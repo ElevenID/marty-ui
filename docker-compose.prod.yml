@@ -1,0 +1,164 @@
+#
+# Production Docker Compose Override
+#
+# This file extends docker-compose.yml for production deployment.
+# Use with: docker-compose -f docker-compose.yml -f docker-compose.prod.yml up
+#
+# Key differences from development:
+# - ENVIRONMENT=production (strict cookie settings, OWASP compliance)
+# - No seed service (data managed externally)
+# - External Keycloak URL (adjust KC_HOSTNAME for your domain)
+# - Redis persistence enabled
+# - Health check intervals optimized for production
+# - Resource limits defined
+#
+
+services:
+  #
+  # Keycloak Identity Provider (Production Settings)
+  #
+  keycloak:
+    environment:
+      # Production mode
+      KC_HOSTNAME: auth.example.com  # CHANGE THIS to your domain
+      KC_HOSTNAME_STRICT: "true"
+      KC_HOSTNAME_STRICT_HTTPS: "true"
+      KC_HTTP_ENABLED: "false"
+      KC_PROXY: edge
+      # Production database - use external PostgreSQL in real deployment
+      KC_DB_URL: jdbc:postgresql://keycloak-db:5432/keycloak
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1G
+        reservations:
+          cpus: "0.5"
+          memory: 512M
+    # In production, expose via reverse proxy, not directly
+    ports: []
+
+  #
+  # Keycloak Database (Production Settings)
+  #
+  keycloak-db:
+    environment:
+      # Use secrets in production, not environment variables
+      POSTGRES_PASSWORD_FILE: /run/secrets/keycloak_db_password
+    volumes:
+      - keycloak-db-data:/var/lib/postgresql/data
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+    secrets:
+      - keycloak_db_password
+
+  #
+  # Redis Session Store (Production Settings)
+  #
+  redis:
+    command: >
+      redis-server
+      --appendonly yes
+      --appendfsync everysec
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+      --requirepass ${REDIS_PASSWORD:-changeme}
+    volumes:
+      - redis-data:/data
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+    # In production, don't expose Redis port externally
+    ports: []
+
+  #
+  # Applicant Database (Production Settings)
+  #
+  applicant-db:
+    environment:
+      POSTGRES_PASSWORD_FILE: /run/secrets/applicant_db_password
+    volumes:
+      - applicant-db-data:/var/lib/postgresql/data
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+    secrets:
+      - applicant_db_password
+
+  #
+  # Main Application Service (Production Settings)
+  #
+  marty-api:
+    environment:
+      ENVIRONMENT: production
+      # Session configuration
+      COOKIE_SECURE: "true"
+      COOKIE_SAMESITE: Strict
+      COOKIE_HTTPONLY: "true"
+      # Cookie uses __Host- prefix in production (requires Secure)
+      SESSION_COOKIE_NAME: __Host-session
+      # OIDC configuration
+      OIDC_ISSUER_URL: https://auth.example.com/realms/marty  # CHANGE THIS
+      OIDC_CLIENT_ID: marty-ui
+      # HTTPS redirect (behind reverse proxy)
+      FORWARDED_ALLOW_IPS: "*"
+      # Redis (use password in production)
+      REDIS_URL: redis://:${REDIS_PASSWORD:-changeme}@redis:6379
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1G
+        reservations:
+          cpus: "0.5"
+          memory: 256M
+
+  #
+  # UI Service (Production Settings)
+  #
+  marty-ui:
+    build:
+      args:
+        # Use production nginx config (NO unsafe-eval)
+        NGINX_CONFIG: nginx.prod.conf
+    environment:
+      NODE_ENV: production
+      REACT_APP_API_URL: /api
+      # Keycloak public URL for OIDC redirects
+      REACT_APP_AUTH_URL: https://auth.example.com  # CHANGE THIS
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+
+#
+# Persistent Volumes
+#
+volumes:
+  keycloak-db-data:
+    driver: local
+  applicant-db-data:
+    driver: local
+  redis-data:
+    driver: local
+
+#
+# Docker Secrets (create before deployment)
+#
+# Create secrets:
+#   echo "your-keycloak-db-password" | docker secret create keycloak_db_password -
+#   echo "your-applicant-db-password" | docker secret create applicant_db_password -
+#
+secrets:
+  keycloak_db_password:
+    external: true
+  applicant_db_password:
+    external: true

@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Marty Test Harness</title>
+  <style>
+    body, html { margin: 0; padding: 0; height: 100%; font-family: -apple-system, sans-serif; }
+    .container { display: grid; grid-template-rows: 40px 1fr; height: 100vh; background: #1e1e1e; }
+    .header { background: #2d2d2d; color: #fff; display: flex; align-items: center; padding: 0 16px; font-size: 14px; }
+    .split-view { display: grid; grid-template-columns: 1fr 425px; height: 100%; }
+    .frame-container { position: relative; height: 100%; }
+    .frame-overlay { position: absolute; top: 4px; right: 8px; background: rgba(0,0,0,0.6); color: #fff; padding: 2px 8px; border-radius: 4px; font-size: 10px; z-index: 100; }
+    iframe { width: 100%; height: 100%; border: none; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <span id="testName">Initializing...</span>
+      <span id="sessionInfo" style="margin-left: auto;"></span>
+    </div>
+    <div class="split-view">
+      <div class="frame-container">
+        <div class="frame-overlay">Marty UI</div>
+        <iframe id="marty-frame" name="marty-frame" src="about:blank"></iframe>
+      </div>
+      <div class="frame-container">
+        <div class="frame-overlay">Wallet</div>
+        <iframe id="wallet-frame" name="wallet-frame" src="about:blank"></iframe>
+      </div>
+    </div>
+  </div>
+  <script>
+    console.log('[Harness] Script loaded, adding message listener...');
+    window.addEventListener('message', function(event) {
+      console.log('[Harness] Message received:', JSON.stringify(event.data));
+      if (event.data && event.data.source === 'marty-wallet') {
+        console.log('__WALLET_BRIDGE_MSG__:' + JSON.stringify(event.data));
+      }
+    });
+    window.setFrameSource = function(id, url) { 
+      console.log('[Harness] Setting frame source:', id, url);
+      document.getElementById(id).src = url; 
+    };
+    window.setTestInfo = function(name, info) {
+      document.getElementById('testName').textContent = name;
+      document.getElementById('sessionInfo').textContent = info || '';
+    };
+    window.__harnessReady = true;
+    console.log('[Harness] Ready!');
+  </script>
+</body>
+</html>

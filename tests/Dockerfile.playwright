@@ -1,0 +1,33 @@
+# syntax=docker/dockerfile:1
+# Playwright Test Runner - Full Browser Suite
+# Includes all browsers (Chromium, Firefox, WebKit) for release/CI testing
+#
+# For local development with just Chromium, use Dockerfile.playwright.local
+
+FROM mcr.microsoft.com/playwright:v1.56.0-jammy
+
+WORKDIR /tests
+
+# Copy package files first for better layer caching
+COPY package*.json ./
+
+# Install dependencies with BuildKit cache
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci
+
+# Install all browsers AFTER npm ci to ensure version match
+RUN npx playwright install --with-deps
+
+# Copy test files
+COPY . .
+
+# Set environment variables for containerized execution
+ENV CI=true
+ENV TEST_PROVIDER=mailhog
+ENV MAILHOG_URL=http://mailhog:8025
+ENV BASE_URL=http://ui:80
+ENV API_URL=http://oid4vc-api:8000
+ENV KEYCLOAK_URL=http://keycloak:8080
+
+# Default command runs all tests across all browsers
+CMD ["npx", "playwright", "test", "--reporter=list"]

@@ -1,0 +1,63 @@
+# OpenWallet Foundation Demo Requirements
+
+# Core web framework
+fastapi>=0.104.1
+uvicorn>=0.24.0
+python-multipart>=0.0.6
+
+# Database
+asyncpg>=0.30.0
+aiosqlite>=0.19.0
+psycopg2-binary>=2.9.9
+sqlalchemy[asyncio]>=2.0.23
+
+# HTTP client
+httpx>=0.25.2
+requests>=2.31.0
+
+# Redis for session storage
+redis[hiredis]>=5.0.1
+
+# Data validation and serialization
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+email-validator>=2.1.0
+cbor2>=5.4.6
+
+# JSON handling
+orjson>=3.9.10
+
+# Date/time handling
+python-dateutil>=2.8.2
+
+# QR code generation
+qrcode[pil]>=7.4.2
+
+# Cryptography
+cryptography>=42.0.8
+
+# YAML configuration
+pyyaml>=6.0.1
+
+# Logging
+structlog>=23.2.0
+
+# Metrics and Observability (MMF dependencies)
+prometheus-client>=0.19.0
+psutil>=5.9.0
+opentelemetry-api>=1.37.0
+opentelemetry-sdk>=1.37.0
+
+# Environment variables
+python-dotenv>=1.0.0
+
+# JWT handling
+pyjwt>=2.8.0
+
+# UUID utilities
+shortuuid>=1.0.11
+
+# Development and testing
+pytest>=7.4.3
+pytest-asyncio>=0.21.1
+pytest-mock>=3.12.0

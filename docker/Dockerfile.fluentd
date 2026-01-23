@@ -1,0 +1,13 @@
+# Fluentd Dockerfile with Elasticsearch plugin
+#
+# Extends the official fluentd image with the elasticsearch output plugin
+# for log forwarding to the EFK stack.
+
+FROM fluent/fluentd:v1.16-debian
+
+USER root
+
+# Install elasticsearch output plugin
+RUN gem install fluent-plugin-elasticsearch --no-document --version 5.4.3
+
+USER fluent

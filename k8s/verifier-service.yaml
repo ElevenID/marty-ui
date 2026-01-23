@@ -1,0 +1,212 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: verifier-service
+  namespace: marty-ui
+  labels:
+    app: verifier-service
+    app.kubernetes.io/name: verifier-service
+    app.kubernetes.io/part-of: marty-ui
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: verifier-service
+  template:
+    metadata:
+      labels:
+        app: verifier-service
+    spec:
+      containers:
+      - name: verifier-service
+        # Local image loaded into Kind (build.sh)
+        image: localhost:5001/marty-ui-verifier:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8081
+        env:
+        - name: SERVICE_NAME
+          value: "verifier-service"
+        - name: PORT
+          value: "8081"
+        - name: LOG_LEVEL
+          valueFrom:
+            configMapKeyRef:
+              name: marty-ui-config
+              key: LOG_LEVEL
+        - name: POSTGRES_HOST
+          value: "postgres"
+        - name: POSTGRES_PORT
+          value: "5432"
+        - name: POSTGRES_DB
+          valueFrom:
+            configMapKeyRef:
+              name: marty-ui-config
+              key: POSTGRES_DB
+        - name: POSTGRES_USER
+          valueFrom:
+            configMapKeyRef:
+              name: marty-ui-config
+              key: POSTGRES_USER
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: marty-ui-secrets
+              key: POSTGRES_PASSWORD
+        - name: MULTIPAZ_SDK_VERSION
+          valueFrom:
+            configMapKeyRef:
+              name: marty-ui-config
+              key: MULTIPAZ_SDK_VERSION
+        - name: PRESENTATION_PROTOCOLS
+          valueFrom:
+            configMapKeyRef:
+              name: marty-ui-config
+              key: PRESENTATION_PROTOCOLS
+        - name: SUPPORTED_CLAIMS
+          valueFrom:
+            configMapKeyRef:
+              name: marty-ui-config
+              key: SUPPORTED_CLAIMS
+        - name: ISSUER_BASE_URL
+          valueFrom:
+            configMapKeyRef:
+              name: marty-ui-config
+              key: ISSUER_BASE_URL
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8081
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8081
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        volumeMounts:
+        - name: config-volume
+          mountPath: /app/config
+          readOnly: true
+      volumes:
+      - name: config-volume
+        configMap:
+          name: verifier-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: verifier-service
+  namespace: marty-ui
+  labels:
+    app: verifier-service
+spec:
+  ports:
+  - port: 8081
+    targetPort: 8081
+    name: http
+  selector:
+    app: verifier-service
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: verifier-config
+  namespace: marty-ui
+data:
+  verifier-config.yaml: |
+    service:
+      name: "OpenWallet Foundation Demo Verifier"
+      version: "1.0.0"
+      description: "mDoc/mDL Verifier using Multipaz SDK"
+
+    multipaz:
+      version: "0.94.0"
+      features:
+        - "mso_mdoc"
+        - "iso18013-5"
+        - "openid4vp"
+        - "proximity_presentation"
+
+    verification:
+      protocols:
+        - "openid4vp"
+        - "iso18013-5"
+
+      trust_anchors:
+        - name: "Demo Issuer CA"
+          certificate_path: "/app/certs/demo-issuer-ca.pem"
+        - name: "Test Issuer CA"
+          certificate_path: "/app/certs/test-issuer-ca.pem"
+
+      presentation_definitions:
+        - id: "age_verification"
+          name: "Age Verification"
+          purpose: "Verify age for restricted venue access"
+          input_descriptors:
+            - id: "age_over_21"
+              format:
+                mso_mdoc:
+                  alg: ["ES256", "ES384", "ES512"]
+              constraints:
+                fields:
+                  - path: ["$.birth_date"]
+                    purpose: "Age verification"
+                  - path: ["$.portrait"]
+                    purpose: "Identity verification"
+                    intent_to_retain: false
+
+        - id: "driving_license_verification"
+          name: "Driving License Verification"
+          purpose: "Verify driving privileges and identity"
+          input_descriptors:
+            - id: "mdl_verification"
+              format:
+                mso_mdoc:
+                  alg: ["ES256", "ES384", "ES512"]
+              constraints:
+                fields:
+                  - path: ["$.license_number"]
+                    purpose: "License verification"
+                  - path: ["$.driving_privileges"]
+                    purpose: "Driving privileges verification"
+                  - path: ["$.given_name", "$.family_name"]
+                    purpose: "Identity verification"
+                  - path: ["$.expiry_date"]
+                    purpose: "Validity verification"
+
+        - id: "identity_verification"
+          name: "Basic Identity Verification"
+          purpose: "Verify basic identity information"
+          input_descriptors:
+            - id: "identity_check"
+              format:
+                mso_mdoc:
+                  alg: ["ES256", "ES384", "ES512"]
+              constraints:
+                fields:
+                  - path: ["$.given_name", "$.family_name"]
+                    purpose: "Name verification"
+                  - path: ["$.birth_date"]
+                    purpose: "Birth date verification"
+
+    demo:
+      scenarios:
+        - name: "Age Restricted Venue"
+          description: "21+ venue access verification"
+          presentation_definition_id: "age_verification"
+        - name: "Car Rental"
+          description: "Driving license verification for car rental"
+          presentation_definition_id: "driving_license_verification"
+        - name: "Account Opening"
+          description: "Basic identity verification for account opening"
+          presentation_definition_id: "identity_verification"

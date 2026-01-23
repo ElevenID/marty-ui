@@ -1,0 +1,37 @@
+# Kind cluster configuration for OpenWallet Foundation mDoc/mDL Demo
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+
+# Configure cluster nodes
+nodes:
+- role: control-plane
+  # Use a slightly older, stable node image version to avoid local kubelet issues
+  image: kindest/node:v1.29.2
+  kubeadmConfigPatches:
+  - |
+    kind: InitConfiguration
+    nodeRegistration:
+      kubeletExtraArgs:
+        node-labels: "ingress-ready=true"
+        # Removed explicit cgroup-driver override to allow kubelet to auto-detect (host reports cgroupfs)
+  extraPortMappings:
+  # Ingress HTTP/HTTPS on high, likely free ports
+  - containerPort: 80
+    hostPort: 9080
+    protocol: TCP
+  - containerPort: 443
+    hostPort: 9443
+    protocol: TCP
+
+# Worker nodes for distributed testing (optional)
+- role: worker
+  image: kindest/node:v1.29.2
+
+# Networking configuration
+networking:
+  # Use defaults for subnets to reduce complexity
+  disableDefaultCNI: false
+  kubeProxyMode: "iptables"
+
+# Feature gates for experimental features
+# Removed feature gates for stability

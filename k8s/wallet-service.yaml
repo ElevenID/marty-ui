@@ -1,0 +1,201 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wallet-service
+  namespace: marty-ui
+  labels:
+    app: wallet-service
+    app.kubernetes.io/name: wallet-service
+    app.kubernetes.io/part-of: marty-ui
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: wallet-service
+  template:
+    metadata:
+      labels:
+        app: wallet-service
+    spec:
+      containers:
+      - name: wallet-service
+        # Local image loaded into Kind (build.sh)
+        image: localhost:5001/marty-ui-wallet:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8082
+        env:
+        - name: SERVICE_NAME
+          value: "wallet-service"
+        - name: PORT
+          value: "8082"
+        - name: LOG_LEVEL
+          valueFrom:
+            configMapKeyRef:
+              name: marty-ui-config
+              key: LOG_LEVEL
+        - name: POSTGRES_HOST
+          value: "postgres"
+        - name: POSTGRES_PORT
+          value: "5432"
+        - name: POSTGRES_DB
+          valueFrom:
+            configMapKeyRef:
+              name: marty-ui-config
+              key: POSTGRES_DB
+        - name: POSTGRES_USER
+          valueFrom:
+            configMapKeyRef:
+              name: marty-ui-config
+              key: POSTGRES_USER
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: marty-ui-secrets
+              key: POSTGRES_PASSWORD
+        - name: MULTIPAZ_SDK_VERSION
+          valueFrom:
+            configMapKeyRef:
+              name: marty-ui-config
+              key: MULTIPAZ_SDK_VERSION
+        - name: ISSUER_BASE_URL
+          valueFrom:
+            configMapKeyRef:
+              name: marty-ui-config
+              key: ISSUER_BASE_URL
+        - name: VERIFIER_BASE_URL
+          valueFrom:
+            configMapKeyRef:
+              name: marty-ui-config
+              key: VERIFIER_BASE_URL
+        - name: ENCRYPTION_KEY
+          valueFrom:
+            secretKeyRef:
+              name: marty-ui-secrets
+              key: ENCRYPTION_KEY
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8082
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8082
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        volumeMounts:
+        - name: config-volume
+          mountPath: /app/config
+          readOnly: true
+        - name: wallet-storage
+          mountPath: /app/data
+      volumes:
+      - name: config-volume
+        configMap:
+          name: wallet-config
+      - name: wallet-storage
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: wallet-service
+  namespace: marty-ui
+  labels:
+    app: wallet-service
+spec:
+  ports:
+  - port: 8082
+    targetPort: 8082
+    name: http
+  selector:
+    app: wallet-service
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: wallet-config
+  namespace: marty-ui
+data:
+  wallet-config.yaml: |
+    service:
+      name: "OpenWallet Foundation Demo Wallet"
+      version: "1.0.0"
+      description: "mDoc/mDL Wallet using Multipaz SDK"
+
+    multipaz:
+      version: "0.94.0"
+      features:
+        - "mso_mdoc"
+        - "iso18013-5"
+        - "openid4vci"
+        - "openid4vp"
+        - "proximity_presentation"
+        - "secure_area"
+
+    wallet:
+      storage:
+        type: "secure_area"
+        encryption_enabled: true
+
+      credentials:
+        auto_accept_trusted_issuers: true
+        supported_formats:
+          - "mso_mdoc"
+
+        trusted_issuers:
+          - name: "Demo Issuer"
+            identifier: "did:web:issuer-service:8080"
+            certificate_path: "/app/certs/demo-issuer.pem"
+
+      presentation:
+        protocols:
+          - "openid4vp"
+          - "iso18013-5"
+
+        proximity:
+          enabled: true
+          ble_enabled: true
+          wifi_aware_enabled: false
+          nfc_enabled: false
+
+        selective_disclosure:
+          enabled: true
+          default_policy: "minimal"
+          user_consent_required: true
+
+        consent_policies:
+          minimal:
+            auto_consent_claims: []
+            require_user_consent: true
+          standard:
+            auto_consent_claims: ["given_name", "family_name"]
+            require_user_consent: true
+          enhanced:
+            auto_consent_claims: ["given_name", "family_name", "license_number"]
+            require_user_consent: false
+
+    demo:
+      mode: true
+      sample_credentials:
+        - type: "mDL"
+          user_id: "demo-user-1"
+          auto_provision: true
+        - type: "mDoc"
+          user_id: "demo-user-1"
+          auto_provision: true
+
+      ui:
+        show_debug_info: true
+        enable_dev_tools: true
+        mock_biometric_auth: true
