@@ -965,4 +965,4 @@ async def acknowledge_credential_receipt(
 
 # Note: Test key management endpoints have been removed.
 # Keys are now managed internally via SpruceIDKeyManager.
-# Use get_key_manager() from marty_plugin.adapters.credentials.spruceid
+# Use get_key_manager() from marty_credentials.adapters.credentials.spruceid

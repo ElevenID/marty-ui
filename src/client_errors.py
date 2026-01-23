@@ -20,7 +20,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 
 try:
-    from marty_plugin.common.errors import (
+    from marty_common.errors import (
         ClientErrorAcknowledgment,
         ClientErrorReport,
         ErrorCode,

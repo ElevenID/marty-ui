@@ -6,7 +6,7 @@ what storage capabilities are needed, while adapters implement the actual
 storage mechanisms (Redis, database, etc.).
 
 Note: Key management has been migrated to SpruceIDKeyManager.
-Use get_key_manager() from marty_plugin.adapters.credentials.spruceid.
+Use get_key_manager() from marty_credentials.adapters.credentials.spruceid.
 
 Usage:
     from issuance.ports import IIssuanceStorage
@@ -312,7 +312,7 @@ class IIssuanceStorage(Protocol):
 
 # Note: IKeyStorage has been removed.
 # Key management is now handled by SpruceIDKeyManager.
-# Use get_key_manager() from marty_plugin.adapters.credentials.spruceid.
+# Use get_key_manager() from marty_credentials.adapters.credentials.spruceid.
 
 
 __all__ = [

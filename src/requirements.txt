@@ -57,6 +57,13 @@ pyjwt>=2.8.0
 # UUID utilities
 shortuuid>=1.0.11
 
+# Marty packages - installed from GitHub Packages
+# Production: Configure pip with --extra-index-url or pip.conf (see README.md)
+# Development: Use requirements.dev.txt with local editable installs
+marty-credentials>=0.1.0
+marty-common>=0.1.0
+marty-microservices-framework>=1.0.0
+
 # Development and testing
 pytest>=7.4.3
 pytest-asyncio>=0.21.1

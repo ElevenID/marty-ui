@@ -1,4 +1,42 @@
-# OpenWallet Foundation mDoc/mDL Demo
+# Marty UI - OpenWallet Foundation Demo
+
+**Standalone repository** for the Marty UI demo application, extracted from the main Marty monorepo.
+
+## 🚀 Quick Start
+
+### Local Development (Recommended)
+
+```bash
+# Clone with sibling repositories
+cd ~/workspace
+git clone https://github.com/ORG/Marty.git
+git clone https://github.com/ORG/marty-credentials.git
+git clone https://github.com/ORG/marty-microservices-framework.git
+git clone https://github.com/ORG/marty-ui.git
+
+# Start with Docker (auto-loads local packages)
+cd marty-ui
+docker-compose up
+```
+
+The [docker-compose.override.yml](docker-compose.override.yml) automatically mounts local Marty packages for live development.
+
+### Production Deployment
+
+```bash
+# Set GitHub token for package registry
+export GITHUB_TOKEN="your_token_here"
+
+# Build and deploy
+docker-compose -f docker-compose.yml build --build-arg GITHUB_TOKEN=${GITHUB_TOKEN}
+docker-compose -f docker-compose.yml up
+```
+
+📖 **Full setup guide:** [DEVELOPMENT_SETUP.md](DEVELOPMENT_SETUP.md)
+
+---
+
+## Overview
 
 A comprehensive demonstration of mobile document (mDoc) and mobile driving license (mDL) functionality using the OpenWallet Foundation's Multipaz SDK, deployed on Kubernetes with Kind.
 
@@ -28,6 +66,19 @@ This demo showcases a complete mDoc/mDL ecosystem including:
 ```
 
 All services run in a Kubernetes cluster managed by Kind, with ingress routing and persistent storage.
+
+## Package Dependencies
+
+This project depends on three Marty packages:
+
+- **[marty-credentials](https://github.com/ORG/marty-credentials)** - Credential domain logic, status lists, Rust bindings (marty-rs)
+- **[marty-common](https://github.com/ORG/Marty/tree/main/packages/marty-common)** - Shared infrastructure (crypto_bridge, gRPC, database)
+- **[marty-microservices-framework](https://github.com/ORG/marty-microservices-framework)** - Microservices framework
+
+**Development:** Packages are mounted as volumes for live code reloading  
+**Production:** Packages are installed from GitHub Packages registry
+
+See [IMPORT_MIGRATION.md](IMPORT_MIGRATION.md) for import path details.
 
 ## Features
 

@@ -43,7 +43,7 @@ except Exception:
 
 _CRYPTO_BRIDGE_AVAILABLE = False
 try:
-    from marty_plugin.common.crypto_bridge import (
+    from marty_common.crypto_bridge import (
         open_badge_ob2_issue as _open_badge_ob2_issue,
         open_badge_ob2_verify as _open_badge_ob2_verify,
         open_badge_ob3_issue as _open_badge_ob3_issue,

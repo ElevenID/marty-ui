@@ -169,7 +169,7 @@ except ImportError as e:
 
 # Error handling imports (path already set above)
 try:
-    from marty_plugin.common.errors import register_exception_handlers
+    from marty_common.errors import register_exception_handlers
     ERROR_HANDLERS_AVAILABLE = True
 except ImportError as e:
     ERROR_HANDLERS_AVAILABLE = False
@@ -388,8 +388,8 @@ def _get_adapters():
     """Lazy initialization of adapters."""
     global _key_manager, _issuer, _wallet, _verifier
     if _key_manager is None:
-        # Import from Marty application layer (not MMF - vendor implementations belong in Marty)
-        from marty_plugin.adapters.credentials import (
+        # Import from marty_credentials adapters (credential vendor implementations)
+        from marty_credentials.adapters.credentials import (
             get_issuer,
             get_key_manager,
             get_verifier,

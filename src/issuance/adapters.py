@@ -5,7 +5,7 @@ MMF's RedisCacheManager. This adapter provides persistent storage for
 credential issuance sessions and offers.
 
 Note: Key storage has been migrated to SpruceIDKeyManager. 
-Use get_key_manager() from marty_plugin.adapters.credentials.spruceid.
+Use get_key_manager() from marty_credentials.adapters.credentials.spruceid.
 
 Usage:
     from issuance.adapters import (
