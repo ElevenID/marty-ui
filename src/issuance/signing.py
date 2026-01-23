@@ -105,7 +105,7 @@ class CredentialSigner:
         Returns:
             Signing key configuration with JWK
         """
-        from marty_plugin.adapters.credentials.spruceid import get_key_manager
+        from marty_credentials.adapters.credentials.spruceid import get_key_manager
         from mmf.core.credentials.ports import KeyAlgorithm
         
         # Determine algorithm based on credential format

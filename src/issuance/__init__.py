@@ -14,7 +14,7 @@ Services:
     - CredentialSigner: Credential signing using SpruceIDKeyManager
 
 Note: Key management has been migrated to SpruceIDKeyManager.
-Use get_key_manager() from marty_plugin.adapters.credentials.spruceid.
+Use get_key_manager() from marty_credentials.adapters.credentials.spruceid.
 """
 
 from issuance.router import router

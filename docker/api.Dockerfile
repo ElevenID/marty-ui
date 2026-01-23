@@ -1,15 +1,22 @@
 # syntax=docker/dockerfile:1
 # Multi-stage Dockerfile for OID4VC API Service
-# Optimized with BuildKit cache mounts for faster rebuilds
+# Supports dual-mode: production (GitHub Packages) and development (local paths)
+
+# Build arguments
+ARG DEV_MODE=false
+ARG GITHUB_TOKEN=""
 
 # =============================================================================
 # Builder Stage - Install dependencies
 # =============================================================================
 FROM python:3.11-slim AS builder
 
+ARG DEV_MODE
+ARG GITHUB_TOKEN
+
 WORKDIR /app
 
-# Install system dependencies for building (add Rust toolchain and glibc-dev)
+# Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     libc6-dev \
@@ -17,30 +24,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config \
     libssl-dev \
     curl \
-    && rm -rf /var/lib/apt/lists/* \
-    && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal
-
-ENV PATH="/root/.cargo/bin:${PATH}"
-
-# Copy rust directory
-COPY rust/ /build/rust/
-
-# Build marty-rs Python wheel
-WORKDIR /build/rust/marty-rs
-RUN --mount=type=cache,target=/root/.cargo/registry \
-    --mount=type=cache,target=/root/.cargo/git \
-    pip install maturin && \
-    maturin build --release --features python --strip && \
-    pip install --no-cache-dir ../target/wheels/*.whl
-
-WORKDIR /app
+    git \
+    && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements first for layer caching
-COPY marty-ui/src/requirements.txt .
+COPY src/requirements.txt .
 
-# Install dependencies with BuildKit cache
+# Install dependencies based on mode
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --no-cache-dir -r requirements.txt
+    if [ "$DEV_MODE" = "true" ]; then \
+        echo "DEV MODE: Installing from local paths (volumes will be mounted at runtime)"; \
+        pip install --no-cache-dir -r requirements.txt || true; \
+    else \
+        echo "PRODUCTION MODE: Installing from GitHub Packages"; \
+        pip install --no-cache-dir -r requirements.txt \
+            --extra-index-url "https://oauth2:${GITHUB_TOKEN}@ghcr.io/YOUR_ORG/simple"; \
+    fi
 
 # =============================================================================
 # Runtime Stage - Minimal production image
@@ -63,20 +62,12 @@ RUN groupadd -r marty && useradd -r -g marty marty
 COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 
-# Copy MMF framework
-COPY marty-microservices-framework/ /app/marty-microservices-framework/
-
-# Copy status_list module from main Marty/src
-COPY src/status_list/ /app/status_list/
-
-# Copy marty_plugin module from main Marty/src
-COPY src/marty_plugin/ /app/marty_plugin/
-
-ENV PYTHONPATH="${PYTHONPATH}:/app/marty-microservices-framework:/app"
+# Note: In DEV_MODE, marty packages are mounted as volumes (see docker-compose.override.yml)
+# In production, they're installed from GitHub Packages
 
 # Copy application code
-COPY marty-ui/src/ /app/src/
-COPY marty-ui/config/ /app/config/
+COPY src/ /app/src/
+COPY config/ /app/config/
 
 # Set ownership
 RUN chown -R marty:marty /app

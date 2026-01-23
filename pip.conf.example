@@ -1,0 +1,13 @@
+# pip.conf example for GitHub Packages authentication
+# Copy to ~/.config/pip/pip.conf (Linux/macOS) or %APPDATA%\pip\pip.ini (Windows)
+# Replace YOUR_GITHUB_TOKEN with a personal access token with read:packages scope
+
+[global]
+extra-index-url = 
+    https://oauth2:YOUR_GITHUB_TOKEN@ghcr.io/ORG/simple
+
+# Alternative: Use environment variable
+# extra-index-url = https://oauth2:${GITHUB_TOKEN}@ghcr.io/ORG/simple
+
+# For CI/CD, set GITHUB_TOKEN environment variable and use:
+# pip install -r requirements.txt --extra-index-url https://oauth2:${GITHUB_TOKEN}@ghcr.io/ORG/simple
