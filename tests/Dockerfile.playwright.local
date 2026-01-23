@@ -1,0 +1,38 @@
+# syntax=docker/dockerfile:1
+# Playwright Test Runner - Local Development (Chromium Only)
+# Smaller image (~500MB vs ~1.5GB) for faster local testing
+#
+# Usage: docker build -f Dockerfile.playwright.local -t playwright-local .
+
+FROM mcr.microsoft.com/playwright:v1.56.0-jammy
+
+WORKDIR /tests
+
+# Copy package files first for better layer caching
+COPY package*.json ./
+
+# Install dependencies with BuildKit cache
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci
+
+# Install Chromium browser AFTER npm ci to ensure version match
+# The base image has browsers, but npm ci may update @playwright/test
+RUN npx playwright install chromium --with-deps
+
+# Copy test files
+COPY . .
+
+# Set environment variables for containerized execution
+ENV CI=true
+ENV TEST_PROVIDER=mailhog
+ENV MAILHOG_URL=http://mailhog:8025
+ENV BASE_URL=http://ui:80
+ENV API_URL=http://oid4vc-api:8000
+ENV KEYCLOAK_URL=http://keycloak:8080
+# Use only Chromium for local testing
+ENV PLAYWRIGHT_BROWSERS=chromium
+
+# Default command runs all test projects
+# Projects: smoke (parallel), integration (parallel), workflows (sequential),
+#           vendor, applicant, push-notifications
+CMD ["npx", "playwright", "test", "--reporter=list"]

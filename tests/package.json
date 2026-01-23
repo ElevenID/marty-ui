@@ -1,0 +1,32 @@
+{
+  "name": "marty-ui-e2e-tests",
+  "version": "1.0.0",
+  "description": "End-to-end tests for OpenWallet Foundation mDoc/mDL Demo",
+  "private": true,
+  "scripts": {
+    "test": "playwright test",
+    "test:fast": "PW_FAST=1 playwright test",
+    "test:headed": "playwright test --headed",
+    "test:ui": "playwright test --ui",
+    "test:debug": "playwright test --debug",
+    "test:basic": "playwright test tests/e2e/basic-demo.spec.js",
+    "test:smoke": "playwright test --project=smoke",
+    "test:integration": "playwright test --project=integration",
+    "test:workflows": "playwright test --project=workflows",
+    "test:onboarding": "playwright test tests/e2e/workflows/onboarding.spec.js",
+    "test:enhanced": "playwright test tests/e2e/enhanced-features.spec.js",
+    "test:integration:api": "playwright test tests/e2e/integration.spec.js",
+    "test:ci": "playwright test --reporter=junit",
+    "setup": "npm install && npx playwright install --with-deps",
+    "install:browsers": "npx playwright install --with-deps",
+    "report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.56.0",
+    "@types/node": "^20.0.0"
+  },
+  "dependencies": {
+    "axios": "^1.6.0",
+    "eventsource": "^2.0.2"
+  }
+}

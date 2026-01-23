@@ -1,0 +1,41 @@
+# Dependencies
+node_modules/
+package-lock.json
+
+# Test artifacts
+test-results/
+test-results.json
+playwright-report/
+test-results.xml
+
+# Screenshots and videos
+screenshots/
+videos/
+traces/
+
+# Playwright browsers
+.playwright/
+
+# Coverage reports
+coverage/
+
+# Environment files
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+.auth-state/

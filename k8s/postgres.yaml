@@ -1,0 +1,208 @@
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-pvc
+  namespace: marty-ui
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: marty-ui
+  labels:
+    app: postgres
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/part-of: marty-ui
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:15
+        ports:
+        - containerPort: 5432
+        env:
+        - name: POSTGRES_DB
+          valueFrom:
+            configMapKeyRef:
+              name: marty-ui-config
+              key: POSTGRES_DB
+        - name: POSTGRES_USER
+          valueFrom:
+            configMapKeyRef:
+              name: marty-ui-config
+              key: POSTGRES_USER
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: marty-ui-secrets
+              key: POSTGRES_PASSWORD
+        volumeMounts:
+        - name: postgres-storage
+          mountPath: /var/lib/postgresql/data
+        - name: init-db
+          mountPath: /docker-entrypoint-initdb.d
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          exec:
+            command:
+            - pg_isready
+            - -U
+            - marty_user
+            - -d
+            - marty_ui
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          exec:
+            command:
+            - pg_isready
+            - -U
+            - marty_user
+            - -d
+            - marty_ui
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      volumes:
+      - name: postgres-storage
+        persistentVolumeClaim:
+          claimName: postgres-pvc
+      - name: init-db
+        configMap:
+          name: postgres-init-script
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: marty-ui
+  labels:
+    app: postgres
+spec:
+  ports:
+  - port: 5432
+    targetPort: 5432
+  selector:
+    app: postgres
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-init-script
+  namespace: marty-ui
+data:
+  init-demo-db.sql: |
+    -- Initialize OpenWallet Foundation Demo Database
+
+    -- Create schema for mDoc/mDL credentials
+    CREATE SCHEMA IF NOT EXISTS credentials;
+
+    -- Create schema for presentation sessions
+    CREATE SCHEMA IF NOT EXISTS sessions;
+
+    -- Create schema for demo data
+    CREATE SCHEMA IF NOT EXISTS demo;
+
+    -- mDoc credentials table
+    CREATE TABLE IF NOT EXISTS credentials.mdocs (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        mdoc_id VARCHAR(255) UNIQUE NOT NULL,
+        user_id VARCHAR(255) NOT NULL,
+        document_type VARCHAR(100) NOT NULL,
+        document_number VARCHAR(255) UNIQUE NOT NULL,
+        status VARCHAR(50) NOT NULL DEFAULT 'DRAFT',
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        issued_at TIMESTAMP WITH TIME ZONE,
+        expires_at TIMESTAMP WITH TIME ZONE,
+        issuing_authority VARCHAR(255),
+        credential_data JSONB,
+        multipaz_data JSONB,
+        signatures JSONB
+    );
+
+    -- mDL specific table
+    CREATE TABLE IF NOT EXISTS credentials.mdls (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        mdl_id VARCHAR(255) UNIQUE NOT NULL,
+        license_number VARCHAR(255) UNIQUE NOT NULL,
+        user_id VARCHAR(255) NOT NULL,
+        status VARCHAR(50) NOT NULL DEFAULT 'DRAFT',
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        issued_at TIMESTAMP WITH TIME ZONE,
+        expires_at TIMESTAMP WITH TIME ZONE,
+        license_class VARCHAR(10),
+        driving_privileges JSONB,
+        personal_data JSONB,
+        multipaz_data JSONB
+    );
+
+    -- Presentation sessions table
+    CREATE TABLE IF NOT EXISTS sessions.presentation_sessions (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        session_id VARCHAR(255) UNIQUE NOT NULL,
+        verifier_id VARCHAR(255) NOT NULL,
+        status VARCHAR(50) NOT NULL DEFAULT 'INITIATED',
+        protocol VARCHAR(50) NOT NULL,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        presentation_definition JSONB,
+        presentation_submission JSONB,
+        device_engagement JSONB,
+        session_transcript JSONB
+    );
+
+    -- Demo sample data
+    INSERT INTO demo.sample_users (user_id, given_name, family_name, birth_date, nationality) VALUES
+    ('demo-user-1', 'Alice', 'Smith', '1990-05-15', 'US'),
+    ('demo-user-2', 'Bob', 'Johnson', '1985-08-22', 'US'),
+    ('demo-user-3', 'Carol', 'Williams', '1992-12-03', 'US')
+    ON CONFLICT (user_id) DO NOTHING;
+
+    -- Create demo users table
+    CREATE TABLE IF NOT EXISTS demo.sample_users (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id VARCHAR(255) UNIQUE NOT NULL,
+        given_name VARCHAR(255) NOT NULL,
+        family_name VARCHAR(255) NOT NULL,
+        birth_date DATE NOT NULL,
+        nationality VARCHAR(10) NOT NULL,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- Create indexes for performance
+    CREATE INDEX IF NOT EXISTS idx_mdocs_user_id ON credentials.mdocs(user_id);
+    CREATE INDEX IF NOT EXISTS idx_mdocs_status ON credentials.mdocs(status);
+    CREATE INDEX IF NOT EXISTS idx_mdls_user_id ON credentials.mdls(user_id);
+    CREATE INDEX IF NOT EXISTS idx_mdls_license_number ON credentials.mdls(license_number);
+    CREATE INDEX IF NOT EXISTS idx_sessions_verifier_id ON sessions.presentation_sessions(verifier_id);
+    CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions.presentation_sessions(status);
+
+    -- Grant permissions
+    GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA credentials TO marty_user;
+    GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA sessions TO marty_user;
+    GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA demo TO marty_user;
+    GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA credentials TO marty_user;
+    GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA sessions TO marty_user;
+    GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA demo TO marty_user;

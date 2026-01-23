@@ -1,0 +1,58 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: marty-ui
+  labels:
+    name: marty-ui
+    app.kubernetes.io/part-of: marty-platform
+    demo.type: openwallet-foundation
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: marty-ui-config
+  namespace: marty-ui
+data:
+  # Environment Configuration
+  LOG_LEVEL: "INFO"
+  ENVIRONMENT: "demo"
+
+  # Database Configuration
+  POSTGRES_DB: "marty_ui"
+  POSTGRES_USER: "marty_user"
+
+  # Service URLs
+  ISSUER_BASE_URL: "http://issuer-service:8080"
+  VERIFIER_BASE_URL: "http://verifier-service:8081"
+  WALLET_BASE_URL: "http://wallet-service:8082"
+
+  # OpenWallet Foundation / Multipaz Configuration
+  MULTIPAZ_SDK_VERSION: "0.94.0"
+  CREDENTIAL_FORMAT: "mso_mdoc"
+  MDL_DOCTYPE: "org.iso.18013.5.1.mDL"
+
+  # Presentation Configuration
+  PRESENTATION_PROTOCOLS: "openid4vp,iso18013-5"
+  SUPPORTED_CLAIMS: "given_name,family_name,birth_date,license_number,driving_privileges"
+
+  # Demo Configuration
+  DEMO_MODE: "true"
+  AUTO_PROVISION_SAMPLE_DATA: "true"
+  CORS_ORIGINS: "*"
+
+  # Kubernetes specific
+  SERVICE_MESH_ENABLED: "false"
+  MONITORING_ENABLED: "true"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: marty-ui-secrets
+  namespace: marty-ui
+type: Opaque
+stringData:
+  POSTGRES_PASSWORD: "demo_password"
+  ISSUER_SIGNING_KEY: "demo-signing-key-base64-encoded"
+  ENCRYPTION_KEY: "demo-encryption-key-32-chars"
+  JWT_SECRET: "demo-jwt-secret-for-authentication"
