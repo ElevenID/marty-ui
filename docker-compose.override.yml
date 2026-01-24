@@ -11,8 +11,6 @@
 # To use production mode (GitHub Packages):
 #   docker-compose -f docker-compose.yml up
 
-version: '3.8'
-
 services:
   oid4vc-api:
     build:
@@ -38,23 +36,12 @@ services:
     command: >
       sh -c "
         echo 'Installing local Marty packages in editable mode...' &&
-        pip install -e /app/marty-credentials[ffi] &&
+        pip install -e /app/marty-credentials &&
         pip install -e /app/marty-microservices-framework &&
         pip install -e /app/marty-common &&
         echo 'Starting uvicorn with auto-reload...' &&
         uvicorn oid4vc_api:app --host 0.0.0.0 --port 8000 --reload
       "
-
-  demo-ui:
-    volumes:
-      # Mount UI source for live development
-      - ./ui/src:/app/src:ro
-      - ./ui/public:/app/public:ro
-
-  # Add similar overrides for other services as needed
-  wallet-ui:
-    volumes:
-      - ./ui/src:/app/src:ro
 
   verifier-service:
     build:
@@ -79,3 +66,4 @@ services:
       - ./src:/app/src:ro
     environment:
       PYTHONPATH: "/app/marty-credentials/python:/app/marty-microservices-framework:/app/marty-common:/app/src:${PYTHONPATH}"
+
