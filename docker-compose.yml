@@ -156,7 +156,10 @@ services:
   oid4vc-api:
     build:
       context: .
-      dockerfile: marty-ui/docker/api.Dockerfile
+      dockerfile: docker/api.Dockerfile
+      args:
+        DEV_MODE: "true"
+        USE_BETA_PACKAGES: "true"  # Use pre-built beta packages instead of local builds
     ports:
       - "8000:8000"
     environment:
@@ -209,7 +212,7 @@ services:
   oid4vc-api-test:
     build:
       context: .
-      dockerfile: marty-ui/docker/api.Dockerfile
+      dockerfile: docker/api.Dockerfile
     ports:
       - "8000:8000"
     networks:
@@ -266,7 +269,7 @@ services:
   # ---------------------------------------------------------------------------
   ui:
     build:
-      context: ./marty-ui
+      context: .
       dockerfile: docker/ui.Dockerfile
       args:
         NGINX_CONFIG: nginx.dev.conf
@@ -289,7 +292,7 @@ services:
   # ---------------------------------------------------------------------------
   ui-test:
     build:
-      context: ./marty-ui
+      context: .
       dockerfile: docker/ui.Dockerfile
       args:
         NGINX_CONFIG: nginx.dev.conf
@@ -324,7 +327,7 @@ services:
     ports:
       - "9081:80"
     volumes:
-      - ./marty-ui/docker/wallet-nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./docker/wallet-nginx.conf:/etc/nginx/conf.d/default.conf:ro
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:80/"]
       interval: 5s
@@ -344,7 +347,7 @@ services:
   wallet-simulator:
     image: nginx:alpine
     volumes:
-      - ./marty-ui/tests/wallet-simulator:/usr/share/nginx/html:ro
+      - ./tests/wallet-simulator:/usr/share/nginx/html:ro
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:80/"]
       interval: 5s
@@ -427,7 +430,7 @@ services:
       APPLICANT_DB_PASSWORD: ${APPLICANT_DB_PASSWORD:-marty}
     volumes:
       - ${POSTGRES_VOLUME:-postgres-data}:/var/lib/postgresql/data
-      - ./marty-ui/docker/init-databases.sh:/docker-entrypoint-initdb.d/init-databases.sh:ro
+      - ./docker/init-databases.sh:/docker-entrypoint-initdb.d/init-databases.sh:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres && pg_isready -U keycloak -d keycloak && pg_isready -U marty -d marty_applicants"]
       interval: 5s
@@ -480,7 +483,7 @@ services:
   # ---------------------------------------------------------------------------
   seed:
     build:
-      context: ./marty-ui
+      context: .
       dockerfile: docker/seed.Dockerfile
     environment:
       APPLICANT_DB_URL: postgresql+asyncpg://marty:marty@postgres:5432/marty_applicants
@@ -500,16 +503,16 @@ services:
   # ---------------------------------------------------------------------------
   playwright:
     build:
-      context: ./marty-ui/tests
+      context: ./tests
       dockerfile: Dockerfile.playwright
     extra_hosts:
       - "host.docker.internal:host-gateway"  # Enable host.docker.internal on Linux
     environment:
       <<: *test-env
     volumes:
-      - ./marty-ui/tests/test-results:/tests/test-results
-      - ./marty-ui/tests/playwright-report:/tests/playwright-report
-      - ./marty-ui/tests/playwright.config.js:/tests/playwright.config.js:ro
+      - ./tests/test-results:/tests/test-results
+      - ./tests/playwright-report:/tests/playwright-report
+      - ./tests/playwright.config.js:/tests/playwright.config.js:ro
     depends_on:
       ui-test:
         condition: service_healthy
@@ -527,17 +530,17 @@ services:
   # ---------------------------------------------------------------------------
   playwright-local:
     build:
-      context: ./marty-ui/tests
+      context: ./tests
       dockerfile: Dockerfile.playwright.local
     extra_hosts:
       - "host.docker.internal:host-gateway"  # Enable host.docker.internal on Linux
     environment:
       <<: *test-env
     volumes:
-      - ./marty-ui/tests/test-results:/tests/test-results
-      - ./marty-ui/tests/playwright-report:/tests/playwright-report
-      - ./marty-ui/tests/e2e:/tests/e2e:ro  # Mount test files for live updates
-      - ./marty-ui/tests/utils:/tests/utils:ro  # Mount test helpers
+      - ./tests/test-results:/tests/test-results
+      - ./tests/playwright-report:/tests/playwright-report
+      - ./tests/e2e:/tests/e2e:ro  # Mount test files for live updates
+      - ./tests/utils:/tests/utils:ro  # Mount test helpers
       - ./marty-ui/tests/playwright.config.js:/tests/playwright.config.js:ro
     depends_on:
       ui-test:

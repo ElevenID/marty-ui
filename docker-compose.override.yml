@@ -1,69 +1,82 @@
 # docker-compose.override.yml
 # Local development overrides - automatically loaded by docker-compose
 # 
-# This file enables local development with editable installs of Marty packages.
-# Volume mounts provide live code reloading without rebuilding containers.
+# This file enables local development with beta packages.
+# Beta packages include pre-built wheels (no Rust toolchain needed!).
+#
+# To use local editable installs instead (requires Rust):
+#   Set USE_BETA_PACKAGES=false in build args
+#   Uncomment volume mounts below
 #
 # Usage:
 #   docker-compose up          # Automatically uses this override file
 #   docker-compose down
-#
-# To use production mode (GitHub Packages):
-#   docker-compose -f docker-compose.yml up
 
 services:
   oid4vc-api:
     build:
       args:
         DEV_MODE: "true"
-    volumes:
-      # Mount local Marty packages for live development
-      - ../marty-credentials:/app/marty-credentials:ro
-      - ../marty-microservices-framework:/app/marty-microservices-framework:ro
-      - ../Marty/packages/marty-common:/app/marty-common:ro
-      
-      # Mount application source for live reloading
-      - ./src:/app/src:ro
-      - ./config:/app/config:ro
-      
+        USE_BETA_PACKAGES: "true"  # Use pre-built beta packages (recommended)
+    
+    # Option 1: Beta packages (recommended - no volumes needed!)
+    # Packages are installed during build, no runtime mounting required
+    
+    # Option 2: Local editable installs (uncomment if USE_BETA_PACKAGES=false)
+    # volumes:
+    #   - ../marty-credentials:/app/marty-credentials:ro
+    #   - ../marty-microservices-framework:/app/marty-microservices-framework:ro
+    #   - ../Marty/packages/marty-common:/app/marty-common:ro
+    #   - ./src:/app/src:ro
+    #   - ./config:/app/config:ro
+    
     environment:
-      # Python path for local packages
-      PYTHONPATH: "/app/marty-credentials/python:/app/marty-microservices-framework:/app/marty-common:/app/src:${PYTHONPATH}"
-      
       # Enable auto-reload for development
       RELOAD: "true"
       
+      # Only needed if using local editable installs (Option 2)
+      # PYTHONPATH: "/app/marty-credentials/python:/app/marty-microservices-framework:/app/marty-common:/app/src:${PYTHONPATH}"
+      # SETUPTOOLS_SCM_PRETEND_VERSION: "0.1.0"
+    
+    # Option 1: Beta packages - just run uvicorn
     command: >
       sh -c "
-        echo 'Installing local Marty packages in editable mode...' &&
-        pip install -e /app/marty-credentials &&
-        pip install -e /app/marty-microservices-framework &&
-        pip install -e /app/marty-common &&
-        echo 'Starting uvicorn with auto-reload...' &&
+        echo 'Starting with pre-built beta packages...' &&
         uvicorn oid4vc_api:app --host 0.0.0.0 --port 8000 --reload
       "
+    
+    # Option 2: Local editable installs (uncomment if USE_BETA_PACKAGES=false)
+    # command: >
+    #   sh -c "
+    #     echo 'Installing local Marty packages in editable mode...' &&
+    #     pip install -e /app/marty-credentials &&
+    #     pip install -e /app/marty-microservices-framework &&
+    #     pip install -e /app/marty-common &&
+    #     echo 'Starting uvicorn with auto-reload...' &&
+    #     uvicorn oid4vc_api:app --host 0.0.0.0 --port 8000 --reload
+    #   "
 
-  verifier-service:
-    build:
-      args:
-        DEV_MODE: "true"
-    volumes:
-      - ../marty-credentials:/app/marty-credentials:ro
-      - ../marty-microservices-framework:/app/marty-microservices-framework:ro
-      - ../Marty/packages/marty-common:/app/marty-common:ro
-      - ./src:/app/src:ro
-    environment:
-      PYTHONPATH: "/app/marty-credentials/python:/app/marty-microservices-framework:/app/marty-common:/app/src:${PYTHONPATH}"
+  # verifier-service:
+  #   build:
+  #     args:
+  #       DEV_MODE: "true"
+  #   volumes:
+  #     - ../marty-credentials:/app/marty-credentials:ro
+  #     - ../marty-microservices-framework:/app/marty-microservices-framework:ro
+  #     - ../Marty/packages/marty-common:/app/marty-common:ro
+  #     - ./src:/app/src:ro
+  #   environment:
+  #     PYTHONPATH: "/app/marty-credentials/python:/app/marty-microservices-framework:/app/marty-common:/app/src:${PYTHONPATH}"
 
-  issuer-service:
-    build:
-      args:
-        DEV_MODE: "true"
-    volumes:
-      - ../marty-credentials:/app/marty-credentials:ro
-      - ../marty-microservices-framework:/app/marty-microservices-framework:ro
-      - ../Marty/packages/marty-common:/app/marty-common:ro
-      - ./src:/app/src:ro
-    environment:
-      PYTHONPATH: "/app/marty-credentials/python:/app/marty-microservices-framework:/app/marty-common:/app/src:${PYTHONPATH}"
+  # issuer-service:
+  #   build:
+  #     args:
+  #       DEV_MODE: "true"
+  #   volumes:
+  #     - ../marty-credentials:/app/marty-credentials:ro
+  #     - ../marty-microservices-framework:/app/marty-microservices-framework:ro
+  #     - ../Marty/packages/marty-common:/app/marty-common:ro
+  #     - ./src:/app/src:ro
+  #   environment:
+  #     PYTHONPATH: "/app/marty-credentials/python:/app/marty-microservices-framework:/app/marty-common:/app/src:${PYTHONPATH}"
 

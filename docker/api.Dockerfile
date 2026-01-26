@@ -5,6 +5,7 @@
 # Build arguments
 ARG DEV_MODE=false
 ARG GITHUB_TOKEN=""
+ARG USE_BETA_PACKAGES=true
 
 # =============================================================================
 # Builder Stage - Install dependencies
@@ -13,6 +14,7 @@ FROM python:3.11-slim AS builder
 
 ARG DEV_MODE
 ARG GITHUB_TOKEN
+ARG USE_BETA_PACKAGES
 
 WORKDIR /app
 
@@ -23,9 +25,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev \
     pkg-config \
     libssl-dev \
-    curl \
-    git \
     && rm -rf /var/lib/apt/lists/*
+
+# Note: git and Rust NOT needed when using beta packages!
+ENV PATH="/root/.cargo/bin:${PATH}"
 
 # Copy requirements first for layer caching
 COPY src/requirements.txt .
@@ -33,14 +36,26 @@ COPY src/requirements.txt .
 # Install dependencies based on mode
 RUN --mount=type=cache,target=/root/.cache/pip \
     if [ "$DEV_MODE" = "true" ]; then \
-        echo "DEV MODE: Installing from local paths (volumes will be mounted at runtime)"; \
-        pip install --no-cache-dir -r requirements.txt || true; \
+        echo "DEV MODE: Installing dependencies (excluding marty packages, which will be mounted as volumes)"; \
+        grep -v "^marty-" requirements.txt > requirements-filtered.txt && \
+        pip install --no-cache-dir -r requirements-filtered.txt && \
+        echo "Installing maturin for Rust extension builds" && \
+        pip install --no-cache-dir maturin; \
     else \
-        echo "PRODUCTION MODE: Installing from GitHub Packages"; \
-        pip install --no-cache-dir -r requirements.txt \
-            --extra-index-url "https://oauth2:${GITHUB_TOKEN}@ghcr.io/YOUR_ORG/simple"; \
-    fi
-
+        echo "PRODUCTION MODE:  && [ "$USE_BETA_PACKAGES" = "true" ]; then \
+        echo "DEV MODE with BETA PACKAGES: Installing pre-built marty packages"; \
+        # Install non-marty dependencies first
+        grep -v "^marty-" requirements.txt > requirements-filtered.txt && \
+        pip install --no-cache-dir -r requirements-filtered.txt; \
+        # Install beta versions of marty packages (pre-built wheels, no Rust needed!)
+        pip install --pre --no-cache-dir \
+            marty-credentials \
+            marty-common \
+            marty-microservices-framework; \
+    elif [ "$DEV_MODE" = "true" ]; then \
+        echo "DEV MODE: Installing dependencies (marty packages will be mounted as volumes)"; \
+        grep -v "^marty-" requirements.txt > requirements-filtered.txt && \
+        pip install --no-cache-dir -r requirements-filtered.txt
 # =============================================================================
 # Runtime Stage - Minimal production image
 # =============================================================================

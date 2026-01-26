@@ -51,6 +51,11 @@ import {
   ListItem,
   ListItemText,
   ListItemIcon,
+  Accordion,
+  AccordionSummary,
+  AccordionDetails,
+  Radio,
+  RadioGroup,
 } from '@mui/material';
 import {
   Add as AddIcon,
@@ -68,8 +73,12 @@ import {
   DirectionsCar as DriverLicenseIcon,
   EmojiEvents as OpenBadgeIcon,
   VerifiedUser as VerifiedIcon,
+  ExpandMore as ExpandMoreIcon,
+  CloudUpload as UploadIcon,
+  Warning as WarningIcon,
 } from '@mui/icons-material';
 import { useAuth } from '../../hooks/useAuth';
+import complianceProfilesApi from '../../services/complianceProfilesApi';
 
 // API base URL
 const API_URL = process.env.REACT_APP_API_URL || '';
@@ -138,8 +147,22 @@ function TemplateFormDialog({ open, onClose, onSave, template, trustProfiles }) 
     name: '',
     description: '',
     trust_profile_id: '',
+    compliance_profile_id: '',
     credential_types: [],
     required_documents: [],
+    evidence_requirements: [],
+    claim_verification_rules: {},
+    issuer_config: {
+      hosting_mode: 'marty_hosted',
+      issuer_did: '',
+      auto_generate_did: true,
+      issuer_certificate_chain_pem: '',
+    },
+    environment: 'production',
+    retention_policy: {
+      retention_days: 90,
+      auto_delete: true,
+    },
     requires_approval: true,
     auto_issue_on_approval: true,
     validity_days: 365,
@@ -148,6 +171,9 @@ function TemplateFormDialog({ open, onClose, onSave, template, trustProfiles }) 
   });
 
   const [availableCredentialTypes, setAvailableCredentialTypes] = useState([]);
+  const [complianceProfiles, setComplianceProfiles] = useState([]);
+  const [certificateFile, setCertificateFile] = useState(null);
+  const [validationStatus, setValidationStatus] = useState(null);
 
   // Initialize form when template changes
   useEffect(() => {
@@ -156,8 +182,22 @@ function TemplateFormDialog({ open, onClose, onSave, template, trustProfiles }) 
         name: template.name || '',
         description: template.description || '',
         trust_profile_id: template.trust_profile_id || '',
+        compliance_profile_id: template.compliance_profile_id || '',
         credential_types: template.credential_types || [],
         required_documents: template.required_documents || [],
+        evidence_requirements: template.evidence_requirements || [],
+        claim_verification_rules: template.claim_verification_rules || {},
+        issuer_config: template.issuer_config || {
+          hosting_mode: 'marty_hosted',
+          issuer_did: '',
+          auto_generate_did: true,
+          issuer_certificate_chain_pem: '',
+        },
+        environment: template.environment || 'production',
+        retention_policy: template.retention_policy || {
+          retention_days: 90,
+          auto_delete: true,
+        },
         requires_approval: template.requires_approval !== false,
         auto_issue_on_approval: template.auto_issue_on_approval !== false,
         validity_days: template.validity_days || 365,
@@ -169,8 +209,22 @@ function TemplateFormDialog({ open, onClose, onSave, template, trustProfiles }) 
         name: '',
         description: '',
         trust_profile_id: '',
+        compliance_profile_id: '',
         credential_types: [],
         required_documents: [],
+        evidence_requirements: [],
+        claim_verification_rules: {},
+        issuer_config: {
+          hosting_mode: 'marty_hosted',
+          issuer_did: '',
+          auto_generate_did: true,
+          issuer_certificate_chain_pem: '',
+        },
+        environment: 'production',
+        retention_policy: {
+          retention_days: 90,
+          auto_delete: true,
+        },
         requires_approval: true,
         auto_issue_on_approval: true,
         validity_days: 365,
@@ -179,6 +233,21 @@ function TemplateFormDialog({ open, onClose, onSave, template, trustProfiles }) 
       });
     }
   }, [template, open]);
+
+  // Load compliance profiles
+  useEffect(() => {
+    const loadComplianceProfiles = async () => {
+      try {
+        const profiles = await complianceProfilesApi.listComplianceProfiles();
+        setComplianceProfiles(profiles);
+      } catch (err) {
+        console.error('Failed to load compliance profiles:', err);
+      }
+    };
+    if (open) {
+      loadComplianceProfiles();
+    }
+  }, [open]);
 
   // Update available credential types when trust profile changes
   useEffect(() => {
@@ -224,6 +293,56 @@ function TemplateFormDialog({ open, onClose, onSave, template, trustProfiles }) 
     onSave({ ...template, ...formData });
   };
 
+  const handleValidateArtifacts = async () => {
+    try {
+      setValidationStatus({ loading: true });
+      const result = await complianceProfilesApi.validateIssuerArtifacts(
+        formData.compliance_profile_id,
+        formData.issuer_config
+      );
+      setValidationStatus({ success: true, message: 'Issuer artifacts validated successfully' });
+    } catch (err) {
+      setValidationStatus({ success: false, message: err.message });
+    }
+  };
+
+  const handleCertificateUpload = (event) => {
+    const file = event.target.files[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        handleChange('issuer_config', {
+          ...formData.issuer_config,
+          issuer_certificate_chain_pem: e.target.result,
+        });
+      };
+      reader.readAsText(file);
+      setCertificateFile(file);
+    }
+  };
+
+  const handleAddEvidence = () => {
+    const newEvidence = {
+      evidence_type: 'document',
+      provider_config: {},
+      auto_validate: false,
+    };
+    handleChange('evidence_requirements', [...formData.evidence_requirements, newEvidence]);
+  };
+
+  const handleRemoveEvidence = (index) => {
+    handleChange(
+      'evidence_requirements',
+      formData.evidence_requirements.filter((_, i) => i !== index)
+    );
+  };
+
+  const handleUpdateEvidence = (index, field, value) => {
+    const updated = [...formData.evidence_requirements];
+    updated[index] = { ...updated[index], [field]: value };
+    handleChange('evidence_requirements', updated);
+  };
+
   return (
     <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth>
       <DialogTitle>{template ? 'Edit Application Template' : 'Create Application Template'}</DialogTitle>
@@ -250,6 +369,22 @@ function TemplateFormDialog({ open, onClose, onSave, template, trustProfiles }) 
           />
 
           <Divider />
+
+          {/* Compliance Profile Selection */}
+          <FormControl fullWidth>
+            <InputLabel>Compliance Profile</InputLabel>
+            <Select
+              value={formData.compliance_profile_id}
+              onChange={(e) => handleChange('compliance_profile_id', e.target.value)}
+              label="Compliance Profile"
+            >
+              {complianceProfiles.map((profile) => (
+                <MenuItem key={profile.id} value={profile.id}>
+                  {profile.name} ({profile.code})
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
 
           {/* Trust Profile Selection */}
           <FormControl fullWidth required>
@@ -304,6 +439,229 @@ function TemplateFormDialog({ open, onClose, onSave, template, trustProfiles }) 
               </FormGroup>
             )}
           </Box>
+
+          <Divider />
+
+          {/* Evidence Requirements */}
+          <Box>
+            <Box display="flex" justifyContent="space-between" alignItems="center" mb={1}>
+              <Typography variant="subtitle2">Evidence Requirements</Typography>
+              <Button size="small" startIcon={<AddIcon />} onClick={handleAddEvidence}>
+                Add Evidence
+              </Button>
+            </Box>
+            <Typography variant="caption" color="text.secondary" display="block" mb={2}>
+              Configure structured evidence that applicants must provide
+            </Typography>
+            {formData.evidence_requirements.map((evidence, index) => (
+              <Accordion key={index}>
+                <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                  <Typography>Evidence {index + 1}: {evidence.evidence_type}</Typography>
+                </AccordionSummary>
+                <AccordionDetails>
+                  <Stack spacing={2}>
+                    <FormControl fullWidth>
+                      <InputLabel>Evidence Type</InputLabel>
+                      <Select
+                        value={evidence.evidence_type}
+                        onChange={(e) => handleUpdateEvidence(index, 'evidence_type', e.target.value)}
+                        label="Evidence Type"
+                      >
+                        <MenuItem value="document">Document</MenuItem>
+                        <MenuItem value="biometric">Biometric</MenuItem>
+                        <MenuItem value="electronic">Electronic Record</MenuItem>
+                        <MenuItem value="vouch">Vouch/Reference</MenuItem>
+                      </Select>
+                    </FormControl>
+                    <TextField
+                      fullWidth
+                      label="Provider Configuration (JSON)"
+                      multiline
+                      rows={2}
+                      value={JSON.stringify(evidence.provider_config, null, 2)}
+                      onChange={(e) => {
+                        try {
+                          const config = JSON.parse(e.target.value);
+                          handleUpdateEvidence(index, 'provider_config', config);
+                        } catch (err) {
+                          // Invalid JSON, ignore
+                        }
+                      }}
+                    />
+                    <FormControlLabel
+                      control={
+                        <Checkbox
+                          checked={evidence.auto_validate || false}
+                          onChange={(e) => handleUpdateEvidence(index, 'auto_validate', e.target.checked)}
+                        />
+                      }
+                      label="Auto-validate when possible"
+                    />
+                    <Button
+                      size="small"
+                      color="error"
+                      onClick={() => handleRemoveEvidence(index)}
+                    >
+                      Remove Evidence
+                    </Button>
+                  </Stack>
+                </AccordionDetails>
+              </Accordion>
+            ))}
+          </Box>
+
+          <Divider />
+
+          {/* Issuer Configuration */}
+          <Box>
+            <Typography variant="subtitle2" mb={2}>Issuer Configuration</Typography>
+            
+            <FormControl fullWidth sx={{ mb: 2 }}>
+              <Typography variant="caption" color="text.secondary" mb={1}>DID Hosting Mode</Typography>
+              <RadioGroup
+                value={formData.issuer_config.hosting_mode}
+                onChange={(e) => handleChange('issuer_config', {
+                  ...formData.issuer_config,
+                  hosting_mode: e.target.value,
+                })}
+              >
+                <FormControlLabel
+                  value="marty_hosted"
+                  control={<Radio />}
+                  label="Marty-Hosted (did:web with Marty domain)"
+                />
+                <FormControlLabel
+                  value="self_hosted"
+                  control={<Radio />}
+                  label="Self-Hosted (did:web with your domain)"
+                />
+              </RadioGroup>
+            </FormControl>
+
+            {formData.environment === 'development' && (
+              <Alert severity="info" sx={{ mb: 2 }}>
+                Development mode: did:key will be auto-generated for testing
+              </Alert>
+            )}
+
+            {formData.issuer_config.hosting_mode === 'self_hosted' && (
+              <TextField
+                fullWidth
+                label="Issuer DID"
+                value={formData.issuer_config.issuer_did}
+                onChange={(e) => handleChange('issuer_config', {
+                  ...formData.issuer_config,
+                  issuer_did: e.target.value,
+                })}
+                placeholder="did:web:example.com"
+                sx={{ mb: 2 }}
+              />
+            )}
+
+            {formData.issuer_config.hosting_mode === 'marty_hosted' && (
+              <FormControlLabel
+                control={
+                  <Checkbox
+                    checked={formData.issuer_config.auto_generate_did || false}
+                    onChange={(e) => handleChange('issuer_config', {
+                      ...formData.issuer_config,
+                      auto_generate_did: e.target.checked,
+                    })}
+                  />
+                }
+                label="Auto-generate DID on deployment"
+              />
+            )}
+
+            {/* mDoc Certificate Upload */}
+            <Accordion>
+              <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                <Typography>X.509 Certificate Chain (for mDoc)</Typography>
+              </AccordionSummary>
+              <AccordionDetails>
+                <Alert severity="warning" icon={<WarningIcon />} sx={{ mb: 2 }}>
+                  Required for mDoc credentials. Must be validated against Compliance Profile rules.
+                </Alert>
+                <input
+                  accept=".pem,.crt,.cer"
+                  style={{ display: 'none' }}
+                  id="certificate-upload"
+                  type="file"
+                  onChange={handleCertificateUpload}
+                />
+                <label htmlFor="certificate-upload">
+                  <Button variant="outlined" component="span" startIcon={<UploadIcon />}>
+                    Upload Certificate Chain
+                  </Button>
+                </label>
+                {certificateFile && (
+                  <Typography variant="body2" sx={{ mt: 1 }}>
+                    Loaded: {certificateFile.name}
+                  </Typography>
+                )}
+              </AccordionDetails>
+            </Accordion>
+
+            {formData.compliance_profile_id && (
+              <Box sx={{ mt: 2 }}>
+                <Button
+                  variant="outlined"
+                  onClick={handleValidateArtifacts}
+                  disabled={validationStatus?.loading}
+                >
+                  {validationStatus?.loading ? 'Validating...' : 'Validate Issuer Artifacts'}
+                </Button>
+                {validationStatus && !validationStatus.loading && (
+                  <Alert
+                    severity={validationStatus.success ? 'success' : 'error'}
+                    sx={{ mt: 2 }}
+                    onClose={() => setValidationStatus(null)}
+                  >
+                    {validationStatus.message}
+                  </Alert>
+                )}
+              </Box>
+            )}
+          </Box>
+
+          <Divider />
+
+          {/* Environment and Retention */}
+          <Grid container spacing={2}>
+            <Grid item xs={6}>
+              <FormControl fullWidth>
+                <InputLabel>Environment</InputLabel>
+                <Select
+                  value={formData.environment}
+                  onChange={(e) => handleChange('environment', e.target.value)}
+                  label="Environment"
+                >
+                  <MenuItem value="development">Development</MenuItem>
+                  <MenuItem value="staging">Staging</MenuItem>
+                  <MenuItem value="production">Production</MenuItem>
+                </Select>
+              </FormControl>
+            </Grid>
+            <Grid item xs={6}>
+              <TextField
+                fullWidth
+                type="number"
+                label="Retention Days"
+                value={formData.retention_policy.retention_days}
+                onChange={(e) => handleChange('retention_policy', {
+                  ...formData.retention_policy,
+                  retention_days: parseInt(e.target.value, 10),
+                })}
+                inputProps={{ min: 1 }}
+                helperText="Application data retained after completion"
+              />
+            </Grid>
+          </Grid>
+
+          <Alert severity="info" sx={{ mt: 1 }}>
+            Applications will be automatically deleted after {formData.retention_policy.retention_days} days.
+            Credentials are never stored (privacy-preserving).
+          </Alert>
 
           <Divider />
 
