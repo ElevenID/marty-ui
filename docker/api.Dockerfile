@@ -35,27 +35,21 @@ COPY src/requirements.txt .
 
 # Install dependencies based on mode
 RUN --mount=type=cache,target=/root/.cache/pip \
-    if [ "$DEV_MODE" = "true" ]; then \
-        echo "DEV MODE: Installing dependencies (excluding marty packages, which will be mounted as volumes)"; \
-        grep -v "^marty-" requirements.txt > requirements-filtered.txt && \
-        pip install --no-cache-dir -r requirements-filtered.txt && \
-        echo "Installing maturin for Rust extension builds" && \
-        pip install --no-cache-dir maturin; \
-    else \
-        echo "PRODUCTION MODE:  && [ "$USE_BETA_PACKAGES" = "true" ]; then \
-        echo "DEV MODE with BETA PACKAGES: Installing pre-built marty packages"; \
+    if [ "$USE_BETA_PACKAGES" = "true" ]; then \
+        echo "BETA MODE: Installing pre-built marty packages from GitHub Packages"; \
         # Install non-marty dependencies first
         grep -v "^marty-" requirements.txt > requirements-filtered.txt && \
         pip install --no-cache-dir -r requirements-filtered.txt; \
         # Install beta versions of marty packages (pre-built wheels, no Rust needed!)
+        # Note: Use marty-msf not marty-microservices-framework
         pip install --pre --no-cache-dir \
             marty-credentials \
             marty-common \
-            marty-microservices-framework; \
-    elif [ "$DEV_MODE" = "true" ]; then \
-        echo "DEV MODE: Installing dependencies (marty packages will be mounted as volumes)"; \
-        grep -v "^marty-" requirements.txt > requirements-filtered.txt && \
-        pip install --no-cache-dir -r requirements-filtered.txt
+            marty-msf; \
+    else \
+        echo "PRODUCTION MODE: Installing all dependencies"; \
+        pip install --no-cache-dir -r requirements.txt; \
+    fi
 # =============================================================================
 # Runtime Stage - Minimal production image
 # =============================================================================
