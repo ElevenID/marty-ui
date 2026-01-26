@@ -391,6 +391,48 @@ export function isRetryableError(error) {
 }
 
 
+/**
+ * Handle API errors in a consistent way.
+ * Converts various error formats into a standardized error object.
+ */
+export function handleApiError(error) {
+  // If it's already an Error object with response, return it
+  if (error?.response) {
+    return error;
+  }
+  
+  // If it's a plain error, wrap it
+  return new Error(getErrorMessage(error));
+}
+
+
+/**
+ * API client with axios-like interface for backward compatibility.
+ */
+export const apiClient = {
+  get: async (url, config = {}) => {
+    const data = await get(url, config);
+    return { data };
+  },
+  post: async (url, body, config = {}) => {
+    const data = await post(url, body, config);
+    return { data };
+  },
+  put: async (url, body, config = {}) => {
+    const data = await put(url, body, config);
+    return { data };
+  },
+  patch: async (url, body, config = {}) => {
+    const data = await patch(url, body, config);
+    return { data };
+  },
+  delete: async (url, config = {}) => {
+    const data = await del(url, config);
+    return { data };
+  },
+};
+
+
 export default {
   fetchWithRetry,
   apiRequest,
@@ -404,4 +446,6 @@ export default {
   getErrorCode,
   isAuthError,
   isRetryableError,
+  apiClient,
+  handleApiError,
 };
