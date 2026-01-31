@@ -371,11 +371,13 @@ class CredentialTypeConfiguration(Base):
     
     # Validity
     validity_days = Column(Integer, default=365, nullable=False)
+    validity_rules = Column(JSON, default=dict)  # {ttl_days, expiration_mode, reissue_window_days}
 
     # Issuer signing key metadata
     issuer_key_id = Column(String(255), nullable=True)
     issuer_did = Column(String(255), nullable=True)
     issuer_jwk = Column(JSON, nullable=True)
+    issuer_requirements = Column(JSON, default=dict)  # {allowed_issuers, signing_algo_constraints}
     
     # Status
     is_active = Column(Boolean, default=True, nullable=False)
@@ -1184,7 +1186,8 @@ class IssuanceSession(Base):
     organization_id = Column(String(36), ForeignKey("organizations.id"), nullable=False)
     application_id = Column(String(36), nullable=True)  # Optional - not all issuances come from applications
     credential_config_id = Column(String(36), ForeignKey("credential_type_configurations.id"), nullable=False)
-    applicant_id = Column(String(36), nullable=False)  # Keycloak user ID
+    applicant_id = Column(String(36), nullable=True)  # Keycloak user ID (Optional)
+    subject_did = Column(String(255), nullable=True)  # Subject DID (for direct issuance)
     device_id = Column(String(255), nullable=True)  # Target device for push notification
     
     # Status tracking

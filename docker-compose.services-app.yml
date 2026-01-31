@@ -1,0 +1,359 @@
+# Marty Microservices - Application Layer Only
+#
+# This compose file only starts the application services.
+# It uses the existing infrastructure from docker-compose.infra.yml
+#
+# Prerequisites:
+#   1. Start infrastructure first: docker compose -f docker-compose.infra.yml up -d
+#   2. Initialize database schemas: docker compose exec postgres psql -U marty -f /scripts/init-db.sql
+#
+# Usage:
+#   docker compose -f docker-compose.services-app.yml up -d
+#   docker compose -f docker-compose.services-app.yml logs -f gateway
+
+services:
+  # ==========================================================================
+  # RabbitMQ (only dependency not in infra stack)
+  # ==========================================================================
+  
+  rabbitmq:
+    image: rabbitmq:3.12-management-alpine
+    container_name: marty-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: marty
+      RABBITMQ_DEFAULT_PASS: marty_dev_password
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"  # Management UI
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "check_port_connectivity"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+    networks:
+      - marty-network
+
+  # ==========================================================================
+  # Application Services
+  # ==========================================================================
+
+  gateway:
+    build:
+      context: .
+      dockerfile: services/Dockerfile
+      args:
+        SERVICE_NAME: gateway
+    container_name: marty-gateway
+    environment:
+      GATEWAY_PORT: "8000"
+      AUTH_SERVICE_URL: http://auth:8001
+      ORGANIZATION_SERVICE_URL: http://organization:8002
+      CREDENTIAL_TEMPLATE_SERVICE_URL: http://credential-template:8003
+      TRUST_PROFILE_SERVICE_URL: http://trust-profile:8004
+      ISSUANCE_SERVICE_URL: http://issuance:8005
+      # APPLICANT_SERVICE_URL: http://applicant:8006
+      NOTIFICATION_SERVICE_URL: http://notification:8007
+      COMPLIANCE_PROFILE_SERVICE_URL: http://compliance-profile:8008
+      PRESENTATION_POLICY_SERVICE_URL: http://presentation-policy:8009
+      DEPLOYMENT_PROFILE_SERVICE_URL: http://deployment-profile:8010
+      FLOW_SERVICE_URL: http://flow:8011
+      CORS_ORIGINS: "http://localhost:3000,http://localhost:5173"
+    ports:
+      - "8000:8000"
+    depends_on:
+      - auth
+      - organization
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - marty-network
+
+  auth:
+    build:
+      context: .
+      dockerfile: services/Dockerfile
+      args:
+        SERVICE_NAME: auth
+    container_name: marty-auth
+    environment:
+      AUTH_SERVICE_PORT: "8001"
+      UI_BASE_URL: http://localhost:3000
+      REDIS_URL: redis://marty-ui-redis-1:6379/0
+      RABBITMQ_URL: amqp://marty:marty_dev_password@rabbitmq:5672/
+      # Internal URL for server-to-server calls (Docker network)
+      OIDC_ISSUER_URL: http://marty-ui-keycloak-1:8080/realms/marty
+      # External URL for browser redirects (accessible from host)
+      OIDC_EXTERNAL_ISSUER_URL: http://localhost:8180/realms/marty
+      OIDC_CLIENT_ID: marty-ui
+      OIDC_REDIRECT_URI: http://localhost:8000/v1/auth/callback
+      OIDC_POST_LOGOUT_REDIRECT_URI: http://localhost:3000/
+      SESSION_TTL_SECONDS: "86400"
+      COOKIE_SECURE: "false"
+    ports:
+      - "8001:8001"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - marty-network
+
+  organization:
+    build:
+      context: .
+      dockerfile: services/Dockerfile
+      args:
+        SERVICE_NAME: organization
+    container_name: marty-organization
+    environment:
+      ORGANIZATION_SERVICE_PORT: "8002"
+      DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@marty-ui-postgres-1:5432/marty
+      RABBITMQ_URL: amqp://marty:marty_dev_password@rabbitmq:5672/
+    ports:
+      - "8002:8002"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - marty-network
+
+  credential-template:
+    build:
+      context: .
+      dockerfile: services/Dockerfile
+      args:
+        SERVICE_NAME: credential-template
+    container_name: marty-credential-template
+    environment:
+      CREDENTIAL_TEMPLATE_SERVICE_PORT: "8003"
+      DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@marty-ui-postgres-1:5432/marty
+      RABBITMQ_URL: amqp://marty:marty_dev_password@rabbitmq:5672/
+    ports:
+      - "8003:8003"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - marty-network
+
+  trust-profile:
+    build:
+      context: .
+      dockerfile: services/Dockerfile
+      args:
+        SERVICE_NAME: trust-profile
+    container_name: marty-trust-profile
+    environment:
+      TRUST_PROFILE_SERVICE_PORT: "8004"
+      DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@marty-ui-postgres-1:5432/marty
+      RABBITMQ_URL: amqp://marty:marty_dev_password@rabbitmq:5672/
+    ports:
+      - "8004:8004"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8004/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - marty-network
+
+  issuance:
+    build:
+      context: .
+      dockerfile: services/Dockerfile
+      args:
+        SERVICE_NAME: issuance
+    container_name: marty-issuance
+    environment:
+      ISSUANCE_SERVICE_PORT: "8005"
+      DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@marty-ui-postgres-1:5432/marty
+      REDIS_URL: redis://marty-ui-redis-1:6379/1
+      RABBITMQ_URL: amqp://marty:marty_dev_password@rabbitmq:5672/
+    ports:
+      - "8005:8005"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8005/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - marty-network
+
+  applicant:
+    build:
+      context: .
+      dockerfile: services/Dockerfile
+      args:
+        SERVICE_NAME: applicant
+    container_name: marty-applicant
+    environment:
+      APPLICANT_SERVICE_PORT: "8006"
+      DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@marty-ui-postgres-1:5432/marty
+      RABBITMQ_URL: amqp://marty:marty_dev_password@rabbitmq:5672/
+    ports:
+      - "8006:8006"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8006/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - marty-network
+
+  notification:
+    build:
+      context: .
+      dockerfile: services/Dockerfile
+      args:
+        SERVICE_NAME: notification
+    container_name: marty-notification
+    environment:
+      NOTIFICATION_SERVICE_PORT: "8007"
+      DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@marty-ui-postgres-1:5432/marty
+      RABBITMQ_URL: amqp://marty:marty_dev_password@rabbitmq:5672/
+      SMTP_HOST: marty-ui-mailhog-1
+      SMTP_PORT: "1025"
+    ports:
+      - "8007:8007"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8007/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - marty-network
+
+  compliance-profile:
+    build:
+      context: .
+      dockerfile: services/Dockerfile
+      args:
+        SERVICE_NAME: compliance-profile
+    container_name: marty-compliance-profile
+    environment:
+      COMPLIANCE_PROFILE_SERVICE_PORT: "8008"
+      DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@marty-ui-postgres-1:5432/marty
+      RABBITMQ_URL: amqp://marty:marty_dev_password@rabbitmq:5672/
+    ports:
+      - "8008:8008"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8008/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - marty-network
+
+  presentation-policy:
+    build:
+      context: .
+      dockerfile: services/Dockerfile
+      args:
+        SERVICE_NAME: presentation-policy
+    container_name: marty-presentation-policy
+    environment:
+      PRESENTATION_POLICY_SERVICE_PORT: "8009"
+      DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@marty-ui-postgres-1:5432/marty
+      RABBITMQ_URL: amqp://marty:marty_dev_password@rabbitmq:5672/
+    ports:
+      - "8009:8009"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8009/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - marty-network
+
+  deployment-profile:
+    build:
+      context: .
+      dockerfile: services/Dockerfile
+      args:
+        SERVICE_NAME: deployment-profile
+    container_name: marty-deployment-profile
+    environment:
+      DEPLOYMENT_PROFILE_SERVICE_PORT: "8010"
+      DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@marty-ui-postgres-1:5432/marty
+      RABBITMQ_URL: amqp://marty:marty_dev_password@rabbitmq:5672/
+    ports:
+      - "8010:8010"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8010/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - marty-network
+
+  flow:
+    build:
+      context: .
+      dockerfile: services/Dockerfile
+      args:
+        SERVICE_NAME: flow
+    container_name: marty-flow
+    environment:
+      FLOW_SERVICE_PORT: "8011"
+      DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@marty-ui-postgres-1:5432/marty
+      RABBITMQ_URL: amqp://marty:marty_dev_password@rabbitmq:5672/
+    ports:
+      - "8011:8011"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8011/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - marty-network
+
+volumes:
+  rabbitmq_data:
+
+networks:
+  marty-network:
+    name: marty-infra-network
+    external: true

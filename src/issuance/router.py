@@ -42,7 +42,8 @@ class CreateOfferRequest(BaseModel):
 
     organization_id: Optional[str] = Field(None, description="Target organization ID (required for platform admins)")
     credential_config_id: str = Field(..., description="Credential type configuration ID")
-    applicant_id: str = Field(..., description="Recipient user ID")
+    applicant_id: Optional[str] = Field(None, description="Recipient user ID (legacy)")
+    subject_did: Optional[str] = Field(None, description="Subject DID (for direct issuance)")
     application_id: Optional[str] = Field(None, description="Source application ID (if from application flow)")
     credential_data: dict = Field(..., description="Claim values for the credential")
     device_id: Optional[str] = Field(None, description="Target device for push notification")
@@ -272,7 +273,7 @@ async def create_credential_offer(
     session.organization_id = org_id
     session.application_id = request.application_id
     session.credential_config_id = request.credential_config_id
-    session.applicant_id = request.applicant_id
+    session.applicant_id = request.applicant_id or request.subject_did or "unknown"
     session.device_id = request.device_id
     session.status = IssuanceStatus.DEFERRED if request.deferred else IssuanceStatus.PENDING
     session.pre_authorized_code = pre_authorized_code
