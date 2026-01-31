@@ -13,6 +13,7 @@ from typing import Any
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -45,7 +46,7 @@ _age_verification_engine = None
 _offline_qr_engine = None
 _policy_engine = None
 
-# Document service imports
+# Public Document service imports (for verifying apps)
 try:
     from document_service.api import router as document_router
     from document_service.database import init_document_db
@@ -53,12 +54,8 @@ try:
 except ImportError:
     DOCUMENT_SERVICE_AVAILABLE = False
 
-# Applicant service imports
-try:
-    from applicant_service.api import router as applicant_router
-    APPLICANT_SERVICE_AVAILABLE = True
-except ImportError:
-    APPLICANT_SERVICE_AVAILABLE = False
+# Applicant service deprecated - removed
+APPLICANT_SERVICE_AVAILABLE = False
 
 # Auth service imports
 try:
@@ -146,6 +143,14 @@ try:
 except ImportError as e:
     NOTIFICATIONS_API_AVAILABLE = False
     logging.warning(f"Notifications API not available: {e}")
+# ZK Verification service imports
+try:
+    from marty_credentials.infrastructure.adapters.zk_verification_adapter import create_zk_verification_router
+    from marty_credentials.adapters.services.verification_service import VerificationService
+    ZK_VERIFICATION_AVAILABLE = True
+except ImportError as e:
+    ZK_VERIFICATION_AVAILABLE = False
+    logging.warning(f"ZK Verification service not available: {e}")
 
 
 
@@ -383,6 +388,25 @@ async def startup_event():
             # Fail fast - status list is critical infrastructure
             raise
 
+    # Initialize ZK Verification service
+    if ZK_VERIFICATION_AVAILABLE:
+        try:
+            # Re-use the status list session factory if available, or applicant DB
+            from applicant_service.database import get_session_factory as get_applicant_session_factory
+            from sqlalchemy.orm import scoped_session
+            
+            session_factory = get_applicant_session_factory()
+            scoped_db_session = scoped_session(session_factory)
+            
+            # Initialize service with scoped session for thread safety
+            zk_service = VerificationService(db_session=scoped_db_session) # type: ignore
+            
+            zk_router = create_zk_verification_router(zk_service)
+            app.include_router(zk_router)
+            logger.info("ZK Verification router registered")
+        except Exception as e:
+            logger.error(f"Failed to initialize ZK verification service: {e}")
+
 
 def _get_adapters():
     """Lazy initialization of adapters."""
@@ -499,6 +523,12 @@ class GenerateKeyRequest(BaseModel):
 
 
 # ==================== API Endpoints ====================
+
+@app.get("/", include_in_schema=False)
+async def root():
+    """Redirect root to Swagger UI."""
+    return RedirectResponse(url="/docs")
+
 
 @app.get("/health")
 async def health_check():
