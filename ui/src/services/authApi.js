@@ -4,12 +4,9 @@
  * Provides API calls for authentication operations.
  */
 
-// API base URL for general API calls
-const API_BASE_URL = process.env.REACT_APP_API_URL || '';
-
 // Auth endpoints should always use relative paths to go through nginx proxy
 // This ensures cookies are sent correctly (same origin)
-const AUTH_BASE_URL = '';
+const AUTH_BASE_URL = '/v1/auth';
 
 /**
  * Get current authenticated user info
@@ -17,7 +14,7 @@ const AUTH_BASE_URL = '';
  */
 export async function getCurrentUser() {
   try {
-    const response = await fetch(`${AUTH_BASE_URL}/auth/me`, {
+    const response = await fetch(`${AUTH_BASE_URL}/me`, {
       method: 'GET',
       credentials: 'include', // Include cookies
       headers: {
@@ -42,7 +39,7 @@ export async function getCurrentUser() {
  */
 export function initiateLogin(redirectUri = '/') {
   // Build login URL - always use relative path to go through nginx proxy
-  let loginPath = `${AUTH_BASE_URL}/auth/login`;
+  let loginPath = `${AUTH_BASE_URL}/login`;
   if (redirectUri) {
     loginPath += `?redirect_uri=${encodeURIComponent(redirectUri)}`;
   }
@@ -55,7 +52,7 @@ export function initiateLogin(redirectUri = '/') {
  */
 export function initiateRegister(redirectUri = '/') {
   // Build registration URL - always use relative path to go through nginx proxy
-  let registerPath = `${AUTH_BASE_URL}/auth/register`;
+  let registerPath = `${AUTH_BASE_URL}/register`;
   if (redirectUri) {
     registerPath += `?redirect_uri=${encodeURIComponent(redirectUri)}`;
   }
@@ -70,7 +67,7 @@ export function initiateLogout() {
   // Using relative path ensures cookies are sent correctly (same origin)
   const form = document.createElement('form');
   form.method = 'POST';
-  form.action = `${AUTH_BASE_URL}/auth/logout`;
+  form.action = `${AUTH_BASE_URL}/logout`;
   document.body.appendChild(form);
   form.submit();
 }

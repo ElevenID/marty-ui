@@ -25,10 +25,8 @@ export {
   TrustHealthChecklist,
 } from './components';
 
-// Context and hooks
-export {
-  TrustProvider,
-  useTrustService,
-  useCertParser,
-  useTrust,
-} from './TrustProvider';
+// Context
+export { TrustProvider, TrustContext } from './TrustProvider';
+
+// Hooks
+export { useTrustService, useCertParser, useTrust } from './trustHooks';

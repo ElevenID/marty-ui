@@ -24,13 +24,13 @@ from __future__ import annotations
 import logging
 import os
 from contextlib import asynccontextmanager
-from typing import Any, AsyncGenerator
+from typing import Any, AsyncGenerator, List
 
 import httpx
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Depends, FastAPI, Form, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from starlette.middleware.base import BaseHTTPMiddleware
 
 logging.basicConfig(
@@ -67,6 +67,8 @@ class ServiceRegistry:
             "presentation-policies": os.environ.get("PRESENTATION_POLICY_SERVICE_URL", "http://localhost:8009"),
             "deployment-profiles": os.environ.get("DEPLOYMENT_PROFILE_SERVICE_URL", "http://localhost:8010"),
             "flows": os.environ.get("FLOW_SERVICE_URL", "http://localhost:8011"),
+            "verification": os.environ.get("VERIFICATION_SERVICE_URL", "http://localhost:8012"),
+            "revocation-profiles": os.environ.get("REVOCATION_PROFILE_SERVICE_URL", "http://localhost:8013"),
         }
     
     def get_service_url(self, service_name: str) -> str | None:
@@ -93,12 +95,17 @@ ROUTE_CONFIG = {
     "/v1/compliance-profiles": {"service": "compliance-profiles", "requires_auth": True},
     "/v1/presentation-policies": {"service": "presentation-policies", "requires_auth": True},
     "/v1/deployment-profiles": {"service": "deployment-profiles", "requires_auth": True},
+    "/v1/revocation-profiles": {"service": "revocation-profiles", "requires_auth": True},
     
     # Digital Identity Model - Operational Resources
     "/v1/issuance": {"service": "issuance", "requires_auth": True},
     "/v1/application-templates": {"service": "issuance", "requires_auth": True},
     "/v1/applications": {"service": "issuance", "requires_auth": True},
     "/v1/flows": {"service": "flows", "requires_auth": True},
+    
+    # Verification & ZK Proof routes
+    "/v1/verify": {"service": "verification", "requires_auth": True},
+    "/v1/verify/zkp": {"service": "verification", "requires_auth": True},
     
     # Utility routes
     "/v1/notifications": {"service": "notifications", "requires_auth": True},
@@ -217,14 +224,46 @@ class TemplateIssuerRequirements(BaseModel):
 
 
 class CredentialTemplateCreate(BaseModel):
+    """Create a Credential Template (complete issuance definition).
+    
+    Credential Template is the master configuration combining:
+    - Schema/claims definition
+    - Compliance Profile (embedded - format, framework rules)
+    - Application Template reference (optional - for application-based flows)
+    - Cryptographic configuration (keys, certs, DIDs)
+    - Validity and revocation settings
+    """
     organization_id: str
     name: str
     description: str | None = None
+    
+    # Schema & Claims
     credential_type: str
+    vct: str  # Verifiable Credential Type identifier
     claims: list[ClaimDefinitionModel] = []
     privacy_posture: str = "selective_disclosure"
     supported_formats: list[str] = ["sd_jwt_vc"]
+    
+    # INVERTED RELATIONSHIP: Credential Template references Application Template
+    application_template_id: str | None = None  # Optional - for application-based issuance
+    
+    # Embedded Compliance Profile
+    compliance_profile: dict  # Embedded compliance rules (no longer a reference)
+    trust_profile_id: str | None = None
+    revocation_profile_id: str | None = None
+    
+    # Validity configuration
     validity_rules: TemplateValidityRules | None = None
+    
+    # Cryptographic configuration (moved from Application Template)
+    issuer_key_id: str | None = None
+    issuer_key_algorithm: str | None = None  # RS256, ES256, EdDSA, etc.
+    key_access_mode: str = "key_vault"  # key_vault, hsm, local (dev only)
+    issuer_certificate_chain_pem: str | None = None  # For mDoc/X.509-based credentials
+    issuer_did: str | None = None  # For DID-based credentials
+    auto_generate_artifacts: bool = True  # Auto-generate missing artifacts in non-production
+    
+    # Legacy field for backward compatibility during migration
     issuer_requirements: TemplateIssuerRequirements | None = None
 
 
@@ -234,12 +273,35 @@ class CredentialTemplateResponse(BaseModel):
     name: str
     description: str | None
     status: str
+    
+    # Schema & Claims
     credential_type: str
+    vct: str  # Verifiable Credential Type identifier
     claims: list[dict]
     privacy_posture: str
     supported_formats: list[str]
+    
+    # Profile references
+    application_template_id: str | None
+    compliance_profile: dict  # Embedded compliance rules
+    trust_profile_id: str | None
+    revocation_profile_id: str | None
+    
+    # Validity
     validity_rules: dict | None
+    
+    # Cryptographic status (don't expose raw PEM in responses)
+    issuer_key_id: str | None
+    issuer_key_algorithm: str | None
+    key_access_mode: str
+    issuer_certificate_chain_configured: bool  # Whether cert chain is set
+    issuer_did: str | None
+    artifacts_status: str  # "complete", "partial", "missing"
+    
+    # Legacy field
     issuer_requirements: dict | None
+    
+    # Metadata
     version: int
     created_at: str
     updated_at: str
@@ -630,17 +692,73 @@ class ApprovalStrategy(str, Enum):
     RULES_BASED = "rules_based"
 
 
+class FormFieldModel(BaseModel):
+    """Form field definition."""
+    field_id: str
+    field_type: str
+    label: str
+    required: bool = True
+    options: list[str] = []
+    validation_pattern: str | None = None
+
+
+class ClaimCollectionModel(BaseModel):
+    """Claim collection rule."""
+    claim_name: str
+    source: str  # form_field, evidence, derived
+    source_field: str | None = None
+    required: bool = True
+
+
+class NotificationConfigModel(BaseModel):
+    """Notification configuration."""
+    send_confirmation: bool = True
+    send_status_updates: bool = True
+    email_template_id: str | None = None
+
+
+class ApplicationUIConfigModel(BaseModel):
+    """UI configuration for application."""
+    theme: str = "default"
+    logo_url: str | None = None
+    instructions: str | None = None
+
+
 class ApplicationTemplateCreate(BaseModel):
-    """Create an Application Template for credential issuance applications."""
+    """Create an Application Template (user-facing workflow definition).
+    
+    Application Template defines what users fill out to apply for credentials.
+    This is a PURE USER-FACING entity with NO cryptographic concerns.
+    It defines the application workflow, not the credential structure.
+    """
     organization_id: str
     name: str
     description: str | None = None
-    credential_template_id: str
-    compliance_profile_id: str | None = None
-    evidence_requirements: list[EvidenceType] = []
-    claims_requiring_verification: list[str] = []
-    approval_strategy: ApprovalStrategy = ApprovalStrategy.AUTO
-    auto_generate_artifacts: bool = True
+    credential_template_id: str | None = None  # Added
+    
+    # Evidence collection requirements - list of string identifiers like ["drivers_license", "selfie"]
+    evidence_requirements: Any = Field(
+        default=[],
+        description="List of evidence type strings required for this application"
+    )
+    
+    # Form field definitions (what users fill out)
+    form_fields: List[dict] = Field(default_factory=list)  # Simplified to dict only
+    
+    # Claim collection (how to gather claim values from applicant)
+    claim_collection_rules: List[dict] = Field(default_factory=list)  # Simplified to dict only
+    
+    # Workflow configuration
+    approval_strategy: str = "auto"  # Changed from enum to string
+    application_validity_days: int = 30  # How long application remains valid
+    auto_approval_rules: list[dict] = []  # Added to match backend
+    
+    # Notification settings
+    notifications: NotificationConfigModel | None = None
+    notification_config: dict = {}  # Added as alternative
+    
+    # UI/UX configuration
+    ui_config: ApplicationUIConfigModel | dict | None = None  # Allow dict too
 
 
 class ApplicationTemplateResponse(BaseModel):
@@ -649,15 +767,34 @@ class ApplicationTemplateResponse(BaseModel):
     organization_id: str
     name: str
     description: str | None
+    credential_template_id: str | None  # Added
     status: str
-    credential_template_id: str
-    compliance_profile_id: str | None
+    
+    # Evidence collection
     evidence_requirements: list[str]
-    claims_requiring_verification: list[str]
+    
+    # Form configuration
+    form_fields: list[dict]
+    
+    # Claim collection
+    claim_collection_rules: list[dict]
+    
+    # Workflow
     approval_strategy: str
-    artifacts_status: str  # configured, auto_generated, missing
+    application_validity_days: int
+    auto_approval_rules: list[dict] = []  # Added
+    
+    # Notifications
+    notifications: dict | None = None
+    notification_config: dict = {}  # Added as alternative
+    
+    # UI configuration
+    ui_config: dict | None
+    
+    # Metadata
     created_at: str
     updated_at: str
+    version: int | None = None  # Optional
 
 
 # =============================================================================
@@ -666,17 +803,14 @@ class ApplicationTemplateResponse(BaseModel):
 
 class ApplicationCreate(BaseModel):
     """Create an Application from an Application Template."""
-    organization_id: str
     application_template_id: str
-    subject_id: str
-    initial_claims: dict = {}
+    applicant_data: dict = {}  # Form data from applicant
 
 
 class EvidenceSubmission(BaseModel):
     """Submit evidence for an application."""
-    evidence_type: EvidenceType
-    data: dict = {}
-    file_reference: str | None = None
+    evidence_type: str  # Changed from EvidenceType enum to string for flexibility
+    evidence_data: dict = {}  # Changed from 'data' to 'evidence_data' to match backend
 
 
 class ApplicationResponse(BaseModel):
@@ -684,13 +818,18 @@ class ApplicationResponse(BaseModel):
     id: str
     organization_id: str
     application_template_id: str
-    subject_id: str
-    status: str  # pending, evidence_required, under_review, approved, rejected
-    evidence_submitted: list[str]
-    evidence_pending: list[str]
+    applicant_identifier: str  # Changed from subject_id
+    form_data: dict  # Changed from status
+    evidence_submissions: list[dict]  # Added
+    status: str  # pending, under_review, approved, rejected
     review_notes: str | None
-    created_at: str
-    updated_at: str
+    reviewer_id: str | None = None  # Added
+    submitted_at: str  # Added
+    reviewed_at: str | None = None  # Added
+    expires_at: str  # Added
+    issuance_transaction_id: str | None = None  # Added
+    created_at: str | None = None  # Optional for compatibility
+    updated_at: str | None = None  # Optional for compatibility
 
 
 # =============================================================================
@@ -910,13 +1049,65 @@ async def delete_trusted_issuer(profile_id: str, issuer_id: str, request: Reques
     return await proxy_request(request, service_url, f"/v1/trust-profiles/{profile_id}/issuers/{issuer_id}")
 
 
+# Revocation Profile routes
+revocation_profile_router = APIRouter(prefix="/v1/revocation-profiles", tags=["Revocation Profiles"])
+
+
+@revocation_profile_router.post("", summary="Create Revocation Profile")
+async def create_revocation_profile(request: Request) -> Response:
+    """Create a new Revocation Profile for format-agnostic revocation configuration."""
+    registry = get_registry()
+    service_url = registry.get_service_url("revocation-profiles")
+    return await proxy_request(request, service_url, "/v1/revocation-profiles")
+
+
+@revocation_profile_router.get("", summary="List Revocation Profiles")
+async def list_revocation_profiles(request: Request) -> Response:
+    """List all Revocation Profiles."""
+    registry = get_registry()
+    service_url = registry.get_service_url("revocation-profiles")
+    return await proxy_request(request, service_url, "/v1/revocation-profiles")
+
+
+@revocation_profile_router.get("/{profile_id}", summary="Get Revocation Profile")
+async def get_revocation_profile(profile_id: str, request: Request) -> Response:
+    """Get a Revocation Profile by ID."""
+    registry = get_registry()
+    service_url = registry.get_service_url("revocation-profiles")
+    return await proxy_request(request, service_url, f"/v1/revocation-profiles/{profile_id}")
+
+
+@revocation_profile_router.post("/{profile_id}/activate", summary="Activate Revocation Profile")
+async def activate_revocation_profile(profile_id: str, request: Request) -> Response:
+    """Activate a Revocation Profile for use in credential issuance."""
+    registry = get_registry()
+    service_url = registry.get_service_url("revocation-profiles")
+    return await proxy_request(request, service_url, f"/v1/revocation-profiles/{profile_id}/activate")
+
+
+@revocation_profile_router.delete("/{profile_id}", summary="Delete Revocation Profile")
+async def delete_revocation_profile(profile_id: str, request: Request) -> Response:
+    """Delete a Revocation Profile."""
+    registry = get_registry()
+    service_url = registry.get_service_url("revocation-profiles")
+    return await proxy_request(request, service_url, f"/v1/revocation-profiles/{profile_id}")
+
+
 # Credential Template routes
 credential_template_router = APIRouter(prefix="/v1/credential-templates", tags=["Credential Templates"])
 
 
 @credential_template_router.post("", response_model=CredentialTemplateResponse, summary="Create Credential Template")
 async def create_credential_template(body: CredentialTemplateCreate, request: Request) -> Response:
-    """Create a new Credential Template defining credential structure."""
+    """Create a new Credential Template (master issuance configuration).
+    
+    Credential Template is the complete definition for issuing credentials, combining:
+    - Schema/claims definition
+    - Compliance Profile reference (format, framework)
+    - Optional Application Template reference (for application-based issuance)
+    - Cryptographic configuration (keys, certs, DIDs)
+    - Validity and revocation settings
+    """
     registry = get_registry()
     service_url = registry.get_service_url("credential-templates")
     return await proxy_request(request, service_url, "/v1/credential-templates")
@@ -941,14 +1132,6 @@ async def get_credential_template(template_id: str, request: Request) -> Respons
     return await proxy_request(request, service_url, f"/v1/credential-templates/{template_id}")
 
 
-@credential_template_router.post("/{template_id}/activate", response_model=CredentialTemplateResponse, summary="Activate Credential Template")
-async def activate_credential_template(template_id: str, request: Request) -> Response:
-    """Activate a Credential Template for use in issuance."""
-    registry = get_registry()
-    service_url = registry.get_service_url("credential-templates")
-    return await proxy_request(request, service_url, f"/v1/credential-templates/{template_id}/activate")
-
-
 @credential_template_router.put("/{template_id}", response_model=CredentialTemplateResponse, summary="Update Credential Template")
 async def update_credential_template(template_id: str, body: CredentialTemplateCreate, request: Request) -> Response:
     """Update a Credential Template."""
@@ -965,12 +1148,27 @@ async def delete_credential_template(template_id: str, request: Request) -> Resp
     return await proxy_request(request, service_url, f"/v1/credential-templates/{template_id}")
 
 
-@credential_template_router.post("/{template_id}/claims", response_model=CredentialTemplateResponse, summary="Add Claim")
-async def add_template_claim(template_id: str, body: ClaimDefinitionModel, request: Request) -> Response:
-    """Add a claim definition to a Credential Template."""
+@credential_template_router.post("/{template_id}/validate-artifacts", summary="Validate Cryptographic Artifacts")
+async def validate_credential_template_artifacts(template_id: str, request: Request) -> Response:
+    """Validate that all required cryptographic artifacts are properly configured.
+    
+    Checks:
+    - Signing key availability
+    - Certificate chain validity (for mDoc)
+    - DID resolution (for DID-based credentials)
+    - Compliance with selected Compliance Profile requirements
+    """
     registry = get_registry()
     service_url = registry.get_service_url("credential-templates")
-    return await proxy_request(request, service_url, f"/v1/credential-templates/{template_id}/claims")
+    return await proxy_request(request, service_url, f"/v1/credential-templates/{template_id}/validate-artifacts")
+
+
+@credential_template_router.get("/{template_id}/application-template", summary="Get Linked Application Template")
+async def get_credential_template_application_template(template_id: str, request: Request) -> Response:
+    """Get the Application Template linked to this Credential Template (if any)."""
+    registry = get_registry()
+    service_url = registry.get_service_url("credential-templates")
+    return await proxy_request(request, service_url, f"/v1/credential-templates/{template_id}/application-template")
 
 
 # Compliance Profile routes
@@ -1336,8 +1534,8 @@ async def get_flow_verification_request(instance_id: str, request: Request) -> R
 
 
 @flow_router.post("/instances/{instance_id}/submit", response_model=VerificationResultResponse, summary="Submit Verification")
-async def submit_flow_verification(instance_id: str, body: SubmitVerificationRequest, request: Request) -> Response:
-    """Submit a VP token to complete a verification flow."""
+async def submit_flow_verification(instance_id: str, request: Request) -> Response:
+    """Submit a VP token to complete a verification flow. Accepts JSON or form-encoded data."""
     registry = get_registry()
     service_url = registry.get_service_url("flows")
     return await proxy_request(request, service_url, f"/v1/flows/instances/{instance_id}/submit")
@@ -1352,7 +1550,7 @@ async def create_issuance(body: IssuanceCreate, request: Request) -> Response:
     """Initiate credential issuance for a subject (directly or via Application)."""
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
-    return await proxy_request(request, service_url, "/v1/issuance")
+    return await proxy_request(request, service_url, "/v1/issuance/initiate")
 
 
 @issuance_router.get("", response_model=list[IssuanceResponse], summary="List Issuances")
@@ -1363,7 +1561,7 @@ async def list_issuances(
     """List issuance records for an organization."""
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
-    return await proxy_request(request, service_url, "/v1/issuance")
+    return await proxy_request(request, service_url, "/v1/issuance/transactions")
 
 
 @issuance_router.get("/{issuance_id}", response_model=IssuanceResponse, summary="Get Issuance")
@@ -1371,7 +1569,46 @@ async def get_issuance(issuance_id: str, request: Request) -> Response:
     """Get an issuance record by ID."""
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
-    return await proxy_request(request, service_url, f"/v1/issuance/{issuance_id}")
+    return await proxy_request(request, service_url, f"/v1/issuance/transactions/{issuance_id}")
+
+
+@issuance_router.get("/offers/{tx_id}", summary="Get Credential Offer")
+async def get_credential_offer(tx_id: str, request: Request) -> Response:
+    """
+    Get OID4VCI credential offer for wallet integration.
+    
+    This endpoint is called by wallets when resolving a credential_offer_uri.
+    No authentication required as the pre-authorized code serves as the auth token.
+    """
+    registry = get_registry()
+    service_url = registry.get_service_url("issuance")
+    return await proxy_request(request, service_url, f"/v1/issuance/offers/{tx_id}")
+
+
+@issuance_router.post("/token", summary="Exchange Token")
+async def exchange_token(request: Request) -> Response:
+    """
+    OID4VCI Token Endpoint.
+    
+    Exchange pre-authorized code for access token. This is called by wallets
+    during the credential issuance flow.
+    """
+    registry = get_registry()
+    service_url = registry.get_service_url("issuance")
+    return await proxy_request(request, service_url, "/v1/issuance/token")
+
+
+@issuance_router.post("/credential", summary="Issue Credential")
+async def issue_credential(request: Request) -> Response:
+    """
+    OID4VCI Credential Endpoint.
+    
+    Issue a credential after successful token exchange. This is called by wallets
+    to receive the actual credential.
+    """
+    registry = get_registry()
+    service_url = registry.get_service_url("issuance")
+    return await proxy_request(request, service_url, "/v1/issuance/credential")
 
 
 # Application Template routes (how users apply for credentials)
@@ -1589,6 +1826,7 @@ following the Digital Identity model architecture.
 ### Configuration Resources
 
 - **Trust Profiles** - Define who is trusted and how validation happens
+- **Revocation Profiles** - Format-agnostic revocation configuration
 - **Credential Templates** - Blueprint for credential structure and claims
 - **Compliance Profiles** - Regulatory and policy rules
 - **Presentation Policies** - Define what credentials to request for verification
@@ -1631,6 +1869,7 @@ Verification is handled through two complementary approaches:
     
     # Include all routers
     app.include_router(trust_profile_router)
+    app.include_router(revocation_profile_router)
     app.include_router(credential_template_router)
     app.include_router(compliance_profile_router)
     app.include_router(presentation_policy_router)
@@ -1644,6 +1883,63 @@ Verification is handled through two complementary approaches:
     @app.get("/health")
     async def health_check() -> dict:
         return {"status": "healthy", "service": SERVICE_NAME}
+    
+    @app.get("/.well-known/openid-credential-issuer")
+    async def get_issuer_metadata() -> dict:
+        """
+        OID4VCI Issuer Metadata endpoint.
+        
+        This endpoint is required by wallets to discover credential configurations
+        offered by this issuer. Walt.id wallet uses this to match credential_configuration_ids
+        from credential offers.
+        """
+        issuer_url = os.environ.get("ISSUER_BASE_URL", "http://gateway:8000")
+        return {
+            "credential_issuer": issuer_url,
+            "credential_endpoint": f"{issuer_url}/v1/issuance/credential",
+            "token_endpoint": f"{issuer_url}/v1/issuance/token",
+            "credential_configurations_supported": {
+                # Generic credential configuration that accepts any credential_template_id
+                "default": {
+                    "format": "jwt_vc_json",
+                    "scope": "credential",
+                    "cryptographic_binding_methods_supported": ["did:key"],
+                    "credential_signing_alg_values_supported": ["ES256", "EdDSA"],
+                    "display": [
+                        {
+                            "name": "Verifiable Credential",
+                            "locale": "en-US"
+                        }
+                    ]
+                },
+                # MDL credential
+                "mdl": {
+                    "format": "jwt_vc_json",
+                    "scope": "mdl_credential",
+                    "cryptographic_binding_methods_supported": ["did:key"],
+                    "credential_signing_alg_values_supported": ["ES256", "EdDSA"],
+                    "display": [
+                        {
+                            "name": "Mobile Driver's License",
+                            "locale": "en-US"
+                        }
+                    ]
+                },
+                # Employee badge
+                "employee_badge": {
+                    "format": "jwt_vc_json",
+                    "scope": "employee_badge_credential",
+                    "cryptographic_binding_methods_supported": ["did:key"],
+                    "credential_signing_alg_values_supported": ["ES256", "EdDSA"],
+                    "display": [
+                        {
+                            "name": "Employee Badge",
+                            "locale": "en-US"
+                        }
+                    ]
+                }
+            }
+        }
     
     @app.get("/health/services")
     async def services_health() -> dict:

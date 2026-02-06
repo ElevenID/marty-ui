@@ -53,14 +53,14 @@ export const CertParserMethods = {
    * @returns {Promise<import('./types').CertificateData>}
    * @throws {Error} If parsing fails
    */
-  parseCertificate: async (pemData) => {},
+  parseCertificate: async (pemData) => {}, // eslint-disable-line no-unused-vars
 
   /**
    * Parse a PEM file containing multiple certificates (chain).
    * @param {string} pemData - PEM data with one or more certs
    * @returns {Promise<import('./types').CertificateData[]>}
    */
-  parseChain: async (pemData) => {},
+  parseChain: async (pemData) => {}, // eslint-disable-line no-unused-vars
 
   /**
    * Read a certificate file (PEM, DER, or P7B) and return PEM string.
@@ -68,21 +68,21 @@ export const CertParserMethods = {
    * @returns {Promise<string>} - PEM-encoded certificate(s)
    * @throws {Error} If file format is unsupported
    */
-  readCertificateFile: async (file) => {},
+  readCertificateFile: async (file) => {}, // eslint-disable-line no-unused-vars
 
   /**
    * Check if a string is in PEM format.
    * @param {string} data - String to check
    * @returns {boolean}
    */
-  isPemFormat: (data) => {},
+  isPemFormat: (data) => {}, // eslint-disable-line no-unused-vars
 
   /**
    * Convert DER-encoded certificate to PEM format.
    * @param {ArrayBuffer} derData - DER-encoded certificate
    * @returns {string} - PEM-encoded certificate
    */
-  derToPem: (derData) => {},
+  derToPem: (derData) => {}, // eslint-disable-line no-unused-vars
 };
 
 /**

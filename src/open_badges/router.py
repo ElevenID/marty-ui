@@ -34,14 +34,13 @@ except ImportError:
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/open-badges", tags=["Open Badges"])
 
-_MARTY_RS_AVAILABLE = False
-try:
-    import _marty_rs as marty_rs  # type: ignore
-    _MARTY_RS_AVAILABLE = True
-except Exception:
-    marty_rs = None
+# Open Badges FFI functions from marty_verification via marty_common.crypto_bridge
+_OPEN_BADGES_AVAILABLE = False
+_open_badge_ob2_issue = None
+_open_badge_ob2_verify = None
+_open_badge_ob3_issue = None
+_open_badge_ob3_verify = None
 
-_CRYPTO_BRIDGE_AVAILABLE = False
 try:
     from marty_common.crypto_bridge import (
         open_badge_ob2_issue as _open_badge_ob2_issue,
@@ -49,12 +48,9 @@ try:
         open_badge_ob3_issue as _open_badge_ob3_issue,
         open_badge_ob3_verify as _open_badge_ob3_verify,
     )
-    _CRYPTO_BRIDGE_AVAILABLE = True
-except Exception:
-    _open_badge_ob2_issue = None
-    _open_badge_ob2_verify = None
-    _open_badge_ob3_issue = None
-    _open_badge_ob3_verify = None
+    _OPEN_BADGES_AVAILABLE = True
+except Exception as e:
+    logger.warning(f"Open Badges FFI unavailable (marty_common.crypto_bridge): {e}")
 
 
 class IssueOpenBadgeRequest(BaseModel):
@@ -288,11 +284,7 @@ async def issue_open_badge(
     if body.version == "v3":
         request, store = _build_ob3_issue_request(body, issuer_key)
         default_version = "3.0"
-        issue_fn = (
-            getattr(marty_rs, "open_badge_ob3_issue", None)
-            if _MARTY_RS_AVAILABLE
-            else _open_badge_ob3_issue
-        )
+        issue_fn = _open_badge_ob3_issue
         
         # Inject credential status for V3 credentials (revocation/suspension support)
         credential_id = request["credential"]["id"]
@@ -308,11 +300,7 @@ async def issue_open_badge(
     else:
         request, store = _build_ob2_issue_request(body, issuer_key)
         default_version = "2.0"
-        issue_fn = (
-            getattr(marty_rs, "open_badge_ob2_issue", None)
-            if _MARTY_RS_AVAILABLE
-            else _open_badge_ob2_issue
-        )
+        issue_fn = _open_badge_ob2_issue
 
     if issue_fn is not None:
         try:
@@ -351,11 +339,7 @@ async def verify_open_badge(body: VerifyOpenBadgeRequest):
 
     if body.version == "v3":
         request = {"credential": body.credential, "document_store": body.document_store}
-        verify_fn = (
-            getattr(marty_rs, "open_badge_ob3_verify", None)
-            if _MARTY_RS_AVAILABLE
-            else _open_badge_ob3_verify
-        )
+        verify_fn = _open_badge_ob3_verify
         default_version = "3.0"
     else:
         request = {
@@ -363,11 +347,7 @@ async def verify_open_badge(body: VerifyOpenBadgeRequest):
             "document_store": body.document_store,
             "recipient_identity": body.recipient_identity,
         }
-        verify_fn = (
-            getattr(marty_rs, "open_badge_ob2_verify", None)
-            if _MARTY_RS_AVAILABLE
-            else _open_badge_ob2_verify
-        )
+        verify_fn = _open_badge_ob2_verify
         default_version = "2.0"
 
     if verify_fn is not None:

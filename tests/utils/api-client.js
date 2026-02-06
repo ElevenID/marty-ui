@@ -58,16 +58,16 @@ class AuthenticatedApiClient {
 
     if (listResponse.ok()) {
       const listData = await listResponse.json();
-      const configs = listData.credential_types || [];
+      const configs = listData.credential_templates || [];
       const existing = configs.find((c) => c.credential_type === credentialType);
 
       if (existing) {
         return existing.id;
       }
 
-      // Create new credential config
+      // Create new credential template
       const createResponse = await this.post(
-        `/api/organizations/${organizationId}/credential-types`,
+        `/api/organizations/${organizationId}/credential-templates`,
         {
           credential_type: credentialType,
           name: `${credentialType} Credential`,
@@ -78,7 +78,7 @@ class AuthenticatedApiClient {
 
       if (createResponse.ok()) {
         const created = await createResponse.json();
-        return created.id || created.credential_type_id;
+        return created.id || created.credential_template_id;
       }
     }
 

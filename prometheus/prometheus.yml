@@ -1,0 +1,65 @@
+# Prometheus Configuration for Marty Microservices
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  # Gateway metrics
+  - job_name: 'gateway'
+    static_configs:
+      - targets: ['gateway:8000']
+    metrics_path: '/metrics'
+    scrape_interval: 10s
+
+  # Auth Service
+  - job_name: 'auth-service'
+    static_configs:
+      - targets: ['auth:8001']
+    metrics_path: '/metrics'
+
+  # Organization Service
+  - job_name: 'organization-service'
+    static_configs:
+      - targets: ['organization:8002']
+    metrics_path: '/metrics'
+
+  # Credential Service
+  - job_name: 'credential-service'
+    static_configs:
+      - targets: ['credential:8003']
+    metrics_path: '/metrics'
+
+  # Trust Service
+  - job_name: 'trust-service'
+    static_configs:
+      - targets: ['trust:8004']
+    metrics_path: '/metrics'
+
+  # Issuance Service
+  - job_name: 'issuance-service'
+    static_configs:
+      - targets: ['issuance:8005']
+    metrics_path: '/metrics'
+
+  # Applicant Service
+  - job_name: 'applicant-service'
+    static_configs:
+      - targets: ['applicant:8006']
+    metrics_path: '/metrics'
+
+  # Notification Service
+  - job_name: 'notification-service'
+    static_configs:
+      - targets: ['notification:8007']
+    metrics_path: '/metrics'
+
+  # RabbitMQ
+  - job_name: 'rabbitmq'
+    static_configs:
+      - targets: ['rabbitmq:15692']
+
+  # PostgreSQL (requires exporter)
+  # - job_name: 'postgres'
+  #   static_configs:
+  #     - targets: ['postgres-exporter:9187']

@@ -1,0 +1,3 @@
+"""
+Organization Service - Domain Layer
+"""

@@ -2790,9 +2790,9 @@ async function setupOrganizationWithCredentials(page, options = {}) {
       if (existing) {
         credentialConfigId = existing.id;
       } else {
-        // Create new credential config
+        // Create new credential template
         const createResponse = await page.request.post(
-          `${apiUrl}/api/organizations/${organizationId}/credential-types`,
+          `${apiUrl}/api/organizations/${organizationId}/credential-templates`,
           {
             data: {
               credential_type: credentialType,
@@ -2805,7 +2805,7 @@ async function setupOrganizationWithCredentials(page, options = {}) {
 
         if (createResponse.ok()) {
           const created = await createResponse.json();
-          credentialConfigId = created.id || created.credential_type_id;
+          credentialConfigId = created.id || created.credential_template_id;
         }
       }
     }

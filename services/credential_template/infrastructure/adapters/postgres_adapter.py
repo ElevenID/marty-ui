@@ -1,0 +1,266 @@
+"""
+PostgreSQL adapter for Credential Template Repository.
+
+Implements the repository pattern for credential template persistence.
+"""
+
+import json
+from typing import Any, TYPE_CHECKING
+from datetime import datetime, timezone
+
+from sqlalchemy import select, delete, and_
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from credential_template.infrastructure.models import credential_templates_table
+
+if TYPE_CHECKING:
+    from credential_template.main import (
+        CredentialTemplate, ClaimDefinition, DisplayStyle, ValidityRules, 
+        IssuerRequirements, DerivedAttribute, TemplateStatus, CredentialFormat,
+        PrivacyPosture, ClaimType
+    )
+
+
+class PostgresCredentialTemplateRepository:
+    """PostgreSQL implementation of credential template repository."""
+    
+    def __init__(self, session_factory: async_sessionmaker[AsyncSession]):
+        self._session_factory = session_factory
+    
+    async def save(self, template: "CredentialTemplate") -> None:
+        """Save or update a credential template."""
+        from credential_template.main import ClaimDefinition, DisplayStyle, ValidityRules, IssuerRequirements, DerivedAttribute
+        
+        async with self._session_factory() as session:
+            # Convert domain objects to JSON-serializable dicts
+            claims_json = [
+                {
+                    "id": claim.id,
+                    "name": claim.name,
+                    "display_name": claim.display_name,
+                    "description": claim.description,
+                    "claim_type": claim.claim_type.value,
+                    "required": claim.required,
+                    "selectively_disclosable": claim.selectively_disclosable,
+                    "derivable": claim.derivable,
+                    "pattern": claim.pattern,
+                    "enum_values": claim.enum_values,
+                    "min_value": claim.min_value,
+                    "max_value": claim.max_value,
+                    "mdoc_namespace": claim.mdoc_namespace,
+                    "mdoc_element_identifier": claim.mdoc_element_identifier,
+                }
+                for claim in template.claims
+            ]
+            
+            display_style_json = {
+                "background_color": template.display_style.background_color,
+                "text_color": template.display_style.text_color,
+                "logo_url": template.display_style.logo_url,
+                "background_image_url": template.display_style.background_image_url,
+                "icon": template.display_style.icon,
+            }
+            
+            validity_rules_json = {
+                "default_validity_days": template.validity_rules.default_validity_days,
+                "max_validity_days": template.validity_rules.max_validity_days,
+                "renewable": template.validity_rules.renewable,
+                "renewal_window_days": template.validity_rules.renewal_window_days,
+                "require_revalidation": template.validity_rules.require_revalidation,
+                "revalidation_interval_days": template.validity_rules.revalidation_interval_days,
+            }
+            
+            issuer_requirements_json = {
+                "allowed_issuer_dids": template.issuer_requirements.allowed_issuer_dids,
+                "trust_tier_required": template.issuer_requirements.trust_tier_required,
+                "audit_level_required": template.issuer_requirements.audit_level_required,
+            }
+            
+            derived_attributes_json = [
+                {
+                    "id": attr.id,
+                    "name": attr.name,
+                    "description": attr.description,
+                    "source_claim": attr.source_claim,
+                    "derivation_type": attr.derivation_type,
+                    "parameters": attr.parameters,
+                }
+                for attr in template.derived_attributes
+            ]
+            
+            # Check if template exists
+            stmt = select(credential_templates_table).where(
+                credential_templates_table.c.id == template.id
+            )
+            result = await session.execute(stmt)
+            existing = result.first()
+            
+            template_data = {
+                "id": template.id,
+                "organization_id": template.organization_id,
+                "name": template.name,
+                "description": template.description,
+                "status": template.status.value,
+                "credential_type": template.credential_type,
+                "vct": template.vct,
+                "doctype": template.doctype,
+                "claims": claims_json,
+                "privacy_posture": template.privacy_posture.value,
+                "selective_disclosure_fields": template.selective_disclosure_fields,
+                "derived_attributes": derived_attributes_json,
+                "display_style": display_style_json,
+                "validity_rules": validity_rules_json,
+                "issuer_requirements": issuer_requirements_json,
+                "supported_formats": [fmt.value for fmt in template.supported_formats],
+                "version": template.version,
+                "updated_at": template.updated_at,
+            }
+            
+            if existing:
+                # Update existing
+                stmt = (
+                    credential_templates_table.update()
+                    .where(credential_templates_table.c.id == template.id)
+                    .values(**template_data)
+                )
+                await session.execute(stmt)
+            else:
+                # Insert new
+                template_data["created_at"] = template.created_at
+                stmt = credential_templates_table.insert().values(**template_data)
+                await session.execute(stmt)
+            
+            await session.commit()
+    
+    async def get(self, template_id: str) -> "CredentialTemplate | None":
+        """Get a credential template by ID."""
+        from credential_template.main import (
+            CredentialTemplate, TemplateStatus, PrivacyPosture, CredentialFormat,
+            ClaimDefinition, ClaimType, DisplayStyle, ValidityRules, 
+            IssuerRequirements, DerivedAttribute
+        )
+        
+        async with self._session_factory() as session:
+            stmt = select(credential_templates_table).where(
+                credential_templates_table.c.id == template_id
+            )
+            result = await session.execute(stmt)
+            row = result.first()
+            
+            if not row:
+                return None
+        # Convert JSON data back to domain objects
+        claims = [
+            ClaimDefinition(
+                id=c["id"],
+                name=c["name"],
+                display_name=c["display_name"],
+                description=c.get("description"),
+                claim_type=ClaimType(c["claim_type"]),
+                required=c["required"],
+                selectively_disclosable=c.get("selectively_disclosable", True),
+                derivable=c.get("derivable", False),
+                pattern=c.get("pattern"),
+                enum_values=c.get("enum_values"),
+                min_value=c.get("min_value"),
+                max_value=c.get("max_value"),
+                mdoc_namespace=c.get("mdoc_namespace"),
+                mdoc_element_identifier=c.get("mdoc_element_identifier"),
+            )
+            for c in row.claims
+        ]
+        
+        display_style_data = row.display_style
+        display_style = DisplayStyle(
+            background_color=display_style_data.get("background_color", "#1a1a2e"),
+            text_color=display_style_data.get("text_color", "#ffffff"),
+            logo_url=display_style_data.get("logo_url"),
+            background_image_url=display_style_data.get("background_image_url"),
+            icon=display_style_data.get("icon"),
+        )
+        
+        validity_rules_data = row.validity_rules
+        validity_rules = ValidityRules(
+            default_validity_days=validity_rules_data.get("default_validity_days", 365),
+            max_validity_days=validity_rules_data.get("max_validity_days", 1095),
+            renewable=validity_rules_data.get("renewable", True),
+            renewal_window_days=validity_rules_data.get("renewal_window_days", 30),
+            require_revalidation=validity_rules_data.get("require_revalidation", False),
+            revalidation_interval_days=validity_rules_data.get("revalidation_interval_days"),
+        )
+        
+        issuer_requirements_data = row.issuer_requirements
+        issuer_requirements = IssuerRequirements(
+            allowed_issuer_dids=issuer_requirements_data.get("allowed_issuer_dids", []),
+            trust_tier_required=issuer_requirements_data.get("trust_tier_required"),
+            audit_level_required=issuer_requirements_data.get("audit_level_required"),
+        )
+        
+        derived_attributes = [
+            DerivedAttribute(
+                id=attr["id"],
+                name=attr["name"],
+                description=attr.get("description"),
+                source_claim=attr["source_claim"],
+                derivation_type=attr["derivation_type"],
+                parameters=attr.get("parameters", {}),
+            )
+            for attr in row.derived_attributes
+        ]
+        
+        return CredentialTemplate(
+            id=row.id,
+            organization_id=row.organization_id,
+            name=row.name,
+            description=row.description,
+            status=TemplateStatus(row.status),
+            credential_type=row.credential_type,
+            vct=row.vct,
+            doctype=row.doctype,
+            claims=claims,
+            privacy_posture=PrivacyPosture(row.privacy_posture),
+            selective_disclosure_fields=row.selective_disclosure_fields,
+            derived_attributes=derived_attributes,
+            display_style=display_style,
+            validity_rules=validity_rules,
+            issuer_requirements=issuer_requirements,
+            supported_formats=[CredentialFormat(fmt) for fmt in row.supported_formats],
+            version=row.version,
+            created_at=row.created_at,
+            updated_at=row.updated_at,
+        )
+    
+    async def list(
+        self, 
+        org_id: str, 
+        status: "TemplateStatus | None" = None
+    ) -> list["CredentialTemplate"]:
+        """List credential templates for an organization."""
+        from credential_template.main import TemplateStatus
+        
+        async with self._session_factory() as session:
+            conditions = [credential_templates_table.c.organization_id == org_id]
+            if status:
+                conditions.append(credential_templates_table.c.status == status.value)
+            
+            stmt = select(credential_templates_table).where(and_(*conditions))
+            result = await session.execute(stmt)
+            rows = result.all()
+            
+            # Use get() to convert each row
+            templates = []
+            for row in rows:
+                template = await self.get(row.id)
+                if template:
+                    templates.append(template)
+            
+            return templates
+    
+    async def delete(self, template_id: str) -> None:
+        """Delete a credential template."""
+        async with self._session_factory() as session:
+            stmt = delete(credential_templates_table).where(
+                credential_templates_table.c.id == template_id
+            )
+            await session.execute(stmt)
+            await session.commit()
