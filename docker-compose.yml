@@ -142,7 +142,7 @@ services:
       MARTY_ENV: development
       GRPC_PORT: "8091"
       SERVICE_NAME: open-badges
-      PYTHONPATH: /app/src/marty_plugin/legacy_apps:/app/src
+      PYTHONPATH: /app/src
       OPEN_BADGES_TRUST_STORE_PATH: /app/data/trust/open_badges/trust_store.json
     volumes:
       - ./data:/app/data
@@ -373,8 +373,8 @@ services:
       <<: *keycloak-env
       UI_BASE_URL: ${UI_BASE_URL:-http://localhost:3000}
     volumes:
-      - ./marty-ui/config/keycloak:/opt/keycloak/data/import:ro
-      - ./marty-ui/config/keycloak/themes/marty:/opt/keycloak/themes/marty:ro
+      - ./config/keycloak:/opt/keycloak/data/import:ro
+      - ./config/keycloak/themes/marty:/opt/keycloak/themes/marty:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -386,6 +386,9 @@ services:
       timeout: 5s
       retries: 15
       start_period: 60s
+    networks:
+      - default
+      - marty-infra-network
     profiles:
       - dev
       - test
@@ -631,3 +634,5 @@ volumes:
 networks:
   default:
     name: marty-network
+  marty-infra-network:
+    external: true

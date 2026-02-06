@@ -208,14 +208,20 @@
       "clientAuthenticatorType": "client-secret",
       "redirectUris": [
         "http://localhost:9080/*",
-        "${UI_BASE_URL}/*",
+        "http://localhost:3000/*",
+        "http://localhost:8000/*",
         "http://host.docker.internal:9080/*",
+        "http://host.docker.internal:3000/*",
+        "http://host.docker.internal:8000/*",
         "https://*.marty.demo/*"
       ],
       "webOrigins": [
         "http://localhost:9080",
-        "${UI_BASE_URL}",
+        "http://localhost:3000",
+        "http://localhost:8000",
         "http://host.docker.internal:9080",
+        "http://host.docker.internal:3000",
+        "http://host.docker.internal:8000",
         "https://*.marty.demo"
       ],
       "protocol": "openid-connect",

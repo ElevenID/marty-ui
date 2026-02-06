@@ -76,7 +76,7 @@ class SSEService {
       params.append('subscriptions', options.subscriptions.join(','));
     }
 
-    const sseUrl = `/api/events/push${params.toString() ? '?' + params.toString() : ''}`;
+    const sseUrl = `/v1/notifications/events/push${params.toString() ? '?' + params.toString() : ''}`;
 
     try {
       this.eventSource = new EventSource(sseUrl);

@@ -14,28 +14,28 @@ export { TrustApiAdapter, MockTrustAdapter, NodeForgeCertParser };
  * Create a trust service adapter based on configuration.
  * 
  * Factory function following hexagonal architecture pattern.
- * Returns MockTrustAdapter in development or when explicitly configured,
- * otherwise returns TrustApiAdapter for real backend integration.
+ * Returns TrustApiAdapter by default for real backend integration.
+ * MockTrustAdapter only used when explicitly configured (for isolated UI development).
  * 
  * @param {Object} [config] - Configuration options
- * @param {boolean} [config.useMock] - Force mock adapter
+ * @param {boolean} [config.useMock] - Force mock adapter (for isolated UI dev only)
  * @param {string} [config.baseUrl] - API base URL override
  * @param {Object} [config.fetchOptions] - Custom fetch options
- * @param {number} [config.mockLatencyMs] - Mock latency for realistic UX
+ * @param {number} [config.mockLatencyMs] - Mock latency for realistic UX (mock only)
  * @returns {TrustApiAdapter|MockTrustAdapter}
  */
 export function createTrustService(config = {}) {
-  const useMock = 
-    config.useMock ?? 
-    (process.env.REACT_APP_USE_MOCK_TRUST_LIST === 'true' ||
-    process.env.NODE_ENV === 'test');
+  // Only use mock if explicitly requested - not by default
+  const useMock = config.useMock === true;
 
   if (useMock) {
+    console.warn('[TrustService] Using MockTrustAdapter - for development only');
     return new MockTrustAdapter({
       latencyMs: config.mockLatencyMs,
     });
   }
 
+  // Default: use real API adapter
   return new TrustApiAdapter({
     baseUrl: config.baseUrl,
     fetchOptions: config.fetchOptions,

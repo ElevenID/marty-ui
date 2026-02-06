@@ -17,8 +17,8 @@
     "test:enhanced": "playwright test tests/e2e/enhanced-features.spec.js",
     "test:integration:api": "playwright test tests/e2e/integration.spec.js",
     "test:ci": "playwright test --reporter=junit",
-    "setup": "npm install && npx playwright install --with-deps",
-    "install:browsers": "npx playwright install --with-deps",
+    "setup": "bun install && bunx playwright install --with-deps",
+    "install:browsers": "bunx playwright install --with-deps",
     "report": "playwright show-report"
   },
   "devDependencies": {

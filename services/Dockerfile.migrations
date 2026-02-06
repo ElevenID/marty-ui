@@ -1,0 +1,58 @@
+# Dockerfile for running database migrations
+# This is a lightweight container that runs the migration script and exits
+# Build context should be the parent directory containing both marty-ui and marty-microservices-framework
+
+FROM python:3.11-slim
+
+# Install system dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    postgresql-client \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set working directory
+WORKDIR /app
+
+# Install Python dependencies first (better caching)
+RUN pip install --no-cache-dir \
+    sqlalchemy \
+    alembic \
+    psycopg2-binary \
+    asyncpg
+
+# Copy and install MMF framework
+COPY marty-microservices-framework /tmp/mmf
+RUN pip install --no-cache-dir /tmp/mmf && rm -rf /tmp/mmf
+
+# Copy migration infrastructure
+COPY marty-ui/services/run_all_migrations.py /app/
+
+# Copy all service infrastructure directories (note: source dirs use hyphens, dest dirs use underscores for Python imports)
+COPY marty-ui/services/organization/infrastructure /app/organization/infrastructure/
+COPY marty-ui/services/organization/manage_migrations.py /app/organization/
+
+COPY marty-ui/services/auth/infrastructure /app/auth/infrastructure/
+COPY marty-ui/services/auth/manage_migrations.py /app/auth/
+
+COPY marty-ui/services/credential_template/infrastructure /app/credential_template/infrastructure/
+COPY marty-ui/services/credential_template/manage_migrations.py /app/credential_template/
+
+COPY marty-ui/services/trust_profile/infrastructure /app/trust_profile/infrastructure/
+COPY marty-ui/services/trust_profile/manage_migrations.py /app/trust_profile/
+
+# Note: issuance service is in marty-credentials, not marty-ui
+COPY marty-credentials/services/issuance/infrastructure /app/issuance/infrastructure/
+COPY marty-credentials/services/issuance/manage_migrations.py /app/issuance/
+COPY marty-credentials/services/__init__.py /app/services/
+COPY marty-credentials/services/issuance/__init__.py /app/services/issuance/
+
+COPY marty-ui/services/presentation_policy/infrastructure /app/presentation_policy/infrastructure/
+COPY marty-ui/services/presentation_policy/manage_migrations.py /app/presentation_policy/
+
+COPY marty-ui/services/flow/infrastructure /app/flow/infrastructure/
+COPY marty-ui/services/flow/manage_migrations.py /app/flow/
+
+# Default command runs all migrations
+CMD ["python", "run_all_migrations.py"]
+
+
