@@ -28,7 +28,7 @@ module.exports = {
     ],
     // Relax rules for existing codebase
     'react/prop-types': 'off',
-    'no-unused-vars': 'warn', // Warn instead of error
+    'no-unused-vars': ['warn', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }], // Ignore underscore-prefixed
     'no-undef': 'error', // Keep this as error since it's critical
     'react/no-unescaped-entities': 'warn', // Warn for HTML entities
     'react-hooks/exhaustive-deps': 'warn', // Warn for missing dependencies

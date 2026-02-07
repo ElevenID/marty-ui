@@ -41,8 +41,8 @@ services:
 
   gateway:
     build:
-      context: .
-      dockerfile: services/Dockerfile
+      context: ..
+      dockerfile: marty-ui/services/Dockerfile
       args:
         SERVICE_NAME: gateway
     container_name: marty-gateway
@@ -52,7 +52,7 @@ services:
       ORGANIZATION_SERVICE_URL: http://organization:8002
       CREDENTIAL_TEMPLATE_SERVICE_URL: http://credential-template:8003
       TRUST_PROFILE_SERVICE_URL: http://trust-profile:8004
-      ISSUANCE_SERVICE_URL: http://issuance:8005
+      # ISSUANCE_SERVICE_URL: http://issuance:8005  # No issuance module exists
       # APPLICANT_SERVICE_URL: http://applicant:8006
       NOTIFICATION_SERVICE_URL: http://notification:8007
       COMPLIANCE_PROFILE_SERVICE_URL: http://compliance-profile:8008
@@ -75,8 +75,8 @@ services:
 
   auth:
     build:
-      context: .
-      dockerfile: services/Dockerfile
+      context: ..
+      dockerfile: marty-ui/services/Dockerfile
       args:
         SERVICE_NAME: auth
     container_name: marty-auth
@@ -109,8 +109,8 @@ services:
 
   organization:
     build:
-      context: .
-      dockerfile: services/Dockerfile
+      context: ..
+      dockerfile: marty-ui/services/Dockerfile
       args:
         SERVICE_NAME: organization
     container_name: marty-organization
@@ -133,8 +133,8 @@ services:
 
   credential-template:
     build:
-      context: .
-      dockerfile: services/Dockerfile
+      context: ..
+      dockerfile: marty-ui/services/Dockerfile
       args:
         SERVICE_NAME: credential-template
     container_name: marty-credential-template
@@ -157,8 +157,8 @@ services:
 
   trust-profile:
     build:
-      context: .
-      dockerfile: services/Dockerfile
+      context: ..
+      dockerfile: marty-ui/services/Dockerfile
       args:
         SERVICE_NAME: trust-profile
     container_name: marty-trust-profile
@@ -179,35 +179,37 @@ services:
     networks:
       - marty-network
 
-  issuance:
-    build:
-      context: .
-      dockerfile: services/Dockerfile
-      args:
-        SERVICE_NAME: issuance
-    container_name: marty-issuance
-    environment:
-      ISSUANCE_SERVICE_PORT: "8005"
-      DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@marty-ui-postgres-1:5432/marty
-      REDIS_URL: redis://marty-ui-redis-1:6379/1
-      RABBITMQ_URL: amqp://marty:marty_dev_password@rabbitmq:5672/
-    ports:
-      - "8005:8005"
-    depends_on:
-      rabbitmq:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8005/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-    networks:
-      - marty-network
+  # NOTE: issuance service commented out - no services/issuance/ module exists
+  # The existing module is revocation_profile/ - uncomment and update if needed
+  # issuance:
+  #   build:
+  #     context: ..
+  #     dockerfile: marty-ui/services/Dockerfile
+  #     args:
+  #       SERVICE_NAME: issuance
+  #   container_name: marty-issuance
+  #   environment:
+  #     ISSUANCE_SERVICE_PORT: "8005"
+  #     DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@marty-ui-postgres-1:5432/marty
+  #     REDIS_URL: redis://marty-ui-redis-1:6379/1
+  #     RABBITMQ_URL: amqp://marty:marty_dev_password@rabbitmq:5672/
+  #   ports:
+  #     - "8005:8005"
+  #   depends_on:
+  #     rabbitmq:
+  #       condition: service_healthy
+  #   healthcheck:
+  #     test: ["CMD", "curl", "-f", "http://localhost:8005/health"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 3
+  #   networks:
+  #     - marty-network
 
   applicant:
     build:
-      context: .
-      dockerfile: services/Dockerfile
+      context: ..
+      dockerfile: marty-ui/services/Dockerfile
       args:
         SERVICE_NAME: applicant
     container_name: marty-applicant
@@ -230,8 +232,8 @@ services:
 
   notification:
     build:
-      context: .
-      dockerfile: services/Dockerfile
+      context: ..
+      dockerfile: marty-ui/services/Dockerfile
       args:
         SERVICE_NAME: notification
     container_name: marty-notification
@@ -256,8 +258,8 @@ services:
 
   compliance-profile:
     build:
-      context: .
-      dockerfile: services/Dockerfile
+      context: ..
+      dockerfile: marty-ui/services/Dockerfile
       args:
         SERVICE_NAME: compliance-profile
     container_name: marty-compliance-profile
@@ -280,8 +282,8 @@ services:
 
   presentation-policy:
     build:
-      context: .
-      dockerfile: services/Dockerfile
+      context: ..
+      dockerfile: marty-ui/services/Dockerfile
       args:
         SERVICE_NAME: presentation-policy
     container_name: marty-presentation-policy
@@ -304,8 +306,8 @@ services:
 
   deployment-profile:
     build:
-      context: .
-      dockerfile: services/Dockerfile
+      context: ..
+      dockerfile: marty-ui/services/Dockerfile
       args:
         SERVICE_NAME: deployment-profile
     container_name: marty-deployment-profile
@@ -328,8 +330,8 @@ services:
 
   flow:
     build:
-      context: .
-      dockerfile: services/Dockerfile
+      context: ..
+      dockerfile: marty-ui/services/Dockerfile
       args:
         SERVICE_NAME: flow
     container_name: marty-flow

@@ -66,12 +66,15 @@ setup-local: ## Setup native local development environment (venv + dependencies)
 	@echo "$(BLUE)Setting up native local development environment...$(NC)"
 	@bash $(SETUP_LOCAL_SCRIPT)
 
-run-api: services-up ## Start microservices API stack (alias for services-up)
-	@echo "$(GREEN)✓ Microservices API started$(NC)"
+run-api: infra services-up ## Start infrastructure + microservices API stack
+	@echo "$(GREEN)✓ Gateway API started at http://localhost:8000$(NC)"
 
-run-ui: ## Run UI natively (requires setup-local)
+run-ui: ## Run UI natively (uses gateway API at localhost:8000)
 	@echo "$(BLUE)Starting UI natively...$(NC)"
+	@echo "$(YELLOW)Note: Requires gateway API running (make run-api)$(NC)"
 	@cd ui && bun run dev
+
+gateway-dev: infra services-up run-ui ## Start full gateway-based development environment
 
 # =============================================================================
 # Microservices Operations
@@ -86,10 +89,9 @@ services-init-db: ## Initialize microservices database schemas
 	@docker exec marty-ui-postgres-1 psql -U marty -f /tmp/init-db.sql
 	@echo "$(GREEN)✓ Database schemas initialized$(NC)"
 
-services-up: ## Start all microservices
+services-up: ## Start all microservices (requires infra)
 	@echo "$(BLUE)Starting Marty microservices stack...$(NC)"
-	@echo "$(YELLOW)Note: Requires infrastructure services running (docker-compose.infra.yml)$(NC)"
-	$(SERVICES_COMPOSE) up -d
+	$(SERVICES_COMPOSE) up -d --build
 	@echo "$(GREEN)✓ Microservices started$(NC)"
 	@echo ""
 	@echo "$(YELLOW)Services available at:$(NC)"
@@ -99,6 +101,7 @@ services-up: ## Start all microservices
 	@echo "  - Keycloak:     http://localhost:8180 (admin/admin)"
 	@echo "  - RabbitMQ:     http://localhost:15672 (marty/marty_dev_password)"
 	@echo ""
+	@echo "$(YELLOW)To start UI:$(NC) make run-ui (in separate terminal)"
 	@echo "$(YELLOW)View logs:$(NC) make services-logs"
 	@echo "$(YELLOW)Stop:$(NC) make services-down"
 
@@ -122,7 +125,7 @@ services-restart: services-down services-up ## Restart all microservices
 # =============================================================================
 up: ## Start all containers with local development overrides
 	@echo "$(BLUE)Starting marty-ui services...$(NC)"
-	$(COMPOSE) up -d
+	$(COMPOSE) --profile dev up -d
 	@echo "$(GREEN)✓ Services started$(NC)"
 
 down: ## Stop all containers
