@@ -321,6 +321,7 @@ services:
   # Marty Authenticator Web Wallet (Development)
   # Serves the Flutter web wallet for E2E testing with SSE push notifications
   # REQUIRES: Flutter build first - run: make build-wallet
+  # TEMPORARILY DISABLED: Uncomment when wallet image is available
   # ---------------------------------------------------------------------------
   wallet:
     image: ghcr.io/anthropic/marty-authenticator:local
@@ -336,7 +337,8 @@ services:
       start_period: 5s
     stop_grace_period: 0s
     profiles:
-      - dev
+      # Temporarily disabled from dev profile - uncomment when wallet image is built
+      # - dev
       - test
       - test-local
 

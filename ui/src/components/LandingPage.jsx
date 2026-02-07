@@ -13,108 +13,44 @@ import {
   Button,
   Card,
   CardContent,
-  CardHeader,
-  CardActions,
   Grid,
-  Divider,
+  Alert,
+  Snackbar,
+  CircularProgress,
+  Paper,
   List,
   ListItem,
   ListItemIcon,
   ListItemText,
   Chip,
-  Alert,
-  Snackbar,
-  CircularProgress
 } from '@mui/material';
 import LoginIcon from '@mui/icons-material/Login';
 import FlightTakeoffIcon from '@mui/icons-material/FlightTakeoff';
 import VerifiedUserIcon from '@mui/icons-material/VerifiedUser';
 import SecurityIcon from '@mui/icons-material/Security';
-import CheckIcon from '@mui/icons-material/Check';
-import CloseIcon from '@mui/icons-material/Close';
-import StarIcon from '@mui/icons-material/Star';
-import BusinessIcon from '@mui/icons-material/Business';
-import StorefrontIcon from '@mui/icons-material/Storefront';
-import PersonIcon from '@mui/icons-material/Person';
+import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
+import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import { useAuth } from '../hooks/useAuth';
 import { useBranding } from '../hooks/useBranding';
+import { 
+  VALUE_PROPOSITION, 
+  IDENTITY_CONCEPTS, 
+  PRODUCTS, 
+  TRUST_SIGNALS,
+  IDV_COMPARISON,
+  EUDI_OPEN_BADGES,
+  ORGANIZATION_OUTCOMES,
+  AUDIENCE_ROUTING,
+  PROOF_STRIP,
+} from '../data/marketingContent';
+import { UnifiedIdentityFlowDiagram, StandardsStackDiagram } from './diagrams';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || '';
 
-/**
- * Pricing tier configuration
- * Matches PLAN_LIMITS in PaymentContext
- */
-const PRICING_TIERS = [
-  {
-    name: 'FREE',
-    price: 0,
-    description: 'Perfect for getting started',
-    features: [
-      { text: 'Up to 5 team members', included: true },
-      { text: '100 API calls/month', included: true },
-      { text: '10 credentials/month', included: true },
-      { text: 'Email support', included: true },
-      { text: 'Custom branding', included: false },
-      { text: 'Priority support', included: false },
-      { text: 'Webhooks', included: false },
-    ],
-    buttonText: 'Start Free',
-    highlighted: false,
-  },
-  {
-    name: 'STARTER',
-    price: 49,
-    description: 'For small teams',
-    features: [
-      { text: 'Up to 25 team members', included: true },
-      { text: '1,000 API calls/month', included: true },
-      { text: '100 credentials/month', included: true },
-      { text: 'Email support', included: true },
-      { text: 'Custom branding', included: false },
-      { text: 'Priority support', included: false },
-      { text: 'Webhooks', included: true },
-    ],
-    buttonText: 'Get Started',
-    highlighted: false,
-  },
-  {
-    name: 'PROFESSIONAL',
-    price: 199,
-    description: 'For growing businesses',
-    features: [
-      { text: 'Up to 100 team members', included: true },
-      { text: '10,000 API calls/month', included: true },
-      { text: '1,000 credentials/month', included: true },
-      { text: 'Priority email support', included: true },
-      { text: 'Custom branding', included: true },
-      { text: 'Priority support', included: true },
-      { text: 'Webhooks', included: true },
-    ],
-    buttonText: 'Go Professional',
-    highlighted: true,
-  },
-  {
-    name: 'ENTERPRISE',
-    price: null, // Custom pricing
-    description: 'For large organizations',
-    features: [
-      { text: 'Unlimited team members', included: true },
-      { text: 'Unlimited API calls', included: true },
-      { text: 'Unlimited credentials', included: true },
-      { text: 'Dedicated support', included: true },
-      { text: 'Custom branding', included: true },
-      { text: 'Priority support', included: true },
-      { text: 'Webhooks + Custom integrations', included: true },
-    ],
-    buttonText: 'Contact Sales',
-    highlighted: false,
-  },
-];
-
 function LandingPage() {
-  const branding = useBranding();
-  const { isAuthenticated, isLoading, login, register, isAdministrator, isVendor } = useAuth();
+  const brandingContext = useBranding();
+  const branding = brandingContext?.branding || { appName: 'ElevenID' };
+  const { isAuthenticated, isLoading, register, isAdministrator, isVendor } = useAuth();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [authError, setAuthError] = useState(null);
@@ -222,18 +158,18 @@ function LandingPage() {
   const features = [
     {
       icon: <FlightTakeoffIcon sx={{ fontSize: 48, color: 'primary.main' }} />,
-      title: 'Travel Documents',
-      description: 'Apply for and manage your travel documents securely.',
+      title: 'Issuance',
+      description: 'Issue standards-based credentials with cryptographic signatures and policy enforcement.',
     },
     {
       icon: <VerifiedUserIcon sx={{ fontSize: 48, color: 'success.main' }} />,
-      title: 'Verified Credentials',
-      description: 'Digitally verifiable credentials following international standards.',
+      title: 'Verification',
+      description: 'Verify credentials against trust anchors with revocation checking and selective disclosure.',
     },
     {
       icon: <SecurityIcon sx={{ fontSize: 48, color: 'warning.main' }} />,
-      title: 'Secure & Trusted',
-      description: 'Built on ICAO PKD infrastructure with enterprise-grade security.',
+      title: 'Governance',
+      description: 'Manage trust, policy, and deployment centrally—without changing verifier code.',
     },
   ];
 
@@ -268,237 +204,699 @@ function LandingPage() {
         }}
       >
         <Typography variant="h3" component="h1" gutterBottom fontWeight="bold">
-          {branding.appName}
+          {VALUE_PROPOSITION.headline}
         </Typography>
-        <Typography variant="h6" sx={{ mb: 4, opacity: 0.9 }}>
-          {branding.tagline}
+        <Typography variant="h4" sx={{ mb: 2, opacity: 0.95, maxWidth: 900, mx: 'auto' }}>
+          {VALUE_PROPOSITION.subheadline}
         </Typography>
-        <Button
-          variant="contained"
-          size="large"
-          startIcon={<LoginIcon />}
-          onClick={() => login()}
-          sx={{
-            bgcolor: 'white',
-            color: 'primary.main',
-            '&:hover': { bgcolor: 'grey.100' },
-            px: 4,
-            py: 1.5,
-            mr: 2,
-          }}
-        >
-          Sign In to Continue
-        </Button>
-        <Button
-          variant="outlined"
-          size="large"
-          onClick={() => register()}
-          data-testid="get-started-btn"
-          sx={{
-            borderColor: 'white',
-            color: 'white',
-            '&:hover': { bgcolor: 'rgba(255,255,255,0.1)', borderColor: 'white' },
-            px: 4,
-            py: 1.5,
-          }}
-        >
-          Get Started
-        </Button>
+        <Typography variant="h6" sx={{ mb: 4, opacity: 0.85, maxWidth: 800, mx: 'auto' }}>
+          {VALUE_PROPOSITION.extendedSubheadline}
+        </Typography>
+        <Box sx={{ display: 'flex', gap: 2, justifyContent: 'center', flexWrap: 'wrap' }}>
+          <Button
+            variant="contained"
+            size="large"
+            startIcon={<LoginIcon />}
+            onClick={() => register()}
+            data-testid="get-started-btn"
+            sx={{
+              bgcolor: 'white',
+              color: 'primary.main',
+              '&:hover': { bgcolor: 'grey.100' },
+              px: 4,
+              py: 1.5,
+            }}
+          >
+            Start Free
+          </Button>
+          <Button
+            variant="outlined"
+            size="large"
+            endIcon={<ArrowForwardIcon />}
+            onClick={() => navigate(VALUE_PROPOSITION.secondaryCTA.path)}
+            sx={{
+              borderColor: 'white',
+              color: 'white',
+              '&:hover': { bgcolor: 'rgba(255,255,255,0.1)', borderColor: 'white' },
+              px: 4,
+              py: 1.5,
+            }}
+          >
+            {VALUE_PROPOSITION.secondaryCTA.label} →
+          </Button>
+        </Box>
       </Box>
 
-      {/* Features Grid */}
-      <Grid container spacing={4} sx={{ mb: 4 }}>
-        {features.map((feature, index) => (
-          <Grid item xs={12} md={4} key={index}>
-            <Card sx={{ height: '100%', textAlign: 'center' }}>
-              <CardContent sx={{ py: 4 }}>
-                {feature.icon}
-                <Typography variant="h6" sx={{ mt: 2, mb: 1 }}>
-                  {feature.title}
+      {/* IDV Comparison Section */}
+      <Box sx={{ mb: 8 }}>
+        <Typography variant="h4" gutterBottom fontWeight="bold" textAlign="center">
+          {IDV_COMPARISON.title}
+        </Typography>
+        <Grid container spacing={3} sx={{ mt: 2 }}>
+          <Grid item xs={12} md={6}>
+            <Paper elevation={2} sx={{ p: 3, height: '100%', bgcolor: 'grey.100' }}>
+              <Typography variant="h6" fontWeight="bold" gutterBottom color="text.secondary">
+                Traditional IDV Platforms
+              </Typography>
+              <List>
+                {IDV_COMPARISON.traditional.map((item, index) => (
+                  <ListItem key={index} sx={{ py: 0.5 }}>
+                    <ListItemIcon sx={{ minWidth: 32 }}>
+                      <CheckCircleIcon fontSize="small" color="action" />
+                    </ListItemIcon>
+                    <ListItemText 
+                      primary={item.label}
+                      primaryTypographyProps={{ variant: 'body2' }}
+                    />
+                  </ListItem>
+                ))}
+              </List>
+            </Paper>
+          </Grid>
+          <Grid item xs={12} md={6}>
+            <Paper elevation={3} sx={{ p: 3, height: '100%', bgcolor: 'primary.light', color: 'primary.contrastText' }}>
+              <Typography variant="h6" fontWeight="bold" gutterBottom>
+                {branding.appName}
+              </Typography>
+              <List>
+                {IDV_COMPARISON.elevenid.map((item, index) => (
+                  <ListItem key={index} sx={{ py: 0.5 }}>
+                    <ListItemIcon sx={{ minWidth: 32 }}>
+                      <CheckCircleIcon fontSize="small" sx={{ color: 'success.light' }} />
+                    </ListItemIcon>
+                    <ListItemText 
+                      primary={item.label}
+                      primaryTypographyProps={{ variant: 'body2', fontWeight: 500 }}
+                    />
+                  </ListItem>
+                ))}
+              </List>
+            </Paper>
+          </Grid>
+        </Grid>
+        <Typography 
+          variant="h6" 
+          textAlign="center" 
+          sx={{ mt: 3, fontStyle: 'italic', color: 'primary.main' }}
+        >
+          {IDV_COMPARISON.takeaway}
+        </Typography>
+      </Box>
+
+      {/* EUDI & Open Badges Section */}
+      <Paper elevation={3} sx={{ p: 4, mb: 8, bgcolor: 'success.light', borderRadius: 2 }}>
+        <Typography variant="h5" gutterBottom fontWeight="bold" color="success.dark">
+          {EUDI_OPEN_BADGES.title}
+        </Typography>
+        <Grid container spacing={2} sx={{ mb: 3 }}>
+          {EUDI_OPEN_BADGES.points.map((point, index) => (
+            <Grid item xs={12} sm={4} key={index}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <CheckCircleIcon color="success" />
+                <Typography variant="body1" fontWeight="500">
+                  {point}
                 </Typography>
-                <Typography variant="body2" color="textSecondary">
-                  {feature.description}
+              </Box>
+            </Grid>
+          ))}
+        </Grid>
+        <Paper elevation={0} sx={{ p: 3, bgcolor: 'white', borderLeft: 4, borderColor: 'success.main' }}>
+          <Typography variant="body1" sx={{ fontStyle: 'italic', fontSize: '1.05rem', lineHeight: 1.7 }}>
+            &ldquo;{EUDI_OPEN_BADGES.quote}&rdquo;
+          </Typography>
+        </Paper>
+      </Paper>
+
+      {/* Audience Routing Block */}
+      <Box sx={{ mb: 8 }}>
+        <Typography variant="h4" gutterBottom fontWeight="bold" textAlign="center">
+          {AUDIENCE_ROUTING.title}
+        </Typography>
+        <Typography variant="body1" color="text.secondary" textAlign="center" paragraph sx={{ mb: 4 }}>
+          {AUDIENCE_ROUTING.subtitle}
+        </Typography>
+        <Grid container spacing={3}>
+          {AUDIENCE_ROUTING.paths.map((path) => (
+            <Grid item xs={12} md={4} key={path.id}>
+              <Card 
+                elevation={2} 
+                sx={{ 
+                  height: '100%', 
+                  cursor: 'pointer',
+                  transition: 'transform 0.2s, box-shadow 0.2s',
+                  '&:hover': { 
+                    transform: 'translateY(-4px)', 
+                    boxShadow: 4 
+                  },
+                }}
+                onClick={() => navigate(path.path)}
+              >
+                <CardContent sx={{ textAlign: 'center', py: 4 }}>
+                  <Typography variant="h5" fontWeight="bold" color={`${path.color}.main`} gutterBottom>
+                    {path.title}
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary" sx={{ mb: 3, minHeight: 60 }}>
+                    {path.description}
+                  </Typography>
+                  <Button
+                    variant="outlined"
+                    color={path.color}
+                    endIcon={<ArrowForwardIcon />}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      navigate(path.path);
+                    }}
+                  >
+                    {path.cta}
+                  </Button>
+                </CardContent>
+              </Card>
+            </Grid>
+          ))}
+        </Grid>
+      </Box>
+
+      {/* The Identity Problem */}
+      <Box sx={{ mb: 8 }}>
+        <Typography variant="h4" gutterBottom fontWeight="bold" textAlign="center">
+          The Identity Problem
+        </Typography>
+        <Typography variant="body1" color="text.secondary" textAlign="center" paragraph sx={{ mb: 4, maxWidth: 700, mx: 'auto' }}>
+          Most organizations face fragmented systems, unclear trust, and growing compliance pressure.
+        </Typography>
+
+        <Grid container spacing={3}>
+          {IDENTITY_CONCEPTS.whatIs.problems.map((problem, index) => (
+            <Grid item xs={12} sm={6} key={index}>
+              <Card elevation={2}>
+                <CardContent>
+                  <Typography variant="body1">
+                    {problem}
+                  </Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+          ))}
+        </Grid>
+      </Box>
+
+      {/* How ElevenID Solves It */}
+      <Box sx={{ mb: 8 }}>
+        <Typography variant="h4" gutterBottom fontWeight="bold" textAlign="center">
+          How {branding.appName} Solves It
+        </Typography>
+        <Typography variant="body1" color="text.secondary" textAlign="center" paragraph sx={{ mb: 2, maxWidth: 800, mx: 'auto' }}>
+          Govern identity with four primitives: trust profiles, credential templates, presentation policies, and flows.
+        </Typography>
+        <Typography variant="body2" color="primary.main" textAlign="center" paragraph sx={{ mb: 4, fontWeight: 500 }}>
+          Policies are configuration, not code. Endpoints execute centrally governed trust and disclosure rules without redeployment.
+        </Typography>
+
+        <Grid container spacing={4}>
+          {features.map((feature, index) => (
+            <Grid item xs={12} md={4} key={index}>
+              <Card sx={{ height: '100%', textAlign: 'center' }}>
+                <CardContent sx={{ py: 4 }}>
+                  {feature.icon}
+                  <Typography variant="h6" sx={{ mt: 2, mb: 1 }}>
+                    {feature.title}
+                  </Typography>
+                  <Typography variant="body2" color="textSecondary">
+                    {feature.description}
+                  </Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+          ))}
+        </Grid>
+      </Box>
+
+      {/* How It Works - Visual */}
+      <Box sx={{ mb: 8 }}>
+        <Typography variant="h4" gutterBottom fontWeight="bold" textAlign="center">
+          How It Works
+        </Typography>
+        <Typography variant="body1" color="text.secondary" textAlign="center" paragraph sx={{ mb: 4, maxWidth: 800, mx: 'auto' }}>
+          Digital identity is a governed exchange between four actors.
+        </Typography>
+
+        <Paper elevation={3} sx={{ p: 4, bgcolor: 'grey.50' }}>
+          <UnifiedIdentityFlowDiagram interactive={true} />
+        </Paper>
+
+        <Box sx={{ textAlign: 'center', mt: 3 }}>
+          <Button
+            variant="outlined"
+            size="large"
+            onClick={() => navigate('/identity')}
+            endIcon={<ArrowForwardIcon />}
+          >
+            See the Full Flow →
+          </Button>
+        </Box>
+      </Box>
+
+      {/* Why This Matters for Organizations */}
+      <Box sx={{ mb: 8 }}>
+        <Typography variant="h4" gutterBottom fontWeight="bold" textAlign="center">
+          {ORGANIZATION_OUTCOMES.title}
+        </Typography>
+        <Grid container spacing={3} sx={{ mt: 2 }}>
+          {ORGANIZATION_OUTCOMES.outcomes.map((outcome, index) => (
+            <Grid item xs={12} sm={6} key={index}>
+              <Card elevation={2}>
+                <CardContent>
+                  <Box sx={{ display: 'flex', alignItems: 'start', gap: 1 }}>
+                    <CheckCircleIcon color="success" sx={{ mt: 0.5 }} />
+                    <Typography variant="body1">
+                      {outcome}
+                    </Typography>
+                  </Box>
+                </CardContent>
+              </Card>
+            </Grid>
+          ))}
+        </Grid>
+      </Box>
+
+      {/* Standards & Interoperability */}
+      <Box sx={{ mb: 8 }}>
+        <Typography variant="h4" gutterBottom fontWeight="bold" textAlign="center">
+          Standards-Based Architecture
+        </Typography>
+        <Typography 
+          variant="h6" 
+          textAlign="center" 
+          sx={{ mb: 4, fontWeight: 500, color: 'primary.main' }}
+        >
+          Standards are not integrations. They are the product.
+        </Typography>
+
+        <Paper elevation={3} sx={{ p: 4, bgcolor: 'grey.50' }}>
+          <StandardsStackDiagram interactive={false} />
+        </Paper>
+
+        <Typography variant="body2" color="text.secondary" textAlign="center" sx={{ mt: 3, mb: 2, maxWidth: 700, mx: 'auto' }}>
+          These layers let ElevenID interoperate across governments, wallets, and enterprises without custom integrations.
+        </Typography>
+
+        <Box sx={{ textAlign: 'center' }}>
+          <Button
+            variant="outlined"
+            size="large"
+            onClick={() => navigate('/standards')}
+            endIcon={<ArrowForwardIcon />}
+          >
+            Explore Standards
+          </Button>
+        </Box>
+      </Box>
+
+      {/* What to buy first? - Product on-ramp */}
+      <Box sx={{ mb: 8 }}>
+        <Typography variant="h4" gutterBottom fontWeight="bold" textAlign="center">
+          What are you doing first?
+        </Typography>
+        <Typography variant="body1" color="text.secondary" textAlign="center" paragraph sx={{ mb: 4, maxWidth: 600, mx: 'auto' }}>
+          Choose a starting point. You can expand into a full ecosystem when you&apos;re ready.
+        </Typography>
+        <Grid container spacing={2} justifyContent="center">
+          <Grid item xs={12} sm={6} md={3}>
+            <Card 
+              component="a"
+              href="/product#verification-api"
+              elevation={2} 
+              sx={{ 
+                height: '100%', 
+                cursor: 'pointer',
+                textDecoration: 'none',
+                display: 'block',
+                transition: 'all 0.2s',
+                '&:hover': { transform: 'translateY(-4px)', boxShadow: 4 }
+              }}
+            >
+              <CardContent sx={{ textAlign: 'center', py: 3 }}>
+                <VerifiedUserIcon sx={{ fontSize: 40, color: 'primary.main', mb: 1 }} />
+                <Typography variant="subtitle1" fontWeight="bold" gutterBottom>
+                  Verify credentials
+                </Typography>
+                <Typography variant="body2" color="text.secondary">
+                  Verify EUDI wallets, Open Badges, and ISO credentials.
                 </Typography>
               </CardContent>
             </Card>
           </Grid>
-        ))}
-      </Grid>
-
-      {/* User Type Info */}
-      <Grid container spacing={3}>
-        <Grid item xs={12} md={4}>
-          <Card sx={{ height: '100%' }}>
-            <CardContent>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                <PersonIcon color="info" />
-                <Typography variant="h6" color="info.main">
-                  For Applicants
+          <Grid item xs={12} sm={6} md={3}>
+            <Card 
+              component="a"
+              href="/product#issuance-api"
+              elevation={2}
+              sx={{ 
+                height: '100%', 
+                cursor: 'pointer',
+                textDecoration: 'none',
+                display: 'block',
+                transition: 'all 0.2s',
+                '&:hover': { transform: 'translateY(-4px)', boxShadow: 4 }
+              }}
+            >
+              <CardContent sx={{ textAlign: 'center', py: 3 }}>
+                <FlightTakeoffIcon sx={{ fontSize: 40, color: 'secondary.main', mb: 1 }} />
+                <Typography variant="subtitle1" fontWeight="bold" gutterBottom>
+                  Issue credentials
                 </Typography>
-              </Box>
-              <Typography variant="body2" color="textSecondary">
-                Browse available credentials, submit applications, track your status, and 
-                access your issued documents securely.
-              </Typography>
-            </CardContent>
-          </Card>
-        </Grid>
-        <Grid item xs={12} md={4}>
-          <Card sx={{ height: '100%' }}>
-            <CardContent>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                <StorefrontIcon color="secondary" />
-                <Typography variant="h6" color="secondary">
-                  For Vendors
+                <Typography variant="body2" color="text.secondary">
+                  Issue workforce, education, or government credentials.
                 </Typography>
-              </Box>
-              <Typography variant="body2" color="textSecondary">
-                Manage your organization, configure API keys, invite applicants, and set 
-                processing fees for credential issuance.
-              </Typography>
-            </CardContent>
-          </Card>
-        </Grid>
-        <Grid item xs={12} md={4}>
-          <Card sx={{ height: '100%' }}>
-            <CardContent>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                <BusinessIcon color="primary" />
-                <Typography variant="h6" color="primary">
-                  For Administrators
+              </CardContent>
+            </Card>
+          </Grid>
+          <Grid item xs={12} sm={6} md={3}>
+            <Card 
+              component="a"
+              href="/product#kiosk"
+              elevation={2}
+              sx={{ 
+                height: '100%', 
+                cursor: 'pointer',
+                textDecoration: 'none',
+                display: 'block',
+                transition: 'all 0.2s',
+                '&:hover': { transform: 'translateY(-4px)', boxShadow: 4 }
+              }}
+            >
+              <CardContent sx={{ textAlign: 'center', py: 3 }}>
+                <SecurityIcon sx={{ fontSize: 40, color: 'warning.main', mb: 1 }} />
+                <Typography variant="subtitle1" fontWeight="bold" gutterBottom>
+                  Offline / facility
                 </Typography>
-              </Box>
-              <Typography variant="body2" color="textSecondary">
-                Manage applicant vetting, issue travel documents, configure trust policies, 
-                and monitor system operations.
-              </Typography>
-            </CardContent>
-          </Card>
+                <Typography variant="body2" color="text.secondary">
+                  Verify at checkpoints with limited connectivity.
+                </Typography>
+              </CardContent>
+            </Card>
+          </Grid>
+          <Grid item xs={12} sm={6} md={3}>
+            <Card 
+              component="a"
+              href="/product#authenticator"
+              elevation={2}
+              sx={{ 
+                height: '100%', 
+                cursor: 'pointer',
+                textDecoration: 'none',
+                display: 'block',
+                transition: 'all 0.2s',
+                '&:hover': { transform: 'translateY(-4px)', boxShadow: 4 }
+              }}
+            >
+              <CardContent sx={{ textAlign: 'center', py: 3 }}>
+                <LoginIcon sx={{ fontSize: 40, color: 'info.main', mb: 1 }} />
+                <Typography variant="subtitle1" fontWeight="bold" gutterBottom>
+                  Wallet experience
+                </Typography>
+                <Typography variant="body2" color="text.secondary">
+                  Give users a wallet to hold and present credentials.
+                </Typography>
+              </CardContent>
+            </Card>
+          </Grid>
         </Grid>
-      </Grid>
-
-      {/* Pricing Section */}
-      <Box sx={{ mt: 8, mb: 4, textAlign: 'center' }}>
-        <Typography variant="h4" component="h2" gutterBottom fontWeight="bold">
-          Pricing Plans
-        </Typography>
-        <Typography variant="body1" color="textSecondary" sx={{ mb: 4 }}>
-          Choose the plan that fits your organization&apos;s needs
+        <Typography variant="body2" color="text.secondary" textAlign="center" sx={{ mt: 2 }}>
+          Not sure?{' '}
+          <Typography 
+            component="a" 
+            href="/product#verification-api"
+            sx={{ color: 'primary.main', cursor: 'pointer', textDecoration: 'underline' }}
+          >
+            Start with Verification API →
+          </Typography>
         </Typography>
       </Box>
 
-      <Grid container spacing={3} sx={{ mb: 6 }}>
-        {PRICING_TIERS.map((tier) => (
-          <Grid item xs={12} sm={6} md={3} key={tier.name}>
-            <Card 
-              sx={{ 
-                height: '100%', 
-                display: 'flex', 
-                flexDirection: 'column',
-                border: tier.highlighted ? 2 : 1,
-                borderColor: tier.highlighted ? 'primary.main' : 'divider',
-                position: 'relative'
-              }}
-            >
-              {tier.highlighted && (
-                <Chip
-                  icon={<StarIcon />}
-                  label="Most Popular"
-                  color="primary"
-                  size="small"
-                  sx={{
-                    position: 'absolute',
-                    top: -12,
-                    left: '50%',
-                    transform: 'translateX(-50%)'
-                  }}
-                />
-              )}
-              <CardHeader
-                title={tier.name}
-                subheader={tier.description}
-                titleTypographyProps={{ align: 'center', fontWeight: 'bold' }}
-                subheaderTypographyProps={{ align: 'center' }}
-                sx={{ pb: 0 }}
-              />
-              <CardContent sx={{ flexGrow: 1 }}>
-                <Box sx={{ textAlign: 'center', mb: 2 }}>
-                  {tier.price !== null ? (
-                    <>
-                      <Typography variant="h3" component="span" fontWeight="bold">
-                        ${tier.price}
-                      </Typography>
-                      <Typography variant="subtitle1" color="textSecondary">
-                        /month
-                      </Typography>
-                    </>
-                  ) : (
-                    <Typography variant="h5" fontWeight="bold" color="textSecondary">
-                      Custom Pricing
+      {/* Products & Capabilities */}
+      <Box sx={{ mb: 8 }}>
+        <Typography variant="h4" gutterBottom fontWeight="bold" textAlign="center">
+          Products & Capabilities
+        </Typography>
+        <Typography variant="body1" color="text.secondary" textAlign="center" paragraph sx={{ mb: 4, maxWidth: 800, mx: 'auto' }}>
+          A complete platform—from issuance to verification and governance.
+        </Typography>
+
+        <Grid container spacing={3}>
+          {PRODUCTS.slice(0, 4).map((product) => (
+            <Grid item xs={12} sm={6} md={3} key={product.id}>
+              <Card elevation={2} sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+                <CardContent sx={{ flexGrow: 1 }}>
+                  <Typography variant="h6" fontWeight="bold" gutterBottom>
+                    {product.name}
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary" paragraph>
+                    {product.tagline}
+                  </Typography>
+                  {product.replacesExtends && (
+                    <Typography variant="body2" sx={{ mb: 1, fontStyle: 'italic', color: 'primary.main' }}>
+                      {product.replacesExtends}
                     </Typography>
                   )}
+                  {product.useWhen && (
+                    <Typography variant="body2" sx={{ mb: 2, color: 'text.secondary', fontSize: '0.8rem' }}>
+                      {product.useWhen}
+                    </Typography>
+                  )}
+                  <Box sx={{ mb: 2 }}>
+                    {product.deployment.slice(0, 2).map((deploy) => (
+                      <Chip
+                        key={deploy}
+                        label={deploy}
+                        size="small"
+                        variant="outlined"
+                        sx={{ mr: 0.5, mb: 0.5 }}
+                      />
+                    ))}
+                  </Box>
+                </CardContent>
+                <Box sx={{ p: 2, pt: 0 }}>
+                  <Button
+                    size="small"
+                    fullWidth
+                    variant="text"
+                    endIcon={<ArrowForwardIcon fontSize="small" />}
+                    onClick={() => navigate('/product')}
+                    sx={{ justifyContent: 'flex-start' }}
+                  >
+                    View Details
+                  </Button>
                 </Box>
-                <Divider sx={{ my: 2 }} />
+              </Card>
+            </Grid>
+          ))}
+        </Grid>
+
+        <Box sx={{ textAlign: 'center', mt: 3 }}>
+          <Button
+            variant="outlined"
+            size="large"
+            onClick={() => navigate('/product')}
+            endIcon={<ArrowForwardIcon />}
+          >
+            View All Products
+          </Button>
+        </Box>
+      </Box>
+
+      {/* Trust Signals */}
+      <Box sx={{ mb: 8 }}>
+        <Typography variant="h4" gutterBottom fontWeight="bold" textAlign="center">
+          Enterprise-Grade Infrastructure
+        </Typography>
+
+        <Grid container spacing={3}>
+          <Grid item xs={12} md={4}>
+            <Card elevation={2}>
+              <CardContent>
+                <Typography variant="h6" fontWeight="bold" color="primary" gutterBottom>
+                  Security
+                </Typography>
                 <List dense>
-                  {tier.features.map((feature, index) => (
-                    <ListItem key={index} sx={{ py: 0.5 }}>
+                  {TRUST_SIGNALS.security.map((item) => (
+                    <ListItem key={item} sx={{ py: 0.5 }}>
                       <ListItemIcon sx={{ minWidth: 32 }}>
-                        {feature.included ? (
-                          <CheckIcon fontSize="small" color="success" />
-                        ) : (
-                          <CloseIcon fontSize="small" color="disabled" />
-                        )}
+                        <CheckCircleIcon fontSize="small" color="success" />
                       </ListItemIcon>
                       <ListItemText 
-                        primary={feature.text}
-                        primaryTypographyProps={{
-                          variant: 'body2',
-                          color: feature.included ? 'textPrimary' : 'textSecondary'
-                        }}
+                        primary={item}
+                        primaryTypographyProps={{ variant: 'body2' }}
                       />
                     </ListItem>
                   ))}
                 </List>
               </CardContent>
-              <CardActions sx={{ p: 2, pt: 0 }}>
-                <Button
-                  fullWidth
-                  variant={tier.highlighted ? 'contained' : 'outlined'}
-                  color="primary"
-                  onClick={() => login()}
-                >
-                  {tier.buttonText}
-                </Button>
-              </CardActions>
             </Card>
           </Grid>
-        ))}
-      </Grid>
+
+          <Grid item xs={12} md={4}>
+            <Card elevation={2}>
+              <CardContent>
+                <Typography variant="h6" fontWeight="bold" color="secondary" gutterBottom>
+                  Infrastructure
+                </Typography>
+                <List dense>
+                  {TRUST_SIGNALS.infrastructure.map((item) => (
+                    <ListItem key={item} sx={{ py: 0.5 }}>
+                      <ListItemIcon sx={{ minWidth: 32 }}>
+                        <CheckCircleIcon fontSize="small" color="success" />
+                      </ListItemIcon>
+                      <ListItemText 
+                        primary={item}
+                        primaryTypographyProps={{ variant: 'body2' }}
+                      />
+                    </ListItem>
+                  ))}
+                </List>
+              </CardContent>
+            </Card>
+          </Grid>
+
+          <Grid item xs={12} md={4}>
+            <Card elevation={2}>
+              <CardContent>
+                <Typography variant="h6" fontWeight="bold" color="success.main" gutterBottom>
+                  Compliance
+                </Typography>
+                <List dense>
+                  {TRUST_SIGNALS.compliance.map((item) => (
+                    <ListItem key={item} sx={{ py: 0.5 }}>
+                      <ListItemIcon sx={{ minWidth: 32 }}>
+                        <CheckCircleIcon fontSize="small" color="success" />
+                      </ListItemIcon>
+                      <ListItemText 
+                        primary={item}
+                        primaryTypographyProps={{ variant: 'body2' }}
+                      />
+                    </ListItem>
+                  ))}
+                </List>
+              </CardContent>
+            </Card>
+          </Grid>
+        </Grid>
+      </Box>
+
+      {/* Proof & Credibility Strip */}
+      <Paper 
+        elevation={0} 
+        sx={{ 
+          mb: 8, 
+          p: 3, 
+          bgcolor: 'grey.50', 
+          borderRadius: 2,
+          border: '1px solid',
+          borderColor: 'grey.200'
+        }}
+      >
+        <Typography variant="subtitle1" fontWeight="bold" textAlign="center" sx={{ mb: 2 }}>
+          {PROOF_STRIP.title}
+        </Typography>
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: 2 }}>
+          {PROOF_STRIP.claims.map((claim) => (
+            <Chip
+              key={claim.label}
+              label={`${claim.category}: ${claim.label}`}
+              variant="outlined"
+              sx={{ borderColor: 'grey.400' }}
+            />
+          ))}
+        </Box>
+      </Paper>
+
+      {/* User Type Info - Condensed */}
+      <Paper 
+        elevation={0} 
+        sx={{ 
+          mb: 8, 
+          p: 2, 
+          bgcolor: 'grey.50', 
+          borderRadius: 1,
+          textAlign: 'center'
+        }}
+      >
+        <Typography variant="body2" color="text.secondary">
+          <strong>Built-in portals</strong> for applicants, vendors, and admins—manage API keys, trust policies, and operations in one place.{' '}
+          <Typography
+            component="span"
+            onClick={() => navigate('/product')}
+            sx={{
+              color: 'primary.main',
+              textDecoration: 'underline',
+              cursor: 'pointer',
+              '&:hover': { color: 'primary.dark' }
+            }}
+          >
+            Learn more →
+          </Typography>
+        </Typography>
+      </Paper>
 
       {/* Footer CTA */}
       <Box 
         sx={{ 
           textAlign: 'center', 
-          py: 4, 
+          py: 6, 
           bgcolor: 'grey.100', 
           borderRadius: 2,
-          mb: 2
         }}
       >
-        <Typography variant="h5" gutterBottom>
+        <Typography variant="h4" gutterBottom fontWeight="bold">
           Ready to get started?
         </Typography>
-        <Typography variant="body1" color="textSecondary" sx={{ mb: 2 }}>
-          Sign up today and start issuing secure digital credentials
+        <Typography variant="body1" color="textSecondary" sx={{ mb: 3, maxWidth: 600, mx: 'auto' }}>
+          Start free, or compare plans for your organization.
+        </Typography>
+        <Box sx={{ display: 'flex', gap: 2, justifyContent: 'center', flexWrap: 'wrap' }}>
+          <Button
+            variant="contained"
+            size="large"
+            startIcon={<LoginIcon />}
+            onClick={() => register()}
+            sx={{ px: 4 }}
+          >
+            Start Free
+          </Button>
+          <Button
+            variant="outlined"
+            size="large"
+            onClick={() => navigate('/pricing')}
+            sx={{ px: 4 }}
+          >
+            View Pricing
+          </Button>
+        </Box>
+      </Box>
+
+      {/* Orientation Banner */}
+      <Box 
+        sx={{ 
+          mt: 6, 
+          p: 2, 
+          bgcolor: 'grey.50', 
+          borderRadius: 1,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: 1
+        }}
+      >
+        <Typography variant="body2" color="text.secondary">
+          <strong>New to verifiable identity?</strong>
         </Typography>
         <Button
-          variant="contained"
-          size="large"
-          startIcon={<LoginIcon />}
-          onClick={() => register()}
-          sx={{ px: 4 }}
+          size="small"
+          onClick={() => navigate('/identity')}
+          endIcon={<ArrowForwardIcon fontSize="small" />}
+          sx={{ textTransform: 'none' }}
         >
-          Create Your Account
+          How It Works
         </Button>
       </Box>
     </Box>

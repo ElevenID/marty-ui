@@ -40,10 +40,16 @@ const APPLICANT_TABS = [
 
 /**
  * Public navigation tabs (not logged in)
- * Only show Home - the Login button in the nav bar handles authentication
+ * Intent-based navigation for product education and conversion
  */
 const PUBLIC_TABS = [
   { label: 'Home', path: '/', exact: true },
+  { label: 'Product', path: '/product' },
+  { label: 'How It Works', path: '/identity' },
+  { label: 'Why Verifiable Identity', path: '/from-idv-to-verifiable-identity' },
+  { label: 'Standards', path: '/standards' },
+  { label: 'Docs', path: '/docs' },
+  { label: 'Pricing', path: '/pricing' },
 ];
 
 function Navigation() {

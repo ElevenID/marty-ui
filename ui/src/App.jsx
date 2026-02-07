@@ -49,6 +49,12 @@ import NotificationPreferences from './components/NotificationPreferences';
 import { VendorDashboard, APIKeyManager, CredentialConfigManager, MDocConfigManager, InviteApplicants, VendorApplicationReview, TrustRegistry, Team, AuditLogs, Verification } from './components/vendor';
 import { ApplicationForm, CredentialCatalog } from './components/applicant';
 import InviteAcceptPage from './components/InviteAcceptPage';
+import ApiDocumentation from './components/ApiDocumentation';
+import ProductPage from './components/ProductPage';
+import StandardsPage from './components/StandardsPage';
+import IdentityGuidePage from './components/IdentityGuidePage';
+import FromIDVPage from './components/FromIDVPage';
+import PricingPage from './components/PricingPage';
 
 // TODO: Future feature - Dynamic theme from org database settings
 // When org profile page is implemented, fetch theme colors from API
@@ -237,13 +243,19 @@ function AppContent() {
       <Container maxWidth="lg">
         <Box sx={{ my: 4 }}>
           {/* Hide Navigation menu during onboarding */}
-          {isAuthenticated && !user?.needsOnboarding && <Navigation />}
+          {!user?.needsOnboarding && <Navigation />}
 
                   <Routes>
                 {/* Public Routes */}
                 <Route path="/" element={<LandingPage />} />
                 <Route path="/login" element={<LoginPage />} />
                 <Route path="/auth/callback" element={<AuthCallback />} />
+                <Route path="/product" element={<ProductPage />} />
+                <Route path="/identity" element={<IdentityGuidePage />} />
+                <Route path="/from-idv-to-verifiable-identity" element={<FromIDVPage />} />
+                <Route path="/standards" element={<StandardsPage />} />
+                <Route path="/pricing" element={<PricingPage />} />
+                <Route path="/docs" element={<ApiDocumentation />} />
                 <Route
                   path="/onboarding"
                   element={

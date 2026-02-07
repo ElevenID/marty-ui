@@ -45,6 +45,7 @@ import ErrorIcon from '@mui/icons-material/Error';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import InfoIcon from '@mui/icons-material/Info';
+import IntegrationInstructionsIcon from '@mui/icons-material/IntegrationInstructions';
 
 /**
  * Quick stat card component
@@ -607,6 +608,13 @@ export default function VendorDashboard() {
                 icon={<AttachMoneyIcon color="warning" />}
                 to="/vendor/fees"
                 testId="action-fees"
+              />
+              <QuickAction
+                title="API Documentation"
+                description="View comprehensive API reference and integration guides"
+                icon={<IntegrationInstructionsIcon color="info" />}
+                to="/api-docs"
+                testId="action-api-docs"
               />
             </List>
           </Paper>
