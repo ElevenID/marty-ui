@@ -1,0 +1,296 @@
+/**
+ * Recent Activity Panel
+ * 
+ * Displays the last 5 audit events on the dashboard.
+ * Provides quick visibility into recent system activity.
+ */
+
+import { useState, useEffect } from 'react';
+import {
+  Box,
+  Paper,
+  Typography,
+  List,
+  ListItem,
+  ListItemIcon,
+  ListItemText,
+  Chip,
+  Button,
+  Skeleton,
+} from '@mui/material';
+import { Link } from 'react-router-dom';
+import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import ErrorIcon from '@mui/icons-material/Error';
+import WarningIcon from '@mui/icons-material/Warning';
+import InfoIcon from '@mui/icons-material/Info';
+import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
+import BadgeIcon from '@mui/icons-material/Badge';
+import AccountTreeIcon from '@mui/icons-material/AccountTree';
+import VerifiedUserIcon from '@mui/icons-material/VerifiedUser';
+import PersonIcon from '@mui/icons-material/Person';
+
+import { useAuth } from '../../../hooks/useAuth';
+
+/**
+ * Severity levels and their visual styling
+ */
+const SEVERITY_CONFIG = {
+  info: {
+    color: 'info',
+    icon: InfoIcon,
+    label: 'Info',
+  },
+  success: {
+    color: 'success',
+    icon: CheckCircleIcon,
+    label: 'Success',
+  },
+  warning: {
+    color: 'warning',
+    icon: WarningIcon,
+    label: 'Warning',
+  },
+  error: {
+    color: 'error',
+    icon: ErrorIcon,
+    label: 'Error',
+  },
+};
+
+/**
+ * Event type to icon mapping
+ */
+const EVENT_ICONS = {
+  credential: BadgeIcon,
+  flow: AccountTreeIcon,
+  trust: VerifiedUserIcon,
+  user: PersonIcon,
+  default: InfoIcon,
+};
+
+/**
+ * Format relative time
+ */
+function formatRelativeTime(dateString) {
+  const date = new Date(dateString);
+  const now = new Date();
+  const diffMs = now - date;
+  const diffMinutes = Math.floor(diffMs / 60000);
+  const diffHours = Math.floor(diffMs / 3600000);
+  const diffDays = Math.floor(diffMs / 86400000);
+
+  if (diffMinutes < 1) return 'Just now';
+  if (diffMinutes < 60) return `${diffMinutes}m ago`;
+  if (diffHours < 24) return `${diffHours}h ago`;
+  if (diffDays < 7) return `${diffDays}d ago`;
+  return date.toLocaleDateString();
+}
+
+/**
+ * Get severity from event type/action
+ */
+function getSeverity(event) {
+  if (event.severity) return event.severity;
+  if (event.action?.includes('failed') || event.action?.includes('error')) return 'error';
+  if (event.action?.includes('warning') || event.action?.includes('rejected')) return 'warning';
+  if (event.action?.includes('success') || event.action?.includes('completed') || event.action?.includes('issued')) return 'success';
+  return 'info';
+}
+
+/**
+ * Get category from event
+ */
+function getCategory(event) {
+  if (event.category) return event.category;
+  if (event.action?.includes('credential')) return 'credential';
+  if (event.action?.includes('flow')) return 'flow';
+  if (event.action?.includes('trust')) return 'trust';
+  if (event.action?.includes('user') || event.action?.includes('login')) return 'user';
+  return 'default';
+}
+
+/**
+ * Activity Row Component
+ */
+function ActivityRow({ event }) {
+  const severity = getSeverity(event);
+  const category = getCategory(event);
+  const SeverityIcon = SEVERITY_CONFIG[severity]?.icon || InfoIcon;
+  const CategoryIcon = EVENT_ICONS[category] || EVENT_ICONS.default;
+
+  const getResourceLink = () => {
+    if (event.resource_type === 'credential') return `/console/operate/issuance/${event.resource_id}`;
+    if (event.resource_type === 'flow') return `/console/operate/flow-instances/${event.resource_id}`;
+    if (event.resource_type === 'application') return `/console/operate/applications/${event.resource_id}`;
+    return null;
+  };
+
+  const resourceLink = getResourceLink();
+
+  return (
+    <ListItem
+      disablePadding
+      sx={{ py: 1 }}
+      secondaryAction={
+        <Chip
+          size="small"
+          label={SEVERITY_CONFIG[severity]?.label || 'Info'}
+          color={SEVERITY_CONFIG[severity]?.color || 'default'}
+          variant="outlined"
+        />
+      }
+    >
+      <ListItemIcon sx={{ minWidth: 36 }}>
+        <SeverityIcon
+          fontSize="small"
+          color={SEVERITY_CONFIG[severity]?.color || 'action'}
+        />
+      </ListItemIcon>
+      <ListItemText
+        primary={
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+            <CategoryIcon fontSize="small" color="action" />
+            <Typography variant="body2" component="span">
+              {event.action?.replace(/_/g, ' ').replace(/\./g, ' ') || 'Unknown action'}
+            </Typography>
+            {resourceLink && (
+              <Button
+                size="small"
+                component={Link}
+                to={resourceLink}
+                sx={{ ml: 1, minWidth: 'auto', p: 0.25 }}
+              >
+                View
+              </Button>
+            )}
+          </Box>
+        }
+        secondary={
+          <Typography variant="caption" color="text.secondary">
+            {event.actor || 'System'} • {formatRelativeTime(event.timestamp)}
+          </Typography>
+        }
+      />
+    </ListItem>
+  );
+}
+
+/**
+ * Recent Activity Panel Component
+ */
+export function RecentActivityPanel() {
+  const { organizationId } = useAuth();
+  const [events, setEvents] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!organizationId) {
+      setLoading(false);
+      return;
+    }
+
+    const loadRecentEvents = async () => {
+      setLoading(true);
+      try {
+        // TODO: Replace with actual API call when available
+        // const response = await listAuditEvents({ limit: 5, organization_id: organizationId });
+        // setEvents(response.events || []);
+
+        // Mock data for now
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        setEvents([
+          {
+            id: 'evt-1',
+            timestamp: new Date(Date.now() - 5 * 60000).toISOString(),
+            action: 'credential.issued',
+            actor: 'john@example.com',
+            resource_type: 'credential',
+            resource_id: 'cred-123',
+            severity: 'success',
+          },
+          {
+            id: 'evt-2',
+            timestamp: new Date(Date.now() - 30 * 60000).toISOString(),
+            action: 'flow.verification_completed',
+            actor: 'jane@example.com',
+            resource_type: 'flow',
+            resource_id: 'flow-456',
+            severity: 'success',
+          },
+          {
+            id: 'evt-3',
+            timestamp: new Date(Date.now() - 2 * 3600000).toISOString(),
+            action: 'application.submitted',
+            actor: 'bob@example.com',
+            resource_type: 'application',
+            resource_id: 'app-789',
+            severity: 'info',
+          },
+          {
+            id: 'evt-4',
+            timestamp: new Date(Date.now() - 5 * 3600000).toISOString(),
+            action: 'flow.verification_failed',
+            actor: 'alice@example.com',
+            resource_type: 'flow',
+            resource_id: 'flow-012',
+            severity: 'error',
+          },
+          {
+            id: 'evt-5',
+            timestamp: new Date(Date.now() - 24 * 3600000).toISOString(),
+            action: 'trust_profile.updated',
+            actor: 'admin@example.com',
+            resource_type: 'trust_profile',
+            resource_id: 'tp-345',
+            severity: 'info',
+          },
+        ]);
+      } catch (error) {
+        console.error('Failed to load recent activity:', error);
+        setEvents([]);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadRecentEvents();
+  }, [organizationId]);
+
+  return (
+    <Paper sx={{ p: 3, mb: 3 }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2 }}>
+        <Typography variant="h6">
+          Recent Activity
+        </Typography>
+        <Button
+          size="small"
+          component={Link}
+          to="/console/audit"
+          endIcon={<ArrowForwardIcon />}
+        >
+          View All
+        </Button>
+      </Box>
+
+      {loading ? (
+        <Box>
+          {[1, 2, 3, 4, 5].map((i) => (
+            <Skeleton key={i} height={48} sx={{ my: 0.5 }} />
+          ))}
+        </Box>
+      ) : events.length === 0 ? (
+        <Box sx={{ py: 3, textAlign: 'center' }}>
+          <Typography variant="body2" color="text.secondary">
+            Activity will appear here once you begin issuing or verifying credentials
+          </Typography>
+        </Box>
+      ) : (
+        <List disablePadding>
+          {events.map((event) => (
+            <ActivityRow key={event.id} event={event} />
+          ))}
+        </List>
+      )}
+    </Paper>
+  );
+}

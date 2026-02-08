@@ -1880,6 +1880,67 @@ Verification is handled through two complementary approaches:
     app.include_router(application_router)
     app.include_router(organization_router)
     
+    # Auth service proxy - forward all /v1/auth/* requests to auth service
+    @app.api_route("/v1/auth/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
+    async def proxy_auth_requests(request: Request, path: str) -> Response:
+        """Proxy auth requests to the auth service.
+        
+        This handles login/logout redirects and session management.
+        """
+        registry = get_registry()
+        auth_url = registry.get_service_url("auth")
+        if not auth_url:
+            raise HTTPException(status_code=503, detail="Auth service unavailable")
+        
+        client = get_http_client()
+        target_url = f"{auth_url}/v1/auth/{path}"
+        
+        # Forward query parameters
+        if request.url.query:
+            target_url += f"?{request.url.query}"
+        
+        # Get request body if present
+        body = None
+        if request.method in ["POST", "PUT", "PATCH"]:
+            body = await request.body()
+        
+        # Forward headers (excluding hop-by-hop headers)
+        headers = {
+            k: v for k, v in request.headers.items()
+            if k.lower() not in ("host", "connection", "keep-alive", "transfer-encoding")
+        }
+        
+        try:
+            # Forward request without following redirects (auth handles redirects)
+            response = await client.request(
+                method=request.method,
+                url=target_url,
+                headers=headers,
+                content=body,
+                follow_redirects=False,
+                timeout=30.0,
+            )
+            
+            # Return proxied response with all headers including Set-Cookie
+            return Response(
+                content=response.content,
+                status_code=response.status_code,
+                headers={
+                    k: v for k, v in response.headers.items()
+                    if k.lower() not in ("content-encoding", "transfer-encoding")
+                },
+                media_type=response.headers.get("content-type"),
+            )
+        except httpx.ConnectError:
+            logger.error(f"Auth service unavailable at {auth_url}")
+            raise HTTPException(status_code=503, detail="Auth service unavailable")
+        except httpx.TimeoutException:
+            logger.error(f"Auth service timeout at {auth_url}")
+            raise HTTPException(status_code=504, detail="Auth service timeout")
+        except Exception as e:
+            logger.error(f"Error proxying auth request: {e}")
+            raise HTTPException(status_code=502, detail="Auth service error")
+    
     @app.get("/health")
     async def health_check() -> dict:
         return {"status": "healthy", "service": SERVICE_NAME}

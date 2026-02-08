@@ -1,8 +1,8 @@
 /**
  * Deployment Profile Manager Component
  * 
- * Manages deployment profiles that define how digital identity systems
- * are configured for specific physical deployment scenarios.
+ * Manages deployment profiles that configure how digital identity systems
+ * integrate with APIs, kiosks, lanes/devices in online and offline environments.
  * Hierarchy: Organization → Site → Deployment Profile → Lane(s) → Device(s)
  */
 
@@ -34,8 +34,6 @@ import {
   FormGroup,
   FormControlLabel,
   Checkbox,
-  Tabs,
-  Tab,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import EditIcon from '@mui/icons-material/Edit';
@@ -47,7 +45,6 @@ import PublicIcon from '@mui/icons-material/Public';
 import OfflineBoltIcon from '@mui/icons-material/OfflineBolt';
 
 import deploymentProfilesApi from '../../services/deploymentProfilesApi';
-import LaneManager from './LaneManager';
 
 const NETWORK_MODES = [
   { value: 'ONLINE', label: 'Online', description: 'Full cloud connectivity', icon: <PublicIcon /> },
@@ -61,7 +58,6 @@ const DeploymentProfileManager = () => {
   const [error, setError] = useState(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editMode, setEditMode] = useState(false);
-  const [selectedProfile, setSelectedProfile] = useState(null);
   const [currentProfile, setCurrentProfile] = useState({
     name: '',
     description: '',
@@ -77,7 +73,6 @@ const DeploymentProfileManager = () => {
       accessibility_features: [],
     },
   });
-  const [activeTab, setActiveTab] = useState(0);
 
   useEffect(() => {
     loadProfiles();
@@ -151,11 +146,6 @@ const DeploymentProfileManager = () => {
     }
   };
 
-  const handleViewLanes = (profile) => {
-    setSelectedProfile(profile);
-    setActiveTab(1);
-  };
-
   if (loading) {
     return (
       <Box display="flex" justifyContent="center" alignItems="center" minHeight="400px">
@@ -166,37 +156,39 @@ const DeploymentProfileManager = () => {
 
   return (
     <Box>
-      <Tabs value={activeTab} onChange={(e, v) => setActiveTab(v)} sx={{ mb: 3 }}>
-        <Tab label="Deployment Profiles" />
-        <Tab label="Lanes" disabled={!selectedProfile} />
-      </Tabs>
+      <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
+        <Box>
+          <Typography variant="h4">Deployment Profiles</Typography>
+          <Typography variant="body2" color="text.secondary">
+            Configure APIs, kiosks, lanes/devices for online and offline environments
+          </Typography>
+        </Box>
+        <Button
+          variant="contained"
+          color="primary"
+          startIcon={<AddIcon />}
+          onClick={handleCreate}
+        >
+          Create Profile
+        </Button>
+      </Box>
 
-      {activeTab === 0 && (
-        <>
-          <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
-            <Box>
-              <Typography variant="h4">Deployment Profiles</Typography>
-              <Typography variant="body2" color="text.secondary">
-                Configure physical deployment scenarios (kiosks, border crossings, etc.)
-              </Typography>
-            </Box>
-            <Button
-              variant="contained"
-              color="primary"
-              startIcon={<AddIcon />}
-              onClick={handleCreate}
-            >
-              Create Profile
-            </Button>
-          </Box>
-
-          {error && (
-            <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError(null)}>
-              {error}
-            </Alert>
-          )}
-
-          <Grid container spacing={3}>
+      {/* Show error OR empty state OR profiles - mutually exclusive */}
+      {error ? (
+        <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError(null)}>
+          {error}
+        </Alert>
+      ) : profiles.length === 0 ? (
+        <Paper sx={{ p: 6, textAlign: 'center', borderStyle: 'dashed', borderColor: 'divider' }}>
+          <Typography color="text.secondary" gutterBottom>
+            No deployment profiles yet
+          </Typography>
+          <Typography variant="body2" color="text.secondary">
+            Create a profile to configure how your APIs, kiosks, and devices integrate with credential flows.
+          </Typography>
+        </Paper>
+      ) : (
+        <Grid container spacing={3}>
             {profiles.map((profile) => (
               <Grid item xs={12} md={6} lg={4} key={profile.id}>
                 <Card>
@@ -224,10 +216,6 @@ const DeploymentProfileManager = () => {
                       <EditIcon sx={{ mr: 0.5 }} fontSize="small" />
                       Edit
                     </Button>
-                    <Button size="small" onClick={() => handleViewLanes(profile)}>
-                      <DevicesIcon sx={{ mr: 0.5 }} fontSize="small" />
-                      Lanes
-                    </Button>
                     <Button size="small" color="error" onClick={() => handleDelete(profile.id)}>
                       <DeleteIcon sx={{ mr: 0.5 }} fontSize="small" />
                       Delete
@@ -236,22 +224,8 @@ const DeploymentProfileManager = () => {
                 </Card>
               </Grid>
             ))}
-            {profiles.length === 0 && (
-              <Grid item xs={12}>
-                <Paper sx={{ p: 4, textAlign: 'center' }}>
-                  <Typography color="text.secondary">
-                    No deployment profiles. Create one to configure your physical deployment.
-                  </Typography>
-                </Paper>
-              </Grid>
-            )}
           </Grid>
-        </>
-      )}
-
-      {activeTab === 1 && selectedProfile && (
-        <LaneManager deploymentProfile={selectedProfile} onBack={() => setActiveTab(0)} />
-      )}
+        )}
 
       {/* Create/Edit Dialog */}
       <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} maxWidth="md" fullWidth>

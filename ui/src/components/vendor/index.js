@@ -19,4 +19,7 @@ export { default as AuditLogs } from './AuditLogs';
 export { default as Verification } from './Verification';
 export { default as ApplicationTemplateManager } from './ApplicationTemplateManager';
 export { default as RevocationManager } from './RevocationManager';
+export { default as FlowManager } from './FlowManager';
+export { default as DeploymentProfileManager } from './DeploymentProfileManager';
+export { default as Issuance } from './Issuance';
 export * from './TemplateActions';
