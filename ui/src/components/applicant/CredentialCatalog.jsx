@@ -127,11 +127,6 @@ const CredentialCatalog = () => {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [existingApplications, setExistingApplications] = useState([]);
 
-  useEffect(() => {
-    fetchAvailableCredentials();
-    fetchExistingApplications();
-  }, [organizationId, fetchAvailableCredentials, fetchExistingApplications]);
-
   /**
    * Fetch credentials available to applicants of this organization
    */
@@ -227,6 +222,12 @@ const CredentialCatalog = () => {
       console.error('Failed to fetch applications:', error);
     }
   }, [organizationId, user?.user_id]);
+
+  // Fetch data when component mounts or organizationId changes
+  useEffect(() => {
+    fetchAvailableCredentials();
+    fetchExistingApplications();
+  }, [fetchAvailableCredentials, fetchExistingApplications]);
 
   /**
    * Filter credentials based on search and category

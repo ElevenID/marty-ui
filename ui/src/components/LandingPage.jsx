@@ -84,10 +84,8 @@ function LandingPage() {
               return;
             }
 
-            if (data.user_type === 'administrator' || isAdministrator) {
-              navigate('/dashboard', { replace: true });
-            } else if (data.user_type === 'vendor' || isVendor) {
-              navigate('/vendor', { replace: true });
+            if (data.user_type === 'administrator' || isAdministrator || data.user_type === 'vendor' || isVendor) {
+              navigate('/console', { replace: true });
             } else {
               navigate('/credentials', { replace: true });
             }
@@ -104,10 +102,8 @@ function LandingPage() {
           setCheckingOnboarding(false);
         }
 
-        if (isAdministrator) {
-          navigate('/dashboard', { replace: true });
-        } else if (isVendor) {
-          navigate('/vendor', { replace: true });
+        if (isAdministrator || isVendor) {
+          navigate('/console', { replace: true });
         } else {
           navigate('/credentials', { replace: true });
         }

@@ -49,6 +49,13 @@ export async function deletePresentationPolicy(id) {
 }
 
 /**
+ * Create a new credential template
+ */
+export async function createCredentialTemplate(data) {
+  return post(CREDENTIAL_TEMPLATE_BASE, data);
+}
+
+/**
  * List credential templates (for claim name autocomplete)
  */
 export async function listCredentialTemplates(params = {}) {
@@ -63,6 +70,27 @@ export async function getCredentialTemplate(id) {
 }
 
 /**
+ * Update a credential template
+ */
+export async function updateCredentialTemplate(id, data) {
+  return patch(`${CREDENTIAL_TEMPLATE_BASE}/${id}`, data);
+}
+
+/**
+ * Delete a credential template
+ */
+export async function deleteCredentialTemplate(id) {
+  return del(`${CREDENTIAL_TEMPLATE_BASE}/${id}`);
+}
+
+/**
+ * Create a new trust profile
+ */
+export async function createTrustProfile(data) {
+  return post(TRUST_PROFILE_BASE, data);
+}
+
+/**
  * List organization trust profiles
  */
 export async function listTrustProfiles(params = {}) {
@@ -74,4 +102,18 @@ export async function listTrustProfiles(params = {}) {
  */
 export async function getTrustProfile(id) {
   return get(`${TRUST_PROFILE_BASE}/${id}`);
+}
+
+/**
+ * Update a trust profile
+ */
+export async function updateTrustProfile(id, data) {
+  return patch(`${TRUST_PROFILE_BASE}/${id}`, data);
+}
+
+/**
+ * Delete a trust profile
+ */
+export async function deleteTrustProfile(id) {
+  return del(`${TRUST_PROFILE_BASE}/${id}`);
 }

@@ -46,7 +46,6 @@ import MyDocuments from './components/MyDocuments';
 import ProfilePage from './components/ProfilePage';
 import WalletSetup from './components/WalletSetup';
 import NotificationPreferences from './components/NotificationPreferences';
-import { VendorDashboard, APIKeyManager, CredentialConfigManager, MDocConfigManager, InviteApplicants, VendorApplicationReview, TrustRegistry, Team, AuditLogs, Verification } from './components/vendor';
 import { ApplicationForm, CredentialCatalog } from './components/applicant';
 import InviteAcceptPage from './components/InviteAcceptPage';
 import ApiDocumentation from './components/ApiDocumentation';
@@ -55,6 +54,55 @@ import StandardsPage from './components/StandardsPage';
 import IdentityGuidePage from './components/IdentityGuidePage';
 import FromIDVPage from './components/FromIDVPage';
 import PricingPage from './components/PricingPage';
+
+// New Console Pages with Sidebar Navigation
+import { AuthenticatedLayout, PublicLayout } from './components/layouts';
+import {
+  ConsoleDashboard,
+  // Trust
+  TrustPage,
+  TrustProfilesPage,
+  TrustedIssuersPage,
+  RevocationProfilesPage,
+  TrustProfileWizard,
+  // Templates
+  TemplatesPage,
+  CredentialTemplatesPage,
+  ApplicationTemplatesPage,
+  CredentialTemplateWizard,
+  // Policies
+  PoliciesPage,
+  PresentationPoliciesPage,
+  ComplianceProfilesPage,
+  PresentationPolicyWizard,
+  // Deploy
+  DeployPage,
+  DeploymentProfilesPage,
+  ApiKeysPage,
+  LanesDevicesPage,
+  DeploymentProfileWizard,
+  // Flows
+  FlowsPage,
+  FlowDefinitionsPage,
+  FlowInstancesPage,
+  FlowDefinitionWizard,
+  // Operate
+  OperatePage,
+  IssuancePage,
+  ApplicationsPage,
+  // Org
+  OrgPage,
+  OrganizationSettingsPage,
+  TeamPage,
+  WebhooksPage,
+  // Audit
+  AuditPage,
+  // Applicant
+  ApplicantDashboard,
+  MyCredentialsPage,
+  MyApplicationsPage,
+  ApplicantSettingsPage,
+} from './components/console';
 
 // TODO: Future feature - Dynamic theme from org database settings
 // When org profile page is implemented, fetch theme colors from API
@@ -240,313 +288,297 @@ function AppContent() {
         </Toolbar>
       </AppBar>
 
-      <Container maxWidth="lg">
-        <Box sx={{ my: 4 }}>
-          {/* Hide Navigation menu during onboarding */}
-          {!user?.needsOnboarding && <Navigation />}
+      <Routes>
+        {/* New Console Routes (Admin/Vendor with Sidebar) - Full width, no Container */}
+        <Route
+          path="/console"
+          element={
+            <ProtectedRoute allowedTypes={['administrator', 'vendor']}>
+              <AuthenticatedLayout />
+            </ProtectedRoute>
+          }
+        >
+          <Route index element={<ConsoleDashboard />} />
+          {/* Trust */}
+          <Route path="trust" element={<TrustPage />} />
+          <Route path="trust/profiles" element={<TrustProfilesPage />} />
+          <Route path="trust/profiles/new" element={<TrustProfileWizard />} />
+          <Route path="trust/issuers" element={<TrustedIssuersPage />} />
+          <Route path="trust/revocation" element={<RevocationProfilesPage />} />
+          {/* Templates */}
+          <Route path="templates" element={<TemplatesPage />} />
+          <Route path="templates/credentials" element={<CredentialTemplatesPage />} />
+          <Route path="templates/credentials/new" element={<CredentialTemplateWizard />} />
+          <Route path="templates/applications" element={<ApplicationTemplatesPage />} />
+          {/* Policies */}
+          <Route path="policies" element={<PoliciesPage />} />
+          <Route path="policies/presentation" element={<PresentationPoliciesPage />} />
+          <Route path="policies/presentation/new" element={<PresentationPolicyWizard />} />
+          <Route path="policies/compliance" element={<ComplianceProfilesPage />} />
+          {/* Deploy */}
+          <Route path="deploy" element={<DeployPage />} />
+          <Route path="deploy/profiles" element={<DeploymentProfilesPage />} />
+          <Route path="deploy/profiles/new" element={<DeploymentProfileWizard />} />
+          <Route path="deploy/api-keys" element={<ApiKeysPage />} />
+          <Route path="deploy/lanes" element={<LanesDevicesPage />} />
+          <Route path="deploy/webhooks" element={<WebhooksPage />} />
+          {/* Flows */}
+          <Route path="flows" element={<FlowsPage />} />
+          <Route path="flows/definitions" element={<FlowDefinitionsPage />} />
+          <Route path="flows/definitions/new" element={<FlowDefinitionWizard />} />
+          {/* Operate */}
+          <Route path="operate" element={<OperatePage />} />
+          <Route path="operate/issuance" element={<IssuancePage />} />
+          <Route path="operate/applications" element={<ApplicationsPage />} />
+          <Route path="operate/flow-instances" element={<FlowInstancesPage />} />
+          {/* Org */}
+          <Route path="org" element={<OrgPage />} />
+          <Route path="org/settings" element={<OrganizationSettingsPage />} />
+          <Route path="org/team" element={<TeamPage />} />
+          {/* Audit */}
+          <Route path="audit" element={<AuditPage />} />
+        </Route>
 
-                  <Routes>
-                {/* Public Routes */}
-                <Route path="/" element={<LandingPage />} />
-                <Route path="/login" element={<LoginPage />} />
-                <Route path="/auth/callback" element={<AuthCallback />} />
-                <Route path="/product" element={<ProductPage />} />
-                <Route path="/identity" element={<IdentityGuidePage />} />
-                <Route path="/from-idv-to-verifiable-identity" element={<FromIDVPage />} />
-                <Route path="/standards" element={<StandardsPage />} />
-                <Route path="/pricing" element={<PricingPage />} />
-                <Route path="/docs" element={<ApiDocumentation />} />
-                <Route
-                  path="/onboarding"
-                  element={
-                    <ProtectedRoute>
-                      <OnboardingPage />
-                    </ProtectedRoute>
-                  }
-                />
+        {/* Applicant Console Routes (with Sidebar) - Full width, no Container */}
+        <Route
+          path="/applicant"
+          element={
+            <ApplicantRoute>
+              <AuthenticatedLayout />
+            </ApplicantRoute>
+          }
+        >
+          <Route index element={<ApplicantDashboard />} />
+          <Route path="credentials" element={<MyCredentialsPage />} />
+          <Route path="applications" element={<MyApplicationsPage />} />
+          <Route path="settings" element={<ApplicantSettingsPage />} />
+        </Route>
 
-                {/* Admin Dashboard (the original Home component) */}
-                <Route
-                  path="/dashboard"
-                  element={
-                    <AdminRoute>
-                      <Home />
-                    </AdminRoute>
-                  }
-                />
+        {/* All other routes use PublicLayout with Container */}
+        <Route element={<PublicLayout />}>
+          {/* Public Routes */}
+          <Route path="/" element={<LandingPage />} />
+          <Route path="/login" element={<LoginPage />} />
+          <Route path="/auth/callback" element={<AuthCallback />} />
+          <Route path="/product" element={<ProductPage />} />
+          <Route path="/identity" element={<IdentityGuidePage />} />
+          <Route path="/from-idv-to-verifiable-identity" element={<FromIDVPage />} />
+          <Route path="/standards" element={<StandardsPage />} />
+          <Route path="/pricing" element={<PricingPage />} />
+          <Route path="/docs" element={<ApiDocumentation />} />
+          <Route
+            path="/onboarding"
+            element={
+              <ProtectedRoute>
+                <OnboardingPage />
+              </ProtectedRoute>
+            }
+          />
 
-                {/* Administrator-Only Routes */}
-                <Route
-                  path="/documents"
-                  element={
-                    <AdminRoute>
-                      <TravelDocuments />
-                    </AdminRoute>
-                  }
-                />
-                <Route
-                  path="/applicants"
-                  element={
-                    <AdminRoute>
-                      <ApplicantVetting />
-                    </AdminRoute>
-                  }
-                />
-                <Route
-                  path="/verifier"
-                  element={
-                    <AdminRoute>
-                      <VerifierDemo />
-                    </AdminRoute>
-                  }
-                />
-                <Route
-                  path="/verifier/create-request"
-                  element={
-                    <AdminRoute>
-                      <PresentationRequestCreator />
-                    </AdminRoute>
-                  }
-                />
-                <Route
-                  path="/wallet"
-                  element={
-                    <AdminRoute>
-                      <WalletDemo />
-                    </AdminRoute>
-                  }
-                />
-                <Route
-                  path="/enhanced"
-                  element={
-                    <AdminRoute>
-                      <EnhancedVerifierDemo />
-                    </AdminRoute>
-                  }
-                />
-                <Route
-                  path="/admin"
-                  element={
-                    <AdminRoute>
-                      <AdminDashboard />
-                    </AdminRoute>
-                  }
-                />
-                <Route
-                  path="/admin/passport"
-                  element={
-                    <AdminRoute>
-                      <PassportDemo />
-                    </AdminRoute>
-                  }
-                />
-                <Route
-                  path="/admin/csca"
-                  element={
-                    <AdminRoute>
-                      <CscaManager />
-                    </AdminRoute>
-                  }
-                />
-                <Route
-                  path="/admin/pkd"
-                  element={
-                    <AdminRoute>
-                      <PkdManager />
-                    </AdminRoute>
-                  }
-                />
-                <Route
-                  path="/admin/trust-anchor"
-                  element={
-                    <AdminRoute>
-                      <TrustAnchor />
-                    </AdminRoute>
-                  }
-                />
-                <Route
-                  path="/admin/master-lists"
-                  element={
-                    <AdminRoute>
-                      <MasterListViewer />
-                    </AdminRoute>
-                  }
-                />
-                <Route
-                  path="/admin/metrics"
-                  element={
-                    <AdminRoute>
-                      <MetricsViewer />
-                    </AdminRoute>
-                  }
-                />
+          {/* Admin Dashboard (the original Home component) */}
+          <Route
+            path="/dashboard"
+            element={
+              <AdminRoute>
+                <Home />
+              </AdminRoute>
+            }
+          />
 
-                {/* Vendor-Only Routes */}
-                <Route
-                  path="/vendor"
-                  element={
-                    <VendorRoute>
-                      <VendorDashboard />
-                    </VendorRoute>
-                  }
-                />
-                <Route
-                  path="/vendor/api-keys"
-                  element={
-                    <VendorRoute>
-                      <APIKeyManager />
-                    </VendorRoute>
-                  }
-                />
-                <Route
-                  path="/vendor/credentials"
-                  element={
-                    <VendorRoute>
-                      <CredentialConfigManager />
-                    </VendorRoute>
-                  }
-                />
-                <Route
-                  path="/vendor/mdoc-config"
-                  element={
-                    <VendorRoute>
-                      <MDocConfigManager />
-                    </VendorRoute>
-                  }
-                />
-                <Route
-                  path="/vendor/settings"
-                  element={
-                    <VendorRoute>
-                      <MDocConfigManager />
-                    </VendorRoute>
-                  }
-                />
-                <Route
-                  path="/vendor/invitations"
-                  element={
-                    <VendorRoute>
-                      <InviteApplicants />
-                    </VendorRoute>
-                  }
-                />
-                <Route
-                  path="/vendor/applications"
-                  element={
-                    <VendorRoute>
-                      <VendorApplicationReview />
-                    </VendorRoute>
-                  }
-                />
-                <Route
-                  path="/vendor/trust"
-                  element={
-                    <VendorRoute>
-                      <TrustRegistry />
-                    </VendorRoute>
-                  }
-                />
-                <Route
-                  path="/vendor/team"
-                  element={
-                    <VendorRoute>
-                      <Team />
-                    </VendorRoute>
-                  }
-                />
-                <Route
-                  path="/vendor/logs"
-                  element={
-                    <VendorRoute>
-                      <AuditLogs />
-                    </VendorRoute>
-                  }
-                />
-                <Route
-                  path="/vendor/verification"
-                  element={
-                    <VendorRoute>
-                      <Verification />
-                    </VendorRoute>
-                  }
-                />
+          {/* Administrator-Only Routes */}
+          <Route
+            path="/documents"
+            element={
+              <AdminRoute>
+                <TravelDocuments />
+              </AdminRoute>
+            }
+          />
+          <Route
+            path="/applicants"
+            element={
+              <AdminRoute>
+                <ApplicantVetting />
+              </AdminRoute>
+            }
+          />
+          <Route
+            path="/verifier"
+            element={
+              <AdminRoute>
+                <VerifierDemo />
+              </AdminRoute>
+            }
+          />
+          <Route
+            path="/verifier/create-request"
+            element={
+              <AdminRoute>
+                <PresentationRequestCreator />
+              </AdminRoute>
+            }
+          />
+          <Route
+            path="/wallet"
+            element={
+              <AdminRoute>
+                <WalletDemo />
+              </AdminRoute>
+            }
+          />
+          <Route
+            path="/enhanced"
+            element={
+              <AdminRoute>
+                <EnhancedVerifierDemo />
+              </AdminRoute>
+            }
+          />
+          <Route
+            path="/admin"
+            element={
+              <AdminRoute>
+                <AdminDashboard />
+              </AdminRoute>
+            }
+          />
+          <Route
+            path="/admin/passport"
+            element={
+              <AdminRoute>
+                <PassportDemo />
+              </AdminRoute>
+            }
+          />
+          <Route
+            path="/admin/csca"
+            element={
+              <AdminRoute>
+                <CscaManager />
+              </AdminRoute>
+            }
+          />
+          <Route
+            path="/admin/pkd"
+            element={
+              <AdminRoute>
+                <PkdManager />
+              </AdminRoute>
+            }
+          />
+          <Route
+            path="/admin/trust-anchor"
+            element={
+              <AdminRoute>
+                <TrustAnchor />
+              </AdminRoute>
+            }
+          />
+          <Route
+            path="/admin/master-lists"
+            element={
+              <AdminRoute>
+                <MasterListViewer />
+              </AdminRoute>
+            }
+          />
+          <Route
+            path="/admin/metrics"
+            element={
+              <AdminRoute>
+                <MetricsViewer />
+              </AdminRoute>
+            }
+          />
 
-                {/* Public invite accept route */}
-                <Route path="/invite/accept" element={<InviteAcceptPage />} />
+          {/* Legacy Vendor Routes - Redirect to new Console routes */}
+          <Route path="/vendor" element={<Navigate to="/console" replace />} />
+          <Route path="/vendor/api-keys" element={<Navigate to="/console/deploy/api-keys" replace />} />
+          <Route path="/vendor/credentials" element={<Navigate to="/console/templates/credentials" replace />} />
+          <Route path="/vendor/mdoc-config" element={<Navigate to="/console/templates/credentials" replace />} />
+          <Route path="/vendor/settings" element={<Navigate to="/console/org/settings" replace />} />
+          <Route path="/vendor/invitations" element={<Navigate to="/console/operate/invitations" replace />} />
+          <Route path="/vendor/applications" element={<Navigate to="/console/operate/applications" replace />} />
+          <Route path="/vendor/trust" element={<Navigate to="/console/trust/profiles" replace />} />
+          <Route path="/vendor/team" element={<Navigate to="/console/org/team" replace />} />
+          <Route path="/vendor/logs" element={<Navigate to="/console/audit" replace />} />
+          <Route path="/vendor/verification" element={<Navigate to="/console/operate/verification" replace />} />
 
-                {/* Applicant-Only Routes */}
-                <Route
-                  path="/credentials"
-                  element={
-                    <ApplicantRoute>
-                      <CredentialCatalog />
-                    </ApplicantRoute>
-                  }
-                />
-                <Route
-                  path="/my-applications"
-                  element={
-                    <ApplicantRoute>
-                      <MyApplications />
-                    </ApplicantRoute>
-                  }
-                />
-                <Route
-                  path="/my-documents"
-                  element={
-                    <ApplicantRoute>
-                      <MyDocuments />
-                    </ApplicantRoute>
-                  }
-                />
-                <Route
-                  path="/apply"
-                  element={
-                    <ApplicantRoute>
-                      <ApplicationForm />
-                    </ApplicantRoute>
-                  }
-                />
-                <Route
-                  path="/apply/:credentialType"
-                  element={
-                    <ApplicantRoute>
-                      <ApplicationForm />
-                    </ApplicantRoute>
-                  }
-                />
-                <Route
-                  path="/profile"
-                  element={
-                    <ProtectedRoute>
-                      <ProfilePage />
-                    </ProtectedRoute>
-                  }
-                />
+          {/* Public invite accept route */}
+          <Route path="/invite/accept" element={<InviteAcceptPage />} />
 
-                {/* Wallet Setup & Notifications */}
-                <Route
-                  path="/wallet/setup"
-                  element={
-                    <ProtectedRoute>
-                      <WalletSetup />
-                    </ProtectedRoute>
-                  }
-                />
-                <Route
-                  path="/settings/notifications"
-                  element={
-                    <ProtectedRoute>
-                      <NotificationPreferences />
-                    </ProtectedRoute>
-                  }
-                />
+          {/* Applicant-Only Routes */}
+          <Route
+            path="/credentials"
+            element={
+              <ApplicantRoute>
+                <CredentialCatalog />
+              </ApplicantRoute>
+            }
+          />
+          <Route
+            path="/my-applications"
+            element={
+              <ApplicantRoute>
+                <MyApplications />
+              </ApplicantRoute>
+            }
+          />
+          <Route
+            path="/my-documents"
+            element={
+              <ApplicantRoute>
+                <MyDocuments />
+              </ApplicantRoute>
+            }
+          />
+          <Route
+            path="/apply"
+            element={
+              <ApplicantRoute>
+                <ApplicationForm />
+              </ApplicantRoute>
+            }
+          />
+          <Route
+            path="/apply/:credentialType"
+            element={
+              <ApplicantRoute>
+                <ApplicationForm />
+              </ApplicantRoute>
+            }
+          />
+          <Route
+            path="/profile"
+            element={
+              <ProtectedRoute>
+                <ProfilePage />
+              </ProtectedRoute>
+            }
+          />
 
-                {/* Fallback - redirect unknown routes to home */}
-                <Route path="*" element={<Navigate to="/" replace />} />
-              </Routes>
-        </Box>
-      </Container>
+          {/* Wallet Setup & Notifications */}
+          <Route
+            path="/wallet/setup"
+            element={
+              <ProtectedRoute>
+                <WalletSetup />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/settings/notifications"
+            element={
+              <ProtectedRoute>
+                <NotificationPreferences />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* Fallback - redirect unknown routes to home */}
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Route>
+      </Routes>
     </ThemeProvider>
   );
 }
