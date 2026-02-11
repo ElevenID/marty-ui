@@ -200,7 +200,7 @@ test.describe('Authentication Flow Tests', () => {
       await authHelpers.clickLoginButton();
 
       // Should redirect to Keycloak
-      await page.waitForURL(url => url.toString().includes('realms/marty') && url.toString().includes('openid-connect'), {
+      await page.waitForURL(url => url.toString().includes('realms/11id') && url.toString().includes('openid-connect'), {
         timeout: 10000,
       });
 
@@ -216,7 +216,7 @@ test.describe('Authentication Flow Tests', () => {
       await authHelpers.clickRegisterButton();
 
       // Should redirect to Keycloak
-      await page.waitForURL(url => url.toString().includes('realms/marty'), {
+      await page.waitForURL(url => url.toString().includes('realms/11id'), {
         timeout: 10000,
       });
 
@@ -403,7 +403,7 @@ test.describe('Integration: Full Auth Flow with Keycloak', () => {
   test.beforeEach(async ({ page }) => {
     // Check if Keycloak is available
     try {
-      const response = await page.request.get(`${KEYCLOAK_URL}/realms/marty/.well-known/openid-configuration`);
+      const response = await page.request.get(`${KEYCLOAK_URL}/realms/11id/.well-known/openid-configuration`);
       if (response.status() !== 200) {
         test.skip();
       }
@@ -452,7 +452,7 @@ test.describe('Integration: Full Auth Flow with Keycloak', () => {
     
     // This test verifies the flow entry point
     const url = page.url();
-    expect(url.includes('realms/marty')).toBe(true);
+    expect(url.includes('realms/11id')).toBe(true);
   });
 });
 

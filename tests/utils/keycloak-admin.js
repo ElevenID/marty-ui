@@ -6,7 +6,7 @@
  */
 
 const KEYCLOAK_ADMIN_URL = process.env.KEYCLOAK_ADMIN_URL || 'http://localhost:8180';
-const KEYCLOAK_REALM = process.env.KEYCLOAK_REALM || 'marty';
+const KEYCLOAK_REALM = process.env.KEYCLOAK_REALM || '11id';
 const KEYCLOAK_ADMIN_USER = process.env.KEYCLOAK_ADMIN_USER || 'admin';
 const KEYCLOAK_ADMIN_PASSWORD = process.env.KEYCLOAK_ADMIN_PASSWORD || 'admin';
 

@@ -73,6 +73,38 @@ except ImportError as e:
     ONBOARDING_SERVICE_AVAILABLE = False
     logging.warning(f"Onboarding service not available: {e}")
 
+# Audit service imports
+try:
+    from audit import router as audit_router
+    AUDIT_SERVICE_AVAILABLE = True
+except ImportError as e:
+    AUDIT_SERVICE_AVAILABLE = False
+    logging.warning(f"Audit service not available: {e}")
+
+# Role escalation service imports
+try:
+    from roles import router as roles_router
+    ROLES_SERVICE_AVAILABLE = True
+except ImportError as e:
+    ROLES_SERVICE_AVAILABLE = False
+    logging.warning(f"Roles service not available: {e}")
+
+# Notification preferences service imports
+try:
+    from notifications_service import router as notification_prefs_router
+    NOTIFICATION_PREFS_AVAILABLE = True
+except ImportError as e:
+    NOTIFICATION_PREFS_AVAILABLE = False
+    logging.warning(f"Notification preferences service not available: {e}")
+
+# Admin impersonation service imports
+try:
+    from admin_impersonation import router as admin_impersonation_router
+    ADMIN_IMPERSONATION_AVAILABLE = True
+except ImportError as e:
+    ADMIN_IMPERSONATION_AVAILABLE = False
+    logging.warning(f"Admin impersonation service not available: {e}")
+
 # Credential configuration service imports
 try:
     from credentials.router import router as credentials_router
@@ -232,6 +264,26 @@ if AUTH_SERVICE_AVAILABLE:
 if ONBOARDING_SERVICE_AVAILABLE:
     app.include_router(onboarding_router, tags=["Onboarding"])
     logger.info("Onboarding service router registered")
+
+# Include audit service router
+if AUDIT_SERVICE_AVAILABLE:
+    app.include_router(audit_router, tags=["Audit"])
+    logger.info("Audit service router registered")
+
+# Include roles service router
+if ROLES_SERVICE_AVAILABLE:
+    app.include_router(roles_router, tags=["Roles"])
+    logger.info("Roles service router registered")
+
+# Include notification preferences router
+if NOTIFICATION_PREFS_AVAILABLE:
+    app.include_router(notification_prefs_router, tags=["Notifications"])
+    logger.info("Notification preferences router registered")
+
+# Include admin impersonation router
+if ADMIN_IMPERSONATION_AVAILABLE:
+    app.include_router(admin_impersonation_router, tags=["Admin"])
+    logger.info("Admin impersonation router registered")
 
 # API Keys service
 try:
@@ -1190,6 +1242,177 @@ async def issuer_credential(request: dict[str, Any]):
     except Exception as e:
         logger.error(f"Failed to issue credential via OID4VCI: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# =============================================================================
+# OID4VCI Issuer Metadata Endpoint
+# =============================================================================
+
+@app.get("/.well-known/openid-credential-issuer")
+async def get_issuer_metadata(user_agent: str = Header(None)):
+    """OID4VCI Issuer Metadata Endpoint.
+    
+    Returns metadata about the credential issuer per OID4VCI specification.
+    Includes credential configurations derived from active credential templates.
+    Adapts to wallet capabilities if User-Agent is provided.
+    """
+    # Get base URL from environment
+    base_url = os.getenv("PUBLIC_BASE_URL", "http://localhost:8000")
+    
+    # Detect wallet capabilities if User-Agent is provided
+    wallet_vendor = "generic"
+    supported_formats = None
+    
+    if user_agent:
+        try:
+            import httpx
+            wallet_service_url = os.getenv("WALLET_SERVICE_URL", "http://wallet-service:8015")
+            async with httpx.AsyncClient(timeout=2.0) as client:
+                response = await client.post(
+                    f"{wallet_service_url}/v1/wallets/detect",
+                    json={"user_agent": user_agent}
+                )
+                if response.status_code == 200:
+                    wallet_info = response.json()
+                    wallet_vendor = wallet_info.get("detected_vendor", "generic")
+                    supported_formats = wallet_info.get("supported_formats", [])
+                    logger.info(f"Detected wallet: {wallet_vendor}, formats: {supported_formats}")
+        except Exception as e:
+            logger.warning(f"Failed to detect wallet from User-Agent: {e}")
+    
+    # Query active credential templates if credential service is available
+    credential_configurations = {}
+    
+    if CREDENTIALS_SERVICE_AVAILABLE:
+        try:
+            # Import credential models to query active templates
+            from subscription.models import CredentialTypeConfiguration
+            from sqlalchemy import create_engine
+            from sqlalchemy.orm import sessionmaker
+            
+            # Create database session
+            db_url = os.getenv("DATABASE_URL", "postgresql://marty:marty_dev@postgres:5432/marty_credentials")
+            engine = create_engine(db_url)
+            SessionLocal = sessionmaker(bind=engine)
+            db = SessionLocal()
+            
+            try:
+                # Query active credential templates
+                active_templates = db.query(CredentialTypeConfiguration).filter(
+                    CredentialTypeConfiguration.is_active == True
+                ).all()
+                
+                # Build credential configurations from templates
+                for template in active_templates:
+                    config_id = template.id
+                    
+                    # Parse supported formats from template
+                    all_formats = template.formats or ["vc+sd-jwt", "jwt_vc_json"]
+                    
+                    # Filter formats by wallet capabilities
+                    if supported_formats:
+                        formats = [f for f in all_formats if f in supported_formats or f.replace("_", "+") in supported_formats]
+                        if not formats:
+                            # If wallet doesn't support any formats, skip this template
+                            logger.info(f"Skipping template {template.name} - no format match for wallet {wallet_vendor}")
+                            continue
+                    else:
+                        formats = all_formats
+                    
+                    # Build format-specific configurations
+                    format_config = {}
+                    if "vc+sd-jwt" in formats or "vc_sd_jwt" in formats:
+                        format_config["format"] = "vc+sd-jwt"
+                        format_config["scope"] = template.name.lower().replace(" ", "_")
+                        format_config["cryptographic_binding_methods_supported"] = ["did:key", "did:web", "did:jwk"]
+                        format_config["credential_signing_alg_values_supported"] = ["ES256", "ES384", "EdDSA"]
+                        format_config["proof_types_supported"] = ["jwt"]
+                        
+                        # Add display metadata
+                        format_config["display"] = [{
+                            "name": template.display_name or template.name,
+                            "locale": "en-US",
+                            "logo": {
+                                "uri": template.logo_url if hasattr(template, 'logo_url') and template.logo_url else f"{base_url}/assets/credential-logo.png",
+                            },
+                            "background_color": template.background_color if hasattr(template, 'background_color') and template.background_color else "#0066CC",
+                            "text_color": template.text_color if hasattr(template, 'text_color') and template.text_color else "#FFFFFF",
+                        }]
+                        
+                        # Add credential definition
+                        vct = template.credential_type or template.name.replace(" ", "")
+                        format_config["vct"] = vct
+                    
+                    elif "jwt_vc_json" in formats or "vc_jwt" in formats:
+                        format_config["format"] = "jwt_vc_json"
+                        format_config["scope"] = template.name.lower().replace(" ", "_")
+                        format_config["cryptographic_binding_methods_supported"] = ["did:key", "did:web", "did:jwk"]
+                        format_config["credential_signing_alg_values_supported"] = ["ES256", "ES384", "EdDSA"]
+                        format_config["proof_types_supported"] = ["jwt"]
+                        
+                        # Add display metadata
+                        format_config["display"] = [{
+                            "name": template.display_name or template.name,
+                            "locale": "en-US",
+                        }]
+                        
+                        # Add credential definition with types
+                        types = ["VerifiableCredential"]
+                        if template.credential_type:
+                            types.append(template.credential_type)
+                        
+                        format_config["credential_definition"] = {
+                            "type": types,
+                        }
+                    
+                    credential_configurations[config_id] = format_config
+                
+            finally:
+                db.close()
+        except Exception as e:
+            logger.warning(f"Failed to load credential templates for issuer metadata: {e}")
+            # Fall back to default configuration
+            pass
+    
+    # If no templates loaded, provide default configuration
+    if not credential_configurations:
+        credential_configurations = {
+            "default_credential": {
+                "format": "vc+sd-jwt",
+                "scope": "credential",
+                "cryptographic_binding_methods_supported": ["did:key", "did:web"],
+                "credential_signing_alg_values_supported": ["ES256", "EdDSA"],
+                "proof_types_supported": ["jwt"],
+                "display": [{
+                    "name": "Verifiable Credential",
+                    "locale": "en-US",
+                }],
+                "vct": "VerifiableCredential",
+            }
+        }
+    
+    # Build full issuer metadata
+    metadata = {
+        "credential_issuer": base_url,
+        "credential_endpoint": f"{base_url}/api/issuance/credential",
+        "token_endpoint": f"{base_url}/api/issuance/token",
+        "deferred_credential_endpoint": f"{base_url}/api/issuance/deferred",
+        "credential_configurations_supported": credential_configurations,
+        "display": [{
+            "name": "Marty Credential Issuer",
+            "locale": "en-US",
+            "logo": {
+                "uri": f"{base_url}/assets/logo.png",
+            },
+        }],
+    }
+    
+    # Add wallet compatibility metadata for debugging
+    if user_agent and supported_formats:
+        metadata["_wallet_detected"] = wallet_vendor
+        metadata["_formats_filtered"] = len(all_formats if 'all_formats' in locals() else []) > len(credential_configurations)
+    
+    return metadata
 
 
 # Run with: uvicorn oid4vc_api:app --reload

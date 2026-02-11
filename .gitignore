@@ -55,6 +55,10 @@ bun.lockb
 .env.test.local
 .env.production.local
 
+# Cloudflare Tunnel configuration (contains secrets)
+.env.tunnel
+.env.tunnel-auth
+
 # Keep example env files tracked
 !.env.example
 !.env*.example
@@ -87,6 +91,8 @@ test-results/
 playwright-report/
 playwright/.cache/
 coverage/
+storybook-static/
+.vitest/
 
 # =============================================================================
 # Temporary Files

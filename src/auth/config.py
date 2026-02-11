@@ -79,11 +79,11 @@ class OIDCConfig:
         return cls(
             issuer_url=os.environ.get(
                 "OIDC_ISSUER_URL",
-                "http://localhost:8180/realms/marty",
+                "http://localhost:8180/realms/11id",
             ),
             backend_issuer_url=os.environ.get(
                 "OIDC_BACKEND_ISSUER_URL",
-                "http://keycloak:8080/realms/marty",  # Internal docker network
+                "http://keycloak:8080/realms/11id",  # Internal docker network
             ),
             client_id=os.environ.get("OIDC_CLIENT_ID", "marty-ui"),
             client_secret=os.environ.get("OIDC_CLIENT_SECRET"),  # None for public clients

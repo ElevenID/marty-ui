@@ -33,7 +33,7 @@ class KeycloakAdminConfig:
         """Create config from environment variables."""
         return cls(
             server_url=os.environ.get("KEYCLOAK_URL", "http://keycloak:8080"),
-            realm=os.environ.get("KEYCLOAK_REALM", "marty"),
+            realm=os.environ.get("KEYCLOAK_REALM", "11id"),
             admin_client_id=os.environ.get("KEYCLOAK_ADMIN_CLIENT_ID", "admin-cli"),
             admin_client_secret=os.environ.get("KEYCLOAK_ADMIN_CLIENT_SECRET", ""),
         )

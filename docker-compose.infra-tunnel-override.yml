@@ -1,0 +1,18 @@
+# Docker Compose Override for Keycloak with Tunnel Configuration
+# ===============================================================
+# This file configures Keycloak to work with external access
+# through the Cloudflare tunnel.
+#
+# Usage with tunnel:
+#   Source .env.tunnel first, then start with infra:
+#   export $(cat .env.tunnel | grep -v '^#' | xargs)
+#   docker-compose -f docker-compose.infra.yml -f docker-compose.infra-tunnel-override.yml up -d
+
+version: '3.8'
+
+services:
+  keycloak:
+    environment:
+      # Override for external access through tunnel
+      PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:-beta.elevenidllc.com}
+      UI_BASE_URL: https://${PUBLIC_DOMAIN:-beta.elevenidllc.com}

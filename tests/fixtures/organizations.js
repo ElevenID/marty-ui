@@ -2,7 +2,7 @@
  * Seeded Test Organizations
  *
  * References to organizations pre-created in Keycloak realm.
- * These match the organizations defined in marty-realm.json.
+ * These match the organizations defined in 11id-realm.json.
  */
 
 const SEEDED_ORGS = {

@@ -185,7 +185,7 @@ services:
       AUTH_SERVICE_PORT: "8001"
       REDIS_URL: redis://redis:6379/0
       RABBITMQ_URL: amqp://marty:marty_dev_password@rabbitmq:5672/
-      OIDC_ISSUER_URL: http://keycloak:8080/realms/marty
+      OIDC_ISSUER_URL: http://keycloak:8080/realms/11id
       OIDC_CLIENT_ID: marty-ui
       OIDC_REDIRECT_URI: http://localhost:8000/v1/auth/callback
       SESSION_TTL_SECONDS: "86400"

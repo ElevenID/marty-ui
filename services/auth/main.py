@@ -50,12 +50,12 @@ def get_config() -> dict:
         "oidc": {
             "issuer_url": os.environ.get(
                 "OIDC_ISSUER_URL",
-                "http://localhost:8180/realms/marty"
+                "http://localhost:8180/realms/11id"
             ),
             # External URL for browser redirects (defaults to issuer_url)
             "external_issuer_url": os.environ.get(
                 "OIDC_EXTERNAL_ISSUER_URL",
-                os.environ.get("OIDC_ISSUER_URL", "http://localhost:8180/realms/marty")
+                os.environ.get("OIDC_ISSUER_URL", "http://localhost:8180/realms/11id")
             ),
             "client_id": os.environ.get("OIDC_CLIENT_ID", "marty-ui"),
             "client_secret": os.environ.get("OIDC_CLIENT_SECRET"),

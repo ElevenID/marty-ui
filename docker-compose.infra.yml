@@ -58,6 +58,9 @@ services:
       KC_HOSTNAME_PORT: 8180
       KC_HOSTNAME_STRICT: "false"
       KC_HTTP_ENABLED: "true"
+      # Environment variables for realm import template substitution
+      PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:-localhost}
+      UI_BASE_URL: ${UI_BASE_URL:-http://localhost:3000}
     depends_on:
       postgres:
         condition: service_healthy
