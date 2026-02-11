@@ -4,10 +4,15 @@
  * Reusable empty state for list pages. Answers:
  * - "Why is this empty?"
  * - "What should I do next?"
+ * - "What do I need first?"
  */
 
-import { Box, Typography, Button, Paper } from '@mui/material';
+import { Box, Typography, Button, Paper, Stack, Chip, Link as MuiLink, Alert } from '@mui/material';
 import InboxIcon from '@mui/icons-material/Inbox';
+import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import ErrorIcon from '@mui/icons-material/Error';
+import InfoIcon from '@mui/icons-material/Info';
+import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import { Link } from 'react-router-dom';
 
 /**
@@ -21,6 +26,12 @@ import { Link } from 'react-router-dom';
  * @param {string} [props.secondaryActionLabel] - Secondary action label
  * @param {string} [props.secondaryActionPath] - Secondary action path
  * @param {boolean} [props.isFiltered] - True if filters are applied (shows different message)
+ * @param {Array} [props.prerequisites] - Prerequisites needed before creating this resource
+ *   Array of objects: { label, status: 'ready'|'pending'|'blocked', path }
+ * @param {string} [props.docsUrl] - Link to documentation
+ * @param {string} [props.exampleLabel] - Label for example/preset action
+ * @param {Function} [props.onExampleClick] - Handler for example action
+ * @param {string} [props.whyItMatters] - Short explanation of why this resource is important
  */
 function EmptyState({
   icon,
@@ -32,8 +43,16 @@ function EmptyState({
   secondaryActionLabel,
   secondaryActionPath,
   isFiltered = false,
+  prerequisites,
+  docsUrl,
+  exampleLabel,
+  onExampleClick,
+  whyItMatters,
 }) {
   const IconComponent = icon || InboxIcon;
+  
+  // Check if all prerequisites are met
+  const hasBlockedPrerequisites = prerequisites?.some(p => p.status === 'blocked' || p.status === 'pending');
   
   // Filtered state shows a simpler message
   if (isFiltered) {
@@ -54,6 +73,32 @@ function EmptyState({
       </Box>
     );
   }
+
+  const getPrerequisiteIcon = (status) => {
+    switch (status) {
+      case 'ready':
+        return <CheckCircleIcon fontSize="small" color="success" />;
+      case 'blocked':
+        return <ErrorIcon fontSize="small" color="error" />;
+      case 'pending':
+        return <InfoIcon fontSize="small" color="warning" />;
+      default:
+        return null;
+    }
+  };
+
+  const getPrerequisiteColor = (status) => {
+    switch (status) {
+      case 'ready':
+        return 'success';
+      case 'blocked':
+        return 'error';
+      case 'pending':
+        return 'warning';
+      default:
+        return 'default';
+    }
+  };
 
   return (
     <Paper 
@@ -81,11 +126,7 @@ function EmptyState({
           mb: 2,
         }}
       >
-        {typeof IconComponent === 'function' ? (
-          <IconComponent sx={{ fontSize: 32, color: 'text.secondary' }} />
-        ) : (
-          IconComponent
-        )}
+        <IconComponent sx={{ fontSize: 32, color: 'text.secondary' }} />
       </Box>
       
       <Typography variant="h6" gutterBottom>
@@ -94,15 +135,63 @@ function EmptyState({
       
       <Typography 
         color="text.secondary" 
-        sx={{ mb: 3, maxWidth: 400 }}
+        sx={{ mb: 2, maxWidth: 500 }}
       >
         {description}
       </Typography>
+
+      {whyItMatters && (
+        <Typography 
+          variant="body2"
+          color="text.secondary"
+          sx={{ 
+            mb: 3, 
+            maxWidth: 500,
+            fontStyle: 'italic',
+            opacity: 0.8,
+          }}
+        >
+          💡 {whyItMatters}
+        </Typography>
+      )}
+
+      {/* Prerequisites section */}
+      {prerequisites && prerequisites.length > 0 && (
+        <Box sx={{ mb: 3, width: '100%', maxWidth: 500 }}>
+          <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1.5 }}>
+            {hasBlockedPrerequisites ? 'You need:' : 'Prerequisites:'}
+          </Typography>
+          <Stack spacing={1} alignItems="center">
+            {prerequisites.map((prereq, index) => (
+              <Chip
+                key={index}
+                icon={getPrerequisiteIcon(prereq.status)}
+                label={prereq.label}
+                color={getPrerequisiteColor(prereq.status)}
+                variant={prereq.status === 'ready' ? 'outlined' : 'filled'}
+                size="medium"
+                {...(prereq.path && {
+                  component: Link,
+                  to: prereq.path,
+                  clickable: true,
+                })}
+                sx={{ minWidth: 200 }}
+              />
+            ))}
+          </Stack>
+          {hasBlockedPrerequisites && (
+            <Alert severity="info" sx={{ mt: 2 }}>
+              Complete the blocked prerequisites above before creating this resource.
+            </Alert>
+          )}
+        </Box>
+      )}
       
-      <Box sx={{ display: 'flex', gap: 2 }}>
+      <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', justifyContent: 'center' }}>
         {actionLabel && (actionPath || onAction) && (
           <Button
             variant="contained"
+            disabled={hasBlockedPrerequisites}
             {...(actionPath ? { component: Link, to: actionPath } : { onClick: onAction })}
           >
             {actionLabel}
@@ -118,7 +207,41 @@ function EmptyState({
             {secondaryActionLabel}
           </Button>
         )}
+
+        {exampleLabel && onExampleClick && (
+          <Button
+            variant="text"
+            onClick={onExampleClick}
+          >
+            {exampleLabel}
+          </Button>
+        )}
       </Box>
+
+      {/* Documentation and help links */}
+      {docsUrl && (
+        <Box sx={{ mt: 3 }}>
+          <MuiLink
+            href={docsUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            sx={{ 
+              display: 'inline-flex', 
+              alignItems: 'center', 
+              gap: 0.5,
+              color: 'text.secondary',
+              '&:hover': {
+                color: 'primary.main',
+              },
+            }}
+          >
+            <Typography variant="body2">
+              Learn more in documentation
+            </Typography>
+            <OpenInNewIcon fontSize="small" />
+          </MuiLink>
+        </Box>
+      )}
     </Paper>
   );
 }

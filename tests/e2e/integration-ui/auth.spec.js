@@ -7,6 +7,7 @@ const { test, expect } = require('@playwright/test');
 
 // Test configuration
 const KEYCLOAK_URL = process.env.KEYCLOAK_URL || 'http://localhost:8180';
+const KEYCLOAK_REALM = process.env.KEYCLOAK_REALM || '11id';
 const APP_URL = process.env.BASE_URL || 'http://localhost:9080';
 
 // Test user credentials - should be created in Keycloak test realm
@@ -200,7 +201,7 @@ test.describe('Authentication Flow Tests', () => {
       await authHelpers.clickLoginButton();
 
       // Should redirect to Keycloak
-      await page.waitForURL(url => url.toString().includes('realms/11id') && url.toString().includes('openid-connect'), {
+      await page.waitForURL(url => url.toString().includes(`realms/${KEYCLOAK_REALM}`) && url.toString().includes('openid-connect'), {
         timeout: 10000,
       });
 
@@ -216,7 +217,7 @@ test.describe('Authentication Flow Tests', () => {
       await authHelpers.clickRegisterButton();
 
       // Should redirect to Keycloak
-      await page.waitForURL(url => url.toString().includes('realms/11id'), {
+      await page.waitForURL(url => url.toString().includes(`realms/${KEYCLOAK_REALM}`), {
         timeout: 10000,
       });
 
@@ -403,7 +404,7 @@ test.describe('Integration: Full Auth Flow with Keycloak', () => {
   test.beforeEach(async ({ page }) => {
     // Check if Keycloak is available
     try {
-      const response = await page.request.get(`${KEYCLOAK_URL}/realms/11id/.well-known/openid-configuration`);
+      const response = await page.request.get(`${KEYCLOAK_URL}/realms/${KEYCLOAK_REALM}/.well-known/openid-configuration`);
       if (response.status() !== 200) {
         test.skip();
       }
@@ -452,7 +453,7 @@ test.describe('Integration: Full Auth Flow with Keycloak', () => {
     
     // This test verifies the flow entry point
     const url = page.url();
-    expect(url.includes('realms/11id')).toBe(true);
+    expect(url.includes(`realms/${KEYCLOAK_REALM}`)).toBe(true);
   });
 });
 

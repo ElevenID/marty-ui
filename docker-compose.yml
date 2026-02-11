@@ -33,7 +33,7 @@ x-test-env: &test-env
   BASE_URL: http://ui-test:80
   API_URL: http://oid4vc-api-test:8000
   KEYCLOAK_URL: http://keycloak:8080
-  OIDC_ISSUER_URL: http://keycloak:8080/realms/marty
+  OIDC_ISSUER_URL: http://keycloak:8080/realms/${KEYCLOAK_REALM:-11id}
   WALLET_URL: http://wallet:80
 
 x-keycloak-env: &keycloak-env
@@ -52,6 +52,10 @@ x-keycloak-env: &keycloak-env
   KC_HOSTNAME_STRICT: "false"
   KC_HOSTNAME_STRICT_BACKCHANNEL: "false"
   KC_HTTP_ENABLED: "true"
+  # Environment variables for realm import template substitution
+  KEYCLOAK_REALM: ${KEYCLOAK_REALM:-11id}
+  PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:-localhost}
+  UI_BASE_URL: ${UI_BASE_URL:-http://localhost:3000}
   # SMTP (MailHog)
   KC_SPI_EMAIL_SENDER: default
   KC_SPI_EMAIL_SENDER_DEFAULT_HOST: mailhog
@@ -171,9 +175,9 @@ services:
       DOCUMENT_SIGNER_HOST: document-signer
       DOCUMENT_SIGNER_PORT: "8082"
       # Authentication - uses localhost for dev (browser on host machine)
-      OIDC_ISSUER_URL: http://localhost:8180/realms/marty
+      OIDC_ISSUER_URL: http://localhost:8180/realms/${KEYCLOAK_REALM:-11id}
       # Backend uses host.docker.internal to match Keycloak's configured issuer
-      OIDC_BACKEND_ISSUER_URL: http://host.docker.internal:8180/realms/marty
+      OIDC_BACKEND_ISSUER_URL: http://host.docker.internal:8180/realms/${KEYCLOAK_REALM:-11id}
       OIDC_CLIENT_ID: marty-ui
       OIDC_REDIRECT_URI: http://localhost:3000/auth/callback
       OIDC_POST_LOGOUT_REDIRECT_URI: http://localhost:3000
@@ -231,9 +235,9 @@ services:
       DOCUMENT_SIGNER_PORT: "8082"
       # Authentication - browser uses Docker service names (runs in container)
       # OIDC_ISSUER_URL is what gets returned to the browser for OIDC redirects
-      OIDC_ISSUER_URL: http://localhost:8180/realms/marty
+      OIDC_ISSUER_URL: http://localhost:8180/realms/${KEYCLOAK_REALM:-11id}
       # OIDC_BACKEND_ISSUER_URL must match the issuer in tokens (Keycloak's KC_HOSTNAME)
-      OIDC_BACKEND_ISSUER_URL: http://host.docker.internal:8180/realms/marty
+      OIDC_BACKEND_ISSUER_URL: http://host.docker.internal:8180/realms/${KEYCLOAK_REALM:-11id}
       OIDC_CLIENT_ID: marty-ui
       # Callback URLs also need to be accessible from browser - use Docker service names
       OIDC_REDIRECT_URI: http://localhost:3000/auth/callback
@@ -278,7 +282,7 @@ services:
     environment:
       REACT_APP_API_URL: http://localhost:8000
       REACT_APP_KEYCLOAK_URL: http://localhost:8180
-      REACT_APP_KEYCLOAK_REALM: marty
+      REACT_APP_KEYCLOAK_REALM: 11id
       REACT_APP_KEYCLOAK_CLIENT_ID: marty-ui
     depends_on:
       oid4vc-api:
@@ -307,7 +311,7 @@ services:
     environment:
       REACT_APP_API_URL: http://localhost:8000/
       REACT_APP_KEYCLOAK_URL: http://localhost:8180
-      REACT_APP_KEYCLOAK_REALM: marty
+      REACT_APP_KEYCLOAK_REALM: 11id
       REACT_APP_KEYCLOAK_CLIENT_ID: marty-ui
     depends_on:
       oid4vc-api-test:
@@ -376,7 +380,7 @@ services:
       UI_BASE_URL: ${UI_BASE_URL:-http://localhost:3000}
     volumes:
       - ./config/keycloak:/opt/keycloak/data/import:ro
-      - ./config/keycloak/themes/marty:/opt/keycloak/themes/marty:ro
+      - ./config/keycloak/themes/11id:/opt/keycloak/themes/11id:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -493,7 +497,7 @@ services:
     environment:
       APPLICANT_DB_URL: postgresql+asyncpg://marty:marty@postgres:5432/marty_applicants
       KEYCLOAK_ADMIN_URL: http://keycloak:8080
-      KEYCLOAK_REALM: marty
+      KEYCLOAK_REALM: 11id
     depends_on:
       oid4vc-api:
         condition: service_healthy

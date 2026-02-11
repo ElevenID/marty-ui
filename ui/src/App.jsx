@@ -48,6 +48,7 @@ import WalletSetup from './components/WalletSetup';
 import NotificationPreferences from './components/NotificationPreferences';
 import { ApplicationForm, CredentialCatalog } from './components/applicant';
 import InviteAcceptPage from './components/InviteAcceptPage';
+import ApplyPage from './components/ApplyPage';
 import ApiDocumentation from './components/ApiDocumentation';
 import ProductPage from './components/ProductPage';
 import StandardsPage from './components/StandardsPage';
@@ -59,12 +60,14 @@ import PricingPage from './components/PricingPage';
 import { AuthenticatedLayout, PublicLayout } from './components/layouts';
 import {
   ConsoleDashboard,
+  GuidedSetupWizard,
   // Trust
   TrustPage,
   TrustProfilesPage,
   TrustedIssuersPage,
   RevocationProfilesPage,
   TrustProfileWizard,
+  TrustProfileDetailPage,
   // Templates
   TemplatesPage,
   CredentialTemplatesPage,
@@ -86,6 +89,7 @@ import {
   FlowDefinitionsPage,
   FlowInstancesPage,
   FlowDefinitionWizard,
+  FlowDetailPage,
   // Operate
   OperatePage,
   IssuancePage,
@@ -94,6 +98,11 @@ import {
   OrgPage,
   OrganizationSettingsPage,
   TeamPage,
+  NotificationsPage,
+  MembershipRequestsPage,
+  RoleEscalationRequestsPage,
+  NotificationPreferencesPage,
+  SigningKeysPage,
   WebhooksPage,
   // Audit
   AuditPage,
@@ -102,7 +111,19 @@ import {
   MyCredentialsPage,
   MyApplicationsPage,
   ApplicantSettingsPage,
+  DeviceManagementPage,
 } from './components/console';
+import { NotificationBell } from './components/common';
+import ImpersonationBanner from './components/ImpersonationBanner';
+
+// Preview Components
+import {
+  PreviewLayout,
+  PreviewCatalogPage,
+  PreviewCredentialPage,
+  PreviewApplicationPage,
+  PreviewFlowPage,
+} from './components/preview';
 
 // TODO: Future feature - Dynamic theme from org database settings
 // When org profile page is implemented, fetch theme colors from API
@@ -160,6 +181,7 @@ function AppContent() {
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
+      {isAuthenticated && <ImpersonationBanner />}
       <AppBar position="static">
         <Toolbar>
           {branding.logoUrl && (
@@ -206,6 +228,9 @@ function AppContent() {
                   </Typography>
                 </Box>
 
+                {/* Notification Bell */}
+                {isVendor && <NotificationBell />}
+
                 {/* Settings Menu (Vendor only) */}
                 {isVendor && (
                   <>
@@ -239,7 +264,7 @@ function AppContent() {
                         </ListItemIcon>
                         <ListItemText>Organization Profile</ListItemText>
                       </MenuItem>
-                      <MenuItem disabled>
+                      <MenuItem component="a" href="/console/org/notifications" onClick={handleSettingsClose}>
                         <ListItemIcon>
                           <NotificationsIcon fontSize="small" />
                         </ListItemIcon>
@@ -299,10 +324,12 @@ function AppContent() {
           }
         >
           <Route index element={<ConsoleDashboard />} />
+          <Route path="setup-wizard" element={<GuidedSetupWizard />} />
           {/* Trust */}
           <Route path="trust" element={<TrustPage />} />
           <Route path="trust/profiles" element={<TrustProfilesPage />} />
           <Route path="trust/profiles/new" element={<TrustProfileWizard />} />
+          <Route path="trust/profiles/:id" element={<TrustProfileDetailPage />} />
           <Route path="trust/issuers" element={<TrustedIssuersPage />} />
           <Route path="trust/revocation" element={<RevocationProfilesPage />} />
           {/* Templates */}
@@ -320,12 +347,14 @@ function AppContent() {
           <Route path="deploy/profiles" element={<DeploymentProfilesPage />} />
           <Route path="deploy/profiles/new" element={<DeploymentProfileWizard />} />
           <Route path="deploy/api-keys" element={<ApiKeysPage />} />
+          <Route path="deploy/signing-keys" element={<SigningKeysPage />} />
           <Route path="deploy/lanes" element={<LanesDevicesPage />} />
           <Route path="deploy/webhooks" element={<WebhooksPage />} />
           {/* Flows */}
           <Route path="flows" element={<FlowsPage />} />
           <Route path="flows/definitions" element={<FlowDefinitionsPage />} />
           <Route path="flows/definitions/new" element={<FlowDefinitionWizard />} />
+          <Route path="flows/definitions/:flowId" element={<FlowDetailPage />} />
           {/* Operate */}
           <Route path="operate" element={<OperatePage />} />
           <Route path="operate/issuance" element={<IssuancePage />} />
@@ -335,6 +364,10 @@ function AppContent() {
           <Route path="org" element={<OrgPage />} />
           <Route path="org/settings" element={<OrganizationSettingsPage />} />
           <Route path="org/team" element={<TeamPage />} />
+          <Route path="org/notifications" element={<NotificationsPage />} />
+          <Route path="org/membership-requests" element={<MembershipRequestsPage />} />
+          <Route path="org/role-requests" element={<RoleEscalationRequestsPage />} />
+          <Route path="settings/notifications" element={<NotificationPreferencesPage />} />
           {/* Audit */}
           <Route path="audit" element={<AuditPage />} />
         </Route>
@@ -351,7 +384,23 @@ function AppContent() {
           <Route index element={<ApplicantDashboard />} />
           <Route path="credentials" element={<MyCredentialsPage />} />
           <Route path="applications" element={<MyApplicationsPage />} />
+          <Route path="devices" element={<DeviceManagementPage />} />
           <Route path="settings" element={<ApplicantSettingsPage />} />
+        </Route>
+
+        {/* Preview Routes - Vendor auth required, render applicant views in preview mode */}
+        <Route
+          path="/applicant/preview"
+          element={
+            <VendorRoute>
+              <PreviewLayout />
+            </VendorRoute>
+          }
+        >
+          <Route path="catalog" element={<PreviewCatalogPage />} />
+          <Route path="credentials/:templateId" element={<PreviewCredentialPage />} />
+          <Route path="applications/:applicationTemplateId" element={<PreviewApplicationPage />} />
+          <Route path="flows/:flowId" element={<PreviewFlowPage />} />
         </Route>
 
         {/* All other routes use PublicLayout with Container */}
@@ -360,6 +409,11 @@ function AppContent() {
           <Route path="/" element={<LandingPage />} />
           <Route path="/login" element={<LoginPage />} />
           <Route path="/auth/callback" element={<AuthCallback />} />
+          
+          {/* Deep Link Entry - Apply for Credentials */}
+          <Route path="/apply" element={<ApplyPage />} />
+          <Route path="/apply/:credentialType" element={<ApplyPage />} />
+          
           <Route path="/product" element={<ProductPage />} />
           <Route path="/identity" element={<IdentityGuidePage />} />
           <Route path="/from-idv-to-verifiable-identity" element={<FromIDVPage />} />

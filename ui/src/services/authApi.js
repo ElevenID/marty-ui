@@ -81,10 +81,37 @@ export async function isAuthenticated() {
   return result.authenticated;
 }
 
+/**
+ * Get all organizations for the current user
+ * @returns {Promise<Array<{id: string, name: string, attributes: object}>>}
+ */
+export async function getUserOrganizations() {
+  try {
+    const response = await fetch(`${AUTH_BASE_URL}/me/organizations`, {
+      method: 'GET',
+      credentials: 'include', // Include cookies
+      headers: {
+        'Accept': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    const data = await response.json();
+    return data.organizations || [];
+  } catch (error) {
+    console.error('Error fetching user organizations:', error);
+    return [];
+  }
+}
+
 export default {
   getCurrentUser,
   initiateLogin,
   initiateRegister,
   initiateLogout,
   isAuthenticated,
+  getUserOrganizations,
 };

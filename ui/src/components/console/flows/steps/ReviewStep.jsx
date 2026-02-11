@@ -18,20 +18,48 @@ import {
   ListItemText,
   FormControlLabel,
   Switch,
+  Alert,
 } from '@mui/material';
 import EditIcon from '@mui/icons-material/Edit';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import AccountTreeIcon from '@mui/icons-material/AccountTree';
 import DeployIcon from '@mui/icons-material/RocketLaunch';
+import GppGoodIcon from '@mui/icons-material/GppGood';
+import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings';
+import VerifiedIcon from '@mui/icons-material/Verified';
 
 const FLOW_TYPE_LABELS = {
   verification: 'Verification Flow',
   issuance: 'Issuance Flow',
+  issuance_oid4vci: 'OID4VCI Issuance Flow',
   combined: 'Combined Flow',
 };
 
+const PRECONDITION_LABELS = {
+  application_approved: 'Application Approved',
+  identity_verified: 'Identity Verified',
+  manual_admin_approval: 'Manual Admin Approval',
+  external_verification: 'External Verification Result',
+};
+
+const PRECONDITION_ICONS = {
+  application_approved: <CheckCircleIcon />,
+  identity_verified: <GppGoodIcon />,
+  manual_admin_approval: <AdminPanelSettingsIcon />,
+  external_verification: <VerifiedIcon />,
+};
+
 const ReviewStep = ({ data, onEdit, onToggleActivation }) => {
-  const { flowType, name, description, flowSteps, selectedDeployment, defaultPolicyId, activateImmediately } = data;
+  const { 
+    flowType, 
+    name, 
+    description, 
+    flowSteps, 
+    preconditions = [],
+    selectedDeployment, 
+    defaultPolicyId, 
+    activateImmediately 
+  } = data;
 
   return (
     <Box>
@@ -126,6 +154,49 @@ const ReviewStep = ({ data, onEdit, onToggleActivation }) => {
         </CardContent>
       </Card>
 
+      {/* Preconditions */}
+      {flowType === 'issuance_oid4vci' && (
+        <Card sx={{ mb: 2 }}>
+          <CardContent>
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
+              <Typography variant="h6" sx={{ display: 'flex', alignItems: 'center' }}>
+                <CheckCircleIcon sx={{ mr: 1 }} color="primary" />
+                Preconditions ({preconditions.length})
+              </Typography>
+              <Button size="small" startIcon={<EditIcon />} onClick={() => onEdit(2)}>
+                Edit
+              </Button>
+            </Box>
+
+            {preconditions.length === 0 ? (
+              <Alert severity="warning">
+                <Typography variant="body2">
+                  No preconditions configured. The flow will require manual triggering.
+                </Typography>
+              </Alert>
+            ) : (
+              <List dense>
+                {preconditions.map((condition, index) => (
+                  <ListItem key={index}>
+                    <ListItemText
+                      primary={
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                          {PRECONDITION_ICONS[condition] || <CheckCircleIcon />}
+                          <Typography variant="body2" component="span">
+                            {PRECONDITION_LABELS[condition] || condition}
+                          </Typography>
+                        </Box>
+                      }
+                      secondary={`Condition ${index + 1} of ${preconditions.length}`}
+                    />
+                  </ListItem>
+                ))}
+              </List>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
       {/* Deployment Binding */}
       <Card sx={{ mb: 2 }}>
         <CardContent>
@@ -134,7 +205,7 @@ const ReviewStep = ({ data, onEdit, onToggleActivation }) => {
               <DeployIcon sx={{ mr: 1 }} color="primary" />
               Deployment Binding
             </Typography>
-            <Button size="small" startIcon={<EditIcon />} onClick={() => onEdit(2)}>
+            <Button size="small" startIcon={<EditIcon />} onClick={() => onEdit(3)}>
               Edit
             </Button>
           </Box>

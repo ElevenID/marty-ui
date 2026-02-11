@@ -61,6 +61,7 @@ services:
       # Environment variables for realm import template substitution
       PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:-localhost}
       UI_BASE_URL: ${UI_BASE_URL:-http://localhost:3000}
+      KEYCLOAK_REALM: ${KEYCLOAK_REALM:-11id}
     depends_on:
       postgres:
         condition: service_healthy

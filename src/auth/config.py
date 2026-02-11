@@ -76,15 +76,12 @@ class OIDCConfig:
     @classmethod
     def from_env(cls) -> OIDCConfig:
         """Create configuration from environment variables."""
+        realm = os.environ.get("KEYCLOAK_REALM", "11id")
+        issuer_default = f"http://localhost:8180/realms/{realm}"
+        backend_default = f"http://keycloak:8080/realms/{realm}"
         return cls(
-            issuer_url=os.environ.get(
-                "OIDC_ISSUER_URL",
-                "http://localhost:8180/realms/11id",
-            ),
-            backend_issuer_url=os.environ.get(
-                "OIDC_BACKEND_ISSUER_URL",
-                "http://keycloak:8080/realms/11id",  # Internal docker network
-            ),
+            issuer_url=os.environ.get("OIDC_ISSUER_URL", issuer_default),
+            backend_issuer_url=os.environ.get("OIDC_BACKEND_ISSUER_URL", backend_default),
             client_id=os.environ.get("OIDC_CLIENT_ID", "marty-ui"),
             client_secret=os.environ.get("OIDC_CLIENT_SECRET"),  # None for public clients
             redirect_uri=os.environ.get(

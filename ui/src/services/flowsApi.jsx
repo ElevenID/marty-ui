@@ -11,6 +11,25 @@ import { apiClient, handleApiError } from './api';
 const BASE_PATH = '/v1/identity/flows';
 
 /**
+ * Flow state constants
+ */
+export const FLOW_STATES = {
+  DRAFT: 'draft',
+  PUBLISHED: 'published',
+  DISABLED: 'disabled',
+};
+
+/**
+ * Flow approval strategies
+ */
+export const APPROVAL_STRATEGIES = {
+  AUTO: 'AUTO',
+  MANUAL: 'MANUAL',
+  AUTOMATED_RULES: 'AUTOMATED_RULES',
+  MULTI_PARTY: 'MULTI_PARTY',
+};
+
+/**
  * Create a new flow
  * @param {Object} flowData - Flow configuration
  * @param {string} flowData.name - Flow name
@@ -211,6 +230,58 @@ export const cancelFlowExecution = async (flowId, executionId, reason) => {
   }
 };
 
+/**
+ * Publish a flow - makes it available to applicants
+ * @param {string} flowId - Flow ID
+ * @param {Object} publishData - Publish configuration
+ * @param {string} publishData.change_description - Optional description of changes
+ * @returns {Promise<Object>} Published flow with public URL
+ */
+export const publishFlow = async (flowId, publishData = {}) => {
+  try {
+    const response = await apiClient.post(
+      `${BASE_PATH}/${flowId}/publish`,
+      publishData
+    );
+    return response.data;
+  } catch (error) {
+    throw handleApiError(error);
+  }
+};
+
+/**
+ * Disable a flow - prevents new applications
+ * @param {string} flowId - Flow ID
+ * @param {Object} disableData - Disable configuration
+ * @param {string} disableData.reason - Reason for disabling
+ * @returns {Promise<Object>} Disabled flow
+ */
+export const disableFlow = async (flowId, disableData = {}) => {
+  try {
+    const response = await apiClient.post(
+      `${BASE_PATH}/${flowId}/disable`,
+      disableData
+    );
+    return response.data;
+  } catch (error) {
+    throw handleApiError(error);
+  }
+};
+
+/**
+ * Get public application URL for a published flow
+ * @param {string} flowId - Flow ID
+ * @returns {Promise<Object>} Public URL and QR code data
+ */
+export const getFlowPublicUrl = async (flowId) => {
+  try {
+    const response = await apiClient.get(`${BASE_PATH}/${flowId}/public-url`);
+    return response.data;
+  } catch (error) {
+    throw handleApiError(error);
+  }
+};
+
 export default {
   createFlow,
   listFlows,
@@ -223,4 +294,9 @@ export default {
   approveFlowExecution,
   rejectFlowExecution,
   cancelFlowExecution,
+  publishFlow,
+  disableFlow,
+  getFlowPublicUrl,
+  FLOW_STATES,
+  APPROVAL_STRATEGIES,
 };

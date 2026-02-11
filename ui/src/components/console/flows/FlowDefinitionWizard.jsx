@@ -8,7 +8,7 @@
  * - Review and activation
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Box,
@@ -30,6 +30,7 @@ import { useWizard } from '../../../hooks/useWizard';
 import {
   FlowTypeStep,
   FlowStepsConfigStep,
+  PreconditionsStep,
   DeploymentBindingStep,
   ReviewStep,
 } from './steps';
@@ -37,15 +38,17 @@ import {
 const STEPS = [
   { label: 'Flow Type', optional: false },
   { label: 'Configure Steps', optional: false },
+  { label: 'Preconditions', optional: true },
   { label: 'Bind Deployment', optional: true },
   { label: 'Review', optional: false },
 ];
 
 const INITIAL_DATA = {
-  flowType: null, // 'verification', 'issuance', 'combined'
+  flowType: null, // 'verification', 'issuance', 'combined', 'issuance_oid4vci'
   name: '',
   description: '',
   flowSteps: [],
+  preconditions: [],
   selectedDeployment: null,
   defaultPolicyId: null,
   activateImmediately: true,
@@ -55,92 +58,114 @@ const FlowDefinitionWizard = () => {
   const navigate = useNavigate();
   const [apiError, setApiError] = useState(null);
 
-  const {
-    activeStep,
-    data,
-    loading,
-    error,
-    success,
-    goNext,
-    goBack,
-    goToStep,
-    updateData,
-    submit,
-    isStepValid,
-  } = useWizard({
+  // Validation function for each step
+  const validateStep = useCallback((stepIndex, stepData) => {
+    const valid = (() => {
+      switch (stepIndex) {
+        case 0: // Flow Type
+          return stepData.flowType !== null;
+        case 1: // Configure Steps
+          return (
+            stepData.name.trim() !== '' &&
+            stepData.flowSteps.length > 0
+          );
+        case 2: // Preconditions (optional)
+          return true;
+        case 3: // Bind Deployment (optional)
+          return true;
+        case 4: // Review
+          return true;
+        default:
+          return false;
+      }
+    })();
+    console.log('[FlowWizard] validateStep called:', { stepIndex, flowType: stepData.flowType, valid });
+    return valid;
+  }, []);
+
+  // Handle submission
+  const handleSubmit = useCallback(async (formData) => {
+    const payload = {
+      name: formData.name,
+      description: formData.description,
+      type: formData.flowType,
+      steps: formData.flowSteps,
+      preconditions: formData.preconditions || [],
+      deployment_profile_id: formData.selectedDeployment?.id || null,
+      default_policy_id: formData.defaultPolicyId || null,
+      is_active: formData.activateImmediately,
+    };
+    
+    // Return the created flow (this would be returned by the API)
+    return {
+      id: 'flow_' + Date.now(),
+      ...payload,
+    };
+  }, []);
+
+  const wizard = useWizard({
     steps: STEPS,
     initialData: INITIAL_DATA,
-    apiEndpoint: '/api/v1/identity/flows',
-    onSuccess: () => {
+    validateStep,
+    onSubmit: handleSubmit,
+    onComplete: () => {
       // Redirect to operate page after 2 seconds
       setTimeout(() => {
         navigate('/console/operate');
       }, 2000);
     },
+    onCancel: () => navigate('/console/flows'),
   });
 
-  // Validate current step
+  // Debug logging
   useEffect(() => {
-    let valid = false;
-    
-    switch (activeStep) {
-      case 0: // Flow Type
-        valid = data.flowType !== null;
-        break;
-      case 1: // Configure Steps
-        valid = (
-          data.name.trim() !== '' &&
-          data.flowSteps.length > 0
-        );
-        break;
-      case 2: // Bind Deployment (optional)
-        valid = true;
-        break;
-      case 3: // Review
-        valid = true;
-        break;
-      default:
-        valid = false;
-    }
-    
-    // Update validation state in wizard hook
-    isStepValid(valid);
-  }, [activeStep, data, isStepValid]);
+    console.log('[FlowWizard] Data changed:', { flowType: wizard.data.flowType, activeStep: wizard.activeStep });
+    console.log('[FlowWizard] validateStep called:', { stepIndex: wizard.activeStep, flowType: wizard.data.flowType, valid: validateStep(wizard.activeStep, wizard.data) });
+    console.log('[FlowWizard] isStepValid():', wizard.isStepValid());
+  }, [wizard.data, wizard.activeStep, wizard, validateStep]);
 
   // Render current step content
   const renderStepContent = () => {
-    switch (activeStep) {
+    switch (wizard.activeStep) {
       case 0:
         return (
           <FlowTypeStep
-            selectedType={data.flowType}
-            onSelectType={(type) => updateData({ flowType: type })}
+            selectedType={wizard.data.flowType}
+            onSelectType={(type) => wizard.updateData({ flowType: type })}
           />
         );
       case 1:
         return (
           <FlowStepsConfigStep
-            flowType={data.flowType}
-            name={data.name}
-            description={data.description}
-            flowSteps={data.flowSteps}
-            onUpdate={(updates) => updateData(updates)}
+            flowType={wizard.data.flowType}
+            name={wizard.data.name}
+            description={wizard.data.description}
+            flowSteps={wizard.data.flowSteps}
+            onUpdate={(updates) => wizard.updateData(updates)}
           />
         );
       case 2:
         return (
-          <DeploymentBindingStep
-            selectedDeployment={data.selectedDeployment}
-            defaultPolicyId={data.defaultPolicyId}
-            onUpdate={(updates) => updateData(updates)}
+          <PreconditionsStep
+            flowType={wizard.data.flowType}
+            preconditions={wizard.data.preconditions}
+            onUpdate={(updates) => wizard.updateData(updates)}
           />
         );
       case 3:
         return (
+          <DeploymentBindingStep
+            selectedDeployment={wizard.data.selectedDeployment}
+            defaultPolicyId={wizard.data.defaultPolicyId}
+            onUpdate={(updates) => wizard.updateData(updates)}
+          />
+        );
+      case 4:
+        return (
           <ReviewStep
-            data={data}
-            onEdit={(step) => goToStep(step)}
-            onToggleActivation={(value) => updateData({ activateImmediately: value })}
+            data={wizard.data}
+            onEdit={(step) => wizard.goToStep(step)}
+            onToggleActivation={(value) => wizard.updateData({ activateImmediately: value })}
           />
         );
       default:
@@ -148,30 +173,8 @@ const FlowDefinitionWizard = () => {
     }
   };
 
-  // Handle submission with activation
-  const handleSubmit = async () => {
-    setApiError(null);
-    
-    try {
-      const payload = {
-        name: data.name,
-        description: data.description,
-        flow_type: data.flowType,
-        steps: data.flowSteps,
-        deployment_profile_id: data.selectedDeployment?.id || null,
-        default_presentation_policy_id: data.defaultPolicyId || null,
-        is_active: data.activateImmediately,
-      };
-
-      await submit(payload);
-    } catch (err) {
-      console.error('Failed to create flow definition:', err);
-      setApiError(err.message || 'Failed to create flow definition');
-    }
-  };
-
   // Show success message
-  if (success) {
+  if (wizard.success) {
     return (
       <Container maxWidth="md" sx={{ py: 4 }}>
         <Paper elevation={3} sx={{ p: 4, textAlign: 'center' }}>
@@ -180,7 +183,7 @@ const FlowDefinitionWizard = () => {
             Flow Definition Created Successfully!
           </Typography>
           <Typography color="text.secondary" paragraph>
-            Your flow &quot;{data.name}&quot; is now ready to use.
+            Your flow &quot;{wizard.data.name}&quot; is now ready to use.
           </Typography>
           <Typography variant="body2" color="text.secondary">
             Redirecting to operations dashboard...
@@ -204,7 +207,7 @@ const FlowDefinitionWizard = () => {
         </Box>
 
         {/* Stepper */}
-        <Stepper activeStep={activeStep} sx={{ mb: 4 }}>
+        <Stepper activeStep={wizard.activeStep} sx={{ mb: 4 }}>
           {STEPS.map((step) => (
             <Step key={step.label}>
               <StepLabel optional={step.optional && <Typography variant="caption">Optional</Typography>}>
@@ -215,9 +218,9 @@ const FlowDefinitionWizard = () => {
         </Stepper>
 
         {/* Error Alert */}
-        {(error || apiError) && (
+        {(wizard.error || apiError) && (
           <Alert severity="error" sx={{ mb: 3 }} onClose={() => { setApiError(null); }}>
-            {error || apiError}
+            {wizard.error || apiError}
           </Alert>
         )}
 
@@ -229,39 +232,43 @@ const FlowDefinitionWizard = () => {
         {/* Navigation Buttons */}
         <Box sx={{ display: 'flex', justifyContent: 'space-between', pt: 2 }}>
           <Button
-            onClick={activeStep === 0 ? () => navigate('/console/flows/definitions') : goBack}
+            onClick={wizard.activeStep === 0 ? () => navigate('/console/flows/definitions') : wizard.goBack}
             startIcon={<ArrowBackIcon />}
-            disabled={loading}
+            disabled={wizard.loading}
+            data-testid={wizard.activeStep === 0 ? 'wizard.flow.cancel' : 'wizard.flow.back'}
           >
-            {activeStep === 0 ? 'Cancel' : 'Back'}
+            {wizard.activeStep === 0 ? 'Cancel' : 'Back'}
           </Button>
 
           <Box sx={{ display: 'flex', gap: 2 }}>
             {/* Skip button for optional steps */}
-            {STEPS[activeStep].optional && (
+            {STEPS[wizard.activeStep].optional && (
               <Button
-                onClick={goNext}
-                disabled={loading}
+                onClick={wizard.goNext}
+                disabled={wizard.loading}
+                data-testid="wizard.flow.skip"
               >
                 Skip
               </Button>
             )}
 
-            {activeStep === STEPS.length - 1 ? (
+            {wizard.activeStep === STEPS.length - 1 ? (
               <Button
                 variant="contained"
-                onClick={handleSubmit}
-                disabled={loading}
-                startIcon={loading ? <CircularProgress size={20} /> : <CheckCircleIcon />}
+                onClick={wizard.submit}
+                disabled={wizard.loading || !wizard.isStepValid()}
+                startIcon={wizard.loading ? <CircularProgress size={20} /> : <CheckCircleIcon />}
+                data-testid="wizard.flow.submit"
               >
-                {loading ? 'Creating...' : 'Create Flow'}
+                {wizard.loading ? 'Creating...' : 'Create Flow'}
               </Button>
             ) : (
               <Button
                 variant="contained"
-                onClick={goNext}
-                disabled={loading}
+                onClick={wizard.goNext}
+                disabled={wizard.loading || !wizard.isStepValid()}
                 endIcon={<ArrowForwardIcon />}
+                data-testid="wizard.flow.next"
               >
                 Next
               </Button>

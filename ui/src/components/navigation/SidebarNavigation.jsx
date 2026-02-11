@@ -27,6 +27,8 @@ import ExpandLess from '@mui/icons-material/ExpandLess';
 import ExpandMore from '@mui/icons-material/ExpandMore';
 import MenuIcon from '@mui/icons-material/Menu';
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
+import StarIcon from '@mui/icons-material/Star';
+import Badge from '@mui/material/Badge';
 import { useAuth } from '../../hooks/useAuth';
 import { ADMIN_VENDOR_NAV, APPLICANT_NAV, findActiveNavItem } from '../../config/navigation';
 import { OrgSwitcher } from './OrgSwitcher';
@@ -37,12 +39,20 @@ const DRAWER_WIDTH_COLLAPSED = 72;
 /**
  * Navigation Item Component
  * Renders a single nav item with optional children
+ * Supports visual hierarchy: primary items, badges, and section-specific styling
  */
-function NavItem({ item, isActive, isChildActive, expanded, onToggle, collapsed, depth = 0 }) {
+function NavItem({ item, isActive, isChildActive, expanded, onToggle, collapsed, depth = 0, parentId = null }) {
   const theme = useTheme();
   const navigate = useNavigate();
+  const location = useLocation();
   const hasChildren = item.children && item.children.length > 0;
   const Icon = item.icon;
+  
+  // Visual hierarchy rules
+  const isPrimary = item.primary;
+  const isDesignSection = parentId === 'design' || item.id === 'design';
+  const isDeploySection = parentId === 'deploy' || item.id === 'deploy';
+  const hasBadge = item.badge; // TODO: Wire up actual badge counts from context/API
 
   const handleClick = useCallback(() => {
     if (hasChildren) {
@@ -54,6 +64,36 @@ function NavItem({ item, isActive, isChildActive, expanded, onToggle, collapsed,
 
   const isItemActive = isActive || isChildActive;
 
+  // Determine colors based on section and primary status
+  const getItemColors = () => {
+    if (isPrimary) {
+      return {
+        iconColor: isItemActive ? 'primary.main' : 'primary.light',
+        textColor: isItemActive ? 'primary.main' : 'primary.dark',
+        bgColor: isItemActive ? 'action.selected' : 'transparent',
+        borderColor: isItemActive ? theme.palette.primary.main : 'transparent',
+      };
+    }
+    
+    if (isDesignSection && depth > 0) {
+      return {
+        iconColor: isItemActive ? 'text.primary' : 'text.disabled',
+        textColor: isItemActive ? 'text.primary' : 'text.secondary',
+        bgColor: isItemActive ? 'action.selected' : 'transparent',
+        borderColor: isItemActive ? theme.palette.grey[400] : 'transparent',
+      };
+    }
+    
+    return {
+      iconColor: isItemActive ? 'primary.main' : 'text.secondary',
+      textColor: isItemActive ? 'primary.main' : 'text.primary',
+      bgColor: isItemActive ? 'action.selected' : 'transparent',
+      borderColor: isItemActive ? theme.palette.primary.main : 'transparent',
+    };
+  };
+
+  const colors = getItemColors();
+
   return (
     <>
       <ListItem disablePadding sx={{ display: 'block' }}>
@@ -61,12 +101,12 @@ function NavItem({ item, isActive, isChildActive, expanded, onToggle, collapsed,
           <ListItemButton
             onClick={handleClick}
             sx={{
-              minHeight: 48,
+              minHeight: isPrimary ? 52 : 48,
               justifyContent: collapsed ? 'center' : 'initial',
               px: 2.5,
               pl: depth > 0 ? 4 : 2.5,
-              bgcolor: isItemActive ? 'action.selected' : 'transparent',
-              borderLeft: isItemActive ? `3px solid ${theme.palette.primary.main}` : '3px solid transparent',
+              bgcolor: colors.bgColor,
+              borderLeft: `3px solid ${colors.borderColor}`,
               '&:hover': {
                 bgcolor: 'action.hover',
               },
@@ -78,21 +118,42 @@ function NavItem({ item, isActive, isChildActive, expanded, onToggle, collapsed,
                   minWidth: 0,
                   mr: collapsed ? 0 : 3,
                   justifyContent: 'center',
-                  color: isItemActive ? 'primary.main' : 'text.secondary',
+                  color: colors.iconColor,
+                  position: 'relative',
                 }}
               >
                 <Icon />
+                {isPrimary && !collapsed && (
+                  <StarIcon
+                    sx={{
+                      position: 'absolute',
+                      top: -4,
+                      right: -4,
+                      fontSize: 12,
+                      color: 'primary.main',
+                    }}
+                  />
+                )}
               </ListItemIcon>
             )}
             {!collapsed && (
               <>
                 <ListItemText
-                  primary={item.label}
+                  primary={
+                    hasBadge ? (
+                      <Badge badgeContent={0} color="error" sx={{ '& .MuiBadge-badge': { position: 'relative', transform: 'none', ml: 1 } }}>
+                        {item.label}
+                      </Badge>
+                    ) : (
+                      item.label
+                    )
+                  }
                   sx={{
                     opacity: 1,
                     '& .MuiTypography-root': {
-                      fontWeight: isItemActive ? 600 : 400,
-                      color: isItemActive ? 'primary.main' : 'text.primary',
+                      fontWeight: isItemActive || isPrimary ? 600 : 400,
+                      fontSize: isPrimary ? '0.95rem' : '0.875rem',
+                      color: colors.textColor,
                     },
                   }}
                 />
@@ -107,33 +168,77 @@ function NavItem({ item, isActive, isChildActive, expanded, onToggle, collapsed,
       {hasChildren && !collapsed && (
         <Collapse in={expanded} timeout="auto" unmountOnExit>
           <List component="div" disablePadding>
-            {item.children.map((child) => (
-              <ListItem key={child.id} disablePadding>
-                <ListItemButton
-                  component={Link}
-                  to={child.path}
-                  sx={{
-                    pl: 6,
-                    minHeight: 40,
-                    bgcolor: isChildActive && child.path === window.location.pathname ? 'action.selected' : 'transparent',
-                    '&:hover': {
-                      bgcolor: 'action.hover',
-                    },
-                  }}
-                >
-                  <ListItemText
-                    primary={child.label}
+            {item.children.map((child) => {
+              const childActive = isChildActive && child.path === location.pathname;
+              const childColors = child.primary 
+                ? {
+                    textColor: childActive ? 'primary.main' : 'primary.dark',
+                    iconColor: childActive ? 'primary.main' : 'primary.light',
+                  }
+                : isDesignSection
+                ? {
+                    textColor: childActive ? 'text.primary' : 'text.secondary',
+                    iconColor: childActive ? 'text.primary' : 'text.disabled',
+                  }
+                : {
+                    textColor: childActive ? 'primary.main' : 'text.secondary',
+                    iconColor: childActive ? 'primary.main' : 'text.secondary',
+                  };
+              
+              const ChildIcon = child.icon;
+              return (
+                <ListItem key={child.id} disablePadding>
+                  <ListItemButton
+                    component={Link}
+                    to={child.path}
                     sx={{
-                      '& .MuiTypography-root': {
-                        fontSize: '0.875rem',
-                        fontWeight: isChildActive && child.path === window.location.pathname ? 600 : 400,
-                        color: isChildActive && child.path === window.location.pathname ? 'primary.main' : 'text.secondary',
+                      pl: 6,
+                      minHeight: child.primary ? 44 : 40,
+                      bgcolor: childActive ? 'action.selected' : 'transparent',
+                      borderLeft: childActive ? `3px solid ${child.primary ? theme.palette.primary.main : theme.palette.grey[400]}` : '3px solid transparent',
+                      '&:hover': {
+                        bgcolor: 'action.hover',
                       },
                     }}
-                  />
-                </ListItemButton>
-              </ListItem>
-            ))}
+                  >
+                    {ChildIcon && (
+                      <ListItemIcon
+                        sx={{
+                          minWidth: 0,
+                          mr: 2,
+                          justifyContent: 'center',
+                          color: childColors.iconColor,
+                          position: 'relative',
+                        }}
+                      >
+                        <ChildIcon fontSize="small" />
+                        {child.primary && (
+                          <StarIcon
+                            sx={{
+                              position: 'absolute',
+                              top: -4,
+                              right: -4,
+                              fontSize: 10,
+                              color: 'primary.main',
+                            }}
+                          />
+                        )}
+                      </ListItemIcon>
+                    )}
+                    <ListItemText
+                      primary={child.label}
+                      sx={{
+                        '& .MuiTypography-root': {
+                          fontSize: child.primary ? '0.875rem' : '0.8125rem',
+                          fontWeight: childActive || child.primary ? 600 : 400,
+                          color: childColors.textColor,
+                        },
+                      }}
+                    />
+                  </ListItemButton>
+                </ListItem>
+              );
+            })}
           </List>
         </Collapse>
       )}
@@ -244,6 +349,7 @@ function SidebarNavigation({ mobileOpen, onMobileClose }) {
             expanded={expandedItems[item.id] || false}
             onToggle={handleToggle}
             collapsed={collapsed}
+            parentId={null}
           />
         ))}
       </List>

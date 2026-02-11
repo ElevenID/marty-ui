@@ -19,8 +19,6 @@ import {
   Chip,
   TextField,
   InputAdornment,
-  Alert,
-  LinearProgress,
   Button,
   FormControl,
   InputLabel,
@@ -40,12 +38,19 @@ import ErrorIcon from '@mui/icons-material/Error';
 import WarningIcon from '@mui/icons-material/Warning';
 import InfoIcon from '@mui/icons-material/Info';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
+import BookmarkIcon from '@mui/icons-material/Bookmark';
 import { DatePicker } from '@mui/x-date-pickers/DatePicker';
 import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider';
 import { AdapterDateFns } from '@mui/x-date-pickers/AdapterDateFns';
+import { Link } from 'react-router-dom';
 
 import { ResourcePage } from '../../common';
-import { Link } from 'react-router-dom';
+import { TableSkeleton } from '../../common/skeletons';
+import ErrorState from '../../common/ErrorState';
+import EmptyState from '../../common/EmptyState';
+import HistoryIcon from '@mui/icons-material/History';
+import auditApi from '../../../services/auditApi';
+import { useNotifications } from '../../../hooks/useNotifications';
 
 const BREADCRUMBS = [
   { label: 'Console', path: '/console' },
@@ -79,113 +84,130 @@ function AuditPage() {
   const [totalCount, setTotalCount] = useState(0);
   const [showFilters, setShowFilters] = useState(false);
   const [expandedRow, setExpandedRow] = useState(null);
+  const [savedViews, setSavedViews] = useState([]);
+  const [exporting, setExporting] = useState(false);
   
   // Filters
   const [searchQuery, setSearchQuery] = useState('');
   const [category, setCategory] = useState('all');
   const [severity, setSeverity] = useState('all');
+  const [actor, setActor] = useState('');
+  const [resourceType, setResourceType] = useState('');
+  const [ipAddress, setIpAddress] = useState('');
   const [startDate, setStartDate] = useState(null);
   const [endDate, setEndDate] = useState(null);
+
+  const { showNotification } = useNotifications();
 
   useEffect(() => {
     loadEvents();
   }, [page, rowsPerPage, category, severity, startDate, endDate]);
 
+  useEffect(() => {
+    loadSavedViews();
+  }, []);
+
   const loadEvents = async () => {
     setLoading(true);
+    setError(null);
     try {
-      // TODO: Fetch from API with filters
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      setEvents([
-        {
-          id: 'evt-1',
-          timestamp: '2026-02-07T09:45:23Z',
-          category: 'credential',
-          action: 'credential.issued',
-          actor: 'john@example.com',
-          resource: 'Driver License - DL-2026-00456',
-          severity: 'info',
-          ipAddress: '192.168.1.105',
-          details: { templateId: 'tmpl-dl-1', flowId: 'flow-123' },
-        },
-        {
-          id: 'evt-2',
-          timestamp: '2026-02-07T09:30:15Z',
-          category: 'authentication',
-          action: 'login.success',
-          actor: 'jane@example.com',
-          resource: 'Console',
-          severity: 'info',
-          ipAddress: '10.0.0.50',
-          details: { mfaUsed: true },
-        },
-        {
-          id: 'evt-3',
-          timestamp: '2026-02-07T09:15:10Z',
-          category: 'policy',
-          action: 'policy.updated',
-          actor: 'john@example.com',
-          resource: 'Age Verification Policy',
-          severity: 'info',
-          ipAddress: '192.168.1.105',
-          details: { changes: ['minAge: 18 -> 21'] },
-        },
-        {
-          id: 'evt-4',
-          timestamp: '2026-02-07T08:55:00Z',
-          category: 'authentication',
-          action: 'login.failed',
-          actor: 'unknown@attacker.com',
-          resource: 'Console',
-          severity: 'warning',
-          ipAddress: '203.0.113.42',
-          details: { reason: 'Invalid credentials', attempts: 3 },
-        },
-        {
-          id: 'evt-5',
-          timestamp: '2026-02-07T08:30:00Z',
-          category: 'flow',
-          action: 'flow.failed',
-          actor: 'system',
-          resource: 'Age Verification Flow',
-          severity: 'error',
-          ipAddress: null,
-          details: { error: 'Timeout waiting for wallet response', instanceId: 'fi-789' },
-        },
-        {
-          id: 'evt-6',
-          timestamp: '2026-02-07T08:00:00Z',
-          category: 'team',
-          action: 'user.invited',
-          actor: 'john@example.com',
-          resource: 'bob@example.com',
-          severity: 'info',
-          ipAddress: '192.168.1.105',
-          details: { role: 'developer' },
-        },
-        {
-          id: 'evt-7',
-          timestamp: '2026-02-06T17:45:00Z',
-          category: 'credential',
-          action: 'credential.revoked',
-          actor: 'jane@example.com',
-          resource: 'Employee Badge - EB-2025-00123',
-          severity: 'warning',
-          ipAddress: '10.0.0.50',
-          details: { reason: 'Employee termination' },
-        },
-      ]);
-      setTotalCount(150);
+      const filters = {
+        limit: rowsPerPage,
+        offset: page * rowsPerPage,
+      };
+      
+      if (category !== 'all') filters.resource_type = category;
+      if (severity !== 'all') filters.severity = severity;
+      if (actor) filters.actor = actor;
+      if (resourceType) filters.resource_type = resourceType;
+      if (ipAddress) filters.ip_address = ipAddress;
+      if (startDate) filters.start_date = startDate.toISOString();
+      if (endDate) filters.end_date = endDate.toISOString();
+
+      const data = await auditApi.listAuditEvents(filters);
+      setEvents(Array.isArray(data) ? data : data.events || []);
+      setTotalCount(data.total || data.length || 0);
     } catch (err) {
-      setError('Failed to load audit events');
+      console.error('Failed to load audit events:', err);
+      setError(err);
     } finally {
       setLoading(false);
     }
   };
 
-  const handleExport = () => {
-    // TODO: Export audit logs as CSV
-    console.log('Exporting audit logs...');
+  const loadSavedViews = async () => {
+    try {
+      const views = await auditApi.listFilterViews();
+      setSavedViews(Array.isArray(views) ? views : []);
+    } catch (err) {
+      console.error('Failed to load saved views:', err);
+    }
+  };
+
+  const handleExport = async () => {
+    setExporting(true);
+    try {
+      const filters = {
+        resource_type: category !== 'all' ? category : undefined,
+        severity: severity !== 'all' ? severity : undefined,
+        actor,
+        ip_address: ipAddress,
+        start_date: startDate?.toISOString(),
+        end_date: endDate?.toISOString(),
+      };
+      
+      const result = await auditApi.exportAuditEvents(filters, 'csv');
+      
+      // If backend returns download URL, open it
+      if (result.download_url) {
+        window.open(result.download_url, '_blank');
+        showNotification?.('Export started. Download will begin shortly.', 'success');
+      } else {
+        showNotification?.('Export job created. You\'ll receive a notification when ready.', 'info');
+      }
+    } catch (err) {
+      console.error('Failed to export audit logs:', err);
+      showNotification?.('Failed to export audit logs', 'error');
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const handleSaveView = async () => {
+    const viewName = prompt('Enter a name for this filter view:');
+    if (!viewName) return;
+
+    try {
+      await auditApi.saveFilterView({
+        name: viewName,
+        filters: {
+          category,
+          severity,
+          actor,
+          resourceType,
+          ipAddress,
+          startDate: startDate?.toISOString(),
+          endDate: endDate?.toISOString(),
+        },
+      });
+      showNotification?.('Filter view saved', 'success');
+      loadSavedViews();
+    } catch (err) {
+      console.error('Failed to save view:', err);
+      showNotification?.('Failed to save filter view', 'error');
+    }
+  };
+
+  const applyView = (view) => {
+    const filters = view.filters;
+    setCategory(filters.category || 'all');
+    setSeverity(filters.severity || 'all');
+    setActor(filters.actor || '');
+    setResourceType(filters.resourceType || '');
+    setIpAddress(filters.ipAddress || '');
+    setStartDate(filters.startDate ? new Date(filters.startDate) : null);
+    setEndDate(filters.endDate ? new Date(filters.endDate) : null);
+    showNotification?.(`Applied view: ${view.name}`, 'info');
   };
 
   const getSeverityColor = (sev) => {
@@ -271,8 +293,37 @@ function AuditPage() {
       breadcrumbs={BREADCRUMBS}
       actions={
         <Box sx={{ display: 'flex', gap: 1 }}>
+          {savedViews.length > 0 && (
+            <FormControl size="small" sx={{ minWidth: 150 }}>
+              <InputLabel>Saved Views</InputLabel>
+              <Select
+                label="Saved Views"
+                onChange={(e) => {
+                  const view = savedViews.find(v => v.id === e.target.value);
+                  if (view) applyView(view);
+                }}
+                displayEmpty
+              >
+                <MenuItem value="">Select view...</MenuItem>
+                {savedViews.map((view) => (
+                  <MenuItem key={view.id} value={view.id}>
+                    {view.name}
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+          )}
           <Button
             variant="outlined"
+            size="small"
+            startIcon={<BookmarkIcon />}
+            onClick={handleSaveView}
+          >
+            Save View
+          </Button>
+          <Button
+            variant="outlined"
+            size="small"
             startIcon={<FilterListIcon />}
             onClick={() => setShowFilters(!showFilters)}
           >
@@ -280,24 +331,20 @@ function AuditPage() {
           </Button>
           <Button
             variant="outlined"
+            size="small"
             startIcon={<DownloadIcon />}
             onClick={handleExport}
+            disabled={exporting}
           >
-            Export
+            {exporting ? 'Exporting...' : 'Export'}
           </Button>
-          <IconButton onClick={loadEvents}>
+          <IconButton size="small" onClick={loadEvents}>
             <RefreshIcon />
           </IconButton>
         </Box>
       }
     >
-      {error && (
-        <Alert severity="error" sx={{ mb: 3 }}>
-          {error}
-        </Alert>
-      )}
-
-      {/* Search */}
+      {/* Search and Filters */}
       <Paper sx={{ p: 2, mb: 2 }}>
         <TextField
           fullWidth
@@ -346,6 +393,22 @@ function AuditPage() {
               </Select>
             </FormControl>
 
+            <TextField
+              label="Actor (email)"
+              value={actor}
+              onChange={(e) => setActor(e.target.value)}
+              size="small"
+              sx={{ minWidth: 200 }}
+            />
+
+            <TextField
+              label="IP Address"
+              value={ipAddress}
+              onChange={(e) => setIpAddress(e.target.value)}
+              size="small"
+              sx={{ minWidth: 150 }}
+            />
+
             <LocalizationProvider dateAdapter={AdapterDateFns}>
               <DatePicker
                 label="Start Date"
@@ -366,7 +429,16 @@ function AuditPage() {
 
       {/* Events Table */}
       {loading ? (
-        <LinearProgress />
+        <TableSkeleton rows={rowsPerPage} columns={5} showActions={false} />
+      ) : error ? (
+        <ErrorState error={error} onRetry={loadEvents} variant="inline" />
+      ) : events.length === 0 ? (
+        <EmptyState
+          icon={HistoryIcon}
+          title="No audit events yet"
+          description="Audit logs track security-relevant events in your organization. Events will appear as users interact with your system."
+          whyItMatters="Audit logs help you monitor security, troubleshoot issues, and maintain compliance."
+        />
       ) : (
         <Paper>
           <TableContainer>

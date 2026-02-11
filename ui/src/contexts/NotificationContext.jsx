@@ -22,7 +22,7 @@
  *   showApiError(apiResponse);
  */
 
-import { createContext, useState, useCallback, useMemo } from 'react';
+import { createContext, useState, useCallback, useMemo, useContext } from 'react';
 import {
   Snackbar,
   Alert,
@@ -444,8 +444,18 @@ export function NotificationProvider({ children, config = {} }) {
 
 export { NotificationContext };
 
-
-
+/**
+ * useNotification hook - provides access to notification methods.
+ * 
+ * @returns {object} Notification methods
+ */
+export function useNotification() {
+  const context = useContext(NotificationContext);
+  if (!context) {
+    throw new Error('useNotification must be used within a NotificationProvider');
+  }
+  return context;
+}
 
 /**
  * Helper: Map API severity to MUI Alert severity.

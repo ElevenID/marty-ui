@@ -26,35 +26,28 @@ import VisibilityIcon from '@mui/icons-material/Visibility';
 import DownloadIcon from '@mui/icons-material/Download';
 import QrCodeIcon from '@mui/icons-material/QrCode';
 
+import { getMyCredentials } from '../../../services/applicantApi';
+
 function MyCredentialsPage() {
   const [credentials, setCredentials] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
   useEffect(() => {
-    // TODO: Fetch from API
     const loadCredentials = async () => {
       try {
-        await new Promise((resolve) => setTimeout(resolve, 500));
-        setCredentials([
-          {
-            id: 'cred-1',
-            type: 'Driver License',
-            issuer: 'Department of Motor Vehicles',
-            issuedAt: '2025-12-15T10:00:00Z',
-            expiresAt: '2030-12-15T10:00:00Z',
-            status: 'active',
-          },
-          {
-            id: 'cred-2',
-            type: 'Employee Badge',
-            issuer: 'Acme Corporation',
-            issuedAt: '2026-01-05T10:00:00Z',
-            expiresAt: '2027-01-05T10:00:00Z',
-            status: 'active',
-          },
-        ]);
+        const result = await getMyCredentials();
+        const creds = (result.credentials || result.documents || []).map(doc => ({
+          id: doc.id,
+          type: doc.document_type || doc.credential_type || 'Credential',
+          issuer: doc.issuing_authority || doc.issuer || 'Issuer',
+          issuedAt: doc.issued_at || doc.created_at,
+          expiresAt: doc.expiry_date || doc.valid_until,
+          status: doc.status?.toLowerCase() || 'active',
+        }));
+        setCredentials(creds);
       } catch (err) {
+        console.error('Error loading credentials:', err);
         setError('Failed to load credentials');
       } finally {
         setLoading(false);

@@ -157,7 +157,11 @@ const AdminDashboard = () => {
       // Keycloak impersonation endpoint
       // POST /admin/realms/{realm}/users/{id}/impersonation
       const keycloakUrl = keycloak?.authServerUrl || window.KEYCLOAK_URL || 'http://localhost:8080';
-      const realm = keycloak?.realm || 'marty';
+      const realm =
+        keycloak?.realm ||
+        import.meta.env.VITE_KEYCLOAK_REALM ||
+        window.KEYCLOAK_REALM ||
+        '11id';
       
       const impersonateUrl = `${keycloakUrl}/admin/realms/${realm}/users/${vendor.id}/impersonation`;
       

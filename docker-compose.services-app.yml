@@ -86,9 +86,9 @@ services:
       REDIS_URL: redis://marty-ui-redis-1:6379/0
       RABBITMQ_URL: amqp://marty:marty_dev_password@rabbitmq:5672/
       # Internal URL for server-to-server calls (Docker network)
-      OIDC_ISSUER_URL: http://marty-ui-keycloak-1:8080/realms/11id
+      OIDC_ISSUER_URL: http://marty-ui-keycloak-1:8080/realms/${KEYCLOAK_REALM:-11id}
       # External URL for browser redirects (accessible from host)
-      OIDC_EXTERNAL_ISSUER_URL: http://localhost:8180/realms/11id
+      OIDC_EXTERNAL_ISSUER_URL: http://localhost:8180/realms/${KEYCLOAK_REALM:-11id}
       OIDC_CLIENT_ID: marty-ui
       OIDC_REDIRECT_URI: http://localhost:8000/v1/auth/callback
       OIDC_POST_LOGOUT_REDIRECT_URI: http://localhost:3000/

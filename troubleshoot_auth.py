@@ -8,8 +8,11 @@ async def check_connectivity():
     print("--- Marty Auth Troubleshooter ---")
     
     # Configuration
-    internal_issuer = os.environ.get("OIDC_ISSUER_URL", "http://marty-ui-keycloak-1:8080/realms/11id")
-    external_issuer = os.environ.get("OIDC_EXTERNAL_ISSUER_URL", "http://localhost:8180/realms/11id")
+    realm = os.environ.get("KEYCLOAK_REALM", "11id")
+    internal_default = f"http://marty-ui-keycloak-1:8080/realms/{realm}"
+    external_default = f"http://localhost:8180/realms/{realm}"
+    internal_issuer = os.environ.get("OIDC_ISSUER_URL", internal_default)
+    external_issuer = os.environ.get("OIDC_EXTERNAL_ISSUER_URL", external_default)
     
     print(f"Internal Issuer URL: {internal_issuer}")
     print(f"External Issuer URL: {external_issuer}")

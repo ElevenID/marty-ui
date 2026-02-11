@@ -5,6 +5,10 @@
  * - Setup resources (Trust Profiles, Templates, Policies, Deployments, Flows)
  * - API Keys
  * - System Health
+ * - Team snapshot
+ * - Runtime status
+ * - Critical events
+ * - Environment setting
  */
 
 import { useState, useEffect } from 'react';
@@ -12,6 +16,12 @@ import { listTrustProfiles, listCredentialTemplates, listPresentationPolicies } 
 import { listDeploymentProfiles } from '../services/deploymentProfilesApi';
 import { listFlows } from '../services/flowsApi';
 import { listApiKeys } from '../services/apiKeysApi';
+import { 
+  getTeamSnapshot, 
+  getRuntimeStatus, 
+  getCriticalEvents,
+  getOrganizationEnvironment,
+} from '../services/dashboardApi';
 import { useAuth } from './useAuth';
 
 /**
@@ -28,9 +38,18 @@ export function useDashboardData() {
     flows: [],
     apiKeys: [],
     systemHealth: null,
+    teamData: null,
+    runtimeStatus: null,
+    criticalEvents: [],
+    environment: 'development',
   });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [refetchTrigger, setRefetchTrigger] = useState(0);
+
+  const refetch = () => {
+    setRefetchTrigger((prev) => prev + 1);
+  };
 
   useEffect(() => {
     if (!organizationId) {
@@ -50,10 +69,10 @@ export function useDashboardData() {
           trustProfilesRes,
           templatesRes,
           policiesRes,
-          deploymentsRes,
-          flowsRes,
-          apiKeysRes,
-          healthRes,
+          teamRes,
+          runtimeRes,
+          eventsRes,
+          environmentRes,
         ] = await Promise.allSettled([
           listTrustProfiles({ organization_id: organizationId }),
           listCredentialTemplates({ organization_id: organizationId }),
@@ -62,6 +81,10 @@ export function useDashboardData() {
           listFlows({ organization_id: organizationId }),
           listApiKeys(organizationId),
           fetch('/health').then((r) => (r.ok ? r.json() : { status: 'error' })),
+          getTeamSnapshot(organizationId),
+          getRuntimeStatus(organizationId),
+          getCriticalEvents(organizationId),
+          getOrganizationEnvironment(organizationId),
         ]);
 
         if (!mounted) return;
@@ -74,6 +97,10 @@ export function useDashboardData() {
           flows: flowsRes.status === 'fulfilled' ? flowsRes.value : [],
           apiKeys: apiKeysRes.status === 'fulfilled' ? apiKeysRes.value : [],
           systemHealth: healthRes.status === 'fulfilled' ? healthRes.value : null,
+          teamData: teamRes.status === 'fulfilled' ? teamRes.value : null,
+          runtimeStatus: runtimeRes.status === 'fulfilled' ? runtimeRes.value : null,
+          criticalEvents: eventsRes.status === 'fulfilled' ? eventsRes.value : [],
+          environment: environmentRes.status === 'fulfilled' ? environmentRes.value : 'development',
         });
       } catch (err) {
         if (!mounted) return;
@@ -105,7 +132,7 @@ export function useDashboardData() {
       mounted = false;
       clearInterval(healthInterval);
     };
-  }, [organizationId]);
+  }, [organizationId, refetchTrigger]);
 
-  return { data, loading, error };
+  return { data, loading, error, refetch };
 }

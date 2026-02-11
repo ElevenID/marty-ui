@@ -61,6 +61,7 @@ const BasicsStep = ({ data, onChange }) => {
         placeholder="Default Trust Profile"
         sx={{ mb: 3 }}
         helperText="You can change this later"
+        inputProps={{ 'data-testid': 'wizard.trustProfile.name' }}
       />
 
       {/* Description */}
@@ -73,6 +74,7 @@ const BasicsStep = ({ data, onChange }) => {
         onChange={(e) => onChange({ description: e.target.value })}
         sx={{ mb: 3 }}
         helperText="Optional: Explain the purpose and scope of this trust profile"
+        inputProps={{ 'data-testid': 'wizard.trustProfile.description' }}
       />
 
       {/* Framework Type */}
@@ -82,6 +84,7 @@ const BasicsStep = ({ data, onChange }) => {
           value={data.framework_type || 'custom'}
           onChange={(e) => onChange({ framework_type: e.target.value })}
           label="Framework Type"
+          data-testid="wizard.trustProfile.frameworkType"
         >
           {FRAMEWORK_TYPES.map((type) => (
             <MenuItem key={type.value} value={type.value}>

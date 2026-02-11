@@ -6,6 +6,7 @@
  */
 
 import { useNavigate } from 'react-router-dom';
+import { useCallback } from 'react';
 import {
   Box,
   Container,
@@ -33,6 +34,48 @@ const STEPS = ['Environment', 'Runtime Settings', 'Integration', 'Review & Activ
 const DeploymentProfileWizard = () => {
   const navigate = useNavigate();
 
+  const validateStep = useCallback((stepIndex, data) => {
+    switch (stepIndex) {
+      case 0: // Environment
+        return data.name?.trim().length > 0 && data.environment_type;
+      case 1: // Runtime Settings
+        return data.default_policy_id !== null;
+      case 2: // Integration (optional)
+        return true;
+      case 3: // Review
+        return true;
+      default:
+        return false;
+    }
+  }, []);
+
+  const handleSubmit = useCallback(async (data) => {
+    // Set status based on activate_immediately flag
+    const payload = {
+      name: data.name,
+      description: data.description,
+      environment_type: data.environment_type,
+      network_mode: data.network_mode,
+      presentation_policy_ids: data.default_policy_id ? [data.default_policy_id] : [],
+      enabled_flows: data.enabled_flows,
+      webhook_url: data.webhooks.url || null,
+      webhook_events: data.webhooks.events,
+      feature_flags: data.feature_flags,
+      environment_config: data.ux_config,
+      status: data.activate_immediately ? 'active' : 'draft',
+    };
+    
+    const result = await createDeploymentProfile(payload);
+    
+    // Generate API key if requested
+    if (data.generate_api_key && result.id) {
+      // TODO: Call API key creation endpoint
+      console.log('API key generation would happen here for profile:', result.id);
+    }
+    
+    return result;
+  }, []);
+
   const wizard = useWizard({
     steps: STEPS,
     initialData: {
@@ -59,46 +102,8 @@ const DeploymentProfileWizard = () => {
       generate_api_key: true,
       activate_immediately: true,
     },
-    validateStep: (stepIndex, data) => {
-      switch (stepIndex) {
-        case 0: // Environment
-          return data.name?.trim().length > 0 && data.environment_type;
-        case 1: // Runtime Settings
-          return data.default_policy_id !== null;
-        case 2: // Integration (optional)
-          return true;
-        case 3: // Review
-          return true;
-        default:
-          return false;
-      }
-    },
-    onSubmit: async (data) => {
-      // Set status based on activate_immediately flag
-      const payload = {
-        name: data.name,
-        description: data.description,
-        environment_type: data.environment_type,
-        network_mode: data.network_mode,
-        presentation_policy_ids: data.default_policy_id ? [data.default_policy_id] : [],
-        enabled_flows: data.enabled_flows,
-        webhook_url: data.webhooks.url || null,
-        webhook_events: data.webhooks.events,
-        feature_flags: data.feature_flags,
-        environment_config: data.ux_config,
-        status: data.activate_immediately ? 'active' : 'draft',
-      };
-      
-      const result = await createDeploymentProfile(payload);
-      
-      // Generate API key if requested
-      if (data.generate_api_key && result.id) {
-        // TODO: Call API key creation endpoint
-        console.log('API key generation would happen here for profile:', result.id);
-      }
-      
-      return result;
-    },
+    validateStep,
+    onSubmit: handleSubmit,
     onComplete: () => {
       navigate('/console/flows/definitions');
     },
@@ -210,6 +215,7 @@ const DeploymentProfileWizard = () => {
             onClick={wizard.isFirstStep ? wizard.cancel : wizard.goBack}
             startIcon={<ArrowBackIcon />}
             disabled={wizard.loading}
+            data-testid={wizard.isFirstStep ? 'wizard.deployment.cancel' : 'wizard.deployment.back'}
           >
             {wizard.isFirstStep ? 'Cancel' : 'Back'}
           </Button>
@@ -220,6 +226,7 @@ const DeploymentProfileWizard = () => {
               <Button
                 onClick={wizard.goNext}
                 disabled={wizard.loading}
+                data-testid="wizard.deployment.skip"
               >
                 Skip
               </Button>
@@ -231,6 +238,7 @@ const DeploymentProfileWizard = () => {
                 onClick={wizard.submit}
                 disabled={!wizard.isStepValid() || wizard.loading}
                 startIcon={wizard.loading ? <CircularProgress size={20} /> : <CheckCircleIcon />}
+                data-testid="wizard.deployment.submit"
               >
                 {wizard.loading ? 'Creating...' : 'Create Profile'}
               </Button>
@@ -240,6 +248,7 @@ const DeploymentProfileWizard = () => {
                 onClick={wizard.goNext}
                 disabled={!wizard.isStepValid() || wizard.loading}
                 endIcon={<ArrowForwardIcon />}
+                data-testid="wizard.deployment.next"
               >
                 Next
               </Button>

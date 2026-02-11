@@ -19,7 +19,7 @@ services:
     environment:
       # Override URLs for external access
       UI_BASE_URL: https://${PUBLIC_DOMAIN}
-      OIDC_EXTERNAL_ISSUER_URL: https://${PUBLIC_DOMAIN}/realms/11id
+      OIDC_EXTERNAL_ISSUER_URL: https://${PUBLIC_DOMAIN}/realms/${KEYCLOAK_REALM:-11id}
       OIDC_REDIRECT_URI: https://${PUBLIC_DOMAIN}/v1/auth/callback
       OIDC_POST_LOGOUT_REDIRECT_URI: https://${PUBLIC_DOMAIN}/
       COOKIE_SECURE: "true"

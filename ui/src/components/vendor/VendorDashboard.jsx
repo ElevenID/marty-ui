@@ -46,6 +46,7 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import InfoIcon from '@mui/icons-material/Info';
 import IntegrationInstructionsIcon from '@mui/icons-material/IntegrationInstructions';
+import IssuanceDashboardWidget from '../console/dashboard/IssuanceDashboardWidget';
 
 /**
  * Quick stat card component
@@ -571,6 +572,11 @@ export default function VendorDashboard() {
           </Typography>
         </Paper>
       )}
+
+      {/* Credential Issuance Widget */}
+      <Box sx={{ mb: 3 }}>
+        <IssuanceDashboardWidget compact={false} />
+      </Box>
 
       {/* Quick Actions */}
       <Grid container spacing={3}>

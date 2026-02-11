@@ -10,12 +10,9 @@ export default defineConfig(({ mode }) => {
   
   return {
     plugins: [
-      react({
-        // Use automatic JSX runtime (no need to import React)
-        jsxRuntime: 'automatic',
-      }),
-      // Only enable checker overlay in development mode
-      // This prevents ESLint/TS errors from showing in production builds
+      react(),
+      // Checker temporarily disabled for debugging
+      /*
       ...(isDev ? [checker({
         typescript: true,
         eslint: {
@@ -26,9 +23,17 @@ export default defineConfig(({ mode }) => {
           position: 'br',
         },
       })] : []),
+      */
     ],
     server: {
       port: 3000,
+      host: true, // Listen on all network interfaces
+      allowedHosts: [
+        'localhost',
+        '.localhost',
+        'beta.elevenidllc.com',
+        '.elevenidllc.com', // Allow all subdomains
+      ],
       proxy: {
         // Proxy /v1/* API requests to microservices gateway
         '/v1': {
@@ -78,9 +83,6 @@ export default defineConfig(({ mode }) => {
           },
         },
       },
-    },
-    optimizeDeps: {
-      include: ['react', 'react-dom', 'react-router-dom'],
     },
   }
 })

@@ -28,22 +28,25 @@ import { useAuth } from '../hooks/useAuth';
 
 import {
   RoleSelectionStep,
+  IntentSelectionStep,
   ApplicantJoinStep,
   VendorCreateOrgStep,
   CompletionStep,
   ConfirmOrgDialog,
+  DomainMatchModal,
   WalletPairingStep,
   TrustProfileStep,
   TrustHealthCheckStep,
   BusinessContextStep,
   TechnicalIdentityStep,
 } from './onboarding';
+import { getDomainMatches, joinDomainOrganization, setRoleIntent } from '../services/domainMatchingApi';
 import { TrustProvider } from './trust';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || '';
 const ONBOARDING_API_BASE = `${API_BASE_URL}/api/onboarding`;
 
-const STEPS_APPLICANT = ['Choose Your Role', 'Join Organization', 'Connect Wallet', 'Complete'];
+const STEPS_APPLICANT = ['Choose Your Role', 'What brings you here?', 'Join Organization', 'Connect Wallet', 'Complete'];
 const STEPS_VENDOR = ['Choose Your Role', 'Create Organization', 'Trust Profile', 'Business Context', 'Technical Identity', 'Review', 'Complete'];
 const STEPS_VENDOR_SKIP_TRUST = ['Choose Your Role', 'Create Organization', 'Trust Profile', 'Complete'];
 
@@ -92,6 +95,7 @@ const OnboardingPage = () => {
 
   // User selections
   const [userType, setUserType] = useState(null);
+  const [roleIntent, setRoleIntentState] = useState(null); // 'apply_for_credentials' or 'manage_credentials'
   const [organizations, setOrganizations] = useState([]);
   const [existingOrganization, setExistingOrganization] = useState(null);
   const [roleLocked, setRoleLocked] = useState(false);
@@ -149,11 +153,42 @@ const OnboardingPage = () => {
   // Confirmation dialog
   const [confirmDialogOpen, setConfirmDialogOpen] = useState(false);
   const [selectedOrgForConfirm, setSelectedOrgForConfirm] = useState(null);
+  
+  // Domain matching state
+  const [domainMatches, setDomainMatches] = useState([]);
+  const [domainMatchModalOpen, setDomainMatchModalOpen] = useState(false);
+  const [domainMatchLoading, setDomainMatchLoading] = useState(false);
+
+  // Check for deep link context (from /apply route)
+  useEffect(() => {
+    const contextStr = sessionStorage.getItem('applyContext');
+    if (contextStr) {
+      try {
+        const context = JSON.parse(contextStr);
+        // Check if context is recent (within last 5 minutes)
+        if (Date.now() - context.timestamp < 5 * 60 * 1000) {
+          // If there's an org_id in the context, store it for later use
+          if (context.orgId) {
+            sessionStorage.setItem('joinOrgId', context.orgId);
+          }
+        }
+        // Context has been read, can clear it
+        sessionStorage.removeItem('applyContext');
+      } catch (e) {
+        console.error('Failed to parse apply context:', e);
+      }
+    }
+  }, []);
 
   // Check onboarding status on mount
   useEffect(() => {
     checkOnboardingStatus();
   }, [checkOnboardingStatus]);
+  
+  // Check for domain matches on mount
+  useEffect(() => {
+    loadDomainMatches();
+  }, []);
 
   useEffect(() => {
     if (roleLocked && userType && activeStep === 0) {
@@ -223,11 +258,69 @@ const OnboardingPage = () => {
       if (response.ok) {
         const data = await response.json();
         setOrganizations(data.organizations || []);
+        
+        // Check for deep link target org
+        const targetOrgId = sessionStorage.getItem('joinOrgId');
+        if (targetOrgId) {
+          const targetOrg = (data.organizations || []).find(org => org.id === targetOrgId);
+          if (targetOrg) {
+            // Auto-select this org and show confirmation
+            console.log('Deep link target org found:', targetOrg.name);
+            // Store for later reference when user gets to join step
+            sessionStorage.setItem('suggestedOrg', JSON.stringify(targetOrg));
+          }
+        }
       }
     } catch (err) {
       console.error('Error loading organizations:', err);
     }
   }, []);
+  
+  const loadDomainMatches = async () => {
+    try {
+      const matches = await getDomainMatches();
+      setDomainMatches(matches);
+      // Show modal if there are matches
+      if (matches.length > 0) {
+        setDomainMatchModalOpen(true);
+      }
+    } catch (err) {
+      console.error('Error loading domain matches:', err);
+    }
+  };
+  
+  const handleJoinDomainOrg = async (org) => {
+    setDomainMatchLoading(true);
+    setError(null);
+    
+    try {
+      const result = await joinDomainOrganization(org.id);
+      
+      // Update result state based on action
+      setResultOrgName(result.organization_name);
+      
+      if (result.action === 'joined') {
+        // User was auto-joined
+        setMembershipStatus('joined');
+        setDomainMatchModalOpen(false);
+        // Skip to wallet pairing (step 3)
+        setActiveStep(3);
+      } else if (result.action === 'requested') {
+        // Request was submitted for approval
+        setMembershipStatus('pending');
+        setDomainMatchModalOpen(false);
+        // Can continue onboarding without org access
+      }
+      
+      // Refresh user to get updated org membership
+      await refreshUser();
+      
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setDomainMatchLoading(false);
+    }
+  };
 
   const loadOrgSettings = useCallback(async () => {
     try {
@@ -274,6 +367,32 @@ const OnboardingPage = () => {
     }
     setUserType(role);
   };
+  
+  const handleIntentSelect = (intent) => {
+    setRoleIntentState(intent);
+  };
+  
+  const handleIntentNext = async () => {
+    if (!roleIntent) {
+      setError('Please select an option to continue');
+      return;
+    }
+    
+    setSubmitting(true);
+    setError(null);
+    
+    try {
+      // Save intent to backend
+      await setRoleIntent(roleIntent);
+      
+      // Move to next step
+      setActiveStep(2);
+    } catch (err) {
+      setError(err.message || 'Failed to save your preference');
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   const handleJoinWithCode = async () => {
     if (!inviteCode.trim()) {
@@ -301,7 +420,7 @@ const OnboardingPage = () => {
       setResultOrgName(data.organization_name);
       setMembershipStatus('joined');
       // Move to wallet pairing step
-      setActiveStep(2);
+      setActiveStep(3);
       setSubmitting(false);
     } catch (err) {
       setError(err.message);
@@ -346,7 +465,7 @@ const OnboardingPage = () => {
       setResultOrgName(data.organization_name);
       setMembershipStatus(data.membership_status);
       // Move to wallet pairing step
-      setActiveStep(2);
+      setActiveStep(3);
       setSubmitting(false);
     } catch (err) {
       setError(err.message);
@@ -357,7 +476,7 @@ const OnboardingPage = () => {
   const handleCompleteApplicantWithoutOrg = async () => {
     // Skip org, go directly to wallet pairing
     setMembershipStatus('none');
-    setActiveStep(2);
+    setActiveStep(3);
   };
 
   const handleFinalizeApplicantOnboarding = async (withWallet = false) => {
@@ -384,7 +503,7 @@ const OnboardingPage = () => {
       }
 
       // Move to completion step
-      setActiveStep(3);
+      setActiveStep(4);
       setSubmitting(false);
 
       // Refresh user to update onboarding status
@@ -727,10 +846,22 @@ const OnboardingPage = () => {
             </Box>
           </Fade>
 
-          {/* Step 2: Applicant - Join Organization */}
+          {/* Step 2: Applicant - Intent Selection */}
           <Fade in={activeStep === 1 && userType === 'applicant'} timeout={300} unmountOnExit>
             <Box>
               {activeStep === 1 && userType === 'applicant' && (
+                <IntentSelectionStep
+                  roleIntent={roleIntent}
+                  onSelectIntent={handleIntentSelect}
+                />
+              )}
+            </Box>
+          </Fade>
+
+          {/* Step 3: Applicant - Join Organization */}
+          <Fade in={activeStep === 2 && userType === 'applicant'} timeout={300} unmountOnExit>
+            <Box>
+              {activeStep === 2 && userType === 'applicant' && (
                 <ApplicantJoinStep
                   joinMethod={joinMethod}
                   onJoinMethodChange={setJoinMethod}
@@ -835,10 +966,10 @@ const OnboardingPage = () => {
             </Box>
           </Fade>
 
-          {/* Step 3: Applicant - Wallet Pairing */}
-          <Fade in={activeStep === 2 && userType === 'applicant'} timeout={300} unmountOnExit>
+          {/* Step 4: Applicant - Wallet Pairing */}
+          <Fade in={activeStep === 3 && userType === 'applicant'} timeout={300} unmountOnExit>
             <Box>
-              {activeStep === 2 && userType === 'applicant' && (
+              {activeStep === 3 && userType === 'applicant' && (
                 <WalletPairingStep
                   onPairingComplete={(data) => {
                     setWalletPaired(true);
@@ -852,10 +983,10 @@ const OnboardingPage = () => {
             </Box>
           </Fade>
 
-          {/* Step 3/6: Completion */}
-          <Fade in={(activeStep === 3 && userType === 'applicant') || (activeStep === 6 && userType === 'vendor') || (activeStep === 3 && userType === 'vendor' && skipTrustSetup)} timeout={300} unmountOnExit>
+          {/* Step 4/7: Completion */}
+          <Fade in={(activeStep === 4 && userType === 'applicant') || (activeStep === 6 && userType === 'vendor') || (activeStep === 3 && userType === 'vendor' && skipTrustSetup)} timeout={300} unmountOnExit>
             <Box>
-              {((activeStep === 3 && userType === 'applicant') || 
+              {((activeStep === 4 && userType === 'applicant') || 
                 (activeStep === 6 && userType === 'vendor') ||
                 (activeStep === 3 && userType === 'vendor' && skipTrustSetup)) && (
                 <CompletionStep
@@ -874,7 +1005,7 @@ const OnboardingPage = () => {
           </Fade>
 
           {/* Navigation Buttons */}
-          {activeStep < (userType === 'vendor' ? 5 : 2) && (
+          {activeStep < (userType === 'vendor' ? 5 : 3) && (
             <Box
               sx={{
                 display: 'flex',
@@ -971,6 +1102,18 @@ const OnboardingPage = () => {
                     Next
                   </Button>
                 )}
+                
+                {activeStep === 1 && userType === 'applicant' && (
+                  <Button
+                    variant="contained"
+                    onClick={handleIntentNext}
+                    disabled={submitting || !roleIntent}
+                    endIcon={submitting ? <CircularProgress size={20} /> : <ArrowForwardIcon />}
+                    data-testid="onboarding-next-btn"
+                  >
+                    {submitting ? 'Saving...' : 'Continue'}
+                  </Button>
+                )}
               </Box>
             </Box>
           )}
@@ -987,6 +1130,16 @@ const OnboardingPage = () => {
         organization={selectedOrgForConfirm}
         submitting={submitting}
         onConfirm={handleConfirmOrgSelection}
+      />
+      
+      {/* Domain Match Modal */}
+      <DomainMatchModal
+        open={domainMatchModalOpen}
+        onClose={() => setDomainMatchModalOpen(false)}
+        matches={domainMatches}
+        loading={domainMatchLoading}
+        onJoinOrganization={handleJoinDomainOrg}
+        email={user?.email}
       />
     </Box>
     </TrustProvider>

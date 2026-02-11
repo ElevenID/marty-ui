@@ -6,6 +6,7 @@
  */
 
 import { useNavigate } from 'react-router-dom';
+import { useCallback } from 'react';
 import {
   Box,
   Container,
@@ -20,6 +21,7 @@ import {
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import AccountTreeIcon from '@mui/icons-material/AccountTree';
 
 import { useWizard } from '../../../hooks/useWizard';
 import { createCredentialTemplate } from '../../../services/presentationPolicyApi';
@@ -33,6 +35,41 @@ const STEPS = ['Basics', 'Claims', 'Trust & Compliance', 'Crypto & Validity', 'R
 
 const CredentialTemplateWizard = () => {
   const navigate = useNavigate();
+
+  const validateStep = useCallback((stepIndex, data) => {
+    switch (stepIndex) {
+      case 0: // Basics
+        return (
+          data.name?.trim().length > 0 &&
+          data.credential_type?.trim().length > 0 &&
+          data.vct?.trim().length > 0
+        );
+      case 1: // Claims
+        return data.claims && data.claims.length > 0;
+      case 2: // Trust & Compliance
+        return data.trust_profile_id !== null;
+      case 3: // Crypto & Validity (optional)
+        return true;
+      case 4: // Review
+        return true;
+      default:
+        return false;
+    }
+  }, []);
+
+  const handleSubmit = useCallback(async (data) => {
+    // Set status based on activate_immediately flag
+    const payload = {
+      ...data,
+      status: data.activate_immediately ? 'active' : 'draft',
+      artifacts_auto_generate: data.generate_artifacts_automatically,
+    };
+    delete payload.activate_immediately;
+    delete payload.generate_artifacts_automatically;
+    
+    const result = await createCredentialTemplate(payload);
+    return result;
+  }, []);
 
   const wizard = useWizard({
     steps: STEPS,
@@ -55,40 +92,11 @@ const CredentialTemplateWizard = () => {
       generate_artifacts_automatically: true,
       activate_immediately: true,
     },
-    validateStep: (stepIndex, data) => {
-      switch (stepIndex) {
-        case 0: // Basics
-          return (
-            data.name?.trim().length > 0 &&
-            data.credential_type?.trim().length > 0 &&
-            data.vct?.trim().length > 0
-          );
-        case 1: // Claims
-          return data.claims && data.claims.length > 0;
-        case 2: // Trust & Compliance
-          return data.trust_profile_id !== null;
-        case 3: // Crypto & Validity (optional)
-          return true;
-        case 4: // Review
-          return true;
-        default:
-          return false;
-      }
-    },
-    onSubmit: async (data) => {
-      // Set status based on activate_immediately flag
-      const payload = {
-        ...data,
-        status: data.activate_immediately ? 'active' : 'draft',
-        artifacts_auto_generate: data.generate_artifacts_automatically,
-      };
-      delete payload.activate_immediately;
-      delete payload.generate_artifacts_automatically;
-      
-      return await createCredentialTemplate(payload);
-    },
-    onComplete: () => {
-      navigate('/console/policies/presentation');
+    validateStep,
+    onSubmit: handleSubmit,
+    onComplete: (result) => {
+      // Don't auto-navigate - show success screen with CTAs
+      wizard.templateId = result?.id;
     },
     onCancel: () => {
       navigate('/console/templates/credentials');
@@ -140,6 +148,8 @@ const CredentialTemplateWizard = () => {
 
   // Success screen
   if (wizard.success) {
+    const templateId = wizard.result?.id || 'unknown';
+    
     return (
       <Container maxWidth="md" sx={{ py: 4 }}>
         <Paper elevation={3} sx={{ p: 4, textAlign: 'center' }}>
@@ -158,14 +168,38 @@ const CredentialTemplateWizard = () => {
             🎉 Credential Template Created!
           </Typography>
           <Typography variant="h6" color="text.secondary" paragraph>
-            &quot;{wizard.data.name}&quot; is now {wizard.data.activate_immediately ? 'active and ready to issue' : 'saved as draft'}.
+            &quot;{wizard.data.name}&quot; is now {wizard.data.activate_immediately ? 'active' : 'saved as draft'}.
           </Typography>
-          <Typography color="text.secondary" variant="body2" sx={{ mb: 3 }}>
-            Next, create a presentation policy to define what information verifiers can request.
+          
+          {/* Updated messaging */}
+          <Typography color="text.secondary" variant="body2" sx={{ mb: 1 }}>
+            <strong>Next step: Create an Issuance Flow</strong>
           </Typography>
-          <Typography variant="caption" color="text.secondary">
-            Redirecting to Presentation Policies...
+          <Typography color="text.secondary" variant="body2" sx={{ mb: 4 }}>
+            Templates are not applicant-facing. To make this credential available to applicants, 
+            create an Issuance Flow that uses this template.
           </Typography>
+          
+          {/* Primary CTA: Create Flow */}
+          <Box sx={{ display: 'flex', gap: 2, justifyContent: 'center' }}>
+            <Button
+              variant="contained"
+              size="large"
+              startIcon={<AccountTreeIcon />}
+              onClick={() => navigate(`/console/flows/definitions/new?templateId=${templateId}`)}
+            >
+              Create Issuance Flow
+            </Button>
+            
+            {/* Secondary: Return to Templates */}
+            <Button
+              variant="outlined"
+              size="large"
+              onClick={() => navigate('/console/templates/credentials')}
+            >
+              Return to Templates
+            </Button>
+          </Box>
         </Paper>
       </Container>
     );
@@ -213,6 +247,7 @@ const CredentialTemplateWizard = () => {
             onClick={wizard.isFirstStep ? wizard.cancel : wizard.goBack}
             startIcon={<ArrowBackIcon />}
             disabled={wizard.loading}
+            data-testid={wizard.isFirstStep ? 'wizard.template.cancel' : 'wizard.template.back'}
           >
             {wizard.isFirstStep ? 'Cancel' : 'Back'}
           </Button>
@@ -223,6 +258,7 @@ const CredentialTemplateWizard = () => {
               <Button
                 onClick={wizard.goNext}
                 disabled={wizard.loading}
+                data-testid="wizard.template.skip"
               >
                 Skip
               </Button>
@@ -234,6 +270,7 @@ const CredentialTemplateWizard = () => {
                 onClick={wizard.submit}
                 disabled={!wizard.isStepValid() || wizard.loading}
                 startIcon={wizard.loading ? <CircularProgress size={20} /> : <CheckCircleIcon />}
+                data-testid="wizard.template.submit"
               >
                 {wizard.loading ? 'Creating...' : 'Create Template'}
               </Button>
@@ -243,6 +280,7 @@ const CredentialTemplateWizard = () => {
                 onClick={wizard.goNext}
                 disabled={!wizard.isStepValid() || wizard.loading}
                 endIcon={<ArrowForwardIcon />}
+                data-testid="wizard.template.next"
               >
                 Next
               </Button>

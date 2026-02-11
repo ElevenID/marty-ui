@@ -89,7 +89,7 @@ services:
       
       # OIDC configuration (update if exposing Keycloak externally)
       # For now, keep localhost since Keycloak isn't tunneled
-      OIDC_ISSUER_URL: ${OIDC_ISSUER_URL:-http://localhost:8180/realms/11id}
+      OIDC_ISSUER_URL: ${OIDC_ISSUER_URL:-http://localhost:8180/realms/${KEYCLOAK_REALM:-11id}}
       OIDC_REDIRECT_URI: ${OIDC_REDIRECT_URI:-http://localhost:3000/auth/callback}
       OIDC_POST_LOGOUT_REDIRECT_URI: ${OIDC_POST_LOGOUT_REDIRECT_URI:-http://localhost:3000}
       
