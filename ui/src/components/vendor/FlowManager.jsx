@@ -6,6 +6,8 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { useNotification } from '../../contexts/NotificationContext';
 import {
   Box,
   Paper,
@@ -33,19 +35,30 @@ import {
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
+import PreviewIcon from '@mui/icons-material/Preview';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import CancelIcon from '@mui/icons-material/Cancel';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import WarningIcon from '@mui/icons-material/Warning';
 import BatchPredictionIcon from '@mui/icons-material/BatchPrediction';
+import LinkIcon from '@mui/icons-material/Link';
+import QrCode2Icon from '@mui/icons-material/QrCode2';
+import AppleIcon from '@mui/icons-material/Apple';
+import AndroidIcon from '@mui/icons-material/Android';
+import AccountTreeIcon from '@mui/icons-material/AccountTree';
 
 import { useAuth } from '../../hooks/useAuth';
-import flowsApi from '../../services/flowsApi';
+import flowsApi, { FLOW_STATES } from '../../services/flowsApi';
 import credentialsApi from '../../services/credentialsApi';
 import sseService, { EVENT_TYPES } from '../../services/sseService';
+import FlowPublishDialog from './FlowPublishDialog';
+import FlowDisableDialog from './FlowDisableDialog';
+import { EmptyState } from '../common';
 
 const FlowManager = () => {
   const { user } = useAuth();
+  const navigate = useNavigate();
+  const { showError, showWarning, showSuccess } = useNotification();
   const [activeTab, setActiveTab] = useState(0);
   const [flows, setFlows] = useState([]);
   const [executions, setExecutions] = useState([]);
@@ -58,17 +71,45 @@ const FlowManager = () => {
   // Dialog states
   const [revocationDialog, setRevocationDialog] = useState(false);
   const [selectedCredentials, setSelectedCredentials] = useState([]);
+  const [publishDialog, setPublishDialog] = useState(false);
+  const [disableDialog, setDisableDialog] = useState(false);
+  const [selectedFlow, setSelectedFlow] = useState(null);
 
   // Load data
   const loadFlows = useCallback(async () => {
     try {
       const data = await flowsApi.listFlows({ limit: 100 });
       setFlows(data);
+      setError(null);
     } catch (err) {
       console.error('Failed to load flows:', err);
-      setError('Failed to load flows');
+      showWarning('Backend service unavailable - showing sample data for testing', {
+        autoHideDuration: 8000,
+      });
+      // Use mock data for development/testing when API fails
+      setFlows([
+        {
+          id: 'flow-1',
+          name: 'EU Digital Identity – Employee Issuance',
+          flow_type: 'issuance',
+          status: 'PUBLISHED',
+          approval_strategy: 'manual',
+          credential_template_name: 'EU Digital Identity Credential',
+          credential_template_id: 'ct-1',
+        },
+        {
+          id: 'flow-2',
+          name: 'Mobile Driver License Issuance',
+          flow_type: 'issuance',
+          status: 'DRAFT',
+          approval_strategy: 'auto',
+          credential_template_name: 'Mobile Driving License',
+          credential_template_id: 'ct-2',
+        },
+      ]);
+      setError(null); // Clear error since we're using mock data
     }
-  }, []);
+  }, [showWarning]);
 
   const loadExecutions = useCallback(async (flowId = null) => {
     try {
@@ -86,8 +127,12 @@ const FlowManager = () => {
       }
     } catch (err) {
       console.error('Failed to load executions:', err);
+      showError('Unable to load flow executions', {
+        details: 'The backend service may be unavailable. Check console for details.',
+      });
+      setExecutions([]); // Use empty array on error
     }
-  }, [flows]);
+  }, [flows, showError]);
 
   const loadCredentials = useCallback(async () => {
     try {
@@ -95,8 +140,12 @@ const FlowManager = () => {
       setCredentials(data);
     } catch (err) {
       console.error('Failed to load credentials:', err);
+      showError('Unable to load credentials', {
+        details: 'The backend service may be unavailable. Check console for details.',
+      });
+      setCredentials([]); // Use empty array on error
     }
-  }, []);
+  }, [showError]);
 
   const loadRevocationBatches = useCallback(async () => {
     try {
@@ -104,8 +153,12 @@ const FlowManager = () => {
       setRevocationBatches(data);
     } catch (err) {
       console.error('Failed to load revocation batches:', err);
+      showError('Unable to load revocation batches', {
+        details: 'The backend service may be unavailable. Check console for details.',
+      });
+      setRevocationBatches([]); // Use empty array on error
     }
-  }, []);
+  }, [showError]);
 
   useEffect(() => {
     const loadAllData = async () => {
@@ -320,42 +373,167 @@ const FlowManager = () => {
         {/* Flows Tab */}
         {activeTab === 0 && (
           <Box p={2}>
+            {flows.length === 0 ? (
+              <EmptyState
+                icon={AccountTreeIcon}
+                title="Issuance Flows connect applicants to credentials"
+                description="To create one, you'll need:"
+                actionLabel="Create Issuance Flow"
+                onAction={() => navigate('/console/flows/definitions/new')}
+                prerequisites={[
+                  { 
+                    label: 'Trust Profile', 
+                    status: 'ready', // TODO: Wire up actual status from API
+                    path: '/console/trust/profiles' 
+                  },
+                  { 
+                    label: 'Credential Template', 
+                    status: 'ready', // TODO: Wire up actual status from API
+                    path: '/console/templates/credentials' 
+                  },
+                  { 
+                    label: 'Deployment Profile', 
+                    status: 'ready', // TODO: Wire up actual status from API
+                    path: '/console/deploy/profiles' 
+                  },
+                ]}
+                whyItMatters="Flows are the applicant-facing product. Templates are just inputs."
+              />
+            ) : (
             <TableContainer>
               <Table>
                 <TableHead>
                   <TableRow>
                     <TableCell>Name</TableCell>
-                    <TableCell>Type</TableCell>
-                    <TableCell>Approval Strategy</TableCell>
                     <TableCell>Status</TableCell>
+                    <TableCell>Credential</TableCell>
+                    <TableCell>Applicant Entry</TableCell>
+                    <TableCell>Approval Mode</TableCell>
+                    <TableCell>Wallet Targets</TableCell>
                     <TableCell align="right">Actions</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {flows.map((flow) => (
-                    <TableRow key={flow.id}>
-                      <TableCell>{flow.name}</TableCell>
-                      <TableCell>{flow.flow_type}</TableCell>
+                  {flows.map((flow) => {
+                    const flowStatus = flow.status || FLOW_STATES.DRAFT;
+                    const isDraft = flowStatus === FLOW_STATES.DRAFT;
+                    const isPublished = flowStatus === FLOW_STATES.PUBLISHED;
+                    const isDisabled = flowStatus === FLOW_STATES.DISABLED;
+                    
+                    return (
+                    <TableRow 
+                      key={flow.id}
+                      hover
+                      sx={{ 
+                        cursor: 'pointer',
+                        '&:hover': {
+                          bgcolor: 'action.hover',
+                        },
+                      }}
+                      onClick={() => navigate(`/console/flows/definitions/${flow.id}`)}
+                    >
                       <TableCell>
-                        <Chip label={flow.approval_strategy} size="small" />
+                        <Typography variant="body2" fontWeight={500}>
+                          {flow.name}
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          {flow.flow_type}
+                        </Typography>
                       </TableCell>
                       <TableCell>
-                        <Chip label="Active" color="success" size="small" />
+                        <Chip 
+                          label={flowStatus.charAt(0).toUpperCase() + flowStatus.slice(1)} 
+                          color={isDraft ? 'default' : isPublished ? 'success' : 'error'} 
+                          size="small"
+                          icon={isDraft ? <WarningIcon /> : isPublished ? <CheckCircleIcon /> : <CancelIcon />}
+                        />
                       </TableCell>
-                      <TableCell align="right">
-                        <Tooltip title="Execute Flow">
-                          <IconButton
-                            size="small"
-                          >
-                            <PlayArrowIcon />
-                          </IconButton>
-                        </Tooltip>
+                      <TableCell>
+                        <Typography variant="body2">
+                          {flow.credential_template_name || 'Not configured'}
+                        </Typography>
+                      </TableCell>
+                      <TableCell>
+                        {isPublished ? (
+                          <Box sx={{ display: 'flex', gap: 1 }}>
+                            <Tooltip title="Application URL available">
+                              <Chip 
+                                icon={<LinkIcon />} 
+                                label="URL" 
+                                size="small" 
+                                color="primary"
+                                variant="outlined"
+                              />
+                            </Tooltip>
+                            <Tooltip title="QR code available">
+                              <Chip 
+                                icon={<QrCode2Icon />} 
+                                label="QR" 
+                                size="small" 
+                                color="primary"
+                                variant="outlined"
+                              />
+                            </Tooltip>
+                          </Box>
+                        ) : (
+                          <Chip label="Not Published" size="small" variant="outlined" />
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <Chip 
+                          label={flow.approval_strategy === 'auto' ? 'Auto' : 'Manual'} 
+                          size="small"
+                          color={flow.approval_strategy === 'auto' ? 'success' : 'warning'}
+                          variant="outlined"
+                        />
+                      </TableCell>
+                      <TableCell>
+                        <Box sx={{ display: 'flex', gap: 0.5 }}>
+                          <Tooltip title="Apple Wallet">
+                            <AppleIcon fontSize="small" color="action" />
+                          </Tooltip>
+                          <Tooltip title="Google Wallet">
+                            <AndroidIcon fontSize="small" color="action" />
+                          </Tooltip>
+                        </Box>
+                      </TableCell>
+                      <TableCell align="right" onClick={(e) => e.stopPropagation()}>
+                        {isDraft && (
+                          <Tooltip title="Publish Flow">
+                            <IconButton
+                              size="small"
+                              color="success"
+                              onClick={() => {
+                                setSelectedFlow(flow);
+                                setPublishDialog(true);
+                              }}
+                            >
+                              <CheckCircleIcon />
+                            </IconButton>
+                          </Tooltip>
+                        )}
+                        {isPublished && (
+                          <Tooltip title="Disable Flow">
+                            <IconButton
+                              size="small"
+                              color="error"
+                              onClick={() => {
+                                setSelectedFlow(flow);
+                                setDisableDialog(true);
+                              }}
+                            >
+                              <CancelIcon />
+                            </IconButton>
+                          </Tooltip>
+                        )}
                       </TableCell>
                     </TableRow>
-                  ))}
+                    );
+                  })}
                 </TableBody>
               </Table>
             </TableContainer>
+            )}
           </Box>
         )}
 
@@ -656,6 +834,42 @@ const FlowManager = () => {
           {snackbar.message}
         </Alert>
       </Snackbar>
+
+      {/* Flow Publish Dialog */}
+      <FlowPublishDialog
+        open={publishDialog}
+        onClose={() => {
+          setPublishDialog(false);
+          setSelectedFlow(null);
+        }}
+        flow={selectedFlow}
+        onPublished={(updatedFlow) => {
+          loadFlows();
+          setSnackbar({
+            open: true,
+            message: `Flow "${updatedFlow.name}" published successfully!`,
+            severity: 'success',
+          });
+        }}
+      />
+
+      {/* Flow Disable Dialog */}
+      <FlowDisableDialog
+        open={disableDialog}
+        onClose={() => {
+          setDisableDialog(false);
+          setSelectedFlow(null);
+        }}
+        flow={selectedFlow}
+        onDisabled={(updatedFlow) => {
+          loadFlows();
+          setSnackbar({
+            open: true,
+            message: `Flow "${updatedFlow.name}" disabled successfully.`,
+            severity: 'info',
+          });
+        }}
+      />
     </Box>
   );
 };

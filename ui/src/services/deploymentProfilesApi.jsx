@@ -5,7 +5,7 @@
  * for real endpoints (gates, kiosks, lanes, devices).
  */
 
-import { apiClient, handleApiError } from './api';
+import { get, post, patch, del } from './api';
 
 const BASE_PATH = '/v1/identity/deployment-profiles';
 
@@ -22,12 +22,7 @@ const BASE_PATH = '/v1/identity/deployment-profiles';
  * @returns {Promise<Object>} Created deployment profile
  */
 export const createDeploymentProfile = async (profileData) => {
-  try {
-    const response = await apiClient.post(BASE_PATH, profileData);
-    return response.data;
-  } catch (error) {
-    throw handleApiError(error);
-  }
+  return post(BASE_PATH, profileData);
 };
 
 /**
@@ -38,16 +33,12 @@ export const createDeploymentProfile = async (profileData) => {
  * @returns {Promise<Array>} List of deployment profiles
  */
 export const listDeploymentProfiles = async (filters = {}) => {
-  try {
-    const params = new URLSearchParams();
-    if (filters.limit) params.append('limit', filters.limit);
-    if (filters.offset) params.append('offset', filters.offset);
-    
-    const response = await apiClient.get(`${BASE_PATH}?${params.toString()}`);
-    return response.data;
-  } catch (error) {
-    throw handleApiError(error);
-  }
+  const params = new URLSearchParams();
+  if (filters.limit) params.append('limit', filters.limit);
+  if (filters.offset) params.append('offset', filters.offset);
+  
+  const queryString = params.toString();
+  return get(queryString ? `${BASE_PATH}?${queryString}` : BASE_PATH);
 };
 
 /**
@@ -56,12 +47,7 @@ export const listDeploymentProfiles = async (filters = {}) => {
  * @returns {Promise<Object>} Deployment profile details
  */
 export const getDeploymentProfile = async (profileId) => {
-  try {
-    const response = await apiClient.get(`${BASE_PATH}/${profileId}`);
-    return response.data;
-  } catch (error) {
-    throw handleApiError(error);
-  }
+  return get(`${BASE_PATH}/${profileId}`);
 };
 
 /**
@@ -197,6 +183,15 @@ export const unassignDeviceFromLane = async (laneId, deviceId) => {
   }
 };
 
+/**
+ * Get deployment profile activity metrics
+ * @param {string} profileId - Deployment profile ID
+ * @returns {Promise<Object>} Activity metrics including usage, last issuance/verification
+ */
+export const getDeploymentActivity = async (profileId) => {
+  return get(`${BASE_PATH}/${profileId}/activity`);
+};
+
 export default {
   createDeploymentProfile,
   listDeploymentProfiles,
@@ -210,4 +205,5 @@ export default {
   deleteLane,
   assignDeviceToLane,
   unassignDeviceFromLane,
+  getDeploymentActivity,
 };

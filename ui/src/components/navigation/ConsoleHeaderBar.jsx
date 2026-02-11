@@ -20,6 +20,7 @@ import {
   ListItemText,
   useMediaQuery,
   useTheme,
+  Chip,
 } from '@mui/material';
 import { Link as RouterLink } from 'react-router-dom';
 import MenuIcon from '@mui/icons-material/Menu';
@@ -37,8 +38,11 @@ import { OrgSwitcher } from '../navigation/OrgSwitcher';
 export function ConsoleHeaderBar({ onMobileMenuToggle }) {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('md'));
-  const { user, logout, organizationName } = useAuth();
+  const { user, logout, organizationName, isAdministrator, isVendor } = useAuth();
   const [anchorEl, setAnchorEl] = useState(null);
+
+  // Determine user role for display
+  const userRole = isAdministrator ? 'Administrator' : isVendor ? 'Vendor' : 'User';
 
   const handleUserMenuOpen = (event) => {
     setAnchorEl(event.currentTarget);
@@ -145,6 +149,13 @@ export function ConsoleHeaderBar({ onMobileMenuToggle }) {
                 {organizationName}
               </Typography>
             )}
+            <Chip
+              label={userRole}
+              size="small"
+              color="primary"
+              variant="outlined"
+              sx={{ mt: 0.5, height: 20, fontSize: '0.7rem' }}
+            />
           </Box>
           <Divider />
           <MenuItem component={RouterLink} to="/profile">

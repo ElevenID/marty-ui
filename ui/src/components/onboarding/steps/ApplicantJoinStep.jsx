@@ -4,6 +4,7 @@
  * Step 2 for Applicants: Join an organization via code, browse, or skip
  */
 
+import { useState, useMemo } from 'react';
 import {
   Box,
   Typography,
@@ -21,6 +22,10 @@ import {
   CircularProgress,
   InputAdornment,
   Fade,
+  MenuItem,
+  Select,
+  Chip,
+  Stack,
 } from '@mui/material';
 import VpnKeyIcon from '@mui/icons-material/VpnKey';
 import VisibilityIcon from '@mui/icons-material/Visibility';
@@ -28,6 +33,7 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import InfoIcon from '@mui/icons-material/Info';
+import SearchIcon from '@mui/icons-material/Search';
 import MembershipModeChip from '../MembershipModeChip';
 
 const ApplicantJoinStep = ({
@@ -41,6 +47,30 @@ const ApplicantJoinStep = ({
   onSelectOrg,
   onSkip,
 }) => {
+  const [searchQuery, setSearchQuery] = useState('');
+  const [membershipFilter, setMembershipFilter] = useState('all');
+
+  // Filter and search organizations
+  const filteredOrganizations = useMemo(() => {
+    let filtered = [...organizations];
+
+    // Apply search query
+    if (searchQuery.trim()) {
+      const query = searchQuery.toLowerCase();
+      filtered = filtered.filter(
+        (org) =>
+          org.name.toLowerCase().includes(query) ||
+          (org.description && org.description.toLowerCase().includes(query))
+      );
+    }
+
+    // Apply membership mode filter
+    if (membershipFilter !== 'all') {
+      filtered = filtered.filter((org) => org.membership_mode === membershipFilter);
+    }
+
+    return filtered;
+  }, [organizations, searchQuery, membershipFilter]);
   return (
     <Fade in>
       <Box>
@@ -147,10 +177,60 @@ const ApplicantJoinStep = ({
                     You will be asked to confirm your selection.
                   </Typography>
                 </Alert>
-                <Grid container spacing={2}>
-                  {organizations.map((org) => (
-                    <Grid item xs={12} md={6} key={org.id}>
-                      <Card
+
+                {/* Search and Filter Controls */}
+                <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} sx={{ mb: 3 }}>
+                  <TextField
+                    fullWidth
+                    size="small"
+                    placeholder="Search organizations..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    InputProps={{
+                      startAdornment: (
+                        <InputAdornment position="start">
+                          <SearchIcon />
+                        </InputAdornment>
+                      ),
+                    }}
+                  />
+                  <FormControl size="small" sx={{ minWidth: 200 }}>
+                    <Select
+                      value={membershipFilter}
+                      onChange={(e) => setMembershipFilter(e.target.value)}
+                      displayEmpty
+                    >
+                      <MenuItem value="all">All Types</MenuItem>
+                      <MenuItem value="open">Open (Join Immediately)</MenuItem>
+                      <MenuItem value="approval">Request Approval</MenuItem>
+                      <MenuItem value="invite_only">Invite Only</MenuItem>
+                    </Select>
+                  </FormControl>
+                </Stack>
+
+                {/* Results count */}
+                {(searchQuery || membershipFilter !== 'all') && (
+                  <Box sx={{ mb: 2 }}>
+                    <Chip
+                      size="small"
+                      label={`${filteredOrganizations.length} organization${filteredOrganizations.length !== 1 ? 's' : ''} found`}
+                      color="primary"
+                      variant="outlined"
+                    />
+                  </Box>
+                )}
+
+                {filteredOrganizations.length === 0 ? (
+                  <Alert severity="info" icon={<InfoIcon />}>
+                    <Typography variant="body2">
+                      No organizations match your search criteria. Try adjusting your filters.
+                    </Typography>
+                  </Alert>
+                ) : (
+                  <Grid container spacing={2}>
+                    {filteredOrganizations.map((org) => (
+                      <Grid item xs={12} md={6} key={org.id}>
+                        <Card
                         variant="outlined"
                         sx={{
                           cursor: org.membership_mode !== 'invite_only' ? 'pointer' : 'not-allowed',
@@ -180,6 +260,7 @@ const ApplicantJoinStep = ({
                     </Grid>
                   ))}
                 </Grid>
+                )}
               </>
             )}
           </Box>

@@ -23,7 +23,6 @@ import {
   MenuItem,
   Chip,
   Alert,
-  CircularProgress,
   Accordion,
   AccordionSummary,
   AccordionDetails,
@@ -45,6 +44,8 @@ import PublicIcon from '@mui/icons-material/Public';
 import OfflineBoltIcon from '@mui/icons-material/OfflineBolt';
 
 import deploymentProfilesApi from '../../services/deploymentProfilesApi';
+import { CardSkeleton } from '../common/skeletons';
+import ErrorState from '../common/ErrorState';
 
 const NETWORK_MODES = [
   { value: 'ONLINE', label: 'Online', description: 'Full cloud connectivity', icon: <PublicIcon /> },
@@ -146,39 +147,61 @@ const DeploymentProfileManager = () => {
     }
   };
 
+  // Show header always
+  const header = (
+    <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
+      <Box>
+        <Typography variant="h4">Deployment Profiles</Typography>
+        <Typography variant="body2" color="text.secondary">
+          Configure APIs, kiosks, lanes/devices for online and offline environments
+        </Typography>
+      </Box>
+      <Button
+        variant="contained"
+        color="primary"
+        startIcon={<AddIcon />}
+        onClick={handleCreate}
+        disabled={loading}
+      >
+        Create Profile
+      </Button>
+    </Box>
+  );
+
   if (loading) {
     return (
-      <Box display="flex" justifyContent="center" alignItems="center" minHeight="400px">
-        <CircularProgress />
+      <Box>
+        {header}
+        <Grid container spacing={3}>
+          {Array.from({ length: 3 }).map((_, index) => (
+            <Grid item xs={12} md={6} lg={4} key={index}>
+              <CardSkeleton showHeader={true} showActions={true} lines={4} />
+            </Grid>
+          ))}
+        </Grid>
+      </Box>
+    );
+  }
+
+  if (error) {
+    return (
+      <Box>
+        {header}
+        <ErrorState
+          error={error}
+          onRetry={loadProfiles}
+          variant="inline"
+        />
       </Box>
     );
   }
 
   return (
     <Box>
-      <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
-        <Box>
-          <Typography variant="h4">Deployment Profiles</Typography>
-          <Typography variant="body2" color="text.secondary">
-            Configure APIs, kiosks, lanes/devices for online and offline environments
-          </Typography>
-        </Box>
-        <Button
-          variant="contained"
-          color="primary"
-          startIcon={<AddIcon />}
-          onClick={handleCreate}
-        >
-          Create Profile
-        </Button>
-      </Box>
+      {header}
 
-      {/* Show error OR empty state OR profiles - mutually exclusive */}
-      {error ? (
-        <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError(null)}>
-          {error}
-        </Alert>
-      ) : profiles.length === 0 ? (
+      {/* Show empty state OR profiles */}
+      {profiles.length === 0 ? (
         <Paper sx={{ p: 6, textAlign: 'center', borderStyle: 'dashed', borderColor: 'divider' }}>
           <Typography color="text.secondary" gutterBottom>
             No deployment profiles yet

@@ -4,7 +4,7 @@
  * Profile and preferences for applicants.
  */
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   Box,
   Paper,
@@ -20,11 +20,14 @@ import {
 import SaveIcon from '@mui/icons-material/Save';
 
 import { useAuth } from '../../../hooks/useAuth';
+import { getApplicantByUser, updateApplicantProfile } from '../../../services/applicantApi';
 
 function ApplicantSettingsPage() {
   const { user } = useAuth();
   const [saving, setSaving] = useState(false);
   const [success, setSuccess] = useState(false);
+  const [error, setError] = useState(null);
+  const [applicantId, setApplicantId] = useState(null);
   const [profile, setProfile] = useState({
     name: user?.name || '',
     email: user?.email || '',
@@ -36,13 +39,53 @@ function ApplicantSettingsPage() {
     expirationReminders: true,
   });
 
+  // Load applicant profile on mount
+  useEffect(() => {
+    const loadProfile = async () => {
+      if (user?.user_id) {
+        try {
+          const applicant = await getApplicantByUser(user.user_id);
+          if (applicant) {
+            setApplicantId(applicant.id);
+            setProfile({
+              name: applicant.full_name || user.name || '',
+              email: applicant.email || user.email || '',
+              phone: applicant.phone_number || '',
+            });
+          }
+        } catch (err) {
+          console.error('Error loading applicant profile:', err);
+        }
+      }
+    };
+    loadProfile();
+  }, [user]);
+
   const handleSave = async () => {
     setSaving(true);
+    setError(null);
+    setSuccess(false);
     try {
-      // TODO: Save to API
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      if (!applicantId) {
+        throw new Error('Applicant profile not found');
+      }
+      
+      // Split name into given_name and family_name
+      const nameParts = profile.name.trim().split(' ');
+      const given_name = nameParts[0] || '';
+      const family_name = nameParts.slice(1).join(' ') || '';
+      
+      await updateApplicantProfile(applicantId, {
+        given_name,
+        family_name,
+        phone_number: profile.phone,
+      });
+      
       setSuccess(true);
       setTimeout(() => setSuccess(false), 3000);
+    } catch (err) {
+      console.error('Error saving settings:', err);
+      setError(err.message || 'Failed to save settings');
     } finally {
       setSaving(false);
     }
@@ -68,6 +111,12 @@ function ApplicantSettingsPage() {
       {success && (
         <Alert severity="success" sx={{ mb: 3 }}>
           Settings saved successfully.
+        </Alert>
+      )}
+
+      {error && (
+        <Alert severity="error" sx={{ mb: 3 }}>
+          {error}
         </Alert>
       )}
 

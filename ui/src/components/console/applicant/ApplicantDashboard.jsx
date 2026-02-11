@@ -30,6 +30,7 @@ import PendingIcon from '@mui/icons-material/Pending';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 
 import { useAuth } from '../../../hooks/useAuth';
+import { getApplicantStats } from '../../../services/applicantApi';
 
 function ApplicantDashboard() {
   const { user } = useAuth();
@@ -41,15 +42,16 @@ function ApplicantDashboard() {
   });
 
   useEffect(() => {
-    // TODO: Fetch actual stats from API
     const loadStats = async () => {
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      setStats({
-        activeCredentials: 2,
-        pendingApplications: 1,
-        expiringSoon: 0,
-      });
-      setLoading(false);
+      try {
+        const data = await getApplicantStats();
+        setStats(data);
+      } catch (error) {
+        console.error('Error loading dashboard stats:', error);
+        // Keep default stats on error
+      } finally {
+        setLoading(false);
+      }
     };
     loadStats();
   }, []);

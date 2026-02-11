@@ -157,6 +157,28 @@ export async function cancelOrganizationInvitation(organizationId, invitationId)
   return del(`${BASE_PATH}/${organizationId}/invitations/${invitationId}`);
 }
 
+/**
+ * Get organization defaults
+ * @param {string} organizationId - Organization ID
+ * @returns {Promise<Object>} - Organization defaults
+ */
+export async function getOrganizationDefaults(organizationId) {
+  return get(`${BASE_PATH}/${organizationId}/defaults`);
+}
+
+/**
+ * Update organization defaults
+ * @param {string} organizationId - Organization ID
+ * @param {Object} defaults - Default resource IDs
+ * @param {string} defaults.default_trust_profile_id - Default trust profile
+ * @param {string} defaults.default_policy_id - Default presentation policy
+ * @param {string} defaults.default_template_id - Default credential template
+ * @returns {Promise<Object>} - Updated defaults
+ */
+export async function updateOrganizationDefaults(organizationId, defaults) {
+  return patch(`${BASE_PATH}/${organizationId}/defaults`, defaults);
+}
+
 // Re-export getErrorMessage for convenience
 export { getErrorMessage };
 
@@ -173,5 +195,7 @@ export default {
   getOrganizationInvitations,
   createOrganizationInvitation,
   cancelOrganizationInvitation,
+  getOrganizationDefaults,
+  updateOrganizationDefaults,
   getErrorMessage,
 };

@@ -28,6 +28,8 @@ import {
   DialogActions,
 } from '@mui/material';
 
+import { getMyApplications } from '../../../services/applicantApi';
+
 const APPLICATION_STEPS = ['Submitted', 'Under Review', 'Verification', 'Approved'];
 
 function MyApplicationsPage() {
@@ -37,29 +39,31 @@ function MyApplicationsPage() {
   const [selectedApp, setSelectedApp] = useState(null);
 
   useEffect(() => {
-    // TODO: Fetch from API
     const loadApplications = async () => {
       try {
-        await new Promise((resolve) => setTimeout(resolve, 500));
-        setApplications([
-          {
-            id: 'app-1',
-            credentialType: 'Professional Certification',
-            submittedAt: '2026-02-01T10:00:00Z',
-            status: 'under_review',
-            step: 1,
-            estimatedCompletion: '2026-02-10',
-          },
-          {
-            id: 'app-2',
-            credentialType: 'Driver License',
-            submittedAt: '2025-12-01T10:00:00Z',
-            status: 'approved',
-            step: 3,
-            completedAt: '2025-12-15T10:00:00Z',
-          },
-        ]);
+        const result = await getMyApplications({ limit: 100 });
+        const apps = (result.applications || []).map(app => {
+          // Map status to step number for progress visualization
+          let step = 0;
+          const status = app.status?.toLowerCase();
+          if (status === 'submitted') step = 0;
+          else if (status === 'under_review' || status === 'vetting_in_progress') step = 1;
+          else if (status === 'pending_approval') step = 2;
+          else if (status === 'approved') step = 3;
+          
+          return {
+            id: app.id,
+            reference: app.reference_number,
+            credentialType: app.credential_display_name || app.credential_type || app.document_type,
+            submittedAt: app.submitted_at,
+            status: status || 'submitted',
+            step,
+            completedAt: app.approved_at || app.issued_at,
+          };
+        });
+        setApplications(apps);
       } catch (err) {
+        console.error('Error loading applications:', err);
         setError('Failed to load applications');
       } finally {
         setLoading(false);

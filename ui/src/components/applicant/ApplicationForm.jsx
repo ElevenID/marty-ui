@@ -31,6 +31,7 @@ import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import { useAuth } from '../../hooks/useAuth';
+import { usePreview } from '../../contexts/PreviewContext';
 import { DynamicFieldGroup } from './DynamicFieldRenderer';
 
 
@@ -81,6 +82,7 @@ export default function ApplicationForm() {
   const navigate = useNavigate();
   const location = useLocation();
   const { user, organizationId } = useAuth();
+  const { isPreview } = usePreview?.() || { isPreview: false };
   const fileInputRefs = useRef({});
 
   const [activeStep, setActiveStep] = useState(0);
@@ -574,33 +576,54 @@ export default function ApplicationForm() {
       <Box sx={{ textAlign: 'center', py: 6 }} data-testid="application-submitted">
         <CheckCircleIcon sx={{ fontSize: 80, color: 'success.main', mb: 2 }} />
         <Typography variant="h4" gutterBottom>
-          Application Submitted!
+          {isPreview ? 'Preview: Application Would Be Submitted' : 'Application Submitted!'}
         </Typography>
-        <Typography variant="body1" color="text.secondary" sx={{ mb: 2 }}>
-          Your application has been submitted successfully.
-        </Typography>
-        
-        {applicationId && (
-          <Chip
-            label={`Application ID: ${applicationId}`}
-            color="primary"
-            variant="outlined"
-            sx={{ mb: 3 }}
-            data-testid="application-id"
-            data-value={applicationId}
-          />
+        {isPreview ? (
+          <>
+            <Alert severity="info" sx={{ maxWidth: 600, mx: 'auto', mb: 3, textAlign: 'left' }}>
+              <Typography variant="body2" paragraph>
+                <strong>Preview Mode:</strong> In production, this application would be submitted for review.
+              </Typography>
+              <Typography variant="body2">
+                The applicant would receive confirmation and be able to track the application status.
+              </Typography>
+            </Alert>
+            <Typography variant="body1" color="text.secondary" sx={{ mb: 2 }}>
+              Application data collected:
+            </Typography>
+            <Box component="pre" sx={{ textAlign: 'left', bgcolor: 'grey.100', p: 2, borderRadius: 1, fontSize: '0.85rem', overflow: 'auto', maxHeight: 300, maxWidth: 600, mx: 'auto' }}>
+              {JSON.stringify(formData, null, 2)}
+            </Box>
+          </>
+        ) : (
+          <>
+            <Typography variant="body1" color="text.secondary" sx={{ mb: 2 }}>
+              Your application has been submitted successfully.
+            </Typography>
+            
+            {applicationId && (
+              <Chip
+                label={`Application ID: ${applicationId}`}
+                color="primary"
+                variant="outlined"
+                sx={{ mb: 3 }}
+                data-testid="application-id"
+                data-value={applicationId}
+              />
+            )}
+
+            <Alert severity="info" sx={{ maxWidth: 400, mx: 'auto', mb: 3 }}>
+              You will receive updates on your application status via email. Redirecting to your applications page...
+            </Alert>
+
+            <Button
+              variant="contained"
+              onClick={() => navigate('/my-applications')}
+            >
+              View My Applications
+            </Button>
+          </>
         )}
-
-        <Alert severity="info" sx={{ maxWidth: 400, mx: 'auto', mb: 3 }}>
-          You will receive updates on your application status via email. Redirecting to your applications page...
-        </Alert>
-
-        <Button
-          variant="contained"
-          onClick={() => navigate('/my-applications')}
-        >
-          View My Applications
-        </Button>
       </Box>
     </Fade>
   );
@@ -716,7 +739,7 @@ export default function ApplicationForm() {
               endIcon={submitting ? <CircularProgress size={20} /> : <CheckCircleIcon />}
               data-testid="submit-application-btn"
             >
-              {submitting ? 'Submitting...' : 'Submit Application'}
+              {submitting ? (isPreview ? 'Simulating...' : 'Submitting...') : (isPreview ? 'Preview Submit' : 'Submit Application')}
             </Button>
           )}
         </Box>

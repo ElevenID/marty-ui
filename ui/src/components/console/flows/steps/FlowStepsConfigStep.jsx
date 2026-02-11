@@ -22,6 +22,9 @@ import {
   Alert,
   Menu,
   MenuItem,
+  FormControl,
+  InputLabel,
+  Select,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
@@ -70,6 +73,31 @@ const ISSUANCE_PRESETS = [
   },
 ];
 
+const OID4VCI_PRESETS = [
+  {
+    name: 'OID4VCI QR Code Issuance',
+    steps: [
+      { name: 'Check Preconditions', type: 'approval', config: { required_preconditions: [] } },
+      { name: 'Create Credential Offer', type: 'issuance', config: { transport_method: 'qr_code', offer_validity_minutes: 15 } },
+      { name: 'QR Code Generated', type: 'wait', config: { wait_for_event: 'qr_scanned', show_deep_link: true } },
+      { name: 'Token Exchange', type: 'callback', config: { endpoint: '/api/issuance/token' } },
+      { name: 'Issue Credential', type: 'issuance', config: { endpoint: '/api/issuance/credential' } },
+      { name: 'Issuance Complete', type: 'end', config: { emit_event: 'credential_issued' } },
+    ],
+  },
+  {
+    name: 'OID4VCI Deep Link Issuance',
+    steps: [
+      { name: 'Check Preconditions', type: 'approval', config: { required_preconditions: [] } },
+      { name: 'Create Credential Offer', type: 'issuance', config: { transport_method: 'deep_link', offer_validity_minutes: 60 } },
+      { name: 'Send Deep Link', type: 'callback', config: { delivery_method: 'email' } },
+      { name: 'Token Exchange', type: 'callback', config: { endpoint: '/api/issuance/token' } },
+      { name: 'Issue Credential', type: 'issuance', config: { endpoint: '/api/issuance/credential' } },
+      { name: 'Issuance Complete', type: 'end', config: { emit_event: 'credential_issued' } },
+    ],
+  },
+];
+
 const COMBINED_PRESETS = [
   {
     name: 'Verify Then Issue',
@@ -82,7 +110,16 @@ const COMBINED_PRESETS = [
   },
 ];
 
-const FlowStepsConfigStep = ({ flowType, name, description, flowSteps, onUpdate }) => {
+const FlowStepsConfigStep = ({ 
+  flowType, 
+  name, 
+  description, 
+  flowSteps, 
+  purpose = '',
+  audience = '',
+  deploymentTargets = [],
+  onUpdate 
+}) => {
   const [presetMenuAnchor, setPresetMenuAnchor] = useState(null);
 
   const handleFieldChange = (field, value) => {
@@ -138,6 +175,8 @@ const FlowStepsConfigStep = ({ flowType, name, description, flowSteps, onUpdate 
         return VERIFICATION_PRESETS;
       case 'issuance':
         return ISSUANCE_PRESETS;
+      case 'issuance_oid4vci':
+        return OID4VCI_PRESETS;
       case 'combined':
         return COMBINED_PRESETS;
       default:
@@ -181,7 +220,41 @@ const FlowStepsConfigStep = ({ flowType, name, description, flowSteps, onUpdate 
             onChange={(e) => handleFieldChange('description', e.target.value)}
             multiline
             rows={2}
+            sx={{ mb: 2 }}
             helperText="Optional details about what this flow accomplishes"
+          />
+
+          <FormControl fullWidth sx={{ mb: 2 }}>
+            <InputLabel>Purpose</InputLabel>
+            <Select
+              value={purpose}
+              onChange={(e) => handleFieldChange('purpose', e.target.value)}
+              label="Purpose"
+            >
+              <MenuItem value="credential_issuance">Credential Issuance</MenuItem>
+              <MenuItem value="identity_verification">Identity Verification</MenuItem>
+              <MenuItem value="access_control">Access Control</MenuItem>
+              <MenuItem value="combined">Combined (Verify & Issue)</MenuItem>
+            </Select>
+          </FormControl>
+
+          <TextField
+            fullWidth
+            label="Audience"
+            value={audience}
+            onChange={(e) => handleFieldChange('audience', e.target.value)}
+            sx={{ mb: 2 }}
+            helperText="Who will use this flow? (e.g., Applicants, Partners, Internal Staff)"
+            placeholder="e.g., Applicants, Partners, Internal"
+          />
+
+          <TextField
+            fullWidth
+            label="Deployment Targets"
+            value={deploymentTargets.join(', ')}
+            onChange={(e) => handleFieldChange('deploymentTargets', e.target.value.split(',').map(t => t.trim()).filter(Boolean))}
+            helperText="Comma-separated deployment environments (e.g., production, staging)"
+            placeholder="e.g., production, staging, development"
           />
         </CardContent>
       </Card>

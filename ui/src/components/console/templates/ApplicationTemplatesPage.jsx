@@ -23,6 +23,7 @@ import {
 } from '@mui/material';
 import EditIcon from '@mui/icons-material/Edit';
 import VisibilityIcon from '@mui/icons-material/Visibility';
+import PreviewIcon from '@mui/icons-material/Preview';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import { Link } from 'react-router-dom';
 
@@ -173,6 +174,15 @@ function ApplicationTemplatesPage() {
                           size="small"
                         >
                           <EditIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                      <Tooltip title="Preview Application Form">
+                        <IconButton
+                          onClick={() => window.open(`/applicant/preview/applications/${template.id}`, '_blank')}
+                          size="small"
+                          color="primary"
+                        >
+                          <PreviewIcon fontSize="small" />
                         </IconButton>
                       </Tooltip>
                     </TableCell>

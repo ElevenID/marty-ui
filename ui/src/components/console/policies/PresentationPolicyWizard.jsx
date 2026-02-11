@@ -9,7 +9,7 @@
  * - Review and activation
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Box,
@@ -70,27 +70,51 @@ const PresentationPolicyWizard = () => {
   const navigate = useNavigate();
   const [apiError, setApiError] = useState(null);
 
-  const {
-    activeStep,
-    data,
-    loading,
-    error,
-    success,
-    goNext,
-    goBack,
-    goToStep,
-    updateData,
-    submit,
-    isStepValid,
-  } = useWizard({
+  // Validation function for each step
+  const validateStep = useCallback((stepIndex, stepData) => {
+    switch (stepIndex) {
+      case 0: // Trust Profile
+        return stepData.selectedTrustProfile !== null;
+      case 1: // Template Selection
+        return stepData.selectedTemplate !== null;
+      case 2: // Claims Configuration
+        return (
+          stepData.policyConfig.name.trim() !== '' &&
+          stepData.policyConfig.purpose.trim() !== '' &&
+          stepData.policyConfig.required_claims.length > 0
+        );
+      case 3: // Freshness & Binding (optional)
+        return true;
+      case 4: // Review
+        return true;
+      default:
+        return false;
+    }
+  }, []);
+
+  const handleSubmit = useCallback(async (data) => {
+    // TODO: Implement actual API call
+    const payload = {
+      ...data.policyConfig,
+      trust_profile_id: data.selectedTrustProfile?.id,
+      template_id: data.selectedTemplate?.id,
+      status: data.activateImmediately ? 'active' : 'draft',
+    };
+    return { id: 'mock_policy_id', ...payload };
+  }, []);
+
+  const wizard = useWizard({
     steps: STEPS,
     initialData: INITIAL_DATA,
-    apiEndpoint: '/api/v1/presentation-policies',
-    onSuccess: () => {
-      // Redirect to deployment profiles after 2 seconds
+    validateStep,
+    onSubmit: handleSubmit,
+    onComplete: () => {
       setTimeout(() => {
         navigate('/console/deploy/profiles');
       }, 2000);
+    },
+    onCancel: () => {
+      navigate('/console/policies');
     },
   });
 
@@ -100,7 +124,7 @@ const PresentationPolicyWizard = () => {
     
     if (template && template.config) {
       updates.policyConfig = {
-        ...data.policyConfig,
+        ...wizard.data.policyConfig,
         name: template.name,
         description: template.description,
         purpose: `Verify ${template.name}`,
@@ -112,79 +136,47 @@ const PresentationPolicyWizard = () => {
       };
     }
     
-    updateData(updates);
+    wizard.updateData(updates);
   };
-
-  // Validate current step
-  useEffect(() => {
-    let valid = false;
-    
-    switch (activeStep) {
-      case 0: // Trust Profile
-        valid = data.selectedTrustProfile !== null;
-        break;
-      case 1: // Template Selection
-        valid = data.selectedTemplate !== null;
-        break;
-      case 2: // Claims Configuration
-        valid = (
-          data.policyConfig.name.trim() !== '' &&
-          data.policyConfig.purpose.trim() !== '' &&
-          data.policyConfig.required_claims.length > 0
-        );
-        break;
-      case 3: // Freshness & Binding (optional)
-        valid = true;
-        break;
-      case 4: // Review
-        valid = true;
-        break;
-      default:
-        valid = false;
-    }
-    
-    // Update validation state in wizard hook
-    isStepValid(valid);
-  }, [activeStep, data, isStepValid]);
 
   // Render current step content
   const renderStepContent = () => {
-    switch (activeStep) {
+    switch (wizard.activeStep) {
       case 0:
         return (
           <TrustProfileStep
-            selectedTrustProfile={data.selectedTrustProfile}
-            onSelectTrustProfile={(profile) => updateData({ selectedTrustProfile: profile })}
+            selectedTrustProfile={wizard.data.selectedTrustProfile}
+            onSelectTrustProfile={(profile) => wizard.updateData({ selectedTrustProfile: profile })}
           />
         );
       case 1:
         return (
           <TemplateSelectionStep
-            trustProfile={data.selectedTrustProfile}
-            selectedTemplate={data.selectedTemplate}
+            trustProfile={wizard.data.selectedTrustProfile}
+            selectedTemplate={wizard.data.selectedTemplate}
             onSelectTemplate={handleTemplateSelect}
           />
         );
       case 2:
         return (
           <ClaimsConfigurationStep
-            policyConfig={data.policyConfig}
-            onConfigChange={(config) => updateData({ policyConfig: config })}
+            policyConfig={wizard.data.policyConfig}
+            onConfigChange={(config) => wizard.updateData({ policyConfig: config })}
           />
         );
       case 3:
         return (
           <FreshnessBindingStep
-            policyConfig={data.policyConfig}
-            onConfigChange={(config) => updateData({ policyConfig: config })}
+            policyConfig={wizard.data.policyConfig}
+            onConfigChange={(config) => wizard.updateData({ policyConfig: config })}
           />
         );
       case 4:
         return (
           <ReviewStep
-            data={data}
-            onEdit={(step) => goToStep(step)}
-            onToggleActivation={(value) => updateData({ activateImmediately: value })}
+            data={wizard.data}
+            onEdit={(step) => wizard.goToStep(step)}
+            onToggleActivation={(value) => wizard.updateData({ activateImmediately: value })}
           />
         );
       default:
@@ -192,26 +184,8 @@ const PresentationPolicyWizard = () => {
     }
   };
 
-  // Handle submission with activation
-  const handleSubmit = async () => {
-    setApiError(null);
-    
-    try {
-      const payload = {
-        ...data.policyConfig,
-        trust_profile_id: data.selectedTrustProfile?.id || null,
-        is_active: data.activateImmediately,
-      };
-
-      await submit(payload);
-    } catch (err) {
-      console.error('Failed to create presentation policy:', err);
-      setApiError(err.message || 'Failed to create presentation policy');
-    }
-  };
-
   // Show success message
-  if (success) {
+  if (wizard.success) {
     return (
       <Container maxWidth="md" sx={{ py: 4 }}>
         <Paper elevation={3} sx={{ p: 4, textAlign: 'center' }}>
@@ -220,7 +194,7 @@ const PresentationPolicyWizard = () => {
             Presentation Policy Created Successfully!
           </Typography>
           <Typography color="text.secondary" paragraph>
-            Your policy &quot;{data.policyConfig.name}&quot; is now ready to use.
+            Your policy &quot;{wizard.data.policyConfig.name}&quot; is now ready to use.
           </Typography>
           <Typography variant="body2" color="text.secondary">
             Redirecting to deployment profiles...
@@ -244,7 +218,7 @@ const PresentationPolicyWizard = () => {
         </Box>
 
         {/* Stepper */}
-        <Stepper activeStep={activeStep} sx={{ mb: 4 }}>
+        <Stepper activeStep={wizard.activeStep} sx={{ mb: 4 }}>
           {STEPS.map((step) => (
             <Step key={step.label}>
               <StepLabel optional={step.optional && <Typography variant="caption">Optional</Typography>}>
@@ -255,9 +229,9 @@ const PresentationPolicyWizard = () => {
         </Stepper>
 
         {/* Error Alert */}
-        {(error || apiError) && (
+        {(wizard.error || apiError) && (
           <Alert severity="error" sx={{ mb: 3 }} onClose={() => { setApiError(null); }}>
-            {error || apiError}
+            {wizard.error || apiError}
           </Alert>
         )}
 
@@ -269,39 +243,43 @@ const PresentationPolicyWizard = () => {
         {/* Navigation Buttons */}
         <Box sx={{ display: 'flex', justifyContent: 'space-between', pt: 2 }}>
           <Button
-            onClick={activeStep === 0 ? () => navigate('/console/policies/presentation') : goBack}
+            onClick={wizard.activeStep === 0 ? () => navigate('/console/policies/presentation') : wizard.goBack}
             startIcon={<ArrowBackIcon />}
-            disabled={loading}
+            disabled={wizard.loading}
+            data-testid={wizard.activeStep === 0 ? 'wizard.policy.cancel' : 'wizard.policy.back'}
           >
-            {activeStep === 0 ? 'Cancel' : 'Back'}
+            {wizard.activeStep === 0 ? 'Cancel' : 'Back'}
           </Button>
 
           <Box sx={{ display: 'flex', gap: 2 }}>
             {/* Skip button for optional steps */}
-            {STEPS[activeStep].optional && (
+            {STEPS[wizard.activeStep].optional && (
               <Button
-                onClick={goNext}
-                disabled={loading}
+                onClick={wizard.goNext}
+                disabled={wizard.loading}
+                data-testid="wizard.policy.skip"
               >
                 Skip
               </Button>
             )}
 
-            {activeStep === STEPS.length - 1 ? (
+            {wizard.activeStep === STEPS.length - 1 ? (
               <Button
                 variant="contained"
-                onClick={handleSubmit}
-                disabled={loading}
-                startIcon={loading ? <CircularProgress size={20} /> : <CheckCircleIcon />}
+                onClick={wizard.submit}
+                disabled={wizard.loading || !wizard.isStepValid()}
+                startIcon={wizard.loading ? <CircularProgress size={20} /> : <CheckCircleIcon />}
+                data-testid="wizard.policy.submit"
               >
-                {loading ? 'Creating...' : 'Create Policy'}
+                {wizard.loading ? 'Creating...' : 'Create Policy'}
               </Button>
             ) : (
               <Button
                 variant="contained"
-                onClick={goNext}
-                disabled={loading}
+                onClick={wizard.goNext}
+                disabled={wizard.loading || !wizard.isStepValid()}
                 endIcon={<ArrowForwardIcon />}
+                data-testid="wizard.policy.next"
               >
                 Next
               </Button>

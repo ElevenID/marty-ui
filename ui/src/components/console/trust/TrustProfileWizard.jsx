@@ -5,6 +5,7 @@
  * Defines trusted issuers and validation rules for credential verification.
  */
 
+import { useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Box,
@@ -33,6 +34,32 @@ const STEPS = ['Basics', 'Trust Sources', 'Validation Rules', 'Review & Activate
 const TrustProfileWizard = () => {
   const navigate = useNavigate();
 
+  const validateStep = useCallback((stepIndex, data) => {
+    switch (stepIndex) {
+      case 0: // Basics
+        return data.name?.trim().length > 0;
+      case 1: // Trust Sources (optional)
+        return true;
+      case 2: // Validation Rules (optional)
+        return true;
+      case 3: // Review
+        return true;
+      default:
+        return false;
+    }
+  }, []);
+
+  const handleSubmit = useCallback(async (data) => {
+    // Set status based on activate_immediately flag
+    const payload = {
+      ...data,
+      status: data.activate_immediately ? 'active' : 'draft',
+    };
+    delete payload.activate_immediately;
+    
+    return await createTrustProfile(payload);
+  }, []);
+
   const wizard = useWizard({
     steps: STEPS,
     initialData: {
@@ -50,30 +77,8 @@ const TrustProfileWizard = () => {
       status: 'active',
       activate_immediately: true,
     },
-    validateStep: (stepIndex, data) => {
-      switch (stepIndex) {
-        case 0: // Basics
-          return data.name?.trim().length > 0;
-        case 1: // Trust Sources (optional)
-          return true;
-        case 2: // Validation Rules (optional)
-          return true;
-        case 3: // Review
-          return true;
-        default:
-          return false;
-      }
-    },
-    onSubmit: async (data) => {
-      // Set status based on activate_immediately flag
-      const payload = {
-        ...data,
-        status: data.activate_immediately ? 'active' : 'draft',
-      };
-      delete payload.activate_immediately;
-      
-      return await createTrustProfile(payload);
-    },
+    validateStep,
+    onSubmit: handleSubmit,
     onComplete: () => {
       navigate('/console/templates/credentials');
     },
@@ -122,7 +127,11 @@ const TrustProfileWizard = () => {
   if (wizard.success) {
     return (
       <Container maxWidth="md" sx={{ py: 4 }}>
-        <Paper elevation={3} sx={{ p: 4, textAlign: 'center' }}>
+        <Paper
+          elevation={3}
+          sx={{ p: 4, textAlign: 'center' }}
+          data-testid="wizard.trustProfile.success"
+        >
           <Box
             sx={{
               display: 'inline-flex',
@@ -175,7 +184,10 @@ const TrustProfileWizard = () => {
 
         {/* Error Alert */}
         {wizard.error && (
-          <Box sx={{ mb: 3, p: 2, bgcolor: 'error.light', borderRadius: 1 }}>
+          <Box
+            sx={{ mb: 3, p: 2, bgcolor: 'error.light', borderRadius: 1 }}
+            data-testid="wizard.trustProfile.error"
+          >
             <Typography color="error.contrastText">
               {wizard.error}
             </Typography>
@@ -193,6 +205,7 @@ const TrustProfileWizard = () => {
             onClick={wizard.isFirstStep ? wizard.cancel : wizard.goBack}
             startIcon={<ArrowBackIcon />}
             disabled={wizard.loading}
+            data-testid={wizard.isFirstStep ? 'wizard.trustProfile.cancel' : 'wizard.trustProfile.back'}
           >
             {wizard.isFirstStep ? 'Cancel' : 'Back'}
           </Button>
@@ -203,6 +216,7 @@ const TrustProfileWizard = () => {
               <Button
                 onClick={wizard.goNext}
                 disabled={wizard.loading}
+                data-testid="wizard.trustProfile.skip"
               >
                 Skip
               </Button>
@@ -214,6 +228,7 @@ const TrustProfileWizard = () => {
                 onClick={wizard.submit}
                 disabled={!wizard.isStepValid() || wizard.loading}
                 startIcon={wizard.loading ? <CircularProgress size={20} /> : <CheckCircleIcon />}
+                data-testid="wizard.trustProfile.submit"
               >
                 {wizard.loading ? 'Creating...' : 'Create Trust Profile'}
               </Button>
@@ -223,6 +238,7 @@ const TrustProfileWizard = () => {
                 onClick={wizard.goNext}
                 disabled={!wizard.isStepValid() || wizard.loading}
                 endIcon={<ArrowForwardIcon />}
+                data-testid="wizard.trustProfile.next"
               >
                 Next
               </Button>

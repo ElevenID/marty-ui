@@ -239,8 +239,8 @@ function evaluateDeploymentReadiness(deployments, apiKeys, policies, templates, 
 /**
  * Compute Flow readiness
  */
-function evaluateFlowReadiness(flows, deployments, policies, templates, trustProfiles) {
-  const deploymentReady = evaluateDeploymentReadiness(deployments, [], policies, templates, trustProfiles);
+function evaluateFlowReadiness(flows, deployments, apiKeys, policies, templates, trustProfiles) {
+  const deploymentReady = evaluateDeploymentReadiness(deployments, apiKeys, policies, templates, trustProfiles);
   if (deploymentReady.state !== ReadinessState.READY) {
     return {
       state: ReadinessState.MISSING,
@@ -300,7 +300,7 @@ export function computeSetupReadiness(data) {
   const template = evaluateTemplateReadiness(templates, trustProfiles);
   const policy = evaluatePolicyReadiness(policies, templates, trustProfiles);
   const deployment = evaluateDeploymentReadiness(deployments, apiKeys, policies, templates, trustProfiles);
-  const flow = evaluateFlowReadiness(flows, deployments, policies, templates, trustProfiles);
+  const flow = evaluateFlowReadiness(flows, deployments, apiKeys, policies, templates, trustProfiles);
 
   return {
     trust,

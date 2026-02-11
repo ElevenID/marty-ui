@@ -22,4 +22,6 @@ export { default as RevocationManager } from './RevocationManager';
 export { default as FlowManager } from './FlowManager';
 export { default as DeploymentProfileManager } from './DeploymentProfileManager';
 export { default as Issuance } from './Issuance';
+export { default as VendorOfferList } from './VendorOfferList';
+export { default as OfferAnalytics } from './OfferAnalytics';
 export * from './TemplateActions';

@@ -117,3 +117,13 @@ export async function updateTrustProfile(id, data) {
 export async function deleteTrustProfile(id) {
   return del(`${TRUST_PROFILE_BASE}/${id}`);
 }
+
+/**
+ * Get wallet compatibility for a trust profile
+ * @param {string} id - Trust profile ID
+ * @returns {Promise<Object>} Wallet compatibility data
+ */
+export async function getTrustProfileWalletCompatibility(id) {
+  return get(`${TRUST_PROFILE_BASE}/${id}/wallet-compatibility`);
+}
+

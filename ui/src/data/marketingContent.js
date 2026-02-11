@@ -399,6 +399,7 @@ export const TRUST_SIGNALS = {
     'High-availability SaaS deployment',
     'Self-hosted options for sovereignty',
     'Horizontal scaling and load balancing',
+    'Built with AI-assisted development workflows to maintain high quality at lower cost.',
   ],
   compliance: [
     'Implements ICAO 9303',

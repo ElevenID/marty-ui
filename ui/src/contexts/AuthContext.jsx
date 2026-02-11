@@ -6,7 +6,7 @@
  */
 
 import { createContext, useState, useEffect, useCallback, useMemo } from 'react';
-import { getCurrentUser, initiateLogin, initiateRegister, initiateLogout } from '../services/authApi';
+import { getCurrentUser, initiateLogin, initiateRegister, initiateLogout, getUserOrganizations } from '../services/authApi';
 
 /**
  * @typedef {Object} User
@@ -143,23 +143,43 @@ export function AuthProvider({ children }) {
         const rawUser = result.user;
         const org = parseOrganizationClaim(rawUser.organization);
         const userType = determineUserType(rawUser.roles, rawUser.user_type);
-        const fallbackOrganizations = org.organizations.length
-          ? org.organizations
-          : rawUser.organization_id
-            ? [{ id: rawUser.organization_id, name: rawUser.organization_name || null }]
-            : [];
+        
+        // Fetch full list of organizations from new endpoint
+        let userOrganizations = [];
+        try {
+          userOrganizations = await getUserOrganizations();
+        } catch (orgError) {
+          console.error('Error fetching user organizations:', orgError);
+          // Fallback to organization claim parsing
+          userOrganizations = org.organizations.length
+            ? org.organizations
+            : rawUser.organization_id
+              ? [{ id: rawUser.organization_id, name: rawUser.organization_name || null }]
+              : [];
+        }
+        
+        // If no organizations from endpoint, use fallback
+        if (userOrganizations.length === 0) {
+          userOrganizations = org.organizations.length
+            ? org.organizations
+            : rawUser.organization_id
+              ? [{ id: rawUser.organization_id, name: rawUser.organization_name || null }]
+              : [];
+        }
+        
+        // Determine active organization (priority: localStorage > first in list > claim)
         const storedOrgId = window.localStorage.getItem('activeOrgId');
         const activeOrg =
-          fallbackOrganizations.find((entry) => entry.id === storedOrgId) ||
-          fallbackOrganizations[0] ||
-          null;
+          userOrganizations.find((entry) => entry.id === storedOrgId) ||
+          userOrganizations[0] ||
+          (rawUser.organization_id ? { id: rawUser.organization_id, name: rawUser.organization_name || null } : null);
 
         const enrichedUser = {
           ...rawUser,
           user_type: userType,
-          organization_id: activeOrg?.id || org.id || rawUser.organization_id || null,
-          organization_name: activeOrg?.name || org.name || rawUser.organization_name || null,
-          organizations: fallbackOrganizations,
+          organization_id: activeOrg?.id || null,
+          organization_name: activeOrg?.name || null,
+          organizations: userOrganizations,
           needsOnboarding: false,
           onboardingCompleted: rawUser.onboarding_completed || null,
         };

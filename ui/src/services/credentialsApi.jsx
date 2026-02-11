@@ -146,6 +146,78 @@ export const listRevocationBatches = async (filters = {}) => {
   }
 };
 
+/**
+ * Create a credential offer for OID4VCI issuance
+ * @param {Object} request - Credential offer request
+ * @param {string} request.applicantId - Applicant/recipient ID
+ * @param {string} request.templateId - Credential template ID
+ * @param {Object} request.credentialData - Claim values for the credential
+ * @param {number} request.expiryMinutes - QR code expiry time in minutes (default 15)
+ * @returns {Promise<Object>} Generated credential offer with QR code
+ */
+export const createCredentialOffer = async (request) => {
+  try {
+    const payload = {
+      credential_config_id: request.templateId,
+      applicant_id: request.applicantId,
+      credential_data: request.credentialData,
+      credential_format: 'vc+sd-jwt',
+      deferred: false,
+    };
+    
+    const response = await apiClient.post('/api/issuance/offers', payload);
+    return response.data;
+  } catch (error) {
+    throw handleApiError(error);
+  }
+};
+
+/**
+ * Get credential offer by ID
+ * @param {string} offerId - Offer ID or session ID
+ * @returns {Promise<Object>} Credential offer details
+ */
+export const getCredentialOffer = async (offerId) => {
+  try {
+    const response = await apiClient.get(`/api/issuance/offers/${offerId}`);
+    return response.data;
+  } catch (error) {
+    throw handleApiError(error);
+  }
+};
+
+/**
+ * Get QR code image for a credential offer
+ * @param {string} offerId - Offer ID
+ * @param {string} format - Image format ('png' or 'svg')
+ * @returns {Promise<Blob>} QR code image blob
+ */
+export const getOfferQRCode = async (offerId, format = 'png') => {
+  try {
+    const response = await apiClient.get(
+      `/api/issuance/offers/${offerId}/qr?format=${format}`,
+      { responseType: 'blob' }
+    );
+    return response.data;
+  } catch (error) {
+    throw handleApiError(error);
+  }
+};
+
+/**
+ * Get issuance session status
+ * @param {string} transactionId - Transaction ID
+ * @returns {Promise<Object>} Issuance session status
+ */
+export const getIssuanceSessionStatus = async (transactionId) => {
+  try {
+    const response = await apiClient.get(`/api/issuance/sessions/${transactionId}`);
+    return response.data;
+  } catch (error) {
+    throw handleApiError(error);
+  }
+};
+
 export default {
   issueCredential,
   verifyCredential,
@@ -154,4 +226,8 @@ export default {
   batchRevokeCredentials,
   listCredentials,
   listRevocationBatches,
+  createCredentialOffer,
+  getCredentialOffer,
+  getOfferQRCode,
+  getIssuanceSessionStatus,
 };

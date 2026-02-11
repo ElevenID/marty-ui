@@ -7,7 +7,9 @@
 export { default as RoleCard } from './RoleCard';
 export { default as MembershipModeChip } from './MembershipModeChip';
 export { default as ConfirmOrgDialog } from './ConfirmOrgDialog';
+export { default as DomainMatchModal } from './DomainMatchModal';
 export { default as RoleSelectionStep } from './steps/RoleSelectionStep';
+export { default as IntentSelectionStep } from './steps/IntentSelectionStep';
 export { default as ApplicantJoinStep } from './steps/ApplicantJoinStep';
 export { default as VendorCreateOrgStep } from './steps/VendorCreateOrgStep';
 export { default as CompletionStep } from './steps/CompletionStep';

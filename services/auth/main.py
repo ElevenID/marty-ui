@@ -43,6 +43,9 @@ SERVICE_PORT = int(os.environ.get("AUTH_SERVICE_PORT", "8001"))
 
 def get_config() -> dict:
     """Get service configuration from environment."""
+    realm = os.environ.get("KEYCLOAK_REALM", "11id")
+    issuer_default = f"http://localhost:8180/realms/{realm}"
+    external_default = os.environ.get("OIDC_ISSUER_URL", issuer_default)
     return {
         "ui_base_url": os.environ.get("UI_BASE_URL", "http://localhost:3000"),
         "redis_url": os.environ.get("REDIS_URL", "redis://localhost:6379/0"),
@@ -50,12 +53,12 @@ def get_config() -> dict:
         "oidc": {
             "issuer_url": os.environ.get(
                 "OIDC_ISSUER_URL",
-                "http://localhost:8180/realms/11id"
+                issuer_default,
             ),
             # External URL for browser redirects (defaults to issuer_url)
             "external_issuer_url": os.environ.get(
                 "OIDC_EXTERNAL_ISSUER_URL",
-                os.environ.get("OIDC_ISSUER_URL", "http://localhost:8180/realms/11id")
+                external_default,
             ),
             "client_id": os.environ.get("OIDC_CLIENT_ID", "marty-ui"),
             "client_secret": os.environ.get("OIDC_CLIENT_SECRET"),

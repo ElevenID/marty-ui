@@ -51,6 +51,7 @@ import {
 } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../hooks/useAuth';
+import { usePreview } from '../../contexts/PreviewContext';
 
 const API_URL = import.meta.env.VITE_API_URL || '';
 
@@ -117,6 +118,7 @@ const CATEGORIES = [
 const CredentialCatalog = () => {
   const navigate = useNavigate();
   const { organizationId, organizationName, user } = useAuth();
+  const { isPreview } = usePreview?.() || { isPreview: false };
   
   // State
   const [credentials, setCredentials] = useState([]);
@@ -441,7 +443,7 @@ const CredentialCatalog = () => {
                       onClick={() => handleApply(credential)}
                       data-testid="apply-btn"
                     >
-                      {hasApplied ? 'Application Pending' : 'Apply Now'}
+                      {isPreview ? 'Preview Application' : (hasApplied ? 'Application Pending' : 'Apply Now')}
                     </Button>
                   </CardActions>
                 </Card>
@@ -552,7 +554,7 @@ const CredentialCatalog = () => {
                 }}
                 disabled={hasExistingApplication(selectedCredential.id)}
               >
-                Apply Now
+                {isPreview ? 'Preview Application' : 'Apply Now'}
               </Button>
             </DialogActions>
           </>

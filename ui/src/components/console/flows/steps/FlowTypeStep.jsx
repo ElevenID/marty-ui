@@ -29,9 +29,17 @@ const FLOW_TYPES = [
     value: 'issuance',
     icon: <BadgeIcon sx={{ fontSize: 48 }} />,
     name: 'Issuance Flow',
-    description: 'Issue new credentials to holders (OID4VCI)',
+    description: 'Issue new credentials to holders',
     emoji: '📄',
     examples: ['Driver\'s license issuance', 'Employee badge', 'Proof of vaccination'],
+  },
+  {
+    value: 'issuance_oid4vci',
+    icon: <BadgeIcon sx={{ fontSize: 48 }} />,
+    name: 'OID4VCI Issuance (QR Code)',
+    description: 'Issue credentials via OID4VCI QR codes for third-party wallets',
+    emoji: '📱',
+    examples: ['Open Badge issuance', 'External wallet integration', 'Multi-wallet support'],
   },
   {
     value: 'combined',
@@ -68,10 +76,13 @@ const FlowTypeStep = ({ selectedType, onSelectType }) => {
                   boxShadow: 4,
                 },
               }}
+              data-testid={`flow-type-${type.value}`}
             >
               <CardActionArea
                 onClick={() => onSelectType(type.value)}
                 sx={{ height: '100%', p: 2 }}
+                aria-selected={selectedType === type.value}
+                role="button"
               >
                 <CardContent>
                   {/* Icon & Emoji */}

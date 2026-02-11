@@ -1,7 +1,7 @@
 {
-  "realm": "11id",
+  "realm": "${KEYCLOAK_REALM}",
   "enabled": true,
-  "displayName": "11id",
+  "displayName": "${KEYCLOAK_REALM}",
   "sslRequired": "external",
   "registrationAllowed": true,
   "loginWithEmailAllowed": true,

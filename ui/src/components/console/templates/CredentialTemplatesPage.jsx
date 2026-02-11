@@ -5,6 +5,7 @@
  */
 
 import { useState, useEffect } from 'react';
+import { useNotification } from '../../../contexts/NotificationContext';
 import {
   Box,
   Paper,
@@ -24,8 +25,10 @@ import {
 } from '@mui/material';
 import EditIcon from '@mui/icons-material/Edit';
 import VisibilityIcon from '@mui/icons-material/Visibility';
+import AddIcon from '@mui/icons-material/Add';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import WarningIcon from '@mui/icons-material/Warning';
+import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import { Link } from 'react-router-dom';
 
 import { ResourcePage, EmptyState, EmptyStates, StatusChip } from '../../common';
@@ -79,6 +82,7 @@ function ArtifactsStatus({ hasArtifacts, validated }) {
 }
 
 function CredentialTemplatesPage() {
+  const { showError, showWarning } = useNotification();
   const [templates, setTemplates] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -99,6 +103,7 @@ function CredentialTemplatesPage() {
             artifactsValidated: true,
             status: 'active',
             updatedAt: '2026-02-06T10:30:00Z',
+            usedByFlowsCount: 3,
           },
           {
             id: 'ct-2',
@@ -110,6 +115,7 @@ function CredentialTemplatesPage() {
             artifactsValidated: true,
             status: 'active',
             updatedAt: '2026-02-05T14:20:00Z',
+            usedByFlowsCount: 2,
           },
           {
             id: 'ct-3',
@@ -121,10 +127,15 @@ function CredentialTemplatesPage() {
             artifactsValidated: false,
             status: 'draft',
             updatedAt: '2026-02-07T09:00:00Z',
+            usedByFlowsCount: 0,
           },
         ]);
       } catch (err) {
+        console.error('Failed to load credential templates:', err);
         setError('Failed to load credential templates');
+        showError('Unable to load credential templates', {
+          details: 'The backend service may be unavailable. Check console for details.',
+        });
       } finally {
         setLoading(false);
       }
@@ -150,6 +161,21 @@ function CredentialTemplatesPage() {
           {error}
         </Alert>
       )}
+
+      {/* Guardrail Banner */}
+      <Alert 
+        severity="info" 
+        icon={<InfoOutlinedIcon />}
+        sx={{ mb: 3 }}
+      >
+        <Typography variant="body2" fontWeight={600} gutterBottom>
+          Credential Templates are not applicant-facing.
+        </Typography>
+        <Typography variant="body2">
+          They define schemas, application rules, and compliance used by Issuance Flows. 
+          To make credentials available to applicants, create an Issuance Flow.
+        </Typography>
+      </Alert>
 
       {missingArtifactsCount > 0 && (
         <Alert 
@@ -179,6 +205,7 @@ function CredentialTemplatesPage() {
                 <TableCell>Version</TableCell>
                 <TableCell align="right">Claims</TableCell>
                 <TableCell>Artifacts</TableCell>
+                <TableCell>Used By</TableCell>
                 <TableCell>Status</TableCell>
                 <TableCell>Last Updated</TableCell>
                 <TableCell align="right">Actions</TableCell>
@@ -208,6 +235,16 @@ function CredentialTemplatesPage() {
                       />
                     </TableCell>
                     <TableCell>
+                      <Tooltip title="Number of Issuance Flows using this template">
+                        <Chip 
+                          label={`${template.usedByFlowsCount} Flow${template.usedByFlowsCount !== 1 ? 's' : ''}`}
+                          size="small"
+                          color={template.usedByFlowsCount > 0 ? 'primary' : 'default'}
+                          variant={template.usedByFlowsCount > 0 ? 'filled' : 'outlined'}
+                        />
+                      </Tooltip>
+                    </TableCell>
+                    <TableCell>
                       <StatusChip status={template.status} />
                     </TableCell>
                     <TableCell>
@@ -230,6 +267,16 @@ function CredentialTemplatesPage() {
                           size="small"
                         >
                           <EditIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                      <Tooltip title="Create Issuance Flow">
+                        <IconButton
+                          component={Link}
+                          to={`/console/flows/definitions/new?templateId=${template.id}`}
+                          size="small"
+                          color="primary"
+                        >
+                          <AddIcon fontSize="small" />
                         </IconButton>
                       </Tooltip>
                     </TableCell>

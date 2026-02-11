@@ -18,11 +18,19 @@ import BadgeIcon from '@mui/icons-material/Badge';
 import FolderSharedIcon from '@mui/icons-material/FolderShared';
 import StorefrontIcon from '@mui/icons-material/Storefront';
 import PersonIcon from '@mui/icons-material/Person';
+import SettingsIcon from '@mui/icons-material/Settings';
+import DesignServicesIcon from '@mui/icons-material/DesignServices';
+import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
 
 /**
  * Admin/Vendor Navigation (Resource-based)
  * Used by both Administrator and Vendor roles.
  * Data scope differs by role (Admin sees all orgs, Vendor sees their org).
+ * 
+ * Navigation hierarchy enforces the mental model:
+ * - Design: Templates are inputs, not applicant-facing endpoints
+ * - Deploy: Flows are the applicant-facing product ⭐
+ * - Operate: Runtime execution and monitoring
  */
 export const ADMIN_VENDOR_NAV = [
   {
@@ -33,37 +41,22 @@ export const ADMIN_VENDOR_NAV = [
     exact: true,
   },
   {
-    id: 'trust',
-    label: 'Trust',
-    path: '/console/trust',
-    icon: VerifiedUserIcon,
-    description: 'Trust Profiles, Trusted Issuers, Revocation',
+    id: 'design',
+    label: 'Design',
+    path: '/console/design',
+    icon: DesignServicesIcon,
+    description: 'Trust Profiles, Credential Templates, Application Rules, Compliance',
     children: [
       { id: 'trust-profiles', label: 'Trust Profiles', path: '/console/trust/profiles' },
-      { id: 'trusted-issuers', label: 'Trusted Issuers', path: '/console/trust/issuers' },
-      { id: 'revocation', label: 'Revocation Profiles', path: '/console/trust/revocation' },
-    ],
-  },
-  {
-    id: 'templates',
-    label: 'Templates',
-    path: '/console/templates',
-    icon: DescriptionIcon,
-    description: 'Credential & Application Templates',
-    children: [
-      { id: 'credential-templates', label: 'Credential Templates', path: '/console/templates/credentials' },
-      { id: 'application-templates', label: 'Application Templates', path: '/console/templates/applications' },
-    ],
-  },
-  {
-    id: 'policies',
-    label: 'Policies',
-    path: '/console/policies',
-    icon: PolicyIcon,
-    description: 'Presentation Policies, Compliance Profiles',
-    children: [
-      { id: 'presentation-policies', label: 'Presentation Policies', path: '/console/policies/presentation' },
-      { id: 'compliance-profiles', label: 'Compliance Profiles', path: '/console/policies/compliance' },
+      { 
+        id: 'credential-templates', 
+        label: 'Credential Templates', 
+        path: '/console/templates/credentials',
+        children: [
+          { id: 'application-templates', label: 'Application Rules', path: '/console/templates/applications' },
+          { id: 'compliance-profiles', label: 'Compliance Profiles', path: '/console/policies/compliance' },
+        ],
+      },
     ],
   },
   {
@@ -71,22 +64,17 @@ export const ADMIN_VENDOR_NAV = [
     label: 'Deploy',
     path: '/console/deploy',
     icon: CloudUploadIcon,
-    description: 'Deployment Profiles, API Keys, Webhooks',
+    description: 'Issuance Flows, Deployment Profiles, Signing Keys',
     children: [
+      { 
+        id: 'issuance-flows', 
+        label: 'Issuance Flows', 
+        path: '/console/flows/definitions', 
+        primary: true,
+        icon: AccountTreeIcon,
+      },
       { id: 'deployment-profiles', label: 'Deployment Profiles', path: '/console/deploy/profiles' },
-      { id: 'api-keys', label: 'API Keys', path: '/console/deploy/api-keys' },
-      { id: 'lanes-devices', label: 'Lanes & Devices', path: '/console/deploy/lanes' },
-      { id: 'webhooks', label: 'Webhooks', path: '/console/deploy/webhooks' },
-    ],
-  },
-  {
-    id: 'flows',
-    label: 'Flows',
-    path: '/console/flows',
-    icon: AccountTreeIcon,
-    description: 'Flow Definitions',
-    children: [
-      { id: 'flow-definitions', label: 'Flow Definitions', path: '/console/flows/definitions' },
+      { id: 'signing-keys', label: 'Signing Keys', path: '/console/deploy/signing-keys' },
     ],
   },
   {
@@ -94,10 +82,10 @@ export const ADMIN_VENDOR_NAV = [
     label: 'Operate',
     path: '/console/operate',
     icon: PlayArrowIcon,
-    description: 'Run issuance, process applications, and manage live activity',
+    description: 'Applications, Issued Credentials, Flow Instances',
     children: [
-      { id: 'issuance', label: 'Issuance', path: '/console/operate/issuance' },
-      { id: 'applications', label: 'Applications', path: '/console/operate/applications' },
+      { id: 'applications', label: 'Applicant Submissions', path: '/console/operate/applications', badge: true },
+      { id: 'issued-credentials', label: 'Issued Credentials', path: '/console/operate/issuance' },
       { id: 'flow-instances', label: 'Flow Instances', path: '/console/operate/flow-instances' },
     ],
   },
@@ -106,10 +94,11 @@ export const ADMIN_VENDOR_NAV = [
     label: 'Org',
     path: '/console/org',
     icon: BusinessIcon,
-    description: 'Organization, Team, Profile',
+    description: 'Organization, Team, Notifications',
     children: [
       { id: 'organization', label: 'Organization', path: '/console/org/settings' },
       { id: 'team', label: 'Team', path: '/console/org/team' },
+      { id: 'notifications', label: 'Notifications', path: '/console/org/notifications' },
     ],
   },
   {
@@ -174,14 +163,15 @@ export const PUBLIC_NAV = [
 /**
  * Quick Actions for Dashboard
  * Role-specific quick action buttons.
+ * Emphasizes flow creation as the primary action.
  */
 export const DASHBOARD_QUICK_ACTIONS = {
   adminVendor: [
+    { id: 'create-flow', label: 'Create Issuance Flow', path: '/console/flows/definitions/new', icon: AccountTreeIcon, primary: true },
     { id: 'create-trust-profile', label: 'Create Trust Profile', path: '/console/trust/profiles/new', icon: VerifiedUserIcon },
-    { id: 'create-template', label: 'Create Template', path: '/console/templates/credentials/new', icon: DescriptionIcon },
-    { id: 'create-policy', label: 'Create Policy', path: '/console/policies/presentation/new', icon: PolicyIcon },
-    { id: 'generate-api-key', label: 'Generate API Key', path: '/console/deploy/api-keys/new', icon: CloudUploadIcon },
-    { id: 'start-verification', label: 'Start Verification Flow', path: '/console/flows/definitions/new', icon: AccountTreeIcon },
+    { id: 'create-template', label: 'Create Credential Template', path: '/console/templates/credentials/new', icon: DescriptionIcon },
+    { id: 'create-policy', label: 'Create Compliance Profile', path: '/console/policies/compliance/new', icon: PolicyIcon },
+    { id: 'generate-signing-key', label: 'Generate Signing Key', path: '/console/deploy/signing-keys/new', icon: CloudUploadIcon },
   ],
   applicant: [
     { id: 'browse-catalog', label: 'Browse Credentials', path: '/catalog', icon: StorefrontIcon },
