@@ -398,3 +398,69 @@ a:hover {
   font-size: 3rem;
   margin-bottom: 16px;
 }
+
+/* ============================================================================
+   Language Selector Dropdown Fix
+   ============================================================================ */
+/* Hide the language dropdown menu by default */
+#kc-locale-dropdown {
+  position: relative;
+}
+
+#kc-locale-dropdown ul {
+  display: none;
+  position: absolute;
+  top: 100%;
+  right: 0;
+  background-color: var(--marty-surface);
+  border: 1px solid var(--marty-border);
+  border-radius: var(--marty-border-radius);
+  box-shadow: var(--marty-shadow);
+  list-style: none;
+  margin: 4px 0 0 0;
+  padding: 8px 0;
+  min-width: 200px;
+  z-index: 1000;
+}
+
+#kc-locale-dropdown:hover ul,
+#kc-locale-dropdown:focus-within ul {
+  display: block;martens: 84px;
+
+
+  
+}
+
+#kc-locale-dropdown ul li {
+  padding: 8px 16px;
+  cursor: pointer;
+  transition: background-color 0.2s ease-in-out;
+}
+
+#kc-locale-dropdown ul li:hover {
+  background-color: var(--marty-background);
+}
+
+#kc-locale-dropdown ul li a {
+  color: var(--marty-text-primary);
+  text-decoration: none;
+  display: block;
+  width: 100%;
+}
+
+/* Style the language selector button */
+#kc-current-locale-link {
+  background-color: transparent;
+  border: 1px solid var(--marty-border);
+  border-radius: var(--marty-border-radius);
+  color: var(--marty-text-primary);
+  cursor: pointer;
+  padding: 8px 16px;
+  text-decoration: none;
+  display: inline-block;
+  transition: background-color 0.2s ease-in-out;
+}
+
+#kc-current-locale-link:hover {
+  background-color: var(--marty-background);
+}

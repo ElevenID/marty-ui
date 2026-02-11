@@ -1,0 +1,118 @@
+# Cloudflare Tunnel Overlay Configuration
+# =========================================
+#
+# This file extends docker-compose.yml to add Cloudflare Tunnel support.
+# It enables external access to your local ElevenID instance via beta.elevenfold.com
+#
+# USAGE:
+#   make dev-tunnel                  # Start with tunnel (recommended)
+#
+#   docker compose \
+#     -f docker-compose.yml \
+#     -f docker-compose.tunnel.yml \
+#     --env-file .env.tunnel \
+#     --profile dev \
+#     up -d
+#
+# PREREQUISITES:
+#   1. Create .env.tunnel file (see .env.tunnel.example)
+#   2. Add CLOUDFLARE_TUNNEL_TOKEN from Cloudflare dashboard
+#   3. Configure public hostname in Cloudflare: beta.elevenfold.com → ui:80
+#
+# SECURITY:
+#   - Never commit .env.tunnel (contains secrets)
+#   - Enable COOKIE_SECURE=true for HTTPS
+#   - Consider Cloudflare Access policies for additional protection
+
+services:
+  # ---------------------------------------------------------------------------
+  # Cloudflare Tunnel Connector
+  # Establishes secure tunnel from Cloudflare edge to local services
+  # ---------------------------------------------------------------------------
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: marty-cloudflared
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
+    environment:
+      # Tunnel runs in no-autoupdate mode (Docker image updates separately)
+      # Token provided via environment variable for security
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN}
+    networks:
+      - default
+    restart: unless-stopped
+    depends_on:
+      ui:
+        condition: service_healthy
+      oid4vc-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "cloudflared", "tunnel", "info"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    profiles:
+      - dev
+    labels:
+      com.marty.service: "tunnel"
+      com.marty.description: "Cloudflare Tunnel for external access"
+
+  # ---------------------------------------------------------------------------
+  # UI Service - Override environment variables for public access
+  # ---------------------------------------------------------------------------
+  ui:
+    environment:
+      # Override API URL for public access
+      # Note: Can still be relative since nginx proxies /api/* to backend
+      REACT_APP_API_URL: ${PUBLIC_API_URL:-https://beta.elevenfold.com}
+      REACT_APP_KEYCLOAK_URL: ${REACT_APP_KEYCLOAK_URL:-http://localhost:8180}
+      REACT_APP_KEYCLOAK_REALM: ${KEYCLOAK_REALM:-11id}
+      REACT_APP_KEYCLOAK_CLIENT_ID: ${KEYCLOAK_CLIENT_ID:-marty-ui}
+      # Additional metadata
+      REACT_APP_ENVIRONMENT: ${ENVIRONMENT:-tunnel}
+      REACT_APP_PUBLIC_URL: ${PUBLIC_URL:-https://beta.elevenfold.com}
+
+  # ---------------------------------------------------------------------------
+  # API Service - Update for HTTPS/public access
+  # ---------------------------------------------------------------------------
+  oid4vc-api:
+    environment:
+      # Cookie settings for HTTPS
+      COOKIE_SECURE: ${COOKIE_SECURE:-true}
+      COOKIE_SAMESITE: ${COOKIE_SAMESITE:-none}
+      
+      # CORS configuration for public domain
+      CORS_ORIGINS: ${CORS_ORIGINS:-https://beta.elevenfold.com,http://localhost:9080,http://localhost:3000}
+      
+      # Public URL for callbacks
+      PUBLIC_URL: ${PUBLIC_URL:-https://beta.elevenfold.com}
+      
+      # OIDC configuration (update if exposing Keycloak externally)
+      # For now, keep localhost since Keycloak isn't tunneled
+      OIDC_ISSUER_URL: ${OIDC_ISSUER_URL:-http://localhost:8180/realms/11id}
+      OIDC_REDIRECT_URI: ${OIDC_REDIRECT_URI:-http://localhost:3000/auth/callback}
+      OIDC_POST_LOGOUT_REDIRECT_URI: ${OIDC_POST_LOGOUT_REDIRECT_URI:-http://localhost:3000}
+      
+      # Session configuration
+      SESSION_COOKIE_DOMAIN: ${SESSION_COOKIE_DOMAIN:-.elevenfold.com}
+      
+      # Additional security headers
+      HSTS_ENABLED: ${HSTS_ENABLED:-false}  # Cloudflare handles HSTS
+
+  # ---------------------------------------------------------------------------
+  # Keycloak - Optional: Configure for external access
+  # Uncomment these overrides if you need Keycloak accessible via tunnel
+  # Note: Requires separate Cloudflare hostname (e.g., auth-beta.elevenfold.com)
+  # ---------------------------------------------------------------------------
+  # keycloak:
+  #   environment:
+  #     KC_HOSTNAME: ${KC_HOSTNAME:-beta.elevenfold.com}
+  #     KC_HOSTNAME_PORT: ${KC_HOSTNAME_PORT:-443}
+  #     KC_HOSTNAME_STRICT: "false"
+  #     KC_HOSTNAME_STRICT_BACKCHANNEL: "false"
+  #     KC_PROXY: edge
+  #     KC_HTTP_ENABLED: "true"
+
+networks:
+  default:
+    name: marty-network

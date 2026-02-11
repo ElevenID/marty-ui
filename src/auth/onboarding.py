@@ -28,7 +28,9 @@ from subscription.models import (
     OrganizationMember,
     MembershipMode,
     MemberRole,
+    MembershipRequest,
     MembershipRequestStatus,
+    AuditEventType,
 )
 from subscription.database import get_db_session
 from .config import AuthConfig
@@ -316,11 +318,6 @@ async def use_invite_code(code: str, db: AsyncSession) -> bool:
     return False
 
 
-# In-memory storage for membership requests (until we add a proper table)
-# Key: request_id -> request data
-_membership_requests: dict[str, dict] = {}
-
-
 async def _create_organization_trust_profile(
     organization_id: str,
     framework_code: str,
@@ -512,17 +509,29 @@ async def get_onboarding_status(
     user_email = session.get("email", "")
     user_type = session.get("user_type", "applicant")
     
-    # Check for pending membership request
+    # Check for pending membership request in database
     pending_request = None
-    for req_id, req in _membership_requests.items():
-        if req.get("user_id") == user_id and req.get("status") == "pending":
+    try:
+        result = await db.execute(
+            select(MembershipRequest, Organization).join(
+                Organization,
+                Organization.id == MembershipRequest.organization_id
+            ).where(
+                MembershipRequest.user_id == user_id,
+                MembershipRequest.status == MembershipRequestStatus.PENDING
+            ).limit(1)
+        )
+        row = result.first()
+        if row:
+            req, org = row
             pending_request = {
-                "request_id": req_id,
-                "organization_id": req.get("organization_id"),
-                "organization_name": req.get("organization_name"),
-                "submitted_at": req.get("created_at"),
+                "request_id": req.id,
+                "organization_id": req.organization_id,
+                "organization_name": org.name,
+                "submitted_at": req.created_at.isoformat(),
             }
-            break
+    except Exception as e:
+        logger.warning(f"Error checking pending membership requests: {e}")
     
     try:
         # Check onboarding status from session attributes (set during login)
@@ -593,11 +602,79 @@ async def get_onboarding_status(
         raise HTTPException(status_code=500, detail="Failed to check onboarding status")
 
 
+class SetIntentRequest(BaseModel):
+    """Request to set user's role intent."""
+    
+    intent: Literal["apply_for_credentials", "manage_credentials"] = Field(
+        ...,
+        description="User's intent: apply_for_credentials (applicant) or manage_credentials (future vendor/issuer)"
+    )
+
+
+class SetIntentResponse(BaseModel):
+    """Response after setting role intent."""
+    
+    success: bool
+    intent: str
+    message: str
+
+
+@router.post("/set-intent", response_model=SetIntentResponse)
+async def set_role_intent(
+    body: SetIntentRequest,
+    request: Request,
+) -> SetIntentResponse:
+    """
+    Set the user's role intent preference.
+    
+    This helps route users to appropriate experiences:
+    - "apply_for_credentials": Standard applicant flow (apply for documents)
+    - "manage_credentials": Indicates potential future vendor/issuer (may become credential manager)
+    
+    The intent is stored in the session and can be used for personalization,
+    analytics, and onboarding flow decisions.
+    """
+    try:
+        session = await get_session_data(request)
+        session_id = session.get("_session_id")
+        
+        if not session_id:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        # Store intent in session
+        await update_session_attributes(
+            session_id,
+            {
+                "role_intent": body.intent,
+                "role_intent_set_at": datetime.utcnow().isoformat(),
+            },
+        )
+        
+        logger.info(f"User {session.get('user_id')} set role intent: {body.intent}")
+        
+        return SetIntentResponse(
+            success=True,
+            intent=body.intent,
+            message=f"Role intent set to: {body.intent}",
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error setting role intent: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to set role intent")
+
+
 @router.get("/organizations", response_model=OrganizationsListResponse)
 async def list_organizations(
     user_id: str = Depends(get_current_user_id),
     keycloak: KeycloakAdminClient = Depends(get_keycloak_admin),
     db: AsyncSession = Depends(get_db_session),
+    search: str | None = None,
+    category: str | None = None,
+    membership_mode: str | None = None,
+    page: int = 1,
+    page_size: int = 50,
 ) -> OrganizationsListResponse:
     """
     List discoverable vendor organizations.
@@ -605,8 +682,19 @@ async def list_organizations(
     Only returns organizations that are:
     - Enabled
     - Marked as discoverable
+    
+    Optional filters:
+    - search: Search in organization name and description
+    - category: Filter by category tag
+    - membership_mode: Filter by membership mode (open, approval, invite_only)
+    - page: Page number (default 1)
+    - page_size: Results per page (default 50, max 100)
     """
     try:
+        # Validate pagination params
+        page = max(1, page)
+        page_size = min(max(1, page_size), 100)
+        
         orgs = await keycloak.list_organizations()
         
         org_list = []
@@ -621,6 +709,31 @@ async def list_organizations(
             if not settings.get("is_discoverable", False):
                 continue
             
+            org_name = org.get("name", "Unknown")
+            org_description = org.get("description")
+            org_membership_mode = settings.get("membership_mode", "invite_only")
+            
+            # Get categories from settings
+            org_categories = settings.get("categories", [])
+            if not isinstance(org_categories, list):
+                org_categories = []
+            
+            # Apply search filter
+            if search:
+                search_lower = search.lower()
+                name_match = search_lower in org_name.lower()
+                desc_match = org_description and search_lower in org_description.lower()
+                if not (name_match or desc_match):
+                    continue
+            
+            # Apply category filter
+            if category and category not in org_categories:
+                continue
+            
+            # Apply membership mode filter
+            if membership_mode and org_membership_mode != membership_mode:
+                continue
+            
             # Get member count
             try:
                 members = await keycloak.get_organization_members(org_id)
@@ -630,14 +743,26 @@ async def list_organizations(
             
             org_list.append(OrganizationInfo(
                 id=org_id,
-                name=org.get("name", "Unknown"),
-                description=org.get("description"),
+                name=org_name,
+                description=org_description,
                 member_count=member_count,
-                membership_mode=settings.get("membership_mode", "invite_only"),
+                membership_mode=org_membership_mode,
                 is_discoverable=True,
+                categories=org_categories,
             ))
         
-        return OrganizationsListResponse(organizations=org_list)
+        # Apply pagination
+        total = len(org_list)
+        start_idx = (page - 1) * page_size
+        end_idx = start_idx + page_size
+        paginated_orgs = org_list[start_idx:end_idx]
+        
+        return OrganizationsListResponse(
+            organizations=paginated_orgs,
+            total=total,
+            page=page,
+            page_size=page_size,
+        )
         
     except Exception as e:
         logger.error(f"Error listing organizations: {e}")
@@ -741,15 +866,20 @@ async def request_membership(
                    "Please contact the organization administrator."
         )
     
-    # Check for existing pending request
-    for req in _membership_requests.values():
-        if (req.get("user_id") == user_id and 
-            req.get("organization_id") == org_id and
-            req.get("status") == "pending"):
-            raise HTTPException(
-                status_code=400,
-                detail="You already have a pending request for this organization."
-            )
+    # Check for existing pending request in database
+    result = await db.execute(
+        select(MembershipRequest).where(
+            MembershipRequest.user_id == user_id,
+            MembershipRequest.organization_id == org_id,
+            MembershipRequest.status == MembershipRequestStatus.PENDING
+        )
+    )
+    existing_request = result.scalar_one_or_none()
+    if existing_request:
+        raise HTTPException(
+            status_code=400,
+            detail="You already have a pending request for this organization."
+        )
     
     try:
         # Get organization info
@@ -777,19 +907,19 @@ async def request_membership(
                 message=f"You have joined {org_name}!",
             )
         
-        # Create membership request for approval-required orgs
-        request_id = str(uuid4())
-        _membership_requests[request_id] = {
-            "id": request_id,
-            "organization_id": org_id,
-            "organization_name": org_name,
-            "user_id": user_id,
-            "user_email": user_email,
-            "message": request_data.message,
-            "status": "pending",
-            "created_at": datetime.utcnow().isoformat(),
-        }
+        # Create membership request in database for approval-required orgs
+        new_request = MembershipRequest(
+            id=str(uuid4()),
+            organization_id=org_id,
+            user_id=user_id,
+            user_email=user_email,
+            message=request_data.message,
+            status=MembershipRequestStatus.PENDING,
+        )
+        db.add(new_request)
+        await db.commit()
         
+        request_id = new_request.id
         logger.info(f"User {user_email} requested membership to {org_name}")
         
         return RequestMembershipResponse(
@@ -1134,6 +1264,10 @@ class OrgSettingsResponse(BaseModel):
     is_discoverable: bool
     membership_mode: str
     invite_code: str | None = None
+    # Email domain configuration
+    allowed_email_domains: list[str] = []
+    domain_join_policy: str | None = "approval"  # "auto", "approval", "closed"
+    default_role: str | None = "member"
 
 
 class UpdateOrgSettingsRequest(BaseModel):
@@ -1142,6 +1276,14 @@ class UpdateOrgSettingsRequest(BaseModel):
     is_discoverable: bool | None = None
     membership_mode: Literal["invite_only", "approval", "open"] | None = None
     regenerate_invite_code: bool = False
+    # Email domain configuration
+    allowed_email_domains: list[str] | None = None
+    domain_join_policy: Literal["auto", "approval", "closed"] | None = None
+    default_role: str | None = None
+    # Device security configuration
+    require_device_registration: bool | None = None
+    allow_push_notifications: bool | None = None
+    device_registration_prompt: Literal["onboarding", "first_action", "never"] | None = None
 
 
 @router.get("/org-settings", response_model=OrgSettingsResponse)
@@ -1168,6 +1310,12 @@ async def get_organization_settings(
         is_discoverable=settings.get("is_discoverable", False),
         membership_mode=settings.get("membership_mode", "invite_only"),
         invite_code=settings.get("invite_code"),
+        allowed_email_domains=settings.get("allowed_email_domains", []),
+        domain_join_policy=settings.get("domain_join_policy", "approval"),
+        default_role=settings.get("default_role", "member"),
+        require_device_registration=settings.get("require_device_registration", False),
+        allow_push_notifications=settings.get("allow_push_notifications", True),
+        device_registration_prompt=settings.get("device_registration_prompt", "first_action"),
     )
 
 
@@ -1198,6 +1346,27 @@ async def update_organization_settings(
     if request_data.membership_mode is not None:
         current_settings["membership_mode"] = request_data.membership_mode
     
+    if request_data.allowed_email_domains is not None:
+        # Validate and clean domains
+        cleaned_domains = [d.strip().lower() for d in request_data.allowed_email_domains if d.strip()]
+        current_settings["allowed_email_domains"] = cleaned_domains
+    
+    if request_data.domain_join_policy is not None:
+        current_settings["domain_join_policy"] = request_data.domain_join_policy
+    
+    if request_data.default_role is not None:
+        current_settings["default_role"] = request_data.default_role
+    
+    # Device security settings
+    if request_data.require_device_registration is not None:
+        current_settings["require_device_registration"] = request_data.require_device_registration
+    
+    if request_data.allow_push_notifications is not None:
+        current_settings["allow_push_notifications"] = request_data.allow_push_notifications
+    
+    if request_data.device_registration_prompt is not None:
+        current_settings["device_registration_prompt"] = request_data.device_registration_prompt
+    
     if request_data.regenerate_invite_code:
         await generate_invite_code(org_id, db, created_by=user_id)
         current_settings = await get_org_settings(org_id, db)  # Refresh to get new code
@@ -1212,6 +1381,12 @@ async def update_organization_settings(
         is_discoverable=current_settings.get("is_discoverable", False),
         membership_mode=current_settings.get("membership_mode", "invite_only"),
         invite_code=current_settings.get("invite_code"),
+        allowed_email_domains=current_settings.get("allowed_email_domains", []),
+        domain_join_policy=current_settings.get("domain_join_policy", "approval"),
+        default_role=current_settings.get("default_role", "member"),
+        require_device_registration=current_settings.get("require_device_registration", False),
+        allow_push_notifications=current_settings.get("allow_push_notifications", True),
+        device_registration_prompt=current_settings.get("device_registration_prompt", "first_action"),
     )
 
 
@@ -1235,6 +1410,7 @@ class PendingRequestsResponse(BaseModel):
 async def get_pending_requests(
     session: dict = Depends(get_session_data),
     keycloak: KeycloakAdminClient = Depends(get_keycloak_admin),
+    db: AsyncSession = Depends(get_db_session),
 ) -> PendingRequestsResponse:
     """Get pending membership requests for vendor's organization."""
     user_id = session.get("user_id")
@@ -1245,17 +1421,24 @@ async def get_pending_requests(
     
     org_id = orgs[0]["id"]
     
-    # Get pending requests for this org
+    # Get pending requests for this org from database
+    result = await db.execute(
+        select(MembershipRequest).where(
+            MembershipRequest.organization_id == org_id,
+            MembershipRequest.status == MembershipRequestStatus.PENDING
+        ).order_by(MembershipRequest.created_at.desc())
+    )
+    requests = result.scalars().all()
+    
     pending = [
         MembershipRequestInfo(
-            id=req["id"],
-            user_email=req["user_email"],
-            message=req.get("message"),
-            status=req["status"],
-            created_at=req["created_at"],
+            id=req.id,
+            user_email=req.user_email,
+            message=req.message,
+            status=req.status.value,
+            created_at=req.created_at.isoformat(),
         )
-        for req in _membership_requests.values()
-        if req.get("organization_id") == org_id and req.get("status") == "pending"
+        for req in requests
     ]
     
     return PendingRequestsResponse(requests=pending)
@@ -1279,29 +1462,46 @@ class ReviewRequestResponse(BaseModel):
 @router.post("/review-request", response_model=ReviewRequestResponse)
 async def review_membership_request(
     request_data: ReviewRequestRequest,
+    request: Request,
     session: dict = Depends(get_session_data),
     keycloak: KeycloakAdminClient = Depends(get_keycloak_admin),
+    db: AsyncSession = Depends(get_db_session),
 ) -> ReviewRequestResponse:
     """Approve or reject a membership request."""
     reviewer_id = session.get("user_id")
+    reviewer_email = session.get("email", "")
     
-    # Get the request
-    membership_req = _membership_requests.get(request_data.request_id)
-    if not membership_req:
+    # Get IP address for audit log
+    ip_address = request.client.host if request.client else None
+    
+    # Get the request from database
+    result = await db.execute(
+        select(MembershipRequest, Organization).join(
+            Organization,
+            Organization.id == MembershipRequest.organization_id
+        ).where(
+            MembershipRequest.id == request_data.request_id
+        )
+    )
+    row = result.first()
+    
+    if not row:
         raise HTTPException(status_code=404, detail="Request not found")
     
-    if membership_req.get("status") != "pending":
+    membership_req, organization = row
+    
+    if membership_req.status != MembershipRequestStatus.PENDING:
         raise HTTPException(status_code=400, detail="Request has already been processed")
     
     # Verify reviewer is in the organization
     orgs = await keycloak.get_user_organizations(reviewer_id)
-    if not orgs or orgs[0]["id"] != membership_req["organization_id"]:
+    if not orgs or orgs[0]["id"] != membership_req.organization_id:
         raise HTTPException(status_code=403, detail="You cannot review requests for this organization")
     
-    org_id = membership_req["organization_id"]
-    org_name = membership_req["organization_name"]
-    user_id = membership_req["user_id"]
-    user_email = membership_req["user_email"]
+    org_id = membership_req.organization_id
+    org_name = organization.name
+    user_id = membership_req.user_id
+    user_email = membership_req.user_email
     
     if request_data.action == "approve":
         # Add user to organization
@@ -1314,9 +1514,36 @@ async def review_membership_request(
             "joined_via": ["approval"],
         })
         
-        membership_req["status"] = "approved"
-        membership_req["reviewed_by"] = reviewer_id
-        membership_req["reviewed_at"] = datetime.utcnow().isoformat()
+        # Update request status in database
+        membership_req.status = MembershipRequestStatus.APPROVED
+        membership_req.reviewed_by = reviewer_id
+        membership_req.reviewed_at = datetime.utcnow()
+        await db.commit()
+        
+        # Log audit event
+        from audit import log_audit_event
+        await log_audit_event(
+            db=db,
+            event_type=AuditEventType.MEMBERSHIP_APPROVED,
+            user_id=reviewer_id,
+            user_email=reviewer_email,
+            organization_id=org_id,
+            target_user_id=user_id,
+            target_user_email=user_email,
+            details={"request_id": request_data.request_id},
+            ip_address=ip_address,
+        )
+        
+        # Send email notification
+        try:
+            from notifications_service.email_notifications import send_membership_notification
+            await send_membership_notification(
+                user_email=user_email,
+                organization_name=org_name,
+                status="approved",
+            )
+        except Exception as e:
+            logger.warning("Failed to send email notification: %s", e)
         
         logger.info(f"Approved membership request from {user_email} to {org_name}")
         
@@ -1325,10 +1552,41 @@ async def review_membership_request(
             message=f"{user_email} has been added to the organization.",
         )
     else:
-        membership_req["status"] = "rejected"
-        membership_req["reviewed_by"] = reviewer_id
-        membership_req["reviewed_at"] = datetime.utcnow().isoformat()
-        membership_req["rejection_reason"] = request_data.rejection_reason
+        # Update request status in database
+        membership_req.status = MembershipRequestStatus.REJECTED
+        membership_req.reviewed_by = reviewer_id
+        membership_req.reviewed_at = datetime.utcnow()
+        membership_req.rejection_reason = request_data.rejection_reason
+        await db.commit()
+        
+        # Log audit event
+        from audit import log_audit_event
+        await log_audit_event(
+            db=db,
+            event_type=AuditEventType.MEMBERSHIP_REJECTED,
+            user_id=reviewer_id,
+            user_email=reviewer_email,
+            organization_id=org_id,
+            target_user_id=user_id,
+            target_user_email=user_email,
+            details={
+                "request_id": request_data.request_id,
+                "rejection_reason": request_data.rejection_reason,
+            },
+            ip_address=ip_address,
+        )
+        
+        # Send email notification
+        try:
+            from notifications_service.email_notifications import send_membership_notification
+            await send_membership_notification(
+                user_email=user_email,
+                organization_name=org_name,
+                status="rejected",
+                rejection_reason=request_data.rejection_reason,
+            )
+        except Exception as e:
+            logger.warning("Failed to send email notification: %s", e)
         
         logger.info(f"Rejected membership request from {user_email} to {org_name}")
         
@@ -1336,3 +1594,512 @@ async def review_membership_request(
             success=True,
             message=f"Request from {user_email} has been rejected.",
         )
+
+
+# =============================================================================
+# Invitation Link Endpoints
+# =============================================================================
+
+
+class ValidateInvitationResponse(BaseModel):
+    """Response for invitation validation."""
+    
+    valid: bool
+    organization_id: str | None = None
+    organization_name: str | None = None
+    role: str | None = None
+    expired: bool = False
+    message: str | None = None
+
+
+class AcceptInvitationRequest(BaseModel):
+    """Request to accept an invitation."""
+    
+    token: str = Field(..., description="The invitation token/code")
+
+
+class AcceptInvitationResponse(BaseModel):
+    """Response after accepting an invitation."""
+    
+    success: bool
+    organization_id: str | None = None
+    organization_name: str | None = None
+    role: str | None = None
+    message: str
+
+
+@router.get("/invitations/validate", response_model=ValidateInvitationResponse)
+async def validate_invitation(
+    token: str,
+    db: AsyncSession = Depends(get_db_session),
+) -> ValidateInvitationResponse:
+    """
+    Validate an invitation token without requiring authentication.
+    
+    Public endpoint to check if an invite code is valid before requiring login.
+    """
+    if not token or len(token.strip()) < 4:
+        return ValidateInvitationResponse(
+            valid=False,
+            message="Invalid invitation code format",
+        )
+    
+    try:
+        # Look up the invitation by code
+        result = await db.execute(
+            select(OrganizationInvitation, Organization).join(
+                Organization,
+                Organization.id == OrganizationInvitation.organization_id
+            ).where(
+                OrganizationInvitation.code == token.strip()
+            )
+        )
+        row = result.first()
+        
+        if not row:
+            return ValidateInvitationResponse(
+                valid=False,
+                message="Invitation not found",
+            )
+        
+        invitation, organization = row
+        
+        # Check if invitation is valid
+        if not invitation.is_valid:
+            expired = invitation.expires_at and invitation.expires_at < datetime.utcnow()
+            max_uses_reached = invitation.max_uses and invitation.uses_count >= invitation.max_uses
+            
+            if expired:
+                return ValidateInvitationResponse(
+                    valid=False,
+                    expired=True,
+                    message="This invitation has expired",
+                )
+            elif max_uses_reached:
+                return ValidateInvitationResponse(
+                    valid=False,
+                    message="This invitation has reached its maximum number of uses",
+                )
+            else:
+                return ValidateInvitationResponse(
+                    valid=False,
+                    message="This invitation is no longer active",
+                )
+        
+        return ValidateInvitationResponse(
+            valid=True,
+            organization_id=organization.id,
+            organization_name=organization.name,
+            role=invitation.role.value if invitation.role else "member",
+            message=f"Valid invitation to join {organization.name}",
+        )
+        
+    except Exception as e:
+        logger.error(f"Error validating invitation: {e}")
+        return ValidateInvitationResponse(
+            valid=False,
+            message="Failed to validate invitation",
+        )
+
+
+@router.post("/invitations/accept", response_model=AcceptInvitationResponse)
+async def accept_invitation(
+    request_data: AcceptInvitationRequest,
+    session: dict = Depends(get_session_data),
+    keycloak: KeycloakAdminClient = Depends(get_keycloak_admin),
+    db: AsyncSession = Depends(get_db_session),
+) -> AcceptInvitationResponse:
+    """
+    Accept an invitation and join the organization.
+    
+    Requires authentication. Creates organization membership with the role
+    specified in the invitation.
+    """
+    user_id = session.get("user_id")
+    user_email = session.get("email", "")
+    session_id = session.get("_session_id")
+    token = request_data.token.strip()
+    
+    if not token:
+        raise HTTPException(status_code=400, detail="Invitation code is required")
+    
+    try:
+        # Look up the invitation
+        result = await db.execute(
+            select(OrganizationInvitation, Organization).join(
+                Organization,
+                Organization.id == OrganizationInvitation.organization_id
+            ).where(
+                OrganizationInvitation.code == token
+            )
+        )
+        row = result.first()
+        
+        if not row:
+            raise HTTPException(status_code=404, detail="Invitation not found")
+        
+        invitation, organization = row
+        
+        # Validate invitation
+        if not invitation.is_valid:
+            expired = invitation.expires_at and invitation.expires_at < datetime.utcnow()
+            if expired:
+                raise HTTPException(status_code=400, detail="This invitation has expired")
+            elif invitation.max_uses and invitation.uses_count >= invitation.max_uses:
+                raise HTTPException(
+                    status_code=400,
+                    detail="This invitation has reached its maximum number of uses"
+                )
+            else:
+                raise HTTPException(status_code=400, detail="This invitation is no longer active")
+        
+        # Check if email-specific invitation matches user's email
+        if invitation.email and invitation.email.lower() != user_email.lower():
+            raise HTTPException(
+                status_code=403,
+                detail="This invitation is for a different email address"
+            )
+        
+        org_id = organization.id
+        org_name = organization.name
+        role = invitation.role if invitation.role else MemberRole.MEMBER
+        
+        # Check if user is already a member
+        result = await db.execute(
+            select(OrganizationMember).where(
+                OrganizationMember.organization_id == org_id,
+                OrganizationMember.user_id == user_id,
+            )
+        )
+        existing_member = result.scalar_one_or_none()
+        
+        if existing_member:
+            return AcceptInvitationResponse(
+                success=True,
+                organization_id=org_id,
+                organization_name=org_name,
+                role=existing_member.role.value,
+                message=f"You are already a member of {org_name}",
+            )
+        
+        # Create organization membership
+        new_member = OrganizationMember(
+            id=str(uuid4()),
+            organization_id=org_id,
+            user_id=user_id,
+            role=role,
+            joined_at=datetime.utcnow(),
+        )
+        db.add(new_member)
+        
+        # Update invitation usage
+        invitation.uses_count += 1
+        if not invitation.is_reusable:
+            invitation.is_active = False
+        if invitation.max_uses and invitation.uses_count >= invitation.max_uses:
+            invitation.is_active = False
+        
+        await db.commit()
+        
+        # Add user to organization in Keycloak
+        try:
+            await keycloak.add_user_to_organization(org_id, user_id)
+        except Exception as e:
+            logger.warning(f"Failed to add user to organization in Keycloak: {e}")
+        
+        # Update session and Keycloak attributes
+        org_claim = merge_org_claim(session.get("organization"), org_id, org_name)
+        
+        attributes = {
+            "organization_id": [org_id],
+            "organization_name": [org_name],
+            "joined_via": ["invite_link"],
+            "onboarding_completed": [datetime.utcnow().isoformat()],
+        }
+        
+        try:
+            await keycloak.update_user_attributes(user_id, attributes)
+        except Exception as e:
+            logger.warning(f"Failed to update user attributes in Keycloak: {e}")
+        
+        # Update session
+        await update_session_attributes(
+            session_id,
+            {
+                "organization_id": org_id,
+                "organization_name": org_name,
+                "onboarding_completed": datetime.utcnow().isoformat(),
+                "organization": org_claim,
+                "roles": [role.value],
+            },
+        )
+        
+        logger.info(f"User {user_email} accepted invitation to {org_name} with role {role.value}")
+        
+        return AcceptInvitationResponse(
+            success=True,
+            organization_id=org_id,
+            organization_name=org_name,
+            role=role.value,
+            message=f"Successfully joined {org_name}",
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error accepting invitation: {e}")
+        raise HTTPException(status_code=500, detail="Failed to accept invitation")
+
+
+# =============================================================================
+# Email Domain Matching Endpoints
+# =============================================================================
+
+
+class DomainMatchedOrganization(BaseModel):
+    """Organization matched by email domain."""
+    
+    id: str
+    name: str
+    domain_join_policy: str  # "auto", "approval", "closed"
+    default_role: str
+
+
+class DomainMatchesResponse(BaseModel):
+    """Response with organizations matching user's email domain."""
+    
+    matches: list[DomainMatchedOrganization]
+
+
+class JoinDomainOrgRequest(BaseModel):
+    """Request to join organization based on email domain."""
+    
+    organization_id: str = Field(..., description="ID of organization to join")
+
+
+class JoinDomainOrgResponse(BaseModel):
+    """Response after joining or requesting to join domain org."""
+    
+    success: bool
+    action: str  # "joined" or "requested"
+    organization_id: str
+    organization_name: str
+    message: str
+
+
+@router.get("/domain-matches", response_model=DomainMatchesResponse)
+async def get_domain_matches(
+    request: Request,
+) -> DomainMatchesResponse:
+    """
+    Get organizations matching the user's email domain.
+    
+    Returns organizations that:
+    1. Have the user's email domain in allowed_email_domains
+    2. Are discoverable (is_discoverable = true)
+    
+    The matched organizations are stored in the session during login/provisioning.
+    """
+    session_manager = await get_session_manager()
+    session = await session_manager.get_session(request)
+    
+    if not session:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    # Get matched organizations from session
+    matched_orgs = session.get("matched_organizations", [])
+    
+    if not matched_orgs:
+        return DomainMatchesResponse(matches=[])
+    
+    # Convert to response model
+    matches = [
+        DomainMatchedOrganization(
+            id=org["id"],
+            name=org["name"],
+            domain_join_policy=org["domain_join_policy"],
+            default_role=org["default_role"],
+        )
+        for org in matched_orgs
+    ]
+    
+    return DomainMatchesResponse(matches=matches)
+
+
+@router.post("/join-domain-org", response_model=JoinDomainOrgResponse)
+async def join_domain_organization(
+    body: JoinDomainOrgRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db_session),
+    keycloak: KeycloakAdminClient = Depends(get_keycloak_admin),
+) -> JoinDomainOrgResponse:
+    """
+    Join or request to join an organization based on email domain matching.
+    
+    Behavior depends on the organization's domain_join_policy:
+    - "auto": Automatically adds user as member with default_role
+    - "approval": Creates a membership request for admin review
+    - "closed": Returns error (should not be matched, but handled for safety)
+    
+    Only works if the organization was matched during login (stored in session).
+    """
+    session_manager = await get_session_manager()
+    session = await session_manager.get_session(request)
+    
+    if not session:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    user_id = session.get("user_id")
+    user_email = session.get("email")
+    session_id = session.get("session_id")
+    
+    # Get matched organizations from session
+    matched_orgs = session.get("matched_organizations", [])
+    
+    # Find the requested organization in the matches
+    matched_org = next(
+        (org for org in matched_orgs if org["id"] == body.organization_id),
+        None,
+    )
+    
+    if not matched_org:
+        raise HTTPException(
+            status_code=403,
+            detail="Organization not available for domain-based join",
+        )
+    
+    # Get organization details
+    result = await db.execute(
+        select(Organization).where(Organization.id == body.organization_id)
+    )
+    organization = result.scalar_one_or_none()
+    
+    if not organization:
+        raise HTTPException(status_code=404, detail="Organization not found")
+    
+    policy = matched_org["domain_join_policy"]
+    default_role = matched_org["default_role"]
+    
+    try:
+        # Parse role enum
+        try:
+            member_role = MemberRole(default_role)
+        except ValueError:
+            logger.warning(f"Invalid role {default_role}, defaulting to MEMBER")
+            member_role = MemberRole.MEMBER
+        
+        if policy == "auto":
+            # Auto-join: Create membership immediately
+            membership = OrganizationMember(
+                id=str(uuid4()),
+                organization_id=organization.id,
+                user_id=user_id,
+                role=member_role,
+                joined_at=datetime.utcnow(),
+            )
+            db.add(membership)
+            await db.commit()
+            
+            # Add to Keycloak
+            try:
+                await keycloak.add_user_to_organization(organization.id, user_id)
+            except Exception as e:
+                logger.warning(f"Failed to add user to Keycloak org: {e}")
+            
+            # Update session and Keycloak attributes
+            org_claim = merge_org_claim(
+                session.get("organization"), organization.id, organization.name
+            )
+            
+            attributes = {
+                "organization_id": [organization.id],
+                "organization_name": [organization.name],
+                "joined_via": ["email_domain"],
+                "onboarding_completed": [datetime.utcnow().isoformat()],
+            }
+            
+            try:
+                await keycloak.update_user_attributes(user_id, attributes)
+            except Exception as e:
+                logger.warning(f"Failed to update Keycloak attributes: {e}")
+            
+            # Update session
+            await update_session_attributes(
+                session_id,
+                {
+                    "organization_id": organization.id,
+                    "organization_name": organization.name,
+                    "onboarding_completed": datetime.utcnow().isoformat(),
+                    "organization": org_claim,
+                    "roles": [member_role.value],
+                },
+            )
+            
+            logger.info(
+                f"User {user_email} auto-joined {organization.name} via email domain"
+            )
+            
+            return JoinDomainOrgResponse(
+                success=True,
+                action="joined",
+                organization_id=organization.id,
+                organization_name=organization.name,
+                message=f"Successfully joined {organization.name}",
+            )
+            
+        elif policy == "approval":
+            # Request approval: Create membership request
+            # Check if request already exists
+            existing_request = await db.execute(
+                select(MembershipRequest).where(
+                    MembershipRequest.organization_id == organization.id,
+                    MembershipRequest.user_id == user_id,
+                    MembershipRequest.status == MembershipRequestStatus.PENDING,
+                )
+            )
+            if existing_request.scalar_one_or_none():
+                return JoinDomainOrgResponse(
+                    success=True,
+                    action="requested",
+                    organization_id=organization.id,
+                    organization_name=organization.name,
+                    message=f"You already have a pending request to join {organization.name}",
+                )
+            
+            # Create new request
+            request_record = MembershipRequest(
+                id=str(uuid4()),
+                organization_id=organization.id,
+                user_id=user_id,
+                user_email=user_email,
+                requested_role=member_role,
+                status=MembershipRequestStatus.PENDING,
+                requested_at=datetime.utcnow(),
+                metadata={"source": "email_domain"},
+            )
+            db.add(request_record)
+            await db.commit()
+            
+            logger.info(
+                f"User {user_email} requested to join {organization.name} via email domain"
+            )
+            
+            return JoinDomainOrgResponse(
+                success=True,
+                action="requested",
+                organization_id=organization.id,
+                organization_name=organization.name,
+                message=f"Your request to join {organization.name} has been submitted for approval",
+            )
+            
+        else:  # policy == "closed" or unknown
+            raise HTTPException(
+                status_code=403,
+                detail="This organization does not allow new members at this time",
+            )
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error joining domain organization: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to process request")

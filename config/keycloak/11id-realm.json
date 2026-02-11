@@ -1,10 +1,10 @@
 {
-  "realm": "marty",
+  "realm": "11id",
   "enabled": true,
-  "displayName": "Marty Trust Services",
-  "displayNameHtml": "<div class=\"kc-logo-text\"><span>Marty Trust Services</span></div>",
-  "loginTheme": "marty",
-  "emailTheme": "marty",
+  "displayName": "11id",
+  "displayNameHtml": "<div class=\"kc-logo-text\"><span>11id</span></div>",
+  "loginTheme": "11id",
+  "emailTheme": "11id",
   "registrationAllowed": true,
   "registrationEmailAsUsername": true,
   "verifyEmail": false,
@@ -56,7 +56,7 @@
         "clientRole": false
       },
       {
-        "name": "default-roles-marty",
+        "name": "default-roles-11id",
         "description": "${role_default-roles}",
         "composite": true,
         "composites": {
@@ -67,7 +67,7 @@
     ]
   },
   "defaultRole": {
-    "name": "default-roles-marty",
+    "name": "default-roles-11id",
     "description": "${role_default-roles}",
     "composite": true,
     "composites": {
@@ -213,7 +213,8 @@
         "http://host.docker.internal:9080/*",
         "http://host.docker.internal:3000/*",
         "http://host.docker.internal:8000/*",
-        "https://*.marty.demo/*"
+        "https://*.marty.demo/*",
+        "https://${env.PUBLIC_DOMAIN:beta.elevenidllc.com}/*"
       ],
       "webOrigins": [
         "http://localhost:9080",
@@ -222,7 +223,8 @@
         "http://host.docker.internal:9080",
         "http://host.docker.internal:3000",
         "http://host.docker.internal:8000",
-        "https://*.marty.demo"
+        "https://*.marty.demo",
+        "https://${env.PUBLIC_DOMAIN:beta.elevenidllc.com}"
       ],
       "protocol": "openid-connect",
       "publicClient": true,
@@ -234,7 +236,7 @@
       "fullScopeAllowed": true,
       "attributes": {
         "pkce.code.challenge.method": "S256",
-        "post.logout.redirect.uris": "http://localhost:9080/*##${UI_BASE_URL}/*##http://host.docker.internal:9080/*##https://*.marty.demo/*"
+        "post.logout.redirect.uris": "http://localhost:9080/*##${env.UI_BASE_URL:http://localhost:3000}/*##http://host.docker.internal:9080/*##https://*.marty.demo/*##https://${env.PUBLIC_DOMAIN:beta.elevenidllc.com}/*"
       },
       "defaultClientScopes": [
         "openid",

@@ -22,6 +22,15 @@ from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr
 
+try:
+    from common.events import EventPublisher, DomainEvent, EventType, get_event_publisher
+except ImportError:
+    # Fallback if common module not available
+    EventPublisher = None
+    DomainEvent = None
+    EventType = None
+    get_event_publisher = lambda: None
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -285,6 +294,32 @@ async def review_applicant(
     
     if request.decision == "approve":
         applicant.approve(request.notes)
+        
+        # Publish APPLICATION_APPROVED event
+        if EventPublisher and get_event_publisher():
+            try:
+                event = DomainEvent(
+                    event_type=EventType.APPLICATION_APPROVED,
+                    aggregate_id=applicant.id,
+                    aggregate_type="applicant",
+                    organization_id=applicant.organization_id,
+                    data={
+                        "applicant_id": applicant.id,
+                        "email": applicant.email,
+                        "given_name": applicant.given_name,
+                        "family_name": applicant.family_name,
+                        "status": applicant.status.value,
+                        "vetting_level": applicant.vetting_level.value,
+                        "reviewer_notes": request.notes,
+                    }
+                )
+                publisher = get_event_publisher()
+                await publisher.publish(event)
+                logger.info(f"Published APPLICATION_APPROVED event for applicant {applicant.id}")
+            except Exception as e:
+                logger.error(f"Failed to publish event: {e}")
+                # Don't fail the approval if event publishing fails
+        
     elif request.decision == "reject":
         if not request.reason:
             raise HTTPException(status_code=400, detail="Rejection reason required")

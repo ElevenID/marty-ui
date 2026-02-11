@@ -159,6 +159,18 @@ class BrandingConfiguration:
     # Custom domains
     custom_domain: str | None = None
     custom_issuer_domain: str | None = None
+    
+    # QR Code Customization
+    qr_size: int = 256  # Default QR code size in pixels
+    qr_foreground_color: str = "#000000"  # QR code foreground (dark squares)
+    qr_background_color: str = "#FFFFFF"  # QR code background
+    qr_logo_url: str | None = None  # Optional logo to overlay on QR center
+    qr_logo_size_percent: int = 20  # Logo size as percentage of QR (0-30)
+    qr_border_color: str | None = None  # Optional border color
+    qr_border_width: int = 2  # Border width in pixels
+    qr_error_correction: str = "H"  # L, M, Q, H (High recommended for logo overlay)
+    qr_show_instructions: bool = True  # Show "Scan with Wallet" instructions
+    qr_custom_instruction_text: str | None = None  # Custom instruction text
 
 
 @dataclass
@@ -292,6 +304,18 @@ class BrandingConfigurationModel(BaseModel):
     email_from_name: str = ""
     email_from_address: str | None = None
     custom_domain: str | None = None
+    
+    # QR Code Customization
+    qr_size: int = 256
+    qr_foreground_color: str = "#000000"
+    qr_background_color: str = "#FFFFFF"
+    qr_logo_url: str | None = None
+    qr_logo_size_percent: int = 20
+    qr_border_color: str | None = None
+    qr_border_width: int = 2
+    qr_error_correction: str = "H"
+    qr_show_instructions: bool = True
+    qr_custom_instruction_text: str | None = None
 
 
 class CreateDeploymentProfileRequest(BaseModel):

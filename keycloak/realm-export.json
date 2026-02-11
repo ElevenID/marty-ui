@@ -1,7 +1,7 @@
 {
-  "realm": "marty",
+  "realm": "11id",
   "enabled": true,
-  "displayName": "Marty",
+  "displayName": "11id",
   "sslRequired": "external",
   "registrationAllowed": true,
   "loginWithEmailAllowed": true,

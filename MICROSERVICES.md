@@ -167,7 +167,7 @@ Each service uses environment variables for configuration:
 # Auth Service
 AUTH_SERVICE_PORT=8001
 REDIS_URL=redis://localhost:6379/0
-OIDC_ISSUER_URL=http://localhost:8180/realms/marty
+OIDC_ISSUER_URL=http://localhost:8180/realms/11id
 OIDC_CLIENT_ID=marty-ui
 
 # Organization Service

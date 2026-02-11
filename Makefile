@@ -9,7 +9,7 @@
 #   make logs        - View container logs
 #   make clean       - Stop and remove all containers and volumes
 
-.PHONY: help dev build-wheels up down logs clean restart shell test infra setup-local run-api run-ui run-services services-up services-down services-logs
+.PHONY: help dev build-wheels up down logs clean restart shell test infra setup-local run-api run-ui run-services services-up services-down services-logs tunnel-start tunnel-stop tunnel-logs tunnel-nginx-logs tunnel-restart tunnel-status dev-ui-tunnel
 
 # Colors
 BLUE := \033[0;34m
@@ -154,3 +154,115 @@ test: ## Run E2E tests
 
 status: ## Show status of all services
 	$(COMPOSE) ps
+
+# =============================================================================
+# Cloudflare Tunnel (External Access)
+# =============================================================================
+TUNNEL_COMPOSE := $(COMPOSE) -f docker-compose.cloudflared.yml
+
+tunnel-start: ## Start Cloudflare Tunnel for external access (requires .env.tunnel)
+	@if [ ! -f .env.tunnel ]; then \
+		echo "$(RED)❌ Error: .env.tunnel file not found$(NC)"; \
+		echo ""; \
+		echo "$(YELLOW)Setup:$(NC)"; \
+		echo "  1. Copy template: cp .env.tunnel.example .env.tunnel"; \
+		echo "  2. Add your CLOUDFLARE_TUNNEL_TOKEN"; \
+		echo "  3. Set PUBLIC_DOMAIN to your domain"; \
+		echo "  4. Configure public hostname in Cloudflare dashboard"; \
+		exit 1; \
+	fi
+	@if ! grep -q '^CLOUDFLARE_TUNNEL_TOKEN=eyJ' .env.tunnel 2>/dev/null; then \
+		echo "$(RED)❌ Error: CLOUDFLARE_TUNNEL_TOKEN not set in .env.tunnel$(NC)"; \
+		exit 1; \
+	fi
+	@echo "$(BLUE)🚀 Starting Cloudflare Tunnel...$(NC)"
+	@$(TUNNEL_COMPOSE) --env-file .env.tunnel up -d
+	@echo ""
+	@echo "$(GREEN)✅ Cloudflare Tunnel started!$(NC)"
+	@echo ""
+	@PUBLIC_DOMAIN=$$(grep '^PUBLIC_DOMAIN=' .env.tunnel | cut -d'=' -f2); \
+	echo "  🌐 Public URL:  $(YELLOW)https://$${PUBLIC_DOMAIN}$(NC)"; \
+	echo "  🔗 Local UI:    http://localhost:9080"; \
+	echo "  🔗 Gateway API: http://localhost:8000"
+	@echo ""
+	@echo "$(YELLOW)Important:$(NC) Configure auth service for external access:"
+	@echo "  make tunnel-auth-restart"
+	@echo ""
+	@echo "$(YELLOW)Then start UI:$(NC)"
+	@echo "  make dev-ui-tunnel"
+	@echo ""
+	@echo "$(YELLOW)Logs:$(NC)"
+	@echo "  make tunnel-logs      # Tunnel logs"
+	@echo "  make tunnel-nginx-logs # Nginx proxy logs"
+	@echo ""
+	@echo "$(YELLOW)Stop:$(NC) make tunnel-stop"
+
+dev-ui-tunnel: ## Start UI dev server with external access (for tunnel)
+	@echo "$(BLUE)🚀 Starting UI with external access...$(NC)"
+	@echo "$(YELLOW)Note: UI will be accessible from Docker containers$(NC)"
+	@cd ui && bun run vite --host
+
+tunnel-stop: ## Stop Cloudflare Tunnel
+	@echo "$(BLUE)🛑 Stopping Cloudflare Tunnel...$(NC)"
+	@$(TUNNEL_COMPOSE) down
+	@echo "$(GREEN)✅ Tunnel stopped$(NC)"
+
+tunnel-restart: tunnel-stop tunnel-start ## Restart Cloudflare Tunnel
+
+tunnel-logs: ## View Cloudflare Tunnel logs
+	@echo "$(BLUE)📋 Cloudflare Tunnel logs:$(NC)"
+	@echo ""
+	@docker logs -f cloudflared-tunnel
+
+tunnel-nginx-logs: ## View nginx proxy logs
+	@echo "$(BLUE)📋 Nginx proxy logs:$(NC)"
+	@echo ""
+	@docker logs -f tunnel-nginx-proxy
+
+tunnel-status: ## Check Cloudflare Tunnel status
+	@echo "$(BLUE)🔍 Checking tunnel status...$(NC)"
+	@echo ""
+	@if docker ps --filter name=cloudflared-tunnel --format '{{.Names}}' | grep -q cloudflared-tunnel; then \
+		echo "$(GREEN)✅ Tunnel container is running$(NC)"; \
+		docker ps --filter name=tunnel --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"; \
+		echo ""; \
+		echo "$(BLUE)Recent tunnel logs:$(NC)"; \
+		docker logs cloudflared-tunnel 2>&1 | tail -5; \
+	else \
+		echo "$(RED)❌ Tunnel container is not running$(NC)"; \
+		echo "$(YELLOW)Start with: make tunnel-start$(NC)"; \
+	fi
+	@echo ""
+	@echo "$(BLUE)💡 Check Cloudflare dashboard for detailed status:$(NC)"
+	@echo "   https://one.dash.cloudflare.com/ → Access → Tunnels"
+
+tunnel-auth-restart: ## Restart auth service with tunnel configuration (for external access)
+	@if [ ! -f .env.tunnel ]; then \
+		echo "$(RED)❌ Error: .env.tunnel file not found$(NC)"; \
+		exit 1; \
+	fi
+	@echo "$(BLUE)🔄 Restarting services with tunnel configuration...$(NC)"
+	@PUBLIC_DOMAIN=$$(grep '^PUBLIC_DOMAIN=' .env.tunnel | cut -d'=' -f2); \
+	echo "  Domain: $(YELLOW)$${PUBLIC_DOMAIN}$(NC)"; \
+	docker-compose -f docker-compose.services-app.yml -f docker-compose.tunnel-override.yml --env-file .env.tunnel up -d auth gateway
+	@echo "$(GREEN)✅ Services restarted with tunnel configuration$(NC)"
+	@echo ""
+	@echo "$(YELLOW)Note:$(NC) Auth and Gateway now configured for external access"
+
+tunnel-keycloak-restart: ## Restart Keycloak with tunnel environment variables
+	@if [ ! -f .env.tunnel ]; then \
+		echo "$(RED)❌ Error: .env.tunnel file not found$(NC)"; \
+		exit 1; \
+	fi
+	@echo "$(BLUE)🔄 Restarting Keycloak with tunnel configuration...$(NC)"
+	@PUBLIC_DOMAIN=$$(grep '^PUBLIC_DOMAIN=' .env.tunnel | cut -d'=' -f2); \
+	echo "  Domain: $(YELLOW)$${PUBLIC_DOMAIN}$(NC)"; \
+	docker-compose -f docker-compose.infra.yml -f docker-compose.infra-tunnel-override.yml --env-file .env.tunnel up -d keycloak
+	@echo "$(GREEN)✅ Keycloak restarted with tunnel configuration$(NC)"
+	@echo ""
+	@echo "$(YELLOW)Note:$(NC) Keycloak realm now includes redirect URIs for $${PUBLIC_DOMAIN}"
+
+tunnel-full-restart: tunnel-keycloak-restart tunnel-auth-restart ## Restart all services for tunnel mode
+	@echo ""
+	@echo "$(GREEN)✅ All services configured for tunnel access$(NC)"
+

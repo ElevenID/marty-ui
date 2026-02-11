@@ -139,6 +139,8 @@ class ProvisioningResult:
     is_new_user: bool = False
     is_new_applicant: bool = False
     is_new_organization: bool = False
+    # Email domain matching results
+    matched_organizations: list[dict[str, str]] | None = None
 
 
 class IApplicantRepository(Protocol):
@@ -227,7 +229,7 @@ class JITProvisioningService:
         self._user_repo = user_repository
         self._keycloak_admin = keycloak_admin_client
 
-    async def provision_user(self, user_info: OIDCUserInfo) -> ProvisioningResult:
+    async def provision_user(self, user_info: OIDCUserInfo, session: Any | None = None) -> ProvisioningResult:
         """
         Provision user on OIDC login.
 
@@ -236,6 +238,7 @@ class JITProvisioningService:
         2. If not, check if ApplicantRecord exists with matching email
         3. If found by email, link it to the OIDC account
         4. If not found, create a new ApplicantRecord
+        5. Check for organizations matching email domain
 
         For vendor users:
         1. Check if Organization exists for their Keycloak organization
@@ -244,6 +247,7 @@ class JITProvisioningService:
 
         Args:
             user_info: User information from OIDC claims
+            session: Optional database session for domain matching
 
         Returns:
             ProvisioningResult with user, applicant, and organization IDs
@@ -276,6 +280,9 @@ class JITProvisioningService:
         if existing_by_account:
             result.applicant_id = existing_by_account.id
             logger.info(f"Found existing applicant {result.applicant_id} for account {user_info.sub}")
+            # Check for domain matches even for existing users
+            if session:
+                result.matched_organizations = await self._find_domain_matches(user_info.email, session)
             return result
 
         # Check for existing applicant by email (may be pre-registered or created via admin)
@@ -286,6 +293,9 @@ class JITProvisioningService:
             await self._applicant_repo.create(existing_by_email)  # Update
             result.applicant_id = existing_by_email.id
             logger.info(f"Linked existing applicant {result.applicant_id} to account {user_info.sub}")
+            # Check for domain matches
+            if session:
+                result.matched_organizations = await self._find_domain_matches(user_info.email, session)
             return result
 
         # Create new ApplicantRecord
@@ -293,6 +303,10 @@ class JITProvisioningService:
         result.applicant_id = applicant.id
         result.is_new_applicant = True
         logger.info(f"Created new applicant {result.applicant_id} for {user_info.email}")
+
+        # Check for domain matches for new users
+        if session:
+            result.matched_organizations = await self._find_domain_matches(user_info.email, session)
 
         return result
 
@@ -375,6 +389,26 @@ class JITProvisioningService:
         # Add uniqueness suffix
         slug = f"{slug}-{uuid4().hex[:6]}"
         return slug
+
+    async def _find_domain_matches(self, email: str, session: Any) -> list[dict[str, str]]:
+        """
+        Find organizations matching the user's email domain.
+
+        Args:
+            email: User's email address
+            session: Database session
+
+        Returns:
+            List of organizations matching the email domain
+        """
+        try:
+            from subscription.services import find_organizations_by_email_domain
+            matches = await find_organizations_by_email_domain(session, email)
+            logger.info(f"Found {len(matches)} organization(s) matching email domain for {email}")
+            return matches
+        except Exception as e:
+            logger.error(f"Error checking domain matches: {e}", exc_info=True)
+            return []
 
     async def _create_applicant_record(self, user_info: OIDCUserInfo) -> Any:
         """Create a new ApplicantRecord from OIDC claims."""

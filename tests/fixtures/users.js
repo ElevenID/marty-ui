@@ -2,7 +2,7 @@
  * Seeded Test Users
  * 
  * References to users pre-created in Keycloak realm.
- * These match the users defined in marty-realm.json and docker-compose.test.yml.
+ * These match the users defined in 11id-realm.json and docker-compose.test.yml.
  */
 
 const SEEDED_USERS = {

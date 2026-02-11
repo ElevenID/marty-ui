@@ -105,7 +105,7 @@ services:
       # Cookie uses __Host- prefix in production (requires Secure)
       SESSION_COOKIE_NAME: __Host-session
       # OIDC configuration
-      OIDC_ISSUER_URL: https://auth.example.com/realms/marty  # CHANGE THIS
+      OIDC_ISSUER_URL: https://auth.example.com/realms/11id  # CHANGE THIS
       OIDC_CLIENT_ID: marty-ui
       # HTTPS redirect (behind reverse proxy)
       FORWARDED_ALLOW_IPS: "*"

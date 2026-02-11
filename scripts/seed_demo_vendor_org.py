@@ -12,7 +12,7 @@ Environment Variables:
     KEYCLOAK_URL: Keycloak base URL (default: http://localhost:8180)
     KEYCLOAK_ADMIN_USER: Admin username (default: admin)
     KEYCLOAK_ADMIN_PASSWORD: Admin password (default: admin)
-    KEYCLOAK_REALM: Realm name (default: marty)
+    KEYCLOAK_REALM: Realm name (default: 11id)
     DATABASE_URL: PostgreSQL connection string (optional, for local DB seeding)
 """
 
@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 KEYCLOAK_URL = os.environ.get("KEYCLOAK_URL", "http://localhost:8180")
 KEYCLOAK_ADMIN_USER = os.environ.get("KEYCLOAK_ADMIN_USER", "admin")
 KEYCLOAK_ADMIN_PASSWORD = os.environ.get("KEYCLOAK_ADMIN_PASSWORD", "admin")
-KEYCLOAK_REALM = os.environ.get("KEYCLOAK_REALM", "marty")
+KEYCLOAK_REALM = os.environ.get("KEYCLOAK_REALM", "11id")
 
 # Demo Vendor Organization configuration
 DEMO_VENDOR_ORG = {

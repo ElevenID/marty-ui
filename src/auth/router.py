@@ -61,6 +61,20 @@ class AuthStatusResponse(BaseModel):
     user: UserInfoResponse | None = None
 
 
+class OrganizationResponse(BaseModel):
+    """Organization information response."""
+    
+    id: str
+    name: str
+    attributes: dict[str, Any] = {}
+
+
+class UserOrganizationsResponse(BaseModel):
+    """User organizations list response."""
+    
+    organizations: list[OrganizationResponse]
+
+
 # =============================================================================
 # Dependencies
 # =============================================================================
@@ -347,7 +361,20 @@ async def callback(
 
     # JIT provisioning
     provisioning = await get_provisioning_service()
-    provision_result = await provisioning.provision_user(oidc_user)
+    
+    # Create session for domain matching
+    from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+    import os
+    
+    db_url = os.environ.get(
+        "APPLICANT_DB_URL",
+        "postgresql+asyncpg://marty:marty@localhost:5432/marty_applicants",
+    )
+    engine = create_async_engine(db_url)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    
+    async with session_factory() as db_session:
+        provision_result = await provisioning.provision_user(oidc_user, session=db_session)
 
     # Create session
     session_manager = await get_session_manager()
@@ -367,6 +394,7 @@ async def callback(
         organization_id=provision_result.organization_id or oidc_user.organization_id,
         organization_name=provision_result.organization_name or oidc_user.organization_name,
         organization=oidc_user.organization,
+        matched_organizations=provision_result.matched_organizations,  # Email domain matches
         onboarding_completed=user_claims.get("onboarding_completed")
         or user_claims.get("attributes", {}).get("onboarding_completed", [None])[0],
         access_token_expires_at=(
@@ -523,6 +551,54 @@ async def get_current_user(
     )
 
     return AuthStatusResponse(authenticated=True, user=user)
+
+
+@router.get("/me/organizations", response_model=UserOrganizationsResponse)
+async def get_user_organizations(
+    request: Request,
+    config: AuthConfig = Depends(get_auth_config),
+) -> UserOrganizationsResponse:
+    """
+    Get all organizations for the current authenticated user.
+    
+    Returns a list of organizations the user is a member of.
+    Used for the organization switcher UI.
+    """
+    from .keycloak_admin import get_keycloak_admin
+    
+    # Require authentication
+    auth_status = await get_current_user(request, config)
+    if not auth_status.authenticated or not auth_status.user:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required",
+        )
+    
+    user_id = auth_status.user.user_id
+    
+    try:
+        # Get user's organizations from Keycloak
+        keycloak = await get_keycloak_admin()
+        orgs = await keycloak.get_user_organizations(user_id)
+        
+        # Convert to response model
+        organization_list = [
+            OrganizationResponse(
+                id=org["id"],
+                name=org.get("name", "Unknown"),
+                attributes=org.get("attributes", {}),
+            )
+            for org in orgs
+        ]
+        
+        return UserOrganizationsResponse(organizations=organization_list)
+        
+    except Exception as e:
+        logger.error(f"Error fetching user organizations: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to fetch organizations",
+        )
 
 
 async def _refresh_access_token(

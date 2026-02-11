@@ -136,6 +136,55 @@ class MembershipRequestStatus(str, enum.Enum):
     CANCELLED = "cancelled"
 
 
+class RoleEscalationStatus(str, enum.Enum):
+    """Status of a role escalation request."""
+    
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    CANCELLED = "cancelled"
+
+
+class AuditEventType(str, enum.Enum):
+    """Types of audit events to track."""
+    
+    # Membership events
+    MEMBERSHIP_REQUESTED = "membership_requested"
+    MEMBERSHIP_APPROVED = "membership_approved"
+    MEMBERSHIP_REJECTED = "membership_rejected"
+    MEMBER_REMOVED = "member_removed"
+    
+    # Role events
+    ROLE_ASSIGNED = "role_assigned"
+    ROLE_CHANGED = "role_changed"
+    ROLE_ESCALATION_REQUESTED = "role_escalation_requested"
+    ROLE_ESCALATION_APPROVED = "role_escalation_approved"
+    ROLE_ESCALATION_REJECTED = "role_escalation_rejected"
+    
+    # Device events
+    DEVICE_REGISTERED = "device_registered"
+    DEVICE_REVOKED = "device_revoked"
+    
+    # Organization settings
+    ORG_SETTINGS_CHANGED = "org_settings_changed"
+    ORG_SECURITY_CHANGED = "org_security_changed"
+    
+    # Access events
+    USER_LOGIN = "user_login"
+    USER_LOGOUT = "user_logout"
+    ADMIN_IMPERSONATION_START = "admin_impersonation_start"
+    ADMIN_IMPERSONATION_END = "admin_impersonation_end"
+    
+    # Credential issuance events
+    CREDENTIAL_OFFER_CREATED = "credential_offer_created"
+    CREDENTIAL_OFFER_ACCESSED = "credential_offer_accessed"
+    CREDENTIAL_OFFER_REGENERATED = "credential_offer_regenerated"
+    CREDENTIAL_OFFER_EXPIRED = "credential_offer_expired"
+    CREDENTIAL_ISSUED = "credential_issued"
+    CREDENTIAL_REVOKED = "credential_revoked"
+    CREDENTIAL_FORMAT_NEGOTIATED = "credential_format_negotiated"
+
+
 class Organization(Base):
     """Organization (tenant) model.
 
@@ -296,6 +345,104 @@ class MembershipRequest(Base):
 
     def __repr__(self) -> str:
         return f"<MembershipRequest(org={self.organization_id}, user={self.user_email}, status={self.status})>"
+
+
+class AuditLog(Base):
+    """Audit log model.
+
+    Tracks governance and security events for compliance and transparency.
+
+    Attributes:
+        id: Unique log entry ID
+        event_type: Type of event (from AuditEventType enum)
+        organization_id: Organization where event occurred
+        user_id: User who performed the action
+        user_email: Email of user (for display)
+        target_user_id: Optional target user (e.g., member being approved)
+        target_user_email: Email of target user
+        details: JSON object with event-specific details
+        ip_address: IP address of user
+        user_agent: Browser/client user agent
+        timestamp: When the event occurred
+    """
+
+    __tablename__ = "audit_logs"
+
+    id = Column(String(36), primary_key=True)
+    event_type = Column(SQLEnum(AuditEventType), nullable=False)
+    organization_id = Column(String(36), ForeignKey("organizations.id"), nullable=True)
+    
+    # Actor (who did it)
+    user_id = Column(String(36), nullable=False)
+    user_email = Column(String(255), nullable=False)
+    
+    # Target (who it was done to, if applicable)
+    target_user_id = Column(String(36), nullable=True)
+    target_user_email = Column(String(255), nullable=True)
+    
+    # Event details
+    details = Column(JSON, nullable=True)  # Additional context
+    ip_address = Column(String(45), nullable=True)  # IPv4 or IPv6
+    user_agent = Column(Text, nullable=True)
+    
+    timestamp = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+    # Relationships
+    organization = relationship("Organization")
+
+    def __repr__(self) -> str:
+        return f"<AuditLog(event={self.event_type}, user={self.user_email}, org={self.organization_id})>"
+
+
+class RoleEscalationRequest(Base):
+    """Role escalation request model.
+
+    Tracks requests from users to change their role in an organization.
+    Useful for applicants who want to become members/operators.
+
+    Attributes:
+        id: Unique request ID
+        organization_id: Organization ID
+        user_id: Keycloak user ID of requester
+        user_email: Email of requester (for display)
+        current_role: User's current role
+        requested_role: Role being requested
+        status: Request status (pending, approved, rejected, cancelled)
+        message: Optional message from requester explaining need
+        reviewed_by: User ID of admin who reviewed
+        reviewed_at: When the request was reviewed
+        rejection_reason: Reason for rejection (if rejected)
+    """
+
+    __tablename__ = "role_escalation_requests"
+
+    id = Column(String(36), primary_key=True)
+    organization_id = Column(String(36), ForeignKey("organizations.id"), nullable=False)
+    user_id = Column(String(36), nullable=False)
+    user_email = Column(String(255), nullable=False)
+
+    current_role = Column(SQLEnum(MemberRole), nullable=False)
+    requested_role = Column(SQLEnum(MemberRole), nullable=False)
+
+    status = Column(
+        SQLEnum(RoleEscalationStatus),
+        default=RoleEscalationStatus.PENDING,
+        nullable=False,
+    )
+
+    message = Column(Text, nullable=True)
+    reviewed_by = Column(String(36), nullable=True)
+    reviewed_at = Column(DateTime, nullable=True)
+    rejection_reason = Column(Text, nullable=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    organization = relationship("Organization")
+
+    def __repr__(self) -> str:
+        return f"<RoleEscalationRequest(org={self.organization_id}, user={self.user_email}, {self.current_role}->{self.requested_role}, status={self.status})>"
 
 
 class CredentialType(str, enum.Enum):
@@ -1323,3 +1470,58 @@ class CredentialTypeVersion(Base):
     
     def __repr__(self) -> str:
         return f"<CredentialTypeVersion(config={self.config_id}, v{self.version_number})>"
+
+
+class OfferAccessLog(Base):
+    """Detailed tracking of credential offer accesses.
+    
+    Logs every access to a credential offer for analytics and security monitoring.
+    Tracks wallet metadata, user agents, and access outcomes.
+    
+    Attributes:
+        id: Unique log entry ID
+        offer_id: The credential offer that was accessed
+        session_id: The issuance session ID
+        access_type: Type of access (qr_view, offer_retrieval, token_exchange, credential_request)
+        user_agent: Browser/wallet user agent string
+        ip_address: Client IP address
+        wallet_type: Detected wallet type (if identifiable)
+        outcome: Access outcome (success, expired, error)
+        error_code: Error code if outcome is error
+        metadata: Additional context (JSON)
+        accessed_at: Timestamp of access
+    """
+    
+    __tablename__ = "offer_access_logs"
+    
+    id = Column(String(36), primary_key=True)
+    offer_id = Column(String(36), ForeignKey("credential_offers.id"), nullable=False)
+    session_id = Column(String(36), ForeignKey("issuance_sessions.id"), nullable=False)
+    
+    # Access details
+    access_type = Column(String(50), nullable=False)  # qr_view, offer_retrieval, token_exchange, credential_request
+    user_agent = Column(Text, nullable=True)
+    ip_address = Column(String(45), nullable=True)  # IPv4 or IPv6
+    referrer = Column(Text, nullable=True)
+    
+    # Wallet detection
+    wallet_type = Column(String(100), nullable=True)  # Detected from user agent
+    wallet_version = Column(String(50), nullable=True)
+    
+    # Outcome
+    outcome = Column(String(50), nullable=False)  # success, expired, error, unauthorized
+    error_code = Column(String(100), nullable=True)
+    error_message = Column(Text, nullable=True)
+    
+    # Additional context
+    access_metadata = Column(JSON, nullable=True)  # Renamed from 'metadata' to avoid SQLAlchemy reserved name
+    
+    # Timing
+    accessed_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    
+    # Relationships
+    offer = relationship("CredentialOffer", backref="access_logs")
+    session = relationship("IssuanceSession", backref="access_logs")
+    
+    def __repr__(self) -> str:
+        return f"<OfferAccessLog(id={self.id}, offer={self.offer_id}, type={self.access_type})>"
