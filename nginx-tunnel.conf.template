@@ -1,0 +1,123 @@
+# Nginx Configuration Template for Cloudflare Tunnel
+# ==================================================
+# This template uses environment variables that are substituted at runtime
+#
+# Variables:
+#   PUBLIC_DOMAIN - The public domain (e.g., beta.elevenidllc.com)
+#   UI_DEV_PORT   - The port where Vite dev server runs (default: 3000)
+
+# Use variable to force DNS resolution at runtime
+resolver 127.0.0.11 valid=30s;
+
+server {
+    listen 80;
+    server_name ${PUBLIC_DOMAIN};
+
+    # Increase buffer sizes for large requests
+    client_max_body_size 50M;
+    proxy_buffer_size 128k;
+    proxy_buffers 4 256k;
+    proxy_busy_buffers_size 256k;
+
+    # Security headers
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+
+    # API routes - proxy to gateway
+    location /api/ {
+        set $backend_api marty-gateway:8000;
+        proxy_pass http://$backend_api/api/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        
+        # CORS headers
+        add_header Access-Control-Allow-Origin * always;
+        add_header Access-Control-Allow-Methods "GET, POST, PUT, DELETE, OPTIONS" always;
+        add_header Access-Control-Allow-Headers "Authorization, Content-Type" always;
+        
+        # Handle OPTIONS requests
+        if ($request_method = 'OPTIONS') {
+            return 204;
+        }
+    }
+
+    # Auth routes - proxy to gateway (if auth is separate)
+    location /auth/ {
+        proxy_pass http://marty-gateway:8000/auth/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # Health check
+    location /health {
+        proxy_pass http://marty-gateway:8000/health;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+    }
+
+    # Keycloak routes - for OIDC authentication
+    location /realms/ {
+        set $keycloak marty-ui-keycloak-1:8080;
+        proxy_pass http://$keycloak;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Port $server_port;
+    }
+
+    # Keycloak resources - static assets (themes, CSS, JS)
+    location /resources/ {
+        set $keycloak marty-ui-keycloak-1:8080;
+        proxy_pass http://$keycloak;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        
+        # Cache static resources
+        proxy_cache_valid 200 1h;
+        add_header X-Cache-Status $upstream_cache_status;
+    }
+
+    # V1 API routes (including auth endpoints)
+    location /v1/ {
+        set $backend_api marty-gateway:8000;
+        proxy_pass http://$backend_api;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # UI routes - proxy to local Vite dev server
+    location / {
+        proxy_pass http://host.docker.internal:${UI_DEV_PORT};
+        proxy_http_version 1.1;
+        
+        # WebSocket support for HMR (Hot Module Replacement)
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        
+        # Disable buffering for dev server
+        proxy_buffering off;
+        proxy_cache off;
+    }
+}
