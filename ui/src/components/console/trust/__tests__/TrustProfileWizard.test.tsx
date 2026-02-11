@@ -1,0 +1,401 @@
+/**
+ * Integration Tests for Trust Profile Wizard
+ * 
+ * Tests complete wizard flow including:
+ * - Step navigation
+ * - Form validation
+ * - Data persistence across steps
+ * - API submission
+ * - Success/error handling
+ */
+
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { render, screen, waitFor, within } from '@test/utils'
+import { server } from '@test/mocks/server'
+import { http, HttpResponse } from 'msw'
+import TrustProfileWizard from '../TrustProfileWizard'
+
+// Mock navigation
+const mockNavigate = vi.fn()
+vi.mock('react-router-dom', async () => {
+  const actual = await vi.importActual('react-router-dom')
+  return {
+    ...actual,
+    useNavigate: () => mockNavigate,
+  }
+})
+
+describe('TrustProfileWizard', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  describe('initial render', () => {
+    it('should render wizard with correct initial state', () => {
+      render(<TrustProfileWizard />)
+
+      // Check title
+      expect(screen.getByText('Build Trust Profile')).toBeInTheDocument()
+
+      // Check stepper shows all steps
+      expect(screen.getByText('Basics')).toBeInTheDocument()
+      expect(screen.getByText('Trust Sources')).toBeInTheDocument()
+      expect(screen.getByText('Validation Rules')).toBeInTheDocument()
+      expect(screen.getByText('Review & Activate')).toBeInTheDocument()
+
+      // Check initial step content
+      expect(screen.getByText('Basic Information')).toBeInTheDocument()
+      expect(screen.getByLabelText(/Trust Profile Name/i)).toBeInTheDocument()
+
+      // Check buttons
+      expect(screen.getByTestId('wizard.trustProfile.cancel')).toBeInTheDocument()
+      expect(screen.getByTestId('wizard.trustProfile.next')).toBeInTheDocument()
+    })
+
+    it('should have Next button disabled initially due to validation', () => {
+      render(<TrustProfileWizard />)
+
+      const nextButton = screen.getByTestId('wizard.trustProfile.next')
+      expect(nextButton).toBeDisabled()
+    })
+  })
+
+  describe('step 1: basics', () => {
+    it('should enable Next button when name is entered', async () => {
+      const { user } = render(<TrustProfileWizard />)
+
+      const nameInput = screen.getByLabelText(/Trust Profile Name/i)
+      const nextButton = screen.getByTestId('wizard.trustProfile.next')
+
+      expect(nextButton).toBeDisabled()
+
+      await user.type(nameInput, 'Test Trust Profile')
+
+      expect(nextButton).toBeEnabled()
+    })
+
+    it('should allow entering description', async () => {
+      const { user } = render(<TrustProfileWizard />)
+
+      const descInput = screen.getByLabelText(/Description/i)
+      await user.type(descInput, 'Test description for trust profile')
+
+      expect(descInput).toHaveValue('Test description for trust profile')
+    })
+
+    it('should have framework type preselected to custom', () => {
+      render(<TrustProfileWizard />)
+
+      const frameworkSelect = screen.getByTestId('wizard.trustProfile.frameworkType')
+      expect(frameworkSelect).toHaveValue('custom')
+    })
+
+    it('should validate name is required', async () => {
+      const { user } = render(<TrustProfileWizard />)
+
+      const nameInput = screen.getByLabelText(/Trust Profile Name/i)
+      const nextButton = screen.getByTestId('wizard.trustProfile.next')
+
+      // Enter and then clear name
+      await user.type(nameInput, 'Test')
+      await user.clear(nameInput)
+
+      expect(nextButton).toBeDisabled()
+    })
+  })
+
+  describe('step navigation', () => {
+    it('should navigate to step 2 when Next is clicked', async () => {
+      const { user } = render(<TrustProfileWizard />)
+
+      // Fill required field
+      await user.type(screen.getByLabelText(/Trust Profile Name/i), 'Test Profile')
+
+      // Click Next
+      await user.click(screen.getByTestId('wizard.trustProfile.next'))
+
+      // Should be on Trust Sources step
+      await waitFor(() => {
+        expect(screen.getByText(/Trust Sources/i)).toBeInTheDocument()
+      })
+
+      // Should show Back button
+      expect(screen.getByTestId('wizard.trustProfile.back')).toBeInTheDocument()
+    })
+
+    it('should navigate back to step 1 from step 2', async () => {
+      const { user } = render(<TrustProfileWizard />)
+
+      // Go to step 2
+      await user.type(screen.getByLabelText(/Trust Profile Name/i), 'Test Profile')
+      await user.click(screen.getByTestId('wizard.trustProfile.next'))
+
+      await waitFor(() => {
+        expect(screen.getByText(/Trust Sources/i)).toBeInTheDocument()
+      })
+
+      // Go back
+      await user.click(screen.getByTestId('wizard.trustProfile.back'))
+
+      // Should be back on Basics step
+      await waitFor(() => {
+        expect(screen.getByText('Basic Information')).toBeInTheDocument()
+      })
+    })
+
+    it('should show Skip button on optional steps', async () => {
+      const { user } = render(<TrustProfileWizard />)
+
+      // Navigate to step 2
+      await user.type(screen.getByLabelText(/Trust Profile Name/i), 'Test Profile')
+      await user.click(screen.getByTestId('wizard.trustProfile.next'))
+
+      await waitFor(() => {
+        expect(screen.getByTestId('wizard.trustProfile.skip')).toBeInTheDocument()
+      })
+    })
+
+    it('should preserve data when navigating between steps', async () => {
+      const { user } = render(<TrustProfileWizard />)
+
+      const name = 'Test Trust Profile'
+
+      // Enter data on step 1
+      await user.type(screen.getByLabelText(/Trust Profile Name/i), name)
+
+      // Go to step 2
+      await user.click(screen.getByTestId('wizard.trustProfile.next'))
+
+      await waitFor(() => {
+        expect(screen.getByText(/Trust Sources/i)).toBeInTheDocument()
+      })
+
+      // Go back to step 1
+      await user.click(screen.getByTestId('wizard.trustProfile.back'))
+
+      // Data should be preserved
+      await waitFor(() => {
+        expect(screen.getByLabelText(/Trust Profile Name/i)).toHaveValue(name)
+      })
+    })
+
+    it('should navigate through all steps to review', async () => {
+      const { user } = render(<TrustProfileWizard />)
+
+      // Step 1: Basics
+      await user.type(screen.getByLabelText(/Trust Profile Name/i), 'Test Profile')
+      await user.click(screen.getByTestId('wizard.trustProfile.next'))
+
+      // Step 2: Trust Sources (skip)
+      await waitFor(() => {
+        expect(screen.getByTestId('wizard.trustProfile.skip')).toBeInTheDocument()
+      })
+      await user.click(screen.getByTestId('wizard.trustProfile.skip'))
+
+      // Step 3: Validation Rules (skip)
+      await waitFor(() => {
+        expect(screen.getByTestId('wizard.trustProfile.skip')).toBeInTheDocument()
+      })
+      await user.click(screen.getByTestId('wizard.trustProfile.skip'))
+
+      // Step 4: Review
+      await waitFor(() => {
+        expect(screen.getByText(/Review & Activate/i)).toBeInTheDocument()
+      })
+
+      // Should show Create button
+      expect(screen.getByTestId('wizard.trustProfile.submit')).toBeInTheDocument()
+    })
+  })
+
+  describe('submission', () => {
+    it('should submit successfully and show success message', async () => {
+      const { user } = render(<TrustProfileWizard />)
+
+      const profileName = 'Production Trust Profile'
+
+      // Navigate through wizard
+      await user.type(screen.getByLabelText(/Trust Profile Name/i), profileName)
+      await user.click(screen.getByTestId('wizard.trustProfile.next'))
+
+      // Skip optional steps
+      await waitFor(() => {
+        expect(screen.getByTestId('wizard.trustProfile.skip')).toBeInTheDocument()
+      })
+      await user.click(screen.getByTestId('wizard.trustProfile.skip'))
+
+      await waitFor(() => {
+        expect(screen.getByTestId('wizard.trustProfile.skip')).toBeInTheDocument()
+      })
+      await user.click(screen.getByTestId('wizard.trustProfile.skip'))
+
+      // Submit
+      await waitFor(() => {
+        expect(screen.getByTestId('wizard.trustProfile.submit')).toBeInTheDocument()
+      })
+
+      await user.click(screen.getByTestId('wizard.trustProfile.submit'))
+
+      // Should show success message
+      await waitFor(() => {
+        expect(screen.getByTestId('wizard.trustProfile.success')).toBeInTheDocument()
+      })
+
+      const successScreen = screen.getByTestId('wizard.trustProfile.success')
+      expect(within(successScreen).getByText(/Trust Profile Created!/i)).toBeInTheDocument()
+      expect(within(successScreen).getByText(new RegExp(profileName, 'i'))).toBeInTheDocument()
+
+      // Should redirect after delay
+      await waitFor(
+        () => {
+          expect(mockNavigate).toHaveBeenCalledWith('/console/templates/credentials')
+        },
+        { timeout: 2000 }
+      )
+    })
+
+    it('should handle submission errors', async () => {
+      const { user } = render(<TrustProfileWizard />)
+
+      // Override API to return error
+      server.use(
+        http.post('http://localhost:8000/v1/trust-profiles', () => {
+          return HttpResponse.json(
+            {
+              error: {
+                code: 'VALIDATION_ERROR',
+                message: 'Trust profile name already exists',
+              },
+            },
+            { status: 400 }
+          )
+        })
+      )
+
+      // Navigate through wizard
+      await user.type(screen.getByLabelText(/Trust Profile Name/i), 'Duplicate Name')
+      await user.click(screen.getByTestId('wizard.trustProfile.next'))
+
+      // Skip to review
+      await waitFor(() => {
+        expect(screen.getByTestId('wizard.trustProfile.skip')).toBeInTheDocument()
+      })
+      await user.click(screen.getByTestId('wizard.trustProfile.skip'))
+
+      await waitFor(() => {
+        expect(screen.getByTestId('wizard.trustProfile.skip')).toBeInTheDocument()
+      })
+      await user.click(screen.getByTestId('wizard.trustProfile.skip'))
+
+      // Submit
+      await waitFor(() => {
+        expect(screen.getByTestId('wizard.trustProfile.submit')).toBeInTheDocument()
+      })
+
+      await user.click(screen.getByTestId('wizard.trustProfile.submit'))
+
+      // Should show error message
+      await waitFor(() => {
+        expect(screen.getByText(/already exists/i)).toBeInTheDocument()
+      })
+
+      // Should still be on review step
+      expect(screen.getByTestId('wizard.trustProfile.submit')).toBeInTheDocument()
+    })
+
+    it('should show loading state during submission', async () => {
+      const { user } = render(<TrustProfileWizard />)
+
+      // Mock slow API response
+      let resolveRequest: () => void
+      const requestPromise = new Promise<void>((resolve) => {
+        resolveRequest = resolve
+      })
+
+      server.use(
+        http.post('http://localhost:8000/v1/trust-profiles', async () => {
+          await requestPromise
+          return HttpResponse.json({ id: 1, name: 'Test' })
+        })
+      )
+
+      // Navigate to review
+      await user.type(screen.getByLabelText(/Trust Profile Name/i), 'Test Profile')
+      await user.click(screen.getByTestId('wizard.trustProfile.next'))
+
+      await waitFor(() => {
+        expect(screen.getByTestId('wizard.trustProfile.skip')).toBeInTheDocument()
+      })
+      await user.click(screen.getByTestId('wizard.trustProfile.skip'))
+
+      await waitFor(() => {
+        expect(screen.getByTestId('wizard.trustProfile.skip')).toBeInTheDocument()
+      })
+      await user.click(screen.getByTestId('wizard.trustProfile.skip'))
+
+      // Submit
+      await waitFor(() => {
+        expect(screen.getByTestId('wizard.trustProfile.submit')).toBeInTheDocument()
+      })
+
+      const submitButton = screen.getByTestId('wizard.trustProfile.submit')
+      await user.click(submitButton)
+
+      // Should show loading state (button disabled with "Creating..." text)
+      await waitFor(() => {
+        expect(submitButton).toBeDisabled()
+        expect(submitButton).toHaveTextContent(/Creating/i)
+      })
+
+      // Resolve request
+      resolveRequest!()
+
+      // Wait for completion
+      await waitFor(() => {
+        expect(screen.getByTestId('wizard.trustProfile.success')).toBeInTheDocument()
+      })
+    })
+  })
+
+  describe('cancel', () => {
+    it('should navigate away when Cancel is clicked', async () => {
+      const { user } = render(<TrustProfileWizard />)
+
+      await user.click(screen.getByTestId('wizard.trustProfile.cancel'))
+
+      expect(mockNavigate).toHaveBeenCalledWith('/console/trust/profiles')
+    })
+  })
+
+  describe('review step', () => {
+    it('should display entered data in review step', async () => {
+      const { user } = render(<TrustProfileWizard />)
+
+      const profileName = 'My Trust Profile'
+      const description = 'Test description'
+
+      // Enter data
+      await user.type(screen.getByLabelText(/Trust Profile Name/i), profileName)
+      await user.type(screen.getByLabelText(/Description/i), description)
+
+      // Navigate to review
+      await user.click(screen.getByTestId('wizard.trustProfile.next'))
+
+      await waitFor(() => {
+        expect(screen.getByTestId('wizard.trustProfile.skip')).toBeInTheDocument()
+      })
+      await user.click(screen.getByTestId('wizard.trustProfile.skip'))
+
+      await waitFor(() => {
+        expect(screen.getByTestId('wizard.trustProfile.skip')).toBeInTheDocument()
+      })
+      await user.click(screen.getByTestId('wizard.trustProfile.skip'))
+
+      // Should show entered data
+      await waitFor(() => {
+        expect(screen.getByText(profileName)).toBeInTheDocument()
+        expect(screen.getByText(description)).toBeInTheDocument()
+      })
+    })
+  })
+})
