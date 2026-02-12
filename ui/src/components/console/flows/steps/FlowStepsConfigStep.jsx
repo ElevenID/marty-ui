@@ -30,6 +30,7 @@ import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
 import DragIndicatorIcon from '@mui/icons-material/DragIndicator';
 import PresetIcon from '@mui/icons-material/AutoAwesome';
+import { useTranslation } from 'react-i18next';
 
 // Preset flow step templates
 const VERIFICATION_PRESETS = [
@@ -120,6 +121,7 @@ const FlowStepsConfigStep = ({
   deploymentTargets = [],
   onUpdate 
 }) => {
+  const { t } = useTranslation('console');
   const [presetMenuAnchor, setPresetMenuAnchor] = useState(null);
 
   const handleFieldChange = (field, value) => {
@@ -172,13 +174,31 @@ const FlowStepsConfigStep = ({
   const getPresets = () => {
     switch (flowType) {
       case 'verification':
-        return VERIFICATION_PRESETS;
+        return VERIFICATION_PRESETS.map((preset, index) => ({
+          ...preset,
+          name: t(index === 0
+            ? 'wizards.flowDefinition.flowStepsConfigStep.presets.standardVerification'
+            : 'wizards.flowDefinition.flowStepsConfigStep.presets.ageVerification'),
+        }));
       case 'issuance':
-        return ISSUANCE_PRESETS;
+        return ISSUANCE_PRESETS.map((preset, index) => ({
+          ...preset,
+          name: t(index === 0
+            ? 'wizards.flowDefinition.flowStepsConfigStep.presets.standardIssuance'
+            : 'wizards.flowDefinition.flowStepsConfigStep.presets.preAuthorizedIssuance'),
+        }));
       case 'issuance_oid4vci':
-        return OID4VCI_PRESETS;
+        return OID4VCI_PRESETS.map((preset, index) => ({
+          ...preset,
+          name: t(index === 0
+            ? 'wizards.flowDefinition.flowStepsConfigStep.presets.oid4vciQr'
+            : 'wizards.flowDefinition.flowStepsConfigStep.presets.oid4vciDeepLink'),
+        }));
       case 'combined':
-        return COMBINED_PRESETS;
+        return COMBINED_PRESETS.map((preset) => ({
+          ...preset,
+          name: t('wizards.flowDefinition.flowStepsConfigStep.presets.verifyThenIssue'),
+        }));
       default:
         return [];
     }
@@ -189,72 +209,72 @@ const FlowStepsConfigStep = ({
   return (
     <Box>
       <Typography variant="h6" gutterBottom>
-        Configure Flow Steps
+        {t('wizards.flowDefinition.flowStepsConfigStep.title')}
       </Typography>
       
       <Typography color="text.secondary" paragraph>
-        Define basic information and the sequence of steps for this flow
+        {t('wizards.flowDefinition.flowStepsConfigStep.description')}
       </Typography>
 
       {/* Basic Information */}
       <Card sx={{ mb: 3 }}>
         <CardContent>
           <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 600 }}>
-            Basic Information
+            {t('wizards.flowDefinition.flowStepsConfigStep.sections.basicInfo')}
           </Typography>
 
           <TextField
             fullWidth
-            label="Flow Name"
+            label={t('wizards.flowDefinition.flowStepsConfigStep.fields.flowName')}
             value={name}
             onChange={(e) => handleFieldChange('name', e.target.value)}
             required
             sx={{ mb: 2 }}
-            helperText="A descriptive name for this flow"
+            helperText={t('wizards.flowDefinition.flowStepsConfigStep.helpers.flowName')}
           />
 
           <TextField
             fullWidth
-            label="Description"
+            label={t('wizards.flowDefinition.flowStepsConfigStep.fields.description')}
             value={description}
             onChange={(e) => handleFieldChange('description', e.target.value)}
             multiline
             rows={2}
             sx={{ mb: 2 }}
-            helperText="Optional details about what this flow accomplishes"
+            helperText={t('wizards.flowDefinition.flowStepsConfigStep.helpers.description')}
           />
 
           <FormControl fullWidth sx={{ mb: 2 }}>
-            <InputLabel>Purpose</InputLabel>
+            <InputLabel>{t('wizards.flowDefinition.flowStepsConfigStep.fields.purpose')}</InputLabel>
             <Select
               value={purpose}
               onChange={(e) => handleFieldChange('purpose', e.target.value)}
-              label="Purpose"
+              label={t('wizards.flowDefinition.flowStepsConfigStep.fields.purpose')}
             >
-              <MenuItem value="credential_issuance">Credential Issuance</MenuItem>
-              <MenuItem value="identity_verification">Identity Verification</MenuItem>
-              <MenuItem value="access_control">Access Control</MenuItem>
-              <MenuItem value="combined">Combined (Verify & Issue)</MenuItem>
+              <MenuItem value="credential_issuance">{t('wizards.flowDefinition.flowStepsConfigStep.purposeOptions.credential_issuance')}</MenuItem>
+              <MenuItem value="identity_verification">{t('wizards.flowDefinition.flowStepsConfigStep.purposeOptions.identity_verification')}</MenuItem>
+              <MenuItem value="access_control">{t('wizards.flowDefinition.flowStepsConfigStep.purposeOptions.access_control')}</MenuItem>
+              <MenuItem value="combined">{t('wizards.flowDefinition.flowStepsConfigStep.purposeOptions.combined')}</MenuItem>
             </Select>
           </FormControl>
 
           <TextField
             fullWidth
-            label="Audience"
+            label={t('wizards.flowDefinition.flowStepsConfigStep.fields.audience')}
             value={audience}
             onChange={(e) => handleFieldChange('audience', e.target.value)}
             sx={{ mb: 2 }}
-            helperText="Who will use this flow? (e.g., Applicants, Partners, Internal Staff)"
-            placeholder="e.g., Applicants, Partners, Internal"
+            helperText={t('wizards.flowDefinition.flowStepsConfigStep.helpers.audience')}
+            placeholder={t('wizards.flowDefinition.flowStepsConfigStep.placeholders.audience')}
           />
 
           <TextField
             fullWidth
-            label="Deployment Targets"
+            label={t('wizards.flowDefinition.flowStepsConfigStep.fields.deploymentTargets')}
             value={deploymentTargets.join(', ')}
             onChange={(e) => handleFieldChange('deploymentTargets', e.target.value.split(',').map(t => t.trim()).filter(Boolean))}
-            helperText="Comma-separated deployment environments (e.g., production, staging)"
-            placeholder="e.g., production, staging, development"
+            helperText={t('wizards.flowDefinition.flowStepsConfigStep.helpers.deploymentTargets')}
+            placeholder={t('wizards.flowDefinition.flowStepsConfigStep.placeholders.deploymentTargets')}
           />
         </CardContent>
       </Card>
@@ -264,7 +284,7 @@ const FlowStepsConfigStep = ({
         <CardContent>
           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
             <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
-              Flow Steps
+              {t('wizards.flowDefinition.flowStepsConfigStep.sections.flowSteps')}
             </Typography>
             <Box sx={{ display: 'flex', gap: 1 }}>
               {presets.length > 0 && (
@@ -274,7 +294,7 @@ const FlowStepsConfigStep = ({
                   variant="outlined"
                   size="small"
                 >
-                  Use Preset
+                  {t('wizards.flowDefinition.flowStepsConfigStep.actions.usePreset')}
                 </Button>
               )}
               <Button
@@ -283,7 +303,7 @@ const FlowStepsConfigStep = ({
                 variant="contained"
                 size="small"
               >
-                Add Step
+                {t('wizards.flowDefinition.flowStepsConfigStep.actions.addStep')}
               </Button>
             </Box>
           </Box>
@@ -303,7 +323,7 @@ const FlowStepsConfigStep = ({
 
           {flowSteps.length === 0 && (
             <Alert severity="info">
-              Add flow steps or use a preset template to get started
+              {t('wizards.flowDefinition.flowStepsConfigStep.emptyState')}
             </Alert>
           )}
 
@@ -329,7 +349,7 @@ const FlowStepsConfigStep = ({
                         value={step.name}
                         onChange={(e) => handleStepChange(index, 'name', e.target.value)}
                         variant="standard"
-                        placeholder="Step name"
+                        placeholder={t('wizards.flowDefinition.flowStepsConfigStep.fields.stepNamePlaceholder')}
                         size="small"
                       />
                     }

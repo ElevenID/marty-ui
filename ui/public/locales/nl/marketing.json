@@ -1,0 +1,200 @@
+{
+  "valueProposition": {
+    "headline": "Identiteitsverificatie is niet genoeg.",
+    "subheadline": "Bouw verifieerbare identiteitsinfrastructuur.",
+    "extendedSubheadline": "Geef uit, verifieer en beheer referenties—gebouwd voor EUDI Wallets, Open Badges en enterprise vertrouwen.",
+    "primaryCTA": "Gratis starten",
+    "secondaryCTA": "Waarom verifieerbare identiteit"
+  },
+  "idvComparison": {
+    "title": "Van IDV naar verifieerbare identiteit",
+    "takeaway": "ElevenID vervangt herhaalde verificatie door herbruikbaar vertrouwen.",
+    "traditional": {
+      "title": "Traditionele IDV",
+      "oneTimeChecks": "Eenmalige documentcontroles",
+      "vendorControlled": "Door leverancier gecontroleerde identiteitsgegevens",
+      "biometric": "Biometrische beslissingsuitvoer",
+      "closedAPIs": "Gesloten, propriëtaire API's",
+      "manualTrust": "Handmatige vertrouwensconfiguratie",
+      "reVerification": "Hernieuwde verificatie overal"
+    },
+    "elevenid": {
+      "title": "ElevenID",
+      "reusable": "Herbruikbare verifieerbare referenties",
+      "holderControlled": "Door houder gecontroleerde digitale portemonnees",
+      "cryptographic": "Cryptografische bewijzen",
+      "openStandards": "Open standaarden (W3C VC, OID4VC, ISO)",
+      "governedTrust": "Bestuurde vertrouwensregisters",
+      "reuseAcross": "Identiteitshergebruik over ecosystemen heen"
+    }
+  },
+  "eudiOpenBadges": {
+    "title": "Gebouwd voor EUDI Wallets en verifieerbare referenties",
+    "verifyCredentials": "Verifieer verifieerbare referenties—niet alleen documenten.",
+    "trustIssuers": "Vertrouw uitgevers—niet databases.",
+    "walletFirst": "Wallet-first door ontwerp—EUDI-klaar.",
+    "quote": "IDV-platforms stoppen bij een eenmalige beslissing. ElevenID produceert cryptografisch verifieerbare resultaten die kunnen worden hergebruikt over portemonnees, ecosystemen en vertrouwensregisters heen."
+  },
+  "organizationOutcomes": {
+    "title": "Waarom dit belangrijk is voor organisaties",
+    "reduceKYC": "Verminder herhaalde KYC-kosten met herbruikbare referenties",
+    "eudiReady": "Bereid u voor op EUDI Wallet-acceptatie",
+    "avoidLockIn": "Vermijd vendor lock-in met open standaarden",
+    "supportBadges": "Ondersteun Open Badges, personeelsreferenties en overheids-ID's in één systeem"
+  },
+  "audienceRouting": {
+    "title": "Kies uw pad",
+    "subtitle": "Kies uw toegangspunt—enterprise, overheid of ontwikkelaars.",
+    "enterprise": {
+      "title": "Enterprise",
+      "description": "Verminder herhaalde KYC, schakel partnerinteroperabiliteit in en beheer vertrouwen op schaal.",
+      "cta": "Verken Enterprise"
+    },
+    "government": {
+      "title": "Overheid",
+      "description": "EUDI-klare infrastructuur voor ISO-referenties, vertrouwenslijsten en gereguleerde acceptatie.",
+      "cta": "Verken Overheid"
+    },
+    "developers": {
+      "title": "Ontwikkelaars",
+      "description": "Docs, SDK's en quickstarts voor VC-uitgifte en -verificatie.",
+      "cta": "Lees documentatie"
+    }
+  },
+  "proofStrip": {
+    "title": "Gebouwd op bewezen fundamenten",
+    "interoperability": "Interoperabiliteit",
+    "offlineVerification": "Offline verificatie",
+    "deployment": "Implementatie",
+    "keySecurity": "Sleutelbeveiliging",
+    "compliance": "Naleving"
+  },
+  "infrastructure": {
+    "title": "Waarom infrastructuur prijzen per controle verslaat",
+    "commodity": "Verificatie wordt een commodity",
+    "orchestration": "Vertrouwensorkestratie neemt toe in waarde",
+    "reusable": "Herbruikbare referenties verlagen langetermijnkosten",
+    "preventLockIn": "Standaarden voorkomen vendor lock-in"
+  },
+  "landingPage": {
+    "loading": "Laden...",
+    "checkingAccount": "Controleren van uw account...",
+    "features": {
+      "issuance": {
+        "title": "Uitgifte",
+        "description": "Geef op standaarden gebaseerde referenties uit met cryptografische handtekeningen en beleidshandhaving."
+      },
+      "verification": {
+        "title": "Verificatie",
+        "description": "Verifieer referenties tegen vertrouwensankers met intrekkingscontrole en selectieve openbaarmaking."
+      },
+      "governance": {
+        "title": "Bestuur",
+        "description": "Beheer vertrouwen, beleid en implementatie centraal—zonder verificatiecode te wijzigen."
+      }
+    },
+    "identityProblem": {
+      "title": "Het identiteitsprobleem",
+      "description": "De meeste organisaties hebben te maken met gefragmenteerde systemen, onduidelijk vertrouwen en toenemende nalevingsdruk.",
+      "items": {
+        "fragmented": "Gefragmenteerde identiteitssystemen die niet samenwerken",
+        "unclearTrust": "Onduidelijk uitgeversvertrouwen over partners en jurisdicties heen",
+        "privacyPressure": "Privacynalevingsdruk (gegevensminimalisatie + selectieve openbaarmaking)",
+        "pkiComplexity": "PKI + intrekkingscomplexiteit op schaal"
+      }
+    },
+    "solvesIt": {
+      "title": "Hoe ElevenID dit oplost",
+      "intro": "Bestuur identiteit met vier primitieven: vertrouwensprofielen, referentiesjablonen, presentatiebeleid en flows.",
+      "subheading": "Beleid is configuratie, geen code. Eindpunten voeren centraal bestuurde vertrouwens- en openbaarmakingsregels uit zonder herimplementatie."
+    },
+    "howItWorks": {
+      "title": "Hoe het werkt",
+      "description": "Digitale identiteit is een bestuurde uitwisseling tussen vier actoren.",
+      "cta": "Bekijk de volledige flow"
+    },
+    "standards": {
+      "title": "Op standaarden gebaseerde architectuur",
+      "subtitle": "Standaarden zijn geen integraties. Ze zijn het product.",
+      "description": "Deze lagen stellen ElevenID in staat om samen te werken over overheden, portemonnees en ondernemingen heen zonder aangepaste integraties.",
+      "cta": "Verken standaarden"
+    },
+    "startFirst": {
+      "title": "Wat doet u eerst?",
+      "description": "Kies een startpunt. U kunt uitbreiden naar een volledig ecosysteem wanneer u klaar bent.",
+      "cards": {
+        "verify": {
+          "title": "Referenties verifiëren",
+          "description": "Verifieer EUDI-portemonnees, Open Badges en ISO-referenties."
+        },
+        "issue": {
+          "title": "Referenties uitgeven",
+          "description": "Geef personeels-, onderwijs- of overheidsreferenties uit."
+        },
+        "offline": {
+          "title": "Offline / faciliteit",
+          "description": "Verifieer bij controlepunten met beperkte connectiviteit."
+        },
+        "wallet": {
+          "title": "Wallet-ervaring",
+          "description": "Geef gebruikers een portemonnee om referenties te bewaren en te presenteren."
+        }
+      },
+      "notSure": "Niet zeker?",
+      "startWithVerificationApi": "Begin met verificatie-API"
+    },
+    "products": {
+      "title": "Producten & mogelijkheden",
+      "description": "Een compleet platform—van uitgifte tot verificatie en bestuur.",
+      "viewDetails": "Details bekijken",
+      "viewAll": "Alle producten bekijken"
+    },
+    "trustSignals": {
+      "title": "Enterprise-grade infrastructuur",
+      "security": {
+        "title": "Beveiliging",
+        "item1": "Enterprise-grade cryptografische validatie",
+        "item2": "PKI en intrekkingsbeheer",
+        "item3": "HSM en key vault-integratie"
+      },
+      "infrastructure": {
+        "title": "Infrastructuur",
+        "item1": "Offline-first mogelijkheid (72h cache)",
+        "item2": "Hoge beschikbaarheid SaaS-implementatie",
+        "item3": "Zelf-gehoste opties voor soevereiniteit",
+        "item4": "Horizontale schaalbaarheid en load balancing",
+        "item5": "Gebouwd met AI-ondersteunde ontwikkelingsworkflows om hoge kwaliteit tegen lagere kosten te handhaven."
+      },
+      "compliance": {
+        "title": "Naleving",
+        "item1": "Implementeert ICAO 9303",
+        "item2": "Implementeert ISO 18013-5 (mDoc)",
+        "item3": "AVG en privacy by design",
+        "item4": "Selectieve openbaarmaking en gegevensminimalisatie"
+      }
+    },
+    "proofStrip": {
+      "claims": {
+        "w3c": "W3C VC / SD-JWT / OID4VP",
+        "offlineCache": "72-uurs offline cache",
+        "deployment": "SaaS + Zelf-gehost",
+        "keySecurity": "HSM / Vault-integratie",
+        "auditLogs": "Onveranderlijke auditlogboeken"
+      }
+    },
+    "portals": {
+      "emphasis": "Ingebouwde portalen",
+      "message": "voor aanvragers, leveranciers en beheerders—beheer API-sleutels, vertrouwensbeleid en operaties op één plek.",
+      "learnMore": "Meer informatie"
+    },
+    "footer": {
+      "title": "Klaar om te beginnen?",
+      "description": "Begin gratis, of vergelijk plannen voor uw organisatie.",
+      "viewPricing": "Bekijk prijzen"
+    },
+    "orientation": {
+      "title": "Nieuw bij verifieerbare identiteit?",
+      "cta": "Hoe het werkt"
+    }
+  }
+}

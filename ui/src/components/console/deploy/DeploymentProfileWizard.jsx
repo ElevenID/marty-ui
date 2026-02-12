@@ -7,6 +7,7 @@
 
 import { useNavigate } from 'react-router-dom';
 import { useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   Box,
   Container,
@@ -29,10 +30,16 @@ import RuntimeSettingsStep from './steps/RuntimeSettingsStep';
 import IntegrationStep from './steps/IntegrationStep';
 import ReviewStep from './steps/ReviewStep';
 
-const STEPS = ['Environment', 'Runtime Settings', 'Integration', 'Review & Activate'];
-
 const DeploymentProfileWizard = () => {
   const navigate = useNavigate();
+  const { t } = useTranslation('console');
+
+  const STEPS = [
+    t('wizards.deploymentProfile.steps.environment'),
+    t('wizards.deploymentProfile.steps.runtimeSettings'),
+    t('wizards.deploymentProfile.steps.integration'),
+    t('wizards.deploymentProfile.steps.review'),
+  ];
 
   const validateStep = useCallback((stepIndex, data) => {
     switch (stepIndex) {
@@ -144,7 +151,7 @@ const DeploymentProfileWizard = () => {
           />
         );
       default:
-        return <Typography>Unknown step</Typography>;
+        return <Typography>{t('wizards.deploymentProfile.unknownStep')}</Typography>;
     }
   };
 
@@ -155,18 +162,20 @@ const DeploymentProfileWizard = () => {
         <Paper elevation={3} sx={{ p: 4, textAlign: 'center' }}>
           <CheckCircleIcon color="success" sx={{ fontSize: 64, mb: 2 }} />
           <Typography variant="h5" gutterBottom>
-            Deployment Profile Created Successfully!
+            {t('wizards.deploymentProfile.success.title')}
           </Typography>
           <Typography color="text.secondary" paragraph>
-            &quot;{wizard.data.name}&quot; is now {wizard.data.activate_immediately ? 'active and ready to use' : 'saved as draft'}.
+            {wizard.data.activate_immediately
+              ? t('wizards.deploymentProfile.success.messageActive', { name: wizard.data.name })
+              : t('wizards.deploymentProfile.success.messageDraft', { name: wizard.data.name })}
           </Typography>
           {wizard.data.generate_api_key && (
             <Typography color="text.secondary" variant="body2">
-              API key has been generated. Check your deployment profile details.
+              {t('wizards.deploymentProfile.success.apiKeyGenerated')}
             </Typography>
           )}
           <Typography color="text.secondary" variant="body2" sx={{ mt: 1 }}>
-            Redirecting to Flow Definitions...
+            {t('wizards.deploymentProfile.success.redirecting')}
           </Typography>
         </Paper>
       </Container>
@@ -179,10 +188,10 @@ const DeploymentProfileWizard = () => {
         {/* Header */}
         <Box sx={{ mb: 4 }}>
           <Typography variant="h4" gutterBottom>
-            Build Deployment Profile
+            {t('wizards.deploymentProfile.title')}
           </Typography>
           <Typography color="text.secondary">
-            Configure how your identity system integrates with runtime environments
+            {t('wizards.deploymentProfile.description')}
           </Typography>
         </Box>
 
@@ -217,7 +226,9 @@ const DeploymentProfileWizard = () => {
             disabled={wizard.loading}
             data-testid={wizard.isFirstStep ? 'wizard.deployment.cancel' : 'wizard.deployment.back'}
           >
-            {wizard.isFirstStep ? 'Cancel' : 'Back'}
+            {wizard.isFirstStep
+              ? t('wizards.deploymentProfile.buttons.cancel')
+              : t('wizards.deploymentProfile.buttons.back')}
           </Button>
 
           <Box sx={{ display: 'flex', gap: 1 }}>
@@ -228,7 +239,7 @@ const DeploymentProfileWizard = () => {
                 disabled={wizard.loading}
                 data-testid="wizard.deployment.skip"
               >
-                Skip
+                {t('wizards.deploymentProfile.buttons.skip')}
               </Button>
             )}
 
@@ -240,7 +251,9 @@ const DeploymentProfileWizard = () => {
                 startIcon={wizard.loading ? <CircularProgress size={20} /> : <CheckCircleIcon />}
                 data-testid="wizard.deployment.submit"
               >
-                {wizard.loading ? 'Creating...' : 'Create Profile'}
+                {wizard.loading
+                  ? t('wizards.deploymentProfile.buttons.submitting')
+                  : t('wizards.deploymentProfile.buttons.submit')}
               </Button>
             ) : (
               <Button
@@ -250,7 +263,7 @@ const DeploymentProfileWizard = () => {
                 endIcon={<ArrowForwardIcon />}
                 data-testid="wizard.deployment.next"
               >
-                Next
+                {t('wizards.deploymentProfile.buttons.next')}
               </Button>
             )}
           </Box>

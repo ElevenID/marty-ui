@@ -17,6 +17,7 @@ import {
   ContentCopy as CopyIcon,
   Support as SupportIcon,
 } from '@mui/icons-material';
+import { useTranslation } from 'react-i18next';
 import { useNotifications } from '../../hooks/useNotifications';
 
 /**
@@ -40,14 +41,15 @@ export default function ErrorState({
   variant = 'full',
 }) {
   const [expanded, setExpanded] = useState(false);
+  const { t } = useTranslation('errors');
   const { showNotification } = useNotifications();
 
   // Parse error details
   const errorDetails = React.useMemo(() => {
     if (!error) {
       return {
-        title: title || 'Something went wrong',
-        userMessage: message || 'An unexpected error occurred',
+        title: title || t('errorState.defaultTitle'),
+        userMessage: message || t('errorState.unexpectedError'),
         technicalMessage: null,
         code: null,
         requestId: null,
@@ -59,8 +61,8 @@ export default function ErrorState({
     // Handle structured API error
     if (error.error) {
       return {
-        title: title || 'Operation Failed',
-        userMessage: error.error.user_message || message || 'An error occurred',
+        title: title || t('errorState.operationFailed'),
+        userMessage: error.error.user_message || message || t('errorState.genericError'),
         technicalMessage: error.error.message,
         code: error.error.code,
         requestId: error.request_id,
@@ -71,15 +73,15 @@ export default function ErrorState({
 
     // Handle standard Error object
     return {
-      title: title || 'Error',
-      userMessage: message || error.message || 'An unexpected error occurred',
+      title: title || t('errorState.error'),
+      userMessage: message || error.message || t('errorState.unexpectedError'),
       technicalMessage: error.message,
       code: error.code || error.name,
       requestId: error.requestId,
       timestamp: error.timestamp || new Date().toISOString(),
       severity: 'high',
     };
-  }, [error, title, message]);
+  }, [error, title, message, t]);
 
   const handleCopyDetails = () => {
     const details = JSON.stringify({
@@ -92,17 +94,17 @@ export default function ErrorState({
     }, null, 2);
 
     navigator.clipboard.writeText(details);
-    showNotification?.('Error details copied to clipboard', 'info');
+    showNotification?.(t('errorState.detailsCopied'), 'info');
   };
 
   const handleContactSupport = () => {
-    const subject = encodeURIComponent(`Error Report: ${errorDetails.code || 'Unknown'}`);
+    const subject = encodeURIComponent(t('errorState.errorReport', { code: errorDetails.code || 'Unknown' }));
     const body = encodeURIComponent(
-      `Request ID: ${errorDetails.requestId || 'N/A'}\n` +
-      `Timestamp: ${errorDetails.timestamp}\n` +
-      `Error Code: ${errorDetails.code || 'N/A'}\n` +
-      `Message: ${errorDetails.userMessage}\n\n` +
-      `Technical Details:\n${errorDetails.technicalMessage || 'N/A'}`
+      `${t('errorState.requestId')} ${errorDetails.requestId || t('errorState.notAvailable')}\n` +
+      `${t('errorState.timestamp')} ${errorDetails.timestamp}\n` +
+      `${t('errorState.errorCode')} ${errorDetails.code || t('errorState.notAvailable')}\n` +
+      `${t('errorState.message')} ${errorDetails.userMessage}\n\n` +
+      `${t('errorState.technicalDetails')}\n${errorDetails.technicalMessage || t('errorState.notAvailable')}`
     );
     window.location.href = `mailto:support@example.com?subject=${subject}&body=${body}`;
   };
@@ -115,7 +117,7 @@ export default function ErrorState({
         action={
           onRetry && (
             <Button color="inherit" size="small" onClick={onRetry}>
-              Retry
+              {t('errorState.retry')}
             </Button>
           )
         }
@@ -161,16 +163,16 @@ export default function ErrorState({
           <Collapse in={expanded} timeout="auto">
             <Box sx={{ mt: 2, p: 2, bgcolor: 'action.hover', borderRadius: 1 }}>
               <Typography variant="caption" display="block" gutterBottom>
-                <strong>Error Code:</strong> {errorDetails.code || 'N/A'}
+                <strong>{t('errorState.errorCode')}</strong> {errorDetails.code || t('errorState.notAvailable')}
               </Typography>
               {errorDetails.requestId && (
                 <Typography variant="caption" display="block" gutterBottom>
-                  <strong>Request ID:</strong> {errorDetails.requestId}
+                  <strong>{t('errorState.requestId')}</strong> {errorDetails.requestId}
                 </Typography>
               )}
               {errorDetails.technicalMessage && (
                 <Typography variant="caption" display="block" gutterBottom>
-                  <strong>Technical Details:</strong> {errorDetails.technicalMessage}
+                  <strong>{t('errorState.technicalDetails')}</strong> {errorDetails.technicalMessage}
                 </Typography>
               )}
             </Box>
@@ -248,7 +250,7 @@ export default function ErrorState({
               startIcon={<RefreshIcon />}
               onClick={onRetry}
             >
-              Retry
+              {t('errorState.retry')}
             </Button>
           )}
           {showSupport && (
@@ -257,7 +259,7 @@ export default function ErrorState({
               startIcon={<SupportIcon />}
               onClick={handleContactSupport}
             >
-              Contact Support
+              {t('errorState.contactSupport')}
             </Button>
           )}
         </Stack>
@@ -277,7 +279,7 @@ export default function ErrorState({
               }
               onClick={() => setExpanded(!expanded)}
             >
-              Technical Details
+              {t('errorState.showTechnicalDetails')}
             </Button>
 
             <Collapse in={expanded} timeout="auto">
@@ -292,22 +294,22 @@ export default function ErrorState({
               >
                 {errorDetails.code && (
                   <Typography variant="body2" gutterBottom>
-                    <strong>Error Code:</strong> {errorDetails.code}
+                    <strong>{t('errorState.errorCode')}</strong> {errorDetails.code}
                   </Typography>
                 )}
                 {errorDetails.requestId && (
                   <Typography variant="body2" gutterBottom>
-                    <strong>Request ID:</strong> {errorDetails.requestId}
+                    <strong>{t('errorState.requestId')}</strong> {errorDetails.requestId}
                   </Typography>
                 )}
                 {errorDetails.timestamp && (
                   <Typography variant="body2" gutterBottom>
-                    <strong>Timestamp:</strong> {new Date(errorDetails.timestamp).toLocaleString()}
+                    <strong>{t('errorState.timestamp')}</strong> {new Date(errorDetails.timestamp).toLocaleString()}
                   </Typography>
                 )}
                 {errorDetails.technicalMessage && (
                   <Typography variant="body2" gutterBottom>
-                    <strong>Technical Message:</strong> {errorDetails.technicalMessage}
+                    <strong>{t('errorState.technicalMessage')}</strong> {errorDetails.technicalMessage}
                   </Typography>
                 )}
 
@@ -317,7 +319,7 @@ export default function ErrorState({
                   onClick={handleCopyDetails}
                   sx={{ mt: 2 }}
                 >
-                  Copy Details
+                  {t('errorState.copyDetails')}
                 </Button>
               </Paper>
             </Collapse>

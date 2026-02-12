@@ -7,6 +7,7 @@
 
 import { useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import {
   Button,
   ButtonGroup,
@@ -41,6 +42,7 @@ function BuildButton({
   disabled = false,
   size = 'medium',
 }) {
+  const { t } = useTranslation('common');
   const navigate = useNavigate();
   const [anchorEl, setAnchorEl] = useState(null);
   const open = Boolean(anchorEl);
@@ -82,7 +84,7 @@ function BuildButton({
         disabled={disabled}
         size={size}
       >
-        Build {resourceName}
+        {t('buildButton.build', { resourceName })}
       </Button>
     );
   }
@@ -95,13 +97,13 @@ function BuildButton({
         color="primary"
         disabled={disabled}
         size={size}
-        aria-label={`Build ${resourceName} options`}
+        aria-label={t('buildButton.build', { resourceName })}
       >
         <Button
           startIcon={<AutoFixHighIcon />}
           onClick={handleBuild}
         >
-          Build {resourceName}
+          {t('buildButton.build', { resourceName })}
         </Button>
         <Button
           size="small"
@@ -132,8 +134,8 @@ function BuildButton({
             <AutoFixHighIcon fontSize="small" />
           </ListItemIcon>
           <ListItemText 
-            primary={`Build ${resourceName}`}
-            secondary="Guided wizard"
+            primary={t('buildButton.build', { resourceName })}
+            secondary={t('buildButton.guidedWizard')}
           />
         </MenuItem>
         <Divider />
@@ -142,8 +144,8 @@ function BuildButton({
             <CodeIcon fontSize="small" />
           </ListItemIcon>
           <ListItemText 
-            primary="New (Advanced)"
-            secondary="Raw form / JSON editor"
+            primary={t('buildButton.newAdvanced')}
+            secondary={t('buildButton.rawFormEditor')}
           />
         </MenuItem>
       </Menu>

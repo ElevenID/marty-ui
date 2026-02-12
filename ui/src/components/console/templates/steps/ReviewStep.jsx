@@ -25,17 +25,19 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import DescriptionIcon from '@mui/icons-material/Description';
 import SecurityIcon from '@mui/icons-material/Security';
 import VpnKeyIcon from '@mui/icons-material/VpnKey';
+import { useTranslation } from 'react-i18next';
 
 const ReviewStep = ({ data, onChange, onEdit }) => {
+  const { t } = useTranslation('console');
   const secondsToDays = (seconds) => Math.floor(seconds / 86400);
 
   return (
     <Box>
       <Typography variant="h6" gutterBottom>
-        Review & Activate
+        {t('wizards.credentialTemplate.reviewStep.title')}
       </Typography>
       <Typography color="text.secondary" paragraph>
-        Review all configuration details before creating the credential template.
+        {t('wizards.credentialTemplate.reviewStep.description')}
       </Typography>
 
       {/* Basic Information */}
@@ -44,26 +46,26 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
             <Typography variant="h6" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
               <CheckCircleIcon color="primary" />
-              Basic Information
+              {t('wizards.credentialTemplate.reviewStep.sections.basicInformation')}
             </Typography>
             <Button size="small" startIcon={<EditIcon />} onClick={() => onEdit(0)}>
-              Edit
+              {t('wizards.credentialTemplate.reviewStep.actions.edit')}
             </Button>
           </Box>
 
           <Grid container spacing={2}>
             <Grid item xs={12}>
               <Typography variant="subtitle2" color="text.secondary">
-                Template Name
+                {t('wizards.credentialTemplate.reviewStep.fields.templateName')}
               </Typography>
               <Typography variant="body1" gutterBottom>
-                {data.name || <em>Not set</em>}
+                {data.name || <em>{t('wizards.credentialTemplate.reviewStep.values.notSet')}</em>}
               </Typography>
             </Grid>
 
             <Grid item xs={12} md={6}>
               <Typography variant="subtitle2" color="text.secondary">
-                Credential Type
+                {t('wizards.credentialTemplate.reviewStep.fields.credentialType')}
               </Typography>
               <Typography variant="body1">
                 {data.credential_type}
@@ -72,7 +74,7 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
 
             <Grid item xs={12} md={6}>
               <Typography variant="subtitle2" color="text.secondary">
-                VCT
+                {t('wizards.credentialTemplate.reviewStep.fields.vct')}
               </Typography>
               <Typography variant="body1" sx={{ fontFamily: 'monospace', fontSize: '0.875rem' }}>
                 {data.vct}
@@ -82,7 +84,7 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
             {data.description && (
               <Grid item xs={12}>
                 <Typography variant="subtitle2" color="text.secondary">
-                  Description
+                  {t('wizards.credentialTemplate.reviewStep.fields.description')}
                 </Typography>
                 <Typography variant="body1">
                   {data.description}
@@ -99,10 +101,12 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
             <Typography variant="h6" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
               <DescriptionIcon color="primary" />
-              Claims ({data.claims?.length || 0})
+              {t('wizards.credentialTemplate.reviewStep.sections.claims', {
+                count: data.claims?.length || 0,
+              })}
             </Typography>
             <Button size="small" startIcon={<EditIcon />} onClick={() => onEdit(1)}>
-              Edit
+              {t('wizards.credentialTemplate.reviewStep.actions.edit')}
             </Button>
           </Box>
 
@@ -121,7 +125,7 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
                         </Typography>
                         <Chip label={claim.type} size="small" />
                         {claim.required && (
-                          <Chip label="Required" size="small" color="primary" />
+                          <Chip label={t('wizards.credentialTemplate.claimsStep.addClaim.requiredLabel')} size="small" color="primary" />
                         )}
                       </Box>
                     }
@@ -131,7 +135,7 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
             </List>
           ) : (
             <Typography variant="body2" color="text.secondary">
-              No claims defined
+                {t('wizards.credentialTemplate.claimsStep.noClaimsDefined')}
             </Typography>
           )}
         </CardContent>
@@ -143,29 +147,31 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
             <Typography variant="h6" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
               <SecurityIcon color="primary" />
-              Trust & Compliance
+              {t('wizards.credentialTemplate.reviewStep.sections.trustCompliance')}
             </Typography>
             <Button size="small" startIcon={<EditIcon />} onClick={() => onEdit(2)}>
-              Edit
+              {t('wizards.credentialTemplate.reviewStep.actions.edit')}
             </Button>
           </Box>
 
           <Grid container spacing={2}>
             <Grid item xs={12} md={6}>
               <Typography variant="subtitle2" color="text.secondary">
-                Trust Profile
+                {t('wizards.credentialTemplate.reviewStep.fields.trustProfile')}
               </Typography>
               <Typography variant="body1">
-                {data.trust_profile_id ? `ID: ${data.trust_profile_id}` : <em>Not selected</em>}
+                {data.trust_profile_id
+                  ? t('wizards.credentialTemplate.reviewStep.values.trustProfileId', { id: data.trust_profile_id })
+                  : <em>{t('wizards.credentialTemplate.reviewStep.values.notSelected')}</em>}
               </Typography>
             </Grid>
 
             <Grid item xs={12} md={6}>
               <Typography variant="subtitle2" color="text.secondary">
-                Compliance Profile
+                {t('wizards.credentialTemplate.reviewStep.fields.complianceProfile')}
               </Typography>
               <Typography variant="body1">
-                {data.compliance_profile_id || <em>None</em>}
+                {data.compliance_profile_id || <em>{t('wizards.credentialTemplate.reviewStep.values.none')}</em>}
               </Typography>
             </Grid>
           </Grid>
@@ -178,17 +184,17 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
             <Typography variant="h6" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
               <VpnKeyIcon color="primary" />
-              Cryptography & Validity
+              {t('wizards.credentialTemplate.reviewStep.sections.cryptoValidity')}
             </Typography>
             <Button size="small" startIcon={<EditIcon />} onClick={() => onEdit(3)}>
-              Edit
+              {t('wizards.credentialTemplate.reviewStep.actions.edit')}
             </Button>
           </Box>
 
           <Grid container spacing={2}>
             <Grid item xs={12} md={6}>
               <Typography variant="subtitle2" color="text.secondary">
-                Signing Algorithm
+                {t('wizards.credentialTemplate.reviewStep.fields.signingAlgorithm')}
               </Typography>
               <Typography variant="body1">
                 {data.signing_algorithm || 'ES256'}
@@ -197,28 +203,28 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
 
             <Grid item xs={12} md={6}>
               <Typography variant="subtitle2" color="text.secondary">
-                Default Validity
+                {t('wizards.credentialTemplate.reviewStep.fields.defaultValidity')}
               </Typography>
               <Typography variant="body1">
-                {secondsToDays(data.validity_rules?.ttl_seconds || 31536000)} days
+                {secondsToDays(data.validity_rules?.ttl_seconds || 31536000)} {t('wizards.credentialTemplate.reviewStep.values.days')}
               </Typography>
             </Grid>
 
             <Grid item xs={12} md={6}>
               <Typography variant="subtitle2" color="text.secondary">
-                Maximum Validity
+                {t('wizards.credentialTemplate.reviewStep.fields.maximumValidity')}
               </Typography>
               <Typography variant="body1">
-                {secondsToDays(data.validity_rules?.max_validity_seconds || 63072000)} days
+                {secondsToDays(data.validity_rules?.max_validity_seconds || 63072000)} {t('wizards.credentialTemplate.reviewStep.values.days')}
               </Typography>
             </Grid>
 
             <Grid item xs={12} md={6}>
               <Typography variant="subtitle2" color="text.secondary">
-                Revocation
+                {t('wizards.credentialTemplate.reviewStep.fields.revocation')}
               </Typography>
               <Typography variant="body1">
-                {data.revocation_profile_id || <em>None</em>}
+                {data.revocation_profile_id || <em>{t('wizards.credentialTemplate.reviewStep.values.none')}</em>}
               </Typography>
             </Grid>
           </Grid>
@@ -239,10 +245,10 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
           label={
             <Box>
               <Typography variant="subtitle2">
-                Generate cryptographic artifacts automatically
+                {t('wizards.credentialTemplate.reviewStep.activationOptions.generateArtifacts.label')}
               </Typography>
               <Typography variant="body2" color="text.secondary">
-                Automatically create signing keys and certificates for this template
+                {t('wizards.credentialTemplate.reviewStep.activationOptions.generateArtifacts.description')}
               </Typography>
             </Box>
           }
@@ -260,10 +266,10 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
           label={
             <Box>
               <Typography variant="subtitle2">
-                Activate immediately
+                {t('wizards.credentialTemplate.reviewStep.activationOptions.activateImmediately.label')}
               </Typography>
               <Typography variant="body2" color="text.secondary">
-                Make this template active and ready for credential issuance
+                {t('wizards.credentialTemplate.reviewStep.activationOptions.activateImmediately.description')}
               </Typography>
             </Box>
           }

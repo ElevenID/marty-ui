@@ -33,9 +33,11 @@ import PhoneIphoneIcon from '@mui/icons-material/PhoneIphone';
 import LaptopIcon from '@mui/icons-material/Laptop';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import SecurityIcon from '@mui/icons-material/Security';
+import { useTranslation } from 'react-i18next';
 import { listDevices, unregisterDevice } from '../../../services/devicesApi';
 
 const DeviceManagementPage = () => {
+  const { t } = useTranslation('applicant');
   const [devices, setDevices] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -75,7 +77,7 @@ const DeviceManagementPage = () => {
       setDeleteDialogOpen(false);
       setDeviceToDelete(null);
     } catch (err) {
-      setError(`Failed to unregister device: ${err.message}`);
+      setError(t('devices.errorUnregistering', { message: err.message }));
     } finally {
       setDeleting(false);
     }
@@ -100,7 +102,7 @@ const DeviceManagementPage = () => {
   };
 
   const formatDate = (dateString) => {
-    if (!dateString) return 'Never';
+    if (!dateString) return t('devices.formatDate.never');
     try {
       return new Date(dateString).toLocaleString();
     } catch {
@@ -120,14 +122,14 @@ const DeviceManagementPage = () => {
     <Box>
       <Box sx={{ mb: 3, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <Typography variant="h4" component="h1">
-          Device Management
+          {t('devices.title')}
         </Typography>
         <Button
           startIcon={<RefreshIcon />}
           onClick={loadDevices}
           disabled={loading}
         >
-          Refresh
+          {t('devices.refresh')}
         </Button>
       </Box>
 
@@ -138,18 +140,17 @@ const DeviceManagementPage = () => {
       )}
 
       <Alert severity="info" sx={{ mb: 3 }}>
-        Registered devices can receive push notifications and securely sign verification challenges.
-        Remove devices you no longer use to maintain security.
+        {t('devices.info')}
       </Alert>
 
       {devices.length === 0 ? (
         <Paper sx={{ p: 4, textAlign: 'center' }}>
           <SecurityIcon sx={{ fontSize: 80, color: 'text.secondary', mb: 2 }} />
           <Typography variant="h6" gutterBottom>
-            No Devices Registered
+            {t('devices.empty.title')}
           </Typography>
           <Typography variant="body2" color="text.secondary">
-            Register your mobile wallet app to receive push notifications and use secure verification features.
+            {t('devices.empty.description')}
           </Typography>
         </Paper>
       ) : (
@@ -157,13 +158,13 @@ const DeviceManagementPage = () => {
           <Table>
             <TableHead>
               <TableRow>
-                <TableCell>Device</TableCell>
-                <TableCell>Platform</TableCell>
-                <TableCell>App Version</TableCell>
-                <TableCell>Registered</TableCell>
-                <TableCell>Last Seen</TableCell>
-                <TableCell>Security</TableCell>
-                <TableCell align="right">Actions</TableCell>
+                <TableCell>{t('devices.tableHeaders.device')}</TableCell>
+                <TableCell>{t('devices.tableHeaders.platform')}</TableCell>
+                <TableCell>{t('devices.tableHeaders.appVersion')}</TableCell>
+                <TableCell>{t('devices.tableHeaders.registered')}</TableCell>
+                <TableCell>{t('devices.tableHeaders.lastSeen')}</TableCell>
+                <TableCell>{t('devices.tableHeaders.security')}</TableCell>
+                <TableCell align="right">{t('devices.tableHeaders.actions')}</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
@@ -177,7 +178,7 @@ const DeviceManagementPage = () => {
                           {device.device_id}
                         </Typography>
                         {device.is_active && (
-                          <Chip label="Active" size="small" color="success" sx={{ mt: 0.5 }} />
+                          <Chip label={t('devices.status.active')} size="small" color="success" sx={{ mt: 0.5 }} />
                         )}
                       </Box>
                     </Box>
@@ -194,21 +195,21 @@ const DeviceManagementPage = () => {
                   <TableCell>{formatDate(device.last_seen_at)}</TableCell>
                   <TableCell>
                     {device.has_public_key ? (
-                      <Tooltip title="Device has registered a public key for challenge signing">
+                      <Tooltip title={t('devices.security.hasPublicKey')}>
                         <Chip
                           icon={<SecurityIcon />}
-                          label="Secured"
+                          label={t('devices.status.secured')}
                           size="small"
                           color="primary"
                           variant="outlined"
                         />
                       </Tooltip>
                     ) : (
-                      <Chip label="Basic" size="small" variant="outlined" />
+                      <Chip label={t('devices.status.basic')} size="small" variant="outlined" />
                     )}
                   </TableCell>
                   <TableCell align="right">
-                    <Tooltip title="Unregister device">
+                    <Tooltip title={t('devices.actions.unregister')}>
                       <IconButton
                         size="small"
                         color="error"
@@ -227,18 +228,17 @@ const DeviceManagementPage = () => {
 
       {/* Delete Confirmation Dialog */}
       <Dialog open={deleteDialogOpen} onClose={handleDeleteCancel}>
-        <DialogTitle>Unregister Device?</DialogTitle>
+        <DialogTitle>{t('devices.unregisterDialog.title')}</DialogTitle>
         <DialogContent>
           <DialogContentText>
-            Are you sure you want to unregister this device? This will prevent it from receiving
-            push notifications and using secure verification features.
+            {t('devices.unregisterDialog.message')}
             {deviceToDelete && (
               <Box sx={{ mt: 2, p: 2, bgcolor: 'grey.100', borderRadius: 1 }}>
                 <Typography variant="body2" fontWeight="medium">
-                  Device ID: {deviceToDelete.device_id}
+                  {t('devices.unregisterDialog.deviceId', { deviceId: deviceToDelete.device_id })}
                 </Typography>
                 <Typography variant="body2" color="text.secondary">
-                  Platform: {deviceToDelete.platform?.toUpperCase()}
+                  {t('devices.unregisterDialog.platform', { platform: deviceToDelete.platform?.toUpperCase() })}
                 </Typography>
               </Box>
             )}
@@ -246,10 +246,10 @@ const DeviceManagementPage = () => {
         </DialogContent>
         <DialogActions>
           <Button onClick={handleDeleteCancel} disabled={deleting}>
-            Cancel
+            {t('actions.cancel', { ns: 'common' })}
           </Button>
           <Button onClick={handleDeleteConfirm} color="error" disabled={deleting}>
-            {deleting ? <CircularProgress size={20} /> : 'Unregister'}
+            {deleting ? t('devices.unregisterDialog.unregistering') : t('devices.unregisterDialog.confirm')}
           </Button>
         </DialogActions>
       </Dialog>

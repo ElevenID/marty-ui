@@ -26,24 +26,26 @@ import VisibilityIcon from '@mui/icons-material/Visibility';
 import PreviewIcon from '@mui/icons-material/Preview';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import { Link } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 
 import { ResourcePage, EmptyState, EmptyStates, StatusChip } from '../../common';
 
-const TEMPLATES_TABS = [
-  { label: 'Credential Templates', path: '/console/templates/credentials' },
-  { label: 'Application Templates', path: '/console/templates/applications' },
-];
-
-const BREADCRUMBS = [
-  { label: 'Console', path: '/console' },
-  { label: 'Templates', path: '/console/templates' },
-  { label: 'Application Templates', path: '/console/templates/applications' },
-];
-
 function ApplicationTemplatesPage() {
+  const { t } = useTranslation('console');
   const [templates, setTemplates] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+
+  const getTemplatesTabs = () => [
+    { label: t('templates.credentialTemplates'), path: '/console/templates/credentials' },
+    { label: t('templates.applicationTemplates'), path: '/console/templates/applications' },
+  ];
+
+  const getBreadcrumbs = () => [
+    { label: t('applicationTemplatesPage.breadcrumbs.console'), path: '/console' },
+    { label: t('applicationTemplatesPage.breadcrumbs.templates'), path: '/console/templates' },
+    { label: t('applicationTemplatesPage.breadcrumbs.applicationTemplates'), path: '/console/templates/applications' },
+  ];
 
   useEffect(() => {
     // TODO: Fetch application templates from API
@@ -75,7 +77,7 @@ function ApplicationTemplatesPage() {
           },
         ]);
       } catch (err) {
-        setError('Failed to load application templates');
+        setError(t('applicationTemplatesPage.failedToLoad'));
       } finally {
         setLoading(false);
       }
@@ -85,13 +87,13 @@ function ApplicationTemplatesPage() {
 
   return (
     <ResourcePage
-      title="Application Templates"
-      description="Define application forms and workflows that applicants use to request credentials."
-      resourceName="Application Template"
+      title={t('applicationTemplatesPage.title')}
+      description={t('applicationTemplatesPage.description')}
+      resourceName={t('applicationTemplatesPage.resourceName')}
       buildPath="/console/templates/applications/new"
       newPath="/console/templates/applications/new?mode=advanced"
-      tabs={TEMPLATES_TABS}
-      breadcrumbs={BREADCRUMBS}
+      tabs={getTemplatesTabs()}
+      breadcrumbs={getBreadcrumbs()}
     >
       {error && (
         <Alert severity="error" sx={{ mb: 3 }}>
@@ -106,14 +108,14 @@ function ApplicationTemplatesPage() {
           <Table>
             <TableHead>
               <TableRow>
-                <TableCell>Name</TableCell>
-                <TableCell>Credential Type</TableCell>
-                <TableCell align="right">Fields</TableCell>
-                <TableCell>Requirements</TableCell>
-                <TableCell align="right">Applications</TableCell>
-                <TableCell>Status</TableCell>
-                <TableCell>Last Updated</TableCell>
-                <TableCell align="right">Actions</TableCell>
+                <TableCell>{t('applicationTemplatesPage.tableHeaders.name')}</TableCell>
+                <TableCell>{t('applicationTemplatesPage.tableHeaders.credentialType')}</TableCell>
+                <TableCell align="right">{t('applicationTemplatesPage.tableHeaders.fields')}</TableCell>
+                <TableCell>{t('applicationTemplatesPage.tableHeaders.requirements')}</TableCell>
+                <TableCell align="right">{t('applicationTemplatesPage.tableHeaders.applications')}</TableCell>
+                <TableCell>{t('applicationTemplatesPage.tableHeaders.status')}</TableCell>
+                <TableCell>{t('applicationTemplatesPage.tableHeaders.lastUpdated')}</TableCell>
+                <TableCell align="right">{t('applicationTemplatesPage.tableHeaders.actions')}</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
@@ -136,10 +138,10 @@ function ApplicationTemplatesPage() {
                     <TableCell>
                       <Box sx={{ display: 'flex', gap: 0.5 }}>
                         {template.requiresDocuments && (
-                          <Chip label="Documents" size="small" variant="outlined" />
+                          <Chip label={t('applicationTemplatesPage.requirements.documents')} size="small" variant="outlined" />
                         )}
                         {template.requiresVerification && (
-                          <Chip label="ID Verify" size="small" variant="outlined" />
+                          <Chip label={t('applicationTemplatesPage.requirements.verification')} size="small" variant="outlined" />
                         )}
                       </Box>
                     </TableCell>
@@ -153,7 +155,7 @@ function ApplicationTemplatesPage() {
                       {new Date(template.updatedAt).toLocaleDateString()}
                     </TableCell>
                     <TableCell align="right">
-                      <Tooltip title="View Details">
+                      <Tooltip title={t('applicationTemplatesPage.actions.viewDetails')}>
                         <IconButton
                           component={Link}
                           to={`/console/templates/applications/${template.id}`}
@@ -162,12 +164,12 @@ function ApplicationTemplatesPage() {
                           <VisibilityIcon fontSize="small" />
                         </IconButton>
                       </Tooltip>
-                      <Tooltip title="Duplicate">
+                      <Tooltip title={t('applicationTemplatesPage.actions.duplicate')}>
                         <IconButton size="small">
                           <ContentCopyIcon fontSize="small" />
                         </IconButton>
                       </Tooltip>
-                      <Tooltip title="Edit">
+                      <Tooltip title={t('applicationTemplatesPage.actions.edit')}>
                         <IconButton
                           component={Link}
                           to={`/console/templates/applications/${template.id}/edit`}
@@ -176,7 +178,7 @@ function ApplicationTemplatesPage() {
                           <EditIcon fontSize="small" />
                         </IconButton>
                       </Tooltip>
-                      <Tooltip title="Preview Application Form">
+                      <Tooltip title={t('applicationTemplatesPage.actions.previewForm')}>
                         <IconButton
                           onClick={() => window.open(`/applicant/preview/applications/${template.id}`, '_blank')}
                           size="small"

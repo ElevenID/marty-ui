@@ -6,6 +6,7 @@
  */
 
 import { Box, Alert, Button, Typography, Chip } from '@mui/material';
+import { useTranslation } from 'react-i18next';
 import ExitToAppIcon from '@mui/icons-material/ExitToApp';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import PropTypes from 'prop-types';
@@ -13,6 +14,7 @@ import { usePreview } from '../../contexts/PreviewContext';
 import { useAuth } from '../../hooks/useAuth';
 
 function PreviewModeBanner({ contextLabel, sx = {} }) {
+  const { t } = useTranslation('common');
   const { exitPreview } = usePreview();
   const { organizationName } = useAuth();
 
@@ -43,10 +45,10 @@ function PreviewModeBanner({ contextLabel, sx = {} }) {
       >
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
           <Typography variant="body1" component="span" sx={{ fontWeight: 600 }}>
-            Preview Mode
+            {t('previewMode.title')}
           </Typography>
           <Typography variant="body2" component="span">
-            This is what an applicant sees. Actions are disabled and nothing will be submitted.
+            {t('previewMode.description')}
           </Typography>
           {contextLabel && (
             <Chip 
@@ -57,7 +59,7 @@ function PreviewModeBanner({ contextLabel, sx = {} }) {
           )}
           {organizationName && (
             <Chip 
-              label={`Org: ${organizationName}`} 
+              label={t('previewMode.org', { organizationName })} 
               size="small" 
               variant="outlined"
             />
@@ -78,7 +80,7 @@ function PreviewModeBanner({ contextLabel, sx = {} }) {
             whiteSpace: 'nowrap',
           }}
         >
-          Exit Preview
+          {t('previewMode.exitPreview')}
         </Button>
       </Alert>
     </Box>

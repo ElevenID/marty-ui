@@ -23,16 +23,30 @@ import {
 import { useNavigate } from 'react-router-dom';
 import AddCircleOutlineIcon from '@mui/icons-material/AddCircleOutline';
 import PolicyIcon from '@mui/icons-material/Policy';
+import { useTranslation } from 'react-i18next';
 
 import { listPresentationPolicies } from '../../../../services/presentationPolicyApi';
 
-const FLOW_TYPES = [
-  { value: 'verification', label: 'Verification', description: 'Verify credentials from holders' },
-  { value: 'issuance', label: 'Issuance', description: 'Issue new credentials' },
-  { value: 'combined', label: 'Combined', description: 'Both verification and issuance' },
+const getFlowTypes = (t) => [
+  {
+    value: 'verification',
+    label: t('wizards.deploymentProfile.runtimeSettingsStep.flowTypes.verification.label'),
+    description: t('wizards.deploymentProfile.runtimeSettingsStep.flowTypes.verification.description'),
+  },
+  {
+    value: 'issuance',
+    label: t('wizards.deploymentProfile.runtimeSettingsStep.flowTypes.issuance.label'),
+    description: t('wizards.deploymentProfile.runtimeSettingsStep.flowTypes.issuance.description'),
+  },
+  {
+    value: 'combined',
+    label: t('wizards.deploymentProfile.runtimeSettingsStep.flowTypes.combined.label'),
+    description: t('wizards.deploymentProfile.runtimeSettingsStep.flowTypes.combined.description'),
+  },
 ];
 
 const RuntimeSettingsStep = ({ data, onChange }) => {
+  const { t } = useTranslation('console');
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [policies, setPolicies] = useState([]);
@@ -58,7 +72,7 @@ const RuntimeSettingsStep = ({ data, onChange }) => {
       }
     } catch (err) {
       console.error('Failed to load policies:', err);
-      setError('Failed to load presentation policies');
+      setError(t('wizards.deploymentProfile.runtimeSettingsStep.errors.failedToLoadPolicies'));
     } finally {
       setLoading(false);
     }
@@ -91,17 +105,16 @@ const RuntimeSettingsStep = ({ data, onChange }) => {
         <PolicyIcon sx={{ fontSize: 80, color: 'warning.main', mb: 3 }} />
         
         <Typography variant="h5" gutterBottom>
-          Presentation Policy Required
+          {t('wizards.deploymentProfile.runtimeSettingsStep.blocked.title')}
         </Typography>
         
         <Typography color="text.secondary" paragraph sx={{ maxWidth: 600, mx: 'auto' }}>
-          Before creating a deployment profile, you need at least one active Presentation Policy.
-          Presentation Policies define what credentials must be presented during verification.
+          {t('wizards.deploymentProfile.runtimeSettingsStep.blocked.description')}
         </Typography>
 
         <Alert severity="warning" sx={{ maxWidth: 600, mx: 'auto', mb: 3 }}>
           <Typography variant="body2">
-            You cannot proceed until an active Presentation Policy exists.
+            {t('wizards.deploymentProfile.runtimeSettingsStep.blocked.alert')}
           </Typography>
         </Alert>
 
@@ -111,13 +124,13 @@ const RuntimeSettingsStep = ({ data, onChange }) => {
             startIcon={<AddCircleOutlineIcon />}
             onClick={handleGoToPolicies}
           >
-            Create Presentation Policy
+            {t('wizards.deploymentProfile.runtimeSettingsStep.blocked.createButton')}
           </Button>
           <Button
             variant="outlined"
             onClick={() => window.location.reload()}
           >
-            Refresh
+            {t('wizards.deploymentProfile.runtimeSettingsStep.blocked.refreshButton')}
           </Button>
         </Box>
       </Box>
@@ -127,10 +140,10 @@ const RuntimeSettingsStep = ({ data, onChange }) => {
   return (
     <Box>
       <Typography variant="h6" gutterBottom>
-        Runtime Settings
+        {t('wizards.deploymentProfile.runtimeSettingsStep.title')}
       </Typography>
       <Typography color="text.secondary" paragraph>
-        Configure which presentation policy and flows this deployment will use.
+        {t('wizards.deploymentProfile.runtimeSettingsStep.description')}
       </Typography>
 
       {error && (
@@ -141,11 +154,11 @@ const RuntimeSettingsStep = ({ data, onChange }) => {
 
       {/* Default Presentation Policy */}
       <FormControl fullWidth required sx={{ mb: 4 }}>
-        <InputLabel>Default Presentation Policy</InputLabel>
+        <InputLabel>{t('wizards.deploymentProfile.runtimeSettingsStep.fields.defaultPolicy')}</InputLabel>
         <Select
           value={data.default_policy_id || ''}
           onChange={(e) => onChange({ default_policy_id: e.target.value })}
-          label="Default Presentation Policy"
+          label={t('wizards.deploymentProfile.runtimeSettingsStep.fields.defaultPolicy')}
         >
           {policies.map((policy) => (
             <MenuItem key={policy.id} value={policy.id}>
@@ -154,20 +167,22 @@ const RuntimeSettingsStep = ({ data, onChange }) => {
           ))}
         </Select>
         <FormHelperText>
-          The presentation policy used by default in this deployment ({policies.length} active polic{policies.length !== 1 ? 'ies' : 'y'} available)
+          {t('wizards.deploymentProfile.runtimeSettingsStep.helpers.defaultPolicy', {
+            count: policies.length,
+          })}
         </FormHelperText>
       </FormControl>
 
       {/* Enabled Flows */}
       <Typography variant="subtitle2" gutterBottom>
-        Enabled Flows
+        {t('wizards.deploymentProfile.runtimeSettingsStep.fields.enabledFlows')}
       </Typography>
       <Typography variant="body2" color="text.secondary" paragraph>
-        Select which types of flows this deployment supports
+        {t('wizards.deploymentProfile.runtimeSettingsStep.helpers.enabledFlows')}
       </Typography>
       
       <FormGroup>
-        {FLOW_TYPES.map((flow) => (
+        {getFlowTypes(t).map((flow) => (
           <FormControlLabel
             key={flow.value}
             control={
@@ -190,7 +205,7 @@ const RuntimeSettingsStep = ({ data, onChange }) => {
 
       {data.enabled_flows && data.enabled_flows.length === 0 && (
         <Alert severity="info" sx={{ mt: 2 }}>
-          Select at least one flow type to enable functionality in this deployment.
+          {t('wizards.deploymentProfile.runtimeSettingsStep.emptyFlows')}
         </Alert>
       )}
     </Box>

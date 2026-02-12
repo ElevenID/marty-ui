@@ -95,6 +95,7 @@ function maskApiKey(key, showFull = false) {
 }
 
 export default function APIKeyManager() {
+  const { t } = useTranslation('vendor');
   const { organizationId } = useAuth();
   const [apiKeys, setApiKeys] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -105,6 +106,18 @@ export default function APIKeyManager() {
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' });
   const [anchorEl, setAnchorEl] = useState(null);
   const [menuKeyId, setMenuKeyId] = useState(null);
+
+  // API Scopes (dynamic to access t)
+  const API_SCOPES = [
+    { id: 'read:credentials', label: t('apiKeyManager.scopes.readCredentials.label'), description: t('apiKeyManager.scopes.readCredentials.description') },
+    { id: 'write:credentials', label: t('apiKeyManager.scopes.writeCredentials.label'), description: t('apiKeyManager.scopes.writeCredentials.description') },
+    { id: 'read:trust_registry', label: t('apiKeyManager.scopes.readTrustRegistry.label'), description: t('apiKeyManager.scopes.readTrustRegistry.description') },
+    { id: 'write:trust_registry', label: t('apiKeyManager.scopes.writeTrustRegistry.label'), description: t('apiKeyManager.scopes.writeTrustRegistry.description') },
+    { id: 'read:revocation', label: t('apiKeyManager.scopes.readRevocation.label'), description: t('apiKeyManager.scopes.readRevocation.description') },
+    { id: 'write:revocation', label: t('apiKeyManager.scopes.writeRevocation.label'), description: t('apiKeyManager.scopes.writeRevocation.description') },
+    { id: 'manage:webhooks', label: t('apiKeyManager.scopes.manageWebhooks.label'), description: t('apiKeyManager.scopes.manageWebhooks.description') },
+    { id: 'verify:presentations', label: t('apiKeyManager.scopes.verifyPresentations.label'), description: t('apiKeyManager.scopes.verifyPresentations.description') },
+  ];
 
   // Filter toggles
   const [showRevoked, setShowRevoked] = useState(false);
@@ -165,10 +178,10 @@ export default function APIKeyManager() {
       setNewKeyVisible(newKey);
       setCreateDialogOpen(false);
       resetForm();
-      setSnackbar({ open: true, message: 'API key created successfully', severity: 'success' });
+      setSnackbar({ open: true, message: t('apiKeyManager.snackbars.createSuccess'), severity: 'success' });
     } catch (error) {
       console.error('Failed to create API key:', error);
-      setSnackbar({ open: true, message: getErrorMessage(error) || 'Failed to create API key', severity: 'error' });
+      setSnackbar({ open: true, message: getErrorMessage(error) || t('apiKeyManager.snackbars.createFailed'), severity: 'error' });
     }
   };
 
@@ -181,10 +194,10 @@ export default function APIKeyManager() {
       setApiKeys(apiKeys.filter((k) => k.id !== selectedKey.id));
       setDeleteDialogOpen(false);
       setSelectedKey(null);
-      setSnackbar({ open: true, message: 'API key deleted', severity: 'success' });
+      setSnackbar({ open: true, message: t('apiKeyManager.snackbars.deleteSuccess'), severity: 'success' });
     } catch (error) {
       console.error('Failed to delete API key:', error);
-      setSnackbar({ open: true, message: getErrorMessage(error) || 'Failed to delete API key', severity: 'error' });
+      setSnackbar({ open: true, message: getErrorMessage(error) || t('apiKeyManager.snackbars.deleteFailed'), severity: 'error' });
     }
   };
 
@@ -192,10 +205,10 @@ export default function APIKeyManager() {
     try {
       const updatedKey = await revokeApiKey(organizationId, keyId);
       setApiKeys(apiKeys.map((k) => (k.id === keyId ? updatedKey : k)));
-      setSnackbar({ open: true, message: 'API key revoked', severity: 'success' });
+      setSnackbar({ open: true, message: t('apiKeyManager.snackbars.revokeSuccess'), severity: 'success' });
     } catch (error) {
       console.error('Failed to revoke API key:', error);
-      setSnackbar({ open: true, message: getErrorMessage(error) || 'Failed to revoke API key', severity: 'error' });
+      setSnackbar({ open: true, message: getErrorMessage(error) || t('apiKeyManager.snackbars.revokeFailed'), severity: 'error' });
     }
   };
 
@@ -222,10 +235,10 @@ export default function APIKeyManager() {
 
       setApiKeys([newKey, ...apiKeys.filter((k) => k.id !== keyId)]);
       setNewKeyVisible(newKey);
-      setSnackbar({ open: true, message: 'API key regenerated', severity: 'success' });
+      setSnackbar({ open: true, message: t('apiKeyManager.snackbars.regenerateSuccess'), severity: 'success' });
     } catch (error) {
       console.error('Failed to regenerate API key:', error);
-      setSnackbar({ open: true, message: getErrorMessage(error) || 'Failed to regenerate API key', severity: 'error' });
+      setSnackbar({ open: true, message: getErrorMessage(error) || t('apiKeyManager.snackbars.regenerateFailed'), severity: 'error' });
     }
   };
 
@@ -233,7 +246,7 @@ export default function APIKeyManager() {
     try {
       if (navigator?.clipboard?.writeText) {
         await navigator.clipboard.writeText(key);
-        setSnackbar({ open: true, message: 'API key copied to clipboard', severity: 'success' });
+        setSnackbar({ open: true, message: t('apiKeyManager.snackbars.copiedToClipboard'), severity: 'success' });
         return;
       }
 
@@ -249,13 +262,13 @@ export default function APIKeyManager() {
       document.body.removeChild(textArea);
 
       if (success) {
-        setSnackbar({ open: true, message: 'API key copied to clipboard', severity: 'success' });
+        setSnackbar({ open: true, message: t('apiKeyManager.snackbars.copiedToClipboard'), severity: 'success' });
       } else {
-        setSnackbar({ open: true, message: 'Copy not supported in this browser', severity: 'warning' });
+        setSnackbar({ open: true, message: t('apiKeyManager.snackbars.copyNotSupported'), severity: 'warning' });
       }
     } catch (error) {
       console.error('Failed to copy API key:', error);
-      setSnackbar({ open: true, message: 'Failed to copy API key', severity: 'error' });
+      setSnackbar({ open: true, message: t('apiKeyManager.snackbars.copyFailed'), severity: 'error' });
     }
   };
 
@@ -287,10 +300,10 @@ export default function APIKeyManager() {
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
         <Box>
           <Typography variant="h5" component="h1" gutterBottom>
-            API Keys
+            {t('apiKeyManager.title')}
           </Typography>
           <Typography variant="body2" color="textSecondary">
-            Manage API keys for programmatic access to Marty services.
+            {t('apiKeyManager.description')}
           </Typography>
         </Box>
         <Button
@@ -298,7 +311,7 @@ export default function APIKeyManager() {
           startIcon={<AddIcon />}
           onClick={() => setCreateDialogOpen(true)}
         >
-          Create API Key
+          {t('apiKeyManager.createButton')}
         </Button>
       </Box>
 
@@ -312,7 +325,7 @@ export default function APIKeyManager() {
               size="small"
             />
           }
-          label="Show revoked keys"
+          label={t('apiKeyManager.filters.showRevoked')}
         />
         <FormControlLabel
           control={
@@ -322,7 +335,7 @@ export default function APIKeyManager() {
               size="small"
             />
           }
-          label="Show expired keys"
+          label={t('apiKeyManager.filters.showExpired')}
         />
       </Stack>
 
@@ -338,18 +351,18 @@ export default function APIKeyManager() {
               startIcon={<ContentCopyIcon />}
               onClick={() => handleCopyKey(newKeyVisible.full_key)}
             >
-              Copy
+              {t('apiKeyManager.newKeyAlert.copyButton')}
             </Button>
           }
           onClose={() => setNewKeyVisible(null)}
         >
-          <Typography variant="subtitle2">New API Key Created</Typography>
+          <Typography variant="subtitle2">{t('apiKeyManager.newKeyAlert.title')}</Typography>
           <Typography variant="body2" sx={{ fontFamily: 'monospace', mt: 1 }}>
             {newKeyVisible.full_key}
           </Typography>
           <Typography variant="caption" color="warning.main" sx={{ display: 'flex', alignItems: 'center', mt: 1 }}>
             <WarningIcon fontSize="small" sx={{ mr: 0.5 }} />
-            Save this key now. You won&apos;t be able to see it again!
+            {t('apiKeyManager.newKeyAlert.warning')}
           </Typography>
         </Alert>
       )}
@@ -359,14 +372,14 @@ export default function APIKeyManager() {
         <Table>
           <TableHead>
             <TableRow>
-              <TableCell>Name</TableCell>
-              <TableCell>Key</TableCell>
-              <TableCell>Scopes</TableCell>
-              <TableCell>Created</TableCell>
-              <TableCell>Last Used</TableCell>
-              <TableCell>Expires</TableCell>
-              <TableCell>Status</TableCell>
-              <TableCell align="right">Actions</TableCell>
+              <TableCell>{t('apiKeyManager.table.name')}</TableCell>
+              <TableCell>{t('apiKeyManager.table.key')}</TableCell>
+              <TableCell>{t('apiKeyManager.table.scopes')}</TableCell>
+              <TableCell>{t('apiKeyManager.table.created')}</TableCell>
+              <TableCell>{t('apiKeyManager.table.lastUsed')}</TableCell>
+              <TableCell>{t('apiKeyManager.table.expires')}</TableCell>
+              <TableCell>{t('apiKeyManager.table.status')}</TableCell>
+              <TableCell align="right">{t('apiKeyManager.table.actions')}</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
@@ -414,22 +427,22 @@ export default function APIKeyManager() {
                 </TableCell>
                 <TableCell>
                   <Typography variant="body2" color="textSecondary">
-                    {formatDate(apiKey.created_at)}
+                    {formatDate(apiKey.created_at, t)}
                   </Typography>
                 </TableCell>
                 <TableCell>
                   <Typography variant="body2" color="textSecondary">
-                    {formatDate(apiKey.last_used_at)}
+                    {formatDate(apiKey.last_used_at, t)}
                   </Typography>
                 </TableCell>
                 <TableCell>
                   <Typography variant="body2" color={apiKey.expires_at ? 'warning.main' : 'textSecondary'}>
-                    {apiKey.expires_at ? formatDate(apiKey.expires_at) : 'Never'}
+                    {apiKey.expires_at ? formatDate(apiKey.expires_at, t) : t('apiKeyManager.table.never')}
                   </Typography>
                 </TableCell>
                 <TableCell>
                   <Chip
-                    label={apiKey.is_active ? 'Active' : 'Revoked'}
+                    label={apiKey.is_active ? t('apiKeyManager.table.statusActive') : t('apiKeyManager.table.statusRevoked')}
                     color={apiKey.is_active ? 'success' : 'default'}
                     size="small"
                   />
@@ -449,7 +462,7 @@ export default function APIKeyManager() {
             {apiKeys.length === 0 && !loading && (
               <TableRow>
                 <TableCell colSpan={8} align="center" sx={{ py: 4 }}>
-                  <Typography color="textSecondary">No API keys yet. Create one to get started.</Typography>
+                  <Typography color="textSecondary">{t('apiKeyManager.table.empty')}</Typography>
                 </TableCell>
               </TableRow>
             )}
@@ -468,7 +481,7 @@ export default function APIKeyManager() {
           <ListItemIcon>
             <RefreshIcon fontSize="small" />
           </ListItemIcon>
-          <ListItemText>Regenerate</ListItemText>
+          <ListItemText>{t('apiKeyManager.menu.regenerate')}</ListItemText>
         </MenuItem>
         <MenuItem
           onClick={() => {
@@ -480,7 +493,7 @@ export default function APIKeyManager() {
           <ListItemIcon>
             <VisibilityOffIcon fontSize="small" />
           </ListItemIcon>
-          <ListItemText>Revoke</ListItemText>
+          <ListItemText>{t('apiKeyManager.menu.revoke')}</ListItemText>
         </MenuItem>
         <MenuItem
           onClick={() => {
@@ -494,28 +507,28 @@ export default function APIKeyManager() {
           <ListItemIcon>
             <DeleteIcon fontSize="small" color="error" />
           </ListItemIcon>
-          <ListItemText>Delete</ListItemText>
+          <ListItemText>{t('apiKeyManager.menu.delete')}</ListItemText>
         </MenuItem>
       </Menu>
 
       {/* Create Dialog */}
       <Dialog open={createDialogOpen} onClose={() => setCreateDialogOpen(false)} maxWidth="sm" fullWidth>
-        <DialogTitle>Create API Key</DialogTitle>
+        <DialogTitle>{t('apiKeyManager.createDialog.title')}</DialogTitle>
         <DialogContent>
           <TextField
             autoFocus
             margin="dense"
-            label="Key Name"
+            label={t('apiKeyManager.createDialog.nameLabel')}
             fullWidth
             variant="outlined"
             value={newKeyName}
             onChange={(e) => setNewKeyName(e.target.value)}
-            placeholder="e.g., Production API Key"
+            placeholder={t('apiKeyManager.createDialog.namePlaceholder')}
             sx={{ mb: 3 }}
           />
 
           <FormControl component="fieldset" sx={{ mb: 3 }}>
-            <FormLabel component="legend">Permissions</FormLabel>
+            <FormLabel component="legend">{t('apiKeyManager.createDialog.scopesLabel')}</FormLabel>
             <FormGroup>
               {API_SCOPES.map((scope) => (
                 <FormControlLabel
@@ -541,14 +554,14 @@ export default function APIKeyManager() {
 
           <LocalizationProvider dateAdapter={AdapterDateFns}>
             <DateTimePicker
-              label="Expiration Date (Optional)"
+              label={t('apiKeyManager.createDialog.expiryLabel')}
               value={newKeyExpiry}
               onChange={(newValue) => setNewKeyExpiry(newValue)}
               slotProps={{
                 textField: {
                   fullWidth: true,
                   variant: 'outlined',
-                  helperText: 'Leave empty for no expiration',
+                  helperText: t('apiKeyManager.createDialog.expiryHelper'),
                 },
               }}
               minDateTime={new Date()}
@@ -556,26 +569,25 @@ export default function APIKeyManager() {
           </LocalizationProvider>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setCreateDialogOpen(false)}>Cancel</Button>
+          <Button onClick={() => setCreateDialogOpen(false)}>{t('apiKeyManager.createDialog.cancelButton')}</Button>
           <Button onClick={handleCreateKey} variant="contained">
-            Create Key
+            {t('apiKeyManager.createDialog.createButton')}
           </Button>
         </DialogActions>
       </Dialog>
 
       {/* Delete Confirmation Dialog */}
       <Dialog open={deleteDialogOpen} onClose={() => setDeleteDialogOpen(false)}>
-        <DialogTitle>Delete API Key?</DialogTitle>
+        <DialogTitle>{t('apiKeyManager.deleteDialog.title')}</DialogTitle>
         <DialogContent>
           <Typography>
-            Are you sure you want to delete &quot;{selectedKey?.name}&quot;? This action cannot be undone.
-            Any applications using this key will lose access.
+            {t('apiKeyManager.deleteDialog.warning', { name: selectedKey?.name })}
           </Typography>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setDeleteDialogOpen(false)}>Cancel</Button>
+          <Button onClick={() => setDeleteDialogOpen(false)}>{t('apiKeyManager.deleteDialog.cancelButton')}</Button>
           <Button onClick={handleDeleteKey} color="error" variant="contained">
-            Delete
+            {t('apiKeyManager.deleteDialog.deleteButton')}
           </Button>
         </DialogActions>
       </Dialog>

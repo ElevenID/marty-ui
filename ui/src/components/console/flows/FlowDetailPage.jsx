@@ -9,6 +9,7 @@
 
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate, Link as RouterLink } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { useNotification } from '../../../contexts/NotificationContext';
 import {
   Box,
@@ -54,10 +55,10 @@ import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import { ResourcePage, StatusChip } from '../../common';
 import flowsApi from '../../../services/flowsApi';
 
-const BREADCRUMBS = [
-  { label: 'Console', path: '/console' },
-  { label: 'Deploy', path: '/console/deploy' },
-  { label: 'Issuance Flows', path: '/console/flows/definitions' },
+const getBreadcrumbs = (t) => [
+  { label: t('flows.breadcrumbs.console'), path: '/console' },
+  { label: t('deploy.breadcrumbs.deploy'), path: '/console/deploy' },
+  { label: t('flows.flowDefinitions'), path: '/console/flows/definitions' },
   { label: 'Flow Detail', path: '' },
 ];
 
@@ -66,23 +67,24 @@ const BREADCRUMBS = [
  * Makes the end-to-end path undeniable
  */
 function ApplicantJourney() {
+  const { t } = useTranslation('console');
   const steps = [
-    'Visit Application Link',
-    'Complete Application',
-    'Submit',
-    'Await Approval',
-    'Scan QR',
-    'Credential Issued',
+    t('flows.flowDetail.applicantJourney.steps.visitLink'),
+    t('flows.flowDetail.applicantJourney.steps.completeApplication'),
+    t('flows.flowDetail.applicantJourney.steps.submit'),
+    t('flows.flowDetail.applicantJourney.steps.awaitApproval'),
+    t('flows.flowDetail.applicantJourney.steps.scanQr'),
+    t('flows.flowDetail.applicantJourney.steps.credentialIssued'),
   ];
 
   return (
     <Card elevation={0} sx={{ bgcolor: 'primary.50', border: 1, borderColor: 'primary.100' }}>
       <CardContent>
         <Typography variant="h6" gutterBottom fontWeight={600}>
-          Applicant Journey
+          {t('flows.flowDetail.applicantJourney.title')}
         </Typography>
         <Typography variant="body2" color="text.secondary" gutterBottom>
-          What the applicant experiences from start to finish
+          {t('flows.flowDetail.applicantJourney.description')}
         </Typography>
         
         <Box sx={{ mt: 3 }}>
@@ -113,35 +115,36 @@ function ApplicantJourney() {
  * Reinforces that THIS is what gets shared
  */
 function EntryPoints({ flow, publicUrl, onCopy, onDownloadQR }) {
+  const { t } = useTranslation('console');
   return (
     <Card>
       <CardContent>
         <Typography variant="h6" gutterBottom fontWeight={600}>
-          Applicant Entry Points
+          {t('flows.flowDetail.entryPoints.title')}
         </Typography>
         <Typography variant="body2" color="text.secondary" gutterBottom sx={{ mb: 3 }}>
-          Share these with applicants to start the credential issuance process
+          {t('flows.flowDetail.entryPoints.description')}
         </Typography>
 
         {/* Application URL */}
         <Typography variant="subtitle2" gutterBottom>
-          Application URL
+          {t('flows.flowDetail.entryPoints.applicationUrlLabel')}
         </Typography>
         <TextField
           fullWidth
-          value={publicUrl || 'Not published - flow must be published first'}
+          value={publicUrl || t('flows.flowDetail.entryPoints.notPublished')}
           disabled={!publicUrl}
           size="small"
           InputProps={{
             readOnly: true,
             endAdornment: publicUrl && (
               <InputAdornment position="end">
-                <Tooltip title="Copy URL">
+                <Tooltip title={t('flows.flowDetail.entryPoints.copyUrlTooltip')}>
                   <IconButton onClick={onCopy} edge="end" size="small">
                     <ContentCopyIcon fontSize="small" />
                   </IconButton>
                 </Tooltip>
-                <Tooltip title="Open in new tab">
+                <Tooltip title={t('flows.flowDetail.entryPoints.openInNewTabTooltip')}>
                   <IconButton onClick={() => window.open(publicUrl, '_blank')} edge="end" size="small">
                     <OpenInNewIcon fontSize="small" />
                   </IconButton>
@@ -154,7 +157,7 @@ function EntryPoints({ flow, publicUrl, onCopy, onDownloadQR }) {
 
         {/* QR Code */}
         <Typography variant="subtitle2" gutterBottom>
-          QR Code
+          {t('flows.flowDetail.entryPoints.qrCodeLabel')}
         </Typography>
         {publicUrl ? (
           <Box
@@ -177,12 +180,12 @@ function EntryPoints({ flow, publicUrl, onCopy, onDownloadQR }) {
               onClick={onDownloadQR}
               size="small"
             >
-              Download QR Code
+              {t('flows.flowDetail.entryPoints.downloadQrButton')}
             </Button>
           </Box>
         ) : (
           <Alert severity="info" sx={{ mt: 1 }}>
-            QR code will be generated when flow is published
+            {t('flows.flowDetail.entryPoints.qrCodeAlert')}
           </Alert>
         )}
       </CardContent>
@@ -195,28 +198,29 @@ function EntryPoints({ flow, publicUrl, onCopy, onDownloadQR }) {
  * Shows how the flow is wired without editing chaos
  */
 function ConfigurationSummary({ flow }) {
+  const { t } = useTranslation('console');
   const config = [
     {
-      label: 'Credential Template',
+      label: t('flows.flowDetail.configuration.credentialTemplateLabel'),
       value: flow?.credential_template_name || 'EU Digital Identity Credential',
       path: `/console/templates/credentials/${flow?.credential_template_id}`,
       icon: DescriptionIcon,
     },
     {
-      label: 'Application Rules',
+      label: t('flows.flowDetail.configuration.applicationRulesLabel'),
       value: flow?.application_rules || 'Employee email required (domain: example.com)',
       path: `/console/templates/applications/${flow?.application_template_id}`,
       icon: PolicyIcon,
     },
     {
-      label: 'Compliance Profile',
+      label: t('flows.flowDetail.configuration.complianceProfileLabel'),
       value: flow?.compliance_profile || 'Open Badge 2.0, EUDI-ready',
       path: `/console/policies/compliance/${flow?.compliance_profile_id}`,
       icon: VerifiedUserIcon,
     },
     {
-      label: 'Approval Mode',
-      value: flow?.approval_mode === 'auto' ? 'Automatic Approval' : 'Manual Approval Required',
+      label: t('flows.flowDetail.configuration.approvalModeLabel'),
+      value: flow?.approval_mode === 'auto' ? t('flows.flowDetail.configuration.approvalModeAuto') : t('flows.flowDetail.configuration.approvalModeManual'),
       icon: CheckCircleIcon,
     },
   ];
@@ -225,10 +229,10 @@ function ConfigurationSummary({ flow }) {
     <Card>
       <CardContent>
         <Typography variant="h6" gutterBottom fontWeight={600}>
-          Flow Configuration
+          {t('flows.flowDetail.configuration.title')}
         </Typography>
         <Typography variant="body2" color="text.secondary" gutterBottom sx={{ mb: 2 }}>
-          Read-only view of how this flow is configured
+          {t('flows.flowDetail.configuration.description')}
         </Typography>
 
         <List disablePadding>
@@ -275,21 +279,22 @@ function ConfigurationSummary({ flow }) {
  * Ties deployment to reality
  */
 function RuntimeOverview({ flow }) {
+  const { t } = useTranslation('console');
   const stats = [
-    { label: 'Applications Submitted', value: flow?.stats?.applications_submitted || 142, color: 'primary' },
-    { label: 'Pending Approval', value: flow?.stats?.pending_approval || 12, color: 'warning' },
-    { label: 'Credentials Issued', value: flow?.stats?.credentials_issued || 130, color: 'success' },
-    { label: 'Failures (24h)', value: flow?.stats?.failures_24h || 0, color: 'error' },
+    { label: t('flows.flowDetail.runtime.applicationsSubmittedLabel'), value: flow?.stats?.applications_submitted || 142, color: 'primary' },
+    { label: t('flows.flowDetail.runtime.pendingApprovalLabel'), value: flow?.stats?.pending_approval || 12, color: 'warning' },
+    { label: t('flows.flowDetail.runtime.credentialsIssuedLabel'), value: flow?.stats?.credentials_issued || 130, color: 'success' },
+    { label: t('flows.flowDetail.runtime.failures24hLabel'), value: flow?.stats?.failures_24h || 0, color: 'error' },
   ];
 
   return (
     <Card>
       <CardContent>
         <Typography variant="h6" gutterBottom fontWeight={600}>
-          Runtime Overview
+          {t('flows.flowDetail.runtime.title')}
         </Typography>
         <Typography variant="body2" color="text.secondary" gutterBottom sx={{ mb: 3 }}>
-          Real-time operational metrics for this flow
+          {t('flows.flowDetail.runtime.description')}
         </Typography>
 
         <Grid container spacing={3}>
@@ -315,7 +320,7 @@ function RuntimeOverview({ flow }) {
             size="small"
             fullWidth
           >
-            View Applications
+            {t('flows.flowDetail.runtime.viewApplicationsButton')}
           </Button>
           <Button
             component={RouterLink}
@@ -324,7 +329,7 @@ function RuntimeOverview({ flow }) {
             size="small"
             fullWidth
           >
-            View Issued Credentials
+            {t('flows.flowDetail.runtime.viewIssuedCredentialsButton')}
           </Button>
         </Box>
       </CardContent>
@@ -338,6 +343,7 @@ function RuntimeOverview({ flow }) {
 function FlowDetailPage() {
   const { flowId } = useParams();
   const navigate = useNavigate();
+  const { t } = useTranslation('console');
   const [flow, setFlow] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -375,10 +381,10 @@ function FlowDetailPage() {
           },
         });
       } catch (err) {
-        setError('Failed to load flow details');
+        setError(t('flows.flowDetail.errors.failedToLoad'));
         console.error('Failed to load flow details:', err);
-        showError('Unable to load flow details', {
-          details: 'The backend service may be unavailable. Check console for details.',
+        showError(t('flows.flowDetail.errors.failedToLoad'), {
+          details: t('flows.flowDetail.errors.serviceUnavailable'),
         });
       } finally {
         setLoading(false);
@@ -418,13 +424,13 @@ function FlowDetailPage() {
   if (error || !flow) {
     return (
       <Box sx={{ p: 3 }}>
-        <Alert severity="error">{error || 'Flow not found'}</Alert>
+        <Alert severity="error">{error || t('flows.flowDetail.errors.flowNotFound')}</Alert>
         <Button
           startIcon={<ArrowBackIcon />}
           onClick={() => navigate('/console/flows/definitions')}
           sx={{ mt: 2 }}
         >
-          Back to Issuance Flows
+          {t('flows.flowDetail.actions.backToFlowsButton')}
         </Button>
       </Box>
     );
@@ -435,7 +441,7 @@ function FlowDetailPage() {
   return (
     <ResourcePage
       title=""
-      breadcrumbs={BREADCRUMBS}
+      breadcrumbs={getBreadcrumbs(t)}
       hideTitle
     >
       {/* Hero Header */}
@@ -455,7 +461,7 @@ function FlowDetailPage() {
             </Box>
             <Stack direction="row" spacing={1} sx={{ ml: 5 }}>
               <Chip
-                label={isPublished ? 'Published' : 'Draft'}
+                label={isPublished ? t('flows.flowDetail.statusChips.published') : t('flows.flowDetail.statusChips.draft')}
                 color={isPublished ? 'success' : 'default'}
                 size="small"
                 icon={isPublished ? <CheckCircleIcon /> : <PendingIcon />}
@@ -478,14 +484,14 @@ function FlowDetailPage() {
                   onClick={handleCopyUrl}
                   color={copySuccess ? 'success' : 'primary'}
                 >
-                  {copySuccess ? 'Copied!' : 'Copy Application Link'}
+                  {copySuccess ? t('flows.flowDetail.actions.copied') : t('flows.flowDetail.actions.copyApplicationLink')}
                 </Button>
                 <Button
                   variant="outlined"
                   startIcon={<QrCode2Icon />}
                   onClick={handleDownloadQR}
                 >
-                  Download QR
+                  {t('flows.flowDetail.actions.downloadQr')}
                 </Button>
               </>
             )}
@@ -497,7 +503,7 @@ function FlowDetailPage() {
 
         {!isPublished && (
           <Alert severity="info" sx={{ mt: 2 }}>
-            This flow is in draft status. Publish the flow to make it available to applicants.
+            {t('flows.flowDetail.alerts.draftStatus')}
           </Alert>
         )}
       </Paper>
@@ -518,7 +524,7 @@ function FlowDetailPage() {
             onClick={handlePreview}
             sx={{ py: 1.5 }}
           >
-            Preview Applicant Experience
+            {t('flows.flowDetail.actions.previewButton')}
           </Button>
         </Box>
       )}
@@ -539,7 +545,7 @@ function FlowDetailPage() {
               <Card>
                 <CardContent>
                   <Typography variant="h6" gutterBottom fontWeight={600}>
-                    Operational Controls
+                    {t('flows.flowDetail.operationalControls.title')}
                   </Typography>
                   <Stack spacing={1}>
                     <Button
@@ -547,14 +553,14 @@ function FlowDetailPage() {
                       startIcon={<PauseCircleIcon />}
                       fullWidth
                     >
-                      Pause Flow
+                      {t('flows.flowDetail.operationalControls.pauseFlowButton')}
                     </Button>
                     <Button
                       variant="outlined"
                       startIcon={<RefreshIcon />}
                       fullWidth
                     >
-                      Rotate QR Code
+                      {t('flows.flowDetail.operationalControls.rotateQrButton')}
                     </Button>
                   </Stack>
                 </CardContent>
@@ -575,9 +581,9 @@ function FlowDetailPage() {
       {/* Audit Footer */}
       <Paper sx={{ p: 2, mt: 3, bgcolor: 'grey.50' }}>
         <Typography variant="caption" color="text.secondary">
-          <strong>Created:</strong> {new Date(flow.created_at).toLocaleString()} •{' '}
-          <strong>Published by:</strong> {flow.published_by} •{' '}
-          <strong>Last modified:</strong> {new Date(flow.updated_at).toLocaleString()}
+          <strong>{t('flows.flowDetail.audit.createdLabel')}:</strong> {new Date(flow.created_at).toLocaleString()} •{' '}
+          <strong>{t('flows.flowDetail.audit.publishedByLabel')}:</strong> {flow.published_by} •{' '}
+          <strong>{t('flows.flowDetail.audit.lastModifiedLabel')}:</strong> {new Date(flow.updated_at).toLocaleString()}
         </Typography>
       </Paper>
     </ResourcePage>

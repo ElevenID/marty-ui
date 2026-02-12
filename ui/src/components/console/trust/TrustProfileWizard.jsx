@@ -7,6 +7,7 @@
 
 import { useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import {
   Box,
   Container,
@@ -29,10 +30,16 @@ import TrustSourcesStep from './steps/TrustSourcesStep';
 import ValidationRulesStep from './steps/ValidationRulesStep';
 import ReviewStep from './steps/ReviewStep';
 
-const STEPS = ['Basics', 'Trust Sources', 'Validation Rules', 'Review & Activate'];
+const getSteps = (t) => [
+  t('wizards.trustProfile.steps.basics'),
+  t('wizards.trustProfile.steps.trustSources'),
+  t('wizards.trustProfile.steps.validationRules'),
+  t('wizards.trustProfile.steps.review'),
+];
 
 const TrustProfileWizard = () => {
   const navigate = useNavigate();
+  const { t } = useTranslation('console');
 
   const validateStep = useCallback((stepIndex, data) => {
     switch (stepIndex) {
@@ -61,7 +68,7 @@ const TrustProfileWizard = () => {
   }, []);
 
   const wizard = useWizard({
-    steps: STEPS,
+    steps: getSteps(t),
     initialData: {
       name: '',
       description: '',
@@ -119,7 +126,7 @@ const TrustProfileWizard = () => {
           />
         );
       default:
-        return <Typography>Unknown step</Typography>;
+        return <Typography>{t('wizards.trustProfile.unknownStep')}</Typography>;
     }
   };
 
@@ -144,16 +151,18 @@ const TrustProfileWizard = () => {
             <CheckCircleIcon color="success" sx={{ fontSize: 64 }} />
           </Box>
           <Typography variant="h4" gutterBottom>
-            🎉 Trust Profile Created!
+            {t('wizards.trustProfile.success.title')}
           </Typography>
           <Typography variant="h6" color="text.secondary" paragraph>
-            &quot;{wizard.data.name}&quot; is now {wizard.data.activate_immediately ? 'active and ready to use' : 'saved as draft'}.
+            {wizard.data.activate_immediately 
+              ? t('wizards.trustProfile.success.messageActive', { name: wizard.data.name })
+              : t('wizards.trustProfile.success.messageDraft', { name: wizard.data.name })}
           </Typography>
           <Typography color="text.secondary" variant="body2" sx={{ mb: 3 }}>
-            Next, create a credential template to define what credentials this profile will verify.
+            {t('wizards.trustProfile.success.nextStep')}
           </Typography>
           <Typography variant="caption" color="text.secondary">
-            Redirecting to Credential Templates...
+            {t('wizards.trustProfile.success.redirecting')}
           </Typography>
         </Paper>
       </Container>
@@ -166,16 +175,16 @@ const TrustProfileWizard = () => {
         {/* Header */}
         <Box sx={{ mb: 4 }}>
           <Typography variant="h4" gutterBottom>
-            Build Trust Profile
+            {t('wizards.trustProfile.title')}
           </Typography>
           <Typography color="text.secondary">
-            Define trusted issuers and validation rules for credential verification
+            {t('wizards.trustProfile.description')}
           </Typography>
         </Box>
 
         {/* Stepper */}
         <Stepper activeStep={wizard.activeStep} sx={{ mb: 4 }}>
-          {STEPS.map((label) => (
+          {getSteps(t).map((label) => (
             <Step key={label}>
               <StepLabel>{label}</StepLabel>
             </Step>
@@ -207,7 +216,7 @@ const TrustProfileWizard = () => {
             disabled={wizard.loading}
             data-testid={wizard.isFirstStep ? 'wizard.trustProfile.cancel' : 'wizard.trustProfile.back'}
           >
-            {wizard.isFirstStep ? 'Cancel' : 'Back'}
+            {wizard.isFirstStep ? t('wizards.trustProfile.buttons.cancel') : t('wizards.trustProfile.buttons.back')}
           </Button>
 
           <Box sx={{ display: 'flex', gap: 1 }}>
@@ -218,7 +227,7 @@ const TrustProfileWizard = () => {
                 disabled={wizard.loading}
                 data-testid="wizard.trustProfile.skip"
               >
-                Skip
+                {t('wizards.trustProfile.buttons.skip')}
               </Button>
             )}
 
@@ -230,7 +239,7 @@ const TrustProfileWizard = () => {
                 startIcon={wizard.loading ? <CircularProgress size={20} /> : <CheckCircleIcon />}
                 data-testid="wizard.trustProfile.submit"
               >
-                {wizard.loading ? 'Creating...' : 'Create Trust Profile'}
+                {wizard.loading ? t('wizards.trustProfile.buttons.submitting') : t('wizards.trustProfile.buttons.submit')}
               </Button>
             ) : (
               <Button
@@ -240,7 +249,7 @@ const TrustProfileWizard = () => {
                 endIcon={<ArrowForwardIcon />}
                 data-testid="wizard.trustProfile.next"
               >
-                Next
+                {t('wizards.trustProfile.buttons.next')}
               </Button>
             )}
           </Box>

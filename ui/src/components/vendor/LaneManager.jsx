@@ -10,6 +10,7 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   Box,
   Paper,
@@ -43,6 +44,7 @@ import RemoveCircleIcon from '@mui/icons-material/RemoveCircle';
 import deploymentProfilesApi from '../../services/deploymentProfilesApi';
 
 const LaneManager = ({ deploymentProfile, onBack }) => {
+  const { t } = useTranslation('vendor');
   const [lanes, setLanes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -74,7 +76,7 @@ const LaneManager = ({ deploymentProfile, onBack }) => {
       setError(null);
     } catch (err) {
       console.error('Failed to load lanes:', err);
-      setError('Failed to load lanes');
+      setError(t('laneManager.loadFailed'));
     } finally {
       setLoading(false);
     }
@@ -112,12 +114,12 @@ const LaneManager = ({ deploymentProfile, onBack }) => {
       loadLanes();
     } catch (err) {
       console.error('Failed to save lane:', err);
-      setError(`Failed to save: ${err.message}`);
+      setError(t('laneManager.saveFailed', { error: err.message }));
     }
   };
 
   const handleDelete = async (laneId) => {
-    if (!window.confirm('Are you sure you want to delete this lane?')) {
+    if (!window.confirm(t('laneManager.deleteConfirm'))) {
       return;
     }
     try {
@@ -125,7 +127,7 @@ const LaneManager = ({ deploymentProfile, onBack }) => {
       loadLanes();
     } catch (err) {
       console.error('Failed to delete lane:', err);
-      setError(`Failed to delete: ${err.message}`);
+      setError(t('laneManager.deleteFailed', { error: err.message }));
     }
   };
 
@@ -143,12 +145,12 @@ const LaneManager = ({ deploymentProfile, onBack }) => {
       loadLanes();
     } catch (err) {
       console.error('Failed to assign device:', err);
-      setError(`Failed to assign device: ${err.message}`);
+      setError(t('laneManager.assignDeviceFailed', { error: err.message }));
     }
   };
 
   const handleUnassignDevice = async (laneId, deviceId) => {
-    if (!window.confirm('Remove this device from the lane?')) {
+    if (!window.confirm(t('laneManager.removeDeviceConfirm'))) {
       return;
     }
     try {
@@ -156,7 +158,7 @@ const LaneManager = ({ deploymentProfile, onBack }) => {
       loadLanes();
     } catch (err) {
       console.error('Failed to unassign device:', err);
-      setError(`Failed to unassign device: ${err.message}`);
+      setError(t('laneManager.unassignDeviceFailed', { error: err.message }));
     }
   };
 
@@ -175,9 +177,9 @@ const LaneManager = ({ deploymentProfile, onBack }) => {
           <ArrowBackIcon />
         </IconButton>
         <Box flex={1}>
-          <Typography variant="h4">Lanes - {deploymentProfile.name}</Typography>
+          <Typography variant="h4">{t('laneManager.title', { profileName: deploymentProfile.name })}</Typography>
           <Typography variant="body2" color="text.secondary">
-            Manage processing lanes and device assignments
+            {t('laneManager.description')}
           </Typography>
         </Box>
         <Button
@@ -186,7 +188,7 @@ const LaneManager = ({ deploymentProfile, onBack }) => {
           startIcon={<AddIcon />}
           onClick={handleCreate}
         >
-          Create Lane
+          {t('laneManager.createButton')}
         </Button>
       </Box>
 
@@ -211,18 +213,18 @@ const LaneManager = ({ deploymentProfile, onBack }) => {
                 
                 {lane.metadata?.zone && (
                   <Typography variant="caption" display="block" mb={1}>
-                    <strong>Zone:</strong> {lane.metadata.zone}
+                    <strong>{t('laneManager.card.zone')}:</strong> {lane.metadata.zone}
                   </Typography>
                 )}
                 
                 {lane.metadata?.operator_info && (
                   <Typography variant="caption" display="block" mb={1}>
-                    <strong>Operator:</strong> {lane.metadata.operator_info}
+                    <strong>{t('laneManager.card.operator')}:</strong> {lane.metadata.operator_info}
                   </Typography>
                 )}
 
                 <Typography variant="subtitle2" sx={{ mt: 2, mb: 1 }}>
-                  Assigned Devices ({lane.assigned_devices?.length || 0})
+                  {t('laneManager.card.assignedDevices', { count: lane.assigned_devices?.length || 0 })}
                 </Typography>
                 <List dense>
                   {lane.assigned_devices?.map((device) => (
@@ -243,7 +245,7 @@ const LaneManager = ({ deploymentProfile, onBack }) => {
                     </ListItem>
                   )) || (
                     <Typography variant="body2" color="text.secondary">
-                      No devices assigned
+                      {t('laneManager.card.noDevices')}
                     </Typography>
                   )}
                 </List>
@@ -251,15 +253,15 @@ const LaneManager = ({ deploymentProfile, onBack }) => {
               <CardActions>
                 <Button size="small" onClick={() => handleEdit(lane)}>
                   <EditIcon sx={{ mr: 0.5 }} fontSize="small" />
-                  Edit
+                  {t('laneManager.card.editButton')}
                 </Button>
                 <Button size="small" onClick={() => handleOpenDeviceDialog(lane)}>
                   <AddCircleIcon sx={{ mr: 0.5 }} fontSize="small" />
-                  Assign Device
+                  {t('laneManager.card.assignDeviceButton')}
                 </Button>
                 <Button size="small" color="error" onClick={() => handleDelete(lane.id)}>
                   <DeleteIcon sx={{ mr: 0.5 }} fontSize="small" />
-                  Delete
+                  {t('laneManager.card.deleteButton')}
                 </Button>
               </CardActions>
             </Card>
@@ -269,7 +271,7 @@ const LaneManager = ({ deploymentProfile, onBack }) => {
           <Grid item xs={12}>
             <Paper sx={{ p: 4, textAlign: 'center' }}>
               <Typography color="text.secondary">
-                No lanes configured. Create a lane to define processing stations.
+                {t('laneManager.empty')}
               </Typography>
             </Paper>
           </Grid>
@@ -279,13 +281,13 @@ const LaneManager = ({ deploymentProfile, onBack }) => {
       {/* Create/Edit Lane Dialog */}
       <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} maxWidth="sm" fullWidth>
         <DialogTitle>
-          {editMode ? 'Edit Lane' : 'Create Lane'}
+          {editMode ? t('laneManager.dialog.editTitle') : t('laneManager.dialog.createTitle')}
         </DialogTitle>
         <DialogContent>
           <Box sx={{ mt: 2 }}>
             <TextField
               fullWidth
-              label="Lane Name"
+              label={t('laneManager.dialog.nameLabel')}
               value={currentLane.name}
               onChange={(e) => setCurrentLane({ ...currentLane, name: e.target.value })}
               sx={{ mb: 2 }}
@@ -294,7 +296,7 @@ const LaneManager = ({ deploymentProfile, onBack }) => {
 
             <TextField
               fullWidth
-              label="Description"
+              label={t('laneManager.dialog.descriptionLabel')}
               value={currentLane.description}
               onChange={(e) => setCurrentLane({ ...currentLane, description: e.target.value })}
               multiline
@@ -304,7 +306,7 @@ const LaneManager = ({ deploymentProfile, onBack }) => {
 
             <TextField
               fullWidth
-              label="Zone"
+              label={t('laneManager.dialog.zoneLabel')}
               value={currentLane.metadata?.zone || ''}
               onChange={(e) => setCurrentLane({
                 ...currentLane,
@@ -314,12 +316,12 @@ const LaneManager = ({ deploymentProfile, onBack }) => {
                 },
               })}
               sx={{ mb: 2 }}
-              helperText="e.g., 'Terminal A', 'North Wing'"
+              helperText={t('laneManager.dialog.zoneHelper')}
             />
 
             <TextField
               fullWidth
-              label="Operator Info"
+              label={t('laneManager.dialog.operatorLabel')}
               value={currentLane.metadata?.operator_info || ''}
               onChange={(e) => setCurrentLane({
                 ...currentLane,
@@ -328,39 +330,39 @@ const LaneManager = ({ deploymentProfile, onBack }) => {
                   operator_info: e.target.value,
                 },
               })}
-              helperText="e.g., 'Station 12', 'Supervisor: John Doe'"
+              helperText={t('laneManager.dialog.operatorHelper')}
             />
           </Box>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setDialogOpen(false)}>Cancel</Button>
+          <Button onClick={() => setDialogOpen(false)}>{t('laneManager.dialog.cancelButton')}</Button>
           <Button onClick={handleSave} variant="contained" color="primary">
-            {editMode ? 'Update' : 'Create'}
+            {editMode ? t('laneManager.dialog.updateButton') : t('laneManager.dialog.createButton')}
           </Button>
         </DialogActions>
       </Dialog>
 
       {/* Assign Device Dialog */}
       <Dialog open={deviceDialogOpen} onClose={() => setDeviceDialogOpen(false)} maxWidth="sm" fullWidth>
-        <DialogTitle>Assign Device to Lane</DialogTitle>
+        <DialogTitle>{t('laneManager.deviceDialog.title')}</DialogTitle>
         <DialogContent>
           <Box sx={{ mt: 2 }}>
             <Alert severity="info" sx={{ mb: 2 }}>
-              Enter the device ID to assign to {selectedLane?.name}
+              {t('laneManager.deviceDialog.infoMessage', { laneName: selectedLane?.name })}
             </Alert>
             <TextField
               fullWidth
-              label="Device ID"
+              label={t('laneManager.deviceDialog.deviceIdLabel')}
               value={deviceToAssign}
               onChange={(e) => setDeviceToAssign(e.target.value)}
-              placeholder="device-uuid-here"
+              placeholder={t('laneManager.deviceDialog.deviceIdPlaceholder')}
             />
           </Box>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setDeviceDialogOpen(false)}>Cancel</Button>
+          <Button onClick={() => setDeviceDialogOpen(false)}>{t('laneManager.deviceDialog.cancelButton')}</Button>
           <Button onClick={handleAssignDevice} variant="contained" color="primary">
-            Assign
+            {t('laneManager.deviceDialog.assignButton')}
           </Button>
         </DialogActions>
       </Dialog>

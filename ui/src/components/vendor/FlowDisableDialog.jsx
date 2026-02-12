@@ -5,6 +5,7 @@
  */
 
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   Dialog,
   DialogTitle,
@@ -23,13 +24,14 @@ import PropTypes from 'prop-types';
 import flowsApi from '../../services/flowsApi';
 
 function FlowDisableDialog({ open, onClose, flow, onDisabled }) {
+  const { t } = useTranslation('vendor');
   const [reason, setReason] = useState('');
   const [disabling, setDisabling] = useState(false);
   const [error, setError] = useState(null);
 
   const handleDisable = async () => {
     if (!reason.trim()) {
-      setError('Please provide a reason for disabling this flow');
+      setError(t('flowDisableDialog.reasonError'));
       return;
     }
 
@@ -45,7 +47,7 @@ function FlowDisableDialog({ open, onClose, flow, onDisabled }) {
       
       handleClose();
     } catch (err) {
-      setError(err.message || 'Failed to disable flow');
+      setError(err.message || t('flowDisableDialog.failedToDisable'));
     } finally {
       setDisabling(false);
     }
@@ -60,7 +62,7 @@ function FlowDisableDialog({ open, onClose, flow, onDisabled }) {
   return (
     <Dialog open={open} onClose={handleClose} maxWidth="sm" fullWidth>
       <DialogTitle>
-        Disable Flow
+        {t('flowDisableDialog.title')}
         <IconButton
           onClick={handleClose}
           sx={{ position: 'absolute', right: 8, top: 8 }}
@@ -77,15 +79,15 @@ function FlowDisableDialog({ open, onClose, flow, onDisabled }) {
         )}
 
         <Alert severity="warning" sx={{ mb: 3 }}>
-          Disabling this flow will prevent new applications. Existing applications will continue processing.
+          {t('flowDisableDialog.warningMessage')}
         </Alert>
 
         <Typography variant="body2" color="text.secondary" gutterBottom>
-          <strong>Flow Name:</strong> {flow?.name || 'Unknown'}
+          <strong>{t('flowDisableDialog.flowNameLabel')}:</strong> {flow?.name || t('flowDisableDialog.unknown')}
         </Typography>
         
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          <strong>Status:</strong> {flow?.status || 'Unknown'}
+          <strong>{t('flowDisableDialog.statusLabel')}:</strong> {flow?.status || t('flowDisableDialog.unknown')}
         </Typography>
 
         <TextField
@@ -93,18 +95,18 @@ function FlowDisableDialog({ open, onClose, flow, onDisabled }) {
           required
           multiline
           rows={3}
-          label="Reason for Disabling"
-          placeholder="Explain why this flow is being disabled..."
+          label={t('flowDisableDialog.reasonLabel')}
+          placeholder={t('flowDisableDialog.reasonPlaceholder')}
           value={reason}
           onChange={(e) => setReason(e.target.value)}
           error={!reason && error}
-          helperText={!reason && error ? 'Reason is required' : ''}
+          helperText={!reason && error ? t('flowDisableDialog.reasonRequired') : ''}
         />
       </DialogContent>
 
       <DialogActions>
         <Button onClick={handleClose}>
-          Cancel
+          {t('flowDisableDialog.cancel')}
         </Button>
         <Button
           variant="contained"
@@ -113,7 +115,7 @@ function FlowDisableDialog({ open, onClose, flow, onDisabled }) {
           disabled={disabling}
           startIcon={disabling ? <CircularProgress size={16} /> : <BlockIcon />}
         >
-          {disabling ? 'Disabling...' : 'Disable Flow'}
+          {disabling ? t('flowDisableDialog.disabling') : t('flowDisableDialog.disableButton')}
         </Button>
       </DialogActions>
     </Dialog>

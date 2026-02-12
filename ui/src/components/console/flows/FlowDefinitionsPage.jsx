@@ -6,27 +6,30 @@
  */
 
 import { Box } from '@mui/material';
+import { useTranslation } from 'react-i18next';
 import FlowManager from '../../vendor/FlowManager';
 import { ResourcePage } from '../../common';
 
-const FLOWS_TABS = [
-  { label: 'Flow Definitions', path: '/console/flows/definitions' },
-  { label: 'Flow Instances', path: '/console/flows/instances' },
+const getFlowsTabs = (t) => [
+  { label: t('flows.flowDefinitions'), path: '/console/flows/definitions' },
+  { label: t('flows.flowInstances'), path: '/console/flows/instances' },
 ];
 
-const BREADCRUMBS = [
-  { label: 'Console', path: '/console' },
-  { label: 'Flows', path: '/console/flows' },
-  { label: 'Flow Definitions', path: '/console/flows/definitions' },
+const getBreadcrumbs = (t) => [
+  { label: t('flows.breadcrumbs.console'), path: '/console' },
+  { label: t('flows.breadcrumbs.flows'), path: '/console/flows' },
+  { label: t('flows.breadcrumbs.flowDefinitions'), path: '/console/flows/definitions' },
 ];
 
 function FlowDefinitionsPage() {
+  const { t } = useTranslation('console');
+  
   return (
     <ResourcePage
-      title="Flow Definitions"
-      description="Create and manage verification and issuance workflows."
-      tabs={FLOWS_TABS}
-      breadcrumbs={BREADCRUMBS}
+      title={t('flows.flowDefinitions')}
+      description={t('flows.flowDefinitionsDescription')}
+      tabs={getFlowsTabs(t)}
+      breadcrumbs={getBreadcrumbs(t)}
     >
       <Box sx={{ mx: -3, mt: -2 }}>
         <FlowManager />

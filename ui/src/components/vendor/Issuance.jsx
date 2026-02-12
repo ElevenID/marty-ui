@@ -11,6 +11,7 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   Box,
   Paper,
@@ -57,6 +58,7 @@ function TabPanel({ children, value, index, ...other }) {
  * Issuance Main Component
  */
 export default function Issuance() {
+  const { t } = useTranslation('vendor');
   const { organizationId } = useAuth();
   const [currentTab, setCurrentTab] = useState(0);
   const [offerDialogOpen, setOfferDialogOpen] = useState(false);
@@ -135,10 +137,10 @@ export default function Issuance() {
       <Box sx={{ mb: 4 }}>
         <Typography variant="h4" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <BadgeIcon fontSize="large" />
-          Issuance
+          {t('issuance.title')}
         </Typography>
         <Typography variant="body1" color="text.secondary">
-          Configure credential templates, review issuance history, and manage issuance policies.
+          {t('issuance.description')}
         </Typography>
       </Box>
 
@@ -153,35 +155,35 @@ export default function Issuance() {
           <Tab
             icon={<BadgeIcon />}
             iconPosition="start"
-            label="Templates"
+            label={t('issuance.tabs.templates')}
             id="issuance-tab-0"
             aria-controls="issuance-tabpanel-0"
           />
           <Tab
             icon={<QrCodeIcon />}
             iconPosition="start"
-            label="Active Offers"
+            label={t('issuance.tabs.activeOffers')}
             id="issuance-tab-1"
             aria-controls="issuance-tabpanel-1"
           />
           <Tab
             icon={<AnalyticsIcon />}
             iconPosition="start"
-            label="Analytics"
+            label={t('issuance.tabs.analytics')}
             id="issuance-tab-2"
             aria-controls="issuance-tabpanel-2"
           />
           <Tab
             icon={<HistoryIcon />}
             iconPosition="start"
-            label="History"
+            label={t('issuance.tabs.history')}
             id="issuance-tab-3"
             aria-controls="issuance-tabpanel-3"
           />
           <Tab
             icon={<SettingsIcon />}
             iconPosition="start"
-            label="Settings"
+            label={t('issuance.tabs.settings')}
             id="issuance-tab-4"
             aria-controls="issuance-tabpanel-4"
           />
@@ -190,10 +192,10 @@ export default function Issuance() {
         {/* Tab 0: Templates */}
         <TabPanel value={currentTab} index={0}>
           <Typography variant="h6" gutterBottom>
-            Credential Templates
+            {t('issuance.templates.title')}
           </Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-            Configure and manage credential templates for issuance.
+            {t('issuance.templates.description')}
           </Typography>
           
           <CredentialConfigManager />
@@ -214,10 +216,10 @@ export default function Issuance() {
           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
             <Box>
               <Typography variant="h6" gutterBottom>
-                Issuance History
+                {t('issuance.history.title')}
               </Typography>
               <Typography variant="body2" color="text.secondary">
-                View all credentials issued by your organization, including status and revocation history.
+                {t('issuance.history.description')}
               </Typography>
             </Box>
             <Button
@@ -225,14 +227,13 @@ export default function Issuance() {
               startIcon={<QrCodeIcon />}
               onClick={handleOpenOfferDialog}
             >
-              Generate Offer
+              {t('issuance.history.generateOfferButton')}
             </Button>
           </Box>
 
           <Alert severity="info">
             <Typography variant="body2">
-              Issuance history coming soon. You&apos;ll be able to view all issued credentials, filter by status,
-              and review revocation history.
+              {t('issuance.history.comingSoon')}
             </Typography>
           </Alert>
         </TabPanel>
@@ -240,16 +241,15 @@ export default function Issuance() {
         {/* Tab 4: Settings */}
         <TabPanel value={currentTab} index={4}>
           <Typography variant="h6" gutterBottom>
-            Issuance Settings
+            {t('issuance.settings.title')}
           </Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-            Configure global issuance policies, approval workflows, and notification preferences.
+            {t('issuance.settings.description')}
           </Typography>
 
           <Alert severity="info">
             <Typography variant="body2">
-              Issuance settings coming soon. You&apos;ll be able to configure automatic approval rules,
-              notification templates, and credential expiration policies.
+              {t('issuance.settings.comingSoon')}
             </Typography>
           </Alert>
         </TabPanel>

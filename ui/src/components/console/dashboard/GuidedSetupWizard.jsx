@@ -16,6 +16,7 @@ import {
   MenuItem,
   Divider,
 } from '@mui/material';
+import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
@@ -25,34 +26,34 @@ import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import { useWizard } from '../../../hooks/useWizard';
 import { useNotifications } from '../../../hooks/useNotifications';
 
-const SETUP_STEPS = [
+const getSetupSteps = (t) => [
   {
-    label: 'Trust Profile',
-    description: 'Define which credential issuers and formats you trust',
+    label: t('dashboard.guidedSetup.steps.trustProfile.label'),
+    description: t('dashboard.guidedSetup.steps.trustProfile.description'),
     quickFields: ['name', 'description'],
     fullPath: '/console/trust/profiles/new',
   },
   {
-    label: 'Credential Template',
-    description: 'Create a template for credentials you will issue',
+    label: t('dashboard.guidedSetup.steps.credentialTemplate.label'),
+    description: t('dashboard.guidedSetup.steps.credentialTemplate.description'),
     quickFields: ['name', 'credentialType'],
     fullPath: '/console/templates/credentials/new',
   },
   {
-    label: 'Presentation Policy',
-    description: 'Define what credentials users must present',
+    label: t('dashboard.guidedSetup.steps.presentationPolicy.label'),
+    description: t('dashboard.guidedSetup.steps.presentationPolicy.description'),
     quickFields: ['name', 'requiredCredentials'],
     fullPath: '/console/policies/presentation/new',
   },
   {
-    label: 'Deployment Profile',
-    description: 'Configure your runtime environment',
+    label: t('dashboard.guidedSetup.steps.deploymentProfile.label'),
+    description: t('dashboard.guidedSetup.steps.deploymentProfile.description'),
     quickFields: ['name', 'environment'],
     fullPath: '/console/deploy/profiles/new',
   },
   {
-    label: 'Flow Definition',
-    description: 'Create a workflow for issuance or verification',
+    label: t('dashboard.guidedSetup.steps.flowDefinition.label'),
+    description: t('dashboard.guidedSetup.steps.flowDefinition.description'),
     quickFields: ['name', 'flowType'],
     fullPath: '/console/flows/definitions/new',
   },
@@ -66,6 +67,7 @@ const SETUP_STEPS = [
  * Progress is persisted in localStorage.
  */
 function GuidedSetupWizard() {
+  const { t } = useTranslation('console');
   const navigate = useNavigate();
   const { showNotification } = useNotifications();
   const [activeStep, setActiveStep] = useState(0);
@@ -120,16 +122,17 @@ function GuidedSetupWizard() {
   const handleFinish = () => {
     localStorage.removeItem('guided-setup-progress');
     sessionStorage.removeItem('setup-banner-dismissed');
-    showNotification?.('Setup completed! Your organization is ready to use.', 'success');
+    showNotification?.(t('dashboard.guidedSetup.setupCompletedNotification'), 'success');
     navigate('/console');
   };
 
   const handleCancel = () => {
-    if (confirm('Are you sure you want to exit the setup wizard? Your progress will be saved.')) {
+    if (confirm(t('dashboard.guidedSetup.exitConfirm'))) {
       navigate('/console');
     }
   };
 
+  const SETUP_STEPS = getSetupSteps(t);
   const totalSteps = SETUP_STEPS.length;
   const completedCount = Object.keys(completed).length;
   const allComplete = completedCount === totalSteps;
@@ -140,15 +143,14 @@ function GuidedSetupWizard() {
         {/* Header */}
         <Box sx={{ mb: 4 }}>
           <Typography variant="h4" gutterBottom>
-            Guided Organization Setup
+            {t('dashboard.guidedSetup.title')}
           </Typography>
           <Typography variant="body1" color="text.secondary" paragraph>
-            Welcome! This wizard will help you set up the essential components for your organization.
-            You can use quick forms here or click "Advanced" for full configuration.
+            {t('dashboard.guidedSetup.welcomeMessage')}
           </Typography>
           <Alert severity="info" sx={{ mt: 2 }}>
             <Typography variant="body2">
-              <strong>Progress is automatically saved.</strong> You can exit and resume anytime.
+              <strong>{t('dashboard.guidedSetup.progressSaved')}</strong> {t('dashboard.guidedSetup.progressSavedDescription')}
             </Typography>
           </Alert>
         </Box>
@@ -156,7 +158,7 @@ function GuidedSetupWizard() {
         {/* Progress Summary */}
         <Box sx={{ mb: 4, p: 2, bgcolor: 'grey.50', borderRadius: 1 }}>
           <Typography variant="body2" color="text.secondary">
-            Progress: {completedCount} of {totalSteps} steps completed
+            {t('dashboard.guidedSetup.progressCount', { completed: completedCount, total: totalSteps })}
           </Typography>
         </Box>
 
@@ -169,7 +171,7 @@ function GuidedSetupWizard() {
                   completed[index] ? (
                     <Typography variant="caption" color="success.main">
                       <CheckCircleIcon fontSize="small" sx={{ verticalAlign: 'middle', mr: 0.5 }} />
-                      Complete
+                      {t('dashboard.guidedSetup.stepComplete')}
                     </Typography>
                   ) : null
                 }
@@ -196,13 +198,13 @@ function GuidedSetupWizard() {
                     onClick={() => handleStepComplete(index)}
                     endIcon={<ArrowForwardIcon />}
                   >
-                    {index === totalSteps - 1 ? 'Complete Setup' : 'Continue'}
+                    {index === totalSteps - 1 ? t('dashboard.guidedSetup.completeSetup') : t('dashboard.guidedSetup.continue')}
                   </Button>
                   <Button
                     variant="outlined"
                     onClick={() => handleSkipStep(index)}
                   >
-                    Skip for Now
+                    {t('dashboard.guidedSetup.skipForNow')}
                   </Button>
                   <Button
                     variant="text"
@@ -210,7 +212,7 @@ function GuidedSetupWizard() {
                     target="_blank"
                     endIcon={<OpenInNewIcon />}
                   >
-                    Advanced Editor
+                    {t('dashboard.guidedSetup.advancedEditor')}
                   </Button>
                   {index > 0 && (
                     <Button
@@ -218,7 +220,7 @@ function GuidedSetupWizard() {
                       onClick={handleBack}
                       startIcon={<ArrowBackIcon />}
                     >
-                      Back
+                      {t('dashboard.guidedSetup.back')}
                     </Button>
                   )}
                 </Box>
@@ -231,13 +233,13 @@ function GuidedSetupWizard() {
         {allComplete && (
           <Box sx={{ mt: 4, p: 3, bgcolor: 'success.light', borderRadius: 1 }}>
             <Typography variant="h6" gutterBottom>
-              🎉 Setup Complete!
+              {t('dashboard.guidedSetup.setupCompleteTitle')}
             </Typography>
             <Typography variant="body2" paragraph>
-              You've configured all the essential components. Your organization is now ready to issue and verify credentials.
+              {t('dashboard.guidedSetup.setupCompleteMessage')}
             </Typography>
             <Button variant="contained" onClick={handleFinish}>
-              Go to Dashboard
+              {t('dashboard.guidedSetup.goToDashboard')}
             </Button>
           </Box>
         )}
@@ -246,10 +248,10 @@ function GuidedSetupWizard() {
         {!allComplete && (
           <Box sx={{ mt: 4, pt: 3, borderTop: 1, borderColor: 'divider', display: 'flex', justifyContent: 'space-between' }}>
             <Button variant="text" onClick={handleCancel}>
-              Exit Wizard
+              {t('dashboard.guidedSetup.exitWizard')}
             </Button>
             <Typography variant="caption" color="text.secondary">
-              Your progress is saved automatically
+              {t('dashboard.guidedSetup.progressAutoSaved')}
             </Typography>
           </Box>
         )}
@@ -262,6 +264,8 @@ function GuidedSetupWizard() {
  * Quick create form for each step
  */
 function QuickCreateForm({ step, stepIndex, formData, onDataChange }) {
+  const { t } = useTranslation('console');
+  
   const handleChange = (field, value) => {
     onDataChange({ ...formData, [field]: value });
   };
@@ -274,21 +278,21 @@ function QuickCreateForm({ step, stepIndex, formData, onDataChange }) {
           <>
             <TextField
               fullWidth
-              label="Trust Profile Name"
+              label={t('dashboard.guidedSetup.steps.trustProfile.nameLabel')}
               value={formData.name || ''}
               onChange={(e) => handleChange('name', e.target.value)}
               margin="normal"
-              placeholder="e.g., Production Trust Profile"
+              placeholder={t('dashboard.guidedSetup.steps.trustProfile.namePlaceholder')}
             />
             <TextField
               fullWidth
-              label="Description"
+              label={t('dashboard.guidedSetup.steps.trustProfile.descriptionLabel')}
               value={formData.description || ''}
               onChange={(e) => handleChange('description', e.target.value)}
               margin="normal"
               multiline
               rows={2}
-              placeholder="Describe which issuers and formats are trusted"
+              placeholder={t('dashboard.guidedSetup.steps.trustProfile.descriptionPlaceholder')}
             />
           </>
         );
@@ -298,22 +302,22 @@ function QuickCreateForm({ step, stepIndex, formData, onDataChange }) {
           <>
             <TextField
               fullWidth
-              label="Template Name"
+              label={t('dashboard.guidedSetup.steps.credentialTemplate.nameLabel')}
               value={formData.name || ''}
               onChange={(e) => handleChange('name', e.target.value)}
               margin="normal"
-              placeholder="e.g., Employee Badge"
+              placeholder={t('dashboard.guidedSetup.steps.credentialTemplate.namePlaceholder')}
             />
             <FormControl fullWidth margin="normal">
-              <InputLabel>Credential Type</InputLabel>
+              <InputLabel>{t('dashboard.guidedSetup.steps.credentialTemplate.typeLabel')}</InputLabel>
               <Select
                 value={formData.credentialType || ''}
-                label="Credential Type"
+                label={t('dashboard.guidedSetup.steps.credentialTemplate.typeLabel')}
                 onChange={(e) => handleChange('credentialType', e.target.value)}
               >
-                <MenuItem value="VerifiableCredential">Verifiable Credential (W3C)</MenuItem>
-                <MenuItem value="mDL">Mobile Driver's License (ISO 18013-5)</MenuItem>
-                <MenuItem value="OpenBadge">Open Badge</MenuItem>
+                <MenuItem value="VerifiableCredential">{t('dashboard.guidedSetup.steps.credentialTemplate.typeVC')}</MenuItem>
+                <MenuItem value="mDL">{t('dashboard.guidedSetup.steps.credentialTemplate.typeMDL')}</MenuItem>
+                <MenuItem value="OpenBadge">{t('dashboard.guidedSetup.steps.credentialTemplate.typeBadge')}</MenuItem>
               </Select>
             </FormControl>
           </>
@@ -324,20 +328,20 @@ function QuickCreateForm({ step, stepIndex, formData, onDataChange }) {
           <>
             <TextField
               fullWidth
-              label="Policy Name"
+              label={t('dashboard.guidedSetup.steps.presentationPolicy.nameLabel')}
               value={formData.name || ''}
               onChange={(e) => handleChange('name', e.target.value)}
               margin="normal"
-              placeholder="e.g., Age Verification Policy"
+              placeholder={t('dashboard.guidedSetup.steps.presentationPolicy.namePlaceholder')}
             />
             <TextField
               fullWidth
-              label="Required Credentials"
+              label={t('dashboard.guidedSetup.steps.presentationPolicy.requiredLabel')}
               value={formData.requiredCredentials || ''}
               onChange={(e) => handleChange('requiredCredentials', e.target.value)}
               margin="normal"
-              placeholder="e.g., Driver's License, Passport"
-              helperText="Comma-separated list of credential types"
+              placeholder={t('dashboard.guidedSetup.steps.presentationPolicy.requiredPlaceholder')}
+              helperText={t('dashboard.guidedSetup.steps.presentationPolicy.requiredHelper')}
             />
           </>
         );
@@ -347,22 +351,22 @@ function QuickCreateForm({ step, stepIndex, formData, onDataChange }) {
           <>
             <TextField
               fullWidth
-              label="Profile Name"
+              label={t('dashboard.guidedSetup.steps.deploymentProfile.nameLabel')}
               value={formData.name || ''}
               onChange={(e) => handleChange('name', e.target.value)}
               margin="normal"
-              placeholder="e.g., Production Deployment"
+              placeholder={t('dashboard.guidedSetup.steps.deploymentProfile.namePlaceholder')}
             />
             <FormControl fullWidth margin="normal">
-              <InputLabel>Environment</InputLabel>
+              <InputLabel>{t('dashboard.guidedSetup.steps.deploymentProfile.environmentLabel')}</InputLabel>
               <Select
                 value={formData.environment || 'development'}
-                label="Environment"
+                label={t('dashboard.guidedSetup.steps.deploymentProfile.environmentLabel')}
                 onChange={(e) => handleChange('environment', e.target.value)}
               >
-                <MenuItem value="development">Development</MenuItem>
-                <MenuItem value="staging">Staging</MenuItem>
-                <MenuItem value="production">Production</MenuItem>
+                <MenuItem value="development">{t('dashboard.guidedSetup.steps.deploymentProfile.envDevelopment')}</MenuItem>
+                <MenuItem value="staging">{t('dashboard.guidedSetup.steps.deploymentProfile.envStaging')}</MenuItem>
+                <MenuItem value="production">{t('dashboard.guidedSetup.steps.deploymentProfile.envProduction')}</MenuItem>
               </Select>
             </FormControl>
           </>
@@ -373,22 +377,22 @@ function QuickCreateForm({ step, stepIndex, formData, onDataChange }) {
           <>
             <TextField
               fullWidth
-              label="Flow Name"
+              label={t('dashboard.guidedSetup.steps.flowDefinition.nameLabel')}
               value={formData.name || ''}
               onChange={(e) => handleChange('name', e.target.value)}
               margin="normal"
-              placeholder="e.g., Age Verification Flow"
+              placeholder={t('dashboard.guidedSetup.steps.flowDefinition.namePlaceholder')}
             />
             <FormControl fullWidth margin="normal">
-              <InputLabel>Flow Type</InputLabel>
+              <InputLabel>{t('dashboard.guidedSetup.steps.flowDefinition.typeLabel')}</InputLabel>
               <Select
                 value={formData.flowType || ''}
-                label="Flow Type"
+                label={t('dashboard.guidedSetup.steps.flowDefinition.typeLabel')}
                 onChange={(e) => handleChange('flowType', e.target.value)}
               >
-                <MenuItem value="verification">Verification (Check credentials)</MenuItem>
-                <MenuItem value="issuance">Issuance (Issue credentials)</MenuItem>
-                <MenuItem value="combined">Combined (Verify & Issue)</MenuItem>
+                <MenuItem value="verification">{t('dashboard.guidedSetup.steps.flowDefinition.typeVerification')}</MenuItem>
+                <MenuItem value="issuance">{t('dashboard.guidedSetup.steps.flowDefinition.typeIssuance')}</MenuItem>
+                <MenuItem value="combined">{t('dashboard.guidedSetup.steps.flowDefinition.typeCombined')}</MenuItem>
               </Select>
             </FormControl>
           </>
@@ -402,7 +406,7 @@ function QuickCreateForm({ step, stepIndex, formData, onDataChange }) {
   return (
     <Box sx={{ mt: 2 }}>
       <Typography variant="subtitle2" gutterBottom>
-        Quick Create (Basic Configuration)
+        {t('dashboard.guidedSetup.quickCreateTitle')}
       </Typography>
       {renderFields()}
     </Box>

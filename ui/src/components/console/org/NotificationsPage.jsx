@@ -39,6 +39,7 @@ import WarningIcon from '@mui/icons-material/Warning';
 import InfoIcon from '@mui/icons-material/Info';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import { formatDistanceToNow } from 'date-fns';
+import { useTranslation } from 'react-i18next';
 
 import { ResourcePage } from '../../common';
 import { TableSkeleton } from '../../common/skeletons';
@@ -56,30 +57,31 @@ import { useNotifications } from '../../../hooks/useNotifications';
  * - Preferences: Email/push notification settings
  */
 function NotificationsPage() {
+  const { t } = useTranslation('console');
   const [activeTab, setActiveTab] = useState(0);
   
   return (
     <ResourcePage
-      title="Notifications"
-      subtitle="Manage notifications, alert rules, and preferences"
+      title={t('org.notifications.title')}
+      subtitle={t('org.notifications.subtitle')}
       icon={<NotificationsIcon />}
     >
       <Paper sx={{ mb: 2 }}>
         <Tabs value={activeTab} onChange={(e, val) => setActiveTab(val)}>
-          <Tab label="Notifications" />
-          <Tab label="Alert Rules" />
-          <Tab label="Preferences" />
+          <Tab label={t('org.notifications.tabs.notifications')} />
+          <Tab label={t('org.notifications.tabs.alertRules')} />
+          <Tab label={t('org.notifications.tabs.preferences')} />
         </Tabs>
       </Paper>
 
-      {activeTab === 0 && <NotificationsTab />}
-      {activeTab === 1 && <AlertRulesTab />}
-      {activeTab === 2 && <PreferencesTab />}
+      {activeTab === 0 && <NotificationsTab t={t} />}
+      {activeTab === 1 && <AlertRulesTab t={t} />}
+      {activeTab === 2 && <PreferencesTab t={t} />}
     </ResourcePage>
   );
 }
 
-function NotificationsTab() {
+function NotificationsTab({ t }) {
   const [notifications, setNotifications] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -122,30 +124,30 @@ function NotificationsTab() {
       loadNotifications();
     } catch (err) {
       console.error('Failed to mark as read:', err);
-      showNotification?.('Failed to mark notification as read', 'error');
+      showNotification?.(t('org.notifications.notificationsTab.error.markAsRead'), 'error');
     }
   };
 
   const handleMarkAllAsRead = async () => {
     try {
       await notificationsApi.markAllAsRead();
-      showNotification?.('All notifications marked as read', 'success');
+      showNotification?.(t('org.notifications.notificationsTab.success.markAllAsRead'), 'success');
       loadNotifications();
     } catch (err) {
       console.error('Failed to mark all as read:', err);
-      showNotification?.('Failed to mark all as read', 'error');
+      showNotification?.(t('org.notifications.notificationsTab.error.markAllAsRead'), 'error');
     }
   };
 
   const handleDelete = async (notificationId) => {
-    if (!confirm('Delete this notification?')) return;
+    if (!confirm(t('org.notifications.notificationsTab.confirmDelete'))) return;
     try {
       await notificationsApi.deleteNotification(notificationId);
-      showNotification?.('Notification deleted', 'success');
+      showNotification?.(t('org.notifications.notificationsTab.success.deleted'), 'success');
       loadNotifications();
     } catch (err) {
       console.error('Failed to delete notification:', err);
-      showNotification?.('Failed to delete notification', 'error');
+      showNotification?.(t('org.notifications.notificationsTab.error.delete'), 'error');
     }
   };
 
@@ -162,16 +164,16 @@ function NotificationsTab() {
     <>
       <Paper sx={{ p: 2, mb: 2, display: 'flex', gap: 2, alignItems: 'center' }}>
         <FormControl size="small" sx={{ minWidth: 150 }}>
-          <InputLabel>Filter</InputLabel>
-          <Select value={filter} label="Filter" onChange={(e) => setFilter(e.target.value)}>
-            <MenuItem value="all">All</MenuItem>
-            <MenuItem value="unread">Unread</MenuItem>
-            <MenuItem value="read">Read</MenuItem>
+          <InputLabel>{t('org.notifications.notificationsTab.filter')}</InputLabel>
+          <Select value={filter} label={t('org.notifications.notificationsTab.filter')} onChange={(e) => setFilter(e.target.value)}>
+            <MenuItem value="all">{t('org.notifications.notificationsTab.filterAll')}</MenuItem>
+            <MenuItem value="unread">{t('org.notifications.notificationsTab.filterUnread')}</MenuItem>
+            <MenuItem value="read">{t('org.notifications.notificationsTab.filterRead')}</MenuItem>
           </Select>
         </FormControl>
         {notifications.some(n => !n.read) && (
           <Button size="small" variant="outlined" onClick={handleMarkAllAsRead}>
-            Mark All as Read
+            {t('org.notifications.notificationsTab.markAllAsRead')}
           </Button>
         )}
       </Paper>
@@ -183,8 +185,8 @@ function NotificationsTab() {
       ) : notifications.length === 0 ? (
         <EmptyState
           icon={MailIcon}
-          title="No notifications"
-          description={filter === 'unread' ? "You have no unread notifications." : "You don't have any notifications yet."}
+          title={t('org.notifications.notificationsTab.empty.title')}
+          description={filter === 'unread' ? t('org.notifications.notificationsTab.empty.descriptionUnread') : t('org.notifications.notificationsTab.empty.descriptionAll')}
         />
       ) : (
         <>
@@ -193,10 +195,10 @@ function NotificationsTab() {
               <TableHead>
                 <TableRow>
                   <TableCell width="5%"></TableCell>
-                  <TableCell width="40%">Title</TableCell>
-                  <TableCell width="30%">Message</TableCell>
-                  <TableCell width="15%">Time</TableCell>
-                  <TableCell width="10%" align="right">Actions</TableCell>
+                  <TableCell width="40%">{t('org.notifications.notificationsTab.tableHeaders.title')}</TableCell>
+                  <TableCell width="30%">{t('org.notifications.notificationsTab.tableHeaders.message')}</TableCell>
+                  <TableCell width="15%">{t('org.notifications.notificationsTab.tableHeaders.time')}</TableCell>
+                  <TableCell width="10%" align="right">{t('org.notifications.notificationsTab.tableHeaders.actions')}</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
@@ -226,7 +228,7 @@ function NotificationsTab() {
                         <IconButton
                           size="small"
                           onClick={() => handleMarkAsRead(notification.id)}
-                          title="Mark as read"
+                          title={t('org.notifications.notificationsTab.actions.markAsRead')}
                         >
                           <DraftsIcon fontSize="small" />
                         </IconButton>
@@ -234,7 +236,7 @@ function NotificationsTab() {
                       <IconButton
                         size="small"
                         onClick={() => handleDelete(notification.id)}
-                        title="Delete"
+                        title={t('org.notifications.notificationsTab.actions.delete')}
                       >
                         <DeleteIcon fontSize="small" />
                       </IconButton>
@@ -261,7 +263,7 @@ function NotificationsTab() {
   );
 }
 
-function AlertRulesTab() {
+function AlertRulesTab({ t }) {
   const [rules, setRules] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -299,14 +301,14 @@ function AlertRulesTab() {
   };
 
   const handleDelete = async (ruleId) => {
-    if (!confirm('Delete this alert rule?')) return;
+    if (!confirm(t('org.notifications.alertRulesTab.confirmDelete'))) return;
     try {
       await notificationsApi.deleteAlertRule(ruleId);
-      showNotification?.('Alert rule deleted', 'success');
+      showNotification?.(t('org.notifications.alertRulesTab.success.deleted'), 'success');
       loadRules();
     } catch (err) {
       console.error('Failed to delete alert rule:', err);
-      showNotification?.('Failed to delete alert rule', 'error');
+      showNotification?.(t('org.notifications.alertRulesTab.error.delete'), 'error');
     }
   };
 
@@ -314,16 +316,16 @@ function AlertRulesTab() {
     try {
       if (editingRule) {
         await notificationsApi.updateAlertRule(editingRule.id, ruleData);
-        showNotification?.('Alert rule updated', 'success');
+        showNotification?.(t('org.notifications.alertRulesTab.success.updated'), 'success');
       } else {
         await notificationsApi.createAlertRule(ruleData);
-        showNotification?.('Alert rule created', 'success');
+        showNotification?.(t('org.notifications.alertRulesTab.success.created'), 'success');
       }
       setDialogOpen(false);
       loadRules();
     } catch (err) {
       console.error('Failed to save alert rule:', err);
-      showNotification?.('Failed to save alert rule', 'error');
+      showNotification?.(t('org.notifications.alertRulesTab.error.save'), 'error');
     }
   };
 
@@ -331,7 +333,7 @@ function AlertRulesTab() {
     <>
       <Box sx={{ mb: 2, display: 'flex', justifyContent: 'flex-end' }}>
         <Button variant="contained" startIcon={<AddIcon />} onClick={handleCreate}>
-          Create Alert Rule
+          {t('org.notifications.alertRulesTab.create')}
         </Button>
       </Box>
 
@@ -342,11 +344,11 @@ function AlertRulesTab() {
       ) : rules.length === 0 ? (
         <EmptyState
           icon={NotificationsIcon}
-          title="No alert rules"
-          description="Create alert rules to get notified about important events."
+          title={t('org.notifications.alertRulesTab.empty.title')}
+          description={t('org.notifications.alertRulesTab.empty.description')}
           action={
             <Button variant="contained" startIcon={<AddIcon />} onClick={handleCreate}>
-              Create First Rule
+              {t('org.notifications.alertRulesTab.createFirst')}
             </Button>
           }
         />
@@ -355,11 +357,11 @@ function AlertRulesTab() {
           <Table>
             <TableHead>
               <TableRow>
-                <TableCell>Name</TableCell>
-                <TableCell>Event Type</TableCell>
-                <TableCell>Severity</TableCell>
-                <TableCell>Enabled</TableCell>
-                <TableCell align="right">Actions</TableCell>
+                <TableCell>{t('org.notifications.alertRulesTab.tableHeaders.name')}</TableCell>
+                <TableCell>{t('org.notifications.alertRulesTab.tableHeaders.eventType')}</TableCell>
+                <TableCell>{t('org.notifications.alertRulesTab.tableHeaders.severity')}</TableCell>
+                <TableCell>{t('org.notifications.alertRulesTab.tableHeaders.enabled')}</TableCell>
+                <TableCell align="right">{t('org.notifications.alertRulesTab.tableHeaders.actions')}</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
@@ -377,7 +379,7 @@ function AlertRulesTab() {
                   </TableCell>
                   <TableCell>
                     <Chip
-                      label={rule.enabled ? 'Enabled' : 'Disabled'}
+                      label={rule.enabled ? t('org.notifications.alertRulesTab.status.enabled') : t('org.notifications.alertRulesTab.status.disabled')}
                       size="small"
                       color={rule.enabled ? 'success' : 'default'}
                     />
@@ -402,12 +404,13 @@ function AlertRulesTab() {
         rule={editingRule}
         onClose={() => setDialogOpen(false)}
         onSave={handleSave}
+        t={t}
       />
     </>
   );
 }
 
-function AlertRuleDialog({ open, rule, onClose, onSave }) {
+function AlertRuleDialog({ open, rule, onClose, onSave, t }) {
   const [formData, setFormData] = useState({
     name: '',
     event_type: '',
@@ -429,40 +432,40 @@ function AlertRuleDialog({ open, rule, onClose, onSave }) {
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
-      <DialogTitle>{rule ? 'Edit Alert Rule' : 'Create Alert Rule'}</DialogTitle>
+      <DialogTitle>{rule ? t('org.notifications.alertRulesTab.dialog.titleEdit') : t('org.notifications.alertRulesTab.dialog.titleCreate')}</DialogTitle>
       <DialogContent>
         <TextField
           fullWidth
-          label="Rule Name"
+          label={t('org.notifications.alertRulesTab.dialog.nameLabel')}
           value={formData.name}
           onChange={(e) => setFormData({ ...formData, name: e.target.value })}
           margin="normal"
         />
         <FormControl fullWidth margin="normal">
-          <InputLabel>Event Type</InputLabel>
+          <InputLabel>{t('org.notifications.alertRulesTab.dialog.eventTypeLabel')}</InputLabel>
           <Select
             value={formData.event_type}
-            label="Event Type"
+            label={t('org.notifications.alertRulesTab.dialog.eventTypeLabel')}
             onChange={(e) => setFormData({ ...formData, event_type: e.target.value })}
           >
-            <MenuItem value="credential.issued">Credential Issued</MenuItem>
-            <MenuItem value="credential.revoked">Credential Revoked</MenuItem>
-            <MenuItem value="flow.failed">Flow Failed</MenuItem>
-            <MenuItem value="authentication.failed">Authentication Failed</MenuItem>
-            <MenuItem value="key.expiring">Signing Key Expiring</MenuItem>
-            <MenuItem value="quota.warning">Quota Warning</MenuItem>
+            <MenuItem value="credential.issued">{t('org.notifications.alertRulesTab.eventTypes.credentialIssued')}</MenuItem>
+            <MenuItem value="credential.revoked">{t('org.notifications.alertRulesTab.eventTypes.credentialRevoked')}</MenuItem>
+            <MenuItem value="flow.failed">{t('org.notifications.alertRulesTab.eventTypes.flowFailed')}</MenuItem>
+            <MenuItem value="authentication.failed">{t('org.notifications.alertRulesTab.eventTypes.authenticationFailed')}</MenuItem>
+            <MenuItem value="key.expiring">{t('org.notifications.alertRulesTab.eventTypes.keyExpiring')}</MenuItem>
+            <MenuItem value="quota.warning">{t('org.notifications.alertRulesTab.eventTypes.quotaWarning')}</MenuItem>
           </Select>
         </FormControl>
         <FormControl fullWidth margin="normal">
-          <InputLabel>Severity</InputLabel>
+          <InputLabel>{t('org.notifications.alertRulesTab.dialog.severityLabel')}</InputLabel>
           <Select
             value={formData.severity}
-            label="Severity"
+            label={t('org.notifications.alertRulesTab.dialog.severityLabel')}
             onChange={(e) => setFormData({ ...formData, severity: e.target.value })}
           >
-            <MenuItem value="info">Info</MenuItem>
-            <MenuItem value="warning">Warning</MenuItem>
-            <MenuItem value="error">Error</MenuItem>
+            <MenuItem value="info">{t('org.notifications.alertRulesTab.severity.info')}</MenuItem>
+            <MenuItem value="warning">{t('org.notifications.alertRulesTab.severity.warning')}</MenuItem>
+            <MenuItem value="error">{t('org.notifications.alertRulesTab.severity.error')}</MenuItem>
           </Select>
         </FormControl>
         <FormControlLabel
@@ -472,21 +475,21 @@ function AlertRuleDialog({ open, rule, onClose, onSave }) {
               onChange={(e) => setFormData({ ...formData, enabled: e.target.checked })}
             />
           }
-          label="Enabled"
+          label={t('org.notifications.alertRulesTab.dialog.enabledLabel')}
           sx={{ mt: 2 }}
         />
       </DialogContent>
       <DialogActions>
-        <Button onClick={onClose}>Cancel</Button>
+        <Button onClick={onClose}>{t('actions.cancel', { ns: 'common' })}</Button>
         <Button onClick={handleSubmit} variant="contained">
-          {rule ? 'Update' : 'Create'}
+          {rule ? t('org.notifications.alertRulesTab.dialog.buttonUpdate') : t('org.notifications.alertRulesTab.dialog.buttonCreate')}
         </Button>
       </DialogActions>
     </Dialog>
   );
 }
 
-function PreferencesTab() {
+function PreferencesTab({ t }) {
   const [preferences, setPreferences] = useState({
     email_notifications: true,
     push_notifications: false,
@@ -518,10 +521,10 @@ function PreferencesTab() {
     setSaving(true);
     try {
       await notificationsApi.updateNotificationPreferences(preferences);
-      showNotification?.('Preferences updated', 'success');
+      showNotification?.(t('org.notifications.preferencesTab.success'), 'success');
     } catch (err) {
       console.error('Failed to update preferences:', err);
-      showNotification?.('Failed to update preferences', 'error');
+      showNotification?.(t('org.notifications.preferencesTab.error'), 'error');
     } finally {
       setSaving(false);
     }
@@ -532,7 +535,7 @@ function PreferencesTab() {
   return (
     <Paper sx={{ p: 3 }}>
       <Typography variant="h6" gutterBottom>
-        Notification Preferences
+        {t('org.notifications.preferencesTab.title')}
       </Typography>
       <Divider sx={{ my: 2 }} />
       
@@ -543,11 +546,11 @@ function PreferencesTab() {
             onChange={(e) => setPreferences({ ...preferences, email_notifications: e.target.checked })}
           />
         }
-        label="Email Notifications"
+        label={t('org.notifications.preferencesTab.emailNotifications.label')}
         sx={{ display: 'block', mb: 2 }}
       />
       <Typography variant="body2" color="text.secondary" sx={{ ml: 5, mb: 3 }}>
-        Receive notifications via email
+        {t('org.notifications.preferencesTab.emailNotifications.description')}
       </Typography>
 
       <FormControlLabel
@@ -557,11 +560,11 @@ function PreferencesTab() {
             onChange={(e) => setPreferences({ ...preferences, push_notifications: e.target.checked })}
           />
         }
-        label="Push Notifications"
+        label={t('org.notifications.preferencesTab.pushNotifications.label')}
         sx={{ display: 'block', mb: 2 }}
       />
       <Typography variant="body2" color="text.secondary" sx={{ ml: 5, mb: 3 }}>
-        Receive browser push notifications
+        {t('org.notifications.preferencesTab.pushNotifications.description')}
       </Typography>
 
       <FormControlLabel
@@ -571,30 +574,30 @@ function PreferencesTab() {
             onChange={(e) => setPreferences({ ...preferences, digest_enabled: e.target.checked })}
           />
         }
-        label="Daily Digest"
+        label={t('org.notifications.preferencesTab.digest.label')}
         sx={{ display: 'block', mb: 2 }}
       />
       <Typography variant="body2" color="text.secondary" sx={{ ml: 5, mb: 3 }}>
-        Receive a summary of notifications
+        {t('org.notifications.preferencesTab.digest.description')}
       </Typography>
 
       {preferences.digest_enabled && (
         <FormControl sx={{ ml: 5, mb: 3, minWidth: 200 }}>
-          <InputLabel>Digest Frequency</InputLabel>
+          <InputLabel>{t('org.notifications.preferencesTab.digestFrequency.label')}</InputLabel>
           <Select
             value={preferences.digest_frequency}
-            label="Digest Frequency"
+            label={t('org.notifications.preferencesTab.digestFrequency.label')}
             onChange={(e) => setPreferences({ ...preferences, digest_frequency: e.target.value })}
           >
-            <MenuItem value="daily">Daily</MenuItem>
-            <MenuItem value="weekly">Weekly</MenuItem>
+            <MenuItem value="daily">{t('org.notifications.preferencesTab.digestFrequency.daily')}</MenuItem>
+            <MenuItem value="weekly">{t('org.notifications.preferencesTab.digestFrequency.weekly')}</MenuItem>
           </Select>
         </FormControl>
       )}
 
       <Box sx={{ mt: 4 }}>
         <Button variant="contained" onClick={handleSave} disabled={saving}>
-          {saving ? 'Saving...' : 'Save Preferences'}
+          {saving ? t('org.notifications.preferencesTab.saving') : t('org.notifications.preferencesTab.saveButton')}
         </Button>
       </Box>
     </Paper>

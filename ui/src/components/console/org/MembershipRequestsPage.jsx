@@ -33,24 +33,26 @@ import CancelIcon from '@mui/icons-material/Cancel';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import PersonAddIcon from '@mui/icons-material/PersonAdd';
 import EmailIcon from '@mui/icons-material/Email';
+import { useTranslation } from 'react-i18next';
 
 import { ResourcePage } from '../../common';
 import { getPendingRequests, approveMembershipRequest, rejectMembershipRequest } from '../../../services/membershipApi';
 
-const ORG_TABS = [
-  { label: 'Organization', path: '/console/org/settings' },
-  { label: 'Team', path: '/console/org/team' },
-  { label: 'Membership Requests', path: '/console/org/membership-requests' },
-  { label: 'Webhooks', path: '/console/org/webhooks' },
+const getOrgTabs = (t) => [
+  { label: t('org.tabs.organization'), path: '/console/org/settings' },
+  { label: t('org.tabs.team'), path: '/console/org/team' },
+  { label: t('org.tabs.membershipRequests'), path: '/console/org/membership-requests' },
+  { label: t('org.tabs.webhooks'), path: '/console/org/webhooks' },
 ];
 
-const BREADCRUMBS = [
-  { label: 'Console', path: '/console' },
-  { label: 'Org', path: '/console/org' },
-  { label: 'Membership Requests', path: '/console/org/membership-requests' },
+const getBreadcrumbs = (t) => [
+  { label: t('org.breadcrumbs.console'), path: '/console' },
+  { label: t('org.breadcrumbs.org'), path: '/console/org' },
+  { label: t('org.breadcrumbs.membershipRequests'), path: '/console/org/membership-requests' },
 ];
 
 function MembershipRequestsPage() {
+  const { t } = useTranslation('console');
   const [requests, setRequests] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -86,7 +88,7 @@ function MembershipRequestsPage() {
       setSuccessMessage(null);
       
       const result = await approveMembershipRequest(request.id);
-      setSuccessMessage(result.message || `${request.user_email} has been approved`);
+      setSuccessMessage(result.message || t('org.membership.success.approved', { email: request.user_email }));
       
       // Refresh the list
       await loadRequests();
@@ -115,7 +117,7 @@ function MembershipRequestsPage() {
         selectedRequest.id,
         rejectionReason.trim() || null
       );
-      setSuccessMessage(result.message || `Request from ${selectedRequest.user_email} has been rejected`);
+      setSuccessMessage(result.message || t('org.membership.success.rejected', { email: selectedRequest.user_email }));
       
       setRejectDialogOpen(false);
       setSelectedRequest(null);
@@ -152,10 +154,10 @@ function MembershipRequestsPage() {
 
   return (
     <ResourcePage
-      title="Membership Requests"
-      description="Review and approve membership requests from users wanting to join your organization."
-      tabs={ORG_TABS}
-      breadcrumbs={BREADCRUMBS}
+      title={t('org.membership.title')}
+      description={t('org.membership.description')}
+      tabs={getOrgTabs(t)}
+      breadcrumbs={getBreadcrumbs(t)}
     >
       <Box sx={{ mb: 3 }}>
         {error && (
@@ -172,9 +174,9 @@ function MembershipRequestsPage() {
 
         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
           <Typography variant="h6">
-            Pending Requests ({requests.length})
+            {t('org.membership.pendingRequests', { count: requests.length })}
           </Typography>
-          <Tooltip title="Refresh">
+          <Tooltip title={t('org.membership.refresh')}>
             <IconButton onClick={loadRequests} disabled={loading}>
               <RefreshIcon />
             </IconButton>
@@ -189,10 +191,10 @@ function MembershipRequestsPage() {
           <Paper sx={{ p: 6, textAlign: 'center', bgcolor: 'grey.50' }}>
             <PersonAddIcon sx={{ fontSize: 60, color: 'text.secondary', mb: 2 }} />
             <Typography variant="h6" gutterBottom>
-              No Pending Requests
+              {t('org.membership.empty.title')}
             </Typography>
             <Typography variant="body2" color="text.secondary">
-              When users request to join your organization, they will appear here for review.
+              {t('org.membership.empty.description')}
             </Typography>
           </Paper>
         ) : (
@@ -200,11 +202,11 @@ function MembershipRequestsPage() {
             <Table>
               <TableHead>
                 <TableRow>
-                  <TableCell>User Email</TableCell>
-                  <TableCell>Message</TableCell>
-                  <TableCell>Requested</TableCell>
-                  <TableCell>Status</TableCell>
-                  <TableCell align="right">Actions</TableCell>
+                  <TableCell>{t('org.membership.tableHeaders.userEmail')}</TableCell>
+                  <TableCell>{t('org.membership.tableHeaders.message')}</TableCell>
+                  <TableCell>{t('org.membership.tableHeaders.requested')}</TableCell>
+                  <TableCell>{t('org.membership.tableHeaders.status')}</TableCell>
+                  <TableCell align="right">{t('org.membership.tableHeaders.actions')}</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
@@ -223,7 +225,7 @@ function MembershipRequestsPage() {
                         </Typography>
                       ) : (
                         <Typography variant="body2" color="text.secondary" fontStyle="italic">
-                          No message
+                          {t('org.membership.noMessage')}
                         </Typography>
                       )}
                     </TableCell>
@@ -250,7 +252,7 @@ function MembershipRequestsPage() {
                           onClick={() => handleApprove(request)}
                           disabled={actionLoading}
                         >
-                          Approve
+                          {t('org.membership.actions.approve')}
                         </Button>
                         <Button
                           variant="outlined"
@@ -260,7 +262,7 @@ function MembershipRequestsPage() {
                           onClick={() => handleRejectClick(request)}
                           disabled={actionLoading}
                         >
-                          Reject
+                          {t('org.membership.actions.reject')}
                         </Button>
                       </Box>
                     </TableCell>
@@ -274,25 +276,25 @@ function MembershipRequestsPage() {
 
       {/* Reject Dialog */}
       <Dialog open={rejectDialogOpen} onClose={handleRejectCancel} maxWidth="sm" fullWidth>
-        <DialogTitle>Reject Membership Request</DialogTitle>
+        <DialogTitle>{t('org.membership.dialog.title')}</DialogTitle>
         <DialogContent>
           <Typography variant="body2" sx={{ mb: 2 }}>
-            Are you sure you want to reject the membership request from{' '}
+            {t('org.membership.dialog.message')}{' '}
             <strong>{selectedRequest?.user_email}</strong>?
           </Typography>
           <TextField
-            label="Reason for rejection (optional)"
+            label={t('org.membership.dialog.reasonLabel')}
             multiline
             rows={3}
             fullWidth
             value={rejectionReason}
             onChange={(e) => setRejectionReason(e.target.value)}
-            placeholder="Provide a reason that will be visible to the applicant..."
+            placeholder={t('org.membership.dialog.reasonPlaceholder')}
           />
         </DialogContent>
         <DialogActions>
           <Button onClick={handleRejectCancel} disabled={actionLoading}>
-            Cancel
+            {t('actions.cancel', { ns: 'common' })}
           </Button>
           <Button
             onClick={handleRejectConfirm}
@@ -300,7 +302,7 @@ function MembershipRequestsPage() {
             variant="contained"
             disabled={actionLoading}
           >
-            {actionLoading ? <CircularProgress size={20} /> : 'Reject Request'}
+            {actionLoading ? t('org.membership.dialog.rejecting') : t('org.membership.dialog.reject')}
           </Button>
         </DialogActions>
       </Dialog>

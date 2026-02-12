@@ -1,0 +1,200 @@
+{
+  "valueProposition": {
+    "headline": "Identity verification is not enough.",
+    "subheadline": "Build verifiable identity infrastructure.",
+    "extendedSubheadline": "Issue, verify, and govern credentials—built for EUDI Wallets, Open Badges, and enterprise trust.",
+    "primaryCTA": "Start Free",
+    "secondaryCTA": "Why Verifiable Identity"
+  },
+  "idvComparison": {
+    "title": "From IDV to Verifiable Identity",
+    "takeaway": "ElevenID replaces repeated verification with reusable trust.",
+    "traditional": {
+      "title": "Traditional IDV",
+      "oneTimeChecks": "One-time document checks",
+      "vendorControlled": "Vendor-controlled identity data",
+      "biometric": "Biometric decision outputs",
+      "closedAPIs": "Closed, proprietary APIs",
+      "manualTrust": "Manual trust configuration",
+      "reVerification": "Re-verification everywhere"
+    },
+    "elevenid": {
+      "title": "ElevenID",
+      "reusable": "Reusable verifiable credentials",
+      "holderControlled": "Holder-controlled digital wallets",
+      "cryptographic": "Cryptographic proofs",
+      "openStandards": "Open standards (W3C VC, OID4VC, ISO)",
+      "governedTrust": "Governed trust registries",
+      "reuseAcross": "Identity reuse across ecosystems"
+    }
+  },
+  "eudiOpenBadges": {
+    "title": "Built for EUDI Wallets and Verifiable Credentials",
+    "verifyCredentials": "Verify Verifiable Credentials—not just documents.",
+    "trustIssuers": "Trust issuers—not databases.",
+    "walletFirst": "Wallet-first by design—EUDI-ready.",
+    "quote": "IDV platforms stop at a one-time decision. ElevenID produces cryptographically verifiable outcomes that can be reused across wallets, ecosystems, and trust registries."
+  },
+  "organizationOutcomes": {
+    "title": "Why This Matters for Organizations",
+    "reduceKYC": "Reduce repeat KYC costs with reusable credentials",
+    "eudiReady": "Prepare for EUDI Wallet acceptance",
+    "avoidLockIn": "Avoid vendor lock-in with open standards",
+    "supportBadges": "Support Open Badges, workforce credentials, and government IDs in one system"
+  },
+  "audienceRouting": {
+    "title": "Choose Your Path",
+    "subtitle": "Pick your entry point—enterprise, government, or developers.",
+    "enterprise": {
+      "title": "Enterprise",
+      "description": "Reduce repeat KYC, enable partner interoperability, and govern trust at scale.",
+      "cta": "Explore Enterprise"
+    },
+    "government": {
+      "title": "Government",
+      "description": "EUDI-ready infrastructure for ISO credentials, trust lists, and regulated acceptance.",
+      "cta": "Explore Government"
+    },
+    "developers": {
+      "title": "Developers",
+      "description": "Docs, SDKs, and quickstarts for VC issuance and verification.",
+      "cta": "Read Docs"
+    }
+  },
+  "proofStrip": {
+    "title": "Built on Proven Foundations",
+    "interoperability": "Interoperability",
+    "offlineVerification": "Offline Verification",
+    "deployment": "Deployment",
+    "keySecurity": "Key Security",
+    "compliance": "Compliance"
+  },
+  "infrastructure": {
+    "title": "Why Infrastructure Beats Per-Check Pricing",
+    "commodity": "Verification becomes a commodity",
+    "orchestration": "Trust orchestration compounds in value",
+    "reusable": "Reusable credentials reduce long-term cost",
+    "preventLockIn": "Standards prevent vendor lock-in"
+  },
+  "landingPage": {
+    "loading": "Loading...",
+    "checkingAccount": "Checking your account...",
+    "features": {
+      "issuance": {
+        "title": "Issuance",
+        "description": "Issue standards-based credentials with cryptographic signatures and policy enforcement."
+      },
+      "verification": {
+        "title": "Verification",
+        "description": "Verify credentials against trust anchors with revocation checking and selective disclosure."
+      },
+      "governance": {
+        "title": "Governance",
+        "description": "Manage trust, policy, and deployment centrally—without changing verifier code."
+      }
+    },
+    "identityProblem": {
+      "title": "The Identity Problem",
+      "description": "Most organizations face fragmented systems, unclear trust, and growing compliance pressure.",
+      "items": {
+        "fragmented": "Fragmented identity systems that don't interoperate",
+        "unclearTrust": "Unclear issuer trust across partners and jurisdictions",
+        "privacyPressure": "Privacy compliance pressure (data minimization + selective disclosure)",
+        "pkiComplexity": "PKI + revocation complexity at scale"
+      }
+    },
+    "solvesIt": {
+      "title": "How ElevenID Solves It",
+      "intro": "Govern identity with four primitives: trust profiles, credential templates, presentation policies, and flows.",
+      "subheading": "Policies are configuration, not code. Endpoints execute centrally governed trust and disclosure rules without redeployment."
+    },
+    "howItWorks": {
+      "title": "How It Works",
+      "description": "Digital identity is a governed exchange between four actors.",
+      "cta": "See the Full Flow"
+    },
+    "standards": {
+      "title": "Standards-Based Architecture",
+      "subtitle": "Standards are not integrations. They are the product.",
+      "description": "These layers let ElevenID interoperate across governments, wallets, and enterprises without custom integrations.",
+      "cta": "Explore Standards"
+    },
+    "startFirst": {
+      "title": "What are you doing first?",
+      "description": "Choose a starting point. You can expand into a full ecosystem when you're ready.",
+      "cards": {
+        "verify": {
+          "title": "Verify credentials",
+          "description": "Verify EUDI wallets, Open Badges, and ISO credentials."
+        },
+        "issue": {
+          "title": "Issue credentials",
+          "description": "Issue workforce, education, or government credentials."
+        },
+        "offline": {
+          "title": "Offline / facility",
+          "description": "Verify at checkpoints with limited connectivity."
+        },
+        "wallet": {
+          "title": "Wallet experience",
+          "description": "Give users a wallet to hold and present credentials."
+        }
+      },
+      "notSure": "Not sure?",
+      "startWithVerificationApi": "Start with Verification API"
+    },
+    "products": {
+      "title": "Products & Capabilities",
+      "description": "A complete platform—from issuance to verification and governance.",
+      "viewDetails": "View Details",
+      "viewAll": "View All Products"
+    },
+    "trustSignals": {
+      "title": "Enterprise-Grade Infrastructure",
+      "security": {
+        "title": "Security",
+        "item1": "Enterprise-grade cryptographic validation",
+        "item2": "PKI and revocation management",
+        "item3": "HSM and key vault integration"
+      },
+      "infrastructure": {
+        "title": "Infrastructure",
+        "item1": "Offline-first capability (72h cache)",
+        "item2": "High-availability SaaS deployment",
+        "item3": "Self-hosted options for sovereignty",
+        "item4": "Horizontal scaling and load balancing",
+        "item5": "Built with AI-assisted development workflows to maintain high quality at lower cost."
+      },
+      "compliance": {
+        "title": "Compliance",
+        "item1": "Implements ICAO 9303",
+        "item2": "Implements ISO 18013-5 (mDoc)",
+        "item3": "GDPR and privacy by design",
+        "item4": "Selective disclosure and data minimization"
+      }
+    },
+    "proofStrip": {
+      "claims": {
+        "w3c": "W3C VC / SD-JWT / OID4VP",
+        "offlineCache": "72-hour offline cache",
+        "deployment": "SaaS + Self-hosted",
+        "keySecurity": "HSM / Vault integration",
+        "auditLogs": "Immutable audit logs"
+      }
+    },
+    "portals": {
+      "emphasis": "Built-in portals",
+      "message": "for applicants, vendors, and admins—manage API keys, trust policies, and operations in one place.",
+      "learnMore": "Learn more"
+    },
+    "footer": {
+      "title": "Ready to get started?",
+      "description": "Start free, or compare plans for your organization.",
+      "viewPricing": "View Pricing"
+    },
+    "orientation": {
+      "title": "New to verifiable identity?",
+      "cta": "How It Works"
+    }
+  }
+}

@@ -1,0 +1,54 @@
+{
+	"general": {
+		"unknown": "Ein unbekannter Fehler ist aufgetreten",
+		"networkError": "Netzwerkfehler. Bitte prüfen Sie Ihre Verbindung.",
+		"serverError": "Serverfehler. Bitte versuchen Sie es später erneut.",
+		"unauthorized": "Sie sind nicht berechtigt, diese Aktion auszuführen",
+		"forbidden": "Zugriff verweigert",
+		"notFound": "Die angeforderte Ressource wurde nicht gefunden",
+		"timeout": "Zeitüberschreitung. Bitte versuchen Sie es erneut."
+	},
+	"validation": {
+		"required": "Dieses Feld ist erforderlich",
+		"invalidEmail": "Ungültige E-Mail-Adresse",
+		"invalidPhone": "Ungültige Telefonnummer",
+		"invalidUrl": "Ungültige URL",
+		"passwordTooShort": "Das Passwort muss mindestens 8 Zeichen lang sein",
+		"passwordsDoNotMatch": "Passwörter stimmen nicht überein"
+	},
+	"auth": {
+		"loginFailed": "Anmeldung fehlgeschlagen. Bitte prüfen Sie Ihre Anmeldedaten.",
+		"sessionExpired": "Ihre Sitzung ist abgelaufen. Bitte melden Sie sich erneut an.",
+		"logoutFailed": "Abmeldung fehlgeschlagen. Bitte versuchen Sie es erneut.",
+		"invalidCredentials": "Ungültiger Benutzername oder ungültiges Passwort",
+		"accountLocked": "Ihr Konto wurde gesperrt. Bitte kontaktieren Sie den Support."
+	},
+	"api": {
+		"fetchFailed": "Daten konnten nicht geladen werden",
+		"saveFailed": "Änderungen konnten nicht gespeichert werden",
+		"deleteFailed": "Element konnte nicht gelöscht werden",
+		"uploadFailed": "Datei konnte nicht hochgeladen werden",
+		"connectionFailed": "Verbindung zum Server fehlgeschlagen"
+	},
+	"errorState": {
+		"defaultTitle": "Etwas ist schiefgelaufen",
+		"operationFailed": "Vorgang fehlgeschlagen",
+		"error": "Fehler",
+		"unexpectedError": "Ein unerwarteter Fehler ist aufgetreten",
+		"genericError": "Ein Fehler ist aufgetreten",
+		"detailsCopied": "Fehlerdetails wurden in die Zwischenablage kopiert",
+		"errorReport": "Fehlerbericht: {{code}}",
+		"requestId": "Anfrage-ID:",
+		"timestamp": "Zeitstempel:",
+		"errorCode": "Fehlercode:",
+		"message": "Nachricht:",
+		"technicalDetails": "Technische Details:",
+		"copyDetails": "Details kopieren"
+	},
+	"messages": {
+		"tryAgain": "Bitte versuchen Sie es erneut",
+		"contactSupport": "Wenn das Problem weiterhin besteht, wenden Sie sich bitte an den Support",
+		"goBack": "Zur vorherigen Seite zurückkehren",
+		"retry": "Erneut versuchen"
+	}
+}

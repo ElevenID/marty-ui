@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom';
 import RocketLaunchIcon from '@mui/icons-material/RocketLaunch';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import CloseIcon from '@mui/icons-material/Close';
+import { useTranslation } from 'react-i18next';
 
 /**
  * GuidedSetupBanner - Shows a persistent banner prompting users to complete setup
@@ -12,6 +13,7 @@ import CloseIcon from '@mui/icons-material/Close';
  * until setup is complete.
  */
 function GuidedSetupBanner({ readiness, onDismiss }) {
+  const { t } = useTranslation('console');
   const [dismissed, setDismissed] = useState(false);
 
   useEffect(() => {
@@ -56,26 +58,26 @@ function GuidedSetupBanner({ readiness, onDismiss }) {
           onClick={handleDismiss}
           startIcon={<CloseIcon />}
         >
-          Dismiss
+          {t('dashboard.guidedSetupBanner.dismiss')}
         </Button>
       }
       sx={{ mb: 3 }}
     >
       <Box>
         <Typography variant="subtitle1" fontWeight={600} gutterBottom>
-          {isStarted ? 'Resume Organization Setup' : 'Get Started with Guided Setup'}
+          {isStarted ? t('dashboard.guidedSetupBanner.resumeSetup') : t('dashboard.guidedSetupBanner.getStarted')}
         </Typography>
         <Typography variant="body2" paragraph>
           {isStarted
-            ? `You're ${completedSteps} of ${totalSteps} steps complete. Continue the guided setup to finish configuring your organization.`
-            : 'Walk through a step-by-step wizard to configure trust profiles, templates, policies, deployment, and flows.'}
+            ? t('dashboard.guidedSetupBanner.resumeProgress', { completed: completedSteps, total: totalSteps })
+            : t('dashboard.guidedSetupBanner.startDescription')}
         </Typography>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
           <Box sx={{ flex: 1 }}>
             <LinearProgress variant="determinate" value={progress} />
           </Box>
           <Typography variant="caption" color="text.secondary">
-            {completedSteps}/{totalSteps} steps
+            {t('dashboard.guidedSetupBanner.stepsProgress', { completed: completedSteps, total: totalSteps })}
           </Typography>
         </Box>
         <Button
@@ -85,7 +87,7 @@ function GuidedSetupBanner({ readiness, onDismiss }) {
           size="small"
           startIcon={isStarted ? <PlayArrowIcon /> : <RocketLaunchIcon />}
         >
-          {isStarted ? 'Resume Setup' : 'Start Guided Setup'}
+          {isStarted ? t('dashboard.guidedSetupBanner.resumeButton') : t('dashboard.guidedSetupBanner.startButton')}
         </Button>
       </Box>
     </Alert>

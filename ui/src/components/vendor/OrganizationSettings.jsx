@@ -10,6 +10,7 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   Box,
   Paper,
@@ -43,6 +44,7 @@ import {
  * Organization Settings Component
  */
 export default function OrganizationSettings() {
+  const { t } = useTranslation('vendor');
   const { organizationId } = useAuth();
   
   // Organization details state
@@ -102,7 +104,7 @@ export default function OrganizationSettings() {
 
   const handleSave = async () => {
     if (!organizationName.trim()) {
-      setError('Organization name is required');
+      setError(t('organizationSettings.nameRequired'));
       return;
     }
 
@@ -118,7 +120,7 @@ export default function OrganizationSettings() {
         contactEmail: contactEmail.trim(),
       });
       
-      setSuccessMessage('Organization settings updated successfully');
+      setSuccessMessage(t('organizationSettings.updateSuccess'));
     } catch (err) {
       setError(getErrorMessage(err));
     } finally {
@@ -140,10 +142,10 @@ export default function OrganizationSettings() {
       <Box sx={{ mb: 3 }}>
         <Typography variant="h5" gutterBottom>
           <BusinessIcon sx={{ verticalAlign: 'middle', mr: 1 }} />
-          Organization Settings
+          {t('organizationSettings.title')}
         </Typography>
         <Typography variant="body2" color="text.secondary">
-          Manage your organization profile and view subscription details
+          {t('organizationSettings.description')}
         </Typography>
       </Box>
 
@@ -166,54 +168,54 @@ export default function OrganizationSettings() {
         <Grid item xs={12} md={8}>
           <Paper sx={{ p: 3 }}>
             <Typography variant="h6" gutterBottom>
-              Organization Details
+              {t('organizationSettings.details.title')}
             </Typography>
             <Divider sx={{ mb: 3 }} />
 
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
               <TextField
-                label="Organization Name"
+                label={t('organizationSettings.details.nameLabel')}
                 fullWidth
                 value={organizationName}
                 onChange={(e) => setOrganizationName(e.target.value)}
                 required
-                helperText="The display name for your organization"
+                helperText={t('organizationSettings.details.nameHelper')}
               />
 
               <TextField
-                label="Slug"
+                label={t('organizationSettings.details.slugLabel')}
                 fullWidth
                 value={slug}
                 disabled
-                helperText="Organization identifier (cannot be changed)"
+                helperText={t('organizationSettings.details.slugHelper')}
               />
 
               <TextField
-                label="Logo URL"
+                label={t('organizationSettings.details.logoUrlLabel')}
                 fullWidth
                 value={logoUrl}
                 onChange={(e) => setLogoUrl(e.target.value)}
-                placeholder="https://example.com/logo.png"
-                helperText="URL to your organization's logo image"
+                placeholder={t('organizationSettings.details.logoUrlPlaceholder')}
+                helperText={t('organizationSettings.details.logoUrlHelper')}
               />
 
               <TextField
-                label="Website URL"
+                label={t('organizationSettings.details.websiteUrlLabel')}
                 fullWidth
                 value={websiteUrl}
                 onChange={(e) => setWebsiteUrl(e.target.value)}
-                placeholder="https://example.com"
-                helperText="Your organization's website"
+                placeholder={t('organizationSettings.details.websiteUrlPlaceholder')}
+                helperText={t('organizationSettings.details.websiteUrlHelper')}
               />
 
               <TextField
-                label="Contact Email"
+                label={t('organizationSettings.details.contactEmailLabel')}
                 fullWidth
                 type="email"
                 value={contactEmail}
                 onChange={(e) => setContactEmail(e.target.value)}
-                placeholder="contact@example.com"
-                helperText="Primary contact email for your organization"
+                placeholder={t('organizationSettings.details.contactEmailPlaceholder')}
+                helperText={t('organizationSettings.details.contactEmailHelper')}
               />
 
               <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 2 }}>
@@ -222,7 +224,7 @@ export default function OrganizationSettings() {
                   onClick={loadOrganizationData}
                   disabled={saving}
                 >
-                  Cancel
+                  {t('organizationSettings.details.cancelButton')}
                 </Button>
                 <Button
                   variant="contained"
@@ -230,7 +232,7 @@ export default function OrganizationSettings() {
                   onClick={handleSave}
                   disabled={saving || !organizationName.trim()}
                 >
-                  {saving ? 'Saving...' : 'Save Changes'}
+                  {saving ? t('organizationSettings.details.saving') : t('organizationSettings.details.saveButton')}
                 </Button>
               </Box>
             </Box>
@@ -242,7 +244,7 @@ export default function OrganizationSettings() {
           <Card>
             <CardContent>
               <Typography variant="h6" gutterBottom>
-                Subscription Plan
+                {t('organizationSettings.subscription.title')}
               </Typography>
               <Divider sx={{ mb: 2 }} />
 
@@ -250,10 +252,10 @@ export default function OrganizationSettings() {
                 <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                   <Box>
                     <Typography variant="body2" color="text.secondary">
-                      Current Plan
+                      {t('organizationSettings.subscription.currentPlan')}
                     </Typography>
                     <Chip
-                      label={subscription.tier || 'Free'}
+                      label={subscription.tier || t('organizationSettings.subscription.free')}
                       color="primary"
                       sx={{ mt: 0.5 }}
                     />
@@ -261,10 +263,10 @@ export default function OrganizationSettings() {
 
                   <Box>
                     <Typography variant="body2" color="text.secondary" gutterBottom>
-                      Status
+                      {t('organizationSettings.subscription.status')}
                     </Typography>
                     <Chip
-                      label={subscription.status || 'Active'}
+                      label={subscription.status || t('organizationSettings.subscription.active')}
                       color={subscription.status === 'active' ? 'success' : 'default'}
                       size="small"
                     />
@@ -273,7 +275,7 @@ export default function OrganizationSettings() {
                   {subscription.limits && (
                     <Box>
                       <Typography variant="body2" color="text.secondary" gutterBottom>
-                        Limits
+                        {t('organizationSettings.subscription.limits')}
                       </Typography>
                       <TableContainer>
                         <Table size="small">
@@ -301,7 +303,7 @@ export default function OrganizationSettings() {
                   {(subscription.current_period_start || subscription.current_period_end) && (
                     <Box>
                       <Typography variant="body2" color="text.secondary" gutterBottom>
-                        Billing Period
+                        {t('organizationSettings.subscription.billingPeriod')}
                       </Typography>
                       <Typography variant="caption">
                         {subscription.current_period_start &&
@@ -315,7 +317,7 @@ export default function OrganizationSettings() {
                 </Box>
               ) : (
                 <Alert severity="info">
-                  No active subscription found
+                  {t('organizationSettings.subscription.noSubscription')}
                 </Alert>
               )}
             </CardContent>
@@ -325,23 +327,23 @@ export default function OrganizationSettings() {
           <Card sx={{ mt: 2 }}>
             <CardContent>
               <Typography variant="h6" gutterBottom>
-                Organization Info
+                {t('organizationSettings.info.title')}
               </Typography>
               <Divider sx={{ mb: 2 }} />
 
               <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
                 <Box>
                   <Typography variant="body2" color="text.secondary">
-                    Created
+                    {t('organizationSettings.info.created')}
                   </Typography>
                   <Typography variant="body2">
-                    {createdAt ? new Date(createdAt).toLocaleDateString() : 'N/A'}
+                    {createdAt ? new Date(createdAt).toLocaleDateString() : t('organizationSettings.info.notAvailable')}
                   </Typography>
                 </Box>
 
                 <Box>
                   <Typography variant="body2" color="text.secondary">
-                    Organization ID
+                    {t('organizationSettings.info.organizationId')}
                   </Typography>
                   <Typography variant="caption" sx={{ fontFamily: 'monospace', wordBreak: 'break-all' }}>
                     {organizationId}

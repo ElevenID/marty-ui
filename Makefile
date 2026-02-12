@@ -200,7 +200,11 @@ tunnel-start: ## Start Cloudflare Tunnel for external access (requires .env.tunn
 dev-ui-tunnel: ## Start UI dev server with external access (for tunnel)
 	@echo "$(BLUE)🚀 Starting UI with external access...$(NC)"
 	@echo "$(YELLOW)Note: UI will be accessible from Docker containers$(NC)"
-	@cd ui && bun run vite --host
+	@if [ -f .env.tunnel ]; then \
+		cp .env.tunnel ui/.env.tunnel; \
+		echo "$(GREEN)✓ Synced .env.tunnel to ui/.env.tunnel$(NC)"; \
+	fi
+	@cd ui && bun run vite --host --mode tunnel
 
 tunnel-stop: ## Stop Cloudflare Tunnel
 	@echo "$(BLUE)🛑 Stopping Cloudflare Tunnel...$(NC)"

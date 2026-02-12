@@ -1,0 +1,98 @@
+{
+	"welcome": {
+		"title": "Willkommen bei {{appName}}",
+		"subtitle": "Lassen Sie uns alles einrichten",
+		"getStarted": "Loslegen"
+	},
+	"roleSelection": {
+		"title": "Wählen Sie Ihre Rolle",
+		"subtitle": "Was führt Sie hierher?",
+		"promptTitle": "Wählen Sie die Option, die Sie am besten beschreibt",
+		"administrator": "Administrator",
+		"administratorDesc": "Plattform und Vertrauensinfrastruktur verwalten",
+		"vendor": "Anbieter / Organisation",
+		"vendorDesc": "Ich stelle Dokumente für meine Organisation aus",
+		"vendorFeatures": [
+			"Digitale Reisedokumente ausstellen",
+			"Antragsteller und Anträge verwalten",
+			"API für Integrationen nutzen",
+			"Webhooks und Automatisierungen konfigurieren"
+		],
+		"applicant": "Antragsteller",
+		"applicantDesc": "Ich beantrage digitale Reisedokumente",
+		"applicantFeatures": [
+			"Digitale Reisedokumente beantragen",
+			"Nachweise im Wallet speichern",
+			"Dokumente sicher teilen",
+			"Antragsstatus verfolgen"
+		]
+	},
+	"organization": {
+		"title": "Organisation beitreten",
+		"subtitle": "Geben Sie Ihre Organisationsdaten ein",
+		"organizationName": "Organisationsname",
+		"organizationCode": "Organisationscode",
+		"createNew": "Neue Organisation erstellen",
+		"joinExisting": "Bestehender Organisation beitreten"
+	},
+	"profile": {
+		"title": "Ihr Profil",
+		"subtitle": "Erzählen Sie uns etwas über sich",
+		"firstName": "Vorname",
+		"lastName": "Nachname",
+		"email": "E-Mail",
+		"phone": "Telefonnummer"
+	},
+	"trustSetup": {
+		"title": "Vertrauensprofil",
+		"subtitle": "Definieren Sie, welchen Ausstellern Sie vertrauen",
+		"addIssuers": "Vertrauenswürdige Aussteller hinzufügen",
+		"configurePolicies": "Richtlinien konfigurieren"
+	},
+	"completion": {
+		"title": "Alles bereit!",
+		"subtitle": "Ihr Konto ist einsatzbereit",
+		"goToDashboard": "Zum Dashboard"
+	},
+	"steps": {
+		"role": "Rolle",
+		"organization": "Organisation",
+		"profile": "Profil",
+		"trust": "Vertrauen",
+		"complete": "Fertig"
+	},
+	"domainMatch": {
+		"title": "Organisationen für Ihre E-Mail-Domain gefunden",
+		"info": "Wir haben {{count}} Organisation gefunden, die Benutzer aus der",
+		"info_other": "Wir haben {{count}} Organisationen gefunden, die Benutzer aus der",
+		"domain": "Domain <strong>{{domain}}</strong> akzeptieren.",
+		"policies": {
+			"auto": "Sofortiger Zugriff",
+			"approval": "Genehmigung erforderlich",
+			"closed": "Geschlossen"
+		},
+		"autoDescription": "Sie werden automatisch als <strong>{{role}}</strong> hinzugefügt",
+		"approvalDescription": "Ihre Anfrage wird von einem Administrator geprüft. Sie werden nach Freigabe benachrichtigt.",
+		"buttons": {
+			"joinNow": "Jetzt beitreten",
+			"requestToJoin": "Beitritt anfragen",
+			"closed": "Geschlossen",
+			"processing": "Verarbeitung..."
+		},
+		"skipWarning": "Sie können diesen Schritt überspringen und Organisationen später manuell per Einladungscode beitreten.",
+		"skipButton": "Vorerst überspringen"
+	},
+	"confirmOrg": {
+		"title": "Organisationsauswahl bestätigen",
+		"warning": "Bitte bestätigen Sie, dass Sie der folgenden Organisation beitreten möchten:",
+		"approvalInfo": "Diese Organisation erfordert eine Genehmigung. Ihre Anfrage wird von einem Administrator geprüft.",
+		"cancel": "Abbrechen",
+		"confirm": "Bestätigen & Beitreten",
+		"processing": "Verarbeitung..."
+	},
+	"membershipMode": {
+		"inviteOnly": "Nur Einladung",
+		"approval": "Beitritt anfragen",
+		"open": "Offen"
+	}
+}

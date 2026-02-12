@@ -7,6 +7,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { useNotification } from '../../contexts/NotificationContext';
 import {
   Box,
@@ -56,6 +57,7 @@ import FlowDisableDialog from './FlowDisableDialog';
 import { EmptyState } from '../common';
 
 const FlowManager = () => {
+  const { t } = useTranslation(['vendor', 'common']);
   const { user } = useAuth();
   const navigate = useNavigate();
   const { showError, showWarning, showSuccess } = useNotification();
@@ -345,13 +347,13 @@ const FlowManager = () => {
   return (
     <Box>
       <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
-        <Typography variant="h4">Flow Management</Typography>
+        <Typography variant="h4">{t('flowManager.title')}</Typography>
         <Button
           variant="contained"
           color="primary"
           startIcon={<AddIcon />}
         >
-          Create Flow
+          {t('flowManager.createFlow')}
         </Button>
       </Box>
 
@@ -363,11 +365,11 @@ const FlowManager = () => {
 
       <Paper sx={{ mb: 3 }}>
         <Tabs value={activeTab} onChange={(e, v) => setActiveTab(v)}>
-          <Tab label="Flows" />
-          <Tab label="Executions" />
-          <Tab label="Approval Queue" />
-          <Tab label="Credentials" />
-          <Tab label="Revocation Batches" />
+          <Tab label={t('flowManager.tabs.flows')} />
+          <Tab label={t('flowManager.tabs.executions')} />
+          <Tab label={t('flowManager.tabs.approvals')} />
+          <Tab label={t('flowManager.tabs.credentials')} />
+          <Tab label={t('flowManager.tabs.revocations')} />
         </Tabs>
 
         {/* Flows Tab */}

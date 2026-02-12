@@ -4,6 +4,7 @@
  * Visual representation of the application flow states from submission to credential issuance.
  */
 
+import { useTranslation } from 'react-i18next';
 import {
   Box,
   Paper,
@@ -19,35 +20,37 @@ import HourglassEmptyIcon from '@mui/icons-material/HourglassEmpty';
 import CancelIcon from '@mui/icons-material/Cancel';
 import PropTypes from 'prop-types';
 
-const FLOW_STEPS = [
+const getFlowSteps = (t) => [
   {
-    label: 'Submitted',
-    description: 'Application received and validated',
+    label: t('flowStateMachine.steps.submitted.label'),
+    description: t('flowStateMachine.steps.submitted.description'),
     status: 'submitted',
   },
   {
-    label: 'Under Review',
-    description: 'Application is being reviewed by approver',
+    label: t('flowStateMachine.steps.underReview.label'),
+    description: t('flowStateMachine.steps.underReview.description'),
     status: 'under_review',
   },
   {
-    label: 'Approved',
-    description: 'Application approved, ready for credential issuance',
+    label: t('flowStateMachine.steps.approved.label'),
+    description: t('flowStateMachine.steps.approved.description'),
     status: 'approved',
   },
   {
-    label: 'QR Issued',
-    description: 'QR code generated for credential claim',
+    label: t('flowStateMachine.steps.qrIssued.label'),
+    description: t('flowStateMachine.steps.qrIssued.description'),
     status: 'qr_issued',
   },
   {
-    label: 'Credential Issued',
-    description: 'Credential successfully issued to applicant',
+    label: t('flowStateMachine.steps.credentialIssued.label'),
+    description: t('flowStateMachine.steps.credentialIssued.description'),
     status: 'credential_issued',
   },
 ];
 
 function FlowStateMachine({ currentStatus = 'submitted', isRejected = false, sx = {} }) {
+  const { t } = useTranslation('vendor');
+  const FLOW_STEPS = getFlowSteps(t);
   const getCurrentStep = () => {
     if (isRejected) return -1;
     const index = FLOW_STEPS.findIndex(step => step.status === currentStatus);
@@ -72,12 +75,12 @@ function FlowStateMachine({ currentStatus = 'submitted', isRejected = false, sx 
   return (
     <Paper elevation={1} sx={{ p: 3, ...sx }}>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-        <Typography variant="h6">Application Flow</Typography>
+        <Typography variant="h6">{t('flowStateMachine.title')}</Typography>
         {isRejected ? (
-          <Chip label="Rejected" color="error" size="small" />
+          <Chip label={t('flowStateMachine.rejected')} color="error" size="small" />
         ) : (
           <Chip 
-            label={FLOW_STEPS[activeStep]?.label || 'Unknown'} 
+            label={FLOW_STEPS[activeStep]?.label || t('flowStateMachine.unknown')} 
             color="primary" 
             size="small" 
           />
@@ -88,10 +91,10 @@ function FlowStateMachine({ currentStatus = 'submitted', isRejected = false, sx 
         <Box sx={{ textAlign: 'center', py: 3 }}>
           <CancelIcon sx={{ fontSize: 60, color: 'error.main', mb: 2 }} />
           <Typography variant="h6" color="error">
-            Application Rejected
+            {t('flowStateMachine.applicationRejected')}
           </Typography>
           <Typography variant="body2" color="text.secondary">
-            This application did not meet approval criteria
+            {t('flowStateMachine.rejectionMessage')}
           </Typography>
         </Box>
       ) : (
@@ -102,7 +105,7 @@ function FlowStateMachine({ currentStatus = 'submitted', isRejected = false, sx 
                 StepIconComponent={() => getStepIcon(index)}
                 optional={
                   index === FLOW_STEPS.length - 1 && (
-                    <Typography variant="caption">Final Step</Typography>
+                    <Typography variant="caption">{t('flowStateMachine.finalStep')}</Typography>
                   )
                 }
               >

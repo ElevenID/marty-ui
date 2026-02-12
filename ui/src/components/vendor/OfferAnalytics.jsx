@@ -9,6 +9,7 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import PropTypes from 'prop-types';
 import {
   Box,
@@ -59,8 +60,8 @@ const OUTCOME_COLORS = {
 /**
  * Format date for display
  */
-function formatDate(dateString) {
-  if (!dateString) return 'N/A';
+function formatDate(dateString, t) {
+  if (!dateString) return t('offerAnalytics.notAvailable');
   const date = new Date(dateString);
   return new Intl.DateTimeFormat('en-US', {
     month: 'short',
@@ -73,8 +74,8 @@ function formatDate(dateString) {
 /**
  * Format wallet type for display
  */
-function formatWalletType(walletType) {
-  if (!walletType) return 'Unknown';
+function formatWalletType(walletType, t) {
+  if (!walletType) return t('offerAnalytics.unknown');
   return walletType
     .split('_')
     .map(word => word.charAt(0).toUpperCase() + word.slice(1))
@@ -134,6 +135,7 @@ MetricCard.propTypes = {
  * Main Offer Analytics Component
  */
 export default function OfferAnalytics() {
+  const { t } = useTranslation('vendor');
   const { organizationId } = useAuth();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -186,7 +188,7 @@ export default function OfferAnalytics() {
       setSummary(data);
     } catch (err) {
       console.error('Error fetching analytics:', err);
-      setError(err.message);
+      setError(t('offerAnalytics.loadFailed'));
     } finally {
       setLoading(false);
     }
@@ -280,9 +282,9 @@ export default function OfferAnalytics() {
       {/* Header */}
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
         <Box>
-          <Typography variant="h6">Analytics & Insights</Typography>
+          <Typography variant="h6">{t('offerAnalytics.title')}</Typography>
           <Typography variant="body2" color="text.secondary">
-            QR code scan statistics and wallet analytics (Last 30 days)
+            {t('offerAnalytics.description')}
           </Typography>
         </Box>
         <IconButton onClick={handleRefresh} disabled={loading}>
@@ -293,7 +295,7 @@ export default function OfferAnalytics() {
       {/* Error Alert */}
       {error && (
         <Alert severity="error" sx={{ mb: 3 }} onClose={() => setError(null)}>
-          <AlertTitle>Error</AlertTitle>
+          <AlertTitle>{t('offerAnalytics.error')}</AlertTitle>
           {error}
         </Alert>
       )}
@@ -303,25 +305,25 @@ export default function OfferAnalytics() {
         <Grid container spacing={3} sx={{ mb: 4 }}>
           <Grid item xs={12} sm={6} md={3}>
             <MetricCard
-              title="Total Offers"
+              title={t('offerAnalytics.metrics.totalOffers')}
               value={summary.total_offers}
               icon={QrCodeScannerIcon}
               color="primary"
-              subtitle={`${summary.active_offers} active`}
+              subtitle={t('offerAnalytics.metrics.totalOffersSubtitle', { count: summary.active_offers })}
             />
           </Grid>
           <Grid item xs={12} sm={6} md={3}>
             <MetricCard
-              title="Total Scans"
+              title={t('offerAnalytics.metrics.totalScans')}
               value={summary.total_scans}
               icon={TrendingUpIcon}
               color="info"
-              subtitle={`${summary.avg_scans_per_offer.toFixed(1)} per offer`}
+              subtitle={t('offerAnalytics.metrics.totalScansSubtitle', { avg: summary.avg_scans_per_offer.toFixed(1) })}
             />
           </Grid>
           <Grid item xs={12} sm={6} md={3}>
             <MetricCard
-              title="Success Rate"
+              title={t('offerAnalytics.metrics.successRate')}
               value={`${summary.success_rate}%`}
               icon={CheckCircleIcon}
               color="success"
@@ -329,7 +331,7 @@ export default function OfferAnalytics() {
           </Grid>
           <Grid item xs={12} sm={6} md={3}>
             <MetricCard
-              title="Unique Wallets"
+              title={t('offerAnalytics.metrics.uniqueWallets')}
               value={summary.unique_wallets}
               icon={DevicesIcon}
               color="warning"
@@ -347,7 +349,7 @@ export default function OfferAnalytics() {
               <CardContent>
                 <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                   <DevicesIcon />
-                  Top Wallet Types
+                  {t('offerAnalytics.walletDistribution.title')}
                 </Typography>
                 <Divider sx={{ my: 2 }} />
                 {summary.top_wallet_types.length > 0 ? (
@@ -355,7 +357,7 @@ export default function OfferAnalytics() {
                     {summary.top_wallet_types.map((item, index) => (
                       <Box key={index}>
                         <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
-                          <Typography variant="body2">{formatWalletType(item.wallet_type)}</Typography>
+                          <Typography variant="body2">{formatWalletType(item.wallet_type, t)}</Typography>
                           <Typography variant="body2" fontWeight="medium">{item.count}</Typography>
                         </Box>
                         <Box sx={{ width: '100%', bgcolor: 'grey.200', borderRadius: 1, height: 8 }}>
@@ -372,7 +374,7 @@ export default function OfferAnalytics() {
                     ))}
                   </Stack>
                 ) : (
-                  <Typography color="text.secondary">No wallet data available</Typography>
+                  <Typography color="text.secondary">{t('offerAnalytics.walletDistribution.noData')}</Typography>
                 )}
               </CardContent>
             </Card>
@@ -384,7 +386,7 @@ export default function OfferAnalytics() {
               <CardContent>
                 <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                   <TimelineIcon />
-                  Recent Activity
+                  {t('offerAnalytics.recentActivity.title')}
                 </Typography>
                 <Divider sx={{ my: 2 }} />
                 {summary.recent_activity.length > 0 ? (
@@ -398,17 +400,17 @@ export default function OfferAnalytics() {
                             color={OUTCOME_COLORS[activity.outcome] || 'default'}
                           />
                           <Typography variant="body2" color="text.secondary">
-                            {formatWalletType(activity.wallet_type || 'Unknown')}
+                            {formatWalletType(activity.wallet_type || 'Unknown', t)}
                           </Typography>
                         </Box>
                         <Typography variant="caption" color="text.secondary">
-                          {formatDate(activity.accessed_at)}
+                          {formatDate(activity.accessed_at, t)}
                         </Typography>
                       </Box>
                     ))}
                   </Stack>
                 ) : (
-                  <Typography color="text.secondary">No recent activity</Typography>
+                  <Typography color="text.secondary">{t('offerAnalytics.recentActivity.noActivity')}</Typography>
                 )}
               </CardContent>
             </Card>
@@ -420,64 +422,64 @@ export default function OfferAnalytics() {
       <Paper sx={{ mb: 3 }}>
         <Box sx={{ p: 2, borderBottom: 1, borderColor: 'divider' }}>
           <Typography variant="h6" gutterBottom>
-            Detailed Scan Logs
+            {t('offerAnalytics.detailedLogs.title')}
           </Typography>
           
           {/* Filters */}
           <Box sx={{ display: 'flex', gap: 2, mt: 2 }}>
             <FormControl size="small" sx={{ minWidth: 150 }}>
-              <InputLabel>Access Type</InputLabel>
+              <InputLabel>{t('offerAnalytics.filters.accessType')}</InputLabel>
               <Select
                 value={accessTypeFilter}
-                label="Access Type"
+                label={t('offerAnalytics.filters.accessType')}
                 onChange={(e) => {
                   setAccessTypeFilter(e.target.value);
                   setScansPage(0);
                 }}
               >
-                <MenuItem value="">All</MenuItem>
-                <MenuItem value="qr_view">QR View</MenuItem>
-                <MenuItem value="offer_retrieval">Offer Retrieval</MenuItem>
-                <MenuItem value="token_exchange">Token Exchange</MenuItem>
-                <MenuItem value="credential_request">Credential Request</MenuItem>
+                <MenuItem value="">{t('offerAnalytics.filters.all')}</MenuItem>
+                <MenuItem value="qr_view">{t('offerAnalytics.accessTypes.qrView')}</MenuItem>
+                <MenuItem value="offer_retrieval">{t('offerAnalytics.accessTypes.offerRetrieval')}</MenuItem>
+                <MenuItem value="token_exchange">{t('offerAnalytics.accessTypes.tokenExchange')}</MenuItem>
+                <MenuItem value="credential_request">{t('offerAnalytics.accessTypes.credentialRequest')}</MenuItem>
               </Select>
             </FormControl>
             
             <FormControl size="small" sx={{ minWidth: 150 }}>
-              <InputLabel>Outcome</InputLabel>
+              <InputLabel>{t('offerAnalytics.filters.outcome')}</InputLabel>
               <Select
                 value={outcomeFilter}
-                label="Outcome"
+                label={t('offerAnalytics.filters.outcome')}
                 onChange={(e) => {
                   setOutcomeFilter(e.target.value);
                   setScansPage(0);
                 }}
               >
-                <MenuItem value="">All</MenuItem>
-                <MenuItem value="success">Success</MenuItem>
-                <MenuItem value="expired">Expired</MenuItem>
-                <MenuItem value="error">Error</MenuItem>
-                <MenuItem value="unauthorized">Unauthorized</MenuItem>
+                <MenuItem value="">{t('offerAnalytics.filters.all')}</MenuItem>
+                <MenuItem value="success">{t('offerAnalytics.outcomes.success')}</MenuItem>
+                <MenuItem value="expired">{t('offerAnalytics.outcomes.expired')}</MenuItem>
+                <MenuItem value="error">{t('offerAnalytics.outcomes.error')}</MenuItem>
+                <MenuItem value="unauthorized">{t('offerAnalytics.outcomes.unauthorized')}</MenuItem>
               </Select>
             </FormControl>
             
             <FormControl size="small" sx={{ minWidth: 150 }}>
-              <InputLabel>Wallet Type</InputLabel>
+              <InputLabel>{t('offerAnalytics.filters.walletType')}</InputLabel>
               <Select
                 value={walletTypeFilter}
-                label="Wallet Type"
+                label={t('offerAnalytics.filters.walletType')}
                 onChange={(e) => {
                   setWalletTypeFilter(e.target.value);
                   setScansPage(0);
                 }}
               >
-                <MenuItem value="">All</MenuItem>
-                <MenuItem value="microsoft_authenticator">Microsoft Authenticator</MenuItem>
-                <MenuItem value="spruce_wallet">Spruce Wallet</MenuItem>
-                <MenuItem value="waltid_wallet">Walt.ID Wallet</MenuItem>
-                <MenuItem value="trinsic_wallet">Trinsic Wallet</MenuItem>
-                <MenuItem value="android_wallet">Android Wallet</MenuItem>
-                <MenuItem value="ios_wallet">iOS Wallet</MenuItem>
+                <MenuItem value="">{t('offerAnalytics.filters.all')}</MenuItem>
+                <MenuItem value="microsoft_authenticator">{t('offerAnalytics.walletTypes.microsoftAuthenticator')}</MenuItem>
+                <MenuItem value="spruce_wallet">{t('offerAnalytics.walletTypes.spruce')}</MenuItem>
+                <MenuItem value="waltid_wallet">{t('offerAnalytics.walletTypes.waltId')}</MenuItem>
+                <MenuItem value="trinsic_wallet">{t('offerAnalytics.walletTypes.trinsic')}</MenuItem>
+                <MenuItem value="android_wallet">{t('offerAnalytics.walletTypes.androidWallet')}</MenuItem>
+                <MenuItem value="ios_wallet">{t('offerAnalytics.walletTypes.iosWallet')}</MenuItem>
               </Select>
             </FormControl>
           </Box>
@@ -488,12 +490,12 @@ export default function OfferAnalytics() {
           <Table>
             <TableHead>
               <TableRow>
-                <TableCell>Time</TableCell>
-                <TableCell>Access Type</TableCell>
-                <TableCell>Wallet Type</TableCell>
-                <TableCell>Outcome</TableCell>
-                <TableCell>Transaction ID</TableCell>
-                <TableCell>IP Address</TableCell>
+                <TableCell>{t('offerAnalytics.table.time')}</TableCell>
+                <TableCell>{t('offerAnalytics.table.accessType')}</TableCell>
+                <TableCell>{t('offerAnalytics.table.walletType')}</TableCell>
+                <TableCell>{t('offerAnalytics.table.outcome')}</TableCell>
+                <TableCell>{t('offerAnalytics.table.transactionId')}</TableCell>
+                <TableCell>{t('offerAnalytics.table.ipAddress')}</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
@@ -506,7 +508,7 @@ export default function OfferAnalytics() {
               ) : scans.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={6} align="center" sx={{ py: 4 }}>
-                    <Typography color="text.secondary">No scan logs found</Typography>
+                    <Typography color="text.secondary">{t('offerAnalytics.table.noLogs')}</Typography>
                   </TableCell>
                 </TableRow>
               ) : (
@@ -514,7 +516,7 @@ export default function OfferAnalytics() {
                   <TableRow key={scan.id} hover>
                     <TableCell>
                       <Typography variant="body2" fontSize="0.875rem">
-                        {formatDate(scan.accessed_at)}
+                        {formatDate(scan.accessed_at, t)}
                       </Typography>
                     </TableCell>
                     
@@ -524,7 +526,7 @@ export default function OfferAnalytics() {
                     
                     <TableCell>
                       <Typography variant="body2">
-                        {formatWalletType(scan.wallet_type)}
+                        {formatWalletType(scan.wallet_type, t)}
                         {scan.wallet_version && (
                           <Typography component="span" variant="caption" color="text.secondary" sx={{ ml: 0.5 }}>
                             v{scan.wallet_version}

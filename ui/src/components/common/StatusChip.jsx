@@ -5,6 +5,7 @@
  */
 
 import { Chip } from '@mui/material';
+import { useTranslation } from 'react-i18next';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import WarningIcon from '@mui/icons-material/Warning';
 import ErrorIcon from '@mui/icons-material/Error';
@@ -15,33 +16,33 @@ import BlockIcon from '@mui/icons-material/Block';
 /**
  * Status configurations for different resource types
  */
-const STATUS_CONFIGS = {
+const getStatusConfigs = (t) => ({
   // Generic statuses
-  active: { label: 'Active', color: 'success', icon: CheckCircleIcon },
-  draft: { label: 'Draft', color: 'default', icon: DraftsIcon },
-  disabled: { label: 'Disabled', color: 'error', icon: BlockIcon },
-  pending: { label: 'Pending', color: 'warning', icon: PendingIcon },
+  active: { label: t('status.active'), color: 'success', icon: CheckCircleIcon },
+  draft: { label: t('status.draft'), color: 'default', icon: DraftsIcon },
+  disabled: { label: t('status.disabled'), color: 'error', icon: BlockIcon },
+  pending: { label: t('status.pending'), color: 'warning', icon: PendingIcon },
   
   // Application-specific statuses
-  pending_review: { label: 'Pending Review', color: 'warning', icon: PendingIcon },
-  documents_pending: { label: 'Documents Pending', color: 'info', icon: PendingIcon },
-  approved: { label: 'Approved', color: 'success', icon: CheckCircleIcon },
-  rejected: { label: 'Rejected', color: 'error', icon: ErrorIcon },
-  verification_failed: { label: 'Verification Failed', color: 'error', icon: WarningIcon },
+  pending_review: { label: t('status.pendingReview'), color: 'warning', icon: PendingIcon },
+  documents_pending: { label: t('status.documentsPending'), color: 'info', icon: PendingIcon },
+  approved: { label: t('status.approved'), color: 'success', icon: CheckCircleIcon },
+  rejected: { label: t('status.rejected'), color: 'error', icon: ErrorIcon },
+  verification_failed: { label: t('status.verificationFailed'), color: 'error', icon: WarningIcon },
   
   // Flow instance statuses
-  running: { label: 'Running', color: 'info', icon: PendingIcon },
-  completed: { label: 'Completed', color: 'success', icon: CheckCircleIcon },
-  failed: { label: 'Failed', color: 'error', icon: ErrorIcon },
+  running: { label: t('status.running'), color: 'info', icon: PendingIcon },
+  completed: { label: t('status.completed'), color: 'success', icon: CheckCircleIcon },
+  failed: { label: t('status.failed'), color: 'error', icon: ErrorIcon },
   
   // Credential statuses
-  issued: { label: 'Issued', color: 'success', icon: CheckCircleIcon },
-  revoked: { label: 'Revoked', color: 'error', icon: BlockIcon },
-  expired: { label: 'Expired', color: 'warning', icon: WarningIcon },
+  issued: { label: t('status.issued'), color: 'success', icon: CheckCircleIcon },
+  revoked: { label: t('status.revoked'), color: 'error', icon: BlockIcon },
+  expired: { label: t('status.expired'), color: 'warning', icon: WarningIcon },
   
   // Generic fallback
-  unknown: { label: 'Unknown', color: 'default', icon: null },
-};
+  unknown: { label: t('status.unknown'), color: 'default', icon: null },
+});
 
 /**
  * StatusChip component for consistent status display
@@ -59,7 +60,8 @@ function StatusChip({
   showIcon = false,
   variant,
 }) {
-  const config = STATUS_CONFIGS[status] || STATUS_CONFIGS.unknown;
+  const { t } = useTranslation('common');
+  const config = getStatusConfigs(t)[status] || getStatusConfigs(t).unknown;
   const { label, color, icon: IconComponent } = config;
 
   return (

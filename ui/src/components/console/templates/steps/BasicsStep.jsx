@@ -14,51 +14,54 @@ import {
   MenuItem,
   FormHelperText,
 } from '@mui/material';
+import { useTranslation } from 'react-i18next';
 
-const CREDENTIAL_TYPES = [
-  { value: 'VerifiableCredential', label: 'Verifiable Credential (W3C)' },
-  { value: 'VerifiableAttestation', label: 'Verifiable Attestation' },
-  { value: 'mdoc', label: 'Mobile Document (ISO 18013-5)' },
-  { value: 'OpenBadgeCredential', label: 'Open Badge Credential' },
+const getCredentialTypes = (t) => [
+  { value: 'VerifiableCredential', label: t('wizards.credentialTemplate.credentialTypeLabels.VerifiableCredential') },
+  { value: 'VerifiableAttestation', label: t('wizards.credentialTemplate.credentialTypeLabels.VerifiableAttestation') },
+  { value: 'mdoc', label: t('wizards.credentialTemplate.credentialTypeLabels.mdoc') },
+  { value: 'OpenBadgeCredential', label: t('wizards.credentialTemplate.credentialTypeLabels.OpenBadgeCredential') },
 ];
 
 const BasicsStep = ({ data, onChange }) => {
+  const { t } = useTranslation('console');
+
   return (
     <Box>
       <Typography variant="h6" gutterBottom>
-        Basic Information
+        {t('wizards.credentialTemplate.basicsStep.title')}
       </Typography>
       <Typography color="text.secondary" paragraph>
-        Provide core details about this credential template.
+        {t('wizards.credentialTemplate.basicsStep.description')}
       </Typography>
 
       {/* Name */}
       <TextField
         fullWidth
         required
-        label="Template Name"
+        label={t('wizards.credentialTemplate.basicsStep.fields.templateName')}
         value={data.name || ''}
         onChange={(e) => onChange({ name: e.target.value })}
         sx={{ mb: 3 }}
-        helperText="A descriptive name for this credential template (e.g., 'Driver License', 'Diploma')"
+        helperText={t('wizards.credentialTemplate.basicsStep.helpers.templateName')}
       />
 
       {/* Credential Type */}
       <FormControl fullWidth required sx={{ mb: 3 }}>
-        <InputLabel>Credential Type</InputLabel>
+        <InputLabel>{t('wizards.credentialTemplate.basicsStep.fields.credentialType')}</InputLabel>
         <Select
           value={data.credential_type || 'VerifiableCredential'}
           onChange={(e) => onChange({ credential_type: e.target.value })}
-          label="Credential Type"
+          label={t('wizards.credentialTemplate.basicsStep.fields.credentialType')}
         >
-          {CREDENTIAL_TYPES.map((type) => (
+          {getCredentialTypes(t).map((type) => (
             <MenuItem key={type.value} value={type.value}>
               {type.label}
             </MenuItem>
           ))}
         </Select>
         <FormHelperText>
-          The type of credential this template represents
+          {t('wizards.credentialTemplate.basicsStep.helpers.credentialType')}
         </FormHelperText>
       </FormControl>
 
@@ -66,12 +69,12 @@ const BasicsStep = ({ data, onChange }) => {
       <TextField
         fullWidth
         required
-        label="VCT (Verifiable Credential Type)"
+        label={t('wizards.credentialTemplate.basicsStep.fields.vct')}
         value={data.vct || ''}
         onChange={(e) => onChange({ vct: e.target.value })}
         sx={{ mb: 3 }}
-        placeholder="https://example.com/credentials/DriversLicense"
-        helperText="A unique URI identifying this credential type (often a URL or URN)"
+        placeholder={t('wizards.credentialTemplate.basicsStep.placeholders.vct')}
+        helperText={t('wizards.credentialTemplate.basicsStep.helpers.vct')}
       />
 
       {/* Description */}
@@ -79,10 +82,10 @@ const BasicsStep = ({ data, onChange }) => {
         fullWidth
         multiline
         rows={4}
-        label="Description"
+        label={t('wizards.credentialTemplate.basicsStep.fields.description')}
         value={data.description || ''}
         onChange={(e) => onChange({ description: e.target.value })}
-        helperText="Optional: Describe the purpose and usage of this credential template"
+        helperText={t('wizards.credentialTemplate.basicsStep.helpers.description')}
       />
     </Box>
   );

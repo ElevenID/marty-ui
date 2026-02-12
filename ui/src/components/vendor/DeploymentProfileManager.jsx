@@ -7,6 +7,7 @@
  */
 
 import { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   Box,
   Paper,
@@ -47,13 +48,13 @@ import deploymentProfilesApi from '../../services/deploymentProfilesApi';
 import { CardSkeleton } from '../common/skeletons';
 import ErrorState from '../common/ErrorState';
 
-const NETWORK_MODES = [
-  { value: 'ONLINE', label: 'Online', description: 'Full cloud connectivity', icon: <PublicIcon /> },
-  { value: 'OFFLINE', label: 'Offline', description: 'No network required', icon: <OfflineBoltIcon /> },
-  { value: 'HYBRID', label: 'Hybrid', description: 'Sync when available', icon: <DevicesIcon /> },
-];
-
 const DeploymentProfileManager = () => {
+  const { t } = useTranslation('vendor');
+  const NETWORK_MODES = [
+    { value: 'ONLINE', label: t('deploymentProfiles.networkModes.online'), description: t('deploymentProfiles.networkModes.onlineDesc'), icon: <PublicIcon /> },
+    { value: 'OFFLINE', label: t('deploymentProfiles.networkModes.offline'), description: t('deploymentProfiles.networkModes.offlineDesc'), icon: <OfflineBoltIcon /> },
+    { value: 'HYBRID', label: t('deploymentProfiles.networkModes.hybrid'), description: t('deploymentProfiles.networkModes.hybridDesc'), icon: <DevicesIcon /> },
+  ];
   const [profiles, setProfiles] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -87,7 +88,7 @@ const DeploymentProfileManager = () => {
       setError(null);
     } catch (err) {
       console.error('Failed to load deployment profiles:', err);
-      setError('Failed to load deployment profiles');
+      setError(t('deploymentProfiles.loadFailed'));
     } finally {
       setLoading(false);
     }
@@ -130,12 +131,12 @@ const DeploymentProfileManager = () => {
       loadProfiles();
     } catch (err) {
       console.error('Failed to save deployment profile:', err);
-      setError(`Failed to save: ${err.message}`);
+      setError(t('deploymentProfiles.saveFailed', { error: err.message }));
     }
   };
 
   const handleDelete = async (profileId) => {
-    if (!window.confirm('Are you sure you want to delete this deployment profile?')) {
+    if (!window.confirm(t('deploymentProfiles.deleteConfirm'))) {
       return;
     }
     try {
@@ -143,7 +144,7 @@ const DeploymentProfileManager = () => {
       loadProfiles();
     } catch (err) {
       console.error('Failed to delete deployment profile:', err);
-      setError(`Failed to delete: ${err.message}`);
+      setError(t('deploymentProfiles.deleteFailed', { error: err.message }));
     }
   };
 
@@ -151,9 +152,9 @@ const DeploymentProfileManager = () => {
   const header = (
     <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
       <Box>
-        <Typography variant="h4">Deployment Profiles</Typography>
+        <Typography variant="h4">{t('deploymentProfiles.title')}</Typography>
         <Typography variant="body2" color="text.secondary">
-          Configure APIs, kiosks, lanes/devices for online and offline environments
+          {t('deploymentProfiles.description')}
         </Typography>
       </Box>
       <Button
@@ -163,7 +164,7 @@ const DeploymentProfileManager = () => {
         onClick={handleCreate}
         disabled={loading}
       >
-        Create Profile
+        {t('deploymentProfiles.createButton')}
       </Button>
     </Box>
   );
@@ -204,10 +205,10 @@ const DeploymentProfileManager = () => {
       {profiles.length === 0 ? (
         <Paper sx={{ p: 6, textAlign: 'center', borderStyle: 'dashed', borderColor: 'divider' }}>
           <Typography color="text.secondary" gutterBottom>
-            No deployment profiles yet
+            {t('deploymentProfiles.empty.title')}
           </Typography>
           <Typography variant="body2" color="text.secondary">
-            Create a profile to configure how your APIs, kiosks, and devices integrate with credential flows.
+            {t('deploymentProfiles.empty.description')}
           </Typography>
         </Paper>
       ) : (
@@ -230,18 +231,18 @@ const DeploymentProfileManager = () => {
                       </Typography>
                     </Box>
                     <Box display="flex" gap={1} flexWrap="wrap">
-                      <Chip label={`${profile.enabled_credential_template_ids?.length || 0} Templates`} size="small" />
-                      <Chip label={`${profile.enabled_presentation_policy_ids?.length || 0} Policies`} size="small" />
+                      <Chip label={t('deploymentProfiles.card.templates', { count: profile.enabled_credential_template_ids?.length || 0 })} size="small" />
+                      <Chip label={t('deploymentProfiles.card.policies', { count: profile.enabled_presentation_policy_ids?.length || 0 })} size="small" />
                     </Box>
                   </CardContent>
                   <CardActions>
                     <Button size="small" onClick={() => handleEdit(profile)}>
                       <EditIcon sx={{ mr: 0.5 }} fontSize="small" />
-                      Edit
+                      {t('deploymentProfiles.card.editButton')}
                     </Button>
                     <Button size="small" color="error" onClick={() => handleDelete(profile.id)}>
                       <DeleteIcon sx={{ mr: 0.5 }} fontSize="small" />
-                      Delete
+                      {t('deploymentProfiles.card.deleteButton')}
                     </Button>
                   </CardActions>
                 </Card>
@@ -253,13 +254,13 @@ const DeploymentProfileManager = () => {
       {/* Create/Edit Dialog */}
       <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} maxWidth="md" fullWidth>
         <DialogTitle>
-          {editMode ? 'Edit Deployment Profile' : 'Create Deployment Profile'}
+          {editMode ? t('deploymentProfiles.dialog.editTitle') : t('deploymentProfiles.dialog.createTitle')}
         </DialogTitle>
         <DialogContent>
           <Box sx={{ mt: 2 }}>
             <TextField
               fullWidth
-              label="Name"
+              label={t('deploymentProfiles.dialog.nameLabel')}
               value={currentProfile.name}
               onChange={(e) => setCurrentProfile({ ...currentProfile, name: e.target.value })}
               sx={{ mb: 2 }}
@@ -268,7 +269,7 @@ const DeploymentProfileManager = () => {
 
             <TextField
               fullWidth
-              label="Description"
+              label={t('deploymentProfiles.dialog.descriptionLabel')}
               value={currentProfile.description}
               onChange={(e) => setCurrentProfile({ ...currentProfile, description: e.target.value })}
               multiline
@@ -277,11 +278,11 @@ const DeploymentProfileManager = () => {
             />
 
             <FormControl fullWidth sx={{ mb: 2 }}>
-              <InputLabel>Network Mode</InputLabel>
+              <InputLabel>{t('deploymentProfiles.dialog.networkModeLabel')}</InputLabel>
               <Select
                 value={currentProfile.network_mode}
                 onChange={(e) => setCurrentProfile({ ...currentProfile, network_mode: e.target.value })}
-                label="Network Mode"
+                label={t('deploymentProfiles.dialog.networkModeLabel')}
               >
                 {NETWORK_MODES.map((mode) => (
                   <MenuItem key={mode.value} value={mode.value}>
@@ -296,13 +297,13 @@ const DeploymentProfileManager = () => {
 
             <Accordion>
               <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                <Typography>Environment Configuration</Typography>
+                <Typography>{t('deploymentProfiles.dialog.environmentConfig')}</Typography>
               </AccordionSummary>
               <AccordionDetails>
                 <Grid container spacing={2}>
                   <Grid item xs={6}>
                     <FormControl fullWidth>
-                      <InputLabel>UX Theme</InputLabel>
+                      <InputLabel>{t('deploymentProfiles.dialog.uxThemeLabel')}</InputLabel>
                       <Select
                         value={currentProfile.environment_config.ux_theme}
                         onChange={(e) => setCurrentProfile({
@@ -312,17 +313,17 @@ const DeploymentProfileManager = () => {
                             ux_theme: e.target.value,
                           },
                         })}
-                        label="UX Theme"
+                        label={t('deploymentProfiles.dialog.uxThemeLabel')}
                       >
-                        <MenuItem value="default">Default</MenuItem>
-                        <MenuItem value="high_contrast">High Contrast</MenuItem>
-                        <MenuItem value="large_text">Large Text</MenuItem>
+                        <MenuItem value="default">{t('deploymentProfiles.dialog.themes.default')}</MenuItem>
+                        <MenuItem value="high_contrast">{t('deploymentProfiles.dialog.themes.highContrast')}</MenuItem>
+                        <MenuItem value="large_text">{t('deploymentProfiles.dialog.themes.largeText')}</MenuItem>
                       </Select>
                     </FormControl>
                   </Grid>
                   <Grid item xs={6}>
                     <FormControl fullWidth>
-                      <InputLabel>Language</InputLabel>
+                      <InputLabel>{t('deploymentProfiles.dialog.languageLabel')}</InputLabel>
                       <Select
                         value={currentProfile.environment_config.language}
                         onChange={(e) => setCurrentProfile({
@@ -332,19 +333,19 @@ const DeploymentProfileManager = () => {
                             language: e.target.value,
                           },
                         })}
-                        label="Language"
+                        label={t('deploymentProfiles.dialog.languageLabel')}
                       >
-                        <MenuItem value="en">English</MenuItem>
-                        <MenuItem value="es">Spanish</MenuItem>
-                        <MenuItem value="fr">French</MenuItem>
-                        <MenuItem value="de">German</MenuItem>
+                        <MenuItem value="en">{t('deploymentProfiles.dialog.languages.en')}</MenuItem>
+                        <MenuItem value="es">{t('deploymentProfiles.dialog.languages.es')}</MenuItem>
+                        <MenuItem value="fr">{t('deploymentProfiles.dialog.languages.fr')}</MenuItem>
+                        <MenuItem value="de">{t('deploymentProfiles.dialog.languages.de')}</MenuItem>
                       </Select>
                     </FormControl>
                   </Grid>
                 </Grid>
 
                 <Typography variant="subtitle2" sx={{ mt: 2, mb: 1 }}>
-                  Accessibility Features
+                  {t('deploymentProfiles.dialog.accessibilityFeatures')}
                 </Typography>
                 <FormGroup>
                   {['screen_reader', 'voice_guidance', 'keyboard_navigation'].map((feature) => (
@@ -377,9 +378,9 @@ const DeploymentProfileManager = () => {
           </Box>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setDialogOpen(false)}>Cancel</Button>
+          <Button onClick={() => setDialogOpen(false)}>{t('deploymentProfiles.dialog.cancelButton')}</Button>
           <Button onClick={handleSave} variant="contained" color="primary">
-            {editMode ? 'Update' : 'Create'}
+            {editMode ? t('deploymentProfiles.dialog.updateButton') : t('deploymentProfiles.dialog.createButton')}
           </Button>
         </DialogActions>
       </Dialog>

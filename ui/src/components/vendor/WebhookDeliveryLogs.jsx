@@ -6,6 +6,7 @@
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   Box,
   Paper,
@@ -42,6 +43,7 @@ import { getWebhookDeliveryAttempts, getErrorMessage } from '../../services/webh
  * @param {string} props.webhookId - The webhook ID to show delivery logs for
  */
 export default function WebhookDeliveryLogs({ webhookId }) {
+  const { t } = useTranslation('vendor');
   const [deliveries, setDeliveries] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -96,7 +98,7 @@ export default function WebhookDeliveryLogs({ webhookId }) {
       return (
         <Chip
           icon={<CheckCircleIcon />}
-          label={`Success (${delivery.response_status_code})`}
+          label={t('webhookDeliveryLogs.status.success', { code: delivery.response_status_code })}
           color="success"
           size="small"
         />
@@ -105,7 +107,7 @@ export default function WebhookDeliveryLogs({ webhookId }) {
       return (
         <Chip
           icon={<ErrorIcon />}
-          label={`Failed (${delivery.response_status_code || 'N/A'})`}
+          label={t('webhookDeliveryLogs.status.failed', { code: delivery.response_status_code || t('webhookDeliveryLogs.status.notAvailable') })}
           color="error"
           size="small"
         />
@@ -116,7 +118,7 @@ export default function WebhookDeliveryLogs({ webhookId }) {
   if (!webhookId) {
     return (
       <Alert severity="info">
-        Select a webhook to view delivery logs
+        {t('webhookDeliveryLogs.selectWebhook')}
       </Alert>
     );
   }
@@ -132,10 +134,10 @@ export default function WebhookDeliveryLogs({ webhookId }) {
   return (
     <Box data-testid="webhook-delivery-logs">
       <Typography variant="h6" gutterBottom>
-        Delivery History
+        {t('webhookDeliveryLogs.title')}
       </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-        Recent webhook delivery attempts and their results
+        {t('webhookDeliveryLogs.description')}
       </Typography>
 
       {error && (
@@ -148,10 +150,10 @@ export default function WebhookDeliveryLogs({ webhookId }) {
         <Paper sx={{ p: 4, textAlign: 'center', bgcolor: 'grey.50' }}>
           <InfoIcon sx={{ fontSize: 60, color: 'text.secondary', mb: 2 }} />
           <Typography variant="h6" gutterBottom>
-            No Delivery Attempts
+            {t('webhookDeliveryLogs.empty.title')}
           </Typography>
           <Typography variant="body2" color="text.secondary">
-            This webhook hasn&apos;t received any events yet
+            {t('webhookDeliveryLogs.empty.description')}
           </Typography>
         </Paper>
       ) : (
@@ -161,12 +163,12 @@ export default function WebhookDeliveryLogs({ webhookId }) {
               <TableHead>
                 <TableRow>
                   <TableCell width={50} />
-                  <TableCell>Timestamp</TableCell>
-                  <TableCell>Event Type</TableCell>
-                  <TableCell>Status</TableCell>
-                  <TableCell>Response Time</TableCell>
-                  <TableCell>Retry Count</TableCell>
-                  <TableCell align="right">Actions</TableCell>
+                  <TableCell>{t('webhookDeliveryLogs.table.timestamp')}</TableCell>
+                  <TableCell>{t('webhookDeliveryLogs.table.eventType')}</TableCell>
+                  <TableCell>{t('webhookDeliveryLogs.table.status')}</TableCell>
+                  <TableCell>{t('webhookDeliveryLogs.table.responseTime')}</TableCell>
+                  <TableCell>{t('webhookDeliveryLogs.table.retryCount')}</TableCell>
+                  <TableCell align="right">{t('webhookDeliveryLogs.table.actions')}</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
@@ -209,7 +211,7 @@ export default function WebhookDeliveryLogs({ webhookId }) {
                         />
                       </TableCell>
                       <TableCell align="right">
-                        <Tooltip title="View details">
+                        <Tooltip title={t('webhookDeliveryLogs.viewDetails')}>
                           <IconButton
                             size="small"
                             onClick={() => handleOpenDetails(delivery)}
@@ -224,7 +226,7 @@ export default function WebhookDeliveryLogs({ webhookId }) {
                         <Collapse in={expandedRow === delivery.id} timeout="auto" unmountOnExit>
                           <Box sx={{ py: 2, px: 3, bgcolor: 'grey.50' }}>
                             <Typography variant="subtitle2" gutterBottom>
-                              Error Message
+                              {t('webhookDeliveryLogs.errorMessage')}
                             </Typography>
                             <Typography
                               variant="body2"
@@ -236,7 +238,7 @@ export default function WebhookDeliveryLogs({ webhookId }) {
                                 borderRadius: 1,
                               }}
                             >
-                              {delivery.error_message || 'No error message'}
+                              {delivery.error_message || t('webhookDeliveryLogs.noError')}
                             </Typography>
                           </Box>
                         </Collapse>
@@ -268,22 +270,22 @@ export default function WebhookDeliveryLogs({ webhookId }) {
         maxWidth="md"
         fullWidth
       >
-        <DialogTitle>Delivery Attempt Details</DialogTitle>
+        <DialogTitle>{t('webhookDeliveryLogs.detailsDialog.title')}</DialogTitle>
         <DialogContent>
           {detailsDialog && (
             <Box sx={{ pt: 2 }}>
               <Box sx={{ mb: 2 }}>
                 <Typography variant="subtitle2" color="text.secondary">
-                  Event ID
+                  {t('webhookDeliveryLogs.detailsDialog.eventId')}
                 </Typography>
                 <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
-                  {detailsDialog.event_id || 'N/A'}
+                  {detailsDialog.event_id || t('webhookDeliveryLogs.status.notAvailable')}
                 </Typography>
               </Box>
 
               <Box sx={{ mb: 2 }}>
                 <Typography variant="subtitle2" color="text.secondary">
-                  Event Type
+                  {t('webhookDeliveryLogs.detailsDialog.eventType')}
                 </Typography>
                 <Typography variant="body2">
                   {detailsDialog.event_type || 'unknown'}
@@ -292,7 +294,7 @@ export default function WebhookDeliveryLogs({ webhookId }) {
 
               <Box sx={{ mb: 2 }}>
                 <Typography variant="subtitle2" color="text.secondary">
-                  Timestamp
+                  {t('webhookDeliveryLogs.detailsDialog.timestamp')}
                 </Typography>
                 <Typography variant="body2">
                   {new Date(detailsDialog.created_at).toLocaleString()}
@@ -301,7 +303,7 @@ export default function WebhookDeliveryLogs({ webhookId }) {
 
               <Box sx={{ mb: 2 }}>
                 <Typography variant="subtitle2" color="text.secondary">
-                  Status
+                  {t('webhookDeliveryLogs.detailsDialog.status')}
                 </Typography>
                 <Box sx={{ mt: 0.5 }}>
                   {getStatusChip(detailsDialog)}
@@ -310,18 +312,18 @@ export default function WebhookDeliveryLogs({ webhookId }) {
 
               <Box sx={{ mb: 2 }}>
                 <Typography variant="subtitle2" color="text.secondary">
-                  Response Time
+                  {t('webhookDeliveryLogs.detailsDialog.responseTime')}
                 </Typography>
                 <Typography variant="body2">
                   {detailsDialog.response_time_ms
                     ? `${detailsDialog.response_time_ms}ms`
-                    : 'N/A'}
+                    : t('webhookDeliveryLogs.status.notAvailable')}
                 </Typography>
               </Box>
 
               <Box sx={{ mb: 2 }}>
                 <Typography variant="subtitle2" color="text.secondary">
-                  Retry Count
+                  {t('webhookDeliveryLogs.detailsDialog.retryCount')}
                 </Typography>
                 <Typography variant="body2">
                   {detailsDialog.retry_count || 0}
@@ -331,7 +333,7 @@ export default function WebhookDeliveryLogs({ webhookId }) {
               {detailsDialog.error_message && (
                 <Box sx={{ mb: 2 }}>
                   <Typography variant="subtitle2" color="text.secondary" gutterBottom>
-                    Error Message
+                    {t('webhookDeliveryLogs.detailsDialog.errorMessage')}
                   </Typography>
                   <Paper
                     sx={{
@@ -351,7 +353,7 @@ export default function WebhookDeliveryLogs({ webhookId }) {
               {detailsDialog.response_body && (
                 <Box sx={{ mb: 2 }}>
                   <Typography variant="subtitle2" color="text.secondary" gutterBottom>
-                    Response Body
+                    {t('webhookDeliveryLogs.detailsDialog.responseBody')}
                   </Typography>
                   <Paper
                     sx={{
@@ -373,7 +375,7 @@ export default function WebhookDeliveryLogs({ webhookId }) {
           )}
         </DialogContent>
         <DialogActions>
-          <Button onClick={handleCloseDetails}>Close</Button>
+          <Button onClick={handleCloseDetails}>{t('webhookDeliveryLogs.detailsDialog.closeButton')}</Button>
         </DialogActions>
       </Dialog>
     </Box>

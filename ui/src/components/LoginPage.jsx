@@ -17,8 +17,10 @@ import {
 import LoginIcon from '@mui/icons-material/Login';
 import { useAuth } from '../hooks/useAuth';
 import { useBranding } from '../hooks/useBranding';
+import { useTranslation } from 'react-i18next';
 
 function LoginPage() {
+  const { t } = useTranslation('common');
   const branding = useBranding();
   const { isAuthenticated, isLoading, login } = useAuth();
   const navigate = useNavigate();
@@ -46,7 +48,7 @@ function LoginPage() {
       >
         <CircularProgress size={48} />
         <Typography variant="body1" color="textSecondary" sx={{ mt: 2 }}>
-          Checking authentication...
+          {t('login.checkingAuth')}
         </Typography>
       </Box>
     );
@@ -64,22 +66,16 @@ function LoginPage() {
       <Card sx={{ maxWidth: 400, width: '100%' }} data-testid="login-card">
         <CardContent sx={{ textAlign: 'center', py: 4 }}>
           <Typography variant="h4" component="h1" gutterBottom data-testid="login-title">
-            Welcome to {branding.appName}
+            {t('login.welcome', { appName: branding.appName })}
           </Typography>
 
           <Typography variant="body1" color="textSecondary" sx={{ mb: 4 }}>
-            Sign in to access the Travel Document Trust Services portal.
+            {t('login.signInPrompt')}
           </Typography>
 
           <Box sx={{ mb: 3 }}>
-            <Typography variant="body2" color="textSecondary">
-              For <strong>Administrators</strong>: Manage travel documents, applicants, and system
-              settings.
-            </Typography>
-            <Typography variant="body2" color="textSecondary" sx={{ mt: 1 }}>
-              For <strong>Applicants</strong>: Submit applications and track your travel document
-              status.
-            </Typography>
+            <Typography variant="body2" color="textSecondary" dangerouslySetInnerHTML={{ __html: t('login.forAdministrators') }} />
+            <Typography variant="body2" color="textSecondary" sx={{ mt: 1 }} dangerouslySetInnerHTML={{ __html: t('login.forApplicants') }} />
           </Box>
 
           <Button
@@ -91,11 +87,11 @@ function LoginPage() {
             sx={{ py: 1.5 }}
             data-testid="login-sso-btn"
           >
-            Sign in with SSO
+            {t('login.signInWithSSO')}
           </Button>
 
           <Typography variant="caption" color="textSecondary" sx={{ mt: 3, display: 'block' }}>
-            Secured by Keycloak OpenID Connect
+            {t('login.securedBy')}
           </Typography>
         </CardContent>
       </Card>

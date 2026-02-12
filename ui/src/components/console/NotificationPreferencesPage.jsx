@@ -17,6 +17,7 @@ import {
 import NotificationsIcon from '@mui/icons-material/Notifications';
 import EmailIcon from '@mui/icons-material/Email';
 import PhoneAndroidIcon from '@mui/icons-material/PhoneAndroid';
+import { useTranslation } from 'react-i18next';
 import ResourcePage from '../common/ResourcePage';
 import {
   getNotificationPreferences,
@@ -29,6 +30,7 @@ import {
  * Allows users to configure how they receive notifications (push, email, or both).
  */
 export default function NotificationPreferencesPage() {
+  const { t } = useTranslation('console');
   const [preferences, setPreferences] = useState({
     method: 'both',
     email_for_applications: true,
@@ -52,7 +54,7 @@ export default function NotificationPreferencesPage() {
       setPreferences(prefs);
     } catch (err) {
       console.error('Failed to load notification preferences:', err);
-      setError(err.message || 'Failed to load notification preferences');
+      setError(err.message || t('notificationPreferencesPage.messages.loadFailed'));
     } finally {
       setLoading(false);
     }
@@ -65,10 +67,10 @@ export default function NotificationPreferencesPage() {
       setSuccessMessage(null);
       
       await updateNotificationPreferences(preferences);
-      setSuccessMessage('Notification preferences updated successfully');
+      setSuccessMessage(t('notificationPreferencesPage.messages.saveSuccess'));
     } catch (err) {
       console.error('Failed to save notification preferences:', err);
-      setError(err.message || 'Failed to save notification preferences');
+      setError(err.message || t('notificationPreferencesPage.messages.saveFailed'));
     } finally {
       setSaving(false);
     }
@@ -92,8 +94,8 @@ export default function NotificationPreferencesPage() {
 
   return (
     <ResourcePage
-      title="Notification Preferences"
-      subtitle="Configure how you receive notifications for applications, credentials, and membership updates"
+      title={t('notificationPreferencesPage.title')}
+      subtitle={t('notificationPreferencesPage.subtitle')}
       icon={<NotificationsIcon />}
     >
       {error && (
@@ -111,7 +113,7 @@ export default function NotificationPreferencesPage() {
       <Paper sx={{ p: 3 }}>
         {loading ? (
           <Typography variant="body2" color="text.secondary">
-            Loading preferences...
+            {t('notificationPreferencesPage.loading')}
           </Typography>
         ) : (
           <Stack spacing={3}>
@@ -119,7 +121,7 @@ export default function NotificationPreferencesPage() {
             <Box>
               <FormControl component="fieldset">
                 <FormLabel component="legend" sx={{ mb: 2, fontWeight: 'medium' }}>
-                  Notification Method
+                  {t('notificationPreferencesPage.sections.notificationMethod')}
                 </FormLabel>
                 <RadioGroup value={preferences.method} onChange={handleMethodChange}>
                   <FormControlLabel
@@ -129,9 +131,9 @@ export default function NotificationPreferencesPage() {
                       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                         <PhoneAndroidIcon fontSize="small" />
                         <Box>
-                          <Typography variant="body2">Push Notifications Only</Typography>
+                          <Typography variant="body2">{t('notificationPreferencesPage.methods.pushOnly.title')}</Typography>
                           <Typography variant="caption" color="text.secondary">
-                            Receive notifications in the Marty Authenticator app
+                            {t('notificationPreferencesPage.methods.pushOnly.description')}
                           </Typography>
                         </Box>
                       </Box>
@@ -144,9 +146,9 @@ export default function NotificationPreferencesPage() {
                       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                         <EmailIcon fontSize="small" />
                         <Box>
-                          <Typography variant="body2">Email Only</Typography>
+                          <Typography variant="body2">{t('notificationPreferencesPage.methods.emailOnly.title')}</Typography>
                           <Typography variant="caption" color="text.secondary">
-                            Receive notifications via email
+                            {t('notificationPreferencesPage.methods.emailOnly.description')}
                           </Typography>
                         </Box>
                       </Box>
@@ -159,9 +161,9 @@ export default function NotificationPreferencesPage() {
                       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                         <NotificationsIcon fontSize="small" />
                         <Box>
-                          <Typography variant="body2">Both Push and Email</Typography>
+                          <Typography variant="body2">{t('notificationPreferencesPage.methods.both.title')}</Typography>
                           <Typography variant="caption" color="text.secondary">
-                            Get notifications in both the app and via email (recommended)
+                            {t('notificationPreferencesPage.methods.both.description')}
                           </Typography>
                         </Box>
                       </Box>
@@ -176,13 +178,13 @@ export default function NotificationPreferencesPage() {
             {/* Email Notification Categories */}
             <Box>
               <Typography variant="subtitle1" fontWeight="medium" sx={{ mb: 2 }}>
-                Email Notification Categories
+                {t('notificationPreferencesPage.sections.emailCategories')}
               </Typography>
               <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-                Choose which types of events should trigger email notifications.
+                {t('notificationPreferencesPage.sections.emailCategoriesDescription')}
                 {!isEmailEnabled && (
                   <Typography component="span" color="warning.main" sx={{ display: 'block', mt: 1 }}>
-                    Note: Email is currently disabled in your notification method above.
+                    {t('notificationPreferencesPage.messages.emailDisabledNote')}
                   </Typography>
                 )}
               </Typography>
@@ -198,9 +200,9 @@ export default function NotificationPreferencesPage() {
                   }
                   label={
                     <Box>
-                      <Typography variant="body2">Application Updates</Typography>
+                      <Typography variant="body2">{t('notificationPreferencesPage.categories.applicationUpdates.title')}</Typography>
                       <Typography variant="caption" color="text.secondary">
-                        Status changes for credential applications you&apos;ve submitted
+                        {t('notificationPreferencesPage.categories.applicationUpdates.description')}
                       </Typography>
                     </Box>
                   }
@@ -216,9 +218,9 @@ export default function NotificationPreferencesPage() {
                   }
                   label={
                     <Box>
-                      <Typography variant="body2">Credential Issuance</Typography>
+                      <Typography variant="body2">{t('notificationPreferencesPage.categories.credentialIssuance.title')}</Typography>
                       <Typography variant="caption" color="text.secondary">
-                        When new credentials are issued to your wallet
+                        {t('notificationPreferencesPage.categories.credentialIssuance.description')}
                       </Typography>
                     </Box>
                   }
@@ -234,9 +236,9 @@ export default function NotificationPreferencesPage() {
                   }
                   label={
                     <Box>
-                      <Typography variant="body2">Membership Updates</Typography>
+                      <Typography variant="body2">{t('notificationPreferencesPage.categories.membershipUpdates.title')}</Typography>
                       <Typography variant="caption" color="text.secondary">
-                        Organization membership approvals and role changes
+                        {t('notificationPreferencesPage.categories.membershipUpdates.description')}
                       </Typography>
                     </Box>
                   }
@@ -253,7 +255,7 @@ export default function NotificationPreferencesPage() {
                 onClick={handleSave}
                 disabled={saving || loading}
               >
-                {saving ? 'Saving...' : 'Save Preferences'}
+                {saving ? t('notificationPreferencesPage.actions.saving') : t('notificationPreferencesPage.actions.save')}
               </Button>
             </Box>
           </Stack>

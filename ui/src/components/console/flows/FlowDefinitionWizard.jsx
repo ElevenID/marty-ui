@@ -10,6 +10,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import {
   Box,
   Container,
@@ -35,12 +36,12 @@ import {
   ReviewStep,
 } from './steps';
 
-const STEPS = [
-  { label: 'Flow Type', optional: false },
-  { label: 'Configure Steps', optional: false },
-  { label: 'Preconditions', optional: true },
-  { label: 'Bind Deployment', optional: true },
-  { label: 'Review', optional: false },
+const getSteps = (t) => [
+  { label: t('wizards.flowDefinition.steps.flowType'), optional: false },
+  { label: t('wizards.flowDefinition.steps.configureSteps'), optional: false },
+  { label: t('wizards.flowDefinition.steps.preconditions'), optional: true },
+  { label: t('wizards.flowDefinition.steps.bindDeployment'), optional: true },
+  { label: t('wizards.flowDefinition.steps.review'), optional: false },
 ];
 
 const INITIAL_DATA = {
@@ -56,6 +57,7 @@ const INITIAL_DATA = {
 
 const FlowDefinitionWizard = () => {
   const navigate = useNavigate();
+  const { t } = useTranslation('console');
   const [apiError, setApiError] = useState(null);
 
   // Validation function for each step
@@ -104,7 +106,7 @@ const FlowDefinitionWizard = () => {
   }, []);
 
   const wizard = useWizard({
-    steps: STEPS,
+    steps: getSteps(t),
     initialData: INITIAL_DATA,
     validateStep,
     onSubmit: handleSubmit,
@@ -169,7 +171,7 @@ const FlowDefinitionWizard = () => {
           />
         );
       default:
-        return <Typography>Unknown step</Typography>;
+        return <Typography>{t('wizards.flowDefinition.unknownStep')}</Typography>;
     }
   };
 
@@ -180,13 +182,15 @@ const FlowDefinitionWizard = () => {
         <Paper elevation={3} sx={{ p: 4, textAlign: 'center' }}>
           <CheckCircleIcon color="success" sx={{ fontSize: 64, mb: 2 }} />
           <Typography variant="h5" gutterBottom>
-            Flow Definition Created Successfully!
+            {t('wizards.flowDefinition.success.title')}
           </Typography>
           <Typography color="text.secondary" paragraph>
-            Your flow &quot;{wizard.data.name}&quot; is now ready to use.
+            {wizard.data.activateImmediately 
+              ? t('wizards.flowDefinition.success.messageActive', { name: wizard.data.name })
+              : t('wizards.flowDefinition.success.messageDraft', { name: wizard.data.name })}
           </Typography>
           <Typography variant="body2" color="text.secondary">
-            Redirecting to operations dashboard...
+            {t('wizards.flowDefinition.success.redirecting')}
           </Typography>
         </Paper>
       </Container>
@@ -199,18 +203,18 @@ const FlowDefinitionWizard = () => {
         {/* Header */}
         <Box sx={{ mb: 4 }}>
           <Typography variant="h4" gutterBottom>
-            Create Flow Definition
+            {t('wizards.flowDefinition.title')}
           </Typography>
           <Typography color="text.secondary">
-            Define an end-to-end credential verification or issuance flow
+            {t('wizards.flowDefinition.description')}
           </Typography>
         </Box>
 
         {/* Stepper */}
         <Stepper activeStep={wizard.activeStep} sx={{ mb: 4 }}>
-          {STEPS.map((step) => (
+          {getSteps(t).map((step) => (
             <Step key={step.label}>
-              <StepLabel optional={step.optional && <Typography variant="caption">Optional</Typography>}>
+              <StepLabel optional={step.optional && <Typography variant="caption">{t('wizards.common.optional')}</Typography>}>
                 {step.label}
               </StepLabel>
             </Step>
@@ -237,22 +241,22 @@ const FlowDefinitionWizard = () => {
             disabled={wizard.loading}
             data-testid={wizard.activeStep === 0 ? 'wizard.flow.cancel' : 'wizard.flow.back'}
           >
-            {wizard.activeStep === 0 ? 'Cancel' : 'Back'}
+            {wizard.activeStep === 0 ? t('wizards.flowDefinition.buttons.cancel') : t('wizards.flowDefinition.buttons.back')}
           </Button>
 
           <Box sx={{ display: 'flex', gap: 2 }}>
             {/* Skip button for optional steps */}
-            {STEPS[wizard.activeStep].optional && (
+            {getSteps(t)[wizard.activeStep].optional && (
               <Button
                 onClick={wizard.goNext}
                 disabled={wizard.loading}
                 data-testid="wizard.flow.skip"
               >
-                Skip
+                {t('wizards.flowDefinition.buttons.skip')}
               </Button>
             )}
 
-            {wizard.activeStep === STEPS.length - 1 ? (
+            {wizard.activeStep === getSteps(t).length - 1 ? (
               <Button
                 variant="contained"
                 onClick={wizard.submit}
@@ -260,7 +264,7 @@ const FlowDefinitionWizard = () => {
                 startIcon={wizard.loading ? <CircularProgress size={20} /> : <CheckCircleIcon />}
                 data-testid="wizard.flow.submit"
               >
-                {wizard.loading ? 'Creating...' : 'Create Flow'}
+                {wizard.loading ? t('wizards.flowDefinition.buttons.submitting') : t('wizards.flowDefinition.buttons.submit')}
               </Button>
             ) : (
               <Button
@@ -270,7 +274,7 @@ const FlowDefinitionWizard = () => {
                 endIcon={<ArrowForwardIcon />}
                 data-testid="wizard.flow.next"
               >
-                Next
+                {t('wizards.flowDefinition.buttons.next')}
               </Button>
             )}
           </Box>

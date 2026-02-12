@@ -1,6 +1,7 @@
 import React from 'react';
 import { Box, Button, Tooltip, Typography } from '@mui/material';
 import LockIcon from '@mui/icons-material/Lock';
+import { useTranslation } from 'react-i18next';
 import { usePermissions } from '../../hooks/usePermissions';
 
 /**
@@ -103,6 +104,7 @@ export function PermissionButton({
  * @param {string} props.action - Action that was denied
  */
 export function PermissionAlert({ resource, action }) {
+  const { t } = useTranslation('common');
   const { getPermissionMessage } = usePermissions();
 
   return (
@@ -118,7 +120,7 @@ export function PermissionAlert({ resource, action }) {
     >
       <LockIcon sx={{ fontSize: 64, color: 'text.secondary', mb: 2 }} />
       <Typography variant="h6" gutterBottom>
-        Permission Denied
+        {t('permissions.denied')}
       </Typography>
       <Typography variant="body1" color="text.secondary" textAlign="center">
         {getPermissionMessage(action)}

@@ -7,6 +7,7 @@
 
 import { createContext, useState, useEffect, useCallback, useMemo } from 'react';
 import { getCurrentUser, initiateLogin, initiateRegister, initiateLogout, getUserOrganizations } from '../services/authApi';
+import i18n from '../i18n';
 
 /**
  * @typedef {Object} User
@@ -223,14 +224,16 @@ export function AuthProvider({ children }) {
   // Note: When used as onClick handler, first arg is Event object - we ignore non-string args
   const login = useCallback((redirectUri) => {
     const redirect = typeof redirectUri === 'string' ? redirectUri : window.location.pathname;
-    initiateLogin(redirect);
+    const currentLanguage = i18n.language;
+    initiateLogin(redirect, currentLanguage);
   }, []);
 
   // Register handler - accepts optional redirect URI string
   // Note: When used as onClick handler, first arg is Event object - we ignore non-string args
   const register = useCallback((redirectUri) => {
     const redirect = typeof redirectUri === 'string' ? redirectUri : window.location.pathname;
-    initiateRegister(redirect);
+    const currentLanguage = i18n.language;
+    initiateRegister(redirect, currentLanguage);
   }, []);
 
   // Logout handler

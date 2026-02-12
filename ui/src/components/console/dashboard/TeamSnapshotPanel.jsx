@@ -23,6 +23,7 @@ import {
   AvatarGroup,
   Tooltip,
 } from '@mui/material';
+import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import PersonAddIcon from '@mui/icons-material/PersonAdd';
 import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings';
@@ -33,30 +34,32 @@ import EmailIcon from '@mui/icons-material/Email';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 
 /**
- * Role badge configuration
+ * Role badge configuration factory
  */
-const ROLE_CONFIG = {
+const getRoleConfig = (t) => ({
   admin: {
-    label: 'Admin',
+    label: t('dashboard.team.admin'),
     icon: AdminPanelSettingsIcon,
     color: 'error',
   },
   developer: {
-    label: 'Developer',
+    label: t('dashboard.team.developer'),
     icon: CodeIcon,
     color: 'primary',
   },
   operator: {
-    label: 'Operator',
+    label: t('dashboard.team.operator'),
     icon: SettingsIcon,
     color: 'info',
   },
-};
+});
 
 /**
  * Role summary card
  */
 function RoleCard({ role, count }) {
+  const { t } = useTranslation('console');
+  const ROLE_CONFIG = getRoleConfig(t);
   const config = ROLE_CONFIG[role] || ROLE_CONFIG.operator;
   const Icon = config.icon;
 
@@ -81,6 +84,8 @@ function RoleCard({ role, count }) {
  * Team Snapshot Panel Component
  */
 export function TeamSnapshotPanel({ teamData }) {
+  const { t } = useTranslation('console');
+  
   const {
     members = [],
     pendingInvites = [],
@@ -103,11 +108,11 @@ export function TeamSnapshotPanel({ teamData }) {
           <PeopleIcon color="primary" />
           <Box>
             <Typography variant="h6">
-              Team
+              {t('dashboard.team.title')}
             </Typography>
             <Typography variant="caption" color="text.secondary">
-              {totalMembers} member{totalMembers !== 1 ? 's' : ''}
-              {pendingInvites.length > 0 && ` • ${pendingInvites.length} pending invite${pendingInvites.length !== 1 ? 's' : ''}`}
+              {totalMembers} {totalMembers !== 1 ? t('dashboard.team.members') : t('dashboard.team.member')}
+              {pendingInvites.length > 0 && ` • ${pendingInvites.length} ${pendingInvites.length !== 1 ? t('dashboard.team.pendingInvites') : t('dashboard.team.pendingInvite')}`}
             </Typography>
           </Box>
         </Box>
@@ -119,7 +124,7 @@ export function TeamSnapshotPanel({ teamData }) {
             startIcon={<PersonAddIcon />}
             size="small"
           >
-            Invite
+            {t('dashboard.team.invite')}
           </Button>
           <Button
             component={Link}
@@ -128,7 +133,7 @@ export function TeamSnapshotPanel({ teamData }) {
             size="small"
             endIcon={<ArrowForwardIcon />}
           >
-            Manage
+            {t('dashboard.team.manage')}
           </Button>
         </Box>
       </Box>
@@ -162,7 +167,7 @@ export function TeamSnapshotPanel({ teamData }) {
           </AvatarGroup>
           {totalMembers > 5 && (
             <Typography variant="caption" color="text.secondary">
-              +{totalMembers - 5} more
+              {t('dashboard.team.moreMembers', { count: totalMembers - 5 })}
             </Typography>
           )}
         </Box>
@@ -172,7 +177,7 @@ export function TeamSnapshotPanel({ teamData }) {
         <Box sx={{ mt: 2, p: 2, bgcolor: 'info.light', borderRadius: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
           <EmailIcon fontSize="small" color="info" />
           <Typography variant="body2" color="text.secondary">
-            {pendingInvites.length} pending invitation{pendingInvites.length !== 1 ? 's' : ''}
+            {t('dashboard.team.pendingInvitationsCount', { count: pendingInvites.length })}
           </Typography>
           <Button
             component={Link}
@@ -180,7 +185,7 @@ export function TeamSnapshotPanel({ teamData }) {
             size="small"
             sx={{ ml: 'auto' }}
           >
-            Review
+            {t('dashboard.team.review')}
           </Button>
         </Box>
       )}
@@ -188,7 +193,7 @@ export function TeamSnapshotPanel({ teamData }) {
       {totalMembers === 0 && (
         <Box sx={{ textAlign: 'center', py: 3 }}>
           <Typography variant="body2" color="text.secondary" paragraph>
-            No team members yet. Invite users to collaborate.
+            {t('dashboard.team.noMembersYet')}
           </Typography>
           <Button
             component={Link}
@@ -196,7 +201,7 @@ export function TeamSnapshotPanel({ teamData }) {
             variant="contained"
             startIcon={<PersonAddIcon />}
           >
-            Invite Team Member
+            {t('dashboard.team.inviteTeamMember')}
           </Button>
         </Box>
       )}

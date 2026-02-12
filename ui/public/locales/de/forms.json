@@ -1,0 +1,45 @@
+{
+	"labels": {
+		"firstName": "Vorname",
+		"lastName": "Nachname",
+		"email": "E-Mail-Adresse",
+		"phone": "Telefonnummer",
+		"password": "Passwort",
+		"confirmPassword": "Passwort bestätigen",
+		"organizationName": "Organisationsname",
+		"address": "Adresse",
+		"city": "Stadt",
+		"state": "Bundesland/Region",
+		"country": "Land",
+		"postalCode": "Postleitzahl",
+		"website": "Website",
+		"notes": "Notizen",
+		"category": "Kategorie",
+		"priority": "Priorität"
+	},
+	"placeholders": {
+		"enterName": "Name eingeben",
+		"enterEmail": "z. B. user@example.com",
+		"enterPhone": "z. B. +49 170 1234567",
+		"searchPlaceholder": "Suchen...",
+		"selectOption": "Option auswählen",
+		"enterUrl": "https://example.com",
+		"optional": "Optional"
+	},
+	"helperText": {
+		"emailFormat": "Bitte geben Sie eine gültige E-Mail-Adresse ein",
+		"phoneFormat": "Bitte geben Sie eine gültige Telefonnummer ein",
+		"urlFormat": "Muss eine gültige URL mit http:// oder https:// sein",
+		"minChars": "Mindestens {{count}} Zeichen erforderlich",
+		"passwordStrength": "Verwenden Sie eine Mischung aus Buchstaben, Zahlen und Symbolen",
+		"required": "Dieses Feld ist erforderlich"
+	},
+	"validation": {
+		"required": "{{field}} ist erforderlich",
+		"invalid": "Ungültig: {{field}}",
+		"tooShort": "{{field}} muss mindestens {{min}} Zeichen enthalten",
+		"tooLong": "{{field}} darf höchstens {{max}} Zeichen enthalten",
+		"mustMatch": "{{field}} muss übereinstimmen",
+		"invalidFormat": "Ungültiges Format für {{field}}"
+	}
+}

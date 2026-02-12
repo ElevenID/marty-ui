@@ -5,6 +5,7 @@
  */
 
 import { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   Box,
   Paper,
@@ -39,30 +40,40 @@ import { Link } from 'react-router-dom';
 
 import { ResourcePage } from '../../common';
 
-const DEPLOY_TABS = [
-  { label: 'Deployment Profiles', path: '/console/deploy/profiles' },
-  { label: 'API Keys', path: '/console/deploy/api-keys' },
-  { label: 'Lanes & Devices', path: '/console/deploy/lanes' },
-  { label: 'Webhooks', path: '/console/deploy/webhooks' },
+/**
+ * Get deployment tabs with translations
+ */
+const getDeployTabs = (t) => [
+  { label: t('deploy.tabs.profiles'), path: '/console/deploy/profiles' },
+  { label: t('deploy.tabs.apiKeys'), path: '/console/deploy/api-keys' },
+  { label: t('deploy.tabs.lanes'), path: '/console/deploy/lanes' },
+  { label: t('org.tabs.webhooks'), path: '/console/deploy/webhooks' },
 ];
 
-const BREADCRUMBS = [
-  { label: 'Console', path: '/console' },
-  { label: 'Deploy', path: '/console/deploy' },
-  { label: 'Webhooks', path: '/console/deploy/webhooks' },
+/**
+ * Get breadcrumbs with translations
+ */
+const getBreadcrumbs = (t) => [
+  { label: t('org.breadcrumbs.console'), path: '/console' },
+  { label: t('deploy.breadcrumbs.deploy'), path: '/console/deploy' },
+  { label: t('org.tabs.webhooks'), path: '/console/deploy/webhooks' },
 ];
 
-const EVENT_TYPES = [
-  { value: 'flow.completed', label: 'Flow Completed' },
-  { value: 'flow.failed', label: 'Flow Failed' },
-  { value: 'credential.issued', label: 'Credential Issued' },
-  { value: 'credential.revoked', label: 'Credential Revoked' },
-  { value: 'application.submitted', label: 'Application Submitted' },
-  { value: 'application.approved', label: 'Application Approved' },
-  { value: 'application.rejected', label: 'Application Rejected' },
+/**
+ * Get event types with translations
+ */
+const getEventTypes = (t) => [
+  { value: 'flow.completed', label: t('org.webhooks.events.flowCompleted') },
+  { value: 'flow.failed', label: t('org.webhooks.events.flowFailed') },
+  { value: 'credential.issued', label: t('org.webhooks.events.credentialIssued') },
+  { value: 'credential.revoked', label: t('org.webhooks.events.credentialRevoked') },
+  { value: 'application.submitted', label: t('org.webhooks.events.applicationSubmitted') },
+  { value: 'application.approved', label: t('org.webhooks.events.applicationApproved') },
+  { value: 'application.rejected', label: t('org.webhooks.events.applicationRejected') },
 ];
 
 function WebhooksPage() {
+  const { t } = useTranslation('console');
   const [webhooks, setWebhooks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -121,17 +132,17 @@ function WebhooksPage() {
 
   return (
     <ResourcePage
-      title="Webhooks"
-      description="Configure webhook endpoints to receive real-time event notifications."
-      tabs={DEPLOY_TABS}
-      breadcrumbs={BREADCRUMBS}
+      title={t('org.webhooks.title')}
+      description={t('org.webhooks.description')}
+      tabs={getDeployTabs(t)}
+      breadcrumbs={getBreadcrumbs(t)}
       actions={
         <Button
           variant="contained"
           startIcon={<AddIcon />}
           onClick={() => setCreateDialogOpen(true)}
         >
-          Add Webhook
+          {t('org.webhooks.addWebhook')}
         </Button>
       }
     >
@@ -148,12 +159,12 @@ function WebhooksPage() {
           <Table>
             <TableHead>
               <TableRow>
-                <TableCell>Endpoint URL</TableCell>
-                <TableCell>Events</TableCell>
-                <TableCell>Last Delivery</TableCell>
-                <TableCell>Success Rate</TableCell>
-                <TableCell>Status</TableCell>
-                <TableCell align="right">Actions</TableCell>
+                <TableCell>{t('org.webhooks.tableHeaders.url')}</TableCell>
+                <TableCell>{t('org.webhooks.tableHeaders.events')}</TableCell>
+                <TableCell>{t('org.webhooks.tableHeaders.lastDelivery')}</TableCell>
+                <TableCell>{t('org.webhooks.tableHeaders.successRate')}</TableCell>
+                <TableCell>{t('org.webhooks.tableHeaders.status')}</TableCell>
+                <TableCell align="right">{t('org.webhooks.tableHeaders.actions')}</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
@@ -161,7 +172,7 @@ function WebhooksPage() {
                 <TableRow>
                   <TableCell colSpan={6} align="center">
                     <Typography color="text.secondary" sx={{ py: 4 }}>
-                      No webhooks configured. Add a webhook to receive event notifications.
+                      {t('org.webhooks.empty')}
                     </Typography>
                   </TableCell>
                 </TableRow>
@@ -187,7 +198,7 @@ function WebhooksPage() {
                           <Chip key={event} label={event} size="small" variant="outlined" />
                         ))}
                         {webhook.events.length > 2 && (
-                          <Chip label={`+${webhook.events.length - 2}`} size="small" />
+                          <Chip label={t('org.webhooks.moreEvents', { count: webhook.events.length - 2 })} size="small" />
                         )}
                       </Box>
                     </TableCell>
@@ -203,18 +214,18 @@ function WebhooksPage() {
                     </TableCell>
                     <TableCell>
                       <Chip 
-                        label={webhook.status === 'active' ? 'Active' : 'Disabled'} 
+                        label={webhook.status === 'active' ? t('org.webhooks.status.active') : t('org.webhooks.status.disabled')} 
                         color={webhook.status === 'active' ? 'success' : 'default'}
                         size="small" 
                       />
                     </TableCell>
                     <TableCell align="right">
-                      <Tooltip title="Test Webhook">
+                      <Tooltip title={t('org.webhooks.actions.test')}>
                         <IconButton size="small" color="primary">
                           <PlayArrowIcon fontSize="small" />
                         </IconButton>
                       </Tooltip>
-                      <Tooltip title="Delivery History">
+                      <Tooltip title={t('org.webhooks.actions.history')}>
                         <IconButton
                           component={Link}
                           to={`/console/org/webhooks/${webhook.id}/history`}
@@ -223,12 +234,12 @@ function WebhooksPage() {
                           <HistoryIcon fontSize="small" />
                         </IconButton>
                       </Tooltip>
-                      <Tooltip title="Edit">
+                      <Tooltip title={t('org.webhooks.actions.edit')}>
                         <IconButton size="small">
                           <EditIcon fontSize="small" />
                         </IconButton>
                       </Tooltip>
-                      <Tooltip title="Delete">
+                      <Tooltip title={t('org.webhooks.actions.delete')}>
                         <IconButton size="small" color="error">
                           <DeleteIcon fontSize="small" />
                         </IconButton>
@@ -249,23 +260,23 @@ function WebhooksPage() {
         maxWidth="sm"
         fullWidth
       >
-        <DialogTitle>Add Webhook</DialogTitle>
+        <DialogTitle>{t('org.webhooks.dialog.title')}</DialogTitle>
         <DialogContent>
           <Box sx={{ pt: 1 }}>
             <TextField
               autoFocus
               fullWidth
-              label="Endpoint URL"
-              placeholder="https://api.example.com/webhook"
+              label={t('org.webhooks.dialog.urlLabel')}
+              placeholder={t('org.webhooks.dialog.urlPlaceholder')}
               value={newWebhook.url}
               onChange={(e) => setNewWebhook((prev) => ({ ...prev, url: e.target.value }))}
               sx={{ mb: 3 }}
             />
             <Typography variant="subtitle2" gutterBottom>
-              Events to subscribe
+              {t('org.webhooks.dialog.eventsLabel')}
             </Typography>
             <FormGroup>
-              {EVENT_TYPES.map((event) => (
+              {getEventTypes(t).map((event) => (
                 <FormControlLabel
                   key={event.value}
                   control={
@@ -281,13 +292,13 @@ function WebhooksPage() {
           </Box>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setCreateDialogOpen(false)}>Cancel</Button>
+          <Button onClick={() => setCreateDialogOpen(false)}>{t('actions.cancel', { ns: 'common' })}</Button>
           <Button 
             variant="contained" 
             onClick={handleCreate}
             disabled={!newWebhook.url.trim() || newWebhook.events.length === 0}
           >
-            Add Webhook
+            {t('org.webhooks.dialog.add')}
           </Button>
         </DialogActions>
       </Dialog>

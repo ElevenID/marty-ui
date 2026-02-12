@@ -1,0 +1,50 @@
+{
+  "team": {
+    "title": "チーム",
+    "description": "チームメンバー、招待、API キー、Webhook を管理します。",
+    "tabs": {
+      "members": "メンバー",
+      "invitations": "招待",
+      "apiKeys": "API キー",
+      "webhooks": "Webhook"
+    },
+    "members": {
+      "emptyTitle": "まだメンバーがいません",
+      "emptyDescription": "コラボレーションのためにメンバーを招待してください。",
+      "inviteButton": "メンバーを招待"
+    }
+  },
+  "issuance": {
+    "title": "発行",
+    "description": "テンプレートを設定し、発行処理を管理します。",
+    "tabs": {
+      "templates": "テンプレート",
+      "history": "履歴",
+      "settings": "設定"
+    }
+  },
+  "verification": {
+    "title": "検証",
+    "description": "資格情報を検証するための提示ポリシーを定義します。",
+    "empty": {
+      "title": "提示ポリシーがまだありません",
+      "createButton": "ポリシーを作成"
+    }
+  },
+  "organizationSettings": {
+    "title": "組織設定",
+    "description": "組織プロフィールとサブスクリプション情報を管理します",
+    "updateSuccess": "組織設定が更新されました",
+    "details": {
+      "title": "組織の詳細",
+      "nameLabel": "組織名",
+      "saveButton": "変更を保存",
+      "saving": "保存中..."
+    },
+    "subscription": {
+      "title": "サブスクリプション",
+      "currentPlan": "現在のプラン",
+      "status": "ステータス"
+    }
+  }
+}

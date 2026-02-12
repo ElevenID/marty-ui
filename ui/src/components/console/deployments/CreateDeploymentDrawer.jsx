@@ -1,6 +1,7 @@
 import ResourceCreateDrawer from '../../common/ResourceCreateDrawer';
 import { createDeploymentProfile } from '../../../services/deploymentProfilesApi';
 import { useNotifications } from '../../../hooks/useNotifications';
+import { useTranslation } from 'react-i18next';
 
 /**
  * CreateDeploymentDrawer - Quick deployment profile creation drawer
@@ -9,36 +10,37 @@ import { useNotifications } from '../../../hooks/useNotifications';
  * Links to the full DeploymentProfileWizard for advanced configuration.
  */
 function CreateDeploymentDrawer({ open, onClose, onSuccess }) {
+  const { t } = useTranslation('console');
   const { showNotification } = useNotifications();
 
   const fields = [
     {
       name: 'name',
-      label: 'Deployment Name',
+      label: t('createDeploymentDrawer.deploymentName'),
       type: 'text',
       required: true,
-      placeholder: 'e.g., "Mobile App Production"',
-      helperText: 'A descriptive name for this deployment',
+      placeholder: t('createDeploymentDrawer.deploymentNamePlaceholder'),
+      helperText: t('createDeploymentDrawer.deploymentNameHelper'),
     },
     {
       name: 'environment',
-      label: 'Environment',
+      label: t('createDeploymentDrawer.environment'),
       type: 'select',
       required: true,
       options: [
-        { value: 'development', label: 'Development' },
-        { value: 'staging', label: 'Staging' },
-        { value: 'production', label: 'Production' },
+        { value: 'development', label: t('createDeploymentDrawer.environments.development') },
+        { value: 'staging', label: t('createDeploymentDrawer.environments.staging') },
+        { value: 'production', label: t('createDeploymentDrawer.environments.production') },
       ],
-      helperText: 'Select the deployment environment',
+      helperText: t('createDeploymentDrawer.environmentHelper'),
     },
     {
       name: 'description',
-      label: 'Description',
+      label: t('createDeploymentDrawer.description'),
       type: 'textarea',
       required: false,
-      placeholder: 'Describe this deployment...',
-      helperText: 'Optional description for documentation',
+      placeholder: t('createDeploymentDrawer.descriptionPlaceholder'),
+      helperText: t('createDeploymentDrawer.descriptionHelper'),
       rows: 3,
     },
   ];
@@ -58,7 +60,7 @@ function CreateDeploymentDrawer({ open, onClose, onSuccess }) {
     const result = await createDeploymentProfile(payload);
 
     showNotification({
-      message: `Deployment "${formData.name}" created successfully`,
+      message: t('createDeploymentDrawer.successMessage', { name: formData.name }),
       severity: 'success',
     });
 
@@ -72,7 +74,7 @@ function CreateDeploymentDrawer({ open, onClose, onSuccess }) {
       open={open}
       onClose={onClose}
       onSubmit={handleSubmit}
-      title="Create Deployment Profile"
+      title={t('createDeploymentDrawer.title')}
       resourceType="deployment"
       advancedPath="/console/deployments/new"
       fields={fields}

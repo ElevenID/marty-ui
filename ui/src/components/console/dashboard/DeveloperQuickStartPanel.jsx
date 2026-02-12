@@ -20,6 +20,7 @@ import {
   Skeleton,
   Alert,
 } from '@mui/material';
+import { useTranslation } from 'react-i18next';
 import { Link as RouterLink } from 'react-router-dom';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
@@ -33,6 +34,7 @@ import { getOrganizationIntegrationInfo } from '../../../services/dashboardApi';
  * Developer Quick Start Panel Component
  */
 export function DeveloperQuickStartPanel() {
+  const { t } = useTranslation('console');
   const { organizationId } = useAuth();
   const [integrationInfo, setIntegrationInfo] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -80,7 +82,7 @@ export function DeveloperQuickStartPanel() {
     return (
       <Paper sx={{ p: 3 }}>
         <Alert severity="info">
-          Integration information unavailable
+          {t('dashboard.developerQuickStart.unavailable')}
         </Alert>
       </Paper>
     );
@@ -91,18 +93,18 @@ export function DeveloperQuickStartPanel() {
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
         <CodeIcon color="primary" />
         <Typography variant="h6" fontWeight={600}>
-          Developer Quick Start
+          {t('dashboard.developerQuickStart.title')}
         </Typography>
       </Box>
 
       <Typography variant="body2" color="text.secondary" paragraph>
-        Org-scoped integration details for API development
+        {t('dashboard.developerQuickStart.description')}
       </Typography>
 
       {/* Organization ID */}
       <Box sx={{ mb: 2 }}>
         <Typography variant="caption" color="text.secondary" display="block" gutterBottom>
-          Organization ID
+          {t('dashboard.developerQuickStart.organizationId')}
         </Typography>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <TextField
@@ -114,7 +116,7 @@ export function DeveloperQuickStartPanel() {
               sx: { fontFamily: 'monospace', fontSize: '0.875rem' },
             }}
           />
-          <Tooltip title={copied === 'orgId' ? 'Copied!' : 'Copy to clipboard'}>
+          <Tooltip title={copied === 'orgId' ? t('dashboard.developerQuickStart.copied') : t('dashboard.developerQuickStart.copyToClipboard')}>
             <IconButton 
               size="small" 
               onClick={() => handleCopy(integrationInfo.orgId, 'orgId')}
@@ -129,7 +131,7 @@ export function DeveloperQuickStartPanel() {
       {/* Base API URL */}
       <Box sx={{ mb: 2 }}>
         <Typography variant="caption" color="text.secondary" display="block" gutterBottom>
-          Base API URL
+          {t('dashboard.developerQuickStart.baseApiUrl')}
         </Typography>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <TextField
@@ -141,7 +143,7 @@ export function DeveloperQuickStartPanel() {
               sx: { fontFamily: 'monospace', fontSize: '0.875rem' },
             }}
           />
-          <Tooltip title={copied === 'baseUrl' ? 'Copied!' : 'Copy to clipboard'}>
+          <Tooltip title={copied === 'baseUrl' ? t('dashboard.developerQuickStart.copied') : t('dashboard.developerQuickStart.copyToClipboard')}>
             <IconButton 
               size="small" 
               onClick={() => handleCopy(integrationInfo.baseUrl, 'baseUrl')}
@@ -156,7 +158,7 @@ export function DeveloperQuickStartPanel() {
       {/* Example Request */}
       <Box sx={{ mb: 2 }}>
         <Typography variant="caption" color="text.secondary" display="block" gutterBottom>
-          Example API Request (curl)
+          {t('dashboard.developerQuickStart.exampleRequest')}
         </Typography>
         <Box 
           sx={{ 
@@ -173,7 +175,7 @@ export function DeveloperQuickStartPanel() {
           <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
             {exampleRequest}
           </pre>
-          <Tooltip title={copied === 'example' ? 'Copied!' : 'Copy to clipboard'}>
+          <Tooltip title={copied === 'example' ? t('dashboard.developerQuickStart.copied') : t('dashboard.developerQuickStart.copyToClipboard')}>
             <IconButton
               size="small"
               onClick={() => handleCopy(exampleRequest, 'example')}
@@ -201,7 +203,7 @@ export function DeveloperQuickStartPanel() {
           startIcon={<VpnKeyIcon />}
           size="small"
         >
-          Manage API Keys
+          {t('dashboard.developerQuickStart.manageApiKeys')}
         </Button>
         <Button
           variant="outlined"
@@ -210,7 +212,7 @@ export function DeveloperQuickStartPanel() {
           endIcon={<OpenInNewIcon />}
           size="small"
         >
-          API Documentation
+          {t('dashboard.developerQuickStart.apiDocumentation')}
         </Button>
       </Box>
     </Paper>

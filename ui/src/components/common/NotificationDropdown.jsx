@@ -23,6 +23,7 @@ import MailIcon from '@mui/icons-material/Mail';
 import DraftsIcon from '@mui/icons-material/Drafts';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import { formatDistanceToNow } from 'date-fns';
+import { useTranslation } from 'react-i18next';
 
 import notificationsApi from '../../services/notificationsApi';
 import EmptyState from './EmptyState';
@@ -40,6 +41,7 @@ import EmptyState from './EmptyState';
  * @param {function} onCountChange - Callback when unread count changes
  */
 function NotificationDropdown({ anchorEl, open, onClose, onMarkAllRead, onCountChange }) {
+  const { t } = useTranslation('common');
   const [notifications, setNotifications] = useState([]);
   const [loading, setLoading] = useState(false);
 
@@ -118,10 +120,10 @@ function NotificationDropdown({ anchorEl, open, onClose, onMarkAllRead, onCountC
     >
       {/* Header */}
       <Box sx={{ px: 2, py: 1.5, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <Typography variant="h6">Notifications</Typography>
+        <Typography variant="h6">{t('notifications.title')}</Typography>
         {notifications.some(n => !n.read) && (
           <Button size="small" onClick={onMarkAllRead}>
-            Mark all read
+            {t('notifications.markAllRead')}
           </Button>
         )}
       </Box>
@@ -136,8 +138,8 @@ function NotificationDropdown({ anchorEl, open, onClose, onMarkAllRead, onCountC
         <Box sx={{ py: 3, px: 2 }}>
           <EmptyState
             icon={MailIcon}
-            title="No notifications"
-            description="You're all caught up! Notifications will appear here."
+            title={t('notifications.empty.title')}
+            description={t('notifications.empty.description')}
           />
         </Box>
       ) : (
@@ -166,7 +168,7 @@ function NotificationDropdown({ anchorEl, open, onClose, onMarkAllRead, onCountC
                       {notification.title}
                     </Typography>
                     {!notification.read && (
-                      <Chip label="NEW" size="small" color="primary" sx={{ ml: 1, height: 20 }} />
+                      <Chip label={t('notifications.newBadge')} size="small" color="primary" sx={{ ml: 1, height: 20 }} />
                     )}
                   </Box>
                 }
@@ -212,7 +214,7 @@ function NotificationDropdown({ anchorEl, open, onClose, onMarkAllRead, onCountC
               size="small"
               fullWidth
             >
-              View All Notifications
+              {t('notifications.viewAll')}
             </Button>
           </Box>
         </>

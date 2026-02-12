@@ -7,6 +7,7 @@
 
 import { useNavigate } from 'react-router-dom';
 import { useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   Box,
   Container,
@@ -31,10 +32,17 @@ import TrustComplianceStep from './steps/TrustComplianceStep';
 import CryptoValidityStep from './steps/CryptoValidityStep';
 import ReviewStep from './steps/ReviewStep';
 
-const STEPS = ['Basics', 'Claims', 'Trust & Compliance', 'Crypto & Validity', 'Review & Activate'];
+const getSteps = (t) => [
+  t('wizards.credentialTemplate.steps.basics'),
+  t('wizards.credentialTemplate.steps.claims'),
+  t('wizards.credentialTemplate.steps.trustCompliance'),
+  t('wizards.credentialTemplate.steps.cryptoValidity'),
+  t('wizards.credentialTemplate.steps.review'),
+];
 
 const CredentialTemplateWizard = () => {
   const navigate = useNavigate();
+  const { t } = useTranslation('console');
 
   const validateStep = useCallback((stepIndex, data) => {
     switch (stepIndex) {
@@ -72,7 +80,7 @@ const CredentialTemplateWizard = () => {
   }, []);
 
   const wizard = useWizard({
-    steps: STEPS,
+    steps: getSteps(t),
     initialData: {
       name: '',
       credential_type: 'VerifiableCredential',
@@ -142,7 +150,7 @@ const CredentialTemplateWizard = () => {
           />
         );
       default:
-        return <Typography>Unknown step</Typography>;
+        return <Typography>{t('wizards.credentialTemplate.unknownStep')}</Typography>;
     }
   };
 
@@ -165,19 +173,20 @@ const CredentialTemplateWizard = () => {
             <CheckCircleIcon color="success" sx={{ fontSize: 64 }} />
           </Box>
           <Typography variant="h4" gutterBottom>
-            🎉 Credential Template Created!
+            {t('wizards.credentialTemplate.success.title')}
           </Typography>
           <Typography variant="h6" color="text.secondary" paragraph>
-            &quot;{wizard.data.name}&quot; is now {wizard.data.activate_immediately ? 'active' : 'saved as draft'}.
+            {wizard.data.activate_immediately 
+              ? t('wizards.credentialTemplate.success.messageActive', { name: wizard.data.name })
+              : t('wizards.credentialTemplate.success.messageDraft', { name: wizard.data.name })}
           </Typography>
           
           {/* Updated messaging */}
           <Typography color="text.secondary" variant="body2" sx={{ mb: 1 }}>
-            <strong>Next step: Create an Issuance Flow</strong>
+            <strong>{t('wizards.credentialTemplate.success.nextStepTitle')}</strong>
           </Typography>
           <Typography color="text.secondary" variant="body2" sx={{ mb: 4 }}>
-            Templates are not applicant-facing. To make this credential available to applicants, 
-            create an Issuance Flow that uses this template.
+            {t('wizards.credentialTemplate.success.nextStepDescription')}
           </Typography>
           
           {/* Primary CTA: Create Flow */}
@@ -188,7 +197,7 @@ const CredentialTemplateWizard = () => {
               startIcon={<AccountTreeIcon />}
               onClick={() => navigate(`/console/flows/definitions/new?templateId=${templateId}`)}
             >
-              Create Issuance Flow
+              {t('wizards.credentialTemplate.success.createFlowButton')}
             </Button>
             
             {/* Secondary: Return to Templates */}
@@ -197,7 +206,7 @@ const CredentialTemplateWizard = () => {
               size="large"
               onClick={() => navigate('/console/templates/credentials')}
             >
-              Return to Templates
+              {t('wizards.credentialTemplate.success.returnToTemplatesButton')}
             </Button>
           </Box>
         </Paper>
@@ -211,16 +220,16 @@ const CredentialTemplateWizard = () => {
         {/* Header */}
         <Box sx={{ mb: 4 }}>
           <Typography variant="h4" gutterBottom>
-            Build Credential Template
+            {t('wizards.credentialTemplate.title')}
           </Typography>
           <Typography color="text.secondary">
-            Define what credentials are issued and their structure
+            {t('wizards.credentialTemplate.description')}
           </Typography>
         </Box>
 
         {/* Stepper */}
         <Stepper activeStep={wizard.activeStep} sx={{ mb: 4 }}>
-          {STEPS.map((label) => (
+          {getSteps(t).map((label) => (
             <Step key={label}>
               <StepLabel>{label}</StepLabel>
             </Step>
@@ -249,7 +258,7 @@ const CredentialTemplateWizard = () => {
             disabled={wizard.loading}
             data-testid={wizard.isFirstStep ? 'wizard.template.cancel' : 'wizard.template.back'}
           >
-            {wizard.isFirstStep ? 'Cancel' : 'Back'}
+            {wizard.isFirstStep ? t('wizards.credentialTemplate.buttons.cancel') : t('wizards.credentialTemplate.buttons.back')}
           </Button>
 
           <Box sx={{ display: 'flex', gap: 1 }}>
@@ -260,7 +269,7 @@ const CredentialTemplateWizard = () => {
                 disabled={wizard.loading}
                 data-testid="wizard.template.skip"
               >
-                Skip
+                {t('wizards.credentialTemplate.buttons.skip')}
               </Button>
             )}
 
@@ -272,7 +281,7 @@ const CredentialTemplateWizard = () => {
                 startIcon={wizard.loading ? <CircularProgress size={20} /> : <CheckCircleIcon />}
                 data-testid="wizard.template.submit"
               >
-                {wizard.loading ? 'Creating...' : 'Create Template'}
+                {wizard.loading ? t('wizards.credentialTemplate.buttons.submitting') : t('wizards.credentialTemplate.buttons.submit')}
               </Button>
             ) : (
               <Button
@@ -282,7 +291,7 @@ const CredentialTemplateWizard = () => {
                 endIcon={<ArrowForwardIcon />}
                 data-testid="wizard.template.next"
               >
-                Next
+                {t('wizards.credentialTemplate.buttons.next')}
               </Button>
             )}
           </Box>

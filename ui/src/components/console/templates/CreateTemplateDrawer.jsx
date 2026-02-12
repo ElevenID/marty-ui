@@ -1,6 +1,7 @@
 import ResourceCreateDrawer from '../../common/ResourceCreateDrawer';
 import { createCredentialTemplate } from '../../../services/presentationPolicyApi';
 import { useNotifications } from '../../../hooks/useNotifications';
+import { useTranslation } from 'react-i18next';
 
 /**
  * CreateTemplateDrawer - Quick credential template creation drawer
@@ -9,32 +10,33 @@ import { useNotifications } from '../../../hooks/useNotifications';
  * Links to the full CredentialTemplateWizard for advanced configuration.
  */
 function CreateTemplateDrawer({ open, onClose, onSuccess }) {
+  const { t } = useTranslation('console');
   const { showNotification } = useNotifications();
 
   const fields = [
     {
       name: 'name',
-      label: 'Template Name',
+      label: t('createTemplateDrawer.templateName'),
       type: 'text',
       required: true,
-      placeholder: 'e.g., "Employee Badge"',
-      helperText: 'A descriptive name for this template',
+      placeholder: t('createTemplateDrawer.templateNamePlaceholder'),
+      helperText: t('createTemplateDrawer.templateNameHelper'),
     },
     {
       name: 'credential_type',
-      label: 'Credential Type',
+      label: t('createTemplateDrawer.credentialType'),
       type: 'text',
       required: true,
-      placeholder: 'e.g., "EmployeeBadgeCredential"',
-      helperText: 'The type identifier for this credential',
+      placeholder: t('createTemplateDrawer.credentialTypePlaceholder'),
+      helperText: t('createTemplateDrawer.credentialTypeHelper'),
     },
     {
       name: 'description',
-      label: 'Description',
+      label: t('createTemplateDrawer.description'),
       type: 'textarea',
       required: false,
-      placeholder: 'Describe the purpose of this template...',
-      helperText: 'Optional description for documentation',
+      placeholder: t('createTemplateDrawer.descriptionPlaceholder'),
+      helperText: t('createTemplateDrawer.descriptionHelper'),
       rows: 3,
     },
   ];
@@ -58,7 +60,7 @@ function CreateTemplateDrawer({ open, onClose, onSuccess }) {
     const result = await createCredentialTemplate(payload);
 
     showNotification({
-      message: `Template "${formData.name}" created successfully`,
+      message: t('createTemplateDrawer.successMessage', { name: formData.name }),
       severity: 'success',
     });
 
@@ -72,7 +74,7 @@ function CreateTemplateDrawer({ open, onClose, onSuccess }) {
       open={open}
       onClose={onClose}
       onSubmit={handleSubmit}
-      title="Create Credential Template"
+      title={t('createTemplateDrawer.title')}
       resourceType="template"
       advancedPath="/console/templates/new"
       fields={fields}

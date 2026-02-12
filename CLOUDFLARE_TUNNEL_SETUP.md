@@ -1,10 +1,10 @@
 # Cloudflare Tunnel Setup for ElevenID Beta
 
-This guide walks you through setting up a Cloudflare Tunnel to expose your local ElevenID instance at **beta.elevenfold.com** for external review.
+This guide walks you through setting up a Cloudflare Tunnel to expose your local ElevenID instance at **beta.elevenidllc.com** for external review.
 
 ## Prerequisites
 
-1. **Cloudflare account** with your domain `elevenfold.com` added
+1. **Cloudflare account** with your domain `elevenidllc.com` added
 2. **Cloudflare Zero Trust** enabled (free plan works)
 3. **Docker & Docker Compose** installed locally
 4. **ElevenID running locally** in Docker
@@ -50,7 +50,7 @@ Still on the Cloudflare Tunnel configuration page:
 1. Click **"Add a public hostname"**
 2. Configure:
    - **Subdomain:** `beta`
-   - **Domain:** `elevenfold.com`
+   - **Domain:** `elevenidllc.com`
    - **Service Type:** `HTTP`
    - **URL:** `ui:80`
 3. Click **"Save hostname"**
@@ -60,12 +60,12 @@ Still on the Cloudflare Tunnel configuration page:
 1. Click **"Add a public hostname"** again
 2. Configure:
    - **Subdomain:** `api-beta` (or `beta-api`)
-   - **Domain:** `elevenfold.com`
+   - **Domain:** `elevenidllc.com`
    - **Service Type:** `HTTP`
    - **URL:** `oid4vc-api:8000`
 3. Click **"Save hostname"**
 
-> **Note:** The UI at `beta.elevenfold.com` already proxies API requests to the backend, so the separate API hostname is optional.
+> **Note:** The UI at `beta.elevenidllc.com` already proxies API requests to the backend, so the separate API hostname is optional.
 
 ### 1.6 Skip Connector Installation
 
@@ -99,8 +99,8 @@ Open `.env.tunnel` and add your tunnel token:
 CLOUDFLARE_TUNNEL_TOKEN=eyJhIjoiYWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXoxMjM0NTY3ODkwIiwidCI6ImFiY2RlZmdoaWprbG1ub3BxcnN0dXZ3eHl6MTIzNDU2Nzg5MCIsInMiOiJhYmNkZWZnaGlqa2xtbm9wcXJzdHV2d3h5ejEyMzQ1Njc4OTAifQ==
 
 # Public URLs
-PUBLIC_URL=https://beta.elevenfold.com
-PUBLIC_API_URL=https://beta.elevenfold.com
+PUBLIC_URL=https://beta.elevenidllc.com
+PUBLIC_API_URL=https://beta.elevenidllc.com
 
 # Security Settings (HTTPS)
 COOKIE_SECURE=true
@@ -108,9 +108,9 @@ COOKIE_SAMESITE=none
 
 # Keycloak Configuration (if exposing externally)
 # Uncomment and configure if you need external Keycloak access
-# KC_HOSTNAME=beta.elevenfold.com
+# KC_HOSTNAME=beta.elevenidllc.com
 # KC_HOSTNAME_PORT=443
-# OIDC_ISSUER_URL=https://beta.elevenfold.com/auth/realms/11id
+# OIDC_ISSUER_URL=https://beta.elevenidllc.com/auth/realms/11id
 ```
 
 ### 2.3 Secure the File
@@ -172,7 +172,7 @@ docker compose logs cloudflared
 ### 4.3 Test Public Access
 
 1. Open a browser (or ask someone else to test)
-2. Navigate to: **https://beta.elevenfold.com**
+2. Navigate to: **https://beta.elevenidllc.com**
 3. You should see the ElevenID UI loading
 4. Test login and navigation
 
@@ -207,7 +207,7 @@ Add Cloudflare rate limiting:
 Add access restrictions in Cloudflare Zero Trust:
 
 1. Go to **Zero Trust** → **Access** → **Applications**
-2. Create an application for `beta.elevenfold.com`
+2. Create an application for `beta.elevenidllc.com`
 3. Add policies (e.g., email domain, IP ranges)
 
 ---
@@ -281,7 +281,7 @@ docker compose \
 ```
 Internet
     ↓
-Cloudflare Tunnel (beta.elevenfold.com)
+Cloudflare Tunnel (beta.elevenidllc.com)
     ↓
 Docker: cloudflared container
     ↓

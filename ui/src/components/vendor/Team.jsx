@@ -11,6 +11,7 @@
  */
 
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   Box,
   Paper,
@@ -51,6 +52,7 @@ function TabPanel({ children, value, index, ...other }) {
  * Team Main Component
  */
 export default function Team() {
+  const { t } = useTranslation('vendor');
   const [currentTab, setCurrentTab] = useState(0);
 
   const handleTabChange = (event, newValue) => {
@@ -63,10 +65,10 @@ export default function Team() {
       <Box sx={{ mb: 4 }}>
         <Typography variant="h4" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <PeopleIcon fontSize="large" />
-          Team
+          {t('team.title')}
         </Typography>
         <Typography variant="body1" color="text.secondary">
-          Manage team members, send invitations, configure API keys, and set up webhooks for event notifications.
+          {t('team.description')}
         </Typography>
       </Box>
 
@@ -81,28 +83,28 @@ export default function Team() {
           <Tab
             icon={<PeopleIcon />}
             iconPosition="start"
-            label="Members"
+            label={t('team.tabs.members')}
             id="team-tab-0"
             aria-controls="team-tabpanel-0"
           />
           <Tab
             icon={<MailIcon />}
             iconPosition="start"
-            label="Invitations"
+            label={t('team.tabs.invitations')}
             id="team-tab-1"
             aria-controls="team-tabpanel-1"
           />
           <Tab
             icon={<VpnKeyIcon />}
             iconPosition="start"
-            label="API Keys"
+            label={t('team.tabs.apiKeys')}
             id="team-tab-2"
             aria-controls="team-tabpanel-2"
           />
           <Tab
             icon={<WebhookIcon />}
             iconPosition="start"
-            label="Webhooks"
+            label={t('team.tabs.webhooks')}
             id="team-tab-3"
             aria-controls="team-tabpanel-3"
           />
@@ -112,21 +114,20 @@ export default function Team() {
         <TabPanel value={currentTab} index={0}>
           <Alert severity="info" sx={{ mb: 3 }}>
             <Typography variant="body2">
-              Team member management coming soon. You&apos;ll be able to add team members with different roles
-              (Owner, Admin, Member, Viewer) and manage their permissions.
+              {t('team.members.comingSoon')}
             </Typography>
           </Alert>
 
           <Paper sx={{ p: 3, bgcolor: 'grey.50', textAlign: 'center' }}>
             <PersonAddIcon sx={{ fontSize: 60, color: 'text.secondary', mb: 2 }} />
             <Typography variant="h6" gutterBottom>
-              No Team Members Yet
+              {t('team.members.emptyTitle')}
             </Typography>
             <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-              Invite team members to collaborate on credential issuance and application review.
+              {t('team.members.emptyDescription')}
             </Typography>
             <Button variant="contained" disabled>
-              Invite Team Member
+              {t('team.members.inviteButton')}
             </Button>
           </Paper>
         </TabPanel>

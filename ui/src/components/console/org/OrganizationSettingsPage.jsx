@@ -5,6 +5,7 @@
  */
 
 import { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   Box,
   Paper,
@@ -36,19 +37,26 @@ import { ResourcePage } from '../../common';
 import { useAuth } from '../../../hooks/useAuth';
 import OrgDefaultsSection from './OrgDefaultsSection';
 
-const ORG_TABS = [
-  { label: 'Organization', path: '/console/org/settings' },
-  { label: 'Team', path: '/console/org/team' },
-  { label: 'Webhooks', path: '/console/org/webhooks' },
+/**
+ * Get organization tabs with translations
+ */
+const getOrgTabs = (t) => [
+  { label: t('org.tabs.organization'), path: '/console/org/settings' },
+  { label: t('org.tabs.team'), path: '/console/org/team' },
+  { label: t('org.tabs.webhooks'), path: '/console/org/webhooks' },
 ];
 
-const BREADCRUMBS = [
-  { label: 'Console', path: '/console' },
-  { label: 'Org', path: '/console/org' },
-  { label: 'Organization', path: '/console/org/settings' },
+/**
+ * Get breadcrumbs with translations
+ */
+const getBreadcrumbs = (t) => [
+  { label: t('org.breadcrumbs.console'), path: '/console' },
+  { label: t('org.breadcrumbs.org'), path: '/console/org' },
+  { label: t('org.breadcrumbs.organization'), path: '/console/org/settings' },
 ];
 
 function OrganizationSettingsPage() {
+  const { t } = useTranslation('console');
   const { organizationId, organizationName } = useAuth();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -106,9 +114,9 @@ function OrganizationSettingsPage() {
         } else {
           // Fallback to mock data
           setOrg({
-            name: organizationName || 'My Organization',
-            displayName: organizationName || 'My Organization',
-            description: 'Digital identity services provider',
+            name: organizationName || t('org.settings.defaultName'),
+            displayName: organizationName || t('org.settings.defaultName'),
+            description: t('org.settings.defaultDescription'),
             website: 'https://example.com',
             contactEmail: 'contact@example.com',
             address: '123 Identity Street',
@@ -124,7 +132,7 @@ function OrganizationSettingsPage() {
           });
         }
       } catch (err) {
-        setError('Failed to load organization details');
+        setError(t('org.settings.errorLoading'));
         console.error(err);
       } finally {
         setLoading(false);
@@ -156,14 +164,14 @@ function OrganizationSettingsPage() {
       });
       
       if (!response.ok) {
-        throw new Error('Failed to save organization settings');
+        throw new Error(t('org.settings.errorSaving'));
       }
       
       setSuccess(true);
       setEditMode(false);
       setTimeout(() => setSuccess(false), 3000);
     } catch (err) {
-      setError(err.message || 'Failed to save organization settings');
+      setError(err.message || t('org.settings.errorSaving'));
       console.error(err);
     } finally {
       setSaving(false);
@@ -194,9 +202,9 @@ function OrganizationSettingsPage() {
   if (loading) {
     return (
       <ResourcePage
-        title="Organization"
-        tabs={ORG_TABS}
-        breadcrumbs={BREADCRUMBS}
+        title={t('org.title')}
+        tabs={getOrgTabs(t)}
+        breadcrumbs={getBreadcrumbs(t)}
       >
         <LinearProgress />
       </ResourcePage>
@@ -205,15 +213,15 @@ function OrganizationSettingsPage() {
 
   return (
     <ResourcePage
-      title="Organization"
-      description="Manage your organization profile and settings."
-      tabs={ORG_TABS}
-      breadcrumbs={BREADCRUMBS}
+      title={t('org.title')}
+      description={t('org.settings.description')}
+      tabs={getOrgTabs(t)}
+      breadcrumbs={getBreadcrumbs(t)}
       actions={
         editMode ? (
           <Box sx={{ display: 'flex', gap: 1 }}>
             <Button variant="outlined" onClick={() => setEditMode(false)}>
-              Cancel
+              {t('actions.cancel', { ns: 'common' })}
             </Button>
             <Button
               variant="contained"
@@ -221,7 +229,7 @@ function OrganizationSettingsPage() {
               onClick={handleSave}
               disabled={saving}
             >
-              {saving ? 'Saving...' : 'Save Changes'}
+              {saving ? t('org.settings.saving') : t('org.settings.saveChanges')}
             </Button>
           </Box>
         ) : (
@@ -230,7 +238,7 @@ function OrganizationSettingsPage() {
             startIcon={<EditIcon />}
             onClick={() => setEditMode(true)}
           >
-            Edit
+            {t('org.settings.editMode')}
           </Button>
         )
       }
@@ -243,7 +251,7 @@ function OrganizationSettingsPage() {
 
       {success && (
         <Alert severity="success" sx={{ mb: 3 }}>
-          Organization settings saved successfully.
+          {t('org.settings.successMessage')}
         </Alert>
       )}
 
@@ -257,7 +265,7 @@ function OrganizationSettingsPage() {
             <Box>
               <Typography variant="h5">{org.displayName}</Typography>
               <Typography variant="body2" color="text.secondary">
-                Organization ID: {organizationId || 'org-12345'}
+                {t('org.settings.organizationId')}: {organizationId || 'org-12345'}
               </Typography>
             </Box>
           </Box>
@@ -267,13 +275,13 @@ function OrganizationSettingsPage() {
       {/* Basic Information */}
       <Paper sx={{ p: 3, mb: 3 }}>
         <Typography variant="h6" gutterBottom>
-          Basic Information
+          {t('org.settings.profile.title')}
         </Typography>
         <Grid container spacing={3}>
           <Grid item xs={12} sm={6}>
             <TextField
               fullWidth
-              label="Organization Name"
+              label={t('org.settings.profile.name')}
               value={org.name}
               onChange={handleChange('name')}
               disabled={!editMode}
@@ -282,7 +290,7 @@ function OrganizationSettingsPage() {
           <Grid item xs={12} sm={6}>
             <TextField
               fullWidth
-              label="Display Name"
+              label={t('org.settings.profile.displayName')}
               value={org.displayName}
               onChange={handleChange('displayName')}
               disabled={!editMode}
@@ -291,7 +299,7 @@ function OrganizationSettingsPage() {
           <Grid item xs={12}>
             <TextField
               fullWidth
-              label="Description"
+              label={t('org.settings.profile.description')}
               value={org.description}
               onChange={handleChange('description')}
               disabled={!editMode}
@@ -305,13 +313,13 @@ function OrganizationSettingsPage() {
       {/* Contact Information */}
       <Paper sx={{ p: 3, mb: 3 }}>
         <Typography variant="h6" gutterBottom>
-          Contact Information
+          {t('org.settings.profile.contactInfo')}
         </Typography>
         <Grid container spacing={3}>
           <Grid item xs={12} sm={6}>
             <TextField
               fullWidth
-              label="Website"
+              label={t('org.settings.profile.website')}
               value={org.website}
               onChange={handleChange('website')}
               disabled={!editMode}
@@ -320,7 +328,7 @@ function OrganizationSettingsPage() {
           <Grid item xs={12} sm={6}>
             <TextField
               fullWidth
-              label="Contact Email"
+              label={t('org.settings.profile.contactEmail')}
               value={org.contactEmail}
               onChange={handleChange('contactEmail')}
               disabled={!editMode}
@@ -329,7 +337,7 @@ function OrganizationSettingsPage() {
           <Grid item xs={12} sm={8}>
             <TextField
               fullWidth
-              label="Address"
+              label={t('org.settings.profile.address')}
               value={org.address}
               onChange={handleChange('address')}
               disabled={!editMode}
@@ -338,7 +346,7 @@ function OrganizationSettingsPage() {
           <Grid item xs={12} sm={4}>
             <TextField
               fullWidth
-              label="Country"
+              label={t('org.settings.profile.country')}
               value={org.country}
               onChange={handleChange('country')}
               disabled={!editMode}
@@ -352,10 +360,10 @@ function OrganizationSettingsPage() {
 
       {/* Danger Zone */}
       <Paper sx={{ p: 3, mb: 3 }}>        <Typography variant="h6" gutterBottom>
-          Email Domain-Based Membership
+          {t('org.settings.membership.title')}
         </Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-          Allow users with specific email domains to automatically discover and join your organization.
+          {t('org.settings.membership.description')}
         </Typography>
         
         <Grid container spacing={3}>
@@ -368,16 +376,16 @@ function OrganizationSettingsPage() {
                   disabled={!editMode}
                 />
               }
-              label="Make organization discoverable"
+              label={t('org.settings.membership.discoverable')}
             />
             <FormHelperText>
-              When enabled, users can find your organization in the directory.
+              {t('org.settings.membership.discoverableHelp')}
             </FormHelperText>
           </Grid>
           
           <Grid item xs={12}>
             <Typography variant="subtitle2" gutterBottom>
-              Allowed Email Domains
+              {t('org.settings.membership.domains')}
             </Typography>
             <Box sx={{ display: 'flex', gap: 1, mb: 1, flexWrap: 'wrap' }}>
               {org.allowedEmailDomains.map((domain) => (
@@ -394,7 +402,7 @@ function OrganizationSettingsPage() {
               <Box sx={{ display: 'flex', gap: 1 }}>
                 <TextField
                   size="small"
-                  placeholder="e.g., example.com"
+                  placeholder={t('org.settings.membership.domainPlaceholder')}
                   value={newDomain}
                   onChange={(e) => setNewDomain(e.target.value)}
                   onKeyPress={(e) => e.key === 'Enter' && handleAddDomain()}
@@ -406,49 +414,49 @@ function OrganizationSettingsPage() {
                   onClick={handleAddDomain}
                   disabled={!newDomain.trim()}
                 >
-                  Add Domain
+                  {t('org.settings.membership.addDomain')}
                 </Button>
               </Box>
             )}
             <FormHelperText>
-              Users with these email domains can discover your organization.
+              {t('org.settings.membership.domainsHelp')}
             </FormHelperText>
           </Grid>
           
           <Grid item xs={12} sm={6}>
             <FormControl fullWidth disabled={!editMode}>
-              <InputLabel>Domain Join Policy</InputLabel>
+              <InputLabel>{t('org.settings.membership.joinPolicy')}</InputLabel>
               <Select
                 value={org.domainJoinPolicy}
-                label="Domain Join Policy"
+                label={t('org.settings.membership.joinPolicy')}
                 onChange={(e) => setOrg(prev => ({ ...prev, domainJoinPolicy: e.target.value }))}
               >
-                <MenuItem value="auto">Auto-join (instant access)</MenuItem>
-                <MenuItem value="approval">Requires approval</MenuItem>
-                <MenuItem value="closed">Closed (no new members)</MenuItem>
+                <MenuItem value="auto">{t('org.settings.membership.modes.auto')}</MenuItem>
+                <MenuItem value="approval">{t('org.settings.membership.modes.approval')}</MenuItem>
+                <MenuItem value="closed">{t('org.settings.membership.modes.closed')}</MenuItem>
               </Select>
               <FormHelperText>
-                {org.domainJoinPolicy === 'auto' && 'Users are automatically added as members'}
-                {org.domainJoinPolicy === 'approval' && 'Join requests must be approved by admin'}
-                {org.domainJoinPolicy === 'closed' && 'Domain matching is disabled'}
+                {org.domainJoinPolicy === 'auto' && t('org.settings.membership.joinPolicies.auto')}
+                {org.domainJoinPolicy === 'approval' && t('org.settings.membership.joinPolicies.approval')}
+                {org.domainJoinPolicy === 'closed' && t('org.settings.membership.joinPolicies.closed')}
               </FormHelperText>
             </FormControl>
           </Grid>
           
           <Grid item xs={12} sm={6}>
             <FormControl fullWidth disabled={!editMode}>
-              <InputLabel>Default Role</InputLabel>
+              <InputLabel>{t('org.settings.membership.defaultRole')}</InputLabel>
               <Select
                 value={org.defaultRole}
-                label="Default Role"
+                label={t('org.settings.membership.defaultRole')}
                 onChange={(e) => setOrg(prev => ({ ...prev, defaultRole: e.target.value }))}
               >
-                <MenuItem value="member">Member</MenuItem>
-                <MenuItem value="admin">Admin</MenuItem>
-                <MenuItem value="owner">Owner</MenuItem>
+                <MenuItem value="member">{t('org.settings.membership.roles.member')}</MenuItem>
+                <MenuItem value="admin">{t('org.settings.membership.roles.admin')}</MenuItem>
+                <MenuItem value="owner">{t('org.settings.membership.roles.owner')}</MenuItem>
               </Select>
               <FormHelperText>
-                Role assigned to users who join via email domain
+                {t('org.settings.membership.defaultRoleHelp')}
               </FormHelperText>
             </FormControl>
           </Grid>
@@ -458,10 +466,10 @@ function OrganizationSettingsPage() {
       {/* Device Security Settings */}
       <Paper sx={{ p: 3, mb: 3 }}>
         <Typography variant="h6" gutterBottom>
-          Device Security
+          {t('org.settings.devices.title')}
         </Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-          Configure device registration and push notification settings for credential holders.
+          {t('org.settings.devices.description')}
         </Typography>
         
         <Grid container spacing={3}>
@@ -474,10 +482,10 @@ function OrganizationSettingsPage() {
                   disabled={!editMode}
                 />
               }
-              label="Require Device Registration"
+              label={t('org.settings.devices.requireRegistration')}
             />
             <Typography variant="caption" display="block" color="text.secondary" sx={{ ml: 4 }}>
-              When enabled, users must register their mobile device before they can receive or use credentials.
+              {t('org.settings.devices.requireRegistrationHelp')}
             </Typography>
           </Grid>
           
@@ -490,29 +498,29 @@ function OrganizationSettingsPage() {
                   disabled={!editMode}
                 />
               }
-              label="Allow Push Notifications"
+              label={t('org.settings.devices.allowPushNotifications')}
             />
             <Typography variant="caption" display="block" color="text.secondary" sx={{ ml: 4 }}>
-              Enable push notifications for credential updates, verification requests, and other time-sensitive events.
+              {t('org.settings.devices.pushNotificationsHelp')}
             </Typography>
           </Grid>
           
           <Grid item xs={12} sm={6}>
             <FormControl fullWidth disabled={!editMode}>
-              <InputLabel>Device Registration Prompt</InputLabel>
+              <InputLabel>{t('org.settings.devices.registrationPrompt')}</InputLabel>
               <Select
                 value={org.deviceRegistrationPrompt}
-                label="Device Registration Prompt"
+                label={t('org.settings.devices.registrationPrompt')}
                 onChange={(e) => setOrg(prev => ({ ...prev, deviceRegistrationPrompt: e.target.value }))}
               >
-                <MenuItem value="onboarding">During onboarding</MenuItem>
-                <MenuItem value="first_action">Before first credential action</MenuItem>
-                <MenuItem value="never">Never (optional)</MenuItem>
+                <MenuItem value="onboarding">{t('org.settings.devices.prompts.onboarding')}</MenuItem>
+                <MenuItem value="first_action">{t('org.settings.devices.prompts.firstAction')}</MenuItem>
+                <MenuItem value="never">{t('org.settings.devices.prompts.never')}</MenuItem>
               </Select>
               <FormHelperText>
-                {org.deviceRegistrationPrompt === 'onboarding' && 'Users prompted to register device immediately after account creation'}
-                {org.deviceRegistrationPrompt === 'first_action' && 'Users prompted when they first apply for or use a credential'}
-                {org.deviceRegistrationPrompt === 'never' && 'Device registration is optional unless required above'}
+                {org.deviceRegistrationPrompt === 'onboarding' && t('org.settings.devices.promptHelp.onboarding')}
+                {org.deviceRegistrationPrompt === 'first_action' && t('org.settings.devices.promptHelp.firstAction')}
+                {org.deviceRegistrationPrompt === 'never' && t('org.settings.devices.promptHelp.never')}
               </FormHelperText>
             </FormControl>
           </Grid>
@@ -522,14 +530,13 @@ function OrganizationSettingsPage() {
       {/* Danger Zone */}
       <Paper sx={{ p: 3, border: 1, borderColor: 'error.main' }}>
         <Typography variant="h6" color="error" gutterBottom>
-          Danger Zone
+          {t('org.settings.danger.title')}
         </Typography>
         <Typography variant="body2" color="text.secondary" paragraph>
-          Deleting your organization will permanently remove all data including credentials, 
-          templates, policies, and team members. This action cannot be undone.
+          {t('org.settings.danger.description')}
         </Typography>
         <Button variant="outlined" color="error" disabled>
-          Delete Organization
+          {t('org.settings.danger.deleteOrganization')}
         </Button>
       </Paper>
     </ResourcePage>

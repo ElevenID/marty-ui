@@ -21,6 +21,7 @@ import PersonAddIcon from '@mui/icons-material/PersonAdd';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import BadgeIcon from '@mui/icons-material/Badge';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
+import { useTranslation } from 'react-i18next';
 
 import { useAuth } from '../../../hooks/useAuth';
 import { getApplicantStats } from '../../../services/dashboardApi';
@@ -48,6 +49,7 @@ function StatItem({ icon: Icon, label, value, color = 'primary' }) {
  * Applicant Stats Card Component
  */
 export function ApplicantStatsCard() {
+  const { t } = useTranslation('console');
   const { organizationId } = useAuth();
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -87,7 +89,7 @@ export function ApplicantStatsCard() {
     <Paper sx={{ p: 3, mb: 3 }}>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
         <Typography variant="h6" fontWeight={600}>
-          Applicant Lifecycle
+          {t('dashboard.applicantStats.title')}
         </Typography>
         <Button
           component={Link}
@@ -95,7 +97,7 @@ export function ApplicantStatsCard() {
           endIcon={<ArrowForwardIcon />}
           size="small"
         >
-          View All
+          {t('dashboard.applicantStats.viewAll')}
         </Button>
       </Box>
 
@@ -103,7 +105,7 @@ export function ApplicantStatsCard() {
         <Grid item xs={12} sm={4}>
           <StatItem
             icon={PersonAddIcon}
-            label="Pending Review"
+            label={t('dashboard.applicantStats.pendingReview')}
             value={stats.pending}
             color="warning"
           />
@@ -111,7 +113,7 @@ export function ApplicantStatsCard() {
         <Grid item xs={12} sm={4}>
           <StatItem
             icon={CheckCircleIcon}
-            label="Approved"
+            label={t('dashboard.applicantStats.approved')}
             value={stats.approved}
             color="success"
           />
@@ -119,7 +121,7 @@ export function ApplicantStatsCard() {
         <Grid item xs={12} sm={4}>
           <StatItem
             icon={BadgeIcon}
-            label="Ready to Issue"
+            label={t('dashboard.applicantStats.readyToIssue')}
             value={stats.issuable}
             color="primary"
           />
@@ -129,7 +131,7 @@ export function ApplicantStatsCard() {
       {stats.total === 0 && (
         <Box sx={{ mt: 2, p: 2, bgcolor: 'background.default', borderRadius: 1 }}>
           <Typography variant="body2" color="text.secondary" align="center">
-            No applicants yet. Applications will appear here as users apply for credentials.
+            {t('dashboard.applicantStats.noApplicants')}
           </Typography>
         </Box>
       )}

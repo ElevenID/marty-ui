@@ -1,0 +1,258 @@
+{
+  "dashboard": {
+    "title": "Welkom terug",
+    "titleWithName": "Welkom terug, {{name}}",
+    "description": "Beheer uw digitale referenties en aanvragen.",
+    "pendingAlert": {
+      "title": "Aanvragen in behandeling",
+      "message": "U heeft {{count}} aanvraag/aanvragen die wachten op beoordeling.",
+      "viewStatus": "Status bekijken"
+    },
+    "stats": {
+      "activeCredentials": "Actieve referenties",
+      "pendingApplications": "Aanvragen in behandeling",
+      "expiringSoon": "Verloopt binnenkort",
+      "viewAll": "Alles bekijken"
+    },
+    "quickActions": {
+      "title": "Snelle acties",
+      "applyForCredential": "Aanvragen voor referentie",
+      "applyDescription": "Blader door beschikbare referenties en start een aanvraag",
+      "viewMyCredentials": "Mijn referenties bekijken",
+      "viewDescription": "Bekijk uw uitgegeven digitale referenties"
+    }
+  },
+  "credentials": {
+    "title": "Mijn referenties",
+    "description": "Uw uitgegeven digitale referenties en hun status.",
+    "errorLoading": "Kan referenties niet laden",
+    "tableHeaders": {
+      "credentialType": "Referentietype",
+      "issuer": "Uitgever",
+      "issuedDate": "Uitgegeven op",
+      "expires": "Verloopt",
+      "status": "Status",
+      "actions": "Acties"
+    },
+    "empty": {
+      "message": "Nog geen referenties. Vraag een referentie aan om te beginnen.",
+      "browseButton": "Blader door referenties"
+    },
+    "actions": {
+      "viewDetails": "Details bekijken",
+      "showQRCode": "QR-code tonen",
+      "download": "Downloaden"
+    }
+  },
+  "applications": {
+    "title": "Mijn aanvragen",
+    "description": "Volg de status van uw referentieaanvragen.",
+    "errorLoading": "Kan aanvragen niet laden",
+    "steps": {
+      "submitted": "Ingediend",
+      "underReview": "In behandeling",
+      "verification": "Verificatie",
+      "approved": "Goedgekeurd"
+    },
+    "status": {
+      "submitted": "Ingediend",
+      "underReview": "In behandeling",
+      "approved": "Goedgekeurd",
+      "rejected": "Afgewezen"
+    },
+    "tableHeaders": {
+      "credentialType": "Referentietype",
+      "submitted": "Ingediend",
+      "progress": "Voortgang",
+      "status": "Status",
+      "actions": "Acties"
+    },
+    "empty": {
+      "message": "Nog geen aanvragen.",
+      "applyButton": "Aanvragen voor een referentie"
+    },
+    "actions": {
+      "viewDetails": "Details bekijken"
+    },
+    "detailsDialog": {
+      "title": "Aanvraagdetails",
+      "credentialType": "Referentietype",
+      "submitted": "Ingediend",
+      "status": "Status",
+      "estimatedCompletion": "Geschatte voltooiing",
+      "close": "Sluiten"
+    }
+  },
+  "devices": {
+    "title": "Apparaatbeheer",
+    "description": "Beheer uw geregistreerde apparaten voor veilige referentietoegang.",
+    "refresh": "Vernieuwen",
+    "info": "Geregistreerde apparaten kunnen pushmeldingen ontvangen en veilig verificatie-uitdagingen ondertekenen. Verwijder apparaten die u niet meer gebruikt om de beveiliging te handhaven.",
+    "errorLoading": "Kan apparaten niet laden",
+    "errorUnregistering": "Kan apparaat niet uitschrijven: {{message}}",
+    "tableHeaders": {
+      "device": "Apparaat",
+      "platform": "Platform",
+      "appVersion": "App-versie",
+      "registered": "Geregistreerd",
+      "lastSeen": "Laatst gezien",
+      "security": "Beveiliging",
+      "actions": "Acties"
+    },
+    "status": {
+      "active": "Actief",
+      "secured": "Beveiligd",
+      "basic": "Basis"
+    },
+    "security": {
+      "hasPublicKey": "Apparaat heeft een openbare sleutel geregistreerd voor uitdagingsondertekening"
+    },
+    "empty": {
+      "title": "Geen apparaten geregistreerd",
+      "description": "Registreer uw mobiele wallet-app om pushmeldingen te ontvangen en veilige verificatiefuncties te gebruiken."
+    },
+    "actions": {
+      "unregister": "Apparaat uitschrijven"
+    },
+    "unregisterDialog": {
+      "title": "Apparaat uitschrijven?",
+      "message": "Weet u zeker dat u dit apparaat wilt uitschrijven? Dit voorkomt dat het pushmeldingen ontvangt en veilige verificatiefuncties gebruikt.",
+      "deviceId": "Apparaat-ID: {{deviceId}}",
+      "platform": "Platform: {{platform}}",
+      "confirm": "Uitschrijven",
+      "unregistering": "Uitschrijven..."
+    },
+    "formatDate": {
+      "never": "Nooit"
+    }
+  },
+  "settings": {
+    "title": "Instellingen",
+    "description": "Beheer uw profiel en voorkeuren.",
+    "successMessage": "Instellingen succesvol opgeslagen.",
+    "errorNotFound": "Aanvragersprofiel niet gevonden",
+    "profile": {
+      "title": "Profiel",
+      "fullName": "Volledige naam",
+      "email": "E-mail",
+      "emailHelp": "Neem contact op met de ondersteuning om uw e-mail te wijzigen",
+      "phone": "Telefoonnummer"
+    },
+    "notifications": {
+      "title": "Meldingen",
+      "emailAlerts": "E-mailmeldingen",
+      "emailAlertsDescription": "Ontvang belangrijke updates via e-mail",
+      "applicationUpdates": "Aanvraagupdates",
+      "applicationUpdatesDescription": "Ontvang een melding wanneer uw aanvraagstatus verandert",
+      "expirationReminders": "Verloopherinneringen",
+      "expirationRemindersDescription": "Herinner me voordat referenties verlopen"
+    },
+    "actions": {
+      "save": "Instellingen opslaan",
+      "saving": "Opslaan..."
+    }
+  },
+  "catalog": {
+    "title": "Referentiecatalogus",
+    "description": "Blader door en vraag beschikbare referenties aan",
+    "descriptionWithOrg": "Blader door en vraag beschikbare referenties aan van {{organizationName}}",
+    "searchPlaceholder": "Referenties zoeken...",
+    "resultsCount": "{{count}} referentie gevonden",
+    "resultsCount_other": "{{count}} referenties gevonden",
+    "categories": {
+      "all": "Alle categorieën",
+      "travel": "Reisdocumenten",
+      "identity": "Identiteitsdocumenten",
+      "enterprise": "Enterprise-referenties"
+    },
+    "filters": {
+      "category": "Categorie"
+    },
+    "empty": {
+      "title": "Geen referenties beschikbaar",
+      "description": "Er zijn momenteel geen referenties beschikbaar voor uw organisatie.",
+      "message": "Geen referenties komen overeen met uw zoekcriteria. Probeer uw filters aan te passen."
+    },
+    "card": {
+      "free": "Gratis",
+      "viewDetails": "Details bekijken",
+      "status": {
+        "pending": "Aanvraag in behandeling"
+      },
+      "actions": {
+        "apply": "Nu aanvragen",
+        "preview": "Aanvraag voorvertonen"
+      }
+    },
+    "detailsDialog": {
+      "processingTime": "Verwerkingstijd",
+      "processingFee": "Verwerkingskosten",
+      "noFee": "Geen kosten vereist",
+      "requirements": "Vereisten",
+      "instructions": "Inzendingsinstructies",
+      "requiredInfo": "Vereiste informatie",
+      "offeredBy": "Aangeboden door: {{vendorName}}",
+      "templateVersion": "Sjabloon v{{version}}"
+    }
+  },
+  "applicationForm": {
+    "title": {
+      "default": "Referentieaanvraag",
+      "withName": "Aanvragen voor {{credentialName}}"
+    },
+    "description": "Vul het onderstaande formulier in om uw referentie aan te vragen.",
+    "loadingConfig": "Aanvraagformulier laden...",
+    "instructions": {
+      "default": "Vul alle verplichte velden in."
+    },
+    "steps": {
+      "personalInfo": "Persoonlijke informatie",
+      "address": "Adres",
+      "documentDetails": "Documentdetails",
+      "additionalInfo": "Aanvullende informatie",
+      "photos": "Foto's & documenten",
+      "review": "Beoordelen & indienen"
+    },
+    "navigation": {
+      "back": "Terug",
+      "next": "Volgende",
+      "submit": "Aanvraag indienen",
+      "submitting": "Indienen...",
+      "simulating": "Simuleren...",
+      "previewSubmit": "Inzenden voorvertonen"
+    },
+    "review": {
+      "title": "Controleer uw aanvraag",
+      "description": "Controleer uw informatie voordat u deze indient.",
+      "uploaded": "Geüpload",
+      "terms": "Ik verklaar dat alle verstrekte informatie nauwkeurig en volledig is. Ik begrijp dat het verstrekken van valse informatie kan leiden tot afwijzing van mijn aanvraag."
+    },
+    "success": {
+      "title": "Aanvraag ingediend!",
+      "previewTitle": "Voorbeeld: aanvraag zou worden ingediend",
+      "message": "Uw aanvraag is succesvol ingediend.",
+      "applicationId": "Aanvraag-ID: {{id}}",
+      "nextSteps": "U ontvangt updates over uw aanvraagstatus via e-mail. U wordt doorgestuurd naar uw aanvragenpagina...",
+      "viewApplications": "Mijn aanvragen bekijken",
+      "dataCollected": "Verzamelde aanvraaggegevens:",
+      "previewMode": "Voorbeeldmodus",
+      "previewMessage": "In productie zou deze aanvraag worden ingediend voor beoordeling.",
+      "previewNote": "De aanvrager zou een bevestiging ontvangen en de aanvraagstatus kunnen volgen."
+    },
+    "errors": {
+      "noCredential": "Selecteer een referentie uit de catalogus voordat u een aanvraag start."
+    },
+    "actions": {
+      "gotoCatalog": "Ga naar referentiecatalogus"
+    },
+    "validation": {
+      "requiredField": "Dit veld is verplicht",
+      "invalidEmail": "Voer een geldig e-mailadres in",
+      "invalidPhone": "Voer een geldig telefoonnummer in",
+      "fillRequiredFields": "Vul alle verplichte velden in"
+    },
+    "fields": {
+      "optional": "(optioneel)"
+    }
+  }
+}

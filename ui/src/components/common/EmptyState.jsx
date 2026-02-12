@@ -14,6 +14,7 @@ import ErrorIcon from '@mui/icons-material/Error';
 import InfoIcon from '@mui/icons-material/Info';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import { Link } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 
 /**
  * @param {Object} props
@@ -49,6 +50,7 @@ function EmptyState({
   onExampleClick,
   whyItMatters,
 }) {
+  const { t } = useTranslation('common');
   const IconComponent = icon || InboxIcon;
   
   // Check if all prerequisites are met
@@ -68,7 +70,7 @@ function EmptyState({
         }}
       >
         <Typography color="text.secondary">
-          No results match your filters. Try adjusting your search criteria.
+          {t('emptyState.noResults')}
         </Typography>
       </Box>
     );

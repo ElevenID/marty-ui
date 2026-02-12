@@ -1,8 +1,21 @@
 <#import "template.ftl" as layout>
-<#-- Marty custom login template with test-friendly IDs -->
+<#-- Marty custom login template with test-friendly IDs and language switcher -->
 <@layout.registrationLayout displayMessage=!messagesPerField.existsError('username','password') displayInfo=realm.password && realm.registrationAllowed && !registrationDisabled??; section>
     <#if section = "header">
-        ${msg("loginAccountTitle")}
+        <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+            <div>${msg("loginAccountTitle")}</div>
+            <#if realm.internationalizationEnabled  && locale.supported?has_content && (locale.supported?size > 1)>
+                <div class="kc-locale-dropdown" data-testid="language-switcher">
+                    <select id="kc-locale-dropdown" onchange="if (this.value) window.location.href=this.value;" class="kc-locale-select">
+                        <#list locale.supported as l>
+                            <option value="${l.url}" <#if locale.currentLanguageTag == l.label>selected</#if>>
+                                ${msg("locale_${l.label}")}
+                            </option>
+                        </#list>
+                    </select>
+                </div>
+            </#if>
+        </div>
     <#elseif section = "form">
         <div id="kc-form">
             <div id="kc-form-wrapper">

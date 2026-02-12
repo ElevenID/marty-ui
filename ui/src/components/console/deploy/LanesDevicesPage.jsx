@@ -32,23 +32,25 @@ import VisibilityIcon from '@mui/icons-material/Visibility';
 import SettingsIcon from '@mui/icons-material/Settings';
 import DevicesIcon from '@mui/icons-material/Devices';
 import { Link } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 
 import { ResourcePage, AddButton } from '../../common';
 
-const DEPLOY_TABS = [
-  { label: 'Deployment Profiles', path: '/console/deploy/profiles' },
-  { label: 'API Keys', path: '/console/deploy/api-keys' },
-  { label: 'Lanes & Devices', path: '/console/deploy/lanes' },
-  { label: 'Webhooks', path: '/console/deploy/webhooks' },
+const getDeployTabs = (t) => [
+  { label: t('deploy.deploymentProfiles'), path: '/console/deploy/profiles' },
+  { label: t('deploy.apiKeys'), path: '/console/deploy/api-keys' },
+  { label: t('deploy.lanesDevices'), path: '/console/deploy/lanes' },
+  { label: t('deploy.webhooks'), path: '/console/deploy/webhooks' },
 ];
 
-const BREADCRUMBS = [
-  { label: 'Console', path: '/console' },
-  { label: 'Deploy', path: '/console/deploy' },
-  { label: 'Lanes & Devices', path: '/console/deploy/lanes' },
+const getBreadcrumbs = (t) => [
+  { label: t('deploy.breadcrumbs.console'), path: '/console' },
+  { label: t('deploy.breadcrumbs.deploy'), path: '/console/deploy' },
+  { label: t('deploy.breadcrumbs.lanesDevices'), path: '/console/deploy/lanes' },
 ];
 
 function LanesDevicesPage() {
+  const { t } = useTranslation('console');
   const [lanes, setLanes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -103,7 +105,7 @@ function LanesDevicesPage() {
           },
         ]);
       } catch (err) {
-        setError('Failed to load lanes');
+        setError(t('deploy.lanesDevicesPage.error'));
       } finally {
         setLoading(false);
       }
@@ -124,6 +126,19 @@ function LanesDevicesPage() {
     }
   };
 
+  const getStatusLabel = (status) => {
+    switch (status) {
+      case 'online':
+        return t('deploy.lanesDevicesPage.status.online');
+      case 'degraded':
+        return t('deploy.lanesDevicesPage.status.degraded');
+      case 'offline':
+        return t('deploy.lanesDevicesPage.status.offline');
+      default:
+        return status;
+    }
+  };
+
   const filteredLanes = lanes.filter((lane) => {
     const matchesSearch = lane.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       lane.deployment.toLowerCase().includes(searchQuery.toLowerCase());
@@ -135,13 +150,13 @@ function LanesDevicesPage() {
 
   return (
     <ResourcePage
-      title="Lanes & Devices"
-      description="Monitor and manage verification lanes and connected devices."
-      tabs={DEPLOY_TABS}
-      breadcrumbs={BREADCRUMBS}
+      title={t('deploy.lanesDevicesPage.title')}
+      description={t('deploy.lanesDevicesPage.description')}
+      tabs={getDeployTabs(t)}
+      breadcrumbs={getBreadcrumbs(t)}
       actions={
         <AddButton 
-          label="Add Lane" 
+          label={t('deploy.lanesDevicesPage.addLane')} 
           path="/console/deploy/lanes/new" 
         />
       }
@@ -155,7 +170,7 @@ function LanesDevicesPage() {
       {/* Filters */}
       <Box sx={{ display: 'flex', gap: 2, mb: 3 }}>
         <TextField
-          placeholder="Search lanes..."
+          placeholder={t('deploy.lanesDevicesPage.searchPlaceholder')}
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           size="small"
@@ -169,13 +184,13 @@ function LanesDevicesPage() {
           }}
         />
         <FormControl size="small" sx={{ minWidth: 200 }}>
-          <InputLabel>Deployment</InputLabel>
+          <InputLabel>{t('deploy.lanesDevicesPage.deploymentFilter')}</InputLabel>
           <Select
             value={deploymentFilter}
-            label="Deployment"
+            label={t('deploy.lanesDevicesPage.deploymentFilter')}
             onChange={(e) => setDeploymentFilter(e.target.value)}
           >
-            <MenuItem value="all">All Deployment Profiles</MenuItem>
+            <MenuItem value="all">{t('deploy.lanesDevicesPage.allDeploymentProfiles')}</MenuItem>
             {deployments.map((d) => (
               <MenuItem key={d.id} value={d.id}>{d.name}</MenuItem>
             ))}
@@ -190,12 +205,12 @@ function LanesDevicesPage() {
           <Table>
             <TableHead>
               <TableRow>
-                <TableCell>Lane</TableCell>
-                <TableCell>Deployment</TableCell>
-                <TableCell>Devices</TableCell>
-                <TableCell>Last Activity</TableCell>
-                <TableCell>Status</TableCell>
-                <TableCell align="right">Actions</TableCell>
+                <TableCell>{t('deploy.lanesDevicesPage.tableHeaders.lane')}</TableCell>
+                <TableCell>{t('deploy.lanesDevicesPage.tableHeaders.deployment')}</TableCell>
+                <TableCell>{t('deploy.lanesDevicesPage.tableHeaders.devices')}</TableCell>
+                <TableCell>{t('deploy.lanesDevicesPage.tableHeaders.lastActivity')}</TableCell>
+                <TableCell>{t('deploy.lanesDevicesPage.tableHeaders.status')}</TableCell>
+                <TableCell align="right">{t('deploy.lanesDevicesPage.tableHeaders.actions')}</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
@@ -204,8 +219,8 @@ function LanesDevicesPage() {
                   <TableCell colSpan={6} align="center">
                     <Typography color="text.secondary" sx={{ py: 4 }}>
                       {searchQuery || deploymentFilter !== 'all' 
-                        ? 'No lanes match your filters.' 
-                        : 'No lanes configured.'}
+                        ? t('deploy.lanesDevicesPage.noMatchingLanes') 
+                        : t('deploy.lanesDevicesPage.noLanes')}
                     </Typography>
                   </TableCell>
                 </TableRow>
@@ -223,7 +238,7 @@ function LanesDevicesPage() {
                     <TableCell>{lane.deployment}</TableCell>
                     <TableCell>
                       <Typography variant="body2">
-                        {lane.activeDevices} / {lane.deviceCount} active
+                        {t('deploy.lanesDevicesPage.devicesActive', { active: lane.activeDevices, total: lane.deviceCount })}
                       </Typography>
                     </TableCell>
                     <TableCell>
@@ -231,13 +246,13 @@ function LanesDevicesPage() {
                     </TableCell>
                     <TableCell>
                       <Chip 
-                        label={lane.status.charAt(0).toUpperCase() + lane.status.slice(1)} 
+                        label={getStatusLabel(lane.status)} 
                         color={getStatusColor(lane.status)}
                         size="small" 
                       />
                     </TableCell>
                     <TableCell align="right">
-                      <Tooltip title="View Devices">
+                      <Tooltip title={t('deploy.lanesDevicesPage.actions.viewDevices')}>
                         <IconButton
                           component={Link}
                           to={`/console/deploy/lanes/${lane.id}`}
@@ -246,7 +261,7 @@ function LanesDevicesPage() {
                           <VisibilityIcon fontSize="small" />
                         </IconButton>
                       </Tooltip>
-                      <Tooltip title="Configure">
+                      <Tooltip title={t('deploy.lanesDevicesPage.actions.configure')}>
                         <IconButton
                           component={Link}
                           to={`/console/deploy/lanes/${lane.id}/settings`}

@@ -23,47 +23,50 @@ import ComputerIcon from '@mui/icons-material/Computer';
 import PhoneAndroidIcon from '@mui/icons-material/PhoneAndroid';
 import PublicIcon from '@mui/icons-material/Public';
 import OfflineBoltIcon from '@mui/icons-material/OfflineBolt';
+import { useTranslation } from 'react-i18next';
 
-const ENVIRONMENT_TYPES = [
+const getEnvironmentTypes = (t) => [
   {
     value: 'api',
-    label: 'API Service',
+    label: t('wizards.deploymentProfile.environmentStep.environmentTypes.api.label'),
     icon: <ApiIcon sx={{ fontSize: 48 }} />,
-    description: 'REST API for credential issuance and verification',
+    description: t('wizards.deploymentProfile.environmentStep.environmentTypes.api.description'),
   },
   {
     value: 'kiosk',
-    label: 'Kiosk',
+    label: t('wizards.deploymentProfile.environmentStep.environmentTypes.kiosk.label'),
     icon: <ComputerIcon sx={{ fontSize: 48 }} />,
-    description: 'Self-service kiosk at physical locations',
+    description: t('wizards.deploymentProfile.environmentStep.environmentTypes.kiosk.description'),
   },
   {
     value: 'mobile',
-    label: 'Mobile Verifier',
+    label: t('wizards.deploymentProfile.environmentStep.environmentTypes.mobile.label'),
     icon: <PhoneAndroidIcon sx={{ fontSize: 48 }} />,
-    description: 'Mobile app for credential verification',
+    description: t('wizards.deploymentProfile.environmentStep.environmentTypes.mobile.description'),
   },
 ];
 
 const EnvironmentStep = ({ data, onChange }) => {
+  const { t } = useTranslation('console');
+
   return (
     <Box>
       <Typography variant="h6" gutterBottom>
-        Environment Configuration
+        {t('wizards.deploymentProfile.environmentStep.title')}
       </Typography>
       <Typography color="text.secondary" paragraph>
-        Define where and how this deployment profile will be used.
+        {t('wizards.deploymentProfile.environmentStep.description')}
       </Typography>
 
       {/* Name */}
       <TextField
         fullWidth
         required
-        label="Profile Name"
+        label={t('wizards.deploymentProfile.environmentStep.fields.profileName')}
         value={data.name || ''}
         onChange={(e) => onChange({ name: e.target.value })}
         sx={{ mb: 3 }}
-        helperText="A descriptive name for this deployment (e.g., 'Airport Gate 5', 'Mobile Verification App')"
+        helperText={t('wizards.deploymentProfile.environmentStep.helpers.profileName')}
       />
 
       {/* Description */}
@@ -71,23 +74,23 @@ const EnvironmentStep = ({ data, onChange }) => {
         fullWidth
         multiline
         rows={2}
-        label="Description"
+        label={t('wizards.deploymentProfile.environmentStep.fields.description')}
         value={data.description || ''}
         onChange={(e) => onChange({ description: e.target.value })}
         sx={{ mb: 4 }}
-        helperText="Optional: Additional context about this deployment"
+        helperText={t('wizards.deploymentProfile.environmentStep.helpers.description')}
       />
 
       {/* Environment Type Selection */}
       <Typography variant="subtitle2" gutterBottom>
-        Environment Type *
+        {t('wizards.deploymentProfile.environmentStep.fields.environmentType')}
       </Typography>
       <Typography variant="body2" color="text.secondary" paragraph>
-        Select the type of environment where this profile will be deployed
+        {t('wizards.deploymentProfile.environmentStep.helpers.environmentType')}
       </Typography>
 
       <Grid container spacing={2} sx={{ mb: 4 }}>
-        {ENVIRONMENT_TYPES.map((type) => (
+        {getEnvironmentTypes(t).map((type) => (
           <Grid item xs={12} md={4} key={type.value}>
             <Card
               variant={data.environment_type === type.value ? 'outlined' : 'elevation'}
@@ -112,7 +115,7 @@ const EnvironmentStep = ({ data, onChange }) => {
                     {type.description}
                   </Typography>
                   {data.environment_type === type.value && (
-                    <Chip label="Selected" color="primary" size="small" sx={{ mt: 2 }} />
+                      <Chip label={t('wizards.deploymentProfile.environmentStep.selectedChip')} color="primary" size="small" sx={{ mt: 2 }} />
                   )}
                 </CardContent>
               </CardActionArea>
@@ -123,7 +126,7 @@ const EnvironmentStep = ({ data, onChange }) => {
 
       {/* Network Mode */}
       <Typography variant="subtitle2" gutterBottom>
-        Network Mode
+        {t('wizards.deploymentProfile.environmentStep.fields.networkMode')}
       </Typography>
       <FormControl component="fieldset" fullWidth>
         <RadioGroup
@@ -137,10 +140,10 @@ const EnvironmentStep = ({ data, onChange }) => {
               <Box sx={{ ml: 1 }}>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                   <PublicIcon fontSize="small" />
-                  <Typography variant="body1">Online</Typography>
+                  <Typography variant="body1">{t('wizards.deploymentProfile.environmentStep.networkModes.ONLINE.label')}</Typography>
                 </Box>
                 <Typography variant="body2" color="text.secondary">
-                  Full cloud connectivity required
+                  {t('wizards.deploymentProfile.environmentStep.networkModes.ONLINE.description')}
                 </Typography>
               </Box>
             }
@@ -152,10 +155,10 @@ const EnvironmentStep = ({ data, onChange }) => {
               <Box sx={{ ml: 1 }}>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                   <OfflineBoltIcon fontSize="small" />
-                  <Typography variant="body1">Offline</Typography>
+                  <Typography variant="body1">{t('wizards.deploymentProfile.environmentStep.networkModes.OFFLINE.label')}</Typography>
                 </Box>
                 <Typography variant="body2" color="text.secondary">
-                  No network required - uses local validation
+                  {t('wizards.deploymentProfile.environmentStep.networkModes.OFFLINE.description')}
                 </Typography>
               </Box>
             }
@@ -168,10 +171,10 @@ const EnvironmentStep = ({ data, onChange }) => {
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                   <PublicIcon fontSize="small" />
                   <OfflineBoltIcon fontSize="small" />
-                  <Typography variant="body1">Hybrid</Typography>
+                  <Typography variant="body1">{t('wizards.deploymentProfile.environmentStep.networkModes.HYBRID.label')}</Typography>
                 </Box>
                 <Typography variant="body2" color="text.secondary">
-                  Syncs when network is available
+                  {t('wizards.deploymentProfile.environmentStep.networkModes.HYBRID.description')}
                 </Typography>
               </Box>
             }

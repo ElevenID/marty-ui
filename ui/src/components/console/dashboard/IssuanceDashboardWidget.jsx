@@ -24,6 +24,7 @@ import {
   Stack,
   Tooltip,
 } from '@mui/material';
+import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import QrCodeIcon from '@mui/icons-material/QrCode';
 import TrendingUpIcon from '@mui/icons-material/TrendingUp';
@@ -78,6 +79,7 @@ MiniStat.propTypes = {
  * Main Issuance Dashboard Widget
  */
 export default function IssuanceDashboardWidget({ compact = false }) {
+  const { t } = useTranslation('console');
   const { organizationId } = useAuth();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -125,7 +127,7 @@ export default function IssuanceDashboardWidget({ compact = false }) {
       }
     } catch (err) {
       console.error('Error fetching issuance metrics:', err);
-      setError('Failed to load metrics');
+      setError(t('dashboard.issuance.failedToLoad'));
     } finally {
       setLoading(false);
     }
@@ -175,7 +177,7 @@ export default function IssuanceDashboardWidget({ compact = false }) {
           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
             <Box>
               <Typography variant="subtitle2" color="text.secondary" gutterBottom>
-                Active Credential Offers
+                {t('dashboard.issuance.activeCredentialOffers')}
               </Typography>
               <Typography variant="h4" fontWeight="bold">
                 {metrics.activeOffers}
@@ -196,15 +198,15 @@ export default function IssuanceDashboardWidget({ compact = false }) {
           </Box>
           
           <Stack direction="row" spacing={2} sx={{ mt: 2 }}>
-            <Tooltip title="Scans in last 24 hours">
+            <Tooltip title={t('dashboard.issuance.scansInLast24h')}>
               <Chip
                 icon={<VisibilityIcon />}
-                label={`${metrics.totalScans} scans`}
+                label={t('dashboard.issuance.scans', { count: metrics.totalScans })}
                 size="small"
                 variant="outlined"
               />
             </Tooltip>
-            <Tooltip title="Success rate">
+            <Tooltip title={t('dashboard.issuance.successRateTooltip')}>
               <Chip
                 icon={<CheckCircleIcon />}
                 label={`${metrics.successRate}%`}
@@ -222,7 +224,7 @@ export default function IssuanceDashboardWidget({ compact = false }) {
             to="/console/operate/issuance"
             endIcon={<ArrowForwardIcon />}
           >
-            Manage Offers
+            {t('dashboard.issuance.manageOffers')}
           </Button>
         </CardActions>
       </Card>
@@ -235,10 +237,10 @@ export default function IssuanceDashboardWidget({ compact = false }) {
       <CardContent>
         <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <QrCodeIcon />
-          Credential Issuance
+          {t('dashboard.issuance.title')}
         </Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-          Real-time metrics for OID4VCI credential offers (Last 24 hours)
+          {t('dashboard.issuance.description')}
         </Typography>
         
         <Divider sx={{ my: 2 }} />
@@ -246,7 +248,7 @@ export default function IssuanceDashboardWidget({ compact = false }) {
         <Grid container spacing={3}>
           <Grid item xs={6} sm={3}>
             <MiniStat
-              label="Active Offers"
+              label={t('dashboard.issuance.activeOffers')}
               value={metrics.activeOffers}
               icon={QrCodeIcon}
               color="primary"
@@ -255,7 +257,7 @@ export default function IssuanceDashboardWidget({ compact = false }) {
           
           <Grid item xs={6} sm={3}>
             <MiniStat
-              label="Total Offers"
+              label={t('dashboard.issuance.totalOffers')}
               value={metrics.totalOffers}
               icon={TrendingUpIcon}
               color="info"
@@ -264,7 +266,7 @@ export default function IssuanceDashboardWidget({ compact = false }) {
           
           <Grid item xs={6} sm={3}>
             <MiniStat
-              label="Total Scans"
+              label={t('dashboard.issuance.totalScans')}
               value={metrics.totalScans}
               icon={VisibilityIcon}
               color="secondary"
@@ -273,7 +275,7 @@ export default function IssuanceDashboardWidget({ compact = false }) {
           
           <Grid item xs={6} sm={3}>
             <MiniStat
-              label="Success Rate"
+              label={t('dashboard.issuance.successRate')}
               value={`${metrics.successRate}%`}
               icon={CheckCircleIcon}
               color="success"
@@ -291,7 +293,7 @@ export default function IssuanceDashboardWidget({ compact = false }) {
           to="/console/operate/issuance"
           endIcon={<ArrowForwardIcon />}
         >
-          View All Offers
+          {t('dashboard.issuance.viewAllOffers')}
         </Button>
         <Button
           size="small"
@@ -300,7 +302,7 @@ export default function IssuanceDashboardWidget({ compact = false }) {
           state={{ tab: 2 }}
           endIcon={<ArrowForwardIcon />}
         >
-          View Analytics
+          {t('dashboard.issuance.viewAnalytics')}
         </Button>
       </CardActions>
     </Card>

@@ -1,0 +1,276 @@
+{
+	"dashboard": {
+		"title": "Tableau de bord",
+		"welcome": "Bon retour"
+	},
+	"flows": {
+		"title": "Flux",
+		"flowDefinitions": "Définitions de flux",
+		"flowInstances": "Instances de flux",
+		"refresh": "Actualiser",
+		"searchPlaceholder": "Rechercher des flux...",
+		"filters": {
+			"status": "Statut",
+			"all": "Tous",
+			"pending": "En attente",
+			"completed": "Terminé",
+			"failed": "Échoué"
+		},
+		"tableHeaders": {
+			"instanceId": "ID d'instance",
+			"flow": "Flux",
+			"progress": "Progression",
+			"started": "Démarré",
+			"completed": "Terminé",
+			"status": "Statut",
+			"actions": "Actions"
+		},
+		"progress": "Étape {{current}} / {{total}}",
+		"actions": {
+			"viewDetails": "Voir les détails",
+			"advanceFlow": "Avancer le flux",
+			"cancel": "Annuler"
+		},
+		"noMatchingInstances": "Aucune instance ne correspond aux filtres.",
+		"breadcrumbs": {
+			"console": "Console",
+			"flows": "Flux",
+			"flowInstances": "Instances de flux"
+		}
+	},
+	"deploy": {
+		"title": "Déploiement",
+		"deploymentProfiles": "Profils de déploiement",
+		"deploymentProfilesDescription": "Configurez des profils de déploiement pour API, bornes et appareils en ligne/hors ligne.",
+		"apiKeys": "Clés API",
+		"apiKeysDescription": "Générez et gérez des clés API pour l'accès programmatique.",
+		"lanesDevices": "Voies et appareils",
+		"webhooks": "Webhooks",
+		"apiKeysPage": {
+			"generateKey": "Générer une clé API",
+			"tableHeaders": {
+				"name": "Nom",
+				"keyPrefix": "Préfixe de clé",
+				"scopes": "Permissions",
+				"lastUsed": "Dernière utilisation",
+				"created": "Créé",
+				"status": "Statut",
+				"actions": "Actions"
+			},
+			"empty": "Aucune clé API. Créez votre première clé.",
+			"never": "Jamais",
+			"status": {
+				"active": "Active",
+				"revoked": "Révoquée"
+			},
+			"actions": {
+				"revokeKey": "Révoquer la clé"
+			},
+			"dialog": {
+				"titleCreate": "Générer une nouvelle clé API",
+				"titleCreated": "Clé API créée",
+				"warning": "Copiez cette clé maintenant. Elle ne sera plus affichée ensuite.",
+				"keyLabel": "Clé API",
+				"nameLabel": "Nom de la clé",
+				"namePlaceholder": "ex. Clé API de production",
+				"done": "Terminé",
+				"generate": "Générer"
+			},
+			"error": "Impossible de charger les clés API"
+		},
+		"deploymentActivityCard": {
+			"status": {
+				"active": "Actif",
+				"inactive": "Inactif"
+			},
+			"tooltips": {
+				"lastIssuance": "Dernière émission",
+				"lastVerification": "Dernière vérification"
+			},
+			"labels": {
+				"issued": "Émis :",
+				"verified": "Vérifié :"
+			},
+			"chips": {
+				"qrEnabled": "QR activé",
+				"activeFlows": "{{count}} flux actif",
+				"activeFlows_plural": "{{count}} flux actifs"
+			},
+			"time": {
+				"never": "Jamais",
+				"justNow": "À l'instant",
+				"minutesAgo": "il y a {{count}} min",
+				"hoursAgo": "il y a {{count}} h",
+				"daysAgo": "il y a {{count}} j"
+			},
+			"actions": {
+				"viewDetails": "Voir les détails",
+				"edit": "Modifier"
+			}
+		},
+		"breadcrumbs": {
+			"console": "Console",
+			"deploy": "Déploiement",
+			"deploymentProfiles": "Profils de déploiement",
+			"apiKeys": "Clés API",
+			"lanesDevices": "Voies et appareils",
+			"signingKeys": "Clés de signature"
+		}
+	},
+	"audit": {
+		"title": "Audit",
+		"description": "Surveillez l'activité système et les événements de sécurité.",
+		"refresh": "Actualiser",
+		"export": "Exporter",
+		"showFilters": "Afficher les filtres",
+		"hideFilters": "Masquer les filtres",
+		"searchPlaceholder": "Rechercher des événements...",
+		"exporting": "Export en cours...",
+		"exportSuccess": "Journal d'audit exporté avec succès",
+		"categories": {
+			"all": "Tous les événements",
+			"authentication": "Authentification",
+			"credential": "Identifiants",
+			"flow": "Flux",
+			"policy": "Politiques",
+			"template": "Modèles",
+			"team": "Équipe",
+			"settings": "Paramètres"
+		},
+		"severity": {
+			"all": "Tous les niveaux",
+			"info": "Info",
+			"warning": "Avertissement",
+			"error": "Erreur"
+		},
+		"filters": {
+			"savedViews": "Vues enregistrées",
+			"selectView": "Sélectionner une vue...",
+			"category": "Catégorie",
+			"severity": "Sévérité",
+			"actor": "Acteur",
+			"resourceType": "Type de ressource",
+			"ipAddress": "Adresse IP",
+			"startDate": "Date de début",
+			"endDate": "Date de fin"
+		},
+		"tableHeaders": {
+			"timestamp": "Horodatage",
+			"event": "Événement",
+			"actor": "Acteur",
+			"resource": "Ressource",
+			"status": "Statut"
+		},
+		"empty": {
+			"title": "Aucun événement d'audit",
+			"description": "Aucun événement ne correspond à vos filtres.",
+			"whyItMatters": "Les journaux d'audit aident à surveiller la sécurité, diagnostiquer les problèmes et assurer la conformité.",
+			"noMatching": "Aucun événement d'audit ne correspond à vos critères."
+		},
+		"actions": {
+			"saveView": "Enregistrer la vue",
+			"expandDetails": "Développer les détails",
+			"collapseDetails": "Réduire les détails",
+			"viewResource": "Voir la ressource"
+		},
+		"messages": {
+			"exportJobCreated": "Tâche d'export créée. Vous recevrez une notification lorsqu'elle sera prête.",
+			"exportFailed": "Impossible d'exporter les journaux d'audit",
+			"enterFilterViewName": "Saisissez un nom pour cette vue de filtre :",
+			"filterViewSaved": "Vue de filtre enregistrée",
+			"saveFilterViewFailed": "Impossible d'enregistrer la vue de filtre",
+			"appliedView": "Vue appliquée : {{name}}"
+		},
+		"details": {
+			"title": "Détails de l'événement",
+			"eventId": "ID de l'événement",
+			"ipAddress": "Adresse IP",
+			"additionalData": "Données supplémentaires",
+			"notAvailable": "N/D"
+		},
+		"breadcrumbs": {
+			"console": "Console",
+			"audit": "Audit"
+		}
+	},
+	"notificationPreferencesPage": {
+		"title": "Préférences de notification",
+		"subtitle": "Configurez la façon dont vous recevez les notifications pour les demandes, identifiants et adhésions",
+		"loading": "Chargement des préférences...",
+		"sections": {
+			"notificationMethod": "Méthode de notification",
+			"emailCategories": "Catégories d'e-mails",
+			"emailCategoriesDescription": "Choisissez les types d'événements qui doivent déclencher des notifications par e-mail."
+		},
+		"methods": {
+			"pushOnly": {
+				"title": "Notifications push uniquement",
+				"description": "Recevez des notifications dans l'application Marty Authenticator"
+			},
+			"emailOnly": {
+				"title": "E-mail uniquement",
+				"description": "Recevez des notifications par e-mail"
+			},
+			"both": {
+				"title": "Push et e-mail",
+				"description": "Recevez des notifications dans l'application et par e-mail (recommandé)"
+			}
+		},
+		"categories": {
+			"applicationUpdates": {
+				"title": "Mises à jour des demandes",
+				"description": "Changements d'état des demandes que vous avez soumises"
+			},
+			"credentialIssuance": {
+				"title": "Émission d'identifiants",
+				"description": "Lorsqu'un nouvel identifiant est émis à votre portefeuille"
+			},
+			"membershipUpdates": {
+				"title": "Mises à jour d'adhésion",
+				"description": "Approbations d'adhésion et changements de rôle"
+			}
+		},
+		"actions": {
+			"save": "Enregistrer les préférences",
+			"saving": "Enregistrement..."
+		},
+		"messages": {
+			"loadFailed": "Impossible de charger les préférences de notification",
+			"saveSuccess": "Préférences de notification mises à jour",
+			"saveFailed": "Impossible d'enregistrer les préférences de notification",
+			"emailDisabledNote": "Remarque : l'e-mail est actuellement désactivé dans la méthode sélectionnée ci-dessus."
+		}
+	},
+	"wizards": {
+		"common": {
+			"optional": "Optionnel"
+		}
+	},
+	"org": {
+		"team": {
+			"title": "Équipe",
+			"subtitle": "Gérez les membres, rôles et invitations"
+		},
+		"defaultsSection": {
+			"title": "Valeurs par défaut de l'organisation",
+			"description": "Définissez des ressources par défaut sélectionnées automatiquement lors de la création de nouveaux flux et configurations.",
+			"fields": {
+				"defaultTrustProfile": "Profil de confiance par défaut",
+				"defaultPresentationPolicy": "Politique de présentation par défaut",
+				"defaultCredentialTemplate": "Modèle d'identifiant par défaut"
+			},
+			"values": {
+				"noneManualSelection": "Aucun (sélection manuelle requise)"
+			},
+			"actions": {
+				"save": "Enregistrer les valeurs",
+				"saving": "Enregistrement..."
+			},
+			"messages": {
+				"loadFailed": "Impossible de charger les valeurs par défaut de l'organisation",
+				"saveFailed": "Impossible d'enregistrer les valeurs par défaut de l'organisation",
+				"saveSuccess": "Valeurs par défaut enregistrées avec succès"
+			}
+		}
+	}
+}

@@ -2,8 +2,10 @@ import type { Preview } from '@storybook/react'
 import { ThemeProvider, createTheme } from '@mui/material/styles'
 import CssBaseline from '@mui/material/CssBaseline'
 import { BrowserRouter } from 'react-router-dom'
+import { I18nextProvider } from 'react-i18next'
 import { initialize, mswLoader } from 'msw-storybook-addon'
 import { handlers } from '../src/test/mocks/handlers'
+import i18n from '../src/test/i18nTestSetup'
 
 // Initialize MSW for Storybook
 initialize({
@@ -37,14 +39,16 @@ const preview: Preview = {
   },
   decorators: [
     (Story) => (
-      <BrowserRouter>
-        <ThemeProvider theme={theme}>
-          <CssBaseline />
-          <div style={{ padding: '2rem' }}>
-            <Story />
-          </div>
-        </ThemeProvider>
-      </BrowserRouter>
+      <I18nextProvider i18n={i18n}>
+        <BrowserRouter>
+          <ThemeProvider theme={theme}>
+            <CssBaseline />
+            <div style={{ padding: '2rem' }}>
+              <Story />
+            </div>
+          </ThemeProvider>
+        </BrowserRouter>
+      </I18nextProvider>
     ),
   ],
   loaders: [mswLoader],

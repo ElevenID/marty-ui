@@ -22,27 +22,30 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import SettingsIcon from '@mui/icons-material/Settings';
 import WebhookIcon from '@mui/icons-material/Webhook';
-
-const ENV_TYPE_LABELS = {
-  api: 'API Service',
-  kiosk: 'Kiosk',
-  mobile: 'Mobile Verifier',
-};
-
-const NETWORK_MODE_LABELS = {
-  ONLINE: 'Online',
-  OFFLINE: 'Offline',
-  HYBRID: 'Hybrid',
-};
+import { useTranslation } from 'react-i18next';
 
 const ReviewStep = ({ data, onChange, onEdit }) => {
+  const { t } = useTranslation('console');
+
+  const ENV_TYPE_LABELS = {
+    api: t('wizards.deploymentProfile.reviewStep.environmentTypeLabels.api'),
+    kiosk: t('wizards.deploymentProfile.reviewStep.environmentTypeLabels.kiosk'),
+    mobile: t('wizards.deploymentProfile.reviewStep.environmentTypeLabels.mobile'),
+  };
+
+  const NETWORK_MODE_LABELS = {
+    ONLINE: t('wizards.deploymentProfile.reviewStep.networkModeLabels.ONLINE'),
+    OFFLINE: t('wizards.deploymentProfile.reviewStep.networkModeLabels.OFFLINE'),
+    HYBRID: t('wizards.deploymentProfile.reviewStep.networkModeLabels.HYBRID'),
+  };
+
   return (
     <Box>
       <Typography variant="h6" gutterBottom>
-        Review & Activate
+        {t('wizards.deploymentProfile.reviewStep.title')}
       </Typography>
       <Typography color="text.secondary" paragraph>
-        Review all configuration details before creating the deployment profile.
+        {t('wizards.deploymentProfile.reviewStep.description')}
       </Typography>
 
       {/* Environment */}
@@ -51,27 +54,27 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
             <Typography variant="h6" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
               <CheckCircleIcon color="primary" />
-              Environment
+              {t('wizards.deploymentProfile.reviewStep.sections.environment')}
             </Typography>
             <Button size="small" startIcon={<EditIcon />} onClick={() => onEdit(0)}>
-              Edit
+              {t('wizards.deploymentProfile.reviewStep.actions.edit')}
             </Button>
           </Box>
 
           <Grid container spacing={2}>
             <Grid item xs={12}>
               <Typography variant="subtitle2" color="text.secondary">
-                Profile Name
+                {t('wizards.deploymentProfile.reviewStep.fields.profileName')}
               </Typography>
               <Typography variant="body1" gutterBottom>
-                {data.name || <em>Not set</em>}
+                {data.name || <em>{t('wizards.deploymentProfile.reviewStep.values.notSet')}</em>}
               </Typography>
             </Grid>
 
             {data.description && (
               <Grid item xs={12}>
                 <Typography variant="subtitle2" color="text.secondary">
-                  Description
+                  {t('wizards.deploymentProfile.reviewStep.fields.description')}
                 </Typography>
                 <Typography variant="body1" gutterBottom>
                   {data.description}
@@ -81,7 +84,7 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
 
             <Grid item xs={12} md={6}>
               <Typography variant="subtitle2" color="text.secondary">
-                Environment Type
+                {t('wizards.deploymentProfile.reviewStep.fields.environmentType')}
               </Typography>
               <Typography variant="body1">
                 {ENV_TYPE_LABELS[data.environment_type] || data.environment_type}
@@ -90,7 +93,7 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
 
             <Grid item xs={12} md={6}>
               <Typography variant="subtitle2" color="text.secondary">
-                Network Mode
+                {t('wizards.deploymentProfile.reviewStep.fields.networkMode')}
               </Typography>
               <Typography variant="body1">
                 {NETWORK_MODE_LABELS[data.network_mode] || data.network_mode}
@@ -106,26 +109,28 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
             <Typography variant="h6" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
               <CloudUploadIcon color="primary" />
-              Runtime Settings
+              {t('wizards.deploymentProfile.reviewStep.sections.runtimeSettings')}
             </Typography>
             <Button size="small" startIcon={<EditIcon />} onClick={() => onEdit(1)}>
-              Edit
+              {t('wizards.deploymentProfile.reviewStep.actions.edit')}
             </Button>
           </Box>
 
           <Grid container spacing={2}>
             <Grid item xs={12}>
               <Typography variant="subtitle2" color="text.secondary">
-                Default Presentation Policy
+                {t('wizards.deploymentProfile.reviewStep.fields.defaultPolicy')}
               </Typography>
               <Typography variant="body1" gutterBottom>
-                {data.default_policy_id ? `ID: ${data.default_policy_id}` : <em>Not selected</em>}
+                {data.default_policy_id
+                  ? t('wizards.deploymentProfile.reviewStep.fields.policyId', { id: data.default_policy_id })
+                  : <em>{t('wizards.deploymentProfile.reviewStep.values.notSelected')}</em>}
               </Typography>
             </Grid>
 
             <Grid item xs={12}>
               <Typography variant="subtitle2" color="text.secondary" gutterBottom>
-                Enabled Flows
+                {t('wizards.deploymentProfile.reviewStep.fields.enabledFlows')}
               </Typography>
               {data.enabled_flows && data.enabled_flows.length > 0 ? (
                 <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
@@ -135,7 +140,7 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
                 </Box>
               ) : (
                 <Typography variant="body2" color="text.secondary">
-                  No flows enabled
+                  {t('wizards.deploymentProfile.reviewStep.values.noFlowsEnabled')}
                 </Typography>
               )}
             </Grid>
@@ -149,17 +154,17 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
             <Typography variant="h6" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
               <SettingsIcon color="primary" />
-              Integration
+              {t('wizards.deploymentProfile.reviewStep.sections.integration')}
             </Typography>
             <Button size="small" startIcon={<EditIcon />} onClick={() => onEdit(2)}>
-              Edit
+              {t('wizards.deploymentProfile.reviewStep.actions.edit')}
             </Button>
           </Box>
 
           <Grid container spacing={2}>
             <Grid item xs={12}>
               <Typography variant="subtitle2" color="text.secondary">
-                Webhook
+                {t('wizards.deploymentProfile.reviewStep.fields.webhook')}
               </Typography>
               {data.webhooks?.url ? (
                 <Box>
@@ -176,22 +181,22 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
                 </Box>
               ) : (
                 <Typography variant="body2" color="text.secondary">
-                  Not configured
+                  {t('wizards.deploymentProfile.reviewStep.values.notConfigured')}
                 </Typography>
               )}
             </Grid>
 
             <Grid item xs={12}>
               <Typography variant="subtitle2" color="text.secondary" gutterBottom>
-                Feature Flags
+                {t('wizards.deploymentProfile.reviewStep.fields.featureFlags')}
               </Typography>
               <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-                {data.feature_flags?.qr_code && <Chip label="QR Code" size="small" />}
-                {data.feature_flags?.nfc && <Chip label="NFC" size="small" />}
-                {data.feature_flags?.ble && <Chip label="BLE" size="small" />}
+                {data.feature_flags?.qr_code && <Chip label={t('wizards.deploymentProfile.reviewStep.featureChips.qrCode')} size="small" />}
+                {data.feature_flags?.nfc && <Chip label={t('wizards.deploymentProfile.reviewStep.featureChips.nfc')} size="small" />}
+                {data.feature_flags?.ble && <Chip label={t('wizards.deploymentProfile.reviewStep.featureChips.ble')} size="small" />}
                 {!data.feature_flags?.qr_code && !data.feature_flags?.nfc && !data.feature_flags?.ble && (
                   <Typography variant="body2" color="text.secondary">
-                    No features enabled
+                    {t('wizards.deploymentProfile.reviewStep.values.noFeaturesEnabled')}
                   </Typography>
                 )}
               </Box>
@@ -199,19 +204,19 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
 
             <Grid item xs={12} md={6}>
               <Typography variant="subtitle2" color="text.secondary">
-                Theme
+                {t('wizards.deploymentProfile.reviewStep.fields.theme')}
               </Typography>
               <Typography variant="body1">
-                {data.ux_config?.theme || 'default'}
+                {data.ux_config?.theme || t('wizards.deploymentProfile.reviewStep.values.defaultTheme')}
               </Typography>
             </Grid>
 
             <Grid item xs={12} md={6}>
               <Typography variant="subtitle2" color="text.secondary">
-                Language
+                {t('wizards.deploymentProfile.reviewStep.fields.language')}
               </Typography>
               <Typography variant="body1">
-                {data.ux_config?.language || 'en'}
+                {data.ux_config?.language || t('wizards.deploymentProfile.reviewStep.values.defaultLanguage')}
               </Typography>
             </Grid>
           </Grid>
@@ -232,10 +237,10 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
           label={
             <Box>
               <Typography variant="subtitle2">
-                Generate API key automatically
+                {t('wizards.deploymentProfile.reviewStep.activationOptions.generateApiKey.label')}
               </Typography>
               <Typography variant="body2" color="text.secondary">
-                Create an API key for programmatic access to this deployment
+                {t('wizards.deploymentProfile.reviewStep.activationOptions.generateApiKey.description')}
               </Typography>
             </Box>
           }
@@ -253,10 +258,10 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
           label={
             <Box>
               <Typography variant="subtitle2">
-                Activate immediately
+                {t('wizards.deploymentProfile.reviewStep.activationOptions.activateImmediately.label')}
               </Typography>
               <Typography variant="body2" color="text.secondary">
-                Make this deployment profile active and ready to use
+                {t('wizards.deploymentProfile.reviewStep.activationOptions.activateImmediately.description')}
               </Typography>
             </Box>
           }

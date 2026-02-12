@@ -1,0 +1,193 @@
+{
+  "valueProposition": {
+    "headline": "Identitätsprüfung allein reicht nicht aus.",
+    "subheadline": "Bauen Sie verifizierbare Identitätsinfrastruktur auf.",
+    "extendedSubheadline": "Ausstellen, verifizieren und steuern Sie Nachweise – entwickelt für EUDI-Wallets, Open Badges und unternehmensweiten Vertrauensbetrieb.",
+    "primaryCTA": "Kostenlos starten",
+    "secondaryCTA": "Warum verifizierbare Identität"
+  },
+  "idvComparison": {
+    "title": "Von IDV zu verifizierbarer Identität",
+    "takeaway": "ElevenID ersetzt wiederholte Prüfungen durch wiederverwendbares Vertrauen.",
+    "traditional": {
+      "title": "Traditionelles IDV",
+      "oneTimeChecks": "Einmalige Dokumentenprüfungen",
+      "vendorControlled": "Anbieter-kontrollierte Identitätsdaten",
+      "biometric": "Biometrische Entscheidungswerte",
+      "closedAPIs": "Geschlossene, proprietäre APIs",
+      "manualTrust": "Manuelle Vertrauenseinstellungen",
+      "reVerification": "Überall erneute Verifizierung"
+    },
+    "elevenid": {
+      "title": "ElevenID",
+      "reusable": "Wiederverwendbare verifizierbare Nachweise",
+      "holderControlled": "Wallets unter Kontrolle der Inhaber",
+      "cryptographic": "Kryptografische Nachweise",
+      "openStandards": "Offene Standards (W3C VC, OID4VC, ISO)",
+      "governedTrust": "Governte Vertrauensregister",
+      "reuseAcross": "Identität über Ökosysteme hinweg wiederverwenden"
+    }
+  },
+  "eudiOpenBadges": {
+    "title": "Für EUDI-Wallets und verifizierbare Nachweise entwickelt",
+    "verifyCredentials": "Verifizieren Sie verifizierbare Nachweise – nicht nur Dokumente.",
+    "trustIssuers": "Vertrauen Sie Ausstellern – nicht Datenbanken.",
+    "walletFirst": "Wallet-first by design – EUDI-ready.",
+    "quote": "IDV-Plattformen enden bei einer einmaligen Entscheidung. ElevenID liefert kryptografisch verifizierbare Ergebnisse, die über Wallets, Ökosysteme und Vertrauensregister hinweg wiederverwendet werden können."
+  },
+  "audienceRouting": {
+    "title": "Wählen Sie Ihren Pfad",
+    "subtitle": "Wählen Sie Ihren Einstieg – Unternehmen, Behörden oder Entwickler.",
+    "enterprise": {
+      "title": "Unternehmen",
+      "description": "Wiederholte KYC-Kosten senken, Partner-Interoperabilität ermöglichen und Vertrauen im großen Maßstab steuern.",
+      "cta": "Unternehmen entdecken"
+    },
+    "government": {
+      "title": "Behörden",
+      "description": "EUDI-fähige Infrastruktur für ISO-Nachweise, Trust Lists und regulierte Akzeptanz.",
+      "cta": "Behörden entdecken"
+    },
+    "developers": {
+      "title": "Entwickler",
+      "description": "Docs, SDKs und Quickstarts für VC-Ausstellung und -Verifizierung.",
+      "cta": "Dokumentation lesen"
+    }
+  },
+  "organizationOutcomes": {
+    "title": "Warum das für Organisationen wichtig ist",
+    "reduceKYC": "Wiederholte KYC-Kosten durch wiederverwendbare Nachweise reduzieren",
+    "eudiReady": "Auf die Akzeptanz der EUDI-Wallet vorbereiten",
+    "avoidLockIn": "Vendor-Lock-in durch offene Standards vermeiden",
+    "supportBadges": "Open Badges, Workforce-Nachweise und staatliche IDs in einem System unterstützen"
+  },
+  "proofStrip": {
+    "title": "Auf bewährten Grundlagen aufgebaut",
+    "interoperability": "Interoperabilität",
+    "offlineVerification": "Offline-Verifizierung",
+    "deployment": "Bereitstellung",
+    "keySecurity": "Schlüsselsicherheit",
+    "compliance": "Compliance"
+  },
+  "landingPage": {
+    "loading": "Wird geladen...",
+    "checkingAccount": "Konto wird geprüft...",
+    "features": {
+      "issuance": {
+        "title": "Ausstellung",
+        "description": "Stellen Sie standardbasierte Nachweise mit kryptografischen Signaturen und Policy Enforcement aus."
+      },
+      "verification": {
+        "title": "Verifizierung",
+        "description": "Verifizieren Sie Nachweise gegen Trust Anchors mit Sperrprüfung und selektiver Offenlegung."
+      },
+      "governance": {
+        "title": "Governance",
+        "description": "Steuern Sie Vertrauen, Richtlinien und Deployment zentral – ohne Verifier-Code zu ändern."
+      }
+    },
+    "identityProblem": {
+      "title": "Das Identitätsproblem",
+      "description": "Die meisten Organisationen kämpfen mit fragmentierten Systemen, unklarem Vertrauen und wachsendem Compliance-Druck.",
+      "items": {
+        "fragmented": "Fragmentierte Identitätssysteme ohne Interoperabilität",
+        "unclearTrust": "Unklare Aussteller-Vertrauenswürdigkeit über Partner und Jurisdiktionen hinweg",
+        "privacyPressure": "Datenschutzdruck (Datenminimierung + selektive Offenlegung)",
+        "pkiComplexity": "PKI- und Sperrlisten-Komplexität im Maßstab"
+      }
+    },
+    "solvesIt": {
+      "title": "Wie ElevenID das löst",
+      "intro": "Governieren Sie Identität mit vier Bausteinen: Trust Profiles, Credential Templates, Presentation Policies und Flows.",
+      "subheading": "Policies sind Konfiguration, kein Code. Endpoints führen zentral gesteuerte Vertrauens- und Offenlegungsregeln ohne Redeployment aus."
+    },
+    "howItWorks": {
+      "title": "So funktioniert's",
+      "description": "Digitale Identität ist ein gesteuerter Austausch zwischen vier Akteuren.",
+      "cta": "Vollständigen Ablauf ansehen"
+    },
+    "standards": {
+      "title": "Standards-basierte Architektur",
+      "subtitle": "Standards sind keine Integrationen. Sie sind das Produkt.",
+      "description": "Diese Ebenen ermöglichen Interoperabilität über Regierungen, Wallets und Unternehmen hinweg – ohne Custom Integrations.",
+      "cta": "Standards entdecken"
+    },
+    "startFirst": {
+      "title": "Womit starten Sie zuerst?",
+      "description": "Wählen Sie einen Einstiegspunkt. Später können Sie zu einem vollständigen Ökosystem ausbauen.",
+      "cards": {
+        "verify": {
+          "title": "Nachweise verifizieren",
+          "description": "EUDI-Wallets, Open Badges und ISO-Nachweise verifizieren."
+        },
+        "issue": {
+          "title": "Nachweise ausstellen",
+          "description": "Workforce-, Bildungs- oder staatliche Nachweise ausstellen."
+        },
+        "offline": {
+          "title": "Offline / Einrichtung",
+          "description": "An Checkpoints mit eingeschränkter Konnektivität verifizieren."
+        },
+        "wallet": {
+          "title": "Wallet-Erlebnis",
+          "description": "Geben Sie Nutzern eine Wallet zum Halten und Vorzeigen von Nachweisen."
+        }
+      },
+      "notSure": "Unsicher?",
+      "startWithVerificationApi": "Mit der Verification API starten"
+    },
+    "products": {
+      "title": "Produkte & Fähigkeiten",
+      "description": "Eine vollständige Plattform – von Ausstellung über Verifizierung bis Governance.",
+      "viewDetails": "Details ansehen",
+      "viewAll": "Alle Produkte ansehen"
+    },
+    "trustSignals": {
+      "title": "Enterprise-taugliche Infrastruktur",
+      "security": {
+        "title": "Sicherheit",
+        "item1": "Kryptografische Validierung auf Enterprise-Niveau",
+        "item2": "PKI- und Sperrmanagement",
+        "item3": "HSM- und Key-Vault-Integration"
+      },
+      "infrastructure": {
+        "title": "Infrastruktur",
+        "item1": "Offline-first (72h Cache)",
+        "item2": "Hochverfügbare SaaS-Bereitstellung",
+        "item3": "Self-hosted Optionen für Souveränität",
+        "item4": "Horizontale Skalierung und Load Balancing",
+        "item5": "Mit KI-unterstützten Workflows entwickelt, um hohe Qualität zu geringeren Kosten zu sichern."
+      },
+      "compliance": {
+        "title": "Compliance",
+        "item1": "Implementiert ICAO 9303",
+        "item2": "Implementiert ISO 18013-5 (mDoc)",
+        "item3": "GDPR und Privacy by Design",
+        "item4": "Selektive Offenlegung und Datenminimierung"
+      }
+    },
+    "proofStrip": {
+      "claims": {
+        "w3c": "W3C VC / SD-JWT / OID4VP",
+        "offlineCache": "72-Stunden Offline-Cache",
+        "deployment": "SaaS + Self-hosted",
+        "keySecurity": "HSM / Vault-Integration",
+        "auditLogs": "Unveränderliche Audit-Logs"
+      }
+    },
+    "portals": {
+      "emphasis": "Integrierte Portale",
+      "message": "für Antragsteller, Anbieter und Admins – API Keys, Trust Policies und Betrieb an einem Ort verwalten.",
+      "learnMore": "Mehr erfahren"
+    },
+    "footer": {
+      "title": "Bereit loszulegen?",
+      "description": "Kostenlos starten oder Pläne für Ihre Organisation vergleichen.",
+      "viewPricing": "Preise ansehen"
+    },
+    "orientation": {
+      "title": "Neu bei verifizierbarer Identität?",
+      "cta": "So funktioniert's"
+    }
+  }
+}

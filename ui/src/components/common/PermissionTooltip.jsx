@@ -6,6 +6,7 @@
  */
 
 import { Tooltip } from '@mui/material';
+import { useTranslation } from 'react-i18next';
 import { useAuth } from '../../hooks/useAuth';
 
 /**
@@ -25,6 +26,7 @@ export function PermissionTooltip({
   customMessage,
   disabled = false,
 }) {
+  const { t } = useTranslation('common');
   const { isAdministrator, isVendor, isApplicant } = useAuth();
 
   // Map current user roles
@@ -43,20 +45,12 @@ export function PermissionTooltip({
   }
 
   // Generate tooltip message
-  const roleNames = {
-    administrator: 'Administrator',
-    vendor: 'Vendor',
-    applicant: 'Applicant',
-    developer: 'Developer',
-    operator: 'Operator',
-  };
-
   const requiredRoleNames = requiredRoles
-    .map(role => roleNames[role] || role)
+    .map(role => t(`permissions.roles.${role}`, role))
     .join(' or ');
 
   const message = customMessage || 
-    `Only ${requiredRoleNames} can ${action}. Your current role does not have permission.`;
+    t('permissions.deniedMessage', { roles: requiredRoleNames, action });
 
   return (
     <Tooltip 
