@@ -5,6 +5,7 @@
  */
 
 import { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   Box,
   Paper,
@@ -37,18 +38,19 @@ import { Link } from 'react-router-dom';
 
 import { ResourcePage, EmptyState, EmptyStates, StatusChip } from '../../common';
 
-const FLOWS_TABS = [
-  { label: 'Flow Definitions', path: '/console/flows/definitions' },
-  { label: 'Flow Instances', path: '/console/flows/instances' },
+const getFlowsTabs = (t) => [
+  { label: t('flows.flowDefinitions'), path: '/console/flows/definitions' },
+  { label: t('flows.flowInstances'), path: '/console/flows/instances' },
 ];
 
-const BREADCRUMBS = [
-  { label: 'Console', path: '/console' },
-  { label: 'Flows', path: '/console/flows' },
-  { label: 'Flow Instances', path: '/console/flows/instances' },
+const getBreadcrumbs = (t) => [
+  { label: t('flows.breadcrumbs.console'), path: '/console' },
+  { label: t('flows.breadcrumbs.flows'), path: '/console/flows' },
+  { label: t('flows.breadcrumbs.flowInstances'), path: '/console/flows/instances' },
 ];
 
 function FlowInstancesPage() {
+  const { t } = useTranslation('console');
   const [instances, setInstances] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -121,7 +123,7 @@ function FlowInstancesPage() {
         },
       ]);
     } catch (err) {
-      setError('Failed to load flow instances');
+      setError(t('flows.failedToLoad'));
     } finally {
       setLoading(false);
     }
@@ -146,10 +148,10 @@ function FlowInstancesPage() {
 
   return (
     <ResourcePage
-      title="Flow Instances"
-      description="Monitor running verification and issuance flows."
-      tabs={FLOWS_TABS}
-      breadcrumbs={BREADCRUMBS}
+      title={t('flows.flowInstances')}
+      description={t('flows.flowInstancesDescription')}
+      tabs={getFlowsTabs(t)}
+      breadcrumbs={getBreadcrumbs(t)}
       actions={
         <Button
           variant="outlined"
@@ -157,7 +159,7 @@ function FlowInstancesPage() {
           onClick={loadInstances}
           disabled={loading}
         >
-          Refresh
+          {t('flows.refresh')}
         </Button>
       }
     >
@@ -170,7 +172,7 @@ function FlowInstancesPage() {
       {/* Filters */}
       <Box sx={{ display: 'flex', gap: 2, mb: 3 }}>
         <TextField
-          placeholder="Search by ID or flow name..."
+          placeholder={t('flows.searchPlaceholder')}
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           size="small"
@@ -184,16 +186,16 @@ function FlowInstancesPage() {
           }}
         />
         <FormControl size="small" sx={{ minWidth: 150 }}>
-          <InputLabel>Status</InputLabel>
+          <InputLabel>{t('flows.filters.status')}</InputLabel>
           <Select
             value={statusFilter}
-            label="Status"
+            label={t('flows.filters.status')}
             onChange={(e) => setStatusFilter(e.target.value)}
           >
-            <MenuItem value="all">All</MenuItem>
-            <MenuItem value="pending">Pending</MenuItem>
-            <MenuItem value="completed">Completed</MenuItem>
-            <MenuItem value="failed">Failed</MenuItem>
+            <MenuItem value="all">{t('flows.filters.all')}</MenuItem>
+            <MenuItem value="pending">{t('flows.filters.pending')}</MenuItem>
+            <MenuItem value="completed">{t('flows.filters.completed')}</MenuItem>
+            <MenuItem value="failed">{t('flows.filters.failed')}</MenuItem>
           </Select>
         </FormControl>
       </Box>
@@ -207,13 +209,13 @@ function FlowInstancesPage() {
           <Table>
             <TableHead>
               <TableRow>
-                <TableCell>Instance ID</TableCell>
-                <TableCell>Flow</TableCell>
-                <TableCell>Progress</TableCell>
-                <TableCell>Started</TableCell>
-                <TableCell>Completed</TableCell>
-                <TableCell>Status</TableCell>
-                <TableCell align="right">Actions</TableCell>
+                <TableCell>{t('flows.tableHeaders.instanceId')}</TableCell>
+                <TableCell>{t('flows.tableHeaders.flow')}</TableCell>
+                <TableCell>{t('flows.tableHeaders.progress')}</TableCell>
+                <TableCell>{t('flows.tableHeaders.started')}</TableCell>
+                <TableCell>{t('flows.tableHeaders.completed')}</TableCell>
+                <TableCell>{t('flows.tableHeaders.status')}</TableCell>
+                <TableCell align="right">{t('flows.tableHeaders.actions')}</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
@@ -221,7 +223,7 @@ function FlowInstancesPage() {
                 <TableRow>
                   <TableCell colSpan={7} align="center">
                     <Typography color="text.secondary" sx={{ py: 4 }}>
-                      No instances match your filters. Try adjusting your search.
+                      {t('flows.noMatchingInstances')}
                     </Typography>
                   </TableCell>
                 </TableRow>
@@ -240,7 +242,7 @@ function FlowInstancesPage() {
                     </TableCell>
                     <TableCell>
                       <Typography variant="body2">
-                        Step {instance.currentStep} / {instance.totalSteps}
+                        {t('flows.progress', { current: instance.currentStep, total: instance.totalSteps })}
                       </Typography>
                     </TableCell>
                     <TableCell>
@@ -256,7 +258,7 @@ function FlowInstancesPage() {
                       <StatusChip status={getEffectiveStatus(instance.status, instance.result)} />
                     </TableCell>
                     <TableCell align="right">
-                      <Tooltip title="View Details">
+                      <Tooltip title={t('flows.actions.viewDetails')}>
                         <IconButton
                           component={Link}
                           to={`/console/flows/instances/${instance.id}`}
@@ -267,12 +269,12 @@ function FlowInstancesPage() {
                       </Tooltip>
                       {instance.status === 'pending' && (
                         <>
-                          <Tooltip title="Advance Flow">
+                          <Tooltip title={t('flows.actions.advanceFlow')}>
                             <IconButton size="small" color="primary">
                               <FastForwardIcon fontSize="small" />
                             </IconButton>
                           </Tooltip>
-                          <Tooltip title="Cancel">
+                          <Tooltip title={t('flows.actions.cancel')}>
                             <IconButton size="small" color="error">
                               <CancelIcon fontSize="small" />
                             </IconButton>

@@ -13,6 +13,7 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   Box,
   Paper,
@@ -126,6 +127,7 @@ function getCredentialTypeLabel(typeId, framework) {
  * Application Template Form Dialog
  */
 function TemplateFormDialog({ open, onClose, onSave, template, trustProfiles }) {
+  const { t } = useTranslation('vendor');
   const [formData, setFormData] = useState({
     name: '',
     description: '',
@@ -328,38 +330,37 @@ function TemplateFormDialog({ open, onClose, onSave, template, trustProfiles }) 
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth>
-      <DialogTitle>{template ? 'Edit Application Template' : 'Create Application Template'}</DialogTitle>
+      <DialogTitle>{template ? t('applicationTemplateManager.dialog.editTitle') : t('applicationTemplateManager.dialog.createTitle')}</DialogTitle>
       <DialogContent>
         <Stack spacing={3} sx={{ mt: 1 }}>
           {/* Basic Information */}
           <TextField
             fullWidth
-            label="Template Name"
+            label={t('applicationTemplateManager.form.templateName')}
             value={formData.name}
             onChange={(e) => handleChange('name', e.target.value)}
             required
-            helperText="E.g., 'Travel Visa Application', 'Employee Badge Request'"
+            helperText={t('applicationTemplateManager.form.templateNameHelper')}
           />
 
           <TextField
             fullWidth
             multiline
             rows={2}
-            label="Description"
+            label={t('applicationTemplateManager.form.description')}
             value={formData.description}
             onChange={(e) => handleChange('description', e.target.value)}
-            helperText="Describe what this application is for"
           />
 
           <Divider />
 
           {/* Compliance Profile Selection */}
           <FormControl fullWidth>
-            <InputLabel>Compliance Profile</InputLabel>
+            <InputLabel>{t('applicationTemplateManager.form.complianceProfile')}</InputLabel>
             <Select
               value={formData.compliance_profile_id}
               onChange={(e) => handleChange('compliance_profile_id', e.target.value)}
-              label="Compliance Profile"
+              label={t('applicationTemplateManager.form.complianceProfile')}
             >
               {complianceProfiles.map((profile) => (
                 <MenuItem key={profile.id} value={profile.id}>
@@ -371,11 +372,11 @@ function TemplateFormDialog({ open, onClose, onSave, template, trustProfiles }) 
 
           {/* Trust Profile Selection */}
           <FormControl fullWidth required>
-            <InputLabel>Trust Profile</InputLabel>
+            <InputLabel>{t('applicationTemplateManager.form.trustProfile')}</InputLabel>
             <Select
               value={formData.trust_profile_id}
               onChange={(e) => handleChange('trust_profile_id', e.target.value)}
-              label="Trust Profile"
+              label={t('applicationTemplateManager.form.trustProfile')}
             >
               {trustProfiles.map((profile) => (
                 <MenuItem key={profile.id} value={profile.id}>
@@ -391,7 +392,7 @@ function TemplateFormDialog({ open, onClose, onSave, template, trustProfiles }) 
           {/* Credential Types */}
           <Box>
             <Typography variant="subtitle2" gutterBottom>
-              Credential Types *
+              {t('applicationTemplateManager.form.credentialTypes')} *
             </Typography>
             <Typography variant="caption" color="text.secondary" gutterBottom display="block">
               Select which credentials can be issued through this template
@@ -651,7 +652,7 @@ function TemplateFormDialog({ open, onClose, onSave, template, trustProfiles }) 
           {/* Required Documents */}
           <Box>
             <Typography variant="subtitle2" gutterBottom>
-              Required Documents
+              {t('applicationTemplateManager.form.requiredDocuments')}
             </Typography>
             <Typography variant="caption" color="text.secondary" gutterBottom display="block">
               Select which documents applicants must submit
@@ -685,7 +686,7 @@ function TemplateFormDialog({ open, onClose, onSave, template, trustProfiles }) 
                 onChange={(e) => handleChange('requires_approval', e.target.checked)}
               />
             }
-            label="Requires manual approval before issuance"
+            label={t('applicationTemplateManager.form.requiresApproval')}
           />
 
           <FormControlLabel
@@ -704,7 +705,7 @@ function TemplateFormDialog({ open, onClose, onSave, template, trustProfiles }) 
               <TextField
                 fullWidth
                 type="number"
-                label="Validity Period (days)"
+                label={t('applicationTemplateManager.form.validityDays')}
                 value={formData.validity_days}
                 onChange={(e) => handleChange('validity_days', parseInt(e.target.value, 10))}
                 inputProps={{ min: 1 }}
@@ -714,7 +715,7 @@ function TemplateFormDialog({ open, onClose, onSave, template, trustProfiles }) 
               <TextField
                 fullWidth
                 type="number"
-                label="Max Applications Per User"
+                label={t('applicationTemplateManager.form.maxApplications')}
                 value={formData.max_applications_per_user}
                 onChange={(e) => handleChange('max_applications_per_user', parseInt(e.target.value, 10))}
                 inputProps={{ min: 1 }}
@@ -867,7 +868,7 @@ export default function ApplicationTemplateManager() {
 
       setSnackbar({
         open: true,
-        message: templateData.id ? 'Template updated successfully' : 'Template created successfully',
+        message: templateData.id ? t('applicationTemplateManager.snackbar.updateSuccess') : t('applicationTemplateManager.snackbar.createSuccess'),
         severity: 'success',
       });
 
@@ -901,7 +902,7 @@ export default function ApplicationTemplateManager() {
 
       setSnackbar({
         open: true,
-        message: 'Template deleted successfully',
+        message: t('applicationTemplateManager.snackbar.deleteSuccess'),
         severity: 'success',
       });
 
@@ -937,15 +938,14 @@ export default function ApplicationTemplateManager() {
       <Box sx={{ mb: 3, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <Box>
           <Typography variant="h6" gutterBottom>
-            Application Templates
+            {t('applicationTemplateManager.title')}
           </Typography>
           <Typography variant="body2" color="text.secondary">
-            Templates define what applicants can apply for and encapsulate trust profiles, credential types, and
-            required documents.
+            {t('applicationTemplateManager.description')}
           </Typography>
         </Box>
         <Button variant="contained" startIcon={<AddIcon />} onClick={handleCreate}>
-          Create Template
+          {t('applicationTemplateManager.createButton')}
         </Button>
       </Box>
 

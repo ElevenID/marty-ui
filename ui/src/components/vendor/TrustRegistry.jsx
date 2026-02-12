@@ -12,6 +12,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   Box,
   Paper,
@@ -44,44 +45,47 @@ import RevocationManager from './RevocationManager';
 
 /**
  * Trust framework display configuration
+ * Note: Framework data is now created inside component to access translation function
  */
-const TRUST_FRAMEWORKS = [
-  {
-    id: 'eudi',
-    name: 'EU Digital Identity Wallet (EUDI)',
-    description: 'Use EU trusted lists and wallet-compatible certificates. Recommended for Europe.',
-    icon: <PublicIcon sx={{ fontSize: 40 }} />,
-    color: '#0033A0', // EU blue
-  },
-  {
-    id: 'icao',
-    name: 'ICAO PKD',
-    description: 'Use ICAO Public Key Directory for passport verification. Recommended for travel.',
-    icon: <FlightIcon sx={{ fontSize: 40 }} />,
-    color: '#003087', // ICAO blue
-  },
-  {
-    id: 'aamva',
-    name: 'AAMVA',
-    description: 'Use AAMVA standards for driver licenses and state IDs. Recommended for North America.',
-    icon: <DirectionsCarIcon sx={{ fontSize: 40 }} />,
-    color: '#C8102E', // AAMVA red
-  },
-  {
-    id: 'open_badges',
-    name: 'Open Badges 3.0',
-    description: 'Issue educational credentials, certifications, and skill badges. Supports X.509 certificates with W3C Verifiable Credentials.',
-    icon: <SchoolIcon sx={{ fontSize: 40 }} />,
-    color: '#FF6B35', // Open Badges brand color
-  },
-  {
-    id: 'custom',
-    name: 'Custom X.509',
-    description: 'Manage your own certificate trust anchors for private PKI.',
-    icon: <SettingsIcon sx={{ fontSize: 40 }} />,
-    color: '#757575', // Gray
-  },
-];
+function getTrustFrameworks(t) {
+  return [
+    {
+      id: 'eudi',
+      name: t('trustRegistry.frameworks.eudi.name'),
+      description: t('trustRegistry.frameworks.eudi.description'),
+      icon: <PublicIcon sx={{ fontSize: 40 }} />,
+      color: '#0033A0',
+    },
+    {
+      id: 'icao',
+      name: t('trustRegistry.frameworks.icao.name'),
+      description: t('trustRegistry.frameworks.icao.description'),
+      icon: <FlightIcon sx={{ fontSize: 40 }} />,
+      color: '#003087',
+    },
+    {
+      id: 'aamva',
+      name: t('trustRegistry.frameworks.aamva.name'),
+      description: t('trustRegistry.frameworks.aamva.description'),
+      icon: <DirectionsCarIcon sx={{ fontSize: 40 }} />,
+      color: '#C8102E',
+    },
+    {
+      id: 'open_badges',
+      name: t('trustRegistry.frameworks.openBadges.name'),
+      description: t('trustRegistry.frameworks.openBadges.description'),
+      icon: <SchoolIcon sx={{ fontSize: 40 }} />,
+      color: '#FF6B35',
+    },
+    {
+      id: 'custom',
+      name: t('trustRegistry.frameworks.custom.name'),
+      description: t('trustRegistry.frameworks.custom.description'),
+      icon: <SettingsIcon sx={{ fontSize: 40 }} />,
+      color: '#757575',
+    },
+  ];
+}
 
 /**
  * Tab Panel Component
@@ -103,7 +107,7 @@ function TabPanel({ children, value, index, ...other }) {
 /**
  * Trust Framework Card Component
  */
-function TrustFrameworkCard({ framework, active, onSelect, trustProfile, onViewDetails, onFixIssues }) {
+function TrustFrameworkCard({ framework, active, onSelect, trustProfile, onViewDetails, onFixIssues, t }) {
   const isConfigured = active && trustProfile?.verifierCertificate;
   const hasIssues = active && (!trustProfile?.verifierCertificate || !trustProfile?.issuerKeys?.length);
 
@@ -139,7 +143,7 @@ function TrustFrameworkCard({ framework, active, onSelect, trustProfile, onViewD
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
               {!active ? (
                 <Chip
-                  label="Not Configured"
+                  label={t('trustRegistry.status.notConfigured')}
                   color="default"
                   size="small"
                   sx={{ width: 'fit-content' }}
@@ -147,34 +151,34 @@ function TrustFrameworkCard({ framework, active, onSelect, trustProfile, onViewD
               ) : hasIssues ? (
                 <>
                   <Chip
-                    label="Active - Needs Attention"
+                    label={t('trustRegistry.status.needsAttention')}
                     color="warning"
                     size="small"
                     icon={<SecurityIcon />}
                     sx={{ width: 'fit-content' }}
                   />
                   <Typography variant="caption" color="text.secondary">
-                    {!trustProfile?.verifierCertificate && 'Missing verifier certificate. '}
-                    {!trustProfile?.issuerKeys?.length && 'Missing issuer keys.'}
+                    {!trustProfile?.verifierCertificate && `${t('trustRegistry.status.missingVerifierCert')} `}
+                    {!trustProfile?.issuerKeys?.length && t('trustRegistry.status.missingIssuerKeys')}
                   </Typography>
                 </>
               ) : isConfigured ? (
                 <>
                   <Chip
-                    label="Active - Configured"
+                    label={t('trustRegistry.status.configured')}
                     color="success"
                     size="small"
                     icon={<CheckCircleIcon />}
                     sx={{ width: 'fit-content' }}
                   />
                   <Typography variant="caption" color="text.secondary">
-                    {trustProfile?.verifierCertificate && 'Certificate configured. '}
-                    {trustProfile?.issuerKeys?.length > 0 && `${trustProfile.issuerKeys.length} key(s) configured.`}
+                    {trustProfile?.verifierCertificate && `${t('trustRegistry.status.certConfigured')} `}
+                    {trustProfile?.issuerKeys?.length > 0 && t('trustRegistry.status.keysConfigured', { count: trustProfile.issuerKeys.length })}
                   </Typography>
                 </>
               ) : (
                 <Chip
-                  label="Active - Pending Setup"
+                  label={t('trustRegistry.status.pendingSetup')}
                   color="info"
                   size="small"
                   sx={{ width: 'fit-content' }}
@@ -193,7 +197,7 @@ function TrustFrameworkCard({ framework, active, onSelect, trustProfile, onViewD
                     size="small"
                     onClick={onViewDetails}
                   >
-                    View Details
+                    {t('trustRegistry.buttons.viewDetails')}
                   </Button>
                   {hasIssues && (
                     <Button
@@ -202,7 +206,7 @@ function TrustFrameworkCard({ framework, active, onSelect, trustProfile, onViewD
                       color="warning"
                       onClick={onFixIssues}
                     >
-                      Fix Issues
+                      {t('trustRegistry.buttons.fixIssues')}
                     </Button>
                   )}
                 </>
@@ -212,7 +216,7 @@ function TrustFrameworkCard({ framework, active, onSelect, trustProfile, onViewD
                   size="small"
                   onClick={() => onSelect(framework.id)}
                 >
-                  Configure
+                  {t('trustRegistry.buttons.configure')}
                 </Button>
               )}
             </Box>
@@ -227,6 +231,8 @@ function TrustFrameworkCard({ framework, active, onSelect, trustProfile, onViewD
  * Trust Registry Main Component (Inner - uses TrustProvider context)
  */
 function TrustRegistryContent() {
+  const { t } = useTranslation('vendor');
+  const TRUST_FRAMEWORKS = getTrustFrameworks(t);
   const { organizationId } = useAuth();
   const {
     trustProfile,
@@ -286,10 +292,10 @@ function TrustRegistryContent() {
       <Box sx={{ mb: 4 }}>
         <Typography variant="h4" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <SecurityIcon fontSize="large" />
-          Trust
+          {t('trustRegistry.title')}
         </Typography>
         <Typography variant="body1" color="text.secondary">
-          Monitor trust framework status, manage certificate chains, and configure key infrastructure for secure credential operations.
+          {t('trustRegistry.description')}
         </Typography>
       </Box>
 
@@ -304,7 +310,7 @@ function TrustRegistryContent() {
       {!loading && (!trustProfile || trustProfile.trustFramework === 'CUSTOM') && (
         <Alert severity="info" sx={{ mb: 3 }} icon={<SecurityIcon />}>
           <Typography variant="body2">
-            <strong>Trust profile not fully configured.</strong> Select a trust framework below to get started.
+            <strong>{t('trustRegistry.notConfigured')}</strong> {t('trustRegistry.selectFramework')}
           </Typography>
         </Alert>
       )}
@@ -317,11 +323,11 @@ function TrustRegistryContent() {
           aria-label="trust registry tabs"
           sx={{ borderBottom: 1, borderColor: 'divider' }}
         >
-          <Tab label="Overview" id="trust-tab-0" aria-controls="trust-tabpanel-0" />
-          <Tab label="Frameworks" id="trust-tab-1" aria-controls="trust-tabpanel-1" />
-          <Tab label="Certificate Chain" id="trust-tab-2" aria-controls="trust-tabpanel-2" />
-          <Tab label="Keys" id="trust-tab-3" aria-controls="trust-tabpanel-3" />
-          <Tab label="Revocations" id="trust-tab-4" aria-controls="trust-tabpanel-4" />
+          <Tab label={t('trustRegistry.tabs.overview')} id="trust-tab-0" aria-controls="trust-tabpanel-0" />
+          <Tab label={t('trustRegistry.tabs.frameworks')} id="trust-tab-1" aria-controls="trust-tabpanel-1" />
+          <Tab label={t('trustRegistry.tabs.certificates')} id="trust-tab-2" aria-controls="trust-tabpanel-2" />
+          <Tab label={t('trustRegistry.tabs.keys')} id="trust-tab-3" aria-controls="trust-tabpanel-3" />
+          <Tab label={t('trustRegistry.tabs.revocations')} id="trust-tab-4" aria-controls="trust-tabpanel-4" />
         </Tabs>
 
         {/* Tab 0: Overview */}
@@ -331,7 +337,7 @@ function TrustRegistryContent() {
             <Grid item xs={12} md={6}>
               <Paper sx={{ p: 3, bgcolor: 'grey.50' }}>
                 <Typography variant="h6" gutterBottom>
-                  Active Framework
+                  {t('trustRegistry.overview.activeFramework')}
                 </Typography>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
                   {TRUST_FRAMEWORKS.find(f => f.id === selectedFramework)?.icon}
@@ -349,7 +355,7 @@ function TrustRegistryContent() {
                   size="small"
                   onClick={() => setCurrentTab(1)}
                 >
-                  Change Framework
+                  {t('trustRegistry.overview.changeFramework')}
                 </Button>
               </Paper>
             </Grid>
@@ -358,26 +364,26 @@ function TrustRegistryContent() {
             <Grid item xs={12} md={6}>
               <Paper sx={{ p: 3, bgcolor: 'grey.50' }}>
                 <Typography variant="h6" gutterBottom>
-                  Trust Status
+                  {t('trustRegistry.overview.trustStatus')}
                 </Typography>
                 {!trustProfile || !healthStatus ? (
                   <Alert severity="info" sx={{ mt: 2 }}>
-                    Trust profile not configured yet. Complete onboarding to set up trust framework.
+                    {t('trustRegistry.overview.notConfiguredYet')}
                   </Alert>
                 ) : (
                   <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
                     <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
-                      <Typography variant="body2">Chain Status:</Typography>
+                      <Typography variant="body2">{t('trustRegistry.overview.chainStatus')}</Typography>
                       <Chip
-                        label={healthStatus?.chainStatus?.healthy ? 'Healthy' : 'Pending'}
+                        label={healthStatus?.chainStatus?.healthy ? t('trustRegistry.overview.healthy') : t('trustRegistry.overview.pending')}
                         size="small"
                         color={healthStatus?.chainStatus?.healthy ? 'success' : 'default'}
                       />
                     </Box>
                     <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
-                      <Typography variant="body2">All Checks:</Typography>
+                      <Typography variant="body2">{t('trustRegistry.overview.allChecks')}</Typography>
                       <Chip
-                        label={healthStatus?.allPassed ? 'Passed' : 'Pending Setup'}
+                        label={healthStatus?.allPassed ? t('trustRegistry.overview.passed') : t('trustRegistry.overview.pendingSetup')}
                         size="small"
                         color={healthStatus?.allPassed ? 'success' : 'default'}
                       />
@@ -390,7 +396,7 @@ function TrustRegistryContent() {
                       disabled={loading}
                       sx={{ mt: 1 }}
                     >
-                      Refresh Status
+                      {t('trustRegistry.overview.refreshStatus')}
                     </Button>
                   </Box>
                 )}
@@ -400,7 +406,7 @@ function TrustRegistryContent() {
             {/* Health Checklist */}
             <Grid item xs={12}>
               <Typography variant="h6" gutterBottom>
-                Health Checks
+                {t('trustRegistry.overview.healthChecks')}
               </Typography>
               <TrustHealthChecklist
                 healthStatus={healthStatus}
@@ -416,10 +422,10 @@ function TrustRegistryContent() {
         {/* Tab 1: Frameworks */}
         <TabPanel value={currentTab} index={1}>
           <Typography variant="h6" gutterBottom>
-            Trust Framework Status
+            {t('trustRegistry.frameworks.title')}
           </Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-            Monitor the configuration status of each trust framework. Configure or fix issues as needed.
+            {t('trustRegistry.frameworks.description')}
           </Typography>
 
           <Grid container spacing={3}>
@@ -432,6 +438,7 @@ function TrustRegistryContent() {
                   trustProfile={trustProfile}
                   onViewDetails={() => setCurrentTab(2)}
                   onFixIssues={() => setCurrentTab(3)}
+                  t={t}
                 />
               </Grid>
             ))}
@@ -441,10 +448,10 @@ function TrustRegistryContent() {
         {/* Tab 2: Certificate Chain */}
         <TabPanel value={currentTab} index={2}>
           <Typography variant="h6" gutterBottom>
-            Certificate Chain Status
+            {t('trustRegistry.certificates.title')}
           </Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-            View the status of your PKI trust chain including root CA, intermediate CA, and CRL.
+            {t('trustRegistry.certificates.description')}
           </Typography>
 
           <TrustChainStatus
@@ -458,7 +465,7 @@ function TrustRegistryContent() {
           {healthStatus?.warnings && healthStatus.warnings.length > 0 && (
             <Alert severity="warning" sx={{ mt: 3 }}>
               <Typography variant="body2" fontWeight="bold" gutterBottom>
-                Warnings:
+                {t('trustRegistry.certificates.warnings')}
               </Typography>
               <ul style={{ margin: 0, paddingLeft: 20 }}>
                 {healthStatus.warnings.map((warning, index) => (
@@ -471,7 +478,7 @@ function TrustRegistryContent() {
           {healthStatus?.errors && healthStatus.errors.length > 0 && (
             <Alert severity="error" sx={{ mt: 3 }}>
               <Typography variant="body2" fontWeight="bold" gutterBottom>
-                Errors:
+                {t('trustRegistry.certificates.errors')}
               </Typography>
               <ul style={{ margin: 0, paddingLeft: 20 }}>
                 {healthStatus.errors.map((error, index) => (
@@ -486,30 +493,30 @@ function TrustRegistryContent() {
         <TabPanel value={currentTab} index={3}>
           <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
             <VpnKeyIcon />
-            Key Management
+            {t('trustRegistry.keys.title')}
           </Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-            Manage cryptographic keys for signing and verification.
+            {t('trustRegistry.keys.description')}
           </Typography>
 
           <Alert severity="info">
             <Typography variant="body2">
-              Key management interface coming soon. Keys are currently configured during onboarding.
+              {t('trustRegistry.keys.comingSoon')}
             </Typography>
           </Alert>
 
           {trustProfile?.verifierKeys && trustProfile.verifierKeys.length > 0 && (
             <Paper sx={{ p: 3, mt: 3 }}>
               <Typography variant="subtitle1" gutterBottom fontWeight="bold">
-                Verifier Keys
+                {t('trustRegistry.keys.verifierKeys')}
               </Typography>
               {trustProfile.verifierKeys.map((key, index) => (
                 <Box key={index} sx={{ mb: 2 }}>
                   <Typography variant="body2">
-                    <strong>Location:</strong> {key.location || 'Not specified'}
+                    <strong>{t('trustRegistry.keys.location')}</strong> {key.location || t('trustRegistry.keys.notSpecified')}
                   </Typography>
                   <Typography variant="body2">
-                    <strong>Certificate:</strong> {key.hasCertificate ? 'Attached' : 'Not attached'}
+                    <strong>{t('trustRegistry.keys.certificate')}</strong> {key.hasCertificate ? t('trustRegistry.keys.attached') : t('trustRegistry.keys.notAttached')}
                   </Typography>
                   <Divider sx={{ mt: 1 }} />
                 </Box>
@@ -520,15 +527,15 @@ function TrustRegistryContent() {
           {trustProfile?.issuerKeys && trustProfile.issuerKeys.length > 0 && (
             <Paper sx={{ p: 3, mt: 3 }}>
               <Typography variant="subtitle1" gutterBottom fontWeight="bold">
-                Issuer Keys
+                {t('trustRegistry.keys.issuerKeys')}
               </Typography>
               {trustProfile.issuerKeys.map((key, index) => (
                 <Box key={index} sx={{ mb: 2 }}>
                   <Typography variant="body2">
-                    <strong>Location:</strong> {key.location || 'Not specified'}
+                    <strong>{t('trustRegistry.keys.location')}</strong> {key.location || t('trustRegistry.keys.notSpecified')}
                   </Typography>
                   <Typography variant="body2">
-                    <strong>Certificate:</strong> {key.hasCertificate ? 'Attached' : 'Not attached'}
+                    <strong>{t('trustRegistry.keys.certificate')}</strong> {key.hasCertificate ? t('trustRegistry.keys.attached') : t('trustRegistry.keys.notAttached')}
                   </Typography>
                   <Divider sx={{ mt: 1 }} />
                 </Box>

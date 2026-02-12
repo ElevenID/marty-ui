@@ -29,16 +29,17 @@ import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
 import DragHandleIcon from '@mui/icons-material/DragHandle';
 import InfoIcon from '@mui/icons-material/Info';
+import { useTranslation } from 'react-i18next';
 
-const CLAIM_TYPES = [
-  { value: 'string', label: 'Text (string)' },
-  { value: 'number', label: 'Number' },
-  { value: 'integer', label: 'Integer' },
-  { value: 'boolean', label: 'True/False (boolean)' },
-  { value: 'date', label: 'Date' },
-  { value: 'datetime', label: 'Date & Time' },
-  { value: 'object', label: 'Object (nested)' },
-  { value: 'array', label: 'Array (list)' },
+const getClaimTypes = (t) => [
+  { value: 'string', label: t('wizards.credentialTemplate.claimsStep.claimTypeLabels.string') },
+  { value: 'number', label: t('wizards.credentialTemplate.claimsStep.claimTypeLabels.number') },
+  { value: 'integer', label: t('wizards.credentialTemplate.claimsStep.claimTypeLabels.integer') },
+  { value: 'boolean', label: t('wizards.credentialTemplate.claimsStep.claimTypeLabels.boolean') },
+  { value: 'date', label: t('wizards.credentialTemplate.claimsStep.claimTypeLabels.date') },
+  { value: 'datetime', label: t('wizards.credentialTemplate.claimsStep.claimTypeLabels.datetime') },
+  { value: 'object', label: t('wizards.credentialTemplate.claimsStep.claimTypeLabels.object') },
+  { value: 'array', label: t('wizards.credentialTemplate.claimsStep.claimTypeLabels.array') },
 ];
 
 const CLAIM_PRESETS = {
@@ -65,6 +66,7 @@ const CLAIM_PRESETS = {
 };
 
 const ClaimsStep = ({ data, onChange }) => {
+  const { t } = useTranslation('console');
   const [newClaimName, setNewClaimName] = useState('');
   const [newClaimType, setNewClaimType] = useState('string');
   const [newClaimRequired, setNewClaimRequired] = useState(true);
@@ -130,23 +132,23 @@ const ClaimsStep = ({ data, onChange }) => {
   return (
     <Box>
       <Typography variant="h6" gutterBottom>
-        Define Claims
+        {t('wizards.credentialTemplate.claimsStep.title')}
       </Typography>
       <Typography color="text.secondary" paragraph>
-        Specify what information (claims) this credential contains.
+        {t('wizards.credentialTemplate.claimsStep.description')}
       </Typography>
 
       <Alert severity="info" sx={{ mb: 3 }} icon={<InfoIcon />}>
-        Claims are the individual pieces of information in the credential (e.g., &quot;family_name&quot;, &quot;birth_date&quot;, &quot;license_number&quot;).
+        {t('wizards.credentialTemplate.claimsStep.info')}
       </Alert>
 
       {/* Claim Presets */}
       <Box sx={{ mb: 3 }}>
         <Typography variant="subtitle2" gutterBottom>
-          Quick Start Templates
+          {t('wizards.credentialTemplate.claimsStep.quickStart.title')}
         </Typography>
         <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
-          Choose a preset to auto-populate common claim structures
+          {t('wizards.credentialTemplate.claimsStep.quickStart.description')}
         </Typography>
         <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
           <Button
@@ -154,21 +156,21 @@ const ClaimsStep = ({ data, onChange }) => {
             size="small"
             onClick={() => handleApplyPreset('identity')}
           >
-            Identity Profile
+            {t('wizards.credentialTemplate.claimsStep.quickStart.identity')}
           </Button>
           <Button
             variant="outlined"
             size="small"
             onClick={() => handleApplyPreset('age')}
           >
-            Age Verification
+            {t('wizards.credentialTemplate.claimsStep.quickStart.age')}
           </Button>
           <Button
             variant="outlined"
             size="small"
             onClick={() => handleApplyPreset('employee')}
           >
-            Employee Badge
+            {t('wizards.credentialTemplate.claimsStep.quickStart.employee')}
           </Button>
         </Box>
       </Box>
@@ -176,12 +178,12 @@ const ClaimsStep = ({ data, onChange }) => {
       {/* Add Claim Form */}
       <Paper sx={{ p: 2, mb: 3, bgcolor: 'action.hover' }}>
         <Typography variant="subtitle2" gutterBottom>
-          Add Claim
+          {t('wizards.credentialTemplate.claimsStep.addClaim.title')}
         </Typography>
         <Box sx={{ display: 'flex', gap: 2, alignItems: 'flex-start' }}>
           <TextField
-            label="Claim Name"
-            placeholder="given_name"
+            label={t('wizards.credentialTemplate.claimsStep.addClaim.nameLabel')}
+            placeholder={t('wizards.credentialTemplate.claimsStep.addClaim.namePlaceholder')}
             value={newClaimName}
             onChange={(e) => setNewClaimName(e.target.value)}
             onKeyPress={handleKeyPress}
@@ -189,13 +191,13 @@ const ClaimsStep = ({ data, onChange }) => {
             size="small"
           />
           <FormControl sx={{ flex: 1 }} size="small">
-            <InputLabel>Type</InputLabel>
+            <InputLabel>{t('wizards.credentialTemplate.claimsStep.addClaim.typeLabel')}</InputLabel>
             <Select
               value={newClaimType}
               onChange={(e) => setNewClaimType(e.target.value)}
-              label="Type"
+              label={t('wizards.credentialTemplate.claimsStep.addClaim.typeLabel')}
             >
-              {CLAIM_TYPES.map((type) => (
+              {getClaimTypes(t).map((type) => (
                 <MenuItem key={type.value} value={type.value}>
                   {type.label}
                 </MenuItem>
@@ -210,7 +212,7 @@ const ClaimsStep = ({ data, onChange }) => {
                 size="small"
               />
             }
-            label="Required"
+            label={t('wizards.credentialTemplate.claimsStep.addClaim.requiredLabel')}
           />
           <Button
             variant="contained"
@@ -218,7 +220,7 @@ const ClaimsStep = ({ data, onChange }) => {
             onClick={handleAddClaim}
             disabled={!newClaimName.trim()}
           >
-            Add
+            {t('wizards.credentialTemplate.claimsStep.addClaim.addButton')}
           </Button>
         </Box>
       </Paper>
@@ -227,7 +229,7 @@ const ClaimsStep = ({ data, onChange }) => {
       {data.claims && data.claims.length > 0 ? (
         <Box>
           <Typography variant="subtitle2" gutterBottom>
-            Claims ({data.claims.length})
+            {t('wizards.credentialTemplate.claimsStep.claimsTitle', { count: data.claims.length })}
           </Typography>
           <List>
             {data.claims.map((claim, index) => (
@@ -278,7 +280,11 @@ const ClaimsStep = ({ data, onChange }) => {
                       </Typography>
                       <Chip label={claim.type} size="small" />
                       {claim.required && (
-                        <Chip label="Required" size="small" color="primary" />
+                        <Chip
+                          label={t('wizards.credentialTemplate.claimsStep.addClaim.requiredLabel')}
+                          size="small"
+                          color="primary"
+                        />
                       )}
                     </Box>
                   }
@@ -303,7 +309,7 @@ const ClaimsStep = ({ data, onChange }) => {
           }}
         >
           <Typography color="text.secondary">
-            No claims defined yet. Add claims above to define the credential structure.
+            {t('wizards.credentialTemplate.claimsStep.emptyState')}
           </Typography>
         </Box>
       )}

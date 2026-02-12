@@ -7,6 +7,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import {
   Box,
   Container,
@@ -58,6 +59,7 @@ const CREDENTIAL_ICONS = {
 };
 
 export default function TemplateCatalog() {
+  const { t } = useTranslation('vendor');
   const { organizationId } = useAuth();
   const navigate = useNavigate();
   const [templates, setTemplates] = useState([]);
@@ -112,7 +114,7 @@ export default function TemplateCatalog() {
       }
     } catch (err) {
       console.error('Failed to fetch templates:', err);
-      setError('Failed to load templates');
+      setError(t('templateCatalog.loadFailed'));
     } finally {
       setLoading(false);
     }
@@ -140,7 +142,7 @@ export default function TemplateCatalog() {
 
       if (!response.ok) {
         const data = await response.json();
-        throw new Error(data.detail || 'Failed to clone template');
+        throw new Error(data.detail || t('templateCatalog.cloneFailed'));
       }
 
       setCloneDialogOpen(false);
@@ -177,10 +179,10 @@ export default function TemplateCatalog() {
         {/* Header */}
         <Box sx={{ mb: 4 }}>
           <Typography variant="h4" gutterBottom>
-            Template Marketplace
+            {t('templateCatalog.title')}
           </Typography>
           <Typography variant="body1" color="text.secondary">
-            Browse and clone pre-built credential templates based on international standards
+            {t('templateCatalog.description')}
           </Typography>
         </Box>
 
@@ -190,7 +192,7 @@ export default function TemplateCatalog() {
             <Grid item xs={12} md={6}>
               <TextField
                 fullWidth
-                placeholder="Search templates..."
+                placeholder={t('templateCatalog.searchPlaceholder')}
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 InputProps={{
@@ -204,19 +206,19 @@ export default function TemplateCatalog() {
             </Grid>
             <Grid item xs={12} md={6}>
               <FormControl fullWidth>
-                <InputLabel>Category</InputLabel>
+                <InputLabel>{t('templateCatalog.categoryLabel')}</InputLabel>
                 <Select
                   value={category}
                   onChange={(e) => setCategory(e.target.value)}
-                  label="Category"
+                  label={t('templateCatalog.categoryLabel')}
                 >
-                  <MenuItem value="all">All Templates</MenuItem>
-                  <MenuItem value="drivers_license">Driver&apos;s License</MenuItem>
-                  <MenuItem value="passport">Passport</MenuItem>
-                  <MenuItem value="travel_visa">Travel Visa</MenuItem>
-                  <MenuItem value="permanent_resident_card">Permanent Resident Card</MenuItem>
-                  <MenuItem value="university_degree">University Degree</MenuItem>
-                  <MenuItem value="employment_authorization">Employment Authorization</MenuItem>
+                  <MenuItem value="all">{t('templateCatalog.categories.all')}</MenuItem>
+                  <MenuItem value="drivers_license">{t('templateCatalog.categories.driversLicense')}</MenuItem>
+                  <MenuItem value="passport">{t('templateCatalog.categories.passport')}</MenuItem>
+                  <MenuItem value="travel_visa">{t('templateCatalog.categories.travelVisa')}</MenuItem>
+                  <MenuItem value="permanent_resident_card">{t('templateCatalog.categories.permanentResidentCard')}</MenuItem>
+                  <MenuItem value="university_degree">{t('templateCatalog.categories.universityDegree')}</MenuItem>
+                  <MenuItem value="employment_authorization">{t('templateCatalog.categories.employmentAuthorization')}</MenuItem>
                 </Select>
               </FormControl>
             </Grid>
@@ -238,7 +240,7 @@ export default function TemplateCatalog() {
 
                   {template.is_system_template && (
                     <Chip
-                      label="Official Template"
+                      label={t('templateCatalog.card.officialTemplate')}
                       size="small"
                       color="primary"
                       sx={{ mb: 1 }}
@@ -246,23 +248,23 @@ export default function TemplateCatalog() {
                   )}
 
                   <Typography variant="body2" color="text.secondary" sx={{ mb: 2, minHeight: 60 }}>
-                    {template.description || 'No description available'}
+                    {template.description || t('templateCatalog.card.noDescription')}
                   </Typography>
 
                   <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mb: 1 }}>
                     <Chip
-                      label={`${(template.required_fields || []).length} required fields`}
+                      label={t('templateCatalog.card.requiredFields', { count: (template.required_fields || []).length })}
                       size="small"
                       variant="outlined"
                     />
                     <Chip
-                      label={`${(template.optional_fields || []).length} optional fields`}
+                      label={t('templateCatalog.card.optionalFields', { count: (template.optional_fields || []).length })}
                       size="small"
                       variant="outlined"
                     />
                     {template.custom_fields && template.custom_fields.length > 0 && (
                       <Chip
-                        label={`${template.custom_fields.length} custom fields`}
+                        label={t('templateCatalog.card.customFields', { count: template.custom_fields.length })}
                         size="small"
                         variant="outlined"
                       />
@@ -271,7 +273,7 @@ export default function TemplateCatalog() {
 
                   {template.estimated_processing_time && (
                     <Typography variant="caption" color="text.secondary">
-                      Processing: {template.estimated_processing_time}
+                      {t('templateCatalog.card.processing', { time: template.estimated_processing_time })}
                     </Typography>
                   )}
                 </CardContent>
@@ -283,7 +285,7 @@ export default function TemplateCatalog() {
                     startIcon={<ContentCopyIcon />}
                     onClick={() => openCloneDialog(template)}
                   >
-                    Clone Template
+                    {t('templateCatalog.card.cloneButton')}
                   </Button>
                 </CardActions>
               </Card>
@@ -293,13 +295,13 @@ export default function TemplateCatalog() {
 
         {filteredTemplates.length === 0 && (
           <Alert severity="info" sx={{ mt: 4 }}>
-            No templates found matching your search criteria.
+            {t('templateCatalog.noResults')}
           </Alert>
         )}
 
         {/* Clone Dialog */}
         <Dialog open={cloneDialogOpen} onClose={() => setCloneDialogOpen(false)} maxWidth="md" fullWidth>
-          <DialogTitle>Clone Template</DialogTitle>
+          <DialogTitle>{t('templateCatalog.cloneDialog.title')}</DialogTitle>
           <DialogContent>
             {error && (
               <Alert severity="error" sx={{ mb: 2 }}>
@@ -308,8 +310,7 @@ export default function TemplateCatalog() {
             )}
 
             <Alert severity="info" sx={{ mb: 3 }}>
-              Cloning creates a customizable copy of this template for your organization.
-              You can modify fields, validation rules, and publishing settings.
+              {t('templateCatalog.cloneDialog.infoMessage')}
             </Alert>
 
             {selectedTemplate && (
@@ -324,25 +325,25 @@ export default function TemplateCatalog() {
                 <Divider sx={{ my: 2 }} />
 
                 <Typography variant="subtitle2" gutterBottom>
-                  Template Details:
+                  {t('templateCatalog.cloneDialog.detailsTitle')}
                 </Typography>
                 <List dense>
                   <ListItem>
                     <ListItemText
-                      primary="Required Fields"
-                      secondary={(selectedTemplate.required_fields || []).join(', ') || 'None'}
+                      primary={t('templateCatalog.cloneDialog.requiredFields')}
+                      secondary={(selectedTemplate.required_fields || []).join(', ') || t('templateCatalog.cloneDialog.none')}
                     />
                   </ListItem>
                   <ListItem>
                     <ListItemText
-                      primary="Optional Fields"
-                      secondary={(selectedTemplate.optional_fields || []).join(', ') || 'None'}
+                      primary={t('templateCatalog.cloneDialog.optionalFields')}
+                      secondary={(selectedTemplate.optional_fields || []).join(', ') || t('templateCatalog.cloneDialog.none')}
                     />
                   </ListItem>
                   {selectedTemplate.eligibility_criteria && (
                     <ListItem>
                       <ListItemText
-                        primary="Eligibility"
+                        primary={t('templateCatalog.cloneDialog.eligibility')}
                         secondary={selectedTemplate.eligibility_criteria}
                       />
                     </ListItem>
@@ -353,15 +354,15 @@ export default function TemplateCatalog() {
 
             <TextField
               fullWidth
-              label="Custom Template Name"
+              label={t('templateCatalog.cloneDialog.nameLabel')}
               value={customName}
               onChange={(e) => setCustomName(e.target.value)}
-              helperText="Give your cloned template a unique name"
+              helperText={t('templateCatalog.cloneDialog.nameHelper')}
             />
           </DialogContent>
           <DialogActions>
             <Button onClick={() => setCloneDialogOpen(false)} disabled={cloning}>
-              Cancel
+              {t('templateCatalog.cloneDialog.cancelButton')}
             </Button>
             <Button
               variant="contained"
@@ -369,7 +370,7 @@ export default function TemplateCatalog() {
               disabled={cloning || !customName}
               startIcon={cloning ? <CircularProgress size={16} /> : <CheckCircleIcon />}
             >
-              {cloning ? 'Cloning...' : 'Clone & Customize'}
+              {cloning ? t('templateCatalog.cloneDialog.cloning') : t('templateCatalog.cloneDialog.cloneButton')}
             </Button>
           </DialogActions>
         </Dialog>

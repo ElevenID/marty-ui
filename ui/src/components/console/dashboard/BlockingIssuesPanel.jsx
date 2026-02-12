@@ -18,18 +18,20 @@ import {
 import { Link } from 'react-router-dom';
 import WarningIcon from '@mui/icons-material/Warning';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
+import { useTranslation } from 'react-i18next';
 
 /**
  * Blocking Issues Panel Component
  */
 export function BlockingIssuesPanel({ blockers }) {
+  const { t } = useTranslation('console');
   if (!blockers || blockers.length === 0) {
     return null;
   }
 
   return (
     <Alert severity="warning" sx={{ mb: 3 }}>
-      <AlertTitle>Blocking Issues</AlertTitle>
+      <AlertTitle>{t('dashboard.blockingIssues.title')}</AlertTitle>
       <List dense disablePadding>
         {blockers.map((blocker) => (
           <ListItem

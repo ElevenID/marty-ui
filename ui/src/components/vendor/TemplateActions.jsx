@@ -6,6 +6,7 @@
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   Box,
   Button,
@@ -40,6 +41,7 @@ import ErrorIcon from '@mui/icons-material/Error';
 const API_URL = import.meta.env.VITE_API_URL || '';
 
 export function PublishDialog({ open, onClose, configId, onPublished }) {
+  const { t } = useTranslation('vendor');
   const [visibility, setVisibility] = useState('private');
   const [changeDescription, setChangeDescription] = useState('');
   const [publishing, setPublishing] = useState(false);
@@ -62,7 +64,7 @@ export function PublishDialog({ open, onClose, configId, onPublished }) {
 
       if (!response.ok) {
         const data = await response.json();
-        throw new Error(data.detail || 'Failed to publish template');
+        throw new Error(data.detail || t('templateActions.publishDialog.publishFailed'));
       }
 
       const data = await response.json();
@@ -77,7 +79,7 @@ export function PublishDialog({ open, onClose, configId, onPublished }) {
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
-      <DialogTitle>Publish Template</DialogTitle>
+      <DialogTitle>{t('templateActions.publishDialog.title')}</DialogTitle>
       <DialogContent>
         {error && (
           <Alert severity="error" sx={{ mb: 2 }}>
@@ -86,19 +88,19 @@ export function PublishDialog({ open, onClose, configId, onPublished }) {
         )}
 
         <Alert severity="info" sx={{ mb: 3 }}>
-          Publishing makes this template available for applicants to use.
+          {t('templateActions.publishDialog.infoMessage')}
         </Alert>
 
         <FormControl fullWidth sx={{ mb: 2 }}>
-          <InputLabel>Visibility</InputLabel>
+          <InputLabel>{t('templateActions.publishDialog.visibilityLabel')}</InputLabel>
           <Select
             value={visibility}
             onChange={(e) => setVisibility(e.target.value)}
-            label="Visibility"
+            label={t('templateActions.publishDialog.visibilityLabel')}
           >
-            <MenuItem value="private">Private - Only your organization</MenuItem>
-            <MenuItem value="organization">Organization - Members only</MenuItem>
-            <MenuItem value="public">Public - Available to all organizations</MenuItem>
+            <MenuItem value="private">{t('templateActions.publishDialog.visibility.private')}</MenuItem>
+            <MenuItem value="organization">{t('templateActions.publishDialog.visibility.organization')}</MenuItem>
+            <MenuItem value="public">{t('templateActions.publishDialog.visibility.public')}</MenuItem>
           </Select>
         </FormControl>
 
@@ -106,20 +108,20 @@ export function PublishDialog({ open, onClose, configId, onPublished }) {
           fullWidth
           multiline
           rows={3}
-          label="Change Description (Optional)"
-          placeholder="Describe what's new in this version..."
+          label={t('templateActions.publishDialog.changeDescriptionLabel')}
+          placeholder={t('templateActions.publishDialog.changeDescriptionPlaceholder')}
           value={changeDescription}
           onChange={(e) => setChangeDescription(e.target.value)}
           sx={{ mb: 2 }}
         />
 
         <Typography variant="caption" color="textSecondary">
-          Publishing will increment the template version number and create a version history entry.
+          {t('templateActions.publishDialog.versionNote')}
         </Typography>
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose} disabled={publishing}>
-          Cancel
+          {t('templateActions.publishDialog.cancelButton')}
         </Button>
         <Button
           variant="contained"
@@ -127,7 +129,7 @@ export function PublishDialog({ open, onClose, configId, onPublished }) {
           disabled={publishing}
           startIcon={publishing ? <CircularProgress size={16} /> : <PublishIcon />}
         >
-          Publish
+          {t('templateActions.publishDialog.publishButton')}
         </Button>
       </DialogActions>
     </Dialog>
@@ -135,6 +137,7 @@ export function PublishDialog({ open, onClose, configId, onPublished }) {
 }
 
 export function PreviewDialog({ open, onClose, configId, configData }) {
+  const { t } = useTranslation('vendor');
   const [testData, setTestData] = useState({});
   const [validating, setValidating] = useState(false);
   const [validationResult, setValidationResult] = useState(null);
@@ -159,7 +162,7 @@ export function PreviewDialog({ open, onClose, configId, configData }) {
       );
 
       if (!response.ok) {
-        throw new Error('Failed to validate');
+        throw new Error(t('templateActions.previewDialog.validateFailed'));
       }
 
       const data = await response.json();
@@ -167,7 +170,7 @@ export function PreviewDialog({ open, onClose, configId, configData }) {
     } catch (err) {
       setValidationResult({
         valid: false,
-        errors: { _general: ['Failed to validate: ' + err.message] },
+        errors: { _general: [t('templateActions.previewDialog.validateError', { error: err.message })] },
       });
     } finally {
       setValidating(false);
@@ -181,7 +184,7 @@ export function PreviewDialog({ open, onClose, configId, configData }) {
   return (
     <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth>
       <DialogTitle>
-        Preview & Test Template
+        {t('templateActions.previewDialog.title')}
         <IconButton
           onClick={onClose}
           sx={{ position: 'absolute', right: 8, top: 8 }}
@@ -191,7 +194,7 @@ export function PreviewDialog({ open, onClose, configId, configData }) {
       </DialogTitle>
       <DialogContent>
         <Alert severity="info" sx={{ mb: 3 }}>
-          Fill out the form below to test validation rules before publishing.
+          {t('templateActions.previewDialog.infoMessage')}
         </Alert>
 
         <Grid container spacing={2}>
@@ -217,27 +220,27 @@ export function PreviewDialog({ open, onClose, configId, configData }) {
               icon={validationResult.valid ? <CheckCircleIcon /> : <ErrorIcon />}
             >
               {validationResult.valid
-                ? 'All fields passed validation!'
-                : `Found ${validationResult.validation_summary?.invalid_fields || 0} validation errors`}
+                ? t('templateActions.previewDialog.validationSuccess')
+                : t('templateActions.previewDialog.validationErrors', { count: validationResult.validation_summary?.invalid_fields || 0 })}
             </Alert>
 
             {validationResult.missing_required_fields?.length > 0 && (
               <Alert severity="warning" sx={{ mt: 1 }}>
-                Missing required fields: {validationResult.missing_required_fields.join(', ')}
+                {t('templateActions.previewDialog.missingFields', { fields: validationResult.missing_required_fields.join(', ') })}
               </Alert>
             )}
           </Box>
         )}
       </DialogContent>
       <DialogActions>
-        <Button onClick={onClose}>Close</Button>
+        <Button onClick={onClose}>{t('templateActions.previewDialog.closeButton')}</Button>
         <Button
           variant="contained"
           onClick={handleValidate}
           disabled={validating}
           startIcon={validating ? <CircularProgress size={16} /> : <PreviewIcon />}
         >
-          Validate
+          {t('templateActions.previewDialog.validateButton')}
         </Button>
       </DialogActions>
     </Dialog>
@@ -245,6 +248,7 @@ export function PreviewDialog({ open, onClose, configId, configData }) {
 }
 
 export function VersionHistoryDialog({ open, onClose, configId }) {
+  const { t } = useTranslation('vendor');
   const [versions, setVersions] = useState([]);
   const [loading, setLoading] = useState(false);
 
@@ -275,14 +279,14 @@ export function VersionHistoryDialog({ open, onClose, configId }) {
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth>
-      <DialogTitle>Version History</DialogTitle>
+      <DialogTitle>{t('templateActions.versionHistoryDialog.title')}</DialogTitle>
       <DialogContent>
         {loading ? (
           <Box display="flex" justifyContent="center" py={4}>
             <CircularProgress />
           </Box>
         ) : versions.length === 0 ? (
-          <Alert severity="info">No version history available yet.</Alert>
+          <Alert severity="info">{t('templateActions.versionHistoryDialog.noHistory')}</Alert>
         ) : (
           <List>
             {versions.map((version) => (
@@ -297,14 +301,14 @@ export function VersionHistoryDialog({ open, onClose, configId }) {
                           color="primary"
                         />
                         <Typography variant="body2">
-                          {version.change_description || 'No description'}
+                          {version.change_description || t('templateActions.versionHistoryDialog.noDescription')}
                         </Typography>
                       </Box>
                     }
                     secondary={
                       version.created_at
                         ? new Date(version.created_at).toLocaleString()
-                        : 'Unknown date'
+                        : t('templateActions.versionHistoryDialog.unknownDate')
                     }
                   />
                 </ListItem>
@@ -315,13 +319,14 @@ export function VersionHistoryDialog({ open, onClose, configId }) {
         )}
       </DialogContent>
       <DialogActions>
-        <Button onClick={onClose}>Close</Button>
+        <Button onClick={onClose}>{t('templateActions.versionHistoryDialog.closeButton')}</Button>
       </DialogActions>
     </Dialog>
   );
 }
 
 export function TemplateActions({ configId, configData, onStatusChange }) {
+  const { t } = useTranslation('vendor');
   const [publishDialogOpen, setPublishDialogOpen] = useState(false);
   const [previewDialogOpen, setPreviewDialogOpen] = useState(false);
   const [versionDialogOpen, setVersionDialogOpen] = useState(false);
@@ -360,7 +365,7 @@ export function TemplateActions({ configId, configData, onStatusChange }) {
         onClick={isPublished ? handleUnpublish : () => setPublishDialogOpen(true)}
         disabled={unpublishing}
       >
-        {isPublished ? 'Unpublish' : 'Publish'}
+        {isPublished ? t('templateActions.unpublishButton') : t('templateActions.publishButton')}
       </Button>
 
       <Button
@@ -368,7 +373,7 @@ export function TemplateActions({ configId, configData, onStatusChange }) {
         startIcon={<PreviewIcon />}
         onClick={() => setPreviewDialogOpen(true)}
       >
-        Preview & Test
+        {t('templateActions.previewButton')}
       </Button>
 
       <Button
@@ -376,7 +381,7 @@ export function TemplateActions({ configId, configData, onStatusChange }) {
         startIcon={<HistoryIcon />}
         onClick={() => setVersionDialogOpen(true)}
       >
-        History
+        {t('templateActions.historyButton')}
       </Button>
 
       {configData?.is_published && (

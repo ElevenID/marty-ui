@@ -36,26 +36,54 @@ export async function getCurrentUser() {
 /**
  * Initiate login by redirecting to OIDC provider
  * @param {string} [redirectUri] - Where to redirect after login
+ * @param {string} [locale] - Language code to pass to Keycloak (e.g., 'en', 'de', 'ja')
  */
-export function initiateLogin(redirectUri = '/') {
+export function initiateLogin(redirectUri = '/', locale = null) {
   // Build login URL - always use relative path to go through nginx proxy
   let loginPath = `${AUTH_BASE_URL}/login`;
+  const params = new URLSearchParams();
+  
   if (redirectUri) {
-    loginPath += `?redirect_uri=${encodeURIComponent(redirectUri)}`;
+    params.append('redirect_uri', redirectUri);
   }
+  
+  // Pass locale to Keycloak if provided
+  if (locale) {
+    params.append('kc_locale', locale);
+  }
+  
+  const queryString = params.toString();
+  if (queryString) {
+    loginPath += `?${queryString}`;
+  }
+  
   window.location.href = loginPath;
 }
 
 /**
  * Initiate registration by redirecting to Keycloak registration page
  * @param {string} [redirectUri] - Where to redirect after registration
+ * @param {string} [locale] - Language code to pass to Keycloak (e.g., 'en', 'de', 'ja')
  */
-export function initiateRegister(redirectUri = '/') {
+export function initiateRegister(redirectUri = '/', locale = null) {
   // Build registration URL - always use relative path to go through nginx proxy
   let registerPath = `${AUTH_BASE_URL}/register`;
+  const params = new URLSearchParams();
+  
   if (redirectUri) {
-    registerPath += `?redirect_uri=${encodeURIComponent(redirectUri)}`;
+    params.append('redirect_uri', redirectUri);
   }
+  
+  // Pass locale to Keycloak if provided
+  if (locale) {
+    params.append('kc_locale', locale);
+  }
+  
+  const queryString = params.toString();
+  if (queryString) {
+    registerPath += `?${queryString}`;
+  }
+  
   window.location.href = registerPath;
 }
 

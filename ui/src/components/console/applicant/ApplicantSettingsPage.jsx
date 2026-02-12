@@ -18,11 +18,13 @@ import {
   Divider,
 } from '@mui/material';
 import SaveIcon from '@mui/icons-material/Save';
+import { useTranslation } from 'react-i18next';
 
 import { useAuth } from '../../../hooks/useAuth';
 import { getApplicantByUser, updateApplicantProfile } from '../../../services/applicantApi';
 
 function ApplicantSettingsPage() {
+  const { t } = useTranslation('applicant');
   const { user } = useAuth();
   const [saving, setSaving] = useState(false);
   const [success, setSuccess] = useState(false);
@@ -67,7 +69,7 @@ function ApplicantSettingsPage() {
     setSuccess(false);
     try {
       if (!applicantId) {
-        throw new Error('Applicant profile not found');
+        throw new Error(t('settings.errorNotFound'));
       }
       
       // Split name into given_name and family_name
@@ -102,15 +104,15 @@ function ApplicantSettingsPage() {
   return (
     <Box>
       <Typography variant="h4" gutterBottom>
-        Settings
+        {t('settings.title')}
       </Typography>
       <Typography variant="body1" color="text.secondary" paragraph>
-        Manage your profile and preferences.
+        {t('settings.description')}
       </Typography>
 
       {success && (
         <Alert severity="success" sx={{ mb: 3 }}>
-          Settings saved successfully.
+          {t('settings.successMessage')}
         </Alert>
       )}
 
@@ -123,13 +125,13 @@ function ApplicantSettingsPage() {
       {/* Profile Settings */}
       <Paper sx={{ p: 3, mb: 3 }}>
         <Typography variant="h6" gutterBottom>
-          Profile
+          {t('settings.profile.title')}
         </Typography>
         <Grid container spacing={3}>
           <Grid item xs={12} sm={6}>
             <TextField
               fullWidth
-              label="Full Name"
+              label={t('settings.profile.fullName')}
               value={profile.name}
               onChange={handleProfileChange('name')}
             />
@@ -137,17 +139,17 @@ function ApplicantSettingsPage() {
           <Grid item xs={12} sm={6}>
             <TextField
               fullWidth
-              label="Email"
+              label={t('settings.profile.email')}
               value={profile.email}
               onChange={handleProfileChange('email')}
               disabled
-              helperText="Contact support to change your email"
+              helperText={t('settings.profile.emailHelp')}
             />
           </Grid>
           <Grid item xs={12} sm={6}>
             <TextField
               fullWidth
-              label="Phone Number"
+              label={t('settings.profile.phone')}
               value={profile.phone}
               onChange={handleProfileChange('phone')}
             />
@@ -158,7 +160,7 @@ function ApplicantSettingsPage() {
       {/* Notification Settings */}
       <Paper sx={{ p: 3, mb: 3 }}>
         <Typography variant="h6" gutterBottom>
-          Notifications
+          {t('settings.notifications.title')}
         </Typography>
         <FormControlLabel
           control={
@@ -167,10 +169,10 @@ function ApplicantSettingsPage() {
               onChange={handleNotificationChange('emailAlerts')}
             />
           }
-          label="Email Alerts"
+          label={t('settings.notifications.emailAlerts')}
         />
         <Typography variant="body2" color="text.secondary" paragraph sx={{ ml: 6 }}>
-          Receive important updates via email
+          {t('settings.notifications.emailAlertsDescription')}
         </Typography>
 
         <Divider sx={{ my: 2 }} />
@@ -182,10 +184,10 @@ function ApplicantSettingsPage() {
               onChange={handleNotificationChange('applicationUpdates')}
             />
           }
-          label="Application Updates"
+          label={t('settings.notifications.applicationUpdates')}
         />
         <Typography variant="body2" color="text.secondary" paragraph sx={{ ml: 6 }}>
-          Get notified when your application status changes
+          {t('settings.notifications.applicationUpdatesDescription')}
         </Typography>
 
         <Divider sx={{ my: 2 }} />
@@ -197,10 +199,10 @@ function ApplicantSettingsPage() {
               onChange={handleNotificationChange('expirationReminders')}
             />
           }
-          label="Expiration Reminders"
+          label={t('settings.notifications.expirationReminders')}
         />
         <Typography variant="body2" color="text.secondary" paragraph sx={{ ml: 6 }}>
-          Remind me before credentials expire
+          {t('settings.notifications.expirationRemindersDescription')}
         </Typography>
       </Paper>
 
@@ -210,7 +212,7 @@ function ApplicantSettingsPage() {
         onClick={handleSave}
         disabled={saving}
       >
-        {saving ? 'Saving...' : 'Save Settings'}
+        {saving ? t('settings.actions.saving') : t('settings.actions.save')}
       </Button>
     </Box>
   );

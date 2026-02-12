@@ -17,6 +17,7 @@ import {
 import CloseIcon from '@mui/icons-material/Close';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import { Link } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 
 /**
  * ResourceCreateDrawer - Generic drawer for quick resource creation
@@ -43,6 +44,7 @@ function ResourceCreateDrawer({
   fields = [],
   initialData = {},
 }) {
+  const { t } = useTranslation('common');
   const [formData, setFormData] = useState(initialData);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -60,7 +62,7 @@ function ResourceCreateDrawer({
       onClose();
     } catch (err) {
       console.error(`Failed to create ${resourceType}:`, err);
-      setError(err.message || 'Failed to create resource');
+      setError(err.message || t('resourceDrawer.failedToCreate'));
     } finally {
       setLoading(false);
     }
@@ -164,12 +166,12 @@ function ResourceCreateDrawer({
 
           <Alert severity="info" sx={{ mb: 3 }}>
             <Typography variant="body2">
-              This is a quick create form with essential fields.{' '}
+              {t('resourceDrawer.quickCreateInfo')}{' '}
               {advancedPath && (
                 <>
-                  For advanced configuration,{' '}
+                  {t('resourceDrawer.advancedConfigPrefix')}{' '}
                   <Link to={advancedPath} target="_blank" style={{ color: 'inherit', fontWeight: 600 }}>
-                    open the full editor
+                    {t('resourceDrawer.openFullEditor')}
                     <OpenInNewIcon sx={{ fontSize: 14, verticalAlign: 'middle', ml: 0.5 }} />
                   </Link>
                 </>
@@ -184,7 +186,7 @@ function ResourceCreateDrawer({
         <Divider />
         <Box sx={{ p: 3, display: 'flex', gap: 2, justifyContent: 'flex-end' }}>
           <Button onClick={handleClose} disabled={loading}>
-            Cancel
+            {t('actions.cancel')}
           </Button>
           <Button
             variant="contained"
@@ -192,7 +194,7 @@ function ResourceCreateDrawer({
             disabled={loading}
             startIcon={loading && <CircularProgress size={16} />}
           >
-            {loading ? 'Creating...' : 'Create'}
+            {loading ? t('resourceDrawer.creating') : t('resourceDrawer.create')}
           </Button>
         </Box>
       </Box>

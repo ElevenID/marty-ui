@@ -49,40 +49,44 @@ import { useAuth } from '../../hooks/useAuth';
 // API base URL
 const API_URL = import.meta.env.VITE_API_URL || '';
 
-// Available credential types with icons
-const CREDENTIAL_TYPES = [
-  { id: 'travel_visa', label: 'Travel Visa', icon: <FlightIcon />, color: 'primary' },
-  { id: 'passport', label: 'Passport', icon: <BadgeIcon />, color: 'secondary' },
-  { id: 'drivers_license', label: "Driver's License", icon: <DirectionsCarIcon />, color: 'info' },
-  { id: 'access_badge', label: 'Access Badge', icon: <CreditCardIcon />, color: 'warning' },
-  { id: 'national_id', label: 'National ID', icon: <VerifiedUserIcon />, color: 'success' },
-  { id: 'dtc', label: 'Digital Travel Credential', icon: <FlightIcon />, color: 'default' },
-  { id: 'open_badge', label: 'Open Badge', icon: <EmojiEventsIcon />, color: 'info' },
-];
-
-/**
- * Get icon for credential type
- */
-function getCredentialIcon(type) {
-  const found = CREDENTIAL_TYPES.find(t => t.id === type);
-  return found ? found.icon : <VerifiedUserIcon />;
-}
-
-/**
- * Get color for credential type
- */
-function getCredentialColor(type) {
-  const found = CREDENTIAL_TYPES.find(t => t.id === type);
-  return found ? found.color : 'default';
-}
-
-function getCredentialLabel(type) {
-  const found = CREDENTIAL_TYPES.find(t => t.id === type);
-  return found ? found.label : type;
-}
-
 export default function CredentialConfigManager() {
+  const { t } = useTranslation(['vendor', 'common']);
   const { organizationId } = useAuth();
+
+  // Available credential types with icons
+  const CREDENTIAL_TYPES = [
+    { id: 'travel_visa', label: t('credentialConfigManager.credentialTypes.travelVisa'), icon: <FlightIcon />, color: 'primary' },
+    { id: 'passport', label: t('credentialConfigManager.credentialTypes.passport'), icon: <BadgeIcon />, color: 'secondary' },
+    { id: 'drivers_license', label: t('credentialConfigManager.credentialTypes.driversLicense'), icon: <DirectionsCarIcon />, color: 'info' },
+    { id: 'access_badge', label: t('credentialConfigManager.credentialTypes.accessBadge'), icon: <CreditCardIcon />, color: 'warning' },
+    { id: 'national_id', label: t('credentialConfigManager.credentialTypes.nationalId'), icon: <VerifiedUserIcon />, color: 'success' },
+    { id: 'dtc', label: t('credentialConfigManager.credentialTypes.dtc'), icon: <FlightIcon />, color: 'default' },
+    { id: 'open_badge', label: t('credentialConfigManager.credentialTypes.openBadge'), icon: <EmojiEventsIcon />, color: 'info' },
+  ];
+
+  /**
+   * Get icon for credential type
+   */
+  const getCredentialIcon = (type) => {
+    const found = CREDENTIAL_TYPES.find(t => t.id === type);
+    return found ? found.icon : <VerifiedUserIcon />;
+  };
+
+  /**
+   * Get color for credential type
+   */
+  const getCredentialColor = (type) => {
+    const found = CREDENTIAL_TYPES.find(t => t.id === type);
+    return found ? found.color : 'default';
+  };
+
+  /**
+   * Get label for credential type
+   */
+  const getCredentialLabel = (type) => {
+    const found = CREDENTIAL_TYPES.find(t => t.id === type);
+    return found ? found.label : type;
+  };
   const [configs, setConfigs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -272,8 +276,8 @@ export default function CredentialConfigManager() {
       setSnackbar({
         open: true,
         message: editingConfig
-          ? 'Credential configuration updated successfully'
-          : 'Credential configuration created successfully',
+          ? t('credentialConfigManager.snackbar.updateSuccess')
+          : t('credentialConfigManager.snackbar.createSuccess'),
         severity: 'success',
       });
 
@@ -309,7 +313,7 @@ export default function CredentialConfigManager() {
 
       setSnackbar({
         open: true,
-        message: 'Credential configuration deleted',
+        message: t('credentialConfigManager.snackbar.deleteSuccess'),
         severity: 'success',
       });
 
@@ -364,7 +368,7 @@ export default function CredentialConfigManager() {
     return (
       <Box sx={{ p: 3 }} data-testid="credential-config-loading">
         <Typography variant="h4" gutterBottom>
-          Credential Types
+          {t('credentialConfigManager.title')}
         </Typography>
         <Paper sx={{ p: 2, mt: 2 }}>
           {[1, 2, 3].map(i => (
@@ -381,10 +385,10 @@ export default function CredentialConfigManager() {
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
         <Box>
           <Typography variant="h4" component="h1" gutterBottom>
-            Credential Types
+            {t('credentialConfigManager.title')}
           </Typography>
           <Typography variant="body1" color="textSecondary">
-            Configure the types of credentials your organization will issue to applicants.
+            {t('credentialConfigManager.description')}
           </Typography>
         </Box>
         <Box>
@@ -394,7 +398,7 @@ export default function CredentialConfigManager() {
             sx={{ mr: 1 }}
             data-testid="refresh-configs-btn"
           >
-            Refresh
+            {t('common:refresh')}
           </Button>
           <Button
             variant="contained"
@@ -403,7 +407,7 @@ export default function CredentialConfigManager() {
             disabled={availableTypes.length === 0}
             data-testid="add-credential-type-btn"
           >
-            Add Credential Type
+            {t('credentialConfigManager.addCredentialType')}
           </Button>
         </Box>
       </Box>
@@ -419,10 +423,10 @@ export default function CredentialConfigManager() {
         <Paper sx={{ p: 4, textAlign: 'center' }} data-testid="no-configs-message">
           <VerifiedUserIcon sx={{ fontSize: 64, color: 'text.secondary', mb: 2 }} />
           <Typography variant="h6" gutterBottom>
-            No Credential Types Configured
+            {t('credentialConfigManager.empty.title')}
           </Typography>
           <Typography variant="body2" color="textSecondary" sx={{ mb: 2 }}>
-            Add credential types that your organization will offer to applicants.
+            {t('credentialConfigManager.empty.description')}
           </Typography>
           <Button
             variant="contained"
@@ -430,7 +434,7 @@ export default function CredentialConfigManager() {
             onClick={() => handleOpenDialog()}
             data-testid="add-first-credential-btn"
           >
-            Add Your First Credential Type
+            {t('credentialConfigManager.empty.button')}
           </Button>
         </Paper>
       ) : (
@@ -483,15 +487,15 @@ export default function CredentialConfigManager() {
                   <Divider sx={{ my: 1 }} />
 
                   <Typography variant="body2" color="textSecondary" gutterBottom>
-                    Validity: {config.validity_days} days
+                    {t('credentialConfigManager.form.validity')}: {config.validity_days} {t('credentialConfigManager.form.days')}
                   </Typography>
 
                   <Typography variant="body2" color="textSecondary" gutterBottom>
-                    Required Fields: {(config.required_fields || []).length}
+                    {t('credentialConfigManager.form.requiredFields')}: {(config.required_fields || []).length}
                   </Typography>
 
                   <Typography variant="body2" color="textSecondary">
-                    Optional Fields: {(config.optional_fields || []).length}
+                    {t('credentialConfigManager.form.optionalFields')}: {(config.optional_fields || []).length}
                   </Typography>
 
                   <Divider sx={{ my: 2 }} />
@@ -503,7 +507,7 @@ export default function CredentialConfigManager() {
                       onClick={() => handleOpenDialog(config)}
                       data-testid={`edit-${config.credential_type}`}
                     >
-                      Edit
+                      {t('common:edit')}
                     </Button>
                     <Button
                       size="small"
@@ -515,7 +519,7 @@ export default function CredentialConfigManager() {
                       }}
                       data-testid={`delete-${config.credential_type}`}
                     >
-                      Delete
+                      {t('common:delete')}
                     </Button>
                   </Box>
                 </CardContent>
@@ -534,16 +538,16 @@ export default function CredentialConfigManager() {
         data-testid="credential-config-dialog"
       >
         <DialogTitle>
-          {editingConfig ? 'Edit Credential Type' : 'Add Credential Type'}
+          {editingConfig ? t('credentialConfigManager.dialog.editTitle') : t('credentialConfigManager.dialog.createTitle')}
         </DialogTitle>
         <DialogContent>
           <Stack spacing={3} sx={{ mt: 1 }}>
             <FormControl fullWidth disabled={!!editingConfig}>
-              <InputLabel>Credential Type</InputLabel>
+              <InputLabel>{t('credentialConfigManager.form.credentialType')}</InputLabel>
               <Select
                 value={formData.credential_type}
                 onChange={handleTypeChange}
-                label="Credential Type"
+                label={t('credentialConfigManager.form.credentialType')}
                 data-testid="credential-type-select"
               >
                 {(editingConfig ? CREDENTIAL_TYPES : availableTypes).map((type) => (
@@ -558,23 +562,23 @@ export default function CredentialConfigManager() {
             </FormControl>
 
             <TextField
-              label="Display Name"
+              label={t('credentialConfigManager.form.displayName')}
               value={formData.display_name}
               onChange={(e) => setFormData(prev => ({ ...prev, display_name: e.target.value }))}
               fullWidth
               required
-              helperText="Name shown to applicants"
+              helperText={t('credentialConfigManager.form.displayNameHelper')}
               data-testid="display-name-input"
             />
 
             <TextField
-              label="Validity (days)"
+              label={t('credentialConfigManager.form.validityDays')}
               type="number"
               value={formData.validity_days}
               onChange={(e) => setFormData(prev => ({ ...prev, validity_days: parseInt(e.target.value) || 365 }))}
               fullWidth
               inputProps={{ min: 1, max: 3650 }}
-              helperText="How long credentials are valid"
+              helperText={t('credentialConfigManager.form.validityHelper')}
               data-testid="validity-days-input"
             />
 
@@ -635,20 +639,20 @@ export default function CredentialConfigManager() {
                   onChange={(e) => setFormData(prev => ({ ...prev, is_active: e.target.checked }))}
                 />
               }
-              label="Active (available to applicants)"
+              label={t('credentialConfigManager.form.isActive')}
               data-testid="is-active-switch"
             />
           </Stack>
         </DialogContent>
         <DialogActions>
-          <Button onClick={handleCloseDialog}>Cancel</Button>
+          <Button onClick={handleCloseDialog}>{t('common:cancel')}</Button>
           <Button
             variant="contained"
             onClick={handleSubmit}
             disabled={!formData.credential_type || !formData.display_name}
             data-testid="save-credential-config-btn"
           >
-            {editingConfig ? 'Update' : 'Create'}
+            {editingConfig ? t('common:update') : t('common:create')}
           </Button>
         </DialogActions>
       </Dialog>
@@ -659,22 +663,21 @@ export default function CredentialConfigManager() {
         onClose={() => setDeleteDialogOpen(false)}
         data-testid="delete-confirm-dialog"
       >
-        <DialogTitle>Delete Credential Type?</DialogTitle>
+        <DialogTitle>{t('credentialConfigManager.deleteDialog.title')}</DialogTitle>
         <DialogContent>
           <Typography>
-            Are you sure you want to delete the &quot;{configToDelete?.display_name}&quot; credential type?
-            This action cannot be undone.
+            {t('credentialConfigManager.deleteDialog.message', { name: configToDelete?.display_name })}
           </Typography>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setDeleteDialogOpen(false)}>Cancel</Button>
+          <Button onClick={() => setDeleteDialogOpen(false)}>{t('common:cancel')}</Button>
           <Button
             color="error"
             variant="contained"
             onClick={handleDelete}
             data-testid="confirm-delete-btn"
           >
-            Delete
+            {t('common:delete')}
           </Button>
         </DialogActions>
       </Dialog>

@@ -22,6 +22,7 @@ import {
   Chip,
   Tooltip,
 } from '@mui/material';
+import { useTranslation } from 'react-i18next';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ErrorIcon from '@mui/icons-material/Error';
 import VerifiedUserIcon from '@mui/icons-material/VerifiedUser';
@@ -56,6 +57,8 @@ function StatCard({ icon: Icon, label, count, color = 'primary' }) {
  * Organization Health Panel Component
  */
 export function OrganizationHealthPanel({ data, organizationName, isActive = true }) {
+  const { t } = useTranslation('console');
+  
   // Calculate counts of active resources
   const activeTrustProfiles = data?.trustProfiles?.filter(t => t.status === 'active')?.length || 0;
   const activeTemplates = data?.templates?.filter(t => t.status === 'active')?.length || 0;
@@ -77,25 +80,25 @@ export function OrganizationHealthPanel({ data, organizationName, isActive = tru
           <BusinessIcon color="primary" fontSize="large" />
           <Box>
             <Typography variant="h6">
-              {organizationName || 'Organization'}
+              {organizationName || t('dashboard.organizationHealth.organizationFallback')}
             </Typography>
             <Typography variant="caption" color="text.secondary">
-              Health Overview
+              {t('dashboard.organizationHealth.healthOverview')}
             </Typography>
           </Box>
         </Box>
         <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
-          <Tooltip title={isActive ? 'Organization is active' : 'Organization is inactive'}>
+          <Tooltip title={isActive ? t('dashboard.organizationHealth.organizationActive') : t('dashboard.organizationHealth.organizationInactive')}>
             <Chip 
               icon={isActive ? <CheckCircleIcon /> : <ErrorIcon />}
-              label={isActive ? 'Active' : 'Inactive'}
+              label={isActive ? t('dashboard.organizationHealth.active') : t('dashboard.organizationHealth.inactive')}
               color={isActive ? 'success' : 'error'}
               size="small"
             />
           </Tooltip>
-          <Tooltip title={isOperational ? 'All core systems configured' : 'Setup incomplete'}>
+          <Tooltip title={isOperational ? t('dashboard.organizationHealth.allSystemsConfigured') : t('dashboard.organizationHealth.setupIncomplete')}>
             <Chip 
-              label={isOperational ? 'Operational' : 'Setup Required'}
+              label={isOperational ? t('dashboard.organizationHealth.operational') : t('dashboard.organizationHealth.setupRequired')}
               color={isOperational ? 'success' : 'warning'}
               size="small"
               variant="outlined"
@@ -108,7 +111,7 @@ export function OrganizationHealthPanel({ data, organizationName, isActive = tru
         <Grid item xs={12} sm={6} md={2.4}>
           <StatCard
             icon={VerifiedUserIcon}
-            label="Active Trust Profiles"
+            label={t('dashboard.organizationHealth.activeTrustProfiles')}
             count={activeTrustProfiles}
             color={activeTrustProfiles > 0 ? 'success' : 'error'}
           />
@@ -116,7 +119,7 @@ export function OrganizationHealthPanel({ data, organizationName, isActive = tru
         <Grid item xs={12} sm={6} md={2.4}>
           <StatCard
             icon={DescriptionIcon}
-            label="Active Templates"
+            label={t('dashboard.organizationHealth.activeTemplates')}
             count={activeTemplates}
             color={activeTemplates > 0 ? 'success' : 'warning'}
           />
@@ -124,7 +127,7 @@ export function OrganizationHealthPanel({ data, organizationName, isActive = tru
         <Grid item xs={12} sm={6} md={2.4}>
           <StatCard
             icon={PolicyIcon}
-            label="Active Policies"
+            label={t('dashboard.organizationHealth.activePolicies')}
             count={activePolicies}
             color={activePolicies > 0 ? 'success' : 'warning'}
           />
@@ -132,7 +135,7 @@ export function OrganizationHealthPanel({ data, organizationName, isActive = tru
         <Grid item xs={12} sm={6} md={2.4}>
           <StatCard
             icon={CloudUploadIcon}
-            label="Active Deployments"
+            label={t('dashboard.organizationHealth.activeDeployments')}
             count={activeDeployments}
             color={activeDeployments > 0 ? 'success' : 'warning'}
           />
@@ -140,7 +143,7 @@ export function OrganizationHealthPanel({ data, organizationName, isActive = tru
         <Grid item xs={12} sm={6} md={2.4}>
           <StatCard
             icon={AccountTreeIcon}
-            label="Active Flows"
+            label={t('dashboard.organizationHealth.activeFlows')}
             count={activeFlows}
             color={activeFlows > 0 ? 'success' : 'warning'}
           />
@@ -150,7 +153,7 @@ export function OrganizationHealthPanel({ data, organizationName, isActive = tru
       {!isOperational && (
         <Box sx={{ mt: 2, p: 2, bgcolor: 'warning.light', borderRadius: 1 }}>
           <Typography variant="body2" color="text.secondary">
-            ⚠️ Complete setup by configuring all required resources to make this organization operational.
+            {t('dashboard.organizationHealth.setupWarning')}
           </Typography>
         </Box>
       )}

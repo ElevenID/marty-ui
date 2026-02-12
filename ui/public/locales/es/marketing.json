@@ -1,0 +1,193 @@
+{
+  "valueProposition": {
+    "headline": "La verificación de identidad no es suficiente.",
+    "subheadline": "Construye infraestructura de identidad verificable.",
+    "extendedSubheadline": "Emite, verifica y gobierna credenciales: diseñado para carteras EUDI, Open Badges y confianza empresarial.",
+    "primaryCTA": "Empezar gratis",
+    "secondaryCTA": "Por qué la identidad verificable"
+  },
+  "idvComparison": {
+    "title": "De IDV a identidad verificable",
+    "takeaway": "ElevenID reemplaza verificaciones repetidas por confianza reutilizable.",
+    "traditional": {
+      "title": "IDV tradicional",
+      "oneTimeChecks": "Verificaciones de documentos puntuales",
+      "vendorControlled": "Datos de identidad controlados por el proveedor",
+      "biometric": "Resultados de decisión biométrica",
+      "closedAPIs": "APIs cerradas y propietarias",
+      "manualTrust": "Configuración manual de confianza",
+      "reVerification": "Reverificación en todas partes"
+    },
+    "elevenid": {
+      "title": "ElevenID",
+      "reusable": "Credenciales verificables reutilizables",
+      "holderControlled": "Carteras digitales controladas por el titular",
+      "cryptographic": "Pruebas criptográficas",
+      "openStandards": "Estándares abiertos (W3C VC, OID4VC, ISO)",
+      "governedTrust": "Registros de confianza gobernados",
+      "reuseAcross": "Reutilización de identidad entre ecosistemas"
+    }
+  },
+  "eudiOpenBadges": {
+    "title": "Diseñado para carteras EUDI y credenciales verificables",
+    "verifyCredentials": "Verifica credenciales verificables—no solo documentos.",
+    "trustIssuers": "Confía en emisores—no en bases de datos.",
+    "walletFirst": "Wallet-first por diseño—listo para EUDI.",
+    "quote": "Las plataformas de IDV se quedan en una decisión puntual. ElevenID produce resultados criptográficamente verificables que pueden reutilizarse en carteras, ecosistemas y registros de confianza."
+  },
+  "audienceRouting": {
+    "title": "Elige tu camino",
+    "subtitle": "Selecciona tu punto de entrada: empresa, gobierno o desarrolladores.",
+    "enterprise": {
+      "title": "Empresa",
+      "description": "Reduce KYC repetido, habilita interoperabilidad con socios y gobierna la confianza a escala.",
+      "cta": "Explorar empresa"
+    },
+    "government": {
+      "title": "Gobierno",
+      "description": "Infraestructura lista para EUDI para credenciales ISO, listas de confianza y aceptación regulada.",
+      "cta": "Explorar gobierno"
+    },
+    "developers": {
+      "title": "Desarrolladores",
+      "description": "Docs, SDKs y guías rápidas para emisión y verificación de VC.",
+      "cta": "Leer documentación"
+    }
+  },
+  "organizationOutcomes": {
+    "title": "Por qué esto importa a las organizaciones",
+    "reduceKYC": "Reduce los costes de KYC repetido con credenciales reutilizables",
+    "eudiReady": "Prepárate para la aceptación de la cartera EUDI",
+    "avoidLockIn": "Evita el lock-in del proveedor con estándares abiertos",
+    "supportBadges": "Soporta Open Badges, credenciales laborales e IDs gubernamentales en un solo sistema"
+  },
+  "proofStrip": {
+    "title": "Construido sobre bases probadas",
+    "interoperability": "Interoperabilidad",
+    "offlineVerification": "Verificación sin conexión",
+    "deployment": "Despliegue",
+    "keySecurity": "Seguridad de claves",
+    "compliance": "Cumplimiento"
+  },
+  "landingPage": {
+    "loading": "Cargando...",
+    "checkingAccount": "Comprobando tu cuenta...",
+    "features": {
+      "issuance": {
+        "title": "Emisión",
+        "description": "Emite credenciales basadas en estándares con firmas criptográficas y aplicación de políticas."
+      },
+      "verification": {
+        "title": "Verificación",
+        "description": "Verifica credenciales contra anclas de confianza con comprobación de revocación y divulgación selectiva."
+      },
+      "governance": {
+        "title": "Gobernanza",
+        "description": "Gestiona confianza, políticas y despliegue de forma centralizada—sin cambiar el código del verificador."
+      }
+    },
+    "identityProblem": {
+      "title": "El problema de la identidad",
+      "description": "La mayoría de las organizaciones se enfrentan a sistemas fragmentados, confianza poco clara y presión creciente de cumplimiento.",
+      "items": {
+        "fragmented": "Sistemas de identidad fragmentados que no interoperan",
+        "unclearTrust": "Confianza del emisor poco clara entre socios y jurisdicciones",
+        "privacyPressure": "Presión de privacidad (minimización de datos + divulgación selectiva)",
+        "pkiComplexity": "Complejidad de PKI y revocación a escala"
+      }
+    },
+    "solvesIt": {
+      "title": "Cómo lo resuelve ElevenID",
+      "intro": "Gobierna la identidad con cuatro primitivas: perfiles de confianza, plantillas de credenciales, políticas de presentación y flujos.",
+      "subheading": "Las políticas son configuración, no código. Los endpoints ejecutan reglas de confianza y divulgación gobernadas centralmente sin re-despliegue."
+    },
+    "howItWorks": {
+      "title": "Cómo funciona",
+      "description": "La identidad digital es un intercambio gobernado entre cuatro actores.",
+      "cta": "Ver el flujo completo"
+    },
+    "standards": {
+      "title": "Arquitectura basada en estándares",
+      "subtitle": "Los estándares no son integraciones. Son el producto.",
+      "description": "Estas capas permiten que ElevenID interopere entre gobiernos, carteras y empresas sin integraciones a medida.",
+      "cta": "Explorar estándares"
+    },
+    "startFirst": {
+      "title": "¿Qué estás haciendo primero?",
+      "description": "Elige un punto de partida. Luego puedes ampliar a un ecosistema completo cuando estés listo.",
+      "cards": {
+        "verify": {
+          "title": "Verificar credenciales",
+          "description": "Verifica carteras EUDI, Open Badges y credenciales ISO."
+        },
+        "issue": {
+          "title": "Emitir credenciales",
+          "description": "Emite credenciales laborales, educativas o gubernamentales."
+        },
+        "offline": {
+          "title": "Sin conexión / instalaciones",
+          "description": "Verifica en puntos de control con conectividad limitada."
+        },
+        "wallet": {
+          "title": "Experiencia de cartera",
+          "description": "Ofrece a los usuarios una cartera para guardar y presentar credenciales."
+        }
+      },
+      "notSure": "¿No estás seguro?",
+      "startWithVerificationApi": "Empieza con la API de verificación"
+    },
+    "products": {
+      "title": "Productos y capacidades",
+      "description": "Una plataforma completa: desde emisión hasta verificación y gobernanza.",
+      "viewDetails": "Ver detalles",
+      "viewAll": "Ver todos los productos"
+    },
+    "trustSignals": {
+      "title": "Infraestructura de nivel empresarial",
+      "security": {
+        "title": "Seguridad",
+        "item1": "Validación criptográfica de nivel empresarial",
+        "item2": "Gestión de PKI y revocación",
+        "item3": "Integración con HSM y bóveda de claves"
+      },
+      "infrastructure": {
+        "title": "Infraestructura",
+        "item1": "Capacidad offline-first (caché de 72h)",
+        "item2": "Despliegue SaaS de alta disponibilidad",
+        "item3": "Opciones self-hosted para soberanía",
+        "item4": "Escalado horizontal y balanceo de carga",
+        "item5": "Desarrollado con flujos asistidos por IA para mantener alta calidad a menor coste."
+      },
+      "compliance": {
+        "title": "Cumplimiento",
+        "item1": "Implementa ICAO 9303",
+        "item2": "Implementa ISO 18013-5 (mDoc)",
+        "item3": "GDPR y privacidad por diseño",
+        "item4": "Divulgación selectiva y minimización de datos"
+      }
+    },
+    "proofStrip": {
+      "claims": {
+        "w3c": "W3C VC / SD-JWT / OID4VP",
+        "offlineCache": "Caché offline de 72 horas",
+        "deployment": "SaaS + Self-hosted",
+        "keySecurity": "Integración HSM / Vault",
+        "auditLogs": "Registros de auditoría inmutables"
+      }
+    },
+    "portals": {
+      "emphasis": "Portales integrados",
+      "message": "para solicitantes, proveedores y administradores—gestiona claves API, políticas de confianza y operaciones en un solo lugar.",
+      "learnMore": "Más información"
+    },
+    "footer": {
+      "title": "¿Listo para empezar?",
+      "description": "Empieza gratis o compara planes para tu organización.",
+      "viewPricing": "Ver precios"
+    },
+    "orientation": {
+      "title": "¿Nuevo en identidad verificable?",
+      "cta": "Cómo funciona"
+    }
+  }
+}

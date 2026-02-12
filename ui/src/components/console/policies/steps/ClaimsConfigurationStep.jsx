@@ -24,10 +24,12 @@ import {
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
+import { useTranslation } from 'react-i18next';
 
 import { listCredentialTemplates } from '../../../../services/presentationPolicyApi';
 
 const ClaimsConfigurationStep = ({ policyConfig, onConfigChange }) => {
+  const { t } = useTranslation('console');
   const [credentialTemplates, setCredentialTemplates] = useState([]);
   const [availableClaims, setAvailableClaims] = useState([]);
 
@@ -125,50 +127,50 @@ const ClaimsConfigurationStep = ({ policyConfig, onConfigChange }) => {
   return (
     <Box>
       <Typography variant="h6" gutterBottom>
-        Configure Claims
+        {t('wizards.presentationPolicy.claimsConfigurationStep.title')}
       </Typography>
       
       <Typography color="text.secondary" paragraph>
-        Define the basic information and required claims for this presentation policy.
+        {t('wizards.presentationPolicy.claimsConfigurationStep.description')}
       </Typography>
 
       {/* Basic Information */}
       <Card sx={{ mb: 3 }}>
         <CardContent>
           <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 600 }}>
-            Basic Information
+            {t('wizards.presentationPolicy.claimsConfigurationStep.sections.basicInfo')}
           </Typography>
 
           <TextField
             fullWidth
-            label="Policy Name"
+            label={t('wizards.presentationPolicy.claimsConfigurationStep.fields.policyName')}
             value={policyConfig.name}
             onChange={(e) => handleFieldChange('name', e.target.value)}
             required
             sx={{ mb: 2 }}
-            helperText="A descriptive name for this policy"
+            helperText={t('wizards.presentationPolicy.claimsConfigurationStep.helpers.policyName')}
           />
 
           <TextField
             fullWidth
-            label="Description"
+            label={t('wizards.presentationPolicy.claimsConfigurationStep.fields.description')}
             value={policyConfig.description}
             onChange={(e) => handleFieldChange('description', e.target.value)}
             multiline
             rows={2}
             sx={{ mb: 2 }}
-            helperText="Optional details about this policy"
+            helperText={t('wizards.presentationPolicy.claimsConfigurationStep.helpers.description')}
           />
 
           <TextField
             fullWidth
-            label="Purpose Statement"
+            label={t('wizards.presentationPolicy.claimsConfigurationStep.fields.purposeStatement')}
             value={policyConfig.purpose}
             onChange={(e) => handleFieldChange('purpose', e.target.value)}
             required
             multiline
             rows={2}
-            helperText="Explain to users why you need this information (shown during consent)"
+            helperText={t('wizards.presentationPolicy.claimsConfigurationStep.helpers.purposeStatement')}
           />
         </CardContent>
       </Card>
@@ -177,11 +179,11 @@ const ClaimsConfigurationStep = ({ policyConfig, onConfigChange }) => {
       <Card sx={{ mb: 3 }}>
         <CardContent>
           <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 600 }}>
-            Accepted Credential Types
+            {t('wizards.presentationPolicy.claimsConfigurationStep.sections.acceptedCredentialTypes')}
           </Typography>
 
           <Typography variant="body2" color="text.secondary" paragraph>
-            Which credential types can satisfy this policy?
+            {t('wizards.presentationPolicy.claimsConfigurationStep.helpers.credentialTypesQuestion')}
           </Typography>
 
           <Autocomplete
@@ -192,9 +194,9 @@ const ClaimsConfigurationStep = ({ policyConfig, onConfigChange }) => {
             renderInput={(params) => (
               <TextField
                 {...params}
-                label="Add credential type"
-                placeholder="e.g., org.iso.18013.5.1.mDL"
-                helperText="Select from templates or enter custom type"
+                label={t('wizards.presentationPolicy.claimsConfigurationStep.fields.addCredentialType')}
+                placeholder={t('wizards.presentationPolicy.claimsConfigurationStep.placeholders.credentialType')}
+                helperText={t('wizards.presentationPolicy.claimsConfigurationStep.helpers.addCredentialType')}
               />
             )}
             sx={{ mb: 2 }}
@@ -213,7 +215,7 @@ const ClaimsConfigurationStep = ({ policyConfig, onConfigChange }) => {
 
           {policyConfig.accepted_credential_types.length === 0 && (
             <Alert severity="warning" sx={{ mt: 2 }}>
-              Add at least one accepted credential type
+              {t('wizards.presentationPolicy.claimsConfigurationStep.alerts.addCredentialTypeFirst')}
             </Alert>
           )}
         </CardContent>
@@ -224,26 +226,26 @@ const ClaimsConfigurationStep = ({ policyConfig, onConfigChange }) => {
         <CardContent>
           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
             <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
-              Required Claims
+              {t('wizards.presentationPolicy.claimsConfigurationStep.sections.requiredClaims')}
             </Typography>
             <Button
               startIcon={<AddIcon />}
               onClick={handleAddClaim}
               disabled={policyConfig.accepted_credential_types.length === 0}
             >
-              Add Claim
+              {t('wizards.presentationPolicy.claimsConfigurationStep.quickActions.addClaim')}
             </Button>
           </Box>
 
           {policyConfig.accepted_credential_types.length === 0 && (
             <Alert severity="info">
-              Add credential types above before configuring claims
+              {t('wizards.presentationPolicy.claimsConfigurationStep.alerts.addTypesBeforeClaims')}
             </Alert>
           )}
 
           {policyConfig.required_claims.length === 0 && policyConfig.accepted_credential_types.length > 0 && (
             <Alert severity="warning">
-              Add at least one required claim
+              {t('wizards.presentationPolicy.claimsConfigurationStep.alerts.addClaim')}
             </Alert>
           )}
 
@@ -252,7 +254,7 @@ const ClaimsConfigurationStep = ({ policyConfig, onConfigChange }) => {
               <CardContent>
                 <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
                   <Typography variant="subtitle2" color="primary">
-                    Claim {index + 1}
+                    {t('wizards.presentationPolicy.claimsConfigurationStep.labels.claim', { index: index + 1 })}
                   </Typography>
                   <IconButton
                     size="small"
@@ -274,9 +276,9 @@ const ClaimsConfigurationStep = ({ policyConfig, onConfigChange }) => {
                   renderInput={(params) => (
                     <TextField
                       {...params}
-                      label="Claim Name"
+                      label={t('wizards.presentationPolicy.claimsConfigurationStep.fields.claimName')}
                       required
-                      helperText="The name of the claim to request"
+                      helperText={t('wizards.presentationPolicy.claimsConfigurationStep.helpers.claimName')}
                       onChange={(e) => handleClaimChange(index, 'claim_name', e.target.value)}
                     />
                   )}
@@ -290,9 +292,9 @@ const ClaimsConfigurationStep = ({ policyConfig, onConfigChange }) => {
                   renderInput={(params) => (
                     <TextField
                       {...params}
-                      label="From Credential Type"
+                      label={t('wizards.presentationPolicy.claimsConfigurationStep.fields.fromCredentialType')}
                       required
-                      helperText="Which credential type contains this claim"
+                      helperText={t('wizards.presentationPolicy.claimsConfigurationStep.helpers.fromCredentialType')}
                     />
                   )}
                   sx={{ mb: 2 }}
@@ -307,7 +309,7 @@ const ClaimsConfigurationStep = ({ policyConfig, onConfigChange }) => {
                   }
                   label={
                     <Box sx={{ display: 'flex', alignItems: 'center' }}>
-                      <Typography variant="body2">Accept Predicate Proof</Typography>
+                      <Typography variant="body2">{t('wizards.presentationPolicy.claimsConfigurationStep.labels.acceptPredicateProof')}</Typography>
                       <IconButton size="small" sx={{ ml: 0.5 }}>
                         <InfoOutlinedIcon fontSize="small" />
                       </IconButton>
@@ -318,8 +320,7 @@ const ClaimsConfigurationStep = ({ policyConfig, onConfigChange }) => {
                 {claim.accept_predicate && (
                   <Alert severity="info" icon={<InfoOutlinedIcon />} sx={{ mt: 1 }}>
                     <Typography variant="caption">
-                      Privacy-enhanced: User can prove attributes without revealing actual values
-                      (e.g., prove &quot;age over 21&quot; without showing birth date)
+                      {t('wizards.presentationPolicy.claimsConfigurationStep.alerts.predicateInfo')}
                     </Typography>
                   </Alert>
                 )}
@@ -328,10 +329,10 @@ const ClaimsConfigurationStep = ({ policyConfig, onConfigChange }) => {
 
                 <TextField
                   fullWidth
-                  label="Required Value (Optional)"
+                  label={t('wizards.presentationPolicy.claimsConfigurationStep.fields.requiredValue')}
                   value={claim.required_value || ''}
                   onChange={(e) => handleClaimChange(index, 'required_value', e.target.value || null)}
-                  helperText="If specified, the claim must match this exact value"
+                  helperText={t('wizards.presentationPolicy.claimsConfigurationStep.helpers.requiredValue')}
                   size="small"
                 />
               </CardContent>
@@ -344,7 +345,7 @@ const ClaimsConfigurationStep = ({ policyConfig, onConfigChange }) => {
       <Card sx={{ mt: 3 }}>
         <CardContent>
           <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 600 }}>
-            Presentation Options
+            {t('wizards.presentationPolicy.claimsConfigurationStep.sections.presentationOptions')}
           </Typography>
 
           <FormControlLabel
@@ -354,10 +355,10 @@ const ClaimsConfigurationStep = ({ policyConfig, onConfigChange }) => {
                 onChange={(e) => handleFieldChange('prefer_predicates', e.target.checked)}
               />
             }
-            label="Prefer Predicate Proofs (Privacy-First)"
+            label={t('wizards.presentationPolicy.claimsConfigurationStep.labels.preferPredicateProofs')}
           />
           <Typography variant="caption" color="text.secondary" display="block" sx={{ ml: 4, mb: 2 }}>
-            When enabled, predicates are preferred over raw values whenever possible
+            {t('wizards.presentationPolicy.claimsConfigurationStep.captions.preferPredicates')}
           </Typography>
 
           <FormControlLabel
@@ -367,10 +368,10 @@ const ClaimsConfigurationStep = ({ policyConfig, onConfigChange }) => {
                 onChange={(e) => handleFieldChange('single_presentation', e.target.checked)}
               />
             }
-            label="Require Single Presentation"
+            label={t('wizards.presentationPolicy.claimsConfigurationStep.labels.singlePresentation')}
           />
           <Typography variant="caption" color="text.secondary" display="block" sx={{ ml: 4 }}>
-            All claims must come from a single credential (more restrictive)
+            {t('wizards.presentationPolicy.claimsConfigurationStep.captions.singlePresentation')}
           </Typography>
         </CardContent>
       </Card>

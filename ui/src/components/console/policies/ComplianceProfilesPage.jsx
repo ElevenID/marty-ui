@@ -23,21 +23,23 @@ import {
 import EditIcon from '@mui/icons-material/Edit';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import { Link } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 
 import { ResourcePage } from '../../common';
 
-const POLICIES_TABS = [
-  { label: 'Presentation Policies', path: '/console/policies/presentation' },
-  { label: 'Compliance Profiles', path: '/console/policies/compliance' },
-];
-
-const BREADCRUMBS = [
-  { label: 'Console', path: '/console' },
-  { label: 'Policies', path: '/console/policies' },
-  { label: 'Compliance Profiles', path: '/console/policies/compliance' },
-];
-
 function ComplianceProfilesPage() {
+  const { t } = useTranslation('console');
+
+  const getPoliciesTabs = () => [
+    { label: t('policies.presentationPolicies'), path: '/console/policies/presentation' },
+    { label: t('policies.complianceProfiles'), path: '/console/policies/compliance' },
+  ];
+
+  const getBreadcrumbs = () => [
+    { label: t('complianceProfilesPage.breadcrumbs.console'), path: '/console' },
+    { label: t('complianceProfilesPage.breadcrumbs.policies'), path: '/console/policies' },
+    { label: t('complianceProfilesPage.breadcrumbs.complianceProfiles'), path: '/console/policies/compliance' },
+  ];
   const [profiles, setProfiles] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -80,7 +82,7 @@ function ComplianceProfilesPage() {
           },
         ]);
       } catch (err) {
-        setError('Failed to load compliance profiles');
+        setError(t('complianceProfilesPage.failedToLoad'));
       } finally {
         setLoading(false);
       }
@@ -102,26 +104,18 @@ function ComplianceProfilesPage() {
   };
 
   const getStatusLabel = (status) => {
-    switch (status) {
-      case 'compliant':
-        return 'Compliant';
-      case 'review_needed':
-        return 'Review Needed';
-      case 'non_compliant':
-        return 'Non-Compliant';
-      default:
-        return status;
-    }
+    const statusKey = `complianceProfilesPage.statusLabels.${status}`;
+    return t(statusKey, { defaultValue: status });
   };
 
   return (
     <ResourcePage
-      title="Compliance Profiles"
-      description="Track regulatory compliance and configure business rules for credential operations."
-      resourceName="Compliance Profile"
+      title={t('complianceProfilesPage.title')}
+      description={t('complianceProfilesPage.description')}
+      resourceName={t('complianceProfilesPage.resourceName')}
       buildPath="/console/policies/compliance/new"
-      tabs={POLICIES_TABS}
-      breadcrumbs={BREADCRUMBS}
+      tabs={getPoliciesTabs()}
+      breadcrumbs={getBreadcrumbs()}
     >
       {error && (
         <Alert severity="error" sx={{ mb: 3 }}>
@@ -136,13 +130,13 @@ function ComplianceProfilesPage() {
           <Table>
             <TableHead>
               <TableRow>
-                <TableCell>Name</TableCell>
-                <TableCell>Regulation</TableCell>
-                <TableCell>Region</TableCell>
-                <TableCell>Requirements</TableCell>
-                <TableCell>Status</TableCell>
-                <TableCell>Last Updated</TableCell>
-                <TableCell align="right">Actions</TableCell>
+                <TableCell>{t('complianceProfilesPage.tableHeaders.name')}</TableCell>
+                <TableCell>{t('complianceProfilesPage.tableHeaders.regulation')}</TableCell>
+                <TableCell>{t('complianceProfilesPage.tableHeaders.region')}</TableCell>
+                <TableCell>{t('complianceProfilesPage.tableHeaders.requirements')}</TableCell>
+                <TableCell>{t('complianceProfilesPage.tableHeaders.status')}</TableCell>
+                <TableCell>{t('complianceProfilesPage.tableHeaders.lastUpdated')}</TableCell>
+                <TableCell align="right">{t('complianceProfilesPage.tableHeaders.actions')}</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
@@ -150,7 +144,7 @@ function ComplianceProfilesPage() {
                 <TableRow>
                   <TableCell colSpan={7} align="center">
                     <Typography color="text.secondary" sx={{ py: 4 }}>
-                      No compliance profiles configured.
+                      {t('complianceProfilesPage.emptyState')}
                     </Typography>
                   </TableCell>
                 </TableRow>
@@ -182,7 +176,7 @@ function ComplianceProfilesPage() {
                       {new Date(profile.updatedAt).toLocaleDateString()}
                     </TableCell>
                     <TableCell align="right">
-                      <Tooltip title="View Details">
+                      <Tooltip title={t('complianceProfilesPage.actions.viewDetails')}>
                         <IconButton
                           component={Link}
                           to={`/console/policies/compliance/${profile.id}`}
@@ -191,7 +185,7 @@ function ComplianceProfilesPage() {
                           <VisibilityIcon fontSize="small" />
                         </IconButton>
                       </Tooltip>
-                      <Tooltip title="Edit">
+                      <Tooltip title={t('complianceProfilesPage.actions.edit')}>
                         <IconButton
                           component={Link}
                           to={`/console/policies/compliance/${profile.id}/edit`}

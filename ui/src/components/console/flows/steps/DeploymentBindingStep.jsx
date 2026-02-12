@@ -23,11 +23,13 @@ import {
 } from '@mui/material';
 import DeployIcon from '@mui/icons-material/RocketLaunch';
 import ApiIcon from '@mui/icons-material/Api';
+import { useTranslation } from 'react-i18next';
 
 import { listDeploymentProfiles } from '../../../../services/deploymentProfilesApi';
 import { listPresentationPolicies } from '../../../../services/presentationPolicyApi';
 
 const DeploymentBindingStep = ({ selectedDeployment, defaultPolicyId, onUpdate }) => {
+  const { t } = useTranslation('console');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [deploymentProfiles, setDeploymentProfiles] = useState([]);
@@ -47,11 +49,11 @@ const DeploymentBindingStep = ({ selectedDeployment, defaultPolicyId, onUpdate }
       setPolicies(policiesResponse.data || policiesResponse || []);
     } catch (err) {
       console.error('Failed to fetch data:', err);
-      setError('Failed to load deployment profiles and policies');
+      setError(t('wizards.flowDefinition.deploymentBindingStep.errors.failedToLoad'));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     fetchData();
@@ -76,12 +78,11 @@ const DeploymentBindingStep = ({ selectedDeployment, defaultPolicyId, onUpdate }
   return (
     <Box>
       <Typography variant="h6" gutterBottom>
-        Bind to Deployment
+        {t('wizards.flowDefinition.deploymentBindingStep.title')}
       </Typography>
       
       <Typography color="text.secondary" paragraph>
-        Optionally bind this flow to a deployment profile and set a default presentation policy.
-        This step can be skipped and configured later.
+        {t('wizards.flowDefinition.deploymentBindingStep.description')}
       </Typography>
 
       {error && (
@@ -95,17 +96,17 @@ const DeploymentBindingStep = ({ selectedDeployment, defaultPolicyId, onUpdate }
         <CardContent>
           <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 600 }}>
             <DeployIcon sx={{ verticalAlign: 'middle', mr: 1 }} />
-            Deployment Profile
+            {t('wizards.flowDefinition.deploymentBindingStep.sections.deploymentProfile')}
           </Typography>
 
           {deploymentProfiles.length === 0 ? (
             <Alert severity="info">
-              No deployment profiles available. You can create one later and bind it to this flow.
+              {t('wizards.flowDefinition.deploymentBindingStep.deployment.empty')}
             </Alert>
           ) : (
             <>
               <Typography variant="body2" color="text.secondary" paragraph>
-                Select a deployment profile to bind this flow to a specific runtime environment
+                {t('wizards.flowDefinition.deploymentBindingStep.deployment.helper')}
               </Typography>
 
               <RadioGroup
@@ -118,7 +119,7 @@ const DeploymentBindingStep = ({ selectedDeployment, defaultPolicyId, onUpdate }
                 <FormControlLabel
                   value=""
                   control={<Radio />}
-                  label="None (bind later)"
+                  label={t('wizards.flowDefinition.deploymentBindingStep.deployment.none')}
                   sx={{ mb: 1 }}
                 />
                 
@@ -154,14 +155,14 @@ const DeploymentBindingStep = ({ selectedDeployment, defaultPolicyId, onUpdate }
                           </Typography>
                           <Box sx={{ mt: 0.5 }}>
                             <Chip
-                              label={profile.network_mode || 'ONLINE'}
+                              label={profile.network_mode || t('wizards.flowDefinition.deploymentBindingStep.deployment.onlineFallback')}
                               size="small"
                               variant="outlined"
                               sx={{ mr: 0.5 }}
                             />
                             {profile.is_active && (
                               <Chip
-                                label="Active"
+                                label={t('wizards.flowDefinition.deploymentBindingStep.deployment.activeChip')}
                                 size="small"
                                 color="success"
                                 variant="outlined"
@@ -184,35 +185,35 @@ const DeploymentBindingStep = ({ selectedDeployment, defaultPolicyId, onUpdate }
         <CardContent>
           <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 600 }}>
             <ApiIcon sx={{ verticalAlign: 'middle', mr: 1 }} />
-            Default Presentation Policy
+            {t('wizards.flowDefinition.deploymentBindingStep.sections.defaultPolicy')}
           </Typography>
 
           {policies.length === 0 ? (
             <Alert severity="info">
-              No presentation policies available. This is only required for verification flows.
+              {t('wizards.flowDefinition.deploymentBindingStep.policy.empty')}
             </Alert>
           ) : (
             <>
               <Typography variant="body2" color="text.secondary" paragraph>
-                Select a default presentation policy for verification steps in this flow
+                {t('wizards.flowDefinition.deploymentBindingStep.policy.helper')}
               </Typography>
 
               <FormControl fullWidth>
-                <InputLabel>Presentation Policy</InputLabel>
+                <InputLabel>{t('wizards.flowDefinition.deploymentBindingStep.policy.label')}</InputLabel>
                 <Select
                   value={defaultPolicyId || ''}
                   onChange={(e) => handleSelectPolicy(e.target.value)}
-                  label="Presentation Policy"
+                  label={t('wizards.flowDefinition.deploymentBindingStep.policy.label')}
                 >
                   <MenuItem value="">
-                    <em>None (configure later)</em>
+                    <em>{t('wizards.flowDefinition.deploymentBindingStep.policy.none')}</em>
                   </MenuItem>
                   {policies.map((policy) => (
                     <MenuItem key={policy.id} value={policy.id}>
                       {policy.name}
                       {policy.is_active && (
                         <Chip
-                          label="Active"
+                          label={t('wizards.flowDefinition.deploymentBindingStep.policy.activeChip')}
                           size="small"
                           color="success"
                           variant="outlined"

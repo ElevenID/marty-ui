@@ -23,17 +23,19 @@ import { useNavigate } from 'react-router-dom';
 import SecurityIcon from '@mui/icons-material/Security';
 import AddCircleOutlineIcon from '@mui/icons-material/AddCircleOutline';
 import VerifiedUserIcon from '@mui/icons-material/VerifiedUser';
+import { useTranslation } from 'react-i18next';
 
 import { listTrustProfiles } from '../../../../services/presentationPolicyApi';
 
 const FRAMEWORK_LABELS = {
-  icao: { label: 'ICAO', icon: '✈️', description: 'ICAO 9303 for eMRTD/ePassport' },
-  aamva: { label: 'AAMVA', icon: '🚗', description: 'ISO 18013-5 for mDL' },
-  eudi: { label: 'EUDI', icon: '🇪🇺', description: 'EU Digital Identity Wallet' },
-  custom: { label: 'Custom', icon: '🔧', description: 'Custom trust configuration' },
+  icao: { key: 'icao', icon: '✈️' },
+  aamva: { key: 'aamva', icon: '🚗' },
+  eudi: { key: 'eudi', icon: '🇪🇺' },
+  custom: { key: 'custom', icon: '🔧' },
 };
 
 const TrustProfileStep = ({ selectedTrustProfile, onSelectTrustProfile }) => {
+  const { t } = useTranslation('console');
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -53,11 +55,11 @@ const TrustProfileStep = ({ selectedTrustProfile, onSelectTrustProfile }) => {
       }
     } catch (err) {
       console.error('Failed to fetch trust profiles:', err);
-      setError('Failed to load trust profiles');
+      setError(t('wizards.presentationPolicy.trustProfileStep.errors.failedToLoadTrustProfiles'));
     } finally {
       setLoading(false);
     }
-  }, [selectedTrustProfile, onSelectTrustProfile]);
+  }, [selectedTrustProfile, onSelectTrustProfile, t]);
 
   useEffect(() => {
     fetchTrustProfiles();
@@ -86,19 +88,16 @@ const TrustProfileStep = ({ selectedTrustProfile, onSelectTrustProfile }) => {
         <SecurityIcon sx={{ fontSize: 80, color: 'warning.main', mb: 3 }} />
         
         <Typography variant="h5" gutterBottom>
-          Trust Profile Required
+          {t('wizards.presentationPolicy.trustProfileStep.blocked.title')}
         </Typography>
         
         <Typography color="text.secondary" paragraph sx={{ maxWidth: 600, mx: 'auto' }}>
-          Before creating a presentation policy, you need to configure at least one Trust Profile.
-          Trust Profiles define which credential issuers your organization trusts and the validation
-          rules for verifying credentials.
+          {t('wizards.presentationPolicy.trustProfileStep.blocked.description')}
         </Typography>
 
         <Alert severity="info" sx={{ maxWidth: 600, mx: 'auto', mb: 3 }}>
           <Typography variant="body2">
-            Trust Profiles determine which standards (ICAO, AAMVA, EUDI, etc.) and certificate
-            authorities are trusted for credential verification.
+            {t('wizards.presentationPolicy.trustProfileStep.blocked.info')}
           </Typography>
         </Alert>
 
@@ -109,7 +108,7 @@ const TrustProfileStep = ({ selectedTrustProfile, onSelectTrustProfile }) => {
           onClick={handleGoToTrustProfiles}
           sx={{ mt: 2 }}
         >
-          Create Trust Profile
+          {t('wizards.presentationPolicy.trustProfileStep.blocked.createButton')}
         </Button>
       </Box>
     );
@@ -119,12 +118,11 @@ const TrustProfileStep = ({ selectedTrustProfile, onSelectTrustProfile }) => {
   return (
     <Box>
       <Typography variant="h6" gutterBottom>
-        Select Trust Profile
+        {t('wizards.presentationPolicy.trustProfileStep.title')}
       </Typography>
       
       <Typography color="text.secondary" paragraph>
-        Choose which Trust Profile this presentation policy will use for credential validation.
-        The Trust Profile determines which issuers are trusted and what validation rules apply.
+        {t('wizards.presentationPolicy.trustProfileStep.description')}
       </Typography>
 
       {error && (
@@ -178,7 +176,7 @@ const TrustProfileStep = ({ selectedTrustProfile, onSelectTrustProfile }) => {
                       </Typography>
                       {profile.is_default && (
                         <Chip
-                          label="Default"
+                          label={t('wizards.presentationPolicy.trustProfileStep.defaultChip')}
                           size="small"
                           color="primary"
                           sx={{ ml: 1 }}
@@ -187,19 +185,19 @@ const TrustProfileStep = ({ selectedTrustProfile, onSelectTrustProfile }) => {
                     </Box>
 
                     <Typography variant="body2" color="text.secondary" paragraph>
-                      {profile.description || framework.description}
+                      {profile.description || t(`wizards.presentationPolicy.trustProfileStep.frameworkDescriptions.${framework.key}`)}
                     </Typography>
 
                     <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
                       <Chip
                         icon={<VerifiedUserIcon />}
-                        label={framework.label}
+                        label={t(`wizards.presentationPolicy.trustProfileStep.frameworkLabels.${framework.key}`)}
                         size="small"
                         variant="outlined"
                       />
                       {profile.revocation_settings?.check_revocation && (
                         <Chip
-                          label="Revocation Check"
+                          label={t('wizards.presentationPolicy.trustProfileStep.revocationCheckChip')}
                           size="small"
                           variant="outlined"
                           color="success"
@@ -228,7 +226,7 @@ const TrustProfileStep = ({ selectedTrustProfile, onSelectTrustProfile }) => {
           startIcon={<AddCircleOutlineIcon />}
           onClick={handleGoToTrustProfiles}
         >
-          Create New Trust Profile
+          {t('wizards.presentationPolicy.trustProfileStep.createNewButton')}
         </Button>
       </Box>
     </Box>

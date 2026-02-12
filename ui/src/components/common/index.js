@@ -11,3 +11,4 @@ export { default as NotificationDropdown } from './NotificationDropdown';
 export { default as ResourceCreateDrawer } from './ResourceCreateDrawer';
 export { default as PermissionTooltip } from './PermissionTooltip';
 export { default as PreviewModeBanner } from './PreviewModeBanner';
+export { default as LanguageSwitcher } from './LanguageSwitcher';

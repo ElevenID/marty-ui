@@ -11,6 +11,7 @@
 
 import { useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import {
   Box,
   Container,
@@ -36,12 +37,12 @@ import {
   ReviewStep,
 } from './steps';
 
-const STEPS = [
-  { label: 'Trust Profile', optional: false },
-  { label: 'Select Template', optional: false },
-  { label: 'Configure Claims', optional: false },
-  { label: 'Freshness & Binding', optional: true },
-  { label: 'Review', optional: false },
+const getSteps = (t) => [
+  { label: t('wizards.presentationPolicy.steps.trustProfile'), optional: false },
+  { label: t('wizards.presentationPolicy.steps.selectTemplate'), optional: false },
+  { label: t('wizards.presentationPolicy.steps.configureClaims'), optional: false },
+  { label: t('wizards.presentationPolicy.steps.freshnessBinding'), optional: true },
+  { label: t('wizards.presentationPolicy.steps.review'), optional: false },
 ];
 
 const INITIAL_DATA = {
@@ -68,6 +69,7 @@ const INITIAL_DATA = {
 
 const PresentationPolicyWizard = () => {
   const navigate = useNavigate();
+  const { t } = useTranslation('console');
   const [apiError, setApiError] = useState(null);
 
   // Validation function for each step
@@ -104,7 +106,7 @@ const PresentationPolicyWizard = () => {
   }, []);
 
   const wizard = useWizard({
-    steps: STEPS,
+    steps: getSteps(t),
     initialData: INITIAL_DATA,
     validateStep,
     onSubmit: handleSubmit,
@@ -180,7 +182,7 @@ const PresentationPolicyWizard = () => {
           />
         );
       default:
-        return <Typography>Unknown step</Typography>;
+        return <Typography>{t('wizards.presentationPolicy.unknownStep')}</Typography>;
     }
   };
 
@@ -191,13 +193,15 @@ const PresentationPolicyWizard = () => {
         <Paper elevation={3} sx={{ p: 4, textAlign: 'center' }}>
           <CheckCircleIcon color="success" sx={{ fontSize: 64, mb: 2 }} />
           <Typography variant="h5" gutterBottom>
-            Presentation Policy Created Successfully!
+            {t('wizards.presentationPolicy.success.title')}
           </Typography>
           <Typography color="text.secondary" paragraph>
-            Your policy &quot;{wizard.data.policyConfig.name}&quot; is now ready to use.
+            {wizard.data.activateImmediately 
+              ? t('wizards.presentationPolicy.success.messageActive', { name: wizard.data.policyConfig.name })
+              : t('wizards.presentationPolicy.success.messageDraft', { name: wizard.data.policyConfig.name })}
           </Typography>
           <Typography variant="body2" color="text.secondary">
-            Redirecting to deployment profiles...
+            {t('wizards.presentationPolicy.success.redirecting')}
           </Typography>
         </Paper>
       </Container>
@@ -210,18 +214,18 @@ const PresentationPolicyWizard = () => {
         {/* Header */}
         <Box sx={{ mb: 4 }}>
           <Typography variant="h4" gutterBottom>
-            Create Presentation Policy
+            {t('wizards.presentationPolicy.title')}
           </Typography>
           <Typography color="text.secondary">
-            Define what credentials and claims are required for verification
+            {t('wizards.presentationPolicy.description')}
           </Typography>
         </Box>
 
         {/* Stepper */}
         <Stepper activeStep={wizard.activeStep} sx={{ mb: 4 }}>
-          {STEPS.map((step) => (
+          {getSteps(t).map((step) => (
             <Step key={step.label}>
-              <StepLabel optional={step.optional && <Typography variant="caption">Optional</Typography>}>
+              <StepLabel optional={step.optional && <Typography variant="caption">{t('wizards.common.optional')}</Typography>}>
                 {step.label}
               </StepLabel>
             </Step>
@@ -248,22 +252,22 @@ const PresentationPolicyWizard = () => {
             disabled={wizard.loading}
             data-testid={wizard.activeStep === 0 ? 'wizard.policy.cancel' : 'wizard.policy.back'}
           >
-            {wizard.activeStep === 0 ? 'Cancel' : 'Back'}
+            {wizard.activeStep === 0 ? t('wizards.presentationPolicy.buttons.cancel') : t('wizards.presentationPolicy.buttons.back')}
           </Button>
 
           <Box sx={{ display: 'flex', gap: 2 }}>
             {/* Skip button for optional steps */}
-            {STEPS[wizard.activeStep].optional && (
+            {getSteps(t)[wizard.activeStep].optional && (
               <Button
                 onClick={wizard.goNext}
                 disabled={wizard.loading}
                 data-testid="wizard.policy.skip"
               >
-                Skip
+                {t('wizards.presentationPolicy.buttons.skip')}
               </Button>
             )}
 
-            {wizard.activeStep === STEPS.length - 1 ? (
+            {wizard.activeStep === getSteps(t).length - 1 ? (
               <Button
                 variant="contained"
                 onClick={wizard.submit}
@@ -271,7 +275,7 @@ const PresentationPolicyWizard = () => {
                 startIcon={wizard.loading ? <CircularProgress size={20} /> : <CheckCircleIcon />}
                 data-testid="wizard.policy.submit"
               >
-                {wizard.loading ? 'Creating...' : 'Create Policy'}
+                {wizard.loading ? t('wizards.presentationPolicy.buttons.submitting') : t('wizards.presentationPolicy.buttons.submit')}
               </Button>
             ) : (
               <Button
@@ -281,7 +285,7 @@ const PresentationPolicyWizard = () => {
                 endIcon={<ArrowForwardIcon />}
                 data-testid="wizard.policy.next"
               >
-                Next
+                {t('wizards.presentationPolicy.buttons.next')}
               </Button>
             )}
           </Box>

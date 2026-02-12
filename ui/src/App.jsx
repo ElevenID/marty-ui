@@ -1,5 +1,6 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, Suspense } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
 import { AppBar, Toolbar, Typography, Container, Box, Button, Avatar, Chip, Tooltip, IconButton, Menu, MenuItem, ListItemIcon, ListItemText, Divider } from '@mui/material';
@@ -113,7 +114,7 @@ import {
   ApplicantSettingsPage,
   DeviceManagementPage,
 } from './components/console';
-import { NotificationBell } from './components/common';
+import { NotificationBell, LanguageSwitcher } from './components/common';
 import ImpersonationBanner from './components/ImpersonationBanner';
 
 // Preview Components
@@ -142,6 +143,7 @@ function createDynamicTheme(branding) {
 }
 
 function AppContent() {
+  const { t } = useTranslation('common');
   const { isAuthenticated, isAdministrator, isApplicant, isVendor, organizationName, user, login, logout } = useAuth();
   const { branding } = useBranding();
 
@@ -161,15 +163,14 @@ function AppContent() {
   const theme = useMemo(() => createDynamicTheme(branding), [branding]);
 
   const getUserDisplayName = () => {
-    if (!user) return '';
-    return user.name || user.email || 'User';
+    if (!user) return '';t('common.user');
   };
 
   const getUserTypeLabel = () => {
-    if (isAdministrator) return 'Administrator';
-    if (isVendor) return 'Vendor';
-    if (isApplicant) return 'Applicant';
-    return 'User';
+    if (isAdministrator) return t('userTypes.administrator');
+    if (isVendor) return t('userTypes.vendor');
+    if (isApplicant) return t('userTypes.applicant');
+    return t('userTypes.user');
   };
 
   const getUserTypeIcon = () => {
@@ -191,13 +192,16 @@ function AppContent() {
             {branding.appName}
           </Typography>
           
+          {/* Language Switcher */}
+          <LanguageSwitcher variant="standard" sx={{ mr: 2 }} />
+          
           {/* User Info & Auth Actions */}
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
             {isAuthenticated ? (
               <>
                 {/* Organization Badge (for vendors) */}
                 {isVendor && organizationName && (
-                  <Tooltip title="Your Organization">
+                  <Tooltip title={t('common.yourOrganization')}>
                     <Chip
                       icon={<BusinessIcon />}
                       label={organizationName}
@@ -234,7 +238,7 @@ function AppContent() {
                 {/* Settings Menu (Vendor only) */}
                 {isVendor && (
                   <>
-                    <Tooltip title="Settings">
+                    <Tooltip title={t('common.settings')}>
                       <IconButton
                         onClick={handleSettingsClick}
                         size="small"
@@ -262,23 +266,23 @@ function AppContent() {
                         <ListItemIcon>
                           <BusinessIcon fontSize="small" />
                         </ListItemIcon>
-                        <ListItemText>Organization Profile</ListItemText>
+                        <ListItemText>{t('common.organizationProfile')}</ListItemText>
                       </MenuItem>
                       <MenuItem component="a" href="/console/org/notifications" onClick={handleSettingsClose}>
                         <ListItemIcon>
                           <NotificationsIcon fontSize="small" />
                         </ListItemIcon>
-                        <ListItemText>Notifications</ListItemText>
+                        <ListItemText>{t('common.notifications')}</ListItemText>
                       </MenuItem>
                       <MenuItem disabled>
                         <ListItemIcon>
                           <PaymentIcon fontSize="small" />
                         </ListItemIcon>
-                        <ListItemText>Billing & Subscription</ListItemText>
+                        <ListItemText>{t('common.billingSubscription')}</ListItemText>
                       </MenuItem>
                       <Divider />
                       <MenuItem disabled>
-                        <ListItemText sx={{ color: 'error.main' }}>Delete Organization</ListItemText>
+                        <ListItemText sx={{ color: 'error.main' }}>{t('common.deleteOrganization')}</ListItemText>
                       </MenuItem>
                     </Menu>
                   </>
@@ -293,7 +297,7 @@ function AppContent() {
                   sx={{ borderColor: 'white', color: 'white', '&:hover': { borderColor: 'white', bgcolor: 'rgba(255, 255, 255, 0.1)' } }}
                   data-testid="logout-button"
                 >
-                  Logout
+                  {t('common.logout')}
                 </Button>
               </>
             ) : (
@@ -306,7 +310,7 @@ function AppContent() {
                 sx={{ bgcolor: 'white', color: 'primary.main', '&:hover': { bgcolor: 'rgba(255, 255, 255, 0.9)' } }}
                 data-testid="login-button"
               >
-                Login
+                {t('common.login')}
               </Button>
             )}
           </Box>
@@ -643,19 +647,25 @@ function App() {
   console.log('[DEBUG] App component rendering');
   return (
     <ErrorBoundary>
-      <BrandingProvider>
-        <NotificationProvider>
-          <TrustProvider>
-            <PaymentProvider>
-              <Router>
-                <AuthProvider>
-                  <AppContent />
-                </AuthProvider>
-              </Router>
-            </PaymentProvider>
-          </TrustProvider>
-        </NotificationProvider>
-      </BrandingProvider>
+      <Suspense fallback={
+        <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
+          <Typography>Loading...</Typography>
+        </Box>
+      }>
+        <BrandingProvider>
+          <NotificationProvider>
+            <TrustProvider>
+              <PaymentProvider>
+                <Router>
+                  <AuthProvider>
+                    <AppContent />
+                  </AuthProvider>
+                </Router>
+              </PaymentProvider>
+            </TrustProvider>
+          </NotificationProvider>
+        </BrandingProvider>
+      </Suspense>
     </ErrorBoundary>
   );
 }

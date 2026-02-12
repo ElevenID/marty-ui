@@ -1,6 +1,7 @@
 import ResourceCreateDrawer from '../../common/ResourceCreateDrawer';
 import { createPresentationPolicy } from '../../../services/presentationPolicyApi';
 import { useNotifications } from '../../../hooks/useNotifications';
+import { useTranslation } from 'react-i18next';
 
 /**
  * CreatePolicyDrawer - Quick presentation policy creation drawer
@@ -9,33 +10,34 @@ import { useNotifications } from '../../../hooks/useNotifications';
  * Links to the full PresentationPolicyWizard for advanced configuration.
  */
 function CreatePolicyDrawer({ open, onClose, onSuccess }) {
+  const { t } = useTranslation('console');
   const { showNotification } = useNotifications();
 
   const fields = [
     {
       name: 'name',
-      label: 'Policy Name',
+      label: t('createPolicyDrawer.policyName'),
       type: 'text',
       required: true,
-      placeholder: 'e.g., "Age Verification"',
-      helperText: 'A descriptive name for this policy',
+      placeholder: t('createPolicyDrawer.policyNamePlaceholder'),
+      helperText: t('createPolicyDrawer.policyNameHelper'),
     },
     {
       name: 'description',
-      label: 'Description',
+      label: t('createPolicyDrawer.description'),
       type: 'textarea',
       required: false,
-      placeholder: 'Describe what this policy verifies...',
-      helperText: 'Optional description for documentation',
+      placeholder: t('createPolicyDrawer.descriptionPlaceholder'),
+      helperText: t('createPolicyDrawer.descriptionHelper'),
       rows: 3,
     },
     {
       name: 'required_credentials',
-      label: 'Required Credentials',
+      label: t('createPolicyDrawer.requiredCredentials'),
       type: 'text',
       required: false,
-      placeholder: 'e.g., "DriverLicense,GovernmentID"',
-      helperText: 'Comma-separated list of credential types',
+      placeholder: t('createPolicyDrawer.requiredCredentialsPlaceholder'),
+      helperText: t('createPolicyDrawer.requiredCredentialsHelper'),
     },
   ];
 
@@ -57,7 +59,7 @@ function CreatePolicyDrawer({ open, onClose, onSuccess }) {
     const result = await createPresentationPolicy(payload);
 
     showNotification({
-      message: `Policy "${formData.name}" created successfully`,
+      message: t('createPolicyDrawer.successMessage', { name: formData.name }),
       severity: 'success',
     });
 
@@ -71,7 +73,7 @@ function CreatePolicyDrawer({ open, onClose, onSuccess }) {
       open={open}
       onClose={onClose}
       onSubmit={handleSubmit}
-      title="Create Presentation Policy"
+      title={t('createPolicyDrawer.title')}
       resourceType="policy"
       advancedPath="/console/policies/new"
       fields={fields}

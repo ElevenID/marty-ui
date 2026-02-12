@@ -1,6 +1,7 @@
 import ResourceCreateDrawer from '../../common/ResourceCreateDrawer';
 import { createTrustProfile } from '../../../services/presentationPolicyApi';
 import { useNotifications } from '../../../hooks/useNotifications';
+import { useTranslation } from 'react-i18next';
 
 /**
  * CreateTrustProfileDrawer - Quick trust profile creation drawer
@@ -9,33 +10,34 @@ import { useNotifications } from '../../../hooks/useNotifications';
  * Links to the full TrustProfileWizard for advanced configuration.
  */
 function CreateTrustProfileDrawer({ open, onClose, onSuccess }) {
+  const { t } = useTranslation('console');
   const { showNotification } = useNotifications();
 
   const fields = [
     {
       name: 'name',
-      label: 'Profile Name',
+      label: t('trust.createTrustProfileDrawer.profileName'),
       type: 'text',
       required: true,
-      placeholder: 'e.g., "Government ID Verification"',
-      helperText: 'A descriptive name for this trust profile',
+      placeholder: t('trust.createTrustProfileDrawer.profileNamePlaceholder'),
+      helperText: t('trust.createTrustProfileDrawer.profileNameHelper'),
     },
     {
       name: 'description',
-      label: 'Description',
+      label: t('trust.createTrustProfileDrawer.description'),
       type: 'textarea',
       required: false,
-      placeholder: 'Describe the purpose of this trust profile...',
-      helperText: 'Optional description for documentation',
+      placeholder: t('trust.createTrustProfileDrawer.descriptionPlaceholder'),
+      helperText: t('trust.createTrustProfileDrawer.descriptionHelper'),
       rows: 3,
     },
     {
       name: 'required_credential_types',
-      label: 'Required Credential Types',
+      label: t('trust.createTrustProfileDrawer.requiredCredentialTypes'),
       type: 'text',
       required: false,
-      placeholder: 'e.g., "VerifiableCredential,GovernmentIDCredential"',
-      helperText: 'Comma-separated list of required credential types',
+      placeholder: t('trust.createTrustProfileDrawer.requiredCredentialTypesPlaceholder'),
+      helperText: t('trust.createTrustProfileDrawer.requiredCredentialTypesHelper'),
     },
   ];
 
@@ -58,7 +60,7 @@ function CreateTrustProfileDrawer({ open, onClose, onSuccess }) {
     const result = await createTrustProfile(payload);
 
     showNotification({
-      message: `Trust profile "${formData.name}" created successfully`,
+      message: t('trust.createTrustProfileDrawer.successMessage', { name: formData.name }),
       severity: 'success',
     });
 
@@ -72,7 +74,7 @@ function CreateTrustProfileDrawer({ open, onClose, onSuccess }) {
       open={open}
       onClose={onClose}
       onSubmit={handleSubmit}
-      title="Create Trust Profile"
+      title={t('trust.createTrustProfileDrawer.title')}
       resourceType="trust-profile"
       advancedPath="/console/trust/new"
       fields={fields}

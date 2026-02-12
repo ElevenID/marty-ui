@@ -27,12 +27,19 @@ import {
   DialogContent,
   DialogActions,
 } from '@mui/material';
+import { useTranslation } from 'react-i18next';
 
 import { getMyApplications } from '../../../services/applicantApi';
 
-const APPLICATION_STEPS = ['Submitted', 'Under Review', 'Verification', 'Approved'];
-
 function MyApplicationsPage() {
+  const { t } = useTranslation('applicant');
+  
+  const APPLICATION_STEPS = [
+    t('applications.steps.submitted'),
+    t('applications.steps.underReview'),
+    t('applications.steps.verification'),
+    t('applications.steps.approved'),
+  ];
   const [applications, setApplications] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -64,13 +71,13 @@ function MyApplicationsPage() {
         setApplications(apps);
       } catch (err) {
         console.error('Error loading applications:', err);
-        setError('Failed to load applications');
+        setError(t('applications.errorLoading'));
       } finally {
         setLoading(false);
       }
     };
     loadApplications();
-  }, []);
+  }, [t]);
 
   const getStatusColor = (status) => {
     switch (status) {
@@ -90,13 +97,13 @@ function MyApplicationsPage() {
   const getStatusLabel = (status) => {
     switch (status) {
       case 'under_review':
-        return 'Under Review';
+        return t('applications.status.underReview');
       case 'approved':
-        return 'Approved';
+        return t('applications.status.approved');
       case 'rejected':
-        return 'Rejected';
+        return t('applications.status.rejected');
       case 'submitted':
-        return 'Submitted';
+        return t('applications.status.submitted');
       default:
         return status;
     }
@@ -105,10 +112,10 @@ function MyApplicationsPage() {
   return (
     <Box>
       <Typography variant="h4" gutterBottom>
-        My Applications
+        {t('applications.title')}
       </Typography>
       <Typography variant="body1" color="text.secondary" paragraph>
-        Track the status of your credential applications.
+        {t('applications.description')}
       </Typography>
 
       {error && (
@@ -124,11 +131,11 @@ function MyApplicationsPage() {
           <Table>
             <TableHead>
               <TableRow>
-                <TableCell>Credential Type</TableCell>
-                <TableCell>Submitted</TableCell>
-                <TableCell>Progress</TableCell>
-                <TableCell>Status</TableCell>
-                <TableCell align="right">Actions</TableCell>
+                <TableCell>{t('applications.tableHeaders.credentialType')}</TableCell>
+                <TableCell>{t('applications.tableHeaders.submitted')}</TableCell>
+                <TableCell>{t('applications.tableHeaders.progress')}</TableCell>
+                <TableCell>{t('applications.tableHeaders.status')}</TableCell>
+                <TableCell align="right">{t('applications.tableHeaders.actions')}</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
@@ -136,10 +143,10 @@ function MyApplicationsPage() {
                 <TableRow>
                   <TableCell colSpan={5} align="center">
                     <Typography color="text.secondary" sx={{ py: 4 }}>
-                      No applications yet.
+                      {t('applications.empty.message')}
                     </Typography>
                     <Button variant="contained" href="/credentials">
-                      Apply for a Credential
+                      {t('applications.empty.applyButton')}
                     </Button>
                   </TableCell>
                 </TableRow>
@@ -170,7 +177,7 @@ function MyApplicationsPage() {
                     </TableCell>
                     <TableCell align="right">
                       <Button size="small" onClick={() => setSelectedApp(app)}>
-                        View Details
+                        {t('applications.actions.viewDetails')}
                       </Button>
                     </TableCell>
                   </TableRow>
@@ -188,24 +195,24 @@ function MyApplicationsPage() {
         maxWidth="sm"
         fullWidth
       >
-        <DialogTitle>Application Details</DialogTitle>
+        <DialogTitle>{t('applications.detailsDialog.title')}</DialogTitle>
         <DialogContent>
           {selectedApp && (
             <Box sx={{ pt: 1 }}>
               <Typography variant="subtitle2" color="text.secondary">
-                Credential Type
+                {t('applications.detailsDialog.credentialType')}
               </Typography>
               <Typography paragraph>{selectedApp.credentialType}</Typography>
 
               <Typography variant="subtitle2" color="text.secondary">
-                Submitted
+                {t('applications.detailsDialog.submitted')}
               </Typography>
               <Typography paragraph>
                 {new Date(selectedApp.submittedAt).toLocaleString()}
               </Typography>
 
               <Typography variant="subtitle2" color="text.secondary">
-                Status
+                {t('applications.detailsDialog.status')}
               </Typography>
               <Chip
                 label={getStatusLabel(selectedApp.status)}
@@ -216,7 +223,7 @@ function MyApplicationsPage() {
               {selectedApp.estimatedCompletion && (
                 <>
                   <Typography variant="subtitle2" color="text.secondary" sx={{ mt: 2 }}>
-                    Estimated Completion
+                    {t('applications.detailsDialog.estimatedCompletion')}
                   </Typography>
                   <Typography>{selectedApp.estimatedCompletion}</Typography>
                 </>
@@ -225,7 +232,7 @@ function MyApplicationsPage() {
           )}
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setSelectedApp(null)}>Close</Button>
+          <Button onClick={() => setSelectedApp(null)}>{t('applications.detailsDialog.close')}</Button>
         </DialogActions>
       </Dialog>
     </Box>

@@ -21,6 +21,7 @@ import {
   CircularProgress,
 } from '@mui/material';
 import SaveIcon from '@mui/icons-material/Save';
+import { useTranslation } from 'react-i18next';
 
 import { useAuth } from '../../../hooks/useAuth';
 import {
@@ -37,6 +38,7 @@ import {
  * Organization Defaults Section Component
  */
 export function OrgDefaultsSection() {
+  const { t } = useTranslation('console');
   const { organizationId } = useAuth();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -80,7 +82,7 @@ export function OrgDefaultsSection() {
         setTemplates(Array.isArray(templatesData) ? templatesData : templatesData?.items || []);
       } catch (err) {
         console.error('Failed to load org defaults:', err);
-        setError('Failed to load organization defaults');
+        setError(t('org.defaultsSection.messages.loadFailed'));
       } finally {
         setLoading(false);
       }
@@ -100,7 +102,7 @@ export function OrgDefaultsSection() {
       setTimeout(() => setSuccess(false), 3000);
     } catch (err) {
       console.error('Failed to save org defaults:', err);
-      setError('Failed to save organization defaults');
+      setError(t('org.defaultsSection.messages.saveFailed'));
     } finally {
       setSaving(false);
     }
@@ -124,10 +126,10 @@ export function OrgDefaultsSection() {
   return (
     <Paper sx={{ p: 3, mb: 3 }}>
       <Typography variant="h6" gutterBottom>
-        Organization Defaults
+        {t('org.defaultsSection.title')}
       </Typography>
       <Typography variant="body2" color="text.secondary" paragraph>
-        Set default resources that will be automatically selected when creating new flows and configurations.
+        {t('org.defaultsSection.description')}
       </Typography>
 
       {error && (
@@ -138,21 +140,21 @@ export function OrgDefaultsSection() {
 
       {success && (
         <Alert severity="success" sx={{ mb: 2 }}>
-          Organization defaults saved successfully
+          {t('org.defaultsSection.messages.saveSuccess')}
         </Alert>
       )}
 
       <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
         {/* Default Trust Profile */}
         <FormControl fullWidth>
-          <InputLabel>Default Trust Profile</InputLabel>
+          <InputLabel>{t('org.defaultsSection.fields.defaultTrustProfile')}</InputLabel>
           <Select
             value={defaults.default_trust_profile_id}
             onChange={(e) => handleChange('default_trust_profile_id', e.target.value)}
-            label="Default Trust Profile"
+            label={t('org.defaultsSection.fields.defaultTrustProfile')}
           >
             <MenuItem value="">
-              <em>None (manual selection required)</em>
+              <em>{t('org.defaultsSection.values.noneManualSelection')}</em>
             </MenuItem>
             {trustProfiles.map((profile) => (
               <MenuItem key={profile.id} value={profile.id}>
@@ -164,14 +166,14 @@ export function OrgDefaultsSection() {
 
         {/* Default Presentation Policy */}
         <FormControl fullWidth>
-          <InputLabel>Default Presentation Policy</InputLabel>
+          <InputLabel>{t('org.defaultsSection.fields.defaultPresentationPolicy')}</InputLabel>
           <Select
             value={defaults.default_policy_id}
             onChange={(e) => handleChange('default_policy_id', e.target.value)}
-            label="Default Presentation Policy"
+            label={t('org.defaultsSection.fields.defaultPresentationPolicy')}
           >
             <MenuItem value="">
-              <em>None (manual selection required)</em>
+              <em>{t('org.defaultsSection.values.noneManualSelection')}</em>
             </MenuItem>
             {policies.map((policy) => (
               <MenuItem key={policy.id} value={policy.id}>
@@ -183,14 +185,14 @@ export function OrgDefaultsSection() {
 
         {/* Default Credential Template */}
         <FormControl fullWidth>
-          <InputLabel>Default Credential Template</InputLabel>
+          <InputLabel>{t('org.defaultsSection.fields.defaultCredentialTemplate')}</InputLabel>
           <Select
             value={defaults.default_template_id}
             onChange={(e) => handleChange('default_template_id', e.target.value)}
-            label="Default Credential Template"
+            label={t('org.defaultsSection.fields.defaultCredentialTemplate')}
           >
             <MenuItem value="">
-              <em>None (manual selection required)</em>
+              <em>{t('org.defaultsSection.values.noneManualSelection')}</em>
             </MenuItem>
             {templates.map((template) => (
               <MenuItem key={template.id} value={template.id}>
@@ -208,7 +210,7 @@ export function OrgDefaultsSection() {
             onClick={handleSave}
             disabled={saving}
           >
-            {saving ? 'Saving...' : 'Save Defaults'}
+            {saving ? t('org.defaultsSection.actions.saving') : t('org.defaultsSection.actions.save')}
           </Button>
         </Box>
       </Box>

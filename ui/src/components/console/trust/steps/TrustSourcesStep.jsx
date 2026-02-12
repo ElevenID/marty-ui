@@ -21,8 +21,10 @@ import {
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
 import InfoIcon from '@mui/icons-material/Info';
+import { useTranslation } from 'react-i18next';
 
 const TrustSourcesStep = ({ data, onChange }) => {
+  const { t } = useTranslation('console');
   const [newIssuerDid, setNewIssuerDid] = useState('');
 
   const handleAddIssuer = () => {
@@ -62,27 +64,33 @@ const TrustSourcesStep = ({ data, onChange }) => {
     <Box>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
         <Typography variant="h6">
-          Trust Sources
+          {t('wizards.trustProfile.trustSourcesStep.title')}
         </Typography>
-        <Chip label="Optional" size="small" color="default" variant="outlined" />
+        <Chip
+          label={t('wizards.trustProfile.trustSourcesStep.optionalChip')}
+          size="small"
+          color="default"
+          variant="outlined"
+        />
       </Box>
       <Typography color="text.secondary" paragraph>
-        Define which credential issuers your organization trusts. You can skip this step and configure trust sources later.
+        {t('wizards.trustProfile.trustSourcesStep.description')}
       </Typography>
 
       <Alert severity="info" sx={{ mb: 3 }} icon={<InfoIcon />}>
         <Typography variant="body2" gutterBottom>
-          Trust sources can include DIDs (Decentralized Identifiers), certificate authorities, or known issuer endpoints.
+          {t('wizards.trustProfile.trustSourcesStep.infoAlert.body')}
         </Typography>
         <Typography variant="caption" color="text.secondary">
-          <strong>Skipping this step?</strong> Your profile will accept credentials from any issuer. You can add specific trust sources later to restrict which issuers are accepted.
+          <strong>{t('wizards.trustProfile.trustSourcesStep.infoAlert.skippingTitle')}</strong>{' '}
+          {t('wizards.trustProfile.trustSourcesStep.infoAlert.skippingDescription')}
         </Typography>
       </Alert>
 
       {/* Example DIDs */}
       <Box sx={{ mb: 3, p: 2, bgcolor: 'grey.50', borderRadius: 1, border: 1, borderColor: 'grey.200' }}>
         <Typography variant="caption" color="text.secondary" gutterBottom display="block">
-          Example DIDs:
+          {t('wizards.trustProfile.trustSourcesStep.examplesTitle')}
         </Typography>
         <Box sx={{ fontFamily: 'monospace', fontSize: '0.75rem', color: 'text.secondary' }}>
           <Box>• did:web:issuer.example.com</Box>
@@ -95,12 +103,12 @@ const TrustSourcesStep = ({ data, onChange }) => {
       <Box sx={{ display: 'flex', gap: 2, mb: 3 }}>
         <TextField
           fullWidth
-          label="Issuer DID"
-          placeholder="did:web:example.com or did:key:z6Mk..."
+          label={t('wizards.trustProfile.trustSourcesStep.issuerDid.label')}
+          placeholder={t('wizards.trustProfile.trustSourcesStep.issuerDid.placeholder')}
           value={newIssuerDid}
           onChange={(e) => setNewIssuerDid(e.target.value)}
           onKeyPress={handleKeyPress}
-          helperText="Enter a DID (Decentralized Identifier) for a trusted issuer"
+          helperText={t('wizards.trustProfile.trustSourcesStep.issuerDid.helper')}
         />
         <Button
           variant="contained"
@@ -109,7 +117,7 @@ const TrustSourcesStep = ({ data, onChange }) => {
           disabled={!newIssuerDid.trim()}
           sx={{ minWidth: 120 }}
         >
-          Add
+          {t('wizards.trustProfile.trustSourcesStep.addButton')}
         </Button>
       </Box>
 
@@ -117,7 +125,9 @@ const TrustSourcesStep = ({ data, onChange }) => {
       {data.trusted_issuers && data.trusted_issuers.length > 0 ? (
         <Box>
           <Typography variant="subtitle2" gutterBottom>
-            Trusted Issuers ({data.trusted_issuers.length})
+            {t('wizards.trustProfile.trustSourcesStep.trustedIssuersTitle', {
+              count: data.trusted_issuers.length,
+            })}
           </Typography>
           <List>
             {data.trusted_issuers.map((issuer, index) => (
@@ -167,7 +177,7 @@ const TrustSourcesStep = ({ data, onChange }) => {
           }}
         >
           <Typography color="text.secondary">
-            No trusted issuers configured yet. Add DIDs above or skip this step.
+            {t('wizards.trustProfile.trustSourcesStep.emptyState')}
           </Typography>
         </Box>
       )}
@@ -175,7 +185,8 @@ const TrustSourcesStep = ({ data, onChange }) => {
       {/* Future: Import from registry */}
       <Box sx={{ mt: 3, p: 2, bgcolor: 'action.hover', borderRadius: 1 }}>
         <Typography variant="body2" color="text.secondary">
-          <strong>Coming soon:</strong> Import trusted issuers from known registries (ICAO PKD, EU Trust Lists, etc.)
+          <strong>{t('wizards.trustProfile.trustSourcesStep.comingSoon.title')}</strong>{' '}
+          {t('wizards.trustProfile.trustSourcesStep.comingSoon.description')}
         </Typography>
       </Box>
     </Box>

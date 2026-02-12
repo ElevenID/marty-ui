@@ -27,20 +27,7 @@ import DeployIcon from '@mui/icons-material/RocketLaunch';
 import GppGoodIcon from '@mui/icons-material/GppGood';
 import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings';
 import VerifiedIcon from '@mui/icons-material/Verified';
-
-const FLOW_TYPE_LABELS = {
-  verification: 'Verification Flow',
-  issuance: 'Issuance Flow',
-  issuance_oid4vci: 'OID4VCI Issuance Flow',
-  combined: 'Combined Flow',
-};
-
-const PRECONDITION_LABELS = {
-  application_approved: 'Application Approved',
-  identity_verified: 'Identity Verified',
-  manual_admin_approval: 'Manual Admin Approval',
-  external_verification: 'External Verification Result',
-};
+import { useTranslation } from 'react-i18next';
 
 const PRECONDITION_ICONS = {
   application_approved: <CheckCircleIcon />,
@@ -50,6 +37,7 @@ const PRECONDITION_ICONS = {
 };
 
 const ReviewStep = ({ data, onEdit, onToggleActivation }) => {
+  const { t } = useTranslation('console');
   const { 
     flowType, 
     name, 
@@ -61,14 +49,28 @@ const ReviewStep = ({ data, onEdit, onToggleActivation }) => {
     activateImmediately 
   } = data;
 
+  const FLOW_TYPE_LABELS = {
+    verification: t('wizards.flowDefinition.reviewStep.flowTypeLabels.verification'),
+    issuance: t('wizards.flowDefinition.reviewStep.flowTypeLabels.issuance'),
+    issuance_oid4vci: t('wizards.flowDefinition.reviewStep.flowTypeLabels.issuance_oid4vci'),
+    combined: t('wizards.flowDefinition.reviewStep.flowTypeLabels.combined'),
+  };
+
+  const PRECONDITION_LABELS = {
+    application_approved: t('wizards.flowDefinition.preconditionsStep.types.application_approved.label'),
+    identity_verified: t('wizards.flowDefinition.preconditionsStep.types.identity_verified.label'),
+    manual_admin_approval: t('wizards.flowDefinition.preconditionsStep.types.manual_admin_approval.label'),
+    external_verification: t('wizards.flowDefinition.preconditionsStep.types.external_verification.label'),
+  };
+
   return (
     <Box>
       <Typography variant="h6" gutterBottom>
-        Review & Submit
+        {t('wizards.flowDefinition.reviewStep.title')}
       </Typography>
       
       <Typography color="text.secondary" paragraph>
-        Review all configuration details before creating the flow.
+        {t('wizards.flowDefinition.reviewStep.description')}
       </Typography>
 
       {/* Basic Information */}
@@ -77,17 +79,17 @@ const ReviewStep = ({ data, onEdit, onToggleActivation }) => {
           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
             <Typography variant="h6" sx={{ display: 'flex', alignItems: 'center' }}>
               <CheckCircleIcon sx={{ mr: 1 }} color="primary" />
-              Basic Information
+              {t('wizards.flowDefinition.reviewStep.sections.basicInfo')}
             </Typography>
             <Button size="small" startIcon={<EditIcon />} onClick={() => onEdit(1)}>
-              Edit
+              {t('wizards.flowDefinition.reviewStep.actions.edit')}
             </Button>
           </Box>
 
           <Grid container spacing={2}>
             <Grid item xs={12} sm={6}>
               <Typography variant="subtitle2" color="text.secondary">
-                Flow Type
+                {t('wizards.flowDefinition.reviewStep.fields.flowType')}
               </Typography>
               <Typography variant="body1" gutterBottom>
                 {FLOW_TYPE_LABELS[flowType] || flowType}
@@ -96,19 +98,19 @@ const ReviewStep = ({ data, onEdit, onToggleActivation }) => {
 
             <Grid item xs={12} sm={6}>
               <Typography variant="subtitle2" color="text.secondary">
-                Flow Name
+                {t('wizards.flowDefinition.reviewStep.fields.flowName')}
               </Typography>
               <Typography variant="body1" gutterBottom>
-                {name || <em>Not set</em>}
+                {name || <em>{t('wizards.flowDefinition.reviewStep.values.notSet')}</em>}
               </Typography>
             </Grid>
 
             <Grid item xs={12}>
               <Typography variant="subtitle2" color="text.secondary">
-                Description
+                {t('wizards.flowDefinition.reviewStep.fields.description')}
               </Typography>
               <Typography variant="body1">
-                {description || <em>Not set</em>}
+                {description || <em>{t('wizards.flowDefinition.reviewStep.values.notSet')}</em>}
               </Typography>
             </Grid>
           </Grid>
@@ -121,16 +123,16 @@ const ReviewStep = ({ data, onEdit, onToggleActivation }) => {
           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
             <Typography variant="h6" sx={{ display: 'flex', alignItems: 'center' }}>
               <AccountTreeIcon sx={{ mr: 1 }} color="primary" />
-              Flow Steps ({flowSteps.length})
+              {t('wizards.flowDefinition.reviewStep.sections.flowSteps', { count: flowSteps.length })}
             </Typography>
             <Button size="small" startIcon={<EditIcon />} onClick={() => onEdit(1)}>
-              Edit
+              {t('wizards.flowDefinition.reviewStep.actions.edit')}
             </Button>
           </Box>
 
           {flowSteps.length === 0 ? (
             <Typography variant="body2" color="text.secondary">
-              <em>No steps defined</em>
+              <em>{t('wizards.flowDefinition.reviewStep.values.noSteps')}</em>
             </Typography>
           ) : (
             <List dense>
@@ -145,7 +147,7 @@ const ReviewStep = ({ data, onEdit, onToggleActivation }) => {
                         </Typography>
                       </Box>
                     }
-                    secondary={`Type: ${step.type}`}
+                    secondary={t('wizards.flowDefinition.reviewStep.fields.stepType', { type: step.type })}
                   />
                 </ListItem>
               ))}
@@ -161,17 +163,17 @@ const ReviewStep = ({ data, onEdit, onToggleActivation }) => {
             <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
               <Typography variant="h6" sx={{ display: 'flex', alignItems: 'center' }}>
                 <CheckCircleIcon sx={{ mr: 1 }} color="primary" />
-                Preconditions ({preconditions.length})
+                {t('wizards.flowDefinition.reviewStep.sections.preconditions', { count: preconditions.length })}
               </Typography>
               <Button size="small" startIcon={<EditIcon />} onClick={() => onEdit(2)}>
-                Edit
+                {t('wizards.flowDefinition.reviewStep.actions.edit')}
               </Button>
             </Box>
 
             {preconditions.length === 0 ? (
               <Alert severity="warning">
                 <Typography variant="body2">
-                  No preconditions configured. The flow will require manual triggering.
+                  {t('wizards.flowDefinition.reviewStep.values.noPreconditions')}
                 </Typography>
               </Alert>
             ) : (
@@ -187,7 +189,10 @@ const ReviewStep = ({ data, onEdit, onToggleActivation }) => {
                           </Typography>
                         </Box>
                       }
-                      secondary={`Condition ${index + 1} of ${preconditions.length}`}
+                      secondary={t('wizards.flowDefinition.preconditionsStep.conditionCounter', {
+                        index: index + 1,
+                        total: preconditions.length,
+                      })}
                     />
                   </ListItem>
                 ))}
@@ -203,17 +208,17 @@ const ReviewStep = ({ data, onEdit, onToggleActivation }) => {
           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
             <Typography variant="h6" sx={{ display: 'flex', alignItems: 'center' }}>
               <DeployIcon sx={{ mr: 1 }} color="primary" />
-              Deployment Binding
+              {t('wizards.flowDefinition.reviewStep.sections.deploymentBinding')}
             </Typography>
             <Button size="small" startIcon={<EditIcon />} onClick={() => onEdit(3)}>
-              Edit
+              {t('wizards.flowDefinition.reviewStep.actions.edit')}
             </Button>
           </Box>
 
           <Grid container spacing={2}>
             <Grid item xs={12}>
               <Typography variant="subtitle2" color="text.secondary">
-                Deployment Profile
+                {t('wizards.flowDefinition.reviewStep.fields.deploymentProfile')}
               </Typography>
               <Typography variant="body1" gutterBottom>
                 {selectedDeployment ? (
@@ -221,7 +226,7 @@ const ReviewStep = ({ data, onEdit, onToggleActivation }) => {
                     {selectedDeployment.name}
                     {selectedDeployment.is_active && (
                       <Chip
-                        label="Active"
+                        label={t('wizards.flowDefinition.reviewStep.values.activeChip')}
                         size="small"
                         color="success"
                         variant="outlined"
@@ -230,20 +235,20 @@ const ReviewStep = ({ data, onEdit, onToggleActivation }) => {
                     )}
                   </>
                 ) : (
-                  <em>None (configure later)</em>
+                  <em>{t('wizards.flowDefinition.reviewStep.values.noneConfigureLater')}</em>
                 )}
               </Typography>
             </Grid>
 
             <Grid item xs={12}>
               <Typography variant="subtitle2" color="text.secondary">
-                Default Presentation Policy
+                {t('wizards.flowDefinition.reviewStep.fields.defaultPolicy')}
               </Typography>
               <Typography variant="body1">
                 {defaultPolicyId ? (
-                  `Policy ID: ${defaultPolicyId}`
+                  t('wizards.flowDefinition.reviewStep.fields.policyId', { id: defaultPolicyId })
                 ) : (
-                  <em>None (configure later)</em>
+                  <em>{t('wizards.flowDefinition.reviewStep.values.noneConfigureLater')}</em>
                 )}
               </Typography>
             </Grid>
@@ -255,7 +260,7 @@ const ReviewStep = ({ data, onEdit, onToggleActivation }) => {
       <Card>
         <CardContent>
           <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 600 }}>
-            Activation
+            {t('wizards.flowDefinition.reviewStep.sections.activation')}
           </Typography>
 
           <FormControlLabel
@@ -266,12 +271,12 @@ const ReviewStep = ({ data, onEdit, onToggleActivation }) => {
                 color="primary"
               />
             }
-            label="Activate immediately after creation"
+            label={t('wizards.flowDefinition.reviewStep.activation.label')}
           />
           <Typography variant="caption" color="text.secondary" display="block" sx={{ ml: 4 }}>
             {activateImmediately
-              ? 'Flow will be active and available for use immediately'
-              : 'Flow will be created but remain inactive until manually enabled'}
+              ? t('wizards.flowDefinition.reviewStep.activation.activeDescription')
+              : t('wizards.flowDefinition.reviewStep.activation.inactiveDescription')}
           </Typography>
         </CardContent>
       </Card>

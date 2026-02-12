@@ -34,21 +34,23 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import CancelIcon from '@mui/icons-material/Cancel';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import { Link } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 
 import { ResourcePage, EmptyState, EmptyStates, StatusChip } from '../../common';
 
-const OPERATE_TABS = [
-  { label: 'Issuance', path: '/console/operate/issuance' },
-  { label: 'Applications', path: '/console/operate/applications' },
+const getOperateTabs = (t) => [
+  { label: t('operate.tabs.issuance'), path: '/console/operate/issuance' },
+  { label: t('operate.tabs.applications'), path: '/console/operate/applications' },
 ];
 
-const BREADCRUMBS = [
-  { label: 'Console', path: '/console' },
-  { label: 'Operate', path: '/console/operate' },
-  { label: 'Applications', path: '/console/operate/applications' },
+const getBreadcrumbs = (t) => [
+  { label: t('operate.breadcrumbs.console'), path: '/console' },
+  { label: t('operate.breadcrumbs.operate'), path: '/console/operate' },
+  { label: t('operate.breadcrumbs.applications'), path: '/console/operate/applications' },
 ];
 
 function ApplicationsPage() {
+  const { t } = useTranslation('console');
   const [applications, setApplications] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -102,7 +104,7 @@ function ApplicationsPage() {
         },
       ]);
     } catch (err) {
-      setError('Failed to load applications');
+      setError(t('operate.applications.errorLoading'));
     } finally {
       setLoading(false);
     }
@@ -120,10 +122,10 @@ function ApplicationsPage() {
 
   return (
     <ResourcePage
-      title="Applications"
-      description="Review and process credential applications."
-      tabs={OPERATE_TABS}
-      breadcrumbs={BREADCRUMBS}
+      title={t('operate.applications.title')}
+      description={t('operate.applications.description')}
+      tabs={getOperateTabs(t)}
+      breadcrumbs={getBreadcrumbs(t)}
       actions={
         <Button
           variant="outlined"
@@ -131,7 +133,7 @@ function ApplicationsPage() {
           onClick={loadApplications}
           disabled={loading}
         >
-          Refresh
+          {t('operate.applications.refresh')}
         </Button>
       }
     >
@@ -144,7 +146,7 @@ function ApplicationsPage() {
       {/* Filters */}
       <Box sx={{ display: 'flex', gap: 2, mb: 3 }}>
         <TextField
-          placeholder="Search applications..."
+          placeholder={t('operate.applications.searchPlaceholder')}
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           size="small"
@@ -158,18 +160,18 @@ function ApplicationsPage() {
           }}
         />
         <FormControl size="small" sx={{ minWidth: 180 }}>
-          <InputLabel>Status</InputLabel>
+          <InputLabel>{t('operate.applications.filters.status')}</InputLabel>
           <Select
             value={statusFilter}
-            label="Status"
+            label={t('operate.applications.filters.status')}
             onChange={(e) => setStatusFilter(e.target.value)}
           >
-            <MenuItem value="all">All</MenuItem>
-            <MenuItem value="pending">Pending</MenuItem>
-            <MenuItem value="pending_review">Pending Review</MenuItem>
-            <MenuItem value="documents_pending">Documents Pending</MenuItem>
-            <MenuItem value="approved">Approved</MenuItem>
-            <MenuItem value="rejected">Rejected</MenuItem>
+            <MenuItem value="all">{t('operate.applications.filters.all')}</MenuItem>
+            <MenuItem value="pending">{t('operate.applications.filters.pending')}</MenuItem>
+            <MenuItem value="pending_review">{t('operate.applications.filters.pendingReview')}</MenuItem>
+            <MenuItem value="documents_pending">{t('operate.applications.filters.documentsPending')}</MenuItem>
+            <MenuItem value="approved">{t('operate.applications.filters.approved')}</MenuItem>
+            <MenuItem value="rejected">{t('operate.applications.filters.rejected')}</MenuItem>
           </Select>
         </FormControl>
       </Box>
@@ -183,14 +185,14 @@ function ApplicationsPage() {
           <Table>
             <TableHead>
               <TableRow>
-                <TableCell>Application ID</TableCell>
-                <TableCell>Applicant</TableCell>
-                <TableCell>Credential Type</TableCell>
-                <TableCell>Submitted</TableCell>
-                <TableCell>Documents</TableCell>
-                <TableCell>Verification</TableCell>
-                <TableCell>Status</TableCell>
-                <TableCell align="right">Actions</TableCell>
+                <TableCell>{t('operate.applications.tableHeaders.applicationId')}</TableCell>
+                <TableCell>{t('operate.applications.tableHeaders.applicant')}</TableCell>
+                <TableCell>{t('operate.applications.tableHeaders.credentialType')}</TableCell>
+                <TableCell>{t('operate.applications.tableHeaders.submitted')}</TableCell>
+                <TableCell>{t('operate.applications.tableHeaders.documents')}</TableCell>
+                <TableCell>{t('operate.applications.tableHeaders.verification')}</TableCell>
+                <TableCell>{t('operate.applications.tableHeaders.status')}</TableCell>
+                <TableCell align="right">{t('operate.applications.tableHeaders.actions')}</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
@@ -198,7 +200,7 @@ function ApplicationsPage() {
                 <TableRow>
                   <TableCell colSpan={8} align="center">
                     <Typography color="text.secondary" sx={{ py: 4 }}>
-                      No applications match your filters. Try adjusting your search.
+                      {t('operate.applications.noMatchingApplications')}
                     </Typography>
                   </TableCell>
                 </TableRow>
@@ -217,7 +219,7 @@ function ApplicationsPage() {
                     </TableCell>
                     <TableCell>
                       <Chip 
-                        label={app.documentsUploaded ? 'Uploaded' : 'Pending'} 
+                        label={app.documentsUploaded ? t('operate.applications.documents.uploaded') : t('operate.applications.documents.pending')} 
                         color={app.documentsUploaded ? 'success' : 'warning'}
                         size="small" 
                         variant="outlined"
@@ -225,10 +227,10 @@ function ApplicationsPage() {
                     </TableCell>
                     <TableCell>
                       {app.verificationPassed === null ? (
-                        <Chip label="N/A" size="small" variant="outlined" />
+                        <Chip label={t('operate.applications.verification.na')} size="small" variant="outlined" />
                       ) : (
                         <Chip 
-                          label={app.verificationPassed ? 'Passed' : 'Failed'} 
+                          label={app.verificationPassed ? t('operate.applications.verification.passed') : t('operate.applications.verification.failed')} 
                           color={app.verificationPassed ? 'success' : 'error'}
                           size="small" 
                           variant="outlined"
@@ -239,7 +241,7 @@ function ApplicationsPage() {
                       <StatusChip status={app.status} />
                     </TableCell>
                     <TableCell align="right">
-                      <Tooltip title="View Details">
+                      <Tooltip title={t('operate.applications.actions.viewDetails')}>
                         <IconButton
                           component={Link}
                           to={`/console/operate/applications/${app.id}`}
@@ -250,12 +252,12 @@ function ApplicationsPage() {
                       </Tooltip>
                       {app.status === 'pending_review' && (
                         <>
-                          <Tooltip title="Approve">
+                          <Tooltip title={t('operate.applications.actions.approve')}>
                             <IconButton size="small" color="success">
                               <CheckCircleIcon fontSize="small" />
                             </IconButton>
                           </Tooltip>
-                          <Tooltip title="Reject">
+                          <Tooltip title={t('operate.applications.actions.reject')}>
                             <IconButton size="small" color="error">
                               <CancelIcon fontSize="small" />
                             </IconButton>

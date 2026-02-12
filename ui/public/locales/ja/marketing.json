@@ -1,0 +1,193 @@
+{
+  "valueProposition": {
+    "headline": "本人確認だけでは不十分です。",
+    "subheadline": "検証可能なアイデンティティ基盤を構築しましょう。",
+    "extendedSubheadline": "資格情報の発行・検証・ガバナンスを実現。EUDIウォレット、Open Badges、エンタープライズ信頼基盤に対応。",
+    "primaryCTA": "無料で始める",
+    "secondaryCTA": "なぜ検証可能なアイデンティティなのか"
+  },
+  "idvComparison": {
+    "title": "IDV から検証可能なアイデンティティへ",
+    "takeaway": "ElevenID は繰り返しの確認を再利用可能な信頼へ置き換えます。",
+    "traditional": {
+      "title": "従来の IDV",
+      "oneTimeChecks": "一度きりの書類確認",
+      "vendorControlled": "ベンダー管理のアイデンティティデータ",
+      "biometric": "生体認証の判定結果",
+      "closedAPIs": "閉鎖的な独自API",
+      "manualTrust": "手動の信頼設定",
+      "reVerification": "どこでも再確認"
+    },
+    "elevenid": {
+      "title": "ElevenID",
+      "reusable": "再利用可能な検証可能資格情報",
+      "holderControlled": "保有者が管理するデジタルウォレット",
+      "cryptographic": "暗号学的証明",
+      "openStandards": "オープン標準（W3C VC, OID4VC, ISO）",
+      "governedTrust": "ガバナンスされた信頼レジストリ",
+      "reuseAcross": "エコシステム間でのアイデンティティ再利用"
+    }
+  },
+  "eudiOpenBadges": {
+    "title": "EUDIウォレットと検証可能資格情報のために",
+    "verifyCredentials": "検証可能資格情報を検証—書類だけではありません。",
+    "trustIssuers": "データベースではなく発行者を信頼。",
+    "walletFirst": "ウォレットファースト設計—EUDI対応。",
+    "quote": "IDVプラットフォームは一度きりの判定で終わります。ElevenIDは、ウォレットやエコシステム、信頼レジストリをまたいで再利用できる暗号学的に検証可能な成果を提供します。"
+  },
+  "audienceRouting": {
+    "title": "あなたの道を選ぶ",
+    "subtitle": "企業・行政・開発者のいずれかの入口を選択してください。",
+    "enterprise": {
+      "title": "企業",
+      "description": "繰り返しのKYCコストを削減し、パートナー相互運用性を実現し、信頼をスケールして統制します。",
+      "cta": "企業向けを見る"
+    },
+    "government": {
+      "title": "行政",
+      "description": "ISO資格情報、トラストリスト、規制された受け入れに対応したEUDI準拠の基盤。",
+      "cta": "行政向けを見る"
+    },
+    "developers": {
+      "title": "開発者",
+      "description": "VCの発行と検証のためのドキュメント、SDK、クイックスタート。",
+      "cta": "ドキュメントを読む"
+    }
+  },
+  "organizationOutcomes": {
+    "title": "組織にとっての価値",
+    "reduceKYC": "再利用可能な資格情報で繰り返しKYCコストを削減",
+    "eudiReady": "EUDIウォレット受け入れに備える",
+    "avoidLockIn": "オープン標準でベンダーロックインを回避",
+    "supportBadges": "Open Badges、ワークフォース資格情報、政府IDを一つのシステムでサポート"
+  },
+  "proofStrip": {
+    "title": "実績ある基盤の上に構築",
+    "interoperability": "相互運用性",
+    "offlineVerification": "オフライン検証",
+    "deployment": "デプロイ",
+    "keySecurity": "鍵セキュリティ",
+    "compliance": "コンプライアンス"
+  },
+  "landingPage": {
+    "loading": "読み込み中...",
+    "checkingAccount": "アカウントを確認しています...",
+    "features": {
+      "issuance": {
+        "title": "発行",
+        "description": "標準準拠の資格情報を暗号署名とポリシー適用で発行します。"
+      },
+      "verification": {
+        "title": "検証",
+        "description": "信頼アンカーに対して失効確認と選択的開示を用いて資格情報を検証します。"
+      },
+      "governance": {
+        "title": "ガバナンス",
+        "description": "検証者のコードを変えずに、信頼・ポリシー・デプロイを中央集権的に管理します。"
+      }
+    },
+    "identityProblem": {
+      "title": "アイデンティティの課題",
+      "description": "多くの組織は、分断されたシステム、不明確な信頼、増大するコンプライアンス圧力に直面しています。",
+      "items": {
+        "fragmented": "相互運用できない分断されたアイデンティティシステム",
+        "unclearTrust": "パートナーや法域をまたぐ発行者の信頼性が不明確",
+        "privacyPressure": "プライバシー対応の圧力（データ最小化＋選択的開示）",
+        "pkiComplexity": "PKIと失効の運用が大規模で複雑"
+      }
+    },
+    "solvesIt": {
+      "title": "ElevenID が解決する方法",
+      "intro": "4つのプリミティブ（信頼プロファイル、資格情報テンプレート、提示ポリシー、フロー）でアイデンティティを統治します。",
+      "subheading": "ポリシーはコードではなく設定です。エンドポイントは再デプロイなしに、中央で統治された信頼と開示ルールを実行します。"
+    },
+    "howItWorks": {
+      "title": "仕組み",
+      "description": "デジタル・アイデンティティは4者間の統治された交換です。",
+      "cta": "全体フローを見る"
+    },
+    "standards": {
+      "title": "標準に基づくアーキテクチャ",
+      "subtitle": "標準は統合ではありません。プロダクトそのものです。",
+      "description": "これらのレイヤーにより、ElevenID は政府・ウォレット・企業間で個別統合なしに相互運用できます。",
+      "cta": "標準を見る"
+    },
+    "startFirst": {
+      "title": "最初に何をしますか？",
+      "description": "出発点を選んでください。準備ができたら完全なエコシステムへ拡張できます。",
+      "cards": {
+        "verify": {
+          "title": "資格情報を検証",
+          "description": "EUDIウォレット、Open Badges、ISO資格情報を検証します。"
+        },
+        "issue": {
+          "title": "資格情報を発行",
+          "description": "ワークフォース、教育、政府の資格情報を発行します。"
+        },
+        "offline": {
+          "title": "オフライン／施設",
+          "description": "接続が限られたチェックポイントで検証します。"
+        },
+        "wallet": {
+          "title": "ウォレット体験",
+          "description": "ユーザーが資格情報を保持・提示できるウォレットを提供します。"
+        }
+      },
+      "notSure": "迷っていますか？",
+      "startWithVerificationApi": "Verification API から始める"
+    },
+    "products": {
+      "title": "製品と機能",
+      "description": "発行から検証、ガバナンスまでを網羅するプラットフォーム。",
+      "viewDetails": "詳細を見る",
+      "viewAll": "すべての製品を見る"
+    },
+    "trustSignals": {
+      "title": "エンタープライズ向け基盤",
+      "security": {
+        "title": "セキュリティ",
+        "item1": "エンタープライズ級の暗号学的検証",
+        "item2": "PKI と失効管理",
+        "item3": "HSM とキー管理（Vault）統合"
+      },
+      "infrastructure": {
+        "title": "インフラ",
+        "item1": "オフラインファースト（72時間キャッシュ）",
+        "item2": "高可用性SaaSデプロイ",
+        "item3": "主権要件向けのセルフホスト",
+        "item4": "水平スケールとロードバランシング",
+        "item5": "AI支援開発ワークフローにより高品質を低コストで維持。"
+      },
+      "compliance": {
+        "title": "コンプライアンス",
+        "item1": "ICAO 9303 を実装",
+        "item2": "ISO 18013-5（mDoc）を実装",
+        "item3": "GDPR とプライバシー・バイ・デザイン",
+        "item4": "選択的開示とデータ最小化"
+      }
+    },
+    "proofStrip": {
+      "claims": {
+        "w3c": "W3C VC / SD-JWT / OID4VP",
+        "offlineCache": "72時間オフラインキャッシュ",
+        "deployment": "SaaS + セルフホスト",
+        "keySecurity": "HSM / Vault 統合",
+        "auditLogs": "改ざん不能な監査ログ"
+      }
+    },
+    "portals": {
+      "emphasis": "組み込みポータル",
+      "message": "（申請者／ベンダー／管理者向け）—APIキー、信頼ポリシー、運用を1か所で管理。",
+      "learnMore": "詳しく見る"
+    },
+    "footer": {
+      "title": "始めましょうか？",
+      "description": "無料で開始するか、組織向けプランを比較してください。",
+      "viewPricing": "料金を見る"
+    },
+    "orientation": {
+      "title": "検証可能なアイデンティティが初めてですか？",
+      "cta": "仕組み"
+    }
+  }
+}

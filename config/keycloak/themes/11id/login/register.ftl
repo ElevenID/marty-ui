@@ -1,8 +1,21 @@
 <#import "template.ftl" as layout>
-<#-- Marty custom registration template with test-friendly IDs -->
+<#-- Marty custom registration template with test-friendly IDs and language switcher -->
 <@layout.registrationLayout displayMessage=!messagesPerField.existsError('firstName','lastName','email','username','password','password-confirm'); section>
     <#if section = "header">
-        ${msg("registerTitle")}
+        <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+            <div>${msg("registerTitle")}</div>
+            <#if realm.internationalizationEnabled  && locale.supported?has_content && (locale.supported?size > 1)>
+                <div class="kc-locale-dropdown" data-testid="language-switcher">
+                    <select id="kc-locale-dropdown" onchange="if (this.value) window.location.href=this.value;" class="kc-locale-select">
+                        <#list locale.supported as l>
+                            <option value="${l.url}" <#if locale.currentLanguageTag == l.label>selected</#if>>
+                                ${msg("locale_${l.label}")}
+                            </option>
+                        </#list>
+                    </select>
+                </div>
+            </#if>
+        </div>
     <#elseif section = "form">
         <form id="kc-register-form" class="${properties.kcFormClass!}" action="${url.registrationAction}" method="post">
             <div class="${properties.kcFormGroupClass!}">

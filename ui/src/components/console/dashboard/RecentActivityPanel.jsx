@@ -18,6 +18,7 @@ import {
   Button,
   Skeleton,
 } from '@mui/material';
+import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ErrorIcon from '@mui/icons-material/Error';
@@ -32,30 +33,30 @@ import PersonIcon from '@mui/icons-material/Person';
 import { useAuth } from '../../../hooks/useAuth';
 
 /**
- * Severity levels and their visual styling
+ * Severity levels and their visual styling factory
  */
-const SEVERITY_CONFIG = {
+const getSeverityConfig = (t) => ({
   info: {
     color: 'info',
     icon: InfoIcon,
-    label: 'Info',
+    label: t('dashboard.recentActivity.info'),
   },
   success: {
     color: 'success',
     icon: CheckCircleIcon,
-    label: 'Success',
+    label: t('dashboard.recentActivity.success'),
   },
   warning: {
     color: 'warning',
     icon: WarningIcon,
-    label: 'Warning',
+    label: t('dashboard.recentActivity.warning'),
   },
   error: {
     color: 'error',
     icon: ErrorIcon,
-    label: 'Error',
+    label: t('dashboard.recentActivity.error'),
   },
-};
+});
 
 /**
  * Event type to icon mapping
@@ -71,7 +72,7 @@ const EVENT_ICONS = {
 /**
  * Format relative time
  */
-function formatRelativeTime(dateString) {
+function formatRelativeTime(dateString, t) {
   const date = new Date(dateString);
   const now = new Date();
   const diffMs = now - date;
@@ -79,10 +80,10 @@ function formatRelativeTime(dateString) {
   const diffHours = Math.floor(diffMs / 3600000);
   const diffDays = Math.floor(diffMs / 86400000);
 
-  if (diffMinutes < 1) return 'Just now';
-  if (diffMinutes < 60) return `${diffMinutes}m ago`;
-  if (diffHours < 24) return `${diffHours}h ago`;
-  if (diffDays < 7) return `${diffDays}d ago`;
+  if (diffMinutes < 1) return t('dashboard.recentActivity.justNow');
+  if (diffMinutes < 60) return t('dashboard.recentActivity.minutesAgo', { minutes: diffMinutes });
+  if (diffHours < 24) return t('dashboard.recentActivity.hoursAgo', { hours: diffHours });
+  if (diffDays < 7) return t('dashboard.recentActivity.daysAgo', { days: diffDays });
   return date.toLocaleDateString();
 }
 
@@ -113,6 +114,8 @@ function getCategory(event) {
  * Activity Row Component
  */
 function ActivityRow({ event }) {
+  const { t } = useTranslation('console');
+  const SEVERITY_CONFIG = getSeverityConfig(t);
   const severity = getSeverity(event);
   const category = getCategory(event);
   const SeverityIcon = SEVERITY_CONFIG[severity]?.icon || InfoIcon;
@@ -151,7 +154,7 @@ function ActivityRow({ event }) {
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
             <CategoryIcon fontSize="small" color="action" />
             <Typography variant="body2" component="span">
-              {event.action?.replace(/_/g, ' ').replace(/\./g, ' ') || 'Unknown action'}
+              {event.action?.replace(/_/g, ' ').replace(/\./g, ' ') || t('dashboard.recentActivity.unknownAction')}
             </Typography>
             {resourceLink && (
               <Button
@@ -160,14 +163,14 @@ function ActivityRow({ event }) {
                 to={resourceLink}
                 sx={{ ml: 1, minWidth: 'auto', p: 0.25 }}
               >
-                View
+                {t('dashboard.recentActivity.view')}
               </Button>
             )}
           </Box>
         }
         secondary={
           <Typography variant="caption" color="text.secondary">
-            {event.actor || 'System'} • {formatRelativeTime(event.timestamp)}
+            {event.actor || t('dashboard.recentActivity.system')} • {formatRelativeTime(event.timestamp, t)}
           </Typography>
         }
       />
@@ -179,6 +182,7 @@ function ActivityRow({ event }) {
  * Recent Activity Panel Component
  */
 export function RecentActivityPanel() {
+  const { t } = useTranslation('console');
   const { organizationId } = useAuth();
   const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -260,7 +264,7 @@ export function RecentActivityPanel() {
     <Paper sx={{ p: 3, mb: 3 }}>
       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2 }}>
         <Typography variant="h6">
-          Recent Activity
+          {t('dashboard.recentActivity.title')}
         </Typography>
         <Button
           size="small"
@@ -268,7 +272,7 @@ export function RecentActivityPanel() {
           to="/console/audit"
           endIcon={<ArrowForwardIcon />}
         >
-          View All
+          {t('dashboard.recentActivity.viewAll')}
         </Button>
       </Box>
 
@@ -281,7 +285,7 @@ export function RecentActivityPanel() {
       ) : events.length === 0 ? (
         <Box sx={{ py: 3, textAlign: 'center' }}>
           <Typography variant="body2" color="text.secondary">
-            Activity will appear here once you begin issuing or verifying credentials
+            {t('dashboard.recentActivity.noActivity')}
           </Typography>
         </Box>
       ) : (

@@ -18,22 +18,25 @@ import {
   Checkbox,
   FormHelperText,
 } from '@mui/material';
+import { useTranslation } from 'react-i18next';
 
-const FRAMEWORK_TYPES = [
-  { value: 'icao', label: 'ICAO 9303 (eMRTD/ePassport)' },
-  { value: 'aamva', label: 'AAMVA (mDL - ISO 18013-5)' },
-  { value: 'eudi', label: 'EUDI (EU Digital Identity Wallet)' },
-  { value: 'custom', label: 'Custom' },
+const getFrameworkTypes = (t) => [
+  { value: 'icao', label: t('wizards.trustProfile.frameworkLabels.icao') },
+  { value: 'aamva', label: t('wizards.trustProfile.frameworkLabels.aamva') },
+  { value: 'eudi', label: t('wizards.trustProfile.frameworkLabels.eudi') },
+  { value: 'custom', label: t('wizards.trustProfile.frameworkLabels.custom') },
 ];
 
-const SUPPORTED_FORMATS = [
-  { value: 'jwt_vc', label: 'JWT VC (JSON Web Token Verifiable Credential)', recommended: true },
-  { value: 'sd_jwt_vc', label: 'SD-JWT VC (Selective Disclosure)', recommended: true },
-  { value: 'mdoc', label: 'mDoc (ISO 18013-5 Mobile Document)', recommended: true },
-  { value: 'ldp_vc', label: 'LDP VC (Linked Data Proof)', recommended: false },
+const getSupportedFormats = (t) => [
+  { value: 'jwt_vc', label: t('wizards.trustProfile.basicsStep.formatOptions.jwt_vc'), recommended: true },
+  { value: 'sd_jwt_vc', label: t('wizards.trustProfile.basicsStep.formatOptions.sd_jwt_vc'), recommended: true },
+  { value: 'mdoc', label: t('wizards.trustProfile.basicsStep.formatOptions.mdoc'), recommended: true },
+  { value: 'ldp_vc', label: t('wizards.trustProfile.basicsStep.formatOptions.ldp_vc'), recommended: false },
 ];
 
 const BasicsStep = ({ data, onChange }) => {
+  const { t } = useTranslation('console');
+
   const handleFormatToggle = (format) => {
     const formats = data.supported_formats || [];
     const newFormats = formats.includes(format)
@@ -45,22 +48,22 @@ const BasicsStep = ({ data, onChange }) => {
   return (
     <Box>
       <Typography variant="h6" gutterBottom>
-        Basic Information
+        {t('wizards.trustProfile.basicsStep.title')}
       </Typography>
       <Typography color="text.secondary" paragraph>
-        Trust Profiles define which credential issuers your organization trusts and what validation rules apply. They're the foundation for secure credential verification across your organization.
+        {t('wizards.trustProfile.basicsStep.description')}
       </Typography>
 
       {/* Name */}
       <TextField
         fullWidth
         required
-        label="Trust Profile Name"
+        label={t('wizards.trustProfile.basicsStep.fields.name')}
         value={data.name || ''}
         onChange={(e) => onChange({ name: e.target.value })}
-        placeholder="Default Trust Profile"
+        placeholder={t('wizards.trustProfile.basicsStep.placeholders.name')}
         sx={{ mb: 3 }}
-        helperText="You can change this later"
+        helperText={t('wizards.trustProfile.basicsStep.helpers.name')}
         inputProps={{ 'data-testid': 'wizard.trustProfile.name' }}
       />
 
@@ -69,44 +72,44 @@ const BasicsStep = ({ data, onChange }) => {
         fullWidth
         multiline
         rows={3}
-        label="Description"
+        label={t('wizards.trustProfile.basicsStep.fields.description')}
         value={data.description || ''}
         onChange={(e) => onChange({ description: e.target.value })}
         sx={{ mb: 3 }}
-        helperText="Optional: Explain the purpose and scope of this trust profile"
+        helperText={t('wizards.trustProfile.basicsStep.helpers.description')}
         inputProps={{ 'data-testid': 'wizard.trustProfile.description' }}
       />
 
       {/* Framework Type */}
       <FormControl fullWidth sx={{ mb: 3 }}>
-        <InputLabel>Framework Type</InputLabel>
+        <InputLabel>{t('wizards.trustProfile.basicsStep.fields.frameworkType')}</InputLabel>
         <Select
           value={data.framework_type || 'custom'}
           onChange={(e) => onChange({ framework_type: e.target.value })}
-          label="Framework Type"
+          label={t('wizards.trustProfile.basicsStep.fields.frameworkType')}
           data-testid="wizard.trustProfile.frameworkType"
         >
-          {FRAMEWORK_TYPES.map((type) => (
+          {getFrameworkTypes(t).map((type) => (
             <MenuItem key={type.value} value={type.value}>
               {type.label}
             </MenuItem>
           ))}
         </Select>
         <FormHelperText>
-          Select the trust framework or standard this profile implements
+          {t('wizards.trustProfile.basicsStep.helpers.frameworkType')}
         </FormHelperText>
       </FormControl>
 
       {/* Supported Formats */}
       <FormControl component="fieldset" fullWidth sx={{ mb: 2 }}>
         <Typography variant="subtitle2" gutterBottom>
-          Supported Credential Formats *
+          {t('wizards.trustProfile.basicsStep.fields.supportedFormats')}
         </Typography>
         <FormHelperText sx={{ mt: 0, mb: 1 }}>
-          Select which credential formats this trust profile accepts
+          {t('wizards.trustProfile.basicsStep.helpers.supportedFormats')}
         </FormHelperText>
         <FormGroup>
-          {SUPPORTED_FORMATS.map((format) => (
+          {getSupportedFormats(t).map((format) => (
             <FormControlLabel
               key={format.value}
               control={
@@ -119,7 +122,12 @@ const BasicsStep = ({ data, onChange }) => {
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                   {format.label}
                   {format.recommended && (
-                    <Chip label="Recommended" size="small" color="primary" variant="outlined" />
+                    <Chip
+                      label={t('wizards.trustProfile.basicsStep.recommendedChip')}
+                      size="small"
+                      color="primary"
+                      variant="outlined"
+                    />
                   )}
                 </Box>
               }

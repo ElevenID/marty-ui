@@ -22,8 +22,10 @@ import {
   FormHelperText,
 } from '@mui/material';
 import InfoIcon from '@mui/icons-material/Info';
+import { useTranslation } from 'react-i18next';
 
 const IntegrationStep = ({ data, onChange }) => {
+  const { t } = useTranslation('console');
   const webhooks = data.webhooks || { url: '', events: [] };
   const featureFlags = data.feature_flags || { qr_code: true, nfc: false, ble: false };
   const uxConfig = data.ux_config || { theme: 'default', language: 'en' };
@@ -50,38 +52,38 @@ const IntegrationStep = ({ data, onChange }) => {
   return (
     <Box>
       <Typography variant="h6" gutterBottom>
-        Integration (Optional)
+        {t('wizards.deploymentProfile.integrationStep.title')}
       </Typography>
       <Typography color="text.secondary" paragraph>
-        Configure webhooks, feature flags, and user experience settings. You can skip this step and configure later.
+        {t('wizards.deploymentProfile.integrationStep.description')}
       </Typography>
 
       <Alert severity="info" icon={<InfoIcon />} sx={{ mb: 3 }}>
-        These settings are optional. Skip this step to use defaults.
+        {t('wizards.deploymentProfile.integrationStep.defaultsInfo')}
       </Alert>
 
       {/* Webhooks */}
       <Typography variant="subtitle2" gutterBottom>
-        Webhooks
+        {t('wizards.deploymentProfile.integrationStep.sections.webhooks')}
       </Typography>
       <Typography variant="body2" color="text.secondary" paragraph>
-        Receive real-time notifications about events
+        {t('wizards.deploymentProfile.integrationStep.helpers.webhooks')}
       </Typography>
 
       <TextField
         fullWidth
-        label="Webhook URL"
-        placeholder="https://your-app.com/webhooks"
+        label={t('wizards.deploymentProfile.integrationStep.fields.webhookUrl')}
+        placeholder={t('wizards.deploymentProfile.integrationStep.placeholders.webhookUrl')}
         value={webhooks.url || ''}
         onChange={(e) => handleWebhookChange('url', e.target.value)}
         sx={{ mb: 2 }}
-        helperText="POST requests will be sent to this URL for selected events"
+        helperText={t('wizards.deploymentProfile.integrationStep.helpers.webhookUrl')}
       />
 
       {webhooks.url && (
         <FormGroup sx={{ mb: 3 }}>
           <Typography variant="body2" color="text.secondary" gutterBottom>
-            Webhook Events
+            {t('wizards.deploymentProfile.integrationStep.helpers.webhookEvents')}
           </Typography>
           {WEBHOOK_EVENTS.map((event) => (
             <FormControlLabel
@@ -108,10 +110,10 @@ const IntegrationStep = ({ data, onChange }) => {
 
       {/* Feature Flags */}
       <Typography variant="subtitle2" gutterBottom>
-        Feature Flags
+        {t('wizards.deploymentProfile.integrationStep.sections.featureFlags')}
       </Typography>
       <Typography variant="body2" color="text.secondary" paragraph>
-        Enable or disable specific features for this deployment
+        {t('wizards.deploymentProfile.integrationStep.helpers.featureFlags')}
       </Typography>
 
       <FormGroup sx={{ mb: 3 }}>
@@ -122,10 +124,10 @@ const IntegrationStep = ({ data, onChange }) => {
               onChange={(e) => handleFeatureFlagChange('qr_code', e.target.checked)}
             />
           }
-          label="QR Code Support"
+          label={t('wizards.deploymentProfile.integrationStep.featureFlags.qrCode')}
         />
         <FormHelperText sx={{ ml: 4, mt: -1, mb: 2 }}>
-          Enable QR code scanning for credential exchange
+          {t('wizards.deploymentProfile.integrationStep.helpers.qrCode')}
         </FormHelperText>
 
         <FormControlLabel
@@ -135,10 +137,10 @@ const IntegrationStep = ({ data, onChange }) => {
               onChange={(e) => handleFeatureFlagChange('nfc', e.target.checked)}
             />
           }
-          label="NFC Support"
+          label={t('wizards.deploymentProfile.integrationStep.featureFlags.nfc')}
         />
         <FormHelperText sx={{ ml: 4, mt: -1, mb: 2 }}>
-          Enable Near Field Communication for contactless exchange
+          {t('wizards.deploymentProfile.integrationStep.helpers.nfc')}
         </FormHelperText>
 
         <FormControlLabel
@@ -148,10 +150,10 @@ const IntegrationStep = ({ data, onChange }) => {
               onChange={(e) => handleFeatureFlagChange('ble', e.target.checked)}
             />
           }
-          label="Bluetooth Low Energy (BLE) Support"
+          label={t('wizards.deploymentProfile.integrationStep.featureFlags.ble')}
         />
         <FormHelperText sx={{ ml: 4, mt: -1 }}>
-          Enable Bluetooth for proximity-based exchange
+          {t('wizards.deploymentProfile.integrationStep.helpers.ble')}
         </FormHelperText>
       </FormGroup>
 
@@ -159,44 +161,44 @@ const IntegrationStep = ({ data, onChange }) => {
 
       {/* UX Configuration */}
       <Typography variant="subtitle2" gutterBottom>
-        User Experience
+        {t('wizards.deploymentProfile.integrationStep.sections.userExperience')}
       </Typography>
       <Typography variant="body2" color="text.secondary" paragraph>
-        Customize the look and feel of this deployment
+        {t('wizards.deploymentProfile.integrationStep.helpers.ux')}
       </Typography>
 
       <Grid container spacing={2}>
         <Grid item xs={12} md={6}>
           <FormControl fullWidth>
-            <InputLabel>Theme</InputLabel>
+            <InputLabel>{t('wizards.deploymentProfile.integrationStep.fields.theme')}</InputLabel>
             <Select
               value={uxConfig.theme || 'default'}
               onChange={(e) => handleUxConfigChange('theme', e.target.value)}
-              label="Theme"
+              label={t('wizards.deploymentProfile.integrationStep.fields.theme')}
             >
-              <MenuItem value="default">Default</MenuItem>
-              <MenuItem value="light">Light</MenuItem>
-              <MenuItem value="dark">Dark</MenuItem>
-              <MenuItem value="high-contrast">High Contrast</MenuItem>
+              <MenuItem value="default">{t('wizards.deploymentProfile.integrationStep.themes.default')}</MenuItem>
+              <MenuItem value="light">{t('wizards.deploymentProfile.integrationStep.themes.light')}</MenuItem>
+              <MenuItem value="dark">{t('wizards.deploymentProfile.integrationStep.themes.dark')}</MenuItem>
+              <MenuItem value="high-contrast">{t('wizards.deploymentProfile.integrationStep.themes.highContrast')}</MenuItem>
             </Select>
-            <FormHelperText>Visual theme for user interfaces</FormHelperText>
+            <FormHelperText>{t('wizards.deploymentProfile.integrationStep.helpers.theme')}</FormHelperText>
           </FormControl>
         </Grid>
 
         <Grid item xs={12} md={6}>
           <FormControl fullWidth>
-            <InputLabel>Language</InputLabel>
+            <InputLabel>{t('wizards.deploymentProfile.integrationStep.fields.language')}</InputLabel>
             <Select
               value={uxConfig.language || 'en'}
               onChange={(e) => handleUxConfigChange('language', e.target.value)}
-              label="Language"
+              label={t('wizards.deploymentProfile.integrationStep.fields.language')}
             >
-              <MenuItem value="en">English</MenuItem>
-              <MenuItem value="es">Español</MenuItem>
-              <MenuItem value="fr">Français</MenuItem>
-              <MenuItem value="de">Deutsch</MenuItem>
+              <MenuItem value="en">{t('wizards.deploymentProfile.integrationStep.languages.en')}</MenuItem>
+              <MenuItem value="es">{t('wizards.deploymentProfile.integrationStep.languages.es')}</MenuItem>
+              <MenuItem value="fr">{t('wizards.deploymentProfile.integrationStep.languages.fr')}</MenuItem>
+              <MenuItem value="de">{t('wizards.deploymentProfile.integrationStep.languages.de')}</MenuItem>
             </Select>
-            <FormHelperText>Default language for user interfaces</FormHelperText>
+            <FormHelperText>{t('wizards.deploymentProfile.integrationStep.helpers.language')}</FormHelperText>
           </FormControl>
         </Grid>
       </Grid>

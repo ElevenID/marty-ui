@@ -20,6 +20,7 @@ import {
   Chip,
   Button,
 } from '@mui/material';
+import { useTranslation } from 'react-i18next';
 import { Link as RouterLink } from 'react-router-dom';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ErrorIcon from '@mui/icons-material/Error';
@@ -33,8 +34,8 @@ import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 /**
  * Format relative time for last activity
  */
-function formatLastActivity(timestamp) {
-  if (!timestamp) return 'Never';
+function formatLastActivity(timestamp, t) {
+  if (!timestamp) return t('dashboard.runtimeReadiness.never');
   
   const date = new Date(timestamp);
   const now = new Date();
@@ -43,10 +44,10 @@ function formatLastActivity(timestamp) {
   const diffHours = Math.floor(diffMs / 3600000);
   const diffDays = Math.floor(diffMs / 86400000);
 
-  if (diffMinutes < 1) return 'Just now';
-  if (diffMinutes < 60) return `${diffMinutes}m ago`;
-  if (diffHours < 24) return `${diffHours}h ago`;
-  if (diffDays < 7) return `${diffDays}d ago`;
+  if (diffMinutes < 1) return t('dashboard.runtimeReadiness.justNow');
+  if (diffMinutes < 60) return t('dashboard.runtimeReadiness.minutesAgo', { minutes: diffMinutes });
+  if (diffHours < 24) return t('dashboard.runtimeReadiness.hoursAgo', { hours: diffHours });
+  if (diffDays < 7) return t('dashboard.runtimeReadiness.daysAgo', { days: diffDays });
   return date.toLocaleDateString();
 }
 
@@ -64,6 +65,7 @@ function StatusCard({
   actionLabel, 
   actionLink 
 }) {
+  const { t } = useTranslation('console');
   const getStatusColor = () => {
     switch (status) {
       case 'ready':
@@ -112,7 +114,7 @@ function StatusCard({
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 1 }}>
             <AccessTimeIcon fontSize="small" color="action" />
             <Typography variant="caption" color="text.secondary">
-              Last: {formatLastActivity(lastActivity)}
+              {t('dashboard.runtimeReadiness.lastActivity', { time: formatLastActivity(lastActivity, t) })}
             </Typography>
           </Box>
         )}
@@ -127,7 +129,7 @@ function StatusCard({
         {reason && status !== 'ready' && (
           <Box sx={{ mt: 2, p: 1.5, bgcolor: 'background.default', borderRadius: 1 }}>
             <Typography variant="caption" fontWeight={600} color="text.primary" display="block" gutterBottom>
-              Why this matters:
+              {t('dashboard.runtimeReadiness.whyThisMatters')}
             </Typography>
             <Typography variant="caption" color="text.secondary">
               {reason}
@@ -160,6 +162,8 @@ function StatusCard({
  * Runtime Readiness Panel Component
  */
 export function RuntimeReadinessPanel({ runtimeStatus }) {
+  const { t } = useTranslation('console');
+  
   // Extract runtime status data
   const {
     canIssue = false,
@@ -176,70 +180,70 @@ export function RuntimeReadinessPanel({ runtimeStatus }) {
   const issuanceStatus = canIssue && issuerKeysValid && issuerActive ? 'ready' : 
                          (issuerKeysValid || issuerActive) ? 'degraded' : 'error';
   
-  const issuanceStatusText = canIssue ? 'Ready' : 
-                            (issuerKeysValid || issuerActive) ? 'Degraded' : 'Not Ready';
+  const issuanceStatusText = canIssue ? t('dashboard.runtimeReadiness.ready') : 
+                            (issuerKeysValid || issuerActive) ? t('dashboard.runtimeReadiness.degraded') : t('dashboard.runtimeReadiness.notReady');
   
-  const issuanceDetails = !issuerKeysValid ? 'Keys invalid or expired' :
-                         !issuerActive ? 'Issuer not active' :
-                         'All systems operational';
+  const issuanceDetails = !issuerKeysValid ? t('dashboard.runtimeReadiness.issuance.keysInvalid') :
+                         !issuerActive ? t('dashboard.runtimeReadiness.issuance.issuerInactive') :
+                         t('dashboard.runtimeReadiness.issuance.operational');
 
   const issuanceReason = !issuerKeysValid 
-    ? 'Valid signing keys are required to sign and issue verifiable credentials. Without them, credential issuance cannot proceed.'
+    ? t('dashboard.runtimeReadiness.issuance.keysReason')
     : !issuerActive
-    ? 'The issuer service must be active and properly configured to handle credential issuance requests.'
+    ? t('dashboard.runtimeReadiness.issuance.issuerReason')
     : null;
 
   const issuanceAction = !issuerKeysValid 
-    ? { label: 'Fix Signing Keys', link: '/console/deploy/signing-keys' }
+    ? { label: t('dashboard.runtimeReadiness.issuance.fixSigningKeys'), link: '/console/deploy/signing-keys' }
     : !issuerActive
-    ? { label: 'Activate Issuer', link: '/console/org/settings' }
+    ? { label: t('dashboard.runtimeReadiness.issuance.activateIssuer'), link: '/console/org/settings' }
     : null;
 
   // Compute verification status
   const verificationStatus = canVerify && deploymentActive && policyReachable ? 'ready' :
                             (deploymentActive || policyReachable) ? 'degraded' : 'error';
   
-  const verificationStatusText = canVerify ? 'Ready' : 
-                                (deploymentActive || policyReachable) ? 'Degraded' : 'Not Ready';
+  const verificationStatusText = canVerify ? t('dashboard.runtimeReadiness.ready') : 
+                                (deploymentActive || policyReachable) ? t('dashboard.runtimeReadiness.degraded') : t('dashboard.runtimeReadiness.notReady');
   
-  const verificationDetails = !deploymentActive ? 'No active deployments' :
-                             !policyReachable ? 'Policy unreachable' :
-                             'All systems operational';
+  const verificationDetails = !deploymentActive ? t('dashboard.runtimeReadiness.verification.noDeployments') :
+                             !policyReachable ? t('dashboard.runtimeReadiness.verification.policyUnreachable') :
+                             t('dashboard.runtimeReadiness.verification.operational');
 
   const verificationReason = !deploymentActive
-    ? 'At least one deployment profile must be active to verify credentials. Deployments define the trust policies and verification rules.'
+    ? t('dashboard.runtimeReadiness.verification.deploymentsReason')
     : !policyReachable
-    ? 'Presentation policies must be accessible to validate credentials during verification.'
+    ? t('dashboard.runtimeReadiness.verification.policyReason')
     : null;
 
   const verificationAction = !deploymentActive
-    ? { label: 'Configure Deployment', link: '/console/deploy/profiles' }
+    ? { label: t('dashboard.runtimeReadiness.verification.configureDeployment'), link: '/console/deploy/profiles' }
     : !policyReachable
-    ? { label: 'Fix Policies', link: '/console/policies/presentation' }
+    ? { label: t('dashboard.runtimeReadiness.verification.fixPolicies'), link: '/console/policies/presentation' }
     : null;
 
   const signingKeysReason = !issuerKeysValid
-    ? 'Signing keys authenticate your organization as a credential issuer. expired or invalid keys prevent credential issuance and may invalidate issued credentials.'
+    ? t('dashboard.runtimeReadiness.keys.reason')
     : null;
 
   const signingKeysAction = !issuerKeysValid
-    ? { label: 'Manage Keys', link: '/console/deploy/signing-keys' }
+    ? { label: t('dashboard.runtimeReadiness.keys.manageKeys'), link: '/console/deploy/signing-keys' }
     : null;
 
   return (
     <Paper sx={{ p: 3, mb: 3 }}>
       <Typography variant="h6" gutterBottom>
-        Runtime Operational Status
+        {t('dashboard.runtimeReadiness.title')}
       </Typography>
       <Typography variant="body2" color="text.secondary" paragraph>
-        Real-time readiness for credential operations
+        {t('dashboard.runtimeReadiness.description')}
       </Typography>
 
       <Grid container spacing={2}>
         <Grid item xs={12} md={4}>
           <StatusCard
             icon={BadgeIcon}
-            label="Credential Issuance"
+            label={t('dashboard.runtimeReadiness.credentialIssuance')}
             status={issuanceStatus}
             statusText={issuanceStatusText}
             lastActivity={lastIssuance}
@@ -252,7 +256,7 @@ export function RuntimeReadinessPanel({ runtimeStatus }) {
         <Grid item xs={12} md={4}>
           <StatusCard
             icon={VerifiedUserIcon}
-            label="Credential Verification"
+            label={t('dashboard.runtimeReadiness.credentialVerification')}
             status={verificationStatus}
             statusText={verificationStatusText}
             lastActivity={lastVerification}
@@ -265,10 +269,10 @@ export function RuntimeReadinessPanel({ runtimeStatus }) {
         <Grid item xs={12} md={4}>
           <StatusCard
             icon={VpnKeyIcon}
-            label="Signing Keys"
+            label={t('dashboard.runtimeReadiness.signingKeys')}
             status={issuerKeysValid ? 'ready' : 'error'}
-            statusText={issuerKeysValid ? 'Valid' : 'Invalid'}
-            details={issuerKeysValid ? 'Keys are valid and active' : 'Keys require attention'}
+            statusText={issuerKeysValid ? t('dashboard.runtimeReadiness.valid') : t('dashboard.runtimeReadiness.invalid')}
+            details={issuerKeysValid ? t('dashboard.runtimeReadiness.keys.valid') : t('dashboard.runtimeReadiness.keys.needsAttention')}
             reason={signingKeysReason}
             actionLabel={signingKeysAction?.label}
             actionLink={signingKeysAction?.link}

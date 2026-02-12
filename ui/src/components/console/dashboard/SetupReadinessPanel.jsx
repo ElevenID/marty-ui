@@ -18,6 +18,7 @@ import {
   Button,
   Tooltip,
 } from '@mui/material';
+import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import WarningIcon from '@mui/icons-material/Warning';
@@ -32,38 +33,38 @@ import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 
 import { ReadinessState } from '../../../config/dashboardRules';
 
-const RESOURCE_CONFIG = {
+const getResourceConfig = (t) => ({
   trust: {
-    label: 'Trust Profile',
+    label: t('setupReadiness.trustProfile.label'),
     icon: VerifiedUserIcon,
     path: '/console/trust/profiles',
-    tooltip: 'Defines which credential formats, issuers, and validation rules you accept',
+    tooltip: t('setupReadiness.trustProfile.tooltip'),
   },
   template: {
-    label: 'Credential Template',
+    label: t('setupReadiness.credentialTemplate.label'),
     icon: DescriptionIcon,
     path: '/console/templates/credentials',
-    tooltip: 'Defines the schema and format for credentials you issue',
+    tooltip: t('setupReadiness.credentialTemplate.tooltip'),
   },
   policy: {
-    label: 'Presentation Policy',
+    label: t('setupReadiness.presentationPolicy.label'),
     icon: PolicyIcon,
     path: '/console/policies/presentation',
-    tooltip: 'Defines what credentials and claims are required when verifying',
+    tooltip: t('setupReadiness.presentationPolicy.tooltip'),
   },
   deployment: {
-    label: 'Deployment Profile',
+    label: t('setupReadiness.deploymentProfile.label'),
     icon: CloudUploadIcon,
     path: '/console/deploy/profiles',
-    tooltip: 'Binds policies and flows to your runtime environment (APIs, kiosks, devices)',
+    tooltip: t('setupReadiness.deploymentProfile.tooltip'),
   },
   flow: {
-    label: 'Flow Definition',
+    label: t('setupReadiness.flowDefinition.label'),
     icon: AccountTreeIcon,
     path: '/console/flows/definitions',
-    tooltip: 'Orchestrates verification or issuance workflows for end users',
+    tooltip: t('setupReadiness.flowDefinition.tooltip'),
   },
-};
+});
 
 /**
  * State indicator icon
@@ -84,7 +85,8 @@ function StateIndicator({ state }) {
  * Readiness row
  */
 function ReadinessRow({ resourceKey, readiness }) {
-  const config = RESOURCE_CONFIG[resourceKey];
+  const { t } = useTranslation('console');
+  const config = getResourceConfig(t)[resourceKey];
   const Icon = config.icon;
   const { state, message, action, path, dependencyBlocked } = readiness;
 
@@ -120,17 +122,17 @@ function ReadinessRow({ resourceKey, readiness }) {
             </Tooltip>
             {state === ReadinessState.READY && (
               <Typography variant="caption" color="success.main" fontWeight={500}>
-                Ready
+                {t('setupReadiness.stateReady')}
               </Typography>
             )}
             {state === ReadinessState.BLOCKED && (
               <Typography variant="caption" color="warning.main" fontWeight={500}>
-                Blocked
+                {t('setupReadiness.stateBlocked')}
               </Typography>
             )}
             {state === ReadinessState.MISSING && !dependencyBlocked && (
               <Typography variant="caption" color="text.secondary" fontWeight={500}>
-                Missing
+                {t('setupReadiness.stateMissing')}
               </Typography>
             )}
           </Box>
@@ -157,7 +159,7 @@ function ReadinessRow({ resourceKey, readiness }) {
   // Wrap in tooltip if dependency blocked
   if (dependencyBlocked) {
     return (
-      <Tooltip title="Complete previous steps first" placement="left">
+      <Tooltip title={t('setupReadiness.dependencyBlocked')} placement="left">
         <Box>{rowContent}</Box>
       </Tooltip>
     );
@@ -170,6 +172,8 @@ function ReadinessRow({ resourceKey, readiness }) {
  * Setup Readiness Panel Component
  */
 export function SetupReadinessPanel({ readiness, loading }) {
+  const { t } = useTranslation('console');
+  
   if (loading) {
     return null; // Parent handles loading state
   }
@@ -179,10 +183,10 @@ export function SetupReadinessPanel({ readiness, loading }) {
   return (
     <Paper sx={{ p: 3, mb: 3 }}>
       <Typography variant="h6" gutterBottom>
-        Setup Readiness
+        {t('setupReadiness.title')}
       </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Complete these steps in order to enable full identity operations
+        {t('setupReadiness.description')}
       </Typography>
       <List disablePadding>
         {resourceOrder.map((key, index) => (

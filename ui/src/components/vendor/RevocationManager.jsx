@@ -87,8 +87,22 @@ function TabPanel({ children, value, index }) {
  * Revoke Credential Dialog
  */
 function RevokeDialog({ open, onClose, onRevoke, credential }) {
+  const { t } = useTranslation('vendor');
   const [reason, setReason] = useState('unspecified');
   const [comments, setComments] = useState('');
+
+  // Revocation reasons (dynamic to access t)
+  const REVOCATION_REASONS = [
+    { value: 'unspecified', label: t('revocationManager.reasons.unspecified') },
+    { value: 'keyCompromise', label: t('revocationManager.reasons.keyCompromise') },
+    { value: 'caCompromise', label: t('revocationManager.reasons.caCompromise') },
+    { value: 'affiliationChanged', label: t('revocationManager.reasons.affiliationChanged') },
+    { value: 'superseded', label: t('revocationManager.reasons.superseded') },
+    { value: 'cessationOfOperation', label: t('revocationManager.reasons.cessationOfOperation') },
+    { value: 'certificateHold', label: t('revocationManager.reasons.certificateHold') },
+    { value: 'privilegeWithdrawn', label: t('revocationManager.reasons.privilegeWithdrawn') },
+    { value: 'aaCompromise', label: t('revocationManager.reasons.aaCompromise') },
+  ];
 
   const handleRevoke = () => {
     onRevoke(credential.id, reason, comments);
@@ -162,8 +176,22 @@ function RevokeDialog({ open, onClose, onRevoke, credential }) {
  * Batch Revocation Dialog
  */
 function BatchRevokeDialog({ open, onClose, onBatchRevoke }) {
+  const { t } = useTranslation('vendor');
   const [file, setFile] = useState(null);
   const [reason, setReason] = useState('unspecified');
+
+  // Revocation reasons (dynamic to access t)
+  const REVOCATION_REASONS = [
+    { value: 'unspecified', label: t('revocationManager.reasons.unspecified') },
+    { value: 'keyCompromise', label: t('revocationManager.reasons.keyCompromise') },
+    { value: 'caCompromise', label: t('revocationManager.reasons.caCompromise') },
+    { value: 'affiliationChanged', label: t('revocationManager.reasons.affiliationChanged') },
+    { value: 'superseded', label: t('revocationManager.reasons.superseded') },
+    { value: 'cessationOfOperation', label: t('revocationManager.reasons.cessationOfOperation') },
+    { value: 'certificateHold', label: t('revocationManager.reasons.certificateHold') },
+    { value: 'privilegeWithdrawn', label: t('revocationManager.reasons.privilegeWithdrawn') },
+    { value: 'aaCompromise', label: t('revocationManager.reasons.aaCompromise') },
+  ];
 
   const handleFileChange = (event) => {
     setFile(event.target.files[0]);
@@ -178,16 +206,16 @@ function BatchRevokeDialog({ open, onClose, onBatchRevoke }) {
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
-      <DialogTitle>Batch Revocation</DialogTitle>
+      <DialogTitle>{t('revocationManager.batchTab.title')}</DialogTitle>
       <DialogContent>
         <Stack spacing={3} sx={{ mt: 1 }}>
           <Alert severity="info">
-            Upload a CSV file with credential IDs (one per line) to revoke multiple credentials at once.
+            {t('revocationManager.batchTab.instructions')}
           </Alert>
 
           <Box>
             <Typography variant="subtitle2" gutterBottom>
-              CSV Format Example
+              {t('revocationManager.batchTab.csvFormatLabel')}
             </Typography>
             <Paper variant="outlined" sx={{ p: 1, bgcolor: 'grey.50', fontFamily: 'monospace', fontSize: 12 }}>
               credential_id
@@ -201,13 +229,13 @@ function BatchRevokeDialog({ open, onClose, onBatchRevoke }) {
           </Box>
 
           <Button variant="outlined" component="label" startIcon={<UploadIcon />} fullWidth>
-            {file ? file.name : 'Choose CSV File'}
+            {file ? file.name : t('revocationManager.batchTab.uploadButton')}
             <input type="file" accept=".csv" hidden onChange={handleFileChange} />
           </Button>
 
           <FormControl fullWidth>
-            <InputLabel>Revocation Reason</InputLabel>
-            <Select value={reason} onChange={(e) => setReason(e.target.value)} label="Revocation Reason">
+            <InputLabel>{t('revocationManager.revokeDialog.reasonLabel')}</InputLabel>
+            <Select value={reason} onChange={(e) => setReason(e.target.value)} label={t('revocationManager.revokeDialog.reasonLabel')}>
               {REVOCATION_REASONS.map((r) => (
                 <MenuItem key={r.value} value={r.value}>
                   {r.label}
@@ -218,7 +246,7 @@ function BatchRevokeDialog({ open, onClose, onBatchRevoke }) {
         </Stack>
       </DialogContent>
       <DialogActions>
-        <Button onClick={onClose}>Cancel</Button>
+        <Button onClick={onClose}>{t('revocationManager.revokeDialog.cancelButton')}</Button>
         <Button
           onClick={handleSubmit}
           color="error"
@@ -226,7 +254,7 @@ function BatchRevokeDialog({ open, onClose, onBatchRevoke }) {
           disabled={!file}
           startIcon={<RevokeIcon />}
         >
-          Revoke All
+          {t('revocationManager.batchTab.revokeAllButton')}
         </Button>
       </DialogActions>
     </Dialog>
@@ -237,6 +265,7 @@ function BatchRevokeDialog({ open, onClose, onBatchRevoke }) {
  * Active Credentials Tab
  */
 function ActiveCredentialsTab({ organizationId }) {
+  const { t } = useTranslation('vendor');
   const [credentials, setCredentials] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -315,7 +344,7 @@ function ActiveCredentialsTab({ organizationId }) {
 
       setSnackbar({
         open: true,
-        message: 'Credential revoked successfully',
+        message: t('revocationManager.activeTab.snackbars.revokeSuccess'),
         severity: 'success',
       });
 
@@ -354,7 +383,7 @@ function ActiveCredentialsTab({ organizationId }) {
       const data = await response.json();
       setSnackbar({
         open: true,
-        message: `Successfully revoked ${data.count} credentials`,
+        message: t('revocationManager.activeTab.snackbars.batchSuccess', { count: data.count }),
         severity: 'success',
       });
 
@@ -376,7 +405,7 @@ function ActiveCredentialsTab({ organizationId }) {
       <Stack direction="row" spacing={2} sx={{ mb: 3 }}>
         <TextField
           fullWidth
-          placeholder="Search by credential ID, holder email, or type..."
+          placeholder={t('revocationManager.activeTab.searchPlaceholder')}
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           InputProps={{
@@ -388,7 +417,7 @@ function ActiveCredentialsTab({ organizationId }) {
           }}
         />
         <Button variant="outlined" startIcon={<RefreshIcon />} onClick={loadCredentials}>
-          Refresh
+          {t('revocationManager.activeTab.refreshButton')}
         </Button>
         <Button
           variant="outlined"
@@ -396,14 +425,14 @@ function ActiveCredentialsTab({ organizationId }) {
           startIcon={<UploadIcon />}
           onClick={() => setBatchRevokeDialogOpen(true)}
         >
-          Batch Revoke
+          {t('revocationManager.activeTab.batchRevokeButton')}
         </Button>
       </Stack>
 
       {/* Error Alert */}
       {error && (
         <Alert severity="warning" sx={{ mb: 3 }} onClose={() => setError(null)}>
-          {error} (Showing mock data)
+          {t('revocationManager.activeTab.loadFailed', { error })}
         </Alert>
       )}
 
@@ -412,13 +441,13 @@ function ActiveCredentialsTab({ organizationId }) {
         <Table>
           <TableHead>
             <TableRow>
-              <TableCell>Credential ID</TableCell>
-              <TableCell>Type</TableCell>
-              <TableCell>Holder</TableCell>
-              <TableCell>Issued Date</TableCell>
-              <TableCell>Expiry Date</TableCell>
-              <TableCell>Status</TableCell>
-              <TableCell align="right">Actions</TableCell>
+              <TableCell>{t('revocationManager.activeTab.table.credentialId')}</TableCell>
+              <TableCell>{t('revocationManager.activeTab.table.type')}</TableCell>
+              <TableCell>{t('revocationManager.activeTab.table.holder')}</TableCell>
+              <TableCell>{t('revocationManager.activeTab.table.issuedDate')}</TableCell>
+              <TableCell>{t('revocationManager.activeTab.table.expiryDate')}</TableCell>
+              <TableCell>{t('revocationManager.activeTab.table.status')}</TableCell>
+              <TableCell align="right">{t('revocationManager.activeTab.table.actions')}</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
@@ -432,7 +461,7 @@ function ActiveCredentialsTab({ organizationId }) {
               <TableRow>
                 <TableCell colSpan={7} align="center" sx={{ py: 8 }}>
                   <Typography variant="body2" color="text.secondary">
-                    No active credentials found
+                    {t('revocationManager.activeTab.empty')}
                   </Typography>
                 </TableCell>
               </TableRow>
@@ -449,10 +478,10 @@ function ActiveCredentialsTab({ organizationId }) {
                   <TableCell>{new Date(cred.issued_date).toLocaleDateString()}</TableCell>
                   <TableCell>{new Date(cred.expiry_date).toLocaleDateString()}</TableCell>
                   <TableCell>
-                    <Chip icon={<ActiveIcon />} label="Active" color="success" size="small" />
+                    <Chip icon={<ActiveIcon />} label={t('revocationManager.activeTab.table.statusActive')} color="success" size="small" />
                   </TableCell>
                   <TableCell align="right">
-                    <Tooltip title="Revoke">
+                    <Tooltip title={t('revocationManager.activeTab.revokeTooltip')}>
                       <IconButton
                         size="small"
                         color="error"
@@ -515,6 +544,7 @@ function ActiveCredentialsTab({ organizationId }) {
  * Revocation History Tab
  */
 function RevocationHistoryTab({ organizationId }) {
+  const { t } = useTranslation('vendor');
   const [revocations, setRevocations] = useState([]);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(0);
@@ -532,12 +562,12 @@ function RevocationHistoryTab({ organizationId }) {
         <Table>
           <TableHead>
             <TableRow>
-              <TableCell>Credential ID</TableCell>
-              <TableCell>Type</TableCell>
-              <TableCell>Revoked Date</TableCell>
-              <TableCell>Reason</TableCell>
-              <TableCell>Revoked By</TableCell>
-              <TableCell>Comments</TableCell>
+              <TableCell>{t('revocationManager.historyTab.table.credentialId')}</TableCell>
+              <TableCell>{t('revocationManager.historyTab.table.type')}</TableCell>
+              <TableCell>{t('revocationManager.historyTab.table.revokedDate')}</TableCell>
+              <TableCell>{t('revocationManager.historyTab.table.reason')}</TableCell>
+              <TableCell>{t('revocationManager.historyTab.table.revokedBy')}</TableCell>
+              <TableCell>{t('revocationManager.historyTab.table.comments')}</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
@@ -588,14 +618,15 @@ function RevocationHistoryTab({ organizationId }) {
  * Main Revocation Manager Component
  */
 export default function RevocationManager() {
+  const { t } = useTranslation('vendor');
   const { organizationId } = useAuth();
   const [currentTab, setCurrentTab] = useState(0);
 
   return (
     <Box>
       <Tabs value={currentTab} onChange={(e, v) => setCurrentTab(v)} sx={{ borderBottom: 1, borderColor: 'divider' }}>
-        <Tab icon={<ActiveIcon />} iconPosition="start" label="Active Credentials" />
-        <Tab icon={<HistoryIcon />} iconPosition="start" label="Revocation History" />
+        <Tab icon={<ActiveIcon />} iconPosition="start" label={t('revocationManager.tabs.active')} />
+        <Tab icon={<HistoryIcon />} iconPosition="start" label={t('revocationManager.tabs.history')} />
       </Tabs>
 
       <TabPanel value={currentTab} index={0}>

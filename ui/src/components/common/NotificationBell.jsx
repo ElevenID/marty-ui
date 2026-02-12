@@ -6,6 +6,7 @@ import {
 } from '@mui/material';
 import NotificationsIcon from '@mui/icons-material/Notifications';
 import NotificationsNoneIcon from '@mui/icons-material/NotificationsNone';
+import { useTranslation } from 'react-i18next';
 
 import notificationsApi from '../../services/notificationsApi';
 import NotificationDropdown from './NotificationDropdown';
@@ -21,6 +22,7 @@ import NotificationDropdown from './NotificationDropdown';
  * <NotificationBell />
  */
 function NotificationBell() {
+  const { t } = useTranslation('common');
   const [unreadCount, setUnreadCount] = useState(0);
   const [anchorEl, setAnchorEl] = useState(null);
   const [polling, setPolling] = useState(true);
@@ -70,12 +72,12 @@ function NotificationBell() {
 
   return (
     <>
-      <Tooltip title={unreadCount > 0 ? `${unreadCount} unread notifications` : 'Notifications'}>
+      <Tooltip title={unreadCount > 0 ? t('notifications.unreadCount', { count: unreadCount }) : t('notifications.title')}>
         <IconButton
           onClick={handleClick}
           size="small"
           sx={{ color: 'white' }}
-          aria-label="notifications"
+          aria-label={t('notifications.title').toLowerCase()}
           aria-controls={open ? 'notification-dropdown' : undefined}
           aria-haspopup="true"
           aria-expanded={open ? 'true' : undefined}

@@ -6,6 +6,7 @@
  */
 
 import { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   Box,
   Paper,
@@ -41,48 +42,16 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import CancelIcon from '@mui/icons-material/Cancel';
 import { useAuth } from '../../hooks/useAuth';
 
-// Invitation status mapping
-const STATUS_CONFIG = {
-  pending: { label: 'Pending', color: 'warning', icon: <AccessTimeIcon fontSize="small" /> },
-  accepted: { label: 'Accepted', color: 'success', icon: <CheckCircleIcon fontSize="small" /> },
-  expired: { label: 'Expired', color: 'default', icon: <CancelIcon fontSize="small" /> },
-  cancelled: { label: 'Cancelled', color: 'error', icon: <CancelIcon fontSize="small" /> },
-};
-
-/**
- * Format date for display
- */
-function formatDate(dateString) {
-  if (!dateString) return 'N/A';
-  return new Date(dateString).toLocaleDateString('en-US', {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-}
-
-/**
- * Calculate time remaining until expiry
- */
-function getTimeRemaining(expiresAt) {
-  if (!expiresAt) return null;
-  const now = new Date();
-  const expiry = new Date(expiresAt);
-  const diff = expiry - now;
-  
-  if (diff <= 0) return 'Expired';
-  
-  const days = Math.floor(diff / (1000 * 60 * 60 * 24));
-  const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
-  
-  if (days > 0) return `${days}d ${hours}h remaining`;
-  return `${hours}h remaining`;
-}
-
 export default function InviteApplicants() {
+  const { t } = useTranslation('vendor');
   const { organizationId, organizationName } = useAuth();
+  // Invitation status mapping
+  const STATUS_CONFIG = {
+    pending: { label: t('inviteApplicants.status.pending'), color: 'warning', icon: <AccessTimeIcon fontSize="small" /> },
+    accepted: { label: t('inviteApplicants.status.accepted'), color: 'success', icon: <CheckCircleIcon fontSize="small" /> },
+    expired: { label: t('inviteApplicants.status.expired'), color: 'default', icon: <CancelIcon fontSize="small" /> },
+    cancelled: { label: t('inviteApplicants.status.cancelled'), color: 'error', icon: <CancelIcon fontSize="small" /> },
+  };
   const [invitations, setInvitations] = useState([]);
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
@@ -131,7 +100,7 @@ export default function InviteApplicants() {
       ]);
     } catch (error) {
       console.error('Failed to fetch invitations:', error);
-      setSnackbar({ open: true, message: 'Failed to load invitations', severity: 'error' });
+      setSnackbar({ open: true, message: t('inviteApplicants.loadFailed'), severity: 'error' });
     } finally {
       setLoading(false);
     }
@@ -139,7 +108,7 @@ export default function InviteApplicants() {
 
   const handleSendInvitation = async (emails) => {
     if (!emails || emails.length === 0) {
-      setSnackbar({ open: true, message: 'Please enter at least one email address', severity: 'warning' });
+      setSnackbar({ open: true, message: t('inviteApplicants.enterEmail'), severity: 'warning' });
       return;
     }
 
@@ -179,7 +148,7 @@ export default function InviteApplicants() {
         setInvitations([...successful, ...invitations]);
         setSnackbar({
           open: true,
-          message: `Sent ${successful.length} invitation(s) successfully`,
+          message: t('inviteApplicants.sentSuccess', { count: successful.length }),
           severity: 'success',
         });
       }
@@ -187,7 +156,7 @@ export default function InviteApplicants() {
       if (failed.length > 0) {
         setSnackbar({
           open: true,
-          message: `${failed.length} invitation(s) failed to send`,
+          message: t('inviteApplicants.sentFailed', { count: failed.length }),
           severity: 'error',
         });
       }
@@ -197,7 +166,7 @@ export default function InviteApplicants() {
       setBulkEmails('');
     } catch (error) {
       console.error('Failed to send invitations:', error);
-      setSnackbar({ open: true, message: 'Failed to send invitations', severity: 'error' });
+      setSnackbar({ open: true, message: t('inviteApplicants.sendFailed'), severity: 'error' });
     } finally {
       setSending(false);
     }
@@ -206,7 +175,7 @@ export default function InviteApplicants() {
   const handleResendInvitation = async (invitation) => {
     try {
       // TODO: Resend via Keycloak API
-      setSnackbar({ open: true, message: `Resent invitation to ${invitation.email}`, severity: 'success' });
+      setSnackbar({ open: true, message: t('inviteApplicants.resentSuccess', { email: invitation.email }), severity: 'success' });
       
       // Update expiry
       setInvitations(
@@ -222,7 +191,7 @@ export default function InviteApplicants() {
         )
       );
     } catch (error) {
-      setSnackbar({ open: true, message: 'Failed to resend invitation', severity: 'error' });
+      setSnackbar({ open: true, message: t('inviteApplicants.resendFailed'), severity: 'error' });
     }
   };
 
@@ -234,9 +203,9 @@ export default function InviteApplicants() {
           inv.id === invitation.id ? { ...inv, status: 'cancelled' } : inv
         )
       );
-      setSnackbar({ open: true, message: 'Invitation cancelled', severity: 'success' });
+      setSnackbar({ open: true, message: t('inviteApplicants.cancelSuccess'), severity: 'success' });
     } catch (error) {
-      setSnackbar({ open: true, message: 'Failed to cancel invitation', severity: 'error' });
+      setSnackbar({ open: true, message: t('inviteApplicants.cancelFailed'), severity: 'error' });
     }
   };
 
@@ -259,28 +228,54 @@ export default function InviteApplicants() {
   const pendingCount = invitations.filter((i) => i.status === 'pending').length;
   const acceptedCount = invitations.filter((i) => i.status === 'accepted').length;
 
+  const formatDate = (dateString) => {
+    if (!dateString) return t('inviteApplicants.notAvailable');
+    return new Date(dateString).toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  };
+
+  const getTimeRemaining = (expiresAt) => {
+    if (!expiresAt) return null;
+    const now = new Date();
+    const expiry = new Date(expiresAt);
+    const diff = expiry - now;
+    
+    if (diff <= 0) return t('inviteApplicants.expired');
+    
+    const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+    const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+    
+    if (days > 0) return t('inviteApplicants.timeRemaining.days', { days, hours });
+    return t('inviteApplicants.timeRemaining.hours', { hours });
+  };
+
   return (
     <Box sx={{ p: 3 }}>
       {/* Header */}
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
         <Box>
           <Typography variant="h5" component="h1" gutterBottom>
-            Invite Applicants
+            {t('inviteApplicants.title')}
           </Typography>
           <Typography variant="body2" color="textSecondary">
-            Send email invitations to join {organizationName || 'your organization'} as applicants.
+            {t('inviteApplicants.description', { organization: organizationName || t('inviteApplicants.yourOrganization') })}
           </Typography>
         </Box>
         <Box sx={{ display: 'flex', gap: 1 }}>
           <Button startIcon={<RefreshIcon />} onClick={fetchInvitations} disabled={loading}>
-            Refresh
+            {t('inviteApplicants.refreshButton')}
           </Button>
           <Button
             variant="contained"
             startIcon={<PersonAddIcon />}
             onClick={() => setInviteDialogOpen(true)}
           >
-            Send Invitations
+            {t('inviteApplicants.sendButton')}
           </Button>
         </Box>
       </Box>
@@ -289,13 +284,13 @@ export default function InviteApplicants() {
       <Box sx={{ display: 'flex', gap: 2, mb: 3 }}>
         <Chip
           icon={<AccessTimeIcon />}
-          label={`${pendingCount} Pending`}
+          label={t('inviteApplicants.stats.pending', { count: pendingCount })}
           color="warning"
           variant="outlined"
         />
         <Chip
           icon={<CheckCircleIcon />}
-          label={`${acceptedCount} Accepted`}
+          label={t('inviteApplicants.stats.accepted', { count: acceptedCount })}
           color="success"
           variant="outlined"
         />
@@ -304,10 +299,9 @@ export default function InviteApplicants() {
       {/* Info Alert */}
       <Alert severity="info" sx={{ mb: 3 }}>
         <Typography variant="body2">
-          Invitations are sent via email and expire after 7 days. Applicants will receive a link to
-          create their account and join your organization. View sent emails at{' '}
+          {t('inviteApplicants.infoAlert')}{' '}
           <a href="http://localhost:8025" target="_blank" rel="noopener noreferrer">
-            MailHog (dev only)
+            {t('inviteApplicants.mailhogLink')}
           </a>
           .
         </Typography>
@@ -318,12 +312,12 @@ export default function InviteApplicants() {
         <Table>
           <TableHead>
             <TableRow>
-              <TableCell>Email</TableCell>
-              <TableCell>Status</TableCell>
-              <TableCell>Invited</TableCell>
-              <TableCell>Expires</TableCell>
-              <TableCell>Accepted</TableCell>
-              <TableCell align="right">Actions</TableCell>
+              <TableCell>{t('inviteApplicants.table.email')}</TableCell>
+              <TableCell>{t('inviteApplicants.table.status')}</TableCell>
+              <TableCell>{t('inviteApplicants.table.invited')}</TableCell>
+              <TableCell>{t('inviteApplicants.table.expires')}</TableCell>
+              <TableCell>{t('inviteApplicants.table.accepted')}</TableCell>
+              <TableCell align="right">{t('inviteApplicants.table.actions')}</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
@@ -368,7 +362,7 @@ export default function InviteApplicants() {
                   <TableCell align="right">
                     {invitation.status === 'pending' && (
                       <>
-                        <Tooltip title="Resend Invitation">
+                        <Tooltip title={t('inviteApplicants.table.resend')}>
                           <IconButton
                             size="small"
                             onClick={() => handleResendInvitation(invitation)}
@@ -376,7 +370,7 @@ export default function InviteApplicants() {
                             <RefreshIcon fontSize="small" />
                           </IconButton>
                         </Tooltip>
-                        <Tooltip title="Cancel Invitation">
+                        <Tooltip title={t('inviteApplicants.table.cancel')}>
                           <IconButton
                             size="small"
                             onClick={() => handleCancelInvitation(invitation)}
@@ -388,7 +382,7 @@ export default function InviteApplicants() {
                       </>
                     )}
                     {(invitation.status === 'expired' || invitation.status === 'cancelled') && (
-                      <Tooltip title="Resend Invitation">
+                      <Tooltip title={t('inviteApplicants.table.resend')}>
                         <IconButton
                           size="small"
                           onClick={() => handleResendInvitation(invitation)}
@@ -405,7 +399,7 @@ export default function InviteApplicants() {
               <TableRow>
                 <TableCell colSpan={6} align="center" sx={{ py: 4 }}>
                   <Typography color="textSecondary">
-                    No invitations sent yet. Click &quot;Send Invitations&quot; to get started.
+                    {t('inviteApplicants.table.empty')}
                   </Typography>
                 </TableCell>
               </TableRow>
@@ -421,23 +415,22 @@ export default function InviteApplicants() {
         maxWidth="sm"
         fullWidth
       >
-        <DialogTitle>Send Invitations</DialogTitle>
+        <DialogTitle>{t('inviteApplicants.dialog.title')}</DialogTitle>
         <DialogContent>
           <Typography variant="body2" color="textSecondary" sx={{ mb: 2 }}>
-            Invite applicants to join your organization. They will receive an email with a link to
-            create their account.
+            {t('inviteApplicants.dialog.description')}
           </Typography>
 
           <TextField
             autoFocus
             margin="dense"
-            label="Email Address"
+            label={t('inviteApplicants.dialog.emailLabel')}
             type="email"
             fullWidth
             variant="outlined"
             value={emailInput}
             onChange={(e) => setEmailInput(e.target.value)}
-            placeholder="applicant@example.com"
+            placeholder={t('inviteApplicants.dialog.emailPlaceholder')}
             InputProps={{
               startAdornment: (
                 <InputAdornment position="start">
@@ -450,26 +443,26 @@ export default function InviteApplicants() {
 
           <Divider sx={{ my: 2 }}>
             <Typography variant="caption" color="textSecondary">
-              OR bulk invite
+              {t('inviteApplicants.dialog.bulkOr')}
             </Typography>
           </Divider>
 
           <TextField
             margin="dense"
-            label="Bulk Email Addresses"
+            label={t('inviteApplicants.dialog.bulkLabel')}
             multiline
             rows={4}
             fullWidth
             variant="outlined"
             value={bulkEmails}
             onChange={(e) => setBulkEmails(e.target.value)}
-            placeholder="Enter multiple emails separated by commas, semicolons, or new lines..."
-            helperText={`${parseEmails().length} valid email(s) detected`}
+            placeholder={t('inviteApplicants.dialog.bulkPlaceholder')}
+            helperText={t('inviteApplicants.dialog.bulkHelper', { count: parseEmails().length })}
           />
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setInviteDialogOpen(false)} disabled={sending}>
-            Cancel
+            {t('inviteApplicants.dialog.cancelButton')}
           </Button>
           <Button
             onClick={() => handleSendInvitation(parseEmails())}
@@ -477,7 +470,7 @@ export default function InviteApplicants() {
             startIcon={sending ? <CircularProgress size={20} /> : <SendIcon />}
             disabled={sending || parseEmails().length === 0}
           >
-            {sending ? 'Sending...' : `Send ${parseEmails().length} Invitation(s)`}
+            {sending ? t('inviteApplicants.dialog.sending') : t('inviteApplicants.dialog.sendButton', { count: parseEmails().length })}
           </Button>
         </DialogActions>
       </Dialog>

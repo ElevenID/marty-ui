@@ -19,6 +19,7 @@ import {
   Tooltip,
   Chip,
 } from '@mui/material';
+import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
@@ -52,6 +53,7 @@ import IssuanceDashboardWidget from './dashboard/IssuanceDashboardWidget';
  * Quick action card with context-aware state
  */
 function QuickActionCard({ action, disabled, tooltip, onClick }) {
+  const { t } = useTranslation('console');
   const Icon = action.icon;
   
   const handleClick = (e) => {
@@ -87,7 +89,7 @@ function QuickActionCard({ action, disabled, tooltip, onClick }) {
           disabled={disabled}
           onClick={handleClick}
         >
-          Get Started
+          {t('dashboard.getStarted')}
         </Button>
       </CardActions>
     </Card>
@@ -107,6 +109,7 @@ function QuickActionCard({ action, disabled, tooltip, onClick }) {
 }
 
 function ConsoleDashboard() {
+  const { t } = useTranslation('console');
   const { user, organizationName, organizationId, isAdministrator, isVendor } = useAuth();
   const { data, loading, error, refetch } = useDashboardData();
   const [environment, setEnvironment] = useState(data.environment || 'development');
@@ -186,27 +189,27 @@ function ConsoleDashboard() {
   if (error) {
     return (
       <Box sx={{ py: 4 }}>
-        <Typography color="error">Error loading dashboard: {error}</Typography>
+        <Typography color="error">{t('dashboard.errorLoading', { error })}</Typography>
       </Box>
     );
   }
 
   // Determine user role for display
-  const userRole = isAdministrator ? 'Administrator' : isVendor ? 'Vendor' : 'User';
+  const userRole = isAdministrator ? t('common:userTypes.administrator') : isVendor ? t('common:userTypes.vendor') : t('common:userTypes.user');
 
   return (
     <Box>
       {/* Header */}
       <Box sx={{ mb: 4 }}>
         <Typography variant="h4" component="h1" gutterBottom>
-          Dashboard
+          {t('dashboard.title')}
         </Typography>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <Typography variant="body1" color="text.secondary">
-            Welcome back{user?.name ? `, ${user.name}` : ''}
+            {user?.name ? t('dashboard.welcomeWithName', { name: user.name }) : t('dashboard.welcome')}
           </Typography>
           <Chip
-            label={`Role: ${userRole}`}
+            label={t('dashboard.roleLabel', { role: userRole })}
             size="small"
             color="primary"
             variant="outlined"
@@ -268,10 +271,10 @@ function ConsoleDashboard() {
       {isOperational && (
         <Paper sx={{ p: 3, mb: 4, bgcolor: 'success.light', color: 'success.contrastText' }}>
           <Typography variant="h6" gutterBottom>
-            🎉 Organization is Operational
+            {t('dashboard.operationalTitle')}
           </Typography>
           <Typography variant="body2" paragraph>
-            All systems configured and ready. Your organization can now issue and verify credentials.
+            {t('dashboard.operationalDescription')}
           </Typography>
           <Box sx={{ display: 'flex', gap: 2 }}>
             <Button
@@ -281,7 +284,7 @@ function ConsoleDashboard() {
               endIcon={<ArrowForwardIcon />}
               sx={{ bgcolor: 'success.dark', '&:hover': { bgcolor: 'success.darker' } }}
             >
-              Go to Operate
+              {t('dashboard.goToOperate')}
             </Button>
             <Button
               variant="outlined"
@@ -289,7 +292,7 @@ function ConsoleDashboard() {
               to="/console/audit"
               sx={{ borderColor: 'success.dark', color: 'success.dark' }}
             >
-              View Audit
+              {t('dashboard.viewAudit')}
             </Button>
           </Box>
         </Paper>
@@ -299,7 +302,7 @@ function ConsoleDashboard() {
       {!isOperational && visibleQuickActions.length > 0 && (
         <>
           <Typography variant="h6" gutterBottom>
-            Next Step
+            {t('dashboard.nextStep')}
           </Typography>
           <Grid container spacing={2} sx={{ mb: 4 }}>
             {visibleQuickActions.map((action) => {

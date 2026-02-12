@@ -24,35 +24,38 @@ import TimerIcon from '@mui/icons-material/Timer';
 import FingerprintIcon from '@mui/icons-material/Fingerprint';
 import SecurityIcon from '@mui/icons-material/Security';
 import VerifiedIcon from '@mui/icons-material/Verified';
-
-const HOLDER_BINDING_OPTIONS = [
-  {
-    value: 'device_key',
-    label: 'Device Key',
-    description: 'Bind to device cryptographic key (recommended)',
-    icon: <SecurityIcon />,
-  },
-  {
-    value: 'session_nonce',
-    label: 'Session Nonce',
-    description: 'One-time session binding (less secure)',
-    icon: <TimerIcon />,
-  },
-  {
-    value: 'biometric',
-    label: 'Biometric',
-    description: 'Biometric authentication required',
-    icon: <FingerprintIcon />,
-  },
-  {
-    value: 'none',
-    label: 'None',
-    description: 'No holder binding (least secure)',
-    icon: null,
-  },
-];
+import { useTranslation } from 'react-i18next';
 
 const FreshnessBindingStep = ({ policyConfig, onConfigChange }) => {
+  const { t } = useTranslation('console');
+
+  const HOLDER_BINDING_OPTIONS = [
+    {
+      value: 'device_key',
+      label: t('wizards.presentationPolicy.freshnessBindingStep.bindingOptions.device_key.label'),
+      description: t('wizards.presentationPolicy.freshnessBindingStep.bindingOptions.device_key.description'),
+      icon: <SecurityIcon />,
+    },
+    {
+      value: 'session_nonce',
+      label: t('wizards.presentationPolicy.freshnessBindingStep.bindingOptions.session_nonce.label'),
+      description: t('wizards.presentationPolicy.freshnessBindingStep.bindingOptions.session_nonce.description'),
+      icon: <TimerIcon />,
+    },
+    {
+      value: 'biometric',
+      label: t('wizards.presentationPolicy.freshnessBindingStep.bindingOptions.biometric.label'),
+      description: t('wizards.presentationPolicy.freshnessBindingStep.bindingOptions.biometric.description'),
+      icon: <FingerprintIcon />,
+    },
+    {
+      value: 'none',
+      label: t('wizards.presentationPolicy.freshnessBindingStep.bindingOptions.none.label'),
+      description: t('wizards.presentationPolicy.freshnessBindingStep.bindingOptions.none.description'),
+      icon: null,
+    },
+  ];
+
   const handleFieldChange = (field, value) => {
     onConfigChange({
       ...policyConfig,
@@ -93,22 +96,22 @@ const FreshnessBindingStep = ({ policyConfig, onConfigChange }) => {
   return (
     <Box>
       <Typography variant="h6" gutterBottom>
-        Freshness & Security Settings
+        {t('wizards.presentationPolicy.freshnessBindingStep.title')}
       </Typography>
       
       <Typography color="text.secondary" paragraph>
-        Configure how recent credentials must be and how to bind presentations to holders.
+        {t('wizards.presentationPolicy.freshnessBindingStep.description')}
       </Typography>
 
       {/* Holder Binding */}
       <Card sx={{ mb: 3 }}>
         <CardContent>
           <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 600 }}>
-            Holder Binding Method
+            {t('wizards.presentationPolicy.freshnessBindingStep.sections.holderBinding')}
           </Typography>
 
           <Typography variant="body2" color="text.secondary" paragraph>
-            How should the presentation be bound to the credential holder?
+            {t('wizards.presentationPolicy.freshnessBindingStep.helpers.holderBinding')}
           </Typography>
 
           <FormControl component="fieldset" fullWidth>
@@ -153,7 +156,7 @@ const FreshnessBindingStep = ({ policyConfig, onConfigChange }) => {
                         </Typography>
                       </Box>
                       {option.value === 'device_key' && (
-                        <Chip label="Recommended" size="small" color="success" />
+                        <Chip label={t('wizards.presentationPolicy.freshnessBindingStep.recommendedChip')} size="small" color="success" />
                       )}
                     </Box>
                   </CardContent>
@@ -168,36 +171,36 @@ const FreshnessBindingStep = ({ policyConfig, onConfigChange }) => {
       <Card sx={{ mb: 3 }}>
         <CardContent>
           <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 600 }}>
-            Freshness Requirements
+            {t('wizards.presentationPolicy.freshnessBindingStep.sections.freshness')}
           </Typography>
 
           <Typography variant="body2" color="text.secondary" paragraph>
-            Control how recent credentials and proofs must be.
+            {t('wizards.presentationPolicy.freshnessBindingStep.helpers.freshness')}
           </Typography>
 
           <TextField
             fullWidth
             type="number"
-            label="Maximum Credential Age"
+            label={t('wizards.presentationPolicy.freshnessBindingStep.fields.maxCredentialAge')}
             value={secondsToDays(policyConfig.freshness_requirements.max_credential_age_seconds)}
             onChange={(e) => handleFreshnessChange('max_credential_age_seconds', daysToSeconds(parseInt(e.target.value) || 0))}
             InputProps={{
-              endAdornment: <InputAdornment position="end">days</InputAdornment>,
+              endAdornment: <InputAdornment position="end">{t('wizards.presentationPolicy.freshnessBindingStep.units.days')}</InputAdornment>,
             }}
-            helperText="How old can the credential be? (1 year = 365 days)"
+            helperText={t('wizards.presentationPolicy.freshnessBindingStep.helpers.maxCredentialAge')}
             sx={{ mb: 2 }}
           />
 
           <TextField
             fullWidth
             type="number"
-            label="Maximum Proof Age"
+            label={t('wizards.presentationPolicy.freshnessBindingStep.fields.maxProofAge')}
             value={Math.floor(policyConfig.freshness_requirements.max_proof_age_seconds / 60)}
             onChange={(e) => handleFreshnessChange('max_proof_age_seconds', parseInt(e.target.value) * 60 || 300)}
             InputProps={{
-              endAdornment: <InputAdornment position="end">minutes</InputAdornment>,
+              endAdornment: <InputAdornment position="end">{t('wizards.presentationPolicy.freshnessBindingStep.units.minutes')}</InputAdornment>,
             }}
-            helperText="How old can the proof be? (typically 5-10 minutes)"
+            helperText={t('wizards.presentationPolicy.freshnessBindingStep.helpers.maxProofAge')}
             sx={{ mb: 2 }}
           />
 
@@ -211,12 +214,12 @@ const FreshnessBindingStep = ({ policyConfig, onConfigChange }) => {
             label={
               <Box sx={{ display: 'flex', alignItems: 'center' }}>
                 <VerifiedIcon sx={{ mr: 1, fontSize: 20 }} />
-                <Typography variant="body2">Require Revocation Check</Typography>
+                <Typography variant="body2">{t('wizards.presentationPolicy.freshnessBindingStep.fields.requireRevocationCheck')}</Typography>
               </Box>
             }
           />
           <Typography variant="caption" color="text.secondary" display="block" sx={{ ml: 4 }}>
-            Verify that credentials have not been revoked (recommended)
+            {t('wizards.presentationPolicy.freshnessBindingStep.helpers.revocationCheck')}
           </Typography>
         </CardContent>
       </Card>
@@ -225,27 +228,29 @@ const FreshnessBindingStep = ({ policyConfig, onConfigChange }) => {
       <Card>
         <CardContent>
           <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 600 }}>
-            Compliance & Standards
+            {t('wizards.presentationPolicy.freshnessBindingStep.sections.compliance')}
           </Typography>
 
           <Typography variant="body2" color="text.secondary" paragraph>
-            Track which standard version this policy targets for compliance audits.
+            {t('wizards.presentationPolicy.freshnessBindingStep.helpers.compliance')}
           </Typography>
 
           <TextField
             fullWidth
-            label="Standard Reference"
+            label={t('wizards.presentationPolicy.freshnessBindingStep.fields.standardReference')}
             value={policyConfig.metadata?.standard_reference || ''}
             onChange={(e) => handleMetadataChange('standard_reference', e.target.value)}
-            placeholder="e.g., ISO 18013-5:2021, ARF 1.4.0, ICAO 9303 Ed. 8"
-            helperText="Optional: Specify the standard version this policy conforms to"
+            placeholder={t('wizards.presentationPolicy.freshnessBindingStep.standardReferencePlaceholder')}
+            helperText={t('wizards.presentationPolicy.freshnessBindingStep.helpers.standardReference')}
             sx={{ mb: 2 }}
           />
 
           {policyConfig.metadata?.standard_reference && (
             <Alert severity="info" icon={<VerifiedIcon />}>
               <Typography variant="body2">
-                This policy will be marked as targeting: <strong>{policyConfig.metadata.standard_reference}</strong>
+                {t('wizards.presentationPolicy.freshnessBindingStep.standardReferenceInfo', {
+                  standard: policyConfig.metadata.standard_reference,
+                })}
               </Typography>
             </Alert>
           )}

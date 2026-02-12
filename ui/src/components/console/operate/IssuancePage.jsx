@@ -6,27 +6,30 @@
  */
 
 import { Box } from '@mui/material';
+import { useTranslation } from 'react-i18next';
 import Issuance from '../../vendor/Issuance';
 import { ResourcePage } from '../../common';
 
-const OPERATE_TABS = [
-  { label: 'Issuance', path: '/console/operate/issuance' },
-  { label: 'Applications', path: '/console/operate/applications' },
+const getOperateTabs = (t) => [
+  { label: t('operate.tabs.issuance'), path: '/console/operate/issuance' },
+  { label: t('operate.tabs.applications'), path: '/console/operate/applications' },
 ];
 
-const BREADCRUMBS = [
-  { label: 'Console', path: '/console' },
-  { label: 'Operate', path: '/console/operate' },
-  { label: 'Issuance', path: '/console/operate/issuance' },
+const getBreadcrumbs = (t) => [
+  { label: t('operate.breadcrumbs.console'), path: '/console' },
+  { label: t('operate.breadcrumbs.operate'), path: '/console/operate' },
+  { label: t('operate.breadcrumbs.issuance'), path: '/console/operate/issuance' },
 ];
 
 function IssuancePage() {
+  const { t } = useTranslation('console');
+
   return (
     <ResourcePage
-      title="Issuance"
-      description="Issue and manage digital credentials."
-      tabs={OPERATE_TABS}
-      breadcrumbs={BREADCRUMBS}
+      title={t('operate.issuance.title')}
+      description={t('operate.issuance.description')}
+      tabs={getOperateTabs(t)}
+      breadcrumbs={getBreadcrumbs(t)}
     >
       <Box sx={{ mx: -3, mt: -2 }}>
         <Issuance />

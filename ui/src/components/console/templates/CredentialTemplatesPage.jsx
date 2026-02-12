@@ -5,6 +5,7 @@
  */
 
 import { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useNotification } from '../../../contexts/NotificationContext';
 import {
   Box,
@@ -33,27 +34,29 @@ import { Link } from 'react-router-dom';
 
 import { ResourcePage, EmptyState, EmptyStates, StatusChip } from '../../common';
 
-const TEMPLATES_TABS = [
-  { label: 'Credential Templates', path: '/console/templates/credentials' },
-  { label: 'Application Templates', path: '/console/templates/applications' },
+const getTemplatesTabs = (t) => [
+  { label: t('templates.credentialTemplates'), path: '/console/templates/credentials' },
+  { label: t('templates.applicationTemplates'), path: '/console/templates/applications' },
 ];
 
-const BREADCRUMBS = [
-  { label: 'Console', path: '/console' },
-  { label: 'Templates', path: '/console/templates' },
-  { label: 'Credential Templates', path: '/console/templates/credentials' },
+const getBreadcrumbs = (t) => [
+  { label: t('templates.breadcrumbs.console'), path: '/console' },
+  { label: t('templates.breadcrumbs.templates'), path: '/console/templates' },
+  { label: t('templates.breadcrumbs.credentialTemplates'), path: '/console/templates/credentials' },
 ];
 
 /**
  * Artifacts status indicator
  */
 function ArtifactsStatus({ hasArtifacts, validated }) {
+  const { t } = useTranslation('console');
+  
   if (!hasArtifacts) {
     return (
-      <Tooltip title="Missing required artifacts">
+      <Tooltip title={t('templates.artifactsStatus.missingArtifactsTooltip')}>
         <Chip 
           icon={<WarningIcon />} 
-          label="Missing Artifacts" 
+          label={t('templates.artifactsStatus.missingArtifacts')} 
           color="warning" 
           size="small" 
         />
@@ -63,17 +66,17 @@ function ArtifactsStatus({ hasArtifacts, validated }) {
   
   if (!validated) {
     return (
-      <Tooltip title="Artifacts not validated">
-        <Chip label="Not Validated" size="small" variant="outlined" />
+      <Tooltip title={t('templates.artifactsStatus.notValidatedTooltip')}>
+        <Chip label={t('templates.artifactsStatus.notValidated')} size="small" variant="outlined" />
       </Tooltip>
     );
   }
   
   return (
-    <Tooltip title="All artifacts validated">
+    <Tooltip title={t('templates.artifactsStatus.validTooltip')}>
       <Chip 
         icon={<CheckCircleIcon />} 
-        label="Valid" 
+        label={t('templates.artifactsStatus.valid')} 
         color="success" 
         size="small" 
       />
@@ -82,6 +85,7 @@ function ArtifactsStatus({ hasArtifacts, validated }) {
 }
 
 function CredentialTemplatesPage() {
+  const { t } = useTranslation('console');
   const { showError, showWarning } = useNotification();
   const [templates, setTemplates] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -132,8 +136,8 @@ function CredentialTemplatesPage() {
         ]);
       } catch (err) {
         console.error('Failed to load credential templates:', err);
-        setError('Failed to load credential templates');
-        showError('Unable to load credential templates', {
+        setError(t('templates.failedToLoad'));
+        showError(t('templates.failedToLoad'), {
           details: 'The backend service may be unavailable. Check console for details.',
         });
       } finally {
@@ -148,13 +152,13 @@ function CredentialTemplatesPage() {
 
   return (
     <ResourcePage
-      title="Credential Templates"
-      description="Define schemas and formats for credentials your organization can issue."
-      resourceName="Template"
+      title={t('templates.credentialTemplates')}
+      description={t('templates.credentialTemplatesDescription')}
+      resourceName={t('templates.title')}
       buildPath="/console/templates/credentials/new"
       newPath="/console/templates/credentials/new?mode=advanced"
-      tabs={TEMPLATES_TABS}
-      breadcrumbs={BREADCRUMBS}
+      tabs={getTemplatesTabs(t)}
+      breadcrumbs={getBreadcrumbs(t)}
     >
       {error && (
         <Alert severity="error" sx={{ mb: 3 }}>
@@ -169,11 +173,10 @@ function CredentialTemplatesPage() {
         sx={{ mb: 3 }}
       >
         <Typography variant="body2" fontWeight={600} gutterBottom>
-          Credential Templates are not applicant-facing.
+          {t('templates.guardrailTitle')}
         </Typography>
         <Typography variant="body2">
-          They define schemas, application rules, and compliance used by Issuance Flows. 
-          To make credentials available to applicants, create an Issuance Flow.
+          {t('templates.guardrailDescription')}
         </Typography>
       </Alert>
 
@@ -183,11 +186,11 @@ function CredentialTemplatesPage() {
           sx={{ mb: 3 }}
           action={
             <Button color="inherit" size="small">
-              Validate All
+              {t('templates.validateAll')}
             </Button>
           }
         >
-          {missingArtifactsCount} template(s) have missing or unvalidated artifacts.
+          {t('templates.missingArtifactsWarning', { count: missingArtifactsCount })}
         </Alert>
       )}
 
@@ -200,15 +203,15 @@ function CredentialTemplatesPage() {
           <Table>
             <TableHead>
               <TableRow>
-                <TableCell>Name</TableCell>
-                <TableCell>Format</TableCell>
-                <TableCell>Version</TableCell>
-                <TableCell align="right">Claims</TableCell>
-                <TableCell>Artifacts</TableCell>
-                <TableCell>Used By</TableCell>
-                <TableCell>Status</TableCell>
-                <TableCell>Last Updated</TableCell>
-                <TableCell align="right">Actions</TableCell>
+                <TableCell>{t('templates.tableHeaders.name')}</TableCell>
+                <TableCell>{t('templates.tableHeaders.format')}</TableCell>
+                <TableCell>{t('templates.tableHeaders.version')}</TableCell>
+                <TableCell align="right">{t('templates.tableHeaders.claims')}</TableCell>
+                <TableCell>{t('templates.tableHeaders.artifacts')}</TableCell>
+                <TableCell>{t('templates.tableHeaders.usedBy')}</TableCell>
+                <TableCell>{t('templates.tableHeaders.status')}</TableCell>
+                <TableCell>{t('templates.tableHeaders.lastUpdated')}</TableCell>
+                <TableCell align="right">{t('templates.tableHeaders.actions')}</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
@@ -235,9 +238,9 @@ function CredentialTemplatesPage() {
                       />
                     </TableCell>
                     <TableCell>
-                      <Tooltip title="Number of Issuance Flows using this template">
+                      <Tooltip title={t('templates.usedByFlowsTooltip')}>
                         <Chip 
-                          label={`${template.usedByFlowsCount} Flow${template.usedByFlowsCount !== 1 ? 's' : ''}`}
+                          label={t('templates.usedByFlows', { count: template.usedByFlowsCount })}
                           size="small"
                           color={template.usedByFlowsCount > 0 ? 'primary' : 'default'}
                           variant={template.usedByFlowsCount > 0 ? 'filled' : 'outlined'}
@@ -251,7 +254,7 @@ function CredentialTemplatesPage() {
                       {new Date(template.updatedAt).toLocaleDateString()}
                     </TableCell>
                     <TableCell align="right">
-                      <Tooltip title="View Details">
+                      <Tooltip title={t('templates.actions.viewDetails')}>
                         <IconButton
                           component={Link}
                           to={`/console/templates/credentials/${template.id}`}
@@ -260,7 +263,7 @@ function CredentialTemplatesPage() {
                           <VisibilityIcon fontSize="small" />
                         </IconButton>
                       </Tooltip>
-                      <Tooltip title="Edit">
+                      <Tooltip title={t('templates.actions.edit')}>
                         <IconButton
                           component={Link}
                           to={`/console/templates/credentials/${template.id}/edit`}
@@ -269,7 +272,7 @@ function CredentialTemplatesPage() {
                           <EditIcon fontSize="small" />
                         </IconButton>
                       </Tooltip>
-                      <Tooltip title="Create Issuance Flow">
+                      <Tooltip title={t('templates.actions.createIssuanceFlow')}>
                         <IconButton
                           component={Link}
                           to={`/console/flows/definitions/new?templateId=${template.id}`}

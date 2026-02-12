@@ -27,6 +27,7 @@ import SecurityIcon from '@mui/icons-material/Security';
 import RestartAltIcon from '@mui/icons-material/RestartAlt';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
+import { useTranslation } from 'react-i18next';
 
 const ALGORITHMS = [
   { value: 'ES256', label: 'ES256 (ECDSA P-256)' },
@@ -48,6 +49,7 @@ const KEY_SIZES = [
 ];
 
 const ValidationRulesStep = ({ data, onChange }) => {
+  const { t } = useTranslation('console');
   const [showAdvanced, setShowAdvanced] = useState(false);
   
   const DEFAULT_RULES = {
@@ -80,22 +82,27 @@ const ValidationRulesStep = ({ data, onChange }) => {
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
         <SecurityIcon />
         <Typography variant="h6">
-          Validation Rules
+          {t('wizards.trustProfile.validationRulesStep.title')}
         </Typography>
-        <Chip label="Optional" size="small" color="default" variant="outlined" />
+        <Chip
+          label={t('wizards.trustProfile.validationRulesStep.optionalChip')}
+          size="small"
+          color="default"
+          variant="outlined"
+        />
       </Box>
       <Typography color="text.secondary" paragraph>
-        Configure cryptographic and security requirements. Defaults are pre-selected based on current best practices.
+        {t('wizards.trustProfile.validationRulesStep.description')}
       </Typography>
 
       <Alert severity="success" sx={{ mb: 3 }}>
         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <Box>
             <Typography variant="body2" gutterBottom>
-              <strong>Defaults are production-safe.</strong>
+              <strong>{t('wizards.trustProfile.validationRulesStep.defaultsAlert.title')}</strong>
             </Typography>
             <Typography variant="caption" color="text.secondary">
-              These rules determine which credentials are accepted during verification. You can skip this step to use secure defaults.
+              {t('wizards.trustProfile.validationRulesStep.defaultsAlert.description')}
             </Typography>
           </Box>
           <Button
@@ -103,7 +110,7 @@ const ValidationRulesStep = ({ data, onChange }) => {
             startIcon={<RestartAltIcon />}
             onClick={handleResetDefaults}
           >
-            Reset to Defaults
+            {t('wizards.trustProfile.validationRulesStep.resetDefaults')}
           </Button>
         </Box>
       </Alert>
@@ -111,10 +118,10 @@ const ValidationRulesStep = ({ data, onChange }) => {
       {/* Allowed Algorithms */}
       <FormControl component="fieldset" fullWidth sx={{ mb: 3 }}>
         <Typography variant="subtitle2" gutterBottom>
-          Allowed Signing Algorithms
+          {t('wizards.trustProfile.validationRulesStep.allowedAlgorithms.title')}
         </Typography>
         <FormHelperText sx={{ mt: 0, mb: 1 }}>
-          Select which cryptographic algorithms are accepted for credential signatures
+          {t('wizards.trustProfile.validationRulesStep.allowedAlgorithms.helper')}
         </FormHelperText>
         <FormGroup>
           <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 1 }}>
@@ -142,7 +149,11 @@ const ValidationRulesStep = ({ data, onChange }) => {
           onClick={() => setShowAdvanced(!showAdvanced)}
           endIcon={showAdvanced ? <ExpandLessIcon /> : <ExpandMoreIcon />}
         >
-          {showAdvanced ? 'Hide' : 'Show'} Advanced Options
+          {t('wizards.trustProfile.validationRulesStep.advanced.toggle', {
+            action: showAdvanced
+              ? t('wizards.trustProfile.validationRulesStep.advanced.hide')
+              : t('wizards.trustProfile.validationRulesStep.advanced.show'),
+          })}
         </Button>
 
         <Collapse in={showAdvanced}>
@@ -151,11 +162,11 @@ const ValidationRulesStep = ({ data, onChange }) => {
 
             {/* Key Size Constraints */}
             <FormControl fullWidth sx={{ mb: 3 }}>
-              <InputLabel>Minimum Key Size (RSA)</InputLabel>
+              <InputLabel>{t('wizards.trustProfile.validationRulesStep.keySize.label')}</InputLabel>
               <Select
                 value={rules.min_key_size || 2048}
                 onChange={(e) => handleRuleChange('min_key_size', e.target.value)}
-                label="Minimum Key Size (RSA)"
+                label={t('wizards.trustProfile.validationRulesStep.keySize.label')}
               >
                 {KEY_SIZES.map((size) => (
                   <MenuItem key={size.value} value={size.value}>
@@ -164,7 +175,7 @@ const ValidationRulesStep = ({ data, onChange }) => {
                 ))}
               </Select>
               <FormHelperText>
-                Minimum RSA key size for signature verification (applies to RS*/PS* algorithms)
+                {t('wizards.trustProfile.validationRulesStep.keySize.helper')}
               </FormHelperText>
             </FormControl>
 
@@ -172,7 +183,7 @@ const ValidationRulesStep = ({ data, onChange }) => {
 
             {/* Additional Options */}
             <Typography variant="subtitle2" gutterBottom>
-              Additional Security Options
+              {t('wizards.trustProfile.validationRulesStep.additionalSecurity.title')}
             </Typography>
             
             <FormGroup>
@@ -183,10 +194,10 @@ const ValidationRulesStep = ({ data, onChange }) => {
                     onChange={(e) => handleRuleChange('allow_self_signed', e.target.checked)}
                   />
                 }
-                label="Allow self-signed credentials"
+                label={t('wizards.trustProfile.validationRulesStep.additionalSecurity.allowSelfSigned.label')}
               />
               <FormHelperText sx={{ ml: 4, mt: -1, mb: 2 }}>
-                Enable if credentials can be signed by their subject (not recommended for production)
+                {t('wizards.trustProfile.validationRulesStep.additionalSecurity.allowSelfSigned.helper')}
               </FormHelperText>
 
               <FormControlLabel
@@ -196,10 +207,10 @@ const ValidationRulesStep = ({ data, onChange }) => {
                     onChange={(e) => handleRuleChange('require_key_usage', e.target.checked)}
                   />
                 }
-                label="Require proper key usage in certificates"
+                label={t('wizards.trustProfile.validationRulesStep.additionalSecurity.requireKeyUsage.label')}
               />
               <FormHelperText sx={{ ml: 4, mt: -1 }}>
-                Verify that signing keys have appropriate X.509 key usage extensions (recommended)
+                {t('wizards.trustProfile.validationRulesStep.additionalSecurity.requireKeyUsage.helper')}
               </FormHelperText>
             </FormGroup>
           </Box>

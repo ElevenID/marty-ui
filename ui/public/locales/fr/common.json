@@ -1,0 +1,51 @@
+{
+	"actions": {
+		"save": "Enregistrer",
+		"cancel": "Annuler",
+		"back": "Retour",
+		"next": "Suivant",
+		"close": "Fermer",
+		"refresh": "Actualiser"
+	},
+	"common": {
+		"loading": "Chargement...",
+		"status": "Statut",
+		"active": "Actif",
+		"inactive": "Inactif"
+	},
+	"navigation": {
+		"home": "Accueil",
+		"product": "Produit",
+		"howItWorks": "Fonctionnement",
+		"whyVerifiableIdentity": "Pourquoi l'identité vérifiable",
+		"standards": "Standards",
+		"docs": "Documentation",
+		"pricing": "Tarifs",
+		"dashboard": "Tableau de bord",
+		"travelDocs": "Documents de voyage",
+		"applicants": "Candidats",
+		"verify": "Vérifier",
+		"wallet": "Portefeuille",
+		"advanced": "Avancé",
+		"admin": "Admin",
+		"trust": "Confiance",
+		"verification": "Vérification",
+		"auditLogs": "Journaux d'audit",
+		"team": "Équipe",
+		"credentials": "Justificatifs",
+		"myApplications": "Mes demandes",
+		"myDocuments": "Mes documents",
+		"profile": "Profil",
+		"policies": "Politiques",
+		"templates": "Modèles",
+		"settings": "Paramètres",
+		"help": "Aide"
+	},
+	"validation": {
+		"required": "Ce champ est obligatoire"
+	},
+	"messages": {
+		"success": "Succès",
+		"error": "Erreur"
+	}
+}

@@ -7,6 +7,7 @@ export default defineConfig(({ mode }) => {
   // Load env file based on `mode` in the current working directory.
   const env = loadEnv(mode, process.cwd(), '')
   const isDev = mode === 'development'
+  const port = Number(env.VITE_PORT || env.PORT || env.UI_DEV_PORT || 3000)
   
   return {
     plugins: [
@@ -26,7 +27,7 @@ export default defineConfig(({ mode }) => {
       */
     ],
     server: {
-      port: 3000,
+      port: port,
       host: true, // Listen on all network interfaces
       allowedHosts: [
         'localhost',

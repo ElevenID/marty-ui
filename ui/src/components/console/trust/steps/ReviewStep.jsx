@@ -25,29 +25,28 @@ import EditIcon from '@mui/icons-material/Edit';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import SecurityIcon from '@mui/icons-material/Security';
 import InfoIcon from '@mui/icons-material/Info';
+import { useTranslation } from 'react-i18next';
 
-const FRAMEWORK_LABELS = {
-  icao: 'ICAO 9303 (eMRTD/ePassport)',
-  aamva: 'AAMVA (mDL - ISO 18013-5)',
-  eudi: 'EUDI (EU Digital Identity Wallet)',
-  custom: 'Custom',
+const getFrameworkLabel = (t, frameworkType) => {
+  const key = `wizards.trustProfile.frameworkLabels.${frameworkType}`;
+  return t(key, { defaultValue: frameworkType });
 };
 
-const FORMAT_LABELS = {
-  jwt_vc: 'JWT VC',
-  sd_jwt_vc: 'SD-JWT VC',
-  mdoc: 'mDoc',
-  ldp_vc: 'LDP VC',
+const getFormatLabel = (t, format) => {
+  const key = `wizards.trustProfile.formatLabels.${format}`;
+  return t(key, { defaultValue: format });
 };
 
 const ReviewStep = ({ data, onChange, onEdit }) => {
+  const { t } = useTranslation('console');
+
   return (
     <Box>
       <Typography variant="h6" gutterBottom>
-        Review & Activate
+        {t('wizards.trustProfile.reviewStep.title')}
       </Typography>
       <Typography color="text.secondary" paragraph>
-        Review all configuration details before creating the trust profile.
+        {t('wizards.trustProfile.reviewStep.description')}
       </Typography>
 
       {/* Basic Information */}
@@ -56,27 +55,27 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
             <Typography variant="h6" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
               <CheckCircleIcon color="primary" />
-              Basic Information
+              {t('wizards.trustProfile.reviewStep.sections.basicInformation')}
             </Typography>
             <Button size="small" startIcon={<EditIcon />} onClick={() => onEdit(0)}>
-              Edit
+              {t('wizards.trustProfile.reviewStep.actions.edit')}
             </Button>
           </Box>
 
           <Grid container spacing={2}>
             <Grid item xs={12}>
               <Typography variant="subtitle2" color="text.secondary">
-                Profile Name
+                {t('wizards.trustProfile.reviewStep.fields.profileName')}
               </Typography>
               <Typography variant="body1" gutterBottom>
-                {data.name || <em>Not set</em>}
+                {data.name || <em>{t('wizards.trustProfile.reviewStep.values.notSet')}</em>}
               </Typography>
             </Grid>
 
             {data.description && (
               <Grid item xs={12}>
                 <Typography variant="subtitle2" color="text.secondary">
-                  Description
+                  {t('wizards.trustProfile.reviewStep.fields.description')}
                 </Typography>
                 <Typography variant="body1" gutterBottom>
                   {data.description}
@@ -86,22 +85,22 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
 
             <Grid item xs={12} md={6}>
               <Typography variant="subtitle2" color="text.secondary">
-                Framework Type
+                {t('wizards.trustProfile.reviewStep.fields.frameworkType')}
               </Typography>
               <Typography variant="body1">
-                {FRAMEWORK_LABELS[data.framework_type] || data.framework_type}
+                {getFrameworkLabel(t, data.framework_type)}
               </Typography>
             </Grid>
 
             <Grid item xs={12}>
               <Typography variant="subtitle2" color="text.secondary" gutterBottom>
-                Supported Formats
+                {t('wizards.trustProfile.reviewStep.fields.supportedFormats')}
               </Typography>
               <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
                 {(data.supported_formats || []).map((format) => (
                   <Chip
                     key={format}
-                    label={FORMAT_LABELS[format] || format}
+                    label={getFormatLabel(t, format)}
                     size="small"
                     color="primary"
                     variant="outlined"
@@ -119,17 +118,19 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
             <Typography variant="h6" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
               <SecurityIcon color="primary" />
-              Trust Sources
+              {t('wizards.trustProfile.reviewStep.sections.trustSources')}
             </Typography>
             <Button size="small" startIcon={<EditIcon />} onClick={() => onEdit(1)}>
-              Edit
+              {t('wizards.trustProfile.reviewStep.actions.edit')}
             </Button>
           </Box>
 
           {data.trusted_issuers && data.trusted_issuers.length > 0 ? (
             <Box>
               <Typography variant="body2" color="text.secondary" gutterBottom>
-                {data.trusted_issuers.length} trusted issuer{data.trusted_issuers.length !== 1 ? 's' : ''} configured
+                {t('wizards.trustProfile.reviewStep.trustSourcesSummary.trustedIssuersConfigured', {
+                  count: data.trusted_issuers.length,
+                })}
               </Typography>
               <List dense>
                 {data.trusted_issuers.slice(0, 3).map((issuer, index) => (
@@ -145,14 +146,16 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
                 ))}
                 {data.trusted_issuers.length > 3 && (
                   <Typography variant="body2" color="text.secondary">
-                    ... and {data.trusted_issuers.length - 3} more
+                    {t('wizards.trustProfile.reviewStep.trustSourcesSummary.andMore', {
+                      count: data.trusted_issuers.length - 3,
+                    })}
                   </Typography>
                 )}
               </List>
             </Box>
           ) : (
             <Typography variant="body2" color="text.secondary">
-              No trust sources configured (can be added later)
+              {t('wizards.trustProfile.reviewStep.trustSourcesSummary.noneConfigured')}
             </Typography>
           )}
         </CardContent>
@@ -163,17 +166,17 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
         <CardContent>
           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
             <Typography variant="h6">
-              Validation Rules
+              {t('wizards.trustProfile.reviewStep.sections.validationRules')}
             </Typography>
             <Button size="small" startIcon={<EditIcon />} onClick={() => onEdit(2)}>
-              Edit
+              {t('wizards.trustProfile.reviewStep.actions.edit')}
             </Button>
           </Box>
 
           <Grid container spacing={2}>
             <Grid item xs={12}>
               <Typography variant="subtitle2" color="text.secondary" gutterBottom>
-                Allowed Algorithms
+                {t('wizards.trustProfile.reviewStep.fields.allowedAlgorithms')}
               </Typography>
               <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
                 {(data.validation_rules?.allowed_algorithms || []).map((alg) => (
@@ -184,28 +187,32 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
 
             <Grid item xs={12} md={6}>
               <Typography variant="subtitle2" color="text.secondary">
-                Self-Signed Credentials
+                {t('wizards.trustProfile.reviewStep.fields.selfSignedCredentials')}
               </Typography>
               <Typography variant="body1">
-                {data.validation_rules?.allow_self_signed ? 'Allowed' : 'Not allowed'}
+                {data.validation_rules?.allow_self_signed
+                  ? t('wizards.trustProfile.reviewStep.values.allowed')
+                  : t('wizards.trustProfile.reviewStep.values.notAllowed')}
               </Typography>
             </Grid>
 
             <Grid item xs={12} md={6}>
               <Typography variant="subtitle2" color="text.secondary">
-                Minimum Key Size (RSA)
+                {t('wizards.trustProfile.reviewStep.fields.minimumKeySize')}
               </Typography>
               <Typography variant="body1">
-                {data.validation_rules?.min_key_size || 2048} bits
+                {(data.validation_rules?.min_key_size || 2048)} {t('wizards.trustProfile.reviewStep.values.bits')}
               </Typography>
             </Grid>
 
             <Grid item xs={12} md={6}>
               <Typography variant="subtitle2" color="text.secondary">
-                Key Usage Validation
+                {t('wizards.trustProfile.reviewStep.fields.keyUsageValidation')}
               </Typography>
               <Typography variant="body1">
-                {data.validation_rules?.require_key_usage !== false ? 'Required' : 'Not required'}
+                {data.validation_rules?.require_key_usage !== false
+                  ? t('wizards.trustProfile.reviewStep.values.required')
+                  : t('wizards.trustProfile.reviewStep.values.notRequired')}
               </Typography>
             </Grid>
           </Grid>
@@ -217,10 +224,10 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
       {/* Activation Explanation */}
       <Alert severity="info" icon={<InfoIcon />} sx={{ mb: 2 }}>
         <Typography variant="body2" gutterBottom>
-          <strong>What happens after creation?</strong>
+          <strong>{t('wizards.trustProfile.reviewStep.activationExplanation.title')}</strong>
         </Typography>
         <Typography variant="body2" color="text.secondary">
-          Active trust profiles are immediately available for verification workflows. You'll be redirected to create a credential template that uses this profile.
+          {t('wizards.trustProfile.reviewStep.activationExplanation.description')}
         </Typography>
       </Alert>
 
@@ -236,10 +243,10 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
           label={
             <Box>
               <Typography variant="subtitle2">
-                Activate immediately
+                {t('wizards.trustProfile.reviewStep.activateImmediately.label')}
               </Typography>
               <Typography variant="body2" color="text.secondary">
-                Make this trust profile active and ready to use upon creation
+                {t('wizards.trustProfile.reviewStep.activateImmediately.description')}
               </Typography>
             </Box>
           }

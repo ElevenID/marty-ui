@@ -9,6 +9,7 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   Box,
   Paper,
@@ -57,161 +58,163 @@ import {
 
 /**
  * Available webhook event types
+ * @param {Function} t - Translation function
+ * @returns {Array} Event types with translated labels and descriptions
  */
-const EVENT_TYPES = [
+const getEventTypes = (t) => [
   { 
     id: '*', 
-    label: 'All Events', 
-    description: 'Subscribe to all current and future events',
+    label: t('webhookManager.eventTypes.all.label'), 
+    description: t('webhookManager.eventTypes.all.description'),
     category: 'all'
   },
   // Credential Events
   { 
     id: 'credential.issued', 
-    label: 'Credential Issued', 
-    description: 'Triggered when a credential is issued',
+    label: t('webhookManager.eventTypes.credentialIssued.label'), 
+    description: t('webhookManager.eventTypes.credentialIssued.description'),
     category: 'credential'
   },
   { 
     id: 'credential.revoked', 
-    label: 'Credential Revoked', 
-    description: 'Triggered when a credential is revoked',
+    label: t('webhookManager.eventTypes.credentialRevoked.label'), 
+    description: t('webhookManager.eventTypes.credentialRevoked.description'),
     category: 'credential'
   },
   { 
     id: 'credential.suspended', 
-    label: 'Credential Suspended', 
-    description: 'Triggered when a credential is temporarily suspended',
+    label: t('webhookManager.eventTypes.credentialSuspended.label'), 
+    description: t('webhookManager.eventTypes.credentialSuspended.description'),
     category: 'credential'
   },
   { 
     id: 'credential.reactivated', 
-    label: 'Credential Reactivated', 
-    description: 'Triggered when a suspended credential is reactivated',
+    label: t('webhookManager.eventTypes.credentialReactivated.label'), 
+    description: t('webhookManager.eventTypes.credentialReactivated.description'),
     category: 'credential'
   },
   // Verification Events
   { 
     id: 'verification.completed', 
-    label: 'Verification Completed', 
-    description: 'Triggered when a verification is completed successfully',
+    label: t('webhookManager.eventTypes.verificationCompleted.label'), 
+    description: t('webhookManager.eventTypes.verificationCompleted.description'),
     category: 'verification'
   },
   { 
     id: 'verification.failed', 
-    label: 'Verification Failed', 
-    description: 'Triggered when a verification fails',
+    label: t('webhookManager.eventTypes.verificationFailed.label'), 
+    description: t('webhookManager.eventTypes.verificationFailed.description'),
     category: 'verification'
   },
   { 
     id: 'verification.initiated', 
-    label: 'Verification Initiated', 
-    description: 'Triggered when a verification request is received',
+    label: t('webhookManager.eventTypes.verificationInitiated.label'), 
+    description: t('webhookManager.eventTypes.verificationInitiated.description'),
     category: 'verification'
   },
   // Application Events
   { 
     id: 'application.created', 
-    label: 'Application Created', 
-    description: 'Triggered when a new application is created',
+    label: t('webhookManager.eventTypes.applicationCreated.label'), 
+    description: t('webhookManager.eventTypes.applicationCreated.description'),
     category: 'application'
   },
   { 
     id: 'application.submitted', 
-    label: 'Application Submitted', 
-    description: 'Triggered when an applicant submits an application',
+    label: t('webhookManager.eventTypes.applicationSubmitted.label'), 
+    description: t('webhookManager.eventTypes.applicationSubmitted.description'),
     category: 'application'
   },
   { 
     id: 'application.updated', 
-    label: 'Application Updated', 
-    description: 'Triggered when application information is updated',
+    label: t('webhookManager.eventTypes.applicationUpdated.label'), 
+    description: t('webhookManager.eventTypes.applicationUpdated.description'),
     category: 'application'
   },
   { 
     id: 'application.approved', 
-    label: 'Application Approved', 
-    description: 'Triggered when an application is approved',
+    label: t('webhookManager.eventTypes.applicationApproved.label'), 
+    description: t('webhookManager.eventTypes.applicationApproved.description'),
     category: 'application'
   },
   { 
     id: 'application.rejected', 
-    label: 'Application Rejected', 
-    description: 'Triggered when an application is rejected',
+    label: t('webhookManager.eventTypes.applicationRejected.label'), 
+    description: t('webhookManager.eventTypes.applicationRejected.description'),
     category: 'application'
   },
   { 
     id: 'application.under_review', 
-    label: 'Application Under Review', 
-    description: 'Triggered when an application enters review status',
+    label: t('webhookManager.eventTypes.applicationUnderReview.label'), 
+    description: t('webhookManager.eventTypes.applicationUnderReview.description'),
     category: 'application'
   },
   { 
     id: 'application.additional_info_requested', 
-    label: 'Additional Info Requested', 
-    description: 'Triggered when reviewer requests more information',
+    label: t('webhookManager.eventTypes.applicationAdditionalInfo.label'), 
+    description: t('webhookManager.eventTypes.applicationAdditionalInfo.description'),
     category: 'application'
   },
   { 
     id: 'application.withdrawn', 
-    label: 'Application Withdrawn', 
-    description: 'Triggered when applicant withdraws their application',
+    label: t('webhookManager.eventTypes.applicationWithdrawn.label'), 
+    description: t('webhookManager.eventTypes.applicationWithdrawn.description'),
     category: 'application'
   },
   // Audit Events
   { 
     id: 'audit.access_logged', 
-    label: 'Access Logged', 
-    description: 'Triggered when a user access event is logged',
+    label: t('webhookManager.eventTypes.auditAccessLogged.label'), 
+    description: t('webhookManager.eventTypes.auditAccessLogged.description'),
     category: 'audit'
   },
   { 
     id: 'audit.configuration_changed', 
-    label: 'Configuration Changed', 
-    description: 'Triggered when system configuration is modified',
+    label: t('webhookManager.eventTypes.auditConfigChanged.label'), 
+    description: t('webhookManager.eventTypes.auditConfigChanged.description'),
     category: 'audit'
   },
   { 
     id: 'audit.credential_accessed', 
-    label: 'Credential Accessed', 
-    description: 'Triggered when credential data is accessed',
+    label: t('webhookManager.eventTypes.auditCredentialAccessed.label'), 
+    description: t('webhookManager.eventTypes.auditCredentialAccessed.description'),
     category: 'audit'
   },
   { 
     id: 'audit.export_performed', 
-    label: 'Export Performed', 
-    description: 'Triggered when data is exported from the system',
+    label: t('webhookManager.eventTypes.auditExport.label'), 
+    description: t('webhookManager.eventTypes.auditExport.description'),
     category: 'audit'
   },
   { 
     id: 'audit.security_event', 
-    label: 'Security Event', 
-    description: 'Triggered on security-related events (failed logins, etc.)',
+    label: t('webhookManager.eventTypes.auditSecurityEvent.label'), 
+    description: t('webhookManager.eventTypes.auditSecurityEvent.description'),
     category: 'audit'
   },
   { 
     id: 'audit.compliance_check', 
-    label: 'Compliance Check', 
-    description: 'Triggered when compliance verification occurs',
+    label: t('webhookManager.eventTypes.auditComplianceCheck.label'), 
+    description: t('webhookManager.eventTypes.auditComplianceCheck.description'),
     category: 'audit'
   },
   // Trust Events
   { 
     id: 'trust.updated', 
-    label: 'Trust Framework Updated', 
-    description: 'Triggered when trust settings change',
+    label: t('webhookManager.eventTypes.trustUpdated.label'), 
+    description: t('webhookManager.eventTypes.trustUpdated.description'),
     category: 'trust'
   },
   { 
     id: 'trust.certificate_expiring', 
-    label: 'Certificate Expiring', 
-    description: 'Triggered when a certificate is nearing expiration',
+    label: t('webhookManager.eventTypes.trustCertExpiring.label'), 
+    description: t('webhookManager.eventTypes.trustCertExpiring.description'),
     category: 'trust'
   },
   { 
     id: 'trust.chain_validation_failed', 
-    label: 'Chain Validation Failed', 
-    description: 'Triggered when certificate chain validation fails',
+    label: t('webhookManager.eventTypes.trustChainFailed.label'), 
+    description: t('webhookManager.eventTypes.trustChainFailed.description'),
     category: 'trust'
   },
 ];
@@ -220,7 +223,9 @@ const EVENT_TYPES = [
  * Webhook Manager Component
  */
 export default function WebhookManager() {
+  const { t } = useTranslation(['vendor', 'common']);
   const { organizationId } = useAuth();
+  const eventTypes = getEventTypes(t);
   const [webhooks, setWebhooks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -381,10 +386,10 @@ export default function WebhookManager() {
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
         <Box>
           <Typography variant="h6" gutterBottom>
-            Webhook Endpoints
+            {t('webhookManager.title')}
           </Typography>
           <Typography variant="body2" color="text.secondary">
-            Configure endpoints to receive real-time event notifications from Marty
+            {t('webhookManager.description')}
           </Typography>
         </Box>
         <Button
@@ -392,7 +397,7 @@ export default function WebhookManager() {
           startIcon={<AddIcon />}
           onClick={() => handleOpenDialog()}
         >
-          Add Webhook
+          {t('webhookManager.createButton')}
         </Button>
       </Box>
 
@@ -575,9 +580,9 @@ export default function WebhookManager() {
               <FormGroup>
                 {/* Credential Events */}
                 <Typography variant="subtitle2" color="primary" sx={{ mt: 2, mb: 1, fontWeight: 'bold' }}>
-                  Credential Events
+                  {t('webhookManager.eventCategories.credential')}
                 </Typography>
-                {EVENT_TYPES.filter(e => e.category === 'credential').map((eventType) => (
+                {eventTypes.filter(e => e.category === 'credential').map((eventType) => (
                   <FormControlLabel
                     key={eventType.id}
                     disabled={selectedEvents.includes('*')}
@@ -600,9 +605,9 @@ export default function WebhookManager() {
 
                 {/* Verification Events */}
                 <Typography variant="subtitle2" color="primary" sx={{ mt: 2, mb: 1, fontWeight: 'bold' }}>
-                  Verification Events
+                  {t('webhookManager.eventCategories.verification')}
                 </Typography>
-                {EVENT_TYPES.filter(e => e.category === 'verification').map((eventType) => (
+                {eventTypes.filter(e => e.category === 'verification').map((eventType) => (
                   <FormControlLabel
                     key={eventType.id}
                     disabled={selectedEvents.includes('*')}
@@ -625,9 +630,9 @@ export default function WebhookManager() {
 
                 {/* Application Events */}
                 <Typography variant="subtitle2" color="primary" sx={{ mt: 2, mb: 1, fontWeight: 'bold' }}>
-                  Application Events
+                  {t('webhookManager.eventCategories.application')}
                 </Typography>
-                {EVENT_TYPES.filter(e => e.category === 'application').map((eventType) => (
+                {eventTypes.filter(e => e.category === 'application').map((eventType) => (
                   <FormControlLabel
                     key={eventType.id}
                     disabled={selectedEvents.includes('*')}
@@ -650,9 +655,9 @@ export default function WebhookManager() {
 
                 {/* Audit Events */}
                 <Typography variant="subtitle2" color="primary" sx={{ mt: 2, mb: 1, fontWeight: 'bold' }}>
-                  Audit Events
+                  {t('webhookManager.eventCategories.audit')}
                 </Typography>
-                {EVENT_TYPES.filter(e => e.category === 'audit').map((eventType) => (
+                {eventTypes.filter(e => e.category === 'audit').map((eventType) => (
                   <FormControlLabel
                     key={eventType.id}
                     disabled={selectedEvents.includes('*')}
@@ -675,9 +680,9 @@ export default function WebhookManager() {
 
                 {/* Trust Events */}
                 <Typography variant="subtitle2" color="primary" sx={{ mt: 2, mb: 1, fontWeight: 'bold' }}>
-                  Trust Events
+                  {t('webhookManager.eventCategories.trust')}
                 </Typography>
-                {EVENT_TYPES.filter(e => e.category === 'trust').map((eventType) => (
+                {eventTypes.filter(e => e.category === 'trust').map((eventType) => (
                   <FormControlLabel
                     key={eventType.id}
                     disabled={selectedEvents.includes('*')}

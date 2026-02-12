@@ -5,6 +5,7 @@
  */
 
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   Dialog,
   DialogTitle,
@@ -28,6 +29,7 @@ import PropTypes from 'prop-types';
 import flowsApi from '../../services/flowsApi';
 
 function FlowPublishDialog({ open, onClose, flow, onPublished }) {
+  const { t } = useTranslation('vendor');
   const [changeDescription, setChangeDescription] = useState('');
   const [publishing, setPublishing] = useState(false);
   const [error, setError] = useState(null);
@@ -50,7 +52,7 @@ function FlowPublishDialog({ open, onClose, flow, onPublished }) {
         onPublished(result);
       }
     } catch (err) {
-      setError(err.message || 'Failed to publish flow');
+      setError(err.message || t('flowPublishDialog.failedToPublish'));
     } finally {
       setPublishing(false);
     }
@@ -74,7 +76,7 @@ function FlowPublishDialog({ open, onClose, flow, onPublished }) {
   return (
     <Dialog open={open} onClose={handleClose} maxWidth="sm" fullWidth>
       <DialogTitle>
-        {published ? 'Flow Published' : 'Publish Flow'}
+        {published ? t('flowPublishDialog.titlePublished') : t('flowPublishDialog.title')}
         <IconButton
           onClick={handleClose}
           sx={{ position: 'absolute', right: 8, top: 8 }}
@@ -93,24 +95,23 @@ function FlowPublishDialog({ open, onClose, flow, onPublished }) {
         {!published ? (
           <>
             <Alert severity="info" sx={{ mb: 3 }}>
-              Publishing will make this flow available to applicants and generate a public application URL. 
-              This will also lock the referenced Credential Template version.
+              {t('flowPublishDialog.infoMessage')}
             </Alert>
 
             <Typography variant="body2" color="text.secondary" gutterBottom>
-              <strong>Flow Name:</strong> {flow?.name || 'Unknown'}
+              <strong>{t('flowPublishDialog.flowNameLabel')}:</strong> {flow?.name || t('flowPublishDialog.unknown')}
             </Typography>
             
             <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-              <strong>Type:</strong> {flow?.flow_type || 'Unknown'}
+              <strong>{t('flowPublishDialog.typeLabel')}:</strong> {flow?.flow_type || t('flowPublishDialog.unknown')}
             </Typography>
 
             <TextField
               fullWidth
               multiline
               rows={3}
-              label="Change Description (Optional)"
-              placeholder="Describe what's new in this version..."
+              label={t('flowPublishDialog.changeDescriptionLabel')}
+              placeholder={t('flowPublishDialog.changeDescriptionPlaceholder')}
               value={changeDescription}
               onChange={(e) => setChangeDescription(e.target.value)}
               sx={{ mb: 2 }}
@@ -119,11 +120,11 @@ function FlowPublishDialog({ open, onClose, flow, onPublished }) {
         ) : (
           <>
             <Alert severity="success" sx={{ mb: 3 }}>
-              Flow successfully published! Share the URL below with applicants.
+              {t('flowPublishDialog.successMessage')}
             </Alert>
 
             <Typography variant="subtitle2" gutterBottom>
-              Public Application URL
+              {t('flowPublishDialog.publicUrlLabel')}
             </Typography>
             
             <TextField
@@ -147,7 +148,7 @@ function FlowPublishDialog({ open, onClose, flow, onPublished }) {
             <Box sx={{ textAlign: 'center' }}>
               <QrCodeIcon sx={{ fontSize: 120, color: 'primary.main', mb: 1 }} />
               <Typography variant="caption" display="block" color="text.secondary">
-                QR code generation coming soon
+                {t('flowPublishDialog.qrCodeComingSoon')}
               </Typography>
             </Box>
           </>
@@ -156,7 +157,7 @@ function FlowPublishDialog({ open, onClose, flow, onPublished }) {
 
       <DialogActions>
         <Button onClick={handleClose}>
-          {published ? 'Close' : 'Cancel'}
+          {published ? t('flowPublishDialog.close') : t('flowPublishDialog.cancel')}
         </Button>
         {!published && (
           <Button
@@ -165,7 +166,7 @@ function FlowPublishDialog({ open, onClose, flow, onPublished }) {
             disabled={publishing}
             startIcon={publishing ? <CircularProgress size={16} /> : <PublishIcon />}
           >
-            {publishing ? 'Publishing...' : 'Publish Flow'}
+            {publishing ? t('flowPublishDialog.publishing') : t('flowPublishDialog.publishButton')}
           </Button>
         )}
       </DialogActions>

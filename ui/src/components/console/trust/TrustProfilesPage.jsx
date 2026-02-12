@@ -6,6 +6,7 @@
  */
 
 import { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   Paper,
   Typography,
@@ -28,19 +29,20 @@ import { Link } from 'react-router-dom';
 import { ResourcePage, StatusChip, EmptyState, EmptyStates } from '../../common';
 import { TrustProvider } from '../../trust';
 
-const TRUST_TABS = [
-  { label: 'Trust Profiles', path: '/console/trust/profiles' },
-  { label: 'Trusted Issuers', path: '/console/trust/issuers' },
-  { label: 'Revocation Profiles', path: '/console/trust/revocation' },
+const getTrustTabs = (t) => [
+  { label: t('trust.trustProfiles'), path: '/console/trust/profiles' },
+  { label: t('trust.trustedIssuers'), path: '/console/trust/issuers' },
+  { label: t('trust.revocationProfiles'), path: '/console/trust/revocation' },
 ];
 
-const BREADCRUMBS = [
-  { label: 'Console', path: '/console' },
-  { label: 'Trust', path: '/console/trust' },
-  { label: 'Trust Profiles', path: '/console/trust/profiles' },
+const getBreadcrumbs = (t) => [
+  { label: t('trust.breadcrumbs.console'), path: '/console' },
+  { label: t('trust.breadcrumbs.trust'), path: '/console/trust' },
+  { label: t('trust.breadcrumbs.trustProfiles'), path: '/console/trust/profiles' },
 ];
 
 function TrustProfilesPage() {
+  const { t } = useTranslation('console');
   const [profiles, setProfiles] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -81,7 +83,7 @@ function TrustProfilesPage() {
           },
         ]);
       } catch (err) {
-        setError('Failed to load trust profiles');
+        setError(t('trust.failedToLoad'));
       } finally {
         setLoading(false);
       }
@@ -92,13 +94,13 @@ function TrustProfilesPage() {
   return (
     <TrustProvider>
       <ResourcePage
-        title="Trust Profiles"
-        description="Define trust frameworks, trusted issuers, and validation rules for credential verification."
-        resourceName="Trust Profile"
+        title={t('trust.trustProfiles')}
+        description={t('trust.trustProfilesDescription')}
+        resourceName={t('trust.trustProfiles')}
         buildPath="/console/trust/profiles/new"
         newPath="/console/trust/profiles/new?mode=advanced"
-        tabs={TRUST_TABS}
-        breadcrumbs={BREADCRUMBS}
+        tabs={getTrustTabs(t)}
+        breadcrumbs={getBreadcrumbs(t)}
       >
         {error && (
           <Alert severity="error" sx={{ mb: 3 }}>
@@ -115,13 +117,13 @@ function TrustProfilesPage() {
             <Table>
               <TableHead>
                 <TableRow>
-                  <TableCell>Name</TableCell>
-                  <TableCell>Framework</TableCell>
-                  <TableCell>Status</TableCell>
-                  <TableCell align="right">Trusted Issuers</TableCell>
-                  <TableCell align="right">Validation Rules</TableCell>
-                  <TableCell>Last Updated</TableCell>
-                  <TableCell align="right">Actions</TableCell>
+                  <TableCell>{t('trust.tableHeaders.name')}</TableCell>
+                  <TableCell>{t('trust.tableHeaders.framework')}</TableCell>
+                  <TableCell>{t('trust.tableHeaders.status')}</TableCell>
+                  <TableCell align="right">{t('trust.tableHeaders.trustedIssuers')}</TableCell>
+                  <TableCell align="right">{t('trust.tableHeaders.validationRules')}</TableCell>
+                  <TableCell>{t('trust.tableHeaders.lastUpdated')}</TableCell>
+                  <TableCell align="right">{t('trust.tableHeaders.actions')}</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
@@ -148,7 +150,7 @@ function TrustProfilesPage() {
                         {new Date(profile.updatedAt).toLocaleDateString()}
                       </TableCell>
                       <TableCell align="right">
-                        <Tooltip title="View Details">
+                        <Tooltip title={t('trust.actions.viewDetails')}>
                           <IconButton
                             component={Link}
                             to={`/console/trust/profiles/${profile.id}`}
@@ -157,7 +159,7 @@ function TrustProfilesPage() {
                             <VisibilityIcon fontSize="small" />
                           </IconButton>
                         </Tooltip>
-                        <Tooltip title="Edit">
+                        <Tooltip title={t('trust.actions.edit')}>
                           <IconButton
                             component={Link}
                             to={`/console/trust/profiles/${profile.id}/edit`}

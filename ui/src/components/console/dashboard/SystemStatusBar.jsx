@@ -24,6 +24,7 @@ import WarningIcon from '@mui/icons-material/Warning';
 import ErrorIcon from '@mui/icons-material/Error';
 import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
+import { useTranslation } from 'react-i18next';
 
 import { HealthStatus } from '../../../services/healthApi';
 
@@ -31,6 +32,7 @@ import { HealthStatus } from '../../../services/healthApi';
  * Status indicator for a single service
  */
 function ServiceStatusIndicator({ status, label, onClick }) {
+  const { t } = useTranslation('console');
   const getStatusIcon = () => {
     switch (status) {
       case HealthStatus.HEALTHY:
@@ -48,14 +50,14 @@ function ServiceStatusIndicator({ status, label, onClick }) {
   const getStatusText = () => {
     switch (status) {
       case HealthStatus.HEALTHY:
-        return 'Healthy';
+        return t('dashboard.systemStatus.healthy');
       case HealthStatus.WARNING:
-        return 'Degraded';
+        return t('dashboard.systemStatus.degraded');
       case HealthStatus.ERROR:
-        return 'Error';
+        return t('dashboard.systemStatus.error');
       case HealthStatus.UNKNOWN:
       default:
-        return 'Unknown';
+        return t('dashboard.systemStatus.unknown');
     }
   };
 
@@ -74,7 +76,7 @@ function ServiceStatusIndicator({ status, label, onClick }) {
   };
 
   return (
-    <Tooltip title="Click to view audit logs" placement="top">
+    <Tooltip title={t('dashboard.systemStatus.clickToViewLogs')} placement="top">
       <Box
         onClick={onClick}
         sx={{
@@ -108,6 +110,8 @@ function ServiceStatusIndicator({ status, label, onClick }) {
  * System Status Bar Component
  */
 export function SystemStatusBar({ systemHealth }) {
+  const { t } = useTranslation('console');
+  
   if (!systemHealth) {
     return null;
   }
@@ -126,14 +130,14 @@ export function SystemStatusBar({ systemHealth }) {
       {/* Error Banner */}
       {hasError && (
         <Alert severity="error" sx={{ mb: 2 }}>
-          One or more services are experiencing issues. Click on a service below to view logs.
+          {t('dashboard.systemStatus.errorBanner')}
         </Alert>
       )}
 
       {/* Warning Banner */}
       {!hasError && hasWarning && (
         <Alert severity="warning" sx={{ mb: 2 }}>
-          One or more services are degraded. System may experience reduced performance.
+          {t('dashboard.systemStatus.warningBanner')}
         </Alert>
       )}
 
@@ -141,13 +145,13 @@ export function SystemStatusBar({ systemHealth }) {
       <Paper sx={{ p: 2 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1.5 }}>
           <Typography variant="h6">
-            System Status
+            {t('dashboard.systemStatus.title')}
           </Typography>
           <IconButton
             size="small"
             component={Link}
             to="/console/audit"
-            title="View all audit logs"
+            title={t('dashboard.systemStatus.viewAllLogs')}
           >
             <OpenInNewIcon fontSize="small" />
           </IconButton>
@@ -156,21 +160,21 @@ export function SystemStatusBar({ systemHealth }) {
           <Grid item xs={12} sm={4}>
             <ServiceStatusIndicator
               status={gateway}
-              label="API Gateway"
+              label={t('dashboard.systemStatus.apiGateway')}
               onClick={() => handleServiceClick('gateway')}
             />
           </Grid>
           <Grid item xs={12} sm={4}>
             <ServiceStatusIndicator
               status={issuer}
-              label="Issuer Metadata"
+              label={t('dashboard.systemStatus.issuerMetadata')}
               onClick={() => handleServiceClick('issuer')}
             />
           </Grid>
           <Grid item xs={12} sm={4}>
             <ServiceStatusIndicator
               status={verifier}
-              label="Verifier Service"
+              label={t('dashboard.systemStatus.verifierService')}
               onClick={() => handleServiceClick('verifier')}
             />
           </Grid>

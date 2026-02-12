@@ -7,6 +7,7 @@
  */
 
 import { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   Box,
   Paper,
@@ -40,16 +41,8 @@ import { usePayment } from '../../contexts/paymentHooks';
 const MIN_FEE = 0;
 const MAX_FEE = 50;
 
-// Credential type fee presets
-const CREDENTIAL_TYPES = [
-  { id: 'passport', name: 'Passport Application', defaultFee: 25 },
-  { id: 'visa', name: 'Visa Application', defaultFee: 35 },
-  { id: 'permit', name: 'Work Permit', defaultFee: 40 },
-  { id: 'license', name: 'License Renewal', defaultFee: 15 },
-  { id: 'certificate', name: 'Certificate Request', defaultFee: 10 },
-];
-
 export default function ProcessingFeeConfig() {
+  const { t } = useTranslation('vendor');
   const { organizationId } = useAuth();
   const { validateProcessingFee, minProcessingFee, maxProcessingFee, isMockMode } = usePayment();
   
@@ -60,6 +53,15 @@ export default function ProcessingFeeConfig() {
   const [saving, setSaving] = useState(false);
   const [hasChanges, setHasChanges] = useState(false);
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' });
+
+  // Credential type fee presets
+  const CREDENTIAL_TYPES = [
+    { id: 'passport', name: t('processingFeeConfig.credentialTypes.passport'), defaultFee: 25 },
+    { id: 'visa', name: t('processingFeeConfig.credentialTypes.visa'), defaultFee: 35 },
+    { id: 'permit', name: t('processingFeeConfig.credentialTypes.permit'), defaultFee: 40 },
+    { id: 'license', name: t('processingFeeConfig.credentialTypes.license'), defaultFee: 15 },
+    { id: 'certificate', name: t('processingFeeConfig.credentialTypes.certificate'), defaultFee: 10 },
+  ];
 
   // Load current settings
   useEffect(() => {
@@ -84,7 +86,7 @@ export default function ProcessingFeeConfig() {
       setFreeProcessing(false);
     } catch (error) {
       console.error('Failed to load fee settings:', error);
-      setSnackbar({ open: true, message: 'Failed to load settings', severity: 'error' });
+      setSnackbar({ open: true, message: t('processingFeeConfig.messages.loadFailed'), severity: 'error' });
     }
   };
 
@@ -103,7 +105,7 @@ export default function ProcessingFeeConfig() {
         if (!credValidation.valid) {
           setSnackbar({
             open: true,
-            message: `Invalid fee for ${credType}: ${credValidation.error}`,
+            message: t('processingFeeConfig.messages.invalidFee', { credType, error: credValidation.error }),
             severity: 'error',
           });
           return;
@@ -126,10 +128,10 @@ export default function ProcessingFeeConfig() {
       await new Promise((resolve) => setTimeout(resolve, 500)); // Simulate API
       
       setHasChanges(false);
-      setSnackbar({ open: true, message: 'Fee settings saved successfully', severity: 'success' });
+      setSnackbar({ open: true, message: t('processingFeeConfig.messages.saveSuccess'), severity: 'success' });
     } catch (error) {
       console.error('Failed to save fee settings:', error);
-      setSnackbar({ open: true, message: 'Failed to save settings', severity: 'error' });
+      setSnackbar({ open: true, message: t('processingFeeConfig.messages.saveFailed'), severity: 'error' });
     } finally {
       setSaving(false);
     }
@@ -172,10 +174,10 @@ export default function ProcessingFeeConfig() {
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
         <Box>
           <Typography variant="h5" component="h1" gutterBottom>
-            Processing Fees
+            {t('processingFeeConfig.title')}
           </Typography>
           <Typography variant="body2" color="textSecondary">
-            Configure fees charged to applicants when they apply for credentials.
+            {t('processingFeeConfig.description')}
           </Typography>
         </Box>
         <Button
@@ -184,7 +186,7 @@ export default function ProcessingFeeConfig() {
           onClick={handleSave}
           disabled={saving || !hasChanges}
         >
-          {saving ? 'Saving...' : 'Save Changes'}
+          {saving ? t('processingFeeConfig.saving') : t('processingFeeConfig.saveButton')}
         </Button>
       </Box>
 
@@ -192,7 +194,7 @@ export default function ProcessingFeeConfig() {
       {isMockMode && (
         <Alert severity="info" sx={{ mb: 3 }}>
           <Typography variant="body2">
-            <strong>Development Mode:</strong> Payments are mocked. No real charges will be made.
+            <strong>{t('processingFeeConfig.mockModeAlert')}</strong>
           </Typography>
         </Alert>
       )}
@@ -212,9 +214,9 @@ export default function ProcessingFeeConfig() {
               }
               label={
                 <Box>
-                  <Typography variant="body1">Free Processing</Typography>
+                  <Typography variant="body1">{t('processingFeeConfig.freeProcessing.label')}</Typography>
                   <Typography variant="caption" color="textSecondary">
-                    Waive all processing fees for applicants
+                    {t('processingFeeConfig.freeProcessing.description')}
                   </Typography>
                 </Box>
               }
@@ -226,10 +228,10 @@ export default function ProcessingFeeConfig() {
             {/* Default Fee */}
             <Box sx={{ mb: 4, opacity: freeProcessing ? 0.5 : 1 }}>
               <Typography variant="h6" gutterBottom>
-                Default Processing Fee
+                {t('processingFeeConfig.defaultFee.title')}
               </Typography>
               <Typography variant="body2" color="textSecondary" sx={{ mb: 2 }}>
-                This fee is charged to all applicants unless per-credential fees are configured.
+                {t('processingFeeConfig.defaultFee.description')}
               </Typography>
 
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 3 }}>
@@ -278,9 +280,9 @@ export default function ProcessingFeeConfig() {
                 }
                 label={
                   <Box>
-                    <Typography variant="body1">Per-Credential Fees</Typography>
+                    <Typography variant="body1">{t('processingFeeConfig.perCredentialFees.label')}</Typography>
                     <Typography variant="caption" color="textSecondary">
-                      Set different fees for each credential type
+                      {t('processingFeeConfig.perCredentialFees.description')}
                     </Typography>
                   </Box>
                 }
@@ -293,7 +295,7 @@ export default function ProcessingFeeConfig() {
                     <ListItem key={credType.id} divider>
                       <ListItemText
                         primary={credType.name}
-                        secondary={`Default: $${credType.defaultFee}`}
+                        secondary={t('processingFeeConfig.perCredentialFees.default', { amount: credType.defaultFee })}
                       />
                       <ListItemSecondaryAction>
                         <TextField
@@ -322,16 +324,16 @@ export default function ProcessingFeeConfig() {
             <CardContent>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
                 <ReceiptIcon color="primary" />
-                <Typography variant="h6">Fee Summary</Typography>
+                <Typography variant="h6">{t('processingFeeConfig.summary.title')}</Typography>
               </Box>
 
               <Box sx={{ mb: 2 }}>
                 <Typography variant="body2" color="textSecondary">
-                  Current Configuration
+                  {t('processingFeeConfig.summary.currentConfig')}
                 </Typography>
                 <Chip
                   icon={<AttachMoneyIcon />}
-                  label={freeProcessing ? 'Free' : `$${defaultFee} default`}
+                  label={freeProcessing ? t('processingFeeConfig.summary.free') : t('processingFeeConfig.summary.defaultAmount', { amount: defaultFee })}
                   color={freeProcessing ? 'success' : 'primary'}
                   sx={{ mt: 1 }}
                 />
@@ -341,7 +343,7 @@ export default function ProcessingFeeConfig() {
 
               <Box sx={{ mb: 2 }}>
                 <Typography variant="body2" color="textSecondary">
-                  Fee Range
+                  {t('processingFeeConfig.summary.feeRange')}
                 </Typography>
                 <Typography variant="h5">
                   ${minProcessingFee} - ${maxProcessingFee}
@@ -350,13 +352,13 @@ export default function ProcessingFeeConfig() {
 
               <Box>
                 <Typography variant="body2" color="textSecondary">
-                  Estimated Monthly Revenue
+                  {t('processingFeeConfig.summary.estimatedRevenue')}
                 </Typography>
                 <Typography variant="h5" color="success.main">
                   ${calculateEstimatedRevenue().toFixed(2)}
                 </Typography>
                 <Typography variant="caption" color="textSecondary">
-                  Based on ~100 applicants/month
+                  {t('processingFeeConfig.summary.revenueNote')}
                 </Typography>
               </Box>
             </CardContent>
@@ -367,12 +369,10 @@ export default function ProcessingFeeConfig() {
             <CardContent>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
                 <InfoIcon color="info" />
-                <Typography variant="subtitle2">Payment Processing</Typography>
+                <Typography variant="subtitle2">{t('processingFeeConfig.info.title')}</Typography>
               </Box>
               <Typography variant="body2" color="textSecondary">
-                Processing fees are collected via Square at the time of application. Funds are
-                deposited to your connected Square account minus Square&apos;s transaction fees
-                (2.6% + $0.10).
+                {t('processingFeeConfig.info.description')}
               </Typography>
             </CardContent>
           </Card>

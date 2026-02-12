@@ -8,6 +8,7 @@
 
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import {
   Box,
   Container,
@@ -40,7 +41,7 @@ const API_URL = import.meta.env.VITE_API_URL || '';
 /**
  * Group fields into logical steps based on their names/prefixes
  */
-function groupFieldsIntoSteps(requiredFields = [], optionalFields = [], customFields = []) {
+function groupFieldsIntoSteps(requiredFields = [], optionalFields = [], customFields = [], t) {
   const steps = [];
   
   // Define standard field categories
@@ -67,17 +68,18 @@ function groupFieldsIntoSteps(requiredFields = [], optionalFields = [], customFi
     !photo.includes(f)
   );
   
-  if (personal.length > 0) steps.push({ label: 'Personal Information', fields: personal });
-  if (address.length > 0) steps.push({ label: 'Address', fields: address });
-  if (document.length > 0) steps.push({ label: 'Document Details', fields: document });
-  if (other.length > 0) steps.push({ label: 'Additional Information', fields: other });
-  if (photo.length > 0) steps.push({ label: 'Photos & Documents', fields: photo });
-  steps.push({ label: 'Review & Submit', fields: [] });
+  if (personal.length > 0) steps.push({ label: t('applicationForm.steps.personalInfo'), fields: personal });
+  if (address.length > 0) steps.push({ label: t('applicationForm.steps.address'), fields: address });
+  if (document.length > 0) steps.push({ label: t('applicationForm.steps.documentDetails'), fields: document });
+  if (other.length > 0) steps.push({ label: t('applicationForm.steps.additionalInfo'), fields: other });
+  if (photo.length > 0) steps.push({ label: t('applicationForm.steps.photos'), fields: photo });
+  steps.push({ label: t('applicationForm.steps.review'), fields: [] });
   
   return steps;
 }
 
 export default function ApplicationForm() {
+  const { t } = useTranslation('applicant');
   const { credentialType: credentialConfigId } = useParams();
   const navigate = useNavigate();
   const location = useLocation();
@@ -105,14 +107,15 @@ export default function ApplicationForm() {
   
   // Compute steps dynamically from credential config
   const steps = useMemo(() => {
-    if (!credentialConfig) return [{ label: 'Review & Submit', fields: [] }];
+    if (!credentialConfig) return [{ label: t('applicationForm.steps.review'), fields: [] }];
     
     return groupFieldsIntoSteps(
       credentialConfig.required_fields || [],
       credentialConfig.optional_fields || [],
-      credentialConfig.custom_fields || []
+      credentialConfig.custom_fields || [],
+      t
     );
-  }, [credentialConfig]);
+  }, [credentialConfig, t]);
   
   // Flatten all fields for validation
   const allFields = useMemo(() => {
@@ -484,7 +487,7 @@ export default function ApplicationForm() {
           {step.label}
         </Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-          {credentialConfig?.submission_instructions || 'Please fill in all required fields.'}
+          {credentialConfig?.submission_instructions || t('applicationForm.instructions.default')}
         </Typography>
 
         <DynamicFieldGroup
@@ -503,10 +506,10 @@ export default function ApplicationForm() {
   const renderReviewStep = () => (
     <Box data-testid="review-step">
       <Typography variant="h6" gutterBottom>
-        Review Your Application
+        {t('applicationForm.review.title')}
       </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-        Please review your information before submitting.
+        {t('applicationForm.review.description')}
       </Typography>
 
       <Grid container spacing={3}>
@@ -528,11 +531,11 @@ export default function ApplicationForm() {
                     // Format value for display
                     let displayValue = value;
                     if (field.type === 'file') {
-                      displayValue = value?.name || 'Uploaded';
+                      displayValue = value?.name || t('applicationForm.review.uploaded');
                     } else if (field.type === 'address') {
                       displayValue = value ? `${value.street}, ${value.city}, ${value.state} ${value.zip}` : '';
                     } else if (field.type === 'boolean') {
-                      displayValue = value ? 'Yes' : 'No';
+                      displayValue = value ? t('common.yes', { ns: 'common' }) : t('common.no', { ns: 'common' });
                     }
                     
                     return (
@@ -559,7 +562,7 @@ export default function ApplicationForm() {
                 data-testid="accept-terms-checkbox"
               />
             }
-            label="I certify that all information provided is accurate and complete. I understand that providing false information may result in denial of my application."
+            label={t('applicationForm.review.terms')}
           />
           {validationErrors.acceptTerms && (
             <Typography color="error" variant="caption" display="block">
@@ -576,20 +579,20 @@ export default function ApplicationForm() {
       <Box sx={{ textAlign: 'center', py: 6 }} data-testid="application-submitted">
         <CheckCircleIcon sx={{ fontSize: 80, color: 'success.main', mb: 2 }} />
         <Typography variant="h4" gutterBottom>
-          {isPreview ? 'Preview: Application Would Be Submitted' : 'Application Submitted!'}
+          {isPreview ? t('applicationForm.success.previewTitle') : t('applicationForm.success.title')}
         </Typography>
         {isPreview ? (
           <>
             <Alert severity="info" sx={{ maxWidth: 600, mx: 'auto', mb: 3, textAlign: 'left' }}>
               <Typography variant="body2" paragraph>
-                <strong>Preview Mode:</strong> In production, this application would be submitted for review.
+                <strong>{t('applicationForm.success.previewMode')}:</strong> {t('applicationForm.success.previewMessage')}
               </Typography>
               <Typography variant="body2">
-                The applicant would receive confirmation and be able to track the application status.
+                {t('applicationForm.success.previewNote')}
               </Typography>
             </Alert>
             <Typography variant="body1" color="text.secondary" sx={{ mb: 2 }}>
-              Application data collected:
+              {t('applicationForm.success.dataCollected')}
             </Typography>
             <Box component="pre" sx={{ textAlign: 'left', bgcolor: 'grey.100', p: 2, borderRadius: 1, fontSize: '0.85rem', overflow: 'auto', maxHeight: 300, maxWidth: 600, mx: 'auto' }}>
               {JSON.stringify(formData, null, 2)}
@@ -598,12 +601,12 @@ export default function ApplicationForm() {
         ) : (
           <>
             <Typography variant="body1" color="text.secondary" sx={{ mb: 2 }}>
-              Your application has been submitted successfully.
+              {t('applicationForm.success.message')}
             </Typography>
             
             {applicationId && (
               <Chip
-                label={`Application ID: ${applicationId}`}
+                label={t('applicationForm.success.applicationId', { id: applicationId })}
                 color="primary"
                 variant="outlined"
                 sx={{ mb: 3 }}
@@ -613,14 +616,14 @@ export default function ApplicationForm() {
             )}
 
             <Alert severity="info" sx={{ maxWidth: 400, mx: 'auto', mb: 3 }}>
-              You will receive updates on your application status via email. Redirecting to your applications page...
+              {t('applicationForm.success.nextSteps')}
             </Alert>
 
             <Button
               variant="contained"
               onClick={() => navigate('/my-applications')}
             >
-              View My Applications
+              {t('applicationForm.success.viewApplications')}
             </Button>
           </>
         )}
@@ -652,6 +655,7 @@ export default function ApplicationForm() {
       <Container maxWidth="md" sx={{ py: 4 }}>
         <Paper sx={{ p: 4, textAlign: 'center' }}>
           <CircularProgress />
+          <Typography sx={{ mt: 2 }}>{t('applicationForm.loadingConfig')}</Typography>
         </Paper>
       </Container>
     );
@@ -662,10 +666,10 @@ export default function ApplicationForm() {
       <Container maxWidth="md" sx={{ py: 4 }}>
         <Paper sx={{ p: 4 }}>
           <Alert severity="warning" sx={{ mb: 2 }}>
-            Please select a credential from the catalog before starting an application.
+            {t('applicationForm.errors.noCredential')}
           </Alert>
           <Button variant="contained" onClick={() => navigate('/credentials')}>
-            Go to Credential Catalog
+            {t('applicationForm.actions.gotoCatalog')}
           </Button>
         </Paper>
       </Container>
@@ -679,11 +683,11 @@ export default function ApplicationForm() {
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 1 }}>
           <CheckCircleIcon color="primary" fontSize="large" />
           <Typography variant="h4" component="h1">
-            {credentialConfig?.display_name || 'Credential Application'}
+            {credentialConfig?.display_name || t('applicationForm.title.default')}
           </Typography>
         </Box>
         <Typography variant="body1" color="text.secondary">
-          Complete the form below to apply for your credential.
+          {t('applicationForm.description')}
         </Typography>
       </Box>
 
@@ -718,7 +722,7 @@ export default function ApplicationForm() {
             onClick={handleBack}
             startIcon={<ArrowBackIcon />}
           >
-            Back
+            {t('applicationForm.navigation.back')}
           </Button>
 
           {activeStep < steps.length - 1 ? (
@@ -728,7 +732,7 @@ export default function ApplicationForm() {
               endIcon={<ArrowForwardIcon />}
               data-testid="next-step-btn"
             >
-              Next
+              {t('applicationForm.navigation.next')}
             </Button>
           ) : (
             <Button
@@ -739,7 +743,9 @@ export default function ApplicationForm() {
               endIcon={submitting ? <CircularProgress size={20} /> : <CheckCircleIcon />}
               data-testid="submit-application-btn"
             >
-              {submitting ? (isPreview ? 'Simulating...' : 'Submitting...') : (isPreview ? 'Preview Submit' : 'Submit Application')}
+              {submitting 
+                ? (isPreview ? t('applicationForm.navigation.simulating') : t('applicationForm.navigation.submitting')) 
+                : (isPreview ? t('applicationForm.navigation.previewSubmit') : t('applicationForm.navigation.submit'))}
             </Button>
           )}
         </Box>

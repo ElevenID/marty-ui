@@ -5,6 +5,7 @@
  */
 
 import { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   Box,
   Paper,
@@ -30,18 +31,19 @@ import { Link } from 'react-router-dom';
 
 import { ResourcePage, EmptyState, EmptyStates, StatusChip } from '../../common';
 
-const POLICIES_TABS = [
-  { label: 'Presentation Policies', path: '/console/policies/presentation' },
-  { label: 'Compliance Profiles', path: '/console/policies/compliance' },
+const getPoliciesTabs = (t) => [
+  { label: t('policies.presentationPolicies'), path: '/console/policies/presentation' },
+  { label: t('policies.complianceProfiles'), path: '/console/policies/compliance' },
 ];
 
-const BREADCRUMBS = [
-  { label: 'Console', path: '/console' },
-  { label: 'Policies', path: '/console/policies' },
-  { label: 'Presentation Policies', path: '/console/policies/presentation' },
+const getBreadcrumbs = (t) => [
+  { label: t('policies.breadcrumbs.console'), path: '/console' },
+  { label: t('policies.breadcrumbs.policies'), path: '/console/policies' },
+  { label: t('policies.breadcrumbs.presentationPolicies'), path: '/console/policies/presentation' },
 ];
 
 function PresentationPoliciesPage() {
+  const { t } = useTranslation('console');
   const [policies, setPolicies] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -90,7 +92,7 @@ function PresentationPoliciesPage() {
           },
         ]);
       } catch (err) {
-        setError('Failed to load presentation policies');
+        setError(t('policies.failedToLoad'));
       } finally {
         setLoading(false);
       }
@@ -107,7 +109,7 @@ function PresentationPoliciesPage() {
         component={Link}
         to="/console/policies/test"
       >
-        Evaluate VP
+        {t('policies.testActions.evaluateVP')}
       </Button>
       <Button
         variant="outlined"
@@ -116,20 +118,20 @@ function PresentationPoliciesPage() {
         component={Link}
         to="/console/flows/definitions/new?type=verification"
       >
-        Start QR Verification
+        {t('policies.testActions.startQRVerification')}
       </Button>
     </Box>
   );
 
   return (
     <ResourcePage
-      title="Presentation Policies"
-      description="Define what credentials and claims are required for verification requests."
-      resourceName="Policy"
+      title={t('policies.presentationPolicies')}
+      description={t('policies.presentationPoliciesDescription')}
+      resourceName={t('policies.title')}
       buildPath="/console/policies/presentation/new"
       newPath="/console/policies/presentation/new?mode=advanced"
-      tabs={POLICIES_TABS}
-      breadcrumbs={BREADCRUMBS}
+      tabs={getPoliciesTabs(t)}
+      breadcrumbs={getBreadcrumbs(t)}
       actions={<TestActions />}
     >
       {error && (
@@ -147,14 +149,14 @@ function PresentationPoliciesPage() {
           <Table>
             <TableHead>
               <TableRow>
-                <TableCell>Name</TableCell>
-                <TableCell>Trust Profile</TableCell>
-                <TableCell>Required Claims</TableCell>
-                <TableCell>Freshness</TableCell>
-                <TableCell>Holder Binding</TableCell>
-                <TableCell align="right">Usage</TableCell>
-                <TableCell>Status</TableCell>
-                <TableCell align="right">Actions</TableCell>
+                <TableCell>{t('policies.tableHeaders.name')}</TableCell>
+                <TableCell>{t('policies.tableHeaders.trustProfile')}</TableCell>
+                <TableCell>{t('policies.tableHeaders.requiredClaims')}</TableCell>
+                <TableCell>{t('policies.tableHeaders.freshness')}</TableCell>
+                <TableCell>{t('policies.tableHeaders.holderBinding')}</TableCell>
+                <TableCell align="right">{t('policies.tableHeaders.usage')}</TableCell>
+                <TableCell>{t('policies.tableHeaders.status')}</TableCell>
+                <TableCell align="right">{t('policies.tableHeaders.actions')}</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
@@ -179,9 +181,9 @@ function PresentationPoliciesPage() {
                     <TableCell>{policy.freshness}</TableCell>
                     <TableCell>
                       {policy.holderBinding ? (
-                        <Chip label="Required" size="small" color="info" />
+                        <Chip label={t('policies.holderBinding.required')} size="small" color="info" />
                       ) : (
-                        <Chip label="Optional" size="small" variant="outlined" />
+                        <Chip label={t('policies.holderBinding.optional')} size="small" variant="outlined" />
                       )}
                     </TableCell>
                     <TableCell align="right">
@@ -191,7 +193,7 @@ function PresentationPoliciesPage() {
                       <StatusChip status={policy.status} />
                     </TableCell>
                     <TableCell align="right">
-                      <Tooltip title="View Details">
+                      <Tooltip title={t('policies.actions.viewDetails')}>
                         <IconButton
                           component={Link}
                           to={`/console/policies/presentation/${policy.id}`}
@@ -200,7 +202,7 @@ function PresentationPoliciesPage() {
                           <VisibilityIcon fontSize="small" />
                         </IconButton>
                       </Tooltip>
-                      <Tooltip title="Edit">
+                      <Tooltip title={t('policies.actions.edit')}>
                         <IconButton
                           component={Link}
                           to={`/console/policies/presentation/${policy.id}/edit`}

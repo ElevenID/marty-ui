@@ -1,0 +1,45 @@
+{
+  "labels": {
+    "firstName": "Voornaam",
+    "lastName": "Achternaam",
+    "email": "E-mailadres",
+    "phone": "Telefoonnummer",
+    "password": "Wachtwoord",
+    "confirmPassword": "Wachtwoord bevestigen",
+    "organizationName": "Organisatienaam",
+    "address": "Adres",
+    "city": "Plaats",
+    "state": "Provincie",
+    "country": "Land",
+    "postalCode": "Postcode",
+    "website": "Website",
+    "notes": "Notities",
+    "category": "Categorie",
+    "priority": "Prioriteit"
+  },
+  "placeholders": {
+    "enterName": "Voer naam in",
+    "enterEmail": "bijv. gebruiker@voorbeeld.nl",
+    "enterPhone": "bijv. +31 6 12345678",
+    "searchPlaceholder": "Zoeken...",
+    "selectOption": "Selecteer een optie",
+    "enterUrl": "https://voorbeeld.nl",
+    "optional": "Optioneel"
+  },
+  "helperText": {
+    "emailFormat": "Voer een geldig e-mailadres in",
+    "phoneFormat": "Voer een geldig telefoonnummer in",
+    "urlFormat": "Moet een geldige URL zijn die begint met http:// of https://",
+    "minChars": "Moet minimaal {{count}} tekens bevatten",
+    "passwordStrength": "Gebruik een mix van letters, cijfers en symbolen",
+    "required": "Dit veld is verplicht"
+  },
+  "validation": {
+    "required": "{{field}} is verplicht",
+    "invalid": "Ongeldige {{field}}",
+    "tooShort": "{{field}} moet minimaal {{min}} tekens bevatten",
+    "tooLong": "{{field}} mag niet meer dan {{max}} tekens bevatten",
+    "mustMatch": "{{field}} moet overeenkomen",
+    "invalidFormat": "Ongeldige indeling voor {{field}}"
+  }
+}

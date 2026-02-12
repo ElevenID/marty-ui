@@ -30,24 +30,26 @@ import {
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import DeleteIcon from '@mui/icons-material/Delete';
 import AddIcon from '@mui/icons-material/Add';
+import { useTranslation } from 'react-i18next';
 // import { Link } from 'react-router-dom';
 
 import { ResourcePage } from '../../common';
 
-const DEPLOY_TABS = [
-  { label: 'Deployment Profiles', path: '/console/deploy/profiles' },
-  { label: 'API Keys', path: '/console/deploy/api-keys' },
-  { label: 'Lanes & Devices', path: '/console/deploy/lanes' },
-  { label: 'Webhooks', path: '/console/deploy/webhooks' },
+const getDeployTabs = (t) => [
+  { label: t('deploy.deploymentProfiles'), path: '/console/deploy/profiles' },
+  { label: t('deploy.apiKeys'), path: '/console/deploy/api-keys' },
+  { label: t('deploy.lanesDevices'), path: '/console/deploy/lanes' },
+  { label: t('deploy.webhooks'), path: '/console/deploy/webhooks' },
 ];
 
-const BREADCRUMBS = [
-  { label: 'Console', path: '/console' },
-  { label: 'Deploy', path: '/console/deploy' },
-  { label: 'API Keys', path: '/console/deploy/api-keys' },
+const getBreadcrumbs = (t) => [
+  { label: t('deploy.breadcrumbs.console'), path: '/console' },
+  { label: t('deploy.breadcrumbs.deploy'), path: '/console/deploy' },
+  { label: t('deploy.breadcrumbs.apiKeys'), path: '/console/deploy/api-keys' },
 ];
 
 function ApiKeysPage() {
+  const { t } = useTranslation('console');
   const [apiKeys, setApiKeys] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -90,7 +92,7 @@ function ApiKeysPage() {
           },
         ]);
       } catch (err) {
-        setError('Failed to load API keys');
+        setError(t('deploy.apiKeysPage.error'));
       } finally {
         setLoading(false);
       }
@@ -115,17 +117,17 @@ function ApiKeysPage() {
 
   return (
     <ResourcePage
-      title="API Keys"
-      description="Generate and manage API keys for programmatic access to identity services."
-      tabs={DEPLOY_TABS}
-      breadcrumbs={BREADCRUMBS}
+      title={t('deploy.apiKeys')}
+      description={t('deploy.apiKeysDescription')}
+      tabs={getDeployTabs(t)}
+      breadcrumbs={getBreadcrumbs(t)}
       actions={
         <Button
           variant="contained"
           startIcon={<AddIcon />}
           onClick={() => setCreateDialogOpen(true)}
         >
-          Generate API Key
+          {t('deploy.apiKeysPage.generateKey')}
         </Button>
       }
     >
@@ -142,13 +144,13 @@ function ApiKeysPage() {
           <Table>
             <TableHead>
               <TableRow>
-                <TableCell>Name</TableCell>
-                <TableCell>Key Prefix</TableCell>
-                <TableCell>Scopes</TableCell>
-                <TableCell>Last Used</TableCell>
-                <TableCell>Created</TableCell>
-                <TableCell>Status</TableCell>
-                <TableCell align="right">Actions</TableCell>
+                <TableCell>{t('deploy.apiKeysPage.tableHeaders.name')}</TableCell>
+                <TableCell>{t('deploy.apiKeysPage.tableHeaders.keyPrefix')}</TableCell>
+                <TableCell>{t('deploy.apiKeysPage.tableHeaders.scopes')}</TableCell>
+                <TableCell>{t('deploy.apiKeysPage.tableHeaders.lastUsed')}</TableCell>
+                <TableCell>{t('deploy.apiKeysPage.tableHeaders.created')}</TableCell>
+                <TableCell>{t('deploy.apiKeysPage.tableHeaders.status')}</TableCell>
+                <TableCell align="right">{t('deploy.apiKeysPage.tableHeaders.actions')}</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
@@ -156,7 +158,7 @@ function ApiKeysPage() {
                 <TableRow>
                   <TableCell colSpan={7} align="center">
                     <Typography color="text.secondary" sx={{ py: 4 }}>
-                      No API keys generated. Create your first API key to get started.
+                      {t('deploy.apiKeysPage.empty')}
                     </Typography>
                   </TableCell>
                 </TableRow>
@@ -186,7 +188,7 @@ function ApiKeysPage() {
                     <TableCell>
                       {apiKey.lastUsed 
                         ? new Date(apiKey.lastUsed).toLocaleDateString()
-                        : 'Never'
+                        : t('deploy.apiKeysPage.never')
                       }
                     </TableCell>
                     <TableCell>
@@ -194,13 +196,13 @@ function ApiKeysPage() {
                     </TableCell>
                     <TableCell>
                       <Chip 
-                        label={apiKey.status === 'active' ? 'Active' : 'Revoked'} 
+                        label={apiKey.status === 'active' ? t('deploy.apiKeysPage.status.active') : t('deploy.apiKeysPage.status.revoked')} 
                         color={apiKey.status === 'active' ? 'success' : 'error'}
                         size="small" 
                       />
                     </TableCell>
                     <TableCell align="right">
-                      <Tooltip title="Revoke Key">
+                      <Tooltip title={t('deploy.apiKeysPage.actions.revokeKey')}>
                         <IconButton size="small" color="error">
                           <DeleteIcon fontSize="small" />
                         </IconButton>
@@ -226,17 +228,17 @@ function ApiKeysPage() {
         fullWidth
       >
         <DialogTitle>
-          {createdKey ? 'API Key Created' : 'Generate New API Key'}
+          {createdKey ? t('deploy.apiKeysPage.dialog.titleCreated') : t('deploy.apiKeysPage.dialog.titleCreate')}
         </DialogTitle>
         <DialogContent>
           {createdKey ? (
             <Box>
               <Alert severity="warning" sx={{ mb: 2 }}>
-                Copy this key now. You will not be able to see it again.
+                {t('deploy.apiKeysPage.dialog.warning')}
               </Alert>
               <TextField
                 fullWidth
-                label="API Key"
+                label={t('deploy.apiKeysPage.dialog.keyLabel')}
                 value={createdKey.fullKey}
                 InputProps={{
                   readOnly: true,
@@ -253,8 +255,8 @@ function ApiKeysPage() {
             <TextField
               autoFocus
               margin="dense"
-              label="Key Name"
-              placeholder="e.g., Production API Key"
+              label={t('deploy.apiKeysPage.dialog.nameLabel')}
+              placeholder={t('deploy.apiKeysPage.dialog.namePlaceholder')}
               fullWidth
               value={newKeyName}
               onChange={(e) => setNewKeyName(e.target.value)}
@@ -267,17 +269,17 @@ function ApiKeysPage() {
               setCreateDialogOpen(false);
               setCreatedKey(null);
             }}>
-              Done
+              {t('deploy.apiKeysPage.dialog.done')}
             </Button>
           ) : (
             <>
-              <Button onClick={() => setCreateDialogOpen(false)}>Cancel</Button>
+              <Button onClick={() => setCreateDialogOpen(false)}>{t('actions.cancel', { ns: 'common' })}</Button>
               <Button 
                 variant="contained" 
                 onClick={handleCreateKey}
                 disabled={!newKeyName.trim()}
               >
-                Generate
+                {t('deploy.apiKeysPage.dialog.generate')}
               </Button>
             </>
           )}

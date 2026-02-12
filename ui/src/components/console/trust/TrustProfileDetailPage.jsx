@@ -34,6 +34,7 @@ import AccountBalanceIcon from '@mui/icons-material/AccountBalance';
 import PhoneAndroidIcon from '@mui/icons-material/PhoneAndroid';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import SecurityIcon from '@mui/icons-material/Security';
+import { useTranslation } from 'react-i18next';
 
 import { getTrustProfile, getTrustProfileWalletCompatibility } from '../../../services/presentationPolicyApi';
 
@@ -52,6 +53,7 @@ const FORMAT_ICONS = {
  * Wallet Compatibility Panel Component
  */
 function WalletCompatibilityPanel({ trustProfileId }) {
+  const { t } = useTranslation('console');
   const [compatibility, setCompatibility] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -86,14 +88,14 @@ function WalletCompatibilityPanel({ trustProfileId }) {
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
         <PhoneAndroidIcon color="primary" />
         <Typography variant="h6" fontWeight={600}>
-          Wallet Compatibility
+          {t('trust.trustProfileDetail.walletCompatibility')}
         </Typography>
       </Box>
 
       {/* Supported Formats */}
       <Box sx={{ mb: 3 }}>
         <Typography variant="subtitle2" gutterBottom>
-          Supported Credential Formats
+          {t('trust.trustProfileDetail.supportedCredentialFormats')}
         </Typography>
         <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mt: 1 }}>
           {formats.length > 0 ? (
@@ -107,7 +109,7 @@ function WalletCompatibilityPanel({ trustProfileId }) {
             ))
           ) : (
             <Typography variant="body2" color="text.secondary">
-              No specific formats configured (accepts all)
+              {t('trust.trustProfileDetail.noFormatsConfigured')}
             </Typography>
           )}
         </Box>
@@ -116,7 +118,7 @@ function WalletCompatibilityPanel({ trustProfileId }) {
       {/* Supported Wallets */}
       <Box>
         <Typography variant="subtitle2" gutterBottom>
-          Compatible Wallet Applications
+          {t('trust.trustProfileDetail.compatibleWalletApplications')}
         </Typography>
         {wallets.length > 0 ? (
           <List dense>
@@ -127,14 +129,14 @@ function WalletCompatibilityPanel({ trustProfileId }) {
                 </ListItemIcon>
                 <ListItemText
                   primary={wallet.name || wallet}
-                  secondary={wallet.description || 'Compatible wallet application'}
+                  secondary={wallet.description || t('trust.trustProfileDetail.compatibleWallet')}
                 />
               </ListItem>
             ))}
           </List>
         ) : (
           <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-            Compatible with standard-compliant wallets
+            {t('trust.trustProfileDetail.standardCompliantWallets')}
           </Typography>
         )}
       </Box>
@@ -146,6 +148,7 @@ function WalletCompatibilityPanel({ trustProfileId }) {
  * Trust Profile Provenance Section
  */
 function ProvenanceSection({ trustProfile }) {
+  const { t } = useTranslation('console');
   const trustAnchors = trustProfile?.trust_anchors || [];
   const revocationStrategy = trustProfile?.revocation_strategy || 'dynamic';
   const issuerCount = trustAnchors.length;
@@ -155,7 +158,7 @@ function ProvenanceSection({ trustProfile }) {
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
         <AccountBalanceIcon color="primary" />
         <Typography variant="h6" fontWeight={600}>
-          Trust Provenance
+          {t('trust.trustProfileDetail.trustProvenance')}
         </Typography>
       </Box>
 
@@ -163,7 +166,7 @@ function ProvenanceSection({ trustProfile }) {
         {/* Trust Anchors */}
         <Grid item xs={12} md={6}>
           <Typography variant="subtitle2" gutterBottom>
-            Trust Anchors
+            {t('trust.trustProfileDetail.trustAnchors')}
           </Typography>
           {trustAnchors.length > 0 ? (
             <List dense>
@@ -173,15 +176,15 @@ function ProvenanceSection({ trustProfile }) {
                     <VerifiedUserIcon color="primary" fontSize="small" />
                   </ListItemIcon>
                   <ListItemText
-                    primary={anchor.name || anchor.authority || `Anchor ${index + 1}`}
-                    secondary={anchor.type || 'Trust Authority'}
+                    primary={anchor.name || anchor.authority || t('trust.trustProfileDetail.anchor', { number: index + 1 })}
+                    secondary={anchor.type || t('trust.trustProfileDetail.trustAuthority')}
                   />
                 </ListItem>
               ))}
             </List>
           ) : (
             <Typography variant="body2" color="text.secondary">
-              No trust anchors configured
+              {t('trust.trustProfileDetail.noTrustAnchors')}
             </Typography>
           )}
         </Grid>
@@ -189,12 +192,12 @@ function ProvenanceSection({ trustProfile }) {
         {/* Metadata */}
         <Grid item xs={12} md={6}>
           <Typography variant="subtitle2" gutterBottom>
-            Trust Metadata
+            {t('trust.trustProfileDetail.trustMetadata')}
           </Typography>
           <Box sx={{ mt: 1 }}>
             <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
               <Typography variant="body2" color="text.secondary">
-                Trusted Issuers
+                {t('trust.trustProfileDetail.trustedIssuersCount')}
               </Typography>
               <Typography variant="body2" fontWeight={600}>
                 {issuerCount}
@@ -202,7 +205,7 @@ function ProvenanceSection({ trustProfile }) {
             </Box>
             <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
               <Typography variant="body2" color="text.secondary">
-                Revocation Strategy
+                {t('trust.trustProfileDetail.revocationStrategy')}
               </Typography>
               <Chip
                 label={revocationStrategy}
@@ -218,7 +221,7 @@ function ProvenanceSection({ trustProfile }) {
         <>
           <Divider sx={{ my: 2 }} />
           <Typography variant="subtitle2" gutterBottom>
-            Trust Policy Description
+            {t('trust.trustProfileDetail.trustPolicyDescription')}
           </Typography>
           <Typography variant="body2" color="text.secondary">
             {trustProfile.description}
@@ -233,6 +236,7 @@ function ProvenanceSection({ trustProfile }) {
  * Trust Profile Detail Page Component
  */
 export function TrustProfileDetailPage() {
+  const { t } = useTranslation('console');
   const { id } = useParams();
   const navigate = useNavigate();
   const [profile, setProfile] = useState(null);
@@ -247,7 +251,7 @@ export function TrustProfileDetailPage() {
         setProfile(data);
       } catch (err) {
         console.error('Failed to load trust profile:', err);
-        setError('Failed to load trust profile details');
+        setError(t('trust.trustProfileDetail.failedToLoad'));
       } finally {
         setLoading(false);
       }
@@ -270,13 +274,13 @@ export function TrustProfileDetailPage() {
   if (error || !profile) {
     return (
       <Box sx={{ py: 4 }}>
-        <Alert severity="error">{error || 'Trust profile not found'}</Alert>
+        <Alert severity="error">{error || t('trust.trustProfileDetail.notFound')}</Alert>
         <Button
           startIcon={<ArrowBackIcon />}
           onClick={() => navigate('/console/trust/profiles')}
           sx={{ mt: 2 }}
         >
-          Back to Trust Profiles
+          {t('trust.trustProfileDetail.backToProfiles')}
         </Button>
       </Box>
     );
@@ -287,13 +291,13 @@ export function TrustProfileDetailPage() {
       {/* Breadcrumbs */}
       <Breadcrumbs sx={{ mb: 2 }}>
         <Link component={RouterLink} to="/console" underline="hover" color="inherit">
-          Console
+          {t('trust.breadcrumbs.console')}
         </Link>
         <Link component={RouterLink} to="/console/trust" underline="hover" color="inherit">
-          Trust
+          {t('trust.breadcrumbs.trust')}
         </Link>
         <Link component={RouterLink} to="/console/trust/profiles" underline="hover" color="inherit">
-          Trust Profiles
+          {t('trust.breadcrumbs.trustProfiles')}
         </Link>
         <Typography color="text.primary">{profile.name}</Typography>
       </Breadcrumbs>
@@ -312,7 +316,7 @@ export function TrustProfileDetailPage() {
               size="small"
             />
             {profile.is_default && (
-              <Chip label="Default" color="primary" size="small" variant="outlined" />
+              <Chip label={t('trust.trustProfileDetail.default')} color="primary" size="small" variant="outlined" />
             )}
           </Box>
         </Box>
@@ -321,19 +325,19 @@ export function TrustProfileDetailPage() {
           startIcon={<EditIcon />}
           onClick={() => navigate(`/console/trust/profiles/${id}/edit`)}
         >
-          Edit
+          {t('actions.edit', { ns: 'common' })}
         </Button>
       </Box>
 
       {/* Basic Information */}
       <Paper sx={{ p: 3, mb: 3 }}>
         <Typography variant="h6" fontWeight={600} gutterBottom>
-          Basic Information
+          {t('trust.trustProfileDetail.basicInformation')}
         </Typography>
         <Grid container spacing={2}>
           <Grid item xs={12} sm={6}>
             <Typography variant="body2" color="text.secondary">
-              Profile ID
+              {t('trust.trustProfileDetail.profileId')}
             </Typography>
             <Typography variant="body1" fontWeight={500}>
               {profile.id}
@@ -341,16 +345,16 @@ export function TrustProfileDetailPage() {
           </Grid>
           <Grid item xs={12} sm={6}>
             <Typography variant="body2" color="text.secondary">
-              Created
+              {t('trust.trustProfileDetail.created')}
             </Typography>
             <Typography variant="body1" fontWeight={500}>
-              {profile.created_at ? new Date(profile.created_at).toLocaleDateString() : 'N/A'}
+              {profile.created_at ? new Date(profile.created_at).toLocaleDateString() : t('trust.trustProfileDetail.notAvailable')}
             </Typography>
           </Grid>
           {profile.description && (
             <Grid item xs={12}>
               <Typography variant="body2" color="text.secondary">
-                Description
+                {t('trust.trustProfileDetail.description')}
               </Typography>
               <Typography variant="body1">
                 {profile.description}
@@ -373,7 +377,7 @@ export function TrustProfileDetailPage() {
           startIcon={<ArrowBackIcon />}
           onClick={() => navigate('/console/trust/profiles')}
         >
-          Back to Trust Profiles
+          {t('trust.trustProfileDetail.backToProfiles')}
         </Button>
       </Box>
     </Box>

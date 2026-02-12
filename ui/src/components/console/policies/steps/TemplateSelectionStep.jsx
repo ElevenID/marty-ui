@@ -17,10 +17,13 @@ import {
   Alert,
 } from '@mui/material';
 import BuildIcon from '@mui/icons-material/Build';
+import { useTranslation } from 'react-i18next';
 
 import { POLICY_TEMPLATES, getTemplatesByFramework } from '../../../../data/policyTemplates';
 
 const TemplateSelectionStep = ({ trustProfile, selectedTemplate, onSelectTemplate }) => {
+  const { t } = useTranslation('console');
+
   // Filter templates by trust framework
   const availableTemplates = useMemo(() => {
     if (!trustProfile?.trust_framework_type) {
@@ -32,12 +35,12 @@ const TemplateSelectionStep = ({ trustProfile, selectedTemplate, onSelectTemplat
   // Add "Custom" template option
   const customTemplate = {
     id: 'custom',
-    name: 'Custom Policy',
-    description: 'Build a custom verification policy from scratch',
+    name: t('wizards.presentationPolicy.templateSelectionStep.customTemplate.name'),
+    description: t('wizards.presentationPolicy.templateSelectionStep.customTemplate.description'),
     trustFramework: 'custom',
     standardReference: null,
     icon: '🔧',
-    category: 'Custom',
+    category: t('wizards.presentationPolicy.templateSelectionStep.customTemplate.category'),
     config: null,
   };
 
@@ -50,7 +53,7 @@ const TemplateSelectionStep = ({ trustProfile, selectedTemplate, onSelectTemplat
   if (!trustProfile) {
     return (
       <Alert severity="warning">
-        Please select a Trust Profile first.
+        {t('wizards.presentationPolicy.templateSelectionStep.prerequisite')}
       </Alert>
     );
   }
@@ -58,17 +61,18 @@ const TemplateSelectionStep = ({ trustProfile, selectedTemplate, onSelectTemplat
   return (
     <Box>
       <Typography variant="h6" gutterBottom>
-        Choose a Template
+        {t('wizards.presentationPolicy.templateSelectionStep.title')}
       </Typography>
       
       <Typography color="text.secondary" paragraph>
-        Start with a standards-based template for common verification scenarios, or create a custom policy.
+        {t('wizards.presentationPolicy.templateSelectionStep.description')}
       </Typography>
 
       {availableTemplates.length === 0 && (
         <Alert severity="info" sx={{ mb: 3 }}>
-          No pre-built templates available for {trustProfile.trust_framework_type?.toUpperCase()} framework.
-          You can still create a custom policy.
+          {t('wizards.presentationPolicy.templateSelectionStep.noTemplates', {
+            framework: trustProfile.trust_framework_type?.toUpperCase(),
+          })}
         </Alert>
       )}
 
@@ -130,7 +134,7 @@ const TemplateSelectionStep = ({ trustProfile, selectedTemplate, onSelectTemplat
                     {template.id === 'custom' && (
                       <Chip
                         icon={<BuildIcon />}
-                        label="Customizable"
+                        label={t('wizards.presentationPolicy.templateSelectionStep.customTemplate.customizable')}
                         size="small"
                         variant="outlined"
                       />
@@ -147,15 +151,15 @@ const TemplateSelectionStep = ({ trustProfile, selectedTemplate, onSelectTemplat
       {selectedTemplate && selectedTemplate.id !== 'custom' && (
         <Alert severity="info" sx={{ mt: 3 }}>
           <Typography variant="body2" gutterBottom>
-            <strong>Selected:</strong> {selectedTemplate.name}
+            <strong>{t('wizards.presentationPolicy.templateSelectionStep.selectedInfo.selected')}</strong> {selectedTemplate.name}
           </Typography>
           {selectedTemplate.standardReference && (
             <Typography variant="body2">
-              <strong>Standard:</strong> {selectedTemplate.standardReference}
+              <strong>{t('wizards.presentationPolicy.templateSelectionStep.selectedInfo.standard')}</strong> {selectedTemplate.standardReference}
             </Typography>
           )}
           <Typography variant="body2" sx={{ mt: 1 }}>
-            You can customize the claims and settings in the next steps.
+            {t('wizards.presentationPolicy.templateSelectionStep.selectedInfo.next')}
           </Typography>
         </Alert>
       )}
@@ -163,7 +167,7 @@ const TemplateSelectionStep = ({ trustProfile, selectedTemplate, onSelectTemplat
       {selectedTemplate?.id === 'custom' && (
         <Alert severity="info" sx={{ mt: 3 }}>
           <Typography variant="body2">
-            You&apos;ll configure all policy settings manually in the next steps.
+            {t('wizards.presentationPolicy.templateSelectionStep.customInfo')}
           </Typography>
         </Alert>
       )}

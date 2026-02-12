@@ -29,6 +29,7 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import HowToRegIcon from '@mui/icons-material/HowToReg';
 import MailOutlineIcon from '@mui/icons-material/MailOutline';
 import InfoIcon from '@mui/icons-material/Info';
+import { useTranslation, Trans } from 'react-i18next';
 
 const DomainMatchModal = ({
   open,
@@ -38,6 +39,8 @@ const DomainMatchModal = ({
   onJoinOrganization,
   email,
 }) => {
+  const { t } = useTranslation('onboarding');
+  
   if (!matches || matches.length === 0) {
     return null;
   }
@@ -48,16 +51,7 @@ const DomainMatchModal = ({
   };
 
   const getPolicyLabel = (policy) => {
-    switch (policy) {
-      case 'auto':
-        return 'Instant Access';
-      case 'approval':
-        return 'Requires Approval';
-      case 'closed':
-        return 'Closed';
-      default:
-        return policy;
-    }
+    return t(`domainMatch.policies.${policy}`, policy);
   };
 
   const getPolicyColor = (policy) => {
@@ -76,11 +70,11 @@ const DomainMatchModal = ({
   const getButtonText = (policy) => {
     switch (policy) {
       case 'auto':
-        return 'Join Now';
+        return t('domainMatch.buttons.joinNow');
       case 'approval':
-        return 'Request to Join';
+        return t('domainMatch.buttons.requestToJoin');
       case 'closed':
-        return 'Closed';
+        return t('domainMatch.buttons.closed');
       default:
         return 'Join';
     }
@@ -102,14 +96,16 @@ const DomainMatchModal = ({
       <DialogTitle>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <MailOutlineIcon color="primary" />
-          Organizations Found for Your Email Domain
+          {t('domainMatch.title')}
         </Box>
       </DialogTitle>
       <DialogContent>
         <Alert severity="info" icon={<InfoIcon />} sx={{ mb: 3 }}>
           <Typography variant="body2">
-            We found {matches.length} organization{matches.length > 1 ? 's' : ''} that accept users 
-            from the <strong>{getDomain(email)}</strong> domain.
+            {t('domainMatch.info', { count: matches.length })}{' '}
+            <Trans i18nKey="domainMatch.domain" ns="onboarding" values={{ domain: getDomain(email) }}>
+              <strong>{{ domain: getDomain(email) }}</strong> domain.
+            </Trans>
           </Typography>
         </Alert>
 
@@ -127,12 +123,14 @@ const DomainMatchModal = ({
                 </Box>
                 {org.domain_join_policy === 'auto' && (
                   <Typography variant="body2" color="text.secondary">
-                    You will be automatically added as a <strong>{org.default_role}</strong>
+                    <Trans i18nKey="domainMatch.autoDescription" ns="onboarding" values={{ role: org.default_role }}>
+                      You will be automatically added as a <strong>{{ role: org.default_role }}</strong>
+                    </Trans>
                   </Typography>
                 )}
                 {org.domain_join_policy === 'approval' && (
                   <Typography variant="body2" color="text.secondary">
-                    Your request will be reviewed by an administrator. You will be notified once approved.
+                    {t('domainMatch.approvalDescription')}
                   </Typography>
                 )}
               </CardContent>
@@ -145,7 +143,7 @@ const DomainMatchModal = ({
                   disabled={loading || org.domain_join_policy === 'closed'}
                   fullWidth
                 >
-                  {loading ? 'Processing...' : getButtonText(org.domain_join_policy)}
+                  {loading ? t('domainMatch.buttons.processing') : getButtonText(org.domain_join_policy)}
                 </Button>
               </CardActions>
             </Card>
@@ -154,13 +152,13 @@ const DomainMatchModal = ({
 
         <Alert severity="warning" sx={{ mt: 3 }}>
           <Typography variant="body2">
-            You can also skip this step and join organizations manually later using an invite code.
+            {t('domainMatch.skipWarning')}
           </Typography>
         </Alert>
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose} disabled={loading}>
-          Skip for Now
+          {t('domainMatch.skipButton')}
         </Button>
       </DialogActions>
     </Dialog>

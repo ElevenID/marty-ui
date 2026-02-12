@@ -1,0 +1,198 @@
+{
+  "actions": {
+    "save": "Save",
+    "cancel": "Cancel",
+    "delete": "Delete",
+    "edit": "Edit",
+    "create": "Create",
+    "update": "Update",
+    "submit": "Submit",
+    "confirm": "Confirm",
+    "back": "Back",
+    "next": "Next",
+    "finish": "Finish",
+    "close": "Close",
+    "search": "Search",
+    "filter": "Filter",
+    "export": "Export",
+    "import": "Import",
+    "download": "Download",
+    "upload": "Upload",
+    "view": "View",
+    "refresh": "Refresh",
+    "retry": "Retry",
+    "learnMore": "Learn More",
+    "getStarted": "Get Started",
+    "continue": "Continue",
+    "done": "Done"
+  },
+  "common": {
+    "yes": "Yes",
+    "no": "No",
+    "ok": "OK",
+    "loading": "Loading...",
+    "welcome": "Welcome",
+    "home": "Home",
+    "settings": "Settings",
+    "profile": "Profile",
+    "logout": "Logout",
+    "login": "Login",
+    "signIn": "Sign In",
+    "signOut": "Sign Out",
+    "status": "Status",
+    "active": "Active",
+    "inactive": "Inactive",
+    "pending": "Pending",
+    "approved": "Approved",
+    "rejected": "Rejected",
+    "name": "Name",
+    "description": "Description",
+    "date": "Date",
+    "time": "Time",
+    "type": "Type",
+    "or": "or",
+    "user": "User",
+    "yourOrganization": "Your Organization",
+    "organizationProfile": "Organization Profile",
+    "notifications": "Notifications",
+    "billingSubscription": "Billing & Subscription",
+    "deleteOrganization": "Delete Organization"
+  },
+  "userTypes": {
+    "administrator": "Administrator",
+    "vendor": "Vendor",
+    "applicant": "Applicant",
+    "user": "User"
+  },
+  "navigation": {
+    "home": "Home",
+    "product": "Product",
+    "howItWorks": "How It Works",
+    "whyVerifiableIdentity": "Why Verifiable Identity",
+    "standards": "Standards",
+    "docs": "Docs",
+    "pricing": "Pricing",
+    "dashboard": "Dashboard",
+    "documents": "Travel Docs",
+    "travelDocs": "Travel Docs",
+    "applicants": "Applicants",
+    "verify": "Verify",
+    "wallet": "Wallet",
+    "advanced": "Advanced",
+    "admin": "Admin",
+    "vendors": "Vendors",
+    "applications": "Applications",
+    "trust": "Trust",
+    "verification": "Verification",
+    "auditLogs": "Audit Logs",
+    "team": "Team",
+    "credentials": "Credentials",
+    "myApplications": "My Applications",
+    "myDocuments": "My Documents",
+    "profile": "Profile",
+    "policies": "Policies",
+    "templates": "Templates",
+    "settings": "Settings",
+    "help": "Help"
+  },
+  "validation": {
+    "required": "This field is required",
+    "invalidEmail": "Please enter a valid email address",
+    "invalidUrl": "Please enter a valid URL",
+    "minLength": "Must be at least {{count}} characters",
+    "maxLength": "Must not exceed {{count}} characters",
+    "passwordMismatch": "Passwords do not match",
+    "noResults": "No results match your filters. Try adjusting your search criteria."
+  },
+  "messages": {
+    "success": "Success",
+    "error": "Error",
+    "warning": "Warning",
+    "info": "Information",
+    "saveSuccess": "Changes saved successfully",
+    "deleteSuccess": "Deleted successfully",
+    "deleteConfirm": "Are you sure you want to delete this item?",
+    "unsavedChanges": "You have unsaved changes. Are you sure you want to leave?"
+  },
+  "status": {
+    "active": "Active",
+    "draft": "Draft",
+    "disabled": "Disabled",
+    "pending": "Pending",
+    "pendingReview": "Pending Review",
+    "documentsPending": "Documents Pending",
+    "approved": "Approved",
+    "rejected": "Rejected",
+    "verificationFailed": "Verification Failed",
+    "running": "Running",
+    "completed": "Completed",
+    "failed": "Failed",
+    "issued": "Issued",
+    "revoked": "Revoked",
+    "expired": "Expired",
+    "unknown": "Unknown"
+  },
+  "buildButton": {
+    "build": "Build {{resourceName}}",
+    "guidedWizard": "Guided wizard",
+    "newAdvanced": "New (Advanced)",
+    "rawFormEditor": "Raw form / JSON editor"
+  },
+  "previewMode": {
+    "title": "Preview Mode",
+    "description": "This is what an applicant sees. Actions are disabled and nothing will be submitted.",
+    "exitPreview": "Exit Preview",
+    "org": "Org: {{organizationName}}"
+  },
+  "emptyState": {
+    "noResults": "No results match your filters. Try adjusting your search criteria.",
+    "prerequisites": "Prerequisites",
+    "prerequisiteStatus": {
+      "ready": "Ready",
+      "pending": "Pending",
+      "blocked": "Blocked"
+    }
+  },
+  "login": {
+    "welcome": "Welcome to {{appName}}",
+    "signInPrompt": "Sign in to access the Travel Document Trust Services portal.",
+    "forAdministrators": "For <strong>Administrators</strong>: Manage travel documents, applicants, and system settings.",
+    "forApplicants": "For <strong>Applicants</strong>: Submit applications and track your travel document status.",
+    "signInWithSSO": "Sign in with SSO",
+    "securedBy": "Secured by Keycloak OpenID Connect",
+    "checkingAuth": "Checking authentication..."
+  },
+  "notifications": {
+    "title": "Notifications",
+    "unreadCount": "{{count}} unread notifications",
+    "unreadCount_one": "{{count}} unread notification",
+    "markAllRead": "Mark all read",
+    "viewAll": "View All Notifications",
+    "empty": {
+      "title": "No notifications",
+      "description": "You're all caught up! Notifications will appear here."
+    },
+    "newBadge": "NEW"
+  },
+  "permissions": {
+    "denied": "Permission Denied"
+  },
+  "resourceDrawer": {
+    "quickCreateInfo": "This is a quick create form with essential fields.",
+    "advancedConfigPrefix": "For advanced configuration,",
+    "openFullEditor": "open the full editor",
+    "creating": "Creating...",
+    "create": "Create",
+    "failedToCreate": "Failed to create resource"
+  },
+  "permissions": {
+    "roles": {
+      "administrator": "Administrator",
+      "vendor": "Vendor",
+      "applicant": "Applicant",
+      "developer": "Developer",
+      "operator": "Operator"
+    },
+    "deniedMessage": "Only {{roles}} can {{action}}. Your current role does not have permission."
+  }
+}

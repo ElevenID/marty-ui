@@ -23,10 +23,12 @@ import { useNavigate } from 'react-router-dom';
 import SecurityIcon from '@mui/icons-material/Security';
 import WarningIcon from '@mui/icons-material/Warning';
 import AddCircleOutlineIcon from '@mui/icons-material/AddCircleOutline';
+import { useTranslation } from 'react-i18next';
 
 import { listTrustProfiles } from '../../../../services/presentationPolicyApi';
 
 const TrustComplianceStep = ({ data, onChange }) => {
+  const { t } = useTranslation('console');
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [trustProfiles, setTrustProfiles] = useState([]);
@@ -52,7 +54,7 @@ const TrustComplianceStep = ({ data, onChange }) => {
       }
     } catch (err) {
       console.error('Failed to load trust profiles:', err);
-      setError('Failed to load trust profiles');
+      setError(t('wizards.credentialTemplate.trustComplianceStep.errors.failedToLoadTrustProfiles'));
     } finally {
       setLoading(false);
     }
@@ -77,18 +79,16 @@ const TrustComplianceStep = ({ data, onChange }) => {
         <SecurityIcon sx={{ fontSize: 80, color: 'warning.main', mb: 3 }} />
         
         <Typography variant="h5" gutterBottom>
-          Trust Profile Required
+          {t('wizards.credentialTemplate.trustComplianceStep.blocked.title')}
         </Typography>
         
         <Typography color="text.secondary" paragraph sx={{ maxWidth: 600, mx: 'auto' }}>
-          Before creating a credential template, you need at least one active Trust Profile.
-          Trust Profiles define which issuers are trusted and validation rules for credentials.
+          {t('wizards.credentialTemplate.trustComplianceStep.blocked.description')}
         </Typography>
 
         <Alert severity="warning" sx={{ maxWidth: 600, mx: 'auto', mb: 3 }}>
           <Typography variant="body2">
-            You cannot proceed with credential template creation until an active Trust Profile exists.
-            Create one now to continue.
+            {t('wizards.credentialTemplate.trustComplianceStep.blocked.alert')}
           </Typography>
         </Alert>
 
@@ -98,13 +98,13 @@ const TrustComplianceStep = ({ data, onChange }) => {
             startIcon={<AddCircleOutlineIcon />}
             onClick={handleGoToTrustProfiles}
           >
-            Create Trust Profile
+            {t('wizards.credentialTemplate.trustComplianceStep.blocked.createButton')}
           </Button>
           <Button
             variant="outlined"
             onClick={() => window.location.reload()}
           >
-            Refresh
+            {t('wizards.credentialTemplate.trustComplianceStep.blocked.refreshButton')}
           </Button>
         </Box>
       </Box>
@@ -115,10 +115,10 @@ const TrustComplianceStep = ({ data, onChange }) => {
     <Box>
       <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
         <SecurityIcon />
-        Trust & Compliance
+        {t('wizards.credentialTemplate.trustComplianceStep.title')}
       </Typography>
       <Typography color="text.secondary" paragraph>
-        Select which trust profile and compliance rules apply to this credential template.
+        {t('wizards.credentialTemplate.trustComplianceStep.description')}
       </Typography>
 
       {error && (
@@ -129,11 +129,11 @@ const TrustComplianceStep = ({ data, onChange }) => {
 
       {/* Trust Profile Selection */}
       <FormControl fullWidth required sx={{ mb: 3 }}>
-        <InputLabel>Trust Profile</InputLabel>
+        <InputLabel>{t('wizards.credentialTemplate.trustComplianceStep.trustProfile.label')}</InputLabel>
         <Select
           value={data.trust_profile_id || ''}
           onChange={(e) => onChange({ trust_profile_id: e.target.value })}
-          label="Trust Profile"
+          label={t('wizards.credentialTemplate.trustComplianceStep.trustProfile.label')}
         >
           {trustProfiles.map((profile) => (
             <MenuItem key={profile.id} value={profile.id}>
@@ -151,7 +151,9 @@ const TrustComplianceStep = ({ data, onChange }) => {
           ))}
         </Select>
         <FormHelperText>
-          The trust profile that defines validation rules for this credential ({trustProfiles.length} active profile{trustProfiles.length !== 1 ? 's' : ''} available)
+          {t('wizards.credentialTemplate.trustComplianceStep.trustProfile.helper', {
+            count: trustProfiles.length,
+          })}
         </FormHelperText>
       </FormControl>
 
@@ -159,10 +161,10 @@ const TrustComplianceStep = ({ data, onChange }) => {
       {data.trust_profile_id && (
         <Box sx={{ mb: 3, p: 2, bgcolor: 'action.hover', borderRadius: 1 }}>
           <Typography variant="caption" color="text.secondary" gutterBottom display="block">
-            Selected Trust Profile
+            {t('wizards.credentialTemplate.trustComplianceStep.trustProfile.selectedTitle')}
           </Typography>
           <Chip
-            label={trustProfiles.find((p) => p.id === data.trust_profile_id)?.name || 'Unknown'}
+            label={trustProfiles.find((p) => p.id === data.trust_profile_id)?.name || t('wizards.credentialTemplate.trustComplianceStep.trustProfile.unknown')}
             color="primary"
             icon={<SecurityIcon />}
           />
@@ -171,41 +173,40 @@ const TrustComplianceStep = ({ data, onChange }) => {
 
       {/* Compliance Profile Selection (Optional) */}
       <FormControl fullWidth sx={{ mb: 2 }}>
-        <InputLabel>Compliance Profile</InputLabel>
+        <InputLabel>{t('wizards.credentialTemplate.trustComplianceStep.complianceProfile.label')}</InputLabel>
         <Select
           value={data.compliance_profile_id || ''}
           onChange={(e) => onChange({ compliance_profile_id: e.target.value || null })}
-          label="Compliance Profile"
+          label={t('wizards.credentialTemplate.trustComplianceStep.complianceProfile.label')}
         >
           <MenuItem value="">
-            <em>None (recommended for most use cases)</em>
+            <em>{t('wizards.credentialTemplate.trustComplianceStep.complianceProfile.noneOption')}</em>
           </MenuItem>
           {/* TODO: Load actual compliance profiles when available */}
           <MenuItem value="gdpr" disabled>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              GDPR Compliance
-              <Chip label="Coming Soon" size="small" />
+              {t('wizards.credentialTemplate.trustComplianceStep.complianceProfile.gdpr')}
+              <Chip label={t('wizards.credentialTemplate.trustComplianceStep.complianceProfile.comingSoon')} size="small" />
             </Box>
           </MenuItem>
         </Select>
         <FormHelperText>
-          Optional: Select only if you need specific regulatory requirements (GDPR, HIPAA, etc.)
+          {t('wizards.credentialTemplate.trustComplianceStep.complianceProfile.helper')}
         </FormHelperText>
       </FormControl>
 
       <Alert severity="info" sx={{ mb: 3 }}>
         <Typography variant="body2" gutterBottom>
-          <strong>Most users don't need compliance profiles.</strong>
+          <strong>{t('wizards.credentialTemplate.trustComplianceStep.guidance.title')}</strong>
         </Typography>
         <Typography variant="caption" color="text.secondary">
-          Compliance profiles add extra validation layers for regulated industries. Leave this as "None" unless you have specific regulatory requirements.
+          {t('wizards.credentialTemplate.trustComplianceStep.guidance.description')}
         </Typography>
       </Alert>
 
       <Alert severity="info" icon={<SecurityIcon />}>
         <Typography variant="body2">
-          The selected Trust Profile will determine which cryptographic algorithms and validation rules
-          apply to credentials issued from this template.
+          {t('wizards.credentialTemplate.trustComplianceStep.guidance.securityDescription')}
         </Typography>
       </Alert>
     </Box>

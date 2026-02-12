@@ -43,6 +43,7 @@ import { DatePicker } from '@mui/x-date-pickers/DatePicker';
 import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider';
 import { AdapterDateFns } from '@mui/x-date-pickers/AdapterDateFns';
 import { Link } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 
 import { ResourcePage } from '../../common';
 import { TableSkeleton } from '../../common/skeletons';
@@ -52,30 +53,35 @@ import HistoryIcon from '@mui/icons-material/History';
 import auditApi from '../../../services/auditApi';
 import { useNotifications } from '../../../hooks/useNotifications';
 
-const BREADCRUMBS = [
-  { label: 'Console', path: '/console' },
-  { label: 'Audit', path: '/console/audit' },
-];
-
-const EVENT_CATEGORIES = [
-  { value: 'all', label: 'All Events' },
-  { value: 'authentication', label: 'Authentication' },
-  { value: 'credential', label: 'Credentials' },
-  { value: 'flow', label: 'Flows' },
-  { value: 'policy', label: 'Policies' },
-  { value: 'template', label: 'Templates' },
-  { value: 'team', label: 'Team' },
-  { value: 'settings', label: 'Settings' },
-];
-
-const SEVERITY_LEVELS = [
-  { value: 'all', label: 'All Levels' },
-  { value: 'info', label: 'Info' },
-  { value: 'warning', label: 'Warning' },
-  { value: 'error', label: 'Error' },
-];
-
 function AuditPage() {
+  const { t } = useTranslation('console');
+  
+  const getBreadcrumbs = () => [
+    { label: t('audit.breadcrumbs.console'), path: '/console' },
+    { label: t('audit.breadcrumbs.audit'), path: '/console/audit' },
+  ];
+
+  const getEventCategories = () => [
+    { value: 'all', label: t('audit.categories.all') },
+    { value: 'authentication', label: t('audit.categories.authentication') },
+    { value: 'credential', label: t('audit.categories.credential') },
+    { value: 'flow', label: t('audit.categories.flow') },
+    { value: 'policy', label: t('audit.categories.policy') },
+    { value: 'template', label: t('audit.categories.template') },
+    { value: 'team', label: t('audit.categories.team') },
+    { value: 'settings', label: t('audit.categories.settings') },
+  ];
+
+  const getSeverityLevels = () => [
+    { value: 'all', label: t('audit.severity.all') },
+    { value: 'info', label: t('audit.severity.info') },
+    { value: 'warning', label: t('audit.severity.warning') },
+    { value: 'error', label: t('audit.severity.error') },
+  ];
+
+  const EVENT_CATEGORIES = getEventCategories();
+  const SEVERITY_LEVELS = getSeverityLevels();
+
   const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -161,20 +167,20 @@ function AuditPage() {
       // If backend returns download URL, open it
       if (result.download_url) {
         window.open(result.download_url, '_blank');
-        showNotification?.('Export started. Download will begin shortly.', 'success');
+        showNotification?.(t('audit.exportSuccess'), 'success');
       } else {
-        showNotification?.('Export job created. You\'ll receive a notification when ready.', 'info');
+        showNotification?.(t('audit.messages.exportJobCreated'), 'info');
       }
     } catch (err) {
       console.error('Failed to export audit logs:', err);
-      showNotification?.('Failed to export audit logs', 'error');
+      showNotification?.(t('audit.messages.exportFailed'), 'error');
     } finally {
       setExporting(false);
     }
   };
 
   const handleSaveView = async () => {
-    const viewName = prompt('Enter a name for this filter view:');
+    const viewName = prompt(t('audit.messages.enterFilterViewName'));
     if (!viewName) return;
 
     try {
@@ -190,11 +196,11 @@ function AuditPage() {
           endDate: endDate?.toISOString(),
         },
       });
-      showNotification?.('Filter view saved', 'success');
+      showNotification?.(t('audit.messages.filterViewSaved'), 'success');
       loadSavedViews();
     } catch (err) {
       console.error('Failed to save view:', err);
-      showNotification?.('Failed to save filter view', 'error');
+      showNotification?.(t('audit.messages.saveFilterViewFailed'), 'error');
     }
   };
 
@@ -207,7 +213,7 @@ function AuditPage() {
     setIpAddress(filters.ipAddress || '');
     setStartDate(filters.startDate ? new Date(filters.startDate) : null);
     setEndDate(filters.endDate ? new Date(filters.endDate) : null);
-    showNotification?.(`Applied view: ${view.name}`, 'info');
+    showNotification?.(t('audit.messages.appliedView', { name: view.name }), 'info');
   };
 
   const getSeverityColor = (sev) => {
@@ -288,23 +294,23 @@ function AuditPage() {
 
   return (
     <ResourcePage
-      title="Audit Log"
-      description="Monitor and review all system activity and security events."
-      breadcrumbs={BREADCRUMBS}
+      title={t('audit.title')}
+      description={t('audit.description')}
+      breadcrumbs={getBreadcrumbs()}
       actions={
         <Box sx={{ display: 'flex', gap: 1 }}>
           {savedViews.length > 0 && (
             <FormControl size="small" sx={{ minWidth: 150 }}>
-              <InputLabel>Saved Views</InputLabel>
+              <InputLabel>{t('audit.filters.savedViews')}</InputLabel>
               <Select
-                label="Saved Views"
+                label={t('audit.filters.savedViews')}
                 onChange={(e) => {
                   const view = savedViews.find(v => v.id === e.target.value);
                   if (view) applyView(view);
                 }}
                 displayEmpty
               >
-                <MenuItem value="">Select view...</MenuItem>
+                <MenuItem value="">{t('audit.filters.selectView')}</MenuItem>
                 {savedViews.map((view) => (
                   <MenuItem key={view.id} value={view.id}>
                     {view.name}
@@ -319,7 +325,7 @@ function AuditPage() {
             startIcon={<BookmarkIcon />}
             onClick={handleSaveView}
           >
-            Save View
+            {t('audit.actions.saveView')}
           </Button>
           <Button
             variant="outlined"
@@ -327,7 +333,7 @@ function AuditPage() {
             startIcon={<FilterListIcon />}
             onClick={() => setShowFilters(!showFilters)}
           >
-            Filters
+            {showFilters ? t('audit.hideFilters') : t('audit.showFilters')}
           </Button>
           <Button
             variant="outlined"
@@ -336,7 +342,7 @@ function AuditPage() {
             onClick={handleExport}
             disabled={exporting}
           >
-            {exporting ? 'Exporting...' : 'Export'}
+            {exporting ? t('audit.exporting') : t('audit.export')}
           </Button>
           <IconButton size="small" onClick={loadEvents}>
             <RefreshIcon />
@@ -348,7 +354,7 @@ function AuditPage() {
       <Paper sx={{ p: 2, mb: 2 }}>
         <TextField
           fullWidth
-          placeholder="Search by action, actor, or resource..."
+          placeholder={t('audit.searchPlaceholder')}
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           InputProps={{
@@ -364,10 +370,10 @@ function AuditPage() {
         <Collapse in={showFilters}>
           <Box sx={{ mt: 2, display: 'flex', gap: 2, flexWrap: 'wrap' }}>
             <FormControl sx={{ minWidth: 150 }}>
-              <InputLabel>Category</InputLabel>
+              <InputLabel>{t('audit.filters.category')}</InputLabel>
               <Select
                 value={category}
-                label="Category"
+                label={t('audit.filters.category')}
                 onChange={(e) => setCategory(e.target.value)}
               >
                 {EVENT_CATEGORIES.map((cat) => (
@@ -379,10 +385,10 @@ function AuditPage() {
             </FormControl>
 
             <FormControl sx={{ minWidth: 120 }}>
-              <InputLabel>Severity</InputLabel>
+              <InputLabel>{t('audit.filters.severity')}</InputLabel>
               <Select
                 value={severity}
-                label="Severity"
+                label={t('audit.filters.severity')}
                 onChange={(e) => setSeverity(e.target.value)}
               >
                 {SEVERITY_LEVELS.map((sev) => (
@@ -394,7 +400,7 @@ function AuditPage() {
             </FormControl>
 
             <TextField
-              label="Actor (email)"
+              label={t('audit.filters.actor')}
               value={actor}
               onChange={(e) => setActor(e.target.value)}
               size="small"
@@ -402,7 +408,7 @@ function AuditPage() {
             />
 
             <TextField
-              label="IP Address"
+              label={t('audit.filters.ipAddress')}
               value={ipAddress}
               onChange={(e) => setIpAddress(e.target.value)}
               size="small"
@@ -411,13 +417,13 @@ function AuditPage() {
 
             <LocalizationProvider dateAdapter={AdapterDateFns}>
               <DatePicker
-                label="Start Date"
+                label={t('audit.filters.startDate')}
                 value={startDate}
                 onChange={setStartDate}
                 slotProps={{ textField: { size: 'small' } }}
               />
               <DatePicker
-                label="End Date"
+                label={t('audit.filters.endDate')}
                 value={endDate}
                 onChange={setEndDate}
                 slotProps={{ textField: { size: 'small' } }}
@@ -435,9 +441,9 @@ function AuditPage() {
       ) : events.length === 0 ? (
         <EmptyState
           icon={HistoryIcon}
-          title="No audit events yet"
-          description="Audit logs track security-relevant events in your organization. Events will appear as users interact with your system."
-          whyItMatters="Audit logs help you monitor security, troubleshoot issues, and maintain compliance."
+          title={t('audit.empty.title')}
+          description={t('audit.empty.description')}
+          whyItMatters={t('audit.empty.whyItMatters')}
         />
       ) : (
         <Paper>
@@ -446,11 +452,11 @@ function AuditPage() {
               <TableHead>
                 <TableRow>
                   <TableCell width={40} />
-                  <TableCell>Timestamp</TableCell>
-                  <TableCell>Action</TableCell>
-                  <TableCell>Actor</TableCell>
-                  <TableCell>Resource</TableCell>
-                  <TableCell>Severity</TableCell>
+                  <TableCell>{t('audit.tableHeaders.timestamp')}</TableCell>
+                  <TableCell>{t('audit.tableHeaders.event')}</TableCell>
+                  <TableCell>{t('audit.tableHeaders.actor')}</TableCell>
+                  <TableCell>{t('audit.tableHeaders.resource')}</TableCell>
+                  <TableCell>{t('audit.tableHeaders.status')}</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
@@ -458,7 +464,7 @@ function AuditPage() {
                   <TableRow>
                     <TableCell colSpan={6} align="center">
                       <Typography color="text.secondary" sx={{ py: 4 }}>
-                        No audit events found matching your criteria.
+                        {t('audit.empty.noMatching')}
                       </Typography>
                     </TableCell>
                   </TableRow>
@@ -547,12 +553,12 @@ function AuditPage() {
                           <Collapse in={expandedRow === event.id}>
                             <Box sx={{ p: 2, bgcolor: 'action.hover' }}>
                               <Typography variant="subtitle2" gutterBottom>
-                                Event Details
+                                {t('audit.details.title')}
                               </Typography>
                               <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 2 }}>
                                 <Box>
                                   <Typography variant="caption" color="text.secondary">
-                                    Event ID
+                                    {t('audit.details.eventId')}
                                   </Typography>
                                   <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
                                     {event.id}
@@ -560,15 +566,15 @@ function AuditPage() {
                                 </Box>
                                 <Box>
                                   <Typography variant="caption" color="text.secondary">
-                                    IP Address
+                                    {t('audit.details.ipAddress')}
                                   </Typography>
                                   <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
-                                    {event.ipAddress || 'N/A'}
+                                    {event.ipAddress || t('audit.details.notAvailable')}
                                   </Typography>
                                 </Box>
                                 <Box sx={{ gridColumn: '1 / -1' }}>
                                   <Typography variant="caption" color="text.secondary">
-                                    Additional Data
+                                    {t('audit.details.additionalData')}
                                   </Typography>
                                   <Typography 
                                     variant="body2" 

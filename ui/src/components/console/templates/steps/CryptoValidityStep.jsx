@@ -25,16 +25,18 @@ import VpnKeyIcon from '@mui/icons-material/VpnKey';
 import InfoIcon from '@mui/icons-material/Info';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
+import { useTranslation } from 'react-i18next';
 
-const SIGNING_ALGORITHMS = [
-  { value: 'ES256', label: 'ES256 (ECDSA P-256) - Recommended', recommended: true },
-  { value: 'ES384', label: 'ES384 (ECDSA P-384)' },
-  { value: 'ES512', label: 'ES512 (ECDSA P-521)' },
-  { value: 'EdDSA', label: 'EdDSA (Ed25519)' },
-  { value: 'RS256', label: 'RS256 (RSA 2048+)' },
+const getSigningAlgorithms = (t) => [
+  { value: 'ES256', label: t('wizards.credentialTemplate.cryptoValidityStep.signingAlgorithm.labels.ES256') },
+  { value: 'ES384', label: t('wizards.credentialTemplate.cryptoValidityStep.signingAlgorithm.labels.ES384') },
+  { value: 'ES512', label: t('wizards.credentialTemplate.cryptoValidityStep.signingAlgorithm.labels.ES512') },
+  { value: 'EdDSA', label: t('wizards.credentialTemplate.cryptoValidityStep.signingAlgorithm.labels.EdDSA') },
+  { value: 'RS256', label: t('wizards.credentialTemplate.cryptoValidityStep.signingAlgorithm.labels.RS256') },
 ];
 
 const CryptoValidityStep = ({ data, onChange }) => {
+  const { t } = useTranslation('console');
   const [showAdvanced, setShowAdvanced] = useState(false);
   
   const validity = data.validity_rules || {
@@ -60,27 +62,27 @@ const CryptoValidityStep = ({ data, onChange }) => {
     <Box>
       <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
         <VpnKeyIcon />
-        Cryptography & Validity (Optional)
+        {t('wizards.credentialTemplate.cryptoValidityStep.title')}
       </Typography>
       <Typography color="text.secondary" paragraph>
-        Configure signing and validity settings. Defaults are pre-selected based on best practices.
+        {t('wizards.credentialTemplate.cryptoValidityStep.description')}
       </Typography>
 
       <Alert severity="success" sx={{ mb: 3 }}>
         <Typography variant="body2" gutterBottom>
-          <strong>Defaults are secure and ready to use.</strong>
+          <strong>{t('wizards.credentialTemplate.cryptoValidityStep.defaults.title')}</strong>
         </Typography>
         <Typography variant="caption" color="text.secondary">
-          Skip this step or use defaults for most use cases. Advanced users can customize crypto and validity settings below.
+          {t('wizards.credentialTemplate.cryptoValidityStep.defaults.description')}
         </Typography>
       </Alert>
 
       {/* Validity Period Configuration */}
       <Typography variant="subtitle2" gutterBottom>
-        Validity Period
+        {t('wizards.credentialTemplate.cryptoValidityStep.validity.title')}
       </Typography>
       <Typography variant="body2" color="text.secondary" paragraph>
-        Configure how long credentials remain valid after issuance
+        {t('wizards.credentialTemplate.cryptoValidityStep.validity.description')}
       </Typography>
 
       <Grid container spacing={3}>
@@ -89,10 +91,10 @@ const CryptoValidityStep = ({ data, onChange }) => {
           <TextField
             fullWidth
             type="number"
-            label="Default Validity (days)"
+            label={t('wizards.credentialTemplate.cryptoValidityStep.validity.defaultValidity')}
             value={secondsToDays(validity.ttl_seconds)}
             onChange={(e) => handleValidityChange('ttl_seconds', daysToSeconds(parseInt(e.target.value, 10)))}
-            helperText="How long credentials are valid by default (e.g., 365 days = 1 year)"
+            helperText={t('wizards.credentialTemplate.cryptoValidityStep.validity.defaultValidityHelper')}
             inputProps={{ min: 1 }}
           />
         </Grid>
@@ -102,10 +104,10 @@ const CryptoValidityStep = ({ data, onChange }) => {
           <TextField
             fullWidth
             type="number"
-            label="Maximum Validity (days)"
+            label={t('wizards.credentialTemplate.cryptoValidityStep.validity.maxValidity')}
             value={secondsToDays(validity.max_validity_seconds)}
             onChange={(e) => handleValidityChange('max_validity_seconds', daysToSeconds(parseInt(e.target.value, 10)))}
-            helperText="Maximum allowed validity period (e.g., 730 days = 2 years)"
+            helperText={t('wizards.credentialTemplate.cryptoValidityStep.validity.maxValidityHelper')}
             inputProps={{ min: 1 }}
           />
         </Grid>
@@ -115,10 +117,10 @@ const CryptoValidityStep = ({ data, onChange }) => {
           <TextField
             fullWidth
             type="number"
-            label="Not Before Offset (seconds)"
+            label={t('wizards.credentialTemplate.cryptoValidityStep.validity.notBeforeOffset')}
             value={validity.not_before_offset}
             onChange={(e) => handleValidityChange('not_before_offset', e.target.value)}
-            helperText="Delay before credential becomes valid (usually 0)"
+            helperText={t('wizards.credentialTemplate.cryptoValidityStep.validity.notBeforeOffsetHelper')}
             inputProps={{ min: 0 }}
           />
         </Grid>
@@ -126,9 +128,11 @@ const CryptoValidityStep = ({ data, onChange }) => {
 
       <Box sx={{ mt: 3, p: 2, bgcolor: 'action.hover', borderRadius: 1 }}>
         <Typography variant="body2" color="text.secondary">
-          <strong>Example:</strong> With a default validity of {secondsToDays(validity.ttl_seconds)} days,
-          a credential issued today will expire on{' '}
-          {new Date(Date.now() + validity.ttl_seconds * 1000).toLocaleDateString()}.
+          <strong>{t('wizards.credentialTemplate.cryptoValidityStep.validity.example')}</strong>{' '}
+          {t('wizards.credentialTemplate.cryptoValidityStep.validity.exampleDescription', {
+            days: secondsToDays(validity.ttl_seconds),
+            date: new Date(Date.now() + validity.ttl_seconds * 1000).toLocaleDateString(),
+          })}
         </Typography>
       </Box>
 
@@ -140,7 +144,11 @@ const CryptoValidityStep = ({ data, onChange }) => {
           onClick={() => setShowAdvanced(!showAdvanced)}
           endIcon={showAdvanced ? <ExpandLessIcon /> : <ExpandMoreIcon />}
         >
-          {showAdvanced ? 'Hide' : 'Show'} Advanced Cryptographic Options
+          {t('wizards.credentialTemplate.cryptoValidityStep.advanced.toggle', {
+            action: showAdvanced
+              ? t('wizards.credentialTemplate.cryptoValidityStep.advanced.hide')
+              : t('wizards.credentialTemplate.cryptoValidityStep.advanced.show'),
+          })}
         </Button>
 
         <Collapse in={showAdvanced}>
@@ -149,20 +157,20 @@ const CryptoValidityStep = ({ data, onChange }) => {
 
             {/* Signing Algorithm */}
             <FormControl fullWidth sx={{ mb: 3 }}>
-              <InputLabel>Signing Algorithm</InputLabel>
+              <InputLabel>{t('wizards.credentialTemplate.cryptoValidityStep.signingAlgorithm.label')}</InputLabel>
               <Select
                 value={data.signing_algorithm || 'ES256'}
                 onChange={(e) => onChange({ signing_algorithm: e.target.value })}
-                label="Signing Algorithm"
+                label={t('wizards.credentialTemplate.cryptoValidityStep.signingAlgorithm.label')}
               >
-                {SIGNING_ALGORITHMS.map((alg) => (
+                {getSigningAlgorithms(t).map((alg) => (
                   <MenuItem key={alg.value} value={alg.value}>
                     {alg.label}
                   </MenuItem>
                 ))}
               </Select>
               <FormHelperText>
-                The cryptographic algorithm used to sign credentials from this template
+                {t('wizards.credentialTemplate.cryptoValidityStep.signingAlgorithm.helper')}
               </FormHelperText>
             </FormControl>
 
@@ -170,22 +178,22 @@ const CryptoValidityStep = ({ data, onChange }) => {
 
             {/* Revocation Profile */}
             <FormControl fullWidth>
-              <InputLabel>Revocation Profile</InputLabel>
+              <InputLabel>{t('wizards.credentialTemplate.cryptoValidityStep.revocationProfile.label')}</InputLabel>
               <Select
                 value={data.revocation_profile_id || ''}
                 onChange={(e) => onChange({ revocation_profile_id: e.target.value || null })}
-                label="Revocation Profile"
+                label={t('wizards.credentialTemplate.cryptoValidityStep.revocationProfile.label')}
               >
                 <MenuItem value="">
-                  <em>None (no revocation)</em>
+                  <em>{t('wizards.credentialTemplate.cryptoValidityStep.revocationProfile.none')}</em>
                 </MenuItem>
                 {/* TODO: Load actual revocation profiles when available */}
                 <MenuItem value="status-list" disabled>
-                  Status List 2021 (Coming Soon)
+                  {t('wizards.credentialTemplate.cryptoValidityStep.revocationProfile.statusListComingSoon')}
                 </MenuItem>
               </Select>
               <FormHelperText>
-                Optional: Select a revocation mechanism for credentials issued from this template
+                {t('wizards.credentialTemplate.cryptoValidityStep.revocationProfile.helper')}
               </FormHelperText>
             </FormControl>
           </Box>

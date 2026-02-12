@@ -10,6 +10,7 @@
  */
 
 import { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   Box,
   Paper,
@@ -43,6 +44,7 @@ import { listPresentationPolicies, deletePresentationPolicy } from '../../servic
  * Verification Main Component
  */
 export default function Verification() {
+  const { t } = useTranslation('vendor');
   const [policies, setPolicies] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -61,7 +63,7 @@ export default function Verification() {
       setPolicies(response.data || response || []);
     } catch (err) {
       console.error('Failed to fetch policies:', err);
-      setError('Failed to load presentation policies');
+      setError(t('verification.loadFailed'));
     } finally {
       setLoading(false);
     }
@@ -81,7 +83,7 @@ export default function Verification() {
   };
 
   const handleDeletePolicy = async (policyId) => {
-    if (!window.confirm('Are you sure you want to delete this policy?')) {
+    if (!window.confirm(t('verification.deleteConfirm'))) {
       return;
     }
 
@@ -90,7 +92,7 @@ export default function Verification() {
       fetchPolicies(); // Refresh the list
     } catch (err) {
       console.error('Failed to delete policy:', err);
-      alert('Failed to delete policy');
+      alert(t('verification.deleteFailed'));
     }
   };
 
@@ -119,10 +121,10 @@ export default function Verification() {
       <Box sx={{ mb: 4 }}>
         <Typography variant="h4" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <VerifiedUserIcon fontSize="large" />
-          Verification
+          {t('verification.title')}
         </Typography>
         <Typography variant="body1" color="text.secondary">
-          Define presentation policies to verify credentials from applicants and external parties.
+          {t('verification.description')}
         </Typography>
       </Box>
 
@@ -138,11 +140,10 @@ export default function Verification() {
         <Paper sx={{ p: 6, textAlign: 'center', bgcolor: 'grey.50' }}>
           <PolicyIcon sx={{ fontSize: 80, color: 'text.secondary', mb: 2 }} />
           <Typography variant="h5" gutterBottom>
-            No Presentation Policies Yet
+            {t('verification.empty.title')}
           </Typography>
           <Typography variant="body1" color="text.secondary" sx={{ mb: 3, maxWidth: 600, mx: 'auto' }}>
-            Presentation policies define what credentials you want to verify from applicants.
-            You can specify required fields, accepted issuers, and validation rules.
+            {t('verification.empty.description')}
           </Typography>
           <Button
             variant="contained"
@@ -150,7 +151,7 @@ export default function Verification() {
             startIcon={<AddIcon />}
             onClick={handleCreatePolicy}
           >
-            Create Policy
+            {t('verification.empty.createButton')}
           </Button>
         </Paper>
       )}
@@ -160,14 +161,14 @@ export default function Verification() {
         <>
           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
             <Typography variant="h6">
-              Presentation Policies ({policies.length})
+              {t('verification.list.title', { count: policies.length })}
             </Typography>
             <Button
               variant="contained"
               startIcon={<AddIcon />}
               onClick={handleCreatePolicy}
             >
-              Create Policy
+              {t('verification.list.createButton')}
             </Button>
           </Box>
 
@@ -175,12 +176,12 @@ export default function Verification() {
             <Table>
               <TableHead>
                 <TableRow>
-                  <TableCell>Name</TableCell>
-                  <TableCell>Description</TableCell>
-                  <TableCell>Credential Types</TableCell>
-                  <TableCell>Claims</TableCell>
-                  <TableCell>Standard</TableCell>
-                  <TableCell align="right">Actions</TableCell>
+                  <TableCell>{t('verification.table.name')}</TableCell>
+                  <TableCell>{t('verification.table.description')}</TableCell>
+                  <TableCell>{t('verification.table.credentialTypes')}</TableCell>
+                  <TableCell>{t('verification.table.claims')}</TableCell>
+                  <TableCell>{t('verification.table.standard')}</TableCell>
+                  <TableCell align="right">{t('verification.table.actions')}</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
@@ -193,7 +194,7 @@ export default function Verification() {
                     </TableCell>
                     <TableCell>
                       <Typography variant="body2" color="text.secondary">
-                        {policy.description || '—'}
+                        {policy.description || t('verification.table.noDescription')}
                       </Typography>
                     </TableCell>
                     <TableCell>
@@ -202,13 +203,13 @@ export default function Verification() {
                           <Chip key={type} label={type} size="small" />
                         ))}
                         {policy.accepted_credential_types?.length > 2 && (
-                          <Chip label={`+${policy.accepted_credential_types.length - 2}`} size="small" />
+                          <Chip label={t('verification.table.moreTypes', { count: policy.accepted_credential_types.length - 2 })} size="small" />
                         )}
                       </Box>
                     </TableCell>
                     <TableCell>
                       <Chip
-                        label={`${policy.required_claims?.length || 0} claims`}
+                        label={t('verification.table.claimsCount', { count: policy.required_claims?.length || 0 })}
                         size="small"
                         color="primary"
                         variant="outlined"
@@ -223,7 +224,7 @@ export default function Verification() {
                         />
                       ) : (
                         <Typography variant="body2" color="text.secondary">
-                          —
+                          {t('verification.table.noDescription')}
                         </Typography>
                       )}
                     </TableCell>
@@ -254,11 +255,10 @@ export default function Verification() {
             <CardContent>
               <PolicyIcon color="primary" sx={{ fontSize: 40, mb: 2 }} />
               <Typography variant="h6" gutterBottom>
-                Policy Builder
+                {t('verification.features.policyBuilder.title')}
               </Typography>
               <Typography variant="body2" color="text.secondary">
-                Create presentation policies with a visual builder. Define required credentials,
-                fields, and validation rules.
+                {t('verification.features.policyBuilder.description')}
               </Typography>
             </CardContent>
           </Card>
@@ -269,10 +269,10 @@ export default function Verification() {
             <CardContent>
               <HistoryIcon color="primary" sx={{ fontSize: 40, mb: 2 }} />
               <Typography variant="h6" gutterBottom>
-                Verification History
+                {t('verification.features.verificationHistory.title')}
               </Typography>
               <Typography variant="body2" color="text.secondary">
-                View all verification requests, see which passed or failed, and audit the verification log.
+                {t('verification.features.verificationHistory.description')}
               </Typography>
             </CardContent>
           </Card>
@@ -283,10 +283,10 @@ export default function Verification() {
             <CardContent>
               <VerifiedUserIcon color="primary" sx={{ fontSize: 40, mb: 2 }} />
               <Typography variant="h6" gutterBottom>
-                Trusted Issuers
+                {t('verification.features.trustedIssuers.title')}
               </Typography>
               <Typography variant="body2" color="text.secondary">
-                Manage a list of trusted credential issuers whose credentials you&apos;ll accept.
+                {t('verification.features.trustedIssuers.description')}
               </Typography>
             </CardContent>
           </Card>

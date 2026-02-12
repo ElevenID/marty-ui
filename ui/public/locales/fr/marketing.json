@@ -1,0 +1,193 @@
+{
+  "valueProposition": {
+    "headline": "La vérification d'identité ne suffit pas.",
+    "subheadline": "Construisez une infrastructure d'identité vérifiable.",
+    "extendedSubheadline": "Émettez, vérifiez et gouvernez les justificatifs — conçu pour les portefeuilles EUDI, Open Badges et la confiance d'entreprise.",
+    "primaryCTA": "Commencer gratuitement",
+    "secondaryCTA": "Pourquoi l'identité vérifiable"
+  },
+  "idvComparison": {
+    "title": "De l'IDV à l'identité vérifiable",
+    "takeaway": "ElevenID remplace les vérifications répétées par une confiance réutilisable.",
+    "traditional": {
+      "title": "IDV traditionnel",
+      "oneTimeChecks": "Vérifications de documents ponctuelles",
+      "vendorControlled": "Données d'identité contrôlées par le fournisseur",
+      "biometric": "Résultats de décision biométrique",
+      "closedAPIs": "API fermées et propriétaires",
+      "manualTrust": "Configuration manuelle de la confiance",
+      "reVerification": "Revérification partout"
+    },
+    "elevenid": {
+      "title": "ElevenID",
+      "reusable": "Justificatifs vérifiables réutilisables",
+      "holderControlled": "Portefeuilles numériques contrôlés par le titulaire",
+      "cryptographic": "Preuves cryptographiques",
+      "openStandards": "Standards ouverts (W3C VC, OID4VC, ISO)",
+      "governedTrust": "Registres de confiance gouvernés",
+      "reuseAcross": "Réutilisation de l'identité à travers les écosystèmes"
+    }
+  },
+  "eudiOpenBadges": {
+    "title": "Conçu pour les portefeuilles EUDI et les justificatifs vérifiables",
+    "verifyCredentials": "Vérifiez des justificatifs vérifiables — pas seulement des documents.",
+    "trustIssuers": "Faites confiance aux émetteurs — pas aux bases de données.",
+    "walletFirst": "Wallet-first par conception — prêt pour l'EUDI.",
+    "quote": "Les plateformes d'IDV s'arrêtent à une décision ponctuelle. ElevenID produit des résultats cryptographiquement vérifiables réutilisables à travers les portefeuilles, les écosystèmes et les registres de confiance."
+  },
+  "audienceRouting": {
+    "title": "Choisissez votre parcours",
+    "subtitle": "Choisissez votre point d'entrée — entreprise, gouvernement ou développeurs.",
+    "enterprise": {
+      "title": "Entreprise",
+      "description": "Réduisez le KYC répétitif, activez l'interopérabilité partenaires et gouvernez la confiance à l'échelle.",
+      "cta": "Explorer Entreprise"
+    },
+    "government": {
+      "title": "Gouvernement",
+      "description": "Infrastructure prête pour l'EUDI pour des justificatifs ISO, listes de confiance et acceptation réglementée.",
+      "cta": "Explorer Gouvernement"
+    },
+    "developers": {
+      "title": "Développeurs",
+      "description": "Docs, SDK et quickstarts pour l'émission et la vérification de VC.",
+      "cta": "Lire la documentation"
+    }
+  },
+  "organizationOutcomes": {
+    "title": "Pourquoi cela compte pour les organisations",
+    "reduceKYC": "Réduire les coûts de KYC répétitif avec des justificatifs réutilisables",
+    "eudiReady": "Se préparer à l'acceptation du portefeuille EUDI",
+    "avoidLockIn": "Éviter l'enfermement fournisseur grâce aux standards ouverts",
+    "supportBadges": "Prendre en charge Open Badges, justificatifs RH et identités gouvernementales dans un seul système"
+  },
+  "proofStrip": {
+    "title": "Construit sur des bases éprouvées",
+    "interoperability": "Interopérabilité",
+    "offlineVerification": "Vérification hors ligne",
+    "deployment": "Déploiement",
+    "keySecurity": "Sécurité des clés",
+    "compliance": "Conformité"
+  },
+  "landingPage": {
+    "loading": "Chargement...",
+    "checkingAccount": "Vérification de votre compte...",
+    "features": {
+      "issuance": {
+        "title": "Émission",
+        "description": "Émettez des justificatifs basés sur des standards avec signatures cryptographiques et application de politiques."
+      },
+      "verification": {
+        "title": "Vérification",
+        "description": "Vérifiez des justificatifs contre des ancres de confiance avec contrôle de révocation et divulgation sélective."
+      },
+      "governance": {
+        "title": "Gouvernance",
+        "description": "Gérez confiance, politiques et déploiement de façon centralisée — sans changer le code du vérificateur."
+      }
+    },
+    "identityProblem": {
+      "title": "Le problème de l'identité",
+      "description": "La plupart des organisations font face à des systèmes fragmentés, une confiance floue et une pression de conformité croissante.",
+      "items": {
+        "fragmented": "Systèmes d'identité fragmentés qui n'interopèrent pas",
+        "unclearTrust": "Confiance émetteur incertaine entre partenaires et juridictions",
+        "privacyPressure": "Pression de conformité (minimisation des données + divulgation sélective)",
+        "pkiComplexity": "Complexité PKI + révocation à grande échelle"
+      }
+    },
+    "solvesIt": {
+      "title": "Comment ElevenID résout cela",
+      "intro": "Gouvernez l'identité avec quatre primitives : profils de confiance, modèles de justificatifs, politiques de présentation et flows.",
+      "subheading": "Les politiques sont de la configuration, pas du code. Les endpoints exécutent des règles de confiance et de divulgation gouvernées centralement sans redéploiement."
+    },
+    "howItWorks": {
+      "title": "Fonctionnement",
+      "description": "L'identité numérique est un échange gouverné entre quatre acteurs.",
+      "cta": "Voir le flow complet"
+    },
+    "standards": {
+      "title": "Architecture basée sur des standards",
+      "subtitle": "Les standards ne sont pas des intégrations. Ils sont le produit.",
+      "description": "Ces couches permettent à ElevenID d'interopérer entre gouvernements, portefeuilles et entreprises sans intégrations sur mesure.",
+      "cta": "Explorer les standards"
+    },
+    "startFirst": {
+      "title": "Que faites-vous en premier ?",
+      "description": "Choisissez un point de départ. Vous pourrez étendre ensuite à un écosystème complet.",
+      "cards": {
+        "verify": {
+          "title": "Vérifier des justificatifs",
+          "description": "Vérifiez les portefeuilles EUDI, Open Badges et justificatifs ISO."
+        },
+        "issue": {
+          "title": "Émettre des justificatifs",
+          "description": "Émettez des justificatifs RH, éducation ou gouvernement."
+        },
+        "offline": {
+          "title": "Hors ligne / site",
+          "description": "Vérifiez aux checkpoints avec connectivité limitée."
+        },
+        "wallet": {
+          "title": "Expérience portefeuille",
+          "description": "Offrez aux utilisateurs un portefeuille pour stocker et présenter des justificatifs."
+        }
+      },
+      "notSure": "Pas sûr ?",
+      "startWithVerificationApi": "Commencer avec l'API de vérification"
+    },
+    "products": {
+      "title": "Produits & capacités",
+      "description": "Une plateforme complète — de l'émission à la vérification et à la gouvernance.",
+      "viewDetails": "Voir les détails",
+      "viewAll": "Voir tous les produits"
+    },
+    "trustSignals": {
+      "title": "Infrastructure de niveau entreprise",
+      "security": {
+        "title": "Sécurité",
+        "item1": "Validation cryptographique de niveau entreprise",
+        "item2": "Gestion PKI et révocation",
+        "item3": "Intégration HSM et coffre de clés"
+      },
+      "infrastructure": {
+        "title": "Infrastructure",
+        "item1": "Capacité offline-first (cache 72h)",
+        "item2": "Déploiement SaaS haute disponibilité",
+        "item3": "Options self-hosted pour la souveraineté",
+        "item4": "Scalabilité horizontale et équilibrage de charge",
+        "item5": "Développé avec des workflows assistés par IA pour maintenir une haute qualité à moindre coût."
+      },
+      "compliance": {
+        "title": "Conformité",
+        "item1": "Implémente ICAO 9303",
+        "item2": "Implémente ISO 18013-5 (mDoc)",
+        "item3": "RGPD et privacy by design",
+        "item4": "Divulgation sélective et minimisation des données"
+      }
+    },
+    "proofStrip": {
+      "claims": {
+        "w3c": "W3C VC / SD-JWT / OID4VP",
+        "offlineCache": "Cache hors ligne 72 heures",
+        "deployment": "SaaS + Self-hosted",
+        "keySecurity": "Intégration HSM / Vault",
+        "auditLogs": "Journaux d'audit immuables"
+      }
+    },
+    "portals": {
+      "emphasis": "Portails intégrés",
+      "message": "pour candidats, fournisseurs et admins — gérez clés API, politiques de confiance et opérations au même endroit.",
+      "learnMore": "En savoir plus"
+    },
+    "footer": {
+      "title": "Prêt à commencer ?",
+      "description": "Commencez gratuitement ou comparez les offres pour votre organisation.",
+      "viewPricing": "Voir les tarifs"
+    },
+    "orientation": {
+      "title": "Nouveau dans l'identité vérifiable ?",
+      "cta": "Fonctionnement"
+    }
+  }
+}

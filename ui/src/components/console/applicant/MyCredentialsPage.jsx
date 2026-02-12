@@ -22,6 +22,7 @@ import {
   LinearProgress,
   Button,
 } from '@mui/material';
+import { useTranslation } from 'react-i18next';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import DownloadIcon from '@mui/icons-material/Download';
 import QrCodeIcon from '@mui/icons-material/QrCode';
@@ -29,6 +30,7 @@ import QrCodeIcon from '@mui/icons-material/QrCode';
 import { getMyCredentials } from '../../../services/applicantApi';
 
 function MyCredentialsPage() {
+  const { t } = useTranslation('applicant');
   const [credentials, setCredentials] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -48,13 +50,13 @@ function MyCredentialsPage() {
         setCredentials(creds);
       } catch (err) {
         console.error('Error loading credentials:', err);
-        setError('Failed to load credentials');
+        setError(t('credentials.errorLoading'));
       } finally {
         setLoading(false);
       }
     };
     loadCredentials();
-  }, []);
+  }, [t]);
 
   const getStatusColor = (status) => {
     switch (status) {
@@ -72,10 +74,10 @@ function MyCredentialsPage() {
   return (
     <Box>
       <Typography variant="h4" gutterBottom>
-        My Credentials
+        {t('credentials.title')}
       </Typography>
       <Typography variant="body1" color="text.secondary" paragraph>
-        Your issued digital credentials and their status.
+        {t('credentials.description')}
       </Typography>
 
       {error && (
@@ -91,12 +93,12 @@ function MyCredentialsPage() {
           <Table>
             <TableHead>
               <TableRow>
-                <TableCell>Credential Type</TableCell>
-                <TableCell>Issuer</TableCell>
-                <TableCell>Issued Date</TableCell>
-                <TableCell>Expires</TableCell>
-                <TableCell>Status</TableCell>
-                <TableCell align="right">Actions</TableCell>
+                <TableCell>{t('credentials.tableHeaders.credentialType')}</TableCell>
+                <TableCell>{t('credentials.tableHeaders.issuer')}</TableCell>
+                <TableCell>{t('credentials.tableHeaders.issuedDate')}</TableCell>
+                <TableCell>{t('credentials.tableHeaders.expires')}</TableCell>
+                <TableCell>{t('credentials.tableHeaders.status')}</TableCell>
+                <TableCell align="right">{t('credentials.tableHeaders.actions')}</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
@@ -104,10 +106,10 @@ function MyCredentialsPage() {
                 <TableRow>
                   <TableCell colSpan={6} align="center">
                     <Typography color="text.secondary" sx={{ py: 4 }}>
-                      No credentials yet. Apply for a credential to get started.
+                      {t('credentials.empty.message')}
                     </Typography>
                     <Button variant="contained" href="/credentials">
-                      Browse Credentials
+                      {t('credentials.empty.browseButton')}
                     </Button>
                   </TableCell>
                 </TableRow>
@@ -132,17 +134,17 @@ function MyCredentialsPage() {
                       />
                     </TableCell>
                     <TableCell align="right">
-                      <Tooltip title="View Details">
+                      <Tooltip title={t('credentials.actions.viewDetails')}>
                         <IconButton size="small">
                           <VisibilityIcon fontSize="small" />
                         </IconButton>
                       </Tooltip>
-                      <Tooltip title="Show QR Code">
+                      <Tooltip title={t('credentials.actions.showQRCode')}>
                         <IconButton size="small" color="primary">
                           <QrCodeIcon fontSize="small" />
                         </IconButton>
                       </Tooltip>
-                      <Tooltip title="Download">
+                      <Tooltip title={t('credentials.actions.download')}>
                         <IconButton size="small">
                           <DownloadIcon fontSize="small" />
                         </IconButton>

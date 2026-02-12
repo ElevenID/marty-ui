@@ -28,14 +28,15 @@ import ErrorIcon from '@mui/icons-material/Error';
 import QrCode2Icon from '@mui/icons-material/QrCode2';
 import VerifiedUserIcon from '@mui/icons-material/VerifiedUser';
 import BadgeIcon from '@mui/icons-material/Badge';
+import { useTranslation } from 'react-i18next';
 
 import { getDeploymentActivity } from '../../../services/deploymentProfilesApi';
 
 /**
  * Format timestamp for display
  */
-function formatTimestamp(timestamp) {
-  if (!timestamp) return 'Never';
+function formatTimestamp(timestamp, t) {
+  if (!timestamp) return t('deploy.deploymentActivityCard.time.never');
   const date = new Date(timestamp);
   const now = new Date();
   const diff = now - date;
@@ -43,10 +44,10 @@ function formatTimestamp(timestamp) {
   const hours = Math.floor(minutes / 60);
   const days = Math.floor(hours / 24);
 
-  if (minutes < 1) return 'Just now';
-  if (minutes < 60) return `${minutes}m ago`;
-  if (hours < 24) return `${hours}h ago`;
-  if (days < 7) return `${days}d ago`;
+  if (minutes < 1) return t('deploy.deploymentActivityCard.time.justNow');
+  if (minutes < 60) return t('deploy.deploymentActivityCard.time.minutesAgo', { count: minutes });
+  if (hours < 24) return t('deploy.deploymentActivityCard.time.hoursAgo', { count: hours });
+  if (days < 7) return t('deploy.deploymentActivityCard.time.daysAgo', { count: days });
   return date.toLocaleDateString();
 }
 
@@ -54,6 +55,7 @@ function formatTimestamp(timestamp) {
  * Deployment Activity Card Component
  */
 export function DeploymentActivityCard({ deployment }) {
+  const { t } = useTranslation('console');
   const [activity, setActivity] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -105,7 +107,7 @@ export function DeploymentActivityCard({ deployment }) {
           </Typography>
           <Chip
             icon={isActive ? <CheckCircleIcon /> : <ErrorIcon />}
-            label={isActive ? 'Active' : 'Inactive'}
+            label={isActive ? t('deploy.deploymentActivityCard.status.active') : t('deploy.deploymentActivityCard.status.inactive')}
             color={isActive ? 'success' : 'default'}
             size="small"
           />
@@ -120,21 +122,21 @@ export function DeploymentActivityCard({ deployment }) {
         {/* Activity Badges */}
         <Grid container spacing={1} sx={{ mb: 2 }}>
           <Grid item xs={12} sm={6}>
-            <Tooltip title="Last credential issuance">
+            <Tooltip title={t('deploy.deploymentActivityCard.tooltips.lastIssuance')}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                 <BadgeIcon fontSize="small" color="primary" />
                 <Typography variant="body2">
-                  <strong>Issued:</strong> {formatTimestamp(activity?.last_issuance)}
+                  <strong>{t('deploy.deploymentActivityCard.labels.issued')}</strong> {formatTimestamp(activity?.last_issuance, t)}
                 </Typography>
               </Box>
             </Tooltip>
           </Grid>
           <Grid item xs={12} sm={6}>
-            <Tooltip title="Last credential verification">
+            <Tooltip title={t('deploy.deploymentActivityCard.tooltips.lastVerification')}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                 <VerifiedUserIcon fontSize="small" color="primary" />
                 <Typography variant="body2">
-                  <strong>Verified:</strong> {formatTimestamp(activity?.last_verification)}
+                  <strong>{t('deploy.deploymentActivityCard.labels.verified')}</strong> {formatTimestamp(activity?.last_verification, t)}
                 </Typography>
               </Box>
             </Tooltip>
@@ -146,7 +148,7 @@ export function DeploymentActivityCard({ deployment }) {
           {activity?.qr_enabled && (
             <Chip
               icon={<QrCode2Icon />}
-              label="QR Enabled"
+              label={t('deploy.deploymentActivityCard.chips.qrEnabled')}
               size="small"
               color="primary"
               variant="outlined"
@@ -154,7 +156,7 @@ export function DeploymentActivityCard({ deployment }) {
           )}
           {activeFlowCount > 0 && (
             <Chip
-              label={`${activeFlowCount} Active Flow${activeFlowCount > 1 ? 's' : ''}`}
+              label={t('deploy.deploymentActivityCard.chips.activeFlows', { count: activeFlowCount })}
               size="small"
               color="success"
               variant="outlined"
@@ -176,14 +178,14 @@ export function DeploymentActivityCard({ deployment }) {
           to={`/console/deploy/profiles/${deployment.id}`}
           size="small"
         >
-          View Details
+          {t('deploy.deploymentActivityCard.actions.viewDetails')}
         </Button>
         <Button
           component={RouterLink}
           to={`/console/deploy/profiles/${deployment.id}/edit`}
           size="small"
         >
-          Edit
+          {t('deploy.deploymentActivityCard.actions.edit')}
         </Button>
       </CardActions>
     </Card>

@@ -1,6 +1,7 @@
 import ResourceCreateDrawer from '../../common/ResourceCreateDrawer';
 import { createFlow } from '../../../services/flowsApi';
 import { useNotifications } from '../../../hooks/useNotifications';
+import { useTranslation } from 'react-i18next';
 
 /**
  * CreateFlowDrawer - Quick verification flow creation drawer
@@ -9,36 +10,37 @@ import { useNotifications } from '../../../hooks/useNotifications';
  * Links to the full FlowDefinitionWizard for advanced configuration.
  */
 function CreateFlowDrawer({ open, onClose, onSuccess }) {
+  const { t } = useTranslation('console');
   const { showNotification } = useNotifications();
 
   const fields = [
     {
       name: 'name',
-      label: 'Flow Name',
+      label: t('createFlowDrawer.flowName'),
       type: 'text',
       required: true,
-      placeholder: 'e.g., "Employee Onboarding"',
-      helperText: 'A descriptive name for this flow',
+      placeholder: t('createFlowDrawer.flowNamePlaceholder'),
+      helperText: t('createFlowDrawer.flowNameHelper'),
     },
     {
       name: 'flow_type',
-      label: 'Flow Type',
+      label: t('createFlowDrawer.flowType'),
       type: 'select',
       required: true,
       options: [
-        { value: 'issuance', label: 'Credential Issuance' },
-        { value: 'verification', label: 'Credential Verification' },
-        { value: 'combined', label: 'Combined Flow' },
+        { value: 'issuance', label: t('createFlowDrawer.flowTypes.issuance') },
+        { value: 'verification', label: t('createFlowDrawer.flowTypes.verification') },
+        { value: 'combined', label: t('createFlowDrawer.flowTypes.combined') },
       ],
-      helperText: 'Select the type of flow',
+      helperText: t('createFlowDrawer.flowTypeHelper'),
     },
     {
       name: 'description',
-      label: 'Description',
+      label: t('createFlowDrawer.description'),
       type: 'textarea',
       required: false,
-      placeholder: 'Describe the purpose of this flow...',
-      helperText: 'Optional description for documentation',
+      placeholder: t('createFlowDrawer.descriptionPlaceholder'),
+      helperText: t('createFlowDrawer.descriptionHelper'),
       rows: 3,
     },
   ];
@@ -56,7 +58,7 @@ function CreateFlowDrawer({ open, onClose, onSuccess }) {
     const result = await createFlow(payload);
 
     showNotification({
-      message: `Flow "${formData.name}" created successfully`,
+      message: t('createFlowDrawer.successMessage', { name: formData.name }),
       severity: 'success',
     });
 
@@ -70,7 +72,7 @@ function CreateFlowDrawer({ open, onClose, onSuccess }) {
       open={open}
       onClose={onClose}
       onSubmit={handleSubmit}
-      title="Create Verification Flow"
+      title={t('createFlowDrawer.title')}
       resourceType="flow"
       advancedPath="/console/flows/new"
       fields={fields}

@@ -50,6 +50,7 @@ import {
   AttachMoney as PriceIcon
 } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { useAuth } from '../../hooks/useAuth';
 import { usePreview } from '../../contexts/PreviewContext';
 
@@ -108,17 +109,23 @@ const CREDENTIAL_TYPES = {
   }
 };
 
-const CATEGORIES = [
-  { value: 'all', label: 'All Categories' },
-  { value: 'travel', label: 'Travel Documents' },
-  { value: 'identity', label: 'Identity Documents' },
-  { value: 'enterprise', label: 'Enterprise Credentials' }
+/**
+ * Get credential categories with translations
+ */
+const getCategories = (t) => [
+  { value: 'all', label: t('catalog.categories.all') },
+  { value: 'travel', label: t('catalog.categories.travel') },
+  { value: 'identity', label: t('catalog.categories.identity') },
+  { value: 'enterprise', label: t('catalog.categories.enterprise') }
 ];
 
 const CredentialCatalog = () => {
+  const { t } = useTranslation('applicant');
   const navigate = useNavigate();
   const { organizationId, organizationName, user } = useAuth();
   const { isPreview } = usePreview?.() || { isPreview: false };
+  
+  const CATEGORIES = useMemo(() => getCategories(t), [t]);
   
   // State
   const [credentials, setCredentials] = useState([]);
@@ -277,7 +284,7 @@ const CredentialCatalog = () => {
       return (
         <Chip
           icon={<PendingIcon />}
-          label="Application Pending"
+          label={t('catalog.card.status.pending')}
           size="small"
           color="warning"
           sx={{ mt: 1 }}
@@ -292,11 +299,12 @@ const CredentialCatalog = () => {
       <Box sx={{ mb: 4 }}>
         <Typography variant="h4" component="h1" gutterBottom data-testid="catalog-title">
           <CredentialIcon sx={{ mr: 2, verticalAlign: 'middle' }} />
-          Credential Catalog
+          {t('catalog.title')}
         </Typography>
         <Typography variant="subtitle1" color="text.secondary">
-          Browse and apply for available credentials
-          {organizationName && ` from ${organizationName}`}
+          {organizationName 
+            ? t('catalog.descriptionWithOrg', { organizationName })
+            : t('catalog.description')}
         </Typography>
       </Box>
 
@@ -306,7 +314,7 @@ const CredentialCatalog = () => {
           <Grid item xs={12} md={6}>
             <TextField
               fullWidth
-              placeholder="Search credentials..."
+              placeholder={t('catalog.searchPlaceholder')}
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               data-testid="credential-search"
@@ -321,10 +329,10 @@ const CredentialCatalog = () => {
           </Grid>
           <Grid item xs={12} md={4}>
             <FormControl fullWidth>
-              <InputLabel>Category</InputLabel>
+              <InputLabel>{t('catalog.filters.category')}</InputLabel>
               <Select
                 value={categoryFilter}
-                label="Category"
+                label={t('catalog.filters.category')}
                 onChange={(e) => setCategoryFilter(e.target.value)}
                 data-testid="category-filter"
                 startAdornment={
@@ -343,7 +351,7 @@ const CredentialCatalog = () => {
           </Grid>
           <Grid item xs={12} md={2}>
             <Typography variant="body2" color="text.secondary" textAlign="center" data-testid="credentials-count">
-              {filteredCredentials.length} credential{filteredCredentials.length !== 1 ? 's' : ''} found
+              {t('catalog.resultsCount', { count: filteredCredentials.length })}
             </Typography>
           </Grid>
         </Grid>
@@ -368,7 +376,7 @@ const CredentialCatalog = () => {
         ) : filteredCredentials.length === 0 ? (
           <Grid item xs={12}>
             <Alert severity="info">
-              No credentials match your search criteria. Try adjusting your filters.
+              {t('catalog.empty.message')}
             </Alert>
           </Grid>
         ) : (
@@ -405,7 +413,7 @@ const CredentialCatalog = () => {
                       <Typography variant="h6" gutterBottom data-testid="credential-name">
                         {credential.name}
                       </Typography>
-                      <Tooltip title="View details">
+                      <Tooltip title={t('catalog.card.viewDetails')}>
                         <IconButton 
                           size="small" 
                           onClick={() => handleViewDetails(credential)}
@@ -427,7 +435,7 @@ const CredentialCatalog = () => {
                       />
                       <Chip 
                         icon={<PriceIcon />}
-                        label={credential.processingFee ? `$${credential.processingFee}` : 'Free'} 
+                        label={credential.processingFee ? `$${credential.processingFee}` : t('catalog.card.free')} 
                         size="small" 
                         color={credential.processingFee ? 'default' : 'success'}
                         data-testid="credential-fee"
@@ -443,7 +451,9 @@ const CredentialCatalog = () => {
                       onClick={() => handleApply(credential)}
                       data-testid="apply-btn"
                     >
-                      {isPreview ? 'Preview Application' : (hasApplied ? 'Application Pending' : 'Apply Now')}
+                      {isPreview 
+                        ? t('catalog.card.actions.preview') 
+                        : (hasApplied ? t('catalog.card.status.pending') : t('catalog.card.actions.apply'))}
                     </Button>
                   </CardActions>
                 </Card>
@@ -476,23 +486,23 @@ const CredentialCatalog = () => {
               <Divider sx={{ my: 2 }} />
               
               <Typography variant="subtitle2" gutterBottom>
-                Processing Time
+                {t('catalog.detailsDialog.processingTime')}
               </Typography>
               <Typography variant="body2" color="text.secondary" paragraph>
                 {selectedCredential.processingTime}
               </Typography>
               
               <Typography variant="subtitle2" gutterBottom>
-                Processing Fee
+                {t('catalog.detailsDialog.processingFee')}
               </Typography>
               <Typography variant="body2" color="text.secondary" paragraph>
                 {selectedCredential.processingFee 
                   ? `$${selectedCredential.processingFee}` 
-                  : 'No fee required'}
+                  : t('catalog.detailsDialog.noFee')}
               </Typography>
               
               <Typography variant="subtitle2" gutterBottom>
-                Requirements
+                {t('catalog.detailsDialog.requirements')}
               </Typography>
               <List dense>
                 {(selectedCredential.requirements || []).map((req, index) => (
@@ -508,7 +518,7 @@ const CredentialCatalog = () => {
               {selectedCredential.submissionInstructions && (
                 <>
                   <Typography variant="subtitle2" gutterBottom sx={{ mt: 2 }}>
-                    Submission Instructions
+                    {t('catalog.detailsDialog.instructions')}
                   </Typography>
                   <Typography variant="body2" color="text.secondary" paragraph>
                     {selectedCredential.submissionInstructions}
@@ -519,7 +529,7 @@ const CredentialCatalog = () => {
               {(selectedCredential.requiredFields?.length > 0 || selectedCredential.customFields?.length > 0) && (
                 <>
                   <Typography variant="subtitle2" gutterBottom sx={{ mt: 2 }}>
-                    Required Information
+                    {t('catalog.detailsDialog.requiredInfo')}
                   </Typography>
                   <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
                     {selectedCredential.requiredFields?.map((field) => (
@@ -536,15 +546,15 @@ const CredentialCatalog = () => {
                 <>
                   <Divider sx={{ my: 2 }} />
                   <Typography variant="caption" color="text.secondary">
-                    Offered by: {selectedCredential.vendorName}
-                    {selectedCredential.templateVersion && ` • Template v${selectedCredential.templateVersion}`}
+                    {t('catalog.detailsDialog.offeredBy', { vendorName: selectedCredential.vendorName })}
+                    {selectedCredential.templateVersion && ` • ${t('catalog.detailsDialog.templateVersion', { version: selectedCredential.templateVersion })}`}
                   </Typography>
                 </>
               )}
             </DialogContent>
             <DialogActions>
               <Button onClick={() => setDetailsOpen(false)}>
-                Close
+                {t('actions.close', { ns: 'common' })}
               </Button>
               <Button
                 variant="contained"
@@ -554,7 +564,7 @@ const CredentialCatalog = () => {
                 }}
                 disabled={hasExistingApplication(selectedCredential.id)}
               >
-                {isPreview ? 'Preview Application' : 'Apply Now'}
+                {isPreview ? t('catalog.card.actions.preview') : t('catalog.card.actions.apply')}
               </Button>
             </DialogActions>
           </>

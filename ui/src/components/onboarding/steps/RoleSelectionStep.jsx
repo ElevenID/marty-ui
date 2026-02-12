@@ -5,17 +5,20 @@
  */
 
 import { Box, Typography, Grid, Fade } from '@mui/material';
+import { useTranslation } from 'react-i18next';
 import PersonIcon from '@mui/icons-material/Person';
 import BusinessIcon from '@mui/icons-material/Business';
 import RoleCard from '../RoleCard';
 
 const RoleSelectionStep = ({ userType, onSelectRole }) => {
+  const { t } = useTranslation('onboarding');
+  
   return (
     <Fade in>
       <Box data-testid="role-selection-step" id="role-selection">
         <div data-testid="role-selection">
         <Typography variant="h5" gutterBottom textAlign="center" sx={{ mb: 4 }}>
-          Choose the option that best describes you
+          {t('roleSelection.promptTitle')}
         </Typography>
 
         <Grid container spacing={4} justifyContent="center">
@@ -23,17 +26,12 @@ const RoleSelectionStep = ({ userType, onSelectRole }) => {
             <div data-testid="role-applicant">
               <RoleCard
                 role="applicant"
-                title="Applicant"
-                description="I'm applying for digital travel documents"
+                title={t('roleSelection.applicant')}
+                description={t('roleSelection.applicantDesc')}
                 icon={PersonIcon}
                 selected={userType === 'applicant'}
                 onSelect={onSelectRole}
-                features={[
-                  'Apply for digital travel documents',
-                  'Store credentials in your wallet',
-                  'Share documents securely',
-                  'Track application status',
-                ]}
+                features={t('roleSelection.applicantFeatures', { returnObjects: true })}
                 testId="role-card-applicant"
               />
             </div>
@@ -42,17 +40,12 @@ const RoleSelectionStep = ({ userType, onSelectRole }) => {
             <div data-testid="role-vendor" id="role-issuer">
               <RoleCard
                 role="vendor"
-                title="Vendor / Organization"
-                description="I'm issuing documents for my organization"
+                title={t('roleSelection.vendor')}
+                description={t('roleSelection.vendorDesc')}
                 icon={BusinessIcon}
                 selected={userType === 'vendor'}
                 onSelect={onSelectRole}
-                features={[
-                  'Issue digital travel documents',
-                  'Manage applicants and applications',
-                  'Access API for integrations',
-                  'Configure webhooks and automations',
-                ]}
+                features={t('roleSelection.vendorFeatures', { returnObjects: true })}
                 testId="role-card-vendor"
               />
             </div>

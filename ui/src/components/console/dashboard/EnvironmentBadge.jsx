@@ -26,36 +26,37 @@ import ProductionQuantityLimitsIcon from '@mui/icons-material/ProductionQuantity
 import WarningIcon from '@mui/icons-material/Warning';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import SwapHorizIcon from '@mui/icons-material/SwapHoriz';
+import { useTranslation } from 'react-i18next';
 
 /**
- * Environment configurations
+ * Environment configurations factory
  */
-const ENVIRONMENTS = {
+const getEnvironments = (t) => ({
   development: {
-    label: 'Dev',
-    fullLabel: 'Development',
+    label: t('dashboard.environment.dev'),
+    fullLabel: t('dashboard.environment.development'),
     color: 'info',
     icon: DeveloperModeIcon,
     warning: false,
-    description: 'Development environment for testing',
+    description: t('dashboard.environment.devDescription'),
   },
   staging: {
-    label: 'Staging',
-    fullLabel: 'Staging',
+    label: t('dashboard.environment.staging'),
+    fullLabel: t('dashboard.environment.stagingFull'),
     color: 'warning',
     icon: ScienceIcon,
     warning: false,
-    description: 'Pre-production testing environment',
+    description: t('dashboard.environment.stagingDescription'),
   },
   production: {
-    label: 'Prod',
-    fullLabel: 'Production',
+    label: t('dashboard.environment.prod'),
+    fullLabel: t('dashboard.environment.production'),
     color: 'error',
     icon: ProductionQuantityLimitsIcon,
     warning: true,
-    description: 'Live production environment',
+    description: t('dashboard.environment.prodDescription'),
   },
-};
+});
 
 /**
  * Environment Badge Component
@@ -66,9 +67,11 @@ export function EnvironmentBadge({
   organizationId,
   showSwitcher = true,
 }) {
+  const { t } = useTranslation('console');
   const [anchorEl, setAnchorEl] = useState(null);
   const open = Boolean(anchorEl);
 
+  const ENVIRONMENTS = getEnvironments(t);
   const currentEnv = ENVIRONMENTS[environment] || ENVIRONMENTS.development;
   const Icon = currentEnv.icon;
 
@@ -92,7 +95,7 @@ export function EnvironmentBadge({
   return (
     <Box>
       <Tooltip 
-        title={showSwitcher ? `Click to switch environment • ${currentEnv.description}` : currentEnv.description}
+        title={showSwitcher ? t('dashboard.environment.clickToSwitch', { description: currentEnv.description }) : currentEnv.description}
         placement="bottom"
       >
         <Chip
@@ -156,6 +159,8 @@ export function EnvironmentBadge({
  * Shows prominent warning when in production
  */
 export function EnvironmentWarningBanner({ environment = 'development' }) {
+  const { t } = useTranslation('console');
+  const ENVIRONMENTS = getEnvironments(t);
   const currentEnv = ENVIRONMENTS[environment] || ENVIRONMENTS.development;
 
   if (!currentEnv.warning) {
@@ -169,9 +174,9 @@ export function EnvironmentWarningBanner({ environment = 'development' }) {
       sx={{ mb: 3 }}
     >
       <Box>
-        <strong>Production Environment</strong>
+        <strong>{t('dashboard.environment.warningTitle')}</strong>
         <Box component="span" sx={{ ml: 1 }}>
-          You are operating in the live production environment. Changes will affect real users and data.
+          {t('dashboard.environment.warningMessage')}
         </Box>
       </Box>
     </Alert>
@@ -189,6 +194,8 @@ export function EnvironmentContext({
   onEnvironmentChange,
   showSwitcher = true,
 }) {
+  const { t } = useTranslation('console');
+  
   return (
     <Box sx={{ 
       display: 'flex', 
@@ -208,11 +215,11 @@ export function EnvironmentContext({
             textTransform: 'uppercase',
             letterSpacing: 1,
           }}>
-            Operating As
+            {t('dashboard.environment.operatingAs')}
           </Box>
         </Box>
         <Box sx={{ fontWeight: 600, fontSize: '1rem', mt: 0.5 }}>
-          {organizationName || 'Organization'}
+          {organizationName || t('dashboard.environment.organizationFallback')}
         </Box>
       </Box>
       

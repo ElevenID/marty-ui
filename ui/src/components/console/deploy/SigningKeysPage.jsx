@@ -11,6 +11,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   Box,
   Button,
@@ -55,31 +56,32 @@ import { PermissionButton } from '../../common/PermissionGate';
 import { usePermissions } from '../../../hooks/usePermissions';
 import { useNotifications } from '../../../hooks/useNotifications';
 
-const ALGORITHMS = [
-  { value: 'ES256', label: 'ES256 (ECDSA P-256)' },
-  { value: 'ES384', label: 'ES384 (ECDSA P-384)' },
-  { value: 'RS256', label: 'RS256 (RSA 2048)' },
-  { value: 'EdDSA', label: 'EdDSA (Ed25519)' },
+const getAlgorithms = (t) => [
+  { value: 'ES256', label: t('deploy.signingKeys.algorithms.ES256') },
+  { value: 'ES384', label: t('deploy.signingKeys.algorithms.ES384') },
+  { value: 'RS256', label: t('deploy.signingKeys.algorithms.RS256') },
+  { value: 'EdDSA', label: t('deploy.signingKeys.algorithms.EdDSA') },
 ];
 
-const KEY_TYPES = [
-  { value: 'local', label: 'Local Key' },
-  { value: 'hsm', label: 'HSM (Hardware Security Module)' },
-  { value: 'vault', label: 'HashiCorp Vault' },
+const getKeyTypes = (t) => [
+  { value: 'local', label: t('deploy.signingKeys.keyTypes.local') },
+  { value: 'hsm', label: t('deploy.signingKeys.keyTypes.hsm') },
+  { value: 'vault', label: t('deploy.signingKeys.keyTypes.vault') },
 ];
 
-const TABS = [
-  { label: 'Keys', path: '/console/deploy/signing-keys' },
-  { label: 'Settings', path: '/console/deploy/signing-keys/settings' },
+const getTabs = (t) => [
+  { label: t('deploy.signingKeys.tabs.keys'), path: '/console/deploy/signing-keys' },
+  { label: t('deploy.signingKeys.tabs.settings'), path: '/console/deploy/signing-keys/settings' },
 ];
 
-const BREADCRUMBS = [
-  { label: 'Console', path: '/console' },
-  { label: 'Deploy', path: '/console/deploy' },
-  { label: 'Signing Keys', path: '/console/deploy/signing-keys' },
+const getBreadcrumbs = (t) => [
+  { label: t('deploy.breadcrumbs.console'), path: '/console' },
+  { label: t('deploy.breadcrumbs.deploy'), path: '/console/deploy' },
+  { label: t('deploy.breadcrumbs.signingKeys'), path: '/console/deploy/signing-keys' },
 ];
 
 export default function SigningKeysPage() {
+  const { t } = useTranslation('console');
   const [keys, setKeys] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -133,14 +135,14 @@ export default function SigningKeysPage() {
       setConfig(data);
     } catch (err) {
       console.error('Failed to load key management config:', err);
-      showNotification?.('Failed to load settings', 'error');
+      showNotification?.(t('deploy.signingKeys.notifications.loadSettingsError'), 'error');
     }
   };
 
   const handleUploadKey = async () => {
     try {
       await signingKeysApi.createSigningKey(newKey);
-      showNotification?.('Signing key uploaded successfully', 'success');
+      showNotification?.(t('deploy.signingKeys.notifications.uploadSuccess'), 'success');
       setUploadDialogOpen(false);
       setNewKey({
         name: '',
@@ -151,7 +153,7 @@ export default function SigningKeysPage() {
       loadKeys();
     } catch (err) {
       console.error('Failed to upload key:', err);
-      showNotification?.('Failed to upload signing key', 'error');
+      showNotification?.(t('deploy.signingKeys.notifications.uploadError'), 'error');
     }
   };
 
@@ -160,39 +162,39 @@ export default function SigningKeysPage() {
     
     try {
       await signingKeysApi.rotateSigningKey(selectedKey.id, { immediate });
-      showNotification?.('Signing key rotated successfully', 'success');
+      showNotification?.(t('deploy.signingKeys.notifications.rotateSuccess'), 'success');
       setRotateDialogOpen(false);
       setSelectedKey(null);
       loadKeys();
     } catch (err) {
       console.error('Failed to rotate key:', err);
-      showNotification?.('Failed to rotate signing key', 'error');
+      showNotification?.(t('deploy.signingKeys.notifications.rotateError'), 'error');
     }
   };
 
   const handleDeleteKey = async (keyId) => {
-    if (!window.confirm('Are you sure you want to delete this signing key? This action cannot be undone.')) {
+    if (!window.confirm(t('deploy.signingKeys.deleteConfirmation'))) {
       return;
     }
 
     try {
       await signingKeysApi.deleteSigningKey(keyId);
-      showNotification?.('Signing key deleted successfully', 'success');
+      showNotification?.(t('deploy.signingKeys.notifications.deleteSuccess'), 'success');
       loadKeys();
     } catch (err) {
       console.error('Failed to delete key:', err);
-      showNotification?.('Failed to delete signing key', 'error');
+      showNotification?.(t('deploy.signingKeys.notifications.deleteError'), 'error');
     }
   };
 
   const handleSaveConfig = async () => {
     try {
       await signingKeysApi.updateKeyManagementConfig(config);
-      showNotification?.('Settings saved successfully', 'success');
+      showNotification?.(t('deploy.signingKeys.notifications.settingsSaveSuccess'), 'success');
       setSettingsDialogOpen(false);
     } catch (err) {
       console.error('Failed to save config:', err);
-      showNotification?.('Failed to save settings', 'error');
+      showNotification?.(t('deploy.signingKeys.notifications.settingsSaveError'), 'error');
     }
   };
 
@@ -222,11 +224,11 @@ export default function SigningKeysPage() {
 
   return (
     <ResourcePage
-      title="Signing Keys"
-      description="Manage cryptographic signing keys for credential issuance and verification"
-      resourceName="Signing Keys"
-      tabs={TABS}
-      breadcrumbs={BREADCRUMBS}
+      title={t('deploy.signingKeys.title')}
+      description={t('deploy.signingKeys.description')}
+      resourceName={t('deploy.signingKeys.resourceName')}
+      tabs={getTabs(t)}
+      breadcrumbs={getBreadcrumbs(t)}
       icon={<VpnKeyIcon />}
     >
       <Box>
@@ -237,7 +239,7 @@ export default function SigningKeysPage() {
             startIcon={<SettingsIcon />}
             onClick={() => setSettingsDialogOpen(true)}
           >
-            HSM/Vault Settings
+            {t('deploy.signingKeys.hsmVaultSettings')}
           </Button>
           <PermissionButton
             resource="signing-key"
@@ -246,7 +248,7 @@ export default function SigningKeysPage() {
             startIcon={<AddIcon />}
             onClick={() => setUploadDialogOpen(true)}
           >
-            Upload Key
+            {t('deploy.signingKeys.uploadKey')}
           </PermissionButton>
         </Box>
 
@@ -258,10 +260,10 @@ export default function SigningKeysPage() {
         ) : keys.length === 0 ? (
           <EmptyState
             icon={VpnKeyIcon}
-            title="No signing keys configured"
-            description="Signing keys are required to issue and verify credentials. Upload your first key to enable credential issuance."
-            whyItMatters="Without valid signing keys, you cannot issue credentials or verify signatures."
-            actionLabel="Upload Signing Key"
+            title={t('deploy.signingKeys.emptyState.title')}
+            description={t('deploy.signingKeys.emptyState.description')}
+            whyItMatters={t('deploy.signingKeys.emptyState.whyItMatters')}
+            actionLabel={t('deploy.signingKeys.emptyState.actionLabel')}
             onAction={() => setUploadDialogOpen(true)}
             docsUrl="https://docs.example.com/signing-keys"
           />
@@ -270,13 +272,13 @@ export default function SigningKeysPage() {
             <Table>
               <TableHead>
                 <TableRow>
-                  <TableCell>Key ID</TableCell>
-                  <TableCell>Name</TableCell>
-                  <TableCell>Algorithm</TableCell>
-                  <TableCell>Status</TableCell>
-                  <TableCell>Expiry Date</TableCell>
-                  <TableCell>Created</TableCell>
-                  <TableCell align="right">Actions</TableCell>
+                  <TableCell>{t('deploy.signingKeys.tableHeaders.keyId')}</TableCell>
+                  <TableCell>{t('deploy.signingKeys.tableHeaders.name')}</TableCell>
+                  <TableCell>{t('deploy.signingKeys.tableHeaders.algorithm')}</TableCell>
+                  <TableCell>{t('deploy.signingKeys.tableHeaders.status')}</TableCell>
+                  <TableCell>{t('deploy.signingKeys.tableHeaders.expiryDate')}</TableCell>
+                  <TableCell>{t('deploy.signingKeys.tableHeaders.created')}</TableCell>
+                  <TableCell align="right">{t('deploy.signingKeys.tableHeaders.actions')}</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
@@ -287,7 +289,7 @@ export default function SigningKeysPage() {
                         {key.id.slice(0, 8)}...
                       </Typography>
                     </TableCell>
-                    <TableCell>{key.name || 'Unnamed Key'}</TableCell>
+                    <TableCell>{key.name || t('deploy.signingKeys.unnamedKey')}</TableCell>
                     <TableCell>{key.algorithm}</TableCell>
                     <TableCell>
                       <StatusChip
@@ -303,7 +305,7 @@ export default function SigningKeysPage() {
                           </Typography>
                           {isExpiringSoon(key.expiry_date) && (
                             <Typography variant="caption" color="warning.main">
-                              Expiring soon
+                              {t('deploy.signingKeys.expiringSoon')}
                             </Typography>
                           )}
                         </Box>
@@ -317,7 +319,7 @@ export default function SigningKeysPage() {
                     <TableCell align="right">
                       <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end' }}>
                         {canExecute('signing-key') && key.status === 'active' && (
-                          <Tooltip title="Rotate key">
+                          <Tooltip title={t('deploy.signingKeys.rotateKeyTooltip')}>
                             <IconButton
                               size="small"
                               onClick={() => {
@@ -330,7 +332,7 @@ export default function SigningKeysPage() {
                           </Tooltip>
                         )}
                         {canDelete('signing-key') && (
-                          <Tooltip title="Delete key">
+                          <Tooltip title={t('deploy.signingKeys.deleteKeyTooltip')}>
                             <IconButton
                               size="small"
                               color="error"
@@ -352,17 +354,17 @@ export default function SigningKeysPage() {
         {/* Check for invalid keys warning */}
         {!loading && keys.some(k => k.status === 'invalid' || k.status === 'expired') && (
           <Alert severity="warning" sx={{ mt: 2 }}>
-            You have invalid or expired signing keys. Credential issuance may be blocked until you rotate or upload valid keys.
+            {t('deploy.signingKeys.invalidKeysWarning')}
           </Alert>
         )}
 
         {/* Upload Key Dialog */}
         <Dialog open={uploadDialogOpen} onClose={() => setUploadDialogOpen(false)} maxWidth="sm" fullWidth>
-          <DialogTitle>Upload Signing Key</DialogTitle>
+          <DialogTitle>{t('deploy.signingKeys.uploadDialog.title')}</DialogTitle>
           <DialogContent>
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 1 }}>
               <TextField
-                label="Key Name"
+                label={t('deploy.signingKeys.uploadDialog.keyNameLabel')}
                 value={newKey.name}
                 onChange={(e) => setNewKey({ ...newKey, name: e.target.value })}
                 fullWidth
@@ -370,13 +372,13 @@ export default function SigningKeysPage() {
               />
               
               <FormControl fullWidth>
-                <InputLabel>Algorithm</InputLabel>
+                <InputLabel>{t('deploy.signingKeys.uploadDialog.algorithmLabel')}</InputLabel>
                 <Select
                   value={newKey.algorithm}
                   onChange={(e) => setNewKey({ ...newKey, algorithm: e.target.value })}
-                  label="Algorithm"
+                  label={t('deploy.signingKeys.uploadDialog.algorithmLabel')}
                 >
-                  {ALGORITHMS.map((algo) => (
+                  {getAlgorithms(t).map((algo) => (
                     <MenuItem key={algo.value} value={algo.value}>
                       {algo.label}
                     </MenuItem>
@@ -385,13 +387,13 @@ export default function SigningKeysPage() {
               </FormControl>
 
               <FormControl fullWidth>
-                <InputLabel>Key Type</InputLabel>
+                <InputLabel>{t('deploy.signingKeys.uploadDialog.keyTypeLabel')}</InputLabel>
                 <Select
                   value={newKey.key_type}
                   onChange={(e) => setNewKey({ ...newKey, key_type: e.target.value })}
-                  label="Key Type"
+                  label={t('deploy.signingKeys.uploadDialog.keyTypeLabel')}
                 >
-                  {KEY_TYPES.map((type) => (
+                  {getKeyTypes(t).map((type) => (
                     <MenuItem key={type.value} value={type.value}>
                       {type.label}
                     </MenuItem>
@@ -400,74 +402,73 @@ export default function SigningKeysPage() {
               </FormControl>
 
               <TextField
-                label="Public Key (PEM format)"
+                label={t('deploy.signingKeys.uploadDialog.publicKeyLabel')}
                 value={newKey.public_key}
                 onChange={(e) => setNewKey({ ...newKey, public_key: e.target.value })}
                 fullWidth
                 required
                 multiline
                 rows={8}
-                placeholder="-----BEGIN PUBLIC KEY-----&#10;...&#10;-----END PUBLIC KEY-----"
+                placeholder={t('deploy.signingKeys.uploadDialog.publicKeyPlaceholder')}
                 sx={{ fontFamily: 'monospace' }}
               />
 
               <Alert severity="info">
-                Store your private key securely. Only the public key is uploaded to the platform.
+                {t('deploy.signingKeys.uploadDialog.infoMessage')}
               </Alert>
             </Box>
           </DialogContent>
           <DialogActions>
-            <Button onClick={() => setUploadDialogOpen(false)}>Cancel</Button>
+            <Button onClick={() => setUploadDialogOpen(false)}>{t('deploy.signingKeys.uploadDialog.cancel')}</Button>
             <Button
               onClick={handleUploadKey}
               variant="contained"
               disabled={!newKey.name || !newKey.public_key}
             >
-              Upload Key
+              {t('deploy.signingKeys.uploadDialog.uploadButton')}
             </Button>
           </DialogActions>
         </Dialog>
 
         {/* Rotate Key Dialog */}
         <Dialog open={rotateDialogOpen} onClose={() => setRotateDialogOpen(false)} maxWidth="sm" fullWidth>
-          <DialogTitle>Rotate Signing Key</DialogTitle>
+          <DialogTitle>{t('deploy.signingKeys.rotateDialog.title')}</DialogTitle>
           <DialogContent>
             <Box sx={{ mt: 1 }}>
               <Typography variant="body2" paragraph>
-                Rotating a signing key will generate a new key and mark the current key as deprecated.
-                The old key will remain valid for a grace period to avoid breaking existing credentials.
+                {t('deploy.signingKeys.rotateDialog.description')}
               </Typography>
               
               {selectedKey && (
                 <Alert severity="info" sx={{ mb: 2 }}>
                   <Typography variant="body2">
-                    <strong>Current Key:</strong> {selectedKey.name || selectedKey.id}
+                    <strong>{t('deploy.signingKeys.rotateDialog.currentKeyLabel')}:</strong> {selectedKey.name || selectedKey.id}
                   </Typography>
                   <Typography variant="body2">
-                    <strong>Algorithm:</strong> {selectedKey.algorithm}
+                    <strong>{t('deploy.signingKeys.rotateDialog.algorithmLabel')}:</strong> {selectedKey.algorithm}
                   </Typography>
                 </Alert>
               )}
 
               <Typography variant="body2" color="text.secondary">
-                Choose rotation strategy:
+                {t('deploy.signingKeys.rotateDialog.strategyLabel')}
               </Typography>
             </Box>
           </DialogContent>
           <DialogActions>
-            <Button onClick={() => setRotateDialogOpen(false)}>Cancel</Button>
+            <Button onClick={() => setRotateDialogOpen(false)}>{t('deploy.signingKeys.rotateDialog.cancel')}</Button>
             <Button onClick={() => handleRotateKey(false)} variant="outlined">
-              Gradual Rotation
+              {t('deploy.signingKeys.rotateDialog.gradualRotation')}
             </Button>
             <Button onClick={() => handleRotateKey(true)} variant="contained" color="warning">
-              Immediate Rotation
+              {t('deploy.signingKeys.rotateDialog.immediateRotation')}
             </Button>
           </DialogActions>
         </Dialog>
 
         {/* HSM/Vault Settings Dialog */}
         <Dialog open={settingsDialogOpen} onClose={() => setSettingsDialogOpen(false)} maxWidth="md" fullWidth>
-          <DialogTitle>Key Management Settings</DialogTitle>
+          <DialogTitle>{t('deploy.signingKeys.settingsDialog.title')}</DialogTitle>
           <DialogContent>
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3, mt: 1 }}>
               {/* HSM Settings */}
@@ -479,15 +480,15 @@ export default function SigningKeysPage() {
                       onChange={(e) => setConfig({ ...config, hsm_enabled: e.target.checked })}
                     />
                   }
-                  label="Enable HSM Integration"
+                  label={t('deploy.signingKeys.settingsDialog.hsmIntegrationLabel')}
                 />
                 {config.hsm_enabled && (
                   <Box sx={{ mt: 2, pl: 4 }}>
                     <Alert severity="info" sx={{ mb: 2 }}>
-                      Configure your Hardware Security Module connection settings here.
+                      {t('deploy.signingKeys.settingsDialog.hsmConfigMessage')}
                     </Alert>
                     <Typography variant="body2" color="text.secondary">
-                      HSM configuration options will be displayed here based on your HSM provider.
+                      {t('deploy.signingKeys.settingsDialog.hsmConfigPlaceholder')}
                     </Typography>
                   </Box>
                 )}
@@ -502,15 +503,15 @@ export default function SigningKeysPage() {
                       onChange={(e) => setConfig({ ...config, vault_enabled: e.target.checked })}
                     />
                   }
-                  label="Enable HashiCorp Vault Integration"
+                  label={t('deploy.signingKeys.settingsDialog.vaultIntegrationLabel')}
                 />
                 {config.vault_enabled && (
                   <Box sx={{ mt: 2, pl: 4 }}>
                     <Alert severity="info" sx={{ mb: 2 }}>
-                      Configure your HashiCorp Vault connection settings here.
+                      {t('deploy.signingKeys.settingsDialog.vaultConfigMessage')}
                     </Alert>
                     <Typography variant="body2" color="text.secondary">
-                      Vault configuration options will be displayed here.
+                      {t('deploy.signingKeys.settingsDialog.vaultConfigPlaceholder')}
                     </Typography>
                   </Box>
                 )}
@@ -518,9 +519,9 @@ export default function SigningKeysPage() {
             </Box>
           </DialogContent>
           <DialogActions>
-            <Button onClick={() => setSettingsDialogOpen(false)}>Cancel</Button>
+            <Button onClick={() => setSettingsDialogOpen(false)}>{t('deploy.signingKeys.settingsDialog.cancel')}</Button>
             <Button onClick={handleSaveConfig} variant="contained">
-              Save Settings
+              {t('deploy.signingKeys.settingsDialog.saveSettings')}
             </Button>
           </DialogActions>
         </Dialog>

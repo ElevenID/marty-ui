@@ -21,6 +21,7 @@ import {
 } from '@mui/material';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import CancelIcon from '@mui/icons-material/Cancel';
+import { useTranslation } from 'react-i18next';
 import ResourcePage from '../../common/ResourcePage';
 import { getPendingRoleRequests, approveRoleRequest, rejectRoleRequest } from '../../../services/rolesApi';
 
@@ -30,6 +31,7 @@ import { getPendingRoleRequests, approveRoleRequest, rejectRoleRequest } from '.
  * Admin interface for reviewing and approving/rejecting role escalation requests.
  */
 export default function RoleEscalationRequestsPage() {
+  const { t } = useTranslation('console');
   const [requests, setRequests] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -116,8 +118,8 @@ export default function RoleEscalationRequestsPage() {
 
   return (
     <ResourcePage
-      title="Role Escalation Requests"
-      subtitle="Review and manage role change requests from organization members"
+      title={t('org.roleEscalation.title')}
+      subtitle={t('org.roleEscalation.subtitle')}
     >
       {error && (
         <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError(null)}>
@@ -129,12 +131,12 @@ export default function RoleEscalationRequestsPage() {
         <Table>
           <TableHead>
             <TableRow>
-              <TableCell>User</TableCell>
-              <TableCell>Current Role</TableCell>
-              <TableCell>Requested Role</TableCell>
-              <TableCell>Message</TableCell>
-              <TableCell>Requested At</TableCell>
-              <TableCell align="right">Actions</TableCell>
+              <TableCell>{t('org.roleEscalation.tableHeaders.user')}</TableCell>
+              <TableCell>{t('org.roleEscalation.tableHeaders.currentRole')}</TableCell>
+              <TableCell>{t('org.roleEscalation.tableHeaders.requestedRole')}</TableCell>
+              <TableCell>{t('org.roleEscalation.tableHeaders.message')}</TableCell>
+              <TableCell>{t('org.roleEscalation.tableHeaders.requestedAt')}</TableCell>
+              <TableCell align="right">{t('org.roleEscalation.tableHeaders.actions')}</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
@@ -142,7 +144,7 @@ export default function RoleEscalationRequestsPage() {
               <TableRow>
                 <TableCell colSpan={6} align="center">
                   <Typography variant="body2" color="text.secondary">
-                    Loading requests...
+                    {t('org.roleEscalation.loading')}
                   </Typography>
                 </TableCell>
               </TableRow>
@@ -150,7 +152,7 @@ export default function RoleEscalationRequestsPage() {
               <TableRow>
                 <TableCell colSpan={6} align="center">
                   <Typography variant="body2" color="text.secondary">
-                    No pending role escalation requests
+                    {t('org.roleEscalation.empty')}
                   </Typography>
                 </TableCell>
               </TableRow>
@@ -163,7 +165,7 @@ export default function RoleEscalationRequestsPage() {
                         {request.user_email}
                       </Typography>
                       <Typography variant="caption" color="text.secondary">
-                        ID: {request.user_id}
+                        {t('org.roleEscalation.userId', { id: request.user_id })}
                       </Typography>
                     </Box>
                   </TableCell>
@@ -207,7 +209,7 @@ export default function RoleEscalationRequestsPage() {
                         size="small"
                         onClick={() => handleApprove(request)}
                         disabled={actionLoading}
-                        title="Approve request"
+                        title={t('org.roleEscalation.actions.approve')}
                       >
                         <CheckCircleIcon />
                       </IconButton>
@@ -216,7 +218,7 @@ export default function RoleEscalationRequestsPage() {
                         size="small"
                         onClick={() => handleRejectClick(request)}
                         disabled={actionLoading}
-                        title="Reject request"
+                        title={t('org.roleEscalation.actions.reject')}
                       >
                         <CancelIcon />
                       </IconButton>
@@ -236,26 +238,26 @@ export default function RoleEscalationRequestsPage() {
         maxWidth="sm"
         fullWidth
       >
-        <DialogTitle>Reject Role Request</DialogTitle>
+        <DialogTitle>{t('org.roleEscalation.dialog.title')}</DialogTitle>
         <DialogContent>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            You are rejecting the role escalation request from{' '}
-            <strong>{selectedRequest?.user_email}</strong> to become{' '}
+            {t('org.roleEscalation.dialog.message')}{' '}
+            <strong>{selectedRequest?.user_email}</strong> {t('org.roleEscalation.dialog.messageToBecome')}{' '}
             <strong>{selectedRequest ? formatRole(selectedRequest.requested_role) : ''}</strong>.
           </Typography>
           <TextField
-            label="Rejection Reason (Optional)"
+            label={t('org.roleEscalation.dialog.reasonLabel')}
             multiline
             rows={3}
             fullWidth
             value={rejectionReason}
             onChange={(e) => setRejectionReason(e.target.value)}
-            placeholder="Provide a reason for rejecting this request..."
+            placeholder={t('org.roleEscalation.dialog.reasonPlaceholder')}
           />
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setRejectDialogOpen(false)} disabled={actionLoading}>
-            Cancel
+            {t('actions.cancel', { ns: 'common' })}
           </Button>
           <Button
             onClick={handleRejectConfirm}
@@ -263,7 +265,7 @@ export default function RoleEscalationRequestsPage() {
             color="error"
             disabled={actionLoading}
           >
-            {actionLoading ? 'Rejecting...' : 'Reject Request'}
+            {actionLoading ? t('org.roleEscalation.dialog.rejecting') : t('org.roleEscalation.dialog.reject')}
           </Button>
         </DialogActions>
       </Dialog>

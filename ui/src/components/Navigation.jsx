@@ -1,41 +1,42 @@
 import { useMemo } from 'react';
 import { Tabs, Tab, Box } from '@mui/material';
 import { Link, useLocation } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { useAuth } from '../hooks/useAuth';
 
 /**
  * Administrator navigation tabs
  */
 const ADMIN_TABS = [
-  { label: 'Dashboard', path: '/dashboard', exact: true },
-  { label: 'Travel Docs', path: '/documents' },
-  { label: 'Applicants', path: '/applicants' },
-  { label: 'Verify', path: '/verifier' },
-  { label: 'Wallet', path: '/wallet' },
-  { label: 'Advanced', path: '/enhanced' },
-  { label: 'Admin', path: '/admin', prefixes: ['/admin'] },
+  { labelKey: 'navigation.dashboard', defaultLabel: 'Dashboard', path: '/dashboard', exact: true },
+  { labelKey: 'navigation.travelDocs', defaultLabel: 'Travel Docs', path: '/documents' },
+  { labelKey: 'navigation.applicants', defaultLabel: 'Applicants', path: '/applicants' },
+  { labelKey: 'navigation.verify', defaultLabel: 'Verify', path: '/verifier' },
+  { labelKey: 'navigation.wallet', defaultLabel: 'Wallet', path: '/wallet' },
+  { labelKey: 'navigation.advanced', defaultLabel: 'Advanced', path: '/enhanced' },
+  { labelKey: 'navigation.admin', defaultLabel: 'Admin', path: '/admin', prefixes: ['/admin'] },
 ];
 
 /**
  * Vendor navigation tabs
  */
 const VENDOR_TABS = [
-  { label: 'Dashboard', path: '/vendor', exact: true },
-  { label: 'Applications', path: '/vendor/applications' },
-  { label: 'Trust', path: '/vendor/trust' },
-  { label: 'Verification', path: '/vendor/verification' },
-  { label: 'Audit Logs', path: '/vendor/logs' },
-  { label: 'Team', path: '/vendor/team' },
+  { labelKey: 'navigation.dashboard', defaultLabel: 'Dashboard', path: '/vendor', exact: true },
+  { labelKey: 'navigation.applications', defaultLabel: 'Applications', path: '/vendor/applications' },
+  { labelKey: 'navigation.trust', defaultLabel: 'Trust', path: '/vendor/trust' },
+  { labelKey: 'navigation.verification', defaultLabel: 'Verification', path: '/vendor/verification' },
+  { labelKey: 'navigation.auditLogs', defaultLabel: 'Audit Logs', path: '/vendor/logs' },
+  { labelKey: 'navigation.team', defaultLabel: 'Team', path: '/vendor/team' },
 ];
 
 /**
  * Applicant navigation tabs
  */
 const APPLICANT_TABS = [
-  { label: 'Credentials', path: '/credentials', exact: true },
-  { label: 'My Applications', path: '/my-applications' },
-  { label: 'My Documents', path: '/my-documents' },
-  { label: 'Profile', path: '/profile' },
+  { labelKey: 'navigation.credentials', defaultLabel: 'Credentials', path: '/credentials', exact: true },
+  { labelKey: 'navigation.myApplications', defaultLabel: 'My Applications', path: '/my-applications' },
+  { labelKey: 'navigation.myDocuments', defaultLabel: 'My Documents', path: '/my-documents' },
+  { labelKey: 'navigation.profile', defaultLabel: 'Profile', path: '/profile' },
 ];
 
 /**
@@ -43,16 +44,17 @@ const APPLICANT_TABS = [
  * Intent-based navigation for product education and conversion
  */
 const PUBLIC_TABS = [
-  { label: 'Home', path: '/', exact: true },
-  { label: 'Product', path: '/product' },
-  { label: 'How It Works', path: '/identity' },
-  { label: 'Why Verifiable Identity', path: '/from-idv-to-verifiable-identity' },
-  { label: 'Standards', path: '/standards' },
-  { label: 'Docs', path: '/docs' },
-  { label: 'Pricing', path: '/pricing' },
+  { labelKey: 'navigation.home', defaultLabel: 'Home', path: '/', exact: true },
+  { labelKey: 'navigation.product', defaultLabel: 'Product', path: '/product' },
+  { labelKey: 'navigation.howItWorks', defaultLabel: 'How It Works', path: '/identity' },
+  { labelKey: 'navigation.whyVerifiableIdentity', defaultLabel: 'Why Verifiable Identity', path: '/from-idv-to-verifiable-identity' },
+  { labelKey: 'navigation.standards', defaultLabel: 'Standards', path: '/standards' },
+  { labelKey: 'navigation.docs', defaultLabel: 'Docs', path: '/docs' },
+  { labelKey: 'navigation.pricing', defaultLabel: 'Pricing', path: '/pricing' },
 ];
 
 function Navigation() {
+  const { t } = useTranslation('common');
   const location = useLocation();
   const { isAuthenticated, isAdministrator, isApplicant, isVendor } = useAuth();
 
@@ -102,10 +104,10 @@ function Navigation() {
           {tabs.map((tab) => (
             <Tab 
               key={tab.path} 
-              label={tab.label} 
+              label={t(tab.labelKey, tab.defaultLabel)} 
               component={Link} 
               to={tab.path}
-              data-testid={`nav-tab-${tab.label.toLowerCase().replace(/\s+/g, '-')}`}
+              data-testid={`nav-tab-${tab.defaultLabel.toLowerCase().replace(/\s+/g, '-')}`}
             />
           ))}
         </Tabs>

@@ -15,55 +15,74 @@ import {
 import VerifiedUserIcon from '@mui/icons-material/VerifiedUser';
 import BadgeIcon from '@mui/icons-material/Badge';
 import AccountTreeIcon from '@mui/icons-material/AccountTree';
+import { useTranslation } from 'react-i18next';
 
-const FLOW_TYPES = [
+const getFlowTypes = (t) => [
   {
     value: 'verification',
     icon: <VerifiedUserIcon sx={{ fontSize: 48 }} />,
-    name: 'Verification Flow',
-    description: 'Request and verify credentials from holders (OID4VP)',
+    name: t('wizards.flowDefinition.flowTypeStep.types.verification.name'),
+    description: t('wizards.flowDefinition.flowTypeStep.types.verification.description'),
     emoji: '🔍',
-    examples: ['Age verification', 'Identity check', 'Access control'],
+    examples: [
+      t('wizards.flowDefinition.flowTypeStep.types.verification.example1'),
+      t('wizards.flowDefinition.flowTypeStep.types.verification.example2'),
+      t('wizards.flowDefinition.flowTypeStep.types.verification.example3'),
+    ],
   },
   {
     value: 'issuance',
     icon: <BadgeIcon sx={{ fontSize: 48 }} />,
-    name: 'Issuance Flow',
-    description: 'Issue new credentials to holders',
+    name: t('wizards.flowDefinition.flowTypeStep.types.issuance.name'),
+    description: t('wizards.flowDefinition.flowTypeStep.types.issuance.description'),
     emoji: '📄',
-    examples: ['Driver\'s license issuance', 'Employee badge', 'Proof of vaccination'],
+    examples: [
+      t('wizards.flowDefinition.flowTypeStep.types.issuance.example1'),
+      t('wizards.flowDefinition.flowTypeStep.types.issuance.example2'),
+      t('wizards.flowDefinition.flowTypeStep.types.issuance.example3'),
+    ],
   },
   {
     value: 'issuance_oid4vci',
     icon: <BadgeIcon sx={{ fontSize: 48 }} />,
-    name: 'OID4VCI Issuance (QR Code)',
-    description: 'Issue credentials via OID4VCI QR codes for third-party wallets',
+    name: t('wizards.flowDefinition.flowTypeStep.types.issuance_oid4vci.name'),
+    description: t('wizards.flowDefinition.flowTypeStep.types.issuance_oid4vci.description'),
     emoji: '📱',
-    examples: ['Open Badge issuance', 'External wallet integration', 'Multi-wallet support'],
+    examples: [
+      t('wizards.flowDefinition.flowTypeStep.types.issuance_oid4vci.example1'),
+      t('wizards.flowDefinition.flowTypeStep.types.issuance_oid4vci.example2'),
+      t('wizards.flowDefinition.flowTypeStep.types.issuance_oid4vci.example3'),
+    ],
   },
   {
     value: 'combined',
     icon: <AccountTreeIcon sx={{ fontSize: 48 }} />,
-    name: 'Combined Flow',
-    description: 'Verify existing credentials, then issue new ones',
+    name: t('wizards.flowDefinition.flowTypeStep.types.combined.name'),
+    description: t('wizards.flowDefinition.flowTypeStep.types.combined.description'),
     emoji: '🔄',
-    examples: ['Upgrade license', 'Renewal with verification', 'Progressive disclosure'],
+    examples: [
+      t('wizards.flowDefinition.flowTypeStep.types.combined.example1'),
+      t('wizards.flowDefinition.flowTypeStep.types.combined.example2'),
+      t('wizards.flowDefinition.flowTypeStep.types.combined.example3'),
+    ],
   },
 ];
 
 const FlowTypeStep = ({ selectedType, onSelectType }) => {
+  const { t } = useTranslation('console');
+
   return (
     <Box>
       <Typography variant="h6" gutterBottom>
-        Select Flow Type
+        {t('wizards.flowDefinition.flowTypeStep.title')}
       </Typography>
       
       <Typography color="text.secondary" paragraph>
-        Choose the type of flow based on your use case
+        {t('wizards.flowDefinition.flowTypeStep.description')}
       </Typography>
 
       <Grid container spacing={3}>
-        {FLOW_TYPES.map((type) => (
+        {getFlowTypes(t).map((type) => (
           <Grid item xs={12} md={4} key={type.value}>
             <Card
               sx={{
@@ -107,7 +126,7 @@ const FlowTypeStep = ({ selectedType, onSelectType }) => {
 
                   {/* Examples */}
                   <Typography variant="caption" color="text.secondary" sx={{ fontStyle: 'italic' }}>
-                    Examples:
+                    {t('wizards.flowDefinition.flowTypeStep.examples')}
                   </Typography>
                   <Box component="ul" sx={{ pl: 2, mt: 0.5 }}>
                     {type.examples.map((example, idx) => (

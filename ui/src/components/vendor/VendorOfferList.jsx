@@ -12,6 +12,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import PropTypes from 'prop-types';
+import { useTranslation } from 'react-i18next';
 import {
   Box,
   Paper,
@@ -114,8 +115,7 @@ function getTimeRemaining(expiresAt) {
 /**
  * Offer Row Actions Menu
  */
-function OfferActionsMenu({ offer, onRegenerate, onViewQR, onCopyLink }) {
-  const [anchorEl, setAnchorEl] = useState(null);
+function OfferActionsMenu({ offer, onRegenerate, onViewQR, onCopyLink }) {  const { t } = useTranslation('vendor');  const [anchorEl, setAnchorEl] = useState(null);
   const open = Boolean(anchorEl);
 
   const handleClick = (event) => {
@@ -167,16 +167,16 @@ function OfferActionsMenu({ offer, onRegenerate, onViewQR, onCopyLink }) {
       >
         <MenuItem onClick={handleViewQR}>
           <QrCodeIcon fontSize="small" sx={{ mr: 1 }} />
-          View QR Code
+          {t('vendorOfferList.actions.viewQR')}
         </MenuItem>
         <MenuItem onClick={handleCopyLink}>
           <ContentCopyIcon fontSize="small" sx={{ mr: 1 }} />
-          Copy Link
+          {t('vendorOfferList.actions.copyLink')}
         </MenuItem>
         {canRegenerate && (
           <MenuItem onClick={handleRegenerate}>
             <RefreshIcon fontSize="small" sx={{ mr: 1 }} />
-            Regenerate
+            {t('vendorOfferList.actions.regenerate')}
           </MenuItem>
         )}
       </Menu>
@@ -195,6 +195,71 @@ OfferActionsMenu.propTypes = {
  * QR Code Dialog
  */
 function QRCodeDialog({ open, offer, onClose }) {
+  const { t } = useTranslation('vendor');
+
+  // Status labels
+  const STATUS_LABELS = {
+    pending: t('vendorOfferList.statuses.pending'),
+    ready: t('vendorOfferList.statuses.ready'),
+    issued: t('vendorOfferList.statuses.issued'),
+    deferred: t('vendorOfferList.statuses.deferred'),
+    expired: t('vendorOfferList.statuses.expired'),
+    error: t('vendorOfferList.statuses.error'),
+    accepted: t('vendorOfferList.statuses.accepted'),
+  };
+
+  // Status colors (MUI colors)
+  const STATUS_COLORS = {
+    pending: 'warning',
+    ready: 'info',
+    issued: 'success',
+    deferred: 'info',
+    expired: 'default',
+    error: 'error',
+    accepted: 'primary',
+  };
+
+  /**
+   * Format date in a user-friendly way
+   */
+  const formatDate = (timestamp) => {
+    if (!timestamp) return 'N/A';
+    const date = new Date(timestamp);
+    return date.toLocaleString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  };
+
+  /**
+   * Calculate time remaining until expiry
+   */
+  const getTimeRemaining = (expiresAt) => {
+    if (!expiresAt) return 'N/A';
+    const now = new Date();
+    const expiry = new Date(expiresAt);
+    const diff = expiry - now;
+
+    if (diff <= 0) {
+      return t('vendorOfferList.timeRemaining.expired');
+    }
+
+    const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+    const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+    const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+
+    if (days > 0) {
+      return t('vendorOfferList.timeRemaining.daysHours', { days, hours });
+    } else if (hours > 0) {
+      return t('vendorOfferList.timeRemaining.hoursMinutes', { hours, minutes });
+    } else {
+      return t('vendorOfferList.timeRemaining.minutes', { minutes });
+    }
+  };
+
   if (!offer) return null;
 
   const timeRemaining = !offer.is_expired ? getTimeRemaining(offer.expires_at) : null;
@@ -202,10 +267,10 @@ function QRCodeDialog({ open, offer, onClose }) {
   return (
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
       <DialogTitle>
-        Credential Offer QR Code
+        {t('vendorOfferList.qrDialog.title')}
         {offer.attempt_number > 1 && (
           <Chip
-            label={`Attempt ${offer.attempt_number}`}
+            label={t('vendorOfferList.qrDialog.attempt', { number: offer.attempt_number })}
             size="small"
             sx={{ ml: 1 }}
             color="info"
@@ -229,12 +294,12 @@ function QRCodeDialog({ open, offer, onClose }) {
           <Card variant="outlined">
             <CardContent>
               <Typography variant="subtitle2" color="text.secondary" gutterBottom>
-                Offer Details
+                {t('vendorOfferList.qrDialog.offerDetails')}
               </Typography>
               <Divider sx={{ my: 1 }} />
               <Stack spacing={1}>
                 <Box display="flex" justifyContent="space-between">
-                  <Typography variant="body2" color="text.secondary">Status:</Typography>
+                  <Typography variant="body2" color="text.secondary">{t('vendorOfferList.qrDialog.status')}:</Typography>
                   <Chip
                     label={STATUS_LABELS[offer.status] || offer.status}
                     size="small"
@@ -242,26 +307,26 @@ function QRCodeDialog({ open, offer, onClose }) {
                   />
                 </Box>
                 <Box display="flex" justifyContent="space-between">
-                  <Typography variant="body2" color="text.secondary">Transaction ID:</Typography>
+                  <Typography variant="body2" color="text.secondary">{t('vendorOfferList.qrDialog.transactionId')}:</Typography>
                   <Typography variant="body2" fontFamily="monospace" fontSize="0.75rem">
                     {offer.transaction_id.slice(0, 12)}...
                   </Typography>
                 </Box>
                 {timeRemaining && (
                   <Box display="flex" justifyContent="space-between">
-                    <Typography variant="body2" color="text.secondary">Time Remaining:</Typography>
+                    <Typography variant="body2" color="text.secondary">{t('vendorOfferList.qrDialog.timeRemaining')}:</Typography>
                     <Typography variant="body2" fontWeight="medium">
                       {timeRemaining}
                     </Typography>
                   </Box>
                 )}
                 <Box display="flex" justifyContent="space-between">
-                  <Typography variant="body2" color="text.secondary">Access Count:</Typography>
+                  <Typography variant="body2" color="text.secondary">{t('vendorOfferList.qrDialog.accessCount')}:</Typography>
                   <Typography variant="body2">{offer.access_count}</Typography>
                 </Box>
                 {offer.accessed_at && (
                   <Box display="flex" justifyContent="space-between">
-                    <Typography variant="body2" color="text.secondary">Last Accessed:</Typography>
+                    <Typography variant="body2" color="text.secondary">{t('vendorOfferList.qrDialog.lastAccessed')}:</Typography>
                     <Typography variant="body2" fontSize="0.75rem">
                       {formatDate(offer.accessed_at)}
                     </Typography>
@@ -275,7 +340,7 @@ function QRCodeDialog({ open, offer, onClose }) {
           <Card variant="outlined">
             <CardContent>
               <Typography variant="subtitle2" color="text.secondary" gutterBottom>
-                Sharing Options
+                {t('vendorOfferList.qrDialog.sharingOptions')} 
               </Typography>
               <Divider sx={{ my: 1 }} />
               <Stack spacing={1}>
@@ -288,7 +353,7 @@ function QRCodeDialog({ open, offer, onClose }) {
                     navigator.clipboard.writeText(offer.deep_link_uri || offer.credential_offer_uri);
                   }}
                 >
-                  Copy Deep Link
+                  {t('vendorOfferList.qrDialog.copyDeepLink')}
                 </Button>
                 {offer.offer_endpoint && (
                   <Button
@@ -300,7 +365,7 @@ function QRCodeDialog({ open, offer, onClose }) {
                       navigator.clipboard.writeText(offer.offer_endpoint);
                     }}
                   >
-                    Copy HTTP URL
+                    {t('vendorOfferList.qrDialog.copyHttpUrl')}
                   </Button>
                 )}
               </Stack>
@@ -309,7 +374,7 @@ function QRCodeDialog({ open, offer, onClose }) {
         </Stack>
       </DialogContent>
       <DialogActions>
-        <Button onClick={onClose}>Close</Button>
+        <Button onClick={onClose}>{t('common:close', { ns: 'common' })}</Button>
       </DialogActions>
     </Dialog>
   );
@@ -325,7 +390,71 @@ QRCodeDialog.propTypes = {
  * Main Vendor Offer List Component
  */
 export default function VendorOfferList() {
+  const { t } = useTranslation(['vendor', 'common']);
   const { organizationId } = useAuth();
+
+  // Status labels
+  const STATUS_LABELS = {
+    pending: t('vendorOfferList.statuses.pending'),
+    ready: t('vendorOfferList.statuses.ready'),
+    issued: t('vendorOfferList.statuses.issued'),
+    deferred: t('vendorOfferList.statuses.deferred'),
+    expired: t('vendorOfferList.statuses.expired'),
+    error: t('vendorOfferList.statuses.error'),
+    accepted: t('vendorOfferList.statuses.accepted'),
+  };
+
+  // Status colors (MUI colors)
+  const STATUS_COLORS = {
+    pending: 'warning',
+    ready: 'info',
+    issued: 'success',
+    deferred: 'info',
+    expired: 'default',
+    error: 'error',
+    accepted: 'primary',
+  };
+
+  /**
+   * Format date in a user-friendly way
+   */
+  const formatDate = (timestamp) => {
+    if (!timestamp) return 'N/A';
+    const date = new Date(timestamp);
+    return date.toLocaleString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  };
+
+  /**
+   * Calculate time remaining until expiry
+   */
+  const getTimeRemaining = (expiresAt) => {
+    if (!expiresAt) return 'N/A';
+    const now = new Date();
+    const expiry = new Date(expiresAt);
+    const diff = expiry - now;
+
+    if (diff <= 0) {
+      return t('vendorOfferList.timeRemaining.expired');
+    }
+
+    const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+    const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+    const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+
+    if (days > 0) {
+      return t('vendorOfferList.timeRemaining.daysHours', { days, hours });
+    } else if (hours > 0) {
+      return t('vendorOfferList.timeRemaining.hoursMinutes', { hours, minutes });
+    } else {
+      return t('vendorOfferList.timeRemaining.minutes', { minutes });
+    }
+  };
   const [offers, setOffers] = useState([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(0);
@@ -497,9 +626,9 @@ export default function VendorOfferList() {
       {/* Header */}
       <Box sx={{ display: 'flex', justifyContent: 'between', alignItems: 'center', mb: 3 }}>
         <Box>
-          <Typography variant="h6">Credential Offers</Typography>
+          <Typography variant="h6">{t('vendorOfferList.title')}</Typography>
           <Typography variant="body2" color="text.secondary">
-            View and manage all credential offers with QR codes
+            {t('vendorOfferList.description')}
           </Typography>
         </Box>
         <IconButton onClick={fetchOffers} disabled={loading}>
@@ -512,31 +641,31 @@ export default function VendorOfferList() {
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
           <FilterListIcon color="action" />
           <FormControl size="small" sx={{ minWidth: 150 }}>
-            <InputLabel>Status</InputLabel>
+            <InputLabel>{t('vendorOfferList.filters.status')}</InputLabel>
             <Select
               value={statusFilter}
-              label="Status"
+              label={t('vendorOfferList.filters.status')}
               onChange={handleStatusFilterChange}
             >
-              <MenuItem value="">All</MenuItem>
-              <MenuItem value="pending">Pending</MenuItem>
-              <MenuItem value="ready">Ready</MenuItem>
-              <MenuItem value="issued">Issued</MenuItem>
-              <MenuItem value="deferred">Deferred</MenuItem>
-              <MenuItem value="expired">Expired</MenuItem>
-              <MenuItem value="error">Error</MenuItem>
+              <MenuItem value="">{t('vendorOfferList.filters.all')}</MenuItem>
+              <MenuItem value="pending">{t('vendorOfferList.statuses.pending')}</MenuItem>
+              <MenuItem value="ready">{t('vendorOfferList.statuses.ready')}</MenuItem>
+              <MenuItem value="issued">{t('vendorOfferList.statuses.issued')}</MenuItem>
+              <MenuItem value="deferred">{t('vendorOfferList.statuses.deferred')}</MenuItem>
+              <MenuItem value="expired">{t('vendorOfferList.statuses.expired')}</MenuItem>
+              <MenuItem value="error">{t('vendorOfferList.statuses.error')}</MenuItem>
             </Select>
           </FormControl>
           <FormControl size="small" sx={{ minWidth: 150 }}>
-            <InputLabel>Active</InputLabel>
+            <InputLabel>{t('vendorOfferList.filters.active')}</InputLabel>
             <Select
               value={activeFilter}
-              label="Active"
+              label={t('vendorOfferList.filters.active')}
               onChange={handleActiveFilterChange}
             >
-              <MenuItem value="">All</MenuItem>
-              <MenuItem value="true">Active</MenuItem>
-              <MenuItem value="false">Inactive</MenuItem>
+              <MenuItem value="">{t('vendorOfferList.filters.all')}</MenuItem>
+              <MenuItem value="true">{t('vendorOfferList.filters.activeOnly')}</MenuItem>
+              <MenuItem value="false">{t('vendorOfferList.filters.inactiveOnly')}</MenuItem>
             </Select>
           </FormControl>
         </Box>
@@ -545,7 +674,7 @@ export default function VendorOfferList() {
       {/* Error Alert */}
       {error && (
         <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError(null)}>
-          <AlertTitle>Error</AlertTitle>
+          <AlertTitle>{t('common:error', { ns: 'common' })}</AlertTitle>
           {error}
         </Alert>
       )}
@@ -555,14 +684,14 @@ export default function VendorOfferList() {
         <Table>
           <TableHead>
             <TableRow>
-              <TableCell>Created</TableCell>
-              <TableCell>Transaction ID</TableCell>
-              <TableCell>Status</TableCell>
-              <TableCell>Active</TableCell>
-              <TableCell>Time Remaining</TableCell>
-              <TableCell>Access Count</TableCell>
-              <TableCell>Attempt</TableCell>
-              <TableCell align="right">Actions</TableCell>
+              <TableCell>{t('vendorOfferList.table.created')}</TableCell>
+              <TableCell>{t('vendorOfferList.table.transactionId')}</TableCell>
+              <TableCell>{t('vendorOfferList.table.status')}</TableCell>
+              <TableCell>{t('vendorOfferList.table.active')}</TableCell>
+              <TableCell>{t('vendorOfferList.table.timeRemaining')}</TableCell>
+              <TableCell>{t('vendorOfferList.table.accessCount')}</TableCell>
+              <TableCell>{t('vendorOfferList.table.attempt')}</TableCell>
+              <TableCell align="right">{t('vendorOfferList.table.actions')}</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
@@ -576,7 +705,7 @@ export default function VendorOfferList() {
               <TableRow>
                 <TableCell colSpan={8} align="center" sx={{ py: 4 }}>
                   <Typography color="text.secondary">
-                    No credential offers found
+                    {t('vendorOfferList.empty')}
                   </Typography>
                 </TableCell>
               </TableRow>
@@ -611,7 +740,7 @@ export default function VendorOfferList() {
                   {/* Active */}
                   <TableCell>
                     <Chip
-                      label={offer.is_active ? 'Active' : 'Inactive'}
+                      label={offer.is_active ? t('vendorOfferList.filters.activeOnly') : t('vendorOfferList.filters.inactiveOnly')}
                       size="small"
                       color={offer.is_active ? 'success' : 'default'}
                       variant={offer.is_active ? 'filled' : 'outlined'}

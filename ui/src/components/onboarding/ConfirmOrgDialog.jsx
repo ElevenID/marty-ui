@@ -16,6 +16,7 @@ import {
   Alert,
 } from '@mui/material';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
+import { useTranslation } from 'react-i18next';
 import MembershipModeChip from './MembershipModeChip';
 
 const ConfirmOrgDialog = ({
@@ -25,19 +26,21 @@ const ConfirmOrgDialog = ({
   submitting,
   onConfirm,
 }) => {
+  const { t } = useTranslation('onboarding');
+  
   return (
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
       <DialogTitle>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <WarningAmberIcon color="warning" />
-          Confirm Organization Selection
+          {t('confirmOrg.title')}
         </Box>
       </DialogTitle>
       <DialogContent>
         {organization && (
           <>
             <Alert severity="warning" sx={{ mb: 3 }}>
-              Please verify that you want to join the following organization:
+              {t('confirmOrg.warning')}
             </Alert>
             <Paper variant="outlined" sx={{ p: 2, bgcolor: 'grey.50' }}>
               <Typography variant="h6">{organization.name}</Typography>
@@ -52,20 +55,20 @@ const ConfirmOrgDialog = ({
             </Paper>
             {organization.membership_mode === 'approval' && (
               <Alert severity="info" sx={{ mt: 2 }}>
-                This organization requires approval. Your request will be reviewed by an administrator.
+                {t('confirmOrg.approvalInfo')}
               </Alert>
             )}
           </>
         )}
       </DialogContent>
       <DialogActions>
-        <Button onClick={onClose}>Cancel</Button>
+        <Button onClick={onClose}>{t('confirmOrg.cancel')}</Button>
         <Button
           variant="contained"
           onClick={onConfirm}
           disabled={submitting}
         >
-          {submitting ? 'Processing...' : 'Confirm & Join'}
+          {submitting ? t('confirmOrg.processing') : t('confirmOrg.confirm')}
         </Button>
       </DialogActions>
     </Dialog>

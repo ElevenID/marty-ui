@@ -27,22 +27,24 @@ import SearchIcon from '@mui/icons-material/Search';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import DeleteIcon from '@mui/icons-material/Delete';
 import { Link } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 
 import { ResourcePage, AddButton, EmptyState, EmptyStates } from '../../common';
 
-const TRUST_TABS = [
-  { label: 'Trust Profiles', path: '/console/trust/profiles' },
-  { label: 'Trusted Issuers', path: '/console/trust/issuers' },
-  { label: 'Revocation Profiles', path: '/console/trust/revocation' },
+const getTrustTabs = (t) => [
+  { label: t('trust.trustProfiles'), path: '/console/trust/profiles' },
+  { label: t('trust.trustedIssuers'), path: '/console/trust/issuers' },
+  { label: t('trust.revocationProfiles'), path: '/console/trust/revocation' },
 ];
 
-const BREADCRUMBS = [
-  { label: 'Console', path: '/console' },
-  { label: 'Trust', path: '/console/trust' },
-  { label: 'Trusted Issuers', path: '/console/trust/issuers' },
+const getBreadcrumbs = (t) => [
+  { label: t('trust.breadcrumbs.console'), path: '/console' },
+  { label: t('trust.breadcrumbs.trust'), path: '/console/trust' },
+  { label: t('trust.breadcrumbs.trustedIssuers'), path: '/console/trust/issuers' },
 ];
 
 function TrustedIssuersPage() {
+  const { t } = useTranslation('console');
   const [issuers, setIssuers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -80,7 +82,7 @@ function TrustedIssuersPage() {
           },
         ]);
       } catch (err) {
-        setError('Failed to load trusted issuers');
+        setError(t('trust.trustedIssuersPage.error'));
       } finally {
         setLoading(false);
       }
@@ -96,13 +98,13 @@ function TrustedIssuersPage() {
 
   return (
     <ResourcePage
-      title="Trusted Issuers"
-      description="Manage the list of trusted credential issuers across your trust profiles."
-      tabs={TRUST_TABS}
-      breadcrumbs={BREADCRUMBS}
+      title={t('trust.trustedIssuers')}
+      description={t('trust.trustedIssuersDescription')}
+      tabs={getTrustTabs(t)}
+      breadcrumbs={getBreadcrumbs(t)}
       actions={
         <AddButton 
-          label="Add Issuer" 
+          label={t('actions.add', { ns: 'common' })} 
           path="/console/trust/issuers/new" 
         />
       }
@@ -116,7 +118,7 @@ function TrustedIssuersPage() {
       {/* Search */}
       <Box sx={{ mb: 3 }}>
         <TextField
-          placeholder="Search issuers..."
+          placeholder={t('trust.trustedIssuersPage.searchPlaceholder')}
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           size="small"
@@ -140,12 +142,12 @@ function TrustedIssuersPage() {
           <Table>
             <TableHead>
               <TableRow>
-                <TableCell>Name</TableCell>
-                <TableCell>Country</TableCell>
-                <TableCell>DID</TableCell>
-                <TableCell>Trust Profile</TableCell>
-                <TableCell>Status</TableCell>
-                <TableCell align="right">Actions</TableCell>
+                <TableCell>{t('trust.trustedIssuersPage.tableHeaders.name')}</TableCell>
+                <TableCell>{t('trust.trustedIssuersPage.tableHeaders.country')}</TableCell>
+                <TableCell>{t('trust.trustedIssuersPage.tableHeaders.did')}</TableCell>
+                <TableCell>{t('trust.trustedIssuersPage.tableHeaders.trustProfile')}</TableCell>
+                <TableCell>{t('trust.trustedIssuersPage.tableHeaders.status')}</TableCell>
+                <TableCell align="right">{t('trust.trustedIssuersPage.tableHeaders.actions')}</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
@@ -153,7 +155,7 @@ function TrustedIssuersPage() {
                 <TableRow>
                   <TableCell colSpan={6} align="center">
                     <Typography color="text.secondary" sx={{ py: 4 }}>
-                      No issuers match your search. Try adjusting your query.
+                      {t('trust.trustedIssuersPage.empty')}
                     </Typography>
                   </TableCell>
                 </TableRow>
@@ -176,13 +178,13 @@ function TrustedIssuersPage() {
                     <TableCell>{issuer.trustProfile}</TableCell>
                     <TableCell>
                       <Chip 
-                        label={issuer.status === 'active' ? 'Active' : 'Inactive'} 
+                        label={issuer.status === 'active' ? t('trust.trustedIssuersPage.status.active') : t('trust.trustedIssuersPage.status.inactive')} 
                         color={issuer.status === 'active' ? 'success' : 'default'}
                         size="small" 
                       />
                     </TableCell>
                     <TableCell align="right">
-                      <Tooltip title="View Details">
+                      <Tooltip title={t('trust.trustedIssuersPage.actions.viewDetails')}>
                         <IconButton
                           component={Link}
                           to={`/console/trust/issuers/${issuer.id}`}
@@ -191,7 +193,7 @@ function TrustedIssuersPage() {
                           <VisibilityIcon fontSize="small" />
                         </IconButton>
                       </Tooltip>
-                      <Tooltip title="Remove">
+                      <Tooltip title={t('trust.trustedIssuersPage.actions.remove')}>
                         <IconButton size="small" color="error">
                           <DeleteIcon fontSize="small" />
                         </IconButton>

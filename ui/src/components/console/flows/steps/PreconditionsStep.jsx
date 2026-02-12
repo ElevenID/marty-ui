@@ -25,37 +25,38 @@ import GppGoodIcon from '@mui/icons-material/GppGood';
 import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings';
 import VerifiedIcon from '@mui/icons-material/Verified';
 import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
+import { useTranslation } from 'react-i18next';
 
 // Available preconditions
-const PRECONDITION_TYPES = [
+const getPreconditionTypes = (t) => [
   {
     id: 'application_approved',
-    label: 'Application Approved',
-    description: 'Automatically trigger when an applicant\'s credential application is approved',
+    label: t('wizards.flowDefinition.preconditionsStep.types.application_approved.label'),
+    description: t('wizards.flowDefinition.preconditionsStep.types.application_approved.description'),
     icon: <CheckCircleIcon />,
     color: 'success',
     recommended: true,
   },
   {
     id: 'identity_verified',
-    label: 'Identity Verified',
-    description: 'Require successful identity verification (biometric, document scan, etc.)',
+    label: t('wizards.flowDefinition.preconditionsStep.types.identity_verified.label'),
+    description: t('wizards.flowDefinition.preconditionsStep.types.identity_verified.description'),
     icon: <GppGoodIcon />,
     color: 'primary',
     recommended: true,
   },
   {
     id: 'manual_admin_approval',
-    label: 'Manual Admin Approval',
-    description: 'Require explicit admin action to proceed with issuance',
+    label: t('wizards.flowDefinition.preconditionsStep.types.manual_admin_approval.label'),
+    description: t('wizards.flowDefinition.preconditionsStep.types.manual_admin_approval.description'),
     icon: <AdminPanelSettingsIcon />,
     color: 'warning',
     recommended: false,
   },
   {
     id: 'external_verification',
-    label: 'External Verification Result',
-    description: 'Wait for external system verification callback (webhook/API)',
+    label: t('wizards.flowDefinition.preconditionsStep.types.external_verification.label'),
+    description: t('wizards.flowDefinition.preconditionsStep.types.external_verification.description'),
     icon: <VerifiedIcon />,
     color: 'info',
     recommended: false,
@@ -63,7 +64,9 @@ const PRECONDITION_TYPES = [
 ];
 
 const PreconditionsStep = ({ flowType, preconditions = [], onUpdate }) => {
+  const { t } = useTranslation('console');
   const [selectedPreconditions, setSelectedPreconditions] = useState(preconditions);
+  const PRECONDITION_TYPES = getPreconditionTypes(t);
 
   // Initialize with defaults for OID4VCI flows
   useEffect(() => {
@@ -89,20 +92,19 @@ const PreconditionsStep = ({ flowType, preconditions = [], onUpdate }) => {
   return (
     <Box>
       <Typography variant="h6" gutterBottom>
-        Configure Preconditions
+        {t('wizards.flowDefinition.preconditionsStep.title')}
       </Typography>
       
       <Typography color="text.secondary" paragraph>
         {isOID4VCIFlow 
-          ? 'Define when credential offers should be automatically generated. Select one or more conditions that must be met before proceeding.'
-          : 'Configure preconditions for this flow type.'
+          ? t('wizards.flowDefinition.preconditionsStep.descriptionOid4vci')
+          : t('wizards.flowDefinition.preconditionsStep.descriptionDefault')
         }
       </Typography>
 
       {!isOID4VCIFlow && (
         <Alert severity="info" sx={{ mb: 3 }}>
-          Precondition configuration is currently optimized for OID4VCI issuance flows. 
-          Other flow types may have limited precondition support.
+          {t('wizards.flowDefinition.preconditionsStep.limitedSupport')}
         </Alert>
       )}
 
@@ -110,7 +112,7 @@ const PreconditionsStep = ({ flowType, preconditions = [], onUpdate }) => {
       <Card sx={{ mb: 3 }}>
         <CardContent>
           <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 600, mb: 2 }}>
-            Select Preconditions
+            {t('wizards.flowDefinition.preconditionsStep.selectTitle')}
           </Typography>
 
           <FormGroup>
@@ -158,7 +160,7 @@ const PreconditionsStep = ({ flowType, preconditions = [], onUpdate }) => {
                       </Typography>
                       {precondition.recommended && (
                         <Chip 
-                          label="Recommended" 
+                          label={t('wizards.flowDefinition.preconditionsStep.recommendedChip')} 
                           size="small" 
                           color="success" 
                           variant="outlined"
@@ -181,12 +183,12 @@ const PreconditionsStep = ({ flowType, preconditions = [], onUpdate }) => {
       {selectedPreconditions.length > 0 && (
         <Alert severity="info" icon={<HelpOutlineIcon />}>
           <Typography variant="body2" gutterBottom sx={{ fontWeight: 600 }}>
-            Selected Configuration ({selectedPreconditions.length} condition{selectedPreconditions.length > 1 ? 's' : ''})
+            {t('wizards.flowDefinition.preconditionsStep.summaryTitle', { count: selectedPreconditions.length })}
           </Typography>
           <Typography variant="body2" paragraph>
             {selectedPreconditions.length === 1 
-              ? 'The flow will automatically advance when the selected condition is met.'
-              : 'The flow will automatically advance when ALL selected conditions are met (AND logic).'}
+              ? t('wizards.flowDefinition.preconditionsStep.summarySingle')
+              : t('wizards.flowDefinition.preconditionsStep.summaryMultiple')}
           </Typography>
           
           <Divider sx={{ my: 1 }} />
@@ -211,7 +213,7 @@ const PreconditionsStep = ({ flowType, preconditions = [], onUpdate }) => {
       {selectedPreconditions.length === 0 && (
         <Alert severity="warning">
           <Typography variant="body2">
-            No preconditions selected. The flow will require manual triggering or external orchestration.
+            {t('wizards.flowDefinition.preconditionsStep.noneSelected')}
           </Typography>
         </Alert>
       )}

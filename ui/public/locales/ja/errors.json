@@ -1,0 +1,54 @@
+{
+	"general": {
+		"unknown": "不明なエラーが発生しました",
+		"networkError": "ネットワークエラーです。接続を確認してください。",
+		"serverError": "サーバーエラーです。後でもう一度お試しください。",
+		"unauthorized": "この操作を実行する権限がありません",
+		"forbidden": "アクセスが拒否されました",
+		"notFound": "要求されたリソースが見つかりませんでした",
+		"timeout": "タイムアウトしました。もう一度お試しください。"
+	},
+	"validation": {
+		"required": "この項目は必須です",
+		"invalidEmail": "メールアドレスが無効です",
+		"invalidPhone": "電話番号が無効です",
+		"invalidUrl": "URLが無効です",
+		"passwordTooShort": "パスワードは8文字以上で入力してください",
+		"passwordsDoNotMatch": "パスワードが一致しません"
+	},
+	"auth": {
+		"loginFailed": "ログインに失敗しました。認証情報を確認してください。",
+		"sessionExpired": "セッションの有効期限が切れました。再度ログインしてください。",
+		"logoutFailed": "ログアウトに失敗しました。もう一度お試しください。",
+		"invalidCredentials": "ユーザー名またはパスワードが無効です",
+		"accountLocked": "アカウントがロックされました。サポートに連絡してください。"
+	},
+	"api": {
+		"fetchFailed": "データの取得に失敗しました",
+		"saveFailed": "変更の保存に失敗しました",
+		"deleteFailed": "項目の削除に失敗しました",
+		"uploadFailed": "ファイルのアップロードに失敗しました",
+		"connectionFailed": "サーバーへの接続に失敗しました"
+	},
+	"errorState": {
+		"defaultTitle": "問題が発生しました",
+		"operationFailed": "操作に失敗しました",
+		"error": "エラー",
+		"unexpectedError": "予期しないエラーが発生しました",
+		"genericError": "エラーが発生しました",
+		"detailsCopied": "エラー詳細をクリップボードにコピーしました",
+		"errorReport": "エラーレポート: {{code}}",
+		"requestId": "リクエストID:",
+		"timestamp": "タイムスタンプ:",
+		"errorCode": "エラーコード:",
+		"message": "メッセージ:",
+		"technicalDetails": "技術詳細:",
+		"copyDetails": "詳細をコピー"
+	},
+	"messages": {
+		"tryAgain": "もう一度お試しください",
+		"contactSupport": "問題が続く場合はサポートに連絡してください",
+		"goBack": "前のページに戻る",
+		"retry": "再試行"
+	}
+}

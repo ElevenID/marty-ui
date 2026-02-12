@@ -13,8 +13,7 @@
  * - Event detail drill-down
  */
 
-import { useState, useEffect, useCallback } from 'react';
-import {
+import { useState, useEffect, useCallback } from 'react';import { useTranslation } from 'react-i18next';import {
   Box,
   Paper,
   Typography,
@@ -58,19 +57,6 @@ import { useAuth } from '../../hooks/useAuth';
 // API base URL
 const API_URL = import.meta.env.VITE_API_URL || '';
 
-// Event categories
-const EVENT_CATEGORIES = [
-  { id: 'all', label: 'All Events', color: 'default' },
-  { id: 'credential', label: 'Credentials', color: 'primary' },
-  { id: 'verification', label: 'Verifications', color: 'secondary' },
-  { id: 'application', label: 'Applications', color: 'info' },
-  { id: 'trust', label: 'Trust Operations', color: 'warning' },
-  { id: 'security', label: 'Security', color: 'error' },
-  { id: 'audit', label: 'Audit', color: 'success' },
-];
-
-// Event severity levels
-const SEVERITY_LEVELS = ['all', 'info', 'warning', 'error', 'critical'];
 
 /**
  * Get icon for event severity
@@ -216,6 +202,7 @@ function EventDetailDialog({ event, open, onClose }) {
  * Main Audit Logs Component
  */
 export default function AuditLogs() {
+  const { t } = useTranslation('vendor');
   const { organizationId } = useAuth();
   const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -235,6 +222,23 @@ export default function AuditLogs() {
   // Dialog state
   const [selectedEvent, setSelectedEvent] = useState(null);
   const [detailDialogOpen, setDetailDialogOpen] = useState(false);
+
+  // Event categories (dynamic to access t)
+  const EVENT_CATEGORIES = [
+    { id: 'all', label: t('auditLogs.categories.all'), color: 'default' },
+    { id: 'credential', label: t('auditLogs.categories.credential'), color: 'primary' },
+    { id: 'verification', label: t('auditLogs.categories.verification'), color: 'secondary' },
+    { id: 'application', label: t('auditLogs.categories.application'), color: 'info' },
+    { id: 'trust', label: t('auditLogs.categories.trust'), color: 'warning' },
+    { id: 'security', label: t('auditLogs.categories.security'), color: 'error' },
+    { id: 'audit', label: t('auditLogs.categories.audit'), color: 'success' },
+  ];
+
+  // Severity levels (dynamic to access t)
+  const getSeverityLabel = (level) => {
+    if (level === 'all') return t('auditLogs.severity.all');
+    return t(`auditLogs.severity.${level}`);
+  };
 
   /**
    * Load audit events from API
@@ -367,10 +371,10 @@ export default function AuditLogs() {
       <Box sx={{ mb: 4 }}>
         <Typography variant="h4" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <HistoryIcon fontSize="large" />
-          Audit Logs
+          {t('auditLogs.title')}
         </Typography>
         <Typography variant="body1" color="text.secondary">
-          View and analyze all system events, credential operations, and security activities.
+          {t('auditLogs.description')}
         </Typography>
       </Box>
 
@@ -381,7 +385,7 @@ export default function AuditLogs() {
           <Stack direction="row" spacing={2}>
             <TextField
               fullWidth
-              placeholder="Search by event ID, user, or resource..."
+              placeholder={t('auditLogs.filters.search')}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               InputProps={{
@@ -393,13 +397,13 @@ export default function AuditLogs() {
               }}
             />
             <FormControl sx={{ minWidth: 150 }}>
-              <InputLabel>Time Range</InputLabel>
-              <Select value={timeRange} onChange={(e) => setTimeRange(e.target.value)} label="Time Range">
-                <MenuItem value="1h">Last Hour</MenuItem>
-                <MenuItem value="24h">Last 24 Hours</MenuItem>
-                <MenuItem value="7d">Last 7 Days</MenuItem>
-                <MenuItem value="30d">Last 30 Days</MenuItem>
-                <MenuItem value="all">All Time</MenuItem>
+              <InputLabel>{t('auditLogs.filters.timeRange')}</InputLabel>
+              <Select value={timeRange} onChange={(e) => setTimeRange(e.target.value)} label={t('auditLogs.filters.timeRange')}>
+                <MenuItem value="1h">{t('auditLogs.filters.timeRangeOptions.lastHour')}</MenuItem>
+                <MenuItem value="24h">{t('auditLogs.filters.timeRangeOptions.last24Hours')}</MenuItem>
+                <MenuItem value="7d">{t('auditLogs.filters.timeRangeOptions.last7Days')}</MenuItem>
+                <MenuItem value="30d">{t('auditLogs.filters.timeRangeOptions.last30Days')}</MenuItem>
+                <MenuItem value="all">{t('auditLogs.filters.timeRangeOptions.allTime')}</MenuItem>
               </Select>
             </FormControl>
           </Stack>
@@ -419,21 +423,21 @@ export default function AuditLogs() {
             </Box>
 
             <FormControl sx={{ minWidth: 120 }}>
-              <InputLabel>Severity</InputLabel>
+              <InputLabel>{t('auditLogs.filters.severity')}</InputLabel>
               <Select
                 value={severityFilter}
                 onChange={(e) => setSeverityFilter(e.target.value)}
-                label="Severity"
+                label={t('auditLogs.filters.severity')}
               >
-                {SEVERITY_LEVELS.map((level) => (
+                {['all', 'info', 'warning', 'error', 'critical'].map((level) => (
                   <MenuItem key={level} value={level}>
-                    {level.charAt(0).toUpperCase() + level.slice(1)}
+                    {getSeverityLabel(level)}
                   </MenuItem>
                 ))}
               </Select>
             </FormControl>
 
-            <Tooltip title="Refresh">
+            <Tooltip title={t('auditLogs.refreshButton')}>
               <IconButton onClick={loadEvents} disabled={loading}>
                 <RefreshIcon />
               </IconButton>
@@ -444,7 +448,7 @@ export default function AuditLogs() {
               startIcon={<ExportIcon />}
               onClick={() => handleExport('csv')}
             >
-              Export
+              {t('auditLogs.exportButton')}
             </Button>
           </Stack>
         </Stack>
@@ -453,7 +457,7 @@ export default function AuditLogs() {
       {/* Error Alert */}
       {error && (
         <Alert severity="warning" sx={{ mb: 3 }} onClose={() => setError(null)}>
-          {error} (Showing mock data for development)
+          {t('auditLogs.loadFailed', { error })}
         </Alert>
       )}
 
@@ -463,14 +467,14 @@ export default function AuditLogs() {
           <Table>
             <TableHead>
               <TableRow>
-                <TableCell width="30">Severity</TableCell>
-                <TableCell>Timestamp</TableCell>
-                <TableCell>Event Type</TableCell>
-                <TableCell>User</TableCell>
-                <TableCell>Resource</TableCell>
-                <TableCell>Description</TableCell>
+                <TableCell width="30">{t('auditLogs.table.severity')}</TableCell>
+                <TableCell>{t('auditLogs.table.timestamp')}</TableCell>
+                <TableCell>{t('auditLogs.table.eventType')}</TableCell>
+                <TableCell>{t('auditLogs.table.user')}</TableCell>
+                <TableCell>{t('auditLogs.table.resource')}</TableCell>
+                <TableCell>{t('auditLogs.table.description')}</TableCell>
                 <TableCell width="80" align="center">
-                  Actions
+                  {t('auditLogs.table.actions')}
                 </TableCell>
               </TableRow>
             </TableHead>
@@ -485,7 +489,7 @@ export default function AuditLogs() {
                 <TableRow>
                   <TableCell colSpan={7} align="center" sx={{ py: 8 }}>
                     <Typography variant="body2" color="text.secondary">
-                      No events found for the selected filters.
+                      {t('auditLogs.empty')}
                     </Typography>
                   </TableCell>
                 </TableRow>
@@ -523,7 +527,7 @@ export default function AuditLogs() {
                       </Typography>
                     </TableCell>
                     <TableCell align="center">
-                      <Tooltip title="View Details">
+                      <Tooltip title={t('auditLogs.viewDetailsTooltip')}>
                         <IconButton size="small" onClick={() => handleViewEvent(event)}>
                           <ViewIcon fontSize="small" />
                         </IconButton>

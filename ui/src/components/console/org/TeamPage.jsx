@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   Box,
   Paper,
@@ -47,28 +48,38 @@ import { useNotifications } from '../../../hooks/useNotifications';
 import { usePermissions } from '../../../hooks/usePermissions';
 import { PermissionGate } from '../../common/PermissionGate';
 
-const ORG_TABS = [
-  { label: 'Organization', path: '/console/org/settings' },
-  { label: 'Team', path: '/console/org/team' },
-  { label: 'Notifications', path: '/console/org/notifications' },
+/**
+ * Get organization tabs with translations
+ */
+const getOrgTabs = (t) => [
+  { label: t('org.tabs.organization'), path: '/console/org/settings' },
+  { label: t('org.tabs.team'), path: '/console/org/team' },
+  { label: t('org.tabs.notifications'), path: '/console/org/notifications' },
 ];
 
-const BREADCRUMBS = [
-  { label: 'Console', path: '/console' },
-  { label: 'Org', path: '/console/org' },
-  { label: 'Team', path: '/console/org/team' },
+/**
+ * Get breadcrumbs with translations
+ */
+const getBreadcrumbs = (t) => [
+  { label: t('org.breadcrumbs.console'), path: '/console' },
+  { label: t('org.breadcrumbs.org'), path: '/console/org' },
+  { label: t('org.breadcrumbs.team'), path: '/console/org/team' },
 ];
 
-const ROLES = [
-  { value: 'admin', label: 'Admin', description: 'Full access to all resources' },
-  { value: 'developer', label: 'Developer', description: 'Can create and manage resources' },
-  { value: 'operator', label: 'Operator', description: 'Read-only access' },
+/**
+ * Get roles with translations
+ */
+const getRoles = (t) => [
+  { value: 'admin', label: t('org.team.roles.admin.label'), description: t('org.team.roles.admin.description') },
+  { value: 'developer', label: t('org.team.roles.developer.label'), description: t('org.team.roles.developer.description') },
+  { value: 'operator', label: t('org.team.roles.operator.label'), description: t('org.team.roles.operator.description') },
 ];
 
 /**
  * Enhanced Team Page with full CRUD functionality
  */
 function TeamPage() {
+  const { t } = useTranslation('console');
   const [members, setMembers] = useState([]);
   const [pendingInvites, setPendingInvites] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -105,59 +116,59 @@ function TeamPage() {
   const handleInvite = async (email, role) => {
     try {
       await teamApi.inviteMember({ email, role });
-      showNotification?.('Invitation sent successfully', 'success');
+      showNotification?.(t('org.team.dialog.invite.success'), 'success');
       setInviteDialogOpen(false);
       loadTeamData();
     } catch (err) {
       console.error('Failed to invite member:', err);
-      showNotification?.('Failed to send invitation', 'error');
+      showNotification?.(t('org.team.dialog.invite.error'), 'error');
     }
   };
 
   const handleResendInvite = async (inviteId) => {
     try {
       await teamApi.resendInvite(inviteId);
-      showNotification?.('Invitation resent', 'success');
+      showNotification?.(t('org.team.dialog.resendSuccess'), 'success');
     } catch (err) {
       console.error('Failed to resend invite:', err);
-      showNotification?.('Failed to resend invitation', 'error');
+      showNotification?.(t('org.team.dialog.resendError'), 'error');
     }
   };
 
   const handleRevokeInvite = async (inviteId) => {
-    if (!confirm('Revoke this invitation?')) return;
+    if (!confirm(t('org.team.invites.actions.confirmRevoke'))) return;
     try {
       await teamApi.revokeInvite(inviteId);
-      showNotification?.('Invitation revoked', 'success');
+      showNotification?.(t('org.team.dialog.revokeSuccess'), 'success');
       loadTeamData();
     } catch (err) {
       console.error('Failed to revoke invite:', err);
-      showNotification?.('Failed to revoke invitation', 'error');
+      showNotification?.(t('org.team.dialog.revokeError'), 'error');
     }
   };
 
   const handleChangeRole = async (memberId, newRole) => {
     try {
       await teamApi.updateMemberRole(memberId, newRole);
-      showNotification?.('Member role updated', 'success');
+      showNotification?.(t('org.team.dialog.changeRole.success'), 'success');
       setRoleDialogOpen(false);
       setSelectedMember(null);
       loadTeamData();
     } catch (err) {
       console.error('Failed to update role:', err);
-      showNotification?.('Failed to update member role', 'error');
+      showNotification?.(t('org.team.dialog.changeRole.error'), 'error');
     }
   };
 
   const handleRemoveMember = async (memberId, memberEmail) => {
-    if (!confirm(`Remove ${memberEmail} from the team? They will lose access immediately.`)) return;
+    if (!confirm(t('org.team.members.actions.confirmRemove', { email: memberEmail }))) return;
     try {
       await teamApi.removeMember(memberId);
-      showNotification?.('Member removed from team', 'success');
+      showNotification?.(t('org.team.dialog.removeSuccess'), 'success');
       loadTeamData();
     } catch (err) {
       console.error('Failed to remove member:', err);
-      showNotification?.('Failed to remove member', 'error');
+      showNotification?.(t('org.team.dialog.removeError'), 'error');
     }
   };
 
@@ -172,11 +183,11 @@ function TeamPage() {
 
   return (
     <ResourcePage
-      title="Team"
-      subtitle="Manage team members, roles, and invitations"
+      title={t('org.team.title')}
+      subtitle={t('org.team.subtitle')}
       icon={<PeopleIcon />}
-      tabs={ORG_TABS}
-      breadcrumbs={BREADCRUMBS}
+      tabs={getOrgTabs(t)}
+      breadcrumbs={getBreadcrumbs(t)}
       actions={
         <PermissionGate resource="team" action="invite">
           <Button
@@ -184,7 +195,7 @@ function TeamPage() {
             startIcon={<AddIcon />}
             onClick={() => setInviteDialogOpen(true)}
           >
-            Invite Member
+            {t('org.team.members.actions.invite')}
           </Button>
         </PermissionGate>
       }
@@ -198,9 +209,9 @@ function TeamPage() {
           {/* Current Members */}
           <Paper sx={{ mb: 3 }}>
             <Box sx={{ p: 2, borderBottom: 1, borderColor: 'divider' }}>
-              <Typography variant="h6">Current Members</Typography>
+              <Typography variant="h6">{t('org.team.members.title')}</Typography>
               <Typography variant="body2" color="text.secondary">
-                {members.length} team {members.length === 1 ? 'member' : 'members'}
+                {t('org.team.members.count', { count: members.length })}
               </Typography>
             </Box>
             
@@ -208,8 +219,8 @@ function TeamPage() {
               <Box sx={{ p: 3 }}>
                 <EmptyState
                   icon={PeopleIcon}
-                  title="No team members yet"
-                  description="Invite team members to collaborate on your organization."
+                  title={t('org.team.members.empty.title')}
+                  description={t('org.team.members.empty.description')}
                 />
               </Box>
             ) : (
@@ -217,11 +228,11 @@ function TeamPage() {
                 <Table>
                   <TableHead>
                     <TableRow>
-                      <TableCell>Name</TableCell>
-                      <TableCell>Email</TableCell>
-                      <TableCell>Role</TableCell>
-                      <TableCell>Joined</TableCell>
-                      <TableCell align="right">Actions</TableCell>
+                      <TableCell>{t('org.team.members.tableHeaders.name')}</TableCell>
+                      <TableCell>{t('org.team.members.tableHeaders.email')}</TableCell>
+                      <TableCell>{t('org.team.members.tableHeaders.role')}</TableCell>
+                      <TableCell>{t('org.team.members.tableHeaders.joined')}</TableCell>
+                      <TableCell align="right">{t('org.team.members.tableHeaders.actions')}</TableCell>
                     </TableRow>
                   </TableHead>
                   <TableBody>
@@ -263,20 +274,20 @@ function TeamPage() {
           {pendingInvites.length > 0 && (
             <Paper>
               <Box sx={{ p: 2, borderBottom: 1, borderColor: 'divider' }}>
-                <Typography variant="h6">Pending Invitations</Typography>
+                <Typography variant="h6">{t('org.team.invites.title')}</Typography>
                 <Typography variant="body2" color="text.secondary">
-                  {pendingInvites.length} pending {pendingInvites.length === 1 ? 'invitation' : 'invitations'}
+                  {t('org.team.invites.count', { count: pendingInvites.length })}
                 </Typography>
               </Box>
               <TableContainer>
                 <Table>
                   <TableHead>
                     <TableRow>
-                      <TableCell>Email</TableCell>
-                      <TableCell>Role</TableCell>
-                      <TableCell>Invited</TableCell>
-                      <TableCell>Expires</TableCell>
-                      <TableCell align="right">Actions</TableCell>
+                      <TableCell>{t('org.team.invites.tableHeaders.email')}</TableCell>
+                      <TableCell>{t('org.team.invites.tableHeaders.role')}</TableCell>
+                      <TableCell>{t('org.team.invites.tableHeaders.invited')}</TableCell>
+                      <TableCell>{t('org.team.invites.tableHeaders.expires')}</TableCell>
+                      <TableCell align="right">{t('org.team.invites.tableHeaders.actions')}</TableCell>
                     </TableRow>
                   </TableHead>
                   <TableBody>
@@ -296,14 +307,14 @@ function TeamPage() {
                           <IconButton
                             size="small"
                             onClick={() => handleResendInvite(invite.id)}
-                            title="Resend invitation"
+                            title={t('org.team.invites.actions.resend')}
                           >
                             <SendIcon fontSize="small" />
                           </IconButton>
                           <IconButton
                             size="small"
                             onClick={() => handleRevokeInvite(invite.id)}
-                            title="Revoke invitation"
+                            title={t('org.team.invites.actions.revoke')}
                           >
                             <CancelIcon fontSize="small" />
                           </IconButton>
@@ -323,6 +334,7 @@ function TeamPage() {
         open={inviteDialogOpen}
         onClose={() => setInviteDialogOpen(false)}
         onInvite={handleInvite}
+        t={t}
       />
 
       {/* Change Role Dialog */}
@@ -334,12 +346,14 @@ function TeamPage() {
           setSelectedMember(null);
         }}
         onChangeRole={handleChangeRole}
+        t={t}
       />
     </ResourcePage>
   );
 }
 
 function MemberActionsMenu({ member, onChangeRole, onRemove }) {
+  const { t } = useTranslation('console');
   const [anchorEl, setAnchorEl] = useState(null);
   const open = Boolean(anchorEl);
 
@@ -365,7 +379,7 @@ function MemberActionsMenu({ member, onChangeRole, onRemove }) {
           <ListItemIcon>
             <EditIcon fontSize="small" />
           </ListItemIcon>
-          <ListItemText>Change Role</ListItemText>
+          <ListItemText>{t('org.team.members.actions.changeRole')}</ListItemText>
         </MenuItem>
         <Divider />
         <MenuItem
@@ -378,16 +392,18 @@ function MemberActionsMenu({ member, onChangeRole, onRemove }) {
           <ListItemIcon>
             <DeleteIcon fontSize="small" color="error" />
           </ListItemIcon>
-          <ListItemText>Remove Member</ListItemText>
+          <ListItemText>{t('org.team.members.actions.remove')}</ListItemText>
         </MenuItem>
       </Menu>
     </>
   );
 }
 
-function InviteMemberDialog({ open, onClose, onInvite }) {
+function InviteMemberDialog({ open, onClose, onInvite, t }) {
   const [email, setEmail] = useState('');
   const [role, setRole] = useState('developer');
+  
+  const ROLES = getRoles(t);
 
   const handleSubmit = () => {
     if (!email) return;
@@ -398,14 +414,14 @@ function InviteMemberDialog({ open, onClose, onInvite }) {
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
-      <DialogTitle>Invite Team Member</DialogTitle>
+      <DialogTitle>{t('org.team.dialog.invite.title')}</DialogTitle>
       <DialogContent>
         <Alert severity="info" sx={{ mb: 2 }}>
-          An invitation email will be sent to the provided address. The invite will expire in 7 days.
+          {t('org.team.dialog.invite.info')}
         </Alert>
         <TextField
           fullWidth
-          label="Email Address"
+          label={t('org.team.dialog.invite.emailLabel')}
           type="email"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
@@ -413,10 +429,10 @@ function InviteMemberDialog({ open, onClose, onInvite }) {
           autoFocus
         />
         <FormControl fullWidth margin="normal">
-          <InputLabel>Role</InputLabel>
+          <InputLabel>{t('org.team.dialog.invite.roleLabel')}</InputLabel>
           <Select
             value={role}
-            label="Role"
+            label={t('org.team.dialog.invite.roleLabel')}
             onChange={(e) => setRole(e.target.value)}
           >
             {ROLES.map((r) => (
@@ -433,22 +449,24 @@ function InviteMemberDialog({ open, onClose, onInvite }) {
         </FormControl>
       </DialogContent>
       <DialogActions>
-        <Button onClick={onClose}>Cancel</Button>
+        <Button onClick={onClose}>{t('actions.cancel', { ns: 'common' })}</Button>
         <Button
           onClick={handleSubmit}
           variant="contained"
           disabled={!email}
           startIcon={<SendIcon />}
         >
-          Send Invitation
+          {t('org.team.dialog.invite.send')}
         </Button>
       </DialogActions>
     </Dialog>
   );
 }
 
-function ChangeRoleDialog({ open, member, onClose, onChangeRole }) {
+function ChangeRoleDialog({ open, member, onClose, onChangeRole, t }) {
   const [newRole, setNewRole] = useState('');
+  
+  const ROLES = getRoles(t);
 
   useEffect(() => {
     if (member) {
@@ -463,19 +481,19 @@ function ChangeRoleDialog({ open, member, onClose, onChangeRole }) {
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
-      <DialogTitle>Change Member Role</DialogTitle>
+      <DialogTitle>{t('org.team.dialog.changeRole.title')}</DialogTitle>
       <DialogContent>
         <Alert severity="warning" sx={{ mb: 2 }}>
-          Changing a member's role will affect their access to resources immediately.
+          {t('org.team.dialog.changeRole.warning')}
         </Alert>
         <Typography variant="body2" sx={{ mb: 2 }}>
-          Change role for: <strong>{member?.email}</strong>
+          {t('org.team.dialog.changeRole.changingFor', { email: member?.email })}
         </Typography>
         <FormControl fullWidth>
-          <InputLabel>New Role</InputLabel>
+          <InputLabel>{t('org.team.dialog.changeRole.newRoleLabel')}</InputLabel>
           <Select
             value={newRole}
-            label="New Role"
+            label={t('org.team.dialog.changeRole.newRoleLabel')}
             onChange={(e) => setNewRole(e.target.value)}
           >
             {ROLES.map((r) => (
@@ -492,13 +510,13 @@ function ChangeRoleDialog({ open, member, onClose, onChangeRole }) {
         </FormControl>
       </DialogContent>
       <DialogActions>
-        <Button onClick={onClose}>Cancel</Button>
+        <Button onClick={onClose}>{t('actions.cancel', { ns: 'common' })}</Button>
         <Button
           onClick={handleSubmit}
           variant="contained"
           disabled={!newRole || newRole === member?.role}
         >
-          Update Role
+          {t('org.team.dialog.changeRole.update')}
         </Button>
       </DialogActions>
     </Dialog>

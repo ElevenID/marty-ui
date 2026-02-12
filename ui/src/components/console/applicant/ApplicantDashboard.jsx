@@ -23,6 +23,7 @@ import {
   ListItemText,
 } from '@mui/material';
 import { Link } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import BadgeIcon from '@mui/icons-material/Badge';
 import AssignmentIcon from '@mui/icons-material/Assignment';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
@@ -33,6 +34,7 @@ import { useAuth } from '../../../hooks/useAuth';
 import { getApplicantStats } from '../../../services/applicantApi';
 
 function ApplicantDashboard() {
+  const { t } = useTranslation('applicant');
   const { user } = useAuth();
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState({
@@ -60,7 +62,7 @@ function ApplicantDashboard() {
     return (
       <Box>
         <Typography variant="h4" gutterBottom>
-          Welcome back{user?.name ? `, ${user.name}` : ''}
+          {user?.name ? t('dashboard.titleWithName', { name: user.name }) : t('dashboard.title')}
         </Typography>
         <LinearProgress />
       </Box>
@@ -70,24 +72,24 @@ function ApplicantDashboard() {
   return (
     <Box>
       <Typography variant="h4" gutterBottom>
-        Welcome back{user?.name ? `, ${user.name}` : ''}
+        {user?.name ? t('dashboard.titleWithName', { name: user.name }) : t('dashboard.title')}
       </Typography>
       <Typography variant="body1" color="text.secondary" paragraph>
-        Manage your digital credentials and applications.
+        {t('dashboard.description')}
       </Typography>
 
       {/* Pending Applications Alert */}
       {stats.pendingApplications > 0 && (
         <Alert severity="info" sx={{ mb: 3 }}>
-          <AlertTitle>Pending Applications</AlertTitle>
-          You have {stats.pendingApplications} application(s) awaiting review.
+          <AlertTitle>{t('dashboard.pendingAlert.title')}</AlertTitle>
+          {t('dashboard.pendingAlert.message', { count: stats.pendingApplications })}
           <Button
             component={Link}
             to="/applicant/applications"
             size="small"
             sx={{ ml: 2 }}
           >
-            View Status
+            {t('dashboard.pendingAlert.viewStatus')}
           </Button>
         </Alert>
       )}
@@ -101,7 +103,7 @@ function ApplicantDashboard() {
                 <BadgeIcon color="primary" />
                 <Typography variant="h4">{stats.activeCredentials}</Typography>
               </Box>
-              <Typography color="text.secondary">Active Credentials</Typography>
+              <Typography color="text.secondary">{t('dashboard.stats.activeCredentials')}</Typography>
             </CardContent>
             <CardActions>
               <Button
@@ -110,7 +112,7 @@ function ApplicantDashboard() {
                 size="small"
                 endIcon={<ArrowForwardIcon />}
               >
-                View All
+                {t('dashboard.stats.viewAll')}
               </Button>
             </CardActions>
           </Card>
@@ -123,7 +125,7 @@ function ApplicantDashboard() {
                 <PendingIcon color="warning" />
                 <Typography variant="h4">{stats.pendingApplications}</Typography>
               </Box>
-              <Typography color="text.secondary">Pending Applications</Typography>
+              <Typography color="text.secondary">{t('dashboard.stats.pendingApplications')}</Typography>
             </CardContent>
             <CardActions>
               <Button
@@ -132,7 +134,7 @@ function ApplicantDashboard() {
                 size="small"
                 endIcon={<ArrowForwardIcon />}
               >
-                View All
+                {t('dashboard.stats.viewAll')}
               </Button>
             </CardActions>
           </Card>
@@ -145,7 +147,7 @@ function ApplicantDashboard() {
                 <CheckCircleIcon color="success" />
                 <Typography variant="h4">{stats.expiringSoon}</Typography>
               </Box>
-              <Typography color="text.secondary">Expiring Soon</Typography>
+              <Typography color="text.secondary">{t('dashboard.stats.expiringSoon')}</Typography>
             </CardContent>
           </Card>
         </Grid>
@@ -153,7 +155,7 @@ function ApplicantDashboard() {
 
       {/* Quick Actions */}
       <Typography variant="h6" gutterBottom>
-        Quick Actions
+        {t('dashboard.quickActions.title')}
       </Typography>
       <Grid container spacing={2}>
         <Grid item xs={12} md={6}>
@@ -168,8 +170,8 @@ function ApplicantDashboard() {
                   <AssignmentIcon />
                 </ListItemIcon>
                 <ListItemText
-                  primary="Apply for Credential"
-                  secondary="Browse available credentials and start an application"
+                  primary={t('dashboard.quickActions.applyForCredential')}
+                  secondary={t('dashboard.quickActions.applyDescription')}
                 />
               </ListItem>
               <ListItem
@@ -181,8 +183,8 @@ function ApplicantDashboard() {
                   <BadgeIcon />
                 </ListItemIcon>
                 <ListItemText
-                  primary="View My Credentials"
-                  secondary="See your issued digital credentials"
+                  primary={t('dashboard.quickActions.viewMyCredentials')}
+                  secondary={t('dashboard.quickActions.viewDescription')}
                 />
               </ListItem>
             </List>

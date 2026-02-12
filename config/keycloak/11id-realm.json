@@ -633,6 +633,6 @@
   "adminEventsEnabled": true,
   "adminEventsDetailsEnabled": true,
   "internationalizationEnabled": true,
-  "supportedLocales": ["en", "es", "fr", "de"],
+  "supportedLocales": ["en", "de", "ja", "es", "fr"],
   "defaultLocale": "en"
 }

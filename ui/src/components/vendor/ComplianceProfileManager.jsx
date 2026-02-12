@@ -7,6 +7,7 @@
  */
 
 import { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   Box,
   Paper,
@@ -49,21 +50,21 @@ import VerifiedUserIcon from '@mui/icons-material/VerifiedUser';
 
 import complianceProfilesApi from '../../services/complianceProfilesApi';
 
-const COMPLIANCE_CODES = [
-  { value: 'ICAO_DTC', label: 'ICAO Digital Travel Credential', description: 'ePassports and travel documents' },
-  { value: 'AAMVA_MDL', label: 'AAMVA Mobile Driver License', description: 'North American driver licenses' },
-  { value: 'EUDI_PID', label: 'EU Digital Identity Wallet', description: 'European identity credentials' },
-  { value: 'ENTERPRISE_VC', label: 'Enterprise Verifiable Credential', description: 'Custom business credentials' },
-];
-
-const CREDENTIAL_FORMATS = [
-  { value: 'mdoc', label: 'mDoc (ISO 18013-5)' },
-  { value: 'sd_jwt_vc', label: 'SD-JWT VC' },
-  { value: 'jwt_vc', label: 'JWT VC' },
-  { value: 'ldp_vc', label: 'JSON-LD VC' },
-];
-
 const ComplianceProfileManager = () => {
+  const { t } = useTranslation('vendor');
+  const COMPLIANCE_CODES = [
+    { value: 'ICAO_DTC', label: t('complianceProfiles.codes.icao'), description: t('complianceProfiles.codes.icaoDesc') },
+    { value: 'AAMVA_MDL', label: t('complianceProfiles.codes.aamva'), description: t('complianceProfiles.codes.aamvaDesc') },
+    { value: 'EUDI_PID', label: t('complianceProfiles.codes.eudi'), description: t('complianceProfiles.codes.eudiDesc') },
+    { value: 'ENTERPRISE_VC', label: t('complianceProfiles.codes.enterprise'), description: t('complianceProfiles.codes.enterpriseDesc') },
+  ];
+
+  const CREDENTIAL_FORMATS = [
+    { value: 'mdoc', label: t('complianceProfiles.formats.mdoc') },
+    { value: 'sd_jwt_vc', label: t('complianceProfiles.formats.sdJwtVc') },
+    { value: 'jwt_vc', label: t('complianceProfiles.formats.jwtVc') },
+    { value: 'ldp_vc', label: t('complianceProfiles.formats.ldpVc') },
+  ];
   const [profiles, setProfiles] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -96,7 +97,7 @@ const ComplianceProfileManager = () => {
       setError(null);
     } catch (err) {
       console.error('Failed to load compliance profiles:', err);
-      setError('Failed to load compliance profiles');
+      setError(t('complianceProfiles.loadFailed'));
     } finally {
       setLoading(false);
     }
@@ -146,12 +147,12 @@ const ComplianceProfileManager = () => {
       loadProfiles();
     } catch (err) {
       console.error('Failed to save compliance profile:', err);
-      setError(`Failed to save: ${err.message}`);
+      setError(t('complianceProfiles.saveFailed', { error: err.message }));
     }
   };
 
   const handleDelete = async (profileId) => {
-    if (!window.confirm('Are you sure you want to delete this compliance profile?')) {
+    if (!window.confirm(t('complianceProfiles.deleteConfirm'))) {
       return;
     }
     try {
@@ -159,18 +160,18 @@ const ComplianceProfileManager = () => {
       loadProfiles();
     } catch (err) {
       console.error('Failed to delete compliance profile:', err);
-      setError(`Failed to delete: ${err.message}`);
+      setError(t('complianceProfiles.deleteFailed', { error: err.message }));
     }
   };
 
   const getIssuerConsistencyRules = (code) => {
     const rules = {
-      ICAO_DTC: 'Requires IACA-registered certificate separate from DID-based issuers',
-      AAMVA_MDL: 'Validates X.509 subject DN matches did:web domain for same-org credentials',
-      EUDI_PID: 'Enforces single did:web issuer across all credential types',
-      ENTERPRISE_VC: 'Flexible issuer configuration with optional consistency checks',
+      ICAO_DTC: t('complianceProfiles.consistencyRules.icao'),
+      AAMVA_MDL: t('complianceProfiles.consistencyRules.aamva'),
+      EUDI_PID: t('complianceProfiles.consistencyRules.eudi'),
+      ENTERPRISE_VC: t('complianceProfiles.consistencyRules.enterprise'),
     };
-    return rules[code] || 'No specific consistency rules';
+    return rules[code] || t('complianceProfiles.consistencyRules.none');
   };
 
   if (loading) {
@@ -185,9 +186,9 @@ const ComplianceProfileManager = () => {
     <Box>
       <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
         <Box>
-          <Typography variant="h4">Compliance Profiles</Typography>
+          <Typography variant="h4">{t('complianceProfiles.title')}</Typography>
           <Typography variant="body2" color="text.secondary">
-            Abstract credential format complexity behind compliance standards
+            {t('complianceProfiles.description')}
           </Typography>
         </Box>
         <Button
@@ -196,7 +197,7 @@ const ComplianceProfileManager = () => {
           startIcon={<AddIcon />}
           onClick={handleCreate}
         >
-          Create Custom Profile
+          {t('complianceProfiles.createButton')}
         </Button>
       </Box>
 
@@ -210,11 +211,11 @@ const ComplianceProfileManager = () => {
       <Paper sx={{ mb: 3, p: 2 }}>
         <Box display="flex" alignItems="center" mb={2}>
           <SecurityIcon sx={{ mr: 1 }} />
-          <Typography variant="h6">System Presets</Typography>
-          <Chip label="Immutable" size="small" sx={{ ml: 2 }} />
+          <Typography variant="h6">{t('complianceProfiles.systemPresets.title')}</Typography>
+          <Chip label={t('complianceProfiles.systemPresets.immutable')} size="small" sx={{ ml: 2 }} />
         </Box>
         <Typography variant="body2" color="text.secondary" mb={2}>
-          Pre-configured compliance profiles for common standards
+          {t('complianceProfiles.systemPresets.description')}
         </Typography>
         <Box display="flex" flexWrap="wrap" gap={2}>
           {COMPLIANCE_CODES.map((preset) => (
@@ -238,7 +239,7 @@ const ComplianceProfileManager = () => {
               </Typography>
               <Divider sx={{ my: 1 }} />
               <Typography variant="caption" color="text.secondary">
-                <strong>Issuer Consistency:</strong> {getIssuerConsistencyRules(preset.value)}
+                <strong>{t('complianceProfiles.systemPresets.issuerConsistency')}:</strong> {getIssuerConsistencyRules(preset.value)}
               </Typography>
             </Paper>
           ))}
@@ -248,16 +249,16 @@ const ComplianceProfileManager = () => {
       {/* Custom Profiles */}
       <Paper>
         <Box p={2}>
-          <Typography variant="h6" mb={2}>Custom Compliance Profiles</Typography>
+          <Typography variant="h6" mb={2}>{t('complianceProfiles.customProfiles.title')}</Typography>
           <TableContainer>
             <Table>
               <TableHead>
                 <TableRow>
-                  <TableCell>Name</TableCell>
-                  <TableCell>Code</TableCell>
-                  <TableCell>Primary Format</TableCell>
-                  <TableCell>Issuer Consistency</TableCell>
-                  <TableCell align="right">Actions</TableCell>
+                  <TableCell>{t('complianceProfiles.table.name')}</TableCell>
+                  <TableCell>{t('complianceProfiles.table.code')}</TableCell>
+                  <TableCell>{t('complianceProfiles.table.primaryFormat')}</TableCell>
+                  <TableCell>{t('complianceProfiles.table.issuerConsistency')}</TableCell>
+                  <TableCell align="right">{t('complianceProfiles.table.actions')}</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
@@ -268,22 +269,22 @@ const ComplianceProfileManager = () => {
                       <Chip label={profile.code} size="small" />
                     </TableCell>
                     <TableCell>
-                      {profile.credential_format_mapping?.primary_format || 'N/A'}
+                      {profile.credential_format_mapping?.primary_format || t('complianceProfiles.table.notAvailable')}
                     </TableCell>
                     <TableCell>
                       {profile.trust_profile_constraints?.enforce_issuer_consistency ? (
-                        <Chip label="Enforced" color="success" size="small" />
+                        <Chip label={t('complianceProfiles.table.enforced')} color="success" size="small" />
                       ) : (
-                        <Chip label="Optional" size="small" />
+                        <Chip label={t('complianceProfiles.table.optional')} size="small" />
                       )}
                     </TableCell>
                     <TableCell align="right">
-                      <Tooltip title="Edit">
+                      <Tooltip title={t('complianceProfiles.table.edit')}>
                         <IconButton size="small" onClick={() => handleEdit(profile)}>
                           <EditIcon />
                         </IconButton>
                       </Tooltip>
-                      <Tooltip title="Delete">
+                      <Tooltip title={t('complianceProfiles.table.delete')}>
                         <IconButton size="small" onClick={() => handleDelete(profile.id)}>
                           <DeleteIcon />
                         </IconButton>
@@ -295,7 +296,7 @@ const ComplianceProfileManager = () => {
                   <TableRow>
                     <TableCell colSpan={5} align="center">
                       <Typography color="text.secondary">
-                        No custom profiles. Create one to get started.
+                        {t('complianceProfiles.customProfiles.empty')}
                       </Typography>
                     </TableCell>
                   </TableRow>
@@ -309,13 +310,13 @@ const ComplianceProfileManager = () => {
       {/* Create/Edit Dialog */}
       <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} maxWidth="md" fullWidth>
         <DialogTitle>
-          {editMode ? 'Edit Compliance Profile' : 'Create Custom Compliance Profile'}
+          {editMode ? t('complianceProfiles.dialog.editTitle') : t('complianceProfiles.dialog.createTitle')}
         </DialogTitle>
         <DialogContent>
           <Box sx={{ mt: 2 }}>
             <TextField
               fullWidth
-              label="Name"
+              label={t('complianceProfiles.dialog.nameLabel')}
               value={currentProfile.name}
               onChange={(e) => setCurrentProfile({ ...currentProfile, name: e.target.value })}
               sx={{ mb: 2 }}
@@ -323,11 +324,11 @@ const ComplianceProfileManager = () => {
             />
 
             <FormControl fullWidth sx={{ mb: 2 }}>
-              <InputLabel>Compliance Code</InputLabel>
+              <InputLabel>{t('complianceProfiles.dialog.codeLabel')}</InputLabel>
               <Select
                 value={currentProfile.code}
                 onChange={(e) => setCurrentProfile({ ...currentProfile, code: e.target.value })}
-                label="Compliance Code"
+                label={t('complianceProfiles.dialog.codeLabel')}
               >
                 {COMPLIANCE_CODES.map((code) => (
                   <MenuItem key={code.value} value={code.value}>
@@ -339,7 +340,7 @@ const ComplianceProfileManager = () => {
 
             <TextField
               fullWidth
-              label="Description"
+              label={t('complianceProfiles.dialog.descriptionLabel')}
               value={currentProfile.description}
               onChange={(e) => setCurrentProfile({ ...currentProfile, description: e.target.value })}
               multiline
@@ -349,11 +350,11 @@ const ComplianceProfileManager = () => {
 
             <Accordion>
               <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                <Typography>Format Mapping</Typography>
+                <Typography>{t('complianceProfiles.dialog.formatMapping')}</Typography>
               </AccordionSummary>
               <AccordionDetails>
                 <FormControl fullWidth sx={{ mb: 2 }}>
-                  <InputLabel>Primary Format</InputLabel>
+                  <InputLabel>{t('complianceProfiles.dialog.primaryFormat')}</InputLabel>
                   <Select
                     value={currentProfile.credential_format_mapping?.primary_format || ''}
                     onChange={(e) => setCurrentProfile({
@@ -363,7 +364,7 @@ const ComplianceProfileManager = () => {
                         primary_format: e.target.value,
                       },
                     })}
-                    label="Primary Format"
+                    label={t('complianceProfiles.dialog.primaryFormat')}
                   >
                     {CREDENTIAL_FORMATS.map((fmt) => (
                       <MenuItem key={fmt.value} value={fmt.value}>
@@ -373,7 +374,7 @@ const ComplianceProfileManager = () => {
                   </Select>
                 </FormControl>
 
-                <Typography variant="subtitle2" mb={1}>Supported Formats</Typography>
+                <Typography variant="subtitle2" mb={1}>{t('complianceProfiles.dialog.supportedFormats')}</Typography>
                 <FormGroup>
                   {CREDENTIAL_FORMATS.map((fmt) => (
                     <FormControlLabel
@@ -405,7 +406,7 @@ const ComplianceProfileManager = () => {
 
             <Accordion>
               <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                <Typography>Issuer Consistency Rules</Typography>
+                <Typography>{t('complianceProfiles.dialog.consistencyRules')}</Typography>
               </AccordionSummary>
               <AccordionDetails>
                 <Alert severity="info" sx={{ mb: 2 }}>
@@ -425,10 +426,10 @@ const ComplianceProfileManager = () => {
                       })}
                     />
                   }
-                  label="Enforce Issuer Consistency"
+                  label={t('complianceProfiles.dialog.enforceConsistency')}
                 />
 
-                <Typography variant="subtitle2" mt={2} mb={1}>Allowed DID Methods</Typography>
+                <Typography variant="subtitle2" mt={2} mb={1}>{t('complianceProfiles.dialog.allowedDidMethods')}</Typography>
                 <FormGroup>
                   {['did:web', 'did:key', 'did:jwk'].map((method) => (
                     <FormControlLabel
@@ -460,9 +461,9 @@ const ComplianceProfileManager = () => {
           </Box>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setDialogOpen(false)}>Cancel</Button>
+          <Button onClick={() => setDialogOpen(false)}>{t('complianceProfiles.dialog.cancelButton')}</Button>
           <Button onClick={handleSave} variant="contained" color="primary">
-            {editMode ? 'Update' : 'Create'}
+            {editMode ? t('complianceProfiles.dialog.updateButton') : t('complianceProfiles.dialog.createButton')}
           </Button>
         </DialogActions>
       </Dialog>
