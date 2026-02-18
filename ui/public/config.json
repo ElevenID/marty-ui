@@ -1,9 +1,9 @@
 {
-  "appName": "ElevenID",
-  "shortName": "ElevenID",
-  "authenticatorName": "ElevenID Authenticator",
+  "appName": "ElevenID LLC",
+  "shortName": "ElevenID LLC",
+  "authenticatorName": "ElevenID LLC Authenticator",
   "tagline": "Secure Digital Identity Platform",
-  "issuingAuthority": "ElevenID Trust Services",
+  "issuingAuthority": "ElevenID LLC Trust Services",
   "deepLinkProtocol": "elevenid",
   "logoUrl": null,
   "appStoreUrl": "#",

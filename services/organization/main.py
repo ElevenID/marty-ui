@@ -12,15 +12,42 @@ from typing import AsyncGenerator
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from marty_common import OrganizationClient
+import redis.asyncio as aioredis
 
-from .application.use_cases import ApiKeyUseCase, MemberUseCase, OrganizationUseCase
+from .application.use_cases import (
+    ApiKeyUseCase,
+    ConsoleContextPreferenceUseCase,
+    JoinUseCase,
+    MemberUseCase,
+    OrganizationUseCase,
+)
+from .application.rbac_use_cases import RoleUseCase
 from .infrastructure.adapters.audit_adapter import router as audit_router
-from .infrastructure.adapters.http_adapter import configure_org_router, router as org_router
+from .infrastructure.adapters.http_adapter import (
+    configure_org_router,
+    router as org_router,
+    internal_router,
+)
 from .infrastructure.adapters.onboarding_adapter import router as onboarding_router
+from .infrastructure.adapters.preferences_adapter import (
+    configure_preferences_router,
+    router as preferences_router,
+)
+from .infrastructure.adapters.rbac_http_adapter import (
+    configure_rbac_router,
+    router as rbac_router,
+)
 from .infrastructure.adapters.postgres_adapter import (
     PostgresApiKeyRepository,
+    PostgresConsoleContextPreferenceRepository,
+    PostgresJoinCodeRepository,
     PostgresMemberRepository,
     PostgresOrganizationRepository,
+)
+from .infrastructure.adapters.rbac_adapter import (
+    PostgresPermissionRepository,
+    PostgresRoleRepository,
 )
 
 # Configure logging
@@ -67,6 +94,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     org_repo = PostgresOrganizationRepository(session_factory)
     member_repo = PostgresMemberRepository(session_factory)
     api_key_repo = PostgresApiKeyRepository(session_factory)
+    preference_repo = PostgresConsoleContextPreferenceRepository(session_factory)
+    join_code_repo = PostgresJoinCodeRepository(session_factory)
+    role_repo = PostgresRoleRepository(session_factory)
+    permission_repo = PostgresPermissionRepository(session_factory)
     
     # Initialize event publisher
     event_publisher = InMemoryEventPublisher()
@@ -90,12 +121,64 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         event_publisher=event_publisher,
     )
     
-    # Configure router
+    preference_use_case = ConsoleContextPreferenceUseCase(
+        preference_repo=preference_repo,
+    )
+    
+    join_use_case = JoinUseCase(
+        join_code_repo=join_code_repo,
+        organization_repo=org_repo,
+        member_repo=member_repo,
+        event_publisher=event_publisher,
+    )
+    
+    role_use_case = RoleUseCase(
+        role_repo=role_repo,
+        permission_repo=permission_repo,
+        member_repo=member_repo,
+        event_publisher=event_publisher,
+    )
+    
+    # Wire RBAC seeding into org creation
+    org_use_case.role_use_case = role_use_case
+    
+    # Configure routers
     configure_org_router(
         organization_use_case=org_use_case,
         member_use_case=member_use_case,
         api_key_use_case=api_key_use_case,
+        join_use_case=join_use_case,
     )
+    
+    configure_preferences_router(
+        preference_use_case=preference_use_case,
+    )
+    
+    configure_rbac_router(
+        role_use_case=role_use_case,
+    )
+    
+    # Store role use case in app state for the internal permissions endpoint
+    app.state.role_use_case = role_use_case
+    
+    # Initialize Redis for membership cache invalidation
+    redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379")
+    redis_db = int(os.environ.get("REDIS_DB_GATEWAY", "2"))  # Use same DB as gateway
+    logger.info(f"Connecting to Redis at {redis_url}/{redis_db} for cache invalidation")
+    redis_client = aioredis.from_url(
+        f"{redis_url}/{redis_db}",
+        encoding="utf-8",
+        decode_responses=True
+    )
+    
+    # Initialize OrganizationClient for cache invalidation
+    # Points to localhost since the org service needs to invalidate its own cache
+    org_client = OrganizationClient(
+        base_url=f"http://localhost:{SERVICE_PORT}",
+        redis_client=redis_client,  # Enable Redis caching for cache invalidation
+    )
+    app.state.org_client = org_client
+    app.state.redis_client = redis_client
     
     app.state.engine = engine
     
@@ -105,6 +188,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     
     # Cleanup
     logger.info(f"Shutting down {SERVICE_NAME}...")
+    await org_client.close()
+    await redis_client.aclose()
     await engine.dispose()
 
 
@@ -136,8 +221,11 @@ def create_app() -> FastAPI:
     
     # Include routers
     app.include_router(org_router)
+    app.include_router(internal_router)
+    app.include_router(preferences_router)
     app.include_router(onboarding_router)
     app.include_router(audit_router)
+    app.include_router(rbac_router)
     
     # Health check endpoint
     @app.get("/health")

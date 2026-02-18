@@ -8,7 +8,7 @@
   },
   "idvComparison": {
     "title": "De l'IDV à l'identité vérifiable",
-    "takeaway": "ElevenID remplace les vérifications répétées par une confiance réutilisable.",
+    "takeaway": "ElevenID LLC remplace les vérifications répétées par une confiance réutilisable.",
     "traditional": {
       "title": "IDV traditionnel",
       "oneTimeChecks": "Vérifications de documents ponctuelles",
@@ -19,7 +19,7 @@
       "reVerification": "Revérification partout"
     },
     "elevenid": {
-      "title": "ElevenID",
+      "title": "ElevenID LLC",
       "reusable": "Justificatifs vérifiables réutilisables",
       "holderControlled": "Portefeuilles numériques contrôlés par le titulaire",
       "cryptographic": "Preuves cryptographiques",
@@ -33,7 +33,7 @@
     "verifyCredentials": "Vérifiez des justificatifs vérifiables — pas seulement des documents.",
     "trustIssuers": "Faites confiance aux émetteurs — pas aux bases de données.",
     "walletFirst": "Wallet-first par conception — prêt pour l'EUDI.",
-    "quote": "Les plateformes d'IDV s'arrêtent à une décision ponctuelle. ElevenID produit des résultats cryptographiquement vérifiables réutilisables à travers les portefeuilles, les écosystèmes et les registres de confiance."
+    "quote": "Les plateformes d'IDV s'arrêtent à une décision ponctuelle. ElevenID LLC produit des résultats cryptographiquement vérifiables réutilisables à travers les portefeuilles, les écosystèmes et les registres de confiance."
   },
   "audienceRouting": {
     "title": "Choisissez votre parcours",
@@ -97,7 +97,7 @@
       }
     },
     "solvesIt": {
-      "title": "Comment ElevenID résout cela",
+      "title": "Comment ElevenID LLC résout cela",
       "intro": "Gouvernez l'identité avec quatre primitives : profils de confiance, modèles de justificatifs, politiques de présentation et flows.",
       "subheading": "Les politiques sont de la configuration, pas du code. Les endpoints exécutent des règles de confiance et de divulgation gouvernées centralement sans redéploiement."
     },
@@ -109,7 +109,7 @@
     "standards": {
       "title": "Architecture basée sur des standards",
       "subtitle": "Les standards ne sont pas des intégrations. Ils sont le produit.",
-      "description": "Ces couches permettent à ElevenID d'interopérer entre gouvernements, portefeuilles et entreprises sans intégrations sur mesure.",
+      "description": "Ces couches permettent à ElevenID LLC d'interopérer entre gouvernements, portefeuilles et entreprises sans intégrations sur mesure.",
       "cta": "Explorer les standards"
     },
     "startFirst": {

@@ -1,8 +1,7 @@
 /**
  * Unit Tests for ProtectedRoute and Route Guards
  * 
- * Tests authentication-based routing, role-based access control,
- * and redirects for different user types.
+ * Tests authentication-based routing and capability-based access control.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -30,7 +29,6 @@ describe('ProtectedRoute', () => {
         isLoading: true,
         isAuthenticated: false,
         user: null,
-        checkingOnboarding: false,
       })
 
       renderWithoutRouter(
@@ -51,32 +49,6 @@ describe('ProtectedRoute', () => {
       expect(screen.getByText('Checking authentication...')).toBeInTheDocument()
       expect(screen.queryByText('Protected Content')).not.toBeInTheDocument()
     })
-
-    it('should show loading spinner when checking onboarding', () => {
-      mockUseAuth.mockReturnValue({
-        isLoading: false,
-        isAuthenticated: true,
-        user: { id: 1 },
-        checkingOnboarding: true,
-      })
-
-      renderWithoutRouter(
-        <MemoryRouter initialEntries={['/protected']}>
-          <Routes>
-            <Route
-              path="/protected"
-              element={
-                <ProtectedRoute>
-                  <TestComponent />
-                </ProtectedRoute>
-              }
-            />
-          </Routes>
-        </MemoryRouter>
-      )
-
-      expect(screen.getByText('Checking authentication...')).toBeInTheDocument()
-    })
   })
 
   describe('authentication', () => {
@@ -85,7 +57,6 @@ describe('ProtectedRoute', () => {
         isLoading: false,
         isAuthenticated: false,
         user: null,
-        checkingOnboarding: false,
       })
 
       renderWithoutRouter(
@@ -112,11 +83,8 @@ describe('ProtectedRoute', () => {
       mockUseAuth.mockReturnValue({
         isLoading: false,
         isAuthenticated: true,
-        user: { id: 1, user_type: 'administrator' },
-        checkingOnboarding: false,
-        isAdministrator: true,
-        isVendor: false,
-        isApplicant: false,
+        user: { id: 1, capabilities: { 'admin:platform': true } },
+        hasCapability: (capability: string) => capability === 'admin:platform',
       })
 
       renderWithoutRouter(
@@ -142,7 +110,6 @@ describe('ProtectedRoute', () => {
         isLoading: false,
         isAuthenticated: false,
         user: null,
-        checkingOnboarding: false,
       })
 
       const CustomLogin = () => <div>Custom Login</div>
@@ -167,16 +134,13 @@ describe('ProtectedRoute', () => {
     })
   })
 
-  describe('role-based access', () => {
-    it('should allow access when user type matches allowedTypes', () => {
+  describe('capability-based access', () => {
+    it('should allow access when user has required capability', () => {
       mockUseAuth.mockReturnValue({
         isLoading: false,
         isAuthenticated: true,
-        user: { id: 1, user_type: 'administrator' },
-        checkingOnboarding: false,
-        isAdministrator: true,
-        isVendor: false,
-        isApplicant: false,
+        user: { id: 1, capabilities: { 'admin:platform': true } },
+        hasCapability: (capability: string) => capability === 'admin:platform',
       })
 
       renderWithoutRouter(
@@ -185,7 +149,7 @@ describe('ProtectedRoute', () => {
             <Route
               path="/admin"
               element={
-                <ProtectedRoute allowedTypes={['administrator']}>
+                <ProtectedRoute requiredCapabilities={['admin:platform']}>
                   <TestComponent />
                 </ProtectedRoute>
               }
@@ -197,15 +161,12 @@ describe('ProtectedRoute', () => {
       expect(screen.getByText('Protected Content')).toBeInTheDocument()
     })
 
-    it('should redirect when user type does not match allowedTypes', () => {
+    it('should redirect when user lacks required capability', () => {
       mockUseAuth.mockReturnValue({
         isLoading: false,
         isAuthenticated: true,
-        user: { id: 1, user_type: 'applicant' },
-        checkingOnboarding: false,
-        isAdministrator: false,
-        isVendor: false,
-        isApplicant: true,
+        user: { id: 1, capabilities: {} },
+        hasCapability: () => false,
       })
 
       renderWithoutRouter(
@@ -215,7 +176,7 @@ describe('ProtectedRoute', () => {
             <Route
               path="/admin"
               element={
-                <ProtectedRoute allowedTypes={['administrator']}>
+                <ProtectedRoute requiredCapabilities={['admin:platform']}>
                   <TestComponent />
                 </ProtectedRoute>
               }
@@ -228,15 +189,12 @@ describe('ProtectedRoute', () => {
       expect(screen.queryByText('Protected Content')).not.toBeInTheDocument()
     })
 
-    it('should allow access when user matches any of multiple allowedTypes', () => {
+    it('should allow access when user matches any required capability', () => {
       mockUseAuth.mockReturnValue({
         isLoading: false,
         isAuthenticated: true,
-        user: { id: 1, user_type: 'vendor' },
-        checkingOnboarding: false,
-        isAdministrator: false,
-        isVendor: true,
-        isApplicant: false,
+        user: { id: 1, capabilities: { 'org:view': true } },
+        hasCapability: (capability: string) => capability === 'org:view',
       })
 
       renderWithoutRouter(
@@ -245,7 +203,7 @@ describe('ProtectedRoute', () => {
             <Route
               path="/dashboard"
               element={
-                <ProtectedRoute allowedTypes={['administrator', 'vendor']}>
+                <ProtectedRoute requiredCapabilities={['admin:platform', 'org:view']}>
                   <TestComponent />
                 </ProtectedRoute>
               }
@@ -257,15 +215,43 @@ describe('ProtectedRoute', () => {
       expect(screen.getByText('Protected Content')).toBeInTheDocument()
     })
 
+    it('should require all capabilities when configured', () => {
+      mockUseAuth.mockReturnValue({
+        isLoading: false,
+        isAuthenticated: true,
+        user: { id: 1, capabilities: { 'org:view': true } },
+        hasCapability: (capability: string) => capability === 'org:view',
+      })
+
+      renderWithoutRouter(
+        <MemoryRouter initialEntries={['/dashboard']}>
+          <Routes>
+            <Route path="/" element={<HomeComponent />} />
+            <Route
+              path="/dashboard"
+              element={
+                <ProtectedRoute
+                  requiredCapabilities={['admin:platform', 'org:view']}
+                  requireAllCapabilities
+                >
+                  <TestComponent />
+                </ProtectedRoute>
+              }
+            />
+          </Routes>
+        </MemoryRouter>
+      )
+
+      expect(screen.getByText('Home Page')).toBeInTheDocument()
+      expect(screen.queryByText('Protected Content')).not.toBeInTheDocument()
+    })
+
     it('should use custom unauthorizedRedirect', () => {
       mockUseAuth.mockReturnValue({
         isLoading: false,
         isAuthenticated: true,
-        user: { id: 1, user_type: 'applicant' },
-        checkingOnboarding: false,
-        isAdministrator: false,
-        isVendor: false,
-        isApplicant: true,
+        user: { id: 1, capabilities: {} },
+        hasCapability: () => false,
       })
 
       const AccessDenied = () => <div>Access Denied</div>
@@ -278,7 +264,7 @@ describe('ProtectedRoute', () => {
               path="/admin"
               element={
                 <ProtectedRoute
-                  allowedTypes={['administrator']}
+                  requiredCapabilities={['admin:platform']}
                   unauthorizedRedirect="/access-denied"
                 >
                   <TestComponent />
@@ -298,11 +284,8 @@ describe('ProtectedRoute', () => {
       mockUseAuth.mockReturnValue({
         isLoading: false,
         isAuthenticated: true,
-        user: { id: 1, user_type: 'administrator' },
-        checkingOnboarding: false,
-        isAdministrator: true,
-        isVendor: false,
-        isApplicant: false,
+        user: { id: 1, capabilities: { 'admin:platform': true } },
+        hasCapability: (capability: string) => capability === 'admin:platform',
       })
 
       renderWithoutRouter(
@@ -327,11 +310,8 @@ describe('ProtectedRoute', () => {
       mockUseAuth.mockReturnValue({
         isLoading: false,
         isAuthenticated: true,
-        user: { id: 1, user_type: 'vendor' },
-        checkingOnboarding: false,
-        isAdministrator: false,
-        isVendor: true,
-        isApplicant: false,
+        user: { id: 1, capabilities: { 'org:view': true } },
+        hasCapability: (capability: string) => capability === 'org:view',
       })
 
       renderWithoutRouter(
@@ -359,18 +339,15 @@ describe('ProtectedRoute', () => {
       mockUseAuth.mockReturnValue({
         isLoading: false,
         isAuthenticated: true,
-        user: { id: 1, user_type: 'vendor', needsOnboarding: false },
-        checkingOnboarding: false,
-        isAdministrator: false,
-        isVendor: true,
-        isApplicant: false,
+        user: { id: 1, capabilities: { 'org:view': true } },
+        hasCapability: (capability: string) => capability === 'org:view',
       })
 
       renderWithoutRouter(
-        <MemoryRouter initialEntries={['/vendor']}>
+        <MemoryRouter initialEntries={['/console']}>
           <Routes>
             <Route
-              path="/vendor"
+              path="/console"
               element={
                 <VendorRoute>
                   <TestComponent />
@@ -384,56 +361,20 @@ describe('ProtectedRoute', () => {
       expect(screen.getByText('Protected Content')).toBeInTheDocument()
     })
 
-    it('should redirect to onboarding if vendor needs onboarding', () => {
+    it('should deny users without org visibility capability', () => {
       mockUseAuth.mockReturnValue({
         isLoading: false,
         isAuthenticated: true,
-        user: { id: 1, user_type: 'vendor', needsOnboarding: true },
-        checkingOnboarding: false,
-        isAdministrator: false,
-        isVendor: true,
-        isApplicant: false,
-      })
-
-      const OnboardingPage = () => <div>Onboarding Page</div>
-
-      renderWithoutRouter(
-        <MemoryRouter initialEntries={['/vendor']}>
-          <Routes>
-            <Route path="/onboarding" element={<OnboardingPage />} />
-            <Route
-              path="/vendor"
-              element={
-                <VendorRoute>
-                  <TestComponent />
-                </VendorRoute>
-              }
-            />
-          </Routes>
-        </MemoryRouter>
-      )
-
-      expect(screen.getByText('Onboarding Page')).toBeInTheDocument()
-      expect(screen.queryByText('Protected Content')).not.toBeInTheDocument()
-    })
-
-    it('should deny non-vendors', () => {
-      mockUseAuth.mockReturnValue({
-        isLoading: false,
-        isAuthenticated: true,
-        user: { id: 1, user_type: 'applicant' },
-        checkingOnboarding: false,
-        isAdministrator: false,
-        isVendor: false,
-        isApplicant: true,
+        user: { id: 1, capabilities: {} },
+        hasCapability: () => false,
       })
 
       renderWithoutRouter(
-        <MemoryRouter initialEntries={['/vendor']}>
+        <MemoryRouter initialEntries={['/console']}>
           <Routes>
             <Route path="/" element={<HomeComponent />} />
             <Route
-              path="/vendor"
+              path="/console"
               element={
                 <VendorRoute>
                   <TestComponent />
@@ -445,19 +386,17 @@ describe('ProtectedRoute', () => {
       )
 
       expect(screen.getByText('Home Page')).toBeInTheDocument()
+      expect(screen.queryByText('Protected Content')).not.toBeInTheDocument()
     })
   })
 
   describe('ApplicantRoute', () => {
-    it('should allow applicants', () => {
+    it('should allow any authenticated user', () => {
       mockUseAuth.mockReturnValue({
         isLoading: false,
         isAuthenticated: true,
-        user: { id: 1, user_type: 'applicant', needsOnboarding: false },
-        checkingOnboarding: false,
-        isAdministrator: false,
-        isVendor: false,
-        isApplicant: true,
+        user: { id: 1, capabilities: {} },
+        hasCapability: () => false,
       })
 
       renderWithoutRouter(
@@ -478,23 +417,18 @@ describe('ProtectedRoute', () => {
       expect(screen.getByText('Protected Content')).toBeInTheDocument()
     })
 
-    it('should redirect to onboarding if applicant needs onboarding', () => {
+    it('should redirect unauthenticated users to login', () => {
       mockUseAuth.mockReturnValue({
         isLoading: false,
-        isAuthenticated: true,
-        user: { id: 1, user_type: 'applicant', needsOnboarding: true },
-        checkingOnboarding: false,
-        isAdministrator: false,
-        isVendor: false,
-        isApplicant: true,
+        isAuthenticated: false,
+        user: null,
+        hasCapability: () => false,
       })
-
-      const OnboardingPage = () => <div>Onboarding Page</div>
 
       renderWithoutRouter(
         <MemoryRouter initialEntries={['/applicant']}>
           <Routes>
-            <Route path="/onboarding" element={<OnboardingPage />} />
+            <Route path="/login" element={<LoginComponent />} />
             <Route
               path="/applicant"
               element={
@@ -507,37 +441,7 @@ describe('ProtectedRoute', () => {
         </MemoryRouter>
       )
 
-      expect(screen.getByText('Onboarding Page')).toBeInTheDocument()
-    })
-
-    it('should deny non-applicants', () => {
-      mockUseAuth.mockReturnValue({
-        isLoading: false,
-        isAuthenticated: true,
-        user: { id: 1, user_type: 'administrator' },
-        checkingOnboarding: false,
-        isAdministrator: true,
-        isVendor: false,
-        isApplicant: false,
-      })
-
-      renderWithoutRouter(
-        <MemoryRouter initialEntries={['/applicant']}>
-          <Routes>
-            <Route path="/" element={<HomeComponent />} />
-            <Route
-              path="/applicant"
-              element={
-                <ApplicantRoute>
-                  <TestComponent />
-                </ApplicantRoute>
-              }
-            />
-          </Routes>
-        </MemoryRouter>
-      )
-
-      expect(screen.getByText('Home Page')).toBeInTheDocument()
+      expect(screen.getByText('Login Page')).toBeInTheDocument()
     })
   })
 })

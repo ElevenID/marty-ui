@@ -1,0 +1,460 @@
+# Marty UI Unified Base Stack
+# ===========================
+# Single base compose file for infra + microservices.
+# Mode-specific behavior is layered via profile compose files.
+
+services:
+  # ==========================================================================
+  # Infrastructure
+  # ==========================================================================
+  postgres:
+    image: postgres:15-alpine
+    container_name: marty-postgres
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_DB: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      KEYCLOAK_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:-keycloak}
+      MARTY_DB_PASSWORD: ${MARTY_DB_PASSWORD:-marty_dev_password}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/init-databases.sh:/docker-entrypoint-initdb.d/init-databases.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres && pg_isready -U keycloak -d keycloak && pg_isready -U marty -d marty"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - marty-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: marty-redis
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes --maxmemory 128mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - marty-network
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:25.0
+    container_name: marty-keycloak
+    command:
+      - start-dev
+      - --import-realm
+    ports:
+      - "8180:8080"
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:-keycloak}
+      KC_HOSTNAME: ${KC_HOSTNAME:-localhost}
+      KC_HOSTNAME_PORT: ${KC_HOSTNAME_PORT:-8180}
+      KC_HOSTNAME_STRICT: "false"
+      KC_HTTP_ENABLED: "true"
+      PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:-localhost}
+      UI_BASE_URL: ${UI_BASE_URL:-http://localhost:3000}
+      KEYCLOAK_REALM: ${KEYCLOAK_REALM:-11id}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./config/keycloak:/opt/keycloak/data/import:ro
+      - ./config/keycloak/themes:/opt/keycloak/themes:ro
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/8080 && echo -e 'GET /realms/${KEYCLOAK_REALM:-11id}/.well-known/openid-configuration HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && cat <&3 | grep -q '200 OK'"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 60s
+    networks:
+      - marty-network
+
+  mailhog:
+    image: mailhog/mailhog:latest
+    container_name: marty-mailhog
+    ports:
+      - "9025:8025"
+      - "2025:1025"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8025"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - marty-network
+
+  rabbitmq:
+    image: rabbitmq:3.12-management-alpine
+    container_name: marty-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: marty
+      RABBITMQ_DEFAULT_PASS: marty_dev_password
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "check_port_connectivity"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+    networks:
+      - marty-network
+
+  # ==========================================================================
+  # Database Migrations
+  # ==========================================================================
+  db-migrate:
+    build:
+      context: ..
+      dockerfile: marty-ui/services/Dockerfile.migrations
+    container_name: marty-db-migrate
+    environment:
+      DATABASE_URL: postgresql://marty:marty_dev_password@postgres:5432/marty
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+    networks:
+      - marty-network
+
+  # ==========================================================================
+  # Application Services
+  # ==========================================================================
+  gateway:
+    build:
+      context: ..
+      dockerfile: marty-ui/services/Dockerfile
+      args:
+        SERVICE_NAME: gateway
+    container_name: marty-gateway
+    environment:
+      GATEWAY_PORT: "8000"
+      AUTH_SERVICE_URL: http://auth:8001
+      ORGANIZATION_SERVICE_URL: http://organization:8002
+      CREDENTIAL_TEMPLATE_SERVICE_URL: http://credential-template:8003
+      TRUST_PROFILE_SERVICE_URL: http://trust-profile:8004
+      APPLICANT_SERVICE_URL: http://applicant:8006
+      NOTIFICATION_SERVICE_URL: http://notification:8007
+      COMPLIANCE_PROFILE_SERVICE_URL: http://compliance-profile:8008
+      PRESENTATION_POLICY_SERVICE_URL: http://presentation-policy:8009
+      DEPLOYMENT_PROFILE_SERVICE_URL: http://deployment-profile:8010
+      FLOW_SERVICE_URL: http://flow:8011
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://localhost:5173}
+    ports:
+      - "8000:8000"
+    depends_on:
+      auth:
+        condition: service_healthy
+      organization:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - marty-network
+
+  auth:
+    build:
+      context: ..
+      dockerfile: marty-ui/services/Dockerfile
+      args:
+        SERVICE_NAME: auth
+    container_name: marty-auth
+    environment:
+      AUTH_SERVICE_PORT: "8001"
+      UI_BASE_URL: ${UI_BASE_URL:-http://localhost:9080}
+      REDIS_URL: redis://redis:6379/0
+      RABBITMQ_URL: amqp://marty:marty_dev_password@rabbitmq:5672/
+      OIDC_ISSUER_URL: ${OIDC_ISSUER_URL_INTERNAL:-http://keycloak:8080/realms/${KEYCLOAK_REALM:-11id}}
+      OIDC_EXTERNAL_ISSUER_URL: ${OIDC_ISSUER_URL_EXTERNAL:-http://localhost:8180/realms/${KEYCLOAK_REALM:-11id}}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-marty-ui}
+      OIDC_REDIRECT_URI: ${OIDC_REDIRECT_URI:-http://localhost:9080/v1/auth/callback}
+      OIDC_POST_LOGOUT_REDIRECT_URI: ${OIDC_POST_LOGOUT_REDIRECT_URI:-http://localhost:9080/}
+      SESSION_TTL_SECONDS: "86400"
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+    ports:
+      - "8001:8001"
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - marty-network
+
+  organization:
+    build:
+      context: ..
+      dockerfile: marty-ui/services/Dockerfile
+      args:
+        SERVICE_NAME: organization
+    container_name: marty-organization
+    environment:
+      ORGANIZATION_SERVICE_PORT: "8002"
+      DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@postgres:5432/marty
+      RABBITMQ_URL: amqp://marty:marty_dev_password@rabbitmq:5672/
+    ports:
+      - "8002:8002"
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - marty-network
+
+  credential-template:
+    build:
+      context: ..
+      dockerfile: marty-ui/services/Dockerfile
+      args:
+        SERVICE_NAME: credential-template
+    container_name: marty-credential-template
+    environment:
+      CREDENTIAL_TEMPLATE_SERVICE_PORT: "8003"
+      DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@postgres:5432/marty
+      RABBITMQ_URL: amqp://marty:marty_dev_password@rabbitmq:5672/
+    ports:
+      - "8003:8003"
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - marty-network
+
+  trust-profile:
+    build:
+      context: ..
+      dockerfile: marty-ui/services/Dockerfile
+      args:
+        SERVICE_NAME: trust-profile
+    container_name: marty-trust-profile
+    environment:
+      TRUST_PROFILE_SERVICE_PORT: "8004"
+      DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@postgres:5432/marty
+      RABBITMQ_URL: amqp://marty:marty_dev_password@rabbitmq:5672/
+    ports:
+      - "8004:8004"
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8004/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - marty-network
+
+  applicant:
+    build:
+      context: ..
+      dockerfile: marty-ui/services/Dockerfile
+      args:
+        SERVICE_NAME: applicant
+    container_name: marty-applicant
+    environment:
+      APPLICANT_SERVICE_PORT: "8006"
+      DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@postgres:5432/marty
+      RABBITMQ_URL: amqp://marty:marty_dev_password@rabbitmq:5672/
+      APPLICANT_DATA_FILE: /app/data/applicant_store.json
+    ports:
+      - "8006:8006"
+    volumes:
+      - applicant_data:/app/data
+    user: "0:0"
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8006/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - marty-network
+
+  notification:
+    build:
+      context: ..
+      dockerfile: marty-ui/services/Dockerfile
+      args:
+        SERVICE_NAME: notification
+    container_name: marty-notification
+    environment:
+      NOTIFICATION_SERVICE_PORT: "8007"
+      DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@postgres:5432/marty
+      RABBITMQ_URL: amqp://marty:marty_dev_password@rabbitmq:5672/
+      SMTP_HOST: mailhog
+      SMTP_PORT: "1025"
+    ports:
+      - "8007:8007"
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+      mailhog:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8007/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - marty-network
+
+  compliance-profile:
+    build:
+      context: ..
+      dockerfile: marty-ui/services/Dockerfile
+      args:
+        SERVICE_NAME: compliance-profile
+    container_name: marty-compliance-profile
+    environment:
+      COMPLIANCE_PROFILE_SERVICE_PORT: "8008"
+      DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@postgres:5432/marty
+      RABBITMQ_URL: amqp://marty:marty_dev_password@rabbitmq:5672/
+    ports:
+      - "8008:8008"
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8008/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - marty-network
+
+  presentation-policy:
+    build:
+      context: ..
+      dockerfile: marty-ui/services/Dockerfile
+      args:
+        SERVICE_NAME: presentation-policy
+    container_name: marty-presentation-policy
+    environment:
+      PRESENTATION_POLICY_SERVICE_PORT: "8009"
+      DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@postgres:5432/marty
+      RABBITMQ_URL: amqp://marty:marty_dev_password@rabbitmq:5672/
+    ports:
+      - "8009:8009"
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8009/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - marty-network
+
+  deployment-profile:
+    build:
+      context: ..
+      dockerfile: marty-ui/services/Dockerfile
+      args:
+        SERVICE_NAME: deployment-profile
+    container_name: marty-deployment-profile
+    environment:
+      DEPLOYMENT_PROFILE_SERVICE_PORT: "8010"
+      DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@postgres:5432/marty
+      RABBITMQ_URL: amqp://marty:marty_dev_password@rabbitmq:5672/
+    ports:
+      - "8010:8010"
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8010/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - marty-network
+
+  flow:
+    build:
+      context: ..
+      dockerfile: marty-ui/services/Dockerfile
+      args:
+        SERVICE_NAME: flow
+    container_name: marty-flow
+    environment:
+      FLOW_SERVICE_PORT: "8011"
+      DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@postgres:5432/marty
+      RABBITMQ_URL: amqp://marty:marty_dev_password@rabbitmq:5672/
+    ports:
+      - "8011:8011"
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8011/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - marty-network
+
+volumes:
+  postgres_data:
+  redis_data:
+  rabbitmq_data:
+  applicant_data:
+
+networks:
+  marty-network:
+    name: marty-infra-network

@@ -25,9 +25,19 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, AsyncGenerator
 
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query
+from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from typing import Annotated
+
+from marty_common import (
+    OrganizationClient,
+    OrganizationContext,
+    require_org_admin,
+    require_org_membership,
+)
+from marty_common.org_authorization import get_organization_client
+from marty_common.middleware import RequestIdMiddleware, RequestLoggingMiddleware
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -384,12 +394,25 @@ def get_repo() -> InMemoryDeploymentProfileRepository:
     return _repo
 
 
+def get_current_user_id(x_user_id: Annotated[str, Header()]) -> str:
+    """Extract user ID from X-User-Id header (injected by gateway)."""
+    return x_user_id
+
+
 @router.post("", response_model=DeploymentProfileResponse)
 async def create_deployment_profile(
     request: CreateDeploymentProfileRequest,
+    fastapi_request: Request,
+    user_id: str = Depends(get_current_user_id),
     repo: InMemoryDeploymentProfileRepository = Depends(get_repo),
 ) -> DeploymentProfileResponse:
     """Create a new Deployment Profile."""
+    # Verify org membership
+    org_client = await get_organization_client(fastapi_request)
+    membership = await org_client.get_membership(user_id, request.organization_id)
+    if not membership or not membership.is_active():
+        raise HTTPException(status_code=403, detail="Not a member of this organization")
+    
     profile = DeploymentProfile(
         organization_id=request.organization_id,
         name=request.name,
@@ -472,9 +495,12 @@ async def create_deployment_profile(
 @router.get("", response_model=list[DeploymentProfileResponse])
 async def list_deployment_profiles(
     organization_id: str = Query(..., description="Organization ID"),
+    user_id: str = Depends(get_current_user_id),
     repo: InMemoryDeploymentProfileRepository = Depends(get_repo),
 ) -> list[DeploymentProfileResponse]:
     """List Deployment Profiles for an organization."""
+    # Verify org membership
+    await app.state.org_client.get_membership(user_id, organization_id)
     profiles = await repo.list(organization_id)
     return [_profile_to_response(p) for p in profiles]
 
@@ -482,12 +508,15 @@ async def list_deployment_profiles(
 @router.get("/{profile_id}", response_model=DeploymentProfileResponse)
 async def get_deployment_profile(
     profile_id: str,
+    user_id: str = Depends(get_current_user_id),
     repo: InMemoryDeploymentProfileRepository = Depends(get_repo),
 ) -> DeploymentProfileResponse:
     """Get a Deployment Profile by ID."""
     profile = await repo.get(profile_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Deployment Profile not found")
+    # Verify org membership
+    await app.state.org_client.get_membership(user_id, profile.organization_id)
     return _profile_to_response(profile)
 
 
@@ -495,12 +524,18 @@ async def get_deployment_profile(
 async def update_deployment_profile(
     profile_id: str,
     request: UpdateDeploymentProfileRequest,
+    user_id: str = Depends(get_current_user_id),
     repo: InMemoryDeploymentProfileRepository = Depends(get_repo),
 ) -> DeploymentProfileResponse:
-    """Update a Deployment Profile."""
+    """Update a Deployment Profile (requires admin)."""
     profile = await repo.get(profile_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Deployment Profile not found")
+    
+    # Verify admin access
+    membership = await app.state.org_client.get_membership(user_id, profile.organization_id)
+    if not membership.has_role("admin", "owner"):
+        raise HTTPException(status_code=403, detail="Admin access required")
     
     if request.name is not None:
         profile.name = request.name
@@ -519,12 +554,18 @@ async def update_deployment_profile(
 @router.post("/{profile_id}/activate", response_model=DeploymentProfileResponse)
 async def activate_deployment_profile(
     profile_id: str,
+    user_id: str = Depends(get_current_user_id),
     repo: InMemoryDeploymentProfileRepository = Depends(get_repo),
 ) -> DeploymentProfileResponse:
-    """Activate a Deployment Profile."""
+    """Activate a Deployment Profile (requires admin)."""
     profile = await repo.get(profile_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Deployment Profile not found")
+    
+    # Verify admin access
+    membership = await app.state.org_client.get_membership(user_id, profile.organization_id)
+    if not membership.has_role("admin", "owner"):
+        raise HTTPException(status_code=403, detail="Admin access required")
     profile.activate()
     await repo.save(profile)
     return _profile_to_response(profile)
@@ -533,12 +574,18 @@ async def activate_deployment_profile(
 @router.post("/{profile_id}/suspend", response_model=DeploymentProfileResponse)
 async def suspend_deployment_profile(
     profile_id: str,
+    user_id: str = Depends(get_current_user_id),
     repo: InMemoryDeploymentProfileRepository = Depends(get_repo),
 ) -> DeploymentProfileResponse:
-    """Suspend a Deployment Profile."""
+    """Suspend a Deployment Profile (requires admin)."""
     profile = await repo.get(profile_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Deployment Profile not found")
+    
+    # Verify admin access
+    membership = await app.state.org_client.get_membership(user_id, profile.organization_id)
+    if not membership.has_role("admin", "owner"):
+        raise HTTPException(status_code=403, detail="Admin access required")
     profile.suspend()
     await repo.save(profile)
     return _profile_to_response(profile)
@@ -547,12 +594,18 @@ async def suspend_deployment_profile(
 @router.post("/{profile_id}/generate-api-key", response_model=ApiKeyResponse)
 async def generate_api_key(
     profile_id: str,
+    user_id: str = Depends(get_current_user_id),
     repo: InMemoryDeploymentProfileRepository = Depends(get_repo),
 ) -> ApiKeyResponse:
-    """Generate a new API key for the Deployment Profile."""
+    """Generate a new API key for the Deployment Profile (requires admin)."""
     profile = await repo.get(profile_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Deployment Profile not found")
+    
+    # Verify admin access
+    membership = await app.state.org_client.get_membership(user_id, profile.organization_id)
+    if not membership.has_role("admin", "owner"):
+        raise HTTPException(status_code=403, detail="Admin access required")
     
     api_key = profile.generate_api_key()
     await repo.save(profile)
@@ -567,11 +620,20 @@ async def generate_api_key(
 @router.delete("/{profile_id}")
 async def delete_deployment_profile(
     profile_id: str,
+    user_id: str = Depends(get_current_user_id),
     repo: InMemoryDeploymentProfileRepository = Depends(get_repo),
 ) -> dict:
-    """Delete a Deployment Profile."""
+    """Delete a Deployment Profile (requires admin)."""
     profile = await repo.get(profile_id)
-    if profile and profile.status == ProfileStatus.ACTIVE:
+    if not profile:
+        raise HTTPException(status_code=404, detail="Deployment Profile not found")
+    
+    # Verify admin access
+    membership = await app.state.org_client.get_membership(user_id, profile.organization_id)
+    if not membership.has_role("admin", "owner"):
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    if profile.status == ProfileStatus.ACTIVE:
         raise HTTPException(
             status_code=400,
             detail="Cannot delete an active profile. Suspend it first."
@@ -639,6 +701,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     global _repo
     logger.info(f"Starting {SERVICE_NAME}...")
     _repo = InMemoryDeploymentProfileRepository()
+    
+    # Initialize OrganizationClient
+    org_service_url = os.environ.get("ORGANIZATION_SERVICE_URL", "http://organization:8002")
+    app.state.org_client = OrganizationClient(
+        base_url=org_service_url,
+        redis_client=None,
+    )
+    
     yield
     logger.info(f"Shutting down {SERVICE_NAME}...")
 
@@ -651,6 +721,8 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
     
+    app.add_middleware(RequestLoggingMiddleware)
+    app.add_middleware(RequestIdMiddleware)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],

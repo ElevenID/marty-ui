@@ -209,23 +209,13 @@ const OnboardingPage = () => {
 
       const data = await response.json();
 
-      if (!data.needs_onboarding) {
-        if (data.user_type === 'vendor') {
-          navigate('/vendor');
-        } else if (data.user_type === 'administrator') {
-          navigate('/admin');
-        } else {
-          navigate('/credentials');
-        }
-        return;
-      }
+      const capabilities = user?.capabilities || {};
+      const hasOrgCapability = Boolean(
+        capabilities['org:view'] || capabilities['org:manage'] || capabilities['org:issue']
+      );
 
-      const resolvedUserType = data.user_type || user?.user_type || null;
-      if (resolvedUserType) {
-        setUserType(resolvedUserType);
-      }
-
-      if (resolvedUserType === 'vendor') {
+      if (hasOrgCapability) {
+        setUserType('vendor');
         setRoleLocked(true);
         if (data.organization_id) {
           const existing = {
@@ -450,7 +440,6 @@ const OnboardingPage = () => {
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify({
-          user_type: 'applicant',
           organization_id: org.id,
           confirm_organization: true,
         }),
@@ -489,7 +478,6 @@ const OnboardingPage = () => {
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify({
-          user_type: 'applicant',
           organization_id: selectedOrgForConfirm?.id || null,
           wallet_paired: withWallet,
           device_id: pairedDeviceId,
@@ -619,7 +607,6 @@ const OnboardingPage = () => {
 
     try {
       const payload = {
-        user_type: 'vendor',
         is_discoverable: isDiscoverable,
         membership_mode: membershipMode,
         trust_framework_codes: trustProfile, // Send array of codes
@@ -761,7 +748,7 @@ const OnboardingPage = () => {
       // Refresh user and redirect
       await refreshUser();
       setTimeout(() => {
-        navigate('/vendor');
+        navigate('/console');
       }, 5000);
     } catch (err) {
       setError(err.message);
@@ -776,7 +763,7 @@ const OnboardingPage = () => {
     // Still refresh user and redirect
     await refreshUser();
     setTimeout(() => {
-      navigate('/vendor');
+      navigate('/console');
     }, 5000);
   };
 

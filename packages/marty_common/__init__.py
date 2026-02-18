@@ -12,6 +12,7 @@ Contents:
 - middleware: Request ID injection, logging middleware
 - dto: Common API response DTOs
 - events: Domain event base classes and messaging utilities
+- org_authorization: Organization-scoped authorization dependencies
 """
 
 from .value_objects import UserId, OrganizationId, Email
@@ -25,6 +26,16 @@ from .errors import (
     RateLimitError,
 )
 from .dto import ApiResponse, PaginatedResponse, ErrorResponse
+from .org_authorization import (
+    OrgRole,
+    OrganizationMembership,
+    OrganizationContext,
+    OrganizationClient,
+    require_org_membership,
+    require_org_role,
+    require_org_admin,
+    require_org_owner,
+)
 
 __all__ = [
     # Value Objects
@@ -43,4 +54,13 @@ __all__ = [
     "ApiResponse",
     "PaginatedResponse",
     "ErrorResponse",
+    # Organization Authorization
+    "OrgRole",
+    "OrganizationMembership",
+    "OrganizationContext",
+    "OrganizationClient",
+    "require_org_membership",
+    "require_org_role",
+    "require_org_admin",
+    "require_org_owner",
 ]

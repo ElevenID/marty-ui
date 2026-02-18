@@ -1,7 +1,7 @@
 /**
  * Navigation Configuration
  * 
- * Defines role-based navigation structures for the ElevenID Identity Management UI.
+ * Defines role-based navigation structures for the ElevenID LLC Identity Management UI.
  * Following the resource-based "Configure + Operate + Monitor" model.
  */
 
@@ -17,7 +17,6 @@ import HistoryIcon from '@mui/icons-material/History';
 import BadgeIcon from '@mui/icons-material/Badge';
 import FolderSharedIcon from '@mui/icons-material/FolderShared';
 import StorefrontIcon from '@mui/icons-material/Storefront';
-import PersonIcon from '@mui/icons-material/Person';
 import SettingsIcon from '@mui/icons-material/Settings';
 import DesignServicesIcon from '@mui/icons-material/DesignServices';
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
@@ -36,25 +35,25 @@ export const ADMIN_VENDOR_NAV = [
   {
     id: 'dashboard',
     label: 'Dashboard',
-    path: '/console',
+    path: '/console/org',
     icon: DashboardIcon,
     exact: true,
   },
   {
     id: 'design',
     label: 'Design',
-    path: '/console/design',
+    path: '/console/org/design',
     icon: DesignServicesIcon,
     description: 'Trust Profiles, Credential Templates, Application Rules, Compliance',
     children: [
-      { id: 'trust-profiles', label: 'Trust Profiles', path: '/console/trust/profiles' },
+      { id: 'trust-profiles', label: 'Trust Profiles', path: '/console/org/trust/profiles' },
       { 
         id: 'credential-templates', 
         label: 'Credential Templates', 
-        path: '/console/templates/credentials',
+        path: '/console/org/templates/credentials',
         children: [
-          { id: 'application-templates', label: 'Application Rules', path: '/console/templates/applications' },
-          { id: 'compliance-profiles', label: 'Compliance Profiles', path: '/console/policies/compliance' },
+          { id: 'application-templates', label: 'Application Rules', path: '/console/org/templates/applications' },
+          { id: 'compliance-profiles', label: 'Compliance Profiles', path: '/console/org/policies/compliance' },
         ],
       },
     ],
@@ -62,31 +61,31 @@ export const ADMIN_VENDOR_NAV = [
   {
     id: 'deploy',
     label: 'Deploy',
-    path: '/console/deploy',
+    path: '/console/org/deploy',
     icon: CloudUploadIcon,
     description: 'Issuance Flows, Deployment Profiles, Signing Keys',
     children: [
       { 
         id: 'issuance-flows', 
         label: 'Issuance Flows', 
-        path: '/console/flows/definitions', 
+        path: '/console/org/flows/definitions', 
         primary: true,
         icon: AccountTreeIcon,
       },
-      { id: 'deployment-profiles', label: 'Deployment Profiles', path: '/console/deploy/profiles' },
-      { id: 'signing-keys', label: 'Signing Keys', path: '/console/deploy/signing-keys' },
+      { id: 'deployment-profiles', label: 'Deployment Profiles', path: '/console/org/deploy/profiles' },
+      { id: 'signing-keys', label: 'Signing Keys', path: '/console/org/deploy/signing-keys' },
     ],
   },
   {
     id: 'operate',
     label: 'Operate',
-    path: '/console/operate',
+    path: '/console/org/operate',
     icon: PlayArrowIcon,
     description: 'Applications, Issued Credentials, Flow Instances',
     children: [
-      { id: 'applications', label: 'Applicant Submissions', path: '/console/operate/applications', badge: true },
-      { id: 'issued-credentials', label: 'Issued Credentials', path: '/console/operate/issuance' },
-      { id: 'flow-instances', label: 'Flow Instances', path: '/console/operate/flow-instances' },
+      { id: 'applications', label: 'Applicant Submissions', path: '/console/org/operate/applications', badge: true },
+      { id: 'issued-credentials', label: 'Issued Credentials', path: '/console/org/operate/issuance' },
+      { id: 'flow-instances', label: 'Flow Instances', path: '/console/org/operate/flow-instances' },
     ],
   },
   {
@@ -94,17 +93,18 @@ export const ADMIN_VENDOR_NAV = [
     label: 'Org',
     path: '/console/org',
     icon: BusinessIcon,
-    description: 'Organization, Team, Notifications',
+    description: 'Organization, Team, Roles, Notifications',
     children: [
       { id: 'organization', label: 'Organization', path: '/console/org/settings' },
-      { id: 'team', label: 'Team', path: '/console/org/team' },
+      { id: 'team', label: 'Team', path: '/console/org/team', requiredPermission: { resource: 'team', action: 'view' } },
+      { id: 'roles', label: 'Roles', path: '/console/org/roles', requiredPermission: { resource: 'role', action: 'view' } },
       { id: 'notifications', label: 'Notifications', path: '/console/org/notifications' },
     ],
   },
   {
     id: 'audit',
     label: 'Audit',
-    path: '/console/audit',
+    path: '/console/org/audit',
     icon: HistoryIcon,
     description: 'Audit Events',
     exact: true,
@@ -119,29 +119,22 @@ export const APPLICANT_NAV = [
   {
     id: 'my-credentials',
     label: 'My Credentials',
-    path: '/credentials',
+    path: '/console/applicant/credentials',
     icon: BadgeIcon,
     exact: true,
   },
   {
     id: 'my-applications',
     label: 'My Applications',
-    path: '/my-applications',
+    path: '/console/applicant/applications',
     icon: FolderSharedIcon,
     exact: true,
   },
   {
     id: 'catalog',
     label: 'Catalog',
-    path: '/catalog',
+    path: '/console/applicant/catalog',
     icon: StorefrontIcon,
-    exact: true,
-  },
-  {
-    id: 'profile',
-    label: 'Profile',
-    path: '/profile',
-    icon: PersonIcon,
     exact: true,
   },
 ];
@@ -167,15 +160,15 @@ export const PUBLIC_NAV = [
  */
 export const DASHBOARD_QUICK_ACTIONS = {
   adminVendor: [
-    { id: 'create-flow', label: 'Create Issuance Flow', path: '/console/flows/definitions/new', icon: AccountTreeIcon, primary: true },
-    { id: 'create-trust-profile', label: 'Create Trust Profile', path: '/console/trust/profiles/new', icon: VerifiedUserIcon },
-    { id: 'create-template', label: 'Create Credential Template', path: '/console/templates/credentials/new', icon: DescriptionIcon },
-    { id: 'create-policy', label: 'Create Compliance Profile', path: '/console/policies/compliance/new', icon: PolicyIcon },
-    { id: 'generate-signing-key', label: 'Generate Signing Key', path: '/console/deploy/signing-keys/new', icon: CloudUploadIcon },
+    { id: 'create-flow', label: 'Create Issuance Flow', path: '/console/org/flows/definitions/new', icon: AccountTreeIcon, primary: true },
+    { id: 'create-trust-profile', label: 'Create Trust Profile', path: '/console/org/trust/profiles/new', icon: VerifiedUserIcon },
+    { id: 'create-template', label: 'Create Credential Template', path: '/console/org/templates/credentials/new', icon: DescriptionIcon },
+    { id: 'create-policy', label: 'Create Compliance Profile', path: '/console/org/policies/compliance/new', icon: PolicyIcon },
+    { id: 'generate-signing-key', label: 'Generate Signing Key', path: '/console/org/deploy/signing-keys/new', icon: CloudUploadIcon },
   ],
   applicant: [
-    { id: 'browse-catalog', label: 'Browse Credentials', path: '/catalog', icon: StorefrontIcon },
-    { id: 'view-applications', label: 'View Applications', path: '/my-applications', icon: FolderSharedIcon },
+    { id: 'browse-catalog', label: 'Browse Credentials', path: '/console/applicant/catalog', icon: StorefrontIcon },
+    { id: 'view-applications', label: 'View Applications', path: '/console/applicant/applications', icon: FolderSharedIcon },
   ],
 };
 

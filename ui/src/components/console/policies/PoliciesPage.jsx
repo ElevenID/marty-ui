@@ -8,7 +8,7 @@
 import { Navigate } from 'react-router-dom';
 
 function PoliciesPage() {
-  return <Navigate to="/console/policies/presentation" replace />;
+  return <Navigate to="/console/org/policies/presentation" replace />;
 }
 
 export default PoliciesPage;

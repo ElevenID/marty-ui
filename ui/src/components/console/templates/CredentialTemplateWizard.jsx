@@ -31,12 +31,14 @@ import ClaimsStep from './steps/ClaimsStep';
 import TrustComplianceStep from './steps/TrustComplianceStep';
 import CryptoValidityStep from './steps/CryptoValidityStep';
 import ReviewStep from './steps/ReviewStep';
+import WalletCompatibilityStep from './steps/WalletCompatibilityStep';
 
 const getSteps = (t) => [
   t('wizards.credentialTemplate.steps.basics'),
   t('wizards.credentialTemplate.steps.claims'),
   t('wizards.credentialTemplate.steps.trustCompliance'),
   t('wizards.credentialTemplate.steps.cryptoValidity'),
+  t('wizards.credentialTemplate.steps.walletCompatibility', 'Wallet Compatibility'),
   t('wizards.credentialTemplate.steps.review'),
 ];
 
@@ -58,7 +60,9 @@ const CredentialTemplateWizard = () => {
         return data.trust_profile_id !== null;
       case 3: // Crypto & Validity (optional)
         return true;
-      case 4: // Review
+      case 4: // Wallet Compatibility (optional)
+        return true;
+      case 5: // Review
         return true;
       default:
         return false;
@@ -99,6 +103,8 @@ const CredentialTemplateWizard = () => {
       status: 'active',
       generate_artifacts_automatically: true,
       activate_immediately: true,
+      supported_wallet_ids: [],
+      issuance_protocol: 'oid4vci',
     },
     validateStep,
     onSubmit: handleSubmit,
@@ -107,7 +113,7 @@ const CredentialTemplateWizard = () => {
       wizard.templateId = result?.id;
     },
     onCancel: () => {
-      navigate('/console/templates/credentials');
+      navigate('/console/org/templates/credentials');
     },
   });
 
@@ -142,6 +148,13 @@ const CredentialTemplateWizard = () => {
           />
         );
       case 4:
+        return (
+          <WalletCompatibilityStep
+            data={wizard.data}
+            onChange={wizard.updateData}
+          />
+        );
+      case 5:
         return (
           <ReviewStep
             data={wizard.data}
@@ -195,7 +208,7 @@ const CredentialTemplateWizard = () => {
               variant="contained"
               size="large"
               startIcon={<AccountTreeIcon />}
-              onClick={() => navigate(`/console/flows/definitions/new?templateId=${templateId}`)}
+              onClick={() => navigate(`/console/org/flows/definitions/new?templateId=${templateId}`)}
             >
               {t('wizards.credentialTemplate.success.createFlowButton')}
             </Button>
@@ -204,7 +217,7 @@ const CredentialTemplateWizard = () => {
             <Button
               variant="outlined"
               size="large"
-              onClick={() => navigate('/console/templates/credentials')}
+              onClick={() => navigate('/console/org/templates/credentials')}
             >
               {t('wizards.credentialTemplate.success.returnToTemplatesButton')}
             </Button>

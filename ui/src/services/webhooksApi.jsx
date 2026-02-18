@@ -5,6 +5,7 @@
  * Uses the centralized api.js service for consistent error handling and retry logic.
  */
 import { get, post, patch, del, getErrorMessage } from './api';
+import { buildDefinedQueryString, withQuery } from './queryUtils';
 
 const BASE_PATH = '/v1/notifications/webhooks';
 
@@ -14,7 +15,8 @@ const BASE_PATH = '/v1/notifications/webhooks';
  * @returns {Promise<Array>} - Array of webhook objects
  */
 export async function listWebhooks(organizationId) {
-  const response = await get(`${BASE_PATH}?organization_id=${organizationId}`);
+  const queryString = buildDefinedQueryString({ organization_id: organizationId });
+  const response = await get(withQuery(BASE_PATH, queryString));
   return response?.webhooks || [];
 }
 
@@ -91,10 +93,8 @@ export async function testWebhook(webhookId) {
  * @returns {Promise<Array>} - Array of delivery attempt objects
  */
 export async function getWebhookDeliveryAttempts(webhookId, { limit = 100, offset = 0 } = {}) {
-  const params = new URLSearchParams();
-  params.append('limit', limit.toString());
-  params.append('offset', offset.toString());
-  const response = await get(`${BASE_PATH}/${webhookId}/deliveries?${params.toString()}`);
+  const queryString = buildDefinedQueryString({ limit, offset });
+  const response = await get(withQuery(`${BASE_PATH}/${webhookId}/deliveries`, queryString));
   return response?.deliveries || [];
 }
 

@@ -277,7 +277,7 @@ export function TrustProfileDetailPage() {
         <Alert severity="error">{error || t('trust.trustProfileDetail.notFound')}</Alert>
         <Button
           startIcon={<ArrowBackIcon />}
-          onClick={() => navigate('/console/trust/profiles')}
+          onClick={() => navigate('/console/org/trust/profiles')}
           sx={{ mt: 2 }}
         >
           {t('trust.trustProfileDetail.backToProfiles')}
@@ -293,10 +293,10 @@ export function TrustProfileDetailPage() {
         <Link component={RouterLink} to="/console" underline="hover" color="inherit">
           {t('trust.breadcrumbs.console')}
         </Link>
-        <Link component={RouterLink} to="/console/trust" underline="hover" color="inherit">
+        <Link component={RouterLink} to="/console/org/trust" underline="hover" color="inherit">
           {t('trust.breadcrumbs.trust')}
         </Link>
-        <Link component={RouterLink} to="/console/trust/profiles" underline="hover" color="inherit">
+        <Link component={RouterLink} to="/console/org/trust/profiles" underline="hover" color="inherit">
           {t('trust.breadcrumbs.trustProfiles')}
         </Link>
         <Typography color="text.primary">{profile.name}</Typography>
@@ -323,7 +323,7 @@ export function TrustProfileDetailPage() {
         <Button
           variant="outlined"
           startIcon={<EditIcon />}
-          onClick={() => navigate(`/console/trust/profiles/${id}/edit`)}
+          onClick={() => navigate(`/console/org/trust/profiles/${id}/edit`)}
         >
           {t('actions.edit', { ns: 'common' })}
         </Button>
@@ -375,7 +375,7 @@ export function TrustProfileDetailPage() {
         <Button
           variant="outlined"
           startIcon={<ArrowBackIcon />}
-          onClick={() => navigate('/console/trust/profiles')}
+          onClick={() => navigate('/console/org/trust/profiles')}
         >
           {t('trust.trustProfileDetail.backToProfiles')}
         </Button>

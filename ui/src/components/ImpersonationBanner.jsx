@@ -13,6 +13,7 @@ import {
   getImpersonationStatus,
   stopImpersonation,
 } from '../services/adminImpersonationApi';
+import { useAuth } from '../hooks/useAuth';
 
 /**
  * Impersonation Banner
@@ -21,12 +22,19 @@ import {
  * Shows read-only indicator and provides a button to stop impersonation.
  */
 export default function ImpersonationBanner() {
+  const { isAuthenticated, isAdministrator, hasCapability } = useAuth();
   const [status, setStatus] = useState({ is_impersonating: false });
   const [stopping, setStopping] = useState(false);
   const [error, setError] = useState(null);
 
   useEffect(() => {
-    // Only check status for authenticated users
+    // Only check status for authenticated platform admins.
+    const canUseImpersonation = isAuthenticated && (isAdministrator || hasCapability?.('admin:platform'));
+    if (!canUseImpersonation) {
+      setStatus({ is_impersonating: false });
+      return;
+    }
+
     let mounted = true;
     
     const checkStatus = async () => {
@@ -52,7 +60,7 @@ export default function ImpersonationBanner() {
       mounted = false;
       clearInterval(interval);
     };
-  }, []);
+  }, [isAuthenticated, isAdministrator, hasCapability]);
 
   const handleStopImpersonation = async () => {
     try {

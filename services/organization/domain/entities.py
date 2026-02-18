@@ -14,6 +14,103 @@ from enum import Enum
 from typing import Any
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# RBAC: Permission & Role entities
+# ─────────────────────────────────────────────────────────────────────────────
+
+@dataclass
+class Permission:
+    """
+    A single permission definition.
+    
+    Permissions follow the pattern ``resource:action`` and are defined
+    once globally in the ``permissions`` table.  They are assigned to
+    roles via the ``role_permissions`` join table.
+    """
+
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    resource: str = ""
+    action: str = ""
+    description: str | None = None
+
+    @property
+    def key(self) -> str:
+        """Return the canonical ``resource:action`` string."""
+        return f"{self.resource}:{self.action}"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "resource": self.resource,
+            "action": self.action,
+            "description": self.description,
+        }
+
+
+@dataclass
+class Role:
+    """
+    An organisation-scoped role that bundles a set of permissions.
+    
+    Each organisation gets its own copy of the system roles
+    (owner, admin, member, viewer) and may create any number of
+    custom roles on top.
+    """
+
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    organization_id: str = ""
+    name: str = ""
+    display_name: str | None = None
+    description: str | None = None
+    is_system: bool = False
+    is_default_for_new_members: bool = False
+    permissions: list[Permission] = field(default_factory=list)
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+    # ── helpers ──────────────────────────────────────────────────────────
+
+    def has_permission(self, resource: str, action: str) -> bool:
+        """Check whether this role grants a specific permission."""
+        return any(p.resource == resource and p.action == action for p in self.permissions)
+
+    @property
+    def permission_keys(self) -> set[str]:
+        """Return the set of ``resource:action`` strings."""
+        return {p.key for p in self.permissions}
+
+    def add_permission(self, permission: Permission) -> None:
+        if permission.key not in self.permission_keys:
+            self.permissions.append(permission)
+            self.updated_at = datetime.now(timezone.utc)
+
+    def remove_permission(self, resource: str, action: str) -> None:
+        self.permissions = [
+            p for p in self.permissions
+            if not (p.resource == resource and p.action == action)
+        ]
+        self.updated_at = datetime.now(timezone.utc)
+
+    def set_permissions(self, permissions: list[Permission]) -> None:
+        """Replace the permission set entirely."""
+        self.permissions = list(permissions)
+        self.updated_at = datetime.now(timezone.utc)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "organization_id": self.organization_id,
+            "name": self.name,
+            "display_name": self.display_name,
+            "description": self.description,
+            "is_system": self.is_system,
+            "is_default_for_new_members": self.is_default_for_new_members,
+            "permissions": [p.to_dict() for p in self.permissions],
+            "created_at": self.created_at.isoformat(),
+            "updated_at": self.updated_at.isoformat(),
+        }
+
+
 class OrganizationStatus(str, Enum):
     """Organization status values."""
     ACTIVE = "active"
@@ -41,6 +138,7 @@ class MemberRole(str, Enum):
 class MemberStatus(str, Enum):
     """Member status values."""
     ACTIVE = "active"
+    PENDING = "pending"
     INVITED = "invited"
     DEACTIVATED = "deactivated"
 
@@ -50,6 +148,110 @@ class ApiKeyStatus(str, Enum):
     ACTIVE = "active"
     REVOKED = "revoked"
     EXPIRED = "expired"
+
+
+class ViewMode(str, Enum):
+    """Console view mode values."""
+    APPLICANT = "applicant"
+    ORG_ADMIN = "org_admin"
+
+
+class JoinMechanism(str, Enum):
+    """How users can discover and join an organization."""
+    OPEN = "open"  # Discoverable, anyone can join
+    CODE = "code"  # Join via invite code
+    INVITE = "invite"  # Email invitation only
+    DOMAIN = "domain"  # Domain-based suggestions (future)
+
+
+@dataclass
+class ConsoleContextPreference:
+    """
+    User preferences for console context (view mode + active org).
+    
+    MVP placement: preferences live here for pragmatism;
+    conceptually belongs in auth/identity service.
+    """
+    
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    user_id: str = ""  # From auth service
+    last_view_mode: ViewMode = ViewMode.APPLICANT
+    last_active_org_id: str | None = None  # Nullable - valid for applicant mode
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dict for API responses."""
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "last_view_mode": self.last_view_mode.value,
+            "last_active_org_id": self.last_active_org_id,
+            "created_at": self.created_at.isoformat(),
+            "updated_at": self.updated_at.isoformat(),
+        }
+
+
+@dataclass
+class JoinCode:
+    """
+    Join code for organizations.
+    
+    Allows users to join organizations via short, memorable codes.
+    """
+    
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    organization_id: str = ""
+    code: str = ""  # 8-character alphanumeric code
+    created_by: str = ""  # User ID who created the code
+    expires_at: datetime | None = None  # Optional expiration
+    max_uses: int | None = None  # Optional use limit
+    use_count: int = 0  # Current usage count
+    is_active: bool = True  # Can be deactivated without deletion
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    
+    @staticmethod
+    def generate_code() -> str:
+        """Generate a random 8-character alphanumeric code."""
+        # Use uppercase letters and digits, excluding ambiguous characters (0, O, I, 1)
+        alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+        return ''.join(secrets.choice(alphabet) for _ in range(8))
+    
+    def is_valid(self) -> bool:
+        """Check if the code is currently valid for use."""
+        if not self.is_active:
+            return False
+        
+        # Check expiration
+        if self.expires_at and datetime.now(timezone.utc) > self.expires_at:
+            return False
+        
+        # Check usage limit
+        if self.max_uses is not None and self.use_count >= self.max_uses:
+            return False
+        
+        return True
+    
+    def increment_usage(self) -> None:
+        """Increment the usage counter."""
+        self.use_count += 1
+        self.updated_at = datetime.now(timezone.utc)
+    
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dict for API responses."""
+        return {
+            "id": self.id,
+            "organization_id": self.organization_id,
+            "code": self.code,
+            "created_by": self.created_by,
+            "expires_at": self.expires_at.isoformat() if self.expires_at else None,
+            "max_uses": self.max_uses,
+            "use_count": self.use_count,
+            "is_active": self.is_active,
+            "created_at": self.created_at.isoformat(),
+            "updated_at": self.updated_at.isoformat(),
+        }
 
 
 @dataclass
@@ -68,6 +270,11 @@ class Organization:
     description: str | None = None
     org_type: OrganizationType = OrganizationType.STARTUP
     status: OrganizationStatus = OrganizationStatus.PENDING
+    
+    # Join settings
+    join_mechanism: JoinMechanism = JoinMechanism.INVITE  # Default to invite-only
+    requires_approval: bool = False  # Whether joining requires admin approval
+    is_discoverable: bool = False  # Whether shown in org browser
     
     # Contact info
     contact_email: str | None = None
@@ -149,6 +356,9 @@ class Organization:
             "description": self.description,
             "org_type": self.org_type.value,
             "status": self.status.value,
+            "join_mechanism": self.join_mechanism.value,
+            "requires_approval": self.requires_approval,
+            "is_discoverable": self.is_discoverable,
             "contact_email": self.contact_email,
             "contact_phone": self.contact_phone,
             "website": self.website,
@@ -170,8 +380,11 @@ class Member:
     organization_id: str = ""
     user_id: str = ""
     email: str | None = None  # For invitations
-    role: MemberRole = MemberRole.MEMBER
+    role: MemberRole = MemberRole.MEMBER  # Legacy – kept for backward compat
     status: MemberStatus = MemberStatus.ACTIVE
+    
+    # RBAC roles (populated from member_roles join table)
+    roles: list[Role] = field(default_factory=list)
     
     # Invitation tracking
     invited_by: str | None = None
@@ -181,6 +394,48 @@ class Member:
     # Timestamps
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+    # ── RBAC helpers ─────────────────────────────────────────────────────
+
+    @property
+    def effective_permissions(self) -> set[str]:
+        """Union of ``resource:action`` keys across all assigned roles."""
+        perms: set[str] = set()
+        for r in self.roles:
+            perms |= r.permission_keys
+        return perms
+
+    def has_permission(self, resource: str, action: str) -> bool:
+        """Check whether the member has a specific permission via any role."""
+        key = f"{resource}:{action}"
+        return key in self.effective_permissions
+
+    def has_any_role(self, *role_names: str) -> bool:
+        """Check if the member holds any of the given role names."""
+        member_role_names = {r.name for r in self.roles}
+        return bool(member_role_names & set(role_names))
+
+    @classmethod
+    def create(
+        cls,
+        organization_id: str,
+        user_id: str,
+        email: str | None = None,
+        role: MemberRole = MemberRole.MEMBER,
+        status: MemberStatus = MemberStatus.ACTIVE,
+    ) -> Member:
+        """Create a direct membership (non-invitation flow)."""
+        now = datetime.now(timezone.utc)
+        return cls(
+            organization_id=organization_id,
+            user_id=user_id,
+            email=email,
+            role=role,
+            status=status,
+            joined_at=now,
+            created_at=now,
+            updated_at=now,
+        )
     
     @classmethod
     def create_invitation(
@@ -234,6 +489,7 @@ class Member:
             "user_id": self.user_id,
             "email": self.email,
             "role": self.role.value,
+            "roles": [{"id": r.id, "name": r.name, "display_name": r.display_name} for r in self.roles],
             "status": self.status.value,
             "invited_by": self.invited_by,
             "invited_at": self.invited_at.isoformat() if self.invited_at else None,

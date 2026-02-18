@@ -76,7 +76,7 @@ function CreateDeploymentDrawer({ open, onClose, onSuccess }) {
       onSubmit={handleSubmit}
       title={t('createDeploymentDrawer.title')}
       resourceType="deployment"
-      advancedPath="/console/deployments/new"
+      advancedPath="/console/org/deployments/new"
       fields={fields}
       initialData={{
         name: '',

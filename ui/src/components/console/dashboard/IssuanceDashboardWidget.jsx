@@ -221,7 +221,7 @@ export default function IssuanceDashboardWidget({ compact = false }) {
           <Button
             size="small"
             component={Link}
-            to="/console/operate/issuance"
+            to="/console/org/operate/issuance"
             endIcon={<ArrowForwardIcon />}
           >
             {t('dashboard.issuance.manageOffers')}
@@ -290,7 +290,7 @@ export default function IssuanceDashboardWidget({ compact = false }) {
         <Button
           size="small"
           component={Link}
-          to="/console/operate/issuance"
+          to="/console/org/operate/issuance"
           endIcon={<ArrowForwardIcon />}
         >
           {t('dashboard.issuance.viewAllOffers')}
@@ -298,7 +298,7 @@ export default function IssuanceDashboardWidget({ compact = false }) {
         <Button
           size="small"
           component={Link}
-          to="/console/operate/issuance"
+          to="/console/org/operate/issuance"
           state={{ tab: 2 }}
           endIcon={<ArrowForwardIcon />}
         >

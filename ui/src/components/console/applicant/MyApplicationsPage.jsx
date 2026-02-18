@@ -30,6 +30,30 @@ import {
 import { useTranslation } from 'react-i18next';
 
 import { getMyApplications } from '../../../services/applicantApi';
+import ClaimCredentialDialog from './ClaimCredentialDialog';
+
+const TERMINAL_STATUSES = new Set(['approved', 'issued', 'rejected']);
+
+function getStepFromStatus(status) {
+  switch (status) {
+    case 'submitted':
+      return 0;
+    case 'under_review':
+    case 'vetting_in_progress':
+      return 1;
+    case 'pending_approval':
+    case 'needs_info':
+      return 2;
+    case 'approved':
+      return 3;
+    case 'issued':
+      return 4;
+    case 'rejected':
+      return 4;
+    default:
+      return 0;
+  }
+}
 
 function MyApplicationsPage() {
   const { t } = useTranslation('applicant');
@@ -39,24 +63,22 @@ function MyApplicationsPage() {
     t('applications.steps.underReview'),
     t('applications.steps.verification'),
     t('applications.steps.approved'),
+    t('applications.steps.credentialReady', 'Credential Ready'),
   ];
   const [applications, setApplications] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [selectedApp, setSelectedApp] = useState(null);
+  const [claimApp, setClaimApp] = useState(null);
 
   useEffect(() => {
-    const loadApplications = async () => {
+    const loadApplications = async (showLoading = true) => {
       try {
+        if (showLoading) setLoading(true);
         const result = await getMyApplications({ limit: 100 });
         const apps = (result.applications || []).map(app => {
-          // Map status to step number for progress visualization
-          let step = 0;
           const status = app.status?.toLowerCase();
-          if (status === 'submitted') step = 0;
-          else if (status === 'under_review' || status === 'vetting_in_progress') step = 1;
-          else if (status === 'pending_approval') step = 2;
-          else if (status === 'approved') step = 3;
+          const step = getStepFromStatus(status);
           
           return {
             id: app.id,
@@ -73,19 +95,37 @@ function MyApplicationsPage() {
         console.error('Error loading applications:', err);
         setError(t('applications.errorLoading'));
       } finally {
-        setLoading(false);
+        if (showLoading) setLoading(false);
       }
     };
-    loadApplications();
+
+    loadApplications(true);
+
+    // Keep statuses in sync with org review decisions
+    const interval = setInterval(() => {
+      loadApplications(false);
+    }, 15000);
+
+    const onFocus = () => loadApplications(false);
+    window.addEventListener('focus', onFocus);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('focus', onFocus);
+    };
   }, [t]);
 
   const getStatusColor = (status) => {
     switch (status) {
       case 'approved':
+      case 'issued':
         return 'success';
       case 'rejected':
         return 'error';
       case 'under_review':
+      case 'vetting_in_progress':
+      case 'pending_approval':
+      case 'needs_info':
         return 'warning';
       case 'submitted':
         return 'info';
@@ -100,9 +140,14 @@ function MyApplicationsPage() {
         return t('applications.status.underReview');
       case 'approved':
         return t('applications.status.approved');
+      case 'issued':
+        return t('applications.status.approved');
       case 'rejected':
         return t('applications.status.rejected');
+      case 'vetting_in_progress':
+      case 'pending_approval':
       case 'submitted':
+      case 'needs_info':
         return t('applications.status.submitted');
       default:
         return status;
@@ -145,7 +190,7 @@ function MyApplicationsPage() {
                     <Typography color="text.secondary" sx={{ py: 4 }}>
                       {t('applications.empty.message')}
                     </Typography>
-                    <Button variant="contained" href="/credentials">
+                    <Button variant="contained" href="/console/applicant/catalog">
                       {t('applications.empty.applyButton')}
                     </Button>
                   </TableCell>
@@ -163,7 +208,7 @@ function MyApplicationsPage() {
                       <Stepper activeStep={app.step} alternativeLabel size="small">
                         {APPLICATION_STEPS.map((label) => (
                           <Step key={label}>
-                            <StepLabel>{label}</StepLabel>
+                            <StepLabel error={app.status === 'rejected' && TERMINAL_STATUSES.has(app.status)}>{label}</StepLabel>
                           </Step>
                         ))}
                       </Stepper>
@@ -176,9 +221,19 @@ function MyApplicationsPage() {
                       />
                     </TableCell>
                     <TableCell align="right">
-                      <Button size="small" onClick={() => setSelectedApp(app)}>
+                      <Button size="small" onClick={() => setSelectedApp(app)} sx={{ mr: 1 }}>
                         {t('applications.actions.viewDetails')}
                       </Button>
+                      {(app.status === 'approved' || app.status === 'issued') && (
+                        <Button
+                          size="small"
+                          variant="contained"
+                          color="primary"
+                          onClick={() => setClaimApp(app)}
+                        >
+                          {t('applications.actions.addToWallet', 'Add to Wallet')}
+                        </Button>
+                      )}
                     </TableCell>
                   </TableRow>
                 ))
@@ -187,6 +242,12 @@ function MyApplicationsPage() {
           </Table>
         </TableContainer>
       )}
+
+      <ClaimCredentialDialog
+        open={!!claimApp}
+        onClose={() => setClaimApp(null)}
+        applicationId={claimApp?.id}
+      />
 
       {/* Application Details Dialog */}
       <Dialog

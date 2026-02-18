@@ -285,13 +285,9 @@ if ADMIN_IMPERSONATION_AVAILABLE:
     app.include_router(admin_impersonation_router, tags=["Admin"])
     logger.info("Admin impersonation router registered")
 
-# API Keys service
-try:
-    from api_keys.api import router as api_keys_router
-    app.include_router(api_keys_router, tags=["API Keys"])
-    logger.info("API Keys service router registered")
-except ImportError as e:
-    logging.warning(f"API Keys service not available: {e}")
+# API Keys - handled by organization service (port 8002) via gateway
+# UI should call: /v1/organizations/{org_id}/api-keys
+# Gateway routes to: http://organization:8002/v1/organizations/{org_id}/api-keys
 
 # Credential configuration service
 if CREDENTIALS_SERVICE_AVAILABLE:

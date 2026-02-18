@@ -218,6 +218,37 @@ export const getIssuanceSessionStatus = async (transactionId) => {
   }
 };
 
+/**
+ * Generate (or refresh) the issuance offer for an approved application.
+ * Called by admins via the "Generate Wallet Invite" button.
+ *
+ * @param {string} applicationId
+ * @returns {Promise<Object>} IssuanceOfferResponse with offer_url, wallets, expires_at
+ */
+export const generateIssuanceOffer = async (applicationId) => {
+  try {
+    const response = await apiClient.post(`/v1/applications/${applicationId}/issuance-offer`);
+    return response.data;
+  } catch (error) {
+    throw handleApiError(error);
+  }
+};
+
+/**
+ * Retrieve the current issuance offer for an application (applicant-facing).
+ *
+ * @param {string} applicationId
+ * @returns {Promise<Object>} IssuanceOfferResponse
+ */
+export const getIssuanceOffer = async (applicationId) => {
+  try {
+    const response = await apiClient.get(`/v1/applications/${applicationId}/issuance-offer`);
+    return response.data;
+  } catch (error) {
+    throw handleApiError(error);
+  }
+};
+
 export default {
   issueCredential,
   verifyCredential,
@@ -230,4 +261,6 @@ export default {
   getCredentialOffer,
   getOfferQRCode,
   getIssuanceSessionStatus,
+  generateIssuanceOffer,
+  getIssuanceOffer,
 };

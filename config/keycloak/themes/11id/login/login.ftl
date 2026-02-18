@@ -2,23 +2,12 @@
 <#-- Marty custom login template with test-friendly IDs and language switcher -->
 <@layout.registrationLayout displayMessage=!messagesPerField.existsError('username','password') displayInfo=realm.password && realm.registrationAllowed && !registrationDisabled??; section>
     <#if section = "header">
-        <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
-            <div>${msg("loginAccountTitle")}</div>
-            <#if realm.internationalizationEnabled  && locale.supported?has_content && (locale.supported?size > 1)>
-                <div class="kc-locale-dropdown" data-testid="language-switcher">
-                    <select id="kc-locale-dropdown" onchange="if (this.value) window.location.href=this.value;" class="kc-locale-select">
-                        <#list locale.supported as l>
-                            <option value="${l.url}" <#if locale.currentLanguageTag == l.label>selected</#if>>
-                                ${msg("locale_${l.label}")}
-                            </option>
-                        </#list>
-                    </select>
-                </div>
-            </#if>
-        </div>
+        <#-- Header content handled by template.ftl -->
     <#elseif section = "form">
         <div id="kc-form">
             <div id="kc-form-wrapper">
+                <p class="elevenid-login-title">${msg("loginAccountTitle")}</p>
+                <p class="elevenid-context-hint">${msg("contextHint")}</p>
                 <#if realm.password>
                     <form id="kc-form-login" onsubmit="login.disabled = true; return true;" action="${url.loginAction}" method="post">
                         <#if !usernameHidden??>
@@ -110,27 +99,6 @@
             </div>
         </#if>
     <#elseif section = "socialProviders">
-        <#if realm.password && social.providers??>
-            <div id="kc-social-providers" class="${properties.kcFormSocialAccountSectionClass!}">
-                <hr/>
-                <h4>${msg("identity-provider-login-label")}</h4>
-                <ul class="${properties.kcFormSocialAccountListClass!} <#if social.providers?size gt 3>${properties.kcFormSocialAccountListGridClass!}</#if>">
-                    <#list social.providers as p>
-                        <a id="social-${p.alias}" 
-                           data-testid="social-provider-${p.alias}"
-                           class="${properties.kcFormSocialAccountListButtonClass!} <#if social.providers?size gt 3>${properties.kcFormSocialAccountGridItem!}</#if>"
-                           type="button" 
-                           href="${p.loginUrl}">
-                            <#if p.iconClasses?has_content>
-                                <i class="${properties.kcCommonLogoIdP!} ${p.iconClasses!}" aria-hidden="true"></i>
-                                <span class="${properties.kcFormSocialAccountNameClass!} kc-social-icon-text">${p.displayName!}</span>
-                            <#else>
-                                <span class="${properties.kcFormSocialAccountNameClass!}">${p.displayName!}</span>
-                            </#if>
-                        </a>
-                    </#list>
-                </ul>
-            </div>
-        </#if>
+        <#-- Password-only flow: intentionally suppress social/passkey/wallet provider options -->
     </#if>
 </@layout.registrationLayout>

@@ -37,31 +37,31 @@ const getResourceConfig = (t) => ({
   trust: {
     label: t('setupReadiness.trustProfile.label'),
     icon: VerifiedUserIcon,
-    path: '/console/trust/profiles',
+    path: '/console/org/trust/profiles',
     tooltip: t('setupReadiness.trustProfile.tooltip'),
   },
   template: {
     label: t('setupReadiness.credentialTemplate.label'),
     icon: DescriptionIcon,
-    path: '/console/templates/credentials',
+    path: '/console/org/templates/credentials',
     tooltip: t('setupReadiness.credentialTemplate.tooltip'),
   },
   policy: {
     label: t('setupReadiness.presentationPolicy.label'),
     icon: PolicyIcon,
-    path: '/console/policies/presentation',
+    path: '/console/org/policies/presentation',
     tooltip: t('setupReadiness.presentationPolicy.tooltip'),
   },
   deployment: {
     label: t('setupReadiness.deploymentProfile.label'),
     icon: CloudUploadIcon,
-    path: '/console/deploy/profiles',
+    path: '/console/org/deploy/profiles',
     tooltip: t('setupReadiness.deploymentProfile.tooltip'),
   },
   flow: {
     label: t('setupReadiness.flowDefinition.label'),
     icon: AccountTreeIcon,
-    path: '/console/flows/definitions',
+    path: '/console/org/flows/definitions',
     tooltip: t('setupReadiness.flowDefinition.tooltip'),
   },
 });

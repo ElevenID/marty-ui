@@ -37,7 +37,15 @@ EOSQL
 # Create Keycloak database
 create_database_and_user "keycloak" "keycloak" "${KEYCLOAK_DB_PASSWORD:-keycloak}"
 
-# Create Applicant database
-create_database_and_user "marty_applicants" "marty" "${APPLICANT_DB_PASSWORD:-marty}"
+# Create Marty microservices database
+create_database_and_user "marty" "marty" "${MARTY_DB_PASSWORD:-marty_dev_password}"
+
+# Create Applicant database (uses same user but separate database)
+psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-EOSQL
+    SELECT 'CREATE DATABASE marty_applicants OWNER marty'
+    WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'marty_applicants')\gexec
+    
+    GRANT ALL PRIVILEGES ON DATABASE marty_applicants TO marty;
+EOSQL
 
 echo "All databases initialized successfully."

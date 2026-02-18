@@ -29,8 +29,6 @@ class OIDCUserInfo:
     preferred_username: str | None = None
     phone_number: str | None = None
     phone_number_verified: bool = False
-    # Custom claims from Keycloak
-    user_type: str | None = None
     nationality: str | None = None
     date_of_birth: str | None = None
     roles: list[str] | None = None
@@ -87,7 +85,6 @@ class OIDCUserInfo:
             preferred_username=claims.get("preferred_username"),
             phone_number=claims.get("phone_number"),
             phone_number_verified=claims.get("phone_number_verified", False),
-            user_type=claims.get("user_type"),
             nationality=claims.get("nationality"),
             date_of_birth=claims.get("date_of_birth"),
             roles=roles,
@@ -96,35 +93,17 @@ class OIDCUserInfo:
             organization=org_claim if org_claim else None,
         )
 
-    def get_user_type(self) -> str:
-        """Determine user type from claims or roles.
-        
-        Priority: administrator > vendor > applicant
-        """
-        # Check explicit user_type claim first
-        if self.user_type:
-            if self.user_type in ("administrator", "vendor", "applicant"):
-                return self.user_type
+    def has_any_role(self, roles: set[str]) -> bool:
+        """Check if user has any role from the provided set."""
+        current_roles = set(self.roles or [])
+        return any(role in current_roles for role in roles)
 
-        # Check roles for user type (priority order)
-        if self.roles:
-            if "administrator" in self.roles:
-                return "administrator"
-            if "vendor" in self.roles:
-                return "vendor"
-            if "applicant" in self.roles:
-                return "applicant"
+    def has_organization_membership(self) -> bool:
+        """Check if user has organization context through claims or org-scoped roles."""
+        if self.organization_id or self.organization_name or self.organization:
+            return True
 
-        # Default to applicant for self-registered users
-        return "applicant"
-
-    def is_vendor(self) -> bool:
-        """Check if user is a vendor."""
-        return self.get_user_type() == "vendor" or (self.roles and "vendor" in self.roles)
-
-    def is_administrator(self) -> bool:
-        """Check if user is an administrator."""
-        return self.get_user_type() == "administrator" or (self.roles and "administrator" in self.roles)
+        return self.has_any_role({"vendor", "org_admin", "org_owner", "owner"})
 
 
 @dataclass
@@ -132,7 +111,6 @@ class ProvisioningResult:
     """Result of JIT provisioning."""
 
     user_id: str
-    user_type: str
     applicant_id: str | None = None
     organization_id: str | None = None
     organization_name: str | None = None
@@ -252,30 +230,18 @@ class JITProvisioningService:
         Returns:
             ProvisioningResult with user, applicant, and organization IDs
         """
-        user_type = user_info.get_user_type()
         result = ProvisioningResult(
             user_id=user_info.sub,
-            user_type=user_type,
             organization_id=user_info.organization_id,
             organization_name=user_info.organization_name,
         )
 
-        # Handle vendor organization provisioning
-        if user_type == "vendor":
+        # Handle organization provisioning for users with org membership context
+        if user_info.has_organization_membership():
             await self._provision_vendor_organization(user_info, result)
-            return result
 
-        # Handle administrator (no special provisioning needed)
-        if user_type == "administrator":
-            logger.info(f"User {user_info.email} is administrator, no provisioning needed")
-            return result
-
-        # Only provision ApplicantRecord for applicant users
-        if user_type != "applicant":
-            logger.info(f"User {user_info.email} is {user_type}, skipping applicant provisioning")
-            return result
-
-        # Check for existing applicant by account_id (OIDC sub)
+        # Person-first model: every authenticated person can apply.
+        # Ensure an ApplicantRecord exists regardless of membership roles.
         existing_by_account = await self._applicant_repo.get_by_account_id(user_info.sub)
         if existing_by_account:
             result.applicant_id = existing_by_account.id

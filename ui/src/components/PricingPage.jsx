@@ -6,6 +6,7 @@
  */
 
 import { Box, Typography, Button, Card, CardContent, CardHeader, CardActions, Grid, Divider, List, ListItem, ListItemIcon, ListItemText, Chip, Paper } from '@mui/material';
+import { SEOHead } from './seo';
 import CheckIcon from '@mui/icons-material/Check';
 import CloseIcon from '@mui/icons-material/Close';
 import StarIcon from '@mui/icons-material/Star';
@@ -88,6 +89,13 @@ function PricingPage() {
 
   return (
     <Box>
+      <SEOHead
+        title="Verifiable Credential Pricing"
+        description="Transparent pricing for verifiable credential infrastructure. Free, Starter, Professional, and Enterprise plans for issuance and verification APIs."
+        canonicalPath="/pricing"
+        keywords={['verifiable credential pricing', 'credential API pricing', 'identity verification pricing', 'EUDI wallet infrastructure pricing']}
+      />
+
       {/* Hero Section */}
       <Box
         sx={{
@@ -292,7 +300,7 @@ function PricingPage() {
           {INFRASTRUCTURE_VALUE.title}
         </Typography>
         <Typography variant="body1" color="text.secondary" textAlign="center" paragraph sx={{ mb: 4, maxWidth: 800, mx: 'auto' }}>
-          Traditional IDV platforms charge per verification. ElevenID provides infrastructure that 
+          Traditional IDV platforms charge per verification. ElevenID LLC provides infrastructure that 
           enables credential reuse, reducing long-term costs while increasing value.
         </Typography>
         <Grid container spacing={3}>

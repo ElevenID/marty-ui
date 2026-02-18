@@ -32,15 +32,15 @@ import { useTranslation } from 'react-i18next';
 import { ResourcePage, AddButton, EmptyState, EmptyStates } from '../../common';
 
 const getTrustTabs = (t) => [
-  { label: t('trust.trustProfiles'), path: '/console/trust/profiles' },
-  { label: t('trust.trustedIssuers'), path: '/console/trust/issuers' },
-  { label: t('trust.revocationProfiles'), path: '/console/trust/revocation' },
+  { label: t('trust.trustProfiles'), path: '/console/org/trust/profiles' },
+  { label: t('trust.trustedIssuers'), path: '/console/org/trust/issuers' },
+  { label: t('trust.revocationProfiles'), path: '/console/org/trust/revocation' },
 ];
 
 const getBreadcrumbs = (t) => [
   { label: t('trust.breadcrumbs.console'), path: '/console' },
-  { label: t('trust.breadcrumbs.trust'), path: '/console/trust' },
-  { label: t('trust.breadcrumbs.trustedIssuers'), path: '/console/trust/issuers' },
+  { label: t('trust.breadcrumbs.trust'), path: '/console/org/trust' },
+  { label: t('trust.breadcrumbs.trustedIssuers'), path: '/console/org/trust/issuers' },
 ];
 
 function TrustedIssuersPage() {
@@ -105,7 +105,7 @@ function TrustedIssuersPage() {
       actions={
         <AddButton 
           label={t('actions.add', { ns: 'common' })} 
-          path="/console/trust/issuers/new" 
+          path="/console/org/trust/issuers/new" 
         />
       }
     >
@@ -187,7 +187,7 @@ function TrustedIssuersPage() {
                       <Tooltip title={t('trust.trustedIssuersPage.actions.viewDetails')}>
                         <IconButton
                           component={Link}
-                          to={`/console/trust/issuers/${issuer.id}`}
+                          to={`/console/org/trust/issuers/${issuer.id}`}
                           size="small"
                         >
                           <VisibilityIcon fontSize="small" />

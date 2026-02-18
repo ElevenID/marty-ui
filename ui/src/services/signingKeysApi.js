@@ -6,6 +6,7 @@
  */
 
 import { get, post, patch, del } from './api';
+import { buildTruthyQueryString, withQuery } from './queryUtils';
 
 const BASE_PATH = '/v1/signing-keys';
 
@@ -18,13 +19,12 @@ const BASE_PATH = '/v1/signing-keys';
  * @returns {Promise<Array>} List of signing keys
  */
 export async function listSigningKeys(filters = {}) {
-  const params = new URLSearchParams();
-  if (filters.status) params.append('status', filters.status);
-  if (filters.limit) params.append('limit', filters.limit);
-  if (filters.offset) params.append('offset', filters.offset);
-  
-  const queryString = params.toString();
-  return get(queryString ? `${BASE_PATH}?${queryString}` : BASE_PATH);
+  const queryString = buildTruthyQueryString({
+    status: filters.status,
+    limit: filters.limit,
+    offset: filters.offset,
+  });
+  return get(withQuery(BASE_PATH, queryString));
 }
 
 /**

@@ -8,7 +8,7 @@
 import { Navigate } from 'react-router-dom';
 
 function TemplatesPage() {
-  return <Navigate to="/console/templates/credentials" replace />;
+  return <Navigate to="/console/org/templates/credentials" replace />;
 }
 
 export default TemplatesPage;

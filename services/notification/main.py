@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, AsyncGenerator
 
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query
+from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr
 
@@ -76,6 +76,8 @@ class Notification:
     template_id: str | None = None
     subject: str = ""
     body: str = ""
+    severity: str = "info"
+    link: str | None = None
     data: dict[str, Any] = field(default_factory=dict)
     
     # Status
@@ -91,6 +93,7 @@ class Notification:
     # Timestamps
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     scheduled_at: datetime | None = None
+    read_at: datetime | None = None
     
     def mark_sent(self) -> None:
         self.status = NotificationStatus.SENT
@@ -106,6 +109,13 @@ class Notification:
         self.error_message = error
         self.attempts += 1
         self.last_attempt_at = datetime.now(timezone.utc)
+
+    def mark_read(self) -> None:
+        self.read_at = datetime.now(timezone.utc)
+
+    @property
+    def is_read(self) -> bool:
+        return self.read_at is not None
 
 
 @dataclass
@@ -169,6 +179,12 @@ class InMemoryNotificationRepository:
     
     async def get_notification(self, notif_id: str) -> Notification | None:
         return self._notifications.get(notif_id)
+
+    async def delete_notification(self, notif_id: str) -> bool:
+        if notif_id in self._notifications:
+            del self._notifications[notif_id]
+            return True
+        return False
     
     async def list_notifications(
         self,
@@ -218,6 +234,10 @@ class SendNotificationRequest(BaseModel):
     template_id: str | None = None
     subject: str | None = None
     body: str | None = None
+    title: str | None = None
+    message: str | None = None
+    severity: str = "info"
+    link: str | None = None
     data: dict[str, Any] = {}
     priority: str = "normal"
 
@@ -226,10 +246,23 @@ class NotificationResponse(BaseModel):
     id: str
     notification_type: str
     status: str
+    read: bool
+    title: str
+    message: str
+    severity: str
+    link: str | None
     recipient_email: str | None
     subject: str
     created_at: str
     delivered_at: str | None
+
+
+class NotificationCountResponse(BaseModel):
+    count: int
+
+
+class MarkAllReadResponse(BaseModel):
+    marked_read: int
 
 
 class TemplateResponse(BaseModel):
@@ -247,8 +280,8 @@ async def send_notification(
 ) -> NotificationResponse:
     """Send a notification."""
     # Get template if specified
-    subject = request.subject or ""
-    body = request.body or ""
+    subject = request.title or request.subject or ""
+    body = request.message or request.body or ""
     
     if request.template_id:
         template = await repo.get_template(request.template_id)
@@ -268,6 +301,8 @@ async def send_notification(
         template_id=request.template_id,
         subject=subject,
         body=body,
+        severity=request.severity,
+        link=request.link,
         data=request.data,
         priority=NotificationPriority(request.priority),
     )
@@ -287,24 +322,77 @@ async def list_notifications(
     organization_id: str | None = None,
     recipient_id: str | None = None,
     status: str | None = None,
+    unread_only: bool = Query(False),
     repo: InMemoryNotificationRepository = Depends(get_repo),
 ) -> list[NotificationResponse]:
     """List notifications."""
     status_filter = NotificationStatus(status) if status else None
     notifications = await repo.list_notifications(organization_id, recipient_id, status_filter)
+    if unread_only:
+        notifications = [n for n in notifications if not n.is_read]
     return [_to_response(n) for n in notifications]
 
 
-@router.get("/{notification_id}", response_model=NotificationResponse)
-async def get_notification(
+@router.get("/unread/count", response_model=NotificationCountResponse)
+async def get_unread_count(
+    organization_id: str | None = None,
+    recipient_id: str | None = None,
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+    repo: InMemoryNotificationRepository = Depends(get_repo),
+) -> NotificationCountResponse:
+    """Get unread notification count."""
+    effective_recipient_id = recipient_id or x_user_id
+    notifications = await repo.list_notifications(organization_id, effective_recipient_id)
+    unread_count = sum(1 for notification in notifications if not notification.is_read)
+    return NotificationCountResponse(count=unread_count)
+
+
+@router.patch("/{notification_id}/read", response_model=NotificationResponse)
+async def mark_as_read(
     notification_id: str,
     repo: InMemoryNotificationRepository = Depends(get_repo),
 ) -> NotificationResponse:
-    """Get a notification."""
+    """Mark a notification as read."""
     notification = await repo.get_notification(notification_id)
     if not notification:
         raise HTTPException(status_code=404, detail="Notification not found")
+
+    notification.mark_read()
+    await repo.save_notification(notification)
     return _to_response(notification)
+
+
+@router.post("/read-all", response_model=MarkAllReadResponse)
+async def mark_all_as_read(
+    organization_id: str | None = None,
+    recipient_id: str | None = None,
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+    repo: InMemoryNotificationRepository = Depends(get_repo),
+) -> MarkAllReadResponse:
+    """Mark all matching notifications as read."""
+    effective_recipient_id = recipient_id or x_user_id
+    notifications = await repo.list_notifications(organization_id, effective_recipient_id)
+
+    marked_read = 0
+    for notification in notifications:
+        if not notification.is_read:
+            notification.mark_read()
+            await repo.save_notification(notification)
+            marked_read += 1
+
+    return MarkAllReadResponse(marked_read=marked_read)
+
+
+@router.delete("/{notification_id}")
+async def delete_notification(
+    notification_id: str,
+    repo: InMemoryNotificationRepository = Depends(get_repo),
+) -> dict[str, bool]:
+    """Delete a notification."""
+    deleted = await repo.delete_notification(notification_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Notification not found")
+    return {"deleted": True}
 
 
 @router.get("/templates", response_model=list[TemplateResponse])
@@ -326,11 +414,28 @@ async def list_templates(
     ]
 
 
+@router.get("/{notification_id}", response_model=NotificationResponse)
+async def get_notification(
+    notification_id: str,
+    repo: InMemoryNotificationRepository = Depends(get_repo),
+) -> NotificationResponse:
+    """Get a notification."""
+    notification = await repo.get_notification(notification_id)
+    if not notification:
+        raise HTTPException(status_code=404, detail="Notification not found")
+    return _to_response(notification)
+
+
 def _to_response(notification: Notification) -> NotificationResponse:
     return NotificationResponse(
         id=notification.id,
         notification_type=notification.notification_type.value,
         status=notification.status.value,
+        read=notification.is_read,
+        title=notification.subject,
+        message=notification.body,
+        severity=notification.severity,
+        link=notification.link,
         recipient_email=notification.recipient_email,
         subject=notification.subject,
         created_at=notification.created_at.isoformat(),

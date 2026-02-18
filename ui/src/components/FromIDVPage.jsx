@@ -1,7 +1,7 @@
 /**
  * From IDV to Verifiable Identity Page
  * 
- * Thought-leadership page positioning ElevenID as the evolution beyond
+ * Thought-leadership page positioning ElevenID LLC as the evolution beyond
  * traditional identity verification (IDV) platforms
  */
 
@@ -9,6 +9,8 @@ import { Box, Typography, Paper, Card, CardContent, Grid, List, ListItem, ListIt
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import { useNavigate } from 'react-router-dom';
+import { SEOHead } from './seo';
+import { articleSchema, breadcrumbListSchema } from './seo/structuredData';
 import { useBranding } from '../hooks/useBranding';
 
 function FromIDVPage() {
@@ -78,6 +80,25 @@ function FromIDVPage() {
 
   return (
     <Box>
+      <SEOHead
+        title="From IDV to Verifiable Identity"
+        description="Why traditional identity verification is evolving into verifiable credential infrastructure with reusable trust, standards, and governance."
+        canonicalPath="/from-idv-to-verifiable-identity"
+        keywords={['identity verification', 'verifiable identity', 'IDV modernization', 'reusable trust infrastructure']}
+        structuredData={[
+          articleSchema({
+            headline: 'From IDV to Verifiable Identity',
+            description: 'Why traditional identity verification is evolving into verifiable credential infrastructure with reusable trust, standards, and governance.',
+            datePublished: '2024-01-01',
+            url: 'https://elevenidllc.com/from-idv-to-verifiable-identity',
+          }),
+          breadcrumbListSchema([
+            { name: 'Home', url: 'https://elevenidllc.com' },
+            { name: 'From IDV to Verifiable Identity', url: 'https://elevenidllc.com/from-idv-to-verifiable-identity' },
+          ]),
+        ]}
+      />
+
       {/* Hero Section */}
       <Box
         sx={{
@@ -97,7 +118,7 @@ function FromIDVPage() {
           Modern digital identity must support <strong>reuse, portability, and trust at scale</strong>.
         </Typography>
         <Typography variant="body1" sx={{ maxWidth: 900, mx: 'auto', opacity: 0.9 }}>
-          ElevenID provides the infrastructure layer that replaces repeated identity checks with{' '}
+          ElevenID LLC provides the infrastructure layer that replaces repeated identity checks with{' '}
           <strong>cryptographically verifiable credentials</strong> — designed for EUDI Wallets, Open Badges,
           and enterprise trust ecosystems.
         </Typography>
@@ -194,7 +215,7 @@ function FromIDVPage() {
 
         <Paper elevation={2} sx={{ p: 3, mt: 3, bgcolor: 'grey.100', borderRadius: 2 }}>
           <Typography variant="body1" sx={{ fontSize: '1.05rem', lineHeight: 1.8 }}>
-            <strong>This is the same model used throughout ElevenID.</strong>{' '}
+            <strong>This is the same model used throughout ElevenID LLC.</strong>{' '}
             Digital identity becomes scalable when trust, policy, and deployment are modeled as configuration—then 
             orchestrated by flows across wallets, APIs, and devices.
           </Typography>
@@ -203,7 +224,7 @@ function FromIDVPage() {
 
       <Divider sx={{ my: 8 }} />
 
-      {/* Section 4 - How ElevenID Solves Identity Management */}
+      {/* Section 4 - How ElevenID LLC Solves Identity Management */}
       <Box sx={{ mb: 8 }}>
         <Typography variant="h4" gutterBottom fontWeight="bold">
           How {branding.branding.appName} Solves Identity Management
@@ -334,7 +355,7 @@ function FromIDVPage() {
           <Button
             variant="text"
             size="large"
-            onClick={() => navigate('/api-docs')}
+            onClick={() => navigate('/docs')}
           >
             API Docs
           </Button>

@@ -39,14 +39,14 @@ import { Link } from 'react-router-dom';
 import { ResourcePage, EmptyState, EmptyStates, StatusChip } from '../../common';
 
 const getFlowsTabs = (t) => [
-  { label: t('flows.flowDefinitions'), path: '/console/flows/definitions' },
-  { label: t('flows.flowInstances'), path: '/console/flows/instances' },
+  { label: t('flows.flowDefinitions'), path: '/console/org/flows/definitions' },
+  { label: t('flows.flowInstances'), path: '/console/org/flows/instances' },
 ];
 
 const getBreadcrumbs = (t) => [
   { label: t('flows.breadcrumbs.console'), path: '/console' },
-  { label: t('flows.breadcrumbs.flows'), path: '/console/flows' },
-  { label: t('flows.breadcrumbs.flowInstances'), path: '/console/flows/instances' },
+  { label: t('flows.breadcrumbs.flows'), path: '/console/org/flows' },
+  { label: t('flows.breadcrumbs.flowInstances'), path: '/console/org/flows/instances' },
 ];
 
 function FlowInstancesPage() {

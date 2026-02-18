@@ -5,10 +5,10 @@ Organization Service Application Ports
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
-from ..domain.entities import ApiKey, Member, MemberRole, Organization, OrganizationType
+from ..domain.entities import ApiKey, ConsoleContextPreference, JoinCode, Member, MemberRole, Organization, OrganizationType, Permission, Role, ViewMode
 
 
 # =============================================================================
@@ -73,6 +73,92 @@ class RevokeApiKeyCommand:
     revoked_by: str
 
 
+@dataclass
+class UpsertConsoleContextPreferenceCommand:
+    """Command to upsert console context preference."""
+    user_id: str
+    last_view_mode: ViewMode | None = None
+    last_active_org_id: str | None = None
+
+
+@dataclass
+class JoinByCodeCommand:
+    """Command to join an organization by code."""
+    user_id: str
+    code: str
+    email: str  # User email for membership record
+
+
+@dataclass
+class JoinOrganizationCommand:
+    """Command to join/request to join an organization directly by ID."""
+    user_id: str
+    organization_id: str
+    email: str  # User email for membership record
+
+
+# ── RBAC Commands ────────────────────────────────────────────────────────────
+
+@dataclass
+class CreateRoleCommand:
+    """Command to create a custom role."""
+    organization_id: str
+    name: str
+    created_by: str
+    display_name: str | None = None
+    description: str | None = None
+    permission_ids: list[str] = field(default_factory=list)
+    is_default_for_new_members: bool = False
+
+
+@dataclass
+class UpdateRoleCommand:
+    """Command to update an existing role."""
+    role_id: str
+    organization_id: str
+    updated_by: str
+    display_name: str | None = None
+    description: str | None = None
+    permission_ids: list[str] | None = None
+    is_default_for_new_members: bool | None = None
+
+
+@dataclass
+class DeleteRoleCommand:
+    """Command to delete a custom role."""
+    role_id: str
+    organization_id: str
+    deleted_by: str
+    replacement_role_id: str | None = None
+
+
+@dataclass
+class SetMemberRolesCommand:
+    """Command to set member's roles (replace all)."""
+    member_id: str
+    organization_id: str
+    role_ids: list[str]
+    updated_by: str
+
+
+@dataclass
+class AddMemberRoleCommand:
+    """Command to add a single role to a member."""
+    member_id: str
+    organization_id: str
+    role_id: str
+    updated_by: str
+
+
+@dataclass
+class RemoveMemberRoleCommand:
+    """Command to remove a single role from a member."""
+    member_id: str
+    organization_id: str
+    role_id: str
+    updated_by: str
+
+
 # =============================================================================
 # Outbound Ports
 # =============================================================================
@@ -98,6 +184,18 @@ class OrganizationRepositoryPort(ABC):
     @abstractmethod
     async def list_all(self, limit: int = 100, offset: int = 0) -> list[Organization]:
         """List all organizations."""
+        ...
+    
+    @abstractmethod
+    async def list_discoverable(
+        self,
+        search: str | None = None,
+        org_type: OrganizationType | None = None,
+        join_mechanism: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[Organization]:
+        """List discoverable organizations with optional filters."""
         ...
     
     @abstractmethod
@@ -171,6 +269,129 @@ class ApiKeyRepositoryPort(ABC):
     @abstractmethod
     async def delete(self, key_id: str) -> None:
         """Delete an API key."""
+        ...
+
+
+class ConsoleContextPreferenceRepositoryPort(ABC):
+    """Port for console context preference persistence."""
+    
+    @abstractmethod
+    async def get_by_user_id(self, user_id: str) -> ConsoleContextPreference | None:
+        """Get preference by user ID."""
+        ...
+    
+    @abstractmethod
+    async def save(self, preference: ConsoleContextPreference) -> None:
+        """Save a preference (insert or update)."""
+        ...
+
+
+class JoinCodeRepositoryPort(ABC):
+    """Port for join code persistence."""
+    
+    @abstractmethod
+    async def save(self, join_code: JoinCode) -> None:
+        """Save a join code (insert or update)."""
+        ...
+    
+    @abstractmethod
+    async def get_by_code(self, code: str) -> JoinCode | None:
+        """Get join code by code string."""
+        ...
+    
+    @abstractmethod
+    async def list_by_organization(self, org_id: str) -> list[JoinCode]:
+        """List all join codes for an organization."""
+        ...
+    
+    @abstractmethod
+    async def delete(self, code_id: str) -> None:
+        """Delete a join code."""
+        ...
+
+
+# ── RBAC Repository Ports ────────────────────────────────────────────────────
+
+class RoleRepositoryPort(ABC):
+    """Port for role persistence."""
+
+    @abstractmethod
+    async def save(self, role: Role) -> None:
+        """Save a role (insert or update), including its permissions."""
+        ...
+
+    @abstractmethod
+    async def get_by_id(self, role_id: str) -> Role | None:
+        """Get role by ID with its permissions loaded."""
+        ...
+
+    @abstractmethod
+    async def get_by_name(self, organization_id: str, name: str) -> Role | None:
+        """Get role by name within an organization."""
+        ...
+
+    @abstractmethod
+    async def list_by_organization(self, org_id: str) -> list[Role]:
+        """List all roles for an organization with permissions."""
+        ...
+
+    @abstractmethod
+    async def delete(self, role_id: str) -> None:
+        """Delete a role and its permission associations."""
+        ...
+
+    @abstractmethod
+    async def get_member_roles(self, member_id: str) -> list[Role]:
+        """Get all roles assigned to a member, with permissions loaded."""
+        ...
+
+    @abstractmethod
+    async def set_member_roles(self, member_id: str, role_ids: list[str]) -> None:
+        """Replace a member's role assignments."""
+        ...
+
+    @abstractmethod
+    async def add_member_role(self, member_id: str, role_id: str) -> None:
+        """Add a single role to a member."""
+        ...
+
+    @abstractmethod
+    async def remove_member_role(self, member_id: str, role_id: str) -> None:
+        """Remove a single role from a member."""
+        ...
+
+    @abstractmethod
+    async def get_member_permissions(self, member_id: str) -> list[Permission]:
+        """Get the flattened list of unique permissions for a member."""
+        ...
+
+    @abstractmethod
+    async def get_members_with_role(self, role_id: str) -> list[str]:
+        """Get member IDs that have a specific role."""
+        ...
+
+
+class PermissionRepositoryPort(ABC):
+    """Port for permission catalog persistence."""
+
+    @abstractmethod
+    async def list_all(self) -> list[Permission]:
+        """List all permissions in the catalog."""
+        ...
+
+    @abstractmethod
+    async def get_by_ids(self, permission_ids: list[str]) -> list[Permission]:
+        """Get permissions by their IDs."""
+        ...
+
+    @abstractmethod
+    async def get_by_resource(self, resource: str) -> list[Permission]:
+        """Get all permissions for a specific resource."""
+        ...
+
+    @abstractmethod
+    async def get_by_key(self, resource: str, action: str) -> Permission | None:
+        """Get a permission by its resource + action key."""
         ...
 
 

@@ -2,11 +2,12 @@
  * Authentication Context
  *
  * Provides authentication state and methods to the React component tree.
- * Handles user session, user type detection, organization membership, and auth status.
+ * Handles user session, capability detection, organization membership, and auth status.
  */
 
 import { createContext, useState, useEffect, useCallback, useMemo } from 'react';
-import { getCurrentUser, initiateLogin, initiateRegister, initiateLogout, getUserOrganizations } from '../services/authApi';
+import { getCurrentUser, initiateLogin, initiateRegister, initiateLogout } from '../services/authApi';
+import { getMyOrganizations } from '../services/organizationsApi';
 import i18n from '../i18n';
 
 /**
@@ -16,15 +17,13 @@ import i18n from '../i18n';
  * @property {string|null} username - Username
  * @property {string|null} given_name - First name
  * @property {string|null} family_name - Last name
- * @property {string} user_type - 'administrator', 'vendor', or 'applicant'
- * @property {string|null} applicant_id - Linked ApplicantRecord ID (for applicants)
+ * @property {string|null} applicant_id - Linked ApplicantRecord ID (if available)
  * @property {string[]} roles - User roles (from Keycloak realm_access.roles)
  * @property {string|null} organization_id - Keycloak Organization ID (for vendors/org members)
  * @property {string|null} organization_name - Organization display name
  * @property {Object|null} organization - Raw organization claim from Keycloak
  * @property {Array<{id: string, name: string|null}>} organizations - Organization memberships
- * @property {boolean} needsOnboarding - Whether user needs to complete onboarding
- * @property {string|null} onboardingCompleted - ISO timestamp of onboarding completion
+ * @property {Object<string, boolean>} capabilities - Normalized capability map
  */
 
 /**
@@ -32,13 +31,14 @@ import i18n from '../i18n';
  * @property {User|null} user - Current authenticated user
  * @property {boolean} isAuthenticated - Whether user is authenticated
  * @property {boolean} isLoading - Whether auth state is loading
- * @property {boolean} checkingOnboarding - Whether onboarding status is being checked
  * @property {boolean} isAdministrator - Whether user is a super-administrator
- * @property {boolean} isVendor - Whether user is a vendor (org admin)
- * @property {boolean} isApplicant - Whether user is an applicant
+ * @property {boolean} isVendor - Whether user has organization console capabilities
+ * @property {boolean} isApplicant - Always true for authenticated users
  * @property {string|null} organizationId - Current organization ID
  * @property {string|null} organizationName - Current organization name
  * @property {Array<{id: string, name: string|null}>} organizations - Organization memberships
+ * @property {Object<string, boolean>} capabilities - Current user capabilities
+ * @property {function} hasCapability - Capability check helper
  * @property {function} setActiveOrganizationId - Select active organization
  * @property {function} login - Initiate login flow
  * @property {function} register - Initiate registration flow
@@ -50,13 +50,14 @@ const defaultContextValue = {
   user: null,
   isAuthenticated: false,
   isLoading: true,
-  checkingOnboarding: false,
   isAdministrator: false,
   isVendor: false,
   isApplicant: false,
   organizationId: null,
   organizationName: null,
   organizations: [],
+  capabilities: {},
+  hasCapability: () => false,
   login: () => {},
   register: () => {},
   logout: () => {},
@@ -101,26 +102,45 @@ function parseOrganizationClaim(orgClaim) {
   };
 }
 
-/**
- * Determine user type from roles and claims.
- * Priority: administrator > vendor > applicant
- * @param {string[]} roles - User roles array
- * @param {string|null} userTypeClaim - Explicit user_type claim
- * @returns {string}
- */
-function determineUserType(roles, userTypeClaim) {
-  // Check explicit claim first
-  if (userTypeClaim && ['administrator', 'vendor', 'applicant'].includes(userTypeClaim)) {
-    return userTypeClaim;
+function normalizeCapabilities(rawCapabilities) {
+  if (!rawCapabilities) return {};
+
+  if (Array.isArray(rawCapabilities)) {
+    return rawCapabilities.reduce((acc, capability) => {
+      if (typeof capability === 'string' && capability.trim()) {
+        acc[capability] = true;
+      }
+      return acc;
+    }, {});
   }
-  
-  // Check roles (priority order)
-  if (roles?.includes('administrator')) return 'administrator';
-  if (roles?.includes('vendor')) return 'vendor';
-  if (roles?.includes('applicant')) return 'applicant';
-  
-  // Default to applicant for self-registered users
-  return 'applicant';
+
+  if (typeof rawCapabilities === 'object') {
+    return Object.entries(rawCapabilities).reduce((acc, [capability, enabled]) => {
+      acc[capability] = Boolean(enabled);
+      return acc;
+    }, {});
+  }
+
+  return {};
+}
+
+function deriveCapabilities(rawUser, organizations) {
+  const roles = rawUser?.roles || [];
+  const fromApi = normalizeCapabilities(rawUser?.capabilities);
+  const hasOrganizations = organizations.length > 0;
+
+  const inferred = {
+    apply: true,
+    'org:view': hasOrganizations || roles.includes('vendor') || roles.includes('administrator'),
+    'org:manage': roles.includes('vendor') || roles.includes('administrator'),
+    'org:issue': roles.includes('vendor') || roles.includes('administrator'),
+    'admin:platform': roles.includes('administrator'),
+  };
+
+  return {
+    ...inferred,
+    ...fromApi,
+  };
 }
 
 /**
@@ -131,7 +151,6 @@ function determineUserType(roles, userTypeClaim) {
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [checkingOnboarding, setCheckingOnboarding] = useState(false);
 
   // Fetch current user on mount
   const fetchUser = useCallback(async () => {
@@ -143,12 +162,11 @@ export function AuthProvider({ children }) {
         // Enrich user object with parsed organization data
         const rawUser = result.user;
         const org = parseOrganizationClaim(rawUser.organization);
-        const userType = determineUserType(rawUser.roles, rawUser.user_type);
         
         // Fetch full list of organizations from new endpoint
         let userOrganizations = [];
         try {
-          userOrganizations = await getUserOrganizations();
+          userOrganizations = await getMyOrganizations();
         } catch (orgError) {
           console.error('Error fetching user organizations:', orgError);
           // Fallback to organization claim parsing
@@ -175,34 +193,15 @@ export function AuthProvider({ children }) {
           userOrganizations[0] ||
           (rawUser.organization_id ? { id: rawUser.organization_id, name: rawUser.organization_name || null } : null);
 
+        const capabilities = deriveCapabilities(rawUser, userOrganizations);
+
         const enrichedUser = {
           ...rawUser,
-          user_type: userType,
           organization_id: activeOrg?.id || null,
           organization_name: activeOrg?.name || null,
           organizations: userOrganizations,
-          needsOnboarding: false,
-          onboardingCompleted: rawUser.onboarding_completed || null,
+          capabilities,
         };
-
-        // Check onboarding status
-        setCheckingOnboarding(true);
-        try {
-          const onboardingResponse = await fetch('/api/onboarding/status', {
-            credentials: 'include',
-          });
-          
-          if (onboardingResponse.ok) {
-            const onboardingData = await onboardingResponse.json();
-            enrichedUser.needsOnboarding = onboardingData.needs_onboarding || false;
-            enrichedUser.onboardingCompleted = onboardingData.completed_at || enrichedUser.onboardingCompleted;
-          }
-        } catch (onboardingError) {
-          console.error('Error checking onboarding status:', onboardingError);
-          // Don't fail auth if onboarding check fails
-        } finally {
-          setCheckingOnboarding(false);
-        }
 
         setUser(enrichedUser);
       } else {
@@ -254,12 +253,34 @@ export function AuthProvider({ children }) {
         if (!prev) return prev;
         const memberships = prev.organizations || [];
         const selected = memberships.find((entry) => entry.id === orgId);
-        if (!selected) return prev;
+
+        // Keep auth state aligned with ConsoleContext even when memberships are
+        // stale in AuthContext (e.g., org created in current session).
+        const resolvedOrganization = selected || (orgId ? { id: orgId, name: null } : null);
+
+        if (!resolvedOrganization && orgId) {
+          return prev;
+        }
+
         window.localStorage.setItem('activeOrgId', orgId);
+
+        const nextMemberships = selected
+          ? memberships
+          : orgId
+            ? [...memberships, resolvedOrganization]
+            : memberships;
+
+        const nextCapabilities = {
+          ...(prev.capabilities || {}),
+          ...(orgId ? { 'org:view': true } : {}),
+        };
+
         return {
           ...prev,
-          organization_id: selected.id,
-          organization_name: selected.name || prev.organization_name,
+          organization_id: resolvedOrganization?.id || null,
+          organization_name: resolvedOrganization?.name || prev.organization_name,
+          organizations: nextMemberships,
+          capabilities: nextCapabilities,
         };
       });
     },
@@ -267,22 +288,24 @@ export function AuthProvider({ children }) {
   );
 
   const contextValue = useMemo(() => {
-    const userType = user?.user_type;
     const roles = user?.roles || [];
+    const capabilities = user?.capabilities || {};
+    const hasCapability = (capability) => Boolean(capabilities[capability]);
     
     return {
       user,
       isAuthenticated: !!user,
       isLoading,
-      checkingOnboarding,
-      // Role checks - explicit type or role membership
-      isAdministrator: userType === 'administrator' || roles.includes('administrator'),
-      isVendor: userType === 'vendor' || roles.includes('vendor'),
-      isApplicant: userType === 'applicant' || roles.includes('applicant'),
+      // Capability-first checks
+      isAdministrator: hasCapability('admin:platform') || roles.includes('administrator'),
+      isVendor: hasCapability('org:view') || hasCapability('org:manage') || roles.includes('vendor'),
+      isApplicant: !!user,
       // Organization info
       organizationId: user?.organization_id || null,
       organizationName: user?.organization_name || null,
       organizations: user?.organizations || [],
+      capabilities,
+      hasCapability,
       // Actions
       login,
       register,
@@ -290,7 +313,7 @@ export function AuthProvider({ children }) {
       refreshUser,
       setActiveOrganizationId,
     };
-  }, [user, isLoading, checkingOnboarding, login, register, logout, refreshUser, setActiveOrganizationId]);
+  }, [user, isLoading, login, register, logout, refreshUser, setActiveOrganizationId]);
 
   return (
     <AuthContext.Provider value={contextValue}>

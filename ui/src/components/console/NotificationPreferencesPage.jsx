@@ -19,10 +19,7 @@ import EmailIcon from '@mui/icons-material/Email';
 import PhoneAndroidIcon from '@mui/icons-material/PhoneAndroid';
 import { useTranslation } from 'react-i18next';
 import ResourcePage from '../common/ResourcePage';
-import {
-  getNotificationPreferences,
-  updateNotificationPreferences,
-} from '../../services/notificationPreferencesApi';
+import notificationsApi from '../../services/notificationsApi';
 
 /**
  * Notification Preferences Page
@@ -50,7 +47,7 @@ export default function NotificationPreferencesPage() {
     try {
       setLoading(true);
       setError(null);
-      const prefs = await getNotificationPreferences();
+      const prefs = await notificationsApi.getNotificationPreferences();
       setPreferences(prefs);
     } catch (err) {
       console.error('Failed to load notification preferences:', err);
@@ -66,7 +63,7 @@ export default function NotificationPreferencesPage() {
       setError(null);
       setSuccessMessage(null);
       
-      await updateNotificationPreferences(preferences);
+      await notificationsApi.updateNotificationPreferences(preferences);
       setSuccessMessage(t('notificationPreferencesPage.messages.saveSuccess'));
     } catch (err) {
       console.error('Failed to save notification preferences:', err);

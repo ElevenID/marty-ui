@@ -1,6 +1,9 @@
 import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 import checker from 'vite-plugin-checker'
+import prerender from '@prerenderer/rollup-plugin'
+import PuppeteerRenderer from '@prerenderer/renderer-puppeteer'
+import Sitemap from 'vite-plugin-sitemap'
 
 // https://vitejs.dev/config/
 export default defineConfig(({ mode }) => {
@@ -10,6 +13,12 @@ export default defineConfig(({ mode }) => {
   const port = Number(env.VITE_PORT || env.PORT || env.UI_DEV_PORT || 3000)
   
   return {
+    resolve: {
+      dedupe: ['react', 'react-dom', 'react/jsx-runtime', 'react/jsx-dev-runtime'],
+    },
+    optimizeDeps: {
+      include: ['react', 'react-dom', 'react/jsx-runtime', 'react/jsx-dev-runtime', 'react-router-dom'],
+    },
     plugins: [
       react(),
       // Checker temporarily disabled for debugging
@@ -25,16 +34,112 @@ export default defineConfig(({ mode }) => {
         },
       })] : []),
       */
+      
+      // Prerendering for SEO - only in production builds
+      ...(!isDev ? [
+        prerender({
+          routes: [
+            '/',
+            '/product',
+            '/verifiable-credential-api',
+            '/eudi-wallet-verification',
+            '/iso-18013-5-mdoc-verification',
+            '/sd-jwt-verification',
+            '/open-badges-verification',
+            '/open-badges-issuance',
+            '/trust-registry-infrastructure',
+            '/identity',
+            '/from-idv-to-verifiable-identity',
+            '/standards',
+            '/pricing',
+            '/docs',
+          ],
+          renderer: new PuppeteerRenderer({
+            renderAfterTime: 3000, // Wait for MUI CSS-in-JS hydration
+            headless: true,
+          }),
+          postProcess(route) {
+            // Add prerender status meta tag
+            route.html = route.html.replace(
+              '</head>',
+              '<meta name="prerender-status-code" content="200" /></head>'
+            );
+          },
+        }),
+        
+        // Sitemap generation
+        Sitemap({
+          hostname: 'https://elevenidllc.com',
+          dynamicRoutes: [
+            '/',
+            '/product',
+            '/verifiable-credential-api',
+            '/eudi-wallet-verification',
+            '/iso-18013-5-mdoc-verification',
+            '/sd-jwt-verification',
+            '/open-badges-verification',
+            '/open-badges-issuance',
+            '/trust-registry-infrastructure',
+            '/identity',
+            '/from-idv-to-verifiable-identity',
+            '/standards',
+            '/pricing',
+            '/docs',
+          ],
+          exclude: [
+            '/console',
+            '/console/*',
+            '/applicant',
+            '/applicant/*',
+            '/admin',
+            '/admin/*',
+            '/vendor',
+            '/vendor/*',
+            '/dashboard',
+            '/login',
+            '/auth/*',
+          ],
+          changefreq: 'weekly',
+          priority: {
+            '/': 1.0,
+            '/product': 0.9,
+            '/pricing': 0.9,
+            '/standards': 0.8,
+            '/docs': 0.8,
+            '*': 0.7,
+          },
+          generateRobotsTxt: true,
+          robots: [
+            {
+              userAgent: '*',
+              allow: '/',
+              disallow: [
+                '/console',
+                '/console/*',
+                '/applicant',
+                '/applicant/*',
+                '/admin',
+                '/admin/*',
+                '/vendor',
+                '/vendor/*',
+                '/dashboard',
+                '/auth/*',
+                '/api/*',
+                '/v1/*',
+              ],
+            },
+          ],
+        }),
+      ] : []),
     ],
     server: {
       port: port,
-      host: true, // Listen on all network interfaces
-      allowedHosts: [
-        'localhost',
-        '.localhost',
-        'beta.elevenidllc.com',
-        '.elevenidllc.com', // Allow all subdomains
-      ],
+      host: '0.0.0.0', // Listen on all network interfaces
+      strictPort: false,
+      cors: true,
+      headers: {
+        'Cache-Control': 'no-store',
+      },
       proxy: {
         // Proxy /v1/* API requests to microservices gateway
         '/v1': {

@@ -5,11 +5,11 @@
     <link rel="icon" href="/favicon.ico?v=2" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#1976d2" />
-    <meta
-      name="description"
-      content="Build verifiable identity infrastructure for EUDI Wallets, Open Badges, and W3C Verifiable Credentials. Issuance, verification, and trust governance APIs."
-    />
-    <meta name="keywords" content="verifiable credentials, digital wallet, OID4VP, SD-JWT, EUDI Wallet, Open Badges, W3C VC, identity verification, mDL, ISO 18013-5" />
+    
+    <!-- Google Search Console Verification -->
+    <!-- Replace YOUR_VERIFICATION_CODE with actual code from Search Console -->
+    <!-- <meta name="google-site-verification" content="YOUR_VERIFICATION_CODE" /> -->
+    
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <link rel="manifest" href="/manifest.json" />
 
@@ -24,9 +24,35 @@
       href="https://fonts.googleapis.com/icon?family=Material+Icons"
     />
 
-    <title>ElevenID — Verifiable Identity Infrastructure</title>
+    <title>ElevenID LLC — Verifiable Identity Infrastructure</title>
+    <script>
+      // Ensure loading state is enforced before first paint, even on prerendered HTML
+      document.documentElement.classList.remove('app-ready');
+      document.documentElement.classList.add('app-loading');
+    </script>
+
+    <style>
+      html,
+      body,
+      #root {
+        height: 100%;
+      }
+
+      body {
+        margin: 0;
+      }
+
+      /* Prevent first-paint FOUC until app styles/fonts are ready */
+      html.app-loading #root {
+        visibility: hidden;
+      }
+
+      html.app-ready #root {
+        visibility: visible;
+      }
+    </style>
   </head>
-  <body>
+  <body class="app-loading">
     <noscript>You need to enable JavaScript to run this app.</noscript>
     <div id="root"></div>
     <script type="module" src="/src/index.jsx"></script>

@@ -78,3 +78,62 @@ class ApiKeyRevokedEvent(DomainEvent):
     organization_id: str = ""
     api_key_id: str = ""
     revoked_by: str = ""
+
+
+# ── RBAC Events ──────────────────────────────────────────────────────────────
+
+@dataclass
+class RoleCreatedEvent(DomainEvent):
+    """Emitted when a role is created."""
+
+    source_service: str = "organization"
+    organization_id: str = ""
+    role_id: str = ""
+    role_name: str = ""
+    created_by: str = ""
+
+
+@dataclass
+class RoleUpdatedEvent(DomainEvent):
+    """Emitted when a role is updated (permissions changed, etc.)."""
+
+    source_service: str = "organization"
+    organization_id: str = ""
+    role_id: str = ""
+    role_name: str = ""
+    updated_by: str = ""
+
+
+@dataclass
+class RoleDeletedEvent(DomainEvent):
+    """Emitted when a role is deleted."""
+
+    source_service: str = "organization"
+    organization_id: str = ""
+    role_id: str = ""
+    role_name: str = ""
+    deleted_by: str = ""
+
+
+@dataclass
+class RoleAssignedEvent(DomainEvent):
+    """Emitted when a role is assigned to a member."""
+
+    source_service: str = "organization"
+    organization_id: str = ""
+    member_id: str = ""
+    role_id: str = ""
+    role_name: str = ""
+    assigned_by: str = ""
+
+
+@dataclass
+class RoleRemovedFromMemberEvent(DomainEvent):
+    """Emitted when a role is removed from a member."""
+
+    source_service: str = "organization"
+    organization_id: str = ""
+    member_id: str = ""
+    role_id: str = ""
+    role_name: str = ""
+    removed_by: str = ""

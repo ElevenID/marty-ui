@@ -82,8 +82,8 @@ DTC_FIELDS = {
 }
 
 OPEN_BADGE_FIELDS = {
-    "required": ["version", "payload_json"],
-    "optional": ["document_store_json", "recipient_identity", "signing_json"],
+    "required": ["family_name", "given_name", "achievement_name", "course_name", "completion_date", "institution_name"],
+    "optional": ["badge_image", "achievement_criteria", "grade", "credit_hours", "instructor_name", "certificate_id"],
 }
 
 DEFAULT_FIELDS = {

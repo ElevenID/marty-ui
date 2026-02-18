@@ -31,14 +31,14 @@ function ComplianceProfilesPage() {
   const { t } = useTranslation('console');
 
   const getPoliciesTabs = () => [
-    { label: t('policies.presentationPolicies'), path: '/console/policies/presentation' },
-    { label: t('policies.complianceProfiles'), path: '/console/policies/compliance' },
+    { label: t('policies.presentationPolicies'), path: '/console/org/policies/presentation' },
+    { label: t('policies.complianceProfiles'), path: '/console/org/policies/compliance' },
   ];
 
   const getBreadcrumbs = () => [
     { label: t('complianceProfilesPage.breadcrumbs.console'), path: '/console' },
-    { label: t('complianceProfilesPage.breadcrumbs.policies'), path: '/console/policies' },
-    { label: t('complianceProfilesPage.breadcrumbs.complianceProfiles'), path: '/console/policies/compliance' },
+    { label: t('complianceProfilesPage.breadcrumbs.policies'), path: '/console/org/policies' },
+    { label: t('complianceProfilesPage.breadcrumbs.complianceProfiles'), path: '/console/org/policies/compliance' },
   ];
   const [profiles, setProfiles] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -113,7 +113,7 @@ function ComplianceProfilesPage() {
       title={t('complianceProfilesPage.title')}
       description={t('complianceProfilesPage.description')}
       resourceName={t('complianceProfilesPage.resourceName')}
-      buildPath="/console/policies/compliance/new"
+      buildPath="/console/org/policies/compliance/new"
       tabs={getPoliciesTabs()}
       breadcrumbs={getBreadcrumbs()}
     >
@@ -179,7 +179,7 @@ function ComplianceProfilesPage() {
                       <Tooltip title={t('complianceProfilesPage.actions.viewDetails')}>
                         <IconButton
                           component={Link}
-                          to={`/console/policies/compliance/${profile.id}`}
+                          to={`/console/org/policies/compliance/${profile.id}`}
                           size="small"
                         >
                           <VisibilityIcon fontSize="small" />
@@ -188,7 +188,7 @@ function ComplianceProfilesPage() {
                       <Tooltip title={t('complianceProfilesPage.actions.edit')}>
                         <IconButton
                           component={Link}
-                          to={`/console/policies/compliance/${profile.id}/edit`}
+                          to={`/console/org/policies/compliance/${profile.id}/edit`}
                           size="small"
                         >
                           <EditIcon fontSize="small" />

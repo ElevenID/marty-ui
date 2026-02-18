@@ -37,16 +37,16 @@ import { useTranslation } from 'react-i18next';
 import { ResourcePage, AddButton } from '../../common';
 
 const getDeployTabs = (t) => [
-  { label: t('deploy.deploymentProfiles'), path: '/console/deploy/profiles' },
-  { label: t('deploy.apiKeys'), path: '/console/deploy/api-keys' },
-  { label: t('deploy.lanesDevices'), path: '/console/deploy/lanes' },
-  { label: t('deploy.webhooks'), path: '/console/deploy/webhooks' },
+  { label: t('deploy.deploymentProfiles'), path: '/console/org/deploy/profiles' },
+  { label: t('deploy.apiKeys'), path: '/console/org/deploy/api-keys' },
+  { label: t('deploy.lanesDevices'), path: '/console/org/deploy/lanes' },
+  { label: t('deploy.webhooks'), path: '/console/org/deploy/webhooks' },
 ];
 
 const getBreadcrumbs = (t) => [
   { label: t('deploy.breadcrumbs.console'), path: '/console' },
-  { label: t('deploy.breadcrumbs.deploy'), path: '/console/deploy' },
-  { label: t('deploy.breadcrumbs.lanesDevices'), path: '/console/deploy/lanes' },
+  { label: t('deploy.breadcrumbs.deploy'), path: '/console/org/deploy' },
+  { label: t('deploy.breadcrumbs.lanesDevices'), path: '/console/org/deploy/lanes' },
 ];
 
 function LanesDevicesPage() {
@@ -157,7 +157,7 @@ function LanesDevicesPage() {
       actions={
         <AddButton 
           label={t('deploy.lanesDevicesPage.addLane')} 
-          path="/console/deploy/lanes/new" 
+          path="/console/org/deploy/lanes/new" 
         />
       }
     >

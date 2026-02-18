@@ -32,8 +32,14 @@
             font-weight: 500;
         }
         .email-header .logo {
-            font-size: 48px;
+            width: 48px;
+            height: 48px;
             margin-bottom: 16px;
+            display: inline-block;
+            border-radius: 12px;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='64' height='64' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0%25' stop-color='%231976d2'/%3E%3Cstop offset='100%25' stop-color='%23115293'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect rx='14' width='64' height='64' fill='url(%23g)'/%3E%3Cpath d='M32 10l18 8v14c0 11.2-7.7 19.8-18 22-10.3-2.2-18-10.8-18-22V18l18-8z' fill='%23fff' fill-opacity='.95'/%3E%3Cpath d='M32 18l10 4.6v8.8c0 6.8-4 12.1-10 14.2-6-2.1-10-7.4-10-14.2v-8.8L32 18z' fill='url(%23g)'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-size: cover;
         }
         .email-body {
             padding: 32px;
@@ -105,14 +111,14 @@
 <body>
     <div class="email-container">
         <div class="email-header">
-            <div class="logo">✈️</div>
-            <h1>Marty Trust Services</h1>
+            <div class="logo"></div>
+            <h1>ElevenID LLC Trust Services</h1>
         </div>
         <div class="email-body">
             ${kcSanitize(msg("emailBody"))?no_esc}
         </div>
         <div class="email-footer">
-            <p>&copy; ${.now?string('yyyy')} Marty Trust Services. All rights reserved.</p>
+            <p>&copy; ${.now?string('yyyy')} ElevenID LLC Trust Services. All rights reserved.</p>
             <p>This email was sent by <a href="${realmUrl}">${realmName}</a></p>
         </div>
     </div>

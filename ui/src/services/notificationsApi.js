@@ -5,6 +5,7 @@
  */
 
 import { get, post, patch, del } from './api';
+import { buildTruthyQueryString, withQuery } from './queryUtils';
 
 const BASE_PATH = '/v1/notifications';
 
@@ -18,15 +19,13 @@ const BASE_PATH = '/v1/notifications';
  * @returns {Promise<Object>} Paginated notifications
  */
 export async function listNotifications(filters = {}) {
-  const params = new URLSearchParams();
-  
-  if (filters.unread_only) params.append('unread_only', 'true');
-  if (filters.severity) params.append('severity', filters.severity);
-  if (filters.limit) params.append('limit', filters.limit);
-  if (filters.offset) params.append('offset', filters.offset);
-  
-  const queryString = params.toString();
-  return get(queryString ? `${BASE_PATH}?${queryString}` : BASE_PATH);
+  const queryString = buildTruthyQueryString({
+    unread_only: filters.unread_only ? 'true' : undefined,
+    severity: filters.severity,
+    limit: filters.limit,
+    offset: filters.offset,
+  });
+  return get(withQuery(BASE_PATH, queryString));
 }
 
 /**

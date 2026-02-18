@@ -76,7 +76,7 @@ function CreateTrustProfileDrawer({ open, onClose, onSuccess }) {
       onSubmit={handleSubmit}
       title={t('trust.createTrustProfileDrawer.title')}
       resourceType="trust-profile"
-      advancedPath="/console/trust/new"
+      advancedPath="/console/org/trust/new"
       fields={fields}
       initialData={{
         name: '',

@@ -9,11 +9,13 @@ import { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Box, CircularProgress, Typography, Alert } from '@mui/material';
 import { useAuth } from '../hooks/useAuth';
+import { useConsole, getDefaultLandingPath } from '../contexts/ConsoleContext';
 
 function AuthCallback() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { refreshUser } = useAuth();
+  const consoleContext = useConsole();
   const [error, setError] = useState(null);
 
   useEffect(() => {
@@ -55,8 +57,16 @@ function AuthCallback() {
         // Refresh the user state
         await refreshUser();
 
-        // Get the intended destination from state or default to home
-        // The state parameter may contain the original URL
+        // Wait for console context to load before determining landing page
+        // This gives ConsoleContext time to load preferences and memberships
+        let attempts = 0;
+        const maxAttempts = 30; // 3 seconds
+        while (consoleContext.isLoading && attempts < maxAttempts) {
+          await new Promise(resolve => setTimeout(resolve, 100));
+          attempts++;
+        }
+
+        // Get the intended destination from state or default to smart home
         let redirectTo = '/';
         if (state) {
           try {
@@ -69,6 +79,11 @@ function AuthCallback() {
           }
         }
 
+        // If redirecting to root, determine smart landing page
+        if (redirectTo === '/') {
+          redirectTo = getDefaultLandingPath(consoleContext, '/console/applicant/catalog');
+        }
+
         navigate(redirectTo, { replace: true });
       } catch (err) {
         console.error('Auth callback error:', err);
@@ -77,7 +92,7 @@ function AuthCallback() {
     };
 
     handleCallback();
-  }, [searchParams, navigate, refreshUser]);
+  }, [searchParams, navigate, refreshUser, consoleContext]);
 
   if (error) {
     return (

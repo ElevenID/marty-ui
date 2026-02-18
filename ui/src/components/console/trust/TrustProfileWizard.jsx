@@ -87,10 +87,10 @@ const TrustProfileWizard = () => {
     validateStep,
     onSubmit: handleSubmit,
     onComplete: () => {
-      navigate('/console/templates/credentials');
+      navigate('/console/org/templates/credentials');
     },
     onCancel: () => {
-      navigate('/console/trust/profiles');
+      navigate('/console/org/trust/profiles');
     },
   });
 

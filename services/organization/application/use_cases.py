@@ -6,8 +6,9 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from typing import Any
 
-from ..domain.entities import ApiKey, Member, MemberRole, MemberStatus, Organization
+from ..domain.entities import ApiKey, ConsoleContextPreference, JoinMechanism, Member, MemberRole, MemberStatus, Organization, ViewMode
 from ..domain.events import (
     ApiKeyCreatedEvent,
     ApiKeyRevokedEvent,
@@ -19,18 +20,40 @@ from ..domain.events import (
 )
 from .ports import (
     ApiKeyRepositoryPort,
+    ConsoleContextPreferenceRepositoryPort,
     CreateApiKeyCommand,
     CreateOrganizationCommand,
     EventPublisherPort,
     InviteMemberCommand,
+    JoinByCodeCommand,
+    JoinOrganizationCommand,
+    JoinCodeRepositoryPort,
     MemberRepositoryPort,
     OrganizationRepositoryPort,
     RevokeApiKeyCommand,
     UpdateMemberRoleCommand,
     UpdateOrganizationCommand,
+    UpsertConsoleContextPreferenceCommand,
 )
 
 logger = logging.getLogger(__name__)
+
+_ORG_TYPE_ALIASES: dict[str, str] = {
+    "vendor": "enterprise",
+    "nonprofit": "individual",
+}
+
+
+def _normalize_org_type(value: str | None) -> str | None:
+    """Normalize external org type aliases to canonical OrganizationType values."""
+    if not value:
+        return None
+
+    normalized = value.strip().lower()
+    if not normalized:
+        return None
+
+    return _ORG_TYPE_ALIASES.get(normalized, normalized)
 
 
 @dataclass
@@ -40,6 +63,7 @@ class OrganizationUseCase:
     organization_repo: OrganizationRepositoryPort
     member_repo: MemberRepositoryPort
     event_publisher: EventPublisherPort
+    role_use_case: Any = None  # Optional[RoleUseCase] — avoids circular import
     
     async def create_organization(self, command: CreateOrganizationCommand) -> Organization:
         """Create a new organization with owner."""
@@ -58,6 +82,24 @@ class OrganizationUseCase:
         # Save both
         await self.organization_repo.save(org)
         await self.member_repo.save(owner)
+        
+        # Seed default RBAC roles and assign owner role
+        if self.role_use_case is not None:
+            try:
+                created_roles = await self.role_use_case.seed_default_roles(org.id)
+                # Assign the "owner" role to the creating user
+                if "owner" in created_roles:
+                    from .ports import AddMemberRoleCommand
+                    await self.role_use_case.add_member_role(
+                        AddMemberRoleCommand(
+                            organization_id=org.id,
+                            member_id=owner.id,
+                            role_id=created_roles["owner"].id,
+                            assigned_by=command.owner_id,
+                        )
+                    )
+            except Exception as e:
+                logger.warning(f"Failed to seed RBAC roles for org {org.id}: {e}")
         
         # Publish event
         await self.event_publisher.publish(
@@ -127,6 +169,45 @@ class OrganizationUseCase:
                 if org:
                     orgs.append(org)
         return orgs
+    
+    async def get_user_organizations_with_memberships(self, user_id: str) -> list[tuple[Organization, Member]]:
+        """Get all organizations a user belongs to with membership details."""
+        memberships = await self.member_repo.list_by_user(user_id)
+        results = []
+        for membership in memberships:
+            if membership.status == MemberStatus.ACTIVE:
+                org = await self.organization_repo.get_by_id(membership.organization_id)
+                if org:
+                    results.append((org, membership))
+        return results
+    
+    async def discover_organizations(
+        self,
+        search: str | None = None,
+        org_type: str | None = None,
+        join_mechanism: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[Organization]:
+        """Discover publicly available organizations with optional filters."""
+        from ..domain.entities import OrganizationType
+        
+        # Convert org_type string/alias to enum if provided
+        org_type_enum = None
+        normalized_org_type = _normalize_org_type(org_type)
+        if normalized_org_type:
+            try:
+                org_type_enum = OrganizationType(normalized_org_type)
+            except ValueError:
+                raise ValueError(f"Invalid organization type: {org_type}")
+        
+        return await self.organization_repo.list_discoverable(
+            search=search,
+            org_type=org_type_enum,
+            join_mechanism=join_mechanism,
+            limit=limit,
+            offset=offset,
+        )
 
 
 @dataclass
@@ -323,3 +404,192 @@ class ApiKeyUseCase:
     async def get_api_key(self, key_id: str) -> ApiKey | None:
         """Get API key by ID."""
         return await self.api_key_repo.get_by_id(key_id)
+
+
+@dataclass
+class ConsoleContextPreferenceUseCase:
+    """Use cases for console context preferences."""
+    
+    preference_repo: ConsoleContextPreferenceRepositoryPort
+    
+    async def get_preferences(self, user_id: str) -> ConsoleContextPreference:
+        """Get user's console context preferences, return defaults if none exist."""
+        preference = await self.preference_repo.get_by_user_id(user_id)
+        
+        if not preference:
+            # Return default preferences
+            preference = ConsoleContextPreference(
+                user_id=user_id,
+                last_view_mode=ViewMode.APPLICANT,
+                last_active_org_id=None,
+            )
+        
+        return preference
+    
+    async def upsert_preferences(
+        self,
+        command: UpsertConsoleContextPreferenceCommand,
+    ) -> ConsoleContextPreference:
+        """Upsert user's console context preferences."""
+        # Get existing or create new
+        preference = await self.preference_repo.get_by_user_id(command.user_id)
+        
+        if not preference:
+            preference = ConsoleContextPreference(
+                user_id=command.user_id,
+                last_view_mode=ViewMode.APPLICANT,
+                last_active_org_id=None,
+            )
+        
+        # Apply updates (partial update semantics)
+        if command.last_view_mode is not None:
+            preference.last_view_mode = command.last_view_mode
+        
+        # Explicit None handling for last_active_org_id
+        if hasattr(command, 'last_active_org_id'):
+            preference.last_active_org_id = command.last_active_org_id
+        
+        # Save
+        await self.preference_repo.save(preference)
+        
+        logger.info(f"Console context preferences updated for user {command.user_id}")
+        return preference
+
+@dataclass
+class JoinUseCase:
+    """Use cases for joining organizations."""
+    
+    join_code_repo: JoinCodeRepositoryPort
+    organization_repo: OrganizationRepositoryPort
+    member_repo: MemberRepositoryPort
+    event_publisher: EventPublisherPort
+    
+    async def join_by_code(self, command: JoinByCodeCommand) -> tuple[Organization, Member]:
+        """Join an organization using a join code."""
+        # Find the join code
+        join_code = await self.join_code_repo.get_by_code(command.code)
+        if not join_code:
+            raise ValueError("Invalid join code")
+        
+        # Validate the code
+        if not join_code.is_valid():
+            if not join_code.is_active:
+                raise ValueError("Join code is no longer active")
+            if join_code.expires_at:
+                raise ValueError("Join code has expired")
+            if join_code.max_uses is not None:
+                raise ValueError("Join code has reached maximum uses")
+            raise ValueError("Invalid join code")
+        
+        # Get the organization
+        org = await self.organization_repo.get_by_id(join_code.organization_id)
+        if not org:
+            raise ValueError("Organization not found")
+        
+        # Check if user is already a member
+        existing = await self.member_repo.get_by_user_and_org(command.user_id, org.id)
+        if existing:
+            raise ValueError("You are already a member of this organization")
+        
+        # Create membership
+        # If org requires approval, create as PENDING, otherwise ACTIVE
+        status = MemberStatus.PENDING if org.requires_approval else MemberStatus.ACTIVE
+        member = Member.create(
+            organization_id=org.id,
+            user_id=command.user_id,
+            email=command.email,
+            role=MemberRole.MEMBER,
+            status=status,
+        )
+        
+        # Increment join code usage
+        join_code.increment_usage()
+        
+        # Save both
+        await self.member_repo.save(member)
+        await self.join_code_repo.save(join_code)
+        
+        # Publish event
+        await self.event_publisher.publish(
+            MemberAddedEvent(
+                organization_id=org.id,
+                member_id=member.id,
+                user_id=command.user_id,
+                role=member.role.value,
+            )
+        )
+        
+        logger.info(
+            f"User {command.user_id} joined organization {org.id} via code {command.code} "
+            f"with status {status.value}"
+        )
+        return org, member
+
+    async def validate_join_code(self, code: str) -> tuple[bool, Organization | None, str, bool]:
+        """Validate a join code and return org context if valid.
+
+        Returns:
+            (is_valid, organization, message, expired)
+        """
+        normalized = (code or "").strip().upper()
+        if not normalized:
+            return False, None, "Join code is required", False
+
+        join_code = await self.join_code_repo.get_by_code(normalized)
+        if not join_code:
+            return False, None, "Invitation code not found", False
+
+        if not join_code.is_valid():
+            if not join_code.is_active:
+                return False, None, "This invitation is no longer active", False
+            if join_code.expires_at:
+                return False, None, "This invitation has expired", True
+            if join_code.max_uses is not None:
+                return False, None, "This invitation has reached its maximum uses", False
+            return False, None, "Invalid invitation code", False
+
+        org = await self.organization_repo.get_by_id(join_code.organization_id)
+        if not org:
+            return False, None, "Organization not found", False
+
+        return True, org, f"Valid invitation to join {org.name}", False
+
+    async def join_organization(self, command: JoinOrganizationCommand) -> tuple[Organization, Member]:
+        """Join/request to join an organization directly by ID (open join only)."""
+        org = await self.organization_repo.get_by_id(command.organization_id)
+        if not org:
+            raise ValueError("Organization not found")
+
+        if org.join_mechanism != JoinMechanism.OPEN:
+            raise ValueError("This organization does not support direct join. Use an invite code or invitation")
+
+        existing = await self.member_repo.get_by_user_and_org(command.user_id, org.id)
+        if existing:
+            if existing.status == MemberStatus.PENDING:
+                raise ValueError("Your join request is already pending approval")
+            raise ValueError("You are already a member of this organization")
+
+        status = MemberStatus.PENDING if org.requires_approval else MemberStatus.ACTIVE
+        member = Member.create(
+            organization_id=org.id,
+            user_id=command.user_id,
+            email=command.email,
+            role=MemberRole.MEMBER,
+            status=status,
+        )
+
+        await self.member_repo.save(member)
+
+        await self.event_publisher.publish(
+            MemberAddedEvent(
+                organization_id=org.id,
+                member_id=member.id,
+                user_id=command.user_id,
+                role=member.role.value,
+            )
+        )
+
+        logger.info(
+            f"User {command.user_id} joined/requested organization {org.id} with status {status.value}"
+        )
+        return org, member

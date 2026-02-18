@@ -8,7 +8,7 @@
 import { Navigate } from 'react-router-dom';
 
 function FlowsPage() {
-  return <Navigate to="/console/flows/definitions" replace />;
+  return <Navigate to="/console/org/flows/definitions" replace />;
 }
 
 export default FlowsPage;

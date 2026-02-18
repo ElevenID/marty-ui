@@ -8,7 +8,7 @@
   },
   "idvComparison": {
     "title": "From IDV to Verifiable Identity",
-    "takeaway": "ElevenID replaces repeated verification with reusable trust.",
+    "takeaway": "ElevenID LLC replaces repeated verification with reusable trust.",
     "traditional": {
       "title": "Traditional IDV",
       "oneTimeChecks": "One-time document checks",
@@ -19,7 +19,7 @@
       "reVerification": "Re-verification everywhere"
     },
     "elevenid": {
-      "title": "ElevenID",
+      "title": "ElevenID LLC",
       "reusable": "Reusable verifiable credentials",
       "holderControlled": "Holder-controlled digital wallets",
       "cryptographic": "Cryptographic proofs",
@@ -33,7 +33,7 @@
     "verifyCredentials": "Verify Verifiable Credentials—not just documents.",
     "trustIssuers": "Trust issuers—not databases.",
     "walletFirst": "Wallet-first by design—EUDI-ready.",
-    "quote": "IDV platforms stop at a one-time decision. ElevenID produces cryptographically verifiable outcomes that can be reused across wallets, ecosystems, and trust registries."
+    "quote": "IDV platforms stop at a one-time decision. ElevenID LLC produces cryptographically verifiable outcomes that can be reused across wallets, ecosystems, and trust registries."
   },
   "organizationOutcomes": {
     "title": "Why This Matters for Organizations",
@@ -104,7 +104,7 @@
       }
     },
     "solvesIt": {
-      "title": "How ElevenID Solves It",
+      "title": "How ElevenID LLC Solves It",
       "intro": "Govern identity with four primitives: trust profiles, credential templates, presentation policies, and flows.",
       "subheading": "Policies are configuration, not code. Endpoints execute centrally governed trust and disclosure rules without redeployment."
     },
@@ -116,7 +116,7 @@
     "standards": {
       "title": "Standards-Based Architecture",
       "subtitle": "Standards are not integrations. They are the product.",
-      "description": "These layers let ElevenID interoperate across governments, wallets, and enterprises without custom integrations.",
+      "description": "These layers let ElevenID LLC interoperate across governments, wallets, and enterprises without custom integrations.",
       "cta": "Explore Standards"
     },
     "startFirst": {

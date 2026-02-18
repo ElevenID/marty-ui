@@ -2,10 +2,11 @@
  * Standards Page
  * 
  * Explains why standards matter and shows the standards stack
- * that ElevenID is built on
+ * that ElevenID LLC is built on
  */
 
 import { Box, Typography, Card, CardContent, Grid, Paper, Button } from '@mui/material';
+import { SEOHead } from './seo';
 import { STANDARDS_INFO, STANDARDS_STRATEGIC } from '../data/marketingContent';
 import { StandardsStackDiagram } from './diagrams';
 import PortableWifiOffIcon from '@mui/icons-material/PortableWifiOff';
@@ -27,6 +28,14 @@ function StandardsPage() {
 
   return (
     <Box>
+      {/* SEO Meta Tags */}
+      <SEOHead
+        title="Identity Standards & Interoperability"
+        description="Standards-based verifiable identity infrastructure built on ISO 18013-5, W3C VC, EUDI Wallet, OpenID4VP, and Open Badges. Portable, interoperable, and future-proof."
+        canonicalPath="/standards"
+        keywords={['identity standards', 'ISO 18013-5', 'W3C Verifiable Credentials', 'EUDI Wallet', 'OpenID4VP', 'Open Badges', 'interoperability']}
+      />
+      
       {/* Hero Section */}
       <Box
         sx={{
@@ -79,7 +88,7 @@ function StandardsPage() {
           </Typography>
         </Paper>
         <Typography variant="body1" color="text.secondary" textAlign="center" sx={{ maxWidth: 800, mx: 'auto' }}>
-          ElevenID models standards as governed configuration—trust rules, credential formats, presentation policies, 
+          ElevenID LLC models standards as governed configuration—trust rules, credential formats, presentation policies, 
           and deployment behavior—rather than one-off integrations.
         </Typography>
       </Box>
@@ -114,7 +123,7 @@ function StandardsPage() {
         </Paper>
         <Typography variant="body1" color="text.secondary" textAlign="center" sx={{ mt: 3, maxWidth: 800, mx: 'auto' }}>
           Each layer maps to a different concern: frameworks define what identity means, formats define how claims are encoded, 
-          protocols define how they move, and trust defines who is authorized. ElevenID governs all four centrally.
+          protocols define how they move, and trust defines who is authorized. ElevenID LLC governs all four centrally.
         </Typography>
       </Box>
 
@@ -169,12 +178,12 @@ function StandardsPage() {
           Standards-First Architecture
         </Typography>
         <Typography variant="body1" sx={{ maxWidth: 800, mx: 'auto', mb: 2 }}>
-          ElevenID isn&apos;t a proprietary identity system—it&apos;s infrastructure that implements 
+          ElevenID LLC isn&apos;t a proprietary identity system—it&apos;s infrastructure that implements 
           international standards. Your credentials work across vendors, jurisdictions, 
           and use cases.
         </Typography>
         <Typography variant="body2" sx={{ maxWidth: 700, mx: 'auto', mb: 3, opacity: 0.9 }}>
-          Standards define the rules; ElevenID enforces them through centrally governed policies 
+          Standards define the rules; ElevenID LLC enforces them through centrally governed policies 
           executed consistently across APIs, wallets, and devices.
         </Typography>
         <Button

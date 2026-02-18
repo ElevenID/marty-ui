@@ -108,7 +108,7 @@ function MyCredentialsPage() {
                     <Typography color="text.secondary" sx={{ py: 4 }}>
                       {t('credentials.empty.message')}
                     </Typography>
-                    <Button variant="contained" href="/credentials">
+                    <Button variant="contained" href="/console/applicant/catalog">
                       {t('credentials.empty.browseButton')}
                     </Button>
                   </TableCell>

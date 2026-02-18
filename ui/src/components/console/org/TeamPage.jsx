@@ -22,6 +22,7 @@ import {
   Select,
   MenuItem,
   Chip,
+  Checkbox,
   Alert,
   Menu,
   ListItemIcon,
@@ -44,6 +45,8 @@ import { TableSkeleton } from '../../common/skeletons';
 import ErrorState from '../../common/ErrorState';
 import EmptyState from '../../common/EmptyState';
 import teamApi from '../../../services/teamApi';
+import { listRoles, setMemberRoles } from '../../../services/rbacApi';
+import { useAuth } from '../../../hooks/useAuth';
 import { useNotifications } from '../../../hooks/useNotifications';
 import { usePermissions } from '../../../hooks/usePermissions';
 import { PermissionGate } from '../../common/PermissionGate';
@@ -54,6 +57,7 @@ import { PermissionGate } from '../../common/PermissionGate';
 const getOrgTabs = (t) => [
   { label: t('org.tabs.organization'), path: '/console/org/settings' },
   { label: t('org.tabs.team'), path: '/console/org/team' },
+  { label: 'Roles', path: '/console/org/roles' },
   { label: t('org.tabs.notifications'), path: '/console/org/notifications' },
 ];
 
@@ -87,9 +91,11 @@ function TeamPage() {
   const [inviteDialogOpen, setInviteDialogOpen] = useState(false);
   const [roleDialogOpen, setRoleDialogOpen] = useState(false);
   const [selectedMember, setSelectedMember] = useState(null);
+  const [availableRoles, setAvailableRoles] = useState([]);
 
+  const { organizationId } = useAuth();
   const { showNotification } = useNotifications();
-  const { hasPermission } = usePermissions();
+  const { hasPermission, refresh: refreshPermissions } = usePermissions();
 
   useEffect(() => {
     loadTeamData();
@@ -99,12 +105,19 @@ function TeamPage() {
     setLoading(true);
     setError(null);
     try {
-      const [membersData, invitesData] = await Promise.all([
+      const promises = [
         teamApi.listMembers(),
         teamApi.listInvites(),
-      ]);
+      ];
+      if (organizationId) {
+        promises.push(listRoles(organizationId).catch(() => []));
+      }
+      const [membersData, invitesData, rolesData] = await Promise.all(promises);
       setMembers(Array.isArray(membersData) ? membersData : membersData.members || []);
       setPendingInvites(Array.isArray(invitesData) ? invitesData : invitesData.invites || []);
+      if (rolesData) {
+        setAvailableRoles(rolesData.roles || rolesData || []);
+      }
     } catch (err) {
       console.error('Failed to load team data:', err);
       setError(err);
@@ -147,15 +160,21 @@ function TeamPage() {
     }
   };
 
-  const handleChangeRole = async (memberId, newRole) => {
+  const handleChangeRole = async (memberId, roleIds) => {
     try {
-      await teamApi.updateMemberRole(memberId, newRole);
+      if (organizationId) {
+        await setMemberRoles(organizationId, memberId, roleIds);
+      } else {
+        // Fallback for legacy single-role
+        await teamApi.updateMemberRole(memberId, roleIds[0]);
+      }
       showNotification?.(t('org.team.dialog.changeRole.success'), 'success');
       setRoleDialogOpen(false);
       setSelectedMember(null);
+      await refreshPermissions();
       loadTeamData();
     } catch (err) {
-      console.error('Failed to update role:', err);
+      console.error('Failed to update roles:', err);
       showNotification?.(t('org.team.dialog.changeRole.error'), 'error');
     }
   };
@@ -241,11 +260,24 @@ function TeamPage() {
                         <TableCell>{member.name || '—'}</TableCell>
                         <TableCell>{member.email}</TableCell>
                         <TableCell>
-                          <Chip
-                            label={member.role}
-                            size="small"
-                            color={getRoleColor(member.role)}
-                          />
+                          <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
+                            {(member.roles && member.roles.length > 0) ? (
+                              member.roles.map((r) => (
+                                <Chip
+                                  key={r.id || r.name}
+                                  label={r.display_name || r.name}
+                                  size="small"
+                                  color={getRoleColor(r.name)}
+                                />
+                              ))
+                            ) : (
+                              <Chip
+                                label={member.role}
+                                size="small"
+                                color={getRoleColor(member.role)}
+                              />
+                            )}
+                          </Box>
                         </TableCell>
                         <TableCell>
                           {member.joined_at ? formatDistanceToNow(new Date(member.joined_at), { addSuffix: true }) : '—'}
@@ -341,6 +373,7 @@ function TeamPage() {
       <ChangeRoleDialog
         open={roleDialogOpen}
         member={selectedMember}
+        availableRoles={availableRoles}
         onClose={() => {
           setRoleDialogOpen(false);
           setSelectedMember(null);
@@ -463,20 +496,44 @@ function InviteMemberDialog({ open, onClose, onInvite, t }) {
   );
 }
 
-function ChangeRoleDialog({ open, member, onClose, onChangeRole, t }) {
-  const [newRole, setNewRole] = useState('');
-  
-  const ROLES = getRoles(t);
+function ChangeRoleDialog({ open, member, availableRoles = [], onClose, onChangeRole, t }) {
+  const [selectedRoleIds, setSelectedRoleIds] = useState(new Set());
 
   useEffect(() => {
     if (member) {
-      setNewRole(member.role);
+      // Pre-select current roles
+      const currentIds = new Set(
+        (member.roles || []).map(r => r.id).filter(Boolean)
+      );
+      setSelectedRoleIds(currentIds);
     }
   }, [member]);
 
+  const toggleRole = (roleId) => {
+    setSelectedRoleIds(prev => {
+      const next = new Set(prev);
+      if (next.has(roleId)) {
+        next.delete(roleId);
+      } else {
+        next.add(roleId);
+      }
+      return next;
+    });
+  };
+
   const handleSubmit = () => {
-    if (!member || !newRole) return;
-    onChangeRole(member.id, newRole);
+    if (!member || selectedRoleIds.size === 0) return;
+    onChangeRole(member.id, Array.from(selectedRoleIds));
+  };
+
+  const getRoleColorForName = (name) => {
+    switch (name) {
+      case 'owner': return 'error';
+      case 'admin': return 'primary';
+      case 'member': return 'success';
+      case 'viewer': return 'default';
+      default: return 'info';
+    }
   };
 
   return (
@@ -489,32 +546,50 @@ function ChangeRoleDialog({ open, member, onClose, onChangeRole, t }) {
         <Typography variant="body2" sx={{ mb: 2 }}>
           {t('org.team.dialog.changeRole.changingFor', { email: member?.email })}
         </Typography>
-        <FormControl fullWidth>
-          <InputLabel>{t('org.team.dialog.changeRole.newRoleLabel')}</InputLabel>
-          <Select
-            value={newRole}
-            label={t('org.team.dialog.changeRole.newRoleLabel')}
-            onChange={(e) => setNewRole(e.target.value)}
-          >
-            {ROLES.map((r) => (
-              <MenuItem key={r.value} value={r.value}>
-                <Box>
-                  <Typography variant="body2">{r.label}</Typography>
-                  <Typography variant="caption" color="text.secondary">
-                    {r.description}
-                  </Typography>
-                </Box>
-              </MenuItem>
-            ))}
-          </Select>
-        </FormControl>
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+          {availableRoles.map((role) => (
+            <Paper
+              key={role.id}
+              variant="outlined"
+              sx={{
+                p: 1.5,
+                cursor: 'pointer',
+                border: selectedRoleIds.has(role.id) ? 2 : 1,
+                borderColor: selectedRoleIds.has(role.id) ? 'primary.main' : 'divider',
+                '&:hover': { bgcolor: 'action.hover' },
+              }}
+              onClick={() => toggleRole(role.id)}
+            >
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Checkbox
+                  checked={selectedRoleIds.has(role.id)}
+                  size="small"
+                  tabIndex={-1}
+                />
+                <Chip
+                  label={role.display_name || role.name}
+                  size="small"
+                  color={getRoleColorForName(role.name)}
+                />
+                {role.is_system && (
+                  <Chip label="System" size="small" variant="outlined" />
+                )}
+              </Box>
+              {role.description && (
+                <Typography variant="caption" color="text.secondary" sx={{ ml: 5 }}>
+                  {role.description}
+                </Typography>
+              )}
+            </Paper>
+          ))}
+        </Box>
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose}>{t('actions.cancel', { ns: 'common' })}</Button>
         <Button
           onClick={handleSubmit}
           variant="contained"
-          disabled={!newRole || newRole === member?.role}
+          disabled={selectedRoleIds.size === 0}
         >
           {t('org.team.dialog.changeRole.update')}
         </Button>

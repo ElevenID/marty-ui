@@ -8,9 +8,6 @@
 import {
   Box,
   Typography,
-  Card,
-  CardContent,
-  Button,
   Chip,
   Divider,
   Grid,
@@ -18,15 +15,13 @@ import {
   ListItem,
   ListItemText,
   Alert,
-  FormControlLabel,
-  Switch,
 } from '@mui/material';
-import EditIcon from '@mui/icons-material/Edit';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import SecurityIcon from '@mui/icons-material/Security';
 import TimerIcon from '@mui/icons-material/Timer';
 import VerifiedIcon from '@mui/icons-material/Verified';
 import { useTranslation } from 'react-i18next';
+import { ReviewSectionCard, ReviewActivationCard, ReviewField } from '../../../common';
 
 const ReviewStep = ({ data, onEdit, onToggleActivation }) => {
   const { t } = useTranslation('console');
@@ -67,62 +62,50 @@ const ReviewStep = ({ data, onEdit, onToggleActivation }) => {
       </Alert>
 
       {/* Basic Information */}
-      <Card sx={{ mb: 2 }}>
-        <CardContent>
-          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
-            <Typography variant="h6" sx={{ display: 'flex', alignItems: 'center' }}>
-              <CheckCircleIcon sx={{ mr: 1 }} color="primary" />
-              {t('wizards.presentationPolicy.reviewStep.sections.basicInformation')}
-            </Typography>
-            <Button size="small" startIcon={<EditIcon />} onClick={() => onEdit(2)}>
-              {t('wizards.presentationPolicy.reviewStep.actions.edit')}
-            </Button>
-          </Box>
-
+      <ReviewSectionCard
+        sx={{ mb: 2 }}
+        title={t('wizards.presentationPolicy.reviewStep.sections.basicInformation')}
+        icon={<CheckCircleIcon color="primary" />}
+        onEdit={() => onEdit(2)}
+        editLabel={t('wizards.presentationPolicy.reviewStep.actions.edit')}
+      >
           <Grid container spacing={2}>
             <Grid item xs={12}>
-              <Typography variant="subtitle2" color="text.secondary">
-                {t('wizards.presentationPolicy.reviewStep.fields.policyName')}
-              </Typography>
-              <Typography variant="body1" gutterBottom>
-                {policyConfig.name || <em>{t('wizards.presentationPolicy.reviewStep.values.notSet')}</em>}
-              </Typography>
+              <ReviewField
+                label={t('wizards.presentationPolicy.reviewStep.fields.policyName')}
+                value={policyConfig.name}
+                placeholder={t('wizards.presentationPolicy.reviewStep.values.notSet')}
+                gutterBottom
+              />
             </Grid>
 
             <Grid item xs={12}>
-              <Typography variant="subtitle2" color="text.secondary">
-                {t('wizards.presentationPolicy.reviewStep.fields.description')}
-              </Typography>
-              <Typography variant="body1" gutterBottom>
-                {policyConfig.description || <em>{t('wizards.presentationPolicy.reviewStep.values.notSet')}</em>}
-              </Typography>
+              <ReviewField
+                label={t('wizards.presentationPolicy.reviewStep.fields.description')}
+                value={policyConfig.description}
+                placeholder={t('wizards.presentationPolicy.reviewStep.values.notSet')}
+                gutterBottom
+              />
             </Grid>
 
             <Grid item xs={12}>
-              <Typography variant="subtitle2" color="text.secondary">
-                {t('wizards.presentationPolicy.reviewStep.fields.purposeStatement')}
-              </Typography>
-              <Typography variant="body1">
-                {policyConfig.purpose || <em>{t('wizards.presentationPolicy.reviewStep.values.notSet')}</em>}
-              </Typography>
+              <ReviewField
+                label={t('wizards.presentationPolicy.reviewStep.fields.purposeStatement')}
+                value={policyConfig.purpose}
+                placeholder={t('wizards.presentationPolicy.reviewStep.values.notSet')}
+              />
             </Grid>
           </Grid>
-        </CardContent>
-      </Card>
+      </ReviewSectionCard>
 
       {/* Trust Profile */}
-      <Card sx={{ mb: 2 }}>
-        <CardContent>
-          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
-            <Typography variant="h6" sx={{ display: 'flex', alignItems: 'center' }}>
-              <SecurityIcon sx={{ mr: 1 }} color="primary" />
-              {t('wizards.presentationPolicy.reviewStep.sections.trustProfile')}
-            </Typography>
-            <Button size="small" startIcon={<EditIcon />} onClick={() => onEdit(0)}>
-              {t('wizards.presentationPolicy.reviewStep.actions.edit')}
-            </Button>
-          </Box>
-
+      <ReviewSectionCard
+        sx={{ mb: 2 }}
+        title={t('wizards.presentationPolicy.reviewStep.sections.trustProfile')}
+        icon={<SecurityIcon color="primary" />}
+        onEdit={() => onEdit(0)}
+        editLabel={t('wizards.presentationPolicy.reviewStep.actions.edit')}
+      >
           {trustProfile ? (
             <Box>
               <Typography variant="body1" gutterBottom>
@@ -143,44 +126,32 @@ const ReviewStep = ({ data, onEdit, onToggleActivation }) => {
               <em>{t('wizards.presentationPolicy.reviewStep.values.noTrustProfile')}</em>
             </Typography>
           )}
-        </CardContent>
-      </Card>
+      </ReviewSectionCard>
 
       {/* Template */}
       {selectedTemplate && (
-        <Card sx={{ mb: 2 }}>
-          <CardContent>
-            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
-              <Typography variant="h6">
-                {t('wizards.presentationPolicy.reviewStep.sections.template')}
-              </Typography>
-              <Button size="small" startIcon={<EditIcon />} onClick={() => onEdit(1)}>
-                {t('wizards.presentationPolicy.reviewStep.actions.edit')}
-              </Button>
-            </Box>
-
+        <ReviewSectionCard
+          sx={{ mb: 2 }}
+          title={t('wizards.presentationPolicy.reviewStep.sections.template')}
+          onEdit={() => onEdit(1)}
+          editLabel={t('wizards.presentationPolicy.reviewStep.actions.edit')}
+        >
             <Typography variant="body1" gutterBottom>
               {selectedTemplate.icon} {selectedTemplate.name}
             </Typography>
             {selectedTemplate.standardReference && (
               <Chip label={selectedTemplate.standardReference} size="small" variant="outlined" />
             )}
-          </CardContent>
-        </Card>
+        </ReviewSectionCard>
       )}
 
       {/* Credential Types & Claims */}
-      <Card sx={{ mb: 2 }}>
-        <CardContent>
-          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
-            <Typography variant="h6">
-              {t('wizards.presentationPolicy.reviewStep.sections.credentialTypesClaims')}
-            </Typography>
-            <Button size="small" startIcon={<EditIcon />} onClick={() => onEdit(2)}>
-              {t('wizards.presentationPolicy.reviewStep.actions.edit')}
-            </Button>
-          </Box>
-
+      <ReviewSectionCard
+        sx={{ mb: 2 }}
+        title={t('wizards.presentationPolicy.reviewStep.sections.credentialTypesClaims')}
+        onEdit={() => onEdit(2)}
+        editLabel={t('wizards.presentationPolicy.reviewStep.actions.edit')}
+      >
           <Typography variant="subtitle2" color="text.secondary" gutterBottom>
             {t('wizards.presentationPolicy.reviewStep.fields.acceptedCredentialTypes')}
           </Typography>
@@ -239,30 +210,22 @@ const ReviewStep = ({ data, onEdit, onToggleActivation }) => {
               <Chip label={t('wizards.presentationPolicy.reviewStep.values.singlePresentation')} size="small" variant="outlined" />
             )}
           </Box>
-        </CardContent>
-      </Card>
+      </ReviewSectionCard>
 
       {/* Freshness & Binding */}
-      <Card sx={{ mb: 2 }}>
-        <CardContent>
-          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
-            <Typography variant="h6" sx={{ display: 'flex', alignItems: 'center' }}>
-              <TimerIcon sx={{ mr: 1 }} color="primary" />
-              {t('wizards.presentationPolicy.reviewStep.sections.freshnessSecurity')}
-            </Typography>
-            <Button size="small" startIcon={<EditIcon />} onClick={() => onEdit(3)}>
-              {t('wizards.presentationPolicy.reviewStep.actions.edit')}
-            </Button>
-          </Box>
-
+      <ReviewSectionCard
+        sx={{ mb: 2 }}
+        title={t('wizards.presentationPolicy.reviewStep.sections.freshnessSecurity')}
+        icon={<TimerIcon color="primary" />}
+        onEdit={() => onEdit(3)}
+        editLabel={t('wizards.presentationPolicy.reviewStep.actions.edit')}
+      >
           <Grid container spacing={2}>
             <Grid item xs={12} sm={6}>
-              <Typography variant="subtitle2" color="text.secondary">
-                {t('wizards.presentationPolicy.reviewStep.fields.holderBinding')}
-              </Typography>
-              <Typography variant="body1">
-                {holderBindingLabels[policyConfig.holder_binding] || policyConfig.holder_binding}
-              </Typography>
+              <ReviewField
+                label={t('wizards.presentationPolicy.reviewStep.fields.holderBinding')}
+                value={holderBindingLabels[policyConfig.holder_binding] || policyConfig.holder_binding}
+              />
             </Grid>
 
             <Grid item xs={12} sm={6}>
@@ -279,71 +242,45 @@ const ReviewStep = ({ data, onEdit, onToggleActivation }) => {
             </Grid>
 
             <Grid item xs={12} sm={6}>
-              <Typography variant="subtitle2" color="text.secondary">
-                {t('wizards.presentationPolicy.reviewStep.fields.maxCredentialAge')}
-              </Typography>
-              <Typography variant="body1">
-                {formatDuration(policyConfig.freshness_requirements.max_credential_age_seconds)}
-              </Typography>
+              <ReviewField
+                label={t('wizards.presentationPolicy.reviewStep.fields.maxCredentialAge')}
+                value={formatDuration(policyConfig.freshness_requirements.max_credential_age_seconds)}
+              />
             </Grid>
 
             <Grid item xs={12} sm={6}>
-              <Typography variant="subtitle2" color="text.secondary">
-                {t('wizards.presentationPolicy.reviewStep.fields.maxProofAge')}
-              </Typography>
-              <Typography variant="body1">
-                {formatDuration(policyConfig.freshness_requirements.max_proof_age_seconds)}
-              </Typography>
+              <ReviewField
+                label={t('wizards.presentationPolicy.reviewStep.fields.maxProofAge')}
+                value={formatDuration(policyConfig.freshness_requirements.max_proof_age_seconds)}
+              />
             </Grid>
           </Grid>
-        </CardContent>
-      </Card>
+      </ReviewSectionCard>
 
       {/* Standard Reference */}
       {policyConfig.metadata?.standard_reference && (
-        <Card sx={{ mb: 2 }}>
-          <CardContent>
-            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
-              <Typography variant="h6" sx={{ display: 'flex', alignItems: 'center' }}>
-                <VerifiedIcon sx={{ mr: 1 }} color="primary" />
-                {t('wizards.presentationPolicy.reviewStep.sections.complianceStandard')}
-              </Typography>
-              <Button size="small" startIcon={<EditIcon />} onClick={() => onEdit(3)}>
-                {t('wizards.presentationPolicy.reviewStep.actions.edit')}
-              </Button>
-            </Box>
-
+        <ReviewSectionCard
+          sx={{ mb: 2 }}
+          title={t('wizards.presentationPolicy.reviewStep.sections.complianceStandard')}
+          icon={<VerifiedIcon color="primary" />}
+          onEdit={() => onEdit(3)}
+          editLabel={t('wizards.presentationPolicy.reviewStep.actions.edit')}
+        >
             <Typography variant="body1">
               {policyConfig.metadata.standard_reference}
             </Typography>
-          </CardContent>
-        </Card>
+        </ReviewSectionCard>
       )}
 
       {/* Activation Toggle */}
-      <Card>
-        <CardContent>
-          <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 600 }}>
-            {t('wizards.presentationPolicy.reviewStep.sections.activation')}
-          </Typography>
-
-          <FormControlLabel
-            control={
-              <Switch
-                checked={activateImmediately}
-                onChange={(e) => onToggleActivation(e.target.checked)}
-                color="primary"
-              />
-            }
-            label={t('wizards.presentationPolicy.reviewStep.activation.label')}
-          />
-          <Typography variant="caption" color="text.secondary" display="block" sx={{ ml: 4 }}>
-            {activateImmediately
-              ? t('wizards.presentationPolicy.reviewStep.activation.activeDescription')
-              : t('wizards.presentationPolicy.reviewStep.activation.inactiveDescription')}
-          </Typography>
-        </CardContent>
-      </Card>
+      <ReviewActivationCard
+        title={t('wizards.presentationPolicy.reviewStep.sections.activation')}
+        label={t('wizards.presentationPolicy.reviewStep.activation.label')}
+        checked={activateImmediately}
+        onChange={(e) => onToggleActivation(e.target.checked)}
+        activeDescription={t('wizards.presentationPolicy.reviewStep.activation.activeDescription')}
+        inactiveDescription={t('wizards.presentationPolicy.reviewStep.activation.inactiveDescription')}
+      />
     </Box>
   );
 };

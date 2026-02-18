@@ -8,7 +8,7 @@
   },
   "idvComparison": {
     "title": "Van IDV naar verifieerbare identiteit",
-    "takeaway": "ElevenID vervangt herhaalde verificatie door herbruikbaar vertrouwen.",
+    "takeaway": "ElevenID LLC vervangt herhaalde verificatie door herbruikbaar vertrouwen.",
     "traditional": {
       "title": "Traditionele IDV",
       "oneTimeChecks": "Eenmalige documentcontroles",
@@ -19,7 +19,7 @@
       "reVerification": "Hernieuwde verificatie overal"
     },
     "elevenid": {
-      "title": "ElevenID",
+      "title": "ElevenID LLC",
       "reusable": "Herbruikbare verifieerbare referenties",
       "holderControlled": "Door houder gecontroleerde digitale portemonnees",
       "cryptographic": "Cryptografische bewijzen",
@@ -33,7 +33,7 @@
     "verifyCredentials": "Verifieer verifieerbare referenties—niet alleen documenten.",
     "trustIssuers": "Vertrouw uitgevers—niet databases.",
     "walletFirst": "Wallet-first door ontwerp—EUDI-klaar.",
-    "quote": "IDV-platforms stoppen bij een eenmalige beslissing. ElevenID produceert cryptografisch verifieerbare resultaten die kunnen worden hergebruikt over portemonnees, ecosystemen en vertrouwensregisters heen."
+    "quote": "IDV-platforms stoppen bij een eenmalige beslissing. ElevenID LLC produceert cryptografisch verifieerbare resultaten die kunnen worden hergebruikt over portemonnees, ecosystemen en vertrouwensregisters heen."
   },
   "organizationOutcomes": {
     "title": "Waarom dit belangrijk is voor organisaties",
@@ -104,7 +104,7 @@
       }
     },
     "solvesIt": {
-      "title": "Hoe ElevenID dit oplost",
+      "title": "Hoe ElevenID LLC dit oplost",
       "intro": "Bestuur identiteit met vier primitieven: vertrouwensprofielen, referentiesjablonen, presentatiebeleid en flows.",
       "subheading": "Beleid is configuratie, geen code. Eindpunten voeren centraal bestuurde vertrouwens- en openbaarmakingsregels uit zonder herimplementatie."
     },
@@ -116,7 +116,7 @@
     "standards": {
       "title": "Op standaarden gebaseerde architectuur",
       "subtitle": "Standaarden zijn geen integraties. Ze zijn het product.",
-      "description": "Deze lagen stellen ElevenID in staat om samen te werken over overheden, portemonnees en ondernemingen heen zonder aangepaste integraties.",
+      "description": "Deze lagen stellen ElevenID LLC in staat om samen te werken over overheden, portemonnees en ondernemingen heen zonder aangepaste integraties.",
       "cta": "Verken standaarden"
     },
     "startFirst": {

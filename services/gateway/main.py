@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from contextlib import asynccontextmanager
 from typing import Any, AsyncGenerator, List
 
@@ -32,6 +33,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from starlette.middleware.base import BaseHTTPMiddleware
+import redis.asyncio as aioredis
+from marty_common import OrganizationClient
 
 logging.basicConfig(
     level=logging.INFO,
@@ -62,6 +65,7 @@ class ServiceRegistry:
             "credential-templates": os.environ.get("CREDENTIAL_TEMPLATE_SERVICE_URL", "http://localhost:8003"),
             "trust-profiles": os.environ.get("TRUST_PROFILE_SERVICE_URL", "http://localhost:8004"),
             "issuance": os.environ.get("ISSUANCE_SERVICE_URL", "http://localhost:8005"),
+            "applicant": os.environ.get("APPLICANT_SERVICE_URL", "http://localhost:8006"),
             "notifications": os.environ.get("NOTIFICATION_SERVICE_URL", "http://localhost:8007"),
             "compliance-profiles": os.environ.get("COMPLIANCE_PROFILE_SERVICE_URL", "http://localhost:8008"),
             "presentation-policies": os.environ.get("PRESENTATION_POLICY_SERVICE_URL", "http://localhost:8009"),
@@ -79,15 +83,272 @@ class ServiceRegistry:
 
 
 # =============================================================================
+# Session Cache
+# =============================================================================
+
+class SessionCache:
+    """Simple in-memory cache for session validation with TTL."""
+    
+    def __init__(self, ttl_seconds: int = 60):
+        self._cache: dict[str, tuple[dict, float]] = {}
+        self._ttl_seconds = ttl_seconds
+    
+    def get(self, session_id: str) -> dict | None:
+        """Get cached session data if not expired."""
+        if session_id not in self._cache:
+            return None
+        
+        data, expires_at = self._cache[session_id]
+        if time.time() > expires_at:
+            del self._cache[session_id]
+            return None
+        
+        return data
+    
+    def set(self, session_id: str, data: dict) -> None:
+        """Set session data with TTL."""
+        expires_at = time.time() + self._ttl_seconds
+        self._cache[session_id] = (data, expires_at)
+    
+    def clear(self, session_id: str) -> None:
+        """Clear cached session."""
+        self._cache.pop(session_id, None)
+
+
+# =============================================================================
+# Auth Middleware
+# =============================================================================
+
+class AuthMiddleware(BaseHTTPMiddleware):
+    """Middleware that validates sessions and injects user context headers."""
+    
+    def __init__(self, app, registry: ServiceRegistry, session_cache: SessionCache):
+        super().__init__(app)
+        self.registry = registry
+        self.session_cache = session_cache
+        self._http_client: httpx.AsyncClient | None = None
+    
+    async def dispatch(self, request: Request, call_next):
+        """Process request and inject user context headers."""
+        # Get route configuration
+        route_config = get_route_config(request.url.path)
+        
+        # Skip auth for unauthenticated routes or health checks
+        if (
+            not route_config
+            or not route_config.get("requires_auth", False)
+            or request.url.path == "/health"
+            or request.url.path.startswith("/health/")
+            or request.url.path.startswith("/.well-known/")
+        ):
+            return await call_next(request)
+        
+        # Extract session ID from cookie
+        session_id = request.cookies.get("sessionId")
+        if not session_id:
+            logger.warning(f"No session cookie for authenticated route: {request.url.path}")
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Authentication required"},
+            )
+        
+        # Check cache first
+        user_data = self.session_cache.get(session_id)
+        
+        # Validate with auth service if not cached
+        if not user_data:
+            auth_url = self.registry.get_service_url("auth")
+            if not auth_url:
+                logger.error("Auth service URL not configured")
+                return JSONResponse(
+                    status_code=503,
+                    content={"detail": "Auth service unavailable"},
+                )
+            
+            # Validate session
+            try:
+                if not self._http_client:
+                    self._http_client = httpx.AsyncClient()
+                
+                response = await self._http_client.post(
+                    f"{auth_url}/internal/v1/auth/validate-session",
+                    params={"session_id": session_id},
+                    timeout=5.0,
+                )
+                
+                if response.status_code != 200:
+                    logger.warning(f"Session validation failed: {response.status_code}")
+                    return JSONResponse(
+                        status_code=401,
+                        content={"detail": "Invalid session"},
+                    )
+                
+                validation_data = response.json()
+                if not validation_data.get("valid"):
+                    return JSONResponse(
+                        status_code=401,
+                        content={"detail": "Invalid session"},
+                    )
+                
+                user_data = validation_data.get("user", {})
+                
+                # Cache the result
+                self.session_cache.set(session_id, user_data)
+                
+            except httpx.TimeoutException:
+                logger.error("Auth service timeout during session validation")
+                return JSONResponse(
+                    status_code=504,
+                    content={"detail": "Auth service timeout"},
+                )
+            except Exception as e:
+                logger.error(f"Error validating session: {e}")
+                return JSONResponse(
+                    status_code=502,
+                    content={"detail": "Auth service error"},
+                )
+        
+        # Inject user context headers
+        user_id = user_data.get("user_id")
+        email = user_data.get("email")
+        
+        if not user_id:
+            logger.error("No user_id in session data")
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Invalid session data"},
+            )
+        
+        # Add headers to request for downstream services
+        request.state.user_id = user_id
+        request.state.user_email = email
+        request.state.user_domain = email.split("@")[1] if email and "@" in email else None
+        
+        # Proceed with request
+        response = await call_next(request)
+        return response
+
+
+# =============================================================================
+# Organization Authorization Middleware
+# =============================================================================
+
+class OrgAuthMiddleware(BaseHTTPMiddleware):
+    """Middleware that verifies organization membership for org-scoped routes."""
+    
+    # Routes that should skip org membership checks
+    ORG_ALLOWLIST_PATTERNS = [
+        r"^/v1/organizations$",  # List all orgs (discovery)
+        r"^/v1/organizations/mine$",  # Get my orgs
+        r"^/v1/organizations/discover",  # Discover orgs
+        r"^/v1/organizations/join/",  # Join flows
+        r"^/v1/organizations/[^/]+/join$",  # Join specific org by ID (user may not be a member yet)
+        r"^/v1/organizations/invitations/",  # Invitation flows
+        r"^/health",
+        r"^/.well-known/",
+    ]
+    
+    def __init__(self, app):
+        super().__init__(app)
+        import re
+        self._allowlist_patterns = [re.compile(p) for p in self.ORG_ALLOWLIST_PATTERNS]
+    
+    async def dispatch(self, request: Request, call_next):
+        """Check org membership for org-scoped routes."""
+        path = request.url.path
+        
+        # Skip if path matches allowlist
+        import re
+        if any(pattern.match(path) for pattern in self._allowlist_patterns):
+            return await call_next(request)
+        
+        # Check if this is an org-scoped route: /v1/organizations/{org_id}/...
+        org_id_match = re.match(r"^/v1/organizations/([a-f0-9\-]{36})/", path)
+        if not org_id_match:
+            # Not an org-scoped route, proceed
+            return await call_next(request)
+        
+        org_id = org_id_match.group(1)
+        
+        # Get user_id from request state (injected by AuthMiddleware)
+        user_id = getattr(request.state, "user_id", None)
+        if not user_id:
+            # User not authenticated - AuthMiddleware should have caught this
+            # but just in case...
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Authentication required"},
+            )
+        
+        # Get OrganizationClient from app state
+        if not hasattr(request.app.state, "org_client"):
+            logger.error("OrganizationClient not configured in app state")
+            return JSONResponse(
+                status_code=500,
+                content={"detail": "Organization client not configured"},
+            )
+        
+        org_client: OrganizationClient = request.app.state.org_client
+        
+        # Verify membership
+        try:
+            membership = await org_client.get_membership(user_id, org_id)
+            
+            if not membership:
+                logger.warning(
+                    f"User {user_id} attempted to access organization {org_id} "
+                    f"without membership (path: {path})"
+                )
+                return JSONResponse(
+                    status_code=403,
+                    content={"detail": "Not a member of this organization"},
+                )
+            
+            if membership.status != "active":
+                logger.warning(
+                    f"User {user_id} attempted to access organization {org_id} "
+                    f"with inactive membership (status: {membership.status}, path: {path})"
+                )
+                return JSONResponse(
+                    status_code=403,
+                    content={"detail": f"Organization membership is {membership.status}"},
+                )
+            
+            # Inject org role header for downstream services
+            request.state.org_role = membership.role.value
+            
+        except HTTPException as e:
+            # OrganizationClient raises HTTPException for service errors
+            logger.error(f"Error verifying membership: {e.detail}")
+            return JSONResponse(
+                status_code=e.status_code,
+                content={"detail": e.detail},
+            )
+        except Exception as e:
+            logger.error(f"Unexpected error in org auth middleware: {e}", exc_info=True)
+            return JSONResponse(
+                status_code=500,
+                content={"detail": "Internal server error"},
+            )
+        
+        # Membership verified, proceed
+        response = await call_next(request)
+        return response
+
+
+# =============================================================================
 # Route Configuration
 # =============================================================================
 
 ROUTE_CONFIG = {
     # Auth routes (no auth required)
     "/v1/auth": {"service": "auth", "requires_auth": False},
+    "/v1/organizations/invitations/validate": {"service": "auth", "requires_auth": False},
+    "/v1/organizations/join/code/validate": {"service": "organizations", "requires_auth": False},
     
     # Organization routes
     "/v1/organizations": {"service": "organizations", "requires_auth": True},
+    "/v1/me": {"service": "organizations", "requires_auth": True},
     
     # Digital Identity Model - Configuration Resources
     "/v1/credential-templates": {"service": "credential-templates", "requires_auth": True},
@@ -98,6 +359,7 @@ ROUTE_CONFIG = {
     "/v1/revocation-profiles": {"service": "revocation-profiles", "requires_auth": True},
     
     # Digital Identity Model - Operational Resources
+    "/v1/applicants": {"service": "applicant", "requires_auth": True},
     "/v1/issuance": {"service": "issuance", "requires_auth": True},
     "/v1/application-templates": {"service": "issuance", "requires_auth": True},
     "/v1/applications": {"service": "issuance", "requires_auth": True},
@@ -634,6 +896,16 @@ class OrganizationResponse(BaseModel):
     id: str
     name: str
     display_name: str | None
+    slug: str | None = None
+    description: str | None = None
+    org_type: str | None = None
+    status: str | None = None
+    contact_email: str | None = None
+    contact_phone: str | None = None
+    website: str | None = None
+    join_mechanism: str | None = None
+    requires_approval: bool | None = None
+    is_discoverable: bool | None = None
     created_at: str
     updated_at: str
 
@@ -925,6 +1197,16 @@ async def proxy_request(
         if k.lower() not in ("host", "connection", "keep-alive", "transfer-encoding")
     }
     
+    # Inject user context headers from middleware
+    if hasattr(request.state, "user_id") and request.state.user_id:
+        headers["X-User-Id"] = request.state.user_id
+    
+    if hasattr(request.state, "user_email") and request.state.user_email:
+        headers["X-User-Email"] = request.state.user_email
+    
+    if hasattr(request.state, "user_domain") and request.state.user_domain:
+        headers["X-User-Domain"] = request.state.user_domain
+    
     try:
         response = await client.request(
             method=request.method,
@@ -1169,6 +1451,50 @@ async def get_credential_template_application_template(template_id: str, request
     registry = get_registry()
     service_url = registry.get_service_url("credential-templates")
     return await proxy_request(request, service_url, f"/v1/credential-templates/{template_id}/application-template")
+
+
+# Wallet Registry routes (proxied to credential-template service)
+wallet_registry_router = APIRouter(prefix="/v1/wallet-registry", tags=["Wallet Registry"])
+
+
+@wallet_registry_router.get("", summary="List Wallet Registry")
+async def list_wallet_registry(request: Request) -> Response:
+    """List all wallets in the global registry."""
+    registry = get_registry()
+    service_url = registry.get_service_url("credential-templates")
+    return await proxy_request(request, service_url, "/v1/wallet-registry")
+
+
+@wallet_registry_router.get("/{wallet_id}", summary="Get Wallet")
+async def get_wallet_registry_entry(wallet_id: str, request: Request) -> Response:
+    """Get a wallet registry entry by ID."""
+    registry = get_registry()
+    service_url = registry.get_service_url("credential-templates")
+    return await proxy_request(request, service_url, f"/v1/wallet-registry/{wallet_id}")
+
+
+@wallet_registry_router.post("", summary="Create Wallet Entry")
+async def create_wallet_registry_entry(request: Request) -> Response:
+    """Create a new wallet registry entry."""
+    registry = get_registry()
+    service_url = registry.get_service_url("credential-templates")
+    return await proxy_request(request, service_url, "/v1/wallet-registry")
+
+
+@wallet_registry_router.patch("/{wallet_id}", summary="Update Wallet Entry")
+async def update_wallet_registry_entry(wallet_id: str, request: Request) -> Response:
+    """Update a wallet registry entry."""
+    registry = get_registry()
+    service_url = registry.get_service_url("credential-templates")
+    return await proxy_request(request, service_url, f"/v1/wallet-registry/{wallet_id}")
+
+
+@wallet_registry_router.delete("/{wallet_id}", summary="Delete Wallet Entry")
+async def delete_wallet_registry_entry(wallet_id: str, request: Request) -> Response:
+    """Delete a wallet registry entry."""
+    registry = get_registry()
+    service_url = registry.get_service_url("credential-templates")
+    return await proxy_request(request, service_url, f"/v1/wallet-registry/{wallet_id}")
 
 
 # Compliance Profile routes
@@ -1730,6 +2056,175 @@ async def reject_application(application_id: str, request: Request) -> Response:
     return await proxy_request(request, service_url, f"/v1/applications/{application_id}/reject")
 
 
+@application_router.post("/{application_id}/issuance-offer", summary="Generate Wallet Invite")
+async def generate_issuance_offer(application_id: str, request: Request) -> Response:
+    """Generate (or refresh) a wallet credential offer for an approved application.
+
+    Returns offer_url, qr_payload, wallets deep-link list, email_payload, and expires_at.
+    """
+    registry = get_registry()
+    service_url = registry.get_service_url("issuance")
+    return await proxy_request(request, service_url, f"/v1/applications/{application_id}/issuance-offer")
+
+
+@application_router.get("/{application_id}/issuance-offer", summary="Get Wallet Invite (Applicant)")
+async def get_issuance_offer(application_id: str, request: Request) -> Response:
+    """Retrieve the current wallet credential offer for an application (applicant-facing).
+
+    Returns 404 until an admin has generated the offer via POST.
+    """
+    registry = get_registry()
+    service_url = registry.get_service_url("issuance")
+    return await proxy_request(request, service_url, f"/v1/applications/{application_id}/issuance-offer")
+
+
+@application_router.get("/{application_id}/issuance-events", summary="List Issuance Events (Admin)")
+async def get_application_issuance_events(application_id: str, request: Request) -> Response:
+    """List all lifecycle events for an application (admin audit timeline).
+
+    Returns events in chronological order covering the full issuance lifecycle:
+    offer_generated, offer_viewed, offer_expired, credential_issued.
+    """
+    registry = get_registry()
+    service_url = registry.get_service_url("issuance")
+    return await proxy_request(request, service_url, f"/v1/applications/{application_id}/issuance-events")
+
+
+# Notification routes
+notification_router = APIRouter(prefix="/v1/notifications", tags=["Notifications"])
+
+
+@notification_router.api_route("", methods=["GET", "POST", "PUT", "PATCH", "DELETE"], summary="Notifications")
+@notification_router.api_route("/{subpath:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"], summary="Notifications")
+async def proxy_notifications(request: Request, subpath: str = "") -> Response:
+    """Proxy all notification routes to notification service."""
+    registry = get_registry()
+    service_url = registry.get_service_url("notifications")
+    target_path = "/v1/notifications"
+    if subpath:
+        target_path = f"{target_path}/{subpath}"
+    return await proxy_request(request, service_url, target_path)
+
+
+# Applicant routes (applicant profiles)
+applicant_router = APIRouter(prefix="/v1/applicants", tags=["Applicants"])
+
+
+@applicant_router.post("", summary="Create Applicant")
+async def create_applicant(request: Request) -> Response:
+    """Create an applicant profile."""
+    registry = get_registry()
+    service_url = registry.get_service_url("applicant")
+    return await proxy_request(request, service_url, "/v1/applicants")
+
+
+@applicant_router.get("/by-user/{user_id}", summary="Get Applicant by User ID")
+async def get_applicant_by_user(user_id: str, request: Request) -> Response:
+    """Get an applicant profile by user ID."""
+    registry = get_registry()
+    service_url = registry.get_service_url("applicant")
+    return await proxy_request(request, service_url, f"/v1/applicants/by-user/{user_id}")
+
+
+@applicant_router.get("/profiles/{applicant_id}", summary="Get Applicant")
+async def get_applicant(applicant_id: str, request: Request) -> Response:
+    """Get an applicant profile by ID."""
+    registry = get_registry()
+    service_url = registry.get_service_url("applicant")
+    return await proxy_request(request, service_url, f"/v1/applicants/profiles/{applicant_id}")
+
+
+@applicant_router.patch("/profiles/{applicant_id}", summary="Update Applicant")
+async def update_applicant(applicant_id: str, request: Request) -> Response:
+    """Update an applicant profile."""
+    registry = get_registry()
+    service_url = registry.get_service_url("applicant")
+    return await proxy_request(request, service_url, f"/v1/applicants/profiles/{applicant_id}")
+
+
+@applicant_router.get("", summary="List Applicants")
+async def list_applicants(
+    organization_id: str = Query(None, description="Filter by organization"),
+    request: Request = None,
+) -> Response:
+    """List applicant profiles."""
+    registry = get_registry()
+    service_url = registry.get_service_url("applicant")
+    return await proxy_request(request, service_url, "/v1/applicants")
+
+
+@applicant_router.post("/applications", summary="Create Application")
+async def create_applicant_application(request: Request) -> Response:
+    """Create an application for a credential."""
+    registry = get_registry()
+    service_url = registry.get_service_url("applicant")
+    return await proxy_request(request, service_url, "/v1/applicants/applications")
+
+
+@applicant_router.get("/org-applications", summary="List Organization Applications")
+async def list_applicant_applications(request: Request) -> Response:
+    """List applications for an organization queue."""
+    registry = get_registry()
+    service_url = registry.get_service_url("applicant")
+    return await proxy_request(request, service_url, "/v1/applicants/org-applications")
+
+
+@applicant_router.get("/applications/{application_id}", summary="Get Application")
+async def get_applicant_application(application_id: str, request: Request) -> Response:
+    """Get an application by ID."""
+    registry = get_registry()
+    service_url = registry.get_service_url("applicant")
+    return await proxy_request(request, service_url, f"/v1/applicants/applications/{application_id}")
+
+
+@applicant_router.post("/applications/{application_id}/submit", summary="Submit Application")
+async def submit_applicant_application(application_id: str, request: Request) -> Response:
+    """Submit an application for review."""
+    registry = get_registry()
+    service_url = registry.get_service_url("applicant")
+    return await proxy_request(request, service_url, f"/v1/applicants/applications/{application_id}/submit")
+
+
+@applicant_router.patch("/applications/{application_id}", summary="Update Application")
+async def update_applicant_application(application_id: str, request: Request) -> Response:
+    """Update application fields (admin)."""
+    registry = get_registry()
+    service_url = registry.get_service_url("applicant")
+    return await proxy_request(request, service_url, f"/v1/applicants/applications/{application_id}")
+
+
+@applicant_router.post("/applications/{application_id}/review", summary="Review Application")
+async def review_applicant_application(application_id: str, request: Request) -> Response:
+    """Review (approve/reject) an application."""
+    registry = get_registry()
+    service_url = registry.get_service_url("applicant")
+    return await proxy_request(request, service_url, f"/v1/applicants/applications/{application_id}/review")
+
+
+@applicant_router.post("/applications/{application_id}/issue", summary="Issue Application")
+async def issue_applicant_application(application_id: str, request: Request) -> Response:
+    """Issue a credential for an approved application."""
+    registry = get_registry()
+    service_url = registry.get_service_url("applicant")
+    return await proxy_request(request, service_url, f"/v1/applicants/applications/{application_id}/issue")
+
+
+@applicant_router.post("/profiles/{applicant_id}/biometrics", summary="Enroll Biometric")
+async def enroll_applicant_biometric(applicant_id: str, request: Request) -> Response:
+    """Enroll biometric data for an applicant."""
+    registry = get_registry()
+    service_url = registry.get_service_url("applicant")
+    return await proxy_request(request, service_url, f"/v1/applicants/profiles/{applicant_id}/biometrics")
+
+
+@applicant_router.get("/profiles/{applicant_id}/applications", summary="Get Applicant Applications")
+async def get_applicant_applications(applicant_id: str, request: Request) -> Response:
+    """Get applications for a specific applicant."""
+    registry = get_registry()
+    service_url = registry.get_service_url("applicant")
+    return await proxy_request(request, service_url, f"/v1/applicants/profiles/{applicant_id}/applications")
+
+
 # Organization routes
 organization_router = APIRouter(prefix="/v1/organizations", tags=["Organizations"])
 
@@ -1748,6 +2243,22 @@ async def list_organizations(request: Request) -> Response:
     registry = get_registry()
     service_url = registry.get_service_url("organizations")
     return await proxy_request(request, service_url, "/v1/organizations")
+
+
+@organization_router.get("/discover", response_model=list[OrganizationResponse], summary="Discover Organizations")
+async def discover_organizations(request: Request) -> Response:
+    """Discover publicly available organizations."""
+    registry = get_registry()
+    service_url = registry.get_service_url("organizations")
+    return await proxy_request(request, service_url, "/v1/organizations/discover")
+
+
+@organization_router.get("/mine", response_model=list[dict], summary="My Organizations")
+async def get_my_organizations(request: Request) -> Response:
+    """Get organizations the current user belongs to with membership details."""
+    registry = get_registry()
+    service_url = registry.get_service_url("organizations")
+    return await proxy_request(request, service_url, "/v1/organizations/mine")
 
 
 @organization_router.get("/{org_id}", response_model=OrganizationResponse, summary="Get Organization")
@@ -1772,6 +2283,91 @@ async def delete_organization(org_id: str, request: Request) -> Response:
     registry = get_registry()
     service_url = registry.get_service_url("organizations")
     return await proxy_request(request, service_url, f"/v1/organizations/{org_id}")
+
+
+# Join by Code
+class JoinByCodeRequest(BaseModel):
+    """Request to join an organization by code."""
+    code: str = Field(description="8-character join code")
+
+
+class JoinByCodeResponse(BaseModel):
+    """Response after joining an organization."""
+    organization: OrganizationResponse
+    membership: dict = Field(description="Member information")
+
+
+class ValidateJoinCodeResponse(BaseModel):
+    """Response for join code validation."""
+    valid: bool
+    organization_id: str | None = None
+    organization_name: str | None = None
+    expired: bool = False
+    message: str | None = None
+
+
+class InvitationValidateResponse(BaseModel):
+    """Response for invitation validation."""
+    valid: bool
+    organization_id: str | None = None
+    organization_name: str | None = None
+    role: str | None = None
+    expired: bool = False
+    message: str | None = None
+
+
+class InvitationAcceptRequest(BaseModel):
+    """Request to accept an invitation."""
+    token: str
+
+
+class InvitationAcceptResponse(BaseModel):
+    """Response for invitation acceptance."""
+    success: bool
+    organization_id: str | None = None
+    organization_name: str | None = None
+    role: str | None = None
+    message: str
+
+
+@organization_router.post("/join/code", response_model=JoinByCodeResponse, summary="Join Organization by Code", status_code=201)
+async def join_by_code(body: JoinByCodeRequest, request: Request) -> Response:
+    """Join an organization using a join code."""
+    registry = get_registry()
+    service_url = registry.get_service_url("organizations")
+    return await proxy_request(request, service_url, "/v1/organizations/join/code")
+
+
+@organization_router.get("/join/code/validate", response_model=ValidateJoinCodeResponse, summary="Validate Join Code")
+async def validate_join_code(request: Request) -> Response:
+    """Validate join/invitation code without joining."""
+    registry = get_registry()
+    service_url = registry.get_service_url("organizations")
+    return await proxy_request(request, service_url, "/v1/organizations/join/code/validate")
+
+
+@organization_router.post("/{org_id}/join", response_model=JoinByCodeResponse, summary="Join Organization", status_code=201)
+async def join_organization(org_id: str, request: Request) -> Response:
+    """Join/request to join an organization by ID (open join organizations)."""
+    registry = get_registry()
+    service_url = registry.get_service_url("organizations")
+    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/join")
+
+
+@organization_router.get("/invitations/validate", response_model=InvitationValidateResponse, summary="Validate Invitation")
+async def validate_organization_invitation(request: Request) -> Response:
+    """Validate invitation token (public endpoint)."""
+    registry = get_registry()
+    service_url = registry.get_service_url("auth")
+    return await proxy_request(request, service_url, "/api/onboarding/invitations/validate")
+
+
+@organization_router.post("/invitations/accept", response_model=InvitationAcceptResponse, summary="Accept Invitation")
+async def accept_organization_invitation(body: InvitationAcceptRequest, request: Request) -> Response:
+    """Accept invitation and join organization."""
+    registry = get_registry()
+    service_url = registry.get_service_url("auth")
+    return await proxy_request(request, service_url, "/api/onboarding/invitations/accept")
 
 
 # Audit Events (nested under Organization)
@@ -1799,18 +2395,183 @@ async def get_audit_event(org_id: str, event_id: str, request: Request) -> Respo
     return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/audit-events/{event_id}")
 
 
+# RBAC: Permissions catalog
+@organization_router.get("/{org_id}/permissions", summary="List Permissions")
+async def list_permissions(org_id: str, request: Request) -> Response:
+    """List the available permission catalog for this organization."""
+    registry = get_registry()
+    service_url = registry.get_service_url("organizations")
+    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/permissions")
+
+
+# RBAC: Roles
+@organization_router.get("/{org_id}/roles", summary="List Roles")
+async def list_roles(org_id: str, request: Request) -> Response:
+    """List roles in this organization."""
+    registry = get_registry()
+    service_url = registry.get_service_url("organizations")
+    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/roles")
+
+
+@organization_router.post("/{org_id}/roles", summary="Create Role", status_code=201)
+async def create_role(org_id: str, request: Request) -> Response:
+    """Create a custom role in this organization."""
+    registry = get_registry()
+    service_url = registry.get_service_url("organizations")
+    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/roles")
+
+
+@organization_router.get("/{org_id}/roles/{role_id}", summary="Get Role")
+async def get_role(org_id: str, role_id: str, request: Request) -> Response:
+    """Get a role by ID."""
+    registry = get_registry()
+    service_url = registry.get_service_url("organizations")
+    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/roles/{role_id}")
+
+
+@organization_router.patch("/{org_id}/roles/{role_id}", summary="Update Role")
+async def update_role(org_id: str, role_id: str, request: Request) -> Response:
+    """Update a custom role."""
+    registry = get_registry()
+    service_url = registry.get_service_url("organizations")
+    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/roles/{role_id}")
+
+
+@organization_router.delete("/{org_id}/roles/{role_id}", summary="Delete Role")
+async def delete_role(org_id: str, role_id: str, request: Request) -> Response:
+    """Delete a custom role."""
+    registry = get_registry()
+    service_url = registry.get_service_url("organizations")
+    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/roles/{role_id}")
+
+
+# RBAC: Member role assignments
+@organization_router.put("/{org_id}/members/{member_id}/roles", summary="Set Member Roles")
+async def set_member_roles(org_id: str, member_id: str, request: Request) -> Response:
+    """Replace all roles for a member."""
+    registry = get_registry()
+    service_url = registry.get_service_url("organizations")
+    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/members/{member_id}/roles")
+
+
+@organization_router.post("/{org_id}/members/{member_id}/roles/{role_id}", summary="Add Role to Member")
+async def add_member_role(org_id: str, member_id: str, role_id: str, request: Request) -> Response:
+    """Add a role to a member."""
+    registry = get_registry()
+    service_url = registry.get_service_url("organizations")
+    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/members/{member_id}/roles/{role_id}")
+
+
+@organization_router.delete("/{org_id}/members/{member_id}/roles/{role_id}", summary="Remove Role from Member")
+async def remove_member_role(org_id: str, member_id: str, role_id: str, request: Request) -> Response:
+    """Remove a role from a member."""
+    registry = get_registry()
+    service_url = registry.get_service_url("organizations")
+    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/members/{member_id}/roles/{role_id}")
+
+
+# RBAC: Current user permissions
+@organization_router.get("/{org_id}/members/me/permissions", summary="Get My Permissions")
+async def get_my_permissions(org_id: str, request: Request) -> Response:
+    """Get the current user's permissions in this organization."""
+    registry = get_registry()
+    service_url = registry.get_service_url("organizations")
+    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/members/me/permissions")
+
+
+# =============================================================================
+# Preferences Routes (Console Context)
+# =============================================================================
+
+# Pydantic models for preferences
+class PreferencesResponse(BaseModel):
+    """Console context preferences response."""
+    last_view_mode: str = Field(description="Last selected view mode: 'applicant' or 'org_admin'")
+    last_active_org_id: str | None = Field(description="Last active organization ID (null if none)")
+
+
+class UpdatePreferencesRequest(BaseModel):
+    """Request to update console context preferences (partial update)."""
+    last_view_mode: str | None = Field(None, description="View mode to set: 'applicant' or 'org_admin'")
+    last_active_org_id: str | None = Field(None, description="Organization ID to set as active (explicit null allowed)")
+
+
+preferences_router = APIRouter(prefix="/v1/me", tags=["User Preferences"])
+
+
+@preferences_router.get("/preferences", response_model=PreferencesResponse, summary="Get Console Context Preferences")
+async def get_preferences(request: Request) -> Response:
+    """
+    Get current user's console context preferences.
+    
+    Returns existing preferences or defaults if none exist.
+    """
+    registry = get_registry()
+    service_url = registry.get_service_url("organizations")
+    return await proxy_request(request, service_url, "/v1/me/preferences")
+
+
+@preferences_router.put("/preferences", response_model=PreferencesResponse, summary="Update Console Context Preferences")
+async def update_preferences(body: UpdatePreferencesRequest, request: Request) -> Response:
+    """
+    Update (upsert) current user's console context preferences.
+    
+    Partial update semantics:
+    - Absent field: keep existing value
+    - Field present as explicit null for last_active_org_id: set to null
+    - Field present as null for last_view_mode: rejected with 400
+    """
+    registry = get_registry()
+    service_url = registry.get_service_url("organizations")
+    return await proxy_request(request, service_url, "/v1/me/preferences")
+
+
 # =============================================================================
 # Health and Status
 # =============================================================================
 
+_session_cache: SessionCache | None = None
+
+def get_session_cache() -> SessionCache:
+    if _session_cache is None:
+        raise RuntimeError("Service not configured")
+    return _session_cache
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    global _registry, _http_client
+    global _registry, _http_client, _session_cache
     logger.info(f"Starting {SERVICE_NAME}...")
     _registry = ServiceRegistry()
     _http_client = httpx.AsyncClient()
+    _session_cache = SessionCache(ttl_seconds=60)
+    
+    # Initialize Redis for membership caching
+    redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379")
+    redis_db = int(os.environ.get("REDIS_DB_GATEWAY", "2"))  # Use DB 2 for gateway
+    logger.info(f"Connecting to Redis at {redis_url}/{redis_db}")
+    redis_client = aioredis.from_url(
+        f"{redis_url}/{redis_db}",
+        encoding="utf-8",
+        decode_responses=True
+    )
+    
+    # Initialize OrganizationClient for membership verification
+    org_service_url = _registry.get_service_url("organizations")
+    org_client = OrganizationClient(
+        base_url=org_service_url,
+        redis_client=redis_client,
+        cache_ttl=120,  # 2 minutes cache
+    )
+    app.state.org_client = org_client
+    app.state.redis_client = redis_client
+    
+    logger.info(f"{SERVICE_NAME} started successfully")
     yield
+    
     logger.info(f"Shutting down {SERVICE_NAME}...")
+    await org_client.close()
+    await redis_client.aclose()
     await _http_client.aclose()
 
 
@@ -1859,18 +2620,45 @@ Verification is handled through two complementary approaches:
         lifespan=lifespan,
     )
     
+    # CORS configuration: Use specific origins when credentials are enabled
+    # Cannot use wildcard "*" with credentials per CORS spec
+    allowed_origins = os.environ.get(
+        "CORS_ORIGINS",
+        "http://localhost:3000,https://beta.elevenidllc.com,http://localhost:5173"
+    ).split(",")
+    
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=[origin.strip() for origin in allowed_origins],
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        expose_headers=["*"],
     )
+    
+    # Add auth middleware for session validation and user context injection.
+    # NOTE: create_app() runs at import time, before lifespan() initializes globals.
+    # So we bootstrap defaults here and let lifespan() refresh them at startup.
+    global _registry, _session_cache
+    if _registry is None:
+        _registry = ServiceRegistry()
+    if _session_cache is None:
+        _session_cache = SessionCache(ttl_seconds=60)
+
+    registry = _registry
+    session_cache = _session_cache
+
+    # Add org auth middleware first, then auth middleware.
+    # Starlette executes middleware in reverse registration order, so this makes
+    # AuthMiddleware run before OrgAuthMiddleware and inject user context early.
+    app.add_middleware(OrgAuthMiddleware)
+    app.add_middleware(AuthMiddleware, registry=registry, session_cache=session_cache)
     
     # Include all routers
     app.include_router(trust_profile_router)
     app.include_router(revocation_profile_router)
     app.include_router(credential_template_router)
+    app.include_router(wallet_registry_router)
     app.include_router(compliance_profile_router)
     app.include_router(presentation_policy_router)
     app.include_router(deployment_profile_router)
@@ -1878,7 +2666,10 @@ Verification is handled through two complementary approaches:
     app.include_router(issuance_router)
     app.include_router(application_template_router)
     app.include_router(application_router)
+    app.include_router(notification_router)
+    app.include_router(applicant_router)
     app.include_router(organization_router)
+    app.include_router(preferences_router)
     
     # Auth service proxy - forward all /v1/auth/* requests to auth service
     @app.api_route("/v1/auth/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])

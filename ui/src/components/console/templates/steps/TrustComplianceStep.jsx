@@ -61,7 +61,7 @@ const TrustComplianceStep = ({ data, onChange }) => {
   };
 
   const handleGoToTrustProfiles = () => {
-    navigate('/console/trust/profiles/new');
+    navigate('/console/org/trust/profiles/new');
   };
 
   if (loading) {

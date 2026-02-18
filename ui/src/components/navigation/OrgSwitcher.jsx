@@ -23,23 +23,31 @@ import BusinessIcon from '@mui/icons-material/Business';
 import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown';
 
 import { useAuth } from '../../hooks/useAuth';
+import { useConsole } from '../../contexts/ConsoleContext';
 
 /**
  * Organization Switcher Component
  */
 export function OrgSwitcher({ collapsed, variant = 'sidebar' }) {
-  const { 
-    organizationId, 
-    organizationName, 
-    organizations, 
-    isAdministrator,
-    setActiveOrganizationId 
-  } = useAuth();
+  const { isAdministrator } = useAuth();
+  const { activeOrgId, memberships, setActiveOrgId } = useConsole();
 
-  // Don't show if no org or only one org and not admin
-  if (!organizationId || (organizations.length <= 1 && !isAdministrator)) {
-    // For header variant, still show org name if available
-    if (variant === 'header' && organizationName) {
+  // Find active organization details
+  const activeOrg = memberships.find(org => org.id === activeOrgId);
+  const organizationName = activeOrg?.display_name || activeOrg?.name || '';
+
+  const handleChange = (event) => {
+    const newOrgId = event.target.value;
+    setActiveOrgId(newOrgId);
+  };
+
+  // Header variant: compact dropdown
+  if (variant === 'header') {
+    if (memberships.length === 0) {
+      return null;
+    }
+
+    if (memberships.length === 1 && !isAdministrator && activeOrgId) {
       return (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
           <BusinessIcon fontSize="small" color="action" />
@@ -49,20 +57,11 @@ export function OrgSwitcher({ collapsed, variant = 'sidebar' }) {
         </Box>
       );
     }
-    return null;
-  }
 
-  const handleChange = (event) => {
-    const newOrgId = event.target.value;
-    setActiveOrganizationId(newOrgId);
-  };
-
-  // Header variant: compact dropdown
-  if (variant === 'header') {
     return (
       <FormControl size="small">
         <Select
-          value={organizationId || ''}
+          value={activeOrgId || ''}
           onChange={handleChange}
           displayEmpty
           IconComponent={ArrowDropDownIcon}
@@ -90,13 +89,13 @@ export function OrgSwitcher({ collapsed, variant = 'sidebar' }) {
             </Box>
           )}
         >
-          {organizations.map((org) => (
+          {memberships.map((org) => (
             <MenuItem key={org.id} value={org.id}>
               <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
                 <Typography variant="body2">
-                  {org.name || org.id}
+                  {org.display_name || org.name || org.id}
                 </Typography>
-                {org.id === organizationId && (
+                {org.id === activeOrgId && (
                   <CheckIcon fontSize="small" color="primary" sx={{ ml: 1 }} />
                 )}
               </Box>
@@ -105,6 +104,11 @@ export function OrgSwitcher({ collapsed, variant = 'sidebar' }) {
         </Select>
       </FormControl>
     );
+  }
+
+  // Don't show in sidebar if no org or only one org and not admin
+  if (!activeOrgId || (memberships.length <= 1 && !isAdministrator)) {
+    return null;
   }
 
   // Sidebar variant (default)
@@ -118,7 +122,7 @@ export function OrgSwitcher({ collapsed, variant = 'sidebar' }) {
   }
 
   // If only one org, show as read-only
-  if (organizations.length === 1 && !isAdministrator) {
+  if (memberships.length === 1 && !isAdministrator) {
     return (
       <Box sx={{ px: 2, py: 1.5 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
@@ -145,7 +149,7 @@ export function OrgSwitcher({ collapsed, variant = 'sidebar' }) {
       </Box>
       <FormControl fullWidth size="small">
         <Select
-          value={organizationId || ''}
+          value={activeOrgId || ''}
           onChange={handleChange}
           displayEmpty
           sx={{
@@ -155,13 +159,13 @@ export function OrgSwitcher({ collapsed, variant = 'sidebar' }) {
             },
           }}
         >
-          {organizations.map((org) => (
+          {memberships.map((org) => (
             <MenuItem key={org.id} value={org.id}>
               <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
                 <Typography variant="body2">
-                  {org.name || org.id}
+                  {org.display_name || org.name || org.id}
                 </Typography>
-                {org.id === organizationId && (
+                {org.id === activeOrgId && (
                   <CheckIcon fontSize="small" color="primary" />
                 )}
               </Box>

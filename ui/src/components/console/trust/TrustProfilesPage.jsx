@@ -30,15 +30,15 @@ import { ResourcePage, StatusChip, EmptyState, EmptyStates } from '../../common'
 import { TrustProvider } from '../../trust';
 
 const getTrustTabs = (t) => [
-  { label: t('trust.trustProfiles'), path: '/console/trust/profiles' },
-  { label: t('trust.trustedIssuers'), path: '/console/trust/issuers' },
-  { label: t('trust.revocationProfiles'), path: '/console/trust/revocation' },
+  { label: t('trust.trustProfiles'), path: '/console/org/trust/profiles' },
+  { label: t('trust.trustedIssuers'), path: '/console/org/trust/issuers' },
+  { label: t('trust.revocationProfiles'), path: '/console/org/trust/revocation' },
 ];
 
 const getBreadcrumbs = (t) => [
   { label: t('trust.breadcrumbs.console'), path: '/console' },
-  { label: t('trust.breadcrumbs.trust'), path: '/console/trust' },
-  { label: t('trust.breadcrumbs.trustProfiles'), path: '/console/trust/profiles' },
+  { label: t('trust.breadcrumbs.trust'), path: '/console/org/trust' },
+  { label: t('trust.breadcrumbs.trustProfiles'), path: '/console/org/trust/profiles' },
 ];
 
 function TrustProfilesPage() {
@@ -97,8 +97,8 @@ function TrustProfilesPage() {
         title={t('trust.trustProfiles')}
         description={t('trust.trustProfilesDescription')}
         resourceName={t('trust.trustProfiles')}
-        buildPath="/console/trust/profiles/new"
-        newPath="/console/trust/profiles/new?mode=advanced"
+        buildPath="/console/org/trust/profiles/new"
+        newPath="/console/org/trust/profiles/new?mode=advanced"
         tabs={getTrustTabs(t)}
         breadcrumbs={getBreadcrumbs(t)}
       >
@@ -153,7 +153,7 @@ function TrustProfilesPage() {
                         <Tooltip title={t('trust.actions.viewDetails')}>
                           <IconButton
                             component={Link}
-                            to={`/console/trust/profiles/${profile.id}`}
+                            to={`/console/org/trust/profiles/${profile.id}`}
                             size="small"
                           >
                             <VisibilityIcon fontSize="small" />
@@ -162,7 +162,7 @@ function TrustProfilesPage() {
                         <Tooltip title={t('trust.actions.edit')}>
                           <IconButton
                             component={Link}
-                            to={`/console/trust/profiles/${profile.id}/edit`}
+                            to={`/console/org/trust/profiles/${profile.id}/edit`}
                             size="small"
                           >
                             <EditIcon fontSize="small" />

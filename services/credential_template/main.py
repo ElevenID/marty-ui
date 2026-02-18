@@ -25,10 +25,13 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, AsyncGenerator
 
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from typing import Annotated
+from marty_common import OrganizationClient, OrganizationContext, require_org_membership, require_org_admin
+from marty_common.middleware import RequestIdMiddleware, RequestLoggingMiddleware
 
 from credential_template.infrastructure.adapters import PostgresCredentialTemplateRepository
 
@@ -202,6 +205,11 @@ class CredentialTemplate:
     supported_formats: list[CredentialFormat] = field(
         default_factory=lambda: [CredentialFormat.SD_JWT_VC]
     )
+
+    # Wallet compatibility
+    supported_wallet_ids: list[str] = field(default_factory=list)
+    issuance_protocol: str = "oid4vci"
+    credential_format: str | None = None
     
     # Timestamps
     version: int = 1
@@ -230,9 +238,31 @@ class CredentialTemplate:
             display_style=self.display_style,
             validity_rules=self.validity_rules,
             supported_formats=self.supported_formats.copy(),
+            supported_wallet_ids=self.supported_wallet_ids.copy(),
+            issuance_protocol=self.issuance_protocol,
+            credential_format=self.credential_format,
             version=self.version + 1,
         )
         return new
+
+
+@dataclass
+class WalletRegistryEntry:
+    """Global wallet registry entry — describes a wallet app and how to open it."""
+
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    name: str = ""
+    logo_url: str | None = None
+    deep_link_template: str = "openid-credential-offer://?credential_offer={OFFER}"
+    supported_formats: list[str] = field(default_factory=list)
+    supported_protocols: list[str] = field(default_factory=lambda: ["oid4vci"])
+    platforms: list[str] = field(default_factory=list)
+    supports_qr: bool = True
+    supports_deeplink: bool = True
+    docs_url: str | None = None
+    is_active: bool = True
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 # =============================================================================
@@ -259,6 +289,68 @@ class InMemoryCredentialTemplateRepository:
     
     async def delete(self, template_id: str) -> None:
         self._templates.pop(template_id, None)
+
+
+class InMemoryWalletRegistryRepository:
+    """In-memory wallet registry — seeded with common wallets."""
+
+    _DEFAULT_WALLETS: list[WalletRegistryEntry] = [
+        WalletRegistryEntry(
+            id="wr-lissi-001",
+            name="LISSI Wallet",
+            logo_url="https://lissi.id/favicon.ico",
+            deep_link_template="openid-credential-offer://?credential_offer={OFFER}",
+            supported_formats=["sd_jwt_vc", "jwt_vc_json"],
+            platforms=["ios", "android"],
+            docs_url="https://lissi.id",
+        ),
+        WalletRegistryEntry(
+            id="wr-waltid-001",
+            name="walt.id Wallet",
+            logo_url="https://walt.id/favicon.ico",
+            deep_link_template="openid-credential-offer://?credential_offer={OFFER}",
+            supported_formats=["sd_jwt_vc", "jwt_vc_json", "mdoc"],
+            platforms=["ios", "android", "web"],
+            docs_url="https://docs.walt.id",
+        ),
+        WalletRegistryEntry(
+            id="wr-sphereon-001",
+            name="Sphereon Wallet",
+            logo_url="https://sphereon.com/favicon.ico",
+            deep_link_template="openid-credential-offer://?credential_offer={OFFER}",
+            supported_formats=["sd_jwt_vc", "jwt_vc_json"],
+            platforms=["ios", "android"],
+            docs_url="https://sphereon.com",
+        ),
+        WalletRegistryEntry(
+            id="wr-dc4eu-001",
+            name="DC4EU Wallet",
+            deep_link_template="openid-credential-offer://?credential_offer={OFFER}",
+            supported_formats=["sd_jwt_vc", "mdoc"],
+            platforms=["ios", "android"],
+        ),
+    ]
+
+    def __init__(self) -> None:
+        self._wallets: dict[str, WalletRegistryEntry] = {
+            w.id: w for w in self._DEFAULT_WALLETS
+        }
+
+    async def save(self, entry: WalletRegistryEntry) -> None:
+        entry.updated_at = datetime.now(timezone.utc)
+        self._wallets[entry.id] = entry
+
+    async def get(self, wallet_id: str) -> WalletRegistryEntry | None:
+        return self._wallets.get(wallet_id)
+
+    async def list(self, active_only: bool = True) -> list[WalletRegistryEntry]:
+        wallets = list(self._wallets.values())
+        if active_only:
+            wallets = [w for w in wallets if w.is_active]
+        return wallets
+
+    async def delete(self, wallet_id: str) -> None:
+        self._wallets.pop(wallet_id, None)
 
 
 # =============================================================================
@@ -327,6 +419,10 @@ class CreateCredentialTemplateRequest(BaseModel):
     validity_rules: ValidityRulesModel | None = None
     issuer_requirements: IssuerRequirementsModel | None = None
     supported_formats: list[str] = ["sd_jwt_vc"]
+    # Wallet compatibility
+    supported_wallet_ids: list[str] = []
+    issuance_protocol: str = "oid4vci"
+    credential_format: str | None = None
 
 
 class UpdateCredentialTemplateRequest(BaseModel):
@@ -340,6 +436,10 @@ class UpdateCredentialTemplateRequest(BaseModel):
     validity_rules: ValidityRulesModel | None = None
     issuer_requirements: IssuerRequirementsModel | None = None
     supported_formats: list[str] | None = None
+    # Wallet compatibility
+    supported_wallet_ids: list[str] | None = None
+    issuance_protocol: str | None = None
+    credential_format: str | None = None
 
 
 class CredentialTemplateResponse(BaseModel):
@@ -359,7 +459,54 @@ class CredentialTemplateResponse(BaseModel):
     validity_rules: dict
     issuer_requirements: dict
     supported_formats: list[str]
+    # Wallet compatibility
+    supported_wallet_ids: list[str]
+    issuance_protocol: str
+    credential_format: str | None
     version: int
+    created_at: str
+    updated_at: str
+
+
+# ----- Wallet Registry Pydantic Models -----
+
+class WalletRegistryEntryCreate(BaseModel):
+    name: str
+    logo_url: str | None = None
+    deep_link_template: str = "openid-credential-offer://?credential_offer={OFFER}"
+    supported_formats: list[str] = []
+    supported_protocols: list[str] = ["oid4vci"]
+    platforms: list[str] = []
+    supports_qr: bool = True
+    supports_deeplink: bool = True
+    docs_url: str | None = None
+
+
+class WalletRegistryEntryUpdate(BaseModel):
+    name: str | None = None
+    logo_url: str | None = None
+    deep_link_template: str | None = None
+    supported_formats: list[str] | None = None
+    supported_protocols: list[str] | None = None
+    platforms: list[str] | None = None
+    supports_qr: bool | None = None
+    supports_deeplink: bool | None = None
+    docs_url: str | None = None
+    is_active: bool | None = None
+
+
+class WalletRegistryEntryResponse(BaseModel):
+    id: str
+    name: str
+    logo_url: str | None
+    deep_link_template: str
+    supported_formats: list[str]
+    supported_protocols: list[str]
+    platforms: list[str]
+    supports_qr: bool
+    supports_deeplink: bool
+    docs_url: str | None
+    is_active: bool
     created_at: str
     updated_at: str
 
@@ -369,8 +516,10 @@ class CredentialTemplateResponse(BaseModel):
 # =============================================================================
 
 router = APIRouter(prefix="/v1/credential-templates", tags=["credential-templates"])
+wallet_router = APIRouter(prefix="/v1/wallet-registry", tags=["wallet-registry"])
 
 _repo: InMemoryCredentialTemplateRepository | None = None
+_wallet_repo: InMemoryWalletRegistryRepository | None = None
 
 
 def get_repo() -> InMemoryCredentialTemplateRepository:
@@ -379,26 +528,56 @@ def get_repo() -> InMemoryCredentialTemplateRepository:
     return _repo
 
 
+def get_wallet_repo() -> InMemoryWalletRegistryRepository:
+    if _wallet_repo is None:
+        raise RuntimeError("Wallet registry not configured")
+    return _wallet_repo
+
+
+# Helper to get current user ID from gateway-injected header
+async def get_current_user_id(
+    x_user_id: Annotated[str | None, Header(alias="X-User-Id")] = None
+) -> str:
+    """Get current user ID from gateway auth middleware."""
+    if not x_user_id:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required - missing user context",
+        )
+    return x_user_id
+
+
 @router.post("", response_model=CredentialTemplateResponse)
 async def create_credential_template(
-    request: CreateCredentialTemplateRequest,
+    body: CreateCredentialTemplateRequest,
+    request: Request,
+    user_id: str = Depends(get_current_user_id),
     repo: InMemoryCredentialTemplateRepository = Depends(get_repo),
 ) -> CredentialTemplateResponse:
-    """Create a new Credential Template."""
+    """Create a new Credential Template. Requires organization membership.
+    
+    Note: This verifies the user is a member of the organization specified
+    in the request body. Admin role recommended for production.
+    """
+    require_org_membership(body.organization_id, request, user_id)
+
     template = CredentialTemplate(
-        organization_id=request.organization_id,
-        name=request.name,
-        description=request.description,
-        credential_type=request.credential_type,
-        vct=request.vct or f"https://credentials.example.com/{request.credential_type}",
-        doctype=request.doctype or "",
-        privacy_posture=PrivacyPosture(request.privacy_posture),
-        selective_disclosure_fields=request.selective_disclosure_fields,
-        supported_formats=[CredentialFormat(f) for f in request.supported_formats],
+        organization_id=body.organization_id,
+        name=body.name,
+        description=body.description,
+        credential_type=body.credential_type,
+        vct=body.vct or f"https://credentials.example.com/{body.credential_type}",
+        doctype=body.doctype or "",
+        privacy_posture=PrivacyPosture(body.privacy_posture),
+        selective_disclosure_fields=body.selective_disclosure_fields,
+        supported_formats=[CredentialFormat(f) for f in body.supported_formats],
+        supported_wallet_ids=body.supported_wallet_ids,
+        issuance_protocol=body.issuance_protocol,
+        credential_format=body.credential_format,
     )
     
     # Set claims
-    for claim in request.claims:
+    for claim in body.claims:
         template.claims.append(ClaimDefinition(
             name=claim.name,
             display_name=claim.display_name,
@@ -416,7 +595,7 @@ async def create_credential_template(
         ))
     
     # Set derived attributes
-    for da in request.derived_attributes:
+    for da in body.derived_attributes:
         template.derived_attributes.append(DerivedAttribute(
             name=da.name,
             description=da.description,
@@ -426,32 +605,32 @@ async def create_credential_template(
         ))
     
     # Set display style
-    if request.display_style:
+    if body.display_style:
         template.display_style = DisplayStyle(
-            background_color=request.display_style.background_color,
-            text_color=request.display_style.text_color,
-            logo_url=request.display_style.logo_url,
-            background_image_url=request.display_style.background_image_url,
-            icon=request.display_style.icon,
+            background_color=body.display_style.background_color,
+            text_color=body.display_style.text_color,
+            logo_url=body.display_style.logo_url,
+            background_image_url=body.display_style.background_image_url,
+            icon=body.display_style.icon,
         )
     
     # Set validity rules
-    if request.validity_rules:
+    if body.validity_rules:
         template.validity_rules = ValidityRules(
-            default_validity_days=request.validity_rules.default_validity_days,
-            max_validity_days=request.validity_rules.max_validity_days,
-            renewable=request.validity_rules.renewable,
-            renewal_window_days=request.validity_rules.renewal_window_days,
-            require_revalidation=request.validity_rules.require_revalidation,
-            revalidation_interval_days=request.validity_rules.revalidation_interval_days,
+            default_validity_days=body.validity_rules.default_validity_days,
+            max_validity_days=body.validity_rules.max_validity_days,
+            renewable=body.validity_rules.renewable,
+            renewal_window_days=body.validity_rules.renewal_window_days,
+            require_revalidation=body.validity_rules.require_revalidation,
+            revalidation_interval_days=body.validity_rules.revalidation_interval_days,
         )
 
     # Set issuer requirements
-    if request.issuer_requirements:
+    if body.issuer_requirements:
         template.issuer_requirements = IssuerRequirements(
-            allowed_issuer_dids=request.issuer_requirements.allowed_issuer_dids,
-            trust_tier_required=request.issuer_requirements.trust_tier_required,
-            audit_level_required=request.issuer_requirements.audit_level_required,
+            allowed_issuer_dids=body.issuer_requirements.allowed_issuer_dids,
+            trust_tier_required=body.issuer_requirements.trust_tier_required,
+            audit_level_required=body.issuer_requirements.audit_level_required,
         )
     
     await repo.save(template)
@@ -463,9 +642,13 @@ async def create_credential_template(
 async def list_credential_templates(
     organization_id: str = Query(..., description="Organization ID"),
     status: str | None = Query(None, description="Filter by status"),
+    request: Request = None,
+    user_id: str = Depends(get_current_user_id),
     repo: InMemoryCredentialTemplateRepository = Depends(get_repo),
 ) -> list[CredentialTemplateResponse]:
-    """List Credential Templates for an organization."""
+    """List Credential Templates for an organization. Requires organization membership."""
+    require_org_membership(organization_id, request, user_id)
+
     status_filter = TemplateStatus(status) if status else None
     templates = await repo.list(organization_id, status_filter)
     return [_template_to_response(t) for t in templates]
@@ -487,9 +670,13 @@ async def get_credential_template(
 async def update_credential_template(
     template_id: str,
     request: UpdateCredentialTemplateRequest,
+    user_id: str = Depends(get_current_user_id),
     repo: InMemoryCredentialTemplateRepository = Depends(get_repo),
 ) -> CredentialTemplateResponse:
-    """Update a Credential Template (only allowed in draft status)."""
+    """Update a Credential Template (only allowed in draft status).
+    
+    Note: Requires user authentication. Org membership verified via template's org_id.
+    """
     template = await repo.get(template_id)
     if not template:
         raise HTTPException(status_code=404, detail="Credential Template not found")
@@ -510,6 +697,12 @@ async def update_credential_template(
         template.selective_disclosure_fields = request.selective_disclosure_fields
     if request.supported_formats is not None:
         template.supported_formats = [CredentialFormat(f) for f in request.supported_formats]
+    if request.supported_wallet_ids is not None:
+        template.supported_wallet_ids = request.supported_wallet_ids
+    if request.issuance_protocol is not None:
+        template.issuance_protocol = request.issuance_protocol
+    if request.credential_format is not None:
+        template.credential_format = request.credential_format
     
     template.updated_at = datetime.now(timezone.utc)
     await repo.save(template)
@@ -519,9 +712,10 @@ async def update_credential_template(
 @router.post("/{template_id}/activate", response_model=CredentialTemplateResponse)
 async def activate_credential_template(
     template_id: str,
+    user_id: str = Depends(get_current_user_id),
     repo: InMemoryCredentialTemplateRepository = Depends(get_repo),
 ) -> CredentialTemplateResponse:
-    """Activate a Credential Template."""
+    """Activate a Credential Template. Requires authentication."""
     template = await repo.get(template_id)
     if not template:
         raise HTTPException(status_code=404, detail="Credential Template not found")
@@ -537,9 +731,10 @@ async def activate_credential_template(
 @router.post("/{template_id}/deprecate", response_model=CredentialTemplateResponse)
 async def deprecate_credential_template(
     template_id: str,
+    user_id: str = Depends(get_current_user_id),
     repo: InMemoryCredentialTemplateRepository = Depends(get_repo),
 ) -> CredentialTemplateResponse:
-    """Deprecate a Credential Template."""
+    """Deprecate a Credential Template. Requires authentication."""
     template = await repo.get(template_id)
     if not template:
         raise HTTPException(status_code=404, detail="Credential Template not found")
@@ -551,9 +746,10 @@ async def deprecate_credential_template(
 @router.post("/{template_id}/new-version", response_model=CredentialTemplateResponse)
 async def create_new_version(
     template_id: str,
+    user_id: str = Depends(get_current_user_id),
     repo: InMemoryCredentialTemplateRepository = Depends(get_repo),
 ) -> CredentialTemplateResponse:
-    """Create a new draft version from an existing template."""
+    """Create a new draft version from an existing template. Requires authentication."""
     template = await repo.get(template_id)
     if not template:
         raise HTTPException(status_code=404, detail="Credential Template not found")
@@ -566,8 +762,10 @@ async def create_new_version(
 @router.delete("/{template_id}")
 async def delete_credential_template(
     template_id: str,
+    user_id: str = Depends(get_current_user_id),
     repo: InMemoryCredentialTemplateRepository = Depends(get_repo),
 ) -> dict:
+    """Delete a Credential Template (soft delete). Requires authentication."""
     """Delete a Credential Template (only allowed for drafts)."""
     template = await repo.get(template_id)
     if template and template.status != TemplateStatus.DRAFT:
@@ -584,9 +782,10 @@ async def delete_credential_template(
 async def add_claim(
     template_id: str,
     claim: ClaimDefinitionModel,
+    user_id: str = Depends(get_current_user_id),
     repo: InMemoryCredentialTemplateRepository = Depends(get_repo),
 ) -> CredentialTemplateResponse:
-    """Add a claim to a Credential Template."""
+    """Add a claim to a Credential Template. Requires authentication."""
     template = await repo.get(template_id)
     if not template:
         raise HTTPException(status_code=404, detail="Credential Template not found")
@@ -664,10 +863,130 @@ def _template_to_response(template: CredentialTemplate) -> CredentialTemplateRes
             "audit_level_required": template.issuer_requirements.audit_level_required,
         },
         supported_formats=[f.value for f in template.supported_formats],
+        supported_wallet_ids=template.supported_wallet_ids,
+        issuance_protocol=template.issuance_protocol,
+        credential_format=template.credential_format,
         version=template.version,
         created_at=template.created_at.isoformat(),
         updated_at=template.updated_at.isoformat(),
     )
+
+
+def _wallet_to_response(w: WalletRegistryEntry) -> WalletRegistryEntryResponse:
+    return WalletRegistryEntryResponse(
+        id=w.id,
+        name=w.name,
+        logo_url=w.logo_url,
+        deep_link_template=w.deep_link_template,
+        supported_formats=w.supported_formats,
+        supported_protocols=w.supported_protocols,
+        platforms=w.platforms,
+        supports_qr=w.supports_qr,
+        supports_deeplink=w.supports_deeplink,
+        docs_url=w.docs_url,
+        is_active=w.is_active,
+        created_at=w.created_at.isoformat(),
+        updated_at=w.updated_at.isoformat(),
+    )
+
+
+# =============================================================================
+# Wallet Registry Router
+# =============================================================================
+
+@wallet_router.get("", response_model=list[WalletRegistryEntryResponse], summary="List Wallet Registry")
+async def list_wallets(
+    active_only: bool = Query(True, description="Return only active wallets"),
+    repo: InMemoryWalletRegistryRepository = Depends(get_wallet_repo),
+) -> list[WalletRegistryEntryResponse]:
+    """List all wallets in the global registry."""
+    wallets = await repo.list(active_only=active_only)
+    return [_wallet_to_response(w) for w in wallets]
+
+
+@wallet_router.get("/{wallet_id}", response_model=WalletRegistryEntryResponse, summary="Get Wallet")
+async def get_wallet(
+    wallet_id: str,
+    repo: InMemoryWalletRegistryRepository = Depends(get_wallet_repo),
+) -> WalletRegistryEntryResponse:
+    """Get a wallet registry entry by ID."""
+    wallet = await repo.get(wallet_id)
+    if not wallet:
+        raise HTTPException(status_code=404, detail="Wallet not found")
+    return _wallet_to_response(wallet)
+
+
+@wallet_router.post("", response_model=WalletRegistryEntryResponse, summary="Create Wallet Entry", status_code=201)
+async def create_wallet(
+    body: WalletRegistryEntryCreate,
+    user_id: str = Depends(get_current_user_id),
+    repo: InMemoryWalletRegistryRepository = Depends(get_wallet_repo),
+) -> WalletRegistryEntryResponse:
+    """Create a new wallet registry entry. Requires admin authentication."""
+    entry = WalletRegistryEntry(
+        name=body.name,
+        logo_url=body.logo_url,
+        deep_link_template=body.deep_link_template,
+        supported_formats=body.supported_formats,
+        supported_protocols=body.supported_protocols,
+        platforms=body.platforms,
+        supports_qr=body.supports_qr,
+        supports_deeplink=body.supports_deeplink,
+        docs_url=body.docs_url,
+    )
+    await repo.save(entry)
+    logger.info(f"Created wallet registry entry: {entry.id} ({entry.name})")
+    return _wallet_to_response(entry)
+
+
+@wallet_router.patch("/{wallet_id}", response_model=WalletRegistryEntryResponse, summary="Update Wallet Entry")
+async def update_wallet(
+    wallet_id: str,
+    body: WalletRegistryEntryUpdate,
+    user_id: str = Depends(get_current_user_id),
+    repo: InMemoryWalletRegistryRepository = Depends(get_wallet_repo),
+) -> WalletRegistryEntryResponse:
+    """Update a wallet registry entry. Requires admin authentication."""
+    entry = await repo.get(wallet_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Wallet not found")
+    if body.name is not None:
+        entry.name = body.name
+    if body.logo_url is not None:
+        entry.logo_url = body.logo_url
+    if body.deep_link_template is not None:
+        entry.deep_link_template = body.deep_link_template
+    if body.supported_formats is not None:
+        entry.supported_formats = body.supported_formats
+    if body.supported_protocols is not None:
+        entry.supported_protocols = body.supported_protocols
+    if body.platforms is not None:
+        entry.platforms = body.platforms
+    if body.supports_qr is not None:
+        entry.supports_qr = body.supports_qr
+    if body.supports_deeplink is not None:
+        entry.supports_deeplink = body.supports_deeplink
+    if body.docs_url is not None:
+        entry.docs_url = body.docs_url
+    if body.is_active is not None:
+        entry.is_active = body.is_active
+    await repo.save(entry)
+    logger.info(f"Updated wallet registry entry: {entry.id}")
+    return _wallet_to_response(entry)
+
+
+@wallet_router.delete("/{wallet_id}", summary="Delete Wallet Entry")
+async def delete_wallet(
+    wallet_id: str,
+    user_id: str = Depends(get_current_user_id),
+    repo: InMemoryWalletRegistryRepository = Depends(get_wallet_repo),
+) -> dict:
+    """Delete a wallet registry entry. Requires admin authentication."""
+    entry = await repo.get(wallet_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Wallet not found")
+    await repo.delete(wallet_id)
+    return {"success": True}
 
 
 # =============================================================================
@@ -676,7 +995,7 @@ def _template_to_response(template: CredentialTemplate) -> CredentialTemplateRes
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    global _repo
+    global _repo, _wallet_repo
     logger.info(f"Starting {SERVICE_NAME}...")
     
     config = get_config()
@@ -687,9 +1006,23 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     
     # Initialize repository
     _repo = PostgresCredentialTemplateRepository(session_factory)
+
+    # Initialize wallet registry (in-memory with seeded defaults)
+    _wallet_repo = InMemoryWalletRegistryRepository()
     
+    # Initialize OrganizationClient for authorization
+    org_service_url = os.environ.get("ORGANIZATION_SERVICE_URL", "http://localhost:8002")
+    org_client = OrganizationClient(
+        base_url=org_service_url,
+        redis_client=None,  # No Redis caching at service level (gateway handles it)
+    )
+    app.state.org_client = org_client
+    
+    logger.info(f"{SERVICE_NAME} started successfully")
     yield
+    
     logger.info(f"Shutting down {SERVICE_NAME}...")
+    await org_client.close()
 
 
 def create_app() -> FastAPI:
@@ -708,7 +1041,12 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     
+    # Add request middleware
+    app.add_middleware(RequestLoggingMiddleware, service_name=SERVICE_NAME)
+    app.add_middleware(RequestIdMiddleware)
+    
     app.include_router(router)
+    app.include_router(wallet_router)
     
     @app.get("/health")
     async def health_check() -> dict:

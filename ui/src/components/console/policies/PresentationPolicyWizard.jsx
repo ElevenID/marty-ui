@@ -112,11 +112,11 @@ const PresentationPolicyWizard = () => {
     onSubmit: handleSubmit,
     onComplete: () => {
       setTimeout(() => {
-        navigate('/console/deploy/profiles');
+        navigate('/console/org/deploy/profiles');
       }, 2000);
     },
     onCancel: () => {
-      navigate('/console/policies');
+      navigate('/console/org/policies');
     },
   });
 
@@ -247,7 +247,7 @@ const PresentationPolicyWizard = () => {
         {/* Navigation Buttons */}
         <Box sx={{ display: 'flex', justifyContent: 'space-between', pt: 2 }}>
           <Button
-            onClick={wizard.activeStep === 0 ? () => navigate('/console/policies/presentation') : wizard.goBack}
+            onClick={wizard.activeStep === 0 ? () => navigate('/console/org/policies/presentation') : wizard.goBack}
             startIcon={<ArrowBackIcon />}
             disabled={wizard.loading}
             data-testid={wizard.activeStep === 0 ? 'wizard.policy.cancel' : 'wizard.policy.back'}

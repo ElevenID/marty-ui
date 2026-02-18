@@ -8,7 +8,7 @@
   },
   "idvComparison": {
     "title": "IDV から検証可能なアイデンティティへ",
-    "takeaway": "ElevenID は繰り返しの確認を再利用可能な信頼へ置き換えます。",
+    "takeaway": "ElevenID LLC は繰り返しの確認を再利用可能な信頼へ置き換えます。",
     "traditional": {
       "title": "従来の IDV",
       "oneTimeChecks": "一度きりの書類確認",
@@ -19,7 +19,7 @@
       "reVerification": "どこでも再確認"
     },
     "elevenid": {
-      "title": "ElevenID",
+      "title": "ElevenID LLC",
       "reusable": "再利用可能な検証可能資格情報",
       "holderControlled": "保有者が管理するデジタルウォレット",
       "cryptographic": "暗号学的証明",
@@ -33,7 +33,7 @@
     "verifyCredentials": "検証可能資格情報を検証—書類だけではありません。",
     "trustIssuers": "データベースではなく発行者を信頼。",
     "walletFirst": "ウォレットファースト設計—EUDI対応。",
-    "quote": "IDVプラットフォームは一度きりの判定で終わります。ElevenIDは、ウォレットやエコシステム、信頼レジストリをまたいで再利用できる暗号学的に検証可能な成果を提供します。"
+    "quote": "IDVプラットフォームは一度きりの判定で終わります。ElevenID LLCは、ウォレットやエコシステム、信頼レジストリをまたいで再利用できる暗号学的に検証可能な成果を提供します。"
   },
   "audienceRouting": {
     "title": "あなたの道を選ぶ",
@@ -97,7 +97,7 @@
       }
     },
     "solvesIt": {
-      "title": "ElevenID が解決する方法",
+      "title": "ElevenID LLC が解決する方法",
       "intro": "4つのプリミティブ（信頼プロファイル、資格情報テンプレート、提示ポリシー、フロー）でアイデンティティを統治します。",
       "subheading": "ポリシーはコードではなく設定です。エンドポイントは再デプロイなしに、中央で統治された信頼と開示ルールを実行します。"
     },
@@ -109,7 +109,7 @@
     "standards": {
       "title": "標準に基づくアーキテクチャ",
       "subtitle": "標準は統合ではありません。プロダクトそのものです。",
-      "description": "これらのレイヤーにより、ElevenID は政府・ウォレット・企業間で個別統合なしに相互運用できます。",
+      "description": "これらのレイヤーにより、ElevenID LLC は政府・ウォレット・企業間で個別統合なしに相互運用できます。",
       "cta": "標準を見る"
     },
     "startFirst": {

@@ -2,7 +2,7 @@
  * SidebarNavigation Component
  * 
  * Collapsible sidebar navigation for authenticated users.
- * Supports nested navigation items with expand/collapse functionality.
+ * Supports console mode switching and nested navigation items.
  */
 
 import { useState, useMemo, useCallback } from 'react';
@@ -22,16 +22,23 @@ import {
   Divider,
   useTheme,
   useMediaQuery,
+  ToggleButtonGroup,
+  ToggleButton,
+  Alert,
+  Button,
 } from '@mui/material';
 import ExpandLess from '@mui/icons-material/ExpandLess';
 import ExpandMore from '@mui/icons-material/ExpandMore';
 import MenuIcon from '@mui/icons-material/Menu';
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
 import StarIcon from '@mui/icons-material/Star';
+import PersonIcon from '@mui/icons-material/Person';
+import BusinessIcon from '@mui/icons-material/Business';
 import Badge from '@mui/material/Badge';
 import { useAuth } from '../../hooks/useAuth';
+import { usePermissions } from '../../hooks/usePermissions';
+import { useConsole } from '../../contexts/ConsoleContext';
 import { ADMIN_VENDOR_NAV, APPLICANT_NAV, findActiveNavItem } from '../../config/navigation';
-import { OrgSwitcher } from './OrgSwitcher';
 
 const DRAWER_WIDTH = 260;
 const DRAWER_WIDTH_COLLAPSED = 72;
@@ -252,12 +259,12 @@ function NavItem({ item, isActive, isChildActive, expanded, onToggle, collapsed,
 function SidebarNavigation({ mobileOpen, onMobileClose }) {
   const theme = useTheme();
   const location = useLocation();
+  const navigate = useNavigate();
   const isMobile = useMediaQuery(theme.breakpoints.down('md'));
   const { isAdministrator, isVendor, isApplicant } = useAuth();
-
-  // Debug logging
-  console.log('[SidebarNavigation] Rendering');
-  console.log('[SidebarNavigation] isAdministrator:', isAdministrator, 'isVendor:', isVendor, 'isApplicant:', isApplicant);
+  const { mode, setMode, activeOrgId, memberships, isOrgConsoleAvailable, isApplicantConsoleAvailable, isOrgBlocked } = useConsole();
+  const isJoinOnlyMode = memberships.length === 0;
+  const showConsoleSwitcher = isApplicantConsoleAvailable && (isOrgConsoleAvailable || isJoinOnlyMode);
 
   // Collapsed state for desktop
   const [collapsed, setCollapsed] = useState(false);
@@ -265,12 +272,35 @@ function SidebarNavigation({ mobileOpen, onMobileClose }) {
   // Track which parent items are expanded
   const [expandedItems, setExpandedItems] = useState({});
 
-  // Get nav items based on role
+  const { can } = usePermissions();
+
+  // Console mode switching
+  const handleModeChange = useCallback((event, newMode) => {
+    if (newMode && newMode !== mode) {
+      setMode(newMode);
+    }
+  }, [mode, setMode]);
+
+  // Get nav items based on console mode, filtered by permissions
   const navItems = useMemo(() => {
-    if (isAdministrator || isVendor) return ADMIN_VENDOR_NAV;
-    if (isApplicant) return APPLICANT_NAV;
-    return [];
-  }, [isAdministrator, isVendor, isApplicant]);
+    const items = mode === 'org' ? ADMIN_VENDOR_NAV : APPLICANT_NAV;
+
+    // Filter items and their children by requiredPermission
+    const filterByPermission = (list) =>
+      list
+        .filter((item) => {
+          if (!item.requiredPermission) return true;
+          const { resource, action } = item.requiredPermission;
+          return can(resource, action);
+        })
+        .map((item) => {
+          if (!item.children) return item;
+          const filteredChildren = filterByPermission(item.children);
+          return { ...item, children: filteredChildren };
+        });
+
+    return filterByPermission(items);
+  }, [mode, can]);
 
   // Find active item
   const activeItem = useMemo(() => {
@@ -311,35 +341,96 @@ function SidebarNavigation({ mobileOpen, onMobileClose }) {
         bgcolor: 'background.paper',
       }}
     >
-      {/* Header */}
-      <Box
-        sx={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: collapsed ? 'center' : 'space-between',
-          p: 2,
-          minHeight: 64,
-        }}
-      >
-        {!collapsed && (
-          <Typography variant="subtitle1" fontWeight={600} color="primary">
+      {/* Section A - Console Switcher */}
+      {!collapsed && showConsoleSwitcher && (
+        <Box sx={{ p: 2 }}>
+          <Typography variant="caption" color="text.secondary" sx={{ mb: 1, display: 'block' }}>
             Console
           </Typography>
-        )}
-        {!isMobile && (
-          <IconButton onClick={handleCollapseToggle} size="small">
-            {collapsed ? <MenuIcon /> : <ChevronLeftIcon />}
-          </IconButton>
-        )}
-      </Box>
+          <ToggleButtonGroup
+            value={mode}
+            exclusive
+            onChange={handleModeChange}
+            size="small"
+            fullWidth
+            sx={{ mb: 1 }}
+          >
+            <ToggleButton value="applicant" disabled={!isApplicantConsoleAvailable} sx={{ textTransform: 'none' }}>
+              <PersonIcon fontSize="small" sx={{ mr: 0.5 }} />
+              Applicant
+            </ToggleButton>
+            {(isOrgConsoleAvailable || isJoinOnlyMode) && (
+              <ToggleButton value="org" sx={{ textTransform: 'none' }}>
+                <BusinessIcon fontSize="small" sx={{ mr: 0.5 }} />
+                Organization
+              </ToggleButton>
+            )}
+          </ToggleButtonGroup>
+        </Box>
+      )}
+
+      {/* Collapsed console switcher icons */}
+      {collapsed && showConsoleSwitcher && (
+        <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', py: 1, gap: 0.5 }}>
+          <Tooltip title="Applicant Console" placement="right">
+            <IconButton
+              size="small"
+              onClick={() => setMode('applicant')}
+              disabled={!isApplicantConsoleAvailable}
+              sx={{
+                bgcolor: mode === 'applicant' ? 'action.selected' : 'transparent',
+                '&:hover': { bgcolor: 'action.hover' },
+              }}
+            >
+              <PersonIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+          {(isOrgConsoleAvailable || isJoinOnlyMode) && (
+            <Tooltip title="Organization Console" placement="right">
+              <IconButton
+                size="small"
+                onClick={() => setMode('org')}
+                sx={{
+                  bgcolor: mode === 'org' ? 'action.selected' : 'transparent',
+                  '&:hover': { bgcolor: 'action.hover' },
+                }}
+              >
+                <BusinessIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+          )}
+        </Box>
+      )}
 
       <Divider />
 
-      {/* Organization Switcher */}
-      <OrgSwitcher collapsed={collapsed} />
+      {/* Collapse toggle for desktop */}
+      {!isMobile && !collapsed && (
+        <Box sx={{ display: 'flex', justifyContent: 'flex-end', px: 2, py: 1 }}>
+          <IconButton onClick={handleCollapseToggle} size="small">
+            <ChevronLeftIcon />
+          </IconButton>
+        </Box>
+      )}
 
-      {/* Navigation Items */}
-      <List sx={{ flex: 1, pt: 1 }}>
+      {!isMobile && collapsed && (
+        <Box sx={{ display: 'flex', justifyContent: 'center', py: 1 }}>
+          <IconButton onClick={handleCollapseToggle} size="small">
+            <MenuIcon />
+          </IconButton>
+        </Box>
+      )}
+
+      {/* Section C - Navigation Items */}
+      <List
+        sx={{
+          flex: 1,
+          pt: 1,
+          // Disable navigation when org console is blocked
+          opacity: (isOrgBlocked || isJoinOnlyMode) ? 0.5 : 1,
+          pointerEvents: (isOrgBlocked || isJoinOnlyMode) ? 'none' : 'auto',
+        }}
+      >
         {navItems.map((item) => (
           <NavItem
             key={item.id}

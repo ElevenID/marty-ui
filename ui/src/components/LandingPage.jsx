@@ -7,6 +7,7 @@
 
 import { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
+import { SEOHead, organizationSchema } from './seo';
 import {
   Box,
   Typography,
@@ -43,17 +44,14 @@ import {
 } from '../data/marketingContent';
 import { UnifiedIdentityFlowDiagram, StandardsStackDiagram } from './diagrams';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || '';
-
 function LandingPage() {
   const { t } = useTranslation('marketing');
   const brandingContext = useBranding();
-  const branding = brandingContext?.branding || { appName: 'ElevenID' };
-  const { isAuthenticated, isLoading, register, isAdministrator, isVendor } = useAuth();
+  const branding = brandingContext?.branding || { appName: 'ElevenID LLC' };
+  const { isAuthenticated, isLoading, register } = useAuth();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [authError, setAuthError] = useState(null);
-  const [checkingOnboarding, setCheckingOnboarding] = useState(false);
 
   // Check for auth error in URL params
   useEffect(() => {
@@ -66,51 +64,12 @@ function LandingPage() {
     }
   }, [searchParams, setSearchParams]);
 
-  // Redirect authenticated users to appropriate dashboard
+  // Redirect authenticated users to applicant console (person-first default)
   useEffect(() => {
     if (isAuthenticated && !isLoading) {
-      const checkOnboarding = async () => {
-        setCheckingOnboarding(true);
-        try {
-          const response = await fetch(`${API_BASE_URL}/api/onboarding/status`, {
-            credentials: 'include',
-          });
-
-          if (response.ok) {
-            const data = await response.json();
-            if (data.needs_onboarding) {
-              navigate('/onboarding', { replace: true });
-              return;
-            }
-
-            if (data.user_type === 'administrator' || isAdministrator || data.user_type === 'vendor' || isVendor) {
-              navigate('/console', { replace: true });
-            } else {
-              navigate('/credentials', { replace: true });
-            }
-            return;
-          }
-
-          if (response.status === 401) {
-            setCheckingOnboarding(false);
-            return;
-          }
-        } catch (error) {
-          console.error('Error checking onboarding status:', error);
-        } finally {
-          setCheckingOnboarding(false);
-        }
-
-        if (isAdministrator || isVendor) {
-          navigate('/console', { replace: true });
-        } else {
-          navigate('/credentials', { replace: true });
-        }
-      };
-
-      checkOnboarding();
+      navigate('/console/applicant', { replace: true });
     }
-  }, [isAuthenticated, isLoading, isAdministrator, isVendor, navigate]);
+  }, [isAuthenticated, isLoading, navigate]);
 
   const handleCloseError = () => {
     setAuthError(null);
@@ -119,36 +78,37 @@ function LandingPage() {
   // Show loading spinner while checking auth instead of blank page
   if (isLoading) {
     return (
-      <Box 
-        display="flex" 
-        justifyContent="center" 
-        alignItems="center" 
-        minHeight="50vh"
-        flexDirection="column"
-        gap={2}
-      >
-        <CircularProgress />
-        <Typography color="text.secondary">{t('landingPage.loading', 'Loading...')}</Typography>
-      </Box>
-    );
-  }
-
-  // If authenticated and checking onboarding, show a different message
-  if (isAuthenticated && checkingOnboarding) {
-    return (
-      <Box 
-        display="flex" 
-        justifyContent="center" 
-        alignItems="center" 
-        minHeight="50vh"
-        flexDirection="column"
-        gap={2}
-      >
-        <CircularProgress />
-        <Typography color="text.secondary">
-          {t('landingPage.checkingAccount', 'Checking your account...')}
-        </Typography>
-      </Box>
+      <>
+        <SEOHead
+          title="Verifiable Identity Infrastructure"
+          description="Build verifiable identity infrastructure for EUDI Wallets, Open Badges, and W3C Verifiable Credentials. Issuance, verification, and trust governance APIs."
+          canonicalPath="/"
+          structuredData={organizationSchema()}
+          keywords={[
+            'verifiable credentials',
+            'digital wallet',
+            'EUDI Wallet',
+            'Open Badges',
+            'W3C VC',
+            'identity verification',
+            'ISO 18013-5',
+            'mDL',
+            'SD-JWT',
+            'OID4VP',
+          ]}
+        />
+        <Box 
+          display="flex" 
+          justifyContent="center" 
+          alignItems="center" 
+          minHeight="50vh"
+          flexDirection="column"
+          gap={2}
+        >
+          <CircularProgress />
+          <Typography color="text.secondary">{t('landingPage.loading', 'Loading...')}</Typography>
+        </Box>
+      </>
     );
   }
 
@@ -275,6 +235,26 @@ function LandingPage() {
 
   return (
     <Box>
+      {/* SEO Meta Tags */}
+      <SEOHead
+        title="Verifiable Identity Infrastructure"
+        description="Build verifiable identity infrastructure for EUDI Wallets, Open Badges, and W3C Verifiable Credentials. Issuance, verification, and trust governance APIs."
+        canonicalPath="/"
+        structuredData={organizationSchema()}
+        keywords={[
+          'verifiable credentials',
+          'digital wallet',
+          'EUDI Wallet',
+          'Open Badges',
+          'W3C VC',
+          'identity verification',
+          'ISO 18013-5',
+          'mDL',
+          'SD-JWT',
+          'OID4VP',
+        ]}
+      />
+      
       {/* Auth Error Snackbar */}
       <Snackbar
         open={!!authError}
@@ -304,7 +284,10 @@ function LandingPage() {
         }}
       >
         <Typography variant="h3" component="h1" gutterBottom fontWeight="bold">
-          {t('valueProposition.headline', 'Identity verification is not enough.')}
+          {t('valueProposition.headline', 'Verifiable Identity Infrastructure')}
+        </Typography>
+        <Typography variant="h5" sx={{ mb: 2, opacity: 0.90, maxWidth: 900, mx: 'auto', fontStyle: 'italic' }}>
+          {t('valueProposition.provocative', 'Identity verification is not enough.')}
         </Typography>
         <Typography variant="h4" sx={{ mb: 2, opacity: 0.95, maxWidth: 900, mx: 'auto' }}>
           {t('valueProposition.subheadline', 'Build verifiable identity infrastructure.')}
@@ -332,8 +315,9 @@ function LandingPage() {
           <Button
             variant="outlined"
             size="large"
+            component="a"
+            href="/from-idv-to-verifiable-identity"
             endIcon={<ArrowForwardIcon />}
-            onClick={() => navigate('/from-idv-to-verifiable-identity')}
             sx={{
               borderColor: 'white',
               color: 'white',
@@ -399,7 +383,7 @@ function LandingPage() {
           textAlign="center" 
           sx={{ mt: 3, fontStyle: 'italic', color: 'primary.main' }}
         >
-          {t('idvComparison.takeaway', 'ElevenID replaces repeated verification with reusable trust.')}
+          {t('idvComparison.takeaway', 'ElevenID LLC replaces repeated verification with reusable trust.')}
         </Typography>
       </Box>
 
@@ -422,7 +406,7 @@ function LandingPage() {
         </Grid>
         <Paper elevation={0} sx={{ p: 3, bgcolor: 'white', borderLeft: 4, borderColor: 'success.main' }}>
           <Typography variant="body1" sx={{ fontStyle: 'italic', fontSize: '1.05rem', lineHeight: 1.7 }}>
-            &ldquo;{t('eudiOpenBadges.quote', 'IDV platforms stop at a one-time decision. ElevenID produces cryptographically verifiable outcomes that can be reused across wallets, ecosystems, and trust registries.')}&rdquo;
+            &ldquo;{t('eudiOpenBadges.quote', 'IDV platforms stop at a one-time decision. ElevenID LLC produces cryptographically verifiable outcomes that can be reused across wallets, ecosystems, and trust registries.')}&rdquo;
           </Typography>
         </Paper>
       </Paper>
@@ -439,17 +423,20 @@ function LandingPage() {
           {AUDIENCE_ROUTING.paths.map((path) => (
             <Grid item xs={12} md={4} key={path.id}>
               <Card 
+                component="a"
+                href={path.path}
                 elevation={2} 
                 sx={{ 
                   height: '100%', 
                   cursor: 'pointer',
+                  textDecoration: 'none',
+                  color: 'inherit',
                   transition: 'transform 0.2s, box-shadow 0.2s',
                   '&:hover': { 
                     transform: 'translateY(-4px)', 
                     boxShadow: 4 
                   },
                 }}
-                onClick={() => navigate(path.path)}
               >
                 <CardContent sx={{ textAlign: 'center', py: 4 }}>
                   <Typography variant="h5" fontWeight="bold" color={`${path.color}.main`} gutterBottom>
@@ -460,12 +447,11 @@ function LandingPage() {
                   </Typography>
                   <Button
                     variant="outlined"
+                    component="a"
+                    href={path.path}
                     color={path.color}
                     endIcon={<ArrowForwardIcon />}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      navigate(path.path);
-                    }}
+                    onClick={(e) => e.stopPropagation()}
                   >
                     {t(`audienceRouting.${path.id}.cta`, path.cta)}
                   </Button>
@@ -503,7 +489,7 @@ function LandingPage() {
         </Grid>
       </Box>
 
-      {/* How ElevenID Solves It */}
+      {/* How ElevenID LLC Solves It */}
       <Box sx={{ mb: 8 }}>
         <Typography variant="h4" gutterBottom fontWeight="bold" textAlign="center">
           {t('landingPage.solvesIt.title', `How ${branding.appName} Solves It`)}
@@ -560,7 +546,8 @@ function LandingPage() {
           <Button
             variant="outlined"
             size="large"
-            onClick={() => navigate('/identity')}
+            component="a"
+            href="/identity"
             endIcon={<ArrowForwardIcon />}
           >
             {t('landingPage.howItWorks.cta', 'See the Full Flow')} →
@@ -611,7 +598,7 @@ function LandingPage() {
         <Typography variant="body2" color="text.secondary" textAlign="center" sx={{ mt: 3, mb: 2, maxWidth: 700, mx: 'auto' }}>
           {t(
             'landingPage.standards.description',
-            "These layers let ElevenID interoperate across governments, wallets, and enterprises without custom integrations."
+            "These layers let ElevenID LLC interoperate across governments, wallets, and enterprises without custom integrations."
           )}
         </Typography>
 
@@ -619,7 +606,8 @@ function LandingPage() {
           <Button
             variant="outlined"
             size="large"
-            onClick={() => navigate('/standards')}
+            component="a"
+            href="/standards"
             endIcon={<ArrowForwardIcon />}
           >
             {t('landingPage.standards.cta', 'Explore Standards')}
@@ -642,7 +630,7 @@ function LandingPage() {
           <Grid item xs={12} sm={6} md={3}>
             <Card 
               component="a"
-              href="/product#verification-api"
+              href="/verifiable-credential-api"
               elevation={2} 
               sx={{ 
                 height: '100%', 
@@ -656,7 +644,7 @@ function LandingPage() {
               <CardContent sx={{ textAlign: 'center', py: 3 }}>
                 <VerifiedUserIcon sx={{ fontSize: 40, color: 'primary.main', mb: 1 }} />
                 <Typography variant="subtitle1" fontWeight="bold" gutterBottom>
-                  {t('landingPage.startFirst.cards.verify.title', 'Verify credentials')}
+                  {t('landingPage.startFirst.cards.verify.title', 'Verify Verifiable Credentials')}
                 </Typography>
                 <Typography variant="body2" color="text.secondary">
                   {t(
@@ -670,7 +658,7 @@ function LandingPage() {
           <Grid item xs={12} sm={6} md={3}>
             <Card 
               component="a"
-              href="/product#issuance-api"
+              href="/open-badges-issuance"
               elevation={2}
               sx={{ 
                 height: '100%', 
@@ -684,7 +672,7 @@ function LandingPage() {
               <CardContent sx={{ textAlign: 'center', py: 3 }}>
                 <FlightTakeoffIcon sx={{ fontSize: 40, color: 'secondary.main', mb: 1 }} />
                 <Typography variant="subtitle1" fontWeight="bold" gutterBottom>
-                  {t('landingPage.startFirst.cards.issue.title', 'Issue credentials')}
+                  {t('landingPage.startFirst.cards.issue.title', 'Issue Open Badges Credentials')}
                 </Typography>
                 <Typography variant="body2" color="text.secondary">
                   {t(
@@ -698,7 +686,7 @@ function LandingPage() {
           <Grid item xs={12} sm={6} md={3}>
             <Card 
               component="a"
-              href="/product#kiosk"
+              href="/iso-18013-5-mdoc-verification"
               elevation={2}
               sx={{ 
                 height: '100%', 
@@ -712,7 +700,7 @@ function LandingPage() {
               <CardContent sx={{ textAlign: 'center', py: 3 }}>
                 <SecurityIcon sx={{ fontSize: 40, color: 'warning.main', mb: 1 }} />
                 <Typography variant="subtitle1" fontWeight="bold" gutterBottom>
-                  {t('landingPage.startFirst.cards.offline.title', 'Offline / facility')}
+                  {t('landingPage.startFirst.cards.offline.title', 'ISO 18013-5 Offline Verification')}
                 </Typography>
                 <Typography variant="body2" color="text.secondary">
                   {t(
@@ -726,7 +714,7 @@ function LandingPage() {
           <Grid item xs={12} sm={6} md={3}>
             <Card 
               component="a"
-              href="/product#authenticator"
+              href="/eudi-wallet-verification"
               elevation={2}
               sx={{ 
                 height: '100%', 
@@ -740,7 +728,7 @@ function LandingPage() {
               <CardContent sx={{ textAlign: 'center', py: 3 }}>
                 <LoginIcon sx={{ fontSize: 40, color: 'info.main', mb: 1 }} />
                 <Typography variant="subtitle1" fontWeight="bold" gutterBottom>
-                  {t('landingPage.startFirst.cards.wallet.title', 'Wallet experience')}
+                  {t('landingPage.startFirst.cards.wallet.title', 'EUDI Wallet Verification')}
                 </Typography>
                 <Typography variant="body2" color="text.secondary">
                   {t(
@@ -756,7 +744,7 @@ function LandingPage() {
           {t('landingPage.startFirst.notSure', 'Not sure?')}{' '}
           <Typography 
             component="a" 
-            href="/product#verification-api"
+            href="/verifiable-credential-api"
             sx={{ color: 'primary.main', cursor: 'pointer', textDecoration: 'underline' }}
           >
             {t('landingPage.startFirst.startWithVerificationApi', 'Start with Verification API')} →
@@ -811,8 +799,9 @@ function LandingPage() {
                     size="small"
                     fullWidth
                     variant="text"
+                    component="a"
+                    href="/product"
                     endIcon={<ArrowForwardIcon fontSize="small" />}
-                    onClick={() => navigate('/product')}
                     sx={{ justifyContent: 'flex-start' }}
                   >
                     {t('landingPage.products.viewDetails', 'View Details')}
@@ -827,7 +816,8 @@ function LandingPage() {
           <Button
             variant="outlined"
             size="large"
-            onClick={() => navigate('/product')}
+            component="a"
+            href="/product"
             endIcon={<ArrowForwardIcon />}
           >
             {t('landingPage.products.viewAll', 'View All Products')}
@@ -958,8 +948,8 @@ function LandingPage() {
             'for applicants, vendors, and admins—manage API keys, trust policies, and operations in one place.'
           )}{' '}
           <Typography
-            component="span"
-            onClick={() => navigate('/product')}
+            component="a"
+            href="/product"
             sx={{
               color: 'primary.main',
               textDecoration: 'underline',
@@ -1000,7 +990,8 @@ function LandingPage() {
           <Button
             variant="outlined"
             size="large"
-            onClick={() => navigate('/pricing')}
+            component="a"
+            href="/pricing"
             sx={{ px: 4 }}
           >
             {t('landingPage.footer.viewPricing', 'View Pricing')}
@@ -1026,7 +1017,8 @@ function LandingPage() {
         </Typography>
         <Button
           size="small"
-          onClick={() => navigate('/identity')}
+          component="a"
+          href="/identity"
           endIcon={<ArrowForwardIcon fontSize="small" />}
           sx={{ textTransform: 'none' }}
         >

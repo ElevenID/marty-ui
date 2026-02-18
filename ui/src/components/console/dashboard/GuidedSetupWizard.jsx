@@ -31,31 +31,31 @@ const getSetupSteps = (t) => [
     label: t('dashboard.guidedSetup.steps.trustProfile.label'),
     description: t('dashboard.guidedSetup.steps.trustProfile.description'),
     quickFields: ['name', 'description'],
-    fullPath: '/console/trust/profiles/new',
+    fullPath: '/console/org/trust/profiles/new',
   },
   {
     label: t('dashboard.guidedSetup.steps.credentialTemplate.label'),
     description: t('dashboard.guidedSetup.steps.credentialTemplate.description'),
     quickFields: ['name', 'credentialType'],
-    fullPath: '/console/templates/credentials/new',
+    fullPath: '/console/org/templates/credentials/new',
   },
   {
     label: t('dashboard.guidedSetup.steps.presentationPolicy.label'),
     description: t('dashboard.guidedSetup.steps.presentationPolicy.description'),
     quickFields: ['name', 'requiredCredentials'],
-    fullPath: '/console/policies/presentation/new',
+    fullPath: '/console/org/policies/presentation/new',
   },
   {
     label: t('dashboard.guidedSetup.steps.deploymentProfile.label'),
     description: t('dashboard.guidedSetup.steps.deploymentProfile.description'),
     quickFields: ['name', 'environment'],
-    fullPath: '/console/deploy/profiles/new',
+    fullPath: '/console/org/deploy/profiles/new',
   },
   {
     label: t('dashboard.guidedSetup.steps.flowDefinition.label'),
     description: t('dashboard.guidedSetup.steps.flowDefinition.description'),
     quickFields: ['name', 'flowType'],
-    fullPath: '/console/flows/definitions/new',
+    fullPath: '/console/org/flows/definitions/new',
   },
 ];
 

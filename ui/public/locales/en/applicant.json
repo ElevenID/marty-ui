@@ -52,7 +52,8 @@
       "submitted": "Submitted",
       "underReview": "Under Review",
       "verification": "Verification",
-      "approved": "Approved"
+      "approved": "Approved",
+      "credentialReady": "Credential Ready"
     },
     "status": {
       "submitted": "Submitted",
@@ -72,7 +73,8 @@
       "applyButton": "Apply for a Credential"
     },
     "actions": {
-      "viewDetails": "View Details"
+      "viewDetails": "View Details",
+      "addToWallet": "Add to Wallet"
     },
     "detailsDialog": {
       "title": "Application Details",

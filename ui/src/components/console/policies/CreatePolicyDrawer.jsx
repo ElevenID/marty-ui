@@ -75,7 +75,7 @@ function CreatePolicyDrawer({ open, onClose, onSuccess }) {
       onSubmit={handleSubmit}
       title={t('createPolicyDrawer.title')}
       resourceType="policy"
-      advancedPath="/console/policies/new"
+      advancedPath="/console/org/policies/new"
       fields={fields}
       initialData={{
         name: '',

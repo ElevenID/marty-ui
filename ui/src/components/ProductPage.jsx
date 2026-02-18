@@ -1,11 +1,13 @@
 /**
  * Product Page
  * 
- * Comprehensive overview of ElevenID products with capabilities,
+ * Comprehensive overview of ElevenID LLC products with capabilities,
  * deployment options, standards, and use cases
  */
 
 import { Box, Typography, Button, Card, CardContent, CardHeader, Grid, Chip, Divider, List, ListItem, ListItemIcon, ListItemText, Paper } from '@mui/material';
+import { SEOHead } from './seo';
+import { softwareApplicationSchema, breadcrumbListSchema } from './seo/structuredData';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import CloudIcon from '@mui/icons-material/Cloud';
 import StorageIcon from '@mui/icons-material/Storage';
@@ -34,6 +36,24 @@ function ProductPage() {
 
   return (
     <Box>
+      {/* SEO Meta Tags */}
+      <SEOHead
+        title="Verifiable Credential APIs"
+        description="Enterprise verifiable credential infrastructure: Verification API, Issuance API, Kiosk, and Authenticator. EUDI, Open Badges, ISO 18013-5, SD-JWT support."
+        canonicalPath="/product"
+        keywords={['verifiable credential API', 'EUDI Wallet API', 'Open Badges API', 'ISO 18013-5', 'credential issuance', 'credential verification']}
+        structuredData={[
+          softwareApplicationSchema({
+            name: 'ElevenID LLC Verifiable Credential Platform',
+            description: 'Enterprise verifiable credential infrastructure for issuing, verifying, and governing digital credentials.',
+          }),
+          breadcrumbListSchema([
+            { name: 'Home', url: 'https://elevenidllc.com' },
+            { name: 'Products', url: 'https://elevenidllc.com/product' },
+          ]),
+        ]}
+      />
+      
       {/* Hero Section */}
       <Box
         sx={{
@@ -46,7 +66,7 @@ function ProductPage() {
         }}
       >
         <Typography variant="h3" component="h1" gutterBottom fontWeight="bold">
-          Products
+          Verifiable Credential Products & APIs
         </Typography>
         <Typography variant="h6" sx={{ maxWidth: 800, mx: 'auto', opacity: 0.95 }}>
           Choose the building blocks you need—start with verification, then expand into issuance and governance.
@@ -74,7 +94,7 @@ function ProductPage() {
             <Card 
               elevation={1} 
               component="a"
-              href="#verification-api"
+              href="/verifiable-credential-api"
               sx={{ 
                 height: '100%', 
                 cursor: 'pointer',
@@ -96,7 +116,7 @@ function ProductPage() {
             <Card 
               elevation={1}
               component="a"
-              href="#issuance-api"
+              href="/open-badges-issuance"
               sx={{ 
                 height: '100%', 
                 cursor: 'pointer',
@@ -118,7 +138,7 @@ function ProductPage() {
             <Card 
               elevation={1}
               component="a"
-              href="#kiosk"
+              href="/iso-18013-5-mdoc-verification"
               sx={{ 
                 height: '100%', 
                 cursor: 'pointer',
@@ -140,7 +160,7 @@ function ProductPage() {
             <Card 
               elevation={1}
               component="a"
-              href="#authenticator"
+              href="/eudi-wallet-verification"
               sx={{ 
                 height: '100%', 
                 cursor: 'pointer',
@@ -275,7 +295,7 @@ function ProductPage() {
             <Typography variant="body2" color="text.secondary" paragraph>
               Start with Verification API (read-only checks), then add Issuance when you&apos;re ready to issue.
             </Typography>
-            <Button size="small" onClick={() => navigate('/api-docs')} endIcon={<ArrowForwardIcon fontSize="small" />}>
+            <Button size="small" onClick={() => navigate('/docs')} endIcon={<ArrowForwardIcon fontSize="small" />}>
               Read Docs
             </Button>
           </Grid>
@@ -472,7 +492,7 @@ function ProductPage() {
           <Button
             variant="outlined"
             size="large"
-            onClick={() => navigate('/api-docs')}
+            onClick={() => navigate('/docs')}
           >
             API Documentation
           </Button>

@@ -6,6 +6,7 @@
  */
 
 import { get, post, patch, del } from './api';
+import { buildTruthyQueryString, withQuery } from './queryUtils';
 
 const BASE_PATH = '/v1/identity/deployment-profiles';
 
@@ -33,12 +34,11 @@ export const createDeploymentProfile = async (profileData) => {
  * @returns {Promise<Array>} List of deployment profiles
  */
 export const listDeploymentProfiles = async (filters = {}) => {
-  const params = new URLSearchParams();
-  if (filters.limit) params.append('limit', filters.limit);
-  if (filters.offset) params.append('offset', filters.offset);
-  
-  const queryString = params.toString();
-  return get(queryString ? `${BASE_PATH}?${queryString}` : BASE_PATH);
+  const queryString = buildTruthyQueryString({
+    limit: filters.limit,
+    offset: filters.offset,
+  });
+  return get(withQuery(BASE_PATH, queryString));
 };
 
 /**

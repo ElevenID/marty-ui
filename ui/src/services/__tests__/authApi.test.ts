@@ -27,9 +27,10 @@ describe('authApi', () => {
     it('should fetch current user successfully', async () => {
       const result = await getCurrentUser()
 
-      expect(result.id).toBe(mockUsers.admin.id)
-      expect(result.username).toBe(mockUsers.admin.username)
-      expect(result.user_type).toBe(mockUsers.admin.user_type)
+      expect(result.authenticated).toBe(true)
+      expect(result.user.id).toBe(mockUsers.admin.id)
+      expect(result.user.username).toBe(mockUsers.admin.username)
+      expect(result.user.capabilities).toEqual(mockUsers.admin.capabilities)
     })
 
     it('should handle 401 unauthorized', async () => {

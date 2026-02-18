@@ -2,11 +2,11 @@ import { createContext, useState, useEffect } from 'react';
 
 // Default branding configuration (fallback if config.json fails to load)
 const defaultBranding = {
-  appName: 'ElevenID',
-  shortName: 'ElevenID',
-  authenticatorName: 'ElevenID Authenticator',
+  appName: 'ElevenID LLC',
+  shortName: 'ElevenID LLC',
+  authenticatorName: 'ElevenID LLC Authenticator',
   tagline: 'Secure Digital Identity Platform',
-  issuingAuthority: 'ElevenID Trust Services',
+  issuingAuthority: 'ElevenID LLC Trust Services',
   deepLinkProtocol: 'elevenid',
   logoUrl: null,
   appStoreUrl: '#',
@@ -65,7 +65,10 @@ export function BrandingProvider({ children }) {
   // Update document title when branding loads
   useEffect(() => {
     if (!isLoading && branding.appName) {
-      document.title = branding.appName;
+      const path = window.location.pathname;
+      if (path.startsWith('/console') || path.startsWith('/applicant') || path.startsWith('/admin')) {
+        document.title = branding.appName;
+      }
     }
   }, [branding.appName, isLoading]);
 

@@ -1,9 +1,9 @@
-import { useState, useMemo, Suspense } from 'react';
+import { useState, useMemo, Suspense, useContext } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
-import { AppBar, Toolbar, Typography, Container, Box, Button, Avatar, Chip, Tooltip, IconButton, Menu, MenuItem, ListItemIcon, ListItemText, Divider } from '@mui/material';
+import { AppBar, Toolbar, Typography, Box, Button, Avatar, Chip, Tooltip, IconButton, Menu, MenuItem, ListItemIcon, ListItemText, Divider } from '@mui/material';
 import LoginIcon from '@mui/icons-material/Login';
 import LogoutIcon from '@mui/icons-material/Logout';
 import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings';
@@ -14,15 +14,14 @@ import SettingsIcon from '@mui/icons-material/Settings';
 import NotificationsIcon from '@mui/icons-material/Notifications';
 import PaymentIcon from '@mui/icons-material/Payment';
 
-import { AuthProvider } from './contexts/AuthContext';
+import { AuthProvider, AuthContext } from './contexts/AuthContext';
+import { ConsoleProvider } from './contexts/ConsoleContext';
 import { NotificationProvider } from './contexts/NotificationContext';
-import { BrandingProvider } from './contexts/BrandingContext';
+import { BrandingProvider, BrandingContext } from './contexts/BrandingContext';
 import { PaymentProvider } from './contexts/PaymentContext';
 import { TrustProvider } from './components/trust/TrustProvider';
-import { useAuth } from './hooks/useAuth';
-import { useBranding } from './hooks/useBranding';
 import ErrorBoundary from './components/ErrorBoundary';
-import ProtectedRoute, { AdminRoute, ApplicantRoute, VendorRoute } from './components/ProtectedRoute';
+import ProtectedRoute, { AdminRoute, ApplicantRoute, ApplicantConsoleRoute, VendorRoute, OrgConsoleRoute } from './components/ProtectedRoute';
 import LandingPage from './components/LandingPage';
 import Home from './components/Home';
 import TravelDocuments from './components/TravelDocuments';
@@ -30,7 +29,6 @@ import VerifierDemo from './components/VerifierDemo';
 import WalletDemo from './components/WalletDemo';
 import EnhancedVerifierDemo from './components/EnhancedVerifierDemo';
 import PresentationRequestCreator from './components/verifier/PresentationRequestCreator';
-import Navigation from './components/Navigation';
 import AdminDashboard from './components/AdminDashboard';
 import PassportDemo from './components/PassportDemo';
 import CscaManager from './components/CscaManager';
@@ -41,13 +39,10 @@ import MasterListViewer from './components/MasterListViewer';
 import ApplicantVetting from './components/ApplicantVetting';
 import LoginPage from './components/LoginPage';
 import AuthCallback from './components/AuthCallback';
-import OnboardingPage from './components/OnboardingPage';
-import MyApplications from './components/MyApplications';
-import MyDocuments from './components/MyDocuments';
-import ProfilePage from './components/ProfilePage';
 import WalletSetup from './components/WalletSetup';
-import NotificationPreferences from './components/NotificationPreferences';
-import { ApplicationForm, CredentialCatalog } from './components/applicant';
+import ProfilePage from './components/ProfilePage';
+import { ApplicationForm } from './components/applicant';
+import CredentialCatalog from './components/applicant/CredentialCatalog';
 import InviteAcceptPage from './components/InviteAcceptPage';
 import ApplyPage from './components/ApplyPage';
 import ApiDocumentation from './components/ApiDocumentation';
@@ -56,6 +51,18 @@ import StandardsPage from './components/StandardsPage';
 import IdentityGuidePage from './components/IdentityGuidePage';
 import FromIDVPage from './components/FromIDVPage';
 import PricingPage from './components/PricingPage';
+import {
+  VerifiableCredentialApiPage,
+  EudiWalletVerificationPage,
+  IsoMdocVerificationPage,
+  SdJwtVerificationPage,
+  OpenBadgesVerificationPage,
+  OpenBadgesIssuancePage,
+  TrustRegistryPage,
+  MyOrganizationsPage,
+  DiscoverOrganizationsPage,
+  JoinOrganizationPage,
+} from './components/pages';
 
 // New Console Pages with Sidebar Navigation
 import { AuthenticatedLayout, PublicLayout } from './components/layouts';
@@ -95,10 +102,13 @@ import {
   OperatePage,
   IssuancePage,
   ApplicationsPage,
+  ApplicationReviewPage,
   // Org
   OrgPage,
   OrganizationSettingsPage,
+  OrgSetupPage,
   TeamPage,
+  RolesPage,
   NotificationsPage,
   MembershipRequestsPage,
   RoleEscalationRequestsPage,
@@ -144,8 +154,31 @@ function createDynamicTheme(branding) {
 
 function AppContent() {
   const { t } = useTranslation('common');
-  const { isAuthenticated, isAdministrator, isApplicant, isVendor, organizationName, user, login, logout } = useAuth();
-  const { branding } = useBranding();
+  const auth = useContext(AuthContext) || {};
+  const brandingContext = useContext(BrandingContext);
+  const fallbackBranding = useMemo(() => ({
+    appName: 'ElevenID LLC',
+    primaryColor: '#1976d2',
+    secondaryColor: '#dc004e',
+    logoUrl: null,
+  }), []);
+
+  const {
+    isAuthenticated = false,
+    isAdministrator = false,
+    isApplicant = false,
+    isVendor = false,
+    organizationName = null,
+    user = null,
+    login = () => {},
+    logout = () => {},
+  } = auth;
+
+  const runtimeBranding = brandingContext?.branding;
+  const branding = useMemo(
+    () => runtimeBranding || fallbackBranding,
+    [runtimeBranding, fallbackBranding],
+  );
 
   // Settings menu state
   const [settingsAnchorEl, setSettingsAnchorEl] = useState(null);
@@ -163,13 +196,14 @@ function AppContent() {
   const theme = useMemo(() => createDynamicTheme(branding), [branding]);
 
   const getUserDisplayName = () => {
-    if (!user) return '';t('common.user');
+    if (!user) return t('common.user');
+    return user.given_name || user.username || user.email || t('common.user');
   };
 
   const getUserTypeLabel = () => {
     if (isAdministrator) return t('userTypes.administrator');
-    if (isVendor) return t('userTypes.vendor');
-    if (isApplicant) return t('userTypes.applicant');
+    if (isVendor) return t('common.organizationMember', 'Organization Member');
+    if (isApplicant) return t('common.person', 'Person');
     return t('userTypes.user');
   };
 
@@ -193,7 +227,34 @@ function AppContent() {
           </Typography>
           
           {/* Language Switcher */}
-          <LanguageSwitcher variant="standard" sx={{ mr: 2 }} />
+          <LanguageSwitcher
+            variant="standard"
+            sx={{
+              mr: 2,
+              minWidth: 120,
+              '& .MuiInputBase-root': {
+                color: 'common.white',
+              },
+              '& .MuiSelect-select': {
+                color: 'common.white',
+              },
+              '& .MuiSvgIcon-root': {
+                color: 'common.white',
+              },
+              '& .MuiInputAdornment-root .MuiSvgIcon-root': {
+                color: 'common.white',
+              },
+              '& .MuiInput-underline:before': {
+                borderBottomColor: 'rgba(255, 255, 255, 0.7)',
+              },
+              '& .MuiInput-underline:hover:not(.Mui-disabled):before': {
+                borderBottomColor: 'rgba(255, 255, 255, 0.9)',
+              },
+              '& .MuiInput-underline:after': {
+                borderBottomColor: 'common.white',
+              },
+            }}
+          />
           
           {/* User Info & Auth Actions */}
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
@@ -262,7 +323,7 @@ function AppContent() {
                       transformOrigin={{ horizontal: 'right', vertical: 'top' }}
                       anchorOrigin={{ horizontal: 'right', vertical: 'bottom' }}
                     >
-                      <MenuItem component="a" href="/vendor/settings" onClick={handleSettingsClose}>
+                      <MenuItem component="a" href="/console/org/settings" onClick={handleSettingsClose}>
                         <ListItemIcon>
                           <BusinessIcon fontSize="small" />
                         </ListItemIcon>
@@ -318,13 +379,13 @@ function AppContent() {
       </AppBar>
 
       <Routes>
-        {/* New Console Routes (Admin/Vendor with Sidebar) - Full width, no Container */}
+        {/* Organization Console Routes (with Sidebar) - Requires org selection */}
         <Route
-          path="/console"
+          path="/console/org"
           element={
-            <ProtectedRoute allowedTypes={['administrator', 'vendor']}>
+            <OrgConsoleRoute>
               <AuthenticatedLayout />
-            </ProtectedRoute>
+            </OrgConsoleRoute>
           }
         >
           <Route index element={<ConsoleDashboard />} />
@@ -363,31 +424,46 @@ function AppContent() {
           <Route path="operate" element={<OperatePage />} />
           <Route path="operate/issuance" element={<IssuancePage />} />
           <Route path="operate/applications" element={<ApplicationsPage />} />
+          <Route path="operate/applications/:applicationId" element={<ApplicationReviewPage />} />
           <Route path="operate/flow-instances" element={<FlowInstancesPage />} />
-          {/* Org */}
-          <Route path="org" element={<OrgPage />} />
-          <Route path="org/settings" element={<OrganizationSettingsPage />} />
-          <Route path="org/team" element={<TeamPage />} />
-          <Route path="org/notifications" element={<NotificationsPage />} />
-          <Route path="org/membership-requests" element={<MembershipRequestsPage />} />
-          <Route path="org/role-requests" element={<RoleEscalationRequestsPage />} />
-          <Route path="settings/notifications" element={<NotificationPreferencesPage />} />
+          {/* Org - Settings remain under org path */}
+          <Route path="settings" element={<OrganizationSettingsPage />} />
+          <Route path="team" element={<TeamPage />} />
+          <Route path="roles" element={<RolesPage />} />
+          <Route path="notifications" element={<NotificationsPage />} />
+          <Route path="membership-requests" element={<MembershipRequestsPage />} />
+          <Route path="role-requests" element={<RoleEscalationRequestsPage />} />
           {/* Audit */}
           <Route path="audit" element={<AuditPage />} />
         </Route>
 
-        {/* Applicant Console Routes (with Sidebar) - Full width, no Container */}
+        {/* Organization Setup Route - No org required */}
         <Route
-          path="/applicant"
+          path="/console/org/setup"
           element={
-            <ApplicantRoute>
+            <ProtectedRoute>
               <AuthenticatedLayout />
-            </ApplicantRoute>
+            </ProtectedRoute>
           }
         >
-          <Route index element={<ApplicantDashboard />} />
+          <Route index element={<OrgSetupPage />} />
+        </Route>
+
+        {/* Applicant Console Routes (with Sidebar) */}
+        <Route
+          path="/console/applicant"
+          element={
+            <ApplicantConsoleRoute>
+              <AuthenticatedLayout />
+            </ApplicantConsoleRoute>
+          }
+        >
+          <Route index element={<Navigate to="/console/applicant/catalog" replace />} />
+          <Route path="dashboard" element={<ApplicantDashboard />} />
           <Route path="credentials" element={<MyCredentialsPage />} />
           <Route path="applications" element={<MyApplicationsPage />} />
+          <Route path="catalog" element={<CredentialCatalog />} />
+          <Route path="apply/:credentialType" element={<ApplicationForm />} />
           <Route path="devices" element={<DeviceManagementPage />} />
           <Route path="settings" element={<ApplicantSettingsPage />} />
         </Route>
@@ -419,19 +495,21 @@ function AppContent() {
           <Route path="/apply/:credentialType" element={<ApplyPage />} />
           
           <Route path="/product" element={<ProductPage />} />
+          <Route path="/verifiable-credential-api" element={<VerifiableCredentialApiPage />} />
+          <Route path="/eudi-wallet-verification" element={<EudiWalletVerificationPage />} />
+          <Route path="/iso-18013-5-mdoc-verification" element={<IsoMdocVerificationPage />} />
+          <Route path="/sd-jwt-verification" element={<SdJwtVerificationPage />} />
+          <Route path="/open-badges-verification" element={<OpenBadgesVerificationPage />} />
+          <Route path="/open-badges-issuance" element={<OpenBadgesIssuancePage />} />
+          <Route path="/trust-registry-infrastructure" element={<TrustRegistryPage />} />
           <Route path="/identity" element={<IdentityGuidePage />} />
           <Route path="/from-idv-to-verifiable-identity" element={<FromIDVPage />} />
           <Route path="/standards" element={<StandardsPage />} />
           <Route path="/pricing" element={<PricingPage />} />
           <Route path="/docs" element={<ApiDocumentation />} />
-          <Route
-            path="/onboarding"
-            element={
-              <ProtectedRoute>
-                <OnboardingPage />
-              </ProtectedRoute>
-            }
-          />
+          <Route path="/organizations" element={<MyOrganizationsPage />} />
+          <Route path="/organizations/discover" element={<DiscoverOrganizationsPage />} />
+          <Route path="/organizations/join" element={<JoinOrganizationPage />} />
 
           {/* Admin Dashboard (the original Home component) */}
           <Route
@@ -549,19 +627,6 @@ function AppContent() {
             }
           />
 
-          {/* Legacy Vendor Routes - Redirect to new Console routes */}
-          <Route path="/vendor" element={<Navigate to="/console" replace />} />
-          <Route path="/vendor/api-keys" element={<Navigate to="/console/deploy/api-keys" replace />} />
-          <Route path="/vendor/credentials" element={<Navigate to="/console/templates/credentials" replace />} />
-          <Route path="/vendor/mdoc-config" element={<Navigate to="/console/templates/credentials" replace />} />
-          <Route path="/vendor/settings" element={<Navigate to="/console/org/settings" replace />} />
-          <Route path="/vendor/invitations" element={<Navigate to="/console/operate/invitations" replace />} />
-          <Route path="/vendor/applications" element={<Navigate to="/console/operate/applications" replace />} />
-          <Route path="/vendor/trust" element={<Navigate to="/console/trust/profiles" replace />} />
-          <Route path="/vendor/team" element={<Navigate to="/console/org/team" replace />} />
-          <Route path="/vendor/logs" element={<Navigate to="/console/audit" replace />} />
-          <Route path="/vendor/verification" element={<Navigate to="/console/operate/verification" replace />} />
-
           {/* Public invite accept route */}
           <Route path="/invite/accept" element={<InviteAcceptPage />} />
 
@@ -570,7 +635,15 @@ function AppContent() {
             path="/credentials"
             element={
               <ApplicantRoute>
-                <CredentialCatalog />
+                <Navigate to="/applicant/credentials" replace />
+              </ApplicantRoute>
+            }
+          />
+          <Route
+            path="/catalog"
+            element={
+              <ApplicantRoute>
+                <Navigate to="/applicant/credentials" replace />
               </ApplicantRoute>
             }
           />
@@ -578,7 +651,7 @@ function AppContent() {
             path="/my-applications"
             element={
               <ApplicantRoute>
-                <MyApplications />
+                <Navigate to="/applicant/applications" replace />
               </ApplicantRoute>
             }
           />
@@ -586,7 +659,7 @@ function AppContent() {
             path="/my-documents"
             element={
               <ApplicantRoute>
-                <MyDocuments />
+                <Navigate to="/applicant/devices" replace />
               </ApplicantRoute>
             }
           />
@@ -628,7 +701,7 @@ function AppContent() {
             path="/settings/notifications"
             element={
               <ProtectedRoute>
-                <NotificationPreferences />
+                <NotificationPreferencesPage />
               </ProtectedRoute>
             }
           />
@@ -658,7 +731,9 @@ function App() {
               <PaymentProvider>
                 <Router>
                   <AuthProvider>
-                    <AppContent />
+                    <ConsoleProvider>
+                      <AppContent />
+                    </ConsoleProvider>
                   </AuthProvider>
                 </Router>
               </PaymentProvider>

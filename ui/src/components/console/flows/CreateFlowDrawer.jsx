@@ -74,7 +74,7 @@ function CreateFlowDrawer({ open, onClose, onSuccess }) {
       onSubmit={handleSubmit}
       title={t('createFlowDrawer.title')}
       resourceType="flow"
-      advancedPath="/console/flows/new"
+      advancedPath="/console/org/flows/new"
       fields={fields}
       initialData={{
         name: '',

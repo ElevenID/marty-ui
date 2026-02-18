@@ -8,7 +8,7 @@
   },
   "idvComparison": {
     "title": "Von IDV zu verifizierbarer Identität",
-    "takeaway": "ElevenID ersetzt wiederholte Prüfungen durch wiederverwendbares Vertrauen.",
+    "takeaway": "ElevenID LLC ersetzt wiederholte Prüfungen durch wiederverwendbares Vertrauen.",
     "traditional": {
       "title": "Traditionelles IDV",
       "oneTimeChecks": "Einmalige Dokumentenprüfungen",
@@ -19,7 +19,7 @@
       "reVerification": "Überall erneute Verifizierung"
     },
     "elevenid": {
-      "title": "ElevenID",
+      "title": "ElevenID LLC",
       "reusable": "Wiederverwendbare verifizierbare Nachweise",
       "holderControlled": "Wallets unter Kontrolle der Inhaber",
       "cryptographic": "Kryptografische Nachweise",
@@ -33,7 +33,7 @@
     "verifyCredentials": "Verifizieren Sie verifizierbare Nachweise – nicht nur Dokumente.",
     "trustIssuers": "Vertrauen Sie Ausstellern – nicht Datenbanken.",
     "walletFirst": "Wallet-first by design – EUDI-ready.",
-    "quote": "IDV-Plattformen enden bei einer einmaligen Entscheidung. ElevenID liefert kryptografisch verifizierbare Ergebnisse, die über Wallets, Ökosysteme und Vertrauensregister hinweg wiederverwendet werden können."
+    "quote": "IDV-Plattformen enden bei einer einmaligen Entscheidung. ElevenID LLC liefert kryptografisch verifizierbare Ergebnisse, die über Wallets, Ökosysteme und Vertrauensregister hinweg wiederverwendet werden können."
   },
   "audienceRouting": {
     "title": "Wählen Sie Ihren Pfad",
@@ -97,7 +97,7 @@
       }
     },
     "solvesIt": {
-      "title": "Wie ElevenID das löst",
+      "title": "Wie ElevenID LLC das löst",
       "intro": "Governieren Sie Identität mit vier Bausteinen: Trust Profiles, Credential Templates, Presentation Policies und Flows.",
       "subheading": "Policies sind Konfiguration, kein Code. Endpoints führen zentral gesteuerte Vertrauens- und Offenlegungsregeln ohne Redeployment aus."
     },

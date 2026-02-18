@@ -2,7 +2,7 @@
  * Flow Detail Page
  * 
  * THE CENTERPIECE: This page represents the applicant-facing product.
- * If an admin understands this page, they understand ElevenID.
+ * If an admin understands this page, they understand ElevenID LLC.
  * 
  * Enforces the mental model: Applicants apply to Flows, not Templates.
  */
@@ -57,8 +57,8 @@ import flowsApi from '../../../services/flowsApi';
 
 const getBreadcrumbs = (t) => [
   { label: t('flows.breadcrumbs.console'), path: '/console' },
-  { label: t('deploy.breadcrumbs.deploy'), path: '/console/deploy' },
-  { label: t('flows.flowDefinitions'), path: '/console/flows/definitions' },
+  { label: t('deploy.breadcrumbs.deploy'), path: '/console/org/deploy' },
+  { label: t('flows.flowDefinitions'), path: '/console/org/flows/definitions' },
   { label: 'Flow Detail', path: '' },
 ];
 
@@ -203,19 +203,19 @@ function ConfigurationSummary({ flow }) {
     {
       label: t('flows.flowDetail.configuration.credentialTemplateLabel'),
       value: flow?.credential_template_name || 'EU Digital Identity Credential',
-      path: `/console/templates/credentials/${flow?.credential_template_id}`,
+      path: `/console/org/templates/credentials/${flow?.credential_template_id}`,
       icon: DescriptionIcon,
     },
     {
       label: t('flows.flowDetail.configuration.applicationRulesLabel'),
       value: flow?.application_rules || 'Employee email required (domain: example.com)',
-      path: `/console/templates/applications/${flow?.application_template_id}`,
+      path: `/console/org/templates/applications/${flow?.application_template_id}`,
       icon: PolicyIcon,
     },
     {
       label: t('flows.flowDetail.configuration.complianceProfileLabel'),
       value: flow?.compliance_profile || 'Open Badge 2.0, EUDI-ready',
-      path: `/console/policies/compliance/${flow?.compliance_profile_id}`,
+      path: `/console/org/policies/compliance/${flow?.compliance_profile_id}`,
       icon: VerifiedUserIcon,
     },
     {
@@ -315,7 +315,7 @@ function RuntimeOverview({ flow }) {
         <Box sx={{ mt: 3, display: 'flex', gap: 2 }}>
           <Button
             component={RouterLink}
-            to="/console/operate/applications"
+            to="/console/org/operate/applications"
             variant="outlined"
             size="small"
             fullWidth
@@ -324,7 +324,7 @@ function RuntimeOverview({ flow }) {
           </Button>
           <Button
             component={RouterLink}
-            to="/console/operate/issuance"
+            to="/console/org/operate/issuance"
             variant="outlined"
             size="small"
             fullWidth
@@ -427,7 +427,7 @@ function FlowDetailPage() {
         <Alert severity="error">{error || t('flows.flowDetail.errors.flowNotFound')}</Alert>
         <Button
           startIcon={<ArrowBackIcon />}
-          onClick={() => navigate('/console/flows/definitions')}
+          onClick={() => navigate('/console/org/flows/definitions')}
           sx={{ mt: 2 }}
         >
           {t('flows.flowDetail.actions.backToFlowsButton')}
@@ -451,7 +451,7 @@ function FlowDetailPage() {
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
               <IconButton
                 size="small"
-                onClick={() => navigate('/console/flows/definitions')}
+                onClick={() => navigate('/console/org/flows/definitions')}
               >
                 <ArrowBackIcon />
               </IconButton>

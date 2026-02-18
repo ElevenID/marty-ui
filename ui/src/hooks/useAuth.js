@@ -59,18 +59,22 @@ export function useRequireAuth(redirectUri) {
 }
 
 /**
- * Hook to require specific user type
+ * Hook to require specific capability
  *
- * @param {'administrator' | 'applicant'} requiredType - Required user type
+ * @param {string} requiredCapability - Required capability key
  * @param {string} [fallbackPath='/'] - Path to redirect if wrong type
  * @returns {Object} Auth context value
  */
-export function useRequireUserType(requiredType, fallbackPath = '/') {
+export function useRequireCapability(requiredCapability, fallbackPath = '/') {
   const auth = useAuth();
 
   if (!auth.isLoading && auth.isAuthenticated) {
-    if (auth.user?.user_type !== requiredType) {
-      // Redirect to fallback if wrong user type
+    const hasCapability = typeof auth.hasCapability === 'function'
+      ? auth.hasCapability(requiredCapability)
+      : Boolean(auth.capabilities?.[requiredCapability]);
+
+    if (!hasCapability) {
+      // Redirect to fallback if missing capability
       window.location.href = fallbackPath;
     }
   }
