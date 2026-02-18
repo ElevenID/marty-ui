@@ -23,9 +23,19 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, AsyncGenerator
 
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query
+from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from typing import Annotated
+
+from marty_common import (
+    OrganizationClient,
+    OrganizationContext,
+    require_org_admin,
+    require_org_membership,
+    RequestIdMiddleware,
+    RequestLoggingMiddleware,
+)
 
 from status_list_manager import (
     StatusListManager,
@@ -394,6 +404,8 @@ def _to_response(profile: RevocationProfile) -> dict:
 @router.post("", response_model=RevocationProfileResponse)
 async def create_revocation_profile(
     request: CreateRevocationProfileRequest,
+    org_context: OrganizationContext = Depends(require_org_membership(lambda r: r.organization_id)),
+    user_id: str = Depends(get_current_user_id),
     repo: InMemoryRevocationProfileRepository = Depends(get_repo),
 ) -> dict:
     """Create a new RevocationProfile."""
@@ -454,9 +466,12 @@ async def create_revocation_profile(
 @router.get("", response_model=list[RevocationProfileResponse])
 async def list_revocation_profiles(
     organization_id: str = Query(...),
+    user_id: str = Depends(get_current_user_id),
     repo: InMemoryRevocationProfileRepository = Depends(get_repo),
 ) -> list[dict]:
     """List all RevocationProfiles for an organization."""
+    # Verify org membership
+    await app.state.org_client.get_membership(user_id, organization_id)
     profiles = await repo.list(organization_id)
     return [_to_response(p) for p in profiles]
 
@@ -464,24 +479,33 @@ async def list_revocation_profiles(
 @router.get("/{profile_id}", response_model=RevocationProfileResponse)
 async def get_revocation_profile(
     profile_id: str,
+    user_id: str = Depends(get_current_user_id),
     repo: InMemoryRevocationProfileRepository = Depends(get_repo),
 ) -> dict:
     """Get a RevocationProfile by ID."""
     profile = await repo.get(profile_id)
     if not profile:
         raise HTTPException(status_code=404, detail="RevocationProfile not found")
+    # Verify org membership
+    await app.state.org_client.get_membership(user_id, profile.organization_id)
     return _to_response(profile)
 
 
 @router.post("/{profile_id}/activate", response_model=RevocationProfileResponse)
 async def activate_revocation_profile(
     profile_id: str,
+    user_id: str = Depends(get_current_user_id),
     repo: InMemoryRevocationProfileRepository = Depends(get_repo),
 ) -> dict:
-    """Activate a RevocationProfile."""
+    """Activate a RevocationProfile (requires admin)."""
     profile = await repo.get(profile_id)
     if not profile:
         raise HTTPException(status_code=404, detail="RevocationProfile not found")
+    
+    # Verify admin access
+    membership = await app.state.org_client.get_membership(user_id, profile.organization_id)
+    if not membership.has_role("admin", "owner"):
+        raise HTTPException(status_code=403, detail="Admin access required")
     
     profile.activate()
     await repo.save(profile)
@@ -493,12 +517,18 @@ async def activate_revocation_profile(
 @router.delete("/{profile_id}")
 async def delete_revocation_profile(
     profile_id: str,
+    user_id: str = Depends(get_current_user_id),
     repo: InMemoryRevocationProfileRepository = Depends(get_repo),
 ) -> dict:
-    """Delete a RevocationProfile."""
+    """Delete a RevocationProfile (requires admin)."""
     profile = await repo.get(profile_id)
     if not profile:
         raise HTTPException(status_code=404, detail="RevocationProfile not found")
+    
+    # Verify admin access
+    membership = await app.state.org_client.get_membership(user_id, profile.organization_id)
+    if not membership.has_role("admin", "owner"):
+        raise HTTPException(status_code=403, detail="Admin access required")
     
     await repo.delete(profile_id)
     logger.info(f"Deleted RevocationProfile: {profile_id}")
@@ -693,6 +723,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
     logger.info(f"Initialized StatusListManager with base URL: {base_url}")
     
+    # Initialize OrganizationClient
+    org_service_url = os.environ.get("ORGANIZATION_SERVICE_URL", "http://organization:8002")
+    app.state.org_client = OrganizationClient(
+        organization_service_url=org_service_url,
+        redis_client=None,
+    )
+    
     # Create default profiles
     default_profile = RevocationProfile(
         organization_id="system",
@@ -714,6 +751,8 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
     
+    app.add_middleware(RequestLoggingMiddleware)
+    app.add_middleware(RequestIdMiddleware)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],

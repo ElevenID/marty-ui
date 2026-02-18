@@ -47,7 +47,8 @@ import {
   Info as InfoIcon,
   CheckCircle as CheckIcon,
   Schedule as PendingIcon,
-  AttachMoney as PriceIcon
+  AttachMoney as PriceIcon,
+  Business as BusinessIcon
 } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -101,11 +102,11 @@ const CREDENTIAL_TYPES = {
     requirements: ['Valid passport', 'Biometric photo']
   },
   open_badge: {
-    description: 'Open Badge credential aligned with the Open Badges standard',
+    description: 'Professional Development Certificate - Open Badge 3.0 credential for continuing education and professional development in the education sector',
     icon: BadgeIcon,
-    category: 'enterprise',
+    category: 'education',
     processingTime: '1-2 business days',
-    requirements: ['Issuer approval']
+    requirements: ['Course completion verification', 'Instructor approval', 'Minimum passing grade']
   }
 };
 
@@ -143,48 +144,60 @@ const CredentialCatalog = () => {
     setLoading(true);
     try {
       const response = await fetch(
-        `${API_URL}/api/organizations/${organizationId}/credential-types`,
+        `${API_URL}/v1/credential-templates?organization_id=${organizationId}&status=active`,
         { credentials: 'include' }
       );
       if (response.ok) {
         const data = await response.json();
-        const configs = data.credential_types || [];
-        
-        // Filter to only published, non-system templates
-        const publishedConfigs = configs.filter(
-          (config) => config.is_published && !config.is_system_template && config.is_active
-        );
-        
-        const mapped = publishedConfigs.map((config) => {
-          // Use backend metadata instead of hardcoded CREDENTIAL_TYPES
-          const meta = CREDENTIAL_TYPES[config.credential_type] || {};
-          
-          // Parse eligibility criteria into requirements array
-          const requirements = config.eligibility_criteria
-            ? config.eligibility_criteria.split('\n').filter(r => r.trim())
-            : meta.requirements || [];
-          
+        const templates = Array.isArray(data) ? data : (data.templates || []);
+
+        const mapped = templates.map((template) => {
+          const meta = CREDENTIAL_TYPES[template.credential_type] || {};
+
+          const claimRequirements = Array.isArray(template.claims)
+            ? template.claims
+              .filter((claim) => claim?.required)
+              .map((claim) => claim?.display_name || claim?.name)
+              .filter(Boolean)
+            : [];
+
+          const requirements = claimRequirements.length > 0
+            ? claimRequirements
+            : (meta.requirements || []);
+
+          const processingDays = template?.validity_rules?.default_validity_days;
+
           return {
-            id: config.id,
-            credentialType: config.credential_type,
-            name: config.display_name,
-            // Use backend description, fallback to hardcoded if not available
-            description: config.description || meta.description || config.display_name,
+            id: template.id,
+            credentialType: template.credential_type,
+            name: template.name,
+            description: template.description || meta.description || template.name,
             icon: meta.icon || CredentialIcon,
             category: meta.category || 'identity',
-            // Use backend processing time, fallback to hardcoded
-            processingTime: config.estimated_processing_time || meta.processingTime || '3-5 business days',
+            processingTime: processingDays
+              ? `${processingDays} day validity`
+              : (meta.processingTime || '3-5 business days'),
             requirements: requirements,
-            requiredFields: config.required_fields || [],
-            optionalFields: config.optional_fields || [],
-            customFields: config.custom_fields || [],
-            eligibilityCriteria: config.eligibility_criteria,
-            submissionInstructions: config.submission_instructions,
+            requiredFields: Array.isArray(template.claims)
+              ? template.claims
+                .filter((claim) => claim?.required)
+                .map((claim) => claim?.name)
+                .filter(Boolean)
+              : [],
+            optionalFields: Array.isArray(template.claims)
+              ? template.claims
+                .filter((claim) => !claim?.required)
+                .map((claim) => claim?.name)
+                .filter(Boolean)
+              : [],
+            customFields: [],
+            eligibilityCriteria: null,
+            submissionInstructions: null,
             processingFee: 0,
-            available: config.is_active,
+            available: template.status === 'active',
             vendorName: organizationName || 'Issuer',
-            templateVersion: config.template_version,
-            visibility: config.visibility,
+            templateVersion: template.version,
+            visibility: 'organization',
           };
         });
         setCredentials(mapped);
@@ -208,7 +221,7 @@ const CredentialCatalog = () => {
       if (!organizationId || !user?.user_id) {
         return;
       }
-      const applicantResponse = await fetch(`${API_URL}/api/applicants/by-user/${user?.user_id}`, {
+      const applicantResponse = await fetch(`${API_URL}/v1/applicants/by-user/${user?.user_id}`, {
         credentials: 'include',
       });
       if (!applicantResponse.ok) {
@@ -218,7 +231,7 @@ const CredentialCatalog = () => {
       if (!applicant?.id) {
         return;
       }
-      const response = await fetch(`${API_URL}/api/applicants/${applicant.id}/applications`, {
+      const response = await fetch(`${API_URL}/v1/applicants/profiles/${applicant.id}/applications`, {
         credentials: 'include',
       });
       if (!response.ok) {
@@ -254,9 +267,12 @@ const CredentialCatalog = () => {
    * Handle credential application
    */
   const handleApply = (credential) => {
+    // Strip non-serializable properties (icon is a React component)
+    // before passing as navigation state — pushState requires plain data.
+    const { icon, ...serializableCredential } = credential;
     navigate(`/apply/${credential.id}`, {
       state: {
-        credential,
+        credential: serializableCredential,
       }
     });
   };
@@ -296,6 +312,23 @@ const CredentialCatalog = () => {
 
   return (
     <Container maxWidth="lg" data-testid="credential-catalog-page">
+      {/* Organization Metadata Header */}
+      {organizationName && (
+        <Paper elevation={1} sx={{ p: 3, mb: 3, bgcolor: 'primary.light', color: 'primary.contrastText' }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+            <BusinessIcon sx={{ fontSize: 48 }} />
+            <Box>
+              <Typography variant="h5" component="h2" gutterBottom sx={{ mb: 0.5 }}>
+                {organizationName}
+              </Typography>
+              <Typography variant="body2" sx={{ opacity: 0.9 }}>
+                {t('catalog.orgHeader.subtitle', { defaultValue: 'Browse and apply for available credentials' })}
+              </Typography>
+            </Box>
+          </Box>
+        </Paper>
+      )}
+
       <Box sx={{ mb: 4 }}>
         <Typography variant="h4" component="h1" gutterBottom data-testid="catalog-title">
           <CredentialIcon sx={{ mr: 2, verticalAlign: 'middle' }} />

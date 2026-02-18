@@ -26,9 +26,19 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, AsyncGenerator
 
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query
+from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from typing import Annotated
+
+from marty_common import (
+    OrganizationClient,
+    OrganizationContext,
+    require_org_admin,
+    require_org_membership,
+)
+from marty_common.org_authorization import get_organization_client
+from marty_common.middleware import RequestIdMiddleware, RequestLoggingMiddleware
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -326,12 +336,25 @@ def get_repo() -> InMemoryComplianceProfileRepository:
     return _repo
 
 
+def get_current_user_id(x_user_id: Annotated[str, Header()]) -> str:
+    """Extract user ID from X-User-Id header (injected by gateway)."""
+    return x_user_id
+
+
 @router.post("", response_model=ComplianceProfileResponse)
 async def create_compliance_profile(
     request: CreateComplianceProfileRequest,
+    fastapi_request: Request,
+    user_id: str = Depends(get_current_user_id),
     repo: InMemoryComplianceProfileRepository = Depends(get_repo),
 ) -> ComplianceProfileResponse:
     """Create a new Compliance Profile."""
+    # Verify org membership
+    org_client = await get_organization_client(fastapi_request)
+    membership = await org_client.get_membership(user_id, request.organization_id)
+    if not membership or not membership.is_active():
+        raise HTTPException(status_code=403, detail="Not a member of this organization")
+    
     profile = ComplianceProfile(
         organization_id=request.organization_id,
         name=request.name,
@@ -409,9 +432,12 @@ async def create_compliance_profile(
 @router.get("", response_model=list[ComplianceProfileResponse])
 async def list_compliance_profiles(
     organization_id: str = Query(..., description="Organization ID"),
+    user_id: str = Depends(get_current_user_id),
     repo: InMemoryComplianceProfileRepository = Depends(get_repo),
 ) -> list[ComplianceProfileResponse]:
     """List Compliance Profiles for an organization."""
+    # Verify org membership
+    await app.state.org_client.get_membership(user_id, organization_id)
     profiles = await repo.list(organization_id)
     return [_profile_to_response(p) for p in profiles]
 
@@ -419,12 +445,15 @@ async def list_compliance_profiles(
 @router.get("/{profile_id}", response_model=ComplianceProfileResponse)
 async def get_compliance_profile(
     profile_id: str,
+    user_id: str = Depends(get_current_user_id),
     repo: InMemoryComplianceProfileRepository = Depends(get_repo),
 ) -> ComplianceProfileResponse:
     """Get a Compliance Profile by ID."""
-    profile = await repo.get(profile_id)
+    profile = await repo.get_profile(profile_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Compliance Profile not found")
+    # Verify org membership
+    await app.state.org_client.get_membership(user_id, profile.organization_id)
     return _profile_to_response(profile)
 
 
@@ -432,12 +461,18 @@ async def get_compliance_profile(
 async def update_compliance_profile(
     profile_id: str,
     request: UpdateComplianceProfileRequest,
+    user_id: str = Depends(get_current_user_id),
     repo: InMemoryComplianceProfileRepository = Depends(get_repo),
 ) -> ComplianceProfileResponse:
-    """Update a Compliance Profile."""
-    profile = await repo.get(profile_id)
+    """Update a Compliance Profile (requires admin)."""
+    profile = await repo.get_profile(profile_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Compliance Profile not found")
+    
+    # Verify admin access
+    membership = await app.state.org_client.get_membership(user_id, profile.organization_id)
+    if not membership.has_role("admin", "owner"):
+        raise HTTPException(status_code=403, detail="Admin access required")
     
     if request.name is not None:
         profile.name = request.name
@@ -454,12 +489,18 @@ async def update_compliance_profile(
 @router.post("/{profile_id}/activate", response_model=ComplianceProfileResponse)
 async def activate_compliance_profile(
     profile_id: str,
+    user_id: str = Depends(get_current_user_id),
     repo: InMemoryComplianceProfileRepository = Depends(get_repo),
 ) -> ComplianceProfileResponse:
-    """Activate a Compliance Profile."""
-    profile = await repo.get(profile_id)
+    """Activate a Compliance Profile (requires admin)."""
+    profile = await repo.get_profile(profile_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Compliance Profile not found")
+    
+    # Verify admin access
+    membership = await app.state.org_client.get_membership(user_id, profile.organization_id)
+    if not membership.has_role("admin", "owner"):
+        raise HTTPException(status_code=403, detail="Admin access required")
     profile.activate()
     await repo.save(profile)
     return _profile_to_response(profile)
@@ -468,12 +509,18 @@ async def activate_compliance_profile(
 @router.post("/{profile_id}/suspend", response_model=ComplianceProfileResponse)
 async def suspend_compliance_profile(
     profile_id: str,
+    user_id: str = Depends(get_current_user_id),
     repo: InMemoryComplianceProfileRepository = Depends(get_repo),
 ) -> ComplianceProfileResponse:
-    """Suspend a Compliance Profile."""
-    profile = await repo.get(profile_id)
+    """Suspend a Compliance Profile (requires admin)."""
+    profile = await repo.get_profile(profile_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Compliance Profile not found")
+    
+    # Verify admin access
+    membership = await app.state.org_client.get_membership(user_id, profile.organization_id)
+    if not membership.has_role("admin", "owner"):
+        raise HTTPException(status_code=403, detail="Admin access required")
     profile.suspend()
     await repo.save(profile)
     return _profile_to_response(profile)
@@ -482,9 +529,19 @@ async def suspend_compliance_profile(
 @router.delete("/{profile_id}")
 async def delete_compliance_profile(
     profile_id: str,
+    user_id: str = Depends(get_current_user_id),
     repo: InMemoryComplianceProfileRepository = Depends(get_repo),
 ) -> dict:
-    """Delete a Compliance Profile."""
+    """Delete a Compliance Profile (requires admin)."""
+    profile = await repo.get_profile(profile_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Compliance Profile not found")
+    
+    # Verify admin access
+    membership = await app.state.org_client.get_membership(user_id, profile.organization_id)
+    if not membership.has_role("admin", "owner"):
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
     await repo.delete(profile_id)
     return {"success": True}
 
@@ -555,6 +612,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     global _repo
     logger.info(f"Starting {SERVICE_NAME}...")
     _repo = InMemoryComplianceProfileRepository()
+    
+    # Initialize OrganizationClient
+    org_service_url = os.environ.get("ORGANIZATION_SERVICE_URL", "http://organization:8002")
+    app.state.org_client = OrganizationClient(
+        base_url=org_service_url,
+        redis_client=None,
+    )
+    
     yield
     logger.info(f"Shutting down {SERVICE_NAME}...")
 
@@ -567,6 +632,8 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
     
+    app.add_middleware(RequestLoggingMiddleware)
+    app.add_middleware(RequestIdMiddleware)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],

@@ -8,7 +8,7 @@
 import { Navigate } from 'react-router-dom';
 
 function OperatePage() {
-  return <Navigate to="/console/operate/issuance" replace />;
+  return <Navigate to="/console/org/operate/issuance" replace />;
 }
 
 export default OperatePage;

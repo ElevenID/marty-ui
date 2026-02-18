@@ -66,7 +66,7 @@ const TrustProfileStep = ({ selectedTrustProfile, onSelectTrustProfile }) => {
   }, [fetchTrustProfiles]);
 
   const handleGoToTrustProfiles = () => {
-    navigate('/console/trust/profiles/new');
+    navigate('/console/org/trust/profiles/new');
   };
 
   const handleSelectProfile = (profile) => {

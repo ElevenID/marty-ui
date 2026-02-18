@@ -32,14 +32,14 @@ import { Link } from 'react-router-dom';
 import { ResourcePage, EmptyState, EmptyStates, StatusChip } from '../../common';
 
 const getPoliciesTabs = (t) => [
-  { label: t('policies.presentationPolicies'), path: '/console/policies/presentation' },
-  { label: t('policies.complianceProfiles'), path: '/console/policies/compliance' },
+  { label: t('policies.presentationPolicies'), path: '/console/org/policies/presentation' },
+  { label: t('policies.complianceProfiles'), path: '/console/org/policies/compliance' },
 ];
 
 const getBreadcrumbs = (t) => [
   { label: t('policies.breadcrumbs.console'), path: '/console' },
-  { label: t('policies.breadcrumbs.policies'), path: '/console/policies' },
-  { label: t('policies.breadcrumbs.presentationPolicies'), path: '/console/policies/presentation' },
+  { label: t('policies.breadcrumbs.policies'), path: '/console/org/policies' },
+  { label: t('policies.breadcrumbs.presentationPolicies'), path: '/console/org/policies/presentation' },
 ];
 
 function PresentationPoliciesPage() {
@@ -107,7 +107,7 @@ function PresentationPoliciesPage() {
         size="small"
         startIcon={<PlayArrowIcon />}
         component={Link}
-        to="/console/policies/test"
+        to="/console/org/policies/test"
       >
         {t('policies.testActions.evaluateVP')}
       </Button>
@@ -116,7 +116,7 @@ function PresentationPoliciesPage() {
         size="small"
         startIcon={<QrCodeIcon />}
         component={Link}
-        to="/console/flows/definitions/new?type=verification"
+        to="/console/org/flows/definitions/new?type=verification"
       >
         {t('policies.testActions.startQRVerification')}
       </Button>
@@ -128,8 +128,8 @@ function PresentationPoliciesPage() {
       title={t('policies.presentationPolicies')}
       description={t('policies.presentationPoliciesDescription')}
       resourceName={t('policies.title')}
-      buildPath="/console/policies/presentation/new"
-      newPath="/console/policies/presentation/new?mode=advanced"
+      buildPath="/console/org/policies/presentation/new"
+      newPath="/console/org/policies/presentation/new?mode=advanced"
       tabs={getPoliciesTabs(t)}
       breadcrumbs={getBreadcrumbs(t)}
       actions={<TestActions />}
@@ -196,7 +196,7 @@ function PresentationPoliciesPage() {
                       <Tooltip title={t('policies.actions.viewDetails')}>
                         <IconButton
                           component={Link}
-                          to={`/console/policies/presentation/${policy.id}`}
+                          to={`/console/org/policies/presentation/${policy.id}`}
                           size="small"
                         >
                           <VisibilityIcon fontSize="small" />
@@ -205,7 +205,7 @@ function PresentationPoliciesPage() {
                       <Tooltip title={t('policies.actions.edit')}>
                         <IconButton
                           component={Link}
-                          to={`/console/policies/presentation/${policy.id}/edit`}
+                          to={`/console/org/policies/presentation/${policy.id}/edit`}
                           size="small"
                         >
                           <EditIcon fontSize="small" />

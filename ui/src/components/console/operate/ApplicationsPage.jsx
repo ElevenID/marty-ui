@@ -33,24 +33,39 @@ import VisibilityIcon from '@mui/icons-material/Visibility';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import CancelIcon from '@mui/icons-material/Cancel';
 import RefreshIcon from '@mui/icons-material/Refresh';
-import { Link } from 'react-router-dom';
+import SendIcon from '@mui/icons-material/Send';
+import { Link, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+import { useAuth } from '../../../hooks/useAuth';
+import {
+  issueOrganizationApplication,
+  listOrganizationApplications,
+  reviewOrganizationApplication,
+} from '../../../services/applicantApi';
 
 import { ResourcePage, EmptyState, EmptyStates, StatusChip } from '../../common';
 
 const getOperateTabs = (t) => [
-  { label: t('operate.tabs.issuance'), path: '/console/operate/issuance' },
-  { label: t('operate.tabs.applications'), path: '/console/operate/applications' },
+  { label: t('operate.tabs.issuance'), path: '/console/org/operate/issuance' },
+  { label: t('operate.tabs.applications'), path: '/console/org/operate/applications' },
 ];
 
 const getBreadcrumbs = (t) => [
   { label: t('operate.breadcrumbs.console'), path: '/console' },
-  { label: t('operate.breadcrumbs.operate'), path: '/console/operate' },
-  { label: t('operate.breadcrumbs.applications'), path: '/console/operate/applications' },
+  { label: t('operate.breadcrumbs.operate'), path: '/console/org/operate' },
+  { label: t('operate.breadcrumbs.applications'), path: '/console/org/operate/applications' },
 ];
+
+// Statuses that belong to the "pending" (in-progress / awaiting review) group
+const PENDING_STATUSES = new Set([
+  'submitted', 'under_review', 'vetting_in_progress', 'pending_review',
+  'documents_pending', 'pending', 'draft',
+]);
 
 function ApplicationsPage() {
   const { t } = useTranslation('console');
+  const { organizationId } = useAuth();
+  const navigate = useNavigate();
   const [applications, setApplications] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -58,65 +73,94 @@ function ApplicationsPage() {
   const [statusFilter, setStatusFilter] = useState('pending');
 
   useEffect(() => {
-    loadApplications();
-  }, []);
+    if (organizationId) {
+      loadApplications();
+    }
+  }, [organizationId]);
 
   const loadApplications = async () => {
+    if (!organizationId) {
+      setApplications([]);
+      setLoading(false);
+      return;
+    }
+
     setLoading(true);
+    setError(null);
+
     try {
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      setApplications([
-        {
-          id: 'app-2001',
-          applicant: 'alice.johnson@example.com',
-          credentialType: 'EU Digital Identity Credential',
-          submittedAt: '2026-02-07T08:30:00Z',
-          documentsUploaded: true,
-          verificationPassed: true,
-          status: 'pending_review',
-        },
-        {
-          id: 'app-2002',
-          applicant: 'charlie.brown@example.com',
-          credentialType: 'Mobile Driving License',
-          submittedAt: '2026-02-07T07:45:00Z',
-          documentsUploaded: true,
-          verificationPassed: false,
-          status: 'verification_failed',
-        },
-        {
-          id: 'app-2003',
-          applicant: 'diana.prince@example.com',
-          credentialType: 'EU Digital Identity Credential',
-          submittedAt: '2026-02-06T16:00:00Z',
-          documentsUploaded: false,
-          verificationPassed: null,
-          status: 'documents_pending',
-        },
-        {
-          id: 'app-2004',
-          applicant: 'edward.stark@example.com',
-          credentialType: 'Employee Badge',
-          submittedAt: '2026-02-06T14:30:00Z',
-          documentsUploaded: true,
-          verificationPassed: true,
-          status: 'approved',
-        },
+      const [appsResult, applicantsResponse] = await Promise.all([
+        listOrganizationApplications(organizationId),
+        fetch(`/v1/applicants?organization_id=${encodeURIComponent(organizationId)}`, {
+          credentials: 'include',
+        }),
       ]);
+
+      const applicants = applicantsResponse.ok ? await applicantsResponse.json() : [];
+      const applicantById = new Map((Array.isArray(applicants) ? applicants : []).map((a) => [a.id, a]));
+
+      const normalizedApps = (appsResult.applications || []).map((app) => {
+        const applicant = applicantById.get(app.applicant_id);
+        const status = (app.status || '').toLowerCase();
+        const metadata = app.metadata || {};
+
+        return {
+          id: app.id,
+          applicant: applicant?.email || app.applicant_id,
+          credentialType: app.credential_display_name || metadata.credential_display_name || app.credential_configuration_id,
+          submittedAt: app.submitted_at || app.created_at,
+          documentsUploaded: true,
+          verificationPassed: true,
+          status,
+          rawStatus: status,
+          issuanceTransactionId: metadata.issuance_transaction_id || null,
+        };
+      });
+
+      setApplications(normalizedApps);
     } catch (err) {
-      setError(t('operate.applications.errorLoading'));
+      setError(err.message || t('operate.applications.errorLoading'));
     } finally {
       setLoading(false);
     }
   };
 
+  const handleApprove = async (applicationId) => {
+    try {
+      await reviewOrganizationApplication(applicationId, 'approve');
+      await loadApplications();
+    } catch (err) {
+      setError(err.message || 'Failed to approve application');
+    }
+  };
+
+  const handleReject = async (applicationId) => {
+    try {
+      await reviewOrganizationApplication(applicationId, 'reject', {
+        reason: 'Rejected by organization reviewer',
+      });
+      await loadApplications();
+    } catch (err) {
+      setError(err.message || 'Failed to reject application');
+    }
+  };
+
+  const handleIssue = async (applicationId) => {
+    try {
+      await issueOrganizationApplication(applicationId);
+      await loadApplications();
+    } catch (err) {
+      setError(err.message || 'Failed to issue credential');
+    }
+  };
+
   const filteredApplications = applications.filter((app) => {
-    const matchesSearch = app.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      app.applicant.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      app.credentialType.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesStatus = statusFilter === 'all' || 
-      (statusFilter === 'pending' && ['pending_review', 'documents_pending'].includes(app.status)) ||
-      app.status === statusFilter;
+    const q = searchQuery.toLowerCase();
+    const matchesSearch = app.id.toLowerCase().includes(q) ||
+      app.applicant.toLowerCase().includes(q) ||
+      app.credentialType.toLowerCase().includes(q);
+    const matchesStatus = statusFilter === 'all' ||
+      (statusFilter === 'pending' ? PENDING_STATUSES.has(app.status) : app.status === statusFilter);
     return matchesSearch && matchesStatus;
   });
 
@@ -206,7 +250,15 @@ function ApplicationsPage() {
                 </TableRow>
               ) : (
                 filteredApplications.map((app) => (
-                  <TableRow key={app.id} hover>
+                  <TableRow
+                    key={app.id}
+                    hover
+                    onClick={(event) => {
+                      if (event.target.closest('button, a')) return;
+                      navigate(`/console/org/operate/applications/${app.id}`);
+                    }}
+                    sx={{ cursor: 'pointer' }}
+                  >
                     <TableCell>
                       <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
                         {app.id}
@@ -218,10 +270,10 @@ function ApplicationsPage() {
                       {new Date(app.submittedAt).toLocaleDateString()}
                     </TableCell>
                     <TableCell>
-                      <Chip 
-                        label={app.documentsUploaded ? t('operate.applications.documents.uploaded') : t('operate.applications.documents.pending')} 
+                      <Chip
+                        label={app.documentsUploaded ? t('operate.applications.documents.uploaded') : t('operate.applications.documents.pending')}
                         color={app.documentsUploaded ? 'success' : 'warning'}
-                        size="small" 
+                        size="small"
                         variant="outlined"
                       />
                     </TableCell>
@@ -244,25 +296,32 @@ function ApplicationsPage() {
                       <Tooltip title={t('operate.applications.actions.viewDetails')}>
                         <IconButton
                           component={Link}
-                          to={`/console/operate/applications/${app.id}`}
+                          to={`/console/org/operate/applications/${app.id}`}
                           size="small"
                         >
                           <VisibilityIcon fontSize="small" />
                         </IconButton>
                       </Tooltip>
-                      {app.status === 'pending_review' && (
+                      {app.rawStatus === 'submitted' && (
                         <>
                           <Tooltip title={t('operate.applications.actions.approve')}>
-                            <IconButton size="small" color="success">
+                            <IconButton size="small" color="success" onClick={() => handleApprove(app.id)}>
                               <CheckCircleIcon fontSize="small" />
                             </IconButton>
                           </Tooltip>
                           <Tooltip title={t('operate.applications.actions.reject')}>
-                            <IconButton size="small" color="error">
+                            <IconButton size="small" color="error" onClick={() => handleReject(app.id)}>
                               <CancelIcon fontSize="small" />
                             </IconButton>
                           </Tooltip>
                         </>
+                      )}
+                      {app.rawStatus === 'approved' && (
+                        <Tooltip title={t('operate.issuance.title')}>
+                          <IconButton size="small" color="primary" onClick={() => handleIssue(app.id)}>
+                            <SendIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
                       )}
                     </TableCell>
                   </TableRow>

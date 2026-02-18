@@ -47,11 +47,14 @@ export { default as FlowDetailPage } from './flows/FlowDetailPage';
 export { default as OperatePage } from './operate/OperatePage';
 export { default as IssuancePage } from './operate/IssuancePage';
 export { default as ApplicationsPage } from './operate/ApplicationsPage';
+export { default as ApplicationReviewPage } from './operate/ApplicationReviewPage';
 
 // Org
 export { default as OrgPage } from './org/OrgPage';
 export { default as OrganizationSettingsPage } from './org/OrganizationSettingsPage';
+export { default as OrgSetupPage } from './org/OrgSetupPage';
 export { default as TeamPage } from './org/TeamPage';
+export { default as RolesPage } from './org/RolesPage';
 export { default as NotificationsPage } from './org/NotificationsPage';
 export { default as MembershipRequestsPage } from './org/MembershipRequestsPage';
 export { default as RoleEscalationRequestsPage } from './org/RoleEscalationRequestsPage';

@@ -5,6 +5,7 @@
  */
 
 import { get, post, patch, del } from './api';
+import { buildTruthyQueryString, withQuery } from './queryUtils';
 
 const BASE_PATH = '/v1/teams';
 
@@ -17,13 +18,12 @@ const BASE_PATH = '/v1/teams';
  * @returns {Promise<Array>} List of team members
  */
 export async function listMembers(organizationId, filters = {}) {
-  const params = new URLSearchParams();
-  if (filters.role) params.append('role', filters.role);
-  if (filters.status) params.append('status', filters.status);
-  
-  const queryString = params.toString();
+  const queryString = buildTruthyQueryString({
+    role: filters.role,
+    status: filters.status,
+  });
   const path = `/v1/organizations/${organizationId}/members`;
-  return get(queryString ? `${path}?${queryString}` : path);
+  return get(withQuery(path, queryString));
 }
 
 /**

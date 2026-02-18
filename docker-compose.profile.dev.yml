@@ -1,0 +1,12 @@
+# Marty UI Development Profile
+# ============================
+# Optional development-only overrides layered on docker-compose.base.yml.
+
+services:
+  gateway:
+    environment:
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://localhost:5173,http://localhost:9080}
+
+  auth:
+    environment:
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}

@@ -8,7 +8,7 @@
 import { Navigate } from 'react-router-dom';
 
 function TrustPage() {
-  return <Navigate to="/console/trust/profiles" replace />;
+  return <Navigate to="/console/org/trust/profiles" replace />;
 }
 
 export default TrustPage;

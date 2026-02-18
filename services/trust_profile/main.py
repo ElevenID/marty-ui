@@ -25,11 +25,20 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, AsyncGenerator
 
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query
+from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from typing import Annotated
 
+from marty_common import (
+    OrganizationClient,
+    OrganizationContext,
+    require_org_admin,
+    require_org_membership,
+)
+from marty_common.org_authorization import get_organization_client
+from marty_common.middleware import RequestIdMiddleware, RequestLoggingMiddleware
 from trust_profile.infrastructure.adapters import PostgresTrustProfileRepository
 
 logging.basicConfig(level=logging.INFO)
@@ -365,13 +374,26 @@ def get_repo() -> InMemoryTrustProfileRepository:
     return _repo
 
 
+def get_current_user_id(x_user_id: Annotated[str, Header()]) -> str:
+    """Extract user ID from X-User-Id header (injected by gateway)."""
+    return x_user_id
+
+
 # Trust Profile endpoints
 @router.post("", response_model=TrustProfileResponse)
 async def create_trust_profile(
     request: CreateTrustProfileRequest,
+    fastapi_request: Request,
+    user_id: str = Depends(get_current_user_id),
     repo: InMemoryTrustProfileRepository = Depends(get_repo),
 ) -> TrustProfileResponse:
     """Create a new Trust Profile."""
+    # Verify org membership
+    org_client = await get_organization_client(fastapi_request)
+    membership = await org_client.get_membership(user_id, request.organization_id)
+    if not membership or not membership.is_active():
+        raise HTTPException(status_code=403, detail="Not a member of this organization")
+    
     profile = TrustProfile(
         organization_id=request.organization_id,
         name=request.name,
@@ -430,9 +452,13 @@ async def create_trust_profile(
 @router.get("", response_model=list[TrustProfileResponse])
 async def list_trust_profiles(
     organization_id: str = Query(..., description="Organization ID"),
+    user_id: str = Depends(get_current_user_id),
     repo: InMemoryTrustProfileRepository = Depends(get_repo),
+    request: Request = None,
 ) -> list[TrustProfileResponse]:
     """List Trust Profiles for an organization."""
+    # Verify org membership
+    await app.state.org_client.get_membership(user_id, organization_id)
     profiles = await repo.list_profiles(organization_id)
     return [_profile_to_response(p) for p in profiles]
 
@@ -440,12 +466,15 @@ async def list_trust_profiles(
 @router.get("/{profile_id}", response_model=TrustProfileResponse)
 async def get_trust_profile(
     profile_id: str,
+    user_id: str = Depends(get_current_user_id),
     repo: InMemoryTrustProfileRepository = Depends(get_repo),
 ) -> TrustProfileResponse:
     """Get a Trust Profile by ID."""
     profile = await repo.get_profile(profile_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Trust Profile not found")
+    # Verify org membership
+    await app.state.org_client.get_membership(user_id, profile.organization_id)
     return _profile_to_response(profile)
 
 
@@ -453,12 +482,17 @@ async def get_trust_profile(
 async def update_trust_profile(
     profile_id: str,
     request: UpdateTrustProfileRequest,
+    user_id: str = Depends(get_current_user_id),
     repo: InMemoryTrustProfileRepository = Depends(get_repo),
 ) -> TrustProfileResponse:
-    """Update a Trust Profile."""
+    """Update a Trust Profile (requires admin)."""
     profile = await repo.get_profile(profile_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Trust Profile not found")
+    # Verify admin access
+    membership = await app.state.org_client.get_membership(user_id, profile.organization_id)
+    if not membership.has_role("admin", "owner"):
+        raise HTTPException(status_code=403, detail="Admin access required")
     
     if request.name is not None:
         profile.name = request.name
@@ -477,12 +511,17 @@ async def update_trust_profile(
 @router.post("/{profile_id}/activate", response_model=TrustProfileResponse)
 async def activate_trust_profile(
     profile_id: str,
+    user_id: str = Depends(get_current_user_id),
     repo: InMemoryTrustProfileRepository = Depends(get_repo),
 ) -> TrustProfileResponse:
-    """Activate a Trust Profile."""
+    """Activate a Trust Profile (requires admin)."""
     profile = await repo.get_profile(profile_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Trust Profile not found")
+    # Verify admin access
+    membership = await app.state.org_client.get_membership(user_id, profile.organization_id)
+    if not membership.has_role("admin", "owner"):
+        raise HTTPException(status_code=403, detail="Admin access required")
     profile.activate()
     await repo.save_profile(profile)
     return _profile_to_response(profile)
@@ -491,12 +530,17 @@ async def activate_trust_profile(
 @router.post("/{profile_id}/suspend", response_model=TrustProfileResponse)
 async def suspend_trust_profile(
     profile_id: str,
+    user_id: str = Depends(get_current_user_id),
     repo: InMemoryTrustProfileRepository = Depends(get_repo),
 ) -> TrustProfileResponse:
-    """Suspend a Trust Profile."""
+    """Suspend a Trust Profile (requires admin)."""
     profile = await repo.get_profile(profile_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Trust Profile not found")
+    # Verify admin access
+    membership = await app.state.org_client.get_membership(user_id, profile.organization_id)
+    if not membership.has_role("admin", "owner"):
+        raise HTTPException(status_code=403, detail="Admin access required")
     profile.suspend()
     await repo.save_profile(profile)
     return _profile_to_response(profile)
@@ -505,9 +549,17 @@ async def suspend_trust_profile(
 @router.delete("/{profile_id}")
 async def delete_trust_profile(
     profile_id: str,
+    user_id: str = Depends(get_current_user_id),
     repo: InMemoryTrustProfileRepository = Depends(get_repo),
 ) -> dict:
-    """Delete a Trust Profile and its associated issuers."""
+    """Delete a Trust Profile (requires admin)."""
+    profile = await repo.get_profile(profile_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Trust Profile not found")
+    # Verify admin access
+    membership = await app.state.org_client.get_membership(user_id, profile.organization_id)
+    if not membership.has_role("admin", "owner"):
+        raise HTTPException(status_code=403, detail="Admin access required")
     await repo.delete_profile(profile_id)
     return {"success": True}
 
@@ -517,12 +569,17 @@ async def delete_trust_profile(
 async def add_trusted_issuer(
     profile_id: str,
     request: CreateTrustedIssuerRequest,
+    user_id: str = Depends(get_current_user_id),
     repo: InMemoryTrustProfileRepository = Depends(get_repo),
 ) -> TrustedIssuerResponse:
-    """Add a Trusted Issuer to a Trust Profile."""
+    """Add a Trusted Issuer to a Trust Profile (requires admin)."""
     profile = await repo.get_profile(profile_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Trust Profile not found")
+    # Verify admin access
+    membership = await app.state.org_client.get_membership(user_id, profile.organization_id)
+    if not membership.has_role("admin", "owner"):
+        raise HTTPException(status_code=403, detail="Admin access required")
     
     issuer = TrustedIssuer(
         trust_profile_id=profile_id,
@@ -547,9 +604,15 @@ async def add_trusted_issuer(
 @router.get("/{profile_id}/issuers", response_model=list[TrustedIssuerResponse])
 async def list_trusted_issuers(
     profile_id: str,
+    user_id: str = Depends(get_current_user_id),
     repo: InMemoryTrustProfileRepository = Depends(get_repo),
 ) -> list[TrustedIssuerResponse]:
     """List Trusted Issuers for a Trust Profile."""
+    profile = await repo.get_profile(profile_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Trust Profile not found")
+    # Verify org membership
+    await app.state.org_client.get_membership(user_id, profile.organization_id)
     issuers = await repo.list_issuers(profile_id)
     return [_issuer_to_response(i) for i in issuers]
 
@@ -558,12 +621,18 @@ async def list_trusted_issuers(
 async def get_trusted_issuer(
     profile_id: str,
     issuer_id: str,
+    user_id: str = Depends(get_current_user_id),
     repo: InMemoryTrustProfileRepository = Depends(get_repo),
 ) -> TrustedIssuerResponse:
     """Get a Trusted Issuer by ID."""
     issuer = await repo.get_issuer(issuer_id)
     if not issuer or issuer.trust_profile_id != profile_id:
         raise HTTPException(status_code=404, detail="Trusted Issuer not found")
+    # Verify org membership via profile
+    profile = await repo.get_profile(profile_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Trust Profile not found")
+    await app.state.org_client.get_membership(user_id, profile.organization_id)
     return _issuer_to_response(issuer)
 
 
@@ -571,12 +640,20 @@ async def get_trusted_issuer(
 async def remove_trusted_issuer(
     profile_id: str,
     issuer_id: str,
+    user_id: str = Depends(get_current_user_id),
     repo: InMemoryTrustProfileRepository = Depends(get_repo),
 ) -> dict:
-    """Remove a Trusted Issuer from a Trust Profile."""
+    """Remove a Trusted Issuer from a Trust Profile (requires admin)."""
     issuer = await repo.get_issuer(issuer_id)
     if not issuer or issuer.trust_profile_id != profile_id:
         raise HTTPException(status_code=404, detail="Trusted Issuer not found")
+    # Verify admin access
+    profile = await repo.get_profile(profile_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Trust Profile not found")
+    membership = await app.state.org_client.get_membership(user_id, profile.organization_id)
+    if not membership.has_role("admin", "owner"):
+        raise HTTPException(status_code=403, detail="Admin access required")
     await repo.delete_issuer(issuer_id)
     return {"success": True}
 
@@ -664,6 +741,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Initialize repository
     _repo = PostgresTrustProfileRepository(session_factory)
     
+    # Initialize OrganizationClient (no Redis at service level - gateway handles caching)
+    org_service_url = os.environ.get("ORGANIZATION_SERVICE_URL", "http://organization:8002")
+    app.state.org_client = OrganizationClient(
+        base_url=org_service_url,
+        redis_client=None,
+    )
+    
     yield
     logger.info(f"Shutting down {SERVICE_NAME}...")
 
@@ -676,6 +760,8 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
     
+    app.add_middleware(RequestLoggingMiddleware)
+    app.add_middleware(RequestIdMiddleware)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],

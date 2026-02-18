@@ -26,7 +26,7 @@ function PreviewCatalogContent() {
 
 function PreviewCatalogPage() {
   return (
-    <PreviewProvider resourceType="catalog" returnUrl="/console/templates/credentials">
+    <PreviewProvider resourceType="catalog" returnUrl="/console/org/templates/credentials">
       <PreviewCatalogContent />
     </PreviewProvider>
   );

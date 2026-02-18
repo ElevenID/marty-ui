@@ -6,12 +6,33 @@
  */
 
 import { Box, Typography, Paper, Card, CardContent, Grid, List, ListItem, ListItemText, Divider, Chip } from '@mui/material';
+import { SEOHead } from './seo';
+import { articleSchema, breadcrumbListSchema } from './seo/structuredData';
 import { IDENTITY_CONCEPTS } from '../data/marketingContent';
 import { TrustModelDiagram, IdentityTransactionDiagram, CredentialFlowDiagram } from './diagrams';
 
 function IdentityGuidePage() {
   return (
     <Box>
+      <SEOHead
+        title="How Digital Identity Works"
+        description="Technical guide to digital identity trust models, issuer-holder-verifier flows, and standards-based verifiable credential architecture."
+        canonicalPath="/identity"
+        keywords={['digital identity', 'verifiable credentials', 'issuer holder verifier model', 'identity trust architecture']}
+        structuredData={[
+          articleSchema({
+            headline: 'How Digital Identity Works',
+            description: 'Technical guide to digital identity trust models, issuer-holder-verifier flows, and standards-based verifiable credential architecture.',
+            datePublished: '2024-01-01',
+            url: 'https://elevenidllc.com/identity',
+          }),
+          breadcrumbListSchema([
+            { name: 'Home', url: 'https://elevenidllc.com' },
+            { name: 'How Digital Identity Works', url: 'https://elevenidllc.com/identity' },
+          ]),
+        ]}
+      />
+
       {/* Hero Section */}
       <Box
         sx={{

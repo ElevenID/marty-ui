@@ -1,13 +1,13 @@
-# Cloudflare Tunnel Setup for ElevenID Beta
+# Cloudflare Tunnel Setup for ElevenID LLC Beta
 
-This guide walks you through setting up a Cloudflare Tunnel to expose your local ElevenID instance at **beta.elevenidllc.com** for external review.
+This guide walks you through setting up a Cloudflare Tunnel to expose your local ElevenID LLC instance at **beta.elevenidllc.com** for external review.
 
 ## Prerequisites
 
 1. **Cloudflare account** with your domain `elevenidllc.com` added
 2. **Cloudflare Zero Trust** enabled (free plan works)
 3. **Docker & Docker Compose** installed locally
-4. **ElevenID running locally** in Docker
+4. **ElevenID LLC running locally** in Docker
 
 ---
 
@@ -173,7 +173,7 @@ docker compose logs cloudflared
 
 1. Open a browser (or ask someone else to test)
 2. Navigate to: **https://beta.elevenidllc.com**
-3. You should see the ElevenID UI loading
+3. You should see the ElevenID LLC UI loading
 4. Test login and navigation
 
 ### 4.4 Test from Different Network

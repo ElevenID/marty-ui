@@ -6,7 +6,8 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { Box, Typography, Paper, Grid, Card, CardContent, Divider, Chip, Button, Collapse } from '@mui/material';
+import { Box, Typography, Paper, Grid, Card, CardContent, Divider, Chip, Button, Collapse, Alert, AlertTitle, Stack, Link as MuiLink } from '@mui/material';
+import { SEOHead } from './seo';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import VerifiedUserIcon from '@mui/icons-material/VerifiedUser';
@@ -17,11 +18,39 @@ function ApiDocumentation() {
   const containerRef = useRef(null);
   const redocInstanceRef = useRef(null);
   const [showGuide, setShowGuide] = useState(true);
+  const [redocError, setRedocError] = useState(null);
+  const [specUrlInUse, setSpecUrlInUse] = useState(null);
 
   useEffect(() => {
     let mounted = true;
+    const redocScriptCandidates = [
+      'https://cdn.redoc.ly/redoc/latest/bundles/redoc.standalone.js',
+      'https://cdn.jsdelivr.net/npm/redoc@next/bundles/redoc.standalone.js',
+    ];
+    const openApiCandidates = [
+      import.meta.env.VITE_OPENAPI_URL,
+      '/openapi.json',
+    ].filter(Boolean);
 
-    const initRedoc = () => {
+    const isOpenApiReachable = async (url) => {
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 7000);
+        const response = await fetch(url, {
+          method: 'GET',
+          headers: {
+            Accept: 'application/json, application/yaml, text/yaml, */*',
+          },
+          signal: controller.signal,
+        });
+        clearTimeout(timeout);
+        return response.ok;
+      } catch {
+        return false;
+      }
+    };
+
+    const initRedoc = (openApiUrl) => {
       if (!mounted || !containerRef.current) return;
       
       // Only initialize if not already done
@@ -34,7 +63,7 @@ function ApiDocumentation() {
           containerRef.current.appendChild(redocDiv);
           
           window.Redoc.init(
-            '/openapi.json',
+            openApiUrl,
             {
               scrollYOffset: 80,
               hideDownloadButton: false,
@@ -56,29 +85,63 @@ function ApiDocumentation() {
           
           redocInstanceRef.current = true;
         } catch (error) {
+          setRedocError('ReDoc loaded, but API schema rendering failed.');
           console.error('Failed to initialize ReDoc:', error);
         }
       }
     };
 
-    // Check if ReDoc is already available
-    if (window.Redoc) {
-      initRedoc();
-    } else {
-      // Load the ReDoc script
-      const script = document.createElement('script');
-      script.src = 'https://cdn.redoc.ly/redoc/latest/bundles/redoc.standalone.js';
-      script.async = true;
-      script.onload = () => {
-        if (mounted) {
-          initRedoc();
-        }
-      };
-      script.onerror = () => {
-        console.error('Failed to load ReDoc script');
-      };
-      document.head.appendChild(script);
-    }
+    const loadRedocScript = async () => {
+      if (window.Redoc) return true;
+
+      for (const src of redocScriptCandidates) {
+        const existing = document.querySelector(`script[src="${src}"]`);
+        if (existing && window.Redoc) return true;
+
+        const loaded = await new Promise((resolve) => {
+          const script = document.createElement('script');
+          script.src = src;
+          script.async = true;
+          script.onload = () => resolve(true);
+          script.onerror = () => resolve(false);
+          document.head.appendChild(script);
+        });
+
+        if (loaded && window.Redoc) return true;
+      }
+
+      return false;
+    };
+
+    const boot = async () => {
+      const reachableSpec = (await Promise.all(
+        openApiCandidates.map(async (candidate) => ({
+          candidate,
+          ok: await isOpenApiReachable(candidate),
+        }))
+      )).find((result) => result.ok)?.candidate;
+
+      if (!mounted) return;
+
+      if (!reachableSpec) {
+        setRedocError('OpenAPI schema is not publicly reachable in this environment (expected endpoint returned 403/404).');
+        return;
+      }
+
+      setSpecUrlInUse(reachableSpec);
+
+      const scriptLoaded = await loadRedocScript();
+      if (!mounted) return;
+
+      if (!scriptLoaded) {
+        setRedocError('Unable to load ReDoc JavaScript bundle (CDN blocked or unavailable).');
+        return;
+      }
+
+      initRedoc(reachableSpec);
+    };
+
+    boot();
 
     return () => {
       mounted = false;
@@ -95,15 +158,22 @@ function ApiDocumentation() {
       marginLeft: '-50vw',
       marginRight: '-50vw',
     }}>
+      <SEOHead
+        title="Verifiable Credential API Documentation"
+        description="API reference for credential issuance, verification, trust profiles, presentation policies, and identity flow orchestration."
+        canonicalPath="/docs"
+        keywords={['API documentation', 'verifiable credential API', 'identity API reference', 'presentation policy API']}
+      />
+
       {/* Orientation Header */}
       <Paper elevation={0} sx={{ p: 4, bgcolor: 'grey.50', borderBottom: 1, borderColor: 'divider' }}>
-        <Typography variant="h4" fontWeight="bold" gutterBottom>
-          API Reference
+        <Typography variant="h3" component="h1" fontWeight="bold" gutterBottom>
+          Verifiable Credential API Documentation
         </Typography>
         <Typography variant="body1" color="text.secondary" paragraph sx={{ maxWidth: 900 }}>
-          <strong>ElevenID implements digital identity as governed configuration.</strong>{' '}
+          <strong>ElevenID LLC implements digital identity as governed configuration.</strong>{' '}
           Instead of hard-coding trust, disclosure, and verification logic into applications, 
-          ElevenID models identity using five composable primitives—then executes them consistently 
+          ElevenID LLC models identity using five composable primitives—then executes them consistently 
           across wallets, APIs, kiosks, and offline environments.
         </Typography>
 
@@ -253,6 +323,31 @@ function ApiDocumentation() {
           },
         }}
       >
+        {redocError && (
+          <Paper elevation={0} sx={{ maxWidth: 980, mx: 'auto', mt: 3, p: 2 }}>
+            <Alert severity="warning" sx={{ mb: 2 }}>
+              <AlertTitle>Interactive API docs are temporarily unavailable</AlertTitle>
+              {redocError}
+            </Alert>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+              This beta environment is currently running in tunnel/dev mode. If the gateway blocks
+              the schema endpoint or external script CDNs, the embedded viewer cannot render.
+            </Typography>
+            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5}>
+              <Button variant="outlined" size="small" component="a" href="/openapi.json" target="_blank" rel="noopener noreferrer">
+                Try /openapi.json
+              </Button>
+              <Button variant="outlined" size="small" component="a" href="http://localhost:8000/docs" target="_blank" rel="noopener noreferrer">
+                Local gateway docs
+              </Button>
+            </Stack>
+            {specUrlInUse && (
+              <Typography variant="caption" color="text.secondary" sx={{ mt: 1.5, display: 'block' }}>
+                Last reachable schema URL: <MuiLink href={specUrlInUse}>{specUrlInUse}</MuiLink>
+              </Typography>
+            )}
+          </Paper>
+        )}
         <div ref={containerRef} />
       </Box>
     </Box>

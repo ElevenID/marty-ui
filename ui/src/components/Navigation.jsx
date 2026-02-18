@@ -21,12 +21,12 @@ const ADMIN_TABS = [
  * Vendor navigation tabs
  */
 const VENDOR_TABS = [
-  { labelKey: 'navigation.dashboard', defaultLabel: 'Dashboard', path: '/vendor', exact: true },
-  { labelKey: 'navigation.applications', defaultLabel: 'Applications', path: '/vendor/applications' },
-  { labelKey: 'navigation.trust', defaultLabel: 'Trust', path: '/vendor/trust' },
-  { labelKey: 'navigation.verification', defaultLabel: 'Verification', path: '/vendor/verification' },
-  { labelKey: 'navigation.auditLogs', defaultLabel: 'Audit Logs', path: '/vendor/logs' },
-  { labelKey: 'navigation.team', defaultLabel: 'Team', path: '/vendor/team' },
+  { labelKey: 'navigation.dashboard', defaultLabel: 'Dashboard', path: '/console', exact: true },
+  { labelKey: 'navigation.applications', defaultLabel: 'Applications', path: '/console/org/operate/applications' },
+  { labelKey: 'navigation.trust', defaultLabel: 'Trust', path: '/console/org/trust/profiles' },
+  { labelKey: 'navigation.verification', defaultLabel: 'Verification', path: '/console/org/operate/flow-instances' },
+  { labelKey: 'navigation.auditLogs', defaultLabel: 'Audit Logs', path: '/console/audit' },
+  { labelKey: 'navigation.team', defaultLabel: 'Team', path: '/console/org/team' },
 ];
 
 /**

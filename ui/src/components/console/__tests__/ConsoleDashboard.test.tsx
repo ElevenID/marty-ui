@@ -20,7 +20,7 @@ import ConsoleDashboard from '../ConsoleDashboard'
 // Mock auth hook
 vi.mock('../../hooks/useAuth', () => ({
   useAuth: () => ({
-    user: { id: 1, name: 'Admin User', user_type: 'ADMIN' },
+    user: { id: 1, name: 'Admin User', capabilities: { 'admin:platform': true } },
     organizationName: 'Test Organization',
     organizationId: 'org_123',
     isAdmin: true,

@@ -8,7 +8,7 @@
   },
   "idvComparison": {
     "title": "De IDV a identidad verificable",
-    "takeaway": "ElevenID reemplaza verificaciones repetidas por confianza reutilizable.",
+    "takeaway": "ElevenID LLC reemplaza verificaciones repetidas por confianza reutilizable.",
     "traditional": {
       "title": "IDV tradicional",
       "oneTimeChecks": "Verificaciones de documentos puntuales",
@@ -19,7 +19,7 @@
       "reVerification": "Reverificación en todas partes"
     },
     "elevenid": {
-      "title": "ElevenID",
+      "title": "ElevenID LLC",
       "reusable": "Credenciales verificables reutilizables",
       "holderControlled": "Carteras digitales controladas por el titular",
       "cryptographic": "Pruebas criptográficas",
@@ -33,7 +33,7 @@
     "verifyCredentials": "Verifica credenciales verificables—no solo documentos.",
     "trustIssuers": "Confía en emisores—no en bases de datos.",
     "walletFirst": "Wallet-first por diseño—listo para EUDI.",
-    "quote": "Las plataformas de IDV se quedan en una decisión puntual. ElevenID produce resultados criptográficamente verificables que pueden reutilizarse en carteras, ecosistemas y registros de confianza."
+    "quote": "Las plataformas de IDV se quedan en una decisión puntual. ElevenID LLC produce resultados criptográficamente verificables que pueden reutilizarse en carteras, ecosistemas y registros de confianza."
   },
   "audienceRouting": {
     "title": "Elige tu camino",
@@ -97,7 +97,7 @@
       }
     },
     "solvesIt": {
-      "title": "Cómo lo resuelve ElevenID",
+      "title": "Cómo lo resuelve ElevenID LLC",
       "intro": "Gobierna la identidad con cuatro primitivas: perfiles de confianza, plantillas de credenciales, políticas de presentación y flujos.",
       "subheading": "Las políticas son configuración, no código. Los endpoints ejecutan reglas de confianza y divulgación gobernadas centralmente sin re-despliegue."
     },
@@ -109,7 +109,7 @@
     "standards": {
       "title": "Arquitectura basada en estándares",
       "subtitle": "Los estándares no son integraciones. Son el producto.",
-      "description": "Estas capas permiten que ElevenID interopere entre gobiernos, carteras y empresas sin integraciones a medida.",
+      "description": "Estas capas permiten que ElevenID LLC interopere entre gobiernos, carteras y empresas sin integraciones a medida.",
       "cta": "Explorar estándares"
     },
     "startFirst": {

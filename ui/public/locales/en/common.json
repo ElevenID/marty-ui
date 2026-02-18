@@ -119,6 +119,10 @@
     "draft": "Draft",
     "disabled": "Disabled",
     "pending": "Pending",
+    "submitted": "Submitted",
+    "underReview": "Under Review",
+    "needsInfo": "Needs Info",
+    "vettingInProgress": "Vetting In Progress",
     "pendingReview": "Pending Review",
     "documentsPending": "Documents Pending",
     "approved": "Approved",
@@ -128,6 +132,7 @@
     "completed": "Completed",
     "failed": "Failed",
     "issued": "Issued",
+    "offerGenerated": "Invite Sent",
     "revoked": "Revoked",
     "expired": "Expired",
     "unknown": "Unknown"

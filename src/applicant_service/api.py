@@ -897,6 +897,40 @@ async def submit_application(
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@router.patch("/applications/{application_id}", response_model=ApplicationResponse)
+async def update_application(
+    application_id: UUID,
+    organization_id: str | None = None,
+    application_number: str | None = None,
+) -> ApplicationResponse:
+    """
+    Update application fields (administrative endpoint).
+    
+    Args:
+        application_id: UUID of the application
+        organization_id: Organization ID to set
+        application_number: Reference number to set
+        
+    Returns:
+        Updated application
+        
+    Raises:
+        404: Application not found
+    """
+    service = get_application_service()
+    application = await service.get_application(application_id)
+    
+    if not application:
+        raise HTTPException(status_code=404, detail=f"Application {application_id} not found")
+        
+    if organization_id:
+        application.organization_id = organization_id
+    if application_number:
+        application.application_number = application_number
+        
+    return build_application_response(application)
+
+
 @router.get("/applications", response_model=ApplicationListResponse)
 async def list_applications(
     status: ApplicationStatus | None = Query(None, description="Filter by status"),

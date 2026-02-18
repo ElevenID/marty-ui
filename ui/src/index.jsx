@@ -19,4 +19,25 @@ if (!rootElement) {
     </React.StrictMode>
   );
   console.log('[DEBUG] App render called');
+
+  const markAppReady = () => {
+    document.documentElement.classList.remove('app-loading');
+    document.documentElement.classList.add('app-ready');
+    document.body.classList.remove('app-loading');
+    document.body.classList.add('app-ready');
+  };
+
+  const awaitFonts =
+    document.fonts && typeof document.fonts.ready?.then === 'function'
+      ? document.fonts.ready.catch(() => {})
+      : Promise.resolve();
+
+  Promise.resolve()
+    .then(() => awaitFonts)
+    .then(() => {
+      // Ensure we release loading state on next paint after render + fonts
+      requestAnimationFrame(() => {
+        requestAnimationFrame(markAppReady);
+      });
+    });
 }

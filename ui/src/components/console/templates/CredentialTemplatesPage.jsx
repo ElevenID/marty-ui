@@ -35,14 +35,14 @@ import { Link } from 'react-router-dom';
 import { ResourcePage, EmptyState, EmptyStates, StatusChip } from '../../common';
 
 const getTemplatesTabs = (t) => [
-  { label: t('templates.credentialTemplates'), path: '/console/templates/credentials' },
-  { label: t('templates.applicationTemplates'), path: '/console/templates/applications' },
+  { label: t('templates.credentialTemplates'), path: '/console/org/templates/credentials' },
+  { label: t('templates.applicationTemplates'), path: '/console/org/templates/applications' },
 ];
 
 const getBreadcrumbs = (t) => [
   { label: t('templates.breadcrumbs.console'), path: '/console' },
-  { label: t('templates.breadcrumbs.templates'), path: '/console/templates' },
-  { label: t('templates.breadcrumbs.credentialTemplates'), path: '/console/templates/credentials' },
+  { label: t('templates.breadcrumbs.templates'), path: '/console/org/templates' },
+  { label: t('templates.breadcrumbs.credentialTemplates'), path: '/console/org/templates/credentials' },
 ];
 
 /**
@@ -155,8 +155,8 @@ function CredentialTemplatesPage() {
       title={t('templates.credentialTemplates')}
       description={t('templates.credentialTemplatesDescription')}
       resourceName={t('templates.title')}
-      buildPath="/console/templates/credentials/new"
-      newPath="/console/templates/credentials/new?mode=advanced"
+      buildPath="/console/org/templates/credentials/new"
+      newPath="/console/org/templates/credentials/new?mode=advanced"
       tabs={getTemplatesTabs(t)}
       breadcrumbs={getBreadcrumbs(t)}
     >
@@ -257,7 +257,7 @@ function CredentialTemplatesPage() {
                       <Tooltip title={t('templates.actions.viewDetails')}>
                         <IconButton
                           component={Link}
-                          to={`/console/templates/credentials/${template.id}`}
+                          to={`/console/org/templates/credentials/${template.id}`}
                           size="small"
                         >
                           <VisibilityIcon fontSize="small" />
@@ -266,7 +266,7 @@ function CredentialTemplatesPage() {
                       <Tooltip title={t('templates.actions.edit')}>
                         <IconButton
                           component={Link}
-                          to={`/console/templates/credentials/${template.id}/edit`}
+                          to={`/console/org/templates/credentials/${template.id}/edit`}
                           size="small"
                         >
                           <EditIcon fontSize="small" />
@@ -275,7 +275,7 @@ function CredentialTemplatesPage() {
                       <Tooltip title={t('templates.actions.createIssuanceFlow')}>
                         <IconButton
                           component={Link}
-                          to={`/console/flows/definitions/new?templateId=${template.id}`}
+                          to={`/console/org/flows/definitions/new?templateId=${template.id}`}
                           size="small"
                           color="primary"
                         >

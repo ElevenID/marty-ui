@@ -15,7 +15,7 @@
  */
 
 import { useEffect } from 'react';
-import { useParams, useSearchParams, useNavigate } from 'react-router-dom';
+import { useParams, useSearchParams, useNavigate, useLocation } from 'react-router-dom';
 import { Box, CircularProgress, Typography, Container, Paper, Alert } from '@mui/material';
 import { useAuth } from '../hooks/useAuth';
 
@@ -23,7 +23,8 @@ const ApplyPage = () => {
   const { credentialType } = useParams();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
-  const { user, isAuthenticated, loading: authLoading } = useAuth();
+  const location = useLocation();
+  const { user, isAuthenticated, isLoading: authLoading } = useAuth();
 
   useEffect(() => {
     if (authLoading) {
@@ -53,32 +54,27 @@ const ApplyPage = () => {
 
     // User is authenticated - route them appropriately
 
-    // If org_id is specified and user isn't a member yet, go to onboarding with context
+    // If org_id is specified and user isn't a member yet, preserve join intent
     if (orgId && user?.organization_id !== orgId) {
       // Store the join intent
       sessionStorage.setItem('joinOrgId', orgId);
-      
-      // If user hasn't completed onboarding, they'll be routed through onboarding flow
-      if (user?.needsOnboarding) {
-        navigate('/onboarding');
-        return;
-      }
 
-      // If already onboarded, check if they need to join this specific org
-      // For now, redirect to applicant dashboard with a notice
-      navigate('/applicant?org_required=' + orgId);
+      // Redirect to applicant dashboard with org requirement hint
+      navigate('/console/applicant?org_required=' + orgId);
       return;
     }
 
     // User is authenticated and in the right org (or no org specified)
     if (credentialType) {
       // Navigate to specific credential application
-      navigate(`/credentials?type=${credentialType}`);
+      navigate(`/console/applicant/apply/${credentialType}`, {
+        state: location.state, // Preserve credential data passed from catalog
+      });
     } else {
       // No specific credential type - go to catalog
-      navigate('/credentials');
+      navigate('/console/applicant/catalog');
     }
-  }, [authLoading, isAuthenticated, user, credentialType, searchParams, navigate]);
+  }, [authLoading, isAuthenticated, user, credentialType, searchParams, navigate, location.state]);
 
   // Show loading state while checking auth or redirecting
   return (

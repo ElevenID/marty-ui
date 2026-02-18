@@ -136,7 +136,7 @@ export const handlers = [
     }
 
     // Return user based on username
-    let user = mockUsers.admin
+    let user: any = mockUsers.admin
     if (username.includes('vendor')) {
       user = mockUsers.vendor
     } else if (username.includes('applicant')) {
@@ -154,10 +154,10 @@ export const handlers = [
   }),
 
   http.get(`${API_BASE}/auth/me`, () => {
-    return HttpResponse.json(mockUsers.admin)
+    return HttpResponse.json({ authenticated: true, user: mockUsers.admin })
   }),
   http.get(`${API_BASE}/v1/auth/me`, () => {
-    return HttpResponse.json(mockUsers.admin)
+    return HttpResponse.json({ authenticated: true, user: mockUsers.admin })
   }),
   http.get(`${API_BASE}/v1/auth/me/organizations`, () => {
     return HttpResponse.json({ organizations: [mockOrganization] })
@@ -432,7 +432,7 @@ export const handlers = [
   // Fallback handlers for relative URLs (without base)
   // These catch requests from services that use VITE_API_URL=''
   http.get('/v1/auth/me', () => {
-    return HttpResponse.json(mockUsers.admin)
+    return HttpResponse.json({ authenticated: true, user: mockUsers.admin })
   }),
   
   http.get('/v1/auth/me/organizations', () => {

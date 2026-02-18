@@ -529,6 +529,62 @@ This demo implements:
 - **CBOR**: Concise Binary Object Representation
 - **COSE**: CBOR Object Signing and Encryption
 
+## 📋 Future Work - SEO & Analytics
+
+The marketing site infrastructure is complete with prerendering, sitemap, and structured data. The following action items need to be completed before production deployment:
+
+### Required Setup
+
+1. **Google Search Console Verification**
+   - Visit [Google Search Console](https://search.google.com/search-console)
+   - Add property for `https://elevenidllc.com`
+   - Uncomment verification meta tag in `ui/index.html` (line 9)
+   - Add your verification code from Search Console
+   - Deploy and verify ownership
+
+2. **Google Analytics (GA4)**
+   - Create GA4 property at [Google Analytics](https://analytics.google.com/)
+   - Copy your Measurement ID (format: `G-XXXXXXXXXX`)
+   - Add to `.env.production`: `VITE_GA_MEASUREMENT_ID=G-XXXXXXXXXX`
+   - See `ui/src/utils/analytics.example.js` for integration code
+
+3. **Analytics Integration**
+   - Add analytics hooks to `ui/src/App.jsx` (see example file)
+   - Three useEffect hooks needed: init, page tracking, web vitals
+   - Test in development with browser console
+
+4. **Deploy & Verify**
+   - Build production: `cd ui && bunx vite build`
+   - Deploy `dist/` directory to production hosting
+   - Submit sitemap in Search Console: `https://elevenidllc.com/sitemap.xml`
+   - Verify pages are being indexed (check Index Coverage report)
+   - Monitor Core Web Vitals in Search Console
+
+### Documentation
+
+- **Full setup guide**: `ui/SEO_MONITORING_GUIDE.md`
+- **Analytics utilities**: `ui/src/utils/analytics.js`
+- **Integration examples**: `ui/src/utils/analytics.example.js`
+- **Environment config**: `ui/.env.example`
+
+### Current Status
+
+✅ **Complete:**
+- 14 pages prerendered with full SEO metadata
+- Meta tags, Open Graph, Twitter Cards configured
+- JSON-LD structured data for all pages
+- robots.txt and sitemap.xml generated
+- Core Web Vitals monitoring utilities ready
+- Analytics tracking code implemented
+- web-vitals package installed
+
+🔲 **Pending:**
+- Search Console verification code
+- GA4 Measurement ID configuration
+- Analytics integration in App.jsx
+- Production deployment
+- Sitemap submission
+
 ## Contributing
 
 To contribute to this demo:

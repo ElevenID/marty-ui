@@ -70,14 +70,14 @@ const getKeyTypes = (t) => [
 ];
 
 const getTabs = (t) => [
-  { label: t('deploy.signingKeys.tabs.keys'), path: '/console/deploy/signing-keys' },
-  { label: t('deploy.signingKeys.tabs.settings'), path: '/console/deploy/signing-keys/settings' },
+  { label: t('deploy.signingKeys.tabs.keys'), path: '/console/org/deploy/signing-keys' },
+  { label: t('deploy.signingKeys.tabs.settings'), path: '/console/org/deploy/signing-keys/settings' },
 ];
 
 const getBreadcrumbs = (t) => [
   { label: t('deploy.breadcrumbs.console'), path: '/console' },
-  { label: t('deploy.breadcrumbs.deploy'), path: '/console/deploy' },
-  { label: t('deploy.breadcrumbs.signingKeys'), path: '/console/deploy/signing-keys' },
+  { label: t('deploy.breadcrumbs.deploy'), path: '/console/org/deploy' },
+  { label: t('deploy.breadcrumbs.signingKeys'), path: '/console/org/deploy/signing-keys' },
 ];
 
 export default function SigningKeysPage() {

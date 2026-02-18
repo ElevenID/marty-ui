@@ -16,10 +16,10 @@ export const VALUE_PROPOSITION = {
   },
 };
 
-// IDV vs ElevenID comparison
+// IDV vs ElevenID LLC comparison
 export const IDV_COMPARISON = {
   title: 'From IDV to Verifiable Identity',
-  takeaway: 'ElevenID replaces repeated verification with reusable trust.',
+  takeaway: 'ElevenID LLC replaces repeated verification with reusable trust.',
   traditional: [
     { label: 'One-time document checks', category: 'Traditional IDV' },
     { label: 'Vendor-controlled identity data', category: 'Traditional IDV' },
@@ -29,12 +29,12 @@ export const IDV_COMPARISON = {
     { label: 'Re-verification everywhere', category: 'Traditional IDV' },
   ],
   elevenid: [
-    { label: 'Reusable verifiable credentials', category: 'ElevenID' },
-    { label: 'Holder-controlled digital wallets', category: 'ElevenID' },
-    { label: 'Cryptographic proofs', category: 'ElevenID' },
-    { label: 'Open standards (W3C VC, OID4VC, ISO)', category: 'ElevenID' },
-    { label: 'Governed trust registries', category: 'ElevenID' },
-    { label: 'Identity reuse across ecosystems', category: 'ElevenID' },
+    { label: 'Reusable verifiable credentials', category: 'ElevenID LLC' },
+    { label: 'Holder-controlled digital wallets', category: 'ElevenID LLC' },
+    { label: 'Cryptographic proofs', category: 'ElevenID LLC' },
+    { label: 'Open standards (W3C VC, OID4VC, ISO)', category: 'ElevenID LLC' },
+    { label: 'Governed trust registries', category: 'ElevenID LLC' },
+    { label: 'Identity reuse across ecosystems', category: 'ElevenID LLC' },
   ],
 };
 
@@ -46,7 +46,7 @@ export const EUDI_OPEN_BADGES = {
     'Trust issuers—not databases.',
     'Wallet-first by design—EUDI-ready.',
   ],
-  quote: 'IDV platforms stop at a one-time decision. ElevenID produces cryptographically verifiable outcomes that can be reused across wallets, ecosystems, and trust registries.',
+  quote: 'IDV platforms stop at a one-time decision. ElevenID LLC produces cryptographically verifiable outcomes that can be reused across wallets, ecosystems, and trust registries.',
 };
 
 // Why this matters for organizations

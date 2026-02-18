@@ -11,14 +11,14 @@ import Issuance from '../../vendor/Issuance';
 import { ResourcePage } from '../../common';
 
 const getOperateTabs = (t) => [
-  { label: t('operate.tabs.issuance'), path: '/console/operate/issuance' },
-  { label: t('operate.tabs.applications'), path: '/console/operate/applications' },
+  { label: t('operate.tabs.issuance'), path: '/console/org/operate/issuance' },
+  { label: t('operate.tabs.applications'), path: '/console/org/operate/applications' },
 ];
 
 const getBreadcrumbs = (t) => [
   { label: t('operate.breadcrumbs.console'), path: '/console' },
-  { label: t('operate.breadcrumbs.operate'), path: '/console/operate' },
-  { label: t('operate.breadcrumbs.issuance'), path: '/console/operate/issuance' },
+  { label: t('operate.breadcrumbs.operate'), path: '/console/org/operate' },
+  { label: t('operate.breadcrumbs.issuance'), path: '/console/org/operate/issuance' },
 ];
 
 function IssuancePage() {

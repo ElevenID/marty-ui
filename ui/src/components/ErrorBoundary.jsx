@@ -157,45 +157,51 @@ class ErrorBoundary extends Component {
     this.setState({ isReporting: true });
     
     try {
+      // Log to console immediately
+      console.error('[ErrorBoundary] Caught error:', error);
+      console.error('[ErrorBoundary] Error info:', errorInfo);
+      console.error('[ErrorBoundary] Stack:', error.stack);
+      
+      // Skip backend reporting for now since endpoint doesn't exist
       // Get user info from localStorage/context if available
-      let userId = null;
-      let sessionId = null;
-      try {
-        const userStr = localStorage.getItem('user');
-        if (userStr) {
-          const user = JSON.parse(userStr);
-          userId = user.id || user.sub;
-        }
-        sessionId = sessionStorage.getItem('sessionId');
-      } catch (e) {
-        // Ignore storage errors
-      }
+      // let userId = null;
+      // let sessionId = null;
+      // try {
+      //   const userStr = localStorage.getItem('user');
+      //   if (userStr) {
+      //     const user = JSON.parse(userStr);
+      //     userId = user.id || user.sub;
+      //   }
+      //   sessionId = sessionStorage.getItem('sessionId');
+      // } catch (e) {
+      //   // Ignore storage errors
+      // }
       
-      const errorReport = {
-        error_code: error.name || 'Error',
-        message: error.message || String(error),
-        stack_trace: error.stack || null,
-        component_stack: errorInfo?.componentStack || null,
-        url: window.location.href,
-        user_agent: navigator.userAgent,
-        user_id: userId,
-        session_id: sessionId,
-        timestamp: Date.now() / 1000,
-        context: {
-          route: window.location.pathname,
-          referrer: document.referrer,
-          screen: {
-            width: window.innerWidth,
-            height: window.innerHeight,
-          },
-        },
-      };
+      // const errorReport = {
+      //   error_code: error.name || 'Error',
+      //   message: error.message || String(error),
+      //   stack_trace: error.stack || null,
+      //   component_stack: errorInfo?.componentStack || null,
+      //   url: window.location.href,
+      //   user_agent: navigator.userAgent,
+      //   user_id: userId,
+      //   session_id: sessionId,
+      //   timestamp: Date.now() / 1000,
+      //   context: {
+      //     route: window.location.pathname,
+      //     referrer: document.referrer,
+      //     screen: {
+      //       width: window.innerWidth,
+      //       height: window.innerHeight,
+      //     },
+      //   },
+      // };
       
-      const response = await reportClientError(errorReport);
+      // const response = await reportClientError(errorReport);
       
-      if (response?.error_id) {
-        this.setState({ errorId: response.error_id });
-      }
+      // if (response?.error_id) {
+      //   this.setState({ errorId: response.error_id });
+      // }
       
       // Also log to console in development
       if (import.meta.env.DEV) {

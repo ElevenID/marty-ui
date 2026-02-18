@@ -5,6 +5,7 @@
  * Uses the centralized api.js service for consistent error handling and retry logic.
  */
 import { get, post, patch, del, getErrorMessage } from './api';
+import { buildTruthyQueryString, withQuery } from './queryUtils';
 
 const BASE_PATH = '/v1/organizations';
 
@@ -25,11 +26,11 @@ export async function getAvailableScopes() {
  * @returns {Promise<Array>} - Array of API key objects
  */
 export async function listApiKeys(organizationId, { includeRevoked = false, includeExpired = false } = {}) {
-  const params = new URLSearchParams();
-  if (includeRevoked) params.append('include_revoked', 'true');
-  if (includeExpired) params.append('include_expired', 'true');
-  const queryString = params.toString();
-  const url = `${BASE_PATH}/${organizationId}/api-keys${queryString ? `?${queryString}` : ''}`;
+  const queryString = buildTruthyQueryString({
+    include_revoked: includeRevoked ? 'true' : undefined,
+    include_expired: includeExpired ? 'true' : undefined,
+  });
+  const url = withQuery(`${BASE_PATH}/${organizationId}/api-keys`, queryString);
   const response = await get(url);
   return response?.keys || [];
 }

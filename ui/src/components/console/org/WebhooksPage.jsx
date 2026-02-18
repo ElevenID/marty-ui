@@ -44,10 +44,10 @@ import { ResourcePage } from '../../common';
  * Get deployment tabs with translations
  */
 const getDeployTabs = (t) => [
-  { label: t('deploy.tabs.profiles'), path: '/console/deploy/profiles' },
-  { label: t('deploy.tabs.apiKeys'), path: '/console/deploy/api-keys' },
-  { label: t('deploy.tabs.lanes'), path: '/console/deploy/lanes' },
-  { label: t('org.tabs.webhooks'), path: '/console/deploy/webhooks' },
+  { label: t('deploy.tabs.profiles'), path: '/console/org/deploy/profiles' },
+  { label: t('deploy.tabs.apiKeys'), path: '/console/org/deploy/api-keys' },
+  { label: t('deploy.tabs.lanes'), path: '/console/org/deploy/lanes' },
+  { label: t('org.tabs.webhooks'), path: '/console/org/deploy/webhooks' },
 ];
 
 /**
@@ -55,8 +55,8 @@ const getDeployTabs = (t) => [
  */
 const getBreadcrumbs = (t) => [
   { label: t('org.breadcrumbs.console'), path: '/console' },
-  { label: t('deploy.breadcrumbs.deploy'), path: '/console/deploy' },
-  { label: t('org.tabs.webhooks'), path: '/console/deploy/webhooks' },
+  { label: t('deploy.breadcrumbs.deploy'), path: '/console/org/deploy' },
+  { label: t('org.tabs.webhooks'), path: '/console/org/deploy/webhooks' },
 ];
 
 /**

@@ -30,10 +30,20 @@ from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any, AsyncGenerator
 
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query
+from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+from typing import Annotated
+
+from marty_common import (
+    OrganizationClient,
+    OrganizationContext,
+    require_org_admin,
+    require_org_membership,
+)
+from marty_common.org_authorization import get_organization_client
+from marty_common.middleware import RequestIdMiddleware, RequestLoggingMiddleware
 
 from presentation_policy.infrastructure.adapters import PostgresPresentationPolicyRepository
 
@@ -520,6 +530,11 @@ def get_repo() -> InMemoryPresentationPolicyRepository:
     return _repo
 
 
+def get_current_user_id(x_user_id: Annotated[str, Header()]) -> str:
+    """Extract user ID from X-User-Id header (injected by gateway)."""
+    return x_user_id
+
+
 def get_trust_cache() -> TrustProfileCache:
     if _trust_profile_cache is None:
         raise RuntimeError("Service not configured")
@@ -561,9 +576,17 @@ def _build_credential_requirement(model: CredentialRequirementModel) -> Credenti
 @router.post("", response_model=PresentationPolicyResponse)
 async def create_presentation_policy(
     request: CreatePresentationPolicyRequest,
+    fastapi_request: Request,
+    user_id: str = Depends(get_current_user_id),
     repo: InMemoryPresentationPolicyRepository = Depends(get_repo),
 ) -> PresentationPolicyResponse:
     """Create a new Presentation Policy."""
+    # Verify org membership
+    org_client = await get_organization_client(fastapi_request)
+    membership = await org_client.get_membership(user_id, request.organization_id)
+    if not membership or not membership.is_active():
+        raise HTTPException(status_code=403, detail="Not a member of this organization")
+    
     policy = PresentationPolicy(
         organization_id=request.organization_id,
         name=request.name,
@@ -607,9 +630,12 @@ async def create_presentation_policy(
 @router.get("", response_model=list[PresentationPolicyResponse])
 async def list_presentation_policies(
     organization_id: str = Query(..., description="Organization ID"),
+    user_id: str = Depends(get_current_user_id),
     repo: InMemoryPresentationPolicyRepository = Depends(get_repo),
 ) -> list[PresentationPolicyResponse]:
     """List Presentation Policies for an organization."""
+    # Verify org membership
+    await app.state.org_client.get_membership(user_id, organization_id)
     policies = await repo.list(organization_id)
     return [_policy_to_response(p) for p in policies]
 
@@ -617,12 +643,15 @@ async def list_presentation_policies(
 @router.get("/{policy_id}", response_model=PresentationPolicyResponse)
 async def get_presentation_policy(
     policy_id: str,
+    user_id: str = Depends(get_current_user_id),
     repo: InMemoryPresentationPolicyRepository = Depends(get_repo),
 ) -> PresentationPolicyResponse:
     """Get a Presentation Policy by ID."""
     policy = await repo.get(policy_id)
     if not policy:
         raise HTTPException(status_code=404, detail="Presentation Policy not found")
+    # Verify org membership
+    await app.state.org_client.get_membership(user_id, policy.organization_id)
     return _policy_to_response(policy)
 
 
@@ -630,12 +659,18 @@ async def get_presentation_policy(
 async def update_presentation_policy(
     policy_id: str,
     request: UpdatePresentationPolicyRequest,
+    user_id: str = Depends(get_current_user_id),
     repo: InMemoryPresentationPolicyRepository = Depends(get_repo),
 ) -> PresentationPolicyResponse:
-    """Update a Presentation Policy."""
+    """Update a Presentation Policy (requires admin)."""
     policy = await repo.get(policy_id)
     if not policy:
         raise HTTPException(status_code=404, detail="Presentation Policy not found")
+    
+    # Verify admin access
+    membership = await app.state.org_client.get_membership(user_id, policy.organization_id)
+    if not membership.has_role("admin", "owner"):
+        raise HTTPException(status_code=403, detail="Admin access required")
     
     if policy.status != PolicyStatus.DRAFT:
         raise HTTPException(
@@ -658,12 +693,18 @@ async def update_presentation_policy(
 @router.post("/{policy_id}/activate", response_model=PresentationPolicyResponse)
 async def activate_presentation_policy(
     policy_id: str,
+    user_id: str = Depends(get_current_user_id),
     repo: InMemoryPresentationPolicyRepository = Depends(get_repo),
 ) -> PresentationPolicyResponse:
-    """Activate a Presentation Policy."""
+    """Activate a Presentation Policy (requires admin)."""
     policy = await repo.get(policy_id)
     if not policy:
         raise HTTPException(status_code=404, detail="Presentation Policy not found")
+    
+    # Verify admin access
+    membership = await app.state.org_client.get_membership(user_id, policy.organization_id)
+    if not membership.has_role("admin", "owner"):
+        raise HTTPException(status_code=403, detail="Admin access required")
     
     if not policy.credential_requirements and not policy.alternative_requirements:
         raise HTTPException(
@@ -679,12 +720,18 @@ async def activate_presentation_policy(
 @router.post("/{policy_id}/suspend", response_model=PresentationPolicyResponse)
 async def suspend_presentation_policy(
     policy_id: str,
+    user_id: str = Depends(get_current_user_id),
     repo: InMemoryPresentationPolicyRepository = Depends(get_repo),
 ) -> PresentationPolicyResponse:
-    """Suspend a Presentation Policy."""
+    """Suspend a Presentation Policy (requires admin)."""
     policy = await repo.get(policy_id)
     if not policy:
         raise HTTPException(status_code=404, detail="Presentation Policy not found")
+    
+    # Verify admin access
+    membership = await app.state.org_client.get_membership(user_id, policy.organization_id)
+    if not membership.has_role("admin", "owner"):
+        raise HTTPException(status_code=403, detail="Admin access required")
     policy.suspend()
     await repo.save(policy)
     return _policy_to_response(policy)
@@ -693,12 +740,18 @@ async def suspend_presentation_policy(
 @router.post("/{policy_id}/new-version", response_model=PresentationPolicyResponse)
 async def create_new_version(
     policy_id: str,
+    user_id: str = Depends(get_current_user_id),
     repo: InMemoryPresentationPolicyRepository = Depends(get_repo),
 ) -> PresentationPolicyResponse:
-    """Create a new draft version from an existing policy."""
+    """Create a new draft version from an existing policy (requires admin)."""
     policy = await repo.get(policy_id)
     if not policy:
         raise HTTPException(status_code=404, detail="Presentation Policy not found")
+    
+    # Verify admin access
+    membership = await app.state.org_client.get_membership(user_id, policy.organization_id)
+    if not membership.has_role("admin", "owner"):
+        raise HTTPException(status_code=403, detail="Admin access required")
     
     new_policy = PresentationPolicy(
         organization_id=policy.organization_id,
@@ -718,11 +771,20 @@ async def create_new_version(
 @router.delete("/{policy_id}")
 async def delete_presentation_policy(
     policy_id: str,
+    user_id: str = Depends(get_current_user_id),
     repo: InMemoryPresentationPolicyRepository = Depends(get_repo),
 ) -> dict:
-    """Delete a Presentation Policy (only allowed for drafts)."""
+    """Delete a Presentation Policy (only allowed for drafts, requires admin)."""
     policy = await repo.get(policy_id)
-    if policy and policy.status != PolicyStatus.DRAFT:
+    if not policy:
+        raise HTTPException(status_code=404, detail="Presentation Policy not found")
+    
+    # Verify admin access
+    membership = await app.state.org_client.get_membership(user_id, policy.organization_id)
+    if not membership.has_role("admin", "owner"):
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    if policy.status != PolicyStatus.DRAFT:
         raise HTTPException(
             status_code=400,
             detail="Only draft policies can be deleted. Suspend or archive active policies."
@@ -1096,6 +1158,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     _repo = PostgresPresentationPolicyRepository(session_factory)
     logger.info("PostgreSQL adapter initialized for presentation-policy service")
     
+    # Initialize OrganizationClient
+    org_service_url = os.environ.get("ORGANIZATION_SERVICE_URL", "http://organization:8002")
+    app.state.org_client = OrganizationClient(
+        base_url=org_service_url,
+        redis_client=None,
+    )
+    
     _trust_profile_cache = TrustProfileCache()
     yield
     
@@ -1123,6 +1192,8 @@ CRUD operations for Presentation Policies that define required credentials and c
         lifespan=lifespan,
     )
     
+    app.add_middleware(RequestLoggingMiddleware)
+    app.add_middleware(RequestIdMiddleware)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],

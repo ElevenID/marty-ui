@@ -112,10 +112,10 @@ const DeploymentProfileWizard = () => {
     validateStep,
     onSubmit: handleSubmit,
     onComplete: () => {
-      navigate('/console/flows/definitions');
+      navigate('/console/org/flows/definitions');
     },
     onCancel: () => {
-      navigate('/console/deploy/profiles');
+      navigate('/console/org/deploy/profiles');
     },
   });
 

@@ -8,24 +8,19 @@
 import {
   Box,
   Typography,
-  Card,
-  CardContent,
-  Button,
   Chip,
   Grid,
-  FormControlLabel,
-  Switch,
   Divider,
   List,
   ListItem,
   ListItemText,
   Alert,
 } from '@mui/material';
-import EditIcon from '@mui/icons-material/Edit';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import SecurityIcon from '@mui/icons-material/Security';
 import InfoIcon from '@mui/icons-material/Info';
 import { useTranslation } from 'react-i18next';
+import { ReviewSectionCard, ReviewToggleOption, ReviewField } from '../../../common';
 
 const getFrameworkLabel = (t, frameworkType) => {
   const key = `wizards.trustProfile.frameworkLabels.${frameworkType}`;
@@ -50,46 +45,38 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
       </Typography>
 
       {/* Basic Information */}
-      <Card sx={{ mb: 2 }}>
-        <CardContent>
-          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
-            <Typography variant="h6" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <CheckCircleIcon color="primary" />
-              {t('wizards.trustProfile.reviewStep.sections.basicInformation')}
-            </Typography>
-            <Button size="small" startIcon={<EditIcon />} onClick={() => onEdit(0)}>
-              {t('wizards.trustProfile.reviewStep.actions.edit')}
-            </Button>
-          </Box>
-
+      <ReviewSectionCard
+        sx={{ mb: 2 }}
+        title={t('wizards.trustProfile.reviewStep.sections.basicInformation')}
+        icon={<CheckCircleIcon color="primary" />}
+        onEdit={() => onEdit(0)}
+        editLabel={t('wizards.trustProfile.reviewStep.actions.edit')}
+      >
           <Grid container spacing={2}>
             <Grid item xs={12}>
-              <Typography variant="subtitle2" color="text.secondary">
-                {t('wizards.trustProfile.reviewStep.fields.profileName')}
-              </Typography>
-              <Typography variant="body1" gutterBottom>
-                {data.name || <em>{t('wizards.trustProfile.reviewStep.values.notSet')}</em>}
-              </Typography>
+              <ReviewField
+                label={t('wizards.trustProfile.reviewStep.fields.profileName')}
+                value={data.name}
+                placeholder={t('wizards.trustProfile.reviewStep.values.notSet')}
+                gutterBottom
+              />
             </Grid>
 
             {data.description && (
               <Grid item xs={12}>
-                <Typography variant="subtitle2" color="text.secondary">
-                  {t('wizards.trustProfile.reviewStep.fields.description')}
-                </Typography>
-                <Typography variant="body1" gutterBottom>
-                  {data.description}
-                </Typography>
+                <ReviewField
+                  label={t('wizards.trustProfile.reviewStep.fields.description')}
+                  value={data.description}
+                  gutterBottom
+                />
               </Grid>
             )}
 
             <Grid item xs={12} md={6}>
-              <Typography variant="subtitle2" color="text.secondary">
-                {t('wizards.trustProfile.reviewStep.fields.frameworkType')}
-              </Typography>
-              <Typography variant="body1">
-                {getFrameworkLabel(t, data.framework_type)}
-              </Typography>
+              <ReviewField
+                label={t('wizards.trustProfile.reviewStep.fields.frameworkType')}
+                value={getFrameworkLabel(t, data.framework_type)}
+              />
             </Grid>
 
             <Grid item xs={12}>
@@ -109,22 +96,16 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
               </Box>
             </Grid>
           </Grid>
-        </CardContent>
-      </Card>
+      </ReviewSectionCard>
 
       {/* Trust Sources */}
-      <Card sx={{ mb: 2 }}>
-        <CardContent>
-          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
-            <Typography variant="h6" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <SecurityIcon color="primary" />
-              {t('wizards.trustProfile.reviewStep.sections.trustSources')}
-            </Typography>
-            <Button size="small" startIcon={<EditIcon />} onClick={() => onEdit(1)}>
-              {t('wizards.trustProfile.reviewStep.actions.edit')}
-            </Button>
-          </Box>
-
+      <ReviewSectionCard
+        sx={{ mb: 2 }}
+        title={t('wizards.trustProfile.reviewStep.sections.trustSources')}
+        icon={<SecurityIcon color="primary" />}
+        onEdit={() => onEdit(1)}
+        editLabel={t('wizards.trustProfile.reviewStep.actions.edit')}
+      >
           {data.trusted_issuers && data.trusted_issuers.length > 0 ? (
             <Box>
               <Typography variant="body2" color="text.secondary" gutterBottom>
@@ -158,21 +139,15 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
               {t('wizards.trustProfile.reviewStep.trustSourcesSummary.noneConfigured')}
             </Typography>
           )}
-        </CardContent>
-      </Card>
+      </ReviewSectionCard>
 
       {/* Validation Rules */}
-      <Card sx={{ mb: 3 }}>
-        <CardContent>
-          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
-            <Typography variant="h6">
-              {t('wizards.trustProfile.reviewStep.sections.validationRules')}
-            </Typography>
-            <Button size="small" startIcon={<EditIcon />} onClick={() => onEdit(2)}>
-              {t('wizards.trustProfile.reviewStep.actions.edit')}
-            </Button>
-          </Box>
-
+      <ReviewSectionCard
+        sx={{ mb: 3 }}
+        title={t('wizards.trustProfile.reviewStep.sections.validationRules')}
+        onEdit={() => onEdit(2)}
+        editLabel={t('wizards.trustProfile.reviewStep.actions.edit')}
+      >
           <Grid container spacing={2}>
             <Grid item xs={12}>
               <Typography variant="subtitle2" color="text.secondary" gutterBottom>
@@ -186,38 +161,31 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
             </Grid>
 
             <Grid item xs={12} md={6}>
-              <Typography variant="subtitle2" color="text.secondary">
-                {t('wizards.trustProfile.reviewStep.fields.selfSignedCredentials')}
-              </Typography>
-              <Typography variant="body1">
-                {data.validation_rules?.allow_self_signed
+              <ReviewField
+                label={t('wizards.trustProfile.reviewStep.fields.selfSignedCredentials')}
+                value={data.validation_rules?.allow_self_signed
                   ? t('wizards.trustProfile.reviewStep.values.allowed')
                   : t('wizards.trustProfile.reviewStep.values.notAllowed')}
-              </Typography>
+              />
             </Grid>
 
             <Grid item xs={12} md={6}>
-              <Typography variant="subtitle2" color="text.secondary">
-                {t('wizards.trustProfile.reviewStep.fields.minimumKeySize')}
-              </Typography>
-              <Typography variant="body1">
-                {(data.validation_rules?.min_key_size || 2048)} {t('wizards.trustProfile.reviewStep.values.bits')}
-              </Typography>
+              <ReviewField
+                label={t('wizards.trustProfile.reviewStep.fields.minimumKeySize')}
+                value={`${data.validation_rules?.min_key_size || 2048} ${t('wizards.trustProfile.reviewStep.values.bits')}`}
+              />
             </Grid>
 
             <Grid item xs={12} md={6}>
-              <Typography variant="subtitle2" color="text.secondary">
-                {t('wizards.trustProfile.reviewStep.fields.keyUsageValidation')}
-              </Typography>
-              <Typography variant="body1">
-                {data.validation_rules?.require_key_usage !== false
+              <ReviewField
+                label={t('wizards.trustProfile.reviewStep.fields.keyUsageValidation')}
+                value={data.validation_rules?.require_key_usage !== false
                   ? t('wizards.trustProfile.reviewStep.values.required')
                   : t('wizards.trustProfile.reviewStep.values.notRequired')}
-              </Typography>
+              />
             </Grid>
           </Grid>
-        </CardContent>
-      </Card>
+      </ReviewSectionCard>
 
       <Divider sx={{ my: 3 }} />
 
@@ -232,26 +200,12 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
       </Alert>
 
       {/* Activation Toggle */}
-      <Box sx={{ p: 2, bgcolor: 'action.hover', borderRadius: 1 }}>
-        <FormControlLabel
-          control={
-            <Switch
-              checked={data.activate_immediately !== false}
-              onChange={(e) => onChange({ activate_immediately: e.target.checked })}
-            />
-          }
-          label={
-            <Box>
-              <Typography variant="subtitle2">
-                {t('wizards.trustProfile.reviewStep.activateImmediately.label')}
-              </Typography>
-              <Typography variant="body2" color="text.secondary">
-                {t('wizards.trustProfile.reviewStep.activateImmediately.description')}
-              </Typography>
-            </Box>
-          }
-        />
-      </Box>
+      <ReviewToggleOption
+        checked={data.activate_immediately !== false}
+        onChange={(e) => onChange({ activate_immediately: e.target.checked })}
+        title={t('wizards.trustProfile.reviewStep.activateImmediately.label')}
+        description={t('wizards.trustProfile.reviewStep.activateImmediately.description')}
+      />
     </Box>
   );
 };

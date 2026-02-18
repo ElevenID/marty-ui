@@ -59,7 +59,7 @@ function PreviewFlowContent() {
     return (
       <PreviewNotFound 
         resourceType="flow" 
-        returnUrl="/console/flows/definitions"
+        returnUrl="/console/org/flows/definitions"
       />
     );
   }
@@ -95,7 +95,7 @@ function PreviewFlowPage() {
     <PreviewProvider 
       resourceType="flow" 
       resourceId={flowId}
-      returnUrl="/console/flows/definitions"
+      returnUrl="/console/org/flows/definitions"
     >
       <PreviewFlowContent />
     </PreviewProvider>

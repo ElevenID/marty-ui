@@ -82,7 +82,7 @@ function GuidedSetupBanner({ readiness, onDismiss }) {
         </Box>
         <Button
           component={Link}
-          to="/console/setup-wizard"
+          to="/console/org/setup-wizard"
           variant="contained"
           size="small"
           startIcon={isStarted ? <PlayArrowIcon /> : <RocketLaunchIcon />}

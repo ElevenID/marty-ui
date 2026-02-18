@@ -1,0 +1,16 @@
+# Marty UI Production Profile
+# ===========================
+# Production-focused overrides layered on docker-compose.base.yml.
+
+services:
+  auth:
+    environment:
+      COOKIE_SECURE: ${COOKIE_SECURE:-true}
+
+  keycloak:
+    environment:
+      KC_HOSTNAME: ${KC_HOSTNAME:-auth.example.com}
+      KC_HOSTNAME_STRICT: "true"
+      KC_HOSTNAME_STRICT_HTTPS: "true"
+      KC_HTTP_ENABLED: "false"
+      KC_PROXY: edge

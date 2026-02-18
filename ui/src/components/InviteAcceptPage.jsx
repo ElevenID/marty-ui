@@ -34,8 +34,7 @@ import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import ErrorIcon from '@mui/icons-material/Error';
 import VerifiedUserIcon from '@mui/icons-material/VerifiedUser';
 import { useAuth } from '../hooks/useAuth';
-
-const API_URL = import.meta.env.VITE_API_URL || '';
+import { acceptOrganizationInvitation, validateOrganizationInvitation } from '../services/organizationsApi';
 
 // Invitation states
 const STATES = {
@@ -67,32 +66,31 @@ export default function InviteAcceptPage() {
       return;
     }
 
+    if (isAuthenticated) {
+      navigate(`/organizations/join?inviteToken=${encodeURIComponent(token)}`, { replace: true });
+      return;
+    }
+
     validateInvitation();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token]);
+  }, [token, isAuthenticated]);
 
   const validateInvitation = async () => {
     setState(STATES.LOADING);
     try {
-      const response = await fetch(`${API_URL}/api/invitations/validate?token=${token}`, {
-        credentials: 'include',
-      });
+      const data = await validateOrganizationInvitation(token);
 
-      if (!response.ok) {
-        if (response.status === 404) {
-          setState(STATES.INVALID);
-          setError('Invitation not found or has been cancelled');
-          return;
-        }
-        if (response.status === 410) {
+      if (!data?.valid) {
+        if (data?.expired) {
           setState(STATES.EXPIRED);
-          setError('This invitation has expired');
+          setError(data?.message || 'This invitation has expired');
           return;
         }
-        throw new Error('Failed to validate invitation');
+        setState(STATES.INVALID);
+        setError(data?.message || 'Invitation not found or has been cancelled');
+        return;
       }
 
-      const data = await response.json();
       setInvitation(data);
       
       // Check if user needs to login
@@ -111,19 +109,7 @@ export default function InviteAcceptPage() {
   const handleAcceptInvitation = async () => {
     setState(STATES.ACCEPTING);
     try {
-      const response = await fetch(`${API_URL}/api/invitations/accept`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ token }),
-      });
-
-      if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.detail || 'Failed to accept invitation');
-      }
-
-      const data = await response.json();
+      const data = await acceptOrganizationInvitation(token);
       setInvitation(prev => ({ ...prev, ...data }));
       setState(STATES.ACCEPTED);
 
@@ -140,7 +126,7 @@ export default function InviteAcceptPage() {
 
   const handleLogin = () => {
     // Store the current URL to return after login
-    sessionStorage.setItem('returnUrl', window.location.href);
+    sessionStorage.setItem('returnUrl', `/organizations/join?inviteToken=${encodeURIComponent(token || '')}`);
     login();
   };
 

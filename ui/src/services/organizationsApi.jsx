@@ -5,6 +5,7 @@
  * Uses the centralized api.js service for consistent error handling and retry logic.
  */
 import { get, post, patch, del, getErrorMessage } from './api';
+import { buildDefinedQueryString, buildTruthyQueryString, withQuery } from './queryUtils';
 
 const BASE_PATH = '/v1/organizations';
 
@@ -18,6 +19,20 @@ export async function getOrganization(organizationId) {
 }
 
 /**
+ * Create a new organization
+ * @param {Object} data - Organization data
+ * @param {string} data.name - Organization name (unique identifier)
+ * @param {string} data.display_name - Display name
+ * @param {string} data.org_type - Organization type (e.g., 'enterprise', 'startup')
+ * @param {string} [data.description] - Optional description
+ * @param {string} [data.contact_email] - Optional contact email
+ * @returns {Promise<Object>} - Created organization object
+ */
+export async function createOrganization(data) {
+  return post(BASE_PATH, data);
+}
+
+/**
  * List all organizations (admin only)
  * @param {Object} options - Filter options
  * @param {number} options.limit - Max number of records (default: 100)
@@ -25,10 +40,122 @@ export async function getOrganization(organizationId) {
  * @returns {Promise<Array>} - Array of organization objects
  */
 export async function listOrganizations({ limit = 100, offset = 0 } = {}) {
-  const params = new URLSearchParams();
-  params.append('limit', limit.toString());
-  params.append('offset', offset.toString());
-  return get(`${BASE_PATH}?${params.toString()}`);
+  const queryString = buildDefinedQueryString({ limit, offset });
+  return get(withQuery(BASE_PATH, queryString));
+}
+
+/**
+ * Get current user's organizations with membership details
+ * @returns {Promise<Array>} - Array of organizations with membership info
+ */
+export async function getMyOrganizations() {
+  return get(`${BASE_PATH}/mine`);
+}
+
+/**
+ * Discover publicly available organizations
+ * @param {Object} options - Filter options
+ * @param {string} options.search - Search by name or display name
+ * @param {string} options.orgType - Filter by organization type
+ * @param {string} options.joinMechanism - Filter by join mechanism
+ * @param {number} options.limit - Max number of records (default: 100)
+ * @param {number} options.offset - Pagination offset (default: 0)
+ * @returns {Promise<Array>} - Array of discoverable organization objects
+ */
+export async function discoverOrganizations({ search, orgType, joinMechanism, limit = 100, offset = 0 } = {}) {
+  const queryString = buildTruthyQueryString({
+    search,
+    org_type: orgType,
+    join_mechanism: joinMechanism,
+    limit,
+    offset,
+  });
+  return get(withQuery(`${BASE_PATH}/discover`, queryString));
+}
+
+/**
+ * Join an organization using a join code
+ * @param {string} code - 8-character join code
+ * @returns {Promise<Object>} - Organization and membership details
+ */
+export async function joinByCode(code) {
+  return post(`${BASE_PATH}/join/code`, { code });
+}
+
+/**
+ * Validate a join/invitation code without joining.
+ * Public endpoint.
+ * @param {string} code - Join/invitation code
+ * @returns {Promise<Object>} - Validation result
+ */
+export async function validateJoinCode(code) {
+  const encoded = encodeURIComponent(code);
+  return get(`${BASE_PATH}/join/code/validate?code=${encoded}`);
+}
+
+/**
+ * Join/request to join an organization directly by ID.
+ * Works for organizations with open join enabled.
+ * @param {string} organizationId - Organization ID
+ * @returns {Promise<Object>} - Organization and membership details
+ */
+export async function joinOrganization(organizationId) {
+  return post(`${BASE_PATH}/${organizationId}/join`, {});
+}
+
+/**
+ * Validate an invitation token.
+ * Public endpoint (no auth required).
+ * @param {string} token - Invitation token/code
+ * @returns {Promise<Object>} - Validation details
+ */
+export async function validateOrganizationInvitation(token) {
+  const encoded = encodeURIComponent(token);
+  try {
+    return await get(`${BASE_PATH}/invitations/validate?token=${encoded}`);
+  } catch (error) {
+    const status = error?.status;
+    // Compatibility fallback for environments still serving legacy invite endpoints
+    if (status === 404 || status === 502 || status === 503 || status === 504) {
+      try {
+        return await validateJoinCode(token);
+      } catch {
+        try {
+          return await get(`/api/invitations/validate?token=${encoded}`);
+        } catch {
+          return get(`/api/onboarding/invitations/validate?token=${encoded}`);
+        }
+      }
+    }
+    throw error;
+  }
+}
+
+/**
+ * Accept an invitation token.
+ * Requires authenticated session.
+ * @param {string} token - Invitation token/code
+ * @returns {Promise<Object>} - Acceptance details
+ */
+export async function acceptOrganizationInvitation(token) {
+  try {
+    return await post(`${BASE_PATH}/invitations/accept`, { token });
+  } catch (error) {
+    const status = error?.status;
+    // Compatibility fallback for environments still serving legacy invite endpoints
+    if (status === 404 || status === 502 || status === 503 || status === 504) {
+      try {
+        return await joinByCode(token);
+      } catch {
+        try {
+          return await post('/api/invitations/accept', { token });
+        } catch {
+          return post('/api/onboarding/invitations/accept', { token });
+        }
+      }
+    }
+    throw error;
+  }
 }
 
 /**
@@ -114,12 +241,11 @@ export async function getOrganizationSubscription(organizationId) {
  * @returns {Promise<Object>} - Usage statistics
  */
 export async function getOrganizationUsage(organizationId, { startDate, endDate } = {}) {
-  const params = new URLSearchParams();
-  if (startDate) params.append('start_date', startDate);
-  if (endDate) params.append('end_date', endDate);
-  const queryString = params.toString();
-  const url = `${BASE_PATH}/${organizationId}/usage${queryString ? `?${queryString}` : ''}`;
-  return get(url);
+  const queryString = buildTruthyQueryString({
+    start_date: startDate,
+    end_date: endDate,
+  });
+  return get(withQuery(`${BASE_PATH}/${organizationId}/usage`, queryString));
 }
 
 /**
@@ -184,7 +310,15 @@ export { getErrorMessage };
 
 export default {
   getOrganization,
+  createOrganization,
   listOrganizations,
+  getMyOrganizations,
+  discoverOrganizations,
+  validateJoinCode,
+  joinByCode,
+  joinOrganization,
+  validateOrganizationInvitation,
+  acceptOrganizationInvitation,
   updateOrganization,
   getOrganizationMembers,
   addOrganizationMember,

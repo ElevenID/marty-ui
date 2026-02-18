@@ -8,16 +8,12 @@
 import { Outlet } from 'react-router-dom';
 import { Container, Box } from '@mui/material';
 import Navigation from '../Navigation';
-import { useAuth } from '../../hooks/useAuth';
 
 function PublicLayout() {
-  const { user } = useAuth();
-
   return (
     <Container maxWidth="lg">
       <Box sx={{ my: 4 }}>
-        {/* Hide Navigation menu during onboarding */}
-        {!user?.needsOnboarding && <Navigation />}
+        <Navigation />
         <Outlet />
       </Box>
     </Container>

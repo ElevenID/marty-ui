@@ -85,7 +85,7 @@ function ApplicantDashboard() {
           {t('dashboard.pendingAlert.message', { count: stats.pendingApplications })}
           <Button
             component={Link}
-            to="/applicant/applications"
+            to="/console/applicant/applications"
             size="small"
             sx={{ ml: 2 }}
           >
@@ -108,7 +108,7 @@ function ApplicantDashboard() {
             <CardActions>
               <Button
                 component={Link}
-                to="/applicant/credentials"
+                to="/console/applicant/credentials"
                 size="small"
                 endIcon={<ArrowForwardIcon />}
               >
@@ -130,7 +130,7 @@ function ApplicantDashboard() {
             <CardActions>
               <Button
                 component={Link}
-                to="/applicant/applications"
+                to="/console/applicant/applications"
                 size="small"
                 endIcon={<ArrowForwardIcon />}
               >
@@ -163,7 +163,7 @@ function ApplicantDashboard() {
             <List>
               <ListItem
                 component={Link}
-                to="/credentials"
+                to="/console/applicant/credentials"
                 sx={{ color: 'inherit', textDecoration: 'none' }}
               >
                 <ListItemIcon>
@@ -176,7 +176,7 @@ function ApplicantDashboard() {
               </ListItem>
               <ListItem
                 component={Link}
-                to="/applicant/credentials"
+                to="/console/applicant/credentials"
                 sx={{ color: 'inherit', textDecoration: 'none' }}
               >
                 <ListItemIcon>

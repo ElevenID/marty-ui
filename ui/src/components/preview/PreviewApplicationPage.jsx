@@ -28,7 +28,7 @@ function PreviewApplicationPage() {
     <PreviewProvider 
       resourceType="application" 
       resourceId={applicationTemplateId}
-      returnUrl="/console/templates/applications"
+      returnUrl="/console/org/templates/applications"
     >
       <PreviewApplicationContent />
     </PreviewProvider>

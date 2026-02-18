@@ -194,7 +194,7 @@ export function RuntimeReadinessPanel({ runtimeStatus }) {
     : null;
 
   const issuanceAction = !issuerKeysValid 
-    ? { label: t('dashboard.runtimeReadiness.issuance.fixSigningKeys'), link: '/console/deploy/signing-keys' }
+    ? { label: t('dashboard.runtimeReadiness.issuance.fixSigningKeys'), link: '/console/org/deploy/signing-keys' }
     : !issuerActive
     ? { label: t('dashboard.runtimeReadiness.issuance.activateIssuer'), link: '/console/org/settings' }
     : null;
@@ -217,9 +217,9 @@ export function RuntimeReadinessPanel({ runtimeStatus }) {
     : null;
 
   const verificationAction = !deploymentActive
-    ? { label: t('dashboard.runtimeReadiness.verification.configureDeployment'), link: '/console/deploy/profiles' }
+    ? { label: t('dashboard.runtimeReadiness.verification.configureDeployment'), link: '/console/org/deploy/profiles' }
     : !policyReachable
-    ? { label: t('dashboard.runtimeReadiness.verification.fixPolicies'), link: '/console/policies/presentation' }
+    ? { label: t('dashboard.runtimeReadiness.verification.fixPolicies'), link: '/console/org/policies/presentation' }
     : null;
 
   const signingKeysReason = !issuerKeysValid
@@ -227,7 +227,7 @@ export function RuntimeReadinessPanel({ runtimeStatus }) {
     : null;
 
   const signingKeysAction = !issuerKeysValid
-    ? { label: t('dashboard.runtimeReadiness.keys.manageKeys'), link: '/console/deploy/signing-keys' }
+    ? { label: t('dashboard.runtimeReadiness.keys.manageKeys'), link: '/console/org/deploy/signing-keys' }
     : null;
 
   return (

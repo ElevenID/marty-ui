@@ -45,13 +45,14 @@ class UserInfoResponse(BaseModel):
     username: str | None = None
     given_name: str | None = None
     family_name: str | None = None
-    user_type: str
     applicant_id: str | None = None
     roles: list[str] = []
     organization_id: str | None = None
     organization_name: str | None = None
     organization: dict[str, Any] | None = None
-    onboarding_completed: str | None = None
+    organizations: list[dict[str, Any]] = []
+    capabilities: dict[str, bool] = {}
+    default_experience: str = "applicant_console"
 
 
 class AuthStatusResponse(BaseModel):
@@ -157,6 +158,53 @@ def generate_pkce_pair() -> tuple[str, str]:
     code_challenge = base64.urlsafe_b64encode(digest).decode("utf-8").rstrip("=")
 
     return code_verifier, code_challenge
+
+
+def _extract_memberships(
+    organization_claim: dict[str, Any] | None,
+    organization_id: str | None,
+    organization_name: str | None,
+) -> list[dict[str, Any]]:
+    """Normalize organization memberships from claim + session attributes."""
+    memberships: list[dict[str, Any]] = []
+    claim = organization_claim if isinstance(organization_claim, dict) else {}
+
+    for org_id, org_data in claim.items():
+        name = org_data.get("name") if isinstance(org_data, dict) else None
+        memberships.append({
+            "id": org_id,
+            "name": name,
+        })
+
+    if organization_id and all(m.get("id") != organization_id for m in memberships):
+        memberships.append(
+            {
+                "id": organization_id,
+                "name": organization_name,
+            }
+        )
+
+    return memberships
+
+
+def _derive_capabilities(
+    roles: list[str] | None,
+    organization_id: str | None,
+    organizations: list[dict[str, Any]] | None,
+) -> dict[str, bool]:
+    """Derive a baseline capability map from roles and memberships."""
+    user_roles = roles or []
+    has_org = bool(organization_id) or bool(organizations)
+    is_admin = "administrator" in user_roles or "admin" in user_roles
+    is_org_manager = "vendor" in user_roles or "org_admin" in user_roles or "org_owner" in user_roles
+
+    return {
+        "apply": True,
+        "org:view": has_org or is_org_manager or is_admin,
+        "org:manage": is_org_manager or is_admin,
+        "org:issue": is_org_manager or is_admin,
+        "admin:platform": is_admin,
+    }
 
 
 # =============================================================================
@@ -388,15 +436,27 @@ async def callback(
         username=oidc_user.preferred_username or oidc_user.email,
         given_name=oidc_user.given_name,
         family_name=oidc_user.family_name,
-        user_type=provision_result.user_type,
         applicant_id=provision_result.applicant_id,
         roles=oidc_user.roles or [],
         organization_id=provision_result.organization_id or oidc_user.organization_id,
         organization_name=provision_result.organization_name or oidc_user.organization_name,
         organization=oidc_user.organization,
+        organizations=_extract_memberships(
+            oidc_user.organization,
+            provision_result.organization_id or oidc_user.organization_id,
+            provision_result.organization_name or oidc_user.organization_name,
+        ),
+        capabilities=_derive_capabilities(
+            oidc_user.roles or [],
+            provision_result.organization_id or oidc_user.organization_id,
+            _extract_memberships(
+                oidc_user.organization,
+                provision_result.organization_id or oidc_user.organization_id,
+                provision_result.organization_name or oidc_user.organization_name,
+            ),
+        ),
+        default_experience="applicant_console",
         matched_organizations=provision_result.matched_organizations,  # Email domain matches
-        onboarding_completed=user_claims.get("onboarding_completed")
-        or user_claims.get("attributes", {}).get("onboarding_completed", [None])[0],
         access_token_expires_at=(
             datetime.now(timezone.utc) + timedelta(seconds=expires_in)
         ).isoformat(),
@@ -411,35 +471,8 @@ async def callback(
     if id_token:
         await session_manager.store_id_token(session.session_id, id_token)
 
-    # Determine redirect destination based on user role + onboarding state
-    final_redirect = original_redirect
-    user_attrs = user_claims.get("attributes", {})
-    onboarding_completed = user_claims.get("onboarding_completed") or user_attrs.get(
-        "onboarding_completed"
-    )
-    org_id = (
-        user_claims.get("organization_id")
-        or user_attrs.get("organization_id")
-        or oidc_user.organization_id
-    )
-
-    if provision_result.is_new_applicant:
-        final_redirect = "/onboarding"
-        logger.info(f"New user {oidc_user.email} redirected to onboarding")
-    elif provision_result.user_type == "administrator":
-        final_redirect = original_redirect or "/dashboard"
-    elif provision_result.user_type == "vendor":
-        if not onboarding_completed or not org_id:
-            final_redirect = "/onboarding"
-            logger.info(f"Vendor {oidc_user.email} needs onboarding")
-        else:
-            final_redirect = original_redirect or "/vendor"
-    else:
-        if not onboarding_completed:
-            final_redirect = "/onboarding"
-            logger.info(f"Returning user {oidc_user.email} needs onboarding")
-        else:
-            final_redirect = original_redirect or "/credentials"
+    # Person-first default: all authenticated users land in applicant console
+    final_redirect = original_redirect or "/applicant"
 
     # Create response with session cookie
     response = RedirectResponse(url=final_redirect, status_code=302)
@@ -541,13 +574,19 @@ async def get_current_user(
         username=attrs.get("username"),
         given_name=attrs.get("given_name"),
         family_name=attrs.get("family_name"),
-        user_type=attrs.get("user_type", "applicant"),
         applicant_id=attrs.get("applicant_id"),
         roles=attrs.get("roles", []),
         organization_id=attrs.get("organization_id"),
         organization_name=attrs.get("organization_name"),
         organization=attrs.get("organization"),
-        onboarding_completed=attrs.get("onboarding_completed"),
+        organizations=attrs.get("organizations", []),
+        capabilities=attrs.get("capabilities")
+        or _derive_capabilities(
+            attrs.get("roles", []),
+            attrs.get("organization_id"),
+            attrs.get("organizations", []),
+        ),
+        default_experience=attrs.get("default_experience", "applicant_console"),
     )
 
     return AuthStatusResponse(authenticated=True, user=user)
@@ -681,6 +720,11 @@ async def require_org_admin(
     """
     auth_status = await require_authenticated(request, config)
     user = auth_status.user
+    if user is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required",
+        )
     
     # Platform admins have full access (check multiple role names used across Keycloak configs)
     roles = user.roles or []

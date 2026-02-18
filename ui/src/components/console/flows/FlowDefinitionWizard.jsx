@@ -113,10 +113,10 @@ const FlowDefinitionWizard = () => {
     onComplete: () => {
       // Redirect to operate page after 2 seconds
       setTimeout(() => {
-        navigate('/console/operate');
+        navigate('/console/org/operate');
       }, 2000);
     },
-    onCancel: () => navigate('/console/flows'),
+    onCancel: () => navigate('/console/org/flows'),
   });
 
   // Debug logging
@@ -236,7 +236,7 @@ const FlowDefinitionWizard = () => {
         {/* Navigation Buttons */}
         <Box sx={{ display: 'flex', justifyContent: 'space-between', pt: 2 }}>
           <Button
-            onClick={wizard.activeStep === 0 ? () => navigate('/console/flows/definitions') : wizard.goBack}
+            onClick={wizard.activeStep === 0 ? () => navigate('/console/org/flows/definitions') : wizard.goBack}
             startIcon={<ArrowBackIcon />}
             disabled={wizard.loading}
             data-testid={wizard.activeStep === 0 ? 'wizard.flow.cancel' : 'wizard.flow.back'}

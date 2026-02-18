@@ -22,7 +22,7 @@ export async function createApplicant(data) {
 }
 
 export async function getApplicant(applicantId) {
-  const response = await fetch(`${API_BASE}/${applicantId}`);
+  const response = await fetch(`${API_BASE}/profiles/${applicantId}`);
   if (!response.ok) throw new Error('Failed to fetch applicant');
   return response.json();
 }
@@ -35,7 +35,7 @@ export async function getApplicantByUser(userId) {
 }
 
 export async function enrollBiometric(applicantId, data) {
-  const response = await fetch(`${API_BASE}/${applicantId}/biometrics`, {
+  const response = await fetch(`${API_BASE}/profiles/${applicantId}/biometrics`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
@@ -48,7 +48,7 @@ export async function enrollBiometric(applicantId, data) {
 }
 
 export async function getApplicantBiometrics(applicantId) {
-  const response = await fetch(`${API_BASE}/${applicantId}/biometrics`);
+  const response = await fetch(`${API_BASE}/profiles/${applicantId}/biometrics`);
   if (!response.ok) throw new Error('Failed to fetch biometrics');
   return response.json();
 }
@@ -78,27 +78,64 @@ export async function submitApplication(applicationId) {
   return response.json();
 }
 
+export async function listOrganizationApplications(organizationId, params = {}) {
+  const searchParams = new URLSearchParams({ organization_id: organizationId });
+  if (params.status && params.status !== 'all') {
+    searchParams.set('status', params.status);
+  }
+
+  const response = await fetch(`${API_BASE}/org-applications?${searchParams.toString()}`, {
+    credentials: 'include',
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.detail || 'Failed to fetch organization applications');
+  }
+
+  const applications = await response.json();
+  const normalized = Array.isArray(applications) ? applications : (applications?.applications || []);
+  return {
+    applications: normalized,
+    total: normalized.length,
+    limit: params.limit || normalized.length,
+    offset: params.offset || 0,
+  };
+}
+
+export async function reviewOrganizationApplication(applicationId, decision, payload = {}) {
+  const response = await fetch(`${API_BASE}/applications/${applicationId}/review`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({ decision, ...payload }),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.detail || `Failed to ${decision} application`);
+  }
+
+  return response.json();
+}
+
+export async function issueOrganizationApplication(applicationId) {
+  const response = await fetch(`${API_BASE}/applications/${applicationId}/issue`, {
+    method: 'POST',
+    credentials: 'include',
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.detail || 'Failed to issue application');
+  }
+
+  return response.json();
+}
+
 export async function getApplication(applicationId) {
   const response = await fetch(`${API_BASE}/applications/${applicationId}`);
   if (!response.ok) throw new Error('Failed to fetch application');
-  return response.json();
-}
-
-export async function listApplications(params = {}) {
-  const queryParams = new URLSearchParams();
-  if (params.status) queryParams.append('status', params.status);
-  if (params.document_type) queryParams.append('document_type', params.document_type);
-  if (params.limit) queryParams.append('limit', params.limit);
-  if (params.offset) queryParams.append('offset', params.offset);
-
-  const response = await fetch(`${API_BASE}/applications?${queryParams}`);
-  if (!response.ok) throw new Error('Failed to fetch applications');
-  return response.json();
-}
-
-export async function getApprovedApplications(limit = 50) {
-  const response = await fetch(`${API_BASE}/applications/approved?limit=${limit}`);
-  if (!response.ok) throw new Error('Failed to fetch approved applications');
   return response.json();
 }
 
@@ -133,6 +170,160 @@ export async function getPendingChecks(checkType = null) {
     : `${API_BASE}/checks/pending`;
   const response = await fetch(url);
   if (!response.ok) throw new Error('Failed to fetch pending checks');
+  return response.json();
+}
+
+// Request Info API
+export async function requestApplicationInfo(applicationId, data) {
+  const response = await fetch(`${API_BASE}/applications/${applicationId}/request-info`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify(data),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.detail || 'Failed to request info');
+  }
+  return response.json();
+}
+
+// Reviewer Lock API
+export async function acquireReviewerLock(applicationId, reviewerId, reviewerName) {
+  const response = await fetch(`${API_BASE}/applications/${applicationId}/lock`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({ reviewer_id: reviewerId, reviewer_name: reviewerName }),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.detail || 'Failed to acquire lock');
+  }
+  return response.json();
+}
+
+export async function releaseReviewerLock(applicationId, reviewerId) {
+  const response = await fetch(
+    `${API_BASE}/applications/${applicationId}/lock?reviewer_id=${encodeURIComponent(reviewerId)}`,
+    { method: 'DELETE', credentials: 'include' },
+  );
+  if (!response.ok) return { released: false };
+  return response.json();
+}
+
+export async function getLockStatus(applicationId) {
+  const response = await fetch(`${API_BASE}/applications/${applicationId}/lock`);
+  if (!response.ok) return { locked: false };
+  return response.json();
+}
+
+export async function listApplications(params = {}) {
+  try {
+    console.log('[listApplications] Fetching user info from /v1/auth/me');
+    const meResponse = await fetch('/v1/auth/me', { credentials: 'include' });
+    if (!meResponse.ok) {
+      console.warn('[listApplications] Failed to fetch user info:', meResponse.status);
+      return {
+        applications: [],
+        total: 0,
+        limit: params.limit || 50,
+        offset: params.offset || 0,
+      };
+    }
+
+    const me = await meResponse.json();
+    const userId = me?.user?.user_id || me?.user_id || me?.sub;
+    const applicantIdFromAuth = me?.user?.applicant_id || me?.applicant_id || null;
+    console.log('[listApplications] User ID:', userId);
+    if (!userId) {
+      console.warn('[listApplications] No user ID found in response');
+      return {
+        applications: [],
+        total: 0,
+        limit: params.limit || 50,
+        offset: params.offset || 0,
+      };
+    }
+
+    console.log('[listApplications] Fetching applicant by user ID:', userId);
+    const applicantResponse = await fetch(`${API_BASE}/by-user/${userId}`, {
+      credentials: 'include',
+    });
+
+    let applicantId = null;
+    if (applicantResponse.ok) {
+      const applicant = await applicantResponse.json();
+      applicantId = applicant?.id || null;
+      console.log('[listApplications] Applicant ID (by-user):', applicantId);
+    } else {
+      console.warn('[listApplications] Failed to fetch applicant by user:', applicantResponse.status);
+    }
+
+    if (!applicantId && applicantIdFromAuth) {
+      applicantId = applicantIdFromAuth;
+      console.log('[listApplications] Falling back to applicant_id from auth/me:', applicantId);
+    }
+
+    if (!applicantId) {
+      console.warn('[listApplications] No applicant ID available after fallbacks');
+      return {
+        applications: [],
+        total: 0,
+        limit: params.limit || 50,
+        offset: params.offset || 0,
+      };
+    }
+
+    console.log('[listApplications] Fetching applications for applicant:', applicantId);
+
+    // Primary endpoint used by current applicant service
+    let response = await fetch(`${API_BASE}/${applicantId}/applications`, {
+      credentials: 'include',
+    });
+
+    // Backward-compatible fallback for older gateway routes
+    if (!response.ok && response.status === 404) {
+      console.warn('[listApplications] Primary applications endpoint not found, falling back to /profiles route');
+      response = await fetch(`${API_BASE}/profiles/${applicantId}/applications`, {
+        credentials: 'include',
+      });
+    }
+
+    if (!response.ok) {
+      console.warn('[listApplications] Failed to fetch applications:', response.status);
+      return {
+        applications: [],
+        total: 0,
+        limit: params.limit || 50,
+        offset: params.offset || 0,
+      };
+    }
+
+    const applications = await response.json();
+    const normalized = Array.isArray(applications) ? applications : (applications?.applications || []);
+    console.log('[listApplications] Found', normalized.length, 'applications');
+
+    return {
+      applications: normalized,
+      total: normalized.length,
+      limit: params.limit || normalized.length,
+      offset: params.offset || 0,
+    };
+  } catch (error) {
+    console.error('Error in listApplications:', error);
+    return {
+      applications: [],
+      total: 0,
+      limit: params.limit || 50,
+      offset: params.offset || 0,
+    };
+  }
+}
+
+export async function getApprovedApplications(limit = 50) {
+  const response = await fetch(`${API_BASE}/applications/approved?limit=${limit}`);
+  if (!response.ok) throw new Error('Failed to fetch approved applications');
   return response.json();
 }
 
@@ -274,7 +465,7 @@ export async function getMyCredentials() {
  * @returns {Promise<Object>} Updated applicant record
  */
 export async function updateApplicantProfile(applicantId, updates) {
-  const response = await fetch(`${API_BASE}/${applicantId}`, {
+  const response = await fetch(`${API_BASE}/profiles/${applicantId}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     credentials: 'include',

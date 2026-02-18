@@ -87,7 +87,7 @@ const RuntimeSettingsStep = ({ data, onChange }) => {
   };
 
   const handleGoToPolicies = () => {
-    navigate('/console/policies/presentation/new');
+    navigate('/console/org/policies/presentation/new');
   };
 
   if (loading) {

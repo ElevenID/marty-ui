@@ -6,6 +6,7 @@
  */
 
 import { get, post } from './api';
+import { buildTruthyQueryString, withQuery } from './queryUtils';
 
 const BASE_PATH = '/v1/audit/events';
 
@@ -25,21 +26,20 @@ const BASE_PATH = '/v1/audit/events';
  * @returns {Promise<Object>} Paginated audit events
  */
 export async function listAuditEvents(filters = {}) {
-  const params = new URLSearchParams();
-  
-  if (filters.actor) params.append('actor', filters.actor);
-  if (filters.resource_type) params.append('resource_type', filters.resource_type);
-  if (filters.resource_id) params.append('resource_id', filters.resource_id);
-  if (filters.action) params.append('action', filters.action);
-  if (filters.severity) params.append('severity', filters.severity);
-  if (filters.ip_address) params.append('ip_address', filters.ip_address);
-  if (filters.start_date) params.append('start_date', filters.start_date);
-  if (filters.end_date) params.append('end_date', filters.end_date);
-  if (filters.limit) params.append('limit', filters.limit);
-  if (filters.offset) params.append('offset', filters.offset);
-  
-  const queryString = params.toString();
-  return get(queryString ? `${BASE_PATH}?${queryString}` : BASE_PATH);
+  const queryString = buildTruthyQueryString({
+    actor: filters.actor,
+    resource_type: filters.resource_type,
+    resource_id: filters.resource_id,
+    action: filters.action,
+    severity: filters.severity,
+    ip_address: filters.ip_address,
+    start_date: filters.start_date,
+    end_date: filters.end_date,
+    limit: filters.limit,
+    offset: filters.offset,
+  });
+
+  return get(withQuery(BASE_PATH, queryString));
 }
 
 /**

@@ -38,6 +38,33 @@ import { DynamicFieldGroup } from './DynamicFieldRenderer';
 
 const API_URL = import.meta.env.VITE_API_URL || '';
 
+function normalizeCredentialConfigInput(config) {
+  if (!config) {
+    return null;
+  }
+
+  const requiredFields = Array.isArray(config.required_fields)
+    ? config.required_fields
+    : (Array.isArray(config.requiredFields) ? config.requiredFields : []);
+  const optionalFields = Array.isArray(config.optional_fields)
+    ? config.optional_fields
+    : (Array.isArray(config.optionalFields) ? config.optionalFields : []);
+  const customFields = Array.isArray(config.custom_fields)
+    ? config.custom_fields
+    : (Array.isArray(config.customFields) ? config.customFields : []);
+
+  return {
+    ...config,
+    id: config.id,
+    credential_type: config.credential_type || config.credentialType,
+    display_name: config.display_name || config.name,
+    required_fields: requiredFields,
+    optional_fields: optionalFields,
+    custom_fields: customFields,
+    field_validation_rules: config.field_validation_rules || {},
+  };
+}
+
 /**
  * Group fields into logical steps based on their names/prefixes
  */
@@ -93,7 +120,7 @@ export default function ApplicationForm() {
   const [submitted, setSubmitted] = useState(false);
   const [applicationId, setApplicationId] = useState(null);
   const [credentialConfig, setCredentialConfig] = useState(
-    location.state?.credential || null
+    normalizeCredentialConfigInput(location.state?.credential) || null
   );
   const [configLoading, setConfigLoading] = useState(false);
 
@@ -104,6 +131,28 @@ export default function ApplicationForm() {
 
   // Validation errors
   const [validationErrors, setValidationErrors] = useState({});
+
+  const normalizeTemplateToFormConfig = (template) => {
+    const claims = Array.isArray(template?.claims) ? template.claims : [];
+    const requiredClaims = claims.filter((claim) => claim?.required).map((claim) => claim?.name).filter(Boolean);
+    const optionalClaims = claims.filter((claim) => !claim?.required).map((claim) => claim?.name).filter(Boolean);
+
+    return {
+      id: template?.id,
+      credentialType: template?.credential_type,
+      credential_type: template?.credential_type,
+      name: template?.name,
+      display_name: template?.name,
+      description: template?.description,
+      required_fields: requiredClaims,
+      optional_fields: optionalClaims,
+      custom_fields: [],
+      field_validation_rules: {},
+      submission_instructions: null,
+      validity_rules: template?.validity_rules || null,
+      claims,
+    };
+  };
   
   // Compute steps dynamically from credential config
   const steps = useMemo(() => {
@@ -131,7 +180,7 @@ export default function ApplicationForm() {
       return null;
     }
 
-    const response = await fetch(`${API_URL}/api/applicants/${applicantId}`, {
+    const response = await fetch(`${API_URL}/v1/applicants/profiles/${applicantId}`, {
       credentials: 'include',
     });
 
@@ -148,7 +197,7 @@ export default function ApplicationForm() {
       return null;
     }
 
-    const response = await fetch(`${API_URL}/api/applicants/by-user/${user.user_id}`, {
+    const response = await fetch(`${API_URL}/v1/applicants/by-user/${user.user_id}`, {
       credentials: 'include',
     });
 
@@ -175,7 +224,7 @@ export default function ApplicationForm() {
       throw new Error('Unable to resolve applicant profile');
     }
 
-    const response = await fetch(`${API_URL}/api/applicants`, {
+    const response = await fetch(`${API_URL}/v1/applicants`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
@@ -219,14 +268,14 @@ export default function ApplicationForm() {
       setConfigLoading(true);
       try {
         const response = await fetch(
-          `${API_URL}/api/organizations/${organizationId}/credential-types/${credentialConfigId}`,
+          `${API_URL}/v1/credential-templates/${credentialConfigId}`,
           { credentials: 'include' }
         );
         if (!response.ok) {
           throw new Error('Unable to load credential configuration');
         }
         const data = await response.json();
-        setCredentialConfig(data.credential_type || null);
+        setCredentialConfig(normalizeTemplateToFormConfig(data));
       } catch (err) {
         setError(err.message);
       } finally {
@@ -332,6 +381,7 @@ export default function ApplicationForm() {
       
       // Build applicant data from form
       const applicantData = {
+        organization_id: organizationId,
         user_id: user.user_id,
         given_name: formData.given_name || formData.first_name || '',
         family_name: formData.family_name || formData.last_name || '',
@@ -366,7 +416,7 @@ export default function ApplicationForm() {
       }
 
       if (!applicantCreated) {
-        const updateResponse = await fetch(`${API_URL}/api/applicants/${applicantId}`, {
+        const updateResponse = await fetch(`${API_URL}/v1/applicants/profiles/${applicantId}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include',
@@ -392,7 +442,7 @@ export default function ApplicationForm() {
         }
       }
 
-      const createResponse = await fetch(`${API_URL}/api/applicants/applications`, {
+      const createResponse = await fetch(`${API_URL}/v1/applicants/applications`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
@@ -419,7 +469,7 @@ export default function ApplicationForm() {
       const created = await createResponse.json();
 
       const submitResponse = await fetch(
-        `${API_URL}/api/applicants/applications/${created.id}/submit`,
+        `${API_URL}/v1/applicants/applications/${created.id}/submit`,
         {
           method: 'POST',
           credentials: 'include',
@@ -440,7 +490,7 @@ export default function ApplicationForm() {
         const templateBase64 = imageBase64 || btoa('test-biometric-template');
 
         const biometricResponse = await fetch(
-          `${API_URL}/api/applicants/${applicantId}/biometrics`,
+          `${API_URL}/v1/applicants/profiles/${applicantId}/biometrics`,
           {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -463,11 +513,6 @@ export default function ApplicationForm() {
 
       setApplicationId(submittedApplication.id);
       setSubmitted(true);
-
-      // Redirect after delay
-      setTimeout(() => {
-        navigate('/my-applications');
-      }, 5000);
     } catch (err) {
       console.error('Error submitting application:', err);
       setError(err.message);
@@ -621,7 +666,7 @@ export default function ApplicationForm() {
 
             <Button
               variant="contained"
-              onClick={() => navigate('/my-applications')}
+              onClick={() => navigate('/applicant/applications')}
             >
               {t('applicationForm.success.viewApplications')}
             </Button>
@@ -668,7 +713,7 @@ export default function ApplicationForm() {
           <Alert severity="warning" sx={{ mb: 2 }}>
             {t('applicationForm.errors.noCredential')}
           </Alert>
-          <Button variant="contained" onClick={() => navigate('/credentials')}>
+          <Button variant="contained" onClick={() => navigate('/console/applicant/catalog')}>
             {t('applicationForm.actions.gotoCatalog')}
           </Button>
         </Paper>
@@ -743,8 +788,8 @@ export default function ApplicationForm() {
               endIcon={submitting ? <CircularProgress size={20} /> : <CheckCircleIcon />}
               data-testid="submit-application-btn"
             >
-              {submitting 
-                ? (isPreview ? t('applicationForm.navigation.simulating') : t('applicationForm.navigation.submitting')) 
+              {submitting
+                ? (isPreview ? t('applicationForm.navigation.simulating') : t('applicationForm.navigation.submitting'))
                 : (isPreview ? t('applicationForm.navigation.previewSubmit') : t('applicationForm.navigation.submit'))}
             </Button>
           )}

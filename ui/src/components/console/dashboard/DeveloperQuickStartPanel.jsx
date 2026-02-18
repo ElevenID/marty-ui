@@ -42,7 +42,11 @@ export function DeveloperQuickStartPanel() {
 
   useEffect(() => {
     async function fetchIntegrationInfo() {
-      if (!organizationId) return;
+      if (!organizationId) {
+        setIntegrationInfo(null);
+        setLoading(false);
+        return;
+      }
 
       try {
         const info = await getOrganizationIntegrationInfo(organizationId);
@@ -199,7 +203,7 @@ export function DeveloperQuickStartPanel() {
         <Button
           variant="outlined"
           component={RouterLink}
-          to="/console/deploy/api-keys"
+          to="/console/org/deploy/api-keys"
           startIcon={<VpnKeyIcon />}
           size="small"
         >

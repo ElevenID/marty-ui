@@ -8,7 +8,7 @@
 import { Navigate } from 'react-router-dom';
 
 function DeployPage() {
-  return <Navigate to="/console/deploy/profiles" replace />;
+  return <Navigate to="/console/org/deploy/profiles" replace />;
 }
 
 export default DeployPage;

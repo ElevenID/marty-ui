@@ -56,7 +56,11 @@ export function ApplicantStatsCard() {
 
   useEffect(() => {
     async function fetchStats() {
-      if (!organizationId) return;
+      if (!organizationId) {
+        setStats({ pending: 0, approved: 0, issuable: 0, total: 0 });
+        setLoading(false);
+        return;
+      }
       
       setLoading(true);
       try {
@@ -93,7 +97,7 @@ export function ApplicantStatsCard() {
         </Typography>
         <Button
           component={Link}
-          to="/console/operate/applications"
+          to="/console/org/operate/applications"
           endIcon={<ArrowForwardIcon />}
           size="small"
         >

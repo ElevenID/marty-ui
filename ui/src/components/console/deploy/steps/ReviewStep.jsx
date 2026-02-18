@@ -8,21 +8,15 @@
 import {
   Box,
   Typography,
-  Card,
-  CardContent,
-  Button,
   Chip,
   Grid,
-  FormControlLabel,
-  Switch,
   Divider,
 } from '@mui/material';
-import EditIcon from '@mui/icons-material/Edit';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import SettingsIcon from '@mui/icons-material/Settings';
-import WebhookIcon from '@mui/icons-material/Webhook';
 import { useTranslation } from 'react-i18next';
+import { ReviewSectionCard, ReviewToggleOption, ReviewField } from '../../../common';
 
 const ReviewStep = ({ data, onChange, onEdit }) => {
   const { t } = useTranslation('console');
@@ -49,83 +43,67 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
       </Typography>
 
       {/* Environment */}
-      <Card sx={{ mb: 2 }}>
-        <CardContent>
-          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
-            <Typography variant="h6" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <CheckCircleIcon color="primary" />
-              {t('wizards.deploymentProfile.reviewStep.sections.environment')}
-            </Typography>
-            <Button size="small" startIcon={<EditIcon />} onClick={() => onEdit(0)}>
-              {t('wizards.deploymentProfile.reviewStep.actions.edit')}
-            </Button>
-          </Box>
-
+      <ReviewSectionCard
+        sx={{ mb: 2 }}
+        title={t('wizards.deploymentProfile.reviewStep.sections.environment')}
+        icon={<CheckCircleIcon color="primary" />}
+        onEdit={() => onEdit(0)}
+        editLabel={t('wizards.deploymentProfile.reviewStep.actions.edit')}
+      >
           <Grid container spacing={2}>
             <Grid item xs={12}>
-              <Typography variant="subtitle2" color="text.secondary">
-                {t('wizards.deploymentProfile.reviewStep.fields.profileName')}
-              </Typography>
-              <Typography variant="body1" gutterBottom>
-                {data.name || <em>{t('wizards.deploymentProfile.reviewStep.values.notSet')}</em>}
-              </Typography>
+              <ReviewField
+                label={t('wizards.deploymentProfile.reviewStep.fields.profileName')}
+                value={data.name}
+                placeholder={t('wizards.deploymentProfile.reviewStep.values.notSet')}
+                gutterBottom
+              />
             </Grid>
 
             {data.description && (
               <Grid item xs={12}>
-                <Typography variant="subtitle2" color="text.secondary">
-                  {t('wizards.deploymentProfile.reviewStep.fields.description')}
-                </Typography>
-                <Typography variant="body1" gutterBottom>
-                  {data.description}
-                </Typography>
+                <ReviewField
+                  label={t('wizards.deploymentProfile.reviewStep.fields.description')}
+                  value={data.description}
+                  gutterBottom
+                />
               </Grid>
             )}
 
             <Grid item xs={12} md={6}>
-              <Typography variant="subtitle2" color="text.secondary">
-                {t('wizards.deploymentProfile.reviewStep.fields.environmentType')}
-              </Typography>
-              <Typography variant="body1">
-                {ENV_TYPE_LABELS[data.environment_type] || data.environment_type}
-              </Typography>
+              <ReviewField
+                label={t('wizards.deploymentProfile.reviewStep.fields.environmentType')}
+                value={ENV_TYPE_LABELS[data.environment_type] || data.environment_type}
+              />
             </Grid>
 
             <Grid item xs={12} md={6}>
-              <Typography variant="subtitle2" color="text.secondary">
-                {t('wizards.deploymentProfile.reviewStep.fields.networkMode')}
-              </Typography>
-              <Typography variant="body1">
-                {NETWORK_MODE_LABELS[data.network_mode] || data.network_mode}
-              </Typography>
+              <ReviewField
+                label={t('wizards.deploymentProfile.reviewStep.fields.networkMode')}
+                value={NETWORK_MODE_LABELS[data.network_mode] || data.network_mode}
+              />
             </Grid>
           </Grid>
-        </CardContent>
-      </Card>
+      </ReviewSectionCard>
 
       {/* Runtime Settings */}
-      <Card sx={{ mb: 2 }}>
-        <CardContent>
-          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
-            <Typography variant="h6" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <CloudUploadIcon color="primary" />
-              {t('wizards.deploymentProfile.reviewStep.sections.runtimeSettings')}
-            </Typography>
-            <Button size="small" startIcon={<EditIcon />} onClick={() => onEdit(1)}>
-              {t('wizards.deploymentProfile.reviewStep.actions.edit')}
-            </Button>
-          </Box>
-
+      <ReviewSectionCard
+        sx={{ mb: 2 }}
+        title={t('wizards.deploymentProfile.reviewStep.sections.runtimeSettings')}
+        icon={<CloudUploadIcon color="primary" />}
+        onEdit={() => onEdit(1)}
+        editLabel={t('wizards.deploymentProfile.reviewStep.actions.edit')}
+      >
           <Grid container spacing={2}>
             <Grid item xs={12}>
-              <Typography variant="subtitle2" color="text.secondary">
-                {t('wizards.deploymentProfile.reviewStep.fields.defaultPolicy')}
-              </Typography>
-              <Typography variant="body1" gutterBottom>
-                {data.default_policy_id
+              <ReviewField
+                label={t('wizards.deploymentProfile.reviewStep.fields.defaultPolicy')}
+                value={data.default_policy_id
                   ? t('wizards.deploymentProfile.reviewStep.fields.policyId', { id: data.default_policy_id })
-                  : <em>{t('wizards.deploymentProfile.reviewStep.values.notSelected')}</em>}
-              </Typography>
+                  : undefined}
+                placeholder={t('wizards.deploymentProfile.reviewStep.values.notSelected')}
+                gutterBottom
+              />
             </Grid>
 
             <Grid item xs={12}>
@@ -145,22 +123,16 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
               )}
             </Grid>
           </Grid>
-        </CardContent>
-      </Card>
+      </ReviewSectionCard>
 
       {/* Integration */}
-      <Card sx={{ mb: 3 }}>
-        <CardContent>
-          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
-            <Typography variant="h6" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <SettingsIcon color="primary" />
-              {t('wizards.deploymentProfile.reviewStep.sections.integration')}
-            </Typography>
-            <Button size="small" startIcon={<EditIcon />} onClick={() => onEdit(2)}>
-              {t('wizards.deploymentProfile.reviewStep.actions.edit')}
-            </Button>
-          </Box>
-
+      <ReviewSectionCard
+        sx={{ mb: 3 }}
+        title={t('wizards.deploymentProfile.reviewStep.sections.integration')}
+        icon={<SettingsIcon color="primary" />}
+        onEdit={() => onEdit(2)}
+        editLabel={t('wizards.deploymentProfile.reviewStep.actions.edit')}
+      >
           <Grid container spacing={2}>
             <Grid item xs={12}>
               <Typography variant="subtitle2" color="text.secondary">
@@ -203,70 +175,38 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
             </Grid>
 
             <Grid item xs={12} md={6}>
-              <Typography variant="subtitle2" color="text.secondary">
-                {t('wizards.deploymentProfile.reviewStep.fields.theme')}
-              </Typography>
-              <Typography variant="body1">
-                {data.ux_config?.theme || t('wizards.deploymentProfile.reviewStep.values.defaultTheme')}
-              </Typography>
+              <ReviewField
+                label={t('wizards.deploymentProfile.reviewStep.fields.theme')}
+                value={data.ux_config?.theme || t('wizards.deploymentProfile.reviewStep.values.defaultTheme')}
+              />
             </Grid>
 
             <Grid item xs={12} md={6}>
-              <Typography variant="subtitle2" color="text.secondary">
-                {t('wizards.deploymentProfile.reviewStep.fields.language')}
-              </Typography>
-              <Typography variant="body1">
-                {data.ux_config?.language || t('wizards.deploymentProfile.reviewStep.values.defaultLanguage')}
-              </Typography>
+              <ReviewField
+                label={t('wizards.deploymentProfile.reviewStep.fields.language')}
+                value={data.ux_config?.language || t('wizards.deploymentProfile.reviewStep.values.defaultLanguage')}
+              />
             </Grid>
           </Grid>
-        </CardContent>
-      </Card>
+      </ReviewSectionCard>
 
       <Divider sx={{ my: 3 }} />
 
       {/* Activation Options */}
-      <Box sx={{ p: 2, bgcolor: 'action.hover', borderRadius: 1, mb: 2 }}>
-        <FormControlLabel
-          control={
-            <Switch
-              checked={data.generate_api_key !== false}
-              onChange={(e) => onChange({ generate_api_key: e.target.checked })}
-            />
-          }
-          label={
-            <Box>
-              <Typography variant="subtitle2">
-                {t('wizards.deploymentProfile.reviewStep.activationOptions.generateApiKey.label')}
-              </Typography>
-              <Typography variant="body2" color="text.secondary">
-                {t('wizards.deploymentProfile.reviewStep.activationOptions.generateApiKey.description')}
-              </Typography>
-            </Box>
-          }
-        />
-      </Box>
+      <ReviewToggleOption
+        sx={{ mb: 2 }}
+        checked={data.generate_api_key !== false}
+        onChange={(e) => onChange({ generate_api_key: e.target.checked })}
+        title={t('wizards.deploymentProfile.reviewStep.activationOptions.generateApiKey.label')}
+        description={t('wizards.deploymentProfile.reviewStep.activationOptions.generateApiKey.description')}
+      />
 
-      <Box sx={{ p: 2, bgcolor: 'action.hover', borderRadius: 1 }}>
-        <FormControlLabel
-          control={
-            <Switch
-              checked={data.activate_immediately !== false}
-              onChange={(e) => onChange({ activate_immediately: e.target.checked })}
-            />
-          }
-          label={
-            <Box>
-              <Typography variant="subtitle2">
-                {t('wizards.deploymentProfile.reviewStep.activationOptions.activateImmediately.label')}
-              </Typography>
-              <Typography variant="body2" color="text.secondary">
-                {t('wizards.deploymentProfile.reviewStep.activationOptions.activateImmediately.description')}
-              </Typography>
-            </Box>
-          }
-        />
-      </Box>
+      <ReviewToggleOption
+        checked={data.activate_immediately !== false}
+        onChange={(e) => onChange({ activate_immediately: e.target.checked })}
+        title={t('wizards.deploymentProfile.reviewStep.activationOptions.activateImmediately.label')}
+        description={t('wizards.deploymentProfile.reviewStep.activationOptions.activateImmediately.description')}
+      />
     </Box>
   );
 };

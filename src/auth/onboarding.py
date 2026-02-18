@@ -48,13 +48,12 @@ router = APIRouter(prefix="/api/onboarding", tags=["onboarding"])
 
 
 class OnboardingStatusResponse(BaseModel):
-    """Onboarding status response."""
-    
-    needs_onboarding: bool
-    user_type: str | None = None
+    """Action-readiness status response."""
+
+    ready_for_apply: bool
+    has_organizations: bool
     organization_id: str | None = None
     organization_name: str | None = None
-    completed_at: str | None = None
     pending_request: dict | None = None  # If user has a pending membership request
 
 
@@ -108,11 +107,10 @@ class RequestMembershipResponse(BaseModel):
 
 class CompleteOnboardingRequest(BaseModel):
     """Request to complete onboarding."""
-    
-    user_type: str = Field(..., description="User type: 'applicant' or 'vendor'")
+
     organization_id: str | None = Field(
         None, 
-        description="Organization ID to associate with (for applicants selecting open org)"
+        description="Organization ID to associate with or resume setup for"
     )
     # Vendor new organization fields
     organization_name: str | None = Field(
@@ -148,7 +146,6 @@ class CompleteOnboardingResponse(BaseModel):
     """Response after completing onboarding."""
     
     success: bool
-    user_type: str
     organization_id: str | None = None
     organization_name: str | None = None
     membership_status: str | None = None  # joined, pending_approval, none
@@ -469,7 +466,7 @@ async def auto_accept_email_invites(
             "organization_id": [primary_org_id],
             "organization_name": [primary_org_name or ""],
             "joined_via": ["email_invite"],
-            "onboarding_completed": [datetime.utcnow().isoformat()],
+            "profile_completed_at": [datetime.utcnow().isoformat()],
         }
         await keycloak.update_user_attributes(user_id, attributes)
         await update_session_attributes(
@@ -477,7 +474,7 @@ async def auto_accept_email_invites(
             {
                 "organization_id": primary_org_id,
                 "organization_name": primary_org_name,
-                "onboarding_completed": datetime.utcnow().isoformat(),
+                "profile_completed_at": datetime.utcnow().isoformat(),
                 "organization": org_claim,
             },
         )
@@ -497,17 +494,14 @@ async def get_onboarding_status(
     db: AsyncSession = Depends(get_db_session),
 ) -> OnboardingStatusResponse:
     """
-    Check if the current user needs onboarding.
+    Return person-first action readiness for the current user.
     
     Uses session data stored during login - no Keycloak admin API calls needed.
     
-    A user needs onboarding if:
-    - They don't have an 'onboarding_completed' attribute
-    - They have the default 'applicant' user_type
+    All authenticated users are ready to apply by default.
     """
     user_id = session.get("user_id")
     user_email = session.get("email", "")
-    user_type = session.get("user_type", "applicant")
     
     # Check for pending membership request in database
     pending_request = None
@@ -534,62 +528,11 @@ async def get_onboarding_status(
         logger.warning(f"Error checking pending membership requests: {e}")
     
     try:
-        # Check onboarding status from session attributes (set during login)
-        onboarding_completed = session.get("onboarding_completed")
         organization_id = session.get("organization_id")
         organization_name = session.get("organization_name")
-        roles = session.get("roles", [])
-        is_admin = "administrator" in roles or user_type == "administrator"
-        is_vendor = "vendor" in roles or user_type == "vendor"
-        resolved_user_type = "administrator" if is_admin else "vendor" if is_vendor else user_type
-
-        # Auto-accept email invites for applicants without an org
-        if not organization_id and user_type == "applicant":
-            org_id, org_name, _org_claim = await auto_accept_email_invites(
-                user_id=user_id,
-                user_email=user_email,
-                session_id=session.get("_session_id"),
-                keycloak=keycloak,
-                db=db,
-                existing_org_claim=session.get("organization"),
-            )
-            if org_id:
-                organization_id = org_id
-                organization_name = org_name
-                onboarding_completed = onboarding_completed or datetime.utcnow().isoformat()
-        
-        if onboarding_completed:
-            return OnboardingStatusResponse(
-                needs_onboarding=False,
-                user_type=resolved_user_type,
-                organization_id=organization_id,
-                organization_name=organization_name,
-                completed_at=onboarding_completed,
-                pending_request=pending_request,
-            )
-        
-        if is_admin:
-            return OnboardingStatusResponse(
-                needs_onboarding=False,
-                user_type="administrator",
-                organization_id=organization_id,
-                organization_name=organization_name,
-                pending_request=pending_request,
-            )
-
-        if is_vendor:
-            return OnboardingStatusResponse(
-                needs_onboarding=True,
-                user_type="vendor",
-                organization_id=organization_id,
-                organization_name=organization_name,
-                pending_request=pending_request,
-            )
-        
-        # New users without onboarding_completed need onboarding
         return OnboardingStatusResponse(
-            needs_onboarding=True,
-            user_type=resolved_user_type,
+            ready_for_apply=True,
+            has_organizations=bool(organization_id),
             organization_id=organization_id,
             organization_name=organization_name,
             pending_request=pending_request,
@@ -810,7 +753,7 @@ async def join_with_invite_code(
             "organization_id": [org_id],
             "organization_name": [org_name],
             "joined_via": ["invite_code"],
-            "onboarding_completed": [datetime.utcnow().isoformat()],
+            "profile_completed_at": [datetime.utcnow().isoformat()],
         }
         await keycloak.update_user_attributes(user_id, attributes)
         await use_invite_code(request_data.invite_code, db)
@@ -819,7 +762,7 @@ async def join_with_invite_code(
             {
                 "organization_id": org_id,
                 "organization_name": org_name,
-                "onboarding_completed": datetime.utcnow().isoformat(),
+                "profile_completed_at": datetime.utcnow().isoformat(),
                 "organization": org_claim,
             },
         )
@@ -947,33 +890,28 @@ async def complete_onboarding(
     """
     Complete the onboarding process.
     
-    For applicants:
-    - Optionally associate with a vendor organization (if open/approval mode)
-    - Keep the 'applicant' role
-    
-    For vendors:
-    - Switch role from 'applicant' to 'vendor'
-    - Create new organization with specified settings
-    - Set as organization owner
+    Action-driven flow:
+    - Organization setup/resume when creating or configuring an org
+    - Organization join when selecting an existing org with confirmation
+    - Otherwise mark profile completion for applicant-first experience
     """
     user_id = session.get("user_id")
     user_email = session.get("email", "")
     session_id = session.get("_session_id")
-    
-    if request_data.user_type not in ("applicant", "vendor"):
-        raise HTTPException(
-            status_code=400, 
-            detail="Invalid user type. Must be 'applicant' or 'vendor'"
-        )
     
     try:
         org_id = None
         org_name = None
         membership_status = "none"
         invite_code = None
+
+        setup_mode = bool(request_data.organization_name) or bool(
+            request_data.organization_id and not request_data.confirm_organization
+        )
+        join_mode = bool(request_data.organization_id and request_data.confirm_organization)
         
-        if request_data.user_type == "vendor":
-            # Vendor flow: create or complete organization setup
+        if setup_mode:
+            # Organization owner flow: create or complete organization setup
             if request_data.organization_id:
                 org_id = request_data.organization_id
                 session_org_id = session.get("organization_id")
@@ -983,7 +921,7 @@ async def complete_onboarding(
                 logger.info(f"  - Requested org_id: {org_id}")
                 logger.info(f"  - Session org_id: {session_org_id}")
                 logger.info(f"  - User ID: {user_id}")
-                logger.info(f"  - Session has onboarding_completed: {session.get('onboarding_completed') is not None}")
+                logger.info(f"  - Session has profile_completed_at: {session.get('profile_completed_at') is not None}")
                 
                 # Check authorization: allow if session org_id matches
                 if session_org_id and session_org_id != org_id:
@@ -1102,23 +1040,14 @@ async def complete_onboarding(
 
                 membership_status = "owner"
 
-            # Update role from applicant to vendor if needed
+            # Ensure user has owner/vendor capabilities through role assignment
             current_roles = session.get("roles", []) or []
             if "vendor" not in current_roles:
                 await keycloak.add_user_role(user_id, "vendor")
-            if "applicant" in current_roles:
-                await keycloak.remove_user_role(user_id, "applicant")
-            
-        elif request_data.user_type == "applicant":
-            # Applicant flow
+
+        elif join_mode:
+            # Membership join/request flow
             if request_data.organization_id:
-                # Require explicit confirmation
-                if not request_data.confirm_organization:
-                    raise HTTPException(
-                        status_code=400,
-                        detail="Please confirm your organization selection"
-                    )
-                
                 org_id = request_data.organization_id
                 settings = await get_org_settings(org_id, db)
                 
@@ -1156,14 +1085,13 @@ async def complete_onboarding(
         
         org_id_for_attributes = org_id
         org_name_for_attributes = org_name
-        if request_data.user_type == "applicant" and membership_status == "pending_approval":
+        if join_mode and membership_status == "pending_approval":
             org_id_for_attributes = None
             org_name_for_attributes = None
 
         # Update user attributes
         attributes = {
-            "user_type": [request_data.user_type],
-            "onboarding_completed": [datetime.utcnow().isoformat()],
+            "profile_completed_at": [datetime.utcnow().isoformat()],
         }
         if org_id_for_attributes:
             attributes["organization_id"] = [org_id_for_attributes]
@@ -1171,12 +1099,10 @@ async def complete_onboarding(
             attributes["organization_name"] = [org_name_for_attributes]
         
         await keycloak.update_user_attributes(user_id, attributes)
-        
-        updated_roles = None
-        if request_data.user_type == "vendor":
-            updated_roles = list({*(session.get("roles", []) or []), "vendor"} - {"applicant"})
-        elif request_data.user_type == "applicant":
-            updated_roles = list({*(session.get("roles", []) or []), "applicant"})
+
+        updated_roles = list({*(session.get("roles", []) or []), "applicant"})
+        if setup_mode:
+            updated_roles = list({*updated_roles, "vendor"})
 
         org_claim = (
             merge_org_claim(session.get("organization"), org_id_for_attributes, org_name_for_attributes)
@@ -1186,17 +1112,16 @@ async def complete_onboarding(
         await update_session_attributes(
             session_id,
             {
-                "user_type": request_data.user_type,
                 "organization_id": org_id_for_attributes or None,
                 "organization_name": org_name_for_attributes or None,
-                "onboarding_completed": datetime.utcnow().isoformat(),
+                "profile_completed_at": datetime.utcnow().isoformat(),
                 "roles": updated_roles or session.get("roles", []),
                 "organization": org_claim,
             },
         )
         
         # Build response message
-        if request_data.user_type == "vendor":
+        if setup_mode:
             if request_data.organization_id:
                 message = f"Organization setup complete. Your invite code is: {invite_code}"
             else:
@@ -1210,12 +1135,11 @@ async def complete_onboarding(
         
         logger.info(
             f"Completed onboarding for {user_email}: "
-            f"type={request_data.user_type}, org={org_name}, status={membership_status}"
+            f"mode={'setup' if setup_mode else 'join' if join_mode else 'profile'}, org={org_name}, status={membership_status}"
         )
         
         return CompleteOnboardingResponse(
             success=True,
-            user_type=request_data.user_type,
             organization_id=org_id,
             organization_name=org_name,
             membership_status=membership_status,
@@ -1814,7 +1738,7 @@ async def accept_invitation(
             "organization_id": [org_id],
             "organization_name": [org_name],
             "joined_via": ["invite_link"],
-            "onboarding_completed": [datetime.utcnow().isoformat()],
+            "profile_completed_at": [datetime.utcnow().isoformat()],
         }
         
         try:
@@ -1828,7 +1752,7 @@ async def accept_invitation(
             {
                 "organization_id": org_id,
                 "organization_name": org_name,
-                "onboarding_completed": datetime.utcnow().isoformat(),
+                "profile_completed_at": datetime.utcnow().isoformat(),
                 "organization": org_claim,
                 "roles": [role.value],
             },
@@ -2015,7 +1939,7 @@ async def join_domain_organization(
                 "organization_id": [organization.id],
                 "organization_name": [organization.name],
                 "joined_via": ["email_domain"],
-                "onboarding_completed": [datetime.utcnow().isoformat()],
+                "profile_completed_at": [datetime.utcnow().isoformat()],
             }
             
             try:
@@ -2029,7 +1953,7 @@ async def join_domain_organization(
                 {
                     "organization_id": organization.id,
                     "organization_name": organization.name,
-                    "onboarding_completed": datetime.utcnow().isoformat(),
+                    "profile_completed_at": datetime.utcnow().isoformat(),
                     "organization": org_claim,
                     "roles": [member_role.value],
                 },

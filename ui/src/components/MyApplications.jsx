@@ -83,7 +83,7 @@ function MyApplications() {
         throw new Error('Applicant profile not found');
       }
 
-      const response = await fetch(`/v1/applicants/${applicantId}/applications`, {
+      const response = await fetch(`/v1/applicants/profiles/${applicantId}/applications`, {
         credentials: 'include',
       });
 

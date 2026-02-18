@@ -10,7 +10,7 @@ The table definitions are separated from repository implementations to:
 3. Enable schema autogeneration without importing business logic
 """
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Table, Text
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Table, Text
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID as PostgresUUID
 from sqlalchemy.orm import registry
 
@@ -43,6 +43,9 @@ organizations_table = Table(
     Column("contact_phone", String(50)),
     Column("website", String(1024)),
     Column("settings", JSONB),
+    Column("join_mechanism", String(50), nullable=False, default="invite"),
+    Column("requires_approval", Boolean, nullable=False, default=False),
+    Column("is_discoverable", Boolean, nullable=False, default=False),
     schema=SCHEMA,
 )
 
@@ -88,11 +91,107 @@ api_keys_table = Table(
 )
 
 
+# Console Context Preferences table
+console_context_preferences_table = Table(
+    "console_context_preferences",
+    mapper_registry.metadata,
+    Column("id", PostgresUUID(as_uuid=True), primary_key=True),
+    Column("user_id", String(255), nullable=False, unique=True),  # Unique constraint on user_id
+    Column("last_view_mode", String(50), nullable=False, default="applicant"),
+    Column("last_active_org_id", PostgresUUID(as_uuid=True)),  # Nullable
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    schema=SCHEMA,
+)
+
+
+# Join Codes table
+join_codes_table = Table(
+    "join_codes",
+    mapper_registry.metadata,
+    Column("id", PostgresUUID(as_uuid=True), primary_key=True),
+    Column("organization_id", PostgresUUID(as_uuid=True), ForeignKey(f"{SCHEMA}.organizations.id"), nullable=False),
+    Column("code", String(8), nullable=False, unique=True),  # 8-character alphanumeric code
+    Column("created_by", String(36), nullable=False),
+    Column("expires_at", DateTime(timezone=True)),  # Nullable - optional expiration
+    Column("max_uses", Integer),  # Nullable - optional use limit
+    Column("use_count", Integer, nullable=False, default=0),
+    Column("is_active", Boolean, nullable=False, default=True),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    schema=SCHEMA,
+)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# RBAC Tables
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Permissions catalog (global reference table)
+permissions_table = Table(
+    "permissions",
+    mapper_registry.metadata,
+    Column("id", PostgresUUID(as_uuid=True), primary_key=True),
+    Column("resource", String(100), nullable=False),
+    Column("action", String(100), nullable=False),
+    Column("description", Text),
+    schema=SCHEMA,
+)
+
+
+# Roles (per-organization)
+roles_table = Table(
+    "roles",
+    mapper_registry.metadata,
+    Column("id", PostgresUUID(as_uuid=True), primary_key=True),
+    Column("organization_id", PostgresUUID(as_uuid=True),
+           ForeignKey(f"{SCHEMA}.organizations.id", ondelete="CASCADE"), nullable=False),
+    Column("name", String(100), nullable=False),
+    Column("display_name", String(255)),
+    Column("description", Text),
+    Column("is_system", Boolean, nullable=False, default=False),
+    Column("is_default_for_new_members", Boolean, nullable=False, default=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    schema=SCHEMA,
+)
+
+
+# Role ↔ Permission many-to-many
+role_permissions_table = Table(
+    "role_permissions",
+    mapper_registry.metadata,
+    Column("role_id", PostgresUUID(as_uuid=True),
+           ForeignKey(f"{SCHEMA}.roles.id", ondelete="CASCADE"), primary_key=True),
+    Column("permission_id", PostgresUUID(as_uuid=True),
+           ForeignKey(f"{SCHEMA}.permissions.id", ondelete="CASCADE"), primary_key=True),
+    schema=SCHEMA,
+)
+
+
+# Member ↔ Role many-to-many
+member_roles_table = Table(
+    "member_roles",
+    mapper_registry.metadata,
+    Column("member_id", PostgresUUID(as_uuid=True),
+           ForeignKey(f"{SCHEMA}.members.id", ondelete="CASCADE"), primary_key=True),
+    Column("role_id", PostgresUUID(as_uuid=True),
+           ForeignKey(f"{SCHEMA}.roles.id", ondelete="CASCADE"), primary_key=True),
+    schema=SCHEMA,
+)
+
+
 # Export metadata for Alembic migrations
 __all__ = [
     "mapper_registry",
     "organizations_table",
     "members_table",
     "api_keys_table",
+    "console_context_preferences_table",
+    "join_codes_table",
+    "permissions_table",
+    "roles_table",
+    "role_permissions_table",
+    "member_roles_table",
     "SCHEMA",
 ]

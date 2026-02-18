@@ -76,7 +76,7 @@ function CreateTemplateDrawer({ open, onClose, onSuccess }) {
       onSubmit={handleSubmit}
       title={t('createTemplateDrawer.title')}
       resourceType="template"
-      advancedPath="/console/templates/new"
+      advancedPath="/console/org/templates/new"
       fields={fields}
       initialData={{
         name: '',

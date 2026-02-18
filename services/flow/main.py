@@ -30,7 +30,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, AsyncGenerator
 
-from fastapi import APIRouter, Depends, FastAPI, Form, HTTPException, Query
+from fastapi import APIRouter, Depends, FastAPI, Form, Header, HTTPException, Query, Request
 from fastapi.responses import Response
 from jose import jwt, jwk
 from jose.constants import ALGORITHMS
@@ -40,7 +40,16 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+from typing import Annotated
 
+from marty_common import (
+    OrganizationClient,
+    OrganizationContext,
+    require_org_admin,
+    require_org_membership,
+)
+from marty_common.org_authorization import get_organization_client
+from marty_common.middleware import RequestIdMiddleware, RequestLoggingMiddleware
 from flow.infrastructure.adapters import PostgresFlowRepository
 
 logging.basicConfig(level=logging.INFO)
@@ -621,6 +630,11 @@ def get_repo() -> InMemoryFlowRepository:
     return _repo
 
 
+def get_current_user_id(x_user_id: Annotated[str, Header()]) -> str:
+    """Extract user ID from X-User-Id header (injected by gateway)."""
+    return x_user_id
+
+
 # =============================================================================
 # Helper Functions
 # =============================================================================
@@ -818,9 +832,17 @@ async def _create_oid4vci_artifact(
 @router.post("/definitions", response_model=FlowDefinitionResponse)
 async def create_flow_definition(
     request: CreateFlowDefinitionRequest,
+    fastapi_request: Request,
+    user_id: str = Depends(get_current_user_id),
     repo: InMemoryFlowRepository = Depends(get_repo),
 ) -> FlowDefinitionResponse:
     """Create a new Flow Definition."""
+    # Verify org membership
+    org_client = await get_organization_client(fastapi_request)
+    membership = await org_client.get_membership(user_id, request.organization_id)
+    if not membership or not membership.is_active():
+        raise HTTPException(status_code=403, detail="Not a member of this organization")
+    
     flow = FlowDefinition(
         organization_id=request.organization_id,
         name=request.name,
@@ -878,9 +900,12 @@ async def create_flow_definition(
 @router.get("/definitions", response_model=list[FlowDefinitionResponse])
 async def list_flow_definitions(
     organization_id: str = Query(..., description="Organization ID"),
+    user_id: str = Depends(get_current_user_id),
     repo: InMemoryFlowRepository = Depends(get_repo),
 ) -> list[FlowDefinitionResponse]:
     """List Flow Definitions for an organization."""
+    # Verify org membership
+    await app.state.org_client.get_membership(user_id, organization_id)
     flows = await repo.list_definitions(organization_id)
     return [_definition_to_response(f) for f in flows]
 
@@ -888,24 +913,33 @@ async def list_flow_definitions(
 @router.get("/definitions/{flow_id}", response_model=FlowDefinitionResponse)
 async def get_flow_definition(
     flow_id: str,
+    user_id: str = Depends(get_current_user_id),
     repo: InMemoryFlowRepository = Depends(get_repo),
 ) -> FlowDefinitionResponse:
     """Get a Flow Definition by ID."""
     flow = await repo.get_definition(flow_id)
     if not flow:
         raise HTTPException(status_code=404, detail="Flow Definition not found")
+    # Verify org membership
+    await app.state.org_client.get_membership(user_id, flow.organization_id)
     return _definition_to_response(flow)
 
 
 @router.post("/definitions/{flow_id}/activate", response_model=FlowDefinitionResponse)
 async def activate_flow_definition(
     flow_id: str,
+    user_id: str = Depends(get_current_user_id),
     repo: InMemoryFlowRepository = Depends(get_repo),
 ) -> FlowDefinitionResponse:
-    """Activate a Flow Definition."""
+    """Activate a Flow Definition (requires admin)."""
     flow = await repo.get_definition(flow_id)
     if not flow:
         raise HTTPException(status_code=404, detail="Flow Definition not found")
+    
+    # Verify admin access
+    membership = await app.state.org_client.get_membership(user_id, flow.organization_id)
+    if not membership.has_role("admin", "owner"):
+        raise HTTPException(status_code=403, detail="Admin access required")
     
     if not flow.steps:
         raise HTTPException(status_code=400, detail="Flow must have at least one step")
@@ -918,11 +952,20 @@ async def activate_flow_definition(
 @router.delete("/definitions/{flow_id}")
 async def delete_flow_definition(
     flow_id: str,
+    user_id: str = Depends(get_current_user_id),
     repo: InMemoryFlowRepository = Depends(get_repo),
 ) -> dict:
-    """Delete a Flow Definition (only drafts)."""
+    """Delete a Flow Definition (only drafts, requires admin)."""
     flow = await repo.get_definition(flow_id)
-    if flow and flow.status != FlowStatus.DRAFT:
+    if not flow:
+        raise HTTPException(status_code=404, detail="Flow Definition not found")
+    
+    # Verify admin access
+    membership = await app.state.org_client.get_membership(user_id, flow.organization_id)
+    if not membership.has_role("admin", "owner"):
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    if flow.status != FlowStatus.DRAFT:
         raise HTTPException(status_code=400, detail="Only draft flows can be deleted")
     await repo.delete_definition(flow_id)
     return {"success": True}
@@ -932,12 +975,16 @@ async def delete_flow_definition(
 @router.post("/instances", response_model=FlowInstanceResponse)
 async def start_flow(
     request: StartFlowRequest,
+    user_id: str = Depends(get_current_user_id),
     repo: InMemoryFlowRepository = Depends(get_repo),
 ) -> FlowInstanceResponse:
     """Start a new Flow Instance."""
     flow_def = await repo.get_definition(request.flow_definition_id)
     if not flow_def:
         raise HTTPException(status_code=404, detail="Flow Definition not found")
+    
+    # Verify org membership
+    await app.state.org_client.get_membership(user_id, flow_def.organization_id)
     
     if flow_def.status != FlowStatus.ACTIVE:
         raise HTTPException(status_code=400, detail="Flow Definition is not active")
@@ -983,9 +1030,12 @@ async def list_flow_instances(
     organization_id: str = Query(..., description="Organization ID"),
     flow_definition_id: str | None = Query(None, description="Filter by flow definition"),
     status: str | None = Query(None, description="Filter by status"),
+    user_id: str = Depends(get_current_user_id),
     repo: InMemoryFlowRepository = Depends(get_repo),
 ) -> list[FlowInstanceResponse]:
     """List Flow Instances."""
+    # Verify org membership
+    await app.state.org_client.get_membership(user_id, organization_id)
     status_filter = FlowInstanceStatus(status) if status else None
     instances = await repo.list_instances(organization_id, flow_definition_id, status_filter)
     return [_instance_to_response(i) for i in instances]
@@ -994,12 +1044,15 @@ async def list_flow_instances(
 @router.get("/instances/{instance_id}", response_model=FlowInstanceResponse)
 async def get_flow_instance(
     instance_id: str,
+    user_id: str = Depends(get_current_user_id),
     repo: InMemoryFlowRepository = Depends(get_repo),
 ) -> FlowInstanceResponse:
     """Get a Flow Instance by ID."""
     instance = await repo.get_instance(instance_id)
     if not instance:
         raise HTTPException(status_code=404, detail="Flow Instance not found")
+    # Verify org membership
+    await app.state.org_client.get_membership(user_id, instance.organization_id)
     return _instance_to_response(instance)
 
 
@@ -1007,12 +1060,16 @@ async def get_flow_instance(
 async def advance_flow(
     instance_id: str,
     request: AdvanceFlowRequest,
+    user_id: str = Depends(get_current_user_id),
     repo: InMemoryFlowRepository = Depends(get_repo),
 ) -> FlowInstanceResponse:
     """Advance a Flow Instance to the next step."""
     instance = await repo.get_instance(instance_id)
     if not instance:
         raise HTTPException(status_code=404, detail="Flow Instance not found")
+    
+    # Verify org membership
+    await app.state.org_client.get_membership(user_id, instance.organization_id)
     
     if instance.status not in [FlowInstanceStatus.IN_PROGRESS, FlowInstanceStatus.WAITING]:
         raise HTTPException(status_code=400, detail=f"Cannot advance flow in {instance.status} status")
@@ -1087,12 +1144,16 @@ async def advance_flow(
 @router.post("/instances/{instance_id}/cancel", response_model=FlowInstanceResponse)
 async def cancel_flow(
     instance_id: str,
+    user_id: str = Depends(get_current_user_id),
     repo: InMemoryFlowRepository = Depends(get_repo),
 ) -> FlowInstanceResponse:
     """Cancel a Flow Instance."""
     instance = await repo.get_instance(instance_id)
     if not instance:
         raise HTTPException(status_code=404, detail="Flow Instance not found")
+    
+    # Verify org membership
+    await app.state.org_client.get_membership(user_id, instance.organization_id)
     
     if instance.status in [FlowInstanceStatus.COMPLETED, FlowInstanceStatus.CANCELLED]:
         raise HTTPException(status_code=400, detail="Flow already ended")
@@ -1112,12 +1173,16 @@ async def cancel_flow(
 @router.get("/instances/{instance_id}/artifacts", response_model=list[FlowInstanceArtifactResponse])
 async def list_flow_instance_artifacts(
     instance_id: str,
+    user_id: str = Depends(get_current_user_id),
     repo: InMemoryFlowRepository = Depends(get_repo),
 ) -> list[FlowInstanceArtifactResponse]:
     """Get all artifacts (QR codes, offers, etc.) for a flow instance."""
     instance = await repo.get_instance(instance_id)
     if not instance:
         raise HTTPException(status_code=404, detail="Flow Instance not found")
+    
+    # Verify org membership
+    await app.state.org_client.get_membership(user_id, instance.organization_id)
     
     artifacts = await repo.list_artifacts(instance_id)
     return [_artifact_to_response(a) for a in artifacts]
@@ -1127,6 +1192,7 @@ async def list_flow_instance_artifacts(
 async def get_flow_instance_artifact(
     instance_id: str,
     artifact_id: str,
+    user_id: str = Depends(get_current_user_id),
     repo: InMemoryFlowRepository = Depends(get_repo),
 ) -> FlowInstanceArtifactResponse:
     """Get a specific artifact by ID."""
@@ -1134,18 +1200,28 @@ async def get_flow_instance_artifact(
     if not artifact or artifact.flow_instance_id != instance_id:
         raise HTTPException(status_code=404, detail="Artifact not found")
     
+    # Verify org membership via instance
+    instance = await repo.get_instance(instance_id)
+    if not instance:
+        raise HTTPException(status_code=404, detail="Flow Instance not found")
+    await app.state.org_client.get_membership(user_id, instance.organization_id)
+    
     return _artifact_to_response(artifact)
 
 
 @router.post("/instances/{instance_id}/generate-qr", response_model=FlowInstanceArtifactResponse)
 async def generate_qr_code(
     instance_id: str,
+    user_id: str = Depends(get_current_user_id),
     repo: InMemoryFlowRepository = Depends(get_repo),
 ) -> FlowInstanceArtifactResponse:
     """Manually generate a new QR code / credential offer for an OID4VCI flow instance."""
     instance = await repo.get_instance(instance_id)
     if not instance:
         raise HTTPException(status_code=404, detail="Flow Instance not found")
+    
+    # Verify org membership
+    await app.state.org_client.get_membership(user_id, instance.organization_id)
     
     flow_def = await repo.get_definition(instance.flow_definition_id)
     if not flow_def:
@@ -1220,6 +1296,7 @@ class VerificationResultResponse(BaseModel):
 @router.post("/verify", response_model=VerificationRequestResponse)
 async def start_verification_flow(
     request: StartVerificationFlowRequest,
+    user_id: str = Depends(get_current_user_id),
     repo: InMemoryFlowRepository = Depends(get_repo),
 ) -> VerificationRequestResponse:
     """
@@ -1676,6 +1753,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     _repo = PostgresFlowRepository(session_factory)
     logger.info("PostgreSQL adapter initialized for flow service")
     
+    # Initialize OrganizationClient (no Redis at service level - gateway handles caching)
+    org_service_url = os.environ.get("ORGANIZATION_SERVICE_URL", "http://organization:8002")
+    app.state.org_client = OrganizationClient(
+        base_url=org_service_url,
+        redis_client=None,
+    )
+    
     yield
     
     logger.info(f"Shutting down {SERVICE_NAME}...")
@@ -1703,6 +1787,8 @@ For orchestrating multi-step credential journeys (issuance, renewal, revocation)
         lifespan=lifespan,
     )
     
+    app.add_middleware(RequestLoggingMiddleware)
+    app.add_middleware(RequestIdMiddleware)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],

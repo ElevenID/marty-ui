@@ -12,3 +12,7 @@ export { default as ResourceCreateDrawer } from './ResourceCreateDrawer';
 export { default as PermissionTooltip } from './PermissionTooltip';
 export { default as PreviewModeBanner } from './PreviewModeBanner';
 export { default as LanguageSwitcher } from './LanguageSwitcher';
+export { default as ReviewSectionCard } from './ReviewSectionCard';
+export { default as ReviewToggleOption } from './ReviewToggleOption';
+export { default as ReviewActivationCard } from './ReviewActivationCard';
+export { default as ReviewField } from './ReviewField';

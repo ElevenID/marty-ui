@@ -12,6 +12,7 @@ import ErrorIcon from '@mui/icons-material/Error';
 import PendingIcon from '@mui/icons-material/Pending';
 import DraftsIcon from '@mui/icons-material/Drafts';
 import BlockIcon from '@mui/icons-material/Block';
+import SendIcon from '@mui/icons-material/Send';
 
 /**
  * Status configurations for different resource types
@@ -24,9 +25,14 @@ const getStatusConfigs = (t) => ({
   pending: { label: t('status.pending'), color: 'warning', icon: PendingIcon },
   
   // Application-specific statuses
+  submitted: { label: t('status.submitted'), color: 'info', icon: PendingIcon },
+  under_review: { label: t('status.underReview'), color: 'warning', icon: PendingIcon },
+  needs_info: { label: t('status.needsInfo'), color: 'info', icon: WarningIcon },
+  vetting_in_progress: { label: t('status.vettingInProgress'), color: 'warning', icon: PendingIcon },
   pending_review: { label: t('status.pendingReview'), color: 'warning', icon: PendingIcon },
   documents_pending: { label: t('status.documentsPending'), color: 'info', icon: PendingIcon },
   approved: { label: t('status.approved'), color: 'success', icon: CheckCircleIcon },
+  offer_generated: { label: t('status.offerGenerated'), color: 'info', icon: SendIcon },
   rejected: { label: t('status.rejected'), color: 'error', icon: ErrorIcon },
   verification_failed: { label: t('status.verificationFailed'), color: 'error', icon: WarningIcon },
   

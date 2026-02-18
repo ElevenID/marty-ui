@@ -1,134 +1,97 @@
 /**
  * Permissions System
  * 
- * Defines role-based access control (RBAC) for the application.
+ * Organization-scoped Role-Based Access Control (RBAC).
  * 
- * Roles:
- * - admin: Organization administrator (full access)
- * - dev: Developer (create/edit resources, no team management)
- * - operator: Operator (view-only, can manage flows and issuance)
+ * Permissions are loaded from the backend via GET /v1/organizations/{id}/members/me/permissions
+ * and stored as a flat set of "resource:action" keys (e.g. "credential-template:create").
  * 
- * Resources:
- * - trust: Trust profiles, trusted issuers, revocation
- * - template: Credential templates, application templates
- * - policy: Presentation policies, compliance profiles
- * - deployment: Deployment profiles, API keys, webhooks
- * - flow: Flow definitions and instances
- * - issuance: Credential issuance
- * - team: Team members, invites, roles
- * - audit: Audit logs
- * - org: Organization settings
- * - signing-key: Signing keys management
+ * This module provides helpers for checking permissions against the loaded set.
  * 
- * Actions:
- * - view: View resource details and lists
- * - create: Create new resources
- * - edit: Edit existing resources
- * - delete: Delete resources
- * - execute: Execute actions (e.g., issue credentials, rotate keys)
+ * System Roles:
+ * - owner: Full access + transfer ownership
+ * - admin: Full access to all resources and settings
+ * - member: Can create and manage resources; no team/org/role management
+ * - viewer: Read-only access
+ * 
+ * Organizations can also create custom roles with arbitrary permission subsets.
  */
 
-// Wildcard permission
-const ALL = '*';
-
 /**
- * Permission matrix defining what each role can do
- */
-export const PERMISSIONS = {
-  admin: {
-    view: [ALL],
-    create: [ALL],
-    edit: [ALL],
-    delete: [ALL],
-    execute: [ALL],
-  },
-  dev: {
-    view: [ALL],
-    create: [
-      'trust',
-      'template',
-      'policy',
-      'deployment',
-      'flow',
-    ],
-    edit: [
-      'trust',
-      'template',
-      'policy',
-      'deployment',
-      'flow',
-    ],
-    delete: [
-      'template',
-      'policy',
-      'flow',
-    ],
-    execute: [
-      'flow',
-    ],
-  },
-  operator: {
-    view: [
-      'flow',
-      'issuance',
-      'audit',
-      'deployment',
-      'template',
-      'policy',
-    ],
-    create: [
-      'issuance',
-      'flow', // can start flow instances
-    ],
-    edit: [],
-    delete: [],
-    execute: [
-      'flow',
-      'issuance',
-    ],
-  },
-};
-
-/**
- * Check if a role has permission for a resource and action
+ * Check if a permission set includes a specific resource:action
  * 
- * @param {string} role - User role (admin, dev, operator)
+ * @param {Set<string>|string[]} permissions - The user's permission set
+ * @param {string} resource - Resource type (e.g. "credential-template")
+ * @param {string} action - Action type (e.g. "create")
+ * @returns {boolean} Whether the permission is granted
+ */
+export function hasPermission(permissions, resource, action) {
+  if (!permissions || !resource || !action) {
+    return false;
+  }
+  const key = `${resource}:${action}`;
+  if (permissions instanceof Set) {
+    return permissions.has(key);
+  }
+  if (Array.isArray(permissions)) {
+    return permissions.includes(key);
+  }
+  return false;
+}
+
+/**
+ * Check if permissions include ANY of the given resource:action pairs
+ * 
+ * @param {Set<string>|string[]} permissions - The user's permission set
+ * @param {Array<{resource: string, action: string}>} checks - Permissions to check
+ * @returns {boolean}
+ */
+export function hasAnyPermission(permissions, checks) {
+  if (!permissions || !checks || checks.length === 0) return false;
+  return checks.some(({ resource, action }) => hasPermission(permissions, resource, action));
+}
+
+/**
+ * Check if permissions include ALL of the given resource:action pairs
+ * 
+ * @param {Set<string>|string[]} permissions - The user's permission set
+ * @param {Array<{resource: string, action: string}>} checks - Permissions to check
+ * @returns {boolean}
+ */
+export function hasAllPermissions(permissions, checks) {
+  if (!permissions || !checks || checks.length === 0) return false;
+  return checks.every(({ resource, action }) => hasPermission(permissions, resource, action));
+}
+
+/**
+ * Check if the user can access a resource in any way (any action)
+ * 
+ * @param {Set<string>|string[]} permissions - The user's permission set
  * @param {string} resource - Resource type
- * @param {string} action - Action type (view, create, edit, delete, execute)
- * @returns {boolean} - Whether the role has permission
+ * @returns {boolean}
  */
-export function hasPermission(role, resource, action) {
-  if (!role || !resource || !action) {
+export function canAccessResource(permissions, resource) {
+  if (!permissions || !resource) return false;
+  const prefix = `${resource}:`;
+  if (permissions instanceof Set) {
+    for (const p of permissions) {
+      if (p.startsWith(prefix)) return true;
+    }
     return false;
   }
-
-  const rolePermissions = PERMISSIONS[role];
-  if (!rolePermissions) {
-    return false;
+  if (Array.isArray(permissions)) {
+    return permissions.some(p => p.startsWith(prefix));
   }
-
-  const allowedResources = rolePermissions[action];
-  if (!allowedResources) {
-    return false;
-  }
-
-  // Check for wildcard permission
-  if (allowedResources.includes(ALL)) {
-    return true;
-  }
-
-  // Check for specific resource permission
-  return allowedResources.includes(resource);
+  return false;
 }
 
 /**
  * Get user-friendly message for permission denial
  * 
- * @param {string} role - User role
  * @param {string} action - Action attempted
  * @returns {string} - User-friendly message
  */
-export function getPermissionDeniedMessage(role, action) {
+export function getPermissionDeniedMessage(action) {
   const actionLabels = {
     view: 'view',
     create: 'create',
@@ -137,62 +100,34 @@ export function getPermissionDeniedMessage(role, action) {
     execute: 'perform',
   };
 
-  const roleLabels = {
-    admin: 'Administrator',
-    dev: 'Developer',
-    operator: 'Operator',
-  };
-
-  return `You don't have permission to ${actionLabels[action] || action} this resource. Your role is ${roleLabels[role] || role}. Contact an administrator to request access.`;
-}
-
-/**
- * Get all permissions for a role
- * 
- * @param {string} role - User role
- * @returns {Object} - All permissions for the role
- */
-export function getRolePermissions(role) {
-  return PERMISSIONS[role] || {
-    view: [],
-    create: [],
-    edit: [],
-    delete: [],
-    execute: [],
-  };
-}
-
-/**
- * Check if role can perform any action on a resource
- * 
- * @param {string} role - User role
- * @param {string} resource - Resource type
- * @returns {boolean} - Whether the role can interact with the resource at all
- */
-export function canAccessResource(role, resource) {
-  return (
-    hasPermission(role, resource, 'view') ||
-    hasPermission(role, resource, 'create') ||
-    hasPermission(role, resource, 'edit') ||
-    hasPermission(role, resource, 'delete') ||
-    hasPermission(role, resource, 'execute')
-  );
+  return `You don't have permission to ${actionLabels[action] || action} this resource. Contact an administrator to request access.`;
 }
 
 /**
  * Resource display names for user-facing messages
  */
 export const RESOURCE_LABELS = {
-  trust: 'Trust Profiles',
-  template: 'Templates',
-  policy: 'Policies',
-  deployment: 'Deployment Profiles',
-  flow: 'Flows',
+  'trust-profile': 'Trust Profiles',
+  'trusted-issuer': 'Trusted Issuers',
+  'credential-template': 'Credential Templates',
+  'compliance-profile': 'Compliance Profiles',
+  'presentation-policy': 'Presentation Policies',
+  'revocation-profile': 'Revocation Profiles',
+  'deployment-profile': 'Deployment Profiles',
+  'flow-definition': 'Flow Definitions',
+  'flow-instance': 'Flow Instances',
   issuance: 'Issuance',
+  'application-template': 'Application Templates',
+  application: 'Applications',
+  organization: 'Organization Settings',
   team: 'Team Management',
-  audit: 'Audit Logs',
-  org: 'Organization Settings',
+  role: 'Role Management',
+  'api-key': 'API Keys',
   'signing-key': 'Signing Keys',
+  webhook: 'Webhooks',
+  notification: 'Notifications',
+  audit: 'Audit Logs',
+  verification: 'Verification',
 };
 
 /**

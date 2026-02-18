@@ -27,6 +27,13 @@ function NotificationBell() {
   const [anchorEl, setAnchorEl] = useState(null);
   const [polling, setPolling] = useState(true);
 
+  const normalizeUnreadCount = (value) => {
+    if (typeof value === 'number') return value;
+    if (typeof value?.count === 'number') return value.count;
+    if (typeof value?.unread_count === 'number') return value.unread_count;
+    return 0;
+  };
+
   useEffect(() => {
     loadUnreadCount();
 
@@ -43,7 +50,7 @@ function NotificationBell() {
   const loadUnreadCount = async () => {
     try {
       const count = await notificationsApi.getUnreadCount();
-      setUnreadCount(count);
+      setUnreadCount(normalizeUnreadCount(count));
     } catch (err) {
       console.error('Failed to load unread count:', err);
     }

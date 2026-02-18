@@ -280,7 +280,7 @@ function ConsoleDashboard() {
             <Button
               variant="contained"
               component={Link}
-              to="/console/operate"
+              to="/console/org/operate"
               endIcon={<ArrowForwardIcon />}
               sx={{ bgcolor: 'success.dark', '&:hover': { bgcolor: 'success.darker' } }}
             >

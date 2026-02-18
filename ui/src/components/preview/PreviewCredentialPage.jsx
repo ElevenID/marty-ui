@@ -58,7 +58,7 @@ function PreviewCredentialContent() {
     return (
       <PreviewNotFound 
         resourceType="credential" 
-        returnUrl="/console/templates/credentials"
+        returnUrl="/console/org/templates/credentials"
       />
     );
   }
@@ -124,7 +124,7 @@ function PreviewCredentialPage() {
     <PreviewProvider 
       resourceType="credential" 
       resourceId={templateId}
-      returnUrl="/console/templates/credentials"
+      returnUrl="/console/org/templates/credentials"
     >
       <PreviewCredentialContent />
     </PreviewProvider>

@@ -381,22 +381,22 @@ const FlowManager = () => {
                 title="Issuance Flows connect applicants to credentials"
                 description="To create one, you'll need:"
                 actionLabel="Create Issuance Flow"
-                onAction={() => navigate('/console/flows/definitions/new')}
+                onAction={() => navigate('/console/org/flows/definitions/new')}
                 prerequisites={[
                   { 
                     label: 'Trust Profile', 
                     status: 'ready', // TODO: Wire up actual status from API
-                    path: '/console/trust/profiles' 
+                    path: '/console/org/trust/profiles' 
                   },
                   { 
                     label: 'Credential Template', 
                     status: 'ready', // TODO: Wire up actual status from API
-                    path: '/console/templates/credentials' 
+                    path: '/console/org/templates/credentials' 
                   },
                   { 
                     label: 'Deployment Profile', 
                     status: 'ready', // TODO: Wire up actual status from API
-                    path: '/console/deploy/profiles' 
+                    path: '/console/org/deploy/profiles' 
                   },
                 ]}
                 whyItMatters="Flows are the applicant-facing product. Templates are just inputs."
@@ -432,7 +432,7 @@ const FlowManager = () => {
                           bgcolor: 'action.hover',
                         },
                       }}
-                      onClick={() => navigate(`/console/flows/definitions/${flow.id}`)}
+                      onClick={() => navigate(`/console/org/flows/definitions/${flow.id}`)}
                     >
                       <TableCell>
                         <Typography variant="body2" fontWeight={500}>

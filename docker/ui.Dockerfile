@@ -6,9 +6,14 @@ ENV NODE_ENV=production
 ENV VITE_ISSUER_API=http://localhost:8080
 ENV VITE_VERIFIER_API=http://localhost:8081
 ENV VITE_WALLET_API=http://localhost:8082
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
 
 # Set work directory
 WORKDIR /app
+
+# Install Chromium for prerendering
+RUN apk add --no-cache chromium nss freetype harfbuzz ca-certificates ttf-freefont
 
 # Install dependencies
 COPY ui/package.json ./

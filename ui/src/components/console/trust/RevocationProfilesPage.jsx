@@ -30,15 +30,15 @@ import { ResourcePage } from '../../common';
 // import RevocationManager from '../../vendor/RevocationManager';
 
 const getTrustTabs = (t) => [
-  { label: t('trust.trustProfiles'), path: '/console/trust/profiles' },
-  { label: t('trust.trustedIssuers'), path: '/console/trust/issuers' },
-  { label: t('trust.revocationProfiles'), path: '/console/trust/revocation' },
+  { label: t('trust.trustProfiles'), path: '/console/org/trust/profiles' },
+  { label: t('trust.trustedIssuers'), path: '/console/org/trust/issuers' },
+  { label: t('trust.revocationProfiles'), path: '/console/org/trust/revocation' },
 ];
 
 const getBreadcrumbs = (t) => [
   { label: t('trust.breadcrumbs.console'), path: '/console' },
-  { label: t('trust.breadcrumbs.trust'), path: '/console/trust' },
-  { label: t('trust.breadcrumbs.revocationProfiles'), path: '/console/trust/revocation' },
+  { label: t('trust.breadcrumbs.trust'), path: '/console/org/trust' },
+  { label: t('trust.breadcrumbs.revocationProfiles'), path: '/console/org/trust/revocation' },
 ];
 
 function RevocationProfilesPage() {
@@ -86,7 +86,7 @@ function RevocationProfilesPage() {
       title={t('trust.revocationProfiles')}
       description={t('trust.revocationProfilesDescription')}
       resourceName={t('trust.revocationProfile')}
-      buildPath="/console/trust/revocation/new"
+      buildPath="/console/org/trust/revocation/new"
       tabs={getTrustTabs(t)}
       breadcrumbs={getBreadcrumbs(t)}
     >
@@ -156,7 +156,7 @@ function RevocationProfilesPage() {
                       <Tooltip title={t('trust.revocationProfilesPage.actions.viewDetails')}>
                         <IconButton
                           component={Link}
-                          to={`/console/trust/revocation/${profile.id}`}
+                          to={`/console/org/trust/revocation/${profile.id}`}
                           size="small"
                         >
                           <VisibilityIcon fontSize="small" />
@@ -165,7 +165,7 @@ function RevocationProfilesPage() {
                       <Tooltip title={t('trust.revocationProfilesPage.actions.edit')}>
                         <IconButton
                           component={Link}
-                          to={`/console/trust/revocation/${profile.id}/edit`}
+                          to={`/console/org/trust/revocation/${profile.id}/edit`}
                           size="small"
                         >
                           <EditIcon fontSize="small" />

@@ -1318,6 +1318,7 @@
         "claims": "Claims",
         "trustCompliance": "Trust & Compliance",
         "cryptoValidity": "Crypto & Validity",
+        "walletCompatibility": "Wallet Compatibility",
         "review": "Review & Activate"
       },
       "credentialTypeLabels": {
@@ -1460,7 +1461,8 @@
           "basicInformation": "Basic Information",
           "claims": "Claims ({{count}})",
           "trustCompliance": "Trust & Compliance",
-          "cryptoValidity": "Cryptography & Validity"
+          "cryptoValidity": "Cryptography & Validity",
+          "walletCompatibility": "Wallet Compatibility"
         },
         "actions": {
           "edit": "Edit"
@@ -1475,7 +1477,9 @@
           "signingAlgorithm": "Signing Algorithm",
           "defaultValidity": "Default Validity",
           "maximumValidity": "Maximum Validity",
-          "revocation": "Revocation"
+          "revocation": "Revocation",
+          "issuanceProtocol": "Issuance Protocol",
+          "compatibleWallets": "Compatible Wallets"
         },
         "values": {
           "notSet": "Not set",
