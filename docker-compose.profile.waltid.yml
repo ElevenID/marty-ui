@@ -1,0 +1,59 @@
+# Walt.id Web Wallet Profile
+# ==========================
+# Adds the walt.id wallet stack for Playwright-based end-to-end testing.
+#
+# Architecture (mirrors upstream Caddy setup):
+#   Browser → waltid-nginx :7101
+#     /wallet-api/* → waltid-wallet-api :7001   (wallet backend)
+#     /*            → waltid-web-wallet :3001   (Nuxt demo wallet frontend)
+#
+# Usage:
+#   make wallet-up    # start wallet stack alongside the running API services
+#   make wallet-down  # stop wallet stack
+#
+# Wallet UI: http://localhost:7101
+# Wallet API: http://localhost:7001/wallet-api
+
+services:
+  waltid-wallet-api:
+    image: docker.io/waltid/wallet-api:latest
+    container_name: waltid-wallet-api
+    pull_policy: missing
+    ports:
+      - "7001:7001"
+    volumes:
+      - ./docker/waltid/wallet-api/config:/waltid-wallet-api/config
+      - waltid_wallet_data:/waltid-wallet-api/data
+    environment:
+      WALLET_BACKEND_PORT: "7001"
+    networks:
+      - marty-network
+    restart: unless-stopped
+
+  waltid-web-wallet:
+    image: docker.io/waltid/waltid-demo-wallet:latest
+    container_name: waltid-web-wallet
+    pull_policy: missing
+    environment:
+      PORT: "3001"
+    networks:
+      - marty-network
+    depends_on:
+      - waltid-wallet-api
+    restart: unless-stopped
+
+  waltid-nginx:
+    image: nginx:alpine
+    container_name: waltid-nginx
+    ports:
+      - "7101:7101"
+    volumes:
+      - ./docker/waltid/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      - marty-network
+    depends_on:
+      - waltid-web-wallet
+    restart: unless-stopped
+
+volumes:
+  waltid_wallet_data:

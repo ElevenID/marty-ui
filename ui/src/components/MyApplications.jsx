@@ -28,7 +28,9 @@ import AddIcon from '@mui/icons-material/Add';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import EditIcon from '@mui/icons-material/Edit';
 import InfoIcon from '@mui/icons-material/Info';
+import AccountBalanceWalletIcon from '@mui/icons-material/AccountBalanceWallet';
 import { useAuth } from '../hooks/useAuth';
+import WalletOfferDialog from './applicant/WalletOfferDialog';
 
 // Application status colors
 const STATUS_COLORS = {
@@ -62,6 +64,7 @@ function MyApplications() {
   const [applications, setApplications] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [walletApp, setWalletApp] = useState(null); // application whose QR dialog is open
 
   const fetchApplications = useCallback(async () => {
     setLoading(true);
@@ -226,6 +229,17 @@ function MyApplications() {
                             Edit & Resubmit
                           </Button>
                         )}
+                        {['approved', 'issued'].includes(app.status?.toLowerCase()) && (
+                          <Button
+                            size="small"
+                            variant="contained"
+                            color="primary"
+                            startIcon={<AccountBalanceWalletIcon />}
+                            onClick={() => setWalletApp(app)}
+                          >
+                            Add to Wallet
+                          </Button>
+                        )}
                         <Button size="small">View Details</Button>
                       </Box>
                     </TableCell>
@@ -236,6 +250,14 @@ function MyApplications() {
           </Table>
         </TableContainer>
       )}
+
+      {/* Wallet offer dialog */}
+      <WalletOfferDialog
+        open={Boolean(walletApp)}
+        onClose={() => setWalletApp(null)}
+        applicationId={walletApp?.id}
+        credentialName={walletApp?.credential_display_name || walletApp?.document_type}
+      />
     </Box>
   );
 }

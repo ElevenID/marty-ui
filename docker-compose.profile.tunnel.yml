@@ -14,14 +14,20 @@ services:
   gateway:
     environment:
       CORS_ORIGINS: ${CORS_ORIGINS:-https://${PUBLIC_DOMAIN},http://localhost:3000,http://localhost:5173,http://localhost:9080}
+      ISSUER_BASE_URL: ${PUBLIC_API_URL:-https://${PUBLIC_DOMAIN:-beta.elevenidllc.com}}
+
+  issuance:
+    environment:
+      ISSUER_BASE_URL: ${PUBLIC_API_URL:-https://${PUBLIC_DOMAIN:-beta.elevenidllc.com}}
 
   keycloak:
     environment:
       PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:-beta.elevenidllc.com}
-      UI_BASE_URL: ${UI_BASE_URL:-https://${PUBLIC_DOMAIN:-beta.elevenidllc.com}}
-      KC_HOSTNAME: ${KC_HOSTNAME:-${PUBLIC_DOMAIN:-beta.elevenidllc.com}}
-      KC_HOSTNAME_PORT: ${KC_HOSTNAME_PORT:-443}
-      KC_HOSTNAME_STRICT: "true"
+      UI_BASE_URL: ${UI_BASE_URL:-https://beta.elevenidllc.com}
+      # Use PUBLIC_DOMAIN directly — Docker Compose does not support nested variable expansion
+      KC_HOSTNAME: ${PUBLIC_DOMAIN:-beta.elevenidllc.com}
+      KC_HOSTNAME_PORT: 443
+      KC_HOSTNAME_STRICT: "false"
       KC_HOSTNAME_STRICT_HTTPS: "true"
       KC_HTTP_ENABLED: "true"
       KC_PROXY_HEADERS: xforwarded

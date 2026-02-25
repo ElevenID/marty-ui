@@ -30,6 +30,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, AsyncGenerator
 
+import httpx
 from fastapi import APIRouter, Depends, FastAPI, Form, Header, HTTPException, Query, Request
 from fastapi.responses import Response
 from jose import jwt, jwk
@@ -1312,11 +1313,37 @@ async def start_verification_flow(
     from datetime import timedelta
     
     nonce = secrets.token_urlsafe(16)
-    
+
+    # Resolve the real organization_id from the presentation policy so that the
+    # instance carries a valid org and the membership check in get_flow_instance
+    # (and other endpoints) enforces actual authorization.
+    presentation_policy_service_url = os.environ.get(
+        "PRESENTATION_POLICY_SERVICE_URL", "http://presentation-policy:8009"
+    )
+    organization_id = "__unknown__"
+    try:
+        policy_url = f"{presentation_policy_service_url}/v1/presentation-policies/{request.presentation_policy_id}"
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            policy_resp = await client.get(policy_url, headers={"x-user-id": user_id})
+            policy_resp.raise_for_status()
+            organization_id = policy_resp.json().get("organization_id", "__unknown__")
+    except Exception as exc:
+        logger.warning(
+            f"Could not resolve organization for policy {request.presentation_policy_id}: {exc}"
+        )
+        raise HTTPException(
+            status_code=404,
+            detail=f"Presentation policy not found or service unavailable: {request.presentation_policy_id}",
+        )
+
+    # Verify that the requesting user is actually a member of the policy's org
+    # before creating the instance.
+    await app.state.org_client.get_membership(user_id, organization_id)
+
     # Create a verification flow instance directly
     instance = FlowInstance(
         flow_definition_id="__verification__",  # Special marker for ad-hoc verification
-        organization_id="default",  # Would come from auth context in production
+        organization_id=organization_id,
         status=FlowInstanceStatus.WAITING,
         context={
             "presentation_policy_id": request.presentation_policy_id,
@@ -1333,7 +1360,7 @@ async def start_verification_flow(
     
     # Generate request URI and QR code data
     # Use gateway URL for Docker networking (Walt.ID wallet needs to access this)
-    base_url = os.environ.get("PUBLIC_BASE_URL", "http://gateway:8000")
+    base_url = os.environ.get("PUBLIC_BASE_URL", "http://marty-gateway:8000")
     # OID4VP: The request_uri points to where the wallet can fetch the signed Request Object
     request_uri = f"{base_url}/v1/flows/instances/{instance.id}/request"
     # The authorization request with request_uri parameter
@@ -1357,6 +1384,145 @@ async def start_verification_flow(
         expires_at=instance.expires_at.isoformat() if instance.expires_at else "",
         status=instance.status.value,
     )
+
+
+async def _build_presentation_definition(presentation_policy_id: str) -> dict:
+    """
+    Build a proper OID4VP presentation_definition from a presentation policy.
+
+    Fetches the policy and each referenced credential template so that
+    ``input_descriptors`` contain real credential-type filters that a wallet
+    can match against its stored credentials.
+    """
+    presentation_policy_service_url = os.environ.get(
+        "PRESENTATION_POLICY_SERVICE_URL", "http://presentation-policy:8009"
+    )
+    credential_template_service_url = os.environ.get(
+        "CREDENTIAL_TEMPLATE_SERVICE_URL", "http://credential-template:8003"
+    )
+
+    policy: dict = {"credential_requirements": []}
+    if presentation_policy_id:
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as _http:
+                resp = await _http.get(
+                    f"{presentation_policy_service_url}/v1/presentation-policies/{presentation_policy_id}"
+                )
+                resp.raise_for_status()
+                policy = resp.json()
+        except Exception as exc:
+            logger.warning(
+                f"_build_presentation_definition: could not fetch policy "
+                f"{presentation_policy_id}: {exc}"
+            )
+
+    input_descriptors: list[dict] = []
+    for i, req in enumerate(policy.get("credential_requirements", [])):
+        template_id = req.get("credential_template_id", "")
+        descriptor_id = req.get("id") or f"descriptor-{i}"
+        display_name = req.get("display_name") or f"Credential {i + 1}"
+        purpose = req.get("description") or f"Present {display_name}"
+
+        credential_type: str | None = None
+        supported_formats: list[str] = []
+        if template_id:
+            try:
+                async with httpx.AsyncClient(timeout=5.0) as _http:
+                    tmpl_resp = await _http.get(
+                        f"{credential_template_service_url}/v1/credential-templates/{template_id}"
+                    )
+                    if tmpl_resp.status_code == 200:
+                        tmpl = tmpl_resp.json()
+                        credential_type = tmpl.get("credential_type")
+                        supported_formats = tmpl.get("supported_formats") or []
+            except Exception as exc:
+                logger.warning(
+                    f"_build_presentation_definition: could not fetch template "
+                    f"{template_id}: {exc}"
+                )
+
+        # Build type-filter constraint based on format
+        fields: list[dict] = []
+        if credential_type:
+            if "mdoc" in supported_formats:
+                # ISO 18013-5 mDoc — filter by docType
+                fields.append(
+                    {
+                        "path": ["$.mdoc.docType", "$.docType"],
+                        "filter": {"type": "string", "const": credential_type},
+                    }
+                )
+            elif "sd_jwt_vc" in supported_formats:
+                # SD-JWT VC — filter by vct claim
+                fields.append(
+                    {
+                        "path": ["$.vct"],
+                        "filter": {"type": "string", "const": credential_type},
+                    }
+                )
+            else:
+                # W3C JWT VC — filter by vc.type array
+                fields.append(
+                    {
+                        "path": ["$.vc.type", "$.type"],
+                        "filter": {
+                            "type": "array",
+                            "contains": {"const": credential_type},
+                        },
+                    }
+                )
+
+        # Add path hints for required claims (enables selective disclosure)
+        for claim in req.get("requested_claims", []):
+            claim_name = claim.get("claim_name") if isinstance(claim, dict) else getattr(claim, "claim_name", None)
+            if claim_name:
+                fields.append(
+                    {
+                        "path": [
+                            f"$.vc.credentialSubject.{claim_name}",
+                            f"$.credentialSubject.{claim_name}",
+                            f"$.{claim_name}",
+                        ],
+                        "intent_to_retain": True,
+                        "optional": not (claim.get("required", False) if isinstance(claim, dict) else getattr(claim, "required", False)),
+                    }
+                )
+
+        descriptor: dict = {"id": descriptor_id, "name": display_name, "purpose": purpose}
+        if "mdoc" in supported_formats:
+            descriptor["format"] = {"mso_mdoc": {"alg": ["ES256", "ES384"]}}
+        elif "sd_jwt_vc" in supported_formats:
+            descriptor["format"] = {"vc+sd-jwt": {"alg": ["ES256", "EdDSA"]}}
+        else:
+            descriptor["format"] = {
+                "jwt_vp": {"alg": ["ES256", "EdDSA"]},
+                "ldp_vp": {"proof_type": ["Ed25519Signature2020"]},
+            }
+        if fields:
+            descriptor["constraints"] = {"fields": fields}
+
+        input_descriptors.append(descriptor)
+
+    # Fallback: no requirements in policy
+    if not input_descriptors:
+        input_descriptors = [
+            {
+                "id": "default_requirement",
+                "name": "Credential Presentation",
+                "purpose": "Present credentials per policy requirements",
+                "constraints": {"fields": []},
+            }
+        ]
+
+    return {
+        "id": str(uuid.uuid4()),
+        "format": {
+            "jwt_vp": {"alg": ["ES256", "EdDSA"]},
+            "ldp_vp": {"proof_type": ["Ed25519Signature2020"]},
+            "mso_mdoc": {"alg": ["ES256"]},
+        },
+        "input_descriptors": input_descriptors,
+    }
 
 
 @router.get("/instances/{instance_id}/request")
@@ -1388,7 +1554,7 @@ async def get_verification_request_object(
     _, signing_jwk = get_or_create_signing_key()
     
     # Build base URL for response_uri (where wallet posts the VP)
-    base_url = os.environ.get("PUBLIC_BASE_URL", "http://gateway:8000")
+    base_url = os.environ.get("PUBLIC_BASE_URL", "http://marty-gateway:8000")
     client_id = os.environ.get("VERIFIER_CLIENT_ID", f"{base_url}/verifier")
     response_uri = f"{base_url}/v1/flows/instances/{instance_id}/submit"
     
@@ -1409,32 +1575,10 @@ async def get_verification_request_object(
         "iat": int(datetime.now(timezone.utc).timestamp()),
         "exp": int(instance.expires_at.timestamp()) if instance.expires_at else int((datetime.now(timezone.utc).timestamp() + 900)),
         
-        # OID4VP presentation definition
-        "presentation_definition": {
-            "id": str(uuid.uuid4()),
-            "format": {
-                "jwt_vp": {"alg": ["ES256", "EdDSA"]},
-                "ldp_vp": {"proof_type": ["Ed25519Signature2020"]},
-            },
-            "input_descriptors": [
-                {
-                    "id": "policy_requirement",
-                    "name": "Presentation Policy Requirement",
-                    "purpose": "Verify credentials per presentation policy",
-                    "constraints": {
-                        "fields": [
-                            {
-                                "path": ["$.presentation_policy_id"],
-                                "filter": {
-                                    "type": "string",
-                                    "const": instance.context.get("presentation_policy_id")
-                                }
-                            }
-                        ]
-                    }
-                }
-            ],
-        },
+        # OID4VP presentation definition (built from the real policy)
+        "presentation_definition": await _build_presentation_definition(
+            instance.context.get("presentation_policy_id", "")
+        ),
     }
     
     # Sign the Request Object as a JWT

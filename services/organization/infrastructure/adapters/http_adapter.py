@@ -719,6 +719,8 @@ async def get_membership_internal(
         if not member:
             raise HTTPException(status_code=404, detail="Membership not found")
         return _member_to_response(member)
+    except HTTPException:
+        raise
     except ValueError as e:
         logger.warning(f"Invalid IDs in membership lookup: {e}")
         raise HTTPException(status_code=404, detail=str(e))
@@ -769,6 +771,24 @@ async def validate_api_key_internal(
         raise
     except Exception as e:
         logger.error(f"Error validating API key: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@internal_router.get("/organizations/{org_id}")
+async def get_organization_internal(
+    org_id: str,
+    use_case: OrganizationUseCase = Depends(get_org_use_case),
+) -> OrganizationResponse:
+    """Internal API: Get an organization by ID (no auth — cluster-internal only)."""
+    try:
+        org = await use_case.get_organization(org_id)
+        if not org:
+            raise HTTPException(status_code=404, detail="Organization not found")
+        return _org_to_response(org)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching organization {org_id}: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
 

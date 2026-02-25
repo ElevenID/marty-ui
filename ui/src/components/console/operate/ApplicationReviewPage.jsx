@@ -51,12 +51,10 @@ import AssignmentIcon from '@mui/icons-material/Assignment';
 import VerifiedIcon from '@mui/icons-material/Verified';
 import NoteAddIcon from '@mui/icons-material/NoteAdd';
 import RefreshIcon from '@mui/icons-material/Refresh';
-import AccountBalanceWalletIcon from '@mui/icons-material/AccountBalanceWallet';
 
 import { useAuth } from '../../../hooks/useAuth';
 import { StatusChip } from '../../common';
-import WalletInviteDialog from './dialogs/WalletInviteDialog';
-import { generateIssuanceOffer } from '../../../services/credentialsApi';
+import IssuingSection from './IssuingSection';
 import {
   getApplication,
   getVettingChecks,
@@ -227,9 +225,6 @@ export default function ApplicationReviewPage() {
 
   // Dialog state
   const [approveOpen, setApproveOpen] = useState(false);
-  const [walletInviteOpen, setWalletInviteOpen] = useState(false);
-  const [walletOfferData, setWalletOfferData] = useState(null);
-  const [walletOfferLoading, setWalletOfferLoading] = useState(false);
   const [rejectOpen, setRejectOpen] = useState(false);
   const [requestInfoOpen, setRequestInfoOpen] = useState(false);
 
@@ -523,38 +518,8 @@ export default function ApplicationReviewPage() {
           </Alert>
         )}
 
-        {/* Approved – waiting for wallet claim */}
-        {application.status === 'approved' && (
-          <Alert
-            severity="info"
-            sx={{ mb: 2 }}
-            action={
-              <Button
-                size="small"
-                variant="contained"
-                color="info"
-                startIcon={walletOfferLoading ? <CircularProgress size={14} color="inherit" /> : <AccountBalanceWalletIcon />}
-                onClick={async () => {
-                  setWalletOfferLoading(true);
-                  try {
-                    const offer = await generateIssuanceOffer(applicationId);
-                    setWalletOfferData(offer);
-                    setWalletInviteOpen(true);
-                  } catch (err) {
-                    setActionError(err.message || 'Failed to generate wallet invite');
-                  } finally {
-                    setWalletOfferLoading(false);
-                  }
-                }}
-                disabled={walletOfferLoading}
-              >
-                Generate Wallet Invite
-              </Button>
-            }
-          >
-            Application approved. Send a wallet invite to the applicant to claim their credential.
-          </Alert>
-        )}
+        {/* Approved – credential issuance section */}
+        <IssuingSection applicationId={applicationId} applicationStatus={application.status} />
 
         {/* Needs-info state */}
         {application.status === 'needs_info' && (
@@ -756,23 +721,6 @@ export default function ApplicationReviewPage() {
         loading={actionLoading}
         onConfirm={handleRequestInfo}
         onClose={() => setRequestInfoOpen(false)}
-      />
-      <WalletInviteDialog
-        open={walletInviteOpen}
-        onClose={() => setWalletInviteOpen(false)}
-        offerData={walletOfferData}
-        loading={walletOfferLoading}
-        onRegenerate={async () => {
-          setWalletOfferLoading(true);
-          try {
-            const offer = await generateIssuanceOffer(applicationId);
-            setWalletOfferData(offer);
-          } catch (err) {
-            setActionError(err.message || 'Failed to regenerate wallet invite');
-          } finally {
-            setWalletOfferLoading(false);
-          }
-        }}
       />
     </Box>
   );

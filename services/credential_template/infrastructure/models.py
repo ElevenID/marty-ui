@@ -42,6 +42,7 @@ credential_templates_table = Table(
     # Privacy
     Column("privacy_posture", String(30), nullable=False, default="selective_disclosure"),
     Column("selective_disclosure_fields", JSON, nullable=False, default=list),
+    Column("zk_predicate_claims", JSON, nullable=True, default=list),
     Column("derived_attributes", JSON, nullable=False, default=list),
     
     # Display - stored as JSON object
@@ -55,6 +56,12 @@ credential_templates_table = Table(
     
     # Supported formats
     Column("supported_formats", JSON, nullable=False, default=list),
+    
+    # SD-JWT payload structure: "ietf_sd_jwt" or "w3c_vcdm_v2_sd_jwt" (default)
+    Column("credential_payload_format", String(30), nullable=False, server_default="w3c_vcdm_v2_sd_jwt"),
+    
+    # Per-wallet configuration: [{wallet_id, deep_link_scheme}, ...]
+    Column("wallet_configs", JSON, nullable=True, server_default="[]"),
     
     # Version control
     Column("version", Integer, nullable=False, default=1),

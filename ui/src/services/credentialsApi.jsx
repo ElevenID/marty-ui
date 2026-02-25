@@ -220,15 +220,24 @@ export const getIssuanceSessionStatus = async (transactionId) => {
 
 /**
  * Generate (or refresh) the issuance offer for an approved application.
- * Called by admins via the "Generate Wallet Invite" button.
+ * Calls the applicant service's issue endpoint which triggers OID4VCI initiation
+ * via the issuance service and returns the credential_offer_uri.
  *
  * @param {string} applicationId
- * @returns {Promise<Object>} IssuanceOfferResponse with offer_url, wallets, expires_at
+ * @returns {Promise<{offer_url: string, expires_at: string|null, status: string}>}
  */
 export const generateIssuanceOffer = async (applicationId) => {
   try {
-    const response = await apiClient.post(`/v1/applications/${applicationId}/issuance-offer`);
-    return response.data;
+    const response = await apiClient.post(`/v1/applicants/applications/${applicationId}/issue`);
+    const data = response.data;
+    // Normalise to the shape OID4VCIInviteDisplay / IssuingSection expect
+    return {
+      offer_url: data.credential_offer_uri || null,
+      expires_at: data.offer_expires_at || null,
+      status: data.credential_offer_uri ? 'active' : 'pending',
+      // Pass through in case callers want raw fields too
+      ...data,
+    };
   } catch (error) {
     throw handleApiError(error);
   }

@@ -103,6 +103,7 @@ services:
     environment:
       RABBITMQ_DEFAULT_USER: marty
       RABBITMQ_DEFAULT_PASS: marty_dev_password
+      RABBITMQ_ERLANG_COOKIE: "marty_dev_cookie"
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
     ports:
@@ -155,6 +156,8 @@ services:
       PRESENTATION_POLICY_SERVICE_URL: http://presentation-policy:8009
       DEPLOYMENT_PROFILE_SERVICE_URL: http://deployment-profile:8010
       FLOW_SERVICE_URL: http://flow:8011
+      ISSUANCE_SERVICE_URL: http://issuance:8005
+      ISSUER_BASE_URL: ${PUBLIC_API_URL:-http://gateway:8000}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://localhost:5173}
     ports:
       - "8000:8000"
@@ -162,6 +165,8 @@ services:
       auth:
         condition: service_healthy
       organization:
+        condition: service_healthy
+      issuance:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
@@ -180,14 +185,14 @@ services:
     container_name: marty-auth
     environment:
       AUTH_SERVICE_PORT: "8001"
-      UI_BASE_URL: ${UI_BASE_URL:-http://localhost:9080}
+      UI_BASE_URL: ${UI_BASE_URL:-http://localhost:3000}
       REDIS_URL: redis://redis:6379/0
       RABBITMQ_URL: amqp://marty:marty_dev_password@rabbitmq:5672/
       OIDC_ISSUER_URL: ${OIDC_ISSUER_URL_INTERNAL:-http://keycloak:8080/realms/${KEYCLOAK_REALM:-11id}}
       OIDC_EXTERNAL_ISSUER_URL: ${OIDC_ISSUER_URL_EXTERNAL:-http://localhost:8180/realms/${KEYCLOAK_REALM:-11id}}
       OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-marty-ui}
-      OIDC_REDIRECT_URI: ${OIDC_REDIRECT_URI:-http://localhost:9080/v1/auth/callback}
-      OIDC_POST_LOGOUT_REDIRECT_URI: ${OIDC_POST_LOGOUT_REDIRECT_URI:-http://localhost:9080/}
+      OIDC_REDIRECT_URI: ${OIDC_REDIRECT_URI:-http://localhost:3000/v1/auth/callback}
+      OIDC_POST_LOGOUT_REDIRECT_URI: ${OIDC_POST_LOGOUT_REDIRECT_URI:-http://localhost:3000/}
       SESSION_TTL_SECONDS: "86400"
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
     ports:
@@ -218,12 +223,16 @@ services:
       ORGANIZATION_SERVICE_PORT: "8002"
       DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@postgres:5432/marty
       RABBITMQ_URL: amqp://marty:marty_dev_password@rabbitmq:5672/
+      REDIS_URL: redis://redis:6379
+      REDIS_DB_GATEWAY: "2"
     ports:
       - "8002:8002"
     depends_on:
       db-migrate:
         condition: service_completed_successfully
       rabbitmq:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
@@ -297,6 +306,7 @@ services:
       DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@postgres:5432/marty
       RABBITMQ_URL: amqp://marty:marty_dev_password@rabbitmq:5672/
       APPLICANT_DATA_FILE: /app/data/applicant_store.json
+      ISSUANCE_SERVICE_URL: http://issuance:8005
     ports:
       - "8006:8006"
     volumes:
@@ -434,6 +444,7 @@ services:
       FLOW_SERVICE_PORT: "8011"
       DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@postgres:5432/marty
       RABBITMQ_URL: amqp://marty:marty_dev_password@rabbitmq:5672/
+      PUBLIC_BASE_URL: ${PUBLIC_API_URL:-http://gateway:8000}
     ports:
       - "8011:8011"
     depends_on:
@@ -446,6 +457,32 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
+    networks:
+      - marty-network
+
+  issuance:
+    build:
+      context: ..
+      dockerfile: marty-credentials/services/Dockerfile
+    container_name: marty-issuance
+    environment:
+      ISSUANCE_SERVICE_PORT: "8005"
+      DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@postgres:5432/marty
+      RABBITMQ_URL: amqp://marty:marty_dev_password@rabbitmq:5672/
+      ISSUER_BASE_URL: ${PUBLIC_API_URL:-http://gateway:8000}
+    ports:
+      - "8005:8005"
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8005/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
     networks:
       - marty-network
 
