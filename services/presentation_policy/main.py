@@ -144,6 +144,7 @@ class CredentialRequirement:
     display_name: str = ""
     description: str | None = None
     required: bool = True
+    credential_payload_format: str = "w3c_vcdm_v2_sd_jwt"  # Expected payload format for verification
     
     # What to request
     requested_claims: list[RequestedClaim] = field(default_factory=list)
@@ -311,6 +312,7 @@ class CredentialRequirementModel(BaseModel):
     display_name: str
     description: str | None = None
     required: bool = True
+    credential_payload_format: str = "w3c_vcdm_v2_sd_jwt"
     requested_claims: list[RequestedClaimModel] = []
     trust_profile_id: str | None = None
     max_age_seconds: int | None = None
@@ -547,6 +549,7 @@ def _build_credential_requirement(model: CredentialRequirementModel) -> Credenti
         display_name=model.display_name,
         description=model.description,
         required=model.required,
+        credential_payload_format=model.credential_payload_format,
         trust_profile_id=model.trust_profile_id,
         max_age_seconds=model.max_age_seconds,
         require_fresh_issuance=model.require_fresh_issuance,
@@ -1091,6 +1094,7 @@ def _policy_to_response(policy: PresentationPolicy) -> PresentationPolicyRespons
                 "credential_template_id": req.credential_template_id,
                 "display_name": req.display_name,
                 "required": req.required,
+                "credential_payload_format": req.credential_payload_format,
                 "requested_claims": [
                     {
                         "id": rc.id,

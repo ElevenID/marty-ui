@@ -1,4 +1,10 @@
 /**
+ * @deprecated
+ * This dialog has been superseded by the inline IssuingSection component
+ * (components/console/operate/IssuingSection.jsx) which uses the protocol
+ * registry (config/issuanceProtocols.js) for extensibility.
+ * Kept temporarily for reference — safe to delete once confirmed unused.
+ *
  * WalletInviteDialog
  *
  * Admin-facing dialog opened after an application is Approved.

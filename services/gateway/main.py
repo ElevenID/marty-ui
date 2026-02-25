@@ -130,8 +130,14 @@ class AuthMiddleware(BaseHTTPMiddleware):
     
     async def dispatch(self, request: Request, call_next):
         """Process request and inject user context headers."""
+        import re as _re
         # Get route configuration
         route_config = get_route_config(request.url.path)
+        
+        # OID4VP wallet-facing endpoints must be public (wallet has no session cookie)
+        _WALLET_PUBLIC = _re.compile(
+            r"^/v1/flows/instances/[^/]+/(request|submit)$"
+        )
         
         # Skip auth for unauthenticated routes or health checks
         if (
@@ -140,6 +146,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
             or request.url.path == "/health"
             or request.url.path.startswith("/health/")
             or request.url.path.startswith("/.well-known/")
+            or _WALLET_PUBLIC.match(request.url.path)
         ):
             return await call_next(request)
         
@@ -360,6 +367,9 @@ ROUTE_CONFIG = {
     
     # Digital Identity Model - Operational Resources
     "/v1/applicants": {"service": "applicant", "requires_auth": True},
+    # OID4VCI wallet-facing endpoints must be public (no auth token available on wallet)
+    "/v1/issuance/token": {"service": "issuance", "requires_auth": False},
+    "/v1/issuance/credential": {"service": "issuance", "requires_auth": False},
     "/v1/issuance": {"service": "issuance", "requires_auth": True},
     "/v1/application-templates": {"service": "issuance", "requires_auth": True},
     "/v1/applications": {"service": "issuance", "requires_auth": True},
@@ -527,6 +537,12 @@ class CredentialTemplateCreate(BaseModel):
     
     # Legacy field for backward compatibility during migration
     issuer_requirements: TemplateIssuerRequirements | None = None
+    # ZK-specific fields
+    zk_predicate_claims: list[str] = []
+    schema_uri: dict | None = None
+    # Payload format and wallet deep-link configuration
+    credential_payload_format: str = "w3c_vcdm_v2_sd_jwt"  # ietf_sd_jwt | w3c_vcdm_v2_sd_jwt | w3c_vcdm_v2_jwt_vc
+    wallet_configs: list[dict] = []  # [{"wallet_id": ..., "deep_link_scheme": ...}]
 
 
 class CredentialTemplateResponse(BaseModel):
@@ -562,7 +578,12 @@ class CredentialTemplateResponse(BaseModel):
     
     # Legacy field
     issuer_requirements: dict | None
-    
+    # ZK-specific fields
+    zk_predicate_claims: list[str] = []
+    # Payload format and wallet deep-link configuration
+    credential_payload_format: str = "w3c_vcdm_v2_sd_jwt"
+    wallet_configs: list[dict] = []
+
     # Metadata
     version: int
     created_at: str
@@ -1179,22 +1200,45 @@ async def proxy_request(
     request: Request,
     service_url: str,
     path: str,
+    inject_params: dict | None = None,
+    body_override: bytes | None = None,
 ) -> Response:
-    """Proxy a request to a backend service."""
+    """Proxy a request to a backend service.
+
+    Args:
+        request: The incoming FastAPI request.
+        service_url: Base URL of the target micro-service.
+        path: Path to append to the service URL.
+        inject_params: Extra query parameters to merge into the forwarded URL.
+            These are appended *in addition to* any query params already present
+            on the incoming request, and they override duplicate keys.
+    """
     client = get_http_client()
     
     # Build target URL
     url = f"{service_url}{path}"
-    if request.url.query:
-        url = f"{url}?{request.url.query}"
+    # Forward incoming query string, then overlay inject_params
+    from urllib.parse import parse_qsl, urlencode
+    qs_pairs = list(parse_qsl(request.url.query or ""))
+    if inject_params:
+        incoming_keys = {k for k, _ in qs_pairs}
+        for k, v in inject_params.items():
+            if k not in incoming_keys:
+                qs_pairs.append((k, v))
+    if qs_pairs:
+        url = f"{url}?{urlencode(qs_pairs)}"
     
     # Get request body if present
-    body = await request.body()
+    body = body_override if body_override is not None else await request.body()
     
     # Forward headers (excluding hop-by-hop headers)
+    excluded_headers = {"host", "connection", "keep-alive", "transfer-encoding"}
+    # Also strip content-length when body_override is provided (size may differ)
+    if body_override is not None:
+        excluded_headers.add("content-length")
     headers = {
         k: v for k, v in request.headers.items()
-        if k.lower() not in ("host", "connection", "keep-alive", "transfer-encoding")
+        if k.lower() not in excluded_headers
     }
     
     # Inject user context headers from middleware
@@ -1392,7 +1436,7 @@ async def create_credential_template(body: CredentialTemplateCreate, request: Re
     """
     registry = get_registry()
     service_url = registry.get_service_url("credential-templates")
-    return await proxy_request(request, service_url, "/v1/credential-templates")
+    return await proxy_request(request, service_url, "/v1/credential-templates", body_override=body.model_dump_json().encode())
 
 
 @credential_template_router.get("", response_model=list[CredentialTemplateResponse], summary="List Credential Templates")
@@ -2266,7 +2310,7 @@ async def get_organization(org_id: str, request: Request) -> Response:
     """Get an Organization by ID."""
     registry = get_registry()
     service_url = registry.get_service_url("organizations")
-    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}")
+    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}", inject_params={"organization_id": org_id})
 
 
 @organization_router.put("/{org_id}", response_model=OrganizationResponse, summary="Update Organization")
@@ -2274,7 +2318,7 @@ async def update_organization(org_id: str, body: OrganizationCreate, request: Re
     """Update an Organization."""
     registry = get_registry()
     service_url = registry.get_service_url("organizations")
-    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}")
+    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}", inject_params={"organization_id": org_id})
 
 
 @organization_router.delete("/{org_id}", summary="Delete Organization")
@@ -2282,7 +2326,7 @@ async def delete_organization(org_id: str, request: Request) -> Response:
     """Delete an Organization."""
     registry = get_registry()
     service_url = registry.get_service_url("organizations")
-    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}")
+    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}", inject_params={"organization_id": org_id})
 
 
 # Join by Code
@@ -2351,7 +2395,7 @@ async def join_organization(org_id: str, request: Request) -> Response:
     """Join/request to join an organization by ID (open join organizations)."""
     registry = get_registry()
     service_url = registry.get_service_url("organizations")
-    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/join")
+    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/join", inject_params={"organization_id": org_id})
 
 
 @organization_router.get("/invitations/validate", response_model=InvitationValidateResponse, summary="Validate Invitation")
@@ -2384,7 +2428,7 @@ async def list_audit_events(
     """List Audit Events for an organization (immutable log)."""
     registry = get_registry()
     service_url = registry.get_service_url("organizations")
-    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/audit-events")
+    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/audit-events", inject_params={"organization_id": org_id})
 
 
 @organization_router.get("/{org_id}/audit-events/{event_id}", response_model=AuditEventResponse, summary="Get Audit Event")
@@ -2392,7 +2436,7 @@ async def get_audit_event(org_id: str, event_id: str, request: Request) -> Respo
     """Get an Audit Event by ID."""
     registry = get_registry()
     service_url = registry.get_service_url("organizations")
-    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/audit-events/{event_id}")
+    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/audit-events/{event_id}", inject_params={"organization_id": org_id})
 
 
 # RBAC: Permissions catalog
@@ -2401,7 +2445,7 @@ async def list_permissions(org_id: str, request: Request) -> Response:
     """List the available permission catalog for this organization."""
     registry = get_registry()
     service_url = registry.get_service_url("organizations")
-    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/permissions")
+    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/permissions", inject_params={"organization_id": org_id})
 
 
 # RBAC: Roles
@@ -2410,7 +2454,7 @@ async def list_roles(org_id: str, request: Request) -> Response:
     """List roles in this organization."""
     registry = get_registry()
     service_url = registry.get_service_url("organizations")
-    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/roles")
+    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/roles", inject_params={"organization_id": org_id})
 
 
 @organization_router.post("/{org_id}/roles", summary="Create Role", status_code=201)
@@ -2418,7 +2462,7 @@ async def create_role(org_id: str, request: Request) -> Response:
     """Create a custom role in this organization."""
     registry = get_registry()
     service_url = registry.get_service_url("organizations")
-    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/roles")
+    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/roles", inject_params={"organization_id": org_id})
 
 
 @organization_router.get("/{org_id}/roles/{role_id}", summary="Get Role")
@@ -2426,7 +2470,7 @@ async def get_role(org_id: str, role_id: str, request: Request) -> Response:
     """Get a role by ID."""
     registry = get_registry()
     service_url = registry.get_service_url("organizations")
-    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/roles/{role_id}")
+    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/roles/{role_id}", inject_params={"organization_id": org_id})
 
 
 @organization_router.patch("/{org_id}/roles/{role_id}", summary="Update Role")
@@ -2434,7 +2478,7 @@ async def update_role(org_id: str, role_id: str, request: Request) -> Response:
     """Update a custom role."""
     registry = get_registry()
     service_url = registry.get_service_url("organizations")
-    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/roles/{role_id}")
+    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/roles/{role_id}", inject_params={"organization_id": org_id})
 
 
 @organization_router.delete("/{org_id}/roles/{role_id}", summary="Delete Role")
@@ -2442,7 +2486,7 @@ async def delete_role(org_id: str, role_id: str, request: Request) -> Response:
     """Delete a custom role."""
     registry = get_registry()
     service_url = registry.get_service_url("organizations")
-    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/roles/{role_id}")
+    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/roles/{role_id}", inject_params={"organization_id": org_id})
 
 
 # RBAC: Member role assignments
@@ -2451,7 +2495,7 @@ async def set_member_roles(org_id: str, member_id: str, request: Request) -> Res
     """Replace all roles for a member."""
     registry = get_registry()
     service_url = registry.get_service_url("organizations")
-    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/members/{member_id}/roles")
+    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/members/{member_id}/roles", inject_params={"organization_id": org_id})
 
 
 @organization_router.post("/{org_id}/members/{member_id}/roles/{role_id}", summary="Add Role to Member")
@@ -2459,7 +2503,7 @@ async def add_member_role(org_id: str, member_id: str, role_id: str, request: Re
     """Add a role to a member."""
     registry = get_registry()
     service_url = registry.get_service_url("organizations")
-    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/members/{member_id}/roles/{role_id}")
+    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/members/{member_id}/roles/{role_id}", inject_params={"organization_id": org_id})
 
 
 @organization_router.delete("/{org_id}/members/{member_id}/roles/{role_id}", summary="Remove Role from Member")
@@ -2467,7 +2511,7 @@ async def remove_member_role(org_id: str, member_id: str, role_id: str, request:
     """Remove a role from a member."""
     registry = get_registry()
     service_url = registry.get_service_url("organizations")
-    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/members/{member_id}/roles/{role_id}")
+    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/members/{member_id}/roles/{role_id}", inject_params={"organization_id": org_id})
 
 
 # RBAC: Current user permissions
@@ -2476,7 +2520,7 @@ async def get_my_permissions(org_id: str, request: Request) -> Response:
     """Get the current user's permissions in this organization."""
     registry = get_registry()
     service_url = registry.get_service_url("organizations")
-    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/members/me/permissions")
+    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/members/me/permissions", inject_params={"organization_id": org_id})
 
 
 # =============================================================================
@@ -2735,63 +2779,102 @@ Verification is handled through two complementary approaches:
     @app.get("/health")
     async def health_check() -> dict:
         return {"status": "healthy", "service": SERVICE_NAME}
+
+    async def _proxy_to_issuance_well_known(path: str) -> Response:
+        """Proxy a well-known request to the issuance service.
+
+        The issuance service is the source of truth for OID4VCI metadata.
+        Keeping gateway endpoints as a proxy avoids drift and ensures that
+        per-org discovery (OID4VCI v1 §12.2.2 insertion rule) works end-to-end.
+        """
+        registry = get_registry()
+        issuance_url = registry.get_service_url("issuance")
+        if not issuance_url:
+            raise HTTPException(status_code=503, detail="Issuance service unavailable")
+
+        client = get_http_client()
+        try:
+            upstream = await client.get(f"{issuance_url}{path}", timeout=10.0)
+        except httpx.TimeoutException:
+            raise HTTPException(status_code=504, detail="Issuance service timeout")
+        except Exception as exc:
+            logger.error("Error proxying well-known to issuance (%s): %s", path, exc)
+            raise HTTPException(status_code=502, detail="Issuance service error")
+
+        return Response(
+            content=upstream.content,
+            status_code=upstream.status_code,
+            media_type=upstream.headers.get("content-type"),
+            headers={
+                k: v
+                for k, v in upstream.headers.items()
+                if k.lower() not in ("content-encoding", "transfer-encoding")
+            },
+        )
+
+    # ---------------------------------------------------------------------
+    # OID4VCI v1 per-org discovery (insertion rule paths)
+    # ---------------------------------------------------------------------
+
+    @app.get("/.well-known/openid-credential-issuer/org/{org_id}")
+    async def get_org_issuer_metadata(org_id: str) -> Response:
+        return await _proxy_to_issuance_well_known(f"/.well-known/openid-credential-issuer/org/{org_id}")
+
+    @app.get("/.well-known/oauth-authorization-server/org/{org_id}")
+    async def get_org_oauth_authorization_server_metadata(org_id: str) -> Response:
+        return await _proxy_to_issuance_well_known(f"/.well-known/oauth-authorization-server/org/{org_id}")
+
+    # ---------------------------------------------------------------------
+    # OID4VCI spec §11.2.2 "/.well-known/openid-credential-issuer" appended
+    # to the credential_issuer URL (RFC 8414-style discovery).
+    # When credential_issuer = "https://host/org/{org_id}", wallets fetch:
+    #   https://host/org/{org_id}/.well-known/openid-credential-issuer
+    # These two routes satisfy that pattern.
+    # ---------------------------------------------------------------------
+
+    @app.get("/org/{org_id}/.well-known/openid-credential-issuer")
+    async def get_org_issuer_metadata_oid4vci_style(org_id: str) -> Response:
+        """OID4VCI §11.2.2 discovery: <credential_issuer>/.well-known/openid-credential-issuer"""
+        return await _proxy_to_issuance_well_known(f"/.well-known/openid-credential-issuer/org/{org_id}")
+
+    @app.get("/org/{org_id}/.well-known/oauth-authorization-server")
+    async def get_org_oauth_metadata_oid4vci_style(org_id: str) -> Response:
+        """OID4VCI §11.2.2 discovery: <credential_issuer>/.well-known/oauth-authorization-server"""
+        return await _proxy_to_issuance_well_known(f"/.well-known/oauth-authorization-server/org/{org_id}")
     
     @app.get("/.well-known/openid-credential-issuer")
-    async def get_issuer_metadata() -> dict:
-        """
-        OID4VCI Issuer Metadata endpoint.
-        
-        This endpoint is required by wallets to discover credential configurations
-        offered by this issuer. Walt.id wallet uses this to match credential_configuration_ids
-        from credential offers.
-        """
-        issuer_url = os.environ.get("ISSUER_BASE_URL", "http://gateway:8000")
+    async def get_issuer_metadata() -> Response:
+        """OID4VCI Issuer Metadata — proxied to the issuance service (source of truth)."""
+        return await _proxy_to_issuance_well_known("/.well-known/openid-credential-issuer")
+
+    @app.get("/.well-known/oauth-authorization-server")
+    async def get_oauth_authorization_server_metadata() -> Response:
+        """OAuth Authorization Server Metadata — proxied to the issuance service (source of truth)."""
+        return await _proxy_to_issuance_well_known("/.well-known/oauth-authorization-server")
+
+    @app.get("/.well-known/openid-configuration")
+    async def get_openid_configuration() -> dict:
+        """OIDC Discovery metadata (compatibility endpoint used by some wallets)."""
+        issuer_url = os.environ.get("ISSUER_BASE_URL", "http://localhost:8000")
         return {
-            "credential_issuer": issuer_url,
-            "credential_endpoint": f"{issuer_url}/v1/issuance/credential",
+            "issuer": issuer_url,
+            "authorization_endpoint": f"{issuer_url}/v1/issuance/authorize",
             "token_endpoint": f"{issuer_url}/v1/issuance/token",
-            "credential_configurations_supported": {
-                # Generic credential configuration that accepts any credential_template_id
-                "default": {
-                    "format": "jwt_vc_json",
-                    "scope": "credential",
-                    "cryptographic_binding_methods_supported": ["did:key"],
-                    "credential_signing_alg_values_supported": ["ES256", "EdDSA"],
-                    "display": [
-                        {
-                            "name": "Verifiable Credential",
-                            "locale": "en-US"
-                        }
-                    ]
-                },
-                # MDL credential
-                "mdl": {
-                    "format": "jwt_vc_json",
-                    "scope": "mdl_credential",
-                    "cryptographic_binding_methods_supported": ["did:key"],
-                    "credential_signing_alg_values_supported": ["ES256", "EdDSA"],
-                    "display": [
-                        {
-                            "name": "Mobile Driver's License",
-                            "locale": "en-US"
-                        }
-                    ]
-                },
-                # Employee badge
-                "employee_badge": {
-                    "format": "jwt_vc_json",
-                    "scope": "employee_badge_credential",
-                    "cryptographic_binding_methods_supported": ["did:key"],
-                    "credential_signing_alg_values_supported": ["ES256", "EdDSA"],
-                    "display": [
-                        {
-                            "name": "Employee Badge",
-                            "locale": "en-US"
-                        }
-                    ]
-                }
-            }
+            "jwks_uri": f"{issuer_url}/.well-known/jwks.json",
+            "response_types_supported": ["code", "token"],
+            "subject_types_supported": ["public"],
+            "id_token_signing_alg_values_supported": ["EdDSA", "ES256"],
+            "grant_types_supported": [
+                "authorization_code",
+                "urn:ietf:params:oauth:grant-type:pre-authorized_code",
+            ],
+            "token_endpoint_auth_methods_supported": ["none"],
         }
+
+    @app.get("/.well-known/jwks.json")
+    async def get_jwks() -> dict:
+        """Compatibility JWKS endpoint for clients that expect OIDC discovery links."""
+        return {"keys": []}
     
     @app.get("/health/services")
     async def services_health() -> dict:

@@ -19,6 +19,8 @@ from __future__ import annotations
 import logging
 import os
 import uuid
+
+import httpx
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -91,6 +93,7 @@ class CredentialFormat(str, Enum):
     MDOC = "mdoc"
     JWT_VC = "jwt_vc"
     JSON_LD_VC = "json_ld_vc"
+    ZK_MDOC = "zk_mdoc"
 
 
 @dataclass
@@ -167,6 +170,29 @@ class DerivedAttribute:
 
 
 @dataclass
+class WalletConfig:
+    """Per-wallet issuance configuration attached to a credential template."""
+
+    wallet_id: str = ""
+    """Registry ID of the wallet (e.g. 'wr-lissi-001')."""
+
+    deep_link_scheme: str = "openid-credential-offer://"
+    """Deep-link scheme used for this wallet's credential offer URI.
+    
+    Example: 'openid-credential-offer://' or 'spruceid://'
+    """
+
+    format_variant: str | None = None
+    """Optional credential format variant for SDK-specific compatibility.
+
+    Set to ``"spruce-vc+sd-jwt"`` for the SpruceID mobile SDK, which requires
+    a dedicated metadata document emitting ``spruce-vc+sd-jwt`` entries instead
+    of the standard ``vc+sd-jwt`` format accepted by Walt.id and other wallets.
+    Leave ``None`` (or unset) for all other wallets.
+    """
+
+
+@dataclass
 class CredentialTemplate:
     """
     Credential Template - blueprint for credential issuance.
@@ -190,6 +216,7 @@ class CredentialTemplate:
     # Privacy
     privacy_posture: PrivacyPosture = PrivacyPosture.SELECTIVE_DISCLOSURE
     selective_disclosure_fields: list[str] = field(default_factory=list)
+    zk_predicate_claims: list[str] = field(default_factory=list)
     derived_attributes: list[DerivedAttribute] = field(default_factory=list)
     
     # Display
@@ -207,9 +234,11 @@ class CredentialTemplate:
     )
 
     # Wallet compatibility
-    supported_wallet_ids: list[str] = field(default_factory=list)
+    wallet_configs: list[WalletConfig] = field(default_factory=list)
+    """Per-wallet configurations: which wallets are enabled and their deep-link schemes."""
     issuance_protocol: str = "oid4vci"
-    credential_format: str | None = None
+    credential_payload_format: str = "w3c_vcdm_v2_sd_jwt"
+    """SD-JWT payload structure: 'ietf_sd_jwt' (flat) or 'w3c_vcdm_v2_sd_jwt' (W3C envelope)."""
     
     # Timestamps
     version: int = 1
@@ -238,9 +267,9 @@ class CredentialTemplate:
             display_style=self.display_style,
             validity_rules=self.validity_rules,
             supported_formats=self.supported_formats.copy(),
-            supported_wallet_ids=self.supported_wallet_ids.copy(),
+            wallet_configs=[WalletConfig(wallet_id=wc.wallet_id, deep_link_scheme=wc.deep_link_scheme, format_variant=wc.format_variant) for wc in self.wallet_configs],
             issuance_protocol=self.issuance_protocol,
-            credential_format=self.credential_format,
+            credential_payload_format=self.credential_payload_format,
             version=self.version + 1,
         )
         return new
@@ -279,7 +308,8 @@ class InMemoryCredentialTemplateRepository:
         self._templates[template.id] = template
     
     async def get(self, template_id: str) -> CredentialTemplate | None:
-        return self._templates.get(template_id)
+        t = self._templates.get(template_id)
+        return t
     
     async def list(self, org_id: str, status: TemplateStatus | None = None) -> list[CredentialTemplate]:
         templates = [t for t in self._templates.values() if t.organization_id == org_id]
@@ -287,6 +317,13 @@ class InMemoryCredentialTemplateRepository:
             templates = [t for t in templates if t.status == status]
         return templates
     
+    async def list_all(self, status: TemplateStatus | None = None) -> list[CredentialTemplate]:
+        """List all templates regardless of organization (internal use only)."""
+        results = list(self._templates.values())
+        if status:
+            results = [t for t in results if t.status == status]
+        return results
+
     async def delete(self, template_id: str) -> None:
         self._templates.pop(template_id, None)
 
@@ -414,15 +451,17 @@ class CreateCredentialTemplateRequest(BaseModel):
     claims: list[ClaimDefinitionModel] = []
     privacy_posture: str = "selective_disclosure"
     selective_disclosure_fields: list[str] = []
+    zk_predicate_claims: list[str] = []
     derived_attributes: list[DerivedAttributeModel] = []
     display_style: DisplayStyleModel | None = None
     validity_rules: ValidityRulesModel | None = None
     issuer_requirements: IssuerRequirementsModel | None = None
     supported_formats: list[str] = ["sd_jwt_vc"]
     # Wallet compatibility
-    supported_wallet_ids: list[str] = []
+    wallet_configs: list[dict] = []
     issuance_protocol: str = "oid4vci"
-    credential_format: str | None = None
+    credential_payload_format: str = "w3c_vcdm_v2_sd_jwt"
+    schema_uri: dict | None = None
 
 
 class UpdateCredentialTemplateRequest(BaseModel):
@@ -431,15 +470,16 @@ class UpdateCredentialTemplateRequest(BaseModel):
     claims: list[ClaimDefinitionModel] | None = None
     privacy_posture: str | None = None
     selective_disclosure_fields: list[str] | None = None
+    zk_predicate_claims: list[str] | None = None
     derived_attributes: list[DerivedAttributeModel] | None = None
     display_style: DisplayStyleModel | None = None
     validity_rules: ValidityRulesModel | None = None
     issuer_requirements: IssuerRequirementsModel | None = None
     supported_formats: list[str] | None = None
     # Wallet compatibility
-    supported_wallet_ids: list[str] | None = None
+    wallet_configs: list[dict] | None = None
     issuance_protocol: str | None = None
-    credential_format: str | None = None
+    credential_payload_format: str | None = None
 
 
 class CredentialTemplateResponse(BaseModel):
@@ -454,15 +494,16 @@ class CredentialTemplateResponse(BaseModel):
     claims: list[dict]
     privacy_posture: str
     selective_disclosure_fields: list[str]
+    zk_predicate_claims: list[str]
     derived_attributes: list[dict]
     display_style: dict
     validity_rules: dict
     issuer_requirements: dict
     supported_formats: list[str]
     # Wallet compatibility
-    supported_wallet_ids: list[str]
+    wallet_configs: list[dict]
     issuance_protocol: str
-    credential_format: str | None
+    credential_payload_format: str
     version: int
     created_at: str
     updated_at: str
@@ -559,7 +600,7 @@ async def create_credential_template(
     Note: This verifies the user is a member of the organization specified
     in the request body. Admin role recommended for production.
     """
-    require_org_membership(body.organization_id, request, user_id)
+    await require_org_membership(body.organization_id, request, user_id)
 
     template = CredentialTemplate(
         organization_id=body.organization_id,
@@ -570,10 +611,11 @@ async def create_credential_template(
         doctype=body.doctype or "",
         privacy_posture=PrivacyPosture(body.privacy_posture),
         selective_disclosure_fields=body.selective_disclosure_fields,
+        zk_predicate_claims=body.zk_predicate_claims,
         supported_formats=[CredentialFormat(f) for f in body.supported_formats],
-        supported_wallet_ids=body.supported_wallet_ids,
+        wallet_configs=[WalletConfig(wallet_id=wc.get("wallet_id", ""), deep_link_scheme=wc.get("deep_link_scheme", "openid-credential-offer://"), format_variant=wc.get("format_variant")) for wc in body.wallet_configs],
         issuance_protocol=body.issuance_protocol,
-        credential_format=body.credential_format,
+        credential_payload_format=body.credential_payload_format,
     )
     
     # Set claims
@@ -647,7 +689,7 @@ async def list_credential_templates(
     repo: InMemoryCredentialTemplateRepository = Depends(get_repo),
 ) -> list[CredentialTemplateResponse]:
     """List Credential Templates for an organization. Requires organization membership."""
-    require_org_membership(organization_id, request, user_id)
+    await require_org_membership(organization_id, request, user_id)
 
     status_filter = TemplateStatus(status) if status else None
     templates = await repo.list(organization_id, status_filter)
@@ -695,14 +737,16 @@ async def update_credential_template(
         template.privacy_posture = PrivacyPosture(request.privacy_posture)
     if request.selective_disclosure_fields is not None:
         template.selective_disclosure_fields = request.selective_disclosure_fields
+    if request.zk_predicate_claims is not None:
+        template.zk_predicate_claims = request.zk_predicate_claims
     if request.supported_formats is not None:
         template.supported_formats = [CredentialFormat(f) for f in request.supported_formats]
-    if request.supported_wallet_ids is not None:
-        template.supported_wallet_ids = request.supported_wallet_ids
+    if request.wallet_configs is not None:
+        template.wallet_configs = [WalletConfig(wallet_id=wc.get("wallet_id", ""), deep_link_scheme=wc.get("deep_link_scheme", "openid-credential-offer://"), format_variant=wc.get("format_variant")) for wc in request.wallet_configs]
     if request.issuance_protocol is not None:
         template.issuance_protocol = request.issuance_protocol
-    if request.credential_format is not None:
-        template.credential_format = request.credential_format
+    if request.credential_payload_format is not None:
+        template.credential_payload_format = request.credential_payload_format
     
     template.updated_at = datetime.now(timezone.utc)
     await repo.save(template)
@@ -833,6 +877,7 @@ def _template_to_response(template: CredentialTemplate) -> CredentialTemplateRes
         ],
         privacy_posture=template.privacy_posture.value,
         selective_disclosure_fields=template.selective_disclosure_fields,
+        zk_predicate_claims=template.zk_predicate_claims,
         derived_attributes=[
             {
                 "id": da.id,
@@ -863,9 +908,9 @@ def _template_to_response(template: CredentialTemplate) -> CredentialTemplateRes
             "audit_level_required": template.issuer_requirements.audit_level_required,
         },
         supported_formats=[f.value for f in template.supported_formats],
-        supported_wallet_ids=template.supported_wallet_ids,
+        wallet_configs=[{k: v for k, v in {"wallet_id": wc.wallet_id, "deep_link_scheme": wc.deep_link_scheme, "format_variant": wc.format_variant}.items() if v is not None} for wc in template.wallet_configs],
         issuance_protocol=template.issuance_protocol,
-        credential_format=template.credential_format,
+        credential_payload_format=template.credential_payload_format,
         version=template.version,
         created_at=template.created_at.isoformat(),
         updated_at=template.updated_at.isoformat(),
@@ -990,6 +1035,100 @@ async def delete_wallet(
 
 
 # =============================================================================
+# Internal API (no authentication — cluster-internal only)
+# =============================================================================
+
+internal_router = APIRouter(prefix="/internal", tags=["internal"])
+
+
+@internal_router.get("/credential-configurations")
+async def get_credential_configurations() -> dict:
+    """
+    Internal endpoint returning OID4VCI ``credential_configurations_supported``
+    built dynamically from all **active** credential templates.
+
+    Called by the gateway to serve ``/.well-known/openid-credential-issuer``
+    without hard-coding credential types.
+
+    No authentication is required — this path must not be exposed externally.
+    """
+    _proof_types: dict = {
+        "jwt": {"proof_signing_alg_values_supported": ["ES256", "EdDSA"]}
+    }
+    _binding = ["did:key"]
+    _signing_algs = ["ES256", "EdDSA"]
+
+    # Always include the generic "default" fallback entry.
+    configs: dict = {
+        "default": {
+            "format": "jwt_vc_json",
+            "scope": "credential",
+            "cryptographic_binding_methods_supported": _binding,
+            "credential_signing_alg_values_supported": _signing_algs,
+            "proof_types_supported": _proof_types,
+            "credential_definition": {"type": ["VerifiableCredential"]},
+            "display": [{"name": "Verifiable Credential", "locale": "en-US"}],
+        }
+    }
+
+    if _repo is None:
+        return configs
+
+    try:
+        templates = await _repo.list_all(status=TemplateStatus.ACTIVE)
+    except Exception as exc:  # pragma: no cover
+        logger.warning("Failed to load credential templates for well-known: %s", exc)
+        return configs
+
+    for t in templates:
+        cred_type = (t.credential_type or "").strip()
+        if not cred_type:
+            continue
+
+        # Always emit jwt_vc_json — that is the only format our issuance service
+        # produces, regardless of what the template's supported_formats list says.
+        fmt = "jwt_vc_json"
+
+        configs[cred_type] = {
+            "format": fmt,
+            "scope": f"{cred_type}_credential",
+            "cryptographic_binding_methods_supported": _binding,
+            "credential_signing_alg_values_supported": _signing_algs,
+            "proof_types_supported": _proof_types,
+            "credential_definition": {
+                "type": ["VerifiableCredential", cred_type]
+            },
+            "display": [{"name": t.name or cred_type, "locale": "en-US"}],
+        }
+
+    # Try to look up the issuer display name from the org service using the
+    # organization_id of the first active template we found.
+    issuer_display_name: str | None = None
+    org_service_url = os.environ.get("ORGANIZATION_SERVICE_URL", "http://organization:8002")
+    if templates:
+        org_id = getattr(templates[0], "organization_id", None)
+        if org_id:
+            try:
+                async with httpx.AsyncClient(timeout=3.0) as org_client:
+                    org_resp = await org_client.get(
+                        f"{org_service_url}/internal/v1/organizations/{org_id}"
+                    )
+                    if org_resp.status_code == 200:
+                        org_data = org_resp.json()
+                        issuer_display_name = (
+                            org_data.get("display_name")
+                            or org_data.get("name")
+                        )
+            except Exception as exc:
+                logger.warning("Could not look up org name for well-known: %s", exc)
+
+    return {
+        "credential_configurations_supported": configs,
+        "issuer_display_name": issuer_display_name,
+    }
+
+
+# =============================================================================
 # Application Setup
 # =============================================================================
 
@@ -1011,7 +1150,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     _wallet_repo = InMemoryWalletRegistryRepository()
     
     # Initialize OrganizationClient for authorization
-    org_service_url = os.environ.get("ORGANIZATION_SERVICE_URL", "http://localhost:8002")
+    org_service_url = os.environ.get("ORGANIZATION_SERVICE_URL", "http://organization:8002")
     org_client = OrganizationClient(
         base_url=org_service_url,
         redis_client=None,  # No Redis caching at service level (gateway handles it)
@@ -1047,6 +1186,7 @@ def create_app() -> FastAPI:
     
     app.include_router(router)
     app.include_router(wallet_router)
+    app.include_router(internal_router)
     
     @app.get("/health")
     async def health_check() -> dict:

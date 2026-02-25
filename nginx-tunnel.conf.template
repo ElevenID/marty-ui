@@ -64,6 +64,34 @@ server {
         proxy_set_header Host $host;
     }
 
+    # OID4VCI discovery + well-known endpoints - proxy to gateway (no auth required by wallets)
+    location /.well-known/ {
+        set $backend_api host.docker.internal:8000;
+        proxy_pass http://$backend_api;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        add_header Access-Control-Allow-Origin * always;
+    }
+
+    # Compatibility: some wallets still try the *appended* discovery form:
+    #   https://issuer.example.com/org/<id>/.well-known/openid-credential-issuer
+    # OID4VCI v1 requires the *inserted* form:
+    #   https://issuer.example.com/.well-known/openid-credential-issuer/org/<id>
+    # If we don't catch this, it falls through to the UI and returns HTML.
+    location ~ "^/org/([0-9a-fA-F-]{36})/\.well-known/(openid-credential-issuer|oauth-authorization-server)$" {
+        set $backend_api host.docker.internal:8000;
+        proxy_pass http://$backend_api/.well-known/$2/org/$1;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        add_header Access-Control-Allow-Origin * always;
+    }
+
     # Keycloak routes - for OIDC authentication
     location /realms/ {
         set $keycloak marty-keycloak:8080;
@@ -103,18 +131,25 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
-    # UI routes - proxy to static production container
+    # UI routes - proxy to Vite dev server on host
     location / {
-        proxy_pass http://tunnel-nginx-proxy-prod;
+        set $ui_upstream host.docker.internal:${UI_DEV_PORT};
+        proxy_pass http://$ui_upstream;
         proxy_http_version 1.1;
-        
+
+        # Required for Vite HMR websocket
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_set_header X-Forwarded-Host $host;
-        
-        # Enable caching for static assets
-        proxy_cache_valid 200 5m;
+
+        # Vite pre-bundles large deps (e.g. MUI icons) on first request — allow extra time
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 300s;
+        proxy_read_timeout 300s;
     }
 }

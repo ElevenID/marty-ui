@@ -1,13 +1,15 @@
 # Marty UI Development Environment
 # =================================
 
-.PHONY: help dev up down restart logs clean status shell test infra setup-local run-api run-ui \
-	services-up services-down services-logs services-build services-restart services-migrate \
+.PHONY: help dev up down restart logs clean status shell test infra setup-local run-api run-api-tunnel run-ui \
+	services-up services-up-tunnel services-down services-logs services-build services-restart services-migrate \
 	tunnel-start tunnel-stop tunnel-restart tunnel-status tunnel-logs tunnel-nginx-logs \
 	tunnel-refresh-upstreams \
 	tunnel-auth-restart tunnel-keycloak-restart tunnel-full-restart tunnel-use-prod tunnel-use-dev \
 	dev-ui-tunnel prod-ui-tunnel prod-ui-tunnel-kill tunnel-prod-static tunnel-prod-restart \
-	obs-up obs-down
+	public-ui \
+	obs-up obs-down \
+	wallet-up wallet-down
 
 # Colors
 BLUE := \033[0;34m
@@ -21,11 +23,13 @@ COMPOSE := docker compose
 BASE_COMPOSE := $(COMPOSE) -f docker-compose.base.yml -f docker-compose.profile.dev.yml
 TUNNEL_COMPOSE := $(COMPOSE) -f docker-compose.base.yml -f docker-compose.profile.dev.yml -f docker-compose.profile.tunnel.yml
 OBS_COMPOSE := $(COMPOSE) -f docker-compose.base.yml -f docker-compose.profile.dev.yml -f docker-compose.profile.obs.yml
+WALTID_COMPOSE := $(TUNNEL_COMPOSE) -f docker-compose.profile.waltid.yml
+WALTID_SERVICES := waltid-wallet-api waltid-web-wallet waltid-nginx
 WHEELS_SCRIPT := ./scripts/build-rust-wheels.sh
 SETUP_LOCAL_SCRIPT := ./scripts/setup-local.sh
 
 INFRA_SERVICES := postgres redis keycloak mailhog
-APP_SERVICES := rabbitmq gateway auth organization credential-template trust-profile applicant notification compliance-profile presentation-policy deployment-profile flow
+APP_SERVICES := rabbitmq issuance gateway auth organization credential-template trust-profile applicant notification compliance-profile presentation-policy deployment-profile flow
 
 .DEFAULT_GOAL := help
 
@@ -60,9 +64,14 @@ infra: ## Start only infrastructure services
 run-api: infra services-up ## Start infra + API microservices
 	@echo "$(GREEN)✓ Gateway API started at http://localhost:8000$(NC)"
 
+run-api-tunnel: infra services-up-tunnel ## Start infra + API microservices with tunnel env vars (sets ISSUER_BASE_URL)
+	@echo "$(GREEN)✓ Gateway API started (tunnel mode)$(NC)"
+
 run-ui: ## Run UI natively (requires API stack)
 	@echo "$(BLUE)Starting UI natively...$(NC)"
 	@cd ui && bun run dev
+
+public-ui: run-api-tunnel tunnel-keycloak-restart tunnel-start dev-ui-tunnel ## Start all dependencies + Cloudflare tunnel/proxy + UI dev server (public tunnel mode)
 
 services-migrate: ## Run Alembic migrations using the migration runner
 	@echo "$(BLUE)Running database migrations...$(NC)"
@@ -71,9 +80,19 @@ services-migrate: ## Run Alembic migrations using the migration runner
 
 services-up: ## Start all microservices (requires infra)
 	@echo "$(BLUE)Starting Marty microservices stack...$(NC)"
+	@$(BASE_COMPOSE) build db-migrate
+	@$(BASE_COMPOSE) up -d db-migrate
 	@$(BASE_COMPOSE) up -d --build $(APP_SERVICES)
 	@$(MAKE) --no-print-directory tunnel-refresh-upstreams
 	@echo "$(GREEN)✓ Microservices started$(NC)"
+
+services-up-tunnel: ## Start all microservices with tunnel profile (sets ISSUER_BASE_URL for public wallet flows)
+	@echo "$(BLUE)Starting Marty microservices stack (tunnel mode)...$(NC)"
+	@$(TUNNEL_COMPOSE) build db-migrate
+	@$(TUNNEL_COMPOSE) up -d db-migrate
+	@$(TUNNEL_COMPOSE) up -d --build $(APP_SERVICES)
+	@$(MAKE) --no-print-directory tunnel-refresh-upstreams
+	@echo "$(GREEN)✓ Microservices started (tunnel mode)$(NC)"
 
 services-down: ## Stop microservices only
 	@echo "$(BLUE)Stopping Marty microservices...$(NC)"
@@ -218,4 +237,16 @@ obs-up: ## Start observability profile
 
 obs-down: ## Stop observability profile
 	@$(OBS_COMPOSE) stop elasticsearch kibana fluentd prometheus grafana jaeger
+
+wallet-up: ## Start walt.id web wallet stack for Playwright testing (UI: :7101, API: :7001)
+	@echo "$(BLUE)Starting walt.id wallet stack...$(NC)"
+	@$(WALTID_COMPOSE) up -d $(WALTID_SERVICES)
+	@echo "$(GREEN)✓ Walt.id wallet started$(NC)"
+	@echo "  Demo Wallet: http://localhost:7101"
+	@echo "  Wallet API:  http://localhost:7001/wallet-api"
+
+wallet-down: ## Stop walt.id wallet stack
+	@echo "$(BLUE)Stopping walt.id wallet stack...$(NC)"
+	@$(WALTID_COMPOSE) stop $(WALTID_SERVICES)
+	@echo "$(GREEN)✓ Walt.id wallet stopped$(NC)"
 

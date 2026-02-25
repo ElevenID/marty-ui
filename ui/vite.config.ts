@@ -137,6 +137,7 @@ export default defineConfig(({ mode }) => {
       host: '0.0.0.0', // Listen on all network interfaces
       strictPort: false,
       cors: true,
+      allowedHosts: env.PUBLIC_DOMAIN ? [env.PUBLIC_DOMAIN, 'localhost'] : 'all',
       headers: {
         'Cache-Control': 'no-store',
       },

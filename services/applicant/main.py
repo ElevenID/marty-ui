@@ -39,7 +39,9 @@ logger = logging.getLogger(__name__)
 
 SERVICE_NAME = "applicant-service"
 SERVICE_PORT = int(os.environ.get("APPLICANT_SERVICE_PORT", "8006"))
-ISSUANCE_SERVICE_URL = os.environ.get("ISSUANCE_SERVICE_URL", "http://gateway:8000")
+# Use the issuance service directly for service-to-service calls so we bypass
+# the gateway's auth check (the gateway requires a bearer token on /v1/issuance).
+ISSUANCE_SERVICE_URL = os.environ.get("ISSUANCE_SERVICE_URL", "http://issuance:8005")
 
 
 def _generate_reference_number() -> str:
@@ -668,6 +670,8 @@ class ApplicationResponse(BaseModel):
     issued_at: str | None = None
     updated_at: str
     credential_display_name: str | None = None
+    credential_offer_uri: str | None = None
+    offer_expires_at: str | None = None
 
 
 class EnrollBiometricRequest(BaseModel):
@@ -1022,10 +1026,8 @@ async def issue_application(
     if not application:
         raise HTTPException(status_code=404, detail="Application not found")
 
-    if application.status == ApplicationStatus.ISSUED:
-        return _application_to_response(application)
-
-    if application.status != ApplicationStatus.APPROVED:
+    # Always re-initiate: offers expire, and we need a fresh URL each time the admin requests one.
+    if application.status not in (ApplicationStatus.APPROVED, ApplicationStatus.ISSUED):
         raise HTTPException(
             status_code=400,
             detail=f"Cannot issue application in {application.status.value} status",
@@ -1035,13 +1037,33 @@ async def issue_application(
     if not applicant:
         raise HTTPException(status_code=404, detail="Applicant not found")
 
-    claims = {
-        **application.metadata,
-        "applicant_id": applicant.id,
-        "email": applicant.email,
-        "given_name": applicant.given_name,
-        "family_name": applicant.family_name,
+    # Internal metadata written by the issuance workflow — must never become
+    # credential subject attributes.  Strip them before forwarding to the
+    # issuance service so they don't end up inside the signed JWT.
+    _INTERNAL_METADATA_FIELDS = {
+        "credential_offer_uri",
+        "offer_expires_at",
+        "issuance_transaction_id",
+        "issuance_fallback",
+        "credential_type",
+        "credential_display_name",
+        "rejection_reason",
+        "review_notes",
+        "info_requests",
     }
+    claims = {
+        k: v
+        for k, v in application.metadata.items()
+        if k not in _INTERNAL_METADATA_FIELDS
+    }
+    claims.update(
+        {
+            "applicant_id": str(applicant.id),
+            "email": applicant.email,
+            "given_name": applicant.given_name,
+            "family_name": applicant.family_name,
+        }
+    )
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -1080,6 +1102,7 @@ async def issue_application(
     application.updated_at = datetime.now(timezone.utc)
     application.metadata["issuance_transaction_id"] = issuance.get("id")
     application.metadata["credential_offer_uri"] = issuance.get("credential_offer_uri")
+    application.metadata["offer_expires_at"] = issuance.get("expires_at")
     if issuance.get("fallback"):
         application.metadata["issuance_fallback"] = True
     await repo.save_application(application)
@@ -1401,6 +1424,8 @@ def _application_to_response(application: ApplicantApplication) -> ApplicationRe
         issued_at=application.issued_at.isoformat() if application.issued_at else None,
         updated_at=application.updated_at.isoformat(),
         credential_display_name=application.metadata.get("credential_display_name"),
+        credential_offer_uri=application.metadata.get("credential_offer_uri"),
+        offer_expires_at=application.metadata.get("offer_expires_at"),
     )
 
 

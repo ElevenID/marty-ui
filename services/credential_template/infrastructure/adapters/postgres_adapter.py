@@ -15,15 +15,15 @@ from credential_template.infrastructure.models import credential_templates_table
 
 if TYPE_CHECKING:
     from credential_template.main import (
-        CredentialTemplate, ClaimDefinition, DisplayStyle, ValidityRules, 
+        CredentialTemplate, ClaimDefinition, DisplayStyle, ValidityRules,
         IssuerRequirements, DerivedAttribute, TemplateStatus, CredentialFormat,
-        PrivacyPosture, ClaimType
+        PrivacyPosture, ClaimType, WalletConfig,
     )
 
 
 class PostgresCredentialTemplateRepository:
-    """PostgreSQL implementation of credential template repository."""
-    
+    """PostgreSQL implementation of the credential template repository."""
+
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]):
         self._session_factory = session_factory
     
@@ -107,11 +107,14 @@ class PostgresCredentialTemplateRepository:
                 "claims": claims_json,
                 "privacy_posture": template.privacy_posture.value,
                 "selective_disclosure_fields": template.selective_disclosure_fields,
+                "zk_predicate_claims": template.zk_predicate_claims,
                 "derived_attributes": derived_attributes_json,
                 "display_style": display_style_json,
                 "validity_rules": validity_rules_json,
                 "issuer_requirements": issuer_requirements_json,
                 "supported_formats": [fmt.value for fmt in template.supported_formats],
+                "credential_payload_format": template.credential_payload_format,
+                "wallet_configs": [{k: v for k, v in {"wallet_id": wc.wallet_id, "deep_link_scheme": wc.deep_link_scheme, "format_variant": wc.format_variant}.items() if v is not None} for wc in template.wallet_configs],
                 "version": template.version,
                 "updated_at": template.updated_at,
             }
@@ -137,7 +140,7 @@ class PostgresCredentialTemplateRepository:
         from credential_template.main import (
             CredentialTemplate, TemplateStatus, PrivacyPosture, CredentialFormat,
             ClaimDefinition, ClaimType, DisplayStyle, ValidityRules, 
-            IssuerRequirements, DerivedAttribute
+            IssuerRequirements, DerivedAttribute, WalletConfig
         )
         
         async with self._session_factory() as session:
@@ -220,11 +223,14 @@ class PostgresCredentialTemplateRepository:
             claims=claims,
             privacy_posture=PrivacyPosture(row.privacy_posture),
             selective_disclosure_fields=row.selective_disclosure_fields,
+            zk_predicate_claims=list(row.zk_predicate_claims or []),
             derived_attributes=derived_attributes,
             display_style=display_style,
             validity_rules=validity_rules,
             issuer_requirements=issuer_requirements,
             supported_formats=[CredentialFormat(fmt) for fmt in row.supported_formats],
+            wallet_configs=[WalletConfig(wallet_id=wc.get("wallet_id", ""), deep_link_scheme=wc.get("deep_link_scheme", "openid-credential-offer://"), format_variant=wc.get("format_variant")) for wc in (row.wallet_configs or [])],
+            credential_payload_format=row.credential_payload_format or "w3c_vcdm_v2_sd_jwt",
             version=row.version,
             created_at=row.created_at,
             updated_at=row.updated_at,
@@ -256,6 +262,33 @@ class PostgresCredentialTemplateRepository:
             
             return templates
     
+    async def list_all(
+        self,
+        status: "TemplateStatus | None" = None,
+    ) -> "list[CredentialTemplate]":
+        """List all credential templates across all organizations (internal use only)."""
+        from credential_template.main import TemplateStatus
+
+        async with self._session_factory() as session:
+            conditions = []
+            if status:
+                conditions.append(credential_templates_table.c.status == status.value)
+
+            stmt = select(credential_templates_table)
+            if conditions:
+                stmt = stmt.where(and_(*conditions))
+
+            result = await session.execute(stmt)
+            rows = result.all()
+
+            templates = []
+            for row in rows:
+                template = await self.get(row.id)
+                if template:
+                    templates.append(template)
+
+            return templates
+
     async def delete(self, template_id: str) -> None:
         """Delete a credential template."""
         async with self._session_factory() as session:
