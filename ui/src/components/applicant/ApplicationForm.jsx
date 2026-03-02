@@ -666,7 +666,7 @@ export default function ApplicationForm() {
 
             <Button
               variant="contained"
-              onClick={() => navigate('/applicant/applications')}
+              onClick={() => navigate(`/console/applicant/applications${applicationId ? `?id=${applicationId}` : ''}`)}
             >
               {t('applicationForm.success.viewApplications')}
             </Button>

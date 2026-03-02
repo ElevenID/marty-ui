@@ -4,7 +4,8 @@
  * View and track credential applications.
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   Box,
   Paper,
@@ -65,6 +66,10 @@ function MyApplicationsPage() {
     t('applications.steps.approved'),
     t('applications.steps.credentialReady', 'Credential Ready'),
   ];
+  const [searchParams] = useSearchParams();
+  const highlightId = searchParams.get('id');
+  const highlightHandled = useRef(false);
+
   const [applications, setApplications] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -88,6 +93,10 @@ function MyApplicationsPage() {
             status: status || 'submitted',
             step,
             completedAt: app.approved_at || app.issued_at,
+            // Preserve offer data so ClaimCredentialDialog can use it directly
+            offerUrl: app.credential_offer_uri || null,
+            offerUris: app.credential_offer_uris || {},
+            offerExpiresAt: app.offer_expires_at || null,
           };
         });
         setApplications(apps);
@@ -114,6 +123,17 @@ function MyApplicationsPage() {
       window.removeEventListener('focus', onFocus);
     };
   }, [t]);
+
+  // Auto-open detail dialog when arriving from the application form (?id=...)
+  useEffect(() => {
+    if (highlightId && applications.length > 0 && !highlightHandled.current) {
+      const match = applications.find(a => a.id === highlightId);
+      if (match) {
+        highlightHandled.current = true;
+        setSelectedApp(match);
+      }
+    }
+  }, [highlightId, applications]);
 
   const getStatusColor = (status) => {
     switch (status) {

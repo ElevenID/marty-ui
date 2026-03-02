@@ -228,7 +228,10 @@ class PostgresCredentialTemplateRepository:
             display_style=display_style,
             validity_rules=validity_rules,
             issuer_requirements=issuer_requirements,
-            supported_formats=[CredentialFormat(fmt) for fmt in row.supported_formats],
+            supported_formats=[
+                CredentialFormat(fmt) for fmt in row.supported_formats
+                if fmt in CredentialFormat._value2member_map_
+            ],
             wallet_configs=[WalletConfig(wallet_id=wc.get("wallet_id", ""), deep_link_scheme=wc.get("deep_link_scheme", "openid-credential-offer://"), format_variant=wc.get("format_variant")) for wc in (row.wallet_configs or [])],
             credential_payload_format=row.credential_payload_format or "w3c_vcdm_v2_sd_jwt",
             version=row.version,

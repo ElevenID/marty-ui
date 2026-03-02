@@ -372,6 +372,84 @@ class PresentationPolicyResponse(BaseModel):
 
 
 # =============================================================================
+# Constraint Evaluation
+# =============================================================================
+
+def _evaluate_constraint(constraint_type: str, value: Any, constraint: "ClaimConstraint") -> bool:
+    """Evaluate a single claim constraint against a presented value."""
+    import re as _re
+
+    expected = constraint.value
+
+    if constraint_type == ConstraintType.PRESENCE.value:
+        return value is not None
+
+    if value is None:
+        # Remaining constraint types require an actual value
+        return False
+
+    if constraint_type == ConstraintType.EQUALS.value:
+        return str(value) == str(expected)
+
+    if constraint_type == ConstraintType.NOT_EQUALS.value:
+        return str(value) != str(expected)
+
+    if constraint_type == ConstraintType.IN_SET.value:
+        allowed = expected if isinstance(expected, list) else [expected]
+        return str(value) in [str(a) for a in allowed]
+
+    if constraint_type == ConstraintType.NOT_IN_SET.value:
+        allowed = expected if isinstance(expected, list) else [expected]
+        return str(value) not in [str(a) for a in allowed]
+
+    if constraint_type == ConstraintType.GREATER_THAN.value:
+        try:
+            return float(value) > float(expected)
+        except (TypeError, ValueError):
+            return False
+
+    if constraint_type == ConstraintType.LESS_THAN.value:
+        try:
+            return float(value) < float(expected)
+        except (TypeError, ValueError):
+            return False
+
+    if constraint_type == ConstraintType.GREATER_OR_EQUAL.value:
+        try:
+            return float(value) >= float(expected)
+        except (TypeError, ValueError):
+            return False
+
+    if constraint_type == ConstraintType.LESS_OR_EQUAL.value:
+        try:
+            return float(value) <= float(expected)
+        except (TypeError, ValueError):
+            return False
+
+    if constraint_type == ConstraintType.REGEX.value:
+        try:
+            return bool(_re.fullmatch(str(expected), str(value)))
+        except _re.error:
+            return False
+
+    if constraint_type == ConstraintType.AGE_OVER.value:
+        # value is expected to be an ISO-8601 date of birth string
+        from datetime import date as _date, datetime as _dt
+        try:
+            min_age = int(expected)
+            dob = _dt.fromisoformat(str(value)).date()
+            today = _date.today()
+            age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
+            return age >= min_age
+        except Exception:
+            return False
+
+    # Unknown constraint type — pass through
+    logger.warning(f"Unknown constraint type '{constraint_type}'; treating as passing")
+    return True
+
+
+# =============================================================================
 # Format Detection & Verification Utilities
 # =============================================================================
 
@@ -473,14 +551,87 @@ def _verify_w3c_vc(vp_token: str, nonce: str | None, audience: str | None) -> di
 
 
 def _verify_sd_jwt(vp_token: str, nonce: str | None, audience: str | None) -> dict:
-    """Verify SD-JWT credential."""
-    # In production: call verification service or use _marty_rs
-    return {
-        "verified": True,
-        "claims": {"simulated": "sd_jwt_claims"},
-        "issuer_did": "did:example:issuer",
-        "format": "sd-jwt",
-    }
+    """
+    Decode an SD-JWT VC and extract all Claims (base claims + disclosures).
+
+    Format:  ``<JWT>~<disclosure_1>~<disclosure_2>~...[~<KB-JWT>]``
+
+    Each disclosure is a base64url-encoded JSON array:
+      ``[salt, claim_name, claim_value]``
+
+    Note: This implementation does NOT cryptographically verify the JWT
+    signature or validate the issuer trust chain.  That is the responsibility
+    of the trust-profile service and the Rust marty-rs bridge.  In a
+    production deployment, wrap this with
+    ``marty_rs.SdJwtVerifier(issuer_public_key_pem).verify(vp_token)``
+    before trusting the extracted claims.
+    """
+    import base64 as _b64
+
+    def _b64decode_unpadded(s: str) -> bytes:
+        s = s.replace("-", "+").replace("_", "/")
+        padding = 4 - len(s) % 4
+        if padding != 4:
+            s += "=" * padding
+        return _b64.b64decode(s)
+
+    try:
+        # Split SD-JWT into JWT part and disclosures
+        # The last segment may be a key-binding JWT (non-empty, starts with 'e')
+        segments = vp_token.split("~")
+        jwt_part = segments[0]
+        disclosure_parts = [
+            s for s in segments[1:]
+            if s and "." not in s  # KB-JWT would contain dots
+        ]
+
+        # Decode JWT payload
+        jwt_segs = jwt_part.split(".")
+        if len(jwt_segs) < 2:
+            return {"verified": False, "error": "Malformed SD-JWT", "claims": {}}
+
+        payload_bytes = _b64decode_unpadded(jwt_segs[1])
+        payload: dict = json.loads(payload_bytes)
+
+        # Collect base (non-selective) claims — exclude SD-JWT internals
+        _SD_INTERNAL = {"_sd", "_sd_alg", "cnf", "..."}
+        claims: dict = {
+            k: v for k, v in payload.items()
+            if k not in _SD_INTERNAL and not k.startswith("_")
+        }
+
+        # Decode each disclosure and merge  
+        for disc in disclosure_parts:
+            try:
+                decoded = json.loads(_b64decode_unpadded(disc))
+                if isinstance(decoded, list) and len(decoded) == 3:
+                    _salt, claim_name, claim_value = decoded
+                    claims[str(claim_name)] = claim_value
+            except Exception as disc_exc:
+                logger.debug(f"Skipping malformed disclosure: {disc_exc}")
+
+        # Optional: validate nonce if the payload carries it
+        if nonce and payload.get("nonce") and payload["nonce"] != nonce:
+            return {
+                "verified": False,
+                "error": "Nonce mismatch",
+                "claims": claims,
+            }
+
+        issuer = payload.get("iss") or payload.get("issuer", "unknown")
+        subject = payload.get("sub") or payload.get("subject", "unknown")
+
+        return {
+            "verified": True,  # structural verification only — crypto TODO
+            "claims": claims,
+            "issuer_did": issuer,
+            "subject": subject,
+            "format": "sd-jwt",
+        }
+
+    except Exception as exc:
+        logger.error(f"SD-JWT decode error: {exc}")
+        return {"verified": False, "error": str(exc), "claims": {}}
 
 
 def _verify_mdoc(vp_token: str, nonce: str | None, audience: str | None) -> dict:
@@ -934,7 +1085,11 @@ async def evaluate_presentation(
     # 5. Evaluate claims against policy constraints
     # 6. Check freshness/expiry
     
-    # Simulated evaluation for development
+    # Extract real claims from the verification result
+    extracted_claims: dict[str, Any] = verification_result.get("claims", {})
+    issuer_did: str = verification_result.get("issuer_did", "unknown")
+    verification_ok: bool = verification_result.get("verified", False)
+
     credential_results = []
     verified_claims: dict[str, Any] = {}
     all_satisfied = True
@@ -945,33 +1100,44 @@ async def evaluate_presentation(
         if req.required:
             required_total += 1
         
-        # Simulate credential verification
         claim_results = []
         req_satisfied = True
         
         for claim in req.requested_claims:
-            # Simulate claim evaluation
-            claim_satisfied = True  # Would actually check constraints
+            # Use real extracted value; fall back to None if not present
+            presented_value = extracted_claims.get(claim.claim_name)
+            claim_satisfied = presented_value is not None or not claim.required
+
+            # Evaluate constraints against the presented value
+            constraint_results = []
+            for c in claim.constraints:
+                try:
+                    ct = c.constraint_type.value
+                    passed = _evaluate_constraint(ct, presented_value, c)
+                    constraint_results.append({"constraint": ct, "passed": passed})
+                    if not passed:
+                        claim_satisfied = False
+                except Exception:
+                    constraint_results.append({"constraint": c.constraint_type.value, "passed": False})
+                    claim_satisfied = False
+
             claim_results.append(ClaimEvaluationResult(
                 claim_name=claim.claim_name,
                 satisfied=claim_satisfied,
-                presented_value="[simulated]",
-                constraint_results=[
-                    {"constraint": c.constraint_type.value, "passed": True}
-                    for c in claim.constraints
-                ],
+                presented_value=str(presented_value) if presented_value is not None else None,
+                constraint_results=constraint_results,
             ))
             if claim.required and not claim_satisfied:
                 req_satisfied = False
             
-            # Add to verified claims
-            verified_claims[claim.claim_name] = "[simulated]"
+            if presented_value is not None:
+                verified_claims[claim.claim_name] = presented_value
         
         credential_results.append(CredentialEvaluationResult(
             credential_template_id=req.credential_template_id,
             satisfied=req_satisfied,
-            issuer_did="did:example:issuer",
-            issuer_name="Simulated Issuer",
+            issuer_did=issuer_did,
+            issuer_name=None,
             claim_results=claim_results,
         ))
         

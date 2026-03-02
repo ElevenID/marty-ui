@@ -672,6 +672,10 @@ class ApplicationResponse(BaseModel):
     credential_display_name: str | None = None
     credential_offer_uri: str | None = None
     offer_expires_at: str | None = None
+    # Per-wallet offer URIs keyed by wallet_id (e.g. {"marty": "openid-credential-offer://..."}).
+    # Populated when the credential template has wallet_configs and the issuance
+    # service is running with multi-wallet support.
+    credential_offer_uris: dict[str, str] = {}
 
 
 class EnrollBiometricRequest(BaseModel):
@@ -1103,6 +1107,7 @@ async def issue_application(
     application.metadata["issuance_transaction_id"] = issuance.get("id")
     application.metadata["credential_offer_uri"] = issuance.get("credential_offer_uri")
     application.metadata["offer_expires_at"] = issuance.get("expires_at")
+    application.metadata["credential_offer_uris"] = issuance.get("credential_offer_uris") or {}
     if issuance.get("fallback"):
         application.metadata["issuance_fallback"] = True
     await repo.save_application(application)
@@ -1426,6 +1431,7 @@ def _application_to_response(application: ApplicantApplication) -> ApplicationRe
         credential_display_name=application.metadata.get("credential_display_name"),
         credential_offer_uri=application.metadata.get("credential_offer_uri"),
         offer_expires_at=application.metadata.get("offer_expires_at"),
+        credential_offer_uris=application.metadata.get("credential_offer_uris") or {},
     )
 
 
