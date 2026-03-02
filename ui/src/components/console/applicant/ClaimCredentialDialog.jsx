@@ -4,13 +4,14 @@
  * Applicant-facing dialog for claiming an approved credential into their wallet.
  *
  * Device-aware UX:
- *   Desktop → QR Code primary + web-wallet deep-link buttons + email-to-phone
- *   Mobile  → Wallet chooser with deep links primary + "Show QR" fallback
+ *   Desktop → Wallet-tab selector (per wallet QR codes, similar to org console)
+ *   Mobile  → Deep-link buttons per wallet (tap to open app), QR as collapsible fallback
  *
  * Props:
  *   open           {boolean}
  *   onClose        {() => void}
- *   applicationId  {string}
+ *   applicationId  {string}   — used as fallback if offerData not provided
+ *   offerData      {Object}   — pre-loaded offer: { offer_url, credential_offer_uris, expires_at }
  */
 
 import { useState, useEffect, useCallback } from 'react';
@@ -25,7 +26,7 @@ import {
   Stack,
   Alert,
   CircularProgress,
-  Divider,
+  Collapse,
   Chip,
   TextField,
   Tab,
@@ -37,144 +38,290 @@ import WalletIcon from '@mui/icons-material/AccountBalanceWallet';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import RefreshIcon from '@mui/icons-material/Refresh';
-import PhoneAndroidIcon from '@mui/icons-material/PhoneAndroid';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import ExpandLessIcon from '@mui/icons-material/ExpandLess';
+import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 
-import { getIssuanceOffer } from '../../../services/credentialsApi';
+import { apiClient } from '../../../services/api';
 import QRCodeDisplay from '../../issuance/QRCodeDisplay';
-import { isMobile, filterWalletsForDevice, openDeepLink } from '../../../utils/deviceDetection';
+import { isMobile, openDeepLink } from '../../../utils/deviceDetection';
 
-function TabPanel({ children, value, index }) {
-  return (
-    <Box role="tabpanel" hidden={value !== index} sx={{ pt: 2 }}>
-      {value === index && children}
-    </Box>
-  );
+/** Human-readable names and optional branding for known wallet IDs */
+const WALLET_META = {
+  marty: { label: 'SpruceKit', color: '#2563eb' },
+  spruce: { label: 'SpruceKit', color: '#2563eb' },
+  sprucekit: { label: 'SpruceKit', color: '#2563eb' },
+};
+
+const walletLabel = (id) => WALLET_META[id]?.label || id;
+
+const GENERIC_ID = '__generic__';
+
+/** Build a flat wallet list from credential_offer_uris + a generic fallback */
+function buildWallets(offerUris, offerUrl) {
+  const specific = Object.entries(offerUris || {}).map(([id, uri]) => ({
+    id,
+    label: walletLabel(id),
+    uri,
+  }));
+  const result = [...specific];
+  if (offerUrl) {
+    result.push({ id: GENERIC_ID, label: specific.length ? 'Other Wallets' : 'Open in Wallet', uri: offerUrl });
+  }
+  return result;
 }
 
-export default function ClaimCredentialDialog({ open, onClose, applicationId }) {
-  const [offer, setOffer] = useState(null);
+/** Fetch the offer via the UI's applicant API (fallback when offerData not passed as prop) */
+async function fetchOffer(applicationId) {
+  const response = await apiClient.get(`/v1/applications/${applicationId}/issuance-offer`);
+  return response.data;
+}
+
+export default function ClaimCredentialDialog({ open, onClose, applicationId, offerData }) {
+  const [apiOffer, setApiOffer] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [notGenerated, setNotGenerated] = useState(false);
-  const [tab, setTab] = useState(0); // 0 = wallets/QR, 1 = email
-  const [copied, setCopied] = useState(false);
+
+  // Wallet-selector state
+  const [selectedWallet, setSelectedWallet] = useState(null);
+  const [deepLinkFailed, setDeepLinkFailed] = useState(false);
+  const [showQrOnMobile, setShowQrOnMobile] = useState(false);
+
+  // Email state
+  const [emailTab, setEmailTab] = useState(false); // toggle email section
   const [emailValue, setEmailValue] = useState('');
   const [emailSent, setEmailSent] = useState(false);
-  const [deepLinkFailed, setDeepLinkFailed] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   const mobile = isMobile();
 
+  // ── Resolve the active offer ────────────────────────────────────────────────
+  // Prefer the pre-loaded offerData prop; fall back to API-fetched data.
+  const activeOffer = offerData ?? apiOffer;
+  const offerUrl = activeOffer?.offer_url || null;
+  const offerUris = activeOffer?.credential_offer_uris || {};
+  const isExpired = activeOffer?.status === 'expired';
+  const notGenerated = !loading && !error && activeOffer !== null && !offerUrl;
+
+  // Build wallet list once offer is resolved
+  const wallets = buildWallets(offerUris, offerUrl);
+  const resolvedWallet = selectedWallet ?? wallets[0]?.id ?? null;
+  const activeUri = wallets.find((w) => w.id === resolvedWallet)?.uri ?? offerUrl ?? '';
+
+  // ── Load from API when offerData prop is not provided ──────────────────────
   const loadOffer = useCallback(async () => {
-    if (!applicationId) return;
+    if (!applicationId || offerData !== undefined) return; // prop takes precedence
     setLoading(true);
     setError(null);
-    setNotGenerated(false);
+    setApiOffer(null);
     try {
-      const data = await getIssuanceOffer(applicationId);
-      setOffer(data);
+      const data = await fetchOffer(applicationId);
+      setApiOffer(data);
     } catch (err) {
       const status = err?.response?.status ?? err?.status;
       if (status === 404) {
-        setNotGenerated(true);
+        setApiOffer({}); // empty = not generated
       } else {
         setError(err.message || 'Failed to load credential offer.');
       }
     } finally {
       setLoading(false);
     }
-  }, [applicationId]);
+  }, [applicationId, offerData]);
 
   useEffect(() => {
     if (open) {
-      setOffer(null);
-      setNotGenerated(false);
+      setApiOffer(null);
       setError(null);
+      setSelectedWallet(null);
       setDeepLinkFailed(false);
+      setShowQrOnMobile(false);
+      setEmailTab(false);
       setEmailSent(false);
-      setTab(0);
+      setCopied(false);
       loadOffer();
     }
   }, [open, applicationId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const isExpired = offer?.status === 'expired';
-  const offerUrl = offer?.offer_url;
-  const walletsForDevice = offer?.wallets ? filterWalletsForDevice(offer.wallets) : [];
-
+  // ── Handlers ───────────────────────────────────────────────────────────────
   const handleCopy = async () => {
-    if (!offerUrl) return;
-    await navigator.clipboard.writeText(offerUrl).catch(() => {});
+    if (!activeUri) return;
+    await navigator.clipboard.writeText(activeUri).catch(() => {});
     setCopied(true);
     setTimeout(() => setCopied(false), 2500);
   };
 
-  const handleOpenWallet = async (wallet) => {
+  const handleOpenDeepLink = async (uri) => {
     setDeepLinkFailed(false);
-    const opened = await openDeepLink(wallet.deep_link_url, 2500);
-    if (!opened) {
-      setDeepLinkFailed(true);
-    }
+    const opened = await openDeepLink(uri, 2500);
+    if (!opened) setDeepLinkFailed(true);
   };
 
   const handleEmailSelf = () => {
-    if (!emailValue || !offerUrl) return;
+    if (!emailValue || !activeUri) return;
     const subject = encodeURIComponent('Your credential is ready');
     const body = encodeURIComponent(
-      `Your credential is ready to add to your wallet.\n\nClick the link below or scan the QR code from your wallet app:\n\n${offerUrl}`
+      `Your credential is ready to add to your wallet.\n\nOpen the link on your phone:\n\n${activeUri}`
     );
     window.open(`mailto:${emailValue}?subject=${subject}&body=${body}`, '_blank');
     setEmailSent(true);
   };
 
-  // ── Wallet buttons (shared between mobile and desktop) ──────────────────────
-  const WalletButtons = () => (
-    <Stack spacing={1.5}>
-      {walletsForDevice.length > 0 ? (
-        <>
-          <Typography variant="caption" color="text.secondary">
-            Choose your wallet:
-          </Typography>
-          {walletsForDevice.map((wallet) => (
+  // ── Derived loading state ──────────────────────────────────────────────────
+  // When offerData prop is supplied we never show a loading spinner.
+  const showLoading = loading && !offerData;
+  const showContent = !showLoading && !error && !notGenerated && !!offerUrl && !isExpired;
+
+  // ── Render helpers ─────────────────────────────────────────────────────────
+
+  /** Wallet tab bar (desktop + mobile tab row) */
+  const WalletTabs = () =>
+    wallets.length > 1 ? (
+      <Tabs
+        value={resolvedWallet}
+        onChange={(_, v) => { setSelectedWallet(v); setDeepLinkFailed(false); setShowQrOnMobile(false); }}
+        sx={{ borderBottom: 1, borderColor: 'divider', mb: 2 }}
+        variant="scrollable"
+        scrollButtons="auto"
+      >
+        {wallets.map((w) => (
+          <Tab
+            key={w.id}
+            value={w.id}
+            label={w.label}
+            sx={{ minHeight: 40, fontSize: '0.8rem', textTransform: 'none' }}
+          />
+        ))}
+      </Tabs>
+    ) : null;
+
+  /** Desktop body: QR code (with optional wallet tabs above) */
+  const DesktopQr = () => (
+    <>
+      <WalletTabs />
+      <QRCodeDisplay
+        offerUri={activeUri}
+        expiresAt={activeOffer?.expires_at}
+        status="active"
+        showDeepLink={false}
+        showCopyLink={false}
+        title={
+          resolvedWallet && resolvedWallet !== GENERIC_ID
+            ? `Scan with ${wallets.find((w) => w.id === resolvedWallet)?.label}`
+            : 'Scan with your wallet app'
+        }
+        instructions={`Open your ${
+          resolvedWallet && resolvedWallet !== GENERIC_ID
+            ? wallets.find((w) => w.id === resolvedWallet)?.label + ' app'
+            : 'wallet app'
+        } on your phone and tap Scan / Add credential.`}
+        size={230}
+      />
+    </>
+  );
+
+  /** Mobile body: deep-link buttons + optional QR toggle */
+  const MobileDeepLinks = () => (
+    <>
+      <WalletTabs />
+      <Stack spacing={1.5} sx={{ mb: 1.5 }}>
+        <Typography variant="caption" color="text.secondary">
+          Tap to open in your wallet app:
+        </Typography>
+        <Button
+          variant="contained"
+          size="large"
+          fullWidth
+          startIcon={<WalletIcon />}
+          endIcon={<OpenInNewIcon fontSize="small" />}
+          onClick={() => handleOpenDeepLink(activeUri)}
+          sx={{ justifyContent: 'space-between', textTransform: 'none' }}
+        >
+          Open in{' '}
+          {resolvedWallet && resolvedWallet !== GENERIC_ID
+            ? wallets.find((w) => w.id === resolvedWallet)?.label
+            : 'Wallet'}
+        </Button>
+        {deepLinkFailed && (
+          <Alert severity="info" sx={{ py: 0.5 }}>
+            Could not open the app. Make sure it&apos;s installed, or use the QR code below.
+          </Alert>
+        )}
+      </Stack>
+
+      {/* QR code toggle (fallback for mobile) */}
+      <Button
+        size="small"
+        variant="text"
+        color="inherit"
+        startIcon={showQrOnMobile ? <ExpandLessIcon /> : <QrCode2Icon />}
+        endIcon={showQrOnMobile ? null : <ExpandMoreIcon />}
+        onClick={() => setShowQrOnMobile((v) => !v)}
+        sx={{ textTransform: 'none', color: 'text.secondary', mb: 0.5 }}
+      >
+        {showQrOnMobile ? 'Hide QR Code' : 'Show QR Code instead'}
+      </Button>
+      <Collapse in={showQrOnMobile}>
+        <QRCodeDisplay
+          offerUri={activeUri}
+          expiresAt={activeOffer?.expires_at}
+          status="active"
+          showDeepLink={false}
+          showCopyLink={false}
+          title="Scan from another device"
+          instructions="Scan this QR code from a desktop device."
+          size={200}
+        />
+      </Collapse>
+    </>
+  );
+
+  /** Email to phone section (bottom of both layouts) */
+  const EmailSection = () => (
+    <>
+      <Button
+        size="small"
+        variant="text"
+        color="inherit"
+        startIcon={<EmailIcon fontSize="small" />}
+        endIcon={emailTab ? <ExpandLessIcon /> : <ExpandMoreIcon />}
+        onClick={() => { setEmailTab((v) => !v); setEmailSent(false); }}
+        sx={{ textTransform: 'none', color: 'text.secondary', mt: 1 }}
+      >
+        Email offer link to phone
+      </Button>
+      <Collapse in={emailTab}>
+        <Box sx={{ pt: 1.5 }}>
+          <Stack direction="row" spacing={1} alignItems="flex-start">
+            <TextField
+              size="small"
+              type="email"
+              placeholder="your@email.com"
+              value={emailValue}
+              onChange={(e) => setEmailValue(e.target.value)}
+              sx={{ flex: 1 }}
+              disabled={emailSent}
+              onKeyDown={(e) => e.key === 'Enter' && handleEmailSelf()}
+            />
             <Button
-              key={wallet.id}
-              variant="outlined"
-              fullWidth
-              size="large"
-              startIcon={
-                wallet.logo_url ? (
-                  <Box
-                    component="img"
-                    src={wallet.logo_url}
-                    alt={wallet.name}
-                    sx={{ width: 22, height: 22, objectFit: 'contain' }}
-                  />
-                ) : (
-                  <WalletIcon />
-                )
-              }
-              onClick={() => handleOpenWallet(wallet)}
-              sx={{ justifyContent: 'flex-start' }}
+              variant="contained"
+              size="small"
+              startIcon={emailSent ? <CheckCircleIcon /> : <EmailIcon />}
+              onClick={handleEmailSelf}
+              disabled={!emailValue || emailSent}
+              color={emailSent ? 'success' : 'primary'}
             >
-              Open in {wallet.name}
+              {emailSent ? 'Sent!' : 'Send'}
             </Button>
-          ))}
-          {deepLinkFailed && (
-            <Alert severity="info" sx={{ mt: 0.5 }}>
-              Could not open the wallet. Make sure it&apos;s installed, or use the QR code tab.
+          </Stack>
+          {emailSent && (
+            <Alert severity="success" sx={{ mt: 1 }}>
+              Email sent — open the link on your phone to claim your credential.
             </Alert>
           )}
-        </>
-      ) : (
-        <Button
-          variant="outlined"
-          fullWidth
-          size="large"
-          startIcon={<WalletIcon />}
-          href={offerUrl}
-        >
-          Open in Wallet
-        </Button>
-      )}
-    </Stack>
+        </Box>
+      </Collapse>
+    </>
   );
 
   return (
@@ -183,160 +330,69 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId }) 
         <WalletIcon color="primary" />
         Add to Wallet
         {isExpired && <Chip label="Expired" color="error" size="small" sx={{ ml: 'auto' }} />}
-        {offer && !isExpired && (
+        {showContent && (
           <Chip label="Ready" color="success" size="small" sx={{ ml: 'auto' }} />
         )}
       </DialogTitle>
 
       <DialogContent dividers>
-        {loading && (
+        {/* ── Loading ── */}
+        {showLoading && (
           <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
             <CircularProgress />
           </Box>
         )}
 
-        {!loading && notGenerated && (
+        {/* ── Not yet generated ── */}
+        {!showLoading && notGenerated && (
           <Alert severity="info">
             Your wallet invite has not been generated yet. The issuer will notify you when
             your credential is ready to claim.
           </Alert>
         )}
 
-        {!loading && error && (
+        {/* ── Error ── */}
+        {!showLoading && error && (
           <Alert severity="error">{error}</Alert>
         )}
 
-        {!loading && isExpired && (
-          <Alert
-            severity="warning"
-            action={
-              <Button size="small" color="inherit" startIcon={<RefreshIcon />} onClick={loadOffer}>
-                Refresh
-              </Button>
-            }
-          >
+        {/* ── Expired ── */}
+        {!showLoading && isExpired && (
+          <Alert severity="warning">
             This wallet invite has expired. Contact the issuer to regenerate it.
           </Alert>
         )}
 
-        {!loading && offer && !isExpired && (
+        {/* ── Active offer ── */}
+        {showContent && (
           <>
-            <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
               Your credential is approved and ready to add to your digital wallet.
             </Typography>
 
-            {/* ── Tabs: [wallet icon] Wallet  |  [qr icon] QR Code  |  [email icon] Email ── */}
-            <Tabs
-              value={tab}
-              onChange={(_, v) => setTab(v)}
-              variant="fullWidth"
-              sx={{ mb: 0, borderBottom: 1, borderColor: 'divider' }}
-            >
-              <Tab
-                icon={<WalletIcon fontSize="small" />}
-                iconPosition="start"
-                label={mobile ? 'Wallet' : 'Wallets'}
-                sx={{ minHeight: 40, fontSize: '0.8rem' }}
-              />
-              <Tab
-                icon={<QrCode2Icon fontSize="small" />}
-                iconPosition="start"
-                label="QR Code"
-                sx={{ minHeight: 40, fontSize: '0.8rem' }}
-              />
-              <Tab
-                icon={<PhoneAndroidIcon fontSize="small" />}
-                iconPosition="start"
-                label="Email"
-                sx={{ minHeight: 40, fontSize: '0.8rem' }}
-              />
-            </Tabs>
+            {mobile ? <MobileDeepLinks /> : <DesktopQr />}
 
-            {/* ── Tab 0: Wallet deep links ── */}
-            <TabPanel value={tab} index={0}>
-              <WalletButtons />
-              <Divider sx={{ my: 1.5 }} />
-              <Stack direction="row" spacing={1} justifyContent="center">
-                <Button
-                  size="small"
-                  variant="text"
-                  startIcon={copied ? <CheckCircleIcon color="success" /> : <ContentCopyIcon />}
-                  onClick={handleCopy}
-                  color={copied ? 'success' : 'primary'}
-                >
-                  {copied ? 'Copied!' : 'Copy offer link'}
-                </Button>
-              </Stack>
-            </TabPanel>
+            {/* ── Copy link ── */}
+            <Stack direction="row" justifyContent="center" sx={{ mt: 1.5 }}>
+              <Button
+                size="small"
+                variant="text"
+                startIcon={copied ? <CheckCircleIcon color="success" /> : <ContentCopyIcon />}
+                onClick={handleCopy}
+                color={copied ? 'success' : 'primary'}
+                sx={{ textTransform: 'none' }}
+              >
+                {copied ? 'Link copied!' : 'Copy offer link'}
+              </Button>
+            </Stack>
 
-            {/* ── Tab 1: QR Code ── */}
-            <TabPanel value={tab} index={1}>
-              <QRCodeDisplay
-                offerUri={offerUrl}
-                expiresAt={offer.expires_at}
-                status="active"
-                showDeepLink={false}
-                showCopyLink={false}
-                title="Scan with your wallet app"
-                instructions={
-                  mobile
-                    ? 'Scan this QR code from another device with your wallet app.'
-                    : 'Open your wallet app on your phone and tap Scan / Add credential.'
-                }
-                size={220}
-              />
-              <Stack direction="row" spacing={1} justifyContent="center" sx={{ mt: 1.5 }}>
-                <Button
-                  size="small"
-                  variant="outlined"
-                  startIcon={copied ? <CheckCircleIcon color="success" /> : <ContentCopyIcon />}
-                  onClick={handleCopy}
-                  color={copied ? 'success' : 'primary'}
-                >
-                  {copied ? 'Copied!' : 'Copy Link'}
-                </Button>
-              </Stack>
-            </TabPanel>
-
-            {/* ── Tab 2: Email to phone ── */}
-            <TabPanel value={tab} index={2}>
-              <Typography variant="body2" color="text.secondary" gutterBottom>
-                Email the credential offer link to yourself to open on your phone.
-              </Typography>
-              <Stack direction="row" spacing={1} alignItems="flex-start" sx={{ mt: 1 }}>
-                <TextField
-                  size="small"
-                  type="email"
-                  placeholder="your@email.com"
-                  value={emailValue}
-                  onChange={(e) => setEmailValue(e.target.value)}
-                  sx={{ flex: 1 }}
-                  disabled={emailSent}
-                  onKeyDown={(e) => e.key === 'Enter' && handleEmailSelf()}
-                />
-                <Button
-                  variant="contained"
-                  size="small"
-                  startIcon={emailSent ? <CheckCircleIcon /> : <EmailIcon />}
-                  onClick={handleEmailSelf}
-                  disabled={!emailValue || emailSent}
-                  color={emailSent ? 'success' : 'primary'}
-                >
-                  {emailSent ? 'Sent!' : 'Send'}
-                </Button>
-              </Stack>
-              {emailSent && (
-                <Alert severity="success" sx={{ mt: 1.5 }}>
-                  Email sent. Open the link on your phone to add the credential to your wallet.
-                </Alert>
-              )}
-            </TabPanel>
+            <EmailSection />
           </>
         )}
       </DialogContent>
 
       <DialogActions sx={{ px: 3, py: 1.5 }}>
-        {!loading && (notGenerated || error) && (
+        {!showLoading && (notGenerated || error) && !offerData && (
           <Button size="small" startIcon={<RefreshIcon />} onClick={loadOffer} sx={{ mr: 'auto' }}>
             Try again
           </Button>

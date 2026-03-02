@@ -373,6 +373,7 @@ ROUTE_CONFIG = {
     "/v1/issuance": {"service": "issuance", "requires_auth": True},
     "/v1/application-templates": {"service": "issuance", "requires_auth": True},
     "/v1/applications": {"service": "issuance", "requires_auth": True},
+    "/v1/flows/instances": {"service": "flows", "requires_auth": False},  # wallet-facing: request + submit
     "/v1/flows": {"service": "flows", "requires_auth": True},
     
     # Verification & ZK Proof routes
@@ -2823,6 +2824,36 @@ Verification is handled through two complementary approaches:
     @app.get("/.well-known/oauth-authorization-server/org/{org_id}")
     async def get_org_oauth_authorization_server_metadata(org_id: str) -> Response:
         return await _proxy_to_issuance_well_known(f"/.well-known/oauth-authorization-server/org/{org_id}")
+
+    # ---------------------------------------------------------------------
+    # SpruceID / SpruceKit wallet — Spruce-specific issuer metadata.
+    # credential_issuer = "https://host/org/{org_id}/spruce", so the SDK
+    # appends /.well-known/openid-credential-issuer, producing:
+    #   https://host/org/{org_id}/spruce/.well-known/openid-credential-issuer
+    # nginx rewrites that to:
+    #   /.well-known/openid-credential-issuer/org/{org_id}/spruce
+    # Both the insertion form AND the appended form are handled here.
+    # ---------------------------------------------------------------------
+
+    @app.get("/.well-known/openid-credential-issuer/org/{org_id}/spruce")
+    async def get_org_spruce_issuer_metadata(org_id: str) -> Response:
+        """SpruceID insertion-form discovery: /.well-known/openid-credential-issuer/org/{org_id}/spruce"""
+        return await _proxy_to_issuance_well_known(f"/.well-known/openid-credential-issuer/org/{org_id}/spruce")
+
+    @app.get("/org/{org_id}/spruce/.well-known/openid-credential-issuer")
+    async def get_org_spruce_issuer_metadata_appended(org_id: str) -> Response:
+        """SpruceID appended-form discovery: /org/{org_id}/spruce/.well-known/openid-credential-issuer"""
+        return await _proxy_to_issuance_well_known(f"/.well-known/openid-credential-issuer/org/{org_id}/spruce")
+
+    @app.get("/.well-known/oauth-authorization-server/org/{org_id}/spruce")
+    async def get_org_spruce_as_metadata(org_id: str) -> Response:
+        """SpruceID insertion-form AS discovery: /.well-known/oauth-authorization-server/org/{org_id}/spruce"""
+        return await _proxy_to_issuance_well_known(f"/.well-known/oauth-authorization-server/org/{org_id}/spruce")
+
+    @app.get("/org/{org_id}/spruce/.well-known/oauth-authorization-server")
+    async def get_org_spruce_as_metadata_appended(org_id: str) -> Response:
+        """SpruceID appended-form AS discovery: /org/{org_id}/spruce/.well-known/oauth-authorization-server"""
+        return await _proxy_to_issuance_well_known(f"/.well-known/oauth-authorization-server/org/{org_id}/spruce")
 
     # ---------------------------------------------------------------------
     # OID4VCI spec §11.2.2 "/.well-known/openid-credential-issuer" appended

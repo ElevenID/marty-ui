@@ -635,7 +635,7 @@ function AppContent() {
             path="/credentials"
             element={
               <ApplicantRoute>
-                <Navigate to="/applicant/credentials" replace />
+                <Navigate to="/console/applicant/credentials" replace />
               </ApplicantRoute>
             }
           />
@@ -643,7 +643,7 @@ function AppContent() {
             path="/catalog"
             element={
               <ApplicantRoute>
-                <Navigate to="/applicant/credentials" replace />
+                <Navigate to="/console/applicant/catalog" replace />
               </ApplicantRoute>
             }
           />
@@ -651,7 +651,7 @@ function AppContent() {
             path="/my-applications"
             element={
               <ApplicantRoute>
-                <Navigate to="/applicant/applications" replace />
+                <Navigate to="/console/applicant/applications" replace />
               </ApplicantRoute>
             }
           />
@@ -659,7 +659,7 @@ function AppContent() {
             path="/my-documents"
             element={
               <ApplicantRoute>
-                <Navigate to="/applicant/devices" replace />
+                <Navigate to="/console/applicant/devices" replace />
               </ApplicantRoute>
             }
           />

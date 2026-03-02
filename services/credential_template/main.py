@@ -91,6 +91,7 @@ class CredentialFormat(str, Enum):
     """Supported credential formats."""
     SD_JWT_VC = "sd_jwt_vc"
     MDOC = "mdoc"
+    MSO_MDOC = "mso_mdoc"
     JWT_VC = "jwt_vc"
     JSON_LD_VC = "json_ld_vc"
     ZK_MDOC = "zk_mdoc"

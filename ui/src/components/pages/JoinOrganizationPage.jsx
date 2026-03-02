@@ -94,7 +94,7 @@ const toErrorText = (error, fallback) => {
 export default function JoinOrganizationPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const { setActiveOrgId } = useConsole();
+  const { setActiveOrgId, refreshMemberships } = useConsole();
   const { isAuthenticated, isLoading: authLoading, login } = useAuth();
 
   const orgIdFromQuery = searchParams.get('orgId');
@@ -275,6 +275,7 @@ export default function JoinOrganizationPage() {
         return;
       }
 
+      await refreshMemberships();
       await setActiveOrgId(organization.id);
       setSuccessState('joined');
       setTimeout(() => navigate('/console'), 1200);
@@ -313,6 +314,7 @@ export default function JoinOrganizationPage() {
         return;
       }
 
+      await refreshMemberships();
       await setActiveOrgId(selectedOrg.id);
       setSuccessState('joined');
       setTimeout(() => navigate('/console'), 1200);
@@ -344,6 +346,7 @@ export default function JoinOrganizationPage() {
       setSuccessState('joined');
 
       if (orgId) {
+        await refreshMemberships();
         await setActiveOrgId(orgId);
       }
       setTimeout(() => navigate('/console'), 1200);

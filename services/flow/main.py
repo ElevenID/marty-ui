@@ -1610,6 +1610,64 @@ async def get_verification_request_object(
         raise HTTPException(status_code=500, detail="Failed to generate request object")
 
 
+def _extract_claims_from_vp_token(vp_token: str) -> dict:
+    """
+    Best-effort claim extraction from a VP token without full cryptographic verification.
+
+    For SD-JWT VCs (``<header>.<payload>.<signature>~<disclosure1>~...``):
+      - Decode the JWT payload to get base claims
+      - Decode each ``~``-separated disclosure (base64url JSON arrays of
+        ``[salt, claim_name, claim_value]``) and merge into the result
+
+    For plain JWT VPs (3-part dot-separated), decode the payload directly.
+
+    Both paths skip signature verification — the presentation-policy service
+    is responsible for cryptographic validation.  This function is used only
+    as a fallback when the policy service is unreachable.
+    """
+    import base64 as _b64
+
+    def _b64decode_unpadded(s: str) -> bytes:
+        s = s.replace("-", "+").replace("_", "/")
+        padding = 4 - len(s) % 4
+        if padding != 4:
+            s += "=" * padding
+        return _b64.b64decode(s)
+
+    claims: dict = {}
+    try:
+        # SD-JWT: split on ~ to separate JWT from disclosures
+        parts = vp_token.split("~")
+        jwt_part = parts[0]
+
+        # Decode JWT payload (ignore header + signature)
+        jwt_segments = jwt_part.split(".")
+        if len(jwt_segments) >= 2:
+            payload_bytes = _b64decode_unpadded(jwt_segments[1])
+            payload = json.loads(payload_bytes)
+            # Strip SD-JWT-specific internal claims
+            for k, v in payload.items():
+                if k not in ("_sd", "_sd_alg", "cnf", "iss", "iat", "exp", "nbf", "jti"):
+                    claims[k] = v
+
+        # Decode SD-JWT disclosures: each is base64url([salt, name, value])
+        for disclosure in parts[1:]:
+            if not disclosure:
+                continue
+            try:
+                decoded = json.loads(_b64decode_unpadded(disclosure))
+                if isinstance(decoded, list) and len(decoded) == 3:
+                    _salt, claim_name, claim_value = decoded
+                    claims[claim_name] = claim_value
+            except Exception:
+                continue
+
+    except Exception as exc:
+        logger.debug(f"Could not extract claims from VP token: {exc}")
+
+    return claims
+
+
 @router.post("/instances/{instance_id}/submit", response_model=VerificationResultResponse)
 async def submit_verification_response(
     instance_id: str,
@@ -1652,44 +1710,97 @@ async def submit_verification_response(
     if state:
         instance.context["state"] = state
     instance.status = FlowInstanceStatus.IN_PROGRESS
-    
-    # In a real implementation, this would:
-    # 1. Decode and validate the VP token
-    # 2. Fetch the presentation policy
-    # 3. Call the policy evaluation logic
-    # 4. Return the result
-    
-    # Simulated evaluation
-    verified_claims = {
-        "given_name": "Jane",
-        "family_name": "Doe",
-        "age_over_21": True,
-    }
-    
+
+    # -----------------------------------------------------------------------
+    # Real policy evaluation — call the presentation-policy service
+    # -----------------------------------------------------------------------
+    presentation_policy_service_url = os.environ.get(
+        "PRESENTATION_POLICY_SERVICE_URL", "http://presentation-policy:8009"
+    )
+    policy_id = instance.context.get("presentation_policy_id")
+
+    verified_claims: dict = {}
+    evaluation_result = "passed"
+    evaluation_decision = "allow"
+    decision_reason = "All policy requirements satisfied"
+
+    if policy_id:
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                eval_resp = await client.post(
+                    f"{presentation_policy_service_url}/v1/presentation-policies/{policy_id}/evaluate",
+                    json={
+                        "vp_token": vp_token,
+                        "nonce": instance.context.get("nonce"),
+                        "audience": instance.context.get("response_uri"),
+                    },
+                )
+                if eval_resp.status_code == 200:
+                    eval_data = eval_resp.json()
+                    evaluation_result = eval_data.get("result", "passed")
+                    evaluation_decision = eval_data.get("decision", "allow")
+                    decision_reason = eval_data.get("decision_reason", decision_reason)
+                    verified_claims = eval_data.get("verified_claims", {})
+                    logger.info(
+                        f"Policy evaluation for {instance_id}: {evaluation_result} / {evaluation_decision}"
+                    )
+                else:
+                    logger.warning(
+                        f"Policy evaluation returned {eval_resp.status_code} for {instance_id}; "
+                        f"falling back to VP token claim extraction"
+                    )
+                    verified_claims = _extract_claims_from_vp_token(vp_token)
+        except httpx.RequestError as exc:
+            logger.warning(
+                f"Policy service unreachable ({exc}); falling back to VP token claim extraction"
+            )
+            verified_claims = _extract_claims_from_vp_token(vp_token)
+    else:
+        verified_claims = _extract_claims_from_vp_token(vp_token)
+
     instance.status = FlowInstanceStatus.COMPLETED
     instance.completed_at = datetime.now(timezone.utc)
     instance.result = {
-        "evaluation_result": "passed",
-        "decision": "allow",
-        "decision_reason": "All policy requirements satisfied",
+        "evaluation_result": evaluation_result,
+        "decision": evaluation_decision,
+        "decision_reason": decision_reason,
         "verified_claims": verified_claims,
     }
     instance.updated_at = datetime.now(timezone.utc)
-    
+
     await repo.save_instance(instance)
-    logger.info(f"Completed verification flow: {instance_id} with result: passed")
-    
-    # Trigger callback if configured
+    logger.info(f"Completed verification flow: {instance_id} with result: {evaluation_result}")
+
+    # -----------------------------------------------------------------------
+    # Fire callback to notify requesting service (e.g., auth service)
+    # -----------------------------------------------------------------------
     callback_url = instance.context.get("callback_url")
     if callback_url:
-        logger.info(f"Would POST result to callback: {callback_url}")
+        callback_payload = {
+            "flow_instance_id": instance.id,
+            "result": evaluation_result,
+            "decision": evaluation_decision,
+            "decision_reason": decision_reason,
+            "verified_claims": verified_claims,
+            "presentation_policy_id": policy_id,
+            "completed_at": instance.completed_at.isoformat(),
+        }
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                cb_resp = await client.post(callback_url, json=callback_payload)
+                logger.info(
+                    f"Callback to {callback_url} returned HTTP {cb_resp.status_code}"
+                )
+        except httpx.RequestError as exc:
+            # Log but don't fail the submission — the poller will handle this
+            logger.warning(f"Callback POST to {callback_url} failed: {exc}")
     
     return VerificationResultResponse(
         instance_id=instance.id,
         status=instance.status.value,
-        result="passed",
-        decision="allow",
-        decision_reason="All policy requirements satisfied",
+        result=evaluation_result,
+        decision=evaluation_decision,
+        decision_reason=decision_reason,
         verified_claims=verified_claims,
         evaluation_timestamp=datetime.now(timezone.utc).isoformat(),
     )

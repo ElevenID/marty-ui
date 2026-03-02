@@ -9,7 +9,9 @@ services:
       OIDC_EXTERNAL_ISSUER_URL: ${OIDC_ISSUER_URL_EXTERNAL:-https://${PUBLIC_DOMAIN}/realms/${KEYCLOAK_REALM:-11id}}
       OIDC_REDIRECT_URI: ${OIDC_REDIRECT_URI:-https://${PUBLIC_DOMAIN}/v1/auth/callback}
       OIDC_POST_LOGOUT_REDIRECT_URI: ${OIDC_POST_LOGOUT_REDIRECT_URI:-https://${PUBLIC_DOMAIN}/}
-      COOKIE_SECURE: ${COOKIE_SECURE:-true}
+      # Tunnel mode always uses HTTPS — force secure cookies regardless of root .env
+      COOKIE_SECURE: "true"
+      COOKIE_SAMESITE: ${COOKIE_SAMESITE:-lax}
 
   gateway:
     environment:

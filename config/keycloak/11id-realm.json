@@ -60,7 +60,9 @@
         "description": "${role_default-roles}",
         "composite": true,
         "composites": {
-          "realm": ["applicant"]
+          "realm": [
+            "applicant"
+          ]
         },
         "clientRole": false
       }
@@ -71,11 +73,15 @@
     "description": "${role_default-roles}",
     "composite": true,
     "composites": {
-      "realm": ["applicant"]
+      "realm": [
+        "applicant"
+      ]
     },
     "clientRole": false
   },
-  "requiredCredentials": ["password"],
+  "requiredCredentials": [
+    "password"
+  ],
   "users": [
     {
       "username": "admin@marty.demo",
@@ -91,9 +97,13 @@
           "temporary": false
         }
       ],
-      "realmRoles": ["administrator"],
+      "realmRoles": [
+        "administrator"
+      ],
       "attributes": {
-        "user_type": ["administrator"]
+        "user_type": [
+          "administrator"
+        ]
       }
     },
     {
@@ -110,10 +120,16 @@
           "temporary": false
         }
       ],
-      "realmRoles": ["vendor"],
+      "realmRoles": [
+        "vendor"
+      ],
       "attributes": {
-        "user_type": ["vendor"],
-        "organization_name": ["Demo Vendor Org"]
+        "user_type": [
+          "vendor"
+        ],
+        "organization_name": [
+          "Demo Vendor Org"
+        ]
       }
     },
     {
@@ -130,11 +146,19 @@
           "temporary": false
         }
       ],
-      "realmRoles": ["applicant"],
+      "realmRoles": [
+        "applicant"
+      ],
       "attributes": {
-        "user_type": ["applicant"],
-        "nationality": ["USA"],
-        "date_of_birth": ["1985-03-15"]
+        "user_type": [
+          "applicant"
+        ],
+        "nationality": [
+          "USA"
+        ],
+        "date_of_birth": [
+          "1985-03-15"
+        ]
       }
     },
     {
@@ -151,11 +175,19 @@
           "temporary": false
         }
       ],
-      "realmRoles": ["applicant"],
+      "realmRoles": [
+        "applicant"
+      ],
       "attributes": {
-        "user_type": ["applicant"],
-        "nationality": ["GBR"],
-        "date_of_birth": ["1990-07-22"]
+        "user_type": [
+          "applicant"
+        ],
+        "nationality": [
+          "GBR"
+        ],
+        "date_of_birth": [
+          "1990-07-22"
+        ]
       }
     },
     {
@@ -172,11 +204,19 @@
           "temporary": false
         }
       ],
-      "realmRoles": ["applicant"],
+      "realmRoles": [
+        "applicant"
+      ],
       "attributes": {
-        "user_type": ["applicant"],
-        "nationality": ["ESP"],
-        "date_of_birth": ["1978-11-08"]
+        "user_type": [
+          "applicant"
+        ],
+        "nationality": [
+          "ESP"
+        ],
+        "date_of_birth": [
+          "1978-11-08"
+        ]
       }
     },
     {
@@ -193,9 +233,29 @@
           "temporary": false
         }
       ],
-      "realmRoles": ["vendor"],
+      "realmRoles": [
+        "vendor"
+      ],
       "attributes": {
-        "user_type": ["verifier"]
+        "user_type": [
+          "verifier"
+        ]
+      }
+    },
+    {
+      "username": "service-account-marty-api",
+      "enabled": true,
+      "email": "service-account-marty-api@placeholder.org",
+      "firstName": "marty-api",
+      "lastName": "Service Account",
+      "serviceAccountClientId": "marty-api",
+      "clientRoles": {
+        "realm-management": [
+          "impersonation",
+          "view-users",
+          "manage-users",
+          "query-users"
+        ]
       }
     }
   ],
@@ -259,21 +319,53 @@
       "enabled": true,
       "clientAuthenticatorType": "client-secret",
       "secret": "${MARTY_API_CLIENT_SECRET:-marty-api-secret-change-in-production}",
-      "bearerOnly": true,
+      "bearerOnly": false,
       "protocol": "openid-connect",
       "publicClient": false,
       "standardFlowEnabled": false,
       "implicitFlowEnabled": false,
-      "directAccessGrantsEnabled": false,
+      "directAccessGrantsEnabled": true,
       "serviceAccountsEnabled": true,
-      "authorizationServicesEnabled": false,
+      "authorizationServicesEnabled": true,
       "fullScopeAllowed": true,
       "defaultClientScopes": [
         "openid",
         "profile",
         "email",
         "roles"
-      ]
+      ],
+      "authorizationSettings": {
+        "allowRemoteResourceManagement": false,
+        "policyEnforcementMode": "PERMISSIVE",
+        "resources": [],
+        "policies": [
+          {
+            "name": "allow-token-exchange",
+            "type": "js",
+            "logic": "POSITIVE",
+            "decisionStrategy": "UNANIMOUS",
+            "config": {
+              "code": "// Allow internal service accounts to exchange tokens\n$evaluation.grant();\n"
+            }
+          },
+          {
+            "name": "token-exchange.permission.client.marty-api",
+            "type": "scope",
+            "logic": "POSITIVE",
+            "decisionStrategy": "UNANIMOUS",
+            "config": {
+              "scopes": "[\"token-exchange\"]",
+              "applyPolicies": "[\"allow-token-exchange\"]"
+            }
+          }
+        ],
+        "scopes": [
+          {
+            "name": "token-exchange"
+          }
+        ],
+        "decisionStrategy": "UNANIMOUS"
+      }
     }
   ],
   "clientScopes": [
@@ -584,11 +676,19 @@
   "scopeMappings": [
     {
       "clientScope": "marty-user-attributes",
-      "roles": ["administrator", "vendor", "applicant"]
+      "roles": [
+        "administrator",
+        "vendor",
+        "applicant"
+      ]
     },
     {
       "clientScope": "organization",
-      "roles": ["administrator", "vendor", "applicant"]
+      "roles": [
+        "administrator",
+        "vendor",
+        "applicant"
+      ]
     }
   ],
   "browserSecurityHeaders": {
@@ -611,7 +711,9 @@
   },
   "eventsEnabled": true,
   "eventsExpiration": 900,
-  "eventsListeners": ["jboss-logging"],
+  "eventsListeners": [
+    "jboss-logging"
+  ],
   "enabledEventTypes": [
     "LOGIN",
     "LOGIN_ERROR",
@@ -633,6 +735,102 @@
   "adminEventsEnabled": true,
   "adminEventsDetailsEnabled": true,
   "internationalizationEnabled": true,
-  "supportedLocales": ["en", "de", "nl", "ja", "es", "fr"],
-  "defaultLocale": "en"
+  "supportedLocales": [
+    "en",
+    "de",
+    "nl",
+    "ja",
+    "es",
+    "fr"
+  ],
+  "defaultLocale": "en",
+  "identityProviders": [
+    {
+      "alias": "google",
+      "displayName": "Google",
+      "providerId": "google",
+      "enabled": true,
+      "trustEmail": true,
+      "storeToken": false,
+      "addReadTokenRoleOnCreate": false,
+      "authenticateByDefault": false,
+      "linkOnly": false,
+      "firstBrokerLoginFlowAlias": "11id-first-broker-login",
+      "config": {
+        "clientId": "${env.GOOGLE_CLIENT_ID}",
+        "clientSecret": "${env.GOOGLE_CLIENT_SECRET}",
+        "defaultScope": "openid email profile",
+        "syncMode": "IMPORT",
+        "useJwksUrl": "true",
+        "loginHint": "false",
+        "uiLocales": "false"
+      }
+    }
+  ],
+  "identityProviderMappers": [
+    {
+      "name": "google-user-type-mapper",
+      "identityProviderAlias": "google",
+      "identityProviderMapper": "hardcoded-attribute-idp-mapper",
+      "config": {
+        "syncMode": "INHERIT",
+        "attribute": "user_type",
+        "attribute.value": "applicant"
+      }
+    },
+    {
+      "name": "google-given-name-mapper",
+      "identityProviderAlias": "google",
+      "identityProviderMapper": "oidc-user-attribute-idp-mapper",
+      "config": {
+        "syncMode": "INHERIT",
+        "claim": "given_name",
+        "user.attribute": "firstName"
+      }
+    },
+    {
+      "name": "google-family-name-mapper",
+      "identityProviderAlias": "google",
+      "identityProviderMapper": "oidc-user-attribute-idp-mapper",
+      "config": {
+        "syncMode": "INHERIT",
+        "claim": "family_name",
+        "user.attribute": "lastName"
+      }
+    }
+  ],
+  "authenticationFlows": [
+    {
+      "alias": "11id-first-broker-login",
+      "description": "First broker login flow for 11id \u2014 auto-links existing accounts by email, otherwise registers a new user",
+      "providerId": "basic-flow",
+      "topLevel": true,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
+          "authenticatorConfig": "11id-auto-link-config",
+          "authenticator": "idp-auto-link",
+          "requirement": "ALTERNATIVE",
+          "priority": 10,
+          "userSetupAllowed": false,
+          "autheticatorFlow": false
+        },
+        {
+          "authenticator": "idp-create-user-if-unique",
+          "requirement": "ALTERNATIVE",
+          "priority": 20,
+          "userSetupAllowed": false,
+          "autheticatorFlow": false
+        }
+      ]
+    }
+  ],
+  "authenticatorConfig": [
+    {
+      "alias": "11id-auto-link-config",
+      "config": {
+        "require.password.update.after.registration": "false"
+      }
+    }
+  ]
 }

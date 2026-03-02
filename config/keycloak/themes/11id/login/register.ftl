@@ -97,6 +97,42 @@
                                     ${kcSanitize(messagesPerField.get('password'))?no_esc}
                                 </span>
                             </#if>
+                            <div class="pwd-requirements" id="password-requirements">
+                                <p class="pwd-req-title">Password requirements</p>
+                                <ul>
+                                    <li id="req-length"  class="pwd-req"><span class="pwd-req-icon">✗</span> At least 8 characters</li>
+                                    <li id="req-upper"   class="pwd-req"><span class="pwd-req-icon">✗</span> At least 1 uppercase letter</li>
+                                    <li id="req-lower"   class="pwd-req"><span class="pwd-req-icon">✗</span> At least 1 lowercase letter</li>
+                                    <li id="req-digit"   class="pwd-req"><span class="pwd-req-icon">✗</span> At least 1 number</li>
+                                    <li id="req-special" class="pwd-req"><span class="pwd-req-icon">✗</span> At least 1 special character</li>
+                                </ul>
+                            </div>
+                            <script>
+                            (function () {
+                                var pwdInput = document.getElementById('password');
+                                if (!pwdInput) return;
+                                var rules = {
+                                    'req-length':  function (v) { return v.length >= 8; },
+                                    'req-upper':   function (v) { return /[A-Z]/.test(v); },
+                                    'req-lower':   function (v) { return /[a-z]/.test(v); },
+                                    'req-digit':   function (v) { return /[0-9]/.test(v); },
+                                    'req-special': function (v) { return /[^A-Za-z0-9]/.test(v); }
+                                };
+                                pwdInput.addEventListener('input', function () {
+                                    var val = pwdInput.value;
+                                    var hasTyped = val.length > 0;
+                                    Object.keys(rules).forEach(function (id) {
+                                        var li   = document.getElementById(id);
+                                        var icon = li && li.querySelector('.pwd-req-icon');
+                                        if (!li) return;
+                                        var ok = rules[id](val);
+                                        li.classList.toggle('met',          ok);
+                                        li.classList.toggle('unmet-active', !ok && hasTyped);
+                                        if (icon) icon.textContent = ok ? '✓' : '✗';
+                                    });
+                                });
+                            })();
+                            </script>
                         </div>
 
                         <div class="${properties.kcFormGroupClass!}">

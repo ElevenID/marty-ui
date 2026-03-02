@@ -70,6 +70,7 @@ import {
   CHECK_STATUS_LABELS,
 } from '../../../config/checkConstants';
 
+import { listCredentialTemplates } from '../../../services/presentationPolicyApi';
 import ApproveDialog from './dialogs/ApproveDialog';
 import RejectDialog from './dialogs/RejectDialog';
 import RequestInfoDialog from './dialogs/RequestInfoDialog';
@@ -210,6 +211,7 @@ export default function ApplicationReviewPage() {
 
   const [application, setApplication] = useState(null);
   const [checks, setChecks] = useState([]);
+  const [credentialTemplate, setCredentialTemplate] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [actionLoading, setActionLoading] = useState(false);
@@ -247,6 +249,20 @@ export default function ApplicationReviewPage() {
       setApplication(app);
       setChecks(Array.isArray(checkList) ? checkList : []);
       if (app.metadata?.review_notes) setReviewerNote(app.metadata.review_notes);
+
+      // Fetch the credential template to drive the claims display dynamically
+      if (app.organization_id && app.credential_configuration_id) {
+        try {
+          const templates = await listCredentialTemplates({ organization_id: app.organization_id });
+          const matched = Array.isArray(templates)
+            ? templates.find(t => t.credential_type === app.credential_configuration_id)
+            : null;
+          setCredentialTemplate(matched || null);
+        } catch {
+          // Non-critical — fall back to metadata-based display
+          setCredentialTemplate(null);
+        }
+      }
     } catch (err) {
       setError(err.message || 'Failed to load application');
     } finally {
@@ -352,18 +368,50 @@ export default function ApplicationReviewPage() {
     checks.length > 0 &&
     checks.every(c => ['passed', 'completed_passed', 'waived', 'skipped'].includes(c.status));
 
-  // Build applicant claims from metadata + applicant fields
+  // Build applicant claims — driven by the credential template definition when available,
+  // falling back to metadata keys + standard applicant fields otherwise.
+  const _INTERNAL_CLAIM_KEYS = [
+    'credential_display_name', 'review_notes', 'rejection_reason',
+    'issuance_transaction_id', 'credential_offer_uri', 'credential_offer_uris',
+    'issuance_fallback', 'info_requests', 'credential_type', 'offer_expires_at',
+  ];
+
   const claims = application
-    ? [
-        { label: 'Given Name', value: application.applicant_given_name, source: 'manual' },
-        { label: 'Family Name', value: application.applicant_family_name, source: 'manual' },
-        { label: 'Email', value: application.applicant_email, source: 'manual' },
-        { label: 'Phone', value: application.applicant_phone, source: 'manual' },
-        // Spread any extra metadata fields (excluding internal keys)
-        ...Object.entries(application.metadata || {})
-          .filter(([k]) => !['credential_display_name', 'review_notes', 'rejection_reason', 'issuance_transaction_id', 'credential_offer_uri', 'issuance_fallback', 'info_requests'].includes(k))
-          .map(([k, v]) => ({ label: k.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()), value: String(v), source: 'manual' })),
-      ]
+    ? (() => {
+        const meta = application.metadata || {};
+
+        if (credentialTemplate?.claims?.length > 0) {
+          // Template-driven: use display_name labels, look up values from metadata
+          // then fall back to top-level applicant_* fields.
+          return credentialTemplate.claims.map(c => {
+            const value =
+              meta[c.name] !== undefined
+                ? meta[c.name]
+                : application[c.name] !== undefined
+                  ? application[c.name]
+                  : application[`applicant_${c.name}`] !== undefined
+                    ? application[`applicant_${c.name}`]
+                    : null;
+            return {
+              label: c.display_name || c.name.replace(/_/g, ' ').replace(/\b\w/g, ch => ch.toUpperCase()),
+              value: value !== null && value !== undefined && typeof value !== 'object' ? String(value) : null,
+              source: 'manual',
+            };
+          });
+        }
+
+        // Fallback: standard applicant fields + non-internal metadata entries
+        return [
+          { label: 'Given Name', value: application.applicant_given_name, source: 'manual' },
+          { label: 'Family Name', value: application.applicant_family_name, source: 'manual' },
+          { label: 'Email', value: application.applicant_email, source: 'manual' },
+          { label: 'Phone', value: application.applicant_phone, source: 'manual' },
+          ...Object.entries(meta)
+            .filter(([k]) => !_INTERNAL_CLAIM_KEYS.includes(k))
+            .filter(([, v]) => v !== null && v !== undefined && typeof v !== 'object')
+            .map(([k, v]) => ({ label: k.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()), value: String(v), source: 'manual' })),
+        ];
+      })()
     : [];
 
   // ---------------------------------------------------------------------------
@@ -559,8 +607,8 @@ export default function ApplicationReviewPage() {
           </Grid>
         </SectionCard>
 
-        {/* ── C. APPLICANT CLAIMS ── */}
-        <SectionCard title="Applicant Claims" icon={<PersonIcon color="action" />}>
+        {/* ── C. CREDENTIAL CLAIMS ── */}
+        <SectionCard title="Credential Claims" icon={<PersonIcon color="action" />}>
           {claims.length === 0 ? (
             <Typography variant="body2" color="text.secondary">No claim data available.</Typography>
           ) : (

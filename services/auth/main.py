@@ -24,6 +24,7 @@ from .infrastructure.adapters.http_adapter import (
     internal_router,
     router as auth_router,
 )
+from .infrastructure.adapters.keycloak_admin_adapter import build_keycloak_admin_adapter
 from .infrastructure.adapters.oidc_adapter import KeycloakOIDCAdapter, OIDCConfig
 from .infrastructure.adapters.postgres_audit_adapter import PostgresAuditRepository
 from .infrastructure.adapters.redis_adapter import RedisPKCEStateRepository, RedisSessionRepository
@@ -80,6 +81,9 @@ def get_config() -> dict:
             "max_age": int(os.environ.get("SESSION_TTL_SECONDS", "86400")),
             "path": "/",
         },
+        "flow_service_url": os.environ.get("FLOW_SERVICE_URL", "http://flow:8011"),
+        "credential_login_policy_id": os.environ.get("CREDENTIAL_LOGIN_POLICY_ID", ""),
+        "auth_service_internal_url": os.environ.get("AUTH_SERVICE_INTERNAL_URL", "http://auth:8001"),
     }
 
 
@@ -141,25 +145,35 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         session_repository=session_repository,
     )
     
+    # Keycloak admin adapter (optional — for token exchange in credential login)
+    kc_admin_adapter = build_keycloak_admin_adapter()
+
     # Configure router with use cases
     configure_auth_router(
         authenticate_use_case=authenticate_use_case,
         session_use_case=session_use_case,
         cookie_config=config["cookie"],
         ui_base_url=config["ui_base_url"],
+        redis_client=redis_client,
+        session_repository=session_repository,
+        flow_service_url=config["flow_service_url"],
+        credential_login_policy_id=config["credential_login_policy_id"],
+        auth_service_internal_url=config["auth_service_internal_url"],
+        kc_admin_adapter=kc_admin_adapter,
     )
-    
+
     # Store in app state for access
     app.state.redis_client = redis_client
     app.state.async_engine = async_engine
     app.state.audit_repository = audit_repository
     app.state.authenticate_use_case = authenticate_use_case
     app.state.session_use_case = session_use_case
-    
+    app.state.kc_admin_adapter = kc_admin_adapter
+
     logger.info(f"{SERVICE_NAME} started on port {SERVICE_PORT}")
-    
+
     yield
-    
+
     # Cleanup
     logger.info(f"Shutting down {SERVICE_NAME}...")
     await redis_client.close()
