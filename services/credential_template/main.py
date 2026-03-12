@@ -35,7 +35,10 @@ from typing import Annotated
 from marty_common import OrganizationClient, OrganizationContext, require_org_membership, require_org_admin
 from marty_common.middleware import RequestIdMiddleware, RequestLoggingMiddleware
 
-from credential_template.infrastructure.adapters import PostgresCredentialTemplateRepository
+from credential_template.infrastructure.adapters import (
+    PostgresCredentialTemplateRepository,
+    PostgresWalletRegistryRepository,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -333,6 +336,34 @@ class InMemoryWalletRegistryRepository:
     """In-memory wallet registry — seeded with common wallets."""
 
     _DEFAULT_WALLETS: list[WalletRegistryEntry] = [
+        # ── SpruceID wallets ──────────────────────────────────────────────
+        WalletRegistryEntry(
+            id="wr-spruce-001",
+            name="SpruceKit",
+            logo_url="https://spruceid.com/favicon.ico",
+            deep_link_template="openid-credential-offer://?credential_offer={OFFER}",
+            supported_formats=["spruce-vc+sd-jwt"],
+            supported_protocols=["oid4vci"],
+            platforms=["ios", "android"],
+            docs_url="https://spruceid.com/products/sprucekit",
+        ),
+        WalletRegistryEntry(
+            id="wr-marty-001",
+            name="Marty Authenticator",
+            deep_link_template="openid-credential-offer://?credential_offer={OFFER}",
+            supported_formats=["spruce-vc+sd-jwt"],
+            supported_protocols=["oid4vci"],
+            platforms=["ios", "android"],
+        ),
+        # ── Generic OID4VCI wallets ───────────────────────────────────────
+        WalletRegistryEntry(
+            id="wr-default",
+            name="Any OID4VCI Wallet",
+            deep_link_template="openid-credential-offer://?credential_offer={OFFER}",
+            supported_formats=["sd_jwt_vc", "jwt_vc_json"],
+            supported_protocols=["oid4vci"],
+            platforms=["ios", "android", "web"],
+        ),
         WalletRegistryEntry(
             id="wr-lissi-001",
             name="LISSI Wallet",
@@ -561,7 +592,7 @@ router = APIRouter(prefix="/v1/credential-templates", tags=["credential-template
 wallet_router = APIRouter(prefix="/v1/wallet-registry", tags=["wallet-registry"])
 
 _repo: InMemoryCredentialTemplateRepository | None = None
-_wallet_repo: InMemoryWalletRegistryRepository | None = None
+_wallet_repo: PostgresWalletRegistryRepository | None = None
 
 
 def get_repo() -> InMemoryCredentialTemplateRepository:
@@ -570,7 +601,7 @@ def get_repo() -> InMemoryCredentialTemplateRepository:
     return _repo
 
 
-def get_wallet_repo() -> InMemoryWalletRegistryRepository:
+def get_wallet_repo() -> PostgresWalletRegistryRepository:
     if _wallet_repo is None:
         raise RuntimeError("Wallet registry not configured")
     return _wallet_repo
@@ -943,7 +974,7 @@ def _wallet_to_response(w: WalletRegistryEntry) -> WalletRegistryEntryResponse:
 @wallet_router.get("", response_model=list[WalletRegistryEntryResponse], summary="List Wallet Registry")
 async def list_wallets(
     active_only: bool = Query(True, description="Return only active wallets"),
-    repo: InMemoryWalletRegistryRepository = Depends(get_wallet_repo),
+    repo: PostgresWalletRegistryRepository = Depends(get_wallet_repo),
 ) -> list[WalletRegistryEntryResponse]:
     """List all wallets in the global registry."""
     wallets = await repo.list(active_only=active_only)
@@ -953,7 +984,7 @@ async def list_wallets(
 @wallet_router.get("/{wallet_id}", response_model=WalletRegistryEntryResponse, summary="Get Wallet")
 async def get_wallet(
     wallet_id: str,
-    repo: InMemoryWalletRegistryRepository = Depends(get_wallet_repo),
+    repo: PostgresWalletRegistryRepository = Depends(get_wallet_repo),
 ) -> WalletRegistryEntryResponse:
     """Get a wallet registry entry by ID."""
     wallet = await repo.get(wallet_id)
@@ -966,7 +997,7 @@ async def get_wallet(
 async def create_wallet(
     body: WalletRegistryEntryCreate,
     user_id: str = Depends(get_current_user_id),
-    repo: InMemoryWalletRegistryRepository = Depends(get_wallet_repo),
+    repo: PostgresWalletRegistryRepository = Depends(get_wallet_repo),
 ) -> WalletRegistryEntryResponse:
     """Create a new wallet registry entry. Requires admin authentication."""
     entry = WalletRegistryEntry(
@@ -990,7 +1021,7 @@ async def update_wallet(
     wallet_id: str,
     body: WalletRegistryEntryUpdate,
     user_id: str = Depends(get_current_user_id),
-    repo: InMemoryWalletRegistryRepository = Depends(get_wallet_repo),
+    repo: PostgresWalletRegistryRepository = Depends(get_wallet_repo),
 ) -> WalletRegistryEntryResponse:
     """Update a wallet registry entry. Requires admin authentication."""
     entry = await repo.get(wallet_id)
@@ -1025,7 +1056,7 @@ async def update_wallet(
 async def delete_wallet(
     wallet_id: str,
     user_id: str = Depends(get_current_user_id),
-    repo: InMemoryWalletRegistryRepository = Depends(get_wallet_repo),
+    repo: PostgresWalletRegistryRepository = Depends(get_wallet_repo),
 ) -> dict:
     """Delete a wallet registry entry. Requires admin authentication."""
     entry = await repo.get(wallet_id)
@@ -1147,8 +1178,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Initialize repository
     _repo = PostgresCredentialTemplateRepository(session_factory)
 
-    # Initialize wallet registry (in-memory with seeded defaults)
-    _wallet_repo = InMemoryWalletRegistryRepository()
+    # Initialize wallet registry (DB-backed)
+    _wallet_repo = PostgresWalletRegistryRepository(session_factory)
     
     # Initialize OrganizationClient for authorization
     org_service_url = os.environ.get("ORGANIZATION_SERVICE_URL", "http://organization:8002")

@@ -59,9 +59,13 @@ bun.lockb
 .env.tunnel
 .env.tunnel-auth
 
+# Oracle Cloud production secrets (NEVER commit)
+.env.production
+
 # Keep example env files tracked
 !.env.example
 !.env*.example
+!.env.production.example
 
 # =============================================================================
 # IDE & Editors

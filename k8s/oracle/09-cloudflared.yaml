@@ -1,0 +1,96 @@
+---
+# ================================================================
+# Cloudflare Tunnel — cloudflared agent
+#
+# This is the ONLY outbound path to the internet.
+# No OCI Load Balancer or public IP is needed.
+#
+# Routes configured on Cloudflare Zero Trust dashboard:
+#   elevenidllc.com         → http://ui.marty-prod.svc.cluster.local:80
+#   api.elevenidllc.com     → http://gateway.marty-prod.svc.cluster.local:8000
+#   auth.elevenidllc.com    → http://keycloak.marty-prod.svc.cluster.local:8080
+#
+# Cloudflare DNS (set automatically when tunnel is linked to hostname):
+#   elevenidllc.com     CNAME  <tunnel-id>.cfargotunnel.com  (proxied)
+#   api.elevenidllc.com CNAME  <tunnel-id>.cfargotunnel.com  (proxied)
+#   auth.elevenidllc.com CNAME <tunnel-id>.cfargotunnel.com  (proxied)
+# ================================================================
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cloudflared-secret
+  namespace: marty-prod
+  labels:
+    app: cloudflared
+    app.kubernetes.io/part-of: marty-platform
+type: Opaque
+stringData:
+  # Paste your Cloudflare Tunnel token here (starts with eyJ...).
+  # Created at: Cloudflare Zero Trust → Networks → Tunnels → Create tunnel
+  CLOUDFLARE_TUNNEL_TOKEN: "CHANGE_ME_your_cloudflare_tunnel_token"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cloudflared
+  namespace: marty-prod
+  labels:
+    app: cloudflared
+    app.kubernetes.io/part-of: marty-platform
+spec:
+  # 2 replicas = high-availability tunnel (both connect to same tunnel, CF load-balances)
+  replicas: 2
+  selector:
+    matchLabels:
+      app: cloudflared
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+  template:
+    metadata:
+      labels:
+        app: cloudflared
+    spec:
+      serviceAccountName: marty-app
+      # Spread replicas across nodes if >1 node available
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: cloudflared
+      containers:
+        - name: cloudflared
+          image: cloudflare/cloudflared:latest
+          args:
+            - tunnel
+            - --no-autoupdate
+            - run
+          env:
+            - name: TUNNEL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: cloudflared-secret
+                  key: CLOUDFLARE_TUNNEL_TOKEN
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "50m"
+            limits:
+              memory: "128Mi"
+              cpu: "150m"
+          livenessProbe:
+            httpGet:
+              path: /ready
+              port: 2000
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 2000
+            initialDelaySeconds: 5
+            periodSeconds: 10

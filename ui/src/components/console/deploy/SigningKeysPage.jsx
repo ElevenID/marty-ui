@@ -55,6 +55,8 @@ import { TableSkeleton } from '../../common/skeletons';
 import { PermissionButton } from '../../common/PermissionGate';
 import { usePermissions } from '../../../hooks/usePermissions';
 import { useNotifications } from '../../../hooks/useNotifications';
+import { useAsyncData } from '../../../hooks/useAsyncData';
+import { useDialog } from '../../../hooks/useDialog';
 
 const getAlgorithms = (t) => [
   { value: 'ES256', label: t('deploy.signingKeys.algorithms.ES256') },
@@ -82,13 +84,13 @@ const getBreadcrumbs = (t) => [
 
 export default function SigningKeysPage() {
   const { t } = useTranslation('console');
-  const [keys, setKeys] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [uploadDialogOpen, setUploadDialogOpen] = useState(false);
-  const [rotateDialogOpen, setRotateDialogOpen] = useState(false);
-  const [settingsDialogOpen, setSettingsDialogOpen] = useState(false);
-  const [selectedKey, setSelectedKey] = useState(null);
+  const { data: keys = [], loading, error, reload: reloadKeys } = useAsyncData(async () => {
+    const data = await signingKeysApi.listSigningKeys();
+    return Array.isArray(data) ? data : data.keys || [];
+  }, []);
+  const uploadDialog = useDialog();
+  const rotateDialog = useDialog();
+  const settingsDialog = useDialog();
   const [currentTab, setCurrentTab] = useState(0);
   
   const [newKey, setNewKey] = useState({
@@ -109,25 +111,10 @@ export default function SigningKeysPage() {
   const { showNotification } = useNotifications();
 
   useEffect(() => {
-    loadKeys();
     if (currentTab === 1) {
       loadConfig();
     }
   }, [currentTab]);
-
-  const loadKeys = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const data = await signingKeysApi.listSigningKeys();
-      setKeys(Array.isArray(data) ? data : data.keys || []);
-    } catch (err) {
-      console.error('Failed to load signing keys:', err);
-      setError(err);
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const loadConfig = async () => {
     try {
@@ -143,14 +130,14 @@ export default function SigningKeysPage() {
     try {
       await signingKeysApi.createSigningKey(newKey);
       showNotification?.(t('deploy.signingKeys.notifications.uploadSuccess'), 'success');
-      setUploadDialogOpen(false);
+      uploadDialog.close();
       setNewKey({
         name: '',
         algorithm: 'ES256',
         public_key: '',
         key_type: 'local',
       });
-      loadKeys();
+      reloadKeys();
     } catch (err) {
       console.error('Failed to upload key:', err);
       showNotification?.(t('deploy.signingKeys.notifications.uploadError'), 'error');
@@ -158,14 +145,14 @@ export default function SigningKeysPage() {
   };
 
   const handleRotateKey = async (immediate = false) => {
-    if (!selectedKey) return;
+    const key = rotateDialog.data;
+    if (!key) return;
     
     try {
-      await signingKeysApi.rotateSigningKey(selectedKey.id, { immediate });
+      await signingKeysApi.rotateSigningKey(key.id, { immediate });
       showNotification?.(t('deploy.signingKeys.notifications.rotateSuccess'), 'success');
-      setRotateDialogOpen(false);
-      setSelectedKey(null);
-      loadKeys();
+      rotateDialog.close();
+      reloadKeys();
     } catch (err) {
       console.error('Failed to rotate key:', err);
       showNotification?.(t('deploy.signingKeys.notifications.rotateError'), 'error');
@@ -180,7 +167,7 @@ export default function SigningKeysPage() {
     try {
       await signingKeysApi.deleteSigningKey(keyId);
       showNotification?.(t('deploy.signingKeys.notifications.deleteSuccess'), 'success');
-      loadKeys();
+      reloadKeys();
     } catch (err) {
       console.error('Failed to delete key:', err);
       showNotification?.(t('deploy.signingKeys.notifications.deleteError'), 'error');
@@ -191,7 +178,7 @@ export default function SigningKeysPage() {
     try {
       await signingKeysApi.updateKeyManagementConfig(config);
       showNotification?.(t('deploy.signingKeys.notifications.settingsSaveSuccess'), 'success');
-      setSettingsDialogOpen(false);
+      settingsDialog.close();
     } catch (err) {
       console.error('Failed to save config:', err);
       showNotification?.(t('deploy.signingKeys.notifications.settingsSaveError'), 'error');
@@ -237,7 +224,7 @@ export default function SigningKeysPage() {
           <Button
             variant="outlined"
             startIcon={<SettingsIcon />}
-            onClick={() => setSettingsDialogOpen(true)}
+            onClick={settingsDialog.open}
           >
             {t('deploy.signingKeys.hsmVaultSettings')}
           </Button>
@@ -246,7 +233,7 @@ export default function SigningKeysPage() {
             action="create"
             variant="contained"
             startIcon={<AddIcon />}
-            onClick={() => setUploadDialogOpen(true)}
+            onClick={uploadDialog.open}
           >
             {t('deploy.signingKeys.uploadKey')}
           </PermissionButton>
@@ -256,7 +243,7 @@ export default function SigningKeysPage() {
         {loading ? (
           <TableSkeleton rows={5} columns={5} showActions={true} />
         ) : error ? (
-          <ErrorState error={error} onRetry={loadKeys} variant="inline" />
+          <ErrorState error={error} onRetry={reloadKeys} variant="inline" />
         ) : keys.length === 0 ? (
           <EmptyState
             icon={VpnKeyIcon}
@@ -322,10 +309,7 @@ export default function SigningKeysPage() {
                           <Tooltip title={t('deploy.signingKeys.rotateKeyTooltip')}>
                             <IconButton
                               size="small"
-                              onClick={() => {
-                                setSelectedKey(key);
-                                setRotateDialogOpen(true);
-                              }}
+                              onClick={() => rotateDialog.open(key)}
                             >
                               <RefreshIcon fontSize="small" />
                             </IconButton>
@@ -359,7 +343,7 @@ export default function SigningKeysPage() {
         )}
 
         {/* Upload Key Dialog */}
-        <Dialog open={uploadDialogOpen} onClose={() => setUploadDialogOpen(false)} maxWidth="sm" fullWidth>
+        <Dialog open={uploadDialog.isOpen} onClose={uploadDialog.close} maxWidth="sm" fullWidth>
           <DialogTitle>{t('deploy.signingKeys.uploadDialog.title')}</DialogTitle>
           <DialogContent>
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 1 }}>
@@ -419,7 +403,7 @@ export default function SigningKeysPage() {
             </Box>
           </DialogContent>
           <DialogActions>
-            <Button onClick={() => setUploadDialogOpen(false)}>{t('deploy.signingKeys.uploadDialog.cancel')}</Button>
+            <Button onClick={uploadDialog.close}>{t('deploy.signingKeys.uploadDialog.cancel')}</Button>
             <Button
               onClick={handleUploadKey}
               variant="contained"
@@ -431,7 +415,7 @@ export default function SigningKeysPage() {
         </Dialog>
 
         {/* Rotate Key Dialog */}
-        <Dialog open={rotateDialogOpen} onClose={() => setRotateDialogOpen(false)} maxWidth="sm" fullWidth>
+        <Dialog open={rotateDialog.isOpen} onClose={rotateDialog.close} maxWidth="sm" fullWidth>
           <DialogTitle>{t('deploy.signingKeys.rotateDialog.title')}</DialogTitle>
           <DialogContent>
             <Box sx={{ mt: 1 }}>
@@ -439,13 +423,13 @@ export default function SigningKeysPage() {
                 {t('deploy.signingKeys.rotateDialog.description')}
               </Typography>
               
-              {selectedKey && (
+              {rotateDialog.data && (
                 <Alert severity="info" sx={{ mb: 2 }}>
                   <Typography variant="body2">
-                    <strong>{t('deploy.signingKeys.rotateDialog.currentKeyLabel')}:</strong> {selectedKey.name || selectedKey.id}
+                    <strong>{t('deploy.signingKeys.rotateDialog.currentKeyLabel')}:</strong> {rotateDialog.data.name || rotateDialog.data.id}
                   </Typography>
                   <Typography variant="body2">
-                    <strong>{t('deploy.signingKeys.rotateDialog.algorithmLabel')}:</strong> {selectedKey.algorithm}
+                    <strong>{t('deploy.signingKeys.rotateDialog.algorithmLabel')}:</strong> {rotateDialog.data.algorithm}
                   </Typography>
                 </Alert>
               )}
@@ -456,7 +440,7 @@ export default function SigningKeysPage() {
             </Box>
           </DialogContent>
           <DialogActions>
-            <Button onClick={() => setRotateDialogOpen(false)}>{t('deploy.signingKeys.rotateDialog.cancel')}</Button>
+            <Button onClick={rotateDialog.close}>{t('deploy.signingKeys.rotateDialog.cancel')}</Button>
             <Button onClick={() => handleRotateKey(false)} variant="outlined">
               {t('deploy.signingKeys.rotateDialog.gradualRotation')}
             </Button>
@@ -467,7 +451,7 @@ export default function SigningKeysPage() {
         </Dialog>
 
         {/* HSM/Vault Settings Dialog */}
-        <Dialog open={settingsDialogOpen} onClose={() => setSettingsDialogOpen(false)} maxWidth="md" fullWidth>
+        <Dialog open={settingsDialog.isOpen} onClose={settingsDialog.close} maxWidth="md" fullWidth>
           <DialogTitle>{t('deploy.signingKeys.settingsDialog.title')}</DialogTitle>
           <DialogContent>
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3, mt: 1 }}>
@@ -519,7 +503,7 @@ export default function SigningKeysPage() {
             </Box>
           </DialogContent>
           <DialogActions>
-            <Button onClick={() => setSettingsDialogOpen(false)}>{t('deploy.signingKeys.settingsDialog.cancel')}</Button>
+            <Button onClick={settingsDialog.close}>{t('deploy.signingKeys.settingsDialog.cancel')}</Button>
             <Button onClick={handleSaveConfig} variant="contained">
               {t('deploy.signingKeys.settingsDialog.saveSettings')}
             </Button>

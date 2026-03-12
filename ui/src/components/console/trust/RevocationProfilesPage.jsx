@@ -4,7 +4,7 @@
  * Manages credential revocation profiles and status lists.
  */
 
-import { useState, useEffect } from 'react';
+import { useAsyncData } from '../../../hooks/useAsyncData';
 import {
   Paper,
   Typography,
@@ -43,42 +43,29 @@ const getBreadcrumbs = (t) => [
 
 function RevocationProfilesPage() {
   const { t } = useTranslation('console');
-  const [profiles, setProfiles] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-
-  useEffect(() => {
+  const { data: profiles = [], loading, error } = useAsyncData(async () => {
     // TODO: Fetch revocation profiles from API
-    const loadProfiles = async () => {
-      try {
-        await new Promise((resolve) => setTimeout(resolve, 500));
-        setProfiles([
-          {
-            id: 'rp-1',
-            name: 'Status List 2021 - Production',
-            type: 'StatusList2021',
-            credentialsTracked: 15234,
-            revokedCount: 42,
-            status: 'active',
-            updatedAt: '2026-02-07T08:00:00Z',
-          },
-          {
-            id: 'rp-2',
-            name: 'Bitstring Status List - Beta',
-            type: 'BitstringStatusList',
-            credentialsTracked: 500,
-            revokedCount: 3,
-            status: 'active',
-            updatedAt: '2026-02-06T16:30:00Z',
-          },
-        ]);
-      } catch (err) {
-        setError(t('trust.revocationProfilesPage.error'));
-      } finally {
-        setLoading(false);
-      }
-    };
-    loadProfiles();
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    return [
+      {
+        id: 'rp-1',
+        name: 'Status List 2021 - Production',
+        type: 'StatusList2021',
+        credentialsTracked: 15234,
+        revokedCount: 42,
+        status: 'active',
+        updatedAt: '2026-02-07T08:00:00Z',
+      },
+      {
+        id: 'rp-2',
+        name: 'Bitstring Status List - Beta',
+        type: 'BitstringStatusList',
+        credentialsTracked: 500,
+        revokedCount: 3,
+        status: 'active',
+        updatedAt: '2026-02-06T16:30:00Z',
+      },
+    ];
   }, []);
 
   return (
@@ -92,7 +79,7 @@ function RevocationProfilesPage() {
     >
       {error && (
         <Alert severity="error" sx={{ mb: 3 }}>
-          {error}
+          {error?.message || String(error)}
         </Alert>
       )}
 

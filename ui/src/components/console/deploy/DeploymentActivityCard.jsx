@@ -9,7 +9,7 @@
  * - Active flows count
  */
 
-import { useState, useEffect } from 'react';
+import { useAsyncData } from '../../../hooks/useAsyncData';
 import {
   Card,
   CardContent,
@@ -56,32 +56,22 @@ function formatTimestamp(timestamp, t) {
  */
 export function DeploymentActivityCard({ deployment }) {
   const { t } = useTranslation('console');
-  const [activity, setActivity] = useState(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    async function fetchActivity() {
-      if (!deployment?.id) return;
-      
+  const { data: activity, loading } = useAsyncData(
+    async () => {
+      if (!deployment?.id) return null;
       try {
-        const data = await getDeploymentActivity(deployment.id);
-        setActivity(data);
-      } catch (error) {
-        console.error('Failed to load deployment activity:', error);
-        // Set default empty activity
-        setActivity({
+        return await getDeploymentActivity(deployment.id);
+      } catch {
+        return {
           last_issuance: null,
           last_verification: null,
           active_flows: [],
           qr_enabled: false,
-        });
-      } finally {
-        setLoading(false);
+        };
       }
-    }
-
-    fetchActivity();
-  }, [deployment?.id]);
+    },
+    [deployment?.id]
+  );
 
   if (loading) {
     return (

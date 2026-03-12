@@ -1,0 +1,146 @@
+---
+# ================================================================
+# PostgreSQL — StatefulSet + PVC (OCI Block Volume)
+# ================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: marty-prod
+  labels:
+    app: postgres
+    app.kubernetes.io/part-of: marty-platform
+spec:
+  clusterIP: None       # headless — pods addressed directly
+  ports:
+    - port: 5432
+      targetPort: 5432
+      name: postgres
+  selector:
+    app: postgres
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: marty-prod
+  labels:
+    app: postgres
+    app.kubernetes.io/part-of: marty-platform
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      serviceAccountName: marty-app
+      containers:
+        - name: postgres
+          image: postgres:15-alpine
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              value: "postgres"
+            - name: POSTGRES_USER
+              value: "postgres"
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: POSTGRES_PASSWORD
+            - name: KEYCLOAK_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: KEYCLOAK_DB_PASSWORD
+            - name: MARTY_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: POSTGRES_PASSWORD
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "500m"
+          volumeMounts:
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
+            - name: init-scripts
+              mountPath: /docker-entrypoint-initdb.d
+              readOnly: true
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "postgres"]
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 5
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "postgres"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 3
+      volumes:
+        - name: init-scripts
+          configMap:
+            name: postgres-init-scripts
+            defaultMode: 0755
+  volumeClaimTemplates:
+    - metadata:
+        name: postgres-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        # OCI Block Volume — uses default storage class on OKE.
+        # For OCI Always Free, 50 GB blocks are free.
+        resources:
+          requests:
+            storage: 50Gi
+---
+# Init script ConfigMap — creates the marty and keycloak databases.
+# Mirrors docker/init-databases.sh from the existing Docker Compose setup.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-init-scripts
+  namespace: marty-prod
+data:
+  init-databases.sh: |
+    #!/bin/bash
+    set -e
+
+    # Create keycloak user + db
+    psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "postgres" <<-EOSQL
+      DO \$\$
+      BEGIN
+        IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'keycloak') THEN
+          CREATE ROLE keycloak WITH LOGIN PASSWORD '${KEYCLOAK_DB_PASSWORD}';
+        END IF;
+      END
+      \$\$;
+      SELECT 'CREATE DATABASE keycloak OWNER keycloak'
+        WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'keycloak')\gexec
+      GRANT ALL PRIVILEGES ON DATABASE keycloak TO keycloak;
+    EOSQL
+
+    # Create marty user + db
+    psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "postgres" <<-EOSQL
+      DO \$\$
+      BEGIN
+        IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'marty') THEN
+          CREATE ROLE marty WITH LOGIN PASSWORD '${MARTY_DB_PASSWORD}';
+        END IF;
+      END
+      \$\$;
+      SELECT 'CREATE DATABASE marty OWNER marty'
+        WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'marty')\gexec
+      GRANT ALL PRIVILEGES ON DATABASE marty TO marty;
+    EOSQL

@@ -1,0 +1,1126 @@
+---
+# ================================================================
+# Marty Microservices — Gateway + 10 backend services
+# All images pulled from OCIR (${OCIR_REGISTRY}/marty-ui/<svc>:${IMAGE_TAG})
+# ================================================================
+
+# --------------------------------
+# Helper macro: common env sources
+# All services include these via envFrom equivalents below.
+# --------------------------------
+
+# ================================================================
+# 1. Gateway — API Gateway (:8000)
+# ================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway
+  namespace: marty-prod
+  labels:
+    app: gateway
+    app.kubernetes.io/part-of: marty-platform
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: gateway
+  template:
+    metadata:
+      labels:
+        app: gateway
+    spec:
+      serviceAccountName: marty-app
+      imagePullSecrets:
+        - name: ocir-secret
+      containers:
+        - name: gateway
+          image: ${OCIR_REGISTRY}/marty-ui/gateway:${IMAGE_TAG}
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8000
+          env:
+            - name: GATEWAY_PORT
+              value: "8000"
+            - name: AUTH_SERVICE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: AUTH_SERVICE_URL
+            - name: ORGANIZATION_SERVICE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: ORGANIZATION_SERVICE_URL
+            - name: CREDENTIAL_TEMPLATE_SERVICE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: CREDENTIAL_TEMPLATE_SERVICE_URL
+            - name: TRUST_PROFILE_SERVICE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: TRUST_PROFILE_SERVICE_URL
+            - name: APPLICANT_SERVICE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: APPLICANT_SERVICE_URL
+            - name: NOTIFICATION_SERVICE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: NOTIFICATION_SERVICE_URL
+            - name: COMPLIANCE_PROFILE_SERVICE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: COMPLIANCE_PROFILE_SERVICE_URL
+            - name: PRESENTATION_POLICY_SERVICE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: PRESENTATION_POLICY_SERVICE_URL
+            - name: DEPLOYMENT_PROFILE_SERVICE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: DEPLOYMENT_PROFILE_SERVICE_URL
+            - name: FLOW_SERVICE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: FLOW_SERVICE_URL
+            - name: ISSUANCE_SERVICE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: ISSUANCE_SERVICE_URL
+            - name: ISSUER_BASE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: PUBLIC_API_URL
+            - name: CORS_ORIGINS
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: CORS_ORIGINS
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "150m"
+            limits:
+              memory: "512Mi"
+              cpu: "400m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gateway
+  namespace: marty-prod
+  labels:
+    app: gateway
+spec:
+  ports:
+    - port: 8000
+      targetPort: 8000
+      name: http
+  selector:
+    app: gateway
+---
+# ================================================================
+# 2. Auth (:8001)
+# ================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: auth
+  namespace: marty-prod
+  labels:
+    app: auth
+    app.kubernetes.io/part-of: marty-platform
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: auth
+  template:
+    metadata:
+      labels:
+        app: auth
+    spec:
+      serviceAccountName: marty-app
+      imagePullSecrets:
+        - name: ocir-secret
+      initContainers:
+        - name: wait-redis
+          image: busybox:1.36
+          command: ['sh', '-c', 'until nc -z redis 6379; do sleep 2; done']
+        - name: wait-rabbitmq
+          image: busybox:1.36
+          command: ['sh', '-c', 'until nc -z rabbitmq 5672; do sleep 2; done']
+      containers:
+        - name: auth
+          image: ${OCIR_REGISTRY}/marty-ui/auth:${IMAGE_TAG}
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8001
+          env:
+            - name: AUTH_SERVICE_PORT
+              value: "8001"
+            - name: UI_BASE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: UI_BASE_URL
+            - name: REDIS_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: REDIS_URL
+            - name: RABBITMQ_URL
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: RABBITMQ_URL
+            - name: OIDC_ISSUER_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: OIDC_ISSUER_URL_INTERNAL
+            - name: OIDC_EXTERNAL_ISSUER_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: OIDC_ISSUER_URL_EXTERNAL
+            - name: OIDC_CLIENT_ID
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: OIDC_CLIENT_ID
+            - name: OIDC_REDIRECT_URI
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: OIDC_REDIRECT_URI
+            - name: OIDC_POST_LOGOUT_REDIRECT_URI
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: OIDC_POST_LOGOUT_REDIRECT_URI
+            - name: SESSION_TTL_SECONDS
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: SESSION_TTL_SECONDS
+            - name: COOKIE_SECURE
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: COOKIE_SECURE
+            - name: KEYCLOAK_ADMIN_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: KEYCLOAK_ADMIN_URL
+            - name: MARTY_API_CLIENT_ID
+              value: "marty-api"
+            - name: MARTY_API_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: MARTY_API_CLIENT_SECRET
+            - name: FLOW_SERVICE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: FLOW_SERVICE_URL
+            - name: CREDENTIAL_LOGIN_POLICY_ID
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: CREDENTIAL_LOGIN_POLICY_ID
+            - name: AUTH_SERVICE_INTERNAL_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: AUTH_SERVICE_INTERNAL_URL
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "150m"
+            limits:
+              memory: "512Mi"
+              cpu: "400m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8001
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8001
+            initialDelaySeconds: 10
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: auth
+  namespace: marty-prod
+spec:
+  ports:
+    - port: 8001
+      targetPort: 8001
+      name: http
+  selector:
+    app: auth
+---
+# ================================================================
+# 3. Organization (:8002)
+# ================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: organization
+  namespace: marty-prod
+  labels:
+    app: organization
+    app.kubernetes.io/part-of: marty-platform
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: organization
+  template:
+    metadata:
+      labels:
+        app: organization
+    spec:
+      serviceAccountName: marty-app
+      imagePullSecrets:
+        - name: ocir-secret
+      containers:
+        - name: organization
+          image: ${OCIR_REGISTRY}/marty-ui/organization:${IMAGE_TAG}
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8002
+          env:
+            - name: ORGANIZATION_SERVICE_PORT
+              value: "8002"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: DATABASE_URL
+            - name: RABBITMQ_URL
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: RABBITMQ_URL
+            - name: REDIS_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: REDIS_URL
+            - name: REDIS_DB_GATEWAY
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: REDIS_DB_GATEWAY
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "300m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8002
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8002
+            initialDelaySeconds: 10
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: organization
+  namespace: marty-prod
+spec:
+  ports:
+    - port: 8002
+      targetPort: 8002
+      name: http
+  selector:
+    app: organization
+---
+# ================================================================
+# 4. Credential Template (:8003)
+# ================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: credential-template
+  namespace: marty-prod
+  labels:
+    app: credential-template
+    app.kubernetes.io/part-of: marty-platform
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: credential-template
+  template:
+    metadata:
+      labels:
+        app: credential-template
+    spec:
+      serviceAccountName: marty-app
+      imagePullSecrets:
+        - name: ocir-secret
+      containers:
+        - name: credential-template
+          image: ${OCIR_REGISTRY}/marty-ui/credential-template:${IMAGE_TAG}
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8003
+          env:
+            - name: CREDENTIAL_TEMPLATE_SERVICE_PORT
+              value: "8003"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: DATABASE_URL
+            - name: RABBITMQ_URL
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: RABBITMQ_URL
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "300m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8003
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8003
+            initialDelaySeconds: 10
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: credential-template
+  namespace: marty-prod
+spec:
+  ports:
+    - port: 8003
+      targetPort: 8003
+      name: http
+  selector:
+    app: credential-template
+---
+# ================================================================
+# 5. Trust Profile (:8004)
+# ================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trust-profile
+  namespace: marty-prod
+  labels:
+    app: trust-profile
+    app.kubernetes.io/part-of: marty-platform
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: trust-profile
+  template:
+    metadata:
+      labels:
+        app: trust-profile
+    spec:
+      serviceAccountName: marty-app
+      imagePullSecrets:
+        - name: ocir-secret
+      containers:
+        - name: trust-profile
+          image: ${OCIR_REGISTRY}/marty-ui/trust-profile:${IMAGE_TAG}
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8004
+          env:
+            - name: TRUST_PROFILE_SERVICE_PORT
+              value: "8004"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: DATABASE_URL
+            - name: RABBITMQ_URL
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: RABBITMQ_URL
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "300m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8004
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8004
+            initialDelaySeconds: 10
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: trust-profile
+  namespace: marty-prod
+spec:
+  ports:
+    - port: 8004
+      targetPort: 8004
+      name: http
+  selector:
+    app: trust-profile
+---
+# ================================================================
+# 6. Issuance (:8005) — built from marty-credentials repo
+# ================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: issuance
+  namespace: marty-prod
+  labels:
+    app: issuance
+    app.kubernetes.io/part-of: marty-platform
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: issuance
+  template:
+    metadata:
+      labels:
+        app: issuance
+    spec:
+      serviceAccountName: marty-app
+      imagePullSecrets:
+        - name: ocir-secret
+      containers:
+        - name: issuance
+          image: ${OCIR_REGISTRY}/marty-ui/issuance:${IMAGE_TAG}
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8005
+          env:
+            - name: ISSUANCE_SERVICE_PORT
+              value: "8005"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: DATABASE_URL
+            - name: RABBITMQ_URL
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: RABBITMQ_URL
+            - name: ISSUER_BASE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: PUBLIC_API_URL
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "200m"
+            limits:
+              memory: "1Gi"
+              cpu: "500m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8005
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            failureThreshold: 5
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8005
+            initialDelaySeconds: 30
+            periodSeconds: 15
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: issuance
+  namespace: marty-prod
+spec:
+  ports:
+    - port: 8005
+      targetPort: 8005
+      name: http
+  selector:
+    app: issuance
+---
+# ================================================================
+# 7. Applicant (:8006)
+# ================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: applicant
+  namespace: marty-prod
+  labels:
+    app: applicant
+    app.kubernetes.io/part-of: marty-platform
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: applicant
+  template:
+    metadata:
+      labels:
+        app: applicant
+    spec:
+      serviceAccountName: marty-app
+      imagePullSecrets:
+        - name: ocir-secret
+      securityContext:
+        runAsUser: 0       # matches 'user: 0:0' from compose
+      containers:
+        - name: applicant
+          image: ${OCIR_REGISTRY}/marty-ui/applicant:${IMAGE_TAG}
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8006
+          env:
+            - name: APPLICANT_SERVICE_PORT
+              value: "8006"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: DATABASE_URL
+            - name: RABBITMQ_URL
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: RABBITMQ_URL
+            - name: APPLICANT_DATA_FILE
+              value: "/app/data/applicant_store.json"
+            - name: ISSUANCE_SERVICE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: ISSUANCE_SERVICE_URL
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "300m"
+          volumeMounts:
+            - name: applicant-data
+              mountPath: /app/data
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8006
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8006
+            initialDelaySeconds: 10
+            periodSeconds: 10
+      volumes:
+        - name: applicant-data
+          persistentVolumeClaim:
+            claimName: applicant-data
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: applicant-data
+  namespace: marty-prod
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: applicant
+  namespace: marty-prod
+spec:
+  ports:
+    - port: 8006
+      targetPort: 8006
+      name: http
+  selector:
+    app: applicant
+---
+# ================================================================
+# 8. Notification (:8007)
+# ================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: notification
+  namespace: marty-prod
+  labels:
+    app: notification
+    app.kubernetes.io/part-of: marty-platform
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: notification
+  template:
+    metadata:
+      labels:
+        app: notification
+    spec:
+      serviceAccountName: marty-app
+      imagePullSecrets:
+        - name: ocir-secret
+      containers:
+        - name: notification
+          image: ${OCIR_REGISTRY}/marty-ui/notification:${IMAGE_TAG}
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8007
+          env:
+            - name: NOTIFICATION_SERVICE_PORT
+              value: "8007"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: DATABASE_URL
+            - name: RABBITMQ_URL
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: RABBITMQ_URL
+            - name: SMTP_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: SMTP_HOST
+            - name: SMTP_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: SMTP_PORT
+            - name: SMTP_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: SMTP_USERNAME
+            - name: SMTP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: SMTP_PASSWORD
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "300m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8007
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8007
+            initialDelaySeconds: 10
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: notification
+  namespace: marty-prod
+spec:
+  ports:
+    - port: 8007
+      targetPort: 8007
+      name: http
+  selector:
+    app: notification
+---
+# ================================================================
+# 9. Compliance Profile (:8008)
+# ================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: compliance-profile
+  namespace: marty-prod
+  labels:
+    app: compliance-profile
+    app.kubernetes.io/part-of: marty-platform
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: compliance-profile
+  template:
+    metadata:
+      labels:
+        app: compliance-profile
+    spec:
+      serviceAccountName: marty-app
+      imagePullSecrets:
+        - name: ocir-secret
+      containers:
+        - name: compliance-profile
+          image: ${OCIR_REGISTRY}/marty-ui/compliance-profile:${IMAGE_TAG}
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8008
+          env:
+            - name: COMPLIANCE_PROFILE_SERVICE_PORT
+              value: "8008"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: DATABASE_URL
+            - name: RABBITMQ_URL
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: RABBITMQ_URL
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "250m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8008
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8008
+            initialDelaySeconds: 10
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: compliance-profile
+  namespace: marty-prod
+spec:
+  ports:
+    - port: 8008
+      targetPort: 8008
+      name: http
+  selector:
+    app: compliance-profile
+---
+# ================================================================
+# 10. Presentation Policy (:8009)
+# ================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: presentation-policy
+  namespace: marty-prod
+  labels:
+    app: presentation-policy
+    app.kubernetes.io/part-of: marty-platform
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: presentation-policy
+  template:
+    metadata:
+      labels:
+        app: presentation-policy
+    spec:
+      serviceAccountName: marty-app
+      imagePullSecrets:
+        - name: ocir-secret
+      containers:
+        - name: presentation-policy
+          image: ${OCIR_REGISTRY}/marty-ui/presentation-policy:${IMAGE_TAG}
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8009
+          env:
+            - name: PRESENTATION_POLICY_SERVICE_PORT
+              value: "8009"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: DATABASE_URL
+            - name: RABBITMQ_URL
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: RABBITMQ_URL
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "250m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8009
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8009
+            initialDelaySeconds: 10
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: presentation-policy
+  namespace: marty-prod
+spec:
+  ports:
+    - port: 8009
+      targetPort: 8009
+      name: http
+  selector:
+    app: presentation-policy
+---
+# ================================================================
+# 11. Deployment Profile (:8010)
+# ================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: deployment-profile
+  namespace: marty-prod
+  labels:
+    app: deployment-profile
+    app.kubernetes.io/part-of: marty-platform
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: deployment-profile
+  template:
+    metadata:
+      labels:
+        app: deployment-profile
+    spec:
+      serviceAccountName: marty-app
+      imagePullSecrets:
+        - name: ocir-secret
+      containers:
+        - name: deployment-profile
+          image: ${OCIR_REGISTRY}/marty-ui/deployment-profile:${IMAGE_TAG}
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8010
+          env:
+            - name: DEPLOYMENT_PROFILE_SERVICE_PORT
+              value: "8010"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: DATABASE_URL
+            - name: RABBITMQ_URL
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: RABBITMQ_URL
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "250m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8010
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8010
+            initialDelaySeconds: 10
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: deployment-profile
+  namespace: marty-prod
+spec:
+  ports:
+    - port: 8010
+      targetPort: 8010
+      name: http
+  selector:
+    app: deployment-profile
+---
+# ================================================================
+# 12. Flow (:8011)
+# ================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flow
+  namespace: marty-prod
+  labels:
+    app: flow
+    app.kubernetes.io/part-of: marty-platform
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: flow
+  template:
+    metadata:
+      labels:
+        app: flow
+    spec:
+      serviceAccountName: marty-app
+      imagePullSecrets:
+        - name: ocir-secret
+      containers:
+        - name: flow
+          image: ${OCIR_REGISTRY}/marty-ui/flow:${IMAGE_TAG}
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8011
+          env:
+            - name: FLOW_SERVICE_PORT
+              value: "8011"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: DATABASE_URL
+            - name: RABBITMQ_URL
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: RABBITMQ_URL
+            - name: PUBLIC_BASE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: PUBLIC_API_URL
+            - name: PRESENTATION_POLICY_SERVICE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: PRESENTATION_POLICY_SERVICE_URL
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "300m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8011
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8011
+            initialDelaySeconds: 10
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: flow
+  namespace: marty-prod
+spec:
+  ports:
+    - port: 8011
+      targetPort: 8011
+      name: http
+  selector:
+    app: flow

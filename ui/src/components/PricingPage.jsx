@@ -10,6 +10,7 @@ import { SEOHead } from './seo';
 import CheckIcon from '@mui/icons-material/Check';
 import CloseIcon from '@mui/icons-material/Close';
 import StarIcon from '@mui/icons-material/Star';
+import LockIcon from '@mui/icons-material/Lock';
 import { useAuth } from '../hooks/useAuth';
 import { INFRASTRUCTURE_VALUE } from '../data/marketingContent';
 
@@ -21,12 +22,12 @@ const PRICING_TIERS = [
   {
     name: 'FREE',
     price: 0,
-    description: 'Perfect for getting started',
+    description: 'Perfect for kicking the tires',
     features: [
-      { text: 'Up to 5 team members', included: true },
+      { text: 'Up to 3 team members', included: true },
       { text: '100 API calls/month', included: true },
       { text: '10 credentials/month', included: true },
-      { text: 'Email support', included: true },
+      { text: 'Community support', included: true },
       { text: 'Custom branding', included: false },
       { text: 'Priority support', included: false },
       { text: 'Webhooks', included: false },
@@ -76,13 +77,31 @@ const PRICING_TIERS = [
       { text: 'Unlimited credentials', included: true },
       { text: 'Dedicated support', included: true },
       { text: 'Custom branding', included: true },
-      { text: 'Priority support', included: true },
+      { text: 'SLA & uptime guarantees', included: true },
       { text: 'Webhooks + Custom integrations', included: true },
     ],
     buttonText: 'Contact Sales',
     highlighted: false,
   },
 ];
+
+const HIRE_DEVELOPER_TIER = {
+  name: 'HIRE THE DEVELOPER',
+  tagline: "It's not too much, you just can't afford it.",
+  priceAnnual: 200000,
+  priceUpfront: 180000, // 10% discount for full payment upfront
+  description: 'Skip the product, hire the architect.',
+  features: [
+    { text: 'Direct access to the developer', included: true },
+    { text: 'Feature requests implemented within 24h', included: true },
+    { text: 'Personal Slack channel', included: true },
+    { text: 'Monthly architecture reviews', included: true },
+    { text: 'Code written exactly how you like it', included: true },
+    { text: 'Judgemental comments about your tech choices', included: true },
+    { text: 'Unlimited opinions', included: true },
+  ],
+  comingSoon: true,
+};
 
 function PricingPage() {
   const { login } = useAuth();
@@ -116,7 +135,7 @@ function PricingPage() {
       </Box>
 
       {/* Plan Comparison */}
-      <Grid container spacing={3} sx={{ mb: 6 }}>
+      <Grid container spacing={3} sx={{ mb: 4 }}>
         {PRICING_TIERS.map((tier) => (
           <Grid item xs={12} sm={6} md={3} key={tier.name}>
             <Card 
@@ -214,6 +233,120 @@ function PricingPage() {
           </Grid>
         ))}
       </Grid>
+
+      {/* Hire the Developer — Coming Soon */}
+      <Box sx={{ position: 'relative', mb: 6, mt: 2 }}>
+        {/* Coming Soon Overlay */}
+        <Box
+          sx={{
+            position: 'absolute',
+            inset: 0,
+            zIndex: 2,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            borderRadius: 2,
+            pointerEvents: 'none',
+          }}
+        >
+          <Chip
+            icon={<LockIcon />}
+            label="COMING SOON"
+            sx={{
+              fontSize: '1rem',
+              fontWeight: 'bold',
+              px: 3,
+              py: 2.5,
+              height: 'auto',
+              bgcolor: 'warning.main',
+              color: 'warning.contrastText',
+              boxShadow: 6,
+              letterSpacing: 2,
+              '& .MuiChip-icon': { fontSize: '1.3rem', color: 'warning.contrastText' },
+            }}
+          />
+        </Box>
+
+        {/* Card — shaded out */}
+        <Card
+          sx={{
+            opacity: 0.45,
+            filter: 'grayscale(60%)',
+            border: 2,
+            borderColor: 'grey.400',
+            borderStyle: 'dashed',
+            borderRadius: 2,
+            userSelect: 'none',
+            pointerEvents: 'none',
+          }}
+        >
+          <CardContent>
+            <Grid container spacing={4} alignItems="center">
+              {/* Left: headline + pricing */}
+              <Grid item xs={12} md={5}>
+                <Typography
+                  variant="overline"
+                  fontWeight="bold"
+                  color="text.secondary"
+                  letterSpacing={3}
+                >
+                  {HIRE_DEVELOPER_TIER.name}
+                </Typography>
+                <Typography variant="h4" fontWeight="bold" gutterBottom>
+                  {HIRE_DEVELOPER_TIER.description}
+                </Typography>
+                <Typography
+                  variant="body1"
+                  color="text.secondary"
+                  sx={{ fontStyle: 'italic', mb: 3 }}
+                >
+                  &ldquo;{HIRE_DEVELOPER_TIER.tagline}&rdquo;
+                </Typography>
+
+                {/* Annual price */}
+                <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1, mb: 1 }}>
+                  <Typography variant="h3" fontWeight="bold">
+                    ${HIRE_DEVELOPER_TIER.priceAnnual.toLocaleString()}
+                  </Typography>
+                  <Typography variant="subtitle1" color="text.secondary">/year</Typography>
+                </Box>
+
+                {/* Upfront discount */}
+                <Paper
+                  elevation={0}
+                  sx={{ p: 1.5, bgcolor: 'success.light', borderRadius: 1, display: 'inline-block' }}
+                >
+                  <Typography variant="body2" fontWeight="bold" color="success.dark">
+                    Pay upfront &amp; save 10% — ${HIRE_DEVELOPER_TIER.priceUpfront.toLocaleString()}/year
+                  </Typography>
+                </Paper>
+              </Grid>
+
+              {/* Right: features */}
+              <Grid item xs={12} md={7}>
+                <Divider orientation="vertical" flexItem sx={{ display: { xs: 'none', md: 'block' } }} />
+                <List dense>
+                  {HIRE_DEVELOPER_TIER.features.map((feature, index) => (
+                    <ListItem key={index} sx={{ py: 0.5 }}>
+                      <ListItemIcon sx={{ minWidth: 32 }}>
+                        <CheckIcon fontSize="small" color="success" />
+                      </ListItemIcon>
+                      <ListItemText
+                        primary={feature.text}
+                        primaryTypographyProps={{ variant: 'body2' }}
+                      />
+                    </ListItem>
+                  ))}
+                </List>
+                <Button variant="contained" color="secondary" disabled fullWidth sx={{ mt: 2 }}>
+                  Apply to Hire
+                </Button>
+              </Grid>
+            </Grid>
+          </CardContent>
+        </Card>
+      </Box>
 
       {/* FAQ / Additional Info */}
       <Box sx={{ mt: 8 }}>

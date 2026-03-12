@@ -4,7 +4,7 @@
  * Manage credential applications from applicants.
  */
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import {
   Box,
   Paper,
@@ -37,6 +37,8 @@ import SendIcon from '@mui/icons-material/Send';
 import { Link, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../../../hooks/useAuth';
+import { useAsyncData } from '../../../hooks/useAsyncData';
+import { useNotifications } from '../../../hooks/useNotifications';
 import {
   issueOrganizationApplication,
   listOrganizationApplications,
@@ -66,71 +68,45 @@ function ApplicationsPage() {
   const { t } = useTranslation('console');
   const { organizationId } = useAuth();
   const navigate = useNavigate();
-  const [applications, setApplications] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
+  const { showError } = useNotifications();
+  const { data: _applicationsData, loading, error, reload } = useAsyncData(async () => {
+    if (!organizationId) return [];
+    const [appsResult, applicantsResponse] = await Promise.all([
+      listOrganizationApplications(organizationId),
+      fetch(`/v1/applicants?organization_id=${encodeURIComponent(organizationId)}`, {
+        credentials: 'include',
+      }),
+    ]);
+    const rawApplicants = applicantsResponse.ok ? await applicantsResponse.json() : [];
+    const applicants = Array.isArray(rawApplicants) ? rawApplicants : [];
+    const applicantById = new Map(applicants.map((a) => [a.id, a]));
+    return (appsResult.applications || []).map((app) => {
+      const applicant = applicantById.get(app.applicant_id);
+      const status = (app.status || '').toLowerCase();
+      const metadata = app.metadata || {};
+      return {
+        id: app.id,
+        applicant: applicant?.email || app.applicant_id,
+        credentialType: app.credential_display_name || metadata.credential_display_name || app.credential_configuration_id,
+        submittedAt: app.submitted_at || app.created_at,
+        documentsUploaded: true,
+        verificationPassed: true,
+        status,
+        rawStatus: status,
+        issuanceTransactionId: metadata.issuance_transaction_id || null,
+      };
+    });
+  }, [organizationId]);
+  const applications = _applicationsData ?? [];
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('pending');
-
-  useEffect(() => {
-    if (organizationId) {
-      loadApplications();
-    }
-  }, [organizationId]);
-
-  const loadApplications = async () => {
-    if (!organizationId) {
-      setApplications([]);
-      setLoading(false);
-      return;
-    }
-
-    setLoading(true);
-    setError(null);
-
-    try {
-      const [appsResult, applicantsResponse] = await Promise.all([
-        listOrganizationApplications(organizationId),
-        fetch(`/v1/applicants?organization_id=${encodeURIComponent(organizationId)}`, {
-          credentials: 'include',
-        }),
-      ]);
-
-      const applicants = applicantsResponse.ok ? await applicantsResponse.json() : [];
-      const applicantById = new Map((Array.isArray(applicants) ? applicants : []).map((a) => [a.id, a]));
-
-      const normalizedApps = (appsResult.applications || []).map((app) => {
-        const applicant = applicantById.get(app.applicant_id);
-        const status = (app.status || '').toLowerCase();
-        const metadata = app.metadata || {};
-
-        return {
-          id: app.id,
-          applicant: applicant?.email || app.applicant_id,
-          credentialType: app.credential_display_name || metadata.credential_display_name || app.credential_configuration_id,
-          submittedAt: app.submitted_at || app.created_at,
-          documentsUploaded: true,
-          verificationPassed: true,
-          status,
-          rawStatus: status,
-          issuanceTransactionId: metadata.issuance_transaction_id || null,
-        };
-      });
-
-      setApplications(normalizedApps);
-    } catch (err) {
-      setError(err.message || t('operate.applications.errorLoading'));
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const handleApprove = async (applicationId) => {
     try {
       await reviewOrganizationApplication(applicationId, 'approve');
-      await loadApplications();
+      await reload();
     } catch (err) {
-      setError(err.message || 'Failed to approve application');
+      showError(err.message || 'Failed to approve application');
     }
   };
 
@@ -139,18 +115,18 @@ function ApplicationsPage() {
       await reviewOrganizationApplication(applicationId, 'reject', {
         reason: 'Rejected by organization reviewer',
       });
-      await loadApplications();
+      await reload();
     } catch (err) {
-      setError(err.message || 'Failed to reject application');
+      showError(err.message || 'Failed to reject application');
     }
   };
 
   const handleIssue = async (applicationId) => {
     try {
       await issueOrganizationApplication(applicationId);
-      await loadApplications();
+      await reload();
     } catch (err) {
-      setError(err.message || 'Failed to issue credential');
+      showError(err.message || 'Failed to issue credential');
     }
   };
 
@@ -174,7 +150,7 @@ function ApplicationsPage() {
         <Button
           variant="outlined"
           startIcon={<RefreshIcon />}
-          onClick={loadApplications}
+          onClick={reload}
           disabled={loading}
         >
           {t('operate.applications.refresh')}
@@ -183,7 +159,7 @@ function ApplicationsPage() {
     >
       {error && (
         <Alert severity="error" sx={{ mb: 3 }}>
-          {error}
+          {error?.message || String(error)}
         </Alert>
       )}
 

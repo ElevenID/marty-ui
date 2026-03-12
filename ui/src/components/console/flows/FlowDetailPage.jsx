@@ -7,10 +7,10 @@
  * Enforces the mental model: Applicants apply to Flows, not Templates.
  */
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useParams, useNavigate, Link as RouterLink } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { useNotification } from '../../../contexts/NotificationContext';
+import { useAsyncData } from '../../../hooks/useAsyncData';
 import {
   Box,
   Paper,
@@ -344,55 +344,34 @@ function FlowDetailPage() {
   const { flowId } = useParams();
   const navigate = useNavigate();
   const { t } = useTranslation('console');
-  const [flow, setFlow] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [copySuccess, setCopySuccess] = useState(false);
-
-  useEffect(() => {
-    const loadFlow = async () => {
-      try {
-        // TODO: Replace with actual API call
-        // const data = await flowsApi.getFlow(flowId);
-        
-        // Mock data for now
-        await new Promise(resolve => setTimeout(resolve, 500));
-        setFlow({
-          id: flowId,
-          name: 'EU Digital Identity – Employee Issuance',
-          status: 'PUBLISHED',
-          environment: 'Production',
-          credential_template_name: 'EU Digital Identity Credential',
-          credential_template_id: 'ct-1',
-          application_rules: 'Employee email required (domain: example.com)',
-          application_template_id: 'at-1',
-          compliance_profile: 'Open Badge 2.0, EUDI-ready',
-          compliance_profile_id: 'cp-1',
-          approval_mode: 'manual',
-          public_url: `${window.location.origin}/apply/${flowId}`,
-          created_at: '2026-01-15T10:00:00Z',
-          published_by: 'admin@example.com',
-          updated_at: '2026-02-08T14:30:00Z',
-          stats: {
-            applications_submitted: 142,
-            pending_approval: 12,
-            credentials_issued: 130,
-            failures_24h: 0,
-          },
-        });
-      } catch (err) {
-        setError(t('flows.flowDetail.errors.failedToLoad'));
-        console.error('Failed to load flow details:', err);
-        showError(t('flows.flowDetail.errors.failedToLoad'), {
-          details: t('flows.flowDetail.errors.serviceUnavailable'),
-        });
-      } finally {
-        setLoading(false);
-      }
+  const { data: flow, loading, error } = useAsyncData(async () => {
+    // TODO: Replace with actual API call
+    await new Promise(resolve => setTimeout(resolve, 500));
+    return {
+      id: flowId,
+      name: 'EU Digital Identity – Employee Issuance',
+      status: 'PUBLISHED',
+      environment: 'Production',
+      credential_template_name: 'EU Digital Identity Credential',
+      credential_template_id: 'ct-1',
+      application_rules: 'Employee email required (domain: example.com)',
+      application_template_id: 'at-1',
+      compliance_profile: 'Open Badge 2.0, EUDI-ready',
+      compliance_profile_id: 'cp-1',
+      approval_mode: 'manual',
+      public_url: `${window.location.origin}/apply/${flowId}`,
+      created_at: '2026-01-15T10:00:00Z',
+      published_by: 'admin@example.com',
+      updated_at: '2026-02-08T14:30:00Z',
+      stats: {
+        applications_submitted: 142,
+        pending_approval: 12,
+        credentials_issued: 130,
+        failures_24h: 0,
+      },
     };
-
-    loadFlow();
   }, [flowId]);
+  const [copySuccess, setCopySuccess] = useState(false);
 
   const handleCopyUrl = () => {
     if (flow?.public_url) {
@@ -424,7 +403,7 @@ function FlowDetailPage() {
   if (error || !flow) {
     return (
       <Box sx={{ p: 3 }}>
-        <Alert severity="error">{error || t('flows.flowDetail.errors.flowNotFound')}</Alert>
+        <Alert severity="error">{error?.message || t('flows.flowDetail.errors.flowNotFound')}</Alert>
         <Button
           startIcon={<ArrowBackIcon />}
           onClick={() => navigate('/console/org/flows/definitions')}

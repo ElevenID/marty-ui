@@ -37,7 +37,6 @@ import {
   MenuItem,
   Chip,
   Alert,
-  Snackbar,
   CircularProgress,
   Stack,
   Grid,
@@ -71,6 +70,9 @@ import {
   Warning as WarningIcon,
 } from '@mui/icons-material';
 import { useAuth } from '../../hooks/useAuth';
+import { useNotifications } from '../../hooks/useNotifications';
+import { useDialog } from '../../hooks/useDialog';
+import { ConfirmDeleteDialog } from '../common';
 import complianceProfilesApi from '../../services/complianceProfilesApi';
 
 // API base URL
@@ -757,17 +759,16 @@ function TemplateFormDialog({ open, onClose, onSave, template, trustProfiles }) 
  */
 export default function ApplicationTemplateManager() {
   const { organizationId } = useAuth();
+  const { showSuccess, showError, showWarning } = useNotifications();
   const [templates, setTemplates] = useState([]);
   const [trustProfiles, setTrustProfiles] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' });
 
   // Dialog state
   const [formDialogOpen, setFormDialogOpen] = useState(false);
   const [editingTemplate, setEditingTemplate] = useState(null);
-  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
-  const [templateToDelete, setTemplateToDelete] = useState(null);
+  const deleteDialog = useDialog();
 
   /**
    * Load templates from API
@@ -866,21 +867,13 @@ export default function ApplicationTemplateManager() {
         throw new Error(`Failed to save template: ${response.statusText}`);
       }
 
-      setSnackbar({
-        open: true,
-        message: templateData.id ? t('applicationTemplateManager.snackbar.updateSuccess') : t('applicationTemplateManager.snackbar.createSuccess'),
-        severity: 'success',
-      });
+      showSuccess(templateData.id ? t('applicationTemplateManager.snackbar.updateSuccess') : t('applicationTemplateManager.snackbar.createSuccess'));
 
       setFormDialogOpen(false);
       loadTemplates();
     } catch (err) {
       console.error('Error saving template:', err);
-      setSnackbar({
-        open: true,
-        message: err.message,
-        severity: 'error',
-      });
+      showError(err.message);
     }
   };
 
@@ -888,10 +881,8 @@ export default function ApplicationTemplateManager() {
    * Handle delete template
    */
   const handleDelete = async () => {
-    if (!templateToDelete) return;
-
     try {
-      const response = await fetch(`${API_URL}/v1/issuance/templates/${templateToDelete.id}`, {
+      const response = await fetch(`${API_URL}/v1/issuance/templates/${deleteDialog.data.id}`, {
         method: 'DELETE',
         credentials: 'include',
       });
@@ -900,22 +891,11 @@ export default function ApplicationTemplateManager() {
         throw new Error(`Failed to delete template: ${response.statusText}`);
       }
 
-      setSnackbar({
-        open: true,
-        message: t('applicationTemplateManager.snackbar.deleteSuccess'),
-        severity: 'success',
-      });
-
-      setDeleteDialogOpen(false);
-      setTemplateToDelete(null);
+      showSuccess(t('applicationTemplateManager.snackbar.deleteSuccess'));
       loadTemplates();
     } catch (err) {
-      console.error('Error deleting template:', err);
-      setSnackbar({
-        open: true,
-        message: err.message,
-        severity: 'error',
-      });
+      showError(err.message);
+      throw err;
     }
   };
 
@@ -1046,10 +1026,7 @@ export default function ApplicationTemplateManager() {
                       <Tooltip title="Delete">
                         <IconButton
                           size="small"
-                          onClick={() => {
-                            setTemplateToDelete(template);
-                            setDeleteDialogOpen(true);
-                          }}
+                          onClick={() => deleteDialog.open(template)}
                         >
                           <DeleteIcon fontSize="small" />
                         </IconButton>
@@ -1072,33 +1049,14 @@ export default function ApplicationTemplateManager() {
         trustProfiles={trustProfiles}
       />
 
-      {/* Delete Confirmation Dialog */}
-      <Dialog open={deleteDialogOpen} onClose={() => setDeleteDialogOpen(false)}>
-        <DialogTitle>Delete Template</DialogTitle>
-        <DialogContent>
-          <Typography>
-            Are you sure you want to delete <strong>{templateToDelete?.name}</strong>? This action cannot be
-            undone.
-          </Typography>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setDeleteDialogOpen(false)}>Cancel</Button>
-          <Button onClick={handleDelete} color="error" variant="contained">
-            Delete
-          </Button>
-        </DialogActions>
-      </Dialog>
+      <ConfirmDeleteDialog
+        open={deleteDialog.isOpen}
+        onClose={deleteDialog.close}
+        onConfirm={handleDelete}
+        title="Delete Template"
+        itemName={deleteDialog.data?.name}
+      />
 
-      {/* Snackbar */}
-      <Snackbar
-        open={snackbar.open}
-        autoHideDuration={6000}
-        onClose={() => setSnackbar({ ...snackbar, open: false })}
-      >
-        <Alert severity={snackbar.severity} onClose={() => setSnackbar({ ...snackbar, open: false })}>
-          {snackbar.message}
-        </Alert>
-      </Snackbar>
     </Box>
   );
 }

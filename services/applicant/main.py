@@ -676,6 +676,9 @@ class ApplicationResponse(BaseModel):
     # Populated when the credential template has wallet_configs and the issuance
     # service is running with multi-wallet support.
     credential_offer_uris: dict[str, str] = {}
+    # Display labels for each wallet tab, sourced from the credential template's
+    # wallet_configs display_name field (e.g. {"wr-marty-001": "SpruceKit"}).
+    credential_offer_labels: dict[str, str] = {}
 
 
 class EnrollBiometricRequest(BaseModel):
@@ -941,12 +944,23 @@ async def submit_application(
         )
 
     is_first_submission = application.status == ApplicationStatus.DRAFT
+    auto_approve = bool(application.metadata.get("auto_approve"))
 
     application.status = ApplicationStatus.SUBMITTED
     if not application.reference_number:
         application.reference_number = _generate_reference_number()
     application.submitted_at = datetime.now(timezone.utc)
     application.updated_at = datetime.now(timezone.utc)
+
+    # Auto-approve: skip the vetting queue entirely when the template opts out
+    # of manual review.  We resolve this BEFORE creating vetting checks so no
+    # orphaned NOT_STARTED checks accumulate for auto-issued credentials.
+    if auto_approve:
+        application.status = ApplicationStatus.APPROVED
+        application.reviewed_at = datetime.now(timezone.utc)
+        await repo.save_application(application)
+        return _application_to_response(application)
+
     await repo.save_application(application)
 
     # Create vetting checks on first submission.
@@ -979,6 +993,104 @@ async def submit_application(
                 )
                 await repo.save_check(check)
 
+    return _application_to_response(application)
+
+
+@router.post("/applications/{application_id}/auto-issue", response_model=ApplicationResponse)
+async def auto_issue_application(
+    application_id: str,
+    repo: InMemoryApplicantRepository = Depends(get_repo),
+) -> ApplicationResponse:
+    """Atomically submit, approve, and issue a credential for an auto-approve application.
+
+    Intended for MemberCredential and other templates where ``approval_required``
+    is False.  The caller must have already created the application and included
+    ``auto_approve: true`` in the metadata.  This endpoint combines the three
+    separate calls (submit / review / issue) into one round-trip so there is no
+    window for partial state.
+    """
+    application = await repo.get_application(application_id)
+    if not application:
+        raise HTTPException(status_code=404, detail="Application not found")
+
+    if not application.metadata.get("auto_approve"):
+        raise HTTPException(
+            status_code=400,
+            detail="Application does not have auto_approve set in metadata",
+        )
+
+    now = datetime.now(timezone.utc)
+
+    # Move through SUBMITTED → APPROVED in one atomic save, skipping vetting.
+    if application.status in {ApplicationStatus.DRAFT, ApplicationStatus.NEEDS_INFO}:
+        application.status = ApplicationStatus.SUBMITTED
+        if not application.reference_number:
+            application.reference_number = _generate_reference_number()
+        application.submitted_at = now
+
+    if application.status == ApplicationStatus.SUBMITTED:
+        application.status = ApplicationStatus.APPROVED
+        application.reviewed_at = now
+
+    if application.status not in (ApplicationStatus.APPROVED, ApplicationStatus.ISSUED):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot auto-issue application in {application.status.value} status",
+        )
+
+    application.updated_at = now
+    await repo.save_application(application)
+
+    # Delegate to the issuance service.
+    applicant = await repo.get_by_id(application.applicant_id)
+    if not applicant:
+        raise HTTPException(status_code=404, detail="Applicant not found")
+
+    _AUTO_INTERNAL_FIELDS = {
+        "credential_offer_uri", "offer_expires_at", "issuance_transaction_id",
+        "issuance_fallback", "credential_type", "credential_display_name",
+        "rejection_reason", "review_notes", "info_requests", "auto_approve",
+    }
+    claims = {k: v for k, v in application.metadata.items() if k not in _AUTO_INTERNAL_FIELDS}
+    claims.update({
+        "applicant_id": str(applicant.id),
+        "email": applicant.email,
+        "given_name": applicant.given_name,
+        "family_name": applicant.family_name,
+    })
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(
+                f"{ISSUANCE_SERVICE_URL}/v1/issuance/initiate",
+                json={
+                    "organization_id": application.organization_id,
+                    "credential_template_id": application.credential_configuration_id,
+                    "applicant_id": applicant.id,
+                    "claims": claims,
+                },
+            )
+            response.raise_for_status()
+            issuance = response.json()
+    except Exception as e:
+        logger.warning("Issuance service unavailable for auto-issue %s: %s", application_id, e)
+        issuance = {
+            "id": f"local-{uuid.uuid4().hex[:12]}",
+            "credential_offer_uri": None,
+            "fallback": True,
+        }
+
+    application.status = ApplicationStatus.ISSUED
+    application.issued_at = datetime.now(timezone.utc)
+    application.updated_at = datetime.now(timezone.utc)
+    application.metadata["issuance_transaction_id"] = issuance.get("id")
+    application.metadata["credential_offer_uri"] = issuance.get("credential_offer_uri")
+    application.metadata["offer_expires_at"] = issuance.get("expires_at")
+    application.metadata["credential_offer_uris"] = issuance.get("credential_offer_uris") or {}
+    application.metadata["credential_offer_labels"] = issuance.get("credential_offer_labels") or {}
+    if issuance.get("fallback"):
+        application.metadata["issuance_fallback"] = True
+    await repo.save_application(application)
     return _application_to_response(application)
 
 
@@ -1054,6 +1166,7 @@ async def issue_application(
         "rejection_reason",
         "review_notes",
         "info_requests",
+        "auto_approve",  # workflow flag — never a credential claim
     }
     claims = {
         k: v
@@ -1108,6 +1221,7 @@ async def issue_application(
     application.metadata["credential_offer_uri"] = issuance.get("credential_offer_uri")
     application.metadata["offer_expires_at"] = issuance.get("expires_at")
     application.metadata["credential_offer_uris"] = issuance.get("credential_offer_uris") or {}
+    application.metadata["credential_offer_labels"] = issuance.get("credential_offer_labels") or {}
     if issuance.get("fallback"):
         application.metadata["issuance_fallback"] = True
     await repo.save_application(application)
@@ -1432,6 +1546,7 @@ def _application_to_response(application: ApplicantApplication) -> ApplicationRe
         credential_offer_uri=application.metadata.get("credential_offer_uri"),
         offer_expires_at=application.metadata.get("offer_expires_at"),
         credential_offer_uris=application.metadata.get("credential_offer_uris") or {},
+        credential_offer_labels=application.metadata.get("credential_offer_labels") or {},
     )
 
 

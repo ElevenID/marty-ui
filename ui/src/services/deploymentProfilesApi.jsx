@@ -57,12 +57,7 @@ export const getDeploymentProfile = async (profileId) => {
  * @returns {Promise<Object>} Updated deployment profile
  */
 export const updateDeploymentProfile = async (profileId, updates) => {
-  try {
-    const response = await apiClient.patch(`${BASE_PATH}/${profileId}`, updates);
-    return response.data;
-  } catch (error) {
-    throw handleApiError(error);
-  }
+  return patch(`${BASE_PATH}/${profileId}`, updates);
 };
 
 /**
@@ -71,11 +66,7 @@ export const updateDeploymentProfile = async (profileId, updates) => {
  * @returns {Promise<void>}
  */
 export const deleteDeploymentProfile = async (profileId) => {
-  try {
-    await apiClient.delete(`${BASE_PATH}/${profileId}`);
-  } catch (error) {
-    throw handleApiError(error);
-  }
+  return del(`${BASE_PATH}/${profileId}`);
 };
 
 /**
@@ -88,12 +79,7 @@ export const deleteDeploymentProfile = async (profileId) => {
  * @returns {Promise<Object>} Created lane
  */
 export const createLane = async (profileId, laneData) => {
-  try {
-    const response = await apiClient.post(`${BASE_PATH}/${profileId}/lanes`, laneData);
-    return response.data;
-  } catch (error) {
-    throw handleApiError(error);
-  }
+  return post(`${BASE_PATH}/${profileId}/lanes`, laneData);
 };
 
 /**
@@ -102,12 +88,7 @@ export const createLane = async (profileId, laneData) => {
  * @returns {Promise<Array>} List of lanes
  */
 export const listLanes = async (profileId) => {
-  try {
-    const response = await apiClient.get(`${BASE_PATH}/${profileId}/lanes`);
-    return response.data;
-  } catch (error) {
-    throw handleApiError(error);
-  }
+  return get(`${BASE_PATH}/${profileId}/lanes`);
 };
 
 /**
@@ -116,12 +97,7 @@ export const listLanes = async (profileId) => {
  * @returns {Promise<Object>} Lane details
  */
 export const getLane = async (laneId) => {
-  try {
-    const response = await apiClient.get(`/v1/identity/lanes/${laneId}`);
-    return response.data;
-  } catch (error) {
-    throw handleApiError(error);
-  }
+  return get(`/v1/identity/lanes/${laneId}`);
 };
 
 /**
@@ -131,12 +107,7 @@ export const getLane = async (laneId) => {
  * @returns {Promise<Object>} Updated lane
  */
 export const updateLane = async (laneId, updates) => {
-  try {
-    const response = await apiClient.patch(`/v1/identity/lanes/${laneId}`, updates);
-    return response.data;
-  } catch (error) {
-    throw handleApiError(error);
-  }
+  return patch(`/v1/identity/lanes/${laneId}`, updates);
 };
 
 /**
@@ -145,11 +116,7 @@ export const updateLane = async (laneId, updates) => {
  * @returns {Promise<void>}
  */
 export const deleteLane = async (laneId) => {
-  try {
-    await apiClient.delete(`/v1/identity/lanes/${laneId}`);
-  } catch (error) {
-    throw handleApiError(error);
-  }
+  return del(`/v1/identity/lanes/${laneId}`);
 };
 
 /**
@@ -159,14 +126,7 @@ export const deleteLane = async (laneId) => {
  * @returns {Promise<Object>} Updated lane with device assignment
  */
 export const assignDeviceToLane = async (laneId, deviceId) => {
-  try {
-    const response = await apiClient.post(`/v1/identity/lanes/${laneId}/assign-device`, {
-      device_id: deviceId,
-    });
-    return response.data;
-  } catch (error) {
-    throw handleApiError(error);
-  }
+  return post(`/v1/identity/lanes/${laneId}/assign-device`, { device_id: deviceId });
 };
 
 /**
@@ -176,11 +136,7 @@ export const assignDeviceToLane = async (laneId, deviceId) => {
  * @returns {Promise<void>}
  */
 export const unassignDeviceFromLane = async (laneId, deviceId) => {
-  try {
-    await apiClient.delete(`/v1/identity/lanes/${laneId}/devices/${deviceId}`);
-  } catch (error) {
-    throw handleApiError(error);
-  }
+  return del(`/v1/identity/lanes/${laneId}/devices/${deviceId}`);
 };
 
 /**

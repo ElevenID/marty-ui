@@ -4,7 +4,7 @@
  * Dashboard for applicants to see their credential status and actions.
  */
 
-import { useState, useEffect } from 'react';
+import { useAsyncData } from '../../../hooks/useAsyncData';
 import {
   Box,
   Grid,
@@ -36,27 +36,10 @@ import { getApplicantStats } from '../../../services/applicantApi';
 function ApplicantDashboard() {
   const { t } = useTranslation('applicant');
   const { user } = useAuth();
-  const [loading, setLoading] = useState(true);
-  const [stats, setStats] = useState({
-    activeCredentials: 0,
-    pendingApplications: 0,
-    expiringSoon: 0,
-  });
-
-  useEffect(() => {
-    const loadStats = async () => {
-      try {
-        const data = await getApplicantStats();
-        setStats(data);
-      } catch (error) {
-        console.error('Error loading dashboard stats:', error);
-        // Keep default stats on error
-      } finally {
-        setLoading(false);
-      }
-    };
-    loadStats();
-  }, []);
+  const { data: stats = { activeCredentials: 0, pendingApplications: 0, expiringSoon: 0 }, loading } = useAsyncData(
+    getApplicantStats,
+    []
+  );
 
   if (loading) {
     return (

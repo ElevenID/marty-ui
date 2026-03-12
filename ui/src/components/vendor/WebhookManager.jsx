@@ -36,7 +36,6 @@ import {
   Alert,
   CircularProgress,
   Tooltip,
-  Snackbar,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
@@ -47,6 +46,7 @@ import ErrorIcon from '@mui/icons-material/Error';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import { useAuth } from '../../hooks/useAuth';
+import { useNotifications } from '../../hooks/useNotifications';
 import {
   listWebhooks,
   createWebhook,
@@ -225,13 +225,13 @@ const getEventTypes = (t) => [
 export default function WebhookManager() {
   const { t } = useTranslation(['vendor', 'common']);
   const { organizationId } = useAuth();
+  const { showSuccess } = useNotifications();
   const eventTypes = getEventTypes(t);
   const [webhooks, setWebhooks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingWebhook, setEditingWebhook] = useState(null);
-  const [successMessage, setSuccessMessage] = useState('');
   const [newWebhookSecret, setNewWebhookSecret] = useState('');
   
   // Form state
@@ -324,15 +324,15 @@ export default function WebhookManager() {
 
       if (editingWebhook) {
         await updateWebhook(editingWebhook.id, webhookData);
-        setSuccessMessage('Webhook updated successfully');
+        showSuccess('Webhook updated successfully');
       } else {
         const result = await createWebhook(organizationId, webhookData);
         // Show the secret only on creation
         if (result.secret) {
           setNewWebhookSecret(result.secret);
-          setSuccessMessage('Webhook created successfully! Save the secret below - it won\'t be shown again.');
+          showSuccess('Webhook created successfully! Save the secret below - it won\'t be shown again.');
         } else {
-          setSuccessMessage('Webhook created successfully');
+          showSuccess('Webhook created successfully');
         }
       }
 
@@ -356,7 +356,7 @@ export default function WebhookManager() {
 
     try {
       await deleteWebhook(webhookId);
-      setSuccessMessage('Webhook deleted successfully');
+      showSuccess('Webhook deleted successfully');
       await loadWebhooks();
     } catch (err) {
       setError(getErrorMessage(err));
@@ -366,7 +366,7 @@ export default function WebhookManager() {
   const handleTest = async (webhookId) => {
     try {
       await testWebhook(webhookId);
-      setSuccessMessage('Test event sent successfully!');
+      showSuccess('Test event sent successfully!');
     } catch (err) {
       setError(getErrorMessage(err));
     }
@@ -726,7 +726,7 @@ export default function WebhookManager() {
                       size="small"
                       onClick={() => {
                         navigator.clipboard.writeText(newWebhookSecret);
-                        setSuccessMessage('Secret copied to clipboard');
+                        showSuccess('Secret copied to clipboard');
                       }}
                     >
                       <ContentCopyIcon fontSize="small" />
@@ -753,17 +753,7 @@ export default function WebhookManager() {
         </DialogActions>
       </Dialog>
 
-      {/* Success Snackbar */}
-      <Snackbar
-        open={!!successMessage}
-        autoHideDuration={6000}
-        onClose={() => setSuccessMessage('')}
-        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
-      >
-        <Alert onClose={() => setSuccessMessage('')} severity="success" sx={{ width: '100%' }}>
-          {successMessage}
-        </Alert>
-      </Snackbar>
+      {/* (success notifications handled by useNotifications) */}
     </Box>
   );
 }

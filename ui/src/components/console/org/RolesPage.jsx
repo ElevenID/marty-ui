@@ -38,13 +38,14 @@ import LockIcon from '@mui/icons-material/Lock';
 import PeopleIcon from '@mui/icons-material/People';
 import StarIcon from '@mui/icons-material/Star';
 
-import { ResourcePage } from '../../common';
+import { ResourcePage, ConfirmDeleteDialog } from '../../common';
 import { TableSkeleton } from '../../common/skeletons';
 import ErrorState from '../../common/ErrorState';
 import EmptyState from '../../common/EmptyState';
 import { listRoles, createRole, updateRole, deleteRole, listPermissions } from '../../../services/rbacApi';
 import { useAuth } from '../../../hooks/useAuth';
 import { useNotifications } from '../../../hooks/useNotifications';
+import { useDialog } from '../../../hooks/useDialog';
 import { usePermissions } from '../../../hooks/usePermissions';
 import { PermissionGate } from '../../common/PermissionGate';
 import { getResourceLabel } from '../../../config/permissions';
@@ -97,8 +98,7 @@ function RolesPage() {
   // Dialog state
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingRole, setEditingRole] = useState(null);
-  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
-  const [deletingRole, setDeletingRole] = useState(null);
+  const deleteDialog = useDialog();
   const [saving, setSaving] = useState(false);
 
   // Form state
@@ -200,18 +200,15 @@ function RolesPage() {
 
   // Delete
   const handleDeleteConfirm = async () => {
-    if (!deletingRole) return;
     setSaving(true);
     try {
-      await deleteRole(organizationId, deletingRole.id);
-      showNotification(`Role "${deletingRole.display_name || deletingRole.name}" deleted`, 'success');
-      setDeleteDialogOpen(false);
-      setDeletingRole(null);
+      await deleteRole(organizationId, deleteDialog.data.id);
+      showNotification(`Role "${deleteDialog.data.display_name || deleteDialog.data.name}" deleted`, 'success');
       await loadData();
       await refreshPermissions();
     } catch (err) {
-      console.error('Failed to delete role:', err);
       showNotification(err.message || 'Failed to delete role', 'error');
+      throw err;
     } finally {
       setSaving(false);
     }
@@ -358,7 +355,7 @@ function RolesPage() {
                         <IconButton
                           size="small"
                           color="error"
-                          onClick={() => { setDeletingRole(role); setDeleteDialogOpen(true); }}
+                          onClick={() => deleteDialog.open(role)}
                         >
                           <DeleteIcon fontSize="small" />
                         </IconButton>
@@ -492,38 +489,22 @@ function RolesPage() {
         </DialogActions>
       </Dialog>
 
-      {/* Delete Confirmation */}
-      <Dialog
-        open={deleteDialogOpen}
-        onClose={() => setDeleteDialogOpen(false)}
-        maxWidth="xs"
-        fullWidth
-      >
-        <DialogTitle>Delete Role</DialogTitle>
-        <DialogContent>
-          <Typography>
-            Are you sure you want to delete the role <strong>{deletingRole?.display_name || deletingRole?.name}</strong>?
-            {deletingRole?.member_count > 0 && (
-              <Alert severity="warning" sx={{ mt: 2 }}>
-                This role is currently assigned to {deletingRole.member_count} member(s).
-                They will be reassigned to the default role.
-              </Alert>
-            )}
-          </Typography>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setDeleteDialogOpen(false)}>Cancel</Button>
-          <Button
-            variant="contained"
-            color="error"
-            onClick={handleDeleteConfirm}
-            disabled={saving}
-            startIcon={saving ? <CircularProgress size={16} /> : null}
-          >
-            Delete
-          </Button>
-        </DialogActions>
-      </Dialog>
+      <ConfirmDeleteDialog
+        open={deleteDialog.isOpen}
+        onClose={() => !saving && deleteDialog.close()}
+        onConfirm={handleDeleteConfirm}
+        loading={saving}
+        title="Delete Role"
+        itemName={deleteDialog.data?.display_name || deleteDialog.data?.name}
+        warning={
+          deleteDialog.data?.member_count > 0 ? (
+            <Alert severity="warning" sx={{ mt: 2 }}>
+              This role is currently assigned to {deleteDialog.data.member_count} member(s).
+              They will be reassigned to the default role.
+            </Alert>
+          ) : null
+        }
+      />
     </ResourcePage>
   );
 }

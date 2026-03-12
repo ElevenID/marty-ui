@@ -7,9 +7,11 @@ Implements UserProvisioningPort for JIT (Just-In-Time) user provisioning.
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
+import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -21,6 +23,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Marty default organization ID (must match migration)
+MARTY_ORG_ID = os.environ.get("MARTY_ORG_ID", "00000000-0000-0000-0000-000000000001")
+
 
 class JITUserProvisioningAdapter(UserProvisioningPort):
     """
@@ -29,10 +34,51 @@ class JITUserProvisioningAdapter(UserProvisioningPort):
     Creates or updates users in the database when they authenticate
     via OIDC. This ensures the user exists in our system after
     successful authentication.
+    
+    Also automatically adds new users to the default Marty organization.
     """
     
-    def __init__(self, session_factory: async_sessionmaker[AsyncSession]):
+    def __init__(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        organization_service_url: str | None = None,
+    ):
         self.session_factory = session_factory
+        self.organization_service_url = organization_service_url or os.environ.get(
+            "ORGANIZATION_SERVICE_URL",
+            "http://organization:8002"
+        )
+    
+    async def _add_to_marty_organization(self, user_id: str, email: str) -> None:
+        """
+        Add a new user to the default Marty organization.
+        
+        This is a best-effort operation - if it fails, we log the error but
+        don't fail the user provisioning process.
+        """
+        try:
+            url = f"{self.organization_service_url}/internal/v1/organizations/{MARTY_ORG_ID}/members"
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                response = await client.post(
+                    url,
+                    json={
+                        "user_id": user_id,
+                        "email": email,
+                        "role": "member",
+                    }
+                )
+                response.raise_for_status()
+                logger.info(f"Successfully added user {user_id} to Marty organization")
+        except httpx.HTTPStatusError as e:
+            logger.error(
+                f"Failed to add user {user_id} to Marty organization: "
+                f"HTTP {e.response.status_code} - {e.response.text}"
+            )
+        except Exception as e:
+            logger.error(
+                f"Failed to add user {user_id} to Marty organization: {e}",
+                exc_info=True
+            )
     
     async def provision_user(self, oidc_user: OIDCUserInfo) -> AuthenticatedUser:
         """
@@ -68,6 +114,7 @@ class JITUserProvisioningAdapter(UserProvisioningPort):
                 applicant.last_login = datetime.now(timezone.utc)
                 await session.commit()
                 await session.refresh(applicant)
+                is_new_user = False
             else:
                 # Create new user
                 applicant = Applicant(
@@ -81,6 +128,12 @@ class JITUserProvisioningAdapter(UserProvisioningPort):
                 session.add(applicant)
                 await session.commit()
                 await session.refresh(applicant)
+                is_new_user = True
+            
+            user_id = str(applicant.id)
+            
+            # Ensure user is in the default Marty organization (idempotent - safe for all users)
+            await self._add_to_marty_organization(user_id, applicant.email)
             
             # Look up organization membership
             org_id = None
@@ -119,6 +172,7 @@ class JITUserProvisioningAdapter(UserProvisioningPort):
                 organization_id=org_id,
                 organization_name=org_name,
                 onboarding_completed=getattr(applicant, 'onboarding_completed', None),
+                picture=oidc_user.picture,
             )
 
 
@@ -127,12 +181,43 @@ class InMemoryUserProvisioningAdapter(UserProvisioningPort):
     In-memory user provisioning adapter for testing.
     
     Creates AuthenticatedUser directly from OIDC info without
-    database persistence.
+    database persistence.  Still calls the organization service to
+    ensure every authenticated user is added to the default Marty
+    organisation (best-effort, idempotent).
     """
     
-    def __init__(self):
+    def __init__(
+        self,
+        organization_service_url: str | None = None,
+    ):
         self._users: dict[str, AuthenticatedUser] = {}
-    
+        self.organization_service_url = organization_service_url or os.environ.get(
+            "ORGANIZATION_SERVICE_URL",
+            "http://organization:8002"
+        )
+
+    async def _add_to_marty_organization(self, user_id: str, email: str) -> None:
+        """Add user to the default Marty organisation (idempotent, best-effort)."""
+        try:
+            url = f"{self.organization_service_url}/internal/v1/organizations/{MARTY_ORG_ID}/members"
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                response = await client.post(
+                    url,
+                    json={"user_id": user_id, "email": email, "role": "member"},
+                )
+                response.raise_for_status()
+                logger.info(f"Successfully added user {user_id} to Marty organization")
+        except httpx.HTTPStatusError as e:
+            logger.error(
+                f"Failed to add user {user_id} to Marty organization: "
+                f"HTTP {e.response.status_code} - {e.response.text}"
+            )
+        except Exception as e:
+            logger.error(
+                f"Failed to add user {user_id} to Marty organization: {e}",
+                exc_info=True,
+            )
+
     async def provision_user(self, oidc_user: OIDCUserInfo) -> AuthenticatedUser:
         """Create or update user in memory."""
         # Check if user exists
@@ -150,6 +235,7 @@ class InMemoryUserProvisioningAdapter(UserProvisioningPort):
                 roles=list(oidc_user.roles),
                 organization_id=user.organization_id,
                 organization_name=user.organization_name,
+                picture=oidc_user.picture,
             )
         else:
             # Create new user
@@ -162,7 +248,12 @@ class InMemoryUserProvisioningAdapter(UserProvisioningPort):
                 user_type=UserType.APPLICANT,
                 applicant_id=oidc_user.sub,
                 roles=list(oidc_user.roles),
+                picture=oidc_user.picture,
             )
         
         self._users[oidc_user.sub] = user
+
+        # Ensure user is in the default Marty organisation (idempotent)
+        await self._add_to_marty_organization(oidc_user.sub, oidc_user.email)
+
         return user

@@ -160,6 +160,42 @@ body {
   max-width: 520px;
 }
 
+/* ===== Re-authentication user display ===== */
+.elevenid-reauth-user {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+
+.elevenid-reauth-username {
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: #1a1a2e;
+  letter-spacing: -0.01em;
+}
+
+.elevenid-different-user {
+  text-align: center;
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+.elevenid-different-user-link {
+  font-size: 0.8125rem;
+  color: #5c6bc0;
+  text-decoration: none;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+
+.elevenid-different-user-link:hover {
+  color: #1565c0;
+  text-decoration: underline;
+}
+
 /* ===== Alerts ===== */
 .elevenid-alert {
   border-radius: 4px;

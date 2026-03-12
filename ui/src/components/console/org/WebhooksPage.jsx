@@ -4,7 +4,8 @@
  * Manage webhook endpoints for event notifications.
  */
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
+import { useAsyncData } from '../../../hooks/useAsyncData';
 import { useTranslation } from 'react-i18next';
 import {
   Box,
@@ -74,46 +75,33 @@ const getEventTypes = (t) => [
 
 function WebhooksPage() {
   const { t } = useTranslation('console');
-  const [webhooks, setWebhooks] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
+  const { data: webhooks = [], loading, error } = useAsyncData(async () => {
+    // TODO: Fetch webhooks from API
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    return [
+      {
+        id: 'wh-1',
+        url: 'https://api.example.com/webhooks/identity',
+        events: ['flow.completed', 'flow.failed', 'credential.issued'],
+        status: 'active',
+        lastDelivery: '2026-02-07T09:00:00Z',
+        successRate: 99.5,
+      },
+      {
+        id: 'wh-2',
+        url: 'https://crm.example.com/hooks/applications',
+        events: ['application.submitted', 'application.approved'],
+        status: 'active',
+        lastDelivery: '2026-02-07T08:45:00Z',
+        successRate: 100,
+      },
+    ];
+  }, []);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [newWebhook, setNewWebhook] = useState({
     url: '',
     events: [],
   });
-
-  useEffect(() => {
-    // TODO: Fetch webhooks from API
-    const loadWebhooks = async () => {
-      try {
-        await new Promise((resolve) => setTimeout(resolve, 500));
-        setWebhooks([
-          {
-            id: 'wh-1',
-            url: 'https://api.example.com/webhooks/identity',
-            events: ['flow.completed', 'flow.failed', 'credential.issued'],
-            status: 'active',
-            lastDelivery: '2026-02-07T09:00:00Z',
-            successRate: 99.5,
-          },
-          {
-            id: 'wh-2',
-            url: 'https://crm.example.com/hooks/applications',
-            events: ['application.submitted', 'application.approved'],
-            status: 'active',
-            lastDelivery: '2026-02-07T08:45:00Z',
-            successRate: 100,
-          },
-        ]);
-      } catch (err) {
-        setError('Failed to load webhooks');
-      } finally {
-        setLoading(false);
-      }
-    };
-    loadWebhooks();
-  }, []);
 
   const handleCreate = async () => {
     // TODO: Create webhook via API
@@ -148,7 +136,7 @@ function WebhooksPage() {
     >
       {error && (
         <Alert severity="error" sx={{ mb: 3 }}>
-          {error}
+          {error?.message || String(error)}
         </Alert>
       )}
 

@@ -22,6 +22,8 @@ import {
   useTheme,
   Chip,
   Button,
+  ToggleButtonGroup,
+  ToggleButton,
 } from '@mui/material';
 import { Link as RouterLink } from 'react-router-dom';
 import { useNavigate } from 'react-router-dom';
@@ -47,10 +49,11 @@ export function ConsoleHeaderBar({ onMobileMenuToggle }) {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('md'));
   const { user, logout, organizationName, isAdministrator, isVendor, isApplicant } = useAuth();
-  const { mode, activeOrgId, memberships, isOrgBlocked, setActiveOrgId } = useConsole();
+  const { mode, activeOrgId, memberships, isOrgBlocked, setActiveOrgId, setMode, isApplicantConsoleAvailable, isOrgConsoleAvailable } = useConsole();
   const [anchorEl, setAnchorEl] = useState(null);
   const [orgMenuAnchor, setOrgMenuAnchor] = useState(null);
   const isJoinOnlyMode = (memberships || []).length === 0;
+  const showConsoleSwitcher = isApplicantConsoleAvailable && (isOrgConsoleAvailable || isJoinOnlyMode);
 
   // Find active org details
   const activeOrg = (memberships || []).find(org => org.id === activeOrgId);
@@ -58,7 +61,7 @@ export function ConsoleHeaderBar({ onMobileMenuToggle }) {
 
   // Determine user role for display
   const userRole = isAdministrator ? 'Administrator' : isVendor ? 'Vendor' : isApplicant ? 'Person' : 'User';
-  const profilePath = isApplicant ? '/applicant/settings' : '/profile';
+  const profilePath = isApplicant ? '/console/applicant/profile' : '/console/org/profile';
 
   const handleUserMenuOpen = (event) => {
     setAnchorEl(event.currentTarget);
@@ -120,6 +123,47 @@ export function ConsoleHeaderBar({ onMobileMenuToggle }) {
             ElevenID LLC
           </Typography>
         </Box>
+
+        {/* Center: Console switcher (mobile only) */}
+        {isMobile && showConsoleSwitcher && (
+          <ToggleButtonGroup
+            value={mode}
+            exclusive
+            onChange={(_, newMode) => { if (newMode) setMode(newMode); }}
+            size="small"
+            sx={{
+              bgcolor: 'rgba(255,255,255,0.15)',
+              borderRadius: '8px',
+              '& .MuiToggleButton-root': {
+                color: 'rgba(255,255,255,0.7)',
+                border: 'none',
+                px: 1.5,
+                py: 0.5,
+                textTransform: 'none',
+                fontSize: '0.75rem',
+                fontWeight: 500,
+                '&.Mui-selected': {
+                  bgcolor: 'rgba(255,255,255,0.25)',
+                  color: 'white',
+                  fontWeight: 700,
+                  '&:hover': { bgcolor: 'rgba(255,255,255,0.3)' },
+                },
+                '&:hover': { bgcolor: 'rgba(255,255,255,0.1)' },
+              },
+            }}
+          >
+            <ToggleButton value="applicant" disabled={!isApplicantConsoleAvailable}>
+              <PersonIcon sx={{ fontSize: 16, mr: 0.5 }} />
+              Me
+            </ToggleButton>
+            {(isOrgConsoleAvailable || isJoinOnlyMode) && (
+              <ToggleButton value="org">
+                <BusinessIcon sx={{ fontSize: 16, mr: 0.5 }} />
+                Org
+              </ToggleButton>
+            )}
+          </ToggleButtonGroup>
+        )}
 
         {/* Right side: User Menu */}
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -273,9 +317,12 @@ export function ConsoleHeaderBar({ onMobileMenuToggle }) {
             aria-haspopup="true"
             aria-expanded={anchorEl ? 'true' : undefined}
           >
-            <Avatar sx={{ width: 32, height: 32, bgcolor: 'primary.main', color: 'common.white' }}>
-              {userInitials}
-            </Avatar>
+            <Avatar
+                sx={{ width: 32, height: 32, bgcolor: 'primary.main', color: 'common.white' }}
+                src={user?.picture || undefined}
+              >
+                {!user?.picture && userInitials}
+              </Avatar>
           </IconButton>
         </Box>
 

@@ -48,7 +48,7 @@
                         </select>
                     </div>
                 </#if>
-                <a class="elevenid-home-btn" href="${client.baseUrl!'/'}">HOME</a>
+                <a class="elevenid-home-btn" href="${(client.baseUrl)!'/'}">HOME</a>
             </div>
         </div>
     </header>

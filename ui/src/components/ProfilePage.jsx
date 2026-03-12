@@ -2,9 +2,11 @@
  * Profile Page Component
  *
  * Shows user profile information from OIDC claims.
+ * Supports viewing and uploading a profile picture.
  * Available to all authenticated users.
  */
 
+import { useRef, useState } from 'react';
 import {
   Box,
   Card,
@@ -22,6 +24,11 @@ import {
   InputLabel,
   Select,
   MenuItem,
+  IconButton,
+  Tooltip,
+  CircularProgress,
+  Alert,
+  Button,
 } from '@mui/material';
 import PersonIcon from '@mui/icons-material/Person';
 import EmailIcon from '@mui/icons-material/Email';
@@ -31,7 +38,9 @@ import CakeIcon from '@mui/icons-material/Cake';
 import SecurityIcon from '@mui/icons-material/Security';
 import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings';
 import BusinessIcon from '@mui/icons-material/Business';
+import PhotoCameraIcon from '@mui/icons-material/PhotoCamera';
 import { useAuth } from '../hooks/useAuth';
+import { updateProfilePicture } from '../services/authApi';
 
 function ProfilePage() {
   const {
@@ -41,12 +50,19 @@ function ProfilePage() {
     organizationId,
     organizations,
     setActiveOrganizationId,
+    refreshUser,
   } = useAuth();
+
+  const fileInputRef = useRef(null);
+  const [previewUrl, setPreviewUrl] = useState(null);
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState(null);
+  const [uploadSuccess, setUploadSuccess] = useState(false);
 
   if (!user) {
     return (
-      <Box>
-        <Typography>Loading profile...</Typography>
+      <Box display="flex" alignItems="center" justifyContent="center" minHeight="40vh">
+        <CircularProgress />
       </Box>
     );
   }
@@ -60,6 +76,56 @@ function ProfilePage() {
     });
   };
 
+  const displayPicture = previewUrl || user.picture || undefined;
+  const userInitial = (user.given_name || user.name || user.email || 'U')[0].toUpperCase();
+
+  const handleFileChange = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!file.type.startsWith('image/')) {
+      setUploadError('Please select an image file (JPEG, PNG, GIF, WebP).');
+      return;
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      setUploadError('Image must be smaller than 2 MB.');
+      return;
+    }
+
+    setUploadError(null);
+    setUploadSuccess(false);
+
+    const reader = new FileReader();
+    reader.onload = (ev) => setPreviewUrl(ev.target.result);
+    reader.readAsDataURL(file);
+  };
+
+  const handleSavePicture = async () => {
+    if (!previewUrl) return;
+
+    setUploading(true);
+    setUploadError(null);
+    setUploadSuccess(false);
+
+    const result = await updateProfilePicture(previewUrl);
+
+    setUploading(false);
+    if (result.success) {
+      setUploadSuccess(true);
+      setPreviewUrl(null);
+      await refreshUser();
+    } else {
+      setUploadError(result.error || 'Failed to update profile picture.');
+    }
+  };
+
+  const handleCancelPicture = () => {
+    setPreviewUrl(null);
+    setUploadError(null);
+    setUploadSuccess(false);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
   return (
     <Box>
       <Typography variant="h4" component="h1" gutterBottom>
@@ -71,18 +137,83 @@ function ProfilePage() {
         <Grid item xs={12} md={4}>
           <Card>
             <CardContent sx={{ textAlign: 'center', py: 4 }}>
-              <Avatar
-                sx={{
-                  width: 100,
-                  height: 100,
-                  mx: 'auto',
-                  mb: 2,
-                  bgcolor: isAdministrator ? 'primary.main' : 'secondary.main',
-                  fontSize: '2.5rem',
-                }}
-              >
-                {user.name?.charAt(0).toUpperCase() || 'U'}
-              </Avatar>
+              {/* Avatar with camera overlay */}
+              <Box sx={{ position: 'relative', display: 'inline-block', mb: 2 }}>
+                <Avatar
+                  src={displayPicture}
+                  sx={{
+                    width: 100,
+                    height: 100,
+                    mx: 'auto',
+                    bgcolor: 'primary.main',
+                    fontSize: '2.5rem',
+                  }}
+                  referrerPolicy="no-referrer"
+                >
+                  {!displayPicture && userInitial}
+                </Avatar>
+
+                <Tooltip title="Change profile picture">
+                  <IconButton
+                    size="small"
+                    onClick={() => fileInputRef.current?.click()}
+                    sx={{
+                      position: 'absolute',
+                      bottom: 0,
+                      right: -4,
+                      bgcolor: 'primary.main',
+                      color: 'white',
+                      border: '2px solid white',
+                      width: 32,
+                      height: 32,
+                      '&:hover': { bgcolor: 'primary.dark' },
+                    }}
+                  >
+                    <PhotoCameraIcon sx={{ fontSize: 16 }} />
+                  </IconButton>
+                </Tooltip>
+
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  hidden
+                  onChange={handleFileChange}
+                />
+              </Box>
+
+              {previewUrl && (
+                <Box sx={{ display: 'flex', gap: 1, justifyContent: 'center', mb: 2 }}>
+                  <Button
+                    variant="contained"
+                    size="small"
+                    onClick={handleSavePicture}
+                    disabled={uploading}
+                    startIcon={uploading ? <CircularProgress size={14} color="inherit" /> : null}
+                  >
+                    {uploading ? 'Saving…' : 'Save'}
+                  </Button>
+                  <Button
+                    variant="outlined"
+                    size="small"
+                    onClick={handleCancelPicture}
+                    disabled={uploading}
+                  >
+                    Cancel
+                  </Button>
+                </Box>
+              )}
+
+              {uploadError && (
+                <Alert severity="error" sx={{ mb: 2, textAlign: 'left' }}>
+                  {uploadError}
+                </Alert>
+              )}
+              {uploadSuccess && (
+                <Alert severity="success" sx={{ mb: 2, textAlign: 'left' }}>
+                  Profile picture updated.
+                </Alert>
+              )}
 
               <Typography variant="h5" gutterBottom>
                 {user.name || 'User'}
@@ -150,7 +281,7 @@ function ProfilePage() {
                   ) : (
                     <ListItemText
                       primary="Organization"
-                      secondary={organizations[0]?.name || 'Not assigned'}
+                      secondary={(organizations || [])[0]?.name || 'Not assigned'}
                     />
                   )}
                 </ListItem>

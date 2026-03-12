@@ -285,8 +285,11 @@ function AppContent() {
 
                 {/* User Avatar & Name */}
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                  <Avatar sx={{ width: 32, height: 32, bgcolor: 'rgba(255, 255, 255, 0.3)' }}>
-                    {getUserDisplayName().charAt(0).toUpperCase()}
+                  <Avatar
+                    src={user?.picture || undefined}
+                    sx={{ width: 32, height: 32, bgcolor: 'rgba(255, 255, 255, 0.3)' }}
+                  >
+                    {!user?.picture && getUserDisplayName().charAt(0).toUpperCase()}
                   </Avatar>
                   <Typography variant="body2" sx={{ color: 'white' }}>
                     {getUserDisplayName()}
@@ -390,6 +393,7 @@ function AppContent() {
         >
           <Route index element={<ConsoleDashboard />} />
           <Route path="setup-wizard" element={<GuidedSetupWizard />} />
+          <Route path="profile" element={<ProfilePage />} />
           {/* Trust */}
           <Route path="trust" element={<TrustPage />} />
           <Route path="trust/profiles" element={<TrustProfilesPage />} />
@@ -466,6 +470,7 @@ function AppContent() {
           <Route path="apply/:credentialType" element={<ApplicationForm />} />
           <Route path="devices" element={<DeviceManagementPage />} />
           <Route path="settings" element={<ApplicantSettingsPage />} />
+          <Route path="profile" element={<ProfilePage />} />
         </Route>
 
         {/* Preview Routes - Vendor auth required, render applicant views in preview mode */}
@@ -679,15 +684,6 @@ function AppContent() {
               </ApplicantRoute>
             }
           />
-          <Route
-            path="/profile"
-            element={
-              <ProtectedRoute>
-                <ProfilePage />
-              </ProtectedRoute>
-            }
-          />
-
           {/* Wallet Setup & Notifications */}
           <Route
             path="/wallet/setup"

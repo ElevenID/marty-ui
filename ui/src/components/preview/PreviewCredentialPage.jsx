@@ -4,7 +4,7 @@
  * Shows the credential detail view that applicants see before applying.
  */
 
-import { useEffect, useState } from 'react';
+import { useAsyncData } from '../../hooks/useAsyncData';
 import { useParams } from 'react-router-dom';
 import { PreviewProvider, usePreview } from '../../contexts/PreviewContext';
 import { Box, Container, Paper, Typography, CircularProgress, Alert } from '@mui/material';
@@ -15,35 +15,18 @@ const API_URL = import.meta.env.VITE_API_URL || '';
 function PreviewCredentialContent() {
   const { templateId } = useParams();
   const { updateContextLabel } = usePreview();
-  const [template, setTemplate] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-
-  useEffect(() => {
-    const fetchTemplate = async () => {
-      try {
-        // Fetch template with preview flag to get applicant-ready data
-        const response = await fetch(
-          `${API_URL}/api/credential-templates/${templateId}?preview=true`,
-          { credentials: 'include' }
-        );
-
-        if (!response.ok) {
-          throw new Error('Template not found');
-        }
-
-        const data = await response.json();
-        setTemplate(data);
-        updateContextLabel(`Credential: ${data.name || data.credential_type || 'Unknown'}`);
-      } catch (err) {
-        setError(err.message);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchTemplate();
-  }, [templateId, updateContextLabel]);
+  const { data: template, loading, error } = useAsyncData(async () => {
+    const response = await fetch(
+      `${API_URL}/api/credential-templates/${templateId}?preview=true`,
+      { credentials: 'include' }
+    );
+    if (!response.ok) {
+      throw new Error('Template not found');
+    }
+    const data = await response.json();
+    updateContextLabel(`Credential: ${data.name || data.credential_type || 'Unknown'}`);
+    return data;
+  }, [templateId]);
 
   if (loading) {
     return (

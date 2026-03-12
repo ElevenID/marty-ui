@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select, delete, and_
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from credential_template.infrastructure.models import credential_templates_table
+from credential_template.infrastructure.models import credential_templates_table, wallet_registry_table
 
 if TYPE_CHECKING:
     from credential_template.main import (
@@ -300,3 +300,84 @@ class PostgresCredentialTemplateRepository:
             )
             await session.execute(stmt)
             await session.commit()
+
+
+class PostgresWalletRegistryRepository:
+    """PostgreSQL implementation of the wallet registry repository."""
+
+    def __init__(self, session_factory: async_sessionmaker[AsyncSession]):
+        self._session_factory = session_factory
+
+    async def save(self, entry: "WalletRegistryEntry") -> None:
+        from credential_template.main import WalletRegistryEntry  # avoid circular at module level
+        entry.updated_at = datetime.now(timezone.utc)
+        async with self._session_factory() as session:
+            row = {
+                "id": entry.id,
+                "name": entry.name,
+                "logo_url": entry.logo_url,
+                "deep_link_template": entry.deep_link_template,
+                "supported_formats": entry.supported_formats,
+                "supported_protocols": entry.supported_protocols,
+                "platforms": entry.platforms,
+                "supports_qr": entry.supports_qr,
+                "supports_deeplink": entry.supports_deeplink,
+                "docs_url": entry.docs_url,
+                "is_active": entry.is_active,
+                "created_at": entry.created_at,
+                "updated_at": entry.updated_at,
+            }
+            existing = await session.execute(
+                select(wallet_registry_table).where(wallet_registry_table.c.id == entry.id)
+            )
+            if existing.first() is not None:
+                await session.execute(
+                    wallet_registry_table.update()
+                    .where(wallet_registry_table.c.id == entry.id)
+                    .values(**{k: v for k, v in row.items() if k != "id"})
+                )
+            else:
+                await session.execute(wallet_registry_table.insert().values(**row))
+            await session.commit()
+
+    async def get(self, wallet_id: str) -> "WalletRegistryEntry | None":
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(wallet_registry_table).where(wallet_registry_table.c.id == wallet_id)
+            )
+            row = result.first()
+            return self._row_to_entry(row) if row else None
+
+    async def list(self, active_only: bool = True) -> "list[WalletRegistryEntry]":
+        async with self._session_factory() as session:
+            stmt = select(wallet_registry_table)
+            if active_only:
+                stmt = stmt.where(wallet_registry_table.c.is_active == True)
+            result = await session.execute(stmt)
+            return [self._row_to_entry(row) for row in result.all()]
+
+    async def delete(self, wallet_id: str) -> None:
+        async with self._session_factory() as session:
+            await session.execute(
+                delete(wallet_registry_table).where(wallet_registry_table.c.id == wallet_id)
+            )
+            await session.commit()
+
+    @staticmethod
+    def _row_to_entry(row) -> "WalletRegistryEntry":
+        from credential_template.main import WalletRegistryEntry
+        return WalletRegistryEntry(
+            id=row.id,
+            name=row.name,
+            logo_url=row.logo_url,
+            deep_link_template=row.deep_link_template,
+            supported_formats=list(row.supported_formats or []),
+            supported_protocols=list(row.supported_protocols or ["oid4vci"]),
+            platforms=list(row.platforms or []),
+            supports_qr=row.supports_qr,
+            supports_deeplink=row.supports_deeplink,
+            docs_url=row.docs_url,
+            is_active=row.is_active,
+            created_at=row.created_at,
+            updated_at=row.updated_at,
+        )

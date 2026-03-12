@@ -30,7 +30,6 @@ import {
   DialogContentText,
   DialogActions,
   Alert,
-  Snackbar,
   CircularProgress
 } from '@mui/material';
 import {
@@ -51,10 +50,12 @@ import {
 } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
+import { useNotifications } from '../hooks/useNotifications';
 
 const AdminDashboard = () => {
   const navigate = useNavigate();
   const { keycloak } = useAuth();
+  const { showSuccess, showError, showWarning } = useNotifications();
   const [stats, setStats] = useState({
     passport: 0,
     mdl: 0,
@@ -74,7 +75,6 @@ const AdminDashboard = () => {
   const [vendorSearch, setVendorSearch] = useState('');
   const [vendorsLoading, setVendorsLoading] = useState(false);
   const [impersonateDialog, setImpersonateDialog] = useState({ open: false, vendor: null });
-  const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'info' });
 
   useEffect(() => {
     fetchStats();
@@ -138,11 +138,7 @@ const AdminDashboard = () => {
       }
     } catch (error) {
       console.error('Failed to fetch vendors:', error);
-      setSnackbar({
-        open: true,
-        message: 'Failed to load vendors',
-        severity: 'error'
-      });
+      showError('Failed to load vendors');
     } finally {
       setVendorsLoading(false);
     }
@@ -179,31 +175,19 @@ const AdminDashboard = () => {
         if (result.redirect) {
           // Open impersonation in new tab to preserve admin session
           window.open(result.redirect, '_blank');
-          setSnackbar({
-            open: true,
-            message: `Now impersonating ${vendor.email}. Check the new tab.`,
-            severity: 'success'
-          });
+          showSuccess(`Now impersonating ${vendor.email}. Check the new tab.`);
         } else {
           // Force refresh to pick up impersonated session
           window.location.reload();
         }
       } else if (response.status === 403) {
-        setSnackbar({
-          open: true,
-          message: 'Impersonation not permitted. Check admin role and Keycloak settings.',
-          severity: 'error'
-        });
+        showError('Impersonation not permitted. Check admin role and Keycloak settings.');
       } else {
         throw new Error(`Impersonation failed: ${response.statusText}`);
       }
     } catch (error) {
       console.error('Impersonation error:', error);
-      setSnackbar({
-        open: true,
-        message: `Failed to impersonate: ${error.message}`,
-        severity: 'error'
-      });
+      showError(`Failed to impersonate: ${error.message}`);
     } finally {
       setImpersonateDialog({ open: false, vendor: null });
     }
@@ -530,20 +514,6 @@ const AdminDashboard = () => {
         </DialogActions>
       </Dialog>
 
-      {/* Snackbar for notifications */}
-      <Snackbar
-        open={snackbar.open}
-        autoHideDuration={6000}
-        onClose={() => setSnackbar({ ...snackbar, open: false })}
-      >
-        <Alert 
-          onClose={() => setSnackbar({ ...snackbar, open: false })} 
-          severity={snackbar.severity}
-          variant="filled"
-        >
-          {snackbar.message}
-        </Alert>
-      </Snackbar>
     </Container>
   );
 };

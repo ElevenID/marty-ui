@@ -1,4 +1,6 @@
 import { useState, useEffect } from 'react';
+import { useDialog } from '../hooks/useDialog';
+import { ConfirmDeleteDialog } from './common';
 import {
   Container,
   Paper,
@@ -34,9 +36,8 @@ import {
 const CscaManager = () => {
   const [certificates, setCertificates] = useState([]);
   const [openDialog, setOpenDialog] = useState(false);
-  const [viewDialogOpen, setViewDialogOpen] = useState(false);
-  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
-  const [selectedCert, setSelectedCert] = useState(null);
+  const viewDialog = useDialog();
+  const deleteDialog = useDialog();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(null);
@@ -44,7 +45,7 @@ const CscaManager = () => {
   // Form state
   const [subjectName, setSubjectName] = useState('');
   const [creating, setCreating] = useState(false);
-  const [deleting, setDeleting] = useState(false);
+  // deleting state removed — ConfirmDeleteDialog manages its own loading state
 
   const fetchCertificates = async () => {
     setLoading(true);
@@ -95,35 +96,19 @@ const CscaManager = () => {
     }
   };
 
-  const handleView = (cert) => {
-    setSelectedCert(cert);
-    setViewDialogOpen(true);
-  };
-
-  const handleDeleteClick = (cert) => {
-    setSelectedCert(cert);
-    setDeleteDialogOpen(true);
-  };
-
   const handleDelete = async () => {
-    if (!selectedCert) return;
-    
-    setDeleting(true);
     try {
-      const response = await fetch(`/v1/trust-profiles/admin/csca/${selectedCert.id}`, {
+      const response = await fetch(`/v1/trust-profiles/admin/csca/${deleteDialog.data.id}`, {
         method: 'DELETE'
       });
       
       if (!response.ok) throw new Error('Failed to delete certificate');
       
-      setSuccess(`Certificate "${selectedCert.subject}" has been deleted`);
-      setDeleteDialogOpen(false);
-      setSelectedCert(null);
+      setSuccess(`Certificate "${deleteDialog.data.subject}" has been deleted`);
       fetchCertificates();
     } catch (err) {
       setError(err.message);
-    } finally {
-      setDeleting(false);
+      throw err;
     }
   };
 
@@ -211,8 +196,8 @@ const CscaManager = () => {
                       />
                     </TableCell>
                     <TableCell align="right">
-                      <IconButton size="small" onClick={() => handleView(cert)}><ViewIcon /></IconButton>
-                      <IconButton size="small" color="error" onClick={() => handleDeleteClick(cert)}><DeleteIcon /></IconButton>
+                      <IconButton size="small" onClick={() => viewDialog.open(cert)}><ViewIcon /></IconButton>
+                      <IconButton size="small" color="error" onClick={() => deleteDialog.open(cert)}><DeleteIcon /></IconButton>
                     </TableCell>
                   </TableRow>
                 ))
@@ -249,7 +234,7 @@ const CscaManager = () => {
       </Dialog>
 
       {/* View Certificate Dialog */}
-      <Dialog open={viewDialogOpen} onClose={() => setViewDialogOpen(false)} maxWidth="sm" fullWidth>
+      <Dialog open={viewDialog.isOpen} onClose={viewDialog.close} maxWidth="sm" fullWidth>
         <DialogTitle>
           <Box display="flex" alignItems="center">
             <SecurityIcon sx={{ mr: 1 }} />
@@ -257,40 +242,40 @@ const CscaManager = () => {
           </Box>
         </DialogTitle>
         <DialogContent>
-          {selectedCert && (
+          {viewDialog.data && (
             <Box>
               <Divider sx={{ my: 2 }} />
               <Grid container spacing={2}>
                 <Grid item xs={12}>
                   <Typography variant="caption" color="text.secondary">ID</Typography>
-                  <Typography fontFamily="monospace">{selectedCert.id}</Typography>
+                  <Typography fontFamily="monospace">{viewDialog.data.id}</Typography>
                 </Grid>
                 <Grid item xs={12}>
                   <Typography variant="caption" color="text.secondary">Subject</Typography>
-                  <Typography>{selectedCert.subject}</Typography>
+                  <Typography>{viewDialog.data.subject}</Typography>
                 </Grid>
                 <Grid item xs={12}>
                   <Typography variant="caption" color="text.secondary">Issuer</Typography>
-                  <Typography>{selectedCert.issuer || selectedCert.subject}</Typography>
+                  <Typography>{viewDialog.data.issuer || viewDialog.data.subject}</Typography>
                 </Grid>
                 <Grid item xs={6}>
                   <Typography variant="caption" color="text.secondary">Not Before</Typography>
-                  <Typography>{formatDate(selectedCert.not_before)}</Typography>
+                  <Typography>{formatDate(viewDialog.data.not_before)}</Typography>
                 </Grid>
                 <Grid item xs={6}>
                   <Typography variant="caption" color="text.secondary">Not After</Typography>
-                  <Typography>{formatDate(selectedCert.not_after)}</Typography>
+                  <Typography>{formatDate(viewDialog.data.not_after)}</Typography>
                 </Grid>
                 <Grid item xs={12}>
                   <Typography variant="caption" color="text.secondary">Serial Number</Typography>
-                  <Typography fontFamily="monospace">{selectedCert.serial_number || 'N/A'}</Typography>
+                  <Typography fontFamily="monospace">{viewDialog.data.serial_number || 'N/A'}</Typography>
                 </Grid>
                 <Grid item xs={12}>
                   <Typography variant="caption" color="text.secondary">Status</Typography>
                   <Box sx={{ mt: 0.5 }}>
                     <Chip 
-                      label={selectedCert.revoked ? 'Revoked' : 'Active'} 
-                      color={selectedCert.revoked ? 'error' : 'success'} 
+                      label={viewDialog.data.revoked ? 'Revoked' : 'Active'} 
+                      color={viewDialog.data.revoked ? 'error' : 'success'} 
                     />
                   </Box>
                 </Grid>
@@ -299,38 +284,17 @@ const CscaManager = () => {
           )}
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setViewDialogOpen(false)}>Close</Button>
+          <Button onClick={viewDialog.close}>Close</Button>
         </DialogActions>
       </Dialog>
 
-      {/* Delete Confirmation Dialog */}
-      <Dialog open={deleteDialogOpen} onClose={() => setDeleteDialogOpen(false)} maxWidth="xs" fullWidth>
-        <DialogTitle>Confirm Delete</DialogTitle>
-        <DialogContent>
-          <Typography>
-            Are you sure you want to delete the certificate:
-          </Typography>
-          <Typography fontWeight="bold" sx={{ mt: 1 }}>
-            {selectedCert?.subject}
-          </Typography>
-          <Alert severity="warning" sx={{ mt: 2 }}>
-            This action cannot be undone.
-          </Alert>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setDeleteDialogOpen(false)} disabled={deleting}>
-            Cancel
-          </Button>
-          <Button 
-            variant="contained" 
-            color="error"
-            onClick={handleDelete}
-            disabled={deleting}
-          >
-            {deleting ? 'Deleting...' : 'Delete'}
-          </Button>
-        </DialogActions>
-      </Dialog>
+      <ConfirmDeleteDialog
+        open={deleteDialog.isOpen}
+        onClose={deleteDialog.close}
+        onConfirm={handleDelete}
+        title="Confirm Delete"
+        itemName={deleteDialog.data?.subject}
+      />
     </Container>
   );
 };

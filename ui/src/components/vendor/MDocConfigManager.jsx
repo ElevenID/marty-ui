@@ -29,7 +29,6 @@ import {
   Chip,
   Divider,
   Alert,
-  Snackbar,
   Skeleton,
   List,
   ListItem,
@@ -46,6 +45,7 @@ import FlightIcon from '@mui/icons-material/Flight';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import DragIndicatorIcon from '@mui/icons-material/DragIndicator';
 import { useAuth } from '../../hooks/useAuth';
+import { useNotifications } from '../../hooks/useNotifications';
 import { TemplateActions } from './TemplateActions';
 
 const API_URL = import.meta.env.VITE_API_URL || '';
@@ -130,10 +130,10 @@ function TabPanel({ children, value, index, ...other }) {
 
 export default function MDocConfigManager() {
   const { organizationId } = useAuth();
+  const { showSuccess, showError, showWarning } = useNotifications();
   const [activeTab, setActiveTab] = useState(0);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' });
   
   // Enabled credential types
   const [enabledTypes, setEnabledTypes] = useState({});
@@ -182,7 +182,7 @@ export default function MDocConfigManager() {
       }
     } catch (error) {
       console.error('Failed to fetch mDoc configuration:', error);
-      setSnackbar({ open: true, message: 'Failed to load configuration', severity: 'error' });
+      showError('Failed to load configuration');
     } finally {
       setLoading(false);
     }
@@ -202,13 +202,13 @@ export default function MDocConfigManager() {
       });
 
       if (response.ok) {
-        setSnackbar({ open: true, message: 'Configuration saved successfully', severity: 'success' });
+        showSuccess('Configuration saved successfully');
       } else {
         throw new Error('Failed to save configuration');
       }
     } catch (error) {
       console.error('Failed to save configuration:', error);
-      setSnackbar({ open: true, message: 'Failed to save configuration', severity: 'error' });
+      showError('Failed to save configuration');
     } finally {
       setSaving(false);
     }
@@ -332,25 +332,12 @@ export default function MDocConfigManager() {
             configData={currentConfig}
             onStatusChange={(updatedConfig) => {
               setCurrentConfig(updatedConfig);
-              setSnackbar({
-                open: true,
-                message: 'Template status updated',
-                severity: 'success',
-              });
+              showSuccess('Template status updated');
             }}
           />
         </Box>
       )}
 
-      <Snackbar
-        open={snackbar.open}
-        autoHideDuration={5000}
-        onClose={() => setSnackbar(s => ({ ...s, open: false }))}
-      >
-        <Alert severity={snackbar.severity} data-testid="config-saved-toast">
-          {snackbar.message}
-        </Alert>
-      </Snackbar>
 
       {/* Tabs */}
       <Paper sx={{ mb: 3 }}>

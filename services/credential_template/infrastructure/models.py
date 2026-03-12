@@ -81,3 +81,30 @@ Index("ix_credential_templates_org_status",
       credential_templates_table.c.status)
 Index("ix_credential_templates_credential_type", 
       credential_templates_table.c.credential_type)
+
+
+# =============================================================================
+# Wallet Registry Table
+# =============================================================================
+
+wallet_registry_table = Table(
+    "wallet_registry",
+    metadata,
+    Column("id", String(64), primary_key=True),          # e.g. "wr-marty-001"
+    Column("name", String(255), nullable=False),
+    Column("logo_url", Text, nullable=True),
+    Column("deep_link_template", Text, nullable=False,
+           server_default="openid-credential-offer://?credential_offer={OFFER}"),
+    Column("supported_formats", JSON, nullable=False, server_default="[]"),
+    Column("supported_protocols", JSON, nullable=False, server_default='["oid4vci"]'),
+    Column("platforms", JSON, nullable=False, server_default="[]"),
+    Column("supports_qr", Boolean, nullable=False, server_default="true"),
+    Column("supports_deeplink", Boolean, nullable=False, server_default="true"),
+    Column("docs_url", Text, nullable=True),
+    Column("is_active", Boolean, nullable=False, server_default="true"),
+    Column("created_at", DateTime(timezone=True), nullable=False, default=datetime.utcnow),
+    Column("updated_at", DateTime(timezone=True), nullable=False, default=datetime.utcnow,
+           onupdate=datetime.utcnow),
+
+    schema=SCHEMA,
+)

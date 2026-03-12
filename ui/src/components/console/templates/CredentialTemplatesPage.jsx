@@ -4,9 +4,8 @@
  * Manages credential templates - schema definitions for issuable credentials.
  */
 
-import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useNotification } from '../../../contexts/NotificationContext';
+import { useAsyncData } from '../../../hooks/useAsyncData';
 import {
   Box,
   Paper,
@@ -86,65 +85,47 @@ function ArtifactsStatus({ hasArtifacts, validated }) {
 
 function CredentialTemplatesPage() {
   const { t } = useTranslation('console');
-  const { showError, showWarning } = useNotification();
-  const [templates, setTemplates] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-
-  useEffect(() => {
+  const { data: templates = [], loading, error } = useAsyncData(async () => {
     // TODO: Fetch credential templates from API
-    const loadTemplates = async () => {
-      try {
-        await new Promise((resolve) => setTimeout(resolve, 500));
-        setTemplates([
-          {
-            id: 'ct-1',
-            name: 'EU Digital Identity Credential',
-            format: 'sd-jwt-vc',
-            version: '1.0.0',
-            claims: 12,
-            hasArtifacts: true,
-            artifactsValidated: true,
-            status: 'active',
-            updatedAt: '2026-02-06T10:30:00Z',
-            usedByFlowsCount: 3,
-          },
-          {
-            id: 'ct-2',
-            name: 'Mobile Driving License',
-            format: 'mdoc',
-            version: '1.0.0',
-            claims: 18,
-            hasArtifacts: true,
-            artifactsValidated: true,
-            status: 'active',
-            updatedAt: '2026-02-05T14:20:00Z',
-            usedByFlowsCount: 2,
-          },
-          {
-            id: 'ct-3',
-            name: 'Employee Badge',
-            format: 'jwt-vc',
-            version: '0.9.0',
-            claims: 8,
-            hasArtifacts: false,
-            artifactsValidated: false,
-            status: 'draft',
-            updatedAt: '2026-02-07T09:00:00Z',
-            usedByFlowsCount: 0,
-          },
-        ]);
-      } catch (err) {
-        console.error('Failed to load credential templates:', err);
-        setError(t('templates.failedToLoad'));
-        showError(t('templates.failedToLoad'), {
-          details: 'The backend service may be unavailable. Check console for details.',
-        });
-      } finally {
-        setLoading(false);
-      }
-    };
-    loadTemplates();
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    return [
+      {
+        id: 'ct-1',
+        name: 'EU Digital Identity Credential',
+        format: 'sd-jwt-vc',
+        version: '1.0.0',
+        claims: 12,
+        hasArtifacts: true,
+        artifactsValidated: true,
+        status: 'active',
+        updatedAt: '2026-02-06T10:30:00Z',
+        usedByFlowsCount: 3,
+      },
+      {
+        id: 'ct-2',
+        name: 'Mobile Driving License',
+        format: 'mdoc',
+        version: '1.0.0',
+        claims: 18,
+        hasArtifacts: true,
+        artifactsValidated: true,
+        status: 'active',
+        updatedAt: '2026-02-05T14:20:00Z',
+        usedByFlowsCount: 2,
+      },
+      {
+        id: 'ct-3',
+        name: 'Employee Badge',
+        format: 'jwt-vc',
+        version: '0.9.0',
+        claims: 8,
+        hasArtifacts: false,
+        artifactsValidated: false,
+        status: 'draft',
+        updatedAt: '2026-02-07T09:00:00Z',
+        usedByFlowsCount: 0,
+      },
+    ];
   }, []);
 
   // Count templates with missing artifacts
@@ -162,7 +143,7 @@ function CredentialTemplatesPage() {
     >
       {error && (
         <Alert severity="error" sx={{ mb: 3 }}>
-          {error}
+          {error?.message || String(error)}
         </Alert>
       )}
 

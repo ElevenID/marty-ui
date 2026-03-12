@@ -1,0 +1,97 @@
+---
+# ========================================================
+# Production ConfigMap — non-sensitive environment config
+# ========================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: marty-config
+  namespace: marty-prod
+  labels:
+    app.kubernetes.io/part-of: marty-platform
+data:
+  # --------------------------------------------------------
+  # Core
+  # --------------------------------------------------------
+  ENVIRONMENT: "production"
+  LOG_LEVEL: "INFO"
+
+  # --------------------------------------------------------
+  # Public domain (elevenidllc.com)
+  # --------------------------------------------------------
+  PUBLIC_DOMAIN: "elevenidllc.com"
+  UI_BASE_URL: "https://elevenidllc.com"
+  PUBLIC_API_URL: "https://api.elevenidllc.com"
+
+  # --------------------------------------------------------
+  # Keycloak
+  # --------------------------------------------------------
+  KEYCLOAK_REALM: "11id"
+  KC_HOSTNAME: "auth.elevenidllc.com"
+  KC_HOSTNAME_PORT: "443"
+  OIDC_CLIENT_ID: "marty-ui"
+  OIDC_ISSUER_URL_INTERNAL: "http://keycloak:8080/realms/11id"
+  OIDC_ISSUER_URL_EXTERNAL: "https://auth.elevenidllc.com/realms/11id"
+  OIDC_REDIRECT_URI: "https://elevenidllc.com/v1/auth/callback"
+  OIDC_POST_LOGOUT_REDIRECT_URI: "https://elevenidllc.com/"
+  KEYCLOAK_ADMIN_URL: "http://keycloak:8080"
+
+  # --------------------------------------------------------
+  # Auth service
+  # --------------------------------------------------------
+  COOKIE_SECURE: "true"
+  SESSION_TTL_SECONDS: "86400"
+  AUTH_SERVICE_INTERNAL_URL: "http://auth:8001"
+
+  # --------------------------------------------------------
+  # Service URLs (internal cluster DNS)
+  # --------------------------------------------------------
+  AUTH_SERVICE_URL: "http://auth:8001"
+  ORGANIZATION_SERVICE_URL: "http://organization:8002"
+  CREDENTIAL_TEMPLATE_SERVICE_URL: "http://credential-template:8003"
+  TRUST_PROFILE_SERVICE_URL: "http://trust-profile:8004"
+  ISSUANCE_SERVICE_URL: "http://issuance:8005"
+  APPLICANT_SERVICE_URL: "http://applicant:8006"
+  NOTIFICATION_SERVICE_URL: "http://notification:8007"
+  COMPLIANCE_PROFILE_SERVICE_URL: "http://compliance-profile:8008"
+  PRESENTATION_POLICY_SERVICE_URL: "http://presentation-policy:8009"
+  DEPLOYMENT_PROFILE_SERVICE_URL: "http://deployment-profile:8010"
+  FLOW_SERVICE_URL: "http://flow:8011"
+
+  # --------------------------------------------------------
+  # CORS — allow UI domain
+  # --------------------------------------------------------
+  CORS_ORIGINS: "https://elevenidllc.com,https://api.elevenidllc.com"
+
+  # --------------------------------------------------------
+  # Database
+  # --------------------------------------------------------
+  POSTGRES_DB: "marty"
+  POSTGRES_USER: "marty"
+  POSTGRES_HOST: "postgres"
+  POSTGRES_PORT: "5432"
+  KEYCLOAK_DB: "keycloak"
+  KEYCLOAK_DB_USER: "keycloak"
+
+  # --------------------------------------------------------
+  # Redis
+  # --------------------------------------------------------
+  REDIS_URL: "redis://redis:6379/0"
+  REDIS_DB_GATEWAY: "2"
+
+  # --------------------------------------------------------
+  # RabbitMQ
+  # --------------------------------------------------------
+  RABBITMQ_USER: "marty"
+  RABBITMQ_VHOST: "/"
+
+  # --------------------------------------------------------
+  # SMTP (override in secrets for credentials)
+  # --------------------------------------------------------
+  SMTP_HOST: "smtp.mailgun.org"
+  SMTP_PORT: "587"
+
+  # --------------------------------------------------------
+  # Credential login policy seed value
+  # --------------------------------------------------------
+  CREDENTIAL_LOGIN_POLICY_ID: "50000000-0000-0000-0000-000000000001"

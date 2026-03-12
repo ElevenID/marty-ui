@@ -5,7 +5,6 @@
  * Wraps the existing TrustRegistry component with the new navigation structure.
  */
 
-import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Paper,
@@ -28,6 +27,7 @@ import { Link } from 'react-router-dom';
 
 import { ResourcePage, StatusChip, EmptyState, EmptyStates } from '../../common';
 import { TrustProvider } from '../../trust';
+import { useAsyncData } from '../../../hooks/useAsyncData';
 
 const getTrustTabs = (t) => [
   { label: t('trust.trustProfiles'), path: '/console/org/trust/profiles' },
@@ -43,52 +43,41 @@ const getBreadcrumbs = (t) => [
 
 function TrustProfilesPage() {
   const { t } = useTranslation('console');
-  const [profiles, setProfiles] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
 
-  useEffect(() => {
-    // TODO: Fetch trust profiles from API
-    const loadProfiles = async () => {
-      try {
-        // Simulated data - replace with actual API call
-        await new Promise((resolve) => setTimeout(resolve, 500));
-        setProfiles([
-          {
-            id: 'tp-1',
-            name: 'EUDI Wallet Trust Profile',
-            framework: 'eudi',
-            status: 'active',
-            trustedIssuers: 12,
-            validationRules: 5,
-            updatedAt: '2026-02-06T10:30:00Z',
-          },
-          {
-            id: 'tp-2',
-            name: 'ICAO PKD Profile',
-            framework: 'icao',
-            status: 'active',
-            trustedIssuers: 195,
-            validationRules: 3,
-            updatedAt: '2026-02-05T14:20:00Z',
-          },
-          {
-            id: 'tp-3',
-            name: 'Custom Enterprise Profile',
-            framework: 'custom',
-            status: 'draft',
-            trustedIssuers: 0,
-            validationRules: 0,
-            updatedAt: '2026-02-07T09:00:00Z',
-          },
-        ]);
-      } catch (err) {
-        setError(t('trust.failedToLoad'));
-      } finally {
-        setLoading(false);
-      }
-    };
-    loadProfiles();
+  // TODO: Replace this simulated data with the real API call, e.g.:
+  //   const { data: profiles = [], loading, error } = useAsyncData(() => listTrustProfiles(), []);
+  const { data: profiles = [], loading, error } = useAsyncData(async () => {
+    // Simulated data — replace with actual API call
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    return [
+      {
+        id: 'tp-1',
+        name: 'EUDI Wallet Trust Profile',
+        framework: 'eudi',
+        status: 'active',
+        trustedIssuers: 12,
+        validationRules: 5,
+        updatedAt: '2026-02-06T10:30:00Z',
+      },
+      {
+        id: 'tp-2',
+        name: 'ICAO PKD Profile',
+        framework: 'icao',
+        status: 'active',
+        trustedIssuers: 195,
+        validationRules: 3,
+        updatedAt: '2026-02-05T14:20:00Z',
+      },
+      {
+        id: 'tp-3',
+        name: 'Custom Enterprise Profile',
+        framework: 'custom',
+        status: 'draft',
+        trustedIssuers: 0,
+        validationRules: 0,
+        updatedAt: '2026-02-07T09:00:00Z',
+      },
+    ];
   }, []);
 
   return (
@@ -104,7 +93,7 @@ function TrustProfilesPage() {
       >
         {error && (
           <Alert severity="error" sx={{ mb: 3 }}>
-            {error}
+            {error.message ?? t('trust.failedToLoad')}
           </Alert>
         )}
 

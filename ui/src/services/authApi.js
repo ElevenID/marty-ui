@@ -135,6 +135,35 @@ export async function getUserOrganizations() {
   }
 }
 
+/**
+ * Update the current user's profile picture
+ * @param {string} pictureDataUrl - Data URL of the image (e.g., "data:image/jpeg;base64,...")
+ * @returns {Promise<{success: boolean, error?: string}>}
+ */
+export async function updateProfilePicture(pictureDataUrl) {
+  try {
+    const response = await fetch(`${AUTH_BASE_URL}/me`, {
+      method: 'PATCH',
+      credentials: 'include',
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ picture: pictureDataUrl }),
+    });
+
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      return { success: false, error: err.detail || `HTTP ${response.status}` };
+    }
+
+    return { success: true };
+  } catch (error) {
+    console.error('Error updating profile picture:', error);
+    return { success: false, error: error.message };
+  }
+}
+
 export default {
   getCurrentUser,
   initiateLogin,
@@ -142,4 +171,5 @@ export default {
   initiateLogout,
   isAuthenticated,
   getUserOrganizations,
+  updateProfilePicture,
 };

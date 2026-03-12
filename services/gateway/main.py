@@ -368,12 +368,18 @@ ROUTE_CONFIG = {
     # Digital Identity Model - Operational Resources
     "/v1/applicants": {"service": "applicant", "requires_auth": True},
     # OID4VCI wallet-facing endpoints must be public (no auth token available on wallet)
+    "/v1/issuance/offers": {"service": "issuance", "requires_auth": False},
     "/v1/issuance/token": {"service": "issuance", "requires_auth": False},
     "/v1/issuance/credential": {"service": "issuance", "requires_auth": False},
+    "/v1/issuance/nonce": {"service": "issuance", "requires_auth": False},
+    "/v1/issuance/notification": {"service": "issuance", "requires_auth": False},
+    "/v1/issuance/deferred-credential": {"service": "issuance", "requires_auth": False},
     "/v1/issuance": {"service": "issuance", "requires_auth": True},
     "/v1/application-templates": {"service": "issuance", "requires_auth": True},
     "/v1/applications": {"service": "issuance", "requires_auth": True},
-    "/v1/flows/instances": {"service": "flows", "requires_auth": False},  # wallet-facing: request + submit
+    "/v1/flows/instances": {"service": "flows", "requires_auth": True},  # wallet-facing /request + /submit handled by _WALLET_PUBLIC regex
+    "/v1/flows/siop/submit": {"service": "flows", "requires_auth": False},  # SIOPv2 wallet-facing
+    "/v1/flows/siop": {"service": "flows", "requires_auth": True},  # SIOPv2 session creation
     "/v1/flows": {"service": "flows", "requires_auth": True},
     
     # Verification & ZK Proof routes
@@ -872,7 +878,9 @@ class EvaluateInlineRequest(BaseModel):
 # =============================================================================
 
 class StartVerificationFlowRequest(BaseModel):
-    presentation_policy_id: str
+    presentation_policy_id: str | None = None  # optional for SIOPv2 (response_type=id_token)
+    organization_id: str | None = None
+    response_type: str = "vp_token"  # id_token for SIOPv2
     trust_profile_id: str | None = None
     deployment_profile_id: str | None = None
     external_reference: str | None = None
@@ -1904,12 +1912,36 @@ async def get_flow_verification_request(instance_id: str, request: Request) -> R
     return await proxy_request(request, service_url, f"/v1/flows/instances/{instance_id}/request")
 
 
+@flow_router.get("/instances/{instance_id}/result", summary="Get Verification Result")
+async def get_flow_instance_result(instance_id: str, request: Request) -> Response:
+    """OID4VP-1FINAL §8.7 — Relying-party result polling endpoint for a flow instance."""
+    registry = get_registry()
+    service_url = registry.get_service_url("flows")
+    return await proxy_request(request, service_url, f"/v1/flows/instances/{instance_id}/result")
+
+
 @flow_router.post("/instances/{instance_id}/submit", response_model=VerificationResultResponse, summary="Submit Verification")
 async def submit_flow_verification(instance_id: str, request: Request) -> Response:
     """Submit a VP token to complete a verification flow. Accepts JSON or form-encoded data."""
     registry = get_registry()
     service_url = registry.get_service_url("flows")
     return await proxy_request(request, service_url, f"/v1/flows/instances/{instance_id}/submit")
+
+
+@flow_router.post("/siop", summary="Start SIOPv2 Cross-Device Flow")
+async def start_siop_flow_gateway(request: Request) -> Response:
+    """SIOPv2 Draft 13 §9: Initiate a cross-device SIOPv2 authentication flow."""
+    registry = get_registry()
+    service_url = registry.get_service_url("flows")
+    return await proxy_request(request, service_url, "/v1/flows/siop")
+
+
+@flow_router.post("/siop/submit", summary="Submit SIOPv2 ID Token")
+async def submit_siop_id_token_gateway(request: Request) -> Response:
+    """SIOPv2 Draft 13 §11: Validate a self-issued ID token from the wallet (wallet-facing, no auth)."""
+    registry = get_registry()
+    service_url = registry.get_service_url("flows")
+    return await proxy_request(request, service_url, "/v1/flows/siop/submit")
 
 
 # Issuance routes
@@ -1980,6 +2012,35 @@ async def issue_credential(request: Request) -> Response:
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
     return await proxy_request(request, service_url, "/v1/issuance/credential")
+
+
+@issuance_router.post("/nonce", summary="Get Fresh Nonce")
+async def get_nonce(request: Request) -> Response:
+    """
+    OID4VCI Nonce Endpoint.
+
+    Returns a fresh c_nonce for use in credential proof JWTs. Called by wallets
+    after token exchange to refresh the nonce. No authentication required.
+    """
+    registry = get_registry()
+    service_url = registry.get_service_url("issuance")
+    return await proxy_request(request, service_url, "/v1/issuance/nonce")
+
+
+@issuance_router.post("/notification", summary="Credential Notification")
+async def credential_notification(request: Request) -> Response:
+    """OID4VCI-1FINAL §11 — Wallet notifies issuer of credential lifecycle event."""
+    registry = get_registry()
+    service_url = registry.get_service_url("issuance")
+    return await proxy_request(request, service_url, "/v1/issuance/notification")
+
+
+@issuance_router.post("/deferred-credential", summary="Deferred Credential")
+async def deferred_credential(request: Request) -> Response:
+    """OID4VCI-1FINAL §9.1 — Poll for a deferred credential using a transaction_id."""
+    registry = get_registry()
+    service_url = registry.get_service_url("issuance")
+    return await proxy_request(request, service_url, "/v1/issuance/deferred-credential")
 
 
 # Application Template routes (how users apply for credentials)
@@ -2254,6 +2315,78 @@ async def issue_applicant_application(application_id: str, request: Request) -> 
     return await proxy_request(request, service_url, f"/v1/applicants/applications/{application_id}/issue")
 
 
+@applicant_router.post("/applications/{application_id}/auto-issue", summary="Auto-Issue Application")
+async def auto_issue_applicant_application(application_id: str, request: Request) -> Response:
+    """Atomically submit, approve, and issue a credential for an auto-approve application."""
+    registry = get_registry()
+    service_url = registry.get_service_url("applicant")
+    return await proxy_request(request, service_url, f"/v1/applicants/applications/{application_id}/auto-issue")
+
+
+@applicant_router.post("/applications/{application_id}/request-info", summary="Request More Info")
+async def request_applicant_info(application_id: str, request: Request) -> Response:
+    """Request additional information from an applicant."""
+    registry = get_registry()
+    service_url = registry.get_service_url("applicant")
+    return await proxy_request(request, service_url, f"/v1/applicants/applications/{application_id}/request-info")
+
+
+@applicant_router.get("/applications/{application_id}/checks", summary="Get Vetting Checks")
+async def get_applicant_checks(application_id: str, request: Request) -> Response:
+    """Get vetting checks for an application."""
+    registry = get_registry()
+    service_url = registry.get_service_url("applicant")
+    return await proxy_request(request, service_url, f"/v1/applicants/applications/{application_id}/checks")
+
+
+@applicant_router.get("/checks/pending", summary="Get Pending Checks")
+async def get_pending_checks(request: Request) -> Response:
+    """List pending vetting checks across all applications."""
+    registry = get_registry()
+    service_url = registry.get_service_url("applicant")
+    return await proxy_request(request, service_url, "/v1/applicants/checks/pending")
+
+
+@applicant_router.post("/checks/{check_id}/start", summary="Start Check")
+async def start_applicant_check(check_id: str, request: Request) -> Response:
+    """Start a vetting check."""
+    registry = get_registry()
+    service_url = registry.get_service_url("applicant")
+    return await proxy_request(request, service_url, f"/v1/applicants/checks/{check_id}/start")
+
+
+@applicant_router.post("/checks/{check_id}/complete", summary="Complete Check")
+async def complete_applicant_check(check_id: str, request: Request) -> Response:
+    """Complete a vetting check."""
+    registry = get_registry()
+    service_url = registry.get_service_url("applicant")
+    return await proxy_request(request, service_url, f"/v1/applicants/checks/{check_id}/complete")
+
+
+@applicant_router.post("/applications/{application_id}/lock", summary="Acquire Reviewer Lock")
+async def acquire_applicant_lock(application_id: str, request: Request) -> Response:
+    """Acquire a reviewer lock on an application."""
+    registry = get_registry()
+    service_url = registry.get_service_url("applicant")
+    return await proxy_request(request, service_url, f"/v1/applicants/applications/{application_id}/lock")
+
+
+@applicant_router.get("/applications/{application_id}/lock", summary="Get Lock Status")
+async def get_applicant_lock(application_id: str, request: Request) -> Response:
+    """Get the current reviewer lock status for an application."""
+    registry = get_registry()
+    service_url = registry.get_service_url("applicant")
+    return await proxy_request(request, service_url, f"/v1/applicants/applications/{application_id}/lock")
+
+
+@applicant_router.delete("/applications/{application_id}/lock", summary="Release Reviewer Lock")
+async def release_applicant_lock(application_id: str, request: Request) -> Response:
+    """Release a reviewer lock on an application."""
+    registry = get_registry()
+    service_url = registry.get_service_url("applicant")
+    return await proxy_request(request, service_url, f"/v1/applicants/applications/{application_id}/lock")
+
+
 @applicant_router.post("/profiles/{applicant_id}/biometrics", summary="Enroll Biometric")
 async def enroll_applicant_biometric(applicant_id: str, request: Request) -> Response:
     """Enroll biometric data for an applicant."""
@@ -2488,6 +2621,90 @@ async def delete_role(org_id: str, role_id: str, request: Request) -> Response:
     registry = get_registry()
     service_url = registry.get_service_url("organizations")
     return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/roles/{role_id}", inject_params={"organization_id": org_id})
+
+
+# Members CRUD
+@organization_router.get("/{org_id}/members", summary="List Members")
+async def list_members(org_id: str, request: Request) -> Response:
+    """List members of an organization."""
+    registry = get_registry()
+    service_url = registry.get_service_url("organizations")
+    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/members", inject_params={"organization_id": org_id})
+
+
+@organization_router.post("/{org_id}/members", summary="Add Member", status_code=201)
+async def add_member(org_id: str, request: Request) -> Response:
+    """Add a member to an organization."""
+    registry = get_registry()
+    service_url = registry.get_service_url("organizations")
+    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/members", inject_params={"organization_id": org_id})
+
+
+@organization_router.patch("/{org_id}/members/{member_id}", summary="Update Member")
+async def update_member(org_id: str, member_id: str, request: Request) -> Response:
+    """Update a member (e.g. change role)."""
+    registry = get_registry()
+    service_url = registry.get_service_url("organizations")
+    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/members/{member_id}", inject_params={"organization_id": org_id})
+
+
+@organization_router.delete("/{org_id}/members/{member_id}", summary="Remove Member")
+async def remove_member(org_id: str, member_id: str, request: Request) -> Response:
+    """Remove a member from an organization."""
+    registry = get_registry()
+    service_url = registry.get_service_url("organizations")
+    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/members/{member_id}", inject_params={"organization_id": org_id})
+
+
+# Invites (pending invitations)
+@organization_router.get("/{org_id}/invites", summary="List Invites")
+async def list_invites(org_id: str, request: Request) -> Response:
+    """List pending invites for an organization."""
+    registry = get_registry()
+    service_url = registry.get_service_url("organizations")
+    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/invites", inject_params={"organization_id": org_id})
+
+
+@organization_router.post("/{org_id}/invites", summary="Create Invite", status_code=201)
+async def create_invite(org_id: str, request: Request) -> Response:
+    """Create an invite for an organization."""
+    registry = get_registry()
+    service_url = registry.get_service_url("organizations")
+    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/invites", inject_params={"organization_id": org_id})
+
+
+@organization_router.post("/{org_id}/invites/{invite_id}/resend", summary="Resend Invite")
+async def resend_invite(org_id: str, invite_id: str, request: Request) -> Response:
+    """Resend an invite."""
+    registry = get_registry()
+    service_url = registry.get_service_url("organizations")
+    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/invites/{invite_id}/resend", inject_params={"organization_id": org_id})
+
+
+@organization_router.delete("/{org_id}/invites/{invite_id}", summary="Revoke Invite")
+async def revoke_invite(org_id: str, invite_id: str, request: Request) -> Response:
+    """Revoke a pending invite."""
+    registry = get_registry()
+    service_url = registry.get_service_url("organizations")
+    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/invites/{invite_id}", inject_params={"organization_id": org_id})
+
+
+# Transfer ownership
+@organization_router.post("/{org_id}/transfer-ownership", summary="Transfer Ownership")
+async def transfer_ownership(org_id: str, request: Request) -> Response:
+    """Transfer organization ownership to another member."""
+    registry = get_registry()
+    service_url = registry.get_service_url("organizations")
+    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/transfer-ownership", inject_params={"organization_id": org_id})
+
+
+# Team snapshot (dashboard)
+@organization_router.get("/{org_id}/team/snapshot", summary="Team Snapshot")
+async def get_team_snapshot(org_id: str, request: Request) -> Response:
+    """Get a team snapshot for dashboards."""
+    registry = get_registry()
+    service_url = registry.get_service_url("organizations")
+    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/team/snapshot", inject_params={"organization_id": org_id})
 
 
 # RBAC: Member role assignments
@@ -2892,8 +3109,16 @@ Verification is handled through two complementary approaches:
             "authorization_endpoint": f"{issuer_url}/v1/issuance/authorize",
             "token_endpoint": f"{issuer_url}/v1/issuance/token",
             "jwks_uri": f"{issuer_url}/.well-known/jwks.json",
-            "response_types_supported": ["code", "token"],
-            "subject_types_supported": ["public"],
+            "response_types_supported": ["code", "token", "id_token"],
+            "subject_types_supported": ["public", "pairwise"],
+            # SIOPv2 Draft 13 §6.1: Relying Party (Verifier) MUST advertise
+            # the subject syntax types it supports.  jwk-thumbprint is required
+            # for wallets that present self-issued credentials without a DID.
+            "subject_syntax_types_supported": [
+                "urn:ietf:params:oauth:jwk-thumbprint",
+                "did:key",
+                "did:jwk",
+            ],
             "id_token_signing_alg_values_supported": ["EdDSA", "ES256"],
             "grant_types_supported": [
                 "authorization_code",

@@ -34,6 +34,7 @@ import LaptopIcon from '@mui/icons-material/Laptop';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import SecurityIcon from '@mui/icons-material/Security';
 import { useTranslation } from 'react-i18next';
+import { useDialog } from '../../../hooks/useDialog';
 import { listDevices, unregisterDevice } from '../../../services/devicesApi';
 
 const DeviceManagementPage = () => {
@@ -41,8 +42,7 @@ const DeviceManagementPage = () => {
   const [devices, setDevices] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
-  const [deviceToDelete, setDeviceToDelete] = useState(null);
+  const deleteDialog = useDialog();
   const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
@@ -62,30 +62,17 @@ const DeviceManagementPage = () => {
     }
   };
 
-  const handleDeleteClick = (device) => {
-    setDeviceToDelete(device);
-    setDeleteDialogOpen(true);
-  };
-
   const handleDeleteConfirm = async () => {
-    if (!deviceToDelete) return;
-
     try {
       setDeleting(true);
-      await unregisterDevice(deviceToDelete.device_id);
-      setDevices(devices.filter((d) => d.device_id !== deviceToDelete.device_id));
-      setDeleteDialogOpen(false);
-      setDeviceToDelete(null);
+      await unregisterDevice(deleteDialog.data.device_id);
+      setDevices(devices.filter((d) => d.device_id !== deleteDialog.data.device_id));
+      deleteDialog.close();
     } catch (err) {
       setError(t('devices.errorUnregistering', { message: err.message }));
     } finally {
       setDeleting(false);
     }
-  };
-
-  const handleDeleteCancel = () => {
-    setDeleteDialogOpen(false);
-    setDeviceToDelete(null);
   };
 
   const getPlatformIcon = (platform) => {
@@ -213,7 +200,7 @@ const DeviceManagementPage = () => {
                       <IconButton
                         size="small"
                         color="error"
-                        onClick={() => handleDeleteClick(device)}
+                        onClick={() => deleteDialog.open(device)}
                       >
                         <DeleteIcon />
                       </IconButton>
@@ -227,25 +214,25 @@ const DeviceManagementPage = () => {
       )}
 
       {/* Delete Confirmation Dialog */}
-      <Dialog open={deleteDialogOpen} onClose={handleDeleteCancel}>
+      <Dialog open={deleteDialog.isOpen} onClose={deleteDialog.close}>
         <DialogTitle>{t('devices.unregisterDialog.title')}</DialogTitle>
         <DialogContent>
           <DialogContentText>
             {t('devices.unregisterDialog.message')}
-            {deviceToDelete && (
+            {deleteDialog.data && (
               <Box sx={{ mt: 2, p: 2, bgcolor: 'grey.100', borderRadius: 1 }}>
                 <Typography variant="body2" fontWeight="medium">
-                  {t('devices.unregisterDialog.deviceId', { deviceId: deviceToDelete.device_id })}
+                  {t('devices.unregisterDialog.deviceId', { deviceId: deleteDialog.data.device_id })}
                 </Typography>
                 <Typography variant="body2" color="text.secondary">
-                  {t('devices.unregisterDialog.platform', { platform: deviceToDelete.platform?.toUpperCase() })}
+                  {t('devices.unregisterDialog.platform', { platform: deleteDialog.data.platform?.toUpperCase() })}
                 </Typography>
               </Box>
             )}
           </DialogContentText>
         </DialogContent>
         <DialogActions>
-          <Button onClick={handleDeleteCancel} disabled={deleting}>
+          <Button onClick={deleteDialog.close} disabled={deleting}>
             {t('actions.cancel', { ns: 'common' })}
           </Button>
           <Button onClick={handleDeleteConfirm} color="error" disabled={deleting}>

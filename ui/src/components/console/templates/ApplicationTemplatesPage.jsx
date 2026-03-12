@@ -4,7 +4,8 @@
  * Manages application templates - forms and workflows for credential applications.
  */
 
-import { useState, useEffect } from 'react';
+import { useAsyncData } from '../../../hooks/useAsyncData';
+import { useDialog } from '../../../hooks/useDialog';
 import {
   Box,
   Paper,
@@ -35,10 +36,12 @@ import CheckConfigurationDialog from './CheckConfigurationDialog';
 function ApplicationTemplatesPage() {
   const { t } = useTranslation('console');
   const { organizationId } = useAuth();
-  const [templates, setTemplates] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [checksDialogTemplate, setChecksDialogTemplate] = useState(null);
+  const { data: templates = [], loading, error, reload } = useAsyncData(async () => {
+    if (!organizationId) return [];
+    const data = await listApplicationTemplates(organizationId);
+    return data || [];
+  }, [organizationId]);
+  const checksDialog = useDialog();
 
   const getTemplatesTabs = () => [
     { label: t('templates.credentialTemplates'), path: '/console/org/templates/credentials' },
@@ -51,26 +54,8 @@ function ApplicationTemplatesPage() {
     { label: t('applicationTemplatesPage.breadcrumbs.applicationTemplates'), path: '/console/org/templates/applications' },
   ];
 
-  const loadTemplates = async () => {
-    if (!organizationId) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const data = await listApplicationTemplates(organizationId);
-      setTemplates(data || []);
-    } catch (err) {
-      setError(err.message || t('applicationTemplatesPage.failedToLoad'));
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => { loadTemplates(); }, [organizationId]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const handleChecksSaved = (updatedTemplate) => {
-    setTemplates((prev) =>
-      prev.map((t) => (t.id === updatedTemplate.id ? updatedTemplate : t))
-    );
+  const handleChecksSaved = () => {
+    reload();
   };
 
   return (
@@ -86,7 +71,7 @@ function ApplicationTemplatesPage() {
     >
       {error && (
         <Alert severity="error" sx={{ mb: 3 }}>
-          {error}
+          {error?.message || String(error)}
         </Alert>
       )}
 
@@ -153,7 +138,7 @@ function ApplicationTemplatesPage() {
                         <IconButton
                           size="small"
                           color="secondary"
-                          onClick={() => setChecksDialogTemplate(template)}
+                          onClick={() => checksDialog.open(template)}
                         >
                           <RuleIcon fontSize="small" />
                         </IconButton>
@@ -195,9 +180,9 @@ function ApplicationTemplatesPage() {
       )}
     </ResourcePage>
     <CheckConfigurationDialog
-      open={!!checksDialogTemplate}
-      template={checksDialogTemplate}
-      onClose={() => setChecksDialogTemplate(null)}
+      open={checksDialog.isOpen}
+      template={checksDialog.data}
+      onClose={checksDialog.close}
       onSaved={handleChecksSaved}
     />
     </>

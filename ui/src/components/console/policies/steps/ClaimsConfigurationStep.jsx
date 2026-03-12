@@ -5,7 +5,7 @@
  * Integrates with CredentialTemplate API for claim name autocomplete.
  */
 
-import { useState, useEffect } from 'react';
+import { useAsyncData } from '../../../../hooks/useAsyncData';
 import {
   Box,
   Typography,
@@ -30,39 +30,23 @@ import { listCredentialTemplates } from '../../../../services/presentationPolicy
 
 const ClaimsConfigurationStep = ({ policyConfig, onConfigChange }) => {
   const { t } = useTranslation('console');
-  const [credentialTemplates, setCredentialTemplates] = useState([]);
-  const [availableClaims, setAvailableClaims] = useState([]);
-
-  useEffect(() => {
-    fetchCredentialTemplates();
-  }, []);
-
-  const fetchCredentialTemplates = async () => {
-    try {
+  const { data: { templates: credentialTemplates = [], claims: availableClaims = [] } = {} } = useAsyncData(
+    async () => {
       const response = await listCredentialTemplates();
       const templates = response.data || response || [];
-      setCredentialTemplates(templates);
-      
-      // Extract all available claims from templates
-      const claims = [];
-      templates.forEach(template => {
-        if (template.claims) {
-          template.claims.forEach(claim => {
-            claims.push({
-              name: claim.name,
-              display_name: claim.display_name || claim.name,
-              credential_type: template.credential_type,
-              data_type: claim.data_type,
-              predicate_type: claim.predicate_type,
-            });
-          });
-        }
-      });
-      setAvailableClaims(claims);
-    } catch (err) {
-      console.error('Failed to fetch credential templates:', err);
-    }
-  };
+      const claims = templates.flatMap(template =>
+        (template.claims || []).map(claim => ({
+          name: claim.name,
+          display_name: claim.display_name || claim.name,
+          credential_type: template.credential_type,
+          data_type: claim.data_type,
+          predicate_type: claim.predicate_type,
+        }))
+      );
+      return { templates, claims };
+    },
+    []
+  );
 
   const handleFieldChange = (field, value) => {
     onConfigChange({

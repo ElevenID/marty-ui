@@ -7,7 +7,7 @@
  * - Issuable credentials
  */
 
-import { useState, useEffect } from 'react';
+import { useAsyncData } from '../../../hooks/useAsyncData';
 import {
   Paper,
   Typography,
@@ -51,30 +51,13 @@ function StatItem({ icon: Icon, label, value, color = 'primary' }) {
 export function ApplicantStatsCard() {
   const { t } = useTranslation('console');
   const { organizationId } = useAuth();
-  const [stats, setStats] = useState(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    async function fetchStats() {
-      if (!organizationId) {
-        setStats({ pending: 0, approved: 0, issuable: 0, total: 0 });
-        setLoading(false);
-        return;
-      }
-      
-      setLoading(true);
-      try {
-        const data = await getApplicantStats(organizationId);
-        setStats(data);
-      } catch (error) {
-        console.error('Failed to load applicant stats:', error);
-      } finally {
-        setLoading(false);
-      }
-    }
-
-    fetchStats();
-  }, [organizationId]);
+  const { data: stats = { pending: 0, approved: 0, issuable: 0, total: 0 }, loading } = useAsyncData(
+    async () => {
+      if (!organizationId) return { pending: 0, approved: 0, issuable: 0, total: 0 };
+      return await getApplicantStats(organizationId);
+    },
+    [organizationId]
+  );
 
   if (loading) {
     return (

@@ -53,6 +53,7 @@ class UserInfoResponse(BaseModel):
     organizations: list[dict[str, Any]] = []
     capabilities: dict[str, bool] = {}
     default_experience: str = "applicant_console"
+    picture: str | None = None
 
 
 class AuthStatusResponse(BaseModel):
@@ -74,6 +75,12 @@ class UserOrganizationsResponse(BaseModel):
     """User organizations list response."""
     
     organizations: list[OrganizationResponse]
+
+
+class UpdateUserMeRequest(BaseModel):
+    """Request body for updating current user's profile."""
+
+    picture: str | None = None
 
 
 # =============================================================================
@@ -456,6 +463,7 @@ async def callback(
             ),
         ),
         default_experience="applicant_console",
+        picture=oidc_user.picture,
         matched_organizations=provision_result.matched_organizations,  # Email domain matches
         access_token_expires_at=(
             datetime.now(timezone.utc) + timedelta(seconds=expires_in)
@@ -587,9 +595,41 @@ async def get_current_user(
             attrs.get("organizations", []),
         ),
         default_experience=attrs.get("default_experience", "applicant_console"),
+        picture=attrs.get("picture"),
     )
 
     return AuthStatusResponse(authenticated=True, user=user)
+
+
+@router.patch("/me", response_model=AuthStatusResponse)
+async def update_current_user(
+    request: Request,
+    body: UpdateUserMeRequest,
+    config: AuthConfig = Depends(get_auth_config),
+) -> AuthStatusResponse:
+    """
+    Update current user's profile attributes.
+
+    Currently supports updating the profile picture (stored in session).
+    """
+    session_id = request.cookies.get(config.cookie.name)
+    if not session_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    session_manager = await get_session_manager()
+    session = await session_manager.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=401, detail="Session not found")
+
+    if body.picture is not None:
+        # Validate it's a data URL or a plain URL (not arbitrary content)
+        if not (body.picture.startswith("data:image/") or body.picture.startswith("http")):
+            raise HTTPException(status_code=400, detail="picture must be an image data URL or https URL")
+        session.attributes["picture"] = body.picture
+        await session_manager.update_session(session)
+        logger.info(f"Updated profile picture for session {session_id}")
+
+    return await get_current_user(request, config)
 
 
 @router.get("/me/organizations", response_model=UserOrganizationsResponse)

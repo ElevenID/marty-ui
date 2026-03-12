@@ -4,7 +4,7 @@
  * Applicant view showing their issued travel documents.
  */
 
-import { useState, useEffect } from 'react';
+import { useAsyncData } from '../hooks/useAsyncData';
 import {
   Box,
   Card,
@@ -24,36 +24,19 @@ import { useAuth } from '../hooks/useAuth';
 
 function MyDocuments() {
   const { user } = useAuth();
-  const [documents, setDocuments] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-
-  const fetchDocuments = async () => {
-    setLoading(true);
-    setError(null);
-
-    try {
+  const { data: documents = [], loading, error, reload } = useAsyncData(
+    async () => {
       const response = await fetch('/api/applicants/me/documents', {
         credentials: 'include',
       });
-
       if (!response.ok) {
         throw new Error('Failed to fetch documents');
       }
-
       const data = await response.json();
-      setDocuments(data.documents || []);
-    } catch (err) {
-      console.error('Error fetching documents:', err);
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchDocuments();
-  }, []);
+      return data.documents || [];
+    },
+    []
+  );
 
   const formatDate = (dateString) => {
     if (!dateString) return 'N/A';
@@ -101,7 +84,7 @@ function MyDocuments() {
         <Button 
           variant="outlined" 
           startIcon={<RefreshIcon />} 
-          onClick={fetchDocuments}
+          onClick={reload}
           data-testid="refresh-documents-btn"
         >
           Refresh
@@ -111,7 +94,7 @@ function MyDocuments() {
       {/* Error Display */}
       {error && (
         <Alert severity="error" sx={{ mb: 3 }} data-testid="documents-error">
-          {error}
+          {error?.message}
         </Alert>
       )}
 

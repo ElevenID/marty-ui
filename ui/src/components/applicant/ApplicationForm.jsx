@@ -31,9 +31,13 @@ import {
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import LoginIcon from '@mui/icons-material/Login';
+import BadgeIcon from '@mui/icons-material/Badge';
+import PersonIcon from '@mui/icons-material/Person';
 import { useAuth } from '../../hooks/useAuth';
 import { usePreview } from '../../contexts/PreviewContext';
 import { DynamicFieldGroup } from './DynamicFieldRenderer';
+import ClaimCredentialDialog from '../console/applicant/ClaimCredentialDialog';
 
 
 const API_URL = import.meta.env.VITE_API_URL || '';
@@ -124,6 +128,11 @@ export default function ApplicationForm() {
   );
   const [configLoading, setConfigLoading] = useState(false);
 
+  // MemberCredential / auto-approve claim dialog state
+  const [claimDialogOpen, setClaimDialogOpen] = useState(false);
+  const [autoOfferData, setAutoOfferData] = useState(null);
+  const [autoApplying, setAutoApplying] = useState(false);
+
   // Dynamic form data (keys based on credential config)
   const [formData, setFormData] = useState({
     acceptTerms: false,
@@ -150,6 +159,7 @@ export default function ApplicationForm() {
       field_validation_rules: {},
       submission_instructions: null,
       validity_rules: template?.validity_rules || null,
+      issuer_requirements: template?.issuer_requirements || {},
       claims,
     };
   };
@@ -292,6 +302,92 @@ export default function ApplicationForm() {
       setFormData(prev => ({ ...prev, email: user.email }));
     }
   }, [user, allFields]);
+
+  // ===========================================================================
+  // MemberCredential: derived flag & one-click auto-apply handler
+  // ===========================================================================
+  const isMemberCredential = credentialConfig?.credential_type === 'MemberCredential';
+
+  const handleAutoApply = async () => {
+    setAutoApplying(true);
+    setError(null);
+    try {
+      // 1. Resolve or create the applicant profile
+      let applicantId = await resolveApplicantId();
+      if (!applicantId) {
+        applicantId = await createApplicant({
+          organization_id: organizationId,
+          user_id: user.user_id,
+          given_name: user.given_name || '',
+          family_name: user.family_name || '',
+          email: user.email,
+        });
+      }
+      if (!applicantId) throw new Error('Unable to resolve applicant profile');
+
+      // 2. Create the application — include all MemberCredential claims
+      //    in metadata so the issuance service can embed them in the VC.
+      const now = new Date().toISOString();
+      const role = (user.roles || []).find(r => ['applicant','vendor','administrator'].includes(r)) || 'applicant';
+      const createRes = await fetch(`${API_URL}/v1/applicants/applications`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          applicant_id: applicantId,
+          credential_configuration_id: credentialConfig?.id || credentialConfigId,
+          issuing_authority: 'Marty Trust Services',
+          requested_validity_years: 1,
+          metadata: {
+            credential_type: 'MemberCredential',
+            credential_display_name: credentialConfig?.name || 'Member Login Credential',
+            // MemberCredential VC claims
+            member_id: user.user_id,
+            user_id: user.user_id,
+            email: user.email,
+            given_name: user.given_name || '',
+            family_name: user.family_name || '',
+            organization_id: organizationId,
+            organization_name: user.organization_name || '',
+            role,
+            issued_at: now,
+            // workflow flag — stripped before signing
+            auto_approve: true,
+          },
+        }),
+      });
+      if (!createRes.ok) {
+        const d = await createRes.json();
+        throw new Error(d.detail || 'Failed to create application');
+      }
+      const created = await createRes.json();
+
+      // 3. Single call: atomically submits, approves, and initiates issuance.
+      const autoIssueRes = await fetch(
+        `${API_URL}/v1/applicants/applications/${created.id}/auto-issue`,
+        { method: 'POST', credentials: 'include' },
+      );
+      if (!autoIssueRes.ok) {
+        const d = await autoIssueRes.json();
+        throw new Error(d.detail || 'Failed to issue credential');
+      }
+      const issued = await autoIssueRes.json();
+      setApplicationId(issued.id);
+
+      // 4. Open wallet claim dialog with the offer URLs
+      setAutoOfferData({
+        offer_url: issued.credential_offer_uri,
+        credential_offer_uris: issued.credential_offer_uris || {},
+        expires_at: issued.offer_expires_at,
+      });
+      setClaimDialogOpen(true);
+    } catch (err) {
+      console.error('Auto-apply error:', err);
+      setError(err.message);
+    } finally {
+      setAutoApplying(false);
+    }
+  };
 
   const handleFieldChange = (fieldName, value) => {
     setFormData(prev => ({
@@ -717,6 +813,100 @@ export default function ApplicationForm() {
             {t('applicationForm.actions.gotoCatalog')}
           </Button>
         </Paper>
+      </Container>
+    );
+  }
+
+  // ===========================================================================
+  // MemberCredential: simplified one-click issuance UI
+  // ===========================================================================
+  if (isMemberCredential) {
+    const displayRole = (user?.roles || []).find(r => ['applicant', 'vendor', 'administrator'].includes(r)) || 'applicant';
+    return (
+      <Container maxWidth="sm" sx={{ py: 6 }}>
+        <Fade in timeout={600}>
+          <Paper
+            elevation={4}
+            sx={{
+              p: 5,
+              borderRadius: 3,
+              textAlign: 'center',
+              background: 'linear-gradient(145deg, #1a237e08, #1a237e14)',
+              border: '1px solid',
+              borderColor: 'primary.light',
+            }}
+          >
+            {/* Icon + title */}
+            <Box sx={{ mb: 3 }}>
+              <LoginIcon sx={{ fontSize: 64, color: 'primary.main', mb: 1 }} />
+              <Typography variant="h5" fontWeight={700} gutterBottom>
+                {credentialConfig?.display_name || 'Member Login Credential'}
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                {credentialConfig?.description ||
+                  'A free, instant credential that lets you log in with your wallet — no password needed.'}
+              </Typography>
+            </Box>
+
+            {/* Auto-filled user info summary */}
+            <Paper
+              variant="outlined"
+              sx={{ p: 2.5, mb: 3, textAlign: 'left', borderRadius: 2, bgcolor: 'background.default' }}
+            >
+              <Typography variant="overline" color="text.secondary" sx={{ mb: 1, display: 'block' }}>
+                Your credential will contain
+              </Typography>
+              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
+                {[
+                  { label: 'Name', value: [user?.given_name, user?.family_name].filter(Boolean).join(' ') || '—' },
+                  { label: 'Email', value: user?.email || '—' },
+                  { label: 'Role', value: displayRole },
+                  { label: 'Organization', value: user?.organization_name || organizationId || '—' },
+                ].map(({ label, value }) => (
+                  <Box key={label} sx={{ display: 'flex', justifyContent: 'space-between', gap: 2 }}>
+                    <Typography variant="body2" color="text.secondary">{label}</Typography>
+                    <Typography variant="body2" fontWeight={500}>{value}</Typography>
+                  </Box>
+                ))}
+              </Box>
+            </Paper>
+
+            {/* Error */}
+            {error && (
+              <Alert severity="error" sx={{ mb: 2, textAlign: 'left' }} onClose={() => setError(null)}>
+                {error}
+              </Alert>
+            )}
+
+            {/* CTA button */}
+            <Button
+              variant="contained"
+              size="large"
+              fullWidth
+              onClick={handleAutoApply}
+              disabled={autoApplying}
+              startIcon={autoApplying ? <CircularProgress size={20} color="inherit" /> : <BadgeIcon />}
+              sx={{ py: 1.5, fontSize: '1rem', borderRadius: 2 }}
+            >
+              {autoApplying ? 'Issuing credential…' : 'Get My Login Credential'}
+            </Button>
+
+            <Typography variant="caption" color="text.secondary" sx={{ mt: 2, display: 'block' }}>
+              Free · Instant · No review required
+            </Typography>
+          </Paper>
+        </Fade>
+
+        {/* Wallet claim dialog — opens after successful issuance */}
+        <ClaimCredentialDialog
+          open={claimDialogOpen}
+          onClose={() => {
+            setClaimDialogOpen(false);
+            navigate('/console/applicant/applications');
+          }}
+          applicationId={applicationId}
+          offerData={autoOfferData}
+        />
       </Container>
     );
   }
