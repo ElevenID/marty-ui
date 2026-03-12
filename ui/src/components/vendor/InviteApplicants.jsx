@@ -26,7 +26,6 @@ import {
   DialogContent,
   DialogActions,
   Alert,
-  Snackbar,
   CircularProgress,
   Tooltip,
   Divider,
@@ -41,10 +40,12 @@ import AccessTimeIcon from '@mui/icons-material/AccessTime';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import CancelIcon from '@mui/icons-material/Cancel';
 import { useAuth } from '../../hooks/useAuth';
+import { useNotifications } from '../../hooks/useNotifications';
 
 export default function InviteApplicants() {
   const { t } = useTranslation('vendor');
   const { organizationId, organizationName } = useAuth();
+  const { showSuccess, showError, showWarning } = useNotifications();
   // Invitation status mapping
   const STATUS_CONFIG = {
     pending: { label: t('inviteApplicants.status.pending'), color: 'warning', icon: <AccessTimeIcon fontSize="small" /> },
@@ -58,7 +59,6 @@ export default function InviteApplicants() {
   const [inviteDialogOpen, setInviteDialogOpen] = useState(false);
   const [emailInput, setEmailInput] = useState('');
   const [bulkEmails, setBulkEmails] = useState('');
-  const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' });
 
   // Fetch existing invitations
   useEffect(() => {
@@ -100,7 +100,7 @@ export default function InviteApplicants() {
       ]);
     } catch (error) {
       console.error('Failed to fetch invitations:', error);
-      setSnackbar({ open: true, message: t('inviteApplicants.loadFailed'), severity: 'error' });
+      showError(t('inviteApplicants.loadFailed'));
     } finally {
       setLoading(false);
     }
@@ -108,7 +108,7 @@ export default function InviteApplicants() {
 
   const handleSendInvitation = async (emails) => {
     if (!emails || emails.length === 0) {
-      setSnackbar({ open: true, message: t('inviteApplicants.enterEmail'), severity: 'warning' });
+      showWarning(t('inviteApplicants.enterEmail'));
       return;
     }
 
@@ -146,19 +146,11 @@ export default function InviteApplicants() {
 
       if (successful.length > 0) {
         setInvitations([...successful, ...invitations]);
-        setSnackbar({
-          open: true,
-          message: t('inviteApplicants.sentSuccess', { count: successful.length }),
-          severity: 'success',
-        });
+        showSuccess(t('inviteApplicants.sentSuccess', { count: successful.length }));
       }
 
       if (failed.length > 0) {
-        setSnackbar({
-          open: true,
-          message: t('inviteApplicants.sentFailed', { count: failed.length }),
-          severity: 'error',
-        });
+        showError(t('inviteApplicants.sentFailed', { count: failed.length }));
       }
 
       setInviteDialogOpen(false);
@@ -166,7 +158,7 @@ export default function InviteApplicants() {
       setBulkEmails('');
     } catch (error) {
       console.error('Failed to send invitations:', error);
-      setSnackbar({ open: true, message: t('inviteApplicants.sendFailed'), severity: 'error' });
+      showError(t('inviteApplicants.sendFailed'));
     } finally {
       setSending(false);
     }
@@ -175,7 +167,7 @@ export default function InviteApplicants() {
   const handleResendInvitation = async (invitation) => {
     try {
       // TODO: Resend via Keycloak API
-      setSnackbar({ open: true, message: t('inviteApplicants.resentSuccess', { email: invitation.email }), severity: 'success' });
+      showSuccess(t('inviteApplicants.resentSuccess', { email: invitation.email }));
       
       // Update expiry
       setInvitations(
@@ -191,7 +183,7 @@ export default function InviteApplicants() {
         )
       );
     } catch (error) {
-      setSnackbar({ open: true, message: t('inviteApplicants.resendFailed'), severity: 'error' });
+      showError(t('inviteApplicants.resendFailed'));
     }
   };
 
@@ -203,9 +195,9 @@ export default function InviteApplicants() {
           inv.id === invitation.id ? { ...inv, status: 'cancelled' } : inv
         )
       );
-      setSnackbar({ open: true, message: t('inviteApplicants.cancelSuccess'), severity: 'success' });
+      showSuccess(t('inviteApplicants.cancelSuccess'));
     } catch (error) {
-      setSnackbar({ open: true, message: t('inviteApplicants.cancelFailed'), severity: 'error' });
+      showError(t('inviteApplicants.cancelFailed'));
     }
   };
 
@@ -475,16 +467,6 @@ export default function InviteApplicants() {
         </DialogActions>
       </Dialog>
 
-      {/* Snackbar */}
-      <Snackbar
-        open={snackbar.open}
-        autoHideDuration={4000}
-        onClose={() => setSnackbar({ ...snackbar, open: false })}
-      >
-        <Alert severity={snackbar.severity} onClose={() => setSnackbar({ ...snackbar, open: false })}>
-          {snackbar.message}
-        </Alert>
-      </Snackbar>
     </Box>
   );
 }

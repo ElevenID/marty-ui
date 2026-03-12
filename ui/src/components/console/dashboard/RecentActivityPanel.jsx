@@ -5,7 +5,7 @@
  * Provides quick visibility into recent system activity.
  */
 
-import { useState, useEffect } from 'react';
+import { useAsyncData } from '../../../hooks/useAsyncData';
 import {
   Box,
   Paper,
@@ -184,81 +184,63 @@ function ActivityRow({ event }) {
 export function RecentActivityPanel() {
   const { t } = useTranslation('console');
   const { organizationId } = useAuth();
-  const [events, setEvents] = useState([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    if (!organizationId) {
-      setLoading(false);
-      return;
-    }
-
-    const loadRecentEvents = async () => {
-      setLoading(true);
-      try {
-        // TODO: Replace with actual API call when available
-        // const response = await listAuditEvents({ limit: 5, organization_id: organizationId });
-        // setEvents(response.events || []);
-
-        // Mock data for now
-        await new Promise((resolve) => setTimeout(resolve, 300));
-        setEvents([
-          {
-            id: 'evt-1',
-            timestamp: new Date(Date.now() - 5 * 60000).toISOString(),
-            action: 'credential.issued',
-            actor: 'john@example.com',
-            resource_type: 'credential',
-            resource_id: 'cred-123',
-            severity: 'success',
-          },
-          {
-            id: 'evt-2',
-            timestamp: new Date(Date.now() - 30 * 60000).toISOString(),
-            action: 'flow.verification_completed',
-            actor: 'jane@example.com',
-            resource_type: 'flow',
-            resource_id: 'flow-456',
-            severity: 'success',
-          },
-          {
-            id: 'evt-3',
-            timestamp: new Date(Date.now() - 2 * 3600000).toISOString(),
-            action: 'application.submitted',
-            actor: 'bob@example.com',
-            resource_type: 'application',
-            resource_id: 'app-789',
-            severity: 'info',
-          },
-          {
-            id: 'evt-4',
-            timestamp: new Date(Date.now() - 5 * 3600000).toISOString(),
-            action: 'flow.verification_failed',
-            actor: 'alice@example.com',
-            resource_type: 'flow',
-            resource_id: 'flow-012',
-            severity: 'error',
-          },
-          {
-            id: 'evt-5',
-            timestamp: new Date(Date.now() - 24 * 3600000).toISOString(),
-            action: 'trust_profile.updated',
-            actor: 'admin@example.com',
-            resource_type: 'trust_profile',
-            resource_id: 'tp-345',
-            severity: 'info',
-          },
-        ]);
-      } catch (error) {
-        console.error('Failed to load recent activity:', error);
-        setEvents([]);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    loadRecentEvents();
-  }, [organizationId]);
+  const { data: events = [], loading } = useAsyncData(
+    async () => {
+      if (!organizationId) return [];
+      // TODO: Replace with actual API call when available
+      // const response = await listAuditEvents({ limit: 5, organization_id: organizationId });
+      // return response.events || [];
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      return [
+        {
+          id: 'evt-1',
+          timestamp: new Date(Date.now() - 5 * 60000).toISOString(),
+          action: 'credential.issued',
+          actor: 'john@example.com',
+          resource_type: 'credential',
+          resource_id: 'cred-123',
+          severity: 'success',
+        },
+        {
+          id: 'evt-2',
+          timestamp: new Date(Date.now() - 30 * 60000).toISOString(),
+          action: 'flow.verification_completed',
+          actor: 'jane@example.com',
+          resource_type: 'flow',
+          resource_id: 'flow-456',
+          severity: 'success',
+        },
+        {
+          id: 'evt-3',
+          timestamp: new Date(Date.now() - 2 * 3600000).toISOString(),
+          action: 'application.submitted',
+          actor: 'bob@example.com',
+          resource_type: 'application',
+          resource_id: 'app-789',
+          severity: 'info',
+        },
+        {
+          id: 'evt-4',
+          timestamp: new Date(Date.now() - 5 * 3600000).toISOString(),
+          action: 'flow.verification_failed',
+          actor: 'alice@example.com',
+          resource_type: 'flow',
+          resource_id: 'flow-012',
+          severity: 'error',
+        },
+        {
+          id: 'evt-5',
+          timestamp: new Date(Date.now() - 24 * 3600000).toISOString(),
+          action: 'trust_profile.updated',
+          actor: 'admin@example.com',
+          resource_type: 'trust_profile',
+          resource_id: 'tp-345',
+          severity: 'info',
+        },
+      ];
+    },
+    [organizationId]
+  );
 
   return (
     <Paper sx={{ p: 3, mb: 3 }}>

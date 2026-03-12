@@ -6,6 +6,7 @@
 	tunnel-start tunnel-stop tunnel-restart tunnel-status tunnel-logs tunnel-nginx-logs \
 	tunnel-refresh-upstreams \
 	tunnel-auth-restart tunnel-keycloak-restart tunnel-full-restart tunnel-use-prod tunnel-use-dev \
+	setup-keycloak \
 	dev-ui-tunnel prod-ui-tunnel prod-ui-tunnel-kill tunnel-prod-static tunnel-prod-restart \
 	public-ui \
 	obs-up obs-down \
@@ -59,6 +60,7 @@ setup-local: ## Setup native local development environment (venv + dependencies)
 infra: ## Start only infrastructure services
 	@echo "$(BLUE)Starting infrastructure services...$(NC)"
 	@$(BASE_COMPOSE) up -d $(INFRA_SERVICES)
+	@$(MAKE) --no-print-directory setup-keycloak
 	@echo "$(GREEN)✓ Infrastructure started$(NC)"
 
 run-api: infra services-up ## Start infra + API microservices
@@ -177,10 +179,24 @@ tunnel-auth-restart: ## Restart auth + gateway with tunnel overrides
 	@$(MAKE) --no-print-directory tunnel-refresh-upstreams
 	@echo "$(GREEN)✅ Auth and Gateway restarted$(NC)"
 
-tunnel-keycloak-restart: ## Restart Keycloak with tunnel overrides
+tunnel-keycloak-restart: ## Restart Keycloak with tunnel overrides (then runs setup-keycloak)
 	@echo "$(BLUE)🔄 Restarting Keycloak with tunnel profile...$(NC)"
 	@$(TUNNEL_COMPOSE) up -d keycloak
 	@echo "$(GREEN)✅ Keycloak restarted$(NC)"
+	@$(MAKE) --no-print-directory setup-keycloak
+
+setup-keycloak: ## Patch Keycloak with env-var credentials (Google IdP, redirect URIs)
+	@echo "$(BLUE)⚙️  Running Keycloak configurator...$(NC)"
+	@docker run --rm \
+		--entrypoint /bin/bash \
+		--network marty-infra-network \
+		--env-file .env \
+		-e KC_URL=http://marty-keycloak:8080 \
+		-e KCADM_PATH=/opt/keycloak/bin/kcadm.sh \
+		-v "$(CURDIR)/scripts/setup-keycloak.sh:/scripts/setup-keycloak.sh:ro" \
+		quay.io/keycloak/keycloak:25.0 \
+		/scripts/setup-keycloak.sh 2>&1 | sed 's/^/  /'
+	@echo "$(GREEN)✅ Keycloak configured$(NC)"
 
 tunnel-full-restart: tunnel-keycloak-restart tunnel-auth-restart ## Restart all tunnel-sensitive services
 	@echo "$(GREEN)✅ Tunnel-related services restarted$(NC)"
@@ -192,7 +208,7 @@ tunnel-use-prod: ## Route tunnel proxy to production preview UI (:3002)
 	else \
 		sed -i.bak 's/^UI_DEV_PORT=.*/UI_DEV_PORT=3002/' .env && rm .env.bak; \
 	fi
-	@$(TUNNEL_COMPOSE) restart nginx-proxy
+	@$(TUNNEL_COMPOSE) up -d --force-recreate nginx-proxy
 	@echo "$(GREEN)✅ Tunnel now targets port 3002$(NC)"
 
 tunnel-use-dev: ## Route tunnel proxy to Vite dev UI (:3000)
@@ -202,7 +218,7 @@ tunnel-use-dev: ## Route tunnel proxy to Vite dev UI (:3000)
 	else \
 		sed -i.bak 's/^UI_DEV_PORT=.*/UI_DEV_PORT=3000/' .env && rm .env.bak; \
 	fi
-	@$(TUNNEL_COMPOSE) restart nginx-proxy
+	@$(TUNNEL_COMPOSE) up -d --force-recreate nginx-proxy
 	@echo "$(GREEN)✅ Tunnel now targets port 3000$(NC)"
 
 dev-ui-tunnel: ## Start UI dev server for tunnel mode

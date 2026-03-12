@@ -44,6 +44,7 @@ import {
   Flight as PassportIcon,
   DirectionsCar as DLIcon,
   Badge as BadgeIcon,
+  Login as LoginIcon,
   Info as InfoIcon,
   CheckCircle as CheckIcon,
   Schedule as PendingIcon,
@@ -107,6 +108,13 @@ const CREDENTIAL_TYPES = {
     category: 'education',
     processingTime: '1-2 business days',
     requirements: ['Course completion verification', 'Instructor approval', 'Minimum passing grade']
+  },
+  MemberCredential: {
+    description: 'Free Marty platform membership credential. Use it to log in with your wallet instead of a password — no processing fee.',
+    icon: LoginIcon,
+    category: 'identity',
+    processingTime: 'Instant upon issuance',
+    requirements: ['Active Marty platform account']
   }
 };
 

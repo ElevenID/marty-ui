@@ -37,7 +37,6 @@ import {
   MenuItem,
   Chip,
   Alert,
-  Snackbar,
   CircularProgress,
   Stack,
   Tooltip,
@@ -55,6 +54,7 @@ import {
   Warning as WarningIcon,
 } from '@mui/icons-material';
 import { useAuth } from '../../hooks/useAuth';
+import { useNotifications } from '../../hooks/useNotifications';
 
 // API base URL
 const API_URL = import.meta.env.VITE_API_URL || '';
@@ -278,7 +278,6 @@ function ActiveCredentialsTab({ organizationId }) {
   const [revokeDialogOpen, setRevokeDialogOpen] = useState(false);
   const [selectedCredential, setSelectedCredential] = useState(null);
   const [batchRevokeDialogOpen, setBatchRevokeDialogOpen] = useState(false);
-  const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' });
 
   /**
    * Load active credentials
@@ -342,22 +341,14 @@ function ActiveCredentialsTab({ organizationId }) {
         throw new Error(`Failed to revoke credential: ${response.statusText}`);
       }
 
-      setSnackbar({
-        open: true,
-        message: t('revocationManager.activeTab.snackbars.revokeSuccess'),
-        severity: 'success',
-      });
+      showSuccess(t('revocationManager.activeTab.snackbars.revokeSuccess'));
 
       setRevokeDialogOpen(false);
       setSelectedCredential(null);
       loadCredentials();
     } catch (err) {
       console.error('Error revoking credential:', err);
-      setSnackbar({
-        open: true,
-        message: err.message,
-        severity: 'error',
-      });
+      showError(err.message);
     }
   };
 
@@ -381,21 +372,13 @@ function ActiveCredentialsTab({ organizationId }) {
       }
 
       const data = await response.json();
-      setSnackbar({
-        open: true,
-        message: t('revocationManager.activeTab.snackbars.batchSuccess', { count: data.count }),
-        severity: 'success',
-      });
+      showSuccess(t('revocationManager.activeTab.snackbars.batchSuccess', { count: data.count }));
 
       setBatchRevokeDialogOpen(false);
       loadCredentials();
     } catch (err) {
       console.error('Error batch revoking:', err);
-      setSnackbar({
-        open: true,
-        message: err.message,
-        severity: 'error',
-      });
+      showError(err.message);
     }
   };
 
@@ -528,14 +511,6 @@ function ActiveCredentialsTab({ organizationId }) {
         onBatchRevoke={handleBatchRevoke}
       />
 
-      {/* Snackbar */}
-      <Snackbar
-        open={snackbar.open}
-        autoHideDuration={6000}
-        onClose={() => setSnackbar({ ...snackbar, open: false })}
-      >
-        <Alert severity={snackbar.severity}>{snackbar.message}</Alert>
-      </Snackbar>
     </Box>
   );
 }
@@ -620,6 +595,7 @@ function RevocationHistoryTab({ organizationId }) {
 export default function RevocationManager() {
   const { t } = useTranslation('vendor');
   const { organizationId } = useAuth();
+  const { showSuccess, showError, showWarning } = useNotifications();
   const [currentTab, setCurrentTab] = useState(0);
 
   return (

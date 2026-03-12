@@ -56,9 +56,12 @@
       "credentialReady": "Credential Ready"
     },
     "status": {
+      "draft": "Draft",
       "submitted": "Submitted",
       "underReview": "Under Review",
+      "pendingApproval": "Pending Approval",
       "approved": "Approved",
+      "readyToClaim": "Ready to Claim",
       "rejected": "Rejected"
     },
     "tableHeaders": {

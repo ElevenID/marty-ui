@@ -26,11 +26,13 @@ services:
     environment:
       PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:-beta.elevenidllc.com}
       UI_BASE_URL: ${UI_BASE_URL:-https://beta.elevenidllc.com}
-      # Use PUBLIC_DOMAIN directly — Docker Compose does not support nested variable expansion
+      # Keycloak 25.x uses hostname v2 by default.
+      # KC_HOSTNAME sets the external hostname; KC_PROXY_HEADERS trusts
+      # X-Forwarded-Proto/X-Forwarded-Host from nginx so protocol becomes https.
       KC_HOSTNAME: ${PUBLIC_DOMAIN:-beta.elevenidllc.com}
-      KC_HOSTNAME_PORT: 443
+      # Override base KC_HOSTNAME_PORT (8180) — v2 ignores it but clear to avoid confusion
+      KC_HOSTNAME_PORT: ""
       KC_HOSTNAME_STRICT: "false"
-      KC_HOSTNAME_STRICT_HTTPS: "true"
       KC_HTTP_ENABLED: "true"
       KC_PROXY_HEADERS: xforwarded
 

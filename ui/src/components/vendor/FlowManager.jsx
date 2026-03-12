@@ -8,7 +8,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { useNotification } from '../../contexts/NotificationContext';
 import {
   Box,
   Paper,
@@ -32,7 +31,6 @@ import {
   Tab,
   Checkbox,
   Tooltip,
-  Snackbar,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
@@ -49,6 +47,7 @@ import AndroidIcon from '@mui/icons-material/Android';
 import AccountTreeIcon from '@mui/icons-material/AccountTree';
 
 import { useAuth } from '../../hooks/useAuth';
+import { useNotifications } from '../../hooks/useNotifications';
 import flowsApi, { FLOW_STATES } from '../../services/flowsApi';
 import credentialsApi from '../../services/credentialsApi';
 import sseService, { EVENT_TYPES } from '../../services/sseService';
@@ -59,8 +58,8 @@ import { EmptyState } from '../common';
 const FlowManager = () => {
   const { t } = useTranslation(['vendor', 'common']);
   const { user } = useAuth();
+  const { showSuccess, showError, showWarning } = useNotifications();
   const navigate = useNavigate();
-  const { showError, showWarning, showSuccess } = useNotification();
   const [activeTab, setActiveTab] = useState(0);
   const [flows, setFlows] = useState([]);
   const [executions, setExecutions] = useState([]);
@@ -68,7 +67,6 @@ const FlowManager = () => {
   const [revocationBatches, setRevocationBatches] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'info' });
   
   // Dialog states
   const [revocationDialog, setRevocationDialog] = useState(false);
@@ -201,21 +199,13 @@ const FlowManager = () => {
       sseService.on(EVENT_TYPES.FLOW_EXECUTION_STARTED, (data) => {
         console.log('Flow execution started:', data);
         loadExecutions();
-        setSnackbar({
-          open: true,
-          message: `Flow execution started: ${data.flow_id}`,
-          severity: 'info',
-        });
+        showSuccess(`Flow execution started: ${data.flow_id}`);
       }),
       
       sseService.on(EVENT_TYPES.FLOW_EXECUTION_COMPLETED, (data) => {
         console.log('Flow execution completed:', data);
         loadExecutions();
-        setSnackbar({
-          open: true,
-          message: `Flow execution completed: ${data.execution_id}`,
-          severity: 'success',
-        });
+        showSuccess(`Flow execution completed: ${data.execution_id}`);
       }),
       
       sseService.on(EVENT_TYPES.APPLICATION_APPROVED, (data) => {
@@ -226,11 +216,7 @@ const FlowManager = () => {
       sseService.on(EVENT_TYPES.CREDENTIAL_ISSUED, (data) => {
         console.log('Credential issued:', data);
         loadCredentials();
-        setSnackbar({
-          open: true,
-          message: `Credential issued: ${data.credential_id}`,
-          severity: 'success',
-        });
+        showSuccess(`Credential issued: ${data.credential_id}`);
       }),
       
       sseService.on(EVENT_TYPES.CREDENTIAL_REVOKED, (data) => {
@@ -243,11 +229,7 @@ const FlowManager = () => {
         console.log('Revocation batch completed:', data);
         loadRevocationBatches();
         loadCredentials();
-        setSnackbar({
-          open: true,
-          message: `Revocation batch completed: ${data.credential_count} credentials`,
-          severity: 'info',
-        });
+        showSuccess(`Revocation batch completed: ${data.credential_count} credentials`);
       }),
     ];
 
@@ -266,29 +248,17 @@ const FlowManager = () => {
         execution.id,
         { approver_id: user.id, notes: 'Approved via UI' }
       );
-      setSnackbar({
-        open: true,
-        message: 'Execution approved',
-        severity: 'success',
-      });
+      showSuccess('Execution approved');
       loadExecutions();
     } catch (err) {
-      setSnackbar({
-        open: true,
-        message: `Failed to approve: ${err.message}`,
-        severity: 'error',
-      });
+      showError(`Failed to approve: ${err.message}`);
     }
   };
 
   // Handle batch revocation
   const handleBatchRevoke = async (strategy) => {
     if (selectedCredentials.length === 0) {
-      setSnackbar({
-        open: true,
-        message: 'No credentials selected',
-        severity: 'warning',
-      });
+      showWarning('No credentials selected');
       return;
     }
 
@@ -305,20 +275,16 @@ const FlowManager = () => {
         ? `${selectedCredentials.length} credentials revoked immediately`
         : `${selectedCredentials.length} credentials queued for batch revocation`;
       
-      setSnackbar({
-        open: true,
-        message,
-        severity: strategy === 'immediate' ? 'warning' : 'success',
-      });
+      if (strategy === 'immediate') {
+        showWarning(message);
+      } else {
+        showSuccess(message);
+      }
       
       loadCredentials();
       loadRevocationBatches();
     } catch (err) {
-      setSnackbar({
-        open: true,
-        message: `Batch revocation failed: ${err.message}`,
-        severity: 'error',
-      });
+      showError(`Batch revocation failed: ${err.message}`);
     }
   };
 
@@ -822,20 +788,6 @@ const FlowManager = () => {
         </DialogActions>
       </Dialog>
 
-      {/* Snackbar for notifications */}
-      <Snackbar
-        open={snackbar.open}
-        autoHideDuration={6000}
-        onClose={() => setSnackbar({ ...snackbar, open: false })}
-      >
-        <Alert
-          onClose={() => setSnackbar({ ...snackbar, open: false })}
-          severity={snackbar.severity}
-          sx={{ width: '100%' }}
-        >
-          {snackbar.message}
-        </Alert>
-      </Snackbar>
 
       {/* Flow Publish Dialog */}
       <FlowPublishDialog
@@ -847,11 +799,7 @@ const FlowManager = () => {
         flow={selectedFlow}
         onPublished={(updatedFlow) => {
           loadFlows();
-          setSnackbar({
-            open: true,
-            message: `Flow "${updatedFlow.name}" published successfully!`,
-            severity: 'success',
-          });
+          showSuccess(`Flow "${updatedFlow.name}" published successfully!`);
         }}
       />
 
@@ -865,11 +813,7 @@ const FlowManager = () => {
         flow={selectedFlow}
         onDisabled={(updatedFlow) => {
           loadFlows();
-          setSnackbar({
-            open: true,
-            message: `Flow "${updatedFlow.name}" disabled successfully.`,
-            severity: 'info',
-          });
+          showSuccess(`Flow "${updatedFlow.name}" disabled successfully.`);
         }}
       />
     </Box>

@@ -8,7 +8,8 @@
  * - Links to API keys and docs
  */
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
+import { useAsyncData } from '../../../hooks/useAsyncData';
 import {
   Paper,
   Typography,
@@ -36,30 +37,15 @@ import { getOrganizationIntegrationInfo } from '../../../services/dashboardApi';
 export function DeveloperQuickStartPanel() {
   const { t } = useTranslation('console');
   const { organizationId } = useAuth();
-  const [integrationInfo, setIntegrationInfo] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const { data: integrationInfo, loading } = useAsyncData(
+    async () => {
+      if (!organizationId) return null;
+      return await getOrganizationIntegrationInfo(organizationId);
+    },
+    [organizationId]
+  );
+
   const [copied, setCopied] = useState(null);
-
-  useEffect(() => {
-    async function fetchIntegrationInfo() {
-      if (!organizationId) {
-        setIntegrationInfo(null);
-        setLoading(false);
-        return;
-      }
-
-      try {
-        const info = await getOrganizationIntegrationInfo(organizationId);
-        setIntegrationInfo(info);
-      } catch (error) {
-        console.error('Failed to load integration info:', error);
-      } finally {
-        setLoading(false);
-      }
-    }
-
-    fetchIntegrationInfo();
-  }, [organizationId]);
 
   const handleCopy = (text, label) => {
     navigator.clipboard.writeText(text);

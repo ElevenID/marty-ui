@@ -1,0 +1,27 @@
+---
+# ============================================================
+# Oracle Cloud (OKE) — Namespace, ServiceAccount, OCIR secret
+# ============================================================
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: marty-prod
+  labels:
+    name: marty-prod
+    app.kubernetes.io/part-of: marty-platform
+    environment: production
+---
+# ServiceAccount used by all pods (enables OCI Workload Identity if configured)
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: marty-app
+  namespace: marty-prod
+  labels:
+    app.kubernetes.io/part-of: marty-platform
+---
+# OCIR pull secret — populated by deploy-oracle.sh via:
+#   kubectl create secret docker-registry ocir-secret ...
+# Kept here as a placeholder reference; the script creates the real one.
+# If you rotate the token, delete & re-create this secret:
+#   kubectl delete secret ocir-secret -n marty-prod && ./scripts/deploy-oracle.sh setup-secrets

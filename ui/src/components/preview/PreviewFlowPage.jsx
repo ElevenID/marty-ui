@@ -5,7 +5,7 @@
  * through application submission.
  */
 
-import { useEffect, useState } from 'react';
+import { useAsyncData } from '../../hooks/useAsyncData';
 import { useParams } from 'react-router-dom';
 import { PreviewProvider, usePreview } from '../../contexts/PreviewContext';
 import { Container, Alert, CircularProgress, Typography, Box } from '@mui/material';
@@ -17,34 +17,18 @@ const API_URL = import.meta.env.VITE_API_URL || '';
 function PreviewFlowContent() {
   const { flowId } = useParams();
   const { updateContextLabel } = usePreview();
-  const [flow, setFlow] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-
-  useEffect(() => {
-    const fetchFlow = async () => {
-      try {
-        const response = await fetch(
-          `${API_URL}/api/v1/identity/flows/${flowId}?preview=true`,
-          { credentials: 'include' }
-        );
-
-        if (!response.ok) {
-          throw new Error('Flow not found');
-        }
-
-        const data = await response.json();
-        setFlow(data);
-        updateContextLabel(`Issuance Flow: ${data.name || flowId}`);
-      } catch (err) {
-        setError(err.message);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchFlow();
-  }, [flowId, updateContextLabel]);
+  const { data: flow, loading, error } = useAsyncData(async () => {
+    const response = await fetch(
+      `${API_URL}/api/v1/identity/flows/${flowId}?preview=true`,
+      { credentials: 'include' }
+    );
+    if (!response.ok) {
+      throw new Error('Flow not found');
+    }
+    const data = await response.json();
+    updateContextLabel(`Issuance Flow: ${data.name || flowId}`);
+    return data;
+  }, [flowId]);
 
   if (loading) {
     return (

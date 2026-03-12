@@ -177,10 +177,15 @@ class PostgresPresentationPolicyRepository:
             
             # Deserialize display metadata
             display_data = row.display_metadata
+            _purpose_raw = display_data.get("purpose", "identity_verification")
+            try:
+                _purpose = RequestPurpose(_purpose_raw)
+            except ValueError:
+                _purpose = RequestPurpose.IDENTITY_VERIFICATION
             display_metadata = DisplayMetadata(
                 title=display_data.get("title", ""),
                 description=display_data.get("description", ""),
-                purpose=RequestPurpose(display_data.get("purpose", "identity_verification")),
+                purpose=_purpose,
                 purpose_description=display_data.get("purpose_description"),
                 verifier_name=display_data.get("verifier_name", ""),
                 verifier_logo_url=display_data.get("verifier_logo_url"),
@@ -320,10 +325,15 @@ class PostgresPresentationPolicyRepository:
             for row in rows:
                 # Deserialize display metadata
                 display_data = row.display_metadata
+                _purpose_raw2 = display_data.get("purpose", "identity_verification")
+                try:
+                    _purpose2 = RequestPurpose(_purpose_raw2)
+                except ValueError:
+                    _purpose2 = RequestPurpose.IDENTITY_VERIFICATION
                 display_metadata = DisplayMetadata(
                     title=display_data.get("title", ""),
                     description=display_data.get("description", ""),
-                    purpose=RequestPurpose(display_data.get("purpose", "identity_verification")),
+                    purpose=_purpose2,
                     purpose_description=display_data.get("purpose_description"),
                     verifier_name=display_data.get("verifier_name", ""),
                     verifier_logo_url=display_data.get("verifier_logo_url"),

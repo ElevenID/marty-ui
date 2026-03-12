@@ -266,8 +266,10 @@ function SidebarNavigation({ mobileOpen, onMobileClose }) {
   const isJoinOnlyMode = memberships.length === 0;
   const showConsoleSwitcher = isApplicantConsoleAvailable && (isOrgConsoleAvailable || isJoinOnlyMode);
 
-  // Collapsed state for desktop
-  const [collapsed, setCollapsed] = useState(false);
+  // Collapsed state for desktop — persisted so mode switches don't reset it
+  const [collapsed, setCollapsed] = useState(() => {
+    try { return localStorage.getItem('sidebar-collapsed') === 'true'; } catch { return false; }
+  });
 
   // Track which parent items are expanded
   const [expandedItems, setExpandedItems] = useState({});
@@ -325,12 +327,13 @@ function SidebarNavigation({ mobileOpen, onMobileClose }) {
   }, []);
 
   const handleCollapseToggle = useCallback(() => {
-    setCollapsed((prev) => !prev);
-    // Collapse all expanded items when collapsing sidebar
-    if (!collapsed) {
-      setExpandedItems({});
-    }
-  }, [collapsed]);
+    setCollapsed((prev) => {
+      const next = !prev;
+      try { localStorage.setItem('sidebar-collapsed', String(next)); } catch {}
+      if (next) setExpandedItems({});
+      return next;
+    });
+  }, []);
 
   const drawerContent = (
     <Box
@@ -355,14 +358,14 @@ function SidebarNavigation({ mobileOpen, onMobileClose }) {
             fullWidth
             sx={{ mb: 1 }}
           >
-            <ToggleButton value="applicant" disabled={!isApplicantConsoleAvailable} sx={{ textTransform: 'none' }}>
-              <PersonIcon fontSize="small" sx={{ mr: 0.5 }} />
-              Applicant
+            <ToggleButton value="applicant" disabled={!isApplicantConsoleAvailable} sx={{ textTransform: 'none', minWidth: 0, px: 1 }}>
+              <PersonIcon fontSize="small" sx={{ mr: 0.5, flexShrink: 0 }} />
+              <Box component="span" sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Applicant</Box>
             </ToggleButton>
             {(isOrgConsoleAvailable || isJoinOnlyMode) && (
-              <ToggleButton value="org" sx={{ textTransform: 'none' }}>
-                <BusinessIcon fontSize="small" sx={{ mr: 0.5 }} />
-                Organization
+              <ToggleButton value="org" sx={{ textTransform: 'none', minWidth: 0, px: 1 }}>
+                <BusinessIcon fontSize="small" sx={{ mr: 0.5, flexShrink: 0 }} />
+                <Box component="span" sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Org</Box>
               </ToggleButton>
             )}
           </ToggleButtonGroup>

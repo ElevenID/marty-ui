@@ -42,6 +42,7 @@ import AddCircleIcon from '@mui/icons-material/AddCircle';
 import RemoveCircleIcon from '@mui/icons-material/RemoveCircle';
 
 import deploymentProfilesApi from '../../services/deploymentProfilesApi';
+import { useDialog } from '../../hooks/useDialog';
 
 const LaneManager = ({ deploymentProfile, onBack }) => {
   const { t } = useTranslation('vendor');
@@ -50,8 +51,7 @@ const LaneManager = ({ deploymentProfile, onBack }) => {
   const [error, setError] = useState(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editMode, setEditMode] = useState(false);
-  const [deviceDialogOpen, setDeviceDialogOpen] = useState(false);
-  const [selectedLane, setSelectedLane] = useState(null);
+  const deviceDialog = useDialog();
   const [currentLane, setCurrentLane] = useState({
     name: '',
     description: '',
@@ -131,20 +131,13 @@ const LaneManager = ({ deploymentProfile, onBack }) => {
     }
   };
 
-  const handleOpenDeviceDialog = (lane) => {
-    setSelectedLane(lane);
-    setDeviceToAssign('');
-    setDeviceDialogOpen(true);
-  };
-
   const handleAssignDevice = async () => {
-    if (!deviceToAssign || !selectedLane) return;
+    if (!deviceToAssign || !deviceDialog.data) return;
     try {
-      await deploymentProfilesApi.assignDeviceToLane(selectedLane.id, deviceToAssign);
-      setDeviceDialogOpen(false);
+      await deploymentProfilesApi.assignDeviceToLane(deviceDialog.data.id, deviceToAssign);
+      deviceDialog.close();
       loadLanes();
     } catch (err) {
-      console.error('Failed to assign device:', err);
       setError(t('laneManager.assignDeviceFailed', { error: err.message }));
     }
   };
@@ -255,7 +248,7 @@ const LaneManager = ({ deploymentProfile, onBack }) => {
                   <EditIcon sx={{ mr: 0.5 }} fontSize="small" />
                   {t('laneManager.card.editButton')}
                 </Button>
-                <Button size="small" onClick={() => handleOpenDeviceDialog(lane)}>
+                <Button size="small" onClick={() => { setDeviceToAssign(''); deviceDialog.open(lane); }}>
                   <AddCircleIcon sx={{ mr: 0.5 }} fontSize="small" />
                   {t('laneManager.card.assignDeviceButton')}
                 </Button>
@@ -343,12 +336,12 @@ const LaneManager = ({ deploymentProfile, onBack }) => {
       </Dialog>
 
       {/* Assign Device Dialog */}
-      <Dialog open={deviceDialogOpen} onClose={() => setDeviceDialogOpen(false)} maxWidth="sm" fullWidth>
+      <Dialog open={deviceDialog.isOpen} onClose={deviceDialog.close} maxWidth="sm" fullWidth>
         <DialogTitle>{t('laneManager.deviceDialog.title')}</DialogTitle>
         <DialogContent>
           <Box sx={{ mt: 2 }}>
             <Alert severity="info" sx={{ mb: 2 }}>
-              {t('laneManager.deviceDialog.infoMessage', { laneName: selectedLane?.name })}
+              {t('laneManager.deviceDialog.infoMessage', { laneName: deviceDialog.data?.name })}
             </Alert>
             <TextField
               fullWidth
@@ -360,7 +353,7 @@ const LaneManager = ({ deploymentProfile, onBack }) => {
           </Box>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setDeviceDialogOpen(false)}>{t('laneManager.deviceDialog.cancelButton')}</Button>
+          <Button onClick={deviceDialog.close}>{t('laneManager.deviceDialog.cancelButton')}</Button>
           <Button onClick={handleAssignDevice} variant="contained" color="primary">
             {t('laneManager.deviceDialog.assignButton')}
           </Button>

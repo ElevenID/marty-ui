@@ -18,7 +18,8 @@ export const listDevices = async (organizationId = null) => {
 };
 
 /**
- * Get device details
+ * Get device details.
+ * NOTE: Not currently used in the UI — retained for future use.
  * @param {string} deviceId - Device ID
  * @returns {Promise<Object>}
  */
@@ -36,7 +37,8 @@ export const unregisterDevice = async (deviceId) => {
 };
 
 /**
- * Register a new device (for web-based registration)
+ * Register a new device (for web-based registration).
+ * NOTE: Not currently used in the UI — retained for future use.
  * @param {Object} deviceData - Device registration data
  * @returns {Promise<Object>}
  */

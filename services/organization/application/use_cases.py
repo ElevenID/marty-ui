@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any
 
 from ..domain.entities import ApiKey, ConsoleContextPreference, JoinMechanism, Member, MemberRole, MemberStatus, Organization, ViewMode
@@ -322,6 +323,69 @@ class MemberUseCase:
     async def get_membership(self, user_id: str, org_id: str) -> Member | None:
         """Get a user's membership in an organization."""
         return await self.member_repo.get_by_user_and_org(user_id, org_id)
+
+    async def add_member_direct(
+        self,
+        organization_id: str,
+        user_id: str,
+        email: str | None = None,
+        role: MemberRole = MemberRole.MEMBER,
+    ) -> Member:
+        """Directly add an active member to an organization (idempotent).
+
+        Used by internal service-to-service calls (e.g. auth provisioning)
+        to bypass the invitation flow and add a user as an active member
+        immediately.
+
+        Lookup order:
+        1. Exact match by user_id + org (normal case — returning users).
+        2. Match by email + org with blank user_id (pre-seeded admin row from
+           migration).  In this case the row's user_id is updated to link the
+           authenticated user and the pre-assigned role is preserved.
+        3. No match — create a new member with the supplied role.
+        """
+        # 1. Check by user_id (covers all returning users)
+        existing = await self.member_repo.get_by_user_and_org(user_id, organization_id)
+        if existing:
+            return existing
+
+        # 2. Check by email for a pre-seeded row (e.g. admin seeded by migration)
+        if email:
+            email_match = await self.member_repo.get_by_email_and_org(email, organization_id)
+            if email_match and not email_match.user_id:
+                # Link the authenticated user to the pre-seeded record,
+                # preserving whatever role the migration assigned.
+                email_match.user_id = user_id
+                email_match.joined_at = datetime.now(timezone.utc)
+                email_match.updated_at = datetime.now(timezone.utc)
+                await self.member_repo.save(email_match)
+                logger.info(
+                    f"Linked user {user_id} to pre-seeded member record for {email} "
+                    f"in org {organization_id} (role={email_match.role.value})"
+                )
+                return email_match
+
+        # 3. Create new member
+        member = Member.create(
+            organization_id=organization_id,
+            user_id=user_id,
+            email=email,
+            role=role,
+            status=MemberStatus.ACTIVE,
+        )
+        await self.member_repo.save(member)
+
+        await self.event_publisher.publish(
+            MemberAddedEvent(
+                organization_id=organization_id,
+                member_id=member.id,
+                user_id=user_id,
+                role=role.value,
+            )
+        )
+
+        logger.info(f"Directly added user {user_id} to organization {organization_id} as {role.value}")
+        return member
 
 
 @dataclass

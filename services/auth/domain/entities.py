@@ -48,6 +48,7 @@ class AuthenticatedUser:
     organization_id: str | None = None
     organization_name: str | None = None
     onboarding_completed: datetime | None = None
+    picture: str | None = None
     
     @property
     def display_name(self) -> str:
@@ -88,6 +89,7 @@ class AuthenticatedUser:
             "organization_id": self.organization_id,
             "organization_name": self.organization_name,
             "onboarding_completed": self.onboarding_completed.isoformat() if self.onboarding_completed else None,
+            "picture": self.picture,
         }
     
     @classmethod
@@ -113,6 +115,7 @@ class AuthenticatedUser:
             organization_id=data.get("organization_id"),
             organization_name=data.get("organization_name"),
             onboarding_completed=onboarding,
+            picture=data.get("picture"),
         )
 
 

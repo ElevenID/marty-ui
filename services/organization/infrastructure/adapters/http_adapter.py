@@ -28,6 +28,9 @@ from ...domain.entities import MemberRole, OrganizationType
 
 logger = logging.getLogger(__name__)
 
+# Stable ID for the default Marty organization — users cannot be removed from it
+MARTY_ORG_ID = "00000000-0000-0000-0000-000000000001"
+
 # Create router with versioned prefix
 router = APIRouter(prefix="/v1/organizations", tags=["organizations"])
 
@@ -556,6 +559,11 @@ async def remove_member(
     use_case: MemberUseCase = Depends(get_member_use_case),
 ) -> dict[str, bool]:
     """Remove a member from an organization. Requires admin or owner role."""
+    if org_id == MARTY_ORG_ID:
+        raise HTTPException(
+            status_code=403,
+            detail="Members cannot be removed from the Marty default organization.",
+        )
     try:
         # Get member before deleting to get user_id for cache invalidation
         member = await use_case.get_membership(None, org_id)  # Need to get member first
@@ -729,6 +737,41 @@ async def get_membership_internal(
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
+class AddMemberDirectRequest(BaseModel):
+    """Request body for internal direct-add member endpoint."""
+    user_id: str
+    email: str | None = None
+    role: str = "member"
+
+
+@internal_router.post("/organizations/{org_id}/members", response_model=MemberResponse, status_code=201)
+async def add_member_internal(
+    org_id: str,
+    request: AddMemberDirectRequest,
+    member_use_case: MemberUseCase = Depends(get_member_use_case),
+) -> MemberResponse:
+    """Internal API: Directly add an active member to an organization (idempotent).
+
+    Used by auth provisioning to add users to the default Marty organisation
+    without going through the invitation flow.  Returns 200 if the member
+    already exists (idempotent), 201 on creation.  No authentication required
+    — network-level trust within marty-network.
+    """
+    try:
+        member = await member_use_case.add_member_direct(
+            organization_id=org_id,
+            user_id=request.user_id,
+            email=request.email,
+            role=MemberRole(request.role),
+        )
+        return _member_to_response(member)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error adding member directly to org {org_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
 class ApiKeyValidateRequest(BaseModel):
     """Request to validate an API key."""
     api_key: str
@@ -823,4 +866,59 @@ async def get_member_permissions_internal(
         raise
     except Exception as e:
         logger.error(f"Error fetching member permissions: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+class AddMemberInternalRequest(BaseModel):
+    """Request to add a member to an organization (internal API)."""
+    user_id: str
+    email: str
+    role: str = "member"
+
+
+@internal_router.post("/organizations/{org_id}/members")
+async def add_member_internal(
+    org_id: str,
+    request: AddMemberInternalRequest,
+    join_use_case: JoinUseCase = Depends(get_join_use_case),
+) -> MemberResponse:
+    """Internal API: Add a member to an organization.
+    
+    This endpoint is used by other services to automatically add users to
+    organizations. Primarily used by the auth service to add new users to
+    the default Marty organization. No authentication required - network-level
+    trust within marty-network.
+    
+    This bypasses normal join mechanisms and directly adds the user as an
+    active member with the specified role.
+    """
+    try:
+        from ...domain.entities import Member, MemberStatus
+        
+        # Check if user is already a member
+        member_use_case = get_member_use_case()
+        existing = await member_use_case.get_membership(request.user_id, org_id)
+        if existing:
+            logger.info(f"User {request.user_id} is already a member of org {org_id}")
+            return _member_to_response(existing)
+        
+        # Create member directly with active status
+        member = Member.create(
+            organization_id=org_id,
+            user_id=request.user_id,
+            email=request.email,
+            role=MemberRole(request.role),
+            status=MemberStatus.ACTIVE,
+        )
+        
+        member_repo = member_use_case.member_repo
+        await member_repo.save(member)
+        
+        logger.info(f"Added user {request.user_id} to organization {org_id} via internal API")
+        return _member_to_response(member)
+    except ValueError as e:
+        logger.error(f"Error adding member: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error adding member: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal server error")

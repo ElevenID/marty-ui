@@ -5,7 +5,8 @@
  * Allows switching to an organization or managing memberships.
  */
 
-import { useState, useEffect } from 'react';
+import { useAsyncData } from '../../hooks/useAsyncData';
+import { useNotifications } from '../../hooks/useNotifications';
 import {
   Box,
   Container,
@@ -36,32 +37,11 @@ import { useConsole } from '../../contexts/ConsoleContext';
 export function MyOrganizationsPage() {
   const navigate = useNavigate();
   const { activeOrgId, setActiveOrgId } = useConsole();
-  
-  const [organizations, setOrganizations] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-
-  /**
-   * Load user's organizations
-   */
-  useEffect(() => {
-    async function loadOrganizations() {
-      try {
-        setLoading(true);
-        setError(null);
-        const orgs = await getMyOrganizations();
-        console.log('[MyOrganizationsPage] Loaded organizations:', orgs);
-        setOrganizations(orgs || []);
-      } catch (err) {
-        console.error('Failed to load organizations:', err);
-        setError(err.message || 'Failed to load organizations');
-      } finally {
-        setLoading(false);
-      }
-    }
-
-    loadOrganizations();
-  }, []);
+  const { showError } = useNotifications();
+  const { data: organizations = [], loading, error } = useAsyncData(
+    () => getMyOrganizations(),
+    []
+  );
 
   /**
    * Handle switching to an organization
@@ -72,7 +52,7 @@ export function MyOrganizationsPage() {
       // Navigation is handled by setActiveOrgId in ConsoleContext
     } catch (err) {
       console.error('Failed to switch organization:', err);
-      setError('Failed to switch organization. Please try again.');
+      showError('Failed to switch organization. Please try again.');
     }
   };
 
@@ -146,7 +126,7 @@ export function MyOrganizationsPage() {
       {/* Error Alert */}
       {error && (
         <Alert severity="error" sx={{ mb: 3 }}>
-          {error}
+          {error?.message || String(error)}
         </Alert>
       )}
 

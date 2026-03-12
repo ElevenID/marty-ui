@@ -4,7 +4,8 @@
  * Displays running and completed flow instances.
  */
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
+import { useAsyncData } from '../../../hooks/useAsyncData';
 import { useTranslation } from 'react-i18next';
 import {
   Box,
@@ -51,83 +52,68 @@ const getBreadcrumbs = (t) => [
 
 function FlowInstancesPage() {
   const { t } = useTranslation('console');
-  const [instances, setInstances] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
+  const { data: instances = [], loading, error } = useAsyncData(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    return [
+      {
+        id: 'fi-1001',
+        flowName: 'Age Verification Flow',
+        flowId: 'fl-1',
+        currentStep: 3,
+        totalSteps: 3,
+        status: 'completed',
+        result: 'success',
+        startedAt: '2026-02-07T09:15:00Z',
+        completedAt: '2026-02-07T09:15:45Z',
+      },
+      {
+        id: 'fi-1002',
+        flowName: 'Full Identity Check',
+        flowId: 'fl-2',
+        currentStep: 3,
+        totalSteps: 5,
+        status: 'pending',
+        result: null,
+        startedAt: '2026-02-07T09:10:00Z',
+        completedAt: null,
+      },
+      {
+        id: 'fi-1003',
+        flowName: 'Age Verification Flow',
+        flowId: 'fl-1',
+        currentStep: 2,
+        totalSteps: 3,
+        status: 'pending',
+        result: null,
+        startedAt: '2026-02-07T09:05:00Z',
+        completedAt: null,
+      },
+      {
+        id: 'fi-1004',
+        flowName: 'mDL Issuance Flow',
+        flowId: 'fl-3',
+        currentStep: 7,
+        totalSteps: 7,
+        status: 'completed',
+        result: 'success',
+        startedAt: '2026-02-07T08:50:00Z',
+        completedAt: '2026-02-07T09:02:00Z',
+      },
+      {
+        id: 'fi-1005',
+        flowName: 'Age Verification Flow',
+        flowId: 'fl-1',
+        currentStep: 1,
+        totalSteps: 3,
+        status: 'failed',
+        result: 'credential_expired',
+        startedAt: '2026-02-07T08:45:00Z',
+        completedAt: '2026-02-07T08:45:30Z',
+      },
+    ];
+  }, []);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
-
-  useEffect(() => {
-    loadInstances();
-  }, []);
-
-  const loadInstances = async () => {
-    setLoading(true);
-    try {
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      setInstances([
-        {
-          id: 'fi-1001',
-          flowName: 'Age Verification Flow',
-          flowId: 'fl-1',
-          currentStep: 3,
-          totalSteps: 3,
-          status: 'completed',
-          result: 'success',
-          startedAt: '2026-02-07T09:15:00Z',
-          completedAt: '2026-02-07T09:15:45Z',
-        },
-        {
-          id: 'fi-1002',
-          flowName: 'Full Identity Check',
-          flowId: 'fl-2',
-          currentStep: 3,
-          totalSteps: 5,
-          status: 'pending',
-          result: null,
-          startedAt: '2026-02-07T09:10:00Z',
-          completedAt: null,
-        },
-        {
-          id: 'fi-1003',
-          flowName: 'Age Verification Flow',
-          flowId: 'fl-1',
-          currentStep: 2,
-          totalSteps: 3,
-          status: 'pending',
-          result: null,
-          startedAt: '2026-02-07T09:05:00Z',
-          completedAt: null,
-        },
-        {
-          id: 'fi-1004',
-          flowName: 'mDL Issuance Flow',
-          flowId: 'fl-3',
-          currentStep: 7,
-          totalSteps: 7,
-          status: 'completed',
-          result: 'success',
-          startedAt: '2026-02-07T08:50:00Z',
-          completedAt: '2026-02-07T09:02:00Z',
-        },
-        {
-          id: 'fi-1005',
-          flowName: 'Age Verification Flow',
-          flowId: 'fl-1',
-          currentStep: 1,
-          totalSteps: 3,
-          status: 'failed',
-          result: 'credential_expired',
-          startedAt: '2026-02-07T08:45:00Z',
-          completedAt: '2026-02-07T08:45:30Z',
-        },
-      ]);
-    } catch (err) {
-      setError(t('flows.failedToLoad'));
-    } finally {
-      setLoading(false);
-    }
-  };
 
   /**
    * Get effective status for display (considers result for completed flows)
@@ -165,7 +151,7 @@ function FlowInstancesPage() {
     >
       {error && (
         <Alert severity="error" sx={{ mb: 3 }}>
-          {error}
+          {error?.message || String(error)}
         </Alert>
       )}
 

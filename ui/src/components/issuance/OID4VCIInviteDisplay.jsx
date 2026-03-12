@@ -28,24 +28,37 @@ import { useState } from 'react';
 import { Box, CircularProgress, Tab, Tabs } from '@mui/material';
 import QRCodeDisplay from './QRCodeDisplay';
 
-/** Map wallet_id values to human-readable tab labels. */
-const WALLET_LABELS = {
-  marty:     'SpruceKit',
-  spruce:    'SpruceKit',
-  sprucekit: 'SpruceKit',
-  vcwallet:  'VC Wallet',
+/**
+ * Fallback labels for known wallet IDs when no display_name comes from the
+ * credential template.  Template-provided labels always take precedence.
+ */
+const FALLBACK_WALLET_LABELS = {
+  // Legacy single-id style (old demo templates)
+  marty:          'SpruceKit',
+  spruce:         'SpruceKit',
+  sprucekit:      'SpruceKit',
+  // Registry-style IDs
+  'wr-spruce-001': 'SpruceKit',
+  'wr-marty-001':  'Marty Authenticator',
+  'wr-default':    'Any OID4VCI Wallet',
+  vcwallet:        'VC Wallet',
 };
 
-const walletLabel = (id) => WALLET_LABELS[id] || id;
+/** Wallet IDs that use the SpruceID SDK — preferred as the initial tab. */
+const SPRUCE_WALLET_IDS = new Set(['marty', 'spruce', 'sprucekit', 'wr-marty-001', 'wr-spruce-001']);
+
+const walletLabel = (id, labels = {}) => labels[id] || FALLBACK_WALLET_LABELS[id] || id;
 
 const DEFAULT_TAB = '__default__';
 
-export default function OID4VCIInviteDisplay({ offerData, onRegenerate, loading, title, instructions }) {
-  // Default to the first wallet-specific tab when per-wallet URIs are available,
-  // so the operator sees the correct wallet QR immediately without an extra click.
+export default function OID4VCIInviteDisplay({ offerData, onRegenerate, loading, showDeepLink = false, title, instructions }) {
+  // Prefer the SpruceKit wallet tab when available; otherwise fall back to the
+  // first per-wallet tab so the correct QR is visible without an extra click.
   const initialWallet = (() => {
     const ids = Object.keys(offerData?.credential_offer_uris || {});
-    return ids.length > 0 ? ids[0] : DEFAULT_TAB;
+    if (ids.length === 0) return DEFAULT_TAB;
+    const spruceId = ids.find((id) => SPRUCE_WALLET_IDS.has(id));
+    return spruceId || ids[0];
   })();
   const [selectedWallet, setSelectedWallet] = useState(initialWallet);
 
@@ -59,8 +72,9 @@ export default function OID4VCIInviteDisplay({ offerData, onRegenerate, loading,
 
   if (!offerData) return null;
 
-  // Per-wallet offer URIs from the backend (keyed by wallet_id)
+  // Per-wallet offer URIs and template-provided labels from the backend
   const offerUris = offerData.credential_offer_uris || {};
+  const offerLabels = offerData.credential_offer_labels || {};
   const walletIds = Object.keys(offerUris);
   const hasPerWalletUris = walletIds.length > 0;
 
@@ -88,7 +102,7 @@ export default function OID4VCIInviteDisplay({ offerData, onRegenerate, loading,
           sx={{ mb: 2, borderBottom: 1, borderColor: 'divider' }}
         >
           {walletIds.map((id) => (
-            <Tab key={id} label={walletLabel(id)} value={id} />
+            <Tab key={id} label={walletLabel(id, offerLabels)} value={id} />
           ))}
           <Tab label="Other Wallets" value={DEFAULT_TAB} />
         </Tabs>
@@ -100,14 +114,14 @@ export default function OID4VCIInviteDisplay({ offerData, onRegenerate, loading,
         createdAt={createdAt}
         status={status}
         onRefresh={onRegenerate}
-        showDeepLink={false}
+        showDeepLink={showDeepLink}
         showCopyLink
         title={title || 'Scan to claim credential'}
         instructions={
           instructions ||
           (selectedWallet === DEFAULT_TAB
             ? 'Have the applicant scan this QR code with any OID4VCI-compatible digital wallet to receive the credential.'
-            : `Have the applicant scan this QR code with the ${walletLabel(selectedWallet)} app to receive the credential.`)
+            : `Have the applicant scan this QR code with the ${walletLabel(selectedWallet, offerLabels)} app to receive the credential.`)
         }
       />
     </Box>

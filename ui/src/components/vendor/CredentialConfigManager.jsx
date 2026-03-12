@@ -25,7 +25,6 @@ import {
   FormControlLabel,
   Checkbox,
   Alert,
-  Snackbar,
   Skeleton,
   Switch,
   Stack,
@@ -44,7 +43,11 @@ import DirectionsCarIcon from '@mui/icons-material/DirectionsCar';
 import CreditCardIcon from '@mui/icons-material/CreditCard';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import EmojiEventsIcon from '@mui/icons-material/EmojiEvents';
+import { useTranslation } from 'react-i18next';
 import { useAuth } from '../../hooks/useAuth';
+import { useNotifications } from '../../hooks/useNotifications';
+import { useDialog } from '../../hooks/useDialog';
+import { ConfirmDeleteDialog } from '../common';
 
 // API base URL
 const API_URL = import.meta.env.VITE_API_URL || '';
@@ -52,6 +55,7 @@ const API_URL = import.meta.env.VITE_API_URL || '';
 export default function CredentialConfigManager() {
   const { t } = useTranslation(['vendor', 'common']);
   const { organizationId } = useAuth();
+  const { showSuccess, showError, showWarning } = useNotifications();
 
   // Available credential types with icons
   const CREDENTIAL_TYPES = [
@@ -90,13 +94,11 @@ export default function CredentialConfigManager() {
   const [configs, setConfigs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' });
 
   // Dialog state
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingConfig, setEditingConfig] = useState(null);
-  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
-  const [configToDelete, setConfigToDelete] = useState(null);
+  const deleteDialog = useDialog();
 
   // Form state
   const [formData, setFormData] = useState({
@@ -273,22 +275,12 @@ export default function CredentialConfigManager() {
         throw new Error(errorData.detail || 'Failed to save configuration');
       }
 
-      setSnackbar({
-        open: true,
-        message: editingConfig
-          ? t('credentialConfigManager.snackbar.updateSuccess')
-          : t('credentialConfigManager.snackbar.createSuccess'),
-        severity: 'success',
-      });
+      showSuccess(editingConfig);
 
       handleCloseDialog();
       fetchConfigs();
     } catch (err) {
-      setSnackbar({
-        open: true,
-        message: err.message,
-        severity: 'error',
-      });
+      showError(err.message);
     }
   };
 
@@ -296,11 +288,9 @@ export default function CredentialConfigManager() {
    * Handle delete
    */
   const handleDelete = async () => {
-    if (!configToDelete) return;
-
     try {
       const response = await fetch(
-        `${API_URL}/api/organizations/${organizationId}/credential-types/${configToDelete.id}`,
+        `${API_URL}/api/organizations/${organizationId}/credential-types/${deleteDialog.data.id}`,
         {
           method: 'DELETE',
           credentials: 'include',
@@ -311,21 +301,11 @@ export default function CredentialConfigManager() {
         throw new Error('Failed to delete configuration');
       }
 
-      setSnackbar({
-        open: true,
-        message: t('credentialConfigManager.snackbar.deleteSuccess'),
-        severity: 'success',
-      });
-
-      setDeleteDialogOpen(false);
-      setConfigToDelete(null);
+      showSuccess(t('credentialConfigManager.snackbar.deleteSuccess'));
       fetchConfigs();
     } catch (err) {
-      setSnackbar({
-        open: true,
-        message: err.message,
-        severity: 'error',
-      });
+      showError(err.message);
+      throw err;
     }
   };
 
@@ -352,11 +332,7 @@ export default function CredentialConfigManager() {
 
       fetchConfigs();
     } catch (err) {
-      setSnackbar({
-        open: true,
-        message: err.message,
-        severity: 'error',
-      });
+      showError(err.message);
     }
   };
 
@@ -513,10 +489,7 @@ export default function CredentialConfigManager() {
                       size="small"
                       color="error"
                       startIcon={<DeleteIcon />}
-                      onClick={() => {
-                        setConfigToDelete(config);
-                        setDeleteDialogOpen(true);
-                      }}
+                      onClick={() => deleteDialog.open(config)}
                       data-testid={`delete-${config.credential_type}`}
                     >
                       {t('common:delete')}
@@ -657,46 +630,14 @@ export default function CredentialConfigManager() {
         </DialogActions>
       </Dialog>
 
-      {/* Delete Confirmation Dialog */}
-      <Dialog
-        open={deleteDialogOpen}
-        onClose={() => setDeleteDialogOpen(false)}
-        data-testid="delete-confirm-dialog"
-      >
-        <DialogTitle>{t('credentialConfigManager.deleteDialog.title')}</DialogTitle>
-        <DialogContent>
-          <Typography>
-            {t('credentialConfigManager.deleteDialog.message', { name: configToDelete?.display_name })}
-          </Typography>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setDeleteDialogOpen(false)}>{t('common:cancel')}</Button>
-          <Button
-            color="error"
-            variant="contained"
-            onClick={handleDelete}
-            data-testid="confirm-delete-btn"
-          >
-            {t('common:delete')}
-          </Button>
-        </DialogActions>
-      </Dialog>
+      <ConfirmDeleteDialog
+        open={deleteDialog.isOpen}
+        onClose={deleteDialog.close}
+        onConfirm={handleDelete}
+        title={t('credentialConfigManager.deleteDialog.title')}
+        itemName={deleteDialog.data?.display_name}
+      />
 
-      {/* Snackbar for notifications */}
-      <Snackbar
-        open={snackbar.open}
-        autoHideDuration={6000}
-        onClose={() => setSnackbar({ ...snackbar, open: false })}
-        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
-      >
-        <Alert
-          onClose={() => setSnackbar({ ...snackbar, open: false })}
-          severity={snackbar.severity}
-          variant="filled"
-        >
-          {snackbar.message}
-        </Alert>
-      </Snackbar>
     </Box>
   );
 }

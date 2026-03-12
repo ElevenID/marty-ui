@@ -86,6 +86,33 @@ services:
     networks:
       - marty-network
 
+  # One-shot configurator: patches Keycloak after realm import.
+  # Resolves env vars (Google credentials, public domain redirect URIs, etc.)
+  # that cannot be embedded in the realm JSON. Idempotent — safe to run on
+  # every 'docker compose up'.
+  keycloak-configurator:
+    image: quay.io/keycloak/keycloak:25.0
+    container_name: marty-keycloak-configurator
+    entrypoint: ["/bin/bash", "/scripts/setup-keycloak.sh"]
+    environment:
+      KC_URL: http://keycloak:8080
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
+      KEYCLOAK_REALM: ${KEYCLOAK_REALM:-11id}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:-}
+      UI_BASE_URL: ${UI_BASE_URL:-}
+      MARTY_API_CLIENT_SECRET: ${MARTY_API_CLIENT_SECRET:-}
+    volumes:
+      - ./scripts/setup-keycloak.sh:/scripts/setup-keycloak.sh:ro
+    depends_on:
+      keycloak:
+        condition: service_healthy
+    restart: "no"
+    networks:
+      - marty-network
+
   mailhog:
     image: mailhog/mailhog:latest
     container_name: marty-mailhog
@@ -130,6 +157,8 @@ services:
     container_name: marty-db-migrate
     environment:
       DATABASE_URL: postgresql://marty:marty_dev_password@postgres:5432/marty
+      MARTY_ORG_ID: ${MARTY_ORG_ID:-00000000-0000-0000-0000-000000000001}
+      MARTY_ORG_ADMIN_EMAIL: ${MARTY_ORG_ADMIN_EMAIL:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -204,6 +233,7 @@ services:
       FLOW_SERVICE_URL: ${FLOW_SERVICE_URL:-http://flow:8011}
       CREDENTIAL_LOGIN_POLICY_ID: ${CREDENTIAL_LOGIN_POLICY_ID:-}
       AUTH_SERVICE_INTERNAL_URL: ${AUTH_SERVICE_INTERNAL_URL:-http://auth:8001}
+      MARTY_ORG_ID: ${MARTY_ORG_ID:-00000000-0000-0000-0000-000000000001}
     ports:
       - "8001:8001"
     depends_on:
@@ -480,6 +510,8 @@ services:
       DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@postgres:5432/marty
       RABBITMQ_URL: amqp://marty:marty_dev_password@rabbitmq:5672/
       ISSUER_BASE_URL: ${PUBLIC_API_URL:-http://gateway:8000}
+      ISSUANCE_OFFER_TTL_MINUTES: ${ISSUANCE_OFFER_TTL_MINUTES:-10080}
+      ISSUANCE_AUTH_SESSION_TTL_MINUTES: ${ISSUANCE_AUTH_SESSION_TTL_MINUTES:-60}
     ports:
       - "8005:8005"
     depends_on:

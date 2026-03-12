@@ -1,42 +1,45 @@
 {
-	"dashboard": {
-		"title": "おかえりなさい",
-		"titleWithName": "{{name}} さん、おかえりなさい",
-		"description": "デジタル資格情報と申請を管理します。",
-		"pendingAlert": {
-			"title": "審査待ちの申請",
-			"message": "審査待ちの申請が {{count}} 件あります。",
-			"viewStatus": "ステータスを見る"
-		},
-		"quickActions": {
-			"title": "クイック操作",
-			"applyForCredential": "資格情報を申請",
-			"viewMyCredentials": "自分の資格情報を見る"
-		}
-	},
-	"credentials": {
-		"title": "自分の資格情報",
-		"description": "発行済みデジタル資格情報とその状態。",
-		"tableHeaders": {
-			"credentialType": "資格情報タイプ",
-			"issuer": "発行者",
-			"status": "ステータス",
-			"actions": "操作"
-		}
-	},
-	"applications": {
-		"title": "自分の申請",
-		"description": "資格情報申請の進捗を確認します。",
-		"status": {
-			"submitted": "提出済み",
-			"underReview": "審査中",
-			"approved": "承認済み",
-			"rejected": "却下"
-		}
-	},
-	"catalog": {
-		"title": "資格情報カタログ",
-		"description": "利用可能な資格情報を閲覧して申請します",
-		"searchPlaceholder": "資格情報を検索..."
-	}
+  "dashboard": {
+    "title": "おかえりなさい",
+    "titleWithName": "{{name}} さん、おかえりなさい",
+    "description": "デジタル資格情報と申請を管理します。",
+    "pendingAlert": {
+      "title": "審査待ちの申請",
+      "message": "審査待ちの申請が {{count}} 件あります。",
+      "viewStatus": "ステータスを見る"
+    },
+    "quickActions": {
+      "title": "クイック操作",
+      "applyForCredential": "資格情報を申請",
+      "viewMyCredentials": "自分の資格情報を見る"
+    }
+  },
+  "credentials": {
+    "title": "自分の資格情報",
+    "description": "発行済みデジタル資格情報とその状態。",
+    "tableHeaders": {
+      "credentialType": "資格情報タイプ",
+      "issuer": "発行者",
+      "status": "ステータス",
+      "actions": "操作"
+    }
+  },
+  "applications": {
+    "title": "自分の申請",
+    "description": "資格情報申請の進捗を確認します。",
+    "status": {
+      "draft": "下書き",
+      "submitted": "提出済み",
+      "underReview": "審査中",
+      "pendingApproval": "承認待ち",
+      "approved": "承認済み",
+      "readyToClaim": "請求準備完了",
+      "rejected": "却下"
+    }
+  },
+  "catalog": {
+    "title": "資格情報カタログ",
+    "description": "利用可能な資格情報を閲覧して申請します",
+    "searchPlaceholder": "資格情報を検索..."
+  }
 }

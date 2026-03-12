@@ -20,9 +20,14 @@ RUN pip install --no-cache-dir \
     psycopg2-binary \
     asyncpg
 
-# Copy and install MMF framework
+# Install MMF dependencies first using only pyproject.toml (layer is cached until pyproject.toml changes)
+COPY marty-microservices-framework/pyproject.toml /tmp/mmf-pyproject.toml
+RUN python3 -c "import tomllib, subprocess, sys; data = tomllib.load(open('/tmp/mmf-pyproject.toml', 'rb')); deps = data['project']['dependencies']; subprocess.run([sys.executable, '-m', 'pip', 'install', '--no-cache-dir'] + deps, check=True)" \
+    && rm /tmp/mmf-pyproject.toml
+
+# Copy full MMF source and install the package itself (no deps downloaded - fast)
 COPY marty-microservices-framework /tmp/mmf
-RUN pip install --no-cache-dir /tmp/mmf && rm -rf /tmp/mmf
+RUN pip install --no-cache-dir --no-deps /tmp/mmf && rm -rf /tmp/mmf
 
 # Copy migration infrastructure
 COPY marty-ui/services/run_all_migrations.py /app/

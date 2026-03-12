@@ -8,7 +8,7 @@
  * - Revocation strategy
  */
 
-import { useState, useEffect } from 'react';
+import { useAsyncData } from '../../../hooks/useAsyncData';
 import { useParams, useNavigate, Link as RouterLink } from 'react-router-dom';
 import {
   Box,
@@ -54,27 +54,13 @@ const FORMAT_ICONS = {
  */
 function WalletCompatibilityPanel({ trustProfileId }) {
   const { t } = useTranslation('console');
-  const [compatibility, setCompatibility] = useState(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    async function fetchCompatibility() {
-      try {
-        const data = await getTrustProfileWalletCompatibility(trustProfileId);
-        setCompatibility(data);
-      } catch (error) {
-        console.error('Failed to load wallet compatibility:', error);
-        // Set default empty state
-        setCompatibility({ supported_formats: [], supported_wallets: [] });
-      } finally {
-        setLoading(false);
-      }
-    }
-
-    if (trustProfileId) {
-      fetchCompatibility();
-    }
-  }, [trustProfileId]);
+  const { data: compatibility = { supported_formats: [], supported_wallets: [] }, loading } = useAsyncData(
+    async () => {
+      if (!trustProfileId) return { supported_formats: [], supported_wallets: [] };
+      return await getTrustProfileWalletCompatibility(trustProfileId);
+    },
+    [trustProfileId]
+  );
 
   if (loading) {
     return <Skeleton variant="rectangular" height={200} />;
@@ -239,28 +225,13 @@ export function TrustProfileDetailPage() {
   const { t } = useTranslation('console');
   const { id } = useParams();
   const navigate = useNavigate();
-  const [profile, setProfile] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-
-  useEffect(() => {
-    async function fetchProfile() {
-      try {
-        setLoading(true);
-        const data = await getTrustProfile(id);
-        setProfile(data);
-      } catch (err) {
-        console.error('Failed to load trust profile:', err);
-        setError(t('trust.trustProfileDetail.failedToLoad'));
-      } finally {
-        setLoading(false);
-      }
-    }
-
-    if (id) {
-      fetchProfile();
-    }
-  }, [id]);
+  const { data: profile, loading, error } = useAsyncData(
+    async () => {
+      if (!id) return null;
+      return await getTrustProfile(id);
+    },
+    [id]
+  );
 
   if (loading) {
     return (
@@ -274,7 +245,7 @@ export function TrustProfileDetailPage() {
   if (error || !profile) {
     return (
       <Box sx={{ py: 4 }}>
-        <Alert severity="error">{error || t('trust.trustProfileDetail.notFound')}</Alert>
+        <Alert severity="error">{error?.message || t('trust.trustProfileDetail.failedToLoad') || t('trust.trustProfileDetail.notFound')}</Alert>
         <Button
           startIcon={<ArrowBackIcon />}
           onClick={() => navigate('/console/org/trust/profiles')}

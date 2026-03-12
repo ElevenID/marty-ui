@@ -274,7 +274,7 @@
         "http://host.docker.internal:3000/*",
         "http://host.docker.internal:8000/*",
         "https://*.marty.demo/*",
-        "https://${env.PUBLIC_DOMAIN:beta.elevenidllc.com}/*"
+        "https://beta.elevenidllc.com/*"
       ],
       "webOrigins": [
         "http://localhost:9080",
@@ -284,7 +284,7 @@
         "http://host.docker.internal:3000",
         "http://host.docker.internal:8000",
         "https://*.marty.demo",
-        "https://${env.PUBLIC_DOMAIN:beta.elevenidllc.com}"
+        "https://beta.elevenidllc.com"
       ],
       "protocol": "openid-connect",
       "publicClient": true,
@@ -296,7 +296,7 @@
       "fullScopeAllowed": true,
       "attributes": {
         "pkce.code.challenge.method": "S256",
-        "post.logout.redirect.uris": "http://localhost:9080/*##${env.UI_BASE_URL:http://localhost:3000}/*##http://host.docker.internal:9080/*##https://*.marty.demo/*##https://${env.PUBLIC_DOMAIN:beta.elevenidllc.com}/*"
+        "post.logout.redirect.uris": "http://localhost:9080/*##http://localhost:3000/*##http://host.docker.internal:9080/*##https://*.marty.demo/*##https://beta.elevenidllc.com/*"
       },
       "defaultClientScopes": [
         "openid",
@@ -447,6 +447,20 @@
             "id.token.claim": "true",
             "access.token.claim": "true",
             "claim.name": "preferred_username",
+            "jsonType.label": "String"
+          }
+        },
+        {
+          "name": "picture",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "userinfo.token.claim": "true",
+            "user.attribute": "picture",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "claim.name": "picture",
             "jsonType.label": "String"
           }
         }
@@ -757,8 +771,8 @@
       "linkOnly": false,
       "firstBrokerLoginFlowAlias": "11id-first-broker-login",
       "config": {
-        "clientId": "${env.GOOGLE_CLIENT_ID}",
-        "clientSecret": "${env.GOOGLE_CLIENT_SECRET}",
+        "clientId": "",
+        "clientSecret": "",
         "defaultScope": "openid email profile",
         "syncMode": "IMPORT",
         "useJwksUrl": "true",
@@ -796,6 +810,16 @@
         "syncMode": "INHERIT",
         "claim": "family_name",
         "user.attribute": "lastName"
+      }
+    },
+    {
+      "name": "google-picture-mapper",
+      "identityProviderAlias": "google",
+      "identityProviderMapper": "oidc-user-attribute-idp-mapper",
+      "config": {
+        "syncMode": "INHERIT",
+        "claim": "picture",
+        "user.attribute": "picture"
       }
     }
   ],

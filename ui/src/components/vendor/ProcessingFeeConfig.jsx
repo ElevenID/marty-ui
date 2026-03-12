@@ -16,7 +16,6 @@ import {
   Button,
   Slider,
   Alert,
-  Snackbar,
   Card,
   CardContent,
   Grid,
@@ -35,6 +34,7 @@ import AttachMoneyIcon from '@mui/icons-material/AttachMoney';
 import InfoIcon from '@mui/icons-material/Info';
 import ReceiptIcon from '@mui/icons-material/Receipt';
 import { useAuth } from '../../hooks/useAuth';
+import { useNotifications } from '../../hooks/useNotifications';
 import { usePayment } from '../../contexts/paymentHooks';
 
 // Fee limits (must match PaymentContext)
@@ -44,6 +44,7 @@ const MAX_FEE = 50;
 export default function ProcessingFeeConfig() {
   const { t } = useTranslation('vendor');
   const { organizationId } = useAuth();
+  const { showSuccess, showError, showWarning } = useNotifications();
   const { validateProcessingFee, minProcessingFee, maxProcessingFee, isMockMode } = usePayment();
   
   const [defaultFee, setDefaultFee] = useState(25);
@@ -52,7 +53,6 @@ export default function ProcessingFeeConfig() {
   const [freeProcessing, setFreeProcessing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [hasChanges, setHasChanges] = useState(false);
-  const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' });
 
   // Credential type fee presets
   const CREDENTIAL_TYPES = [
@@ -86,7 +86,7 @@ export default function ProcessingFeeConfig() {
       setFreeProcessing(false);
     } catch (error) {
       console.error('Failed to load fee settings:', error);
-      setSnackbar({ open: true, message: t('processingFeeConfig.messages.loadFailed'), severity: 'error' });
+      showError(t('processingFeeConfig.messages.loadFailed'));
     }
   };
 
@@ -94,7 +94,7 @@ export default function ProcessingFeeConfig() {
     // Validate default fee
     const validation = validateProcessingFee(freeProcessing ? 0 : defaultFee);
     if (!validation.valid) {
-      setSnackbar({ open: true, message: validation.error, severity: 'error' });
+      showError(validation.error);
       return;
     }
 
@@ -103,11 +103,7 @@ export default function ProcessingFeeConfig() {
       for (const [credType, fee] of Object.entries(credentialFees)) {
         const credValidation = validateProcessingFee(fee);
         if (!credValidation.valid) {
-          setSnackbar({
-            open: true,
-            message: t('processingFeeConfig.messages.invalidFee', { credType, error: credValidation.error }),
-            severity: 'error',
-          });
+          showError(t('processingFeeConfig.messages.invalidFee', { credType, error: credValidation.error }));
           return;
         }
       }
@@ -128,10 +124,10 @@ export default function ProcessingFeeConfig() {
       await new Promise((resolve) => setTimeout(resolve, 500)); // Simulate API
       
       setHasChanges(false);
-      setSnackbar({ open: true, message: t('processingFeeConfig.messages.saveSuccess'), severity: 'success' });
+      showSuccess(t('processingFeeConfig.messages.saveSuccess'));
     } catch (error) {
       console.error('Failed to save fee settings:', error);
-      setSnackbar({ open: true, message: t('processingFeeConfig.messages.saveFailed'), severity: 'error' });
+      showError(t('processingFeeConfig.messages.saveFailed'));
     } finally {
       setSaving(false);
     }
@@ -379,16 +375,6 @@ export default function ProcessingFeeConfig() {
         </Grid>
       </Grid>
 
-      {/* Snackbar */}
-      <Snackbar
-        open={snackbar.open}
-        autoHideDuration={4000}
-        onClose={() => setSnackbar({ ...snackbar, open: false })}
-      >
-        <Alert severity={snackbar.severity} onClose={() => setSnackbar({ ...snackbar, open: false })}>
-          {snackbar.message}
-        </Alert>
-      </Snackbar>
     </Box>
   );
 }

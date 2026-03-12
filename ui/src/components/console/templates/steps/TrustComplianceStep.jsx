@@ -5,7 +5,8 @@
  * Trust Profile is required; blocks if none active.
  */
 
-import { useState, useEffect } from 'react';
+import { useEffect } from 'react';
+import { useAsyncData } from '../../../../hooks/useAsyncData';
 import {
   Box,
   Typography,
@@ -30,35 +31,21 @@ import { listTrustProfiles } from '../../../../services/presentationPolicyApi';
 const TrustComplianceStep = ({ data, onChange }) => {
   const { t } = useTranslation('console');
   const navigate = useNavigate();
-  const [loading, setLoading] = useState(true);
-  const [trustProfiles, setTrustProfiles] = useState([]);
-  const [error, setError] = useState(null);
-
-  useEffect(() => {
-    loadTrustProfiles();
-  }, []);
-
-  const loadTrustProfiles = async () => {
-    setLoading(true);
-    setError(null);
-    try {
+  const { data: trustProfiles = [], loading, error } = useAsyncData(
+    async () => {
       const response = await listTrustProfiles();
       const profiles = response.data || response || [];
-      // Filter to only active profiles
-      const activeProfiles = profiles.filter((p) => p.status === 'active');
-      setTrustProfiles(activeProfiles);
+      return profiles.filter((p) => p.status === 'active');
+    },
+    []
+  );
 
-      // Auto-select if only one active profile
-      if (activeProfiles.length === 1 && !data.trust_profile_id) {
-        onChange({ trust_profile_id: activeProfiles[0].id });
-      }
-    } catch (err) {
-      console.error('Failed to load trust profiles:', err);
-      setError(t('wizards.credentialTemplate.trustComplianceStep.errors.failedToLoadTrustProfiles'));
-    } finally {
-      setLoading(false);
+  // Auto-select if only one active profile and none already selected
+  useEffect(() => {
+    if (trustProfiles.length === 1 && !data.trust_profile_id) {
+      onChange({ trust_profile_id: trustProfiles[0].id });
     }
-  };
+  }, [trustProfiles]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleGoToTrustProfiles = () => {
     navigate('/console/org/trust/profiles/new');
@@ -123,7 +110,7 @@ const TrustComplianceStep = ({ data, onChange }) => {
 
       {error && (
         <Alert severity="error" sx={{ mb: 3 }}>
-          {error}
+          {error?.message || t('wizards.credentialTemplate.trustComplianceStep.errors.failedToLoadTrustProfiles')}
         </Alert>
       )}
 

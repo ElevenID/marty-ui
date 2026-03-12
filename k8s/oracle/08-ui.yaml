@@ -1,0 +1,168 @@
+---
+# ================================================================
+# UI — nginx serving React SPA + proxy to gateway & keycloak
+# ================================================================
+
+# Production nginx config — rewrites Docker Compose service names
+# to Kubernetes cluster-DNS service names (gateway:8000, keycloak:8080)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nginx-prod-config
+  namespace: marty-prod
+data:
+  default.conf: |
+    # Nginx Production Config for OKE
+    resolver kube-dns.kube-system.svc.cluster.local valid=30s ipv6=off;
+
+    server {
+        listen 80;
+        server_name _;
+
+        root /usr/share/nginx/html;
+        index index.html;
+
+        client_max_body_size 50M;
+        proxy_buffer_size 128k;
+        proxy_buffers 4 256k;
+        proxy_busy_buffers_size 256k;
+
+        # Security headers (TLS termination is at Cloudflare)
+        add_header X-Frame-Options "SAMEORIGIN" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-XSS-Protection "1; mode=block" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+
+        # API routes — proxy to gateway service
+        location ^~ /api/ {
+            set $backend_api gateway.marty-prod.svc.cluster.local:8000;
+            proxy_pass http://$backend_api/api/;
+            proxy_http_version 1.1;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto https;
+            proxy_set_header X-Forwarded-Host $host;
+        }
+
+        # Auth v1 routes — proxy to gateway
+        location ^~ /v1/auth/ {
+            set $backend_api gateway.marty-prod.svc.cluster.local:8000;
+            proxy_pass http://$backend_api/v1/auth/;
+            proxy_http_version 1.1;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto https;
+            proxy_set_header X-Forwarded-Host $host;
+        }
+
+        # Keycloak realm routes — proxy to keycloak service
+        location ^~ /realms/ {
+            set $keycloak keycloak.marty-prod.svc.cluster.local:8080;
+            proxy_pass http://$keycloak;
+            proxy_http_version 1.1;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto https;
+            proxy_set_header X-Forwarded-Host $host;
+            proxy_set_header X-Forwarded-Port 443;
+        }
+
+        location ^~ /resources/ {
+            set $keycloak keycloak.marty-prod.svc.cluster.local:8080;
+            proxy_pass http://$keycloak;
+            proxy_http_version 1.1;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto https;
+            proxy_set_header X-Forwarded-Host $host;
+        }
+
+        # SPA fallback — all unknown routes serve index.html
+        location / {
+            try_files $uri $uri/ /index.html;
+        }
+
+        # Static asset caching
+        location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$ {
+            expires 1y;
+            add_header Cache-Control "public, immutable";
+        }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ui
+  namespace: marty-prod
+  labels:
+    app: ui
+    app.kubernetes.io/part-of: marty-platform
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ui
+  template:
+    metadata:
+      labels:
+        app: ui
+    spec:
+      serviceAccountName: marty-app
+      imagePullSecrets:
+        - name: ocir-secret
+      containers:
+        - name: ui
+          # nginx serving pre-built React SPA
+          image: ${OCIR_REGISTRY}/marty-ui/ui:${IMAGE_TAG}
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 80
+          env:
+            - name: NODE_ENV
+              value: "production"
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "250m"
+          volumeMounts:
+            - name: nginx-config
+              mountPath: /etc/nginx/conf.d
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 5
+            periodSeconds: 10
+      volumes:
+        - name: nginx-config
+          configMap:
+            name: nginx-prod-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ui
+  namespace: marty-prod
+  labels:
+    app: ui
+spec:
+  ports:
+    - port: 80
+      targetPort: 80
+      name: http
+  selector:
+    app: ui

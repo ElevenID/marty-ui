@@ -4,7 +4,6 @@
  * Manages compliance profiles - regulatory and business rule configurations.
  */
 
-import { useState, useEffect } from 'react';
 import {
   Paper,
   Typography,
@@ -26,6 +25,7 @@ import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
 import { ResourcePage } from '../../common';
+import { useAsyncData } from '../../../hooks/useAsyncData';
 
 function ComplianceProfilesPage() {
   const { t } = useTranslation('console');
@@ -40,54 +40,41 @@ function ComplianceProfilesPage() {
     { label: t('complianceProfilesPage.breadcrumbs.policies'), path: '/console/org/policies' },
     { label: t('complianceProfilesPage.breadcrumbs.complianceProfiles'), path: '/console/org/policies/compliance' },
   ];
-  const [profiles, setProfiles] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-
-  useEffect(() => {
-    // TODO: Fetch compliance profiles from API
-    const loadProfiles = async () => {
-      try {
-        await new Promise((resolve) => setTimeout(resolve, 500));
-        setProfiles([
-          {
-            id: 'cp-1',
-            name: 'eIDAS 2.0 Compliance',
-            regulation: 'eIDAS',
-            region: 'EU',
-            requirements: 12,
-            metRequirements: 12,
-            status: 'compliant',
-            updatedAt: '2026-02-06T10:30:00Z',
-          },
-          {
-            id: 'cp-2',
-            name: 'GDPR Data Minimization',
-            regulation: 'GDPR',
-            region: 'EU',
-            requirements: 8,
-            metRequirements: 7,
-            status: 'review_needed',
-            updatedAt: '2026-02-05T14:20:00Z',
-          },
-          {
-            id: 'cp-3',
-            name: 'AAMVA mDL Compliance',
-            regulation: 'AAMVA',
-            region: 'US',
-            requirements: 15,
-            metRequirements: 15,
-            status: 'compliant',
-            updatedAt: '2026-02-04T09:00:00Z',
-          },
-        ]);
-      } catch (err) {
-        setError(t('complianceProfilesPage.failedToLoad'));
-      } finally {
-        setLoading(false);
-      }
-    };
-    loadProfiles();
+  // TODO: Fetch compliance profiles from API
+  const { data: profiles = [], loading, error } = useAsyncData(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    return [
+      {
+        id: 'cp-1',
+        name: 'eIDAS 2.0 Compliance',
+        regulation: 'eIDAS',
+        region: 'EU',
+        requirements: 12,
+        metRequirements: 12,
+        status: 'compliant',
+        updatedAt: '2026-02-06T10:30:00Z',
+      },
+      {
+        id: 'cp-2',
+        name: 'GDPR Data Minimization',
+        regulation: 'GDPR',
+        region: 'EU',
+        requirements: 8,
+        metRequirements: 7,
+        status: 'review_needed',
+        updatedAt: '2026-02-05T14:20:00Z',
+      },
+      {
+        id: 'cp-3',
+        name: 'AAMVA mDL Compliance',
+        regulation: 'AAMVA',
+        region: 'US',
+        requirements: 15,
+        metRequirements: 15,
+        status: 'compliant',
+        updatedAt: '2026-02-04T09:00:00Z',
+      },
+    ];
   }, []);
 
   const getStatusColor = (status) => {
@@ -119,7 +106,7 @@ function ComplianceProfilesPage() {
     >
       {error && (
         <Alert severity="error" sx={{ mb: 3 }}>
-          {error}
+          {error?.message || String(error)}
         </Alert>
       )}
 

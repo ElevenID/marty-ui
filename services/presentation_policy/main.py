@@ -804,8 +804,16 @@ async def get_presentation_policy(
     policy = await repo.get(policy_id)
     if not policy:
         raise HTTPException(status_code=404, detail="Presentation Policy not found")
-    # Verify org membership
-    await app.state.org_client.get_membership(user_id, policy.organization_id)
+    # Service-to-service callers (non-UUID user IDs like "auth-service", "flow")
+    # are allowed to read policies without an org membership check.
+    try:
+        uuid.UUID(user_id)
+        is_service_user = False
+    except (ValueError, AttributeError):
+        is_service_user = True
+    if not is_service_user:
+        # Verify org membership for real users
+        await app.state.org_client.get_membership(user_id, policy.organization_id)
     return _policy_to_response(policy)
 
 

@@ -4,7 +4,8 @@
  * Manages API keys for accessing identity services.
  */
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
+import { useAsyncData } from '../../../hooks/useAsyncData';
 import {
   Box,
   Paper,
@@ -50,55 +51,42 @@ const getBreadcrumbs = (t) => [
 
 function ApiKeysPage() {
   const { t } = useTranslation('console');
-  const [apiKeys, setApiKeys] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
+  const { data: apiKeys = [], loading, error } = useAsyncData(async () => {
+    // TODO: Fetch API keys from API
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    return [
+      {
+        id: 'ak-1',
+        name: 'Production API Key',
+        keyPrefix: 'mk_prod_',
+        scopes: ['issuance:write', 'verification:write', 'flows:write'],
+        lastUsed: '2026-02-07T08:30:00Z',
+        createdAt: '2025-12-01T10:00:00Z',
+        status: 'active',
+      },
+      {
+        id: 'ak-2',
+        name: 'Test Environment Key',
+        keyPrefix: 'mk_test_',
+        scopes: ['issuance:write', 'verification:write'],
+        lastUsed: '2026-02-06T16:45:00Z',
+        createdAt: '2026-01-15T09:00:00Z',
+        status: 'active',
+      },
+      {
+        id: 'ak-3',
+        name: 'Read-Only Dashboard Key',
+        keyPrefix: 'mk_ro_',
+        scopes: ['read:all'],
+        lastUsed: null,
+        createdAt: '2026-02-01T14:00:00Z',
+        status: 'active',
+      },
+    ];
+  }, []);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [newKeyName, setNewKeyName] = useState('');
   const [createdKey, setCreatedKey] = useState(null);
-
-  useEffect(() => {
-    // TODO: Fetch API keys from API
-    const loadApiKeys = async () => {
-      try {
-        await new Promise((resolve) => setTimeout(resolve, 500));
-        setApiKeys([
-          {
-            id: 'ak-1',
-            name: 'Production API Key',
-            keyPrefix: 'mk_prod_',
-            scopes: ['issuance:write', 'verification:write', 'flows:write'],
-            lastUsed: '2026-02-07T08:30:00Z',
-            createdAt: '2025-12-01T10:00:00Z',
-            status: 'active',
-          },
-          {
-            id: 'ak-2',
-            name: 'Test Environment Key',
-            keyPrefix: 'mk_test_',
-            scopes: ['issuance:write', 'verification:write'],
-            lastUsed: '2026-02-06T16:45:00Z',
-            createdAt: '2026-01-15T09:00:00Z',
-            status: 'active',
-          },
-          {
-            id: 'ak-3',
-            name: 'Read-Only Dashboard Key',
-            keyPrefix: 'mk_ro_',
-            scopes: ['read:all'],
-            lastUsed: null,
-            createdAt: '2026-02-01T14:00:00Z',
-            status: 'active',
-          },
-        ]);
-      } catch (err) {
-        setError(t('deploy.apiKeysPage.error'));
-      } finally {
-        setLoading(false);
-      }
-    };
-    loadApiKeys();
-  }, []);
 
   const handleCreateKey = () => {
     // Simulate key creation
@@ -133,7 +121,7 @@ function ApiKeysPage() {
     >
       {error && (
         <Alert severity="error" sx={{ mb: 3 }}>
-          {error}
+          {error?.message || String(error)}
         </Alert>
       )}
 

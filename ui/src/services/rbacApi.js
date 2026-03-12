@@ -97,7 +97,8 @@ export async function setMemberRoles(organizationId, memberId, roleIds) {
 }
 
 /**
- * Add a role to a member
+ * Add a single role to a member.
+ * Prefer setMemberRoles for bulk updates to avoid race conditions.
  * @param {string} organizationId - Organization ID
  * @param {string} memberId - Member ID
  * @param {string} roleId - Role ID to add
@@ -108,7 +109,8 @@ export async function addMemberRole(organizationId, memberId, roleId) {
 }
 
 /**
- * Remove a role from a member
+ * Remove a single role from a member.
+ * Prefer setMemberRoles for bulk updates to avoid race conditions.
  * @param {string} organizationId - Organization ID
  * @param {string} memberId - Member ID
  * @param {string} roleId - Role ID to remove

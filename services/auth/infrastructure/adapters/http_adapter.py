@@ -57,6 +57,7 @@ class UserInfoResponse(BaseModel):
     organization_id: str | None = None
     organization_name: str | None = None
     onboarding_completed: str | None = None
+    picture: str | None = None
 
 
 class AuthStatusResponse(BaseModel):
@@ -71,6 +72,12 @@ class ApiResponseMeta(BaseModel):
     
     request_id: str
     timestamp: str
+
+
+class UpdateUserMeRequest(BaseModel):
+    """Request body for PATCH /me."""
+
+    picture: str | None = None
 
 
 class AuthStatusApiResponse(BaseModel):
@@ -402,6 +409,53 @@ async def get_current_user(
             organization_id=user.organization_id,
             organization_name=user.organization_name,
             onboarding_completed=user.onboarding_completed.isoformat() if user.onboarding_completed else None,
+            picture=user.picture,
+        ),
+    )
+
+
+@router.patch("/me", response_model=AuthStatusResponse)
+async def update_current_user(
+    body: UpdateUserMeRequest,
+    session_id: Annotated[str | None, Cookie(alias="sessionId")] = None,
+) -> AuthStatusResponse:
+    """
+    Update current user's profile attributes.
+
+    Currently supports updating the profile picture (stored in session).
+    """
+    if not session_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    if _session_repository is None:
+        raise HTTPException(status_code=503, detail="Session store unavailable")
+
+    session = await _session_repository.get(session_id)
+    if not session or not session.is_valid:
+        raise HTTPException(status_code=401, detail="Session not found or expired")
+
+    if body.picture is not None:
+        if not (body.picture.startswith("data:image/") or body.picture.startswith("http")):
+            raise HTTPException(status_code=400, detail="picture must be an image data URL or https URL")
+        session.user.picture = body.picture
+        await _session_repository.save(session)
+        logger.info("Updated profile picture for session %s", session_id[:8])
+
+    return AuthStatusResponse(
+        authenticated=True,
+        user=UserInfoResponse(
+            user_id=session.user.user_id,
+            email=session.user.email,
+            username=session.user.username,
+            given_name=session.user.given_name,
+            family_name=session.user.family_name,
+            user_type=session.user.user_type.value,
+            applicant_id=session.user.applicant_id,
+            roles=session.user.roles,
+            organization_id=session.user.organization_id,
+            organization_name=session.user.organization_name,
+            onboarding_completed=session.user.onboarding_completed.isoformat() if session.user.onboarding_completed else None,
+            picture=session.user.picture,
         ),
     )
 
@@ -416,41 +470,123 @@ _CREDENTIAL_LOGIN_PAGE = """\
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Login with Credential &mdash; Marty</title>
+  <title>Login with Marty Badge &mdash; Marty</title>
   <style>
-    body {{ font-family: system-ui, sans-serif; background: #f5f6fa; display:flex;
-           justify-content:center; align-items:center; min-height:100vh; margin:0 }}
-    .card {{ background:#fff; border-radius:12px; box-shadow:0 2px 16px rgba(0,0,0,.1);
-             padding:2.5rem 2rem; max-width:380px; width:100%; text-align:center }}
-    h1 {{ font-size:1.25rem; margin:0 0 .5rem }}
-    p  {{ color:#666; font-size:.9rem; margin:0 0 1.5rem }}
-    .qr img {{ width:220px; height:220px; border:1px solid #e0e0e0; border-radius:8px }}
-    .status {{ margin-top:1.25rem; font-size:.875rem; color:#555 }}
-    .spinner {{ display:inline-block; width:14px; height:14px; border:2px solid #ccc;
-                border-top-color:#4a90e2; border-radius:50%; animation:spin .8s linear infinite;
+    *, *::before, *::after {{ box-sizing: border-box }}
+    body {{ font-family: system-ui, -apple-system, sans-serif; background: #f5f6fa;
+           display:flex; justify-content:center; align-items:center;
+           min-height:100vh; margin:0; padding: 1rem }}
+    .card {{ background:#fff; border-radius:16px;
+             box-shadow:0 4px 24px rgba(0,0,0,.1);
+             padding:2.5rem 2rem; max-width:420px; width:100%; text-align:center }}
+    .logo {{ width:48px; height:48px; margin:0 auto 1rem; display:block }}
+    h1 {{ font-size:1.35rem; margin:0 0 .4rem; color:#1a1a2e }}
+    .subtitle {{ color:#666; font-size:.9rem; margin:0 0 1.75rem; line-height:1.5 }}
+    /* QR section (shown on desktop) */
+    .qr-section img {{ width:220px; height:220px; border:1px solid #e8e8e8;
+                      border-radius:10px; display:block; margin:0 auto }}
+    .qr-label {{ font-size:.8rem; color:#999; margin:.6rem 0 0 }}
+    /* Deep-link section (shown on mobile) */
+    .mobile-section {{ display:none }}
+    .open-btn {{ display:inline-flex; align-items:center; gap:.5rem;
+                 margin-top:.5rem; padding:.75rem 1.5rem; border-radius:10px;
+                 background:#1a73e8; color:#fff; text-decoration:none;
+                 font-size:1rem; font-weight:600; width:100%;
+                 justify-content:center; transition: background .15s }}
+    .open-btn:hover {{ background:#1558b0 }}
+    .open-btn svg {{ width:20px; height:20px; flex-shrink:0 }}
+    /* Secondary toggle link */
+    .toggle-link {{ font-size:.82rem; color:#1a73e8; cursor:pointer;
+                    text-decoration:underline; margin-top:1rem;
+                    display:inline-block; background:none; border:none;
+                    padding:0 }}
+    .divider {{ border:none; border-top:1px solid #eee; margin:1.5rem 0 }}
+    .status {{ margin-top:1.25rem; font-size:.875rem; color:#555;
+               min-height:1.4em }}
+    .spinner {{ display:inline-block; width:14px; height:14px;
+                border:2px solid #ccc; border-top-color:#1a73e8;
+                border-radius:50%; animation:spin .8s linear infinite;
                 vertical-align:middle; margin-right:6px }}
     @keyframes spin {{ to {{ transform:rotate(360deg) }} }}
     .done {{ color:#27ae60; font-weight:600 }}
-    .btn {{ display:inline-block; margin-top:1rem; padding:.55rem 1.25rem; border-radius:8px;
-            background:#4a90e2; color:#fff; text-decoration:none; font-size:.875rem }}
+    .err  {{ color:#e74c3c }}
+    /* Mobile override */
+    @media (max-width: 600px) {{
+      .qr-section {{ display:none }}
+      .mobile-section {{ display:block }}
+    }}
   </style>
 </head>
 <body>
   <div class="card">
-    <h1>Login with Credential</h1>
-    <p>Scan with your Marty wallet to authenticate</p>
-    <div class="qr">
+    <!-- Icon -->
+    <svg class="logo" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <rect width="48" height="48" rx="12" fill="#1a73e8"/>
+      <path d="M14 20a10 10 0 0 1 20 0v2h2a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H12
+               a2 2 0 0 1-2-2V24a2 2 0 0 1 2-2h2v-2z" fill="white" opacity=".9"/>
+      <circle cx="24" cy="29" r="3" fill="#1a73e8"/>
+    </svg>
+
+    <h1>Login with Marty Badge</h1>
+    <p class="subtitle">Use your Marty wallet to authenticate securely &mdash; no password needed.</p>
+
+    <!-- Desktop: QR code -->
+    <div class="qr-section" id="qr-section">
       <img
-        src="https://api.qrserver.com/v1/create-qr-code/?size=220x220&margin=5&data={qr_encoded}"
-        alt="OID4VP QR code"
+        src="https://api.qrserver.com/v1/create-qr-code/?size=220x220&margin=8&data={qr_encoded}"
+        alt="Scan QR with Marty wallet"
       >
+      <p class="qr-label">Scan with the Marty wallet app</p>
+      <button class="toggle-link" onclick="showMobile()">On this device? Open in wallet &rsaquo;</button>
     </div>
+
+    <!-- Mobile: deep-link button -->
+    <div class="mobile-section" id="mobile-section">
+      <a class="open-btn" href="{oid4vp_uri_escaped}" id="wallet-link">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round">
+          <rect x="2" y="3" width="20" height="14" rx="2"/>
+          <path d="M8 21h8M12 17v4"/>
+        </svg>
+        Open in Wallet App
+      </a>
+      <p style="font-size:.8rem;color:#999;margin:.75rem 0 0">Tap the button to open your Marty wallet</p>
+      <button class="toggle-link" onclick="showQr()">Show QR code instead &rsaquo;</button>
+      <div style="margin-top:1rem">
+        <div class="qr-section" id="qr-fallback" style="display:none">
+          <img
+            src="https://api.qrserver.com/v1/create-qr-code/?size=180x180&margin=6&data={qr_encoded}"
+            alt="Scan QR with Marty wallet" style="width:180px;height:180px"
+          >
+        </div>
+      </div>
+    </div>
+
+    <hr class="divider">
     <div class="status" id="status">
       <span class="spinner"></span> Waiting for wallet response&hellip;
     </div>
   </div>
+
   <script>
     (function() {{
+      // Detect mobile (phones/tablets) and show deep-link instead of QR
+      var isMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+      if (isMobile) {{
+        document.getElementById('qr-section').style.display = 'none';
+        document.getElementById('mobile-section').style.display = 'block';
+      }}
+
+      function showMobile() {{
+        document.getElementById('qr-section').style.display = 'none';
+        document.getElementById('mobile-section').style.display = 'block';
+      }}
+      function showQr() {{
+        document.getElementById('qr-fallback').style.display = 'block';
+      }}
+      window.showMobile = showMobile;
+      window.showQr = showQr;
+
       var nonce = {nonce_json};
       var attempts = 0;
       var max = 180; // 3 min at 1 req/s
@@ -458,7 +594,8 @@ _CREDENTIAL_LOGIN_PAGE = """\
         attempts++;
         if (attempts > max) {{
           clearInterval(timer);
-          document.getElementById('status').innerHTML = '<span style="color:#e74c3c">Timed out. <a href="/v1/auth/credential-login">Try again</a></span>';
+          document.getElementById('status').innerHTML =
+            '<span class="err">Timed out. <a href="/v1/auth/credential-login">Try again</a></span>';
           return;
         }}
         fetch('/v1/auth/credential-login/status?nonce=' + encodeURIComponent(nonce))
@@ -466,11 +603,13 @@ _CREDENTIAL_LOGIN_PAGE = """\
           .then(function(d) {{
             if (d.status === 'completed') {{
               clearInterval(timer);
-              document.getElementById('status').innerHTML = '<span class="done">&#10003; Verified! Redirecting&hellip;</span>';
+              document.getElementById('status').innerHTML =
+                '<span class="done">&#10003; Verified! Redirecting&hellip;</span>';
               window.location.href = d.redirect_to || '/';
             }} else if (d.status === 'failed') {{
               clearInterval(timer);
-              document.getElementById('status').innerHTML = '<span style="color:#e74c3c">Verification failed. <a href="/v1/auth/credential-login">Try again</a></span>';
+              document.getElementById('status').innerHTML =
+                '<span class="err">Verification failed. <a href="/v1/auth/credential-login">Try again</a></span>';
             }}
           }})
           .catch(function() {{ /* network hiccup — keep polling */ }});
@@ -533,11 +672,13 @@ async def credential_login(request: Request) -> HTMLResponse:
     )
 
     qr_encoded = quote(oid4vp_uri, safe="")
-    html = _CREDENTIAL_LOGIN_PAGE.format(
+    import html as _html
+    html_content = _CREDENTIAL_LOGIN_PAGE.format(
         qr_encoded=qr_encoded,
+        oid4vp_uri_escaped=_html.escape(oid4vp_uri, quote=True),
         nonce_json=json.dumps(nonce),
     )
-    return HTMLResponse(content=html)
+    return HTMLResponse(content=html_content)
 
 
 @router.get("/credential-login/status")

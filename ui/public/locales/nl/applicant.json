@@ -55,9 +55,12 @@
       "approved": "Goedgekeurd"
     },
     "status": {
+      "draft": "Concept",
       "submitted": "Ingediend",
       "underReview": "In behandeling",
+      "pendingApproval": "In afwachting van goedkeuring",
       "approved": "Goedgekeurd",
+      "readyToClaim": "Klaar om te claimen",
       "rejected": "Afgewezen"
     },
     "tableHeaders": {

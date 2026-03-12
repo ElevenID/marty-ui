@@ -4,7 +4,7 @@
  * View issued credentials for applicant.
  */
 
-import { useState, useEffect } from 'react';
+import { useAsyncData } from '../../../hooks/useAsyncData';
 import {
   Box,
   Paper,
@@ -31,32 +31,17 @@ import { getMyCredentials } from '../../../services/applicantApi';
 
 function MyCredentialsPage() {
   const { t } = useTranslation('applicant');
-  const [credentials, setCredentials] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-
-  useEffect(() => {
-    const loadCredentials = async () => {
-      try {
-        const result = await getMyCredentials();
-        const creds = (result.credentials || result.documents || []).map(doc => ({
-          id: doc.id,
-          type: doc.document_type || doc.credential_type || 'Credential',
-          issuer: doc.issuing_authority || doc.issuer || 'Issuer',
-          issuedAt: doc.issued_at || doc.created_at,
-          expiresAt: doc.expiry_date || doc.valid_until,
-          status: doc.status?.toLowerCase() || 'active',
-        }));
-        setCredentials(creds);
-      } catch (err) {
-        console.error('Error loading credentials:', err);
-        setError(t('credentials.errorLoading'));
-      } finally {
-        setLoading(false);
-      }
-    };
-    loadCredentials();
-  }, [t]);
+  const { data: credentials = [], loading, error } = useAsyncData(async () => {
+    const result = await getMyCredentials();
+    return (result.credentials || result.documents || []).map(doc => ({
+      id: doc.id,
+      type: doc.document_type || doc.credential_type || 'Credential',
+      issuer: doc.issuing_authority || doc.issuer || 'Issuer',
+      issuedAt: doc.issued_at || doc.created_at,
+      expiresAt: doc.expiry_date || doc.valid_until,
+      status: doc.status?.toLowerCase() || 'active',
+    }));
+  }, []);
 
   const getStatusColor = (status) => {
     switch (status) {
@@ -82,7 +67,7 @@ function MyCredentialsPage() {
 
       {error && (
         <Alert severity="error" sx={{ mb: 3 }}>
-          {error}
+          {error?.message || String(error)}
         </Alert>
       )}
 

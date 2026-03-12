@@ -23,6 +23,7 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import CancelIcon from '@mui/icons-material/Cancel';
 import { useTranslation } from 'react-i18next';
 import ResourcePage from '../../common/ResourcePage';
+import { useDialog } from '../../../hooks/useDialog';
 import { getPendingRoleRequests, approveRoleRequest, rejectRoleRequest } from '../../../services/rolesApi';
 
 /**
@@ -35,8 +36,7 @@ export default function RoleEscalationRequestsPage() {
   const [requests, setRequests] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [rejectDialogOpen, setRejectDialogOpen] = useState(false);
-  const [selectedRequest, setSelectedRequest] = useState(null);
+  const rejectDialog = useDialog();
   const [rejectionReason, setRejectionReason] = useState('');
   const [actionLoading, setActionLoading] = useState(false);
 
@@ -71,24 +71,14 @@ export default function RoleEscalationRequestsPage() {
     }
   };
 
-  const handleRejectClick = (request) => {
-    setSelectedRequest(request);
-    setRejectionReason('');
-    setRejectDialogOpen(true);
-  };
-
   const handleRejectConfirm = async () => {
-    if (!selectedRequest) return;
-
     try {
       setActionLoading(true);
-      await rejectRoleRequest(selectedRequest.id, rejectionReason);
-      setRejectDialogOpen(false);
-      setSelectedRequest(null);
+      await rejectRoleRequest(rejectDialog.data.id, rejectionReason);
+      rejectDialog.close();
       setRejectionReason('');
-      await loadRequests(); // Refresh list
+      await loadRequests();
     } catch (err) {
-      console.error('Failed to reject role request:', err);
       setError(err.message || 'Failed to reject role request');
     } finally {
       setActionLoading(false);
@@ -216,7 +206,7 @@ export default function RoleEscalationRequestsPage() {
                       <IconButton
                         color="error"
                         size="small"
-                        onClick={() => handleRejectClick(request)}
+                        onClick={() => { setRejectionReason(''); rejectDialog.open(request); }}
                         disabled={actionLoading}
                         title={t('org.roleEscalation.actions.reject')}
                       >
@@ -233,8 +223,8 @@ export default function RoleEscalationRequestsPage() {
 
       {/* Reject Dialog */}
       <Dialog
-        open={rejectDialogOpen}
-        onClose={() => !actionLoading && setRejectDialogOpen(false)}
+        open={rejectDialog.isOpen}
+        onClose={() => !actionLoading && rejectDialog.close()}
         maxWidth="sm"
         fullWidth
       >
@@ -242,8 +232,8 @@ export default function RoleEscalationRequestsPage() {
         <DialogContent>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
             {t('org.roleEscalation.dialog.message')}{' '}
-            <strong>{selectedRequest?.user_email}</strong> {t('org.roleEscalation.dialog.messageToBecome')}{' '}
-            <strong>{selectedRequest ? formatRole(selectedRequest.requested_role) : ''}</strong>.
+            <strong>{rejectDialog.data?.user_email}</strong> {t('org.roleEscalation.dialog.messageToBecome')}{' '}
+            <strong>{rejectDialog.data ? formatRole(rejectDialog.data.requested_role) : ''}</strong>.
           </Typography>
           <TextField
             label={t('org.roleEscalation.dialog.reasonLabel')}
@@ -256,7 +246,7 @@ export default function RoleEscalationRequestsPage() {
           />
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setRejectDialogOpen(false)} disabled={actionLoading}>
+          <Button onClick={rejectDialog.close} disabled={actionLoading}>
             {t('actions.cancel', { ns: 'common' })}
           </Button>
           <Button

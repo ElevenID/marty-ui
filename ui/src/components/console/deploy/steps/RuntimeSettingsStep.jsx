@@ -4,7 +4,8 @@
  * Configure default presentation policy and enabled flows.
  */
 
-import { useState, useEffect } from 'react';
+import { useEffect } from 'react';
+import { useAsyncData } from '../../../../hooks/useAsyncData';
 import {
   Box,
   Typography,
@@ -48,35 +49,21 @@ const getFlowTypes = (t) => [
 const RuntimeSettingsStep = ({ data, onChange }) => {
   const { t } = useTranslation('console');
   const navigate = useNavigate();
-  const [loading, setLoading] = useState(true);
-  const [policies, setPolicies] = useState([]);
-  const [error, setError] = useState(null);
-
-  useEffect(() => {
-    loadPolicies();
-  }, []);
-
-  const loadPolicies = async () => {
-    setLoading(true);
-    setError(null);
-    try {
+  const { data: policies = [], loading, error } = useAsyncData(
+    async () => {
       const response = await listPresentationPolicies();
       const items = response.data || response || [];
-      // Filter to active policies
-      const activePolicies = items.filter((p) => p.status === 'active');
-      setPolicies(activePolicies);
+      return items.filter((p) => p.status === 'active');
+    },
+    []
+  );
 
-      // Auto-select if only one policy
-      if (activePolicies.length === 1 && !data.default_policy_id) {
-        onChange({ default_policy_id: activePolicies[0].id });
-      }
-    } catch (err) {
-      console.error('Failed to load policies:', err);
-      setError(t('wizards.deploymentProfile.runtimeSettingsStep.errors.failedToLoadPolicies'));
-    } finally {
-      setLoading(false);
+  // Auto-select if only one policy and none already selected (mirrors original mount-only behavior)
+  useEffect(() => {
+    if (policies.length === 1 && !data.default_policy_id) {
+      onChange({ default_policy_id: policies[0].id });
     }
-  };
+  }, [policies]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleFlowToggle = (flowValue) => {
     const flows = data.enabled_flows || [];
@@ -148,7 +135,7 @@ const RuntimeSettingsStep = ({ data, onChange }) => {
 
       {error && (
         <Alert severity="error" sx={{ mb: 3 }}>
-          {error}
+          {error?.message || t('wizards.deploymentProfile.runtimeSettingsStep.errors.failedToLoadPolicies')}
         </Alert>
       )}
 

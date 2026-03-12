@@ -4,8 +4,8 @@
  * Manages presentation policies - rules for credential verification requests.
  */
 
-import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useAsyncData } from '../../../hooks/useAsyncData';
 import {
   Box,
   Paper,
@@ -44,60 +44,47 @@ const getBreadcrumbs = (t) => [
 
 function PresentationPoliciesPage() {
   const { t } = useTranslation('console');
-  const [policies, setPolicies] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-
-  useEffect(() => {
+  const { data: policies = [], loading, error } = useAsyncData(async () => {
     // TODO: Fetch presentation policies from API
-    const loadPolicies = async () => {
-      try {
-        await new Promise((resolve) => setTimeout(resolve, 500));
-        setPolicies([
-          {
-            id: 'pp-1',
-            name: 'Age Verification (18+)',
-            trustProfile: 'EUDI Wallet Trust Profile',
-            requiredClaims: ['age_over_18'],
-            optionalClaims: [],
-            freshness: '24h',
-            holderBinding: true,
-            usageCount: 15420,
-            status: 'active',
-            updatedAt: '2026-02-06T10:30:00Z',
-          },
-          {
-            id: 'pp-2',
-            name: 'Full Identity Verification',
-            trustProfile: 'EUDI Wallet Trust Profile',
-            requiredClaims: ['given_name', 'family_name', 'birth_date', 'document_number'],
-            optionalClaims: ['address', 'nationality'],
-            freshness: '1h',
-            holderBinding: true,
-            usageCount: 8230,
-            status: 'active',
-            updatedAt: '2026-02-05T14:20:00Z',
-          },
-          {
-            id: 'pp-3',
-            name: 'Passport Verification',
-            trustProfile: 'ICAO PKD Profile',
-            requiredClaims: ['mrz', 'photo', 'nationality'],
-            optionalClaims: [],
-            freshness: '15m',
-            holderBinding: true,
-            usageCount: 2150,
-            status: 'active',
-            updatedAt: '2026-02-04T09:00:00Z',
-          },
-        ]);
-      } catch (err) {
-        setError(t('policies.failedToLoad'));
-      } finally {
-        setLoading(false);
-      }
-    };
-    loadPolicies();
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    return [
+      {
+        id: 'pp-1',
+        name: 'Age Verification (18+)',
+        trustProfile: 'EUDI Wallet Trust Profile',
+        requiredClaims: ['age_over_18'],
+        optionalClaims: [],
+        freshness: '24h',
+        holderBinding: true,
+        usageCount: 15420,
+        status: 'active',
+        updatedAt: '2026-02-06T10:30:00Z',
+      },
+      {
+        id: 'pp-2',
+        name: 'Full Identity Verification',
+        trustProfile: 'EUDI Wallet Trust Profile',
+        requiredClaims: ['given_name', 'family_name', 'birth_date', 'document_number'],
+        optionalClaims: ['address', 'nationality'],
+        freshness: '1h',
+        holderBinding: true,
+        usageCount: 8230,
+        status: 'active',
+        updatedAt: '2026-02-05T14:20:00Z',
+      },
+      {
+        id: 'pp-3',
+        name: 'Passport Verification',
+        trustProfile: 'ICAO PKD Profile',
+        requiredClaims: ['mrz', 'photo', 'nationality'],
+        optionalClaims: [],
+        freshness: '15m',
+        holderBinding: true,
+        usageCount: 2150,
+        status: 'active',
+        updatedAt: '2026-02-04T09:00:00Z',
+      },
+    ];
   }, []);
 
   const TestActions = () => (
@@ -136,7 +123,7 @@ function PresentationPoliciesPage() {
     >
       {error && (
         <Alert severity="error" sx={{ mb: 3 }}>
-          {error}
+          {error?.message || String(error)}
         </Alert>
       )}
 

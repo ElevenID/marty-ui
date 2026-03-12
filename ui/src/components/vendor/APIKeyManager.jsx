@@ -6,6 +6,7 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   Box,
   Paper,
@@ -30,7 +31,6 @@ import {
   FormControlLabel,
   Checkbox,
   Alert,
-  Snackbar,
   Tooltip,
   Menu,
   MenuItem,
@@ -51,6 +51,9 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
 import WarningIcon from '@mui/icons-material/Warning';
 import { useAuth } from '../../hooks/useAuth';
+import { useNotifications } from '../../hooks/useNotifications';
+import { useDialog } from '../../hooks/useDialog';
+import { ConfirmDeleteDialog } from '../common';
 import {
   listApiKeys,
   createApiKey,
@@ -97,13 +100,12 @@ function maskApiKey(key, showFull = false) {
 export default function APIKeyManager() {
   const { t } = useTranslation('vendor');
   const { organizationId } = useAuth();
+  const { showSuccess, showError, showWarning } = useNotifications();
+  const createDialog = useDialog();
+  const deleteDialog = useDialog();
   const [apiKeys, setApiKeys] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [createDialogOpen, setCreateDialogOpen] = useState(false);
-  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
-  const [selectedKey, setSelectedKey] = useState(null);
   const [newKeyVisible, setNewKeyVisible] = useState(null);
-  const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' });
   const [anchorEl, setAnchorEl] = useState(null);
   const [menuKeyId, setMenuKeyId] = useState(null);
 
@@ -140,7 +142,7 @@ export default function APIKeyManager() {
       setApiKeys(keys);
     } catch (error) {
       console.error('Failed to fetch API keys:', error);
-      setSnackbar({ open: true, message: getErrorMessage(error) || 'Failed to load API keys', severity: 'error' });
+      showError(getErrorMessage(error) || 'Failed to load API keys');
     } finally {
       setLoading(false);
     }
@@ -153,11 +155,11 @@ export default function APIKeyManager() {
 
   const handleCreateKey = async () => {
     if (!newKeyName.trim()) {
-      setSnackbar({ open: true, message: 'Please enter a key name', severity: 'warning' });
+      showWarning('Please enter a key name');
       return;
     }
     if (newKeyScopes.length === 0) {
-      setSnackbar({ open: true, message: 'Please select at least one scope', severity: 'warning' });
+      showWarning('Please select at least one scope');
       return;
     }
 
@@ -176,28 +178,28 @@ export default function APIKeyManager() {
 
       setApiKeys([newKey, ...apiKeys]);
       setNewKeyVisible(newKey);
-      setCreateDialogOpen(false);
+      createDialog.close();
       resetForm();
-      setSnackbar({ open: true, message: t('apiKeyManager.snackbars.createSuccess'), severity: 'success' });
+      showSuccess(t('apiKeyManager.snackbars.createSuccess'));
     } catch (error) {
       console.error('Failed to create API key:', error);
-      setSnackbar({ open: true, message: getErrorMessage(error) || t('apiKeyManager.snackbars.createFailed'), severity: 'error' });
+      showError(getErrorMessage(error) || t('apiKeyManager.snackbars.createFailed'));
     }
   };
 
   const handleDeleteKey = async () => {
-    if (!selectedKey) return;
+    const keyToDelete = deleteDialog.data;
+    if (!keyToDelete) return;
 
     try {
-      await deleteApiKey(organizationId, selectedKey.id);
+      await deleteApiKey(organizationId, keyToDelete.id);
 
-      setApiKeys(apiKeys.filter((k) => k.id !== selectedKey.id));
-      setDeleteDialogOpen(false);
-      setSelectedKey(null);
-      setSnackbar({ open: true, message: t('apiKeyManager.snackbars.deleteSuccess'), severity: 'success' });
+      setApiKeys(apiKeys.filter((k) => k.id !== keyToDelete.id));
+      deleteDialog.close();
+      showSuccess(t('apiKeyManager.snackbars.deleteSuccess'));
     } catch (error) {
       console.error('Failed to delete API key:', error);
-      setSnackbar({ open: true, message: getErrorMessage(error) || t('apiKeyManager.snackbars.deleteFailed'), severity: 'error' });
+      showError(getErrorMessage(error) || t('apiKeyManager.snackbars.deleteFailed'));
     }
   };
 
@@ -205,10 +207,10 @@ export default function APIKeyManager() {
     try {
       const updatedKey = await revokeApiKey(organizationId, keyId);
       setApiKeys(apiKeys.map((k) => (k.id === keyId ? updatedKey : k)));
-      setSnackbar({ open: true, message: t('apiKeyManager.snackbars.revokeSuccess'), severity: 'success' });
+      showSuccess(t('apiKeyManager.snackbars.revokeSuccess'));
     } catch (error) {
       console.error('Failed to revoke API key:', error);
-      setSnackbar({ open: true, message: getErrorMessage(error) || t('apiKeyManager.snackbars.revokeFailed'), severity: 'error' });
+      showError(getErrorMessage(error) || t('apiKeyManager.snackbars.revokeFailed'));
     }
   };
 
@@ -235,10 +237,10 @@ export default function APIKeyManager() {
 
       setApiKeys([newKey, ...apiKeys.filter((k) => k.id !== keyId)]);
       setNewKeyVisible(newKey);
-      setSnackbar({ open: true, message: t('apiKeyManager.snackbars.regenerateSuccess'), severity: 'success' });
+      showSuccess(t('apiKeyManager.snackbars.regenerateSuccess'));
     } catch (error) {
       console.error('Failed to regenerate API key:', error);
-      setSnackbar({ open: true, message: getErrorMessage(error) || t('apiKeyManager.snackbars.regenerateFailed'), severity: 'error' });
+      showError(getErrorMessage(error) || t('apiKeyManager.snackbars.regenerateFailed'));
     }
   };
 
@@ -246,7 +248,7 @@ export default function APIKeyManager() {
     try {
       if (navigator?.clipboard?.writeText) {
         await navigator.clipboard.writeText(key);
-        setSnackbar({ open: true, message: t('apiKeyManager.snackbars.copiedToClipboard'), severity: 'success' });
+        showSuccess(t('apiKeyManager.snackbars.copiedToClipboard'));
         return;
       }
 
@@ -262,13 +264,13 @@ export default function APIKeyManager() {
       document.body.removeChild(textArea);
 
       if (success) {
-        setSnackbar({ open: true, message: t('apiKeyManager.snackbars.copiedToClipboard'), severity: 'success' });
+        showSuccess(t('apiKeyManager.snackbars.copiedToClipboard'));
       } else {
-        setSnackbar({ open: true, message: t('apiKeyManager.snackbars.copyNotSupported'), severity: 'warning' });
+        showWarning(t('apiKeyManager.snackbars.copyNotSupported'));
       }
     } catch (error) {
       console.error('Failed to copy API key:', error);
-      setSnackbar({ open: true, message: t('apiKeyManager.snackbars.copyFailed'), severity: 'error' });
+      showError(t('apiKeyManager.snackbars.copyFailed'));
     }
   };
 
@@ -309,7 +311,7 @@ export default function APIKeyManager() {
         <Button
           variant="contained"
           startIcon={<AddIcon />}
-          onClick={() => setCreateDialogOpen(true)}
+          onClick={() => createDialog.open()}
         >
           {t('apiKeyManager.createButton')}
         </Button>
@@ -498,8 +500,7 @@ export default function APIKeyManager() {
         <MenuItem
           onClick={() => {
             const key = apiKeys.find((k) => k.id === menuKeyId);
-            setSelectedKey(key);
-            setDeleteDialogOpen(true);
+            deleteDialog.open(key);
             handleMenuClose();
           }}
           sx={{ color: 'error.main' }}
@@ -512,7 +513,7 @@ export default function APIKeyManager() {
       </Menu>
 
       {/* Create Dialog */}
-      <Dialog open={createDialogOpen} onClose={() => setCreateDialogOpen(false)} maxWidth="sm" fullWidth>
+      <Dialog open={createDialog.isOpen} onClose={createDialog.close} maxWidth="sm" fullWidth>
         <DialogTitle>{t('apiKeyManager.createDialog.title')}</DialogTitle>
         <DialogContent>
           <TextField
@@ -569,7 +570,7 @@ export default function APIKeyManager() {
           </LocalizationProvider>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setCreateDialogOpen(false)}>{t('apiKeyManager.createDialog.cancelButton')}</Button>
+          <Button onClick={createDialog.close}>{t('apiKeyManager.createDialog.cancelButton')}</Button>
           <Button onClick={handleCreateKey} variant="contained">
             {t('apiKeyManager.createDialog.createButton')}
           </Button>
@@ -577,31 +578,13 @@ export default function APIKeyManager() {
       </Dialog>
 
       {/* Delete Confirmation Dialog */}
-      <Dialog open={deleteDialogOpen} onClose={() => setDeleteDialogOpen(false)}>
-        <DialogTitle>{t('apiKeyManager.deleteDialog.title')}</DialogTitle>
-        <DialogContent>
-          <Typography>
-            {t('apiKeyManager.deleteDialog.warning', { name: selectedKey?.name })}
-          </Typography>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setDeleteDialogOpen(false)}>{t('apiKeyManager.deleteDialog.cancelButton')}</Button>
-          <Button onClick={handleDeleteKey} color="error" variant="contained">
-            {t('apiKeyManager.deleteDialog.deleteButton')}
-          </Button>
-        </DialogActions>
-      </Dialog>
-
-      {/* Snackbar */}
-      <Snackbar
-        open={snackbar.open}
-        autoHideDuration={4000}
-        onClose={() => setSnackbar({ ...snackbar, open: false })}
-      >
-        <Alert severity={snackbar.severity} onClose={() => setSnackbar({ ...snackbar, open: false })}>
-          {snackbar.message}
-        </Alert>
-      </Snackbar>
+      <ConfirmDeleteDialog
+        open={deleteDialog.isOpen}
+        onClose={deleteDialog.close}
+        onConfirm={handleDeleteKey}
+        title={t('apiKeyManager.deleteDialog.title')}
+        itemName={deleteDialog.data?.name}
+      />
     </Box>
   );
 }

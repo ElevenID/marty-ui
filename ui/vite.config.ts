@@ -10,6 +10,7 @@ export default defineConfig(({ mode }) => {
   // Load env file based on `mode` in the current working directory.
   const env = loadEnv(mode, process.cwd(), '')
   const isDev = mode === 'development'
+  const disablePrerender = isDev || process.env.DISABLE_PRERENDER === '1'
   const port = Number(env.VITE_PORT || env.PORT || env.UI_DEV_PORT || 3000)
   
   return {
@@ -36,7 +37,7 @@ export default defineConfig(({ mode }) => {
       */
       
       // Prerendering for SEO - only in production builds
-      ...(!isDev ? [
+      ...(!disablePrerender ? [
         prerender({
           routes: [
             '/',
@@ -141,6 +142,16 @@ export default defineConfig(({ mode }) => {
       headers: {
         'Cache-Control': 'no-store',
       },
+      // When accessed via a public tunnel domain, the browser must connect
+      // the HMR WebSocket to the public host via wss:// on port 443.
+      // Without this, Vite tries ws://localhost:3000 which fails cross-origin.
+      ...(env.PUBLIC_DOMAIN ? {
+        hmr: {
+          protocol: 'wss',
+          host: env.PUBLIC_DOMAIN,
+          clientPort: 443,
+        },
+      } : {}),
       proxy: {
         // Proxy /v1/* API requests to microservices gateway
         '/v1': {

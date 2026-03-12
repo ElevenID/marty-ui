@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useAsyncData } from '../../../hooks/useAsyncData';
 import { useTranslation } from 'react-i18next';
 import {
   Box,
@@ -47,7 +48,9 @@ import EmptyState from '../../common/EmptyState';
 import teamApi from '../../../services/teamApi';
 import { listRoles, setMemberRoles } from '../../../services/rbacApi';
 import { useAuth } from '../../../hooks/useAuth';
+import { useConsole } from '../../../contexts/ConsoleContext';
 import { useNotifications } from '../../../hooks/useNotifications';
+import { useDialog } from '../../../hooks/useDialog';
 import { usePermissions } from '../../../hooks/usePermissions';
 import { PermissionGate } from '../../common/PermissionGate';
 
@@ -84,54 +87,48 @@ const getRoles = (t) => [
  */
 function TeamPage() {
   const { t } = useTranslation('console');
-  const [members, setMembers] = useState([]);
-  const [pendingInvites, setPendingInvites] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [inviteDialogOpen, setInviteDialogOpen] = useState(false);
-  const [roleDialogOpen, setRoleDialogOpen] = useState(false);
-  const [selectedMember, setSelectedMember] = useState(null);
-  const [availableRoles, setAvailableRoles] = useState([]);
+  const inviteDialog = useDialog();
+  const roleDialog = useDialog();
 
   const { organizationId } = useAuth();
+  const { activeOrgId } = useConsole();
+  // Prefer the console's actively selected org; fall back to the auth session org
+  const effectiveOrgId = activeOrgId || organizationId;
+  const isMartyOrg = effectiveOrgId === '00000000-0000-0000-0000-000000000001';
   const { showNotification } = useNotifications();
   const { hasPermission, refresh: refreshPermissions } = usePermissions();
 
-  useEffect(() => {
-    loadTeamData();
-  }, []);
-
-  const loadTeamData = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const promises = [
-        teamApi.listMembers(),
-        teamApi.listInvites(),
-      ];
-      if (organizationId) {
-        promises.push(listRoles(organizationId).catch(() => []));
-      }
-      const [membersData, invitesData, rolesData] = await Promise.all(promises);
-      setMembers(Array.isArray(membersData) ? membersData : membersData.members || []);
-      setPendingInvites(Array.isArray(invitesData) ? invitesData : invitesData.invites || []);
-      if (rolesData) {
-        setAvailableRoles(rolesData.roles || rolesData || []);
-      }
-    } catch (err) {
-      console.error('Failed to load team data:', err);
-      setError(err);
-    } finally {
-      setLoading(false);
+  const {
+    data: orgData,
+    loading,
+    error,
+    reload,
+  } = useAsyncData(async () => {
+    const promises = [
+      teamApi.listMembers(effectiveOrgId),
+      teamApi.listInvites(effectiveOrgId).catch(() => []),
+    ];
+    if (effectiveOrgId) {
+      promises.push(listRoles(effectiveOrgId).catch(() => []));
     }
-  };
+    const [membersData, invitesData, rolesData] = await Promise.all(promises);
+    return {
+      members: Array.isArray(membersData) ? membersData : (membersData?.members ?? []),
+      pendingInvites: Array.isArray(invitesData) ? invitesData : (invitesData?.invites ?? []),
+      availableRoles: rolesData ? (rolesData.roles || rolesData || []) : [],
+    };
+  }, [effectiveOrgId]);
+
+  const members = orgData?.members ?? [];
+  const pendingInvites = orgData?.pendingInvites ?? [];
+  const availableRoles = orgData?.availableRoles ?? [];
 
   const handleInvite = async (email, role) => {
     try {
       await teamApi.inviteMember({ email, role });
       showNotification?.(t('org.team.dialog.invite.success'), 'success');
-      setInviteDialogOpen(false);
-      loadTeamData();
+      inviteDialog.close();
+      reload();
     } catch (err) {
       console.error('Failed to invite member:', err);
       showNotification?.(t('org.team.dialog.invite.error'), 'error');
@@ -153,7 +150,7 @@ function TeamPage() {
     try {
       await teamApi.revokeInvite(inviteId);
       showNotification?.(t('org.team.dialog.revokeSuccess'), 'success');
-      loadTeamData();
+      reload();
     } catch (err) {
       console.error('Failed to revoke invite:', err);
       showNotification?.(t('org.team.dialog.revokeError'), 'error');
@@ -169,10 +166,9 @@ function TeamPage() {
         await teamApi.updateMemberRole(memberId, roleIds[0]);
       }
       showNotification?.(t('org.team.dialog.changeRole.success'), 'success');
-      setRoleDialogOpen(false);
-      setSelectedMember(null);
+      roleDialog.close();
       await refreshPermissions();
-      loadTeamData();
+      reload();
     } catch (err) {
       console.error('Failed to update roles:', err);
       showNotification?.(t('org.team.dialog.changeRole.error'), 'error');
@@ -184,7 +180,7 @@ function TeamPage() {
     try {
       await teamApi.removeMember(memberId);
       showNotification?.(t('org.team.dialog.removeSuccess'), 'success');
-      loadTeamData();
+      reload();
     } catch (err) {
       console.error('Failed to remove member:', err);
       showNotification?.(t('org.team.dialog.removeError'), 'error');
@@ -212,7 +208,7 @@ function TeamPage() {
           <Button
             variant="contained"
             startIcon={<AddIcon />}
-            onClick={() => setInviteDialogOpen(true)}
+            onClick={inviteDialog.open}
           >
             {t('org.team.members.actions.invite')}
           </Button>
@@ -222,7 +218,7 @@ function TeamPage() {
       {loading ? (
         <TableSkeleton rows={5} columns={4} showActions />
       ) : error ? (
-        <ErrorState error={error} onRetry={loadTeamData} variant="inline" />
+        <ErrorState error={error} onRetry={reload} variant="inline" />
       ) : (
         <>
           {/* Current Members */}
@@ -283,13 +279,10 @@ function TeamPage() {
                           {member.joined_at ? formatDistanceToNow(new Date(member.joined_at), { addSuffix: true }) : '—'}
                         </TableCell>
                         <TableCell align="right">
-                          {member.role !== 'owner' && hasPermission('team', 'manage') && (
+                          {member.role !== 'owner' && hasPermission('team', 'manage') && !isMartyOrg && (
                             <MemberActionsMenu
                               member={member}
-                              onChangeRole={() => {
-                                setSelectedMember(member);
-                                setRoleDialogOpen(true);
-                              }}
+                              onChangeRole={() => roleDialog.open(member)}
                               onRemove={() => handleRemoveMember(member.id, member.email)}
                             />
                           )}
@@ -363,21 +356,18 @@ function TeamPage() {
 
       {/* Invite Dialog */}
       <InviteMemberDialog
-        open={inviteDialogOpen}
-        onClose={() => setInviteDialogOpen(false)}
+        open={inviteDialog.isOpen}
+        onClose={inviteDialog.close}
         onInvite={handleInvite}
         t={t}
       />
 
       {/* Change Role Dialog */}
       <ChangeRoleDialog
-        open={roleDialogOpen}
-        member={selectedMember}
+        open={roleDialog.isOpen}
+        member={roleDialog.data}
         availableRoles={availableRoles}
-        onClose={() => {
-          setRoleDialogOpen(false);
-          setSelectedMember(null);
-        }}
+        onClose={roleDialog.close}
         onChangeRole={handleChangeRole}
         t={t}
       />

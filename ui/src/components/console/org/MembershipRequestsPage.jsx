@@ -6,6 +6,8 @@
  */
 
 import { useState, useEffect } from 'react';
+import { useDialog } from '../../../hooks/useDialog';
+import { useNotifications } from '../../../hooks/useNotifications';
 import {
   Box,
   Paper,
@@ -53,14 +55,11 @@ const getBreadcrumbs = (t) => [
 
 function MembershipRequestsPage() {
   const { t } = useTranslation('console');
+  const { showSuccess } = useNotifications();
+  const rejectDialog = useDialog();
   const [requests, setRequests] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [successMessage, setSuccessMessage] = useState(null);
-  
-  // Dialog state
-  const [rejectDialogOpen, setRejectDialogOpen] = useState(false);
-  const [selectedRequest, setSelectedRequest] = useState(null);
   const [rejectionReason, setRejectionReason] = useState('');
   const [actionLoading, setActionLoading] = useState(false);
 
@@ -85,12 +84,8 @@ function MembershipRequestsPage() {
     try {
       setActionLoading(true);
       setError(null);
-      setSuccessMessage(null);
-      
       const result = await approveMembershipRequest(request.id);
-      setSuccessMessage(result.message || t('org.membership.success.approved', { email: request.user_email }));
-      
-      // Refresh the list
+      showSuccess(result.message || t('org.membership.success.approved', { email: request.user_email }));
       await loadRequests();
     } catch (err) {
       setError(err.message);
@@ -100,27 +95,24 @@ function MembershipRequestsPage() {
   };
 
   const handleRejectClick = (request) => {
-    setSelectedRequest(request);
     setRejectionReason('');
-    setRejectDialogOpen(true);
+    rejectDialog.open(request);
   };
 
   const handleRejectConfirm = async () => {
-    if (!selectedRequest) return;
+    if (!rejectDialog.data) return;
 
     try {
       setActionLoading(true);
       setError(null);
-      setSuccessMessage(null);
       
       const result = await rejectMembershipRequest(
-        selectedRequest.id,
+        rejectDialog.data.id,
         rejectionReason.trim() || null
       );
-      setSuccessMessage(result.message || t('org.membership.success.rejected', { email: selectedRequest.user_email }));
+      showSuccess(result.message || t('org.membership.success.rejected', { email: rejectDialog.data.user_email }));
       
-      setRejectDialogOpen(false);
-      setSelectedRequest(null);
+      rejectDialog.close();
       setRejectionReason('');
       
       // Refresh the list
@@ -133,8 +125,7 @@ function MembershipRequestsPage() {
   };
 
   const handleRejectCancel = () => {
-    setRejectDialogOpen(false);
-    setSelectedRequest(null);
+    rejectDialog.close();
     setRejectionReason('');
   };
 
@@ -163,12 +154,6 @@ function MembershipRequestsPage() {
         {error && (
           <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError(null)}>
             {error}
-          </Alert>
-        )}
-        
-        {successMessage && (
-          <Alert severity="success" sx={{ mb: 2 }} onClose={() => setSuccessMessage(null)}>
-            {successMessage}
           </Alert>
         )}
 
@@ -275,12 +260,12 @@ function MembershipRequestsPage() {
       </Box>
 
       {/* Reject Dialog */}
-      <Dialog open={rejectDialogOpen} onClose={handleRejectCancel} maxWidth="sm" fullWidth>
+      <Dialog open={rejectDialog.isOpen} onClose={handleRejectCancel} maxWidth="sm" fullWidth>
         <DialogTitle>{t('org.membership.dialog.title')}</DialogTitle>
         <DialogContent>
           <Typography variant="body2" sx={{ mb: 2 }}>
             {t('org.membership.dialog.message')}{' '}
-            <strong>{selectedRequest?.user_email}</strong>?
+            <strong>{rejectDialog.data?.user_email}</strong>?
           </Typography>
           <TextField
             label={t('org.membership.dialog.reasonLabel')}

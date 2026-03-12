@@ -6,7 +6,8 @@
  * Replaces the old MyOrganizationsPage at /organizations/mine.
  */
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
+import { useAsyncData } from '../../../hooks/useAsyncData';
 import {
   Box,
   Container,
@@ -50,9 +51,10 @@ export function OrgSetupPage() {
   const navigate = useNavigate();
   const { activeOrgId, setActiveOrgId, memberships, membershipsLoaded, refreshMemberships } = useConsole();
   
-  const [organizations, setOrganizations] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
+  const { data: organizations = [], loading, error } = useAsyncData(
+    () => getMyOrganizations(),
+    []
+  );
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState(null);
@@ -63,27 +65,6 @@ export function OrgSetupPage() {
   const [orgType, setOrgType] = useState('enterprise');
   const [description, setDescription] = useState('');
   const [contactEmail, setContactEmail] = useState('');
-
-  /**
-   * Load user's organizations
-   */
-  useEffect(() => {
-    async function loadOrganizations() {
-      try {
-        setLoading(true);
-        setError(null);
-        const orgs = await getMyOrganizations();
-        setOrganizations(orgs || []);
-      } catch (err) {
-        console.error('[OrgSetupPage] Failed to load organizations:', err);
-        setError(err.message || 'Failed to load organizations');
-      } finally {
-        setLoading(false);
-      }
-    }
-
-    loadOrganizations();
-  }, []);
 
   /**
    * Redirect to catalog if user has memberships
@@ -226,7 +207,7 @@ export function OrgSetupPage() {
       {/* Error Alert */}
       {error && (
         <Alert severity="error" sx={{ mb: 3 }}>
-          {error}
+          {error?.message || String(error)}
         </Alert>
       )}
 

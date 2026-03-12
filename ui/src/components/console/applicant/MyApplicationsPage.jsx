@@ -33,7 +33,7 @@ import { useTranslation } from 'react-i18next';
 import { getMyApplications } from '../../../services/applicantApi';
 import ClaimCredentialDialog from './ClaimCredentialDialog';
 
-const TERMINAL_STATUSES = new Set(['approved', 'issued', 'rejected']);
+const TERMINAL_STATUSES = new Set(['issued', 'rejected']);
 
 function getStepFromStatus(status) {
   switch (status) {
@@ -96,6 +96,7 @@ function MyApplicationsPage() {
             // Preserve offer data so ClaimCredentialDialog can use it directly
             offerUrl: app.credential_offer_uri || null,
             offerUris: app.credential_offer_uris || {},
+            offerLabels: app.credential_offer_labels || {},
             offerExpiresAt: app.offer_expires_at || null,
           };
         });
@@ -138,8 +139,9 @@ function MyApplicationsPage() {
   const getStatusColor = (status) => {
     switch (status) {
       case 'approved':
-      case 'issued':
         return 'success';
+      case 'issued':
+        return 'primary';
       case 'rejected':
         return 'error';
       case 'under_review':
@@ -156,19 +158,22 @@ function MyApplicationsPage() {
 
   const getStatusLabel = (status) => {
     switch (status) {
+      case 'draft':
+        return t('applications.status.draft', 'Draft');
+      case 'submitted':
+        return t('applications.status.submitted');
       case 'under_review':
+      case 'vetting_in_progress':
         return t('applications.status.underReview');
+      case 'pending_approval':
+      case 'needs_info':
+        return t('applications.status.pendingApproval', 'Pending Approval');
       case 'approved':
         return t('applications.status.approved');
       case 'issued':
-        return t('applications.status.approved');
+        return t('applications.status.readyToClaim', 'Ready to Claim');
       case 'rejected':
         return t('applications.status.rejected');
-      case 'vetting_in_progress':
-      case 'pending_approval':
-      case 'submitted':
-      case 'needs_info':
-        return t('applications.status.submitted');
       default:
         return status;
     }
@@ -267,6 +272,12 @@ function MyApplicationsPage() {
         open={!!claimApp}
         onClose={() => setClaimApp(null)}
         applicationId={claimApp?.id}
+        offerData={claimApp ? {
+          offer_url: claimApp.offerUrl,
+          credential_offer_uris: claimApp.offerUris,
+          credential_offer_labels: claimApp.offerLabels,
+          expires_at: claimApp.offerExpiresAt,
+        } : undefined}
       />
 
       {/* Application Details Dialog */}
