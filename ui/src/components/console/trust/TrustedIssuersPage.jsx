@@ -31,6 +31,7 @@ import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
 import { ResourcePage, AddButton, EmptyState, EmptyStates } from '../../common';
+import { listTrustProfiles } from '../../../services/presentationPolicyApi';
 
 const getTrustTabs = (t) => [
   { label: t('trust.trustProfiles'), path: '/console/org/trust/profiles' },
@@ -47,34 +48,17 @@ const getBreadcrumbs = (t) => [
 function TrustedIssuersPage() {
   const { t } = useTranslation('console');
   const { data: issuers = [], loading, error } = useAsyncData(async () => {
-    // TODO: Fetch trusted issuers from API
-    await new Promise((resolve) => setTimeout(resolve, 500));
-    return [
-      {
-        id: 'ti-1',
-        name: 'German Federal Government',
-        country: 'DE',
-        did: 'did:web:issuer.bundesdruckerei.de',
-        trustProfile: 'EUDI Wallet Trust Profile',
-        status: 'active',
-      },
-      {
-        id: 'ti-2',
-        name: 'French National Identity',
-        country: 'FR',
-        did: 'did:web:france-identite.gouv.fr',
-        trustProfile: 'EUDI Wallet Trust Profile',
-        status: 'active',
-      },
-      {
-        id: 'ti-3',
-        name: 'ICAO PKD Master List',
-        country: 'INT',
-        did: 'did:web:pkd.icao.int',
-        trustProfile: 'ICAO PKD Profile',
-        status: 'active',
-      },
-    ];
+    // Trusted issuers are embedded within trust profiles
+    const profiles = await listTrustProfiles();
+    const allIssuers = [];
+    for (const profile of (profiles || [])) {
+      if (profile.trusted_issuers) {
+        for (const issuer of profile.trusted_issuers) {
+          allIssuers.push({ ...issuer, trustProfile: profile.name });
+        }
+      }
+    }
+    return allIssuers;
   }, []);
   const [searchQuery, setSearchQuery] = useState('');
 

@@ -551,6 +551,10 @@ def create_app() -> FastAPI:
     @app.get("/health")
     async def health_check() -> dict:
         return {"status": "healthy", "service": SERVICE_NAME}
+
+    from common.metrics import init_otel_tracing, mount_metrics
+    init_otel_tracing(SERVICE_NAME)
+    mount_metrics(app)
     
     return app
 

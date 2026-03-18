@@ -49,7 +49,6 @@ from typing import Annotated
 from marty_common import (
     OrganizationClient,
     OrganizationContext,
-    require_org_admin,
     require_org_membership,
 )
 from marty_common.org_authorization import get_organization_client
@@ -126,7 +125,9 @@ class StepType(str, Enum):
     """Types of steps in a flow."""
     START = "start"
     USER_INPUT = "user_input"
+    DATA_COLLECTION = "data_collection"
     VERIFICATION = "verification"
+    VALIDATION = "validation"
     APPROVAL = "approval"
     ISSUANCE = "issuance"
     CALLBACK = "callback"
@@ -162,6 +163,7 @@ class FlowStep:
     
     # Step configuration
     config: dict[str, Any] = field(default_factory=dict)
+    approval_strategy: str | None = None
     
     # Timing
     timeout_seconds: int | None = None
@@ -208,6 +210,7 @@ class FlowDefinition:
     credential_template_id: str | None = None
     presentation_policy_id: str | None = None
     deployment_profile_id: str | None = None
+    trust_profile_id: str | None = None
     
     # Flow-level settings
     default_timeout_seconds: int = 3600  # 1 hour
@@ -362,6 +365,7 @@ def create_default_oid4vci_steps() -> tuple[list[FlowStep], list[FlowTransition]
 class FlowInstanceStatus(str, Enum):
     """Status of a running flow instance."""
     CREATED = "created"
+    PENDING = "pending"
     IN_PROGRESS = "in_progress"
     WAITING = "waiting"
     WAITING_APPROVAL = "waiting_approval"
@@ -522,9 +526,12 @@ class FlowStepModel(BaseModel):
     name: str
     description: str | None = None
     step_type: str = "user_input"
+    type: str | None = None
     config: dict = {}
     timeout_seconds: int | None = None
     conditions: list[dict] = []
+    validation_rules: list[str] = []
+    approval_strategy: str | None = None
 
 
 class FlowTransitionModel(BaseModel):
@@ -546,6 +553,7 @@ class CreateFlowDefinitionRequest(BaseModel):
     credential_template_id: str | None = None
     presentation_policy_id: str | None = None
     deployment_profile_id: str | None = None
+    trust_profile_id: str | None = None
     default_timeout_seconds: int = 3600
     max_retries: int = 3
     enable_resume: bool = True
@@ -561,10 +569,11 @@ class FlowDefinitionResponse(BaseModel):
     steps: list[dict]
     transitions: list[dict]
     start_step_id: str | None
-    preconditions: list[str]
+    preconditions: list[str] = []
     credential_template_id: str | None
     presentation_policy_id: str | None
     deployment_profile_id: str | None
+    trust_profile_id: str | None = None
     default_timeout_seconds: int
     version: int
     created_at: str
@@ -707,9 +716,11 @@ def _definition_to_response(flow: FlowDefinition) -> FlowDefinitionResponse:
             "name": s.name,
             "description": s.description,
             "step_type": s.step_type.value,
+            "type": s.step_type.value,
             "config": s.config,
             "timeout_seconds": s.timeout_seconds,
             "conditions": s.conditions,
+            "approval_strategy": s.approval_strategy,
         } for s in flow.steps],
         transitions=[{
             "id": t.id,
@@ -723,6 +734,7 @@ def _definition_to_response(flow: FlowDefinition) -> FlowDefinitionResponse:
         credential_template_id=flow.credential_template_id,
         presentation_policy_id=flow.presentation_policy_id,
         deployment_profile_id=flow.deployment_profile_id,
+        trust_profile_id=flow.trust_profile_id,
         default_timeout_seconds=flow.default_timeout_seconds,
         version=flow.version,
         created_at=flow.created_at.isoformat(),
@@ -857,6 +869,7 @@ async def create_flow_definition(
         credential_template_id=request.credential_template_id,
         presentation_policy_id=request.presentation_policy_id,
         deployment_profile_id=request.deployment_profile_id,
+        trust_profile_id=request.trust_profile_id,
         default_timeout_seconds=request.default_timeout_seconds,
         max_retries=request.max_retries,
         retry_cooldown_minutes=getattr(request, 'retry_cooldown_minutes', 5),
@@ -866,13 +879,15 @@ async def create_flow_definition(
     # Add steps
     step_id_map: dict[str, str] = {}  # Old ID -> New ID mapping
     for i, step_model in enumerate(request.steps):
+        st = step_model.type or step_model.step_type
         step = FlowStep(
             name=step_model.name,
             description=step_model.description,
-            step_type=StepType(step_model.step_type),
+            step_type=StepType(st),
             config=step_model.config,
             timeout_seconds=step_model.timeout_seconds,
             conditions=step_model.conditions,
+            approval_strategy=step_model.approval_strategy,
         )
         # If start_step_id references this step by index, map it
         if request.start_step_id == str(i):
@@ -895,6 +910,9 @@ async def create_flow_definition(
     # Set start step if not set
     if not flow.start_step_id and flow.steps:
         flow.start_step_id = flow.steps[0].id
+    
+    # Auto-activate flow definition on creation
+    flow.activate()
     
     await repo.save_definition(flow)
     logger.info(f"Created Flow Definition: {flow.id}")
@@ -996,7 +1014,7 @@ async def start_flow(
     instance = FlowInstance(
         flow_definition_id=request.flow_definition_id,
         organization_id=flow_def.organization_id,
-        status=FlowInstanceStatus.IN_PROGRESS,
+        status=FlowInstanceStatus.PENDING,
         current_step_id=flow_def.start_step_id,
         context=request.initial_context,
         subject_id=request.subject_id,
@@ -1408,16 +1426,18 @@ async def start_verification_flow(
     # Resolve the real organization_id from the presentation policy so that the
     # instance carries a valid org and the membership check in get_flow_instance
     # (and other endpoints) enforces actual authorization.
-    presentation_policy_service_url = os.environ.get(
-        "PRESENTATION_POLICY_SERVICE_URL", "http://presentation-policy:8009"
-    )
     organization_id = "__unknown__"
     try:
-        policy_url = f"{presentation_policy_service_url}/v1/presentation-policies/{request.presentation_policy_id}"
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            policy_resp = await client.get(policy_url, headers={"x-user-id": user_id})
-            policy_resp.raise_for_status()
-            organization_id = policy_resp.json().get("organization_id", "__unknown__")
+        from marty_proto.v1 import presentation_policy_service_pb2 as pp_pb2
+        from marty_proto.v1 import presentation_policy_service_pb2_grpc as pp_grpc
+        pp_stub = pp_grpc.PresentationPolicyServiceStub(app.state.pp_grpc_channel)
+        pp_resp = await pp_stub.GetPolicy(
+            pp_pb2.GetPolicyRequest(policy_id=request.presentation_policy_id)
+        )
+        if pp_resp.id:
+            organization_id = pp_resp.organization_id
+        else:
+            raise Exception("Policy not found")
     except Exception as exc:
         logger.warning(
             f"Could not resolve organization for policy {request.presentation_policy_id}: {exc}"
@@ -1493,22 +1513,26 @@ async def _build_presentation_definition(presentation_policy_id: str) -> dict:
     ``input_descriptors`` contain real credential-type filters that a wallet
     can match against its stored credentials.
     """
-    presentation_policy_service_url = os.environ.get(
-        "PRESENTATION_POLICY_SERVICE_URL", "http://presentation-policy:8009"
-    )
-    credential_template_service_url = os.environ.get(
-        "CREDENTIAL_TEMPLATE_SERVICE_URL", "http://credential-template:8003"
-    )
+    import json as _json
+    from marty_proto.v1 import presentation_policy_service_pb2 as pp_pb2
+    from marty_proto.v1 import presentation_policy_service_pb2_grpc as pp_grpc
+    from marty_proto.v1 import credential_template_service_pb2 as ct_pb2
+    from marty_proto.v1 import credential_template_service_pb2_grpc as ct_grpc
+
+    pp_stub = pp_grpc.PresentationPolicyServiceStub(app.state.pp_grpc_channel)
+    ct_stub = ct_grpc.CredentialTemplateServiceStub(app.state.ct_grpc_channel)
 
     policy: dict = {"credential_requirements": []}
     if presentation_policy_id:
         try:
-            async with httpx.AsyncClient(timeout=5.0) as _http:
-                resp = await _http.get(
-                    f"{presentation_policy_service_url}/v1/presentation-policies/{presentation_policy_id}"
-                )
-                resp.raise_for_status()
-                policy = resp.json()
+            pp_resp = await pp_stub.GetPolicy(
+                pp_pb2.GetPolicyRequest(policy_id=presentation_policy_id)
+            )
+            if pp_resp.id:
+                policy = {
+                    "credential_requirements": _json.loads(pp_resp.credential_requirements_json) if pp_resp.credential_requirements_json else [],
+                    "organization_id": pp_resp.organization_id,
+                }
         except Exception as exc:
             logger.warning(
                 f"_build_presentation_definition: could not fetch policy "
@@ -1526,14 +1550,12 @@ async def _build_presentation_definition(presentation_policy_id: str) -> dict:
         supported_formats: list[str] = []
         if template_id:
             try:
-                async with httpx.AsyncClient(timeout=5.0) as _http:
-                    tmpl_resp = await _http.get(
-                        f"{credential_template_service_url}/v1/credential-templates/{template_id}"
-                    )
-                    if tmpl_resp.status_code == 200:
-                        tmpl = tmpl_resp.json()
-                        credential_type = tmpl.get("credential_type")
-                        supported_formats = tmpl.get("supported_formats") or []
+                tmpl_resp = await ct_stub.GetTemplate(
+                    ct_pb2.GetTemplateRequest(template_id=template_id)
+                )
+                if tmpl_resp.id:
+                    credential_type = tmpl_resp.credential_type or None
+                    supported_formats = list(tmpl_resp.supported_formats) or []
             except Exception as exc:
                 logger.warning(
                     f"_build_presentation_definition: could not fetch template "
@@ -2033,11 +2055,8 @@ async def submit_verification_response(
     instance.status = FlowInstanceStatus.IN_PROGRESS
 
     # -----------------------------------------------------------------------
-    # Real policy evaluation — call the presentation-policy service
+    # Real policy evaluation — call the presentation-policy service via gRPC
     # -----------------------------------------------------------------------
-    presentation_policy_service_url = os.environ.get(
-        "PRESENTATION_POLICY_SERVICE_URL", "http://presentation-policy:8009"
-    )
     policy_id = instance.context.get("presentation_policy_id")
 
     verified_claims: dict = {}
@@ -2047,31 +2066,33 @@ async def submit_verification_response(
 
     if policy_id:
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                eval_resp = await client.post(
-                    f"{presentation_policy_service_url}/v1/presentation-policies/{policy_id}/evaluate",
-                    json={
-                        "vp_token": vp_token,
-                        "nonce": instance.context.get("nonce"),
-                        "audience": instance.context.get("response_uri"),
-                    },
+            import json as _json
+            from marty_proto.v1 import presentation_policy_service_pb2 as pp_pb2
+            from marty_proto.v1 import presentation_policy_service_pb2_grpc as pp_grpc
+            pp_stub = pp_grpc.PresentationPolicyServiceStub(app.state.pp_grpc_channel)
+            eval_resp = await pp_stub.EvaluatePresentation(
+                pp_pb2.EvaluatePresentationRequest(
+                    policy_id=policy_id,
+                    vp_token=vp_token,
+                    nonce=instance.context.get("nonce", ""),
+                    audience=instance.context.get("response_uri", ""),
                 )
-                if eval_resp.status_code == 200:
-                    eval_data = eval_resp.json()
-                    evaluation_result = eval_data.get("result", "passed")
-                    evaluation_decision = eval_data.get("decision", "allow")
-                    decision_reason = eval_data.get("decision_reason", decision_reason)
-                    verified_claims = eval_data.get("verified_claims", {})
-                    logger.info(
-                        f"Policy evaluation for {instance_id}: {evaluation_result} / {evaluation_decision}"
-                    )
-                else:
-                    logger.warning(
-                        f"Policy evaluation returned {eval_resp.status_code} for {instance_id}; "
-                        f"falling back to VP token claim extraction"
-                    )
-                    verified_claims = _extract_claims_from_vp_token(vp_token)
-        except httpx.RequestError as exc:
+            )
+            if eval_resp.result:
+                evaluation_result = eval_resp.result
+                evaluation_decision = eval_resp.decision
+                decision_reason = eval_resp.decision_reason
+                verified_claims = _json.loads(eval_resp.verified_claims_json) if eval_resp.verified_claims_json else {}
+                logger.info(
+                    f"Policy evaluation for {instance_id}: {evaluation_result} / {evaluation_decision}"
+                )
+            else:
+                logger.warning(
+                    f"Policy evaluation returned empty result for {instance_id}; "
+                    f"falling back to VP token claim extraction"
+                )
+                verified_claims = _extract_claims_from_vp_token(vp_token)
+        except Exception as exc:
             logger.warning(
                 f"Policy service unreachable ({exc}); falling back to VP token claim extraction"
             )
@@ -2449,8 +2470,10 @@ def _definition_to_response(flow: FlowDefinition) -> FlowDefinitionResponse:
                 "name": s.name,
                 "description": s.description,
                 "step_type": s.step_type.value,
+                "type": s.step_type.value,
                 "config": s.config,
                 "timeout_seconds": s.timeout_seconds,
+                "approval_strategy": s.approval_strategy,
             }
             for s in flow.steps
         ],
@@ -2467,6 +2490,7 @@ def _definition_to_response(flow: FlowDefinition) -> FlowDefinitionResponse:
         credential_template_id=flow.credential_template_id,
         presentation_policy_id=flow.presentation_policy_id,
         deployment_profile_id=flow.deployment_profile_id,
+        trust_profile_id=flow.trust_profile_id,
         default_timeout_seconds=flow.default_timeout_seconds,
         version=flow.version,
         created_at=flow.created_at.isoformat(),
@@ -2517,16 +2541,52 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     _repo = PostgresFlowRepository(session_factory)
     logger.info("PostgreSQL adapter initialized for flow service")
     
-    # Initialize OrganizationClient (no Redis at service level - gateway handles caching)
-    org_service_url = os.environ.get("ORGANIZATION_SERVICE_URL", "http://organization:8002")
+    # Initialize gRPC channel to organization service
+    from common.grpc_factory import create_grpc_channel, create_grpc_server, start_grpc_server_port
+    org_grpc_target = os.environ.get("ORG_GRPC_TARGET", "organization:9002")
+    org_grpc_channel = create_grpc_channel(org_grpc_target, service_name="flow")
     app.state.org_client = OrganizationClient(
-        base_url=org_service_url,
-        redis_client=None,
+        grpc_channel=org_grpc_channel,
     )
+    
+    # gRPC channels to downstream services
+    pp_grpc_target = os.environ.get("PP_GRPC_TARGET", "presentation-policy:9009")
+    pp_grpc_channel = create_grpc_channel(pp_grpc_target, service_name="flow")
+    app.state.pp_grpc_channel = pp_grpc_channel
+
+    ct_grpc_target = os.environ.get("CT_GRPC_TARGET", "credential-template:9003")
+    ct_grpc_channel = create_grpc_channel(ct_grpc_target, service_name="flow")
+    app.state.ct_grpc_channel = ct_grpc_channel
+
+    # Start gRPC server
+    from flow.infrastructure.adapters.grpc_adapter import FlowServiceGrpc
+    from marty_proto.v1.flow_service_pb2_grpc import (
+        add_FlowServiceServicer_to_server,
+    )
+
+    grpc_port = int(os.environ.get("FLOW_GRPC_PORT", "9011"))
+    grpc_server, health_servicer = create_grpc_server("flow")
+    flow_servicer = FlowServiceGrpc(
+        start_verification_fn=start_verification_flow,
+        application_approved_fn=handle_application_approved,
+        get_repo_fn=get_repo,
+    )
+    add_FlowServiceServicer_to_server(flow_servicer, grpc_server)
+    start_grpc_server_port(
+        grpc_server, grpc_port,
+        service_names=["marty.ui.flow.v1.FlowService"],
+        health_servicer=health_servicer,
+    )
+    await grpc_server.start()
+    logger.info(f"Flow gRPC server listening on :{grpc_port}")
     
     yield
     
     logger.info(f"Shutting down {SERVICE_NAME}...")
+    await grpc_server.stop(grace=5)
+    await pp_grpc_channel.close()
+    await ct_grpc_channel.close()
+    await org_grpc_channel.close()
     await engine.dispose()
 
 
@@ -2587,6 +2647,10 @@ For orchestrating multi-step credential journeys (issuance, renewal, revocation)
     @app.get("/health")
     async def health_check() -> dict:
         return {"status": "healthy", "service": SERVICE_NAME}
+
+    from common.metrics import init_otel_tracing, mount_metrics
+    init_otel_tracing(SERVICE_NAME)
+    mount_metrics(app)
     
     return app
 

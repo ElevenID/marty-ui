@@ -48,6 +48,7 @@ export { default as OperatePage } from './operate/OperatePage';
 export { default as IssuancePage } from './operate/IssuancePage';
 export { default as ApplicationsPage } from './operate/ApplicationsPage';
 export { default as ApplicationReviewPage } from './operate/ApplicationReviewPage';
+export { default as VerificationSessionsPage } from './operate/VerificationSessionsPage';
 
 // Org
 export { default as OrgPage } from './org/OrgPage';

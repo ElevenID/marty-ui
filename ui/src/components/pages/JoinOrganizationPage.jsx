@@ -45,6 +45,20 @@ import {
   joinOrganization,
   validateOrganizationInvitation,
 } from '../../services/organizationsApi';
+import {
+  JOIN_ORGANIZATION_INVITE_STATES,
+  filterDiscoverableOrganizations,
+  getJoinOrganizationErrorText,
+  getJoinOrganizationMethodLabel,
+  getJoinOrganizationReturnTo,
+  loadJoinOrganizationDiscoverableOrganizations,
+  loadJoinOrganizationSelection,
+  shouldRequireJoinOrganizationLogin,
+  submitJoinOrganizationByCode,
+  submitJoinSelectedOrganization,
+  validateJoinOrganizationInvitation,
+  acceptJoinOrganizationInvitation,
+} from '../../application/onboarding';
 import { useConsole } from '../../contexts/ConsoleContext';
 import { useAuth } from '../../hooks/useAuth';
 
@@ -53,43 +67,6 @@ const CAPABILITY_HINTS = [
   'View and manage your organization applications',
   'Use organization-specific settings and defaults',
 ];
-
-const INVITE_STATES = {
-  LOADING: 'loading',
-  VALID: 'valid',
-  ACCEPTING: 'accepting',
-  ACCEPTED: 'accepted',
-  ERROR: 'error',
-};
-
-const getJoinMethodLabel = (method) => {
-  const labels = {
-    open: 'Open',
-    code: 'Join code',
-    invite: 'Invite only',
-    domain: 'Domain',
-  };
-  return labels[method] || method || 'Invite only';
-};
-
-const toErrorText = (error, fallback) => {
-  const parsed = getErrorMessage(error);
-  if (typeof parsed === 'string' && parsed.trim() && parsed !== '[object Object]') {
-    return parsed;
-  }
-
-  const nestedUserMessage = error?.response?.error?.user_message || error?.response?.errors?.[0]?.user_message;
-  if (typeof nestedUserMessage === 'string' && nestedUserMessage.trim()) {
-    return nestedUserMessage;
-  }
-
-  const nestedMessage = error?.response?.error?.message;
-  if (typeof nestedMessage === 'string' && nestedMessage.trim() && nestedMessage !== '[object Object]') {
-    return nestedMessage;
-  }
-
-  return fallback;
-};
 
 export default function JoinOrganizationPage() {
   const navigate = useNavigate();
@@ -114,7 +91,7 @@ export default function JoinOrganizationPage() {
   const [successState, setSuccessState] = useState(null); // 'joined' | 'pending' | null
   const [successOrgName, setSuccessOrgName] = useState('');
 
-  const [inviteState, setInviteState] = useState(inviteToken ? INVITE_STATES.LOADING : null);
+  const [inviteState, setInviteState] = useState(inviteToken ? JOIN_ORGANIZATION_INVITE_STATES.LOADING : null);
   const [invitation, setInvitation] = useState(null);
 
   const showCodeMode = modeFromQuery === 'code';
@@ -125,9 +102,8 @@ export default function JoinOrganizationPage() {
       return false;
     }
 
-    if (!isAuthenticated) {
-      const returnTo = window.location.pathname + window.location.search;
-      login(returnTo);
+    if (shouldRequireJoinOrganizationLogin({ authLoading, isAuthenticated })) {
+      login(getJoinOrganizationReturnTo({ pathname: window.location.pathname, search: window.location.search }));
       return false;
     }
 
@@ -138,34 +114,19 @@ export default function JoinOrganizationPage() {
     if (!inviteToken) return;
 
     async function validateInvitation() {
-      try {
-        setInviteState(INVITE_STATES.LOADING);
-        setError(null);
+      setInviteState(JOIN_ORGANIZATION_INVITE_STATES.LOADING);
+      setError(null);
 
-        const data = await validateOrganizationInvitation(inviteToken);
-        if (!data?.valid) {
-          const inviteMessage =
-            (typeof data?.message === 'string' && data.message) ||
-            data?.error?.user_message ||
-            data?.error?.message ||
-            'Invitation is invalid or expired';
-          throw new Error(inviteMessage);
-        }
-        setInvitation(data);
-        setSelectedOrg((prev) => prev || {
-          id: data.organization_id,
-          name: data.organization_name,
-          display_name: data.organization_name,
-          join_mechanism: 'invite',
-          requires_approval: false,
-          description: data.organization_description || '',
-        });
-        setInviteState(INVITE_STATES.VALID);
-      } catch (err) {
-        console.error('Failed to validate invitation:', err);
-        setInviteState(INVITE_STATES.ERROR);
-        setError(toErrorText(err, 'Failed to validate invitation'));
-      }
+      const result = await validateJoinOrganizationInvitation({
+        inviteToken,
+        validateOrganizationInvitation,
+        getErrorMessage,
+      });
+
+      setInvitation(result.invitation);
+      setSelectedOrg((prev) => prev || result.selectedOrg);
+      setInviteState(result.inviteState);
+      setError(result.error);
     }
 
     validateInvitation();
@@ -173,25 +134,20 @@ export default function JoinOrganizationPage() {
 
   useEffect(() => {
     async function loadDiscoverableOrgs() {
-      try {
-        setLoading(true);
-        const orgs = await discoverOrganizations({ limit: 100 });
-        setOrganizations(orgs || []);
+      setLoading(true);
 
-        // If we arrived via /organizations/join?orgId=..., prefer org data from discover list.
-        if (orgIdFromQuery) {
-          const fromDiscoverList = (orgs || []).find((org) => org.id === orgIdFromQuery);
-          if (fromDiscoverList) {
-            setSelectedOrg(fromDiscoverList);
-            setError(null);
-          }
-        }
-      } catch (err) {
-        console.error('Failed to load organizations:', err);
-        setError(toErrorText(err, 'Failed to load organizations'));
-      } finally {
-        setLoading(false);
+      const result = await loadJoinOrganizationDiscoverableOrganizations({
+        orgIdFromQuery,
+        discoverOrganizations,
+        getErrorMessage,
+      });
+
+      setOrganizations(result.organizations);
+      if (result.selectedOrg) {
+        setSelectedOrg(result.selectedOrg);
       }
+      setError(result.error);
+      setLoading(false);
     }
 
     loadDiscoverableOrgs();
@@ -200,51 +156,26 @@ export default function JoinOrganizationPage() {
   useEffect(() => {
     async function loadSelectedFromQuery() {
       if (!orgIdFromQuery) return;
-      try {
-        setLoadingSelection(true);
+      setLoadingSelection(true);
 
-        // If org is already in discoverable list, we can render immediately without detail lookup.
-        const fromList = organizations.find((org) => org.id === orgIdFromQuery);
-        if (fromList) {
-          setSelectedOrg(fromList);
-          setError(null);
-          return;
-        }
+      const result = await loadJoinOrganizationSelection({
+        orgIdFromQuery,
+        organizations,
+        isAuthenticated,
+        getOrganization,
+        getErrorMessage,
+      });
 
-        // Avoid protected details call for unauthenticated users.
-        // Discover data is enough for preview in anonymous mode.
-        if (isAuthenticated) {
-          const org = await getOrganization(orgIdFromQuery);
-          setSelectedOrg(org);
-          setError(null);
-        }
-      } catch (err) {
-        console.error('Failed to load organization:', err);
-        // Some environments restrict direct organization details for non-members.
-        // Keep join preview working using discoverable list data if present.
-        const fromList = organizations.find((org) => org.id === orgIdFromQuery);
-        if (fromList) {
-          setSelectedOrg(fromList);
-          setError(null);
-        } else {
-          setError(toErrorText(err, 'Failed to load organization details'));
-        }
-      } finally {
-        setLoadingSelection(false);
-      }
+      setSelectedOrg(result.selectedOrg);
+      setError(result.error);
+      setLoadingSelection(false);
     }
 
     loadSelectedFromQuery();
   }, [orgIdFromQuery, organizations, isAuthenticated]);
 
   const filteredOrganizations = useMemo(() => {
-    const query = searchQuery.trim().toLowerCase();
-    if (!query) return organizations;
-    return organizations.filter((org) => {
-      const name = (org.name || org.display_name || '').toLowerCase();
-      const description = (org.description || '').toLowerCase();
-      return name.includes(query) || description.includes(query);
-    });
+    return filterDiscoverableOrganizations(organizations, searchQuery);
   }, [organizations, searchQuery]);
 
   const handleJoinByCode = async () => {
@@ -260,28 +191,22 @@ export default function JoinOrganizationPage() {
     try {
       setJoining(true);
       setError(null);
-      const result = await joinByCode(joinCode.trim().toUpperCase());
-      const organization = result?.organization;
-      const membership = result?.membership;
+      const result = await submitJoinOrganizationByCode({
+        joinCode,
+        joinByCode,
+        refreshMemberships,
+        setActiveOrgId,
+      });
 
-      if (!organization) {
-        throw new Error('Join succeeded but organization details were missing');
+      setSuccessOrgName(result.successOrgName);
+      setSuccessState(result.successState);
+
+      if (result.successState === 'joined') {
+        setTimeout(() => navigate('/console'), 1200);
       }
-
-      setSuccessOrgName(organization.name || organization.display_name || 'Organization');
-
-      if (membership?.status === 'pending') {
-        setSuccessState('pending');
-        return;
-      }
-
-      await refreshMemberships();
-      await setActiveOrgId(organization.id);
-      setSuccessState('joined');
-      setTimeout(() => navigate('/console'), 1200);
     } catch (err) {
       console.error('Failed to join by code:', err);
-      setError(toErrorText(err, 'Failed to join organization using join code'));
+      setError(getJoinOrganizationErrorText(err, getErrorMessage, 'Failed to join organization using join code'));
     } finally {
       setJoining(false);
     }
@@ -303,24 +228,22 @@ export default function JoinOrganizationPage() {
       setJoining(true);
       setError(null);
 
-      const result = await joinOrganization(selectedOrg.id);
-      const membershipStatus = result?.membership?.status;
-      const orgName = selectedOrg.name || selectedOrg.display_name || 'Organization';
+      const result = await submitJoinSelectedOrganization({
+        selectedOrg,
+        joinOrganization,
+        refreshMemberships,
+        setActiveOrgId,
+      });
 
-      setSuccessOrgName(orgName);
+      setSuccessOrgName(result.successOrgName);
+      setSuccessState(result.successState);
 
-      if (membershipStatus === 'pending') {
-        setSuccessState('pending');
-        return;
+      if (result.successState === 'joined') {
+        setTimeout(() => navigate('/console'), 1200);
       }
-
-      await refreshMemberships();
-      await setActiveOrgId(selectedOrg.id);
-      setSuccessState('joined');
-      setTimeout(() => navigate('/console'), 1200);
     } catch (err) {
       console.error('Failed to join organization:', err);
-      setError(toErrorText(err, 'Failed to join organization'));
+      setError(getJoinOrganizationErrorText(err, getErrorMessage, 'Failed to join organization'));
     } finally {
       setJoining(false);
     }
@@ -334,26 +257,26 @@ export default function JoinOrganizationPage() {
     }
 
     try {
-      setInviteState(INVITE_STATES.ACCEPTING);
+      setInviteState(JOIN_ORGANIZATION_INVITE_STATES.ACCEPTING);
       setError(null);
 
-      const data = await acceptOrganizationInvitation(inviteToken);
-      const orgId = data.organization_id || invitation?.organization_id || selectedOrg?.id;
-      const orgName = data.organization_name || invitation?.organization_name || selectedOrg?.name || 'Organization';
+      const result = await acceptJoinOrganizationInvitation({
+        inviteToken,
+        invitation,
+        selectedOrg,
+        acceptOrganizationInvitation,
+        refreshMemberships,
+        setActiveOrgId,
+      });
 
-      setSuccessOrgName(orgName);
-      setInviteState(INVITE_STATES.ACCEPTED);
-      setSuccessState('joined');
-
-      if (orgId) {
-        await refreshMemberships();
-        await setActiveOrgId(orgId);
-      }
+      setSuccessOrgName(result.successOrgName);
+      setInviteState(result.inviteState);
+      setSuccessState(result.successState);
       setTimeout(() => navigate('/console'), 1200);
     } catch (err) {
       console.error('Failed to accept invitation:', err);
-      setInviteState(INVITE_STATES.ERROR);
-      setError(toErrorText(err, 'Failed to accept invitation'));
+      setInviteState(JOIN_ORGANIZATION_INVITE_STATES.ERROR);
+      setError(getJoinOrganizationErrorText(err, getErrorMessage, 'Failed to accept invitation'));
     }
   };
 
@@ -361,14 +284,14 @@ export default function JoinOrganizationPage() {
     return (
       <Container maxWidth="md" sx={{ py: 6 }}>
         <Paper sx={{ p: 4 }}>
-          {inviteState === INVITE_STATES.LOADING && (
+          {inviteState === JOIN_ORGANIZATION_INVITE_STATES.LOADING && (
             <Box sx={{ textAlign: 'center', py: 4 }}>
               <CircularProgress sx={{ mb: 2 }} />
               <Typography variant="h6">Validating invitation…</Typography>
             </Box>
           )}
 
-          {inviteState === INVITE_STATES.VALID && (
+          {inviteState === JOIN_ORGANIZATION_INVITE_STATES.VALID && (
             <>
               <Typography variant="h4" fontWeight={700} gutterBottom>
                 Join {invitation?.organization_name || selectedOrg?.name}
@@ -406,14 +329,14 @@ export default function JoinOrganizationPage() {
             </>
           )}
 
-          {inviteState === INVITE_STATES.ACCEPTING && (
+          {inviteState === JOIN_ORGANIZATION_INVITE_STATES.ACCEPTING && (
             <Box sx={{ textAlign: 'center', py: 4 }}>
               <CircularProgress sx={{ mb: 2 }} />
               <Typography variant="h6">Accepting invitation…</Typography>
             </Box>
           )}
 
-          {inviteState === INVITE_STATES.ERROR && (
+          {inviteState === JOIN_ORGANIZATION_INVITE_STATES.ERROR && (
             <Box sx={{ textAlign: 'center', py: 4 }}>
               <ErrorIcon color="error" sx={{ fontSize: 56, mb: 2 }} />
               <Typography variant="h6" gutterBottom>
@@ -575,7 +498,7 @@ export default function JoinOrganizationPage() {
                             </Typography>
                           )}
                           <Stack direction="row" spacing={1} sx={{ mt: 1.5, flexWrap: 'wrap' }}>
-                            <Chip size="small" label={getJoinMethodLabel(org.join_mechanism)} icon={<LockOpenIcon fontSize="small" />} />
+                            <Chip size="small" label={getJoinOrganizationMethodLabel(org.join_mechanism)} icon={<LockOpenIcon fontSize="small" />} />
                             {org.requires_approval && (
                               <Chip size="small" label="Approval Required" color="warning" variant="outlined" />
                             )}
@@ -627,7 +550,7 @@ export default function JoinOrganizationPage() {
                     )}
                     <Chip
                       size="small"
-                      label={getJoinMethodLabel(selectedOrg.join_mechanism)}
+                      label={getJoinOrganizationMethodLabel(selectedOrg.join_mechanism)}
                       color={selectedOrg.join_mechanism === 'open' ? 'success' : 'default'}
                     />
                     {selectedOrg.requires_approval && (

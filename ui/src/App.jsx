@@ -103,6 +103,7 @@ import {
   IssuancePage,
   ApplicationsPage,
   ApplicationReviewPage,
+  VerificationSessionsPage,
   // Org
   OrgPage,
   OrganizationSettingsPage,
@@ -430,6 +431,7 @@ function AppContent() {
           <Route path="operate/applications" element={<ApplicationsPage />} />
           <Route path="operate/applications/:applicationId" element={<ApplicationReviewPage />} />
           <Route path="operate/flow-instances" element={<FlowInstancesPage />} />
+          <Route path="operate/verify" element={<VerificationSessionsPage />} />
           {/* Org - Settings remain under org path */}
           <Route path="settings" element={<OrganizationSettingsPage />} />
           <Route path="team" element={<TeamPage />} />

@@ -18,7 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 
 from .application.use_cases import AuthenticateUseCase, SessionUseCase
-from .infrastructure.adapters.event_adapter import InMemoryEventPublisher, RabbitMQEventPublisher
+from .infrastructure.adapters.grpc_adapter import AuthServiceGrpc
 from .infrastructure.adapters.http_adapter import (
     configure_auth_router,
     internal_router,
@@ -50,7 +50,6 @@ def get_config() -> dict:
     return {
         "ui_base_url": os.environ.get("UI_BASE_URL", "http://localhost:3000"),
         "redis_url": os.environ.get("REDIS_URL", "redis://localhost:6379/0"),
-        "rabbitmq_url": os.environ.get("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/"),
         "oidc": {
             "issuer_url": os.environ.get(
                 "OIDC_ISSUER_URL",
@@ -81,7 +80,6 @@ def get_config() -> dict:
             "max_age": int(os.environ.get("SESSION_TTL_SECONDS", "86400")),
             "path": "/",
         },
-        "flow_service_url": os.environ.get("FLOW_SERVICE_URL", "http://flow:8011"),
         "credential_login_policy_id": os.environ.get("CREDENTIAL_LOGIN_POLICY_ID", ""),
         "auth_service_internal_url": os.environ.get("AUTH_SERVICE_INTERNAL_URL", "http://auth:8001"),
     }
@@ -119,15 +117,21 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
     oidc_provider = KeycloakOIDCAdapter(oidc_config)
     
+    # gRPC channels
+    from common.grpc_factory import create_grpc_channel
+    org_grpc_target = os.environ.get("ORG_GRPC_TARGET", "organization:9002")
+    org_grpc_channel = create_grpc_channel(org_grpc_target, service_name="auth")
+
+    flow_grpc_target = os.environ.get("FLOW_GRPC_TARGET", "flow:9011")
+    flow_grpc_channel = create_grpc_channel(flow_grpc_target, service_name="auth")
+    app.state.flow_grpc_channel = flow_grpc_channel
+
     # Use in-memory provisioning for now (can swap to JIT adapter)
-    user_provisioning = InMemoryUserProvisioningAdapter()
+    user_provisioning = InMemoryUserProvisioningAdapter(org_grpc_channel=org_grpc_channel)
     
-    # Initialize event publisher
-    try:
-        event_publisher = RabbitMQEventPublisher(config["rabbitmq_url"])
-    except Exception as e:
-        logger.warning(f"RabbitMQ not available, using in-memory publisher: {e}")
-        event_publisher = InMemoryEventPublisher()
+    # Initialize event publisher (gRPC event bus)
+    from auth.infrastructure.adapters.event_adapter import GrpcEventBusPublisher
+    event_publisher = GrpcEventBusPublisher()
     
     # Initialize use cases
     authenticate_use_case = AuthenticateUseCase(
@@ -156,7 +160,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         ui_base_url=config["ui_base_url"],
         redis_client=redis_client,
         session_repository=session_repository,
-        flow_service_url=config["flow_service_url"],
         credential_login_policy_id=config["credential_login_policy_id"],
         auth_service_internal_url=config["auth_service_internal_url"],
         kc_admin_adapter=kc_admin_adapter,
@@ -170,12 +173,36 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.session_use_case = session_use_case
     app.state.kc_admin_adapter = kc_admin_adapter
 
+    # Start gRPC server
+    from common.grpc_factory import create_grpc_server, start_grpc_server_port
+    from marty_proto.v1.auth_service_pb2_grpc import add_AuthServiceServicer_to_server
+
+    grpc_port = int(os.environ.get("AUTH_GRPC_PORT", "9001"))
+    grpc_server, health_servicer = create_grpc_server("auth")
+    auth_servicer = AuthServiceGrpc(
+        session_use_case=session_use_case,
+        session_repository=session_repository,
+        redis_client=redis_client,
+        kc_admin_adapter=kc_admin_adapter,
+    )
+    add_AuthServiceServicer_to_server(auth_servicer, grpc_server)
+    start_grpc_server_port(
+        grpc_server, grpc_port,
+        service_names=["marty.ui.auth.v1.AuthService"],
+        health_servicer=health_servicer,
+    )
+    await grpc_server.start()
+    logger.info("Auth gRPC server listening on port %d", grpc_port)
+
     logger.info(f"{SERVICE_NAME} started on port {SERVICE_PORT}")
 
     yield
 
     # Cleanup
     logger.info(f"Shutting down {SERVICE_NAME}...")
+    await grpc_server.stop(grace=5)
+    await flow_grpc_channel.close()
+    await org_grpc_channel.close()
     await redis_client.close()
     await async_engine.dispose()
 
@@ -218,6 +245,10 @@ def create_app() -> FastAPI:
             "status": "healthy",
             "service": SERVICE_NAME,
         }
+
+    from common.metrics import init_otel_tracing, mount_metrics
+    init_otel_tracing(SERVICE_NAME)
+    mount_metrics(app)
     
     return app
 

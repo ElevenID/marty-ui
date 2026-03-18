@@ -36,6 +36,7 @@ import AddIcon from '@mui/icons-material/Add';
 import { ResourcePage } from '../../common';
 import { useAuth } from '../../../hooks/useAuth';
 import OrgDefaultsSection from './OrgDefaultsSection';
+import { loadOrgSettings, saveOrgSettings } from '../../../application/orgSettings';
 
 /**
  * Get organization tabs with translations
@@ -85,52 +86,11 @@ function OrganizationSettingsPage() {
   const [newDomain, setNewDomain] = useState('');
 
   useEffect(() => {
-    // Load organization settings from API
     const loadOrg = async () => {
       try {
-        const response = await fetch('/api/onboarding/org-settings', {
-          credentials: 'include',
-        });
-        
-        if (response.ok) {
-          const data = await response.json();
-          setOrg({
-            name: data.organization_name || 'My Organization',
-            displayName: data.organization_name || 'My Organization',
-            description: 'Digital identity services provider',
-            website: 'https://example.com',
-            contactEmail: 'contact@example.com',
-            address: '123 Identity Street',
-            country: 'Germany',
-            isDiscoverable: data.is_discoverable || false,
-            membershipMode: data.membership_mode || 'invite_only',
-            allowedEmailDomains: data.allowed_email_domains || [],
-            domainJoinPolicy: data.domain_join_policy || 'approval',
-            defaultRole: data.default_role || 'member',
-            requireDeviceRegistration: data.require_device_registration || false,
-            allowPushNotifications: data.allow_push_notifications !== false,
-            deviceRegistrationPrompt: data.device_registration_prompt || 'first_action',
-          });
-        } else {
-          // Fallback to mock data
-          setOrg({
-            name: organizationName || t('org.settings.defaultName'),
-            displayName: organizationName || t('org.settings.defaultName'),
-            description: t('org.settings.defaultDescription'),
-            website: 'https://example.com',
-            contactEmail: 'contact@example.com',
-            address: '123 Identity Street',
-            country: 'Germany',
-            isDiscoverable: false,
-            membershipMode: 'invite_only',
-            allowedEmailDomains: [],
-            domainJoinPolicy: 'approval',
-            defaultRole: 'member',
-            requireDeviceRegistration: false,
-            allowPushNotifications: true,
-            deviceRegistrationPrompt: 'first_action',
-          });
-        }
+        const { org: loaded, error: loadError } = await loadOrgSettings({ organizationName });
+        if (loadError) throw new Error(loadError);
+        setOrg(loaded);
       } catch (err) {
         setError(t('org.settings.errorLoading'));
         console.error(err);
@@ -145,28 +105,8 @@ function OrganizationSettingsPage() {
     setSaving(true);
     setError(null);
     try {
-      const response = await fetch('/api/onboarding/org-settings', {
-        method: 'PUT',
-        credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          is_discoverable: org.isDiscoverable,
-          membership_mode: org.membershipMode,
-          allowed_email_domains: org.allowedEmailDomains,
-          domain_join_policy: org.domainJoinPolicy,
-          default_role: org.defaultRole,
-          require_device_registration: org.requireDeviceRegistration,
-          allow_push_notifications: org.allowPushNotifications,
-          device_registration_prompt: org.deviceRegistrationPrompt,
-        }),
-      });
-      
-      if (!response.ok) {
-        throw new Error(t('org.settings.errorSaving'));
-      }
-      
+      const { error: saveError } = await saveOrgSettings({ org });
+      if (saveError) throw new Error(saveError);
       setSuccess(true);
       setEditMode(false);
       setTimeout(() => setSuccess(false), 3000);

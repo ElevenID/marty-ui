@@ -40,6 +40,8 @@ import HistoryIcon from '@mui/icons-material/History';
 import { Link } from 'react-router-dom';
 
 import { ResourcePage } from '../../common';
+import { useAuth } from '../../../hooks/useAuth';
+import { listWebhooks, createWebhook, deleteWebhook, testWebhook } from '../../../services/webhooksApi';
 
 /**
  * Get deployment tabs with translations
@@ -75,28 +77,11 @@ const getEventTypes = (t) => [
 
 function WebhooksPage() {
   const { t } = useTranslation('console');
-  const { data: webhooks = [], loading, error } = useAsyncData(async () => {
-    // TODO: Fetch webhooks from API
-    await new Promise((resolve) => setTimeout(resolve, 500));
-    return [
-      {
-        id: 'wh-1',
-        url: 'https://api.example.com/webhooks/identity',
-        events: ['flow.completed', 'flow.failed', 'credential.issued'],
-        status: 'active',
-        lastDelivery: '2026-02-07T09:00:00Z',
-        successRate: 99.5,
-      },
-      {
-        id: 'wh-2',
-        url: 'https://crm.example.com/hooks/applications',
-        events: ['application.submitted', 'application.approved'],
-        status: 'active',
-        lastDelivery: '2026-02-07T08:45:00Z',
-        successRate: 100,
-      },
-    ];
-  }, []);
+  const { organizationId } = useAuth();
+  const { data: webhooks = [], loading, error, reload } = useAsyncData(
+    () => listWebhooks(organizationId),
+    [organizationId]
+  );
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [newWebhook, setNewWebhook] = useState({
     url: '',
@@ -104,9 +89,17 @@ function WebhooksPage() {
   });
 
   const handleCreate = async () => {
-    // TODO: Create webhook via API
-    setCreateDialogOpen(false);
-    setNewWebhook({ url: '', events: [] });
+    try {
+      await createWebhook(organizationId, {
+        url: newWebhook.url,
+        eventTypes: newWebhook.events,
+      });
+      setCreateDialogOpen(false);
+      setNewWebhook({ url: '', events: [] });
+      reload();
+    } catch (err) {
+      console.error('Failed to create webhook:', err);
+    }
   };
 
   const handleEventToggle = (eventValue) => {

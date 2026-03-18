@@ -16,6 +16,13 @@ import { useNavigate } from 'react-router-dom';
 import { getPreferences, updatePreferences } from '../services/preferencesApi';
 import { getMyOrganizations } from '../services/organizationsApi';
 import { AuthContext } from './AuthContext';
+import {
+  getDefaultLandingPath,
+  isOrgConsoleBlocked,
+  resolveActiveOrgSelection,
+  resolveConsoleBootstrap,
+  resolveModeChange,
+} from '../application/session/consoleSession';
 
 /**
  * @typedef {'applicant' | 'org'} ConsoleMode
@@ -91,15 +98,11 @@ export function ConsoleProvider({ children }) {
 
       // Restore last mode and org (fallback to localStorage when backend prefs are stale/unavailable)
       const localStoredOrgId = window.localStorage.getItem('activeOrgId');
-      const restoredMode = prefs.last_view_mode || 'applicant';
-      const restoredOrgId = prefs.last_active_org_id || localStoredOrgId || null;
-
-      // Validate restored org is still in memberships
-      const validOrgId = orgs?.find(o => o.id === restoredOrgId) ? restoredOrgId : null;
-
-      // Keep applicant mode available even when user has no memberships.
-      // This allows applicants to view existing applications and onboarding state.
-      const effectiveMode = hasMemberships ? restoredMode : 'applicant';
+      const { mode: effectiveMode, activeOrgId: validOrgId } = resolveConsoleBootstrap({
+        preferences: prefs,
+        memberships: orgs || [],
+        localStoredOrgId,
+      });
 
       setModeState(effectiveMode);
       setActiveOrgIdState(validOrgId);
@@ -133,36 +136,24 @@ export function ConsoleProvider({ children }) {
   const setMode = useCallback(async (newMode) => {
     if (newMode === mode) return;
 
-    // Optimistically update UI
-    setModeState(newMode);
+    const nextState = resolveModeChange({
+      newMode,
+      activeOrgId,
+      memberships,
+    });
 
-    // Clear active org when switching to applicant
-    if (newMode === 'applicant') {
-      setActiveOrgIdState(null);
-      navigate('/console/applicant/catalog');
-    } else if (newMode === 'org') {
-      // Auto-select if only one membership
-      if (memberships.length === 1) {
-        const singleOrg = memberships[0];
-        setActiveOrgIdState(singleOrg.id);
-        if (updateAuthOrg) {
-          updateAuthOrg(singleOrg.id);
-        }
-        navigate('/console/org');
-      } else if (activeOrgId) {
-        // Has an org selected already
-        navigate('/console/org');
-      } else {
-        // Multiple orgs, none selected - go to setup
-        navigate('/console/org/setup');
-      }
+    // Optimistically update UI
+    setModeState(nextState.mode);
+    setActiveOrgIdState(nextState.activeOrgId);
+
+    if (nextState.authOrgId && updateAuthOrg) {
+      updateAuthOrg(nextState.authOrgId);
     }
 
+    navigate(nextState.destination);
+
     try {
-      await updatePreferences({
-        last_view_mode: newMode,
-        last_active_org_id: newMode === 'applicant' ? null : activeOrgId,
-      });
+      await updatePreferences(nextState.persistence);
     } catch (error) {
       // Keep in-memory UI state even if persistence fails (backend may reject some payloads)
       console.warn('[ConsoleContext] Failed to persist mode preference, keeping local state:', error);
@@ -175,8 +166,14 @@ export function ConsoleProvider({ children }) {
   const setActiveOrgId = useCallback(async (orgId) => {
     if (orgId === activeOrgId) return;
 
+    const nextSelection = resolveActiveOrgSelection({
+      orgId,
+      currentMode: mode,
+      memberships,
+    });
+
     // Validate org exists in memberships
-    if (orgId && !(memberships || []).find(o => o.id === orgId)) {
+    if (!nextSelection.valid) {
       console.warn('[ConsoleContext] Attempted to set invalid org ID:', orgId);
       return;
     }
@@ -190,9 +187,9 @@ export function ConsoleProvider({ children }) {
     }
 
     // Auto-switch to org mode if selecting an org
-    const newMode = orgId ? 'org' : mode;
-    if (newMode !== mode) {
-      setModeState(newMode);
+    setActiveOrgIdState(nextSelection.activeOrgId);
+    if (nextSelection.mode !== mode) {
+      setModeState(nextSelection.mode);
     }
 
     // Sync with AuthContext for permissions
@@ -201,20 +198,17 @@ export function ConsoleProvider({ children }) {
     }
 
     try {
-      await updatePreferences({
-        last_view_mode: newMode,
-        last_active_org_id: orgId,
-      });
+      await updatePreferences(nextSelection.persistence);
 
       // Always navigate to org console when selecting an org
-      if (orgId) {
-        navigate('/console/org');
+      if (nextSelection.destination) {
+        navigate(nextSelection.destination);
       }
     } catch (error) {
       // Keep selected org locally even if preference persistence fails
       console.warn('[ConsoleContext] Failed to persist active org preference, keeping local selection:', error);
-      if (orgId) {
-        navigate('/console/org');
+      if (nextSelection.destination) {
+        navigate(nextSelection.destination);
       }
     }
   }, [activeOrgId, mode, memberships, navigate, updateAuthOrg]);
@@ -269,7 +263,7 @@ export function ConsoleProvider({ children }) {
    * Blocked when in org mode but no org selected
    */
   const isOrgBlocked = useMemo(() => {
-    return mode === 'org' && activeOrgId === null;
+    return isOrgConsoleBlocked(mode, activeOrgId);
   }, [mode, activeOrgId]);
 
   const value = useMemo(() => ({
@@ -328,25 +322,4 @@ export function useConsole() {
  * @param {string} fallback - Fallback path (default: '/console/applicant/catalog')
  * @returns {string} - Path to navigate to
  */
-export function getDefaultLandingPath(context, fallback = '/console/applicant/catalog') {
-  const { mode, activeOrgId, memberships } = context;
-
-  // No memberships => keep applicant entrypoint available
-  if (!memberships || memberships.length === 0) {
-    return '/console/applicant/catalog';
-  }
-
-  // If user has org memberships and last mode was org with valid org selected
-  if (mode === 'org' && activeOrgId && memberships.find(o => o.id === activeOrgId)) {
-    return '/console/org';
-  }
-
-  // If user has org memberships but no org is selected (or mode is applicant)
-  // Land on catalog instead of dashboard
-  if (mode === 'applicant' || !activeOrgId) {
-    return '/console/applicant/catalog';
-  }
-
-  // Fallback
-  return fallback;
-}
+export { getDefaultLandingPath };

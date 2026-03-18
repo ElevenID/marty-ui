@@ -54,8 +54,7 @@ import FilterListIcon from '@mui/icons-material/FilterList';
 
 import QRCodeDisplay from '../issuance/QRCodeDisplay';
 import { useAuth } from '../../hooks/useAuth';
-
-const API_URL = import.meta.env.VITE_API_URL || '';
+import { fetchOffers as fetchOffersApi, regenerateOffer } from '../../application/vendor';
 
 // Status configurations
 const STATUS_COLORS = {
@@ -483,30 +482,13 @@ export default function VendorOfferList() {
     setError(null);
     
     try {
-      const params = new URLSearchParams({
-        organization_id: organizationId,
-        page: (page + 1).toString(),
-        page_size: rowsPerPage.toString(),
+      const data = await fetchOffersApi({
+        organizationId,
+        page: page + 1,
+        pageSize: rowsPerPage,
+        statusFilter,
+        activeFilter,
       });
-      
-      if (statusFilter) params.append('status', statusFilter);
-      if (activeFilter !== '') params.append('is_active', activeFilter);
-      
-      const response = await fetch(
-        `${API_URL}/api/issuance/offers?${params.toString()}`,
-        {
-          credentials: 'include',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-        }
-      );
-      
-      if (!response.ok) {
-        throw new Error(`Failed to fetch offers: ${response.statusText}`);
-      }
-      
-      const data = await response.json();
       setOffers(data.offers || []);
       setTotal(data.total || 0);
     } catch (err) {
@@ -525,22 +507,7 @@ export default function VendorOfferList() {
     setError(null);
     
     try {
-      const response = await fetch(
-        `${API_URL}/api/issuance/offers/${offer.offer_id}/regenerate`,
-        {
-          method: 'POST',
-          credentials: 'include',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ force: false }),
-        }
-      );
-      
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.detail || `Failed to regenerate offer: ${response.statusText}`);
-      }
+      await regenerateOffer({ offerId: offer.offer_id });
       
       // Refresh the list
       await fetchOffers();

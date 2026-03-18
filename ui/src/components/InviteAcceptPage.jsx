@@ -5,7 +5,7 @@
  * Handles the invitation token from email link and adds user to org.
  */
 
-import { useState, useEffect } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import {
   Box,
@@ -35,104 +35,73 @@ import ErrorIcon from '@mui/icons-material/Error';
 import VerifiedUserIcon from '@mui/icons-material/VerifiedUser';
 import { useAuth } from '../hooks/useAuth';
 import { acceptOrganizationInvitation, validateOrganizationInvitation } from '../services/organizationsApi';
-
-// Invitation states
-const STATES = {
-  LOADING: 'loading',
-  VALID: 'valid',
-  ACCEPTING: 'accepting',
-  ACCEPTED: 'accepted',
-  EXPIRED: 'expired',
-  INVALID: 'invalid',
-  ERROR: 'error',
-  LOGIN_REQUIRED: 'login_required',
-};
+import {
+  getInviteAcceptLoginReturnUrl,
+  INVITE_ACCEPT_STATES,
+  loadInviteAcceptInvitation,
+  submitInviteAcceptInvitation,
+} from '../application/onboarding';
 
 export default function InviteAcceptPage() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const { isAuthenticated, login } = useAuth();
   
-  const [state, setState] = useState(STATES.LOADING);
+  const [state, setState] = useState(INVITE_ACCEPT_STATES.LOADING);
   const [invitation, setInvitation] = useState(null);
   const [error, setError] = useState(null);
 
   const token = searchParams.get('token');
 
+  const validateInvitation = useCallback(async () => {
+    setState(INVITE_ACCEPT_STATES.LOADING);
+    const result = await loadInviteAcceptInvitation({
+      token,
+      isAuthenticated,
+      validateOrganizationInvitation,
+    });
+
+    if (result.redirectTo) {
+      navigate(result.redirectTo, { replace: true });
+      return;
+    }
+
+    setInvitation(result.invitation);
+    setState(result.state);
+    setError(result.error);
+  }, [token, isAuthenticated, navigate]);
+
   useEffect(() => {
-    if (!token) {
-      setState(STATES.INVALID);
-      setError('No invitation token provided');
-      return;
-    }
-
-    if (isAuthenticated) {
-      navigate(`/organizations/join?inviteToken=${encodeURIComponent(token)}`, { replace: true });
-      return;
-    }
-
     validateInvitation();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token, isAuthenticated]);
-
-  const validateInvitation = async () => {
-    setState(STATES.LOADING);
-    try {
-      const data = await validateOrganizationInvitation(token);
-
-      if (!data?.valid) {
-        if (data?.expired) {
-          setState(STATES.EXPIRED);
-          setError(data?.message || 'This invitation has expired');
-          return;
-        }
-        setState(STATES.INVALID);
-        setError(data?.message || 'Invitation not found or has been cancelled');
-        return;
-      }
-
-      setInvitation(data);
-      
-      // Check if user needs to login
-      if (!isAuthenticated) {
-        setState(STATES.LOGIN_REQUIRED);
-      } else {
-        setState(STATES.VALID);
-      }
-    } catch (err) {
-      console.error('Error validating invitation:', err);
-      setState(STATES.ERROR);
-      setError(err.message);
-    }
-  };
+  }, [validateInvitation]);
 
   const handleAcceptInvitation = async () => {
-    setState(STATES.ACCEPTING);
-    try {
-      const data = await acceptOrganizationInvitation(token);
-      setInvitation(prev => ({ ...prev, ...data }));
-      setState(STATES.ACCEPTED);
+    setState(INVITE_ACCEPT_STATES.ACCEPTING);
+    const result = await submitInviteAcceptInvitation({
+      token,
+      invitation,
+      acceptOrganizationInvitation,
+    });
 
-      // Redirect to dashboard after a short delay
+    setInvitation(result.invitation);
+    setState(result.state);
+    setError(result.error);
+
+    if (result.redirectTo) {
       setTimeout(() => {
-        navigate('/my-applications');
+        navigate(result.redirectTo);
       }, 3000);
-    } catch (err) {
-      console.error('Error accepting invitation:', err);
-      setState(STATES.ERROR);
-      setError(err.message);
     }
   };
 
   const handleLogin = () => {
-    // Store the current URL to return after login
-    sessionStorage.setItem('returnUrl', `/organizations/join?inviteToken=${encodeURIComponent(token || '')}`);
+    sessionStorage.setItem('returnUrl', getInviteAcceptLoginReturnUrl(token));
     login();
   };
 
   const renderContent = () => {
     switch (state) {
-      case STATES.LOADING:
+      case INVITE_ACCEPT_STATES.LOADING:
         return (
           <Box sx={{ textAlign: 'center', py: 6 }} data-testid="invite-loading">
             <CircularProgress size={48} sx={{ mb: 2 }} />
@@ -140,7 +109,7 @@ export default function InviteAcceptPage() {
           </Box>
         );
 
-      case STATES.LOGIN_REQUIRED:
+      case INVITE_ACCEPT_STATES.LOGIN_REQUIRED:
         return (
           <Box sx={{ textAlign: 'center', py: 4 }} data-testid="invite-login-required">
             <BusinessIcon sx={{ fontSize: 64, color: 'primary.main', mb: 2 }} />
@@ -167,7 +136,7 @@ export default function InviteAcceptPage() {
           </Box>
         );
 
-      case STATES.VALID:
+      case INVITE_ACCEPT_STATES.VALID:
         return (
           <Box data-testid="invite-valid">
             <Box sx={{ textAlign: 'center', mb: 4 }}>
@@ -264,7 +233,7 @@ export default function InviteAcceptPage() {
           </Box>
         );
 
-      case STATES.ACCEPTING:
+      case INVITE_ACCEPT_STATES.ACCEPTING:
         return (
           <Box sx={{ textAlign: 'center', py: 6 }} data-testid="invite-accepting">
             <CircularProgress size={48} sx={{ mb: 2 }} />
@@ -272,7 +241,7 @@ export default function InviteAcceptPage() {
           </Box>
         );
 
-      case STATES.ACCEPTED:
+      case INVITE_ACCEPT_STATES.ACCEPTED:
         return (
           <Fade in>
             <Box sx={{ textAlign: 'center', py: 4 }} data-testid="invite-accepted">
@@ -300,7 +269,7 @@ export default function InviteAcceptPage() {
           </Fade>
         );
 
-      case STATES.EXPIRED:
+      case INVITE_ACCEPT_STATES.EXPIRED:
         return (
           <Box sx={{ textAlign: 'center', py: 4 }} data-testid="invite-expired">
             <AccessTimeIcon sx={{ fontSize: 64, color: 'warning.main', mb: 2 }} />
@@ -316,8 +285,8 @@ export default function InviteAcceptPage() {
           </Box>
         );
 
-      case STATES.INVALID:
-      case STATES.ERROR:
+      case INVITE_ACCEPT_STATES.INVALID:
+      case INVITE_ACCEPT_STATES.ERROR:
         return (
           <Box sx={{ textAlign: 'center', py: 4 }} data-testid="invite-error">
             <ErrorIcon sx={{ fontSize: 64, color: 'error.main', mb: 2 }} />

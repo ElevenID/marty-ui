@@ -33,7 +33,6 @@ from typing import Annotated
 from marty_common import (
     OrganizationClient,
     OrganizationContext,
-    require_org_admin,
     require_org_membership,
 )
 from marty_common.org_authorization import get_organization_client
@@ -207,6 +206,17 @@ class DeploymentProfile:
     # Linked configurations (by ID)
     default_trust_profile_id: str | None = None
     default_compliance_profile_id: str | None = None
+    default_presentation_policy_id: str | None = None
+    
+    # Deployment-specific fields
+    site_id: str | None = None
+    network_mode: str = "online"
+    key_access_mode: str = "key_vault"
+    ux_config: dict[str, Any] = field(default_factory=dict)
+    update_policy: dict[str, Any] = field(default_factory=dict)
+    offline_cache_ttl_hours: int = 24
+    biometric_required: bool = False
+    audit_all_events: bool = True
     
     # API credentials (generated)
     api_key: str | None = None
@@ -255,6 +265,44 @@ class InMemoryDeploymentProfileRepository:
     
     async def delete(self, profile_id: str) -> None:
         self._profiles.pop(profile_id, None)
+
+
+@dataclass
+class Lane:
+    """A logical device grouping within a deployment profile."""
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    deployment_profile_id: str = ""
+    name: str = ""
+    description: str | None = None
+    location: str | None = None
+    device_type: str = "kiosk"
+    metadata: dict[str, Any] = field(default_factory=dict)
+    devices: list[dict[str, Any]] = field(default_factory=list)
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+    @property
+    def device_count(self) -> int:
+        return len(self.devices)
+
+
+class InMemoryLaneRepository:
+    """In-memory repository for lanes."""
+
+    def __init__(self):
+        self._lanes: dict[str, Lane] = {}
+
+    async def save(self, lane: Lane) -> None:
+        self._lanes[lane.id] = lane
+
+    async def get(self, lane_id: str) -> Lane | None:
+        return self._lanes.get(lane_id)
+
+    async def list(self, profile_id: str) -> list[Lane]:
+        return [l for l in self._lanes.values() if l.deployment_profile_id == profile_id]
+
+    async def delete(self, lane_id: str) -> None:
+        self._lanes.pop(lane_id, None)
 
 
 # =============================================================================
@@ -333,6 +381,15 @@ class CreateDeploymentProfileRequest(BaseModel):
     name: str
     description: str | None = None
     environment: str = "development"
+    site_id: str | None = None
+    network_mode: str = "online"
+    key_access_mode: str = "key_vault"
+    ux_config: dict | None = None
+    update_policy: dict | None = None
+    offline_cache_ttl_hours: int = 24
+    biometric_required: bool = False
+    audit_all_events: bool = True
+    default_presentation_policy_id: str | None = None
     callbacks: CallbackConfigurationModel | None = None
     api_auth: ApiAuthConfigurationModel | None = None
     rate_limits: RateLimitConfigurationModel | None = None
@@ -345,6 +402,12 @@ class CreateDeploymentProfileRequest(BaseModel):
 class UpdateDeploymentProfileRequest(BaseModel):
     name: str | None = None
     description: str | None = None
+    network_mode: str | None = None
+    biometric_required: bool | None = None
+    audit_all_events: bool | None = None
+    offline_cache_ttl_hours: int | None = None
+    ux_config: dict | None = None
+    default_presentation_policy_id: str | None = None
     callbacks: CallbackConfigurationModel | None = None
     api_auth: ApiAuthConfigurationModel | None = None
     rate_limits: RateLimitConfigurationModel | None = None
@@ -358,17 +421,26 @@ class DeploymentProfileResponse(BaseModel):
     id: str
     organization_id: str
     name: str
-    description: str | None
+    description: str | None = None
     status: str
     environment: str
-    callbacks: dict
-    api_auth: dict
-    rate_limits: dict
-    feature_flags: dict
-    branding: dict
-    default_trust_profile_id: str | None
-    default_compliance_profile_id: str | None
-    api_key_prefix: str | None
+    site_id: str | None = None
+    network_mode: str = "online"
+    key_access_mode: str = "key_vault"
+    ux_config: dict = {}
+    update_policy: dict = {}
+    offline_cache_ttl_hours: int = 24
+    biometric_required: bool = False
+    audit_all_events: bool = True
+    default_presentation_policy_id: str | None = None
+    callbacks: dict = {}
+    api_auth: dict = {}
+    rate_limits: dict = {}
+    feature_flags: dict = {}
+    branding: dict = {}
+    default_trust_profile_id: str | None = None
+    default_compliance_profile_id: str | None = None
+    api_key_prefix: str | None = None
     created_at: str
     updated_at: str
 
@@ -377,6 +449,40 @@ class ApiKeyResponse(BaseModel):
     api_key: str
     api_key_prefix: str
     environment: str
+
+
+class CreateLaneRequest(BaseModel):
+    name: str
+    description: str | None = None
+    location: str | None = None
+    device_type: str = "kiosk"
+    metadata: dict = {}
+
+
+class UpdateLaneRequest(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    location: str | None = None
+    device_type: str | None = None
+    metadata: dict | None = None
+
+
+class LaneResponse(BaseModel):
+    id: str
+    deployment_profile_id: str
+    name: str
+    description: str | None = None
+    location: str | None = None
+    device_type: str = "kiosk"
+    metadata: dict = {}
+    device_count: int = 0
+    created_at: str
+    updated_at: str
+
+
+class AssignDeviceRequest(BaseModel):
+    device_id: str
+    device_name: str | None = None
 
 
 # =============================================================================
@@ -420,6 +526,15 @@ async def create_deployment_profile(
         environment=Environment(request.environment),
         default_trust_profile_id=request.default_trust_profile_id,
         default_compliance_profile_id=request.default_compliance_profile_id,
+        default_presentation_policy_id=request.default_presentation_policy_id,
+        site_id=request.site_id,
+        network_mode=request.network_mode,
+        key_access_mode=request.key_access_mode,
+        ux_config=request.ux_config or {},
+        update_policy=request.update_policy or {},
+        offline_cache_ttl_hours=request.offline_cache_ttl_hours,
+        biometric_required=request.biometric_required,
+        audit_all_events=request.audit_all_events,
     )
     
     # Set callbacks
@@ -545,10 +660,33 @@ async def update_deployment_profile(
         profile.default_trust_profile_id = request.default_trust_profile_id
     if request.default_compliance_profile_id is not None:
         profile.default_compliance_profile_id = request.default_compliance_profile_id
+    if request.network_mode is not None:
+        profile.network_mode = request.network_mode
+    if request.biometric_required is not None:
+        profile.biometric_required = request.biometric_required
+    if request.audit_all_events is not None:
+        profile.audit_all_events = request.audit_all_events
+    if request.offline_cache_ttl_hours is not None:
+        profile.offline_cache_ttl_hours = request.offline_cache_ttl_hours
+    if request.ux_config is not None:
+        profile.ux_config = request.ux_config
+    if request.default_presentation_policy_id is not None:
+        profile.default_presentation_policy_id = request.default_presentation_policy_id
     
     profile.updated_at = datetime.now(timezone.utc)
     await repo.save(profile)
     return _profile_to_response(profile)
+
+
+@router.put("/{profile_id}", response_model=DeploymentProfileResponse)
+async def update_deployment_profile_put(
+    profile_id: str,
+    request: UpdateDeploymentProfileRequest,
+    user_id: str = Depends(get_current_user_id),
+    repo: InMemoryDeploymentProfileRepository = Depends(get_repo),
+) -> DeploymentProfileResponse:
+    """Update a Deployment Profile via PUT (alias for PATCH)."""
+    return await update_deployment_profile(profile_id, request, user_id, repo)
 
 
 @router.post("/{profile_id}/activate", response_model=DeploymentProfileResponse)
@@ -650,6 +788,15 @@ def _profile_to_response(profile: DeploymentProfile) -> DeploymentProfileRespons
         description=profile.description,
         status=profile.status.value,
         environment=profile.environment.value,
+        site_id=profile.site_id,
+        network_mode=profile.network_mode,
+        key_access_mode=profile.key_access_mode,
+        ux_config=profile.ux_config,
+        update_policy=profile.update_policy,
+        offline_cache_ttl_hours=profile.offline_cache_ttl_hours,
+        biometric_required=profile.biometric_required,
+        audit_all_events=profile.audit_all_events,
+        default_presentation_policy_id=profile.default_presentation_policy_id,
         callbacks={
             "issuance_complete_url": profile.callbacks.issuance_complete_url,
             "issuance_failed_url": profile.callbacks.issuance_failed_url,
@@ -692,25 +839,199 @@ def _profile_to_response(profile: DeploymentProfile) -> DeploymentProfileRespons
     )
 
 
+def _lane_to_response(lane: Lane) -> LaneResponse:
+    return LaneResponse(
+        id=lane.id,
+        deployment_profile_id=lane.deployment_profile_id,
+        name=lane.name,
+        description=lane.description,
+        location=lane.location,
+        device_type=lane.device_type,
+        metadata=lane.metadata,
+        device_count=lane.device_count,
+        created_at=lane.created_at.isoformat(),
+        updated_at=lane.updated_at.isoformat(),
+    )
+
+
+# =============================================================================
+# Lane Endpoints
+# =============================================================================
+
+_lane_repo: InMemoryLaneRepository | None = None
+
+
+def get_lane_repo() -> InMemoryLaneRepository:
+    if _lane_repo is None:
+        raise RuntimeError("Service not configured")
+    return _lane_repo
+
+
+@router.post("/{profile_id}/lanes", response_model=LaneResponse)
+async def create_lane(
+    profile_id: str,
+    request: CreateLaneRequest,
+    user_id: str = Depends(get_current_user_id),
+    repo: InMemoryDeploymentProfileRepository = Depends(get_repo),
+    lane_repo: InMemoryLaneRepository = Depends(get_lane_repo),
+) -> LaneResponse:
+    """Create a Lane within a Deployment Profile."""
+    profile = await repo.get(profile_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Deployment Profile not found")
+    await app.state.org_client.get_membership(user_id, profile.organization_id)
+    lane = Lane(
+        deployment_profile_id=profile_id,
+        name=request.name,
+        description=request.description,
+        location=request.location,
+        device_type=request.device_type,
+        metadata=request.metadata,
+    )
+    await lane_repo.save(lane)
+    return _lane_to_response(lane)
+
+
+@router.get("/{profile_id}/lanes", response_model=list[LaneResponse])
+async def list_lanes(
+    profile_id: str,
+    user_id: str = Depends(get_current_user_id),
+    repo: InMemoryDeploymentProfileRepository = Depends(get_repo),
+    lane_repo: InMemoryLaneRepository = Depends(get_lane_repo),
+) -> list[LaneResponse]:
+    """List Lanes for a Deployment Profile."""
+    profile = await repo.get(profile_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Deployment Profile not found")
+    await app.state.org_client.get_membership(user_id, profile.organization_id)
+    lanes = await lane_repo.list(profile_id)
+    return [_lane_to_response(l) for l in lanes]
+
+
+@router.get("/{profile_id}/lanes/{lane_id}", response_model=LaneResponse)
+async def get_lane(
+    profile_id: str,
+    lane_id: str,
+    user_id: str = Depends(get_current_user_id),
+    repo: InMemoryDeploymentProfileRepository = Depends(get_repo),
+    lane_repo: InMemoryLaneRepository = Depends(get_lane_repo),
+) -> LaneResponse:
+    """Get a Lane by ID."""
+    profile = await repo.get(profile_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Deployment Profile not found")
+    await app.state.org_client.get_membership(user_id, profile.organization_id)
+    lane = await lane_repo.get(lane_id)
+    if not lane or lane.deployment_profile_id != profile_id:
+        raise HTTPException(status_code=404, detail="Lane not found")
+    return _lane_to_response(lane)
+
+
+@router.put("/{profile_id}/lanes/{lane_id}", response_model=LaneResponse)
+async def update_lane(
+    profile_id: str,
+    lane_id: str,
+    request: UpdateLaneRequest,
+    user_id: str = Depends(get_current_user_id),
+    repo: InMemoryDeploymentProfileRepository = Depends(get_repo),
+    lane_repo: InMemoryLaneRepository = Depends(get_lane_repo),
+) -> LaneResponse:
+    """Update a Lane."""
+    profile = await repo.get(profile_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Deployment Profile not found")
+    membership = await app.state.org_client.get_membership(user_id, profile.organization_id)
+    if not membership.has_role("admin", "owner"):
+        raise HTTPException(status_code=403, detail="Admin access required")
+    lane = await lane_repo.get(lane_id)
+    if not lane or lane.deployment_profile_id != profile_id:
+        raise HTTPException(status_code=404, detail="Lane not found")
+    if request.name is not None:
+        lane.name = request.name
+    if request.description is not None:
+        lane.description = request.description
+    if request.location is not None:
+        lane.location = request.location
+    if request.device_type is not None:
+        lane.device_type = request.device_type
+    if request.metadata is not None:
+        lane.metadata = request.metadata
+    lane.updated_at = datetime.now(timezone.utc)
+    await lane_repo.save(lane)
+    return _lane_to_response(lane)
+
+
+@router.delete("/{profile_id}/lanes/{lane_id}")
+async def delete_lane(
+    profile_id: str,
+    lane_id: str,
+    user_id: str = Depends(get_current_user_id),
+    repo: InMemoryDeploymentProfileRepository = Depends(get_repo),
+    lane_repo: InMemoryLaneRepository = Depends(get_lane_repo),
+) -> dict:
+    """Delete a Lane."""
+    profile = await repo.get(profile_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Deployment Profile not found")
+    membership = await app.state.org_client.get_membership(user_id, profile.organization_id)
+    if not membership.has_role("admin", "owner"):
+        raise HTTPException(status_code=403, detail="Admin access required")
+    lane = await lane_repo.get(lane_id)
+    if not lane or lane.deployment_profile_id != profile_id:
+        raise HTTPException(status_code=404, detail="Lane not found")
+    await lane_repo.delete(lane_id)
+    return {"success": True}
+
+
+@router.post("/{profile_id}/lanes/{lane_id}/devices")
+async def assign_device_to_lane(
+    profile_id: str,
+    lane_id: str,
+    request: AssignDeviceRequest,
+    user_id: str = Depends(get_current_user_id),
+    repo: InMemoryDeploymentProfileRepository = Depends(get_repo),
+    lane_repo: InMemoryLaneRepository = Depends(get_lane_repo),
+) -> dict:
+    """Assign a device to a Lane."""
+    profile = await repo.get(profile_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Deployment Profile not found")
+    await app.state.org_client.get_membership(user_id, profile.organization_id)
+    lane = await lane_repo.get(lane_id)
+    if not lane or lane.deployment_profile_id != profile_id:
+        raise HTTPException(status_code=404, detail="Lane not found")
+    lane.devices.append({
+        "device_id": request.device_id,
+        "device_name": request.device_name,
+        "assigned_at": datetime.now(timezone.utc).isoformat(),
+    })
+    lane.updated_at = datetime.now(timezone.utc)
+    await lane_repo.save(lane)
+    return _lane_to_response(lane).model_dump()
+
+
 # =============================================================================
 # Application Setup
 # =============================================================================
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    global _repo
+    global _repo, _lane_repo
     logger.info(f"Starting {SERVICE_NAME}...")
     _repo = InMemoryDeploymentProfileRepository()
+    _lane_repo = InMemoryLaneRepository()
     
-    # Initialize OrganizationClient
-    org_service_url = os.environ.get("ORGANIZATION_SERVICE_URL", "http://organization:8002")
+    # Initialize gRPC channel to organization service
+    from common.grpc_factory import create_grpc_channel
+    org_grpc_target = os.environ.get("ORG_GRPC_TARGET", "organization:9002")
+    org_grpc_channel = create_grpc_channel(org_grpc_target, service_name="deployment-profile")
     app.state.org_client = OrganizationClient(
-        base_url=org_service_url,
-        redis_client=None,
+        grpc_channel=org_grpc_channel,
     )
     
     yield
     logger.info(f"Shutting down {SERVICE_NAME}...")
+    await org_grpc_channel.close()
 
 
 def create_app() -> FastAPI:
@@ -736,6 +1057,10 @@ def create_app() -> FastAPI:
     @app.get("/health")
     async def health_check() -> dict:
         return {"status": "healthy", "service": SERVICE_NAME}
+
+    from common.metrics import init_otel_tracing, mount_metrics
+    init_otel_tracing(SERVICE_NAME)
+    mount_metrics(app)
     
     return app
 

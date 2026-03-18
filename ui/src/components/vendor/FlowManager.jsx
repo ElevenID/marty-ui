@@ -51,6 +51,24 @@ import { useNotifications } from '../../hooks/useNotifications';
 import flowsApi, { FLOW_STATES } from '../../services/flowsApi';
 import credentialsApi from '../../services/credentialsApi';
 import sseService, { EVENT_TYPES } from '../../services/sseService';
+import { listTrustProfiles, listCredentialTemplates } from '../../services/presentationPolicyApi';
+import { listDeploymentProfiles } from '../../services/deploymentProfilesApi';
+import {
+  approveFlowManagerExecution,
+  batchRevokeFlowManagerCredentials,
+  formatTruncatedId,
+  getApprovalStrategyPresentation,
+  getCredentialSelectionState,
+  getFlowStatusPresentation,
+  loadFlowManagerCredentials,
+  loadFlowManagerExecutions,
+  loadFlowManagerFlows,
+  loadFlowManagerRevocationBatches,
+  getPendingExecutions,
+  startFlowManagerRealtimeUpdates,
+  toggleAllCredentialSelections,
+  toggleCredentialSelection,
+} from '../../application/flows';
 import FlowPublishDialog from './FlowPublishDialog';
 import FlowDisableDialog from './FlowDisableDialog';
 import { EmptyState } from '../common';
@@ -67,6 +85,11 @@ const FlowManager = () => {
   const [revocationBatches, setRevocationBatches] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [prereqStatus, setPrereqStatus] = useState({
+    trustProfile: 'loading',
+    template: 'loading',
+    deployment: 'loading',
+  });
   
   // Dialog states
   const [revocationDialog, setRevocationDialog] = useState(false);
@@ -74,100 +97,71 @@ const FlowManager = () => {
   const [publishDialog, setPublishDialog] = useState(false);
   const [disableDialog, setDisableDialog] = useState(false);
   const [selectedFlow, setSelectedFlow] = useState(null);
+  const pendingExecutions = getPendingExecutions(executions);
+  const credentialSelectionState = getCredentialSelectionState(credentials, selectedCredentials);
+
+  const showNotification = useCallback((notification) => {
+    if (!notification) return;
+
+    if (notification.type === 'success') {
+      showSuccess(notification.message, notification.options);
+    } else if (notification.type === 'warning') {
+      showWarning(notification.message, notification.options);
+    } else if (notification.type === 'error') {
+      showError(notification.message, notification.options);
+    }
+  }, [showError, showSuccess, showWarning]);
 
   // Load data
   const loadFlows = useCallback(async () => {
-    try {
-      const data = await flowsApi.listFlows({ limit: 100 });
-      setFlows(data);
-      setError(null);
-    } catch (err) {
-      console.error('Failed to load flows:', err);
-      showWarning('Backend service unavailable - showing sample data for testing', {
-        autoHideDuration: 8000,
-      });
-      // Use mock data for development/testing when API fails
-      setFlows([
-        {
-          id: 'flow-1',
-          name: 'EU Digital Identity – Employee Issuance',
-          flow_type: 'issuance',
-          status: 'PUBLISHED',
-          approval_strategy: 'manual',
-          credential_template_name: 'EU Digital Identity Credential',
-          credential_template_id: 'ct-1',
-        },
-        {
-          id: 'flow-2',
-          name: 'Mobile Driver License Issuance',
-          flow_type: 'issuance',
-          status: 'DRAFT',
-          approval_strategy: 'auto',
-          credential_template_name: 'Mobile Driving License',
-          credential_template_id: 'ct-2',
-        },
-      ]);
-      setError(null); // Clear error since we're using mock data
-    }
-  }, [showWarning]);
+    const result = await loadFlowManagerFlows({ listFlows: flowsApi.listFlows });
+    setFlows(result.flows);
+    setError(result.error);
+    showNotification(result.notification);
+  }, [showNotification]);
 
   const loadExecutions = useCallback(async (flowId = null) => {
-    try {
-      if (flowId) {
-        const data = await flowsApi.listFlowExecutions(flowId, { limit: 50 });
-        setExecutions(data);
-      } else if (flows.length > 0) {
-        // Load executions for all flows
-        const allExecutions = [];
-        for (const flow of flows) {
-          const data = await flowsApi.listFlowExecutions(flow.id, { limit: 10 });
-          allExecutions.push(...data);
-        }
-        setExecutions(allExecutions);
-      }
-    } catch (err) {
-      console.error('Failed to load executions:', err);
-      showError('Unable to load flow executions', {
-        details: 'The backend service may be unavailable. Check console for details.',
-      });
-      setExecutions([]); // Use empty array on error
-    }
-  }, [flows, showError]);
+    const result = await loadFlowManagerExecutions({
+      listFlowExecutions: flowsApi.listFlowExecutions,
+      flows,
+      flowId,
+    });
+    setExecutions(result.executions);
+    showNotification(result.notification);
+  }, [flows, showNotification]);
 
   const loadCredentials = useCallback(async () => {
-    try {
-      const data = await credentialsApi.listCredentials({ limit: 100 });
-      setCredentials(data);
-    } catch (err) {
-      console.error('Failed to load credentials:', err);
-      showError('Unable to load credentials', {
-        details: 'The backend service may be unavailable. Check console for details.',
-      });
-      setCredentials([]); // Use empty array on error
-    }
-  }, [showError]);
+    const result = await loadFlowManagerCredentials({
+      listCredentials: credentialsApi.listCredentials,
+    });
+    setCredentials(result.credentials);
+    showNotification(result.notification);
+  }, [showNotification]);
 
   const loadRevocationBatches = useCallback(async () => {
-    try {
-      const data = await credentialsApi.listRevocationBatches();
-      setRevocationBatches(data);
-    } catch (err) {
-      console.error('Failed to load revocation batches:', err);
-      showError('Unable to load revocation batches', {
-        details: 'The backend service may be unavailable. Check console for details.',
-      });
-      setRevocationBatches([]); // Use empty array on error
-    }
-  }, [showError]);
+    const result = await loadFlowManagerRevocationBatches({
+      listRevocationBatches: credentialsApi.listRevocationBatches,
+    });
+    setRevocationBatches(result.revocationBatches);
+    showNotification(result.notification);
+  }, [showNotification]);
 
   useEffect(() => {
     const loadAllData = async () => {
       setLoading(true);
-      await Promise.all([
+      const [,,, trustProfilesResult, templatesResult, deploymentsResult] = await Promise.all([
         loadFlows(),
         loadCredentials(),
         loadRevocationBatches(),
+        listTrustProfiles().catch(() => []),
+        listCredentialTemplates().catch(() => []),
+        listDeploymentProfiles().catch(() => []),
       ]);
+      setPrereqStatus({
+        trustProfile: (trustProfilesResult?.length > 0) ? 'ready' : 'missing',
+        template: (templatesResult?.length > 0) ? 'ready' : 'missing',
+        deployment: (deploymentsResult?.length > 0) ? 'ready' : 'missing',
+      });
       setLoading(false);
     };
     loadAllData();
@@ -179,77 +173,29 @@ const FlowManager = () => {
 
   // SSE real-time updates
   useEffect(() => {
-    if (!user?.organization_id) return;
-
-    // Connect to SSE with organization filter
-    sseService.connect({
-      organizationId: user.organization_id,
-      subscriptions: [
-        EVENT_TYPES.FLOW_EXECUTION_STARTED,
-        EVENT_TYPES.FLOW_EXECUTION_COMPLETED,
-        EVENT_TYPES.APPLICATION_APPROVED,
-        EVENT_TYPES.CREDENTIAL_ISSUED,
-        EVENT_TYPES.CREDENTIAL_REVOKED,
-        EVENT_TYPES.REVOCATION_BATCH_COMPLETED,
-      ],
+    return startFlowManagerRealtimeUpdates({
+      sseService,
+      eventTypes: EVENT_TYPES,
+      organizationId: user?.organization_id,
+      loadExecutions,
+      loadCredentials,
+      loadRevocationBatches,
+      showSuccess,
     });
-
-    // Set up event listeners
-    const unsubscribers = [
-      sseService.on(EVENT_TYPES.FLOW_EXECUTION_STARTED, (data) => {
-        console.log('Flow execution started:', data);
-        loadExecutions();
-        showSuccess(`Flow execution started: ${data.flow_id}`);
-      }),
-      
-      sseService.on(EVENT_TYPES.FLOW_EXECUTION_COMPLETED, (data) => {
-        console.log('Flow execution completed:', data);
-        loadExecutions();
-        showSuccess(`Flow execution completed: ${data.execution_id}`);
-      }),
-      
-      sseService.on(EVENT_TYPES.APPLICATION_APPROVED, (data) => {
-        console.log('Application approved:', data);
-        loadExecutions();
-      }),
-      
-      sseService.on(EVENT_TYPES.CREDENTIAL_ISSUED, (data) => {
-        console.log('Credential issued:', data);
-        loadCredentials();
-        showSuccess(`Credential issued: ${data.credential_id}`);
-      }),
-      
-      sseService.on(EVENT_TYPES.CREDENTIAL_REVOKED, (data) => {
-        console.log('Credential revoked:', data);
-        loadCredentials();
-        loadRevocationBatches();
-      }),
-      
-      sseService.on(EVENT_TYPES.REVOCATION_BATCH_COMPLETED, (data) => {
-        console.log('Revocation batch completed:', data);
-        loadRevocationBatches();
-        loadCredentials();
-        showSuccess(`Revocation batch completed: ${data.credential_count} credentials`);
-      }),
-    ];
-
-    // Cleanup
-    return () => {
-      unsubscribers.forEach(unsub => unsub());
-      sseService.disconnect();
-    };
   }, [user, loadExecutions, loadCredentials, loadRevocationBatches]);
 
   // Handle approval
   const handleApprove = async (execution) => {
     try {
-      await flowsApi.approveFlowExecution(
-        execution.flow_id,
-        execution.id,
-        { approver_id: user.id, notes: 'Approved via UI' }
-      );
-      showSuccess('Execution approved');
-      loadExecutions();
+      const result = await approveFlowManagerExecution({
+        approveFlowExecution: flowsApi.approveFlowExecution,
+        execution,
+        user,
+      });
+      showNotification(result.notification);
+      if (result.shouldReloadExecutions) {
+        loadExecutions();
+      }
     } catch (err) {
       showError(`Failed to approve: ${err.message}`);
     }
@@ -257,38 +203,26 @@ const FlowManager = () => {
 
   // Handle batch revocation
   const handleBatchRevoke = async (strategy) => {
-    if (selectedCredentials.length === 0) {
-      showWarning('No credentials selected');
-      return;
-    }
-
     try {
-      await credentialsApi.batchRevokeCredentials(selectedCredentials, {
-        revocation_strategy: strategy,
-        revocation_reason: 'Batch revocation via UI',
+      const result = await batchRevokeFlowManagerCredentials({
+        batchRevokeCredentials: credentialsApi.batchRevokeCredentials,
+        selectedCredentials,
+        strategy,
       });
-      
-      setRevocationDialog(false);
-      setSelectedCredentials([]);
-      
-      const message = strategy === 'immediate'
-        ? `${selectedCredentials.length} credentials revoked immediately`
-        : `${selectedCredentials.length} credentials queued for batch revocation`;
-      
-      if (strategy === 'immediate') {
-        showWarning(message);
-      } else {
-        showSuccess(message);
+      setRevocationDialog(result.revocationDialog);
+      setSelectedCredentials(result.selectedCredentials);
+      showNotification(result.notification);
+      if (result.shouldReloadCredentials) {
+        loadCredentials();
       }
-      
-      loadCredentials();
-      loadRevocationBatches();
+      if (result.shouldReloadRevocationBatches) {
+        loadRevocationBatches();
+      }
     } catch (err) {
       showError(`Batch revocation failed: ${err.message}`);
     }
   };
 
-  // Get status color
   const getStatusColor = (status) => {
     const colors = {
       'active': 'success',
@@ -351,17 +285,17 @@ const FlowManager = () => {
                 prerequisites={[
                   { 
                     label: 'Trust Profile', 
-                    status: 'ready', // TODO: Wire up actual status from API
+                    status: prereqStatus.trustProfile,
                     path: '/console/org/trust/profiles' 
                   },
                   { 
                     label: 'Credential Template', 
-                    status: 'ready', // TODO: Wire up actual status from API
+                    status: prereqStatus.template,
                     path: '/console/org/templates/credentials' 
                   },
                   { 
                     label: 'Deployment Profile', 
-                    status: 'ready', // TODO: Wire up actual status from API
+                    status: prereqStatus.deployment,
                     path: '/console/org/deploy/profiles' 
                   },
                 ]}
@@ -383,10 +317,8 @@ const FlowManager = () => {
                 </TableHead>
                 <TableBody>
                   {flows.map((flow) => {
-                    const flowStatus = flow.status || FLOW_STATES.DRAFT;
-                    const isDraft = flowStatus === FLOW_STATES.DRAFT;
-                    const isPublished = flowStatus === FLOW_STATES.PUBLISHED;
-                    const isDisabled = flowStatus === FLOW_STATES.DISABLED;
+                    const statusPresentation = getFlowStatusPresentation(flow.status, FLOW_STATES);
+                    const approvalPresentation = getApprovalStrategyPresentation(flow.approval_strategy);
                     
                     return (
                     <TableRow 
@@ -410,10 +342,10 @@ const FlowManager = () => {
                       </TableCell>
                       <TableCell>
                         <Chip 
-                          label={flowStatus.charAt(0).toUpperCase() + flowStatus.slice(1)} 
-                          color={isDraft ? 'default' : isPublished ? 'success' : 'error'} 
+                          label={statusPresentation.label}
+                          color={statusPresentation.color}
                           size="small"
-                          icon={isDraft ? <WarningIcon /> : isPublished ? <CheckCircleIcon /> : <CancelIcon />}
+                          icon={statusPresentation.icon === 'warning' ? <WarningIcon /> : statusPresentation.icon === 'success' ? <CheckCircleIcon /> : <CancelIcon />}
                         />
                       </TableCell>
                       <TableCell>
@@ -422,7 +354,7 @@ const FlowManager = () => {
                         </Typography>
                       </TableCell>
                       <TableCell>
-                        {isPublished ? (
+                        {statusPresentation.hasApplicantEntry ? (
                           <Box sx={{ display: 'flex', gap: 1 }}>
                             <Tooltip title="Application URL available">
                               <Chip 
@@ -449,9 +381,9 @@ const FlowManager = () => {
                       </TableCell>
                       <TableCell>
                         <Chip 
-                          label={flow.approval_strategy === 'auto' ? 'Auto' : 'Manual'} 
+                          label={approvalPresentation.label}
                           size="small"
-                          color={flow.approval_strategy === 'auto' ? 'success' : 'warning'}
+                          color={approvalPresentation.color}
                           variant="outlined"
                         />
                       </TableCell>
@@ -466,7 +398,7 @@ const FlowManager = () => {
                         </Box>
                       </TableCell>
                       <TableCell align="right" onClick={(e) => e.stopPropagation()}>
-                        {isDraft && (
+                        {statusPresentation.isDraft && (
                           <Tooltip title="Publish Flow">
                             <IconButton
                               size="small"
@@ -480,7 +412,7 @@ const FlowManager = () => {
                             </IconButton>
                           </Tooltip>
                         )}
-                        {isPublished && (
+                        {statusPresentation.isPublished && (
                           <Tooltip title="Disable Flow">
                             <IconButton
                               size="small"
@@ -531,7 +463,7 @@ const FlowManager = () => {
                 <TableBody>
                   {executions.map((exec) => (
                     <TableRow key={exec.id}>
-                      <TableCell>{exec.id.substring(0, 8)}</TableCell>
+                      <TableCell>{formatTruncatedId(exec.id, 8)}</TableCell>
                       <TableCell>{exec.flow_id}</TableCell>
                       <TableCell>
                         <Chip label={exec.status} color={getStatusColor(exec.status)} size="small" />
@@ -575,9 +507,9 @@ const FlowManager = () => {
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {executions.filter(e => e.status === 'pending').map((exec) => (
+                  {pendingExecutions.map((exec) => (
                     <TableRow key={exec.id}>
-                      <TableCell>{exec.id.substring(0, 8)}</TableCell>
+                      <TableCell>{formatTruncatedId(exec.id, 8)}</TableCell>
                       <TableCell>{exec.flow_id}</TableCell>
                       <TableCell>
                         <Typography variant="caption">
@@ -606,7 +538,7 @@ const FlowManager = () => {
                       </TableCell>
                     </TableRow>
                   ))}
-                  {executions.filter(e => e.status === 'pending').length === 0 && (
+                  {pendingExecutions.length === 0 && (
                     <TableRow>
                       <TableCell colSpan={5} align="center">
                         <Typography color="text.secondary">No pending approvals</Typography>
@@ -648,14 +580,10 @@ const FlowManager = () => {
                   <TableRow>
                     <TableCell padding="checkbox">
                       <Checkbox
-                        checked={selectedCredentials.length === credentials.length && credentials.length > 0}
-                        indeterminate={selectedCredentials.length > 0 && selectedCredentials.length < credentials.length}
+                        checked={credentialSelectionState.allSelected}
+                        indeterminate={credentialSelectionState.partiallySelected}
                         onChange={(e) => {
-                          if (e.target.checked) {
-                            setSelectedCredentials(credentials.map(c => c.id));
-                          } else {
-                            setSelectedCredentials([]);
-                          }
+                          setSelectedCredentials(toggleAllCredentialSelections(credentials, e.target.checked));
                         }}
                       />
                     </TableCell>
@@ -673,17 +601,13 @@ const FlowManager = () => {
                         <Checkbox
                           checked={selectedCredentials.includes(cred.id)}
                           onChange={(e) => {
-                            if (e.target.checked) {
-                              setSelectedCredentials([...selectedCredentials, cred.id]);
-                            } else {
-                              setSelectedCredentials(selectedCredentials.filter(id => id !== cred.id));
-                            }
+                            setSelectedCredentials(toggleCredentialSelection(selectedCredentials, cred.id, e.target.checked));
                           }}
                           disabled={cred.status !== 'active'}
                         />
                       </TableCell>
-                      <TableCell>{cred.id.substring(0, 12)}...</TableCell>
-                      <TableCell>{cred.credential_template_id.substring(0, 12)}...</TableCell>
+                      <TableCell>{formatTruncatedId(cred.id)}</TableCell>
+                      <TableCell>{formatTruncatedId(cred.credential_template_id)}</TableCell>
                       <TableCell>
                         <Chip label={cred.status} color={getStatusColor(cred.status)} size="small" />
                       </TableCell>
@@ -722,7 +646,7 @@ const FlowManager = () => {
                 <TableBody>
                   {revocationBatches.map((batch) => (
                     <TableRow key={batch.batch_id}>
-                      <TableCell>{batch.batch_id.substring(0, 12)}...</TableCell>
+                      <TableCell>{formatTruncatedId(batch.batch_id)}</TableCell>
                       <TableCell>{batch.credential_count}</TableCell>
                       <TableCell>
                         <Chip label={batch.status} color={getStatusColor(batch.status)} size="small" />

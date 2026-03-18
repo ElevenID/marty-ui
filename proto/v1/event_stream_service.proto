@@ -1,0 +1,92 @@
+syntax = "proto3";
+
+package marty.ui.event_stream.v1;
+
+import "google/api/annotations.proto";
+
+option java_multiple_files = true;
+
+// EventStreamService provides a centralized event bus for inter-service
+// communication, replacing RabbitMQ publish/subscribe patterns with
+// gRPC server streaming.
+service EventStreamService {
+  // Subscribe to a filtered stream of domain events.
+  // The server pushes events matching the filter criteria as they occur.
+  rpc Subscribe(EventSubscription) returns (stream DomainEvent) {}
+
+  // Publish a domain event to all active subscribers.
+  rpc Publish(PublishEventRequest) returns (PublishEventResponse) {
+    option (google.api.http) = {
+      post: "/v1/events/publish"
+      body: "*"
+    };
+  }
+
+  // Health check.
+  rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse) {
+    option (google.api.http) = {
+      get: "/v1/events/health"
+    };
+  }
+}
+
+// ── Subscription ────────────────────────────────────────────────
+
+message EventSubscription {
+  // Filter by event types (empty = all events).
+  repeated string event_types = 1;
+
+  // Filter by organization (empty = all organizations).
+  string organization_id = 2;
+
+  // Filter by aggregate type (e.g., "applicant", "credential").
+  string aggregate_type = 3;
+
+  // Unique subscriber identifier for deduplication.
+  string subscriber_id = 4;
+}
+
+// ── Domain Event ────────────────────────────────────────────────
+
+message DomainEvent {
+  // Unique event ID.
+  string event_id = 1;
+
+  // Event type (e.g., "application.approved", "credential.issued").
+  string event_type = 2;
+
+  // ID of the aggregate that generated the event.
+  string aggregate_id = 3;
+
+  // Type of aggregate (e.g., "applicant", "credential", "flow").
+  string aggregate_type = 4;
+
+  // Organization scope.
+  string organization_id = 5;
+
+  // Event payload as key-value pairs.
+  map<string, string> data = 6;
+
+  // ISO 8601 timestamp.
+  string timestamp = 7;
+
+  // Correlation ID for distributed tracing.
+  string correlation_id = 8;
+}
+
+// ── Publish ─────────────────────────────────────────────────────
+
+message PublishEventRequest {
+  DomainEvent event = 1;
+}
+
+message PublishEventResponse {
+  bool success = 1;
+  int32 subscribers_notified = 2;
+}
+
+message HealthCheckRequest {}
+
+message HealthCheckResponse {
+  string status = 1;
+}

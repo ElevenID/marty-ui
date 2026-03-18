@@ -31,6 +31,17 @@ import {
   Shield as ShieldIcon,
   Policy as PolicyIcon
 } from '@mui/icons-material';
+import {
+  AGE_VERIFICATION_USE_CASES,
+  createAgeVerificationRequest,
+  createOfflineQR,
+  evaluateVerifierPolicy,
+  fetchCertificateDashboard,
+  fetchPolicySummary,
+  renewVerifierCertificate,
+  submitAgeVerification,
+  submitOfflineQRVerification,
+} from '../application/verifier';
 
 const EnhancedVerifierDemo = () => {
   const [selectedFeature, setSelectedFeature] = useState('age-verification');
@@ -55,45 +66,16 @@ const EnhancedVerifierDemo = () => {
     policies: null,
     loading: false
   });
-  const ageVerificationUseCases = {
-    'alcohol_purchase': 'Alcohol Purchase (21+)',
-    'voting_registration': 'Voting Registration (18+)',
-    'senior_discount': 'Senior Discount (65+)',
-    'employment_eligibility': 'Employment Eligibility (18-65)'
-  };
+  const ageVerificationUseCases = AGE_VERIFICATION_USE_CASES;
 
   const handleAgeVerificationRequest = async () => {
     setAgeVerificationState(prev => ({ ...prev, loading: true }));
-
     try {
-      // Use Flow service to start a verification flow
-      const response = await fetch('/v1/flows/verify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          flow_type: 'age_verification',
-          use_case: ageVerificationState.useCase,
-          verifier_id: 'demo_enhanced_verifier',
-          purpose: `Enhanced demo for ${ageVerificationUseCases[ageVerificationState.useCase]}`
-        })
+      const { request, error } = await createAgeVerificationRequest({
+        useCase: ageVerificationState.useCase,
       });
-
-      const data = await response.json();
-
-      if (data.instance_id) {
-        setAgeVerificationState(prev => ({
-          ...prev,
-          request: {
-            request_id: data.instance_id,
-            request_uri: data.request_uri,
-            qr_code_data: data.qr_code_data,
-            ...data
-          },
-          loading: false
-        }));
-      } else {
-        throw new Error(data.error || 'Request failed');
-      }
+      if (error) throw new Error(error);
+      setAgeVerificationState(prev => ({ ...prev, request, loading: false }));
     } catch (error) {
       console.error('Age verification request failed:', error);
       setAgeVerificationState(prev => ({ ...prev, loading: false }));
@@ -102,41 +84,14 @@ const EnhancedVerifierDemo = () => {
 
   const simulateAgeVerification = async () => {
     if (!ageVerificationState.request) return;
-
     setAgeVerificationState(prev => ({ ...prev, loading: true }));
-
     try {
-      // Simulate credential presentation
-      const mockPresentation = {
-        verifiableCredential: [{
-          credentialSubject: {
-            age_over_18: true,
-            age_over_21: ageVerificationState.useCase === 'alcohol_purchase',
-            age_over_65: ageVerificationState.useCase === 'senior_discount',
-            given_name: 'Jane',
-            age_in_range: ageVerificationState.useCase === 'employment_eligibility'
-          },
-          issuer: 'did:example:demo:issuer',
-          expirationDate: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString()
-        }]
-      };
-
-      // Submit verification via Flow instance
-      const response = await fetch(`/v1/flows/instances/${ageVerificationState.request.request_id}/submit`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          vp_token: JSON.stringify(mockPresentation)
-        })
+      const { result, error } = await submitAgeVerification({
+        requestId: ageVerificationState.request.request_id,
+        useCase: ageVerificationState.useCase,
       });
-
-      const data = await response.json();
-
-      setAgeVerificationState(prev => ({
-        ...prev,
-        result: data,
-        loading: false
-      }));
+      if (error) throw new Error(error);
+      setAgeVerificationState(prev => ({ ...prev, result, loading: false }));
     } catch (error) {
       console.error('Age verification failed:', error);
       setAgeVerificationState(prev => ({ ...prev, loading: false }));
@@ -145,51 +100,10 @@ const EnhancedVerifierDemo = () => {
 
   const handleCreateOfflineQR = async () => {
     setOfflineQRState(prev => ({ ...prev, loading: true }));
-
     try {
-      const mockMDLData = {
-        given_name: 'Jane',
-        family_name: 'Doe',
-        birth_date: '1990-01-01',
-        age_over_18: true,
-        age_over_21: true,
-        document_number: 'DL123456789',
-        expiry_date: '2030-01-01',
-        issuing_country: 'XX',
-        issuing_authority: 'Demo DMV'
-      };
-
-      // Use Flow service to create offline QR verification flow
-      const response = await fetch('/v1/flows/verify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          flow_type: 'offline_qr',
-          mdl_data: mockMDLData,
-          verification_requirements: {
-            required_fields: ['given_name', 'family_name', 'age_over_18'],
-            purpose: 'offline_demo',
-            context: 'demo'
-          },
-          expires_in_minutes: 60
-        })
-      });
-
-      const data = await response.json();
-
-      if (data.instance_id) {
-        setOfflineQRState(prev => ({
-          ...prev,
-          qrCode: {
-            qr_code_data: data.qr_code_data,
-            instance_id: data.instance_id,
-            ...data
-          },
-          loading: false
-        }));
-      } else {
-        throw new Error(data.error || 'QR creation failed');
-      }
+      const { qrCode, error } = await createOfflineQR();
+      if (error) throw new Error(error);
+      setOfflineQRState(prev => ({ ...prev, qrCode, loading: false }));
     } catch (error) {
       console.error('Offline QR creation failed:', error);
       setOfflineQRState(prev => ({ ...prev, loading: false }));
@@ -198,30 +112,14 @@ const EnhancedVerifierDemo = () => {
 
   const handleVerifyOfflineQR = async () => {
     if (!offlineQRState.qrCode) return;
-
     setOfflineQRState(prev => ({ ...prev, loading: true }));
-
     try {
-      // Submit offline QR verification via Flow instance
-      const response = await fetch(`/v1/flows/instances/${offlineQRState.qrCode.instance_id}/submit`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          qr_data: offlineQRState.qrCode.qr_code_data,
-          verification_context: {
-            purpose: 'age_verification',
-            verifier_id: 'offline_demo_verifier'
-          }
-        })
+      const { verificationResult, error } = await submitOfflineQRVerification({
+        instanceId: offlineQRState.qrCode.instance_id,
+        qrCodeData: offlineQRState.qrCode.qr_code_data,
       });
-
-      const data = await response.json();
-
-      setOfflineQRState(prev => ({
-        ...prev,
-        verificationResult: data.result,
-        loading: false
-      }));
+      if (error) throw new Error(error);
+      setOfflineQRState(prev => ({ ...prev, verificationResult, loading: false }));
     } catch (error) {
       console.error('Offline QR verification failed:', error);
       setOfflineQRState(prev => ({ ...prev, loading: false }));
@@ -230,16 +128,9 @@ const EnhancedVerifierDemo = () => {
 
   const loadCertificateDashboard = async () => {
     setCertificateState(prev => ({ ...prev, loading: true }));
-
     try {
-      const response = await fetch('/v1/trust-profiles/verifier/certificates/dashboard');
-      const data = await response.json();
-
-      setCertificateState(prev => ({
-        ...prev,
-        dashboard: data,
-        loading: false
-      }));
+      const { dashboard } = await fetchCertificateDashboard();
+      setCertificateState(prev => ({ ...prev, dashboard, loading: false }));
     } catch (error) {
       console.error('Certificate dashboard failed:', error);
       setCertificateState(prev => ({ ...prev, loading: false }));
@@ -248,14 +139,9 @@ const EnhancedVerifierDemo = () => {
 
   const renewCertificate = async (certId) => {
     try {
-      const response = await fetch(`/v1/trust-profiles/verifier/certificates/${certId}/renew`, {
-        method: 'POST'
-      });
-      const data = await response.json();
-
-      if (data.renewal_successful) {
-        // Reload dashboard
-        await loadCertificateDashboard();
+      const { renewed, dashboard } = await renewVerifierCertificate({ certId });
+      if (renewed) {
+        setCertificateState(prev => ({ ...prev, dashboard }));
         alert(`Certificate ${certId} renewed successfully!`);
       }
     } catch (error) {
@@ -265,16 +151,9 @@ const EnhancedVerifierDemo = () => {
 
   const loadPolicySummary = async () => {
     setPolicyState(prev => ({ ...prev, loading: true }));
-
     try {
-      const response = await fetch('/v1/trust/verifier/policy/summary');
-      const data = await response.json();
-
-      setPolicyState(prev => ({
-        ...prev,
-        policies: data,
-        loading: false
-      }));
+      const { policies } = await fetchPolicySummary();
+      setPolicyState(prev => ({ ...prev, policies, loading: false }));
     } catch (error) {
       console.error('Policy summary failed:', error);
       setPolicyState(prev => ({ ...prev, loading: false }));
@@ -283,41 +162,9 @@ const EnhancedVerifierDemo = () => {
 
   const evaluatePolicy = async () => {
     setPolicyState(prev => ({ ...prev, loading: true }));
-
     try {
-      const mockEvaluation = {
-        presentation_request: {
-          purpose: 'age_verification',
-          requested_attributes: ['age_over_21', 'given_name']
-        },
-        available_attributes: {
-          age_over_21: true,
-          given_name: 'Jane',
-          family_name: 'Doe',
-          birth_date: '1990-01-01',
-          address: '123 Demo St'
-        },
-        context: {
-          context_type: 'commercial',
-          verifier_trust_level: 'verified_commercial',
-          location: 'private_establishment',
-          urgency: 'routine'
-        }
-      };
-
-      const response = await fetch('/v1/trust/verifier/policy/evaluate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(mockEvaluation)
-      });
-
-      const data = await response.json();
-
-      setPolicyState(prev => ({
-        ...prev,
-        evaluation: data,
-        loading: false
-      }));
+      const { evaluation } = await evaluateVerifierPolicy();
+      setPolicyState(prev => ({ ...prev, evaluation, loading: false }));
     } catch (error) {
       console.error('Policy evaluation failed:', error);
       setPolicyState(prev => ({ ...prev, loading: false }));

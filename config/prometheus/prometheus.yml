@@ -34,12 +34,27 @@ scrape_configs:
       - targets: ['localhost:9090']
     metrics_path: /metrics
 
-  # OID4VC API service
-  - job_name: 'oid4vc-api'
-    static_configs:
-      - targets: ['oid4vc-api:8000']
-    metrics_path: /metrics
+  # Marty UI microservices (gRPC + REST metrics)
+  - job_name: 'marty-ui-services'
     scrape_interval: 10s
+    static_configs:
+      - targets:
+          - 'gateway:8000'
+          - 'auth:8001'
+          - 'organization:8002'
+          - 'credential-template:8003'
+          - 'trust-profile:8004'
+          - 'issuance:8005'
+          - 'applicant:8006'
+          - 'notification:8007'
+          - 'compliance-profile:8008'
+          - 'presentation-policy:8009'
+          - 'deployment-profile:8010'
+          - 'flow:8011'
+          - 'wallet:8012'
+          - 'revocation-profile:8013'
+          - 'event-stream:8015'
+    metrics_path: /metrics
 
   # Keycloak metrics (if enabled with KC_METRICS_ENABLED=true)
   - job_name: 'keycloak'
@@ -47,6 +62,13 @@ scrape_configs:
       - targets: ['keycloak:8080']
     metrics_path: /metrics
     scrape_interval: 30s
+
+  # Envoy proxy metrics
+  - job_name: 'envoy'
+    static_configs:
+      - targets: ['envoy:9901']
+    metrics_path: /stats/prometheus
+    scrape_interval: 15s
 
   # Redis metrics (if redis-exporter is deployed)
   # - job_name: 'redis'

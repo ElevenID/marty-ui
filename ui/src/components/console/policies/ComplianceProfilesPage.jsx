@@ -26,6 +26,7 @@ import { useTranslation } from 'react-i18next';
 
 import { ResourcePage } from '../../common';
 import { useAsyncData } from '../../../hooks/useAsyncData';
+import { listComplianceProfiles } from '../../../services/complianceProfilesApi';
 
 function ComplianceProfilesPage() {
   const { t } = useTranslation('console');
@@ -40,42 +41,10 @@ function ComplianceProfilesPage() {
     { label: t('complianceProfilesPage.breadcrumbs.policies'), path: '/console/org/policies' },
     { label: t('complianceProfilesPage.breadcrumbs.complianceProfiles'), path: '/console/org/policies/compliance' },
   ];
-  // TODO: Fetch compliance profiles from API
-  const { data: profiles = [], loading, error } = useAsyncData(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 500));
-    return [
-      {
-        id: 'cp-1',
-        name: 'eIDAS 2.0 Compliance',
-        regulation: 'eIDAS',
-        region: 'EU',
-        requirements: 12,
-        metRequirements: 12,
-        status: 'compliant',
-        updatedAt: '2026-02-06T10:30:00Z',
-      },
-      {
-        id: 'cp-2',
-        name: 'GDPR Data Minimization',
-        regulation: 'GDPR',
-        region: 'EU',
-        requirements: 8,
-        metRequirements: 7,
-        status: 'review_needed',
-        updatedAt: '2026-02-05T14:20:00Z',
-      },
-      {
-        id: 'cp-3',
-        name: 'AAMVA mDL Compliance',
-        regulation: 'AAMVA',
-        region: 'US',
-        requirements: 15,
-        metRequirements: 15,
-        status: 'compliant',
-        updatedAt: '2026-02-04T09:00:00Z',
-      },
-    ];
-  }, []);
+  const { data: profiles = [], loading, error } = useAsyncData(
+    () => listComplianceProfiles(),
+    []
+  );
 
   const getStatusColor = (status) => {
     switch (status) {

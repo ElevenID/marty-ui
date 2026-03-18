@@ -11,6 +11,7 @@ import { useState } from 'react';
 import { useParams, useNavigate, Link as RouterLink } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useAsyncData } from '../../../hooks/useAsyncData';
+import { getFlow } from '../../../services/flowsApi';
 import {
   Box,
   Paper,
@@ -344,33 +345,10 @@ function FlowDetailPage() {
   const { flowId } = useParams();
   const navigate = useNavigate();
   const { t } = useTranslation('console');
-  const { data: flow, loading, error } = useAsyncData(async () => {
-    // TODO: Replace with actual API call
-    await new Promise(resolve => setTimeout(resolve, 500));
-    return {
-      id: flowId,
-      name: 'EU Digital Identity – Employee Issuance',
-      status: 'PUBLISHED',
-      environment: 'Production',
-      credential_template_name: 'EU Digital Identity Credential',
-      credential_template_id: 'ct-1',
-      application_rules: 'Employee email required (domain: example.com)',
-      application_template_id: 'at-1',
-      compliance_profile: 'Open Badge 2.0, EUDI-ready',
-      compliance_profile_id: 'cp-1',
-      approval_mode: 'manual',
-      public_url: `${window.location.origin}/apply/${flowId}`,
-      created_at: '2026-01-15T10:00:00Z',
-      published_by: 'admin@example.com',
-      updated_at: '2026-02-08T14:30:00Z',
-      stats: {
-        applications_submitted: 142,
-        pending_approval: 12,
-        credentials_issued: 130,
-        failures_24h: 0,
-      },
-    };
-  }, [flowId]);
+  const { data: flow, loading, error } = useAsyncData(
+    () => getFlow(flowId),
+    [flowId]
+  );
   const [copySuccess, setCopySuccess] = useState(false);
 
   const handleCopyUrl = () => {

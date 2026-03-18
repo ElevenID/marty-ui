@@ -26,8 +26,7 @@ import PhoneAndroidIcon from '@mui/icons-material/PhoneAndroid';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import DownloadIcon from '@mui/icons-material/Download';
 import SkipNextIcon from '@mui/icons-material/SkipNext';
-
-const API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
+import { generateWalletPairingQR, fetchWalletPairingStatus } from '../../../application/vendor';
 
 const WalletPairingStep = ({
   onPairingComplete,
@@ -48,20 +47,13 @@ const WalletPairingStep = ({
     if (pairingToken && pairingStatus === 'scanning') {
       pollInterval = setInterval(async () => {
         try {
-          const response = await fetch(
-            `${API_BASE_URL}/wallet/pairing/${pairingToken}/status`,
-            { credentials: 'include' }
-          );
-          
-          if (response.ok) {
-            const data = await response.json();
-            if (data.status === 'paired') {
-              setPairingStatus('paired');
-              clearInterval(pollInterval);
-              setTimeout(() => {
-                onPairingComplete(data);
-              }, 2000);
-            }
+          const data = await fetchWalletPairingStatus({ pairingToken });
+          if (data.status === 'paired') {
+            setPairingStatus('paired');
+            clearInterval(pollInterval);
+            setTimeout(() => {
+              onPairingComplete(data);
+            }, 2000);
           }
         } catch (err) {
           console.error('Error polling pairing status:', err);
@@ -81,17 +73,7 @@ const WalletPairingStep = ({
     setError(null);
     
     try {
-      const response = await fetch(`${API_BASE_URL}/wallet/pairing/generate`, {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-      });
-      
-      if (!response.ok) {
-        throw new Error('Failed to generate pairing code');
-      }
-      
-      const data = await response.json();
+      const data = await generateWalletPairingQR();
       setQrCode(data.qr_code_data_url || data.qr_code);
       setPairingToken(data.pairing_token);
       setPairingStatus('scanning');

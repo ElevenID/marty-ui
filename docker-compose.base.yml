@@ -127,26 +127,6 @@ services:
     networks:
       - marty-network
 
-  rabbitmq:
-    image: rabbitmq:3.12-management-alpine
-    container_name: marty-rabbitmq
-    environment:
-      RABBITMQ_DEFAULT_USER: marty
-      RABBITMQ_DEFAULT_PASS: marty_dev_password
-      RABBITMQ_ERLANG_COOKIE: "marty_dev_cookie"
-    volumes:
-      - rabbitmq_data:/var/lib/rabbitmq
-    ports:
-      - "5672:5672"
-      - "15672:15672"
-    healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "check_port_connectivity"]
-      interval: 10s
-      timeout: 10s
-      retries: 5
-    networks:
-      - marty-network
-
   # ==========================================================================
   # Database Migrations
   # ==========================================================================
@@ -191,6 +171,11 @@ services:
       ISSUANCE_SERVICE_URL: http://issuance:8005
       ISSUER_BASE_URL: ${PUBLIC_API_URL:-http://gateway:8000}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://localhost:5173}
+      AUTH_GRPC_TARGET: auth:9001
+      ORG_GRPC_TARGET: organization:9002
+      ES_GRPC_TARGET: event-stream:9015
+      REDIS_URL: redis://redis:6379
+      REDIS_DB_GATEWAY: "2"
     ports:
       - "8000:8000"
     depends_on:
@@ -199,6 +184,8 @@ services:
       organization:
         condition: service_healthy
       issuance:
+        condition: service_healthy
+      event-stream:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
@@ -219,7 +206,6 @@ services:
       AUTH_SERVICE_PORT: "8001"
       UI_BASE_URL: ${UI_BASE_URL:-http://localhost:3000}
       REDIS_URL: redis://redis:6379/0
-      RABBITMQ_URL: amqp://marty:marty_dev_password@rabbitmq:5672/
       OIDC_ISSUER_URL: ${OIDC_ISSUER_URL_INTERNAL:-http://keycloak:8080/realms/${KEYCLOAK_REALM:-11id}}
       OIDC_EXTERNAL_ISSUER_URL: ${OIDC_ISSUER_URL_EXTERNAL:-http://localhost:8180/realms/${KEYCLOAK_REALM:-11id}}
       OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-marty-ui}
@@ -230,17 +216,18 @@ services:
       KEYCLOAK_ADMIN_URL: ${KEYCLOAK_ADMIN_URL:-http://keycloak:8080}
       MARTY_API_CLIENT_ID: ${MARTY_API_CLIENT_ID:-marty-api}
       MARTY_API_CLIENT_SECRET: ${MARTY_API_CLIENT_SECRET:-marty-api-secret-change-in-production}
-      FLOW_SERVICE_URL: ${FLOW_SERVICE_URL:-http://flow:8011}
       CREDENTIAL_LOGIN_POLICY_ID: ${CREDENTIAL_LOGIN_POLICY_ID:-}
       AUTH_SERVICE_INTERNAL_URL: ${AUTH_SERVICE_INTERNAL_URL:-http://auth:8001}
       MARTY_ORG_ID: ${MARTY_ORG_ID:-00000000-0000-0000-0000-000000000001}
+      ORG_GRPC_TARGET: organization:9002
+      FLOW_GRPC_TARGET: flow:9011
+      AUTH_GRPC_PORT: "9001"
     ports:
       - "8001:8001"
+      - "9001:9001"
     depends_on:
       db-migrate:
         condition: service_completed_successfully
-      rabbitmq:
-        condition: service_healthy
       redis:
         condition: service_healthy
     healthcheck:
@@ -261,16 +248,15 @@ services:
     environment:
       ORGANIZATION_SERVICE_PORT: "8002"
       DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@postgres:5432/marty
-      RABBITMQ_URL: amqp://marty:marty_dev_password@rabbitmq:5672/
       REDIS_URL: redis://redis:6379
       REDIS_DB_GATEWAY: "2"
+      ORG_GRPC_PORT: "9002"
     ports:
       - "8002:8002"
+      - "9002:9002"
     depends_on:
       db-migrate:
         condition: service_completed_successfully
-      rabbitmq:
-        condition: service_healthy
       redis:
         condition: service_healthy
     healthcheck:
@@ -291,14 +277,14 @@ services:
     environment:
       CREDENTIAL_TEMPLATE_SERVICE_PORT: "8003"
       DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@postgres:5432/marty
-      RABBITMQ_URL: amqp://marty:marty_dev_password@rabbitmq:5672/
+      ORG_GRPC_TARGET: organization:9002
+      CT_GRPC_PORT: "9003"
     ports:
       - "8003:8003"
+      - "9003:9003"
     depends_on:
       db-migrate:
         condition: service_completed_successfully
-      rabbitmq:
-        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
       interval: 10s
@@ -317,14 +303,12 @@ services:
     environment:
       TRUST_PROFILE_SERVICE_PORT: "8004"
       DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@postgres:5432/marty
-      RABBITMQ_URL: amqp://marty:marty_dev_password@rabbitmq:5672/
+      ORG_GRPC_TARGET: organization:9002
     ports:
       - "8004:8004"
     depends_on:
       db-migrate:
         condition: service_completed_successfully
-      rabbitmq:
-        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8004/health"]
       interval: 10s
@@ -343,9 +327,10 @@ services:
     environment:
       APPLICANT_SERVICE_PORT: "8006"
       DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@postgres:5432/marty
-      RABBITMQ_URL: amqp://marty:marty_dev_password@rabbitmq:5672/
       APPLICANT_DATA_FILE: /app/data/applicant_store.json
       ISSUANCE_SERVICE_URL: http://issuance:8005
+      ORG_GRPC_TARGET: organization:9002
+      FLOW_GRPC_TARGET: flow:9011
     ports:
       - "8006:8006"
     volumes:
@@ -354,8 +339,6 @@ services:
     depends_on:
       db-migrate:
         condition: service_completed_successfully
-      rabbitmq:
-        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8006/health"]
       interval: 10s
@@ -374,16 +357,15 @@ services:
     environment:
       NOTIFICATION_SERVICE_PORT: "8007"
       DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@postgres:5432/marty
-      RABBITMQ_URL: amqp://marty:marty_dev_password@rabbitmq:5672/
       SMTP_HOST: mailhog
       SMTP_PORT: "1025"
+      NOTIF_GRPC_PORT: "9007"
     ports:
       - "8007:8007"
+      - "9007:9007"
     depends_on:
       db-migrate:
         condition: service_completed_successfully
-      rabbitmq:
-        condition: service_healthy
       mailhog:
         condition: service_healthy
     healthcheck:
@@ -404,14 +386,12 @@ services:
     environment:
       COMPLIANCE_PROFILE_SERVICE_PORT: "8008"
       DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@postgres:5432/marty
-      RABBITMQ_URL: amqp://marty:marty_dev_password@rabbitmq:5672/
+      ORG_GRPC_TARGET: organization:9002
     ports:
       - "8008:8008"
     depends_on:
       db-migrate:
         condition: service_completed_successfully
-      rabbitmq:
-        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8008/health"]
       interval: 10s
@@ -430,14 +410,14 @@ services:
     environment:
       PRESENTATION_POLICY_SERVICE_PORT: "8009"
       DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@postgres:5432/marty
-      RABBITMQ_URL: amqp://marty:marty_dev_password@rabbitmq:5672/
+      ORG_GRPC_TARGET: organization:9002
+      PP_GRPC_PORT: "9009"
     ports:
       - "8009:8009"
+      - "9009:9009"
     depends_on:
       db-migrate:
         condition: service_completed_successfully
-      rabbitmq:
-        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8009/health"]
       interval: 10s
@@ -456,14 +436,12 @@ services:
     environment:
       DEPLOYMENT_PROFILE_SERVICE_PORT: "8010"
       DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@postgres:5432/marty
-      RABBITMQ_URL: amqp://marty:marty_dev_password@rabbitmq:5672/
+      ORG_GRPC_TARGET: organization:9002
     ports:
       - "8010:8010"
     depends_on:
       db-migrate:
         condition: service_completed_successfully
-      rabbitmq:
-        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8010/health"]
       interval: 10s
@@ -482,16 +460,17 @@ services:
     environment:
       FLOW_SERVICE_PORT: "8011"
       DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@postgres:5432/marty
-      RABBITMQ_URL: amqp://marty:marty_dev_password@rabbitmq:5672/
       PUBLIC_BASE_URL: ${PUBLIC_API_URL:-http://gateway:8000}
-      PRESENTATION_POLICY_SERVICE_URL: http://presentation-policy:8009
+      ORG_GRPC_TARGET: organization:9002
+      PP_GRPC_TARGET: presentation-policy:9009
+      CT_GRPC_TARGET: credential-template:9003
+      FLOW_GRPC_PORT: "9011"
     ports:
       - "8011:8011"
+      - "9011:9011"
     depends_on:
       db-migrate:
         condition: service_completed_successfully
-      rabbitmq:
-        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8011/health"]
       interval: 10s
@@ -508,17 +487,19 @@ services:
     environment:
       ISSUANCE_SERVICE_PORT: "8005"
       DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@postgres:5432/marty
-      RABBITMQ_URL: amqp://marty:marty_dev_password@rabbitmq:5672/
       ISSUER_BASE_URL: ${PUBLIC_API_URL:-http://gateway:8000}
       ISSUANCE_OFFER_TTL_MINUTES: ${ISSUANCE_OFFER_TTL_MINUTES:-10080}
       ISSUANCE_AUTH_SESSION_TTL_MINUTES: ${ISSUANCE_AUTH_SESSION_TTL_MINUTES:-60}
+      ORG_GRPC_TARGET: organization:9002
+      CT_GRPC_TARGET: credential-template:9003
+      CREDENTIAL_TEMPLATE_SERVICE_URL: http://credential-template:8003
+      ISSUANCE_GRPC_PORT: "9005"
     ports:
       - "8005:8005"
+      - "9005:9005"
     depends_on:
       db-migrate:
         condition: service_completed_successfully
-      rabbitmq:
-        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8005/health"]
       interval: 30s
@@ -528,11 +509,131 @@ services:
     networks:
       - marty-network
 
+  # ── Revocation Profile Service ────────────────────────────────────
+  revocation-profile:
+    build:
+      context: ..
+      dockerfile: marty-ui/services/Dockerfile
+      args:
+        SERVICE_NAME: revocation-profile
+    container_name: marty-revocation-profile
+    environment:
+      REVOCATION_PROFILE_SERVICE_PORT: "8013"
+      DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@postgres:5432/marty
+      ORG_GRPC_TARGET: organization:9002
+      RP_GRPC_PORT: "9013"
+    ports:
+      - "8013:8013"
+      - "9013:9013"
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8013/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - marty-network
+
+  # ── Event Stream Service (gRPC event bus) ─────────────────────────
+  event-stream:
+    build:
+      context: ..
+      dockerfile: marty-ui/services/Dockerfile
+      args:
+        SERVICE_NAME: event_stream
+    container_name: marty-event-stream
+    environment:
+      - EVENT_STREAM_GRPC_ENABLED=true
+      - EVENT_STREAM_GRPC_PORT=9015
+      - OTEL_EXPORTER_OTLP_ENDPOINT=jaeger:4317
+    ports:
+      - "8015:8015"
+      - "9015:9015"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8015/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
+    networks:
+      - marty-network
+
+  # ── Verification Service ─────────────────────────────────────────
+  verification:
+    build:
+      context: ..
+      dockerfile: marty-ui/services/Dockerfile
+      args:
+        SERVICE_NAME: verification
+    container_name: marty-verification
+    environment:
+      VERIFICATION_SERVICE_PORT: "8012"
+      PP_GRPC_TARGET: presentation-policy:9009
+      VERIF_GRPC_PORT: "9017"
+      VERIF_GRPC_ENABLED: "true"
+      PUBLIC_BASE_URL: ${PUBLIC_API_URL:-http://gateway:8000}
+      OTEL_EXPORTER_OTLP_ENDPOINT: jaeger:4317
+    ports:
+      - "8012:8012"
+      - "9017:9017"
+    depends_on:
+      presentation-policy:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8012/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - marty-network
+
+  # ── Envoy gRPC Proxy ─────────────────────────────────────────────
+  envoy:
+    image: envoyproxy/envoy:v1.29-latest
+    container_name: marty-envoy
+    volumes:
+      - ./config/envoy/envoy.yaml:/etc/envoy/envoy.yaml:ro
+      - ./config/envoy/proto_descriptor.pb:/etc/envoy/proto_descriptor.pb:ro
+    ports:
+      - "9000:9000"    # gRPC / gRPC-web unified endpoint
+      - "9901:9901"    # Envoy admin
+    depends_on:
+      auth:
+        condition: service_healthy
+      organization:
+        condition: service_healthy
+      credential-template:
+        condition: service_healthy
+      issuance:
+        condition: service_healthy
+      notification:
+        condition: service_healthy
+      presentation-policy:
+        condition: service_healthy
+      flow:
+        condition: service_healthy
+      revocation-profile:
+        condition: service_healthy
+      event-stream:
+        condition: service_healthy
+      verification:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:9901/ready || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - marty-network
+
 volumes:
   postgres_data:
   redis_data:
-  rabbitmq_data:
   applicant_data:
+  envoy_proto_descriptor:
 
 networks:
   marty-network:

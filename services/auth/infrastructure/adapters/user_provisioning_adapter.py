@@ -11,7 +11,6 @@ import os
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
-import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -41,39 +40,34 @@ class JITUserProvisioningAdapter(UserProvisioningPort):
     def __init__(
         self,
         session_factory: async_sessionmaker[AsyncSession],
-        organization_service_url: str | None = None,
+        org_grpc_channel=None,
     ):
         self.session_factory = session_factory
-        self.organization_service_url = organization_service_url or os.environ.get(
-            "ORGANIZATION_SERVICE_URL",
-            "http://organization:8002"
-        )
+        self._org_stub = None
+        if org_grpc_channel is not None:
+            from marty_proto.v1.organization_service_pb2_grpc import OrganizationServiceStub
+            self._org_stub = OrganizationServiceStub(org_grpc_channel)
     
     async def _add_to_marty_organization(self, user_id: str, email: str) -> None:
         """
-        Add a new user to the default Marty organization.
-        
-        This is a best-effort operation - if it fails, we log the error but
-        don't fail the user provisioning process.
+        Add a new user to the default Marty organization via gRPC.
+        Best-effort — failures are logged but don't block provisioning.
         """
+        if self._org_stub is None:
+            logger.warning("No org gRPC channel — skipping auto-add to Marty org")
+            return
         try:
-            url = f"{self.organization_service_url}/internal/v1/organizations/{MARTY_ORG_ID}/members"
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                response = await client.post(
-                    url,
-                    json={
-                        "user_id": user_id,
-                        "email": email,
-                        "role": "member",
-                    }
-                )
-                response.raise_for_status()
-                logger.info(f"Successfully added user {user_id} to Marty organization")
-        except httpx.HTTPStatusError as e:
-            logger.error(
-                f"Failed to add user {user_id} to Marty organization: "
-                f"HTTP {e.response.status_code} - {e.response.text}"
+            from marty_proto.v1 import organization_service_pb2
+            await self._org_stub.AddMember(
+                organization_service_pb2.AddMemberRequest(
+                    organization_id=MARTY_ORG_ID,
+                    user_id=user_id,
+                    email=email,
+                    role="member",
+                ),
+                timeout=5.0,
             )
+            logger.info(f"Successfully added user {user_id} to Marty organization")
         except Exception as e:
             logger.error(
                 f"Failed to add user {user_id} to Marty organization: {e}",
@@ -188,30 +182,31 @@ class InMemoryUserProvisioningAdapter(UserProvisioningPort):
     
     def __init__(
         self,
-        organization_service_url: str | None = None,
+        org_grpc_channel=None,
     ):
         self._users: dict[str, AuthenticatedUser] = {}
-        self.organization_service_url = organization_service_url or os.environ.get(
-            "ORGANIZATION_SERVICE_URL",
-            "http://organization:8002"
-        )
+        self._org_stub = None
+        if org_grpc_channel is not None:
+            from marty_proto.v1.organization_service_pb2_grpc import OrganizationServiceStub
+            self._org_stub = OrganizationServiceStub(org_grpc_channel)
 
     async def _add_to_marty_organization(self, user_id: str, email: str) -> None:
-        """Add user to the default Marty organisation (idempotent, best-effort)."""
+        """Add user to the default Marty organisation via gRPC (idempotent, best-effort)."""
+        if self._org_stub is None:
+            logger.warning("No org gRPC channel — skipping auto-add to Marty org")
+            return
         try:
-            url = f"{self.organization_service_url}/internal/v1/organizations/{MARTY_ORG_ID}/members"
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                response = await client.post(
-                    url,
-                    json={"user_id": user_id, "email": email, "role": "member"},
-                )
-                response.raise_for_status()
-                logger.info(f"Successfully added user {user_id} to Marty organization")
-        except httpx.HTTPStatusError as e:
-            logger.error(
-                f"Failed to add user {user_id} to Marty organization: "
-                f"HTTP {e.response.status_code} - {e.response.text}"
+            from marty_proto.v1 import organization_service_pb2
+            await self._org_stub.AddMember(
+                organization_service_pb2.AddMemberRequest(
+                    organization_id=MARTY_ORG_ID,
+                    user_id=user_id,
+                    email=email,
+                    role="member",
+                ),
+                timeout=5.0,
             )
+            logger.info(f"Successfully added user {user_id} to Marty organization")
         except Exception as e:
             logger.error(
                 f"Failed to add user {user_id} to Marty organization: {e}",

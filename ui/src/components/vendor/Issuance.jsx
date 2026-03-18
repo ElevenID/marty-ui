@@ -34,8 +34,7 @@ import CredentialOfferDialog from '../issuance/CredentialOfferDialog';
 import { useAuth } from '../../hooks/useAuth';
 import * as applicantApi from '../../services/applicantApi';
 import credentialsApi from '../../services/credentialsApi';
-
-const API_URL = import.meta.env.VITE_API_URL || '';
+import { fetchCredentialConfigs } from '../../application/vendor';
 
 /**
  * Tab Panel Component
@@ -96,14 +95,8 @@ export default function Issuance() {
       setApplicants(applicantsData.applications || []);
       
       // Fetch credential templates
-      const response = await fetch(
-        `${API_URL}/api/organizations/${organizationId}/credential-types`,
-        { credentials: 'include' }
-      );
-      if (response.ok) {
-        const data = await response.json();
-        setCredentialTemplates(data.credential_types || []);
-      }
+      const data = await fetchCredentialConfigs({ organizationId });
+      setCredentialTemplates(data.credential_types || []);
     } catch (error) {
       console.error('Error loading dialog data:', error);
     } finally {

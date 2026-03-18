@@ -34,6 +34,11 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../hooks/useAuth';
 import { useBranding } from '../hooks/useBranding';
+import {
+  clearLandingAuthError,
+  getLandingAuthError,
+  getLandingEntryDecision,
+} from '../application/routing';
 import { 
   IDENTITY_CONCEPTS, 
   PRODUCTS, 
@@ -55,19 +60,18 @@ function LandingPage() {
 
   // Check for auth error in URL params
   useEffect(() => {
-    const error = searchParams.get('auth_error');
+    const error = getLandingAuthError(searchParams);
     if (error) {
-      setAuthError(decodeURIComponent(error.replace(/\+/g, ' ')));
-      // Clear the error from URL without triggering navigation
-      searchParams.delete('auth_error');
-      setSearchParams(searchParams, { replace: true });
+      setAuthError(error);
+      setSearchParams(clearLandingAuthError(searchParams), { replace: true });
     }
   }, [searchParams, setSearchParams]);
 
   // Redirect authenticated users to applicant console (person-first default)
   useEffect(() => {
-    if (isAuthenticated && !isLoading) {
-      navigate('/console/applicant', { replace: true });
+    const decision = getLandingEntryDecision({ isAuthenticated, isLoading });
+    if (decision.action === 'navigate' && decision.redirectTo) {
+      navigate(decision.redirectTo, { replace: true });
     }
   }, [isAuthenticated, isLoading, navigate]);
 
@@ -447,11 +451,9 @@ function LandingPage() {
                   </Typography>
                   <Button
                     variant="outlined"
-                    component="a"
-                    href={path.path}
+                    component="span"
                     color={path.color}
                     endIcon={<ArrowForwardIcon />}
-                    onClick={(e) => e.stopPropagation()}
                   >
                     {t(`audienceRouting.${path.id}.cta`, path.cta)}
                   </Button>

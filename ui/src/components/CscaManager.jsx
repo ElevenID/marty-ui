@@ -2,6 +2,13 @@ import { useState, useEffect } from 'react';
 import { useDialog } from '../hooks/useDialog';
 import { ConfirmDeleteDialog } from './common';
 import {
+  createCscaCertificate,
+  deleteCscaCertificate,
+  formatCscaDate,
+  getCscaCertificateStatus,
+  loadCscaCertificates,
+} from '../application/admin';
+import {
   Container,
   Paper,
   Typography,
@@ -50,16 +57,10 @@ const CscaManager = () => {
   const fetchCertificates = async () => {
     setLoading(true);
     setError(null);
-    try {
-      const response = await fetch('/v1/trust-profiles/admin/csca');
-      if (!response.ok) throw new Error('Failed to fetch certificates');
-      const data = await response.json();
-      setCertificates(data.certificates || []);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
+    const result = await loadCscaCertificates();
+    setCertificates(result.certificates);
+    setError(result.error);
+    setLoading(false);
   };
 
   useEffect(() => {
@@ -72,53 +73,31 @@ const CscaManager = () => {
 
   const handleCreate = async () => {
     setCreating(true);
-    try {
-      const response = await fetch('/v1/trust-profiles/admin/csca', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          subject_name: subjectName,
-          key_algorithm: 'RSA',
-          key_size: 2048,
-          validity_days: 365
-        })
-      });
-      
-      if (!response.ok) throw new Error('Failed to create certificate');
-      
+    const result = await createCscaCertificate({ subjectName });
+
+    if (result.success) {
       setOpenDialog(false);
       setSubjectName('');
-      fetchCertificates();
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setCreating(false);
+      await fetchCertificates();
+    } else {
+      setError(result.error);
     }
+
+    setCreating(false);
   };
 
   const handleDelete = async () => {
-    try {
-      const response = await fetch(`/v1/trust-profiles/admin/csca/${deleteDialog.data.id}`, {
-        method: 'DELETE'
-      });
-      
-      if (!response.ok) throw new Error('Failed to delete certificate');
-      
-      setSuccess(`Certificate "${deleteDialog.data.subject}" has been deleted`);
-      fetchCertificates();
-    } catch (err) {
-      setError(err.message);
-      throw err;
-    }
-  };
-
-  const formatDate = (dateString) => {
-    if (!dateString) return 'N/A';
-    return new Date(dateString).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric'
+    const result = await deleteCscaCertificate({
+      certificate: deleteDialog.data,
     });
+
+    if (!result.success) {
+      setError(result.error);
+      throw new Error(result.error);
+    }
+
+    setSuccess(result.successMessage);
+    await fetchCertificates();
   };
 
   return (
@@ -190,8 +169,8 @@ const CscaManager = () => {
                     <TableCell>{cert.not_after}</TableCell>
                     <TableCell>
                       <Chip 
-                        label={cert.revoked ? 'Revoked' : 'Active'} 
-                        color={cert.revoked ? 'error' : 'success'}
+                        label={getCscaCertificateStatus(cert).label}
+                        color={getCscaCertificateStatus(cert).color}
                         size="small"
                       />
                     </TableCell>
@@ -260,11 +239,11 @@ const CscaManager = () => {
                 </Grid>
                 <Grid item xs={6}>
                   <Typography variant="caption" color="text.secondary">Not Before</Typography>
-                  <Typography>{formatDate(viewDialog.data.not_before)}</Typography>
+                  <Typography>{formatCscaDate(viewDialog.data.not_before)}</Typography>
                 </Grid>
                 <Grid item xs={6}>
                   <Typography variant="caption" color="text.secondary">Not After</Typography>
-                  <Typography>{formatDate(viewDialog.data.not_after)}</Typography>
+                  <Typography>{formatCscaDate(viewDialog.data.not_after)}</Typography>
                 </Grid>
                 <Grid item xs={12}>
                   <Typography variant="caption" color="text.secondary">Serial Number</Typography>
@@ -274,8 +253,8 @@ const CscaManager = () => {
                   <Typography variant="caption" color="text.secondary">Status</Typography>
                   <Box sx={{ mt: 0.5 }}>
                     <Chip 
-                      label={viewDialog.data.revoked ? 'Revoked' : 'Active'} 
-                      color={viewDialog.data.revoked ? 'error' : 'success'} 
+                      label={getCscaCertificateStatus(viewDialog.data).label}
+                      color={getCscaCertificateStatus(viewDialog.data).color}
                     />
                   </Box>
                 </Grid>

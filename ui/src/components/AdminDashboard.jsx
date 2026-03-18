@@ -51,24 +51,21 @@ import {
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import { useNotifications } from '../hooks/useNotifications';
+import {
+  ADMIN_DASHBOARD_DEFAULT_HEALTH,
+  ADMIN_DASHBOARD_DEFAULT_STATS,
+  filterAdminVendors,
+  getAdminTierColor,
+  impersonateAdminVendor,
+  loadAdminDashboardBootstrap,
+} from '../application/admin';
 
 const AdminDashboard = () => {
   const navigate = useNavigate();
   const { keycloak } = useAuth();
-  const { showSuccess, showError, showWarning } = useNotifications();
-  const [stats, setStats] = useState({
-    passport: 0,
-    mdl: 0,
-    mdoc: 0,
-    verifications: 0
-  });
-  const [health, setHealth] = useState({
-    issuer_api: 'unknown',
-    passport_engine: 'unknown',
-    mdl_engine: 'unknown',
-    mdoc_engine: 'unknown',
-    inspection_system: 'unknown'
-  });
+  const { showSuccess, showError } = useNotifications();
+  const [stats, setStats] = useState(ADMIN_DASHBOARD_DEFAULT_STATS);
+  const [health, setHealth] = useState(ADMIN_DASHBOARD_DEFAULT_HEALTH);
   
   // Vendor management state
   const [vendors, setVendors] = useState([]);
@@ -76,65 +73,15 @@ const AdminDashboard = () => {
   const [vendorsLoading, setVendorsLoading] = useState(false);
   const [impersonateDialog, setImpersonateDialog] = useState({ open: false, vendor: null });
 
-  useEffect(() => {
-    fetchStats();
-    fetchHealth();
-    fetchVendors();
-  }, [fetchVendors]);
-
-  const fetchStats = async () => {
-    try {
-      const response = await fetch('/api/admin/stats');
-      const data = await response.json();
-      setStats(data);
-    } catch (error) {
-      console.error('Failed to fetch stats:', error);
-    }
-  };
-
-  const fetchHealth = async () => {
-    try {
-      const response = await fetch('/api/health');
-      const data = await response.json();
-      // Map single service health to dashboard format
-      setHealth({
-        issuer_api: data.status,
-        passport_engine: data.status,
-        mdl_engine: data.status,
-        mdoc_engine: data.status,
-        inspection_system: data.status
-      });
-    } catch (error) {
-      console.error('Failed to fetch health:', error);
-    }
-  };
-
-  /**
-   * Fetch vendors (organizations) from Keycloak Admin API
-   */
   const fetchVendors = useCallback(async () => {
     setVendorsLoading(true);
     try {
-      // Get vendor users with the 'vendor' role
-      const response = await fetch('/api/admin/vendors');
-      if (response.ok) {
-        const data = await response.json();
-        setVendors(data);
-      } else {
-        // Fallback: fetch from Keycloak directly if admin API not available
-        console.warn('Vendor API not available, using mock data');
-        setVendors([
-          {
-            id: 'vendor-001',
-            username: 'vendor@marty.demo',
-            email: 'vendor@marty.demo',
-            organizationName: 'Demo Vendor Corp',
-            organizationId: 'org-001',
-            tier: 'PROFESSIONAL',
-            enabled: true,
-            createdAt: new Date().toISOString()
-          }
-        ]);
+      const result = await loadAdminDashboardBootstrap();
+      setStats(result.stats);
+      setHealth(result.health);
+      setVendors(result.vendors);
+      if (result.vendorError) {
+        showError(result.vendorError);
       }
     } catch (error) {
       console.error('Failed to fetch vendors:', error);
@@ -142,7 +89,11 @@ const AdminDashboard = () => {
     } finally {
       setVendorsLoading(false);
     }
-  }, []);
+  }, [showError]);
+
+  useEffect(() => {
+    fetchVendors();
+  }, [fetchVendors]);
 
   /**
    * Impersonate a vendor user via Keycloak
@@ -150,40 +101,18 @@ const AdminDashboard = () => {
    */
   const handleImpersonate = async (vendor) => {
     try {
-      // Keycloak impersonation endpoint
-      // POST /admin/realms/{realm}/users/{id}/impersonation
-      const keycloakUrl = keycloak?.authServerUrl || window.KEYCLOAK_URL || 'http://localhost:8080';
-      const realm =
-        keycloak?.realm ||
-        import.meta.env.VITE_KEYCLOAK_REALM ||
-        window.KEYCLOAK_REALM ||
-        '11id';
-      
-      const impersonateUrl = `${keycloakUrl}/admin/realms/${realm}/users/${vendor.id}/impersonation`;
-      
-      const response = await fetch(impersonateUrl, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${keycloak?.token}`,
-          'Content-Type': 'application/json'
-        }
+      const result = await impersonateAdminVendor({
+        vendor,
+        keycloak,
+        authServerUrl: window.KEYCLOAK_URL,
+        realm: import.meta.env.VITE_KEYCLOAK_REALM || window.KEYCLOAK_REALM,
       });
-      
-      if (response.ok) {
-        const result = await response.json();
-        // Keycloak returns a redirect URL for the impersonation session
-        if (result.redirect) {
-          // Open impersonation in new tab to preserve admin session
-          window.open(result.redirect, '_blank');
-          showSuccess(`Now impersonating ${vendor.email}. Check the new tab.`);
-        } else {
-          // Force refresh to pick up impersonated session
-          window.location.reload();
-        }
-      } else if (response.status === 403) {
-        showError('Impersonation not permitted. Check admin role and Keycloak settings.');
+
+      if (result.action === 'open-tab' && result.redirectUrl) {
+        window.open(result.redirectUrl, '_blank');
+        showSuccess(result.successMessage);
       } else {
-        throw new Error(`Impersonation failed: ${response.statusText}`);
+        window.location.reload();
       }
     } catch (error) {
       console.error('Impersonation error:', error);
@@ -196,21 +125,7 @@ const AdminDashboard = () => {
   /**
    * Filter vendors by search term
    */
-  const filteredVendors = vendors.filter(vendor => 
-    vendor.email?.toLowerCase().includes(vendorSearch.toLowerCase()) ||
-    vendor.organizationName?.toLowerCase().includes(vendorSearch.toLowerCase()) ||
-    vendor.username?.toLowerCase().includes(vendorSearch.toLowerCase())
-  );
-
-  const getTierColor = (tier) => {
-    const colors = {
-      'FREE': 'default',
-      'STARTER': 'info',
-      'PROFESSIONAL': 'primary',
-      'ENTERPRISE': 'secondary'
-    };
-    return colors[tier] || 'default';
-  };
+  const filteredVendors = filterAdminVendors(vendors, vendorSearch);
 
   const getStatusIcon = (status) => {
     return status === 'healthy' ? <CheckCircleIcon color="success" /> : <ErrorIcon color="error" />;
@@ -432,7 +347,7 @@ const AdminDashboard = () => {
                             <Chip 
                               label={vendor.tier || 'FREE'} 
                               size="small" 
-                              color={getTierColor(vendor.tier)}
+                              color={getAdminTierColor(vendor.tier)}
                             />
                           </TableCell>
                           <TableCell>
@@ -479,40 +394,42 @@ const AdminDashboard = () => {
       </Grid>
 
       {/* Impersonation Confirmation Dialog */}
-      <Dialog
-        open={impersonateDialog.open}
-        onClose={() => setImpersonateDialog({ open: false, vendor: null })}
-      >
-        <DialogTitle>
-          <PersonIcon sx={{ mr: 1, verticalAlign: 'middle' }} />
-          Confirm Impersonation
-        </DialogTitle>
-        <DialogContent>
-          <DialogContentText>
-            You are about to impersonate <strong>{impersonateDialog.vendor?.email}</strong> 
-            from organization <strong>{impersonateDialog.vendor?.organizationName}</strong>.
-          </DialogContentText>
-          <Box sx={{ mt: 2 }}>
-            <Alert severity="warning">
-              All actions during impersonation are logged. Use this feature responsibly
-              and only for support or debugging purposes.
-            </Alert>
-          </Box>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setImpersonateDialog({ open: false, vendor: null })}>
-            Cancel
-          </Button>
-          <Button
-            variant="contained"
-            color="primary"
-            startIcon={<ImpersonateIcon />}
-            onClick={() => handleImpersonate(impersonateDialog.vendor)}
-          >
-            Start Impersonation
-          </Button>
-        </DialogActions>
-      </Dialog>
+      {impersonateDialog.open && (
+        <Dialog
+          open={impersonateDialog.open}
+          onClose={() => setImpersonateDialog({ open: false, vendor: null })}
+        >
+          <DialogTitle>
+            <PersonIcon sx={{ mr: 1, verticalAlign: 'middle' }} />
+            Confirm Impersonation
+          </DialogTitle>
+          <DialogContent>
+            <DialogContentText>
+              You are about to impersonate <strong>{impersonateDialog.vendor?.email}</strong> 
+              from organization <strong>{impersonateDialog.vendor?.organizationName}</strong>.
+            </DialogContentText>
+            <Box sx={{ mt: 2 }}>
+              <Alert severity="warning">
+                All actions during impersonation are logged. Use this feature responsibly
+                and only for support or debugging purposes.
+              </Alert>
+            </Box>
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={() => setImpersonateDialog({ open: false, vendor: null })}>
+              Cancel
+            </Button>
+            <Button
+              variant="contained"
+              color="primary"
+              startIcon={<ImpersonateIcon />}
+              onClick={() => handleImpersonate(impersonateDialog.vendor)}
+            >
+              Start Impersonation
+            </Button>
+          </DialogActions>
+        </Dialog>
+      )}
 
     </Container>
   );

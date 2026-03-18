@@ -41,9 +41,9 @@ import { useAsyncData } from '../../../hooks/useAsyncData';
 import { useNotifications } from '../../../hooks/useNotifications';
 import {
   issueOrganizationApplication,
-  listOrganizationApplications,
   reviewOrganizationApplication,
 } from '../../../services/applicantApi';
+import { loadOrganizationApplications } from '../../../application/applications';
 
 import { ResourcePage, EmptyState, EmptyStates, StatusChip } from '../../common';
 
@@ -71,31 +71,7 @@ function ApplicationsPage() {
   const { showError } = useNotifications();
   const { data: _applicationsData, loading, error, reload } = useAsyncData(async () => {
     if (!organizationId) return [];
-    const [appsResult, applicantsResponse] = await Promise.all([
-      listOrganizationApplications(organizationId),
-      fetch(`/v1/applicants?organization_id=${encodeURIComponent(organizationId)}`, {
-        credentials: 'include',
-      }),
-    ]);
-    const rawApplicants = applicantsResponse.ok ? await applicantsResponse.json() : [];
-    const applicants = Array.isArray(rawApplicants) ? rawApplicants : [];
-    const applicantById = new Map(applicants.map((a) => [a.id, a]));
-    return (appsResult.applications || []).map((app) => {
-      const applicant = applicantById.get(app.applicant_id);
-      const status = (app.status || '').toLowerCase();
-      const metadata = app.metadata || {};
-      return {
-        id: app.id,
-        applicant: applicant?.email || app.applicant_id,
-        credentialType: app.credential_display_name || metadata.credential_display_name || app.credential_configuration_id,
-        submittedAt: app.submitted_at || app.created_at,
-        documentsUploaded: true,
-        verificationPassed: true,
-        status,
-        rawStatus: status,
-        issuanceTransactionId: metadata.issuance_transaction_id || null,
-      };
-    });
+    return loadOrganizationApplications({ organizationId });
   }, [organizationId]);
   const applications = _applicationsData ?? [];
   const [searchQuery, setSearchQuery] = useState('');

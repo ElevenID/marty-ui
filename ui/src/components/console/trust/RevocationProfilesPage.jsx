@@ -26,8 +26,7 @@ import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
 import { ResourcePage } from '../../common';
-// TODO: Wire up when RevocationManager is available
-// import RevocationManager from '../../vendor/RevocationManager';
+import { listRevocationBatches } from '../../../services/credentialsApi';
 
 const getTrustTabs = (t) => [
   { label: t('trust.trustProfiles'), path: '/console/org/trust/profiles' },
@@ -43,30 +42,10 @@ const getBreadcrumbs = (t) => [
 
 function RevocationProfilesPage() {
   const { t } = useTranslation('console');
-  const { data: profiles = [], loading, error } = useAsyncData(async () => {
-    // TODO: Fetch revocation profiles from API
-    await new Promise((resolve) => setTimeout(resolve, 500));
-    return [
-      {
-        id: 'rp-1',
-        name: 'Status List 2021 - Production',
-        type: 'StatusList2021',
-        credentialsTracked: 15234,
-        revokedCount: 42,
-        status: 'active',
-        updatedAt: '2026-02-07T08:00:00Z',
-      },
-      {
-        id: 'rp-2',
-        name: 'Bitstring Status List - Beta',
-        type: 'BitstringStatusList',
-        credentialsTracked: 500,
-        revokedCount: 3,
-        status: 'active',
-        updatedAt: '2026-02-06T16:30:00Z',
-      },
-    ];
-  }, []);
+  const { data: profiles = [], loading, error } = useAsyncData(
+    () => listRevocationBatches(),
+    []
+  );
 
   return (
     <ResourcePage

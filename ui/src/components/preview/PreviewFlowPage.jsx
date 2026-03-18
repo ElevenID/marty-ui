@@ -11,21 +11,13 @@ import { PreviewProvider, usePreview } from '../../contexts/PreviewContext';
 import { Container, Alert, CircularProgress, Typography, Box } from '@mui/material';
 import ApplicationForm from '../applicant/ApplicationForm';
 import PreviewNotFound from './PreviewNotFound';
-
-const API_URL = import.meta.env.VITE_API_URL || '';
+import { fetchPreviewFlow } from '../../application/vendor';
 
 function PreviewFlowContent() {
   const { flowId } = useParams();
   const { updateContextLabel } = usePreview();
   const { data: flow, loading, error } = useAsyncData(async () => {
-    const response = await fetch(
-      `${API_URL}/api/v1/identity/flows/${flowId}?preview=true`,
-      { credentials: 'include' }
-    );
-    if (!response.ok) {
-      throw new Error('Flow not found');
-    }
-    const data = await response.json();
+    const data = await fetchPreviewFlow({ flowId });
     updateContextLabel(`Issuance Flow: ${data.name || flowId}`);
     return data;
   }, [flowId]);

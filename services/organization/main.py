@@ -23,11 +23,12 @@ from .application.use_cases import (
     OrganizationUseCase,
 )
 from .application.rbac_use_cases import RoleUseCase
+from .application.policy_set_use_cases import PolicySetUseCase
 from .infrastructure.adapters.audit_adapter import router as audit_router
+from .infrastructure.adapters.grpc_adapter import OrganizationServiceGrpc
 from .infrastructure.adapters.http_adapter import (
     configure_org_router,
     router as org_router,
-    internal_router,
 )
 from .infrastructure.adapters.onboarding_adapter import router as onboarding_router
 from .infrastructure.adapters.preferences_adapter import (
@@ -49,6 +50,11 @@ from .infrastructure.adapters.rbac_adapter import (
     PostgresPermissionRepository,
     PostgresRoleRepository,
 )
+from .infrastructure.adapters.policy_set_adapter import PostgresPolicySetRepository
+from .infrastructure.adapters.policy_set_http_adapter import (
+    configure as configure_policy_set_router,
+    router as policy_set_router,
+)
 
 # Configure logging
 logging.basicConfig(
@@ -69,14 +75,25 @@ def get_config() -> dict:
             "DATABASE_URL",
             "postgresql+asyncpg://postgres:postgres@localhost:5432/marty"
         ),
-        "rabbitmq_url": os.environ.get("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/"),
     }
 
 
-class InMemoryEventPublisher:
-    """Placeholder event publisher."""
+class GrpcEventBusPublisher:
+    """Event publisher backed by the gRPC event bus."""
     async def publish(self, event) -> None:
-        logger.debug(f"Event published: {type(event).__name__}")
+        try:
+            from common.grpc_event_bus import get_event_bus
+            event_dict = event.to_dict() if hasattr(event, "to_dict") else {}
+            event_type = event_dict.get("event_type", type(event).__name__)
+            await get_event_bus().publish(
+                event_type=event_type,
+                aggregate_id=event_dict.get("aggregate_id", ""),
+                aggregate_type=event_dict.get("aggregate_type", ""),
+                organization_id=event_dict.get("organization_id", ""),
+                data={k: str(v) for k, v in event_dict.items()},
+            )
+        except Exception as exc:
+            logger.debug(f"gRPC event bus publish failed: {exc}")
 
 
 @asynccontextmanager
@@ -98,9 +115,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     join_code_repo = PostgresJoinCodeRepository(session_factory)
     role_repo = PostgresRoleRepository(session_factory)
     permission_repo = PostgresPermissionRepository(session_factory)
+    policy_set_repo = PostgresPolicySetRepository(session_factory)
     
-    # Initialize event publisher
-    event_publisher = InMemoryEventPublisher()
+    # Initialize event publisher (gRPC event bus)
+    event_publisher = GrpcEventBusPublisher()
     
     # Initialize use cases
     org_use_case = OrganizationUseCase(
@@ -158,6 +176,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         role_use_case=role_use_case,
     )
     
+    # Initialize Cedar engine and PolicySet use case
+    from marty_common import CedarEngine
+    cedar_engine = CedarEngine.with_defaults()
+    policy_set_use_case = PolicySetUseCase(
+        repo=policy_set_repo,
+        cedar_engine=cedar_engine,
+    )
+    configure_policy_set_router(use_case=policy_set_use_case)
+    
     # Store role use case in app state for the internal permissions endpoint
     app.state.role_use_case = role_use_case
     
@@ -171,24 +198,48 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         decode_responses=True
     )
     
-    # Initialize OrganizationClient for cache invalidation
-    # Points to localhost since the org service needs to invalidate its own cache
-    org_client = OrganizationClient(
-        base_url=f"http://localhost:{SERVICE_PORT}",
-        redis_client=redis_client,  # Enable Redis caching for cache invalidation
-    )
-    app.state.org_client = org_client
     app.state.redis_client = redis_client
-    
     app.state.engine = engine
     
+    # Start gRPC server
+    from common.grpc_factory import create_grpc_server, start_grpc_server_port, create_grpc_channel
+    from marty_proto.v1.organization_service_pb2_grpc import (
+        add_OrganizationServiceServicer_to_server,
+    )
+
+    grpc_port = int(os.environ.get("ORG_GRPC_PORT", "9002"))
+    grpc_server, health_servicer = create_grpc_server("organization")
+    org_servicer = OrganizationServiceGrpc(
+        org_use_case=org_use_case,
+        member_use_case=member_use_case,
+        api_key_use_case=api_key_use_case,
+        role_use_case=role_use_case,
+    )
+    add_OrganizationServiceServicer_to_server(org_servicer, grpc_server)
+    start_grpc_server_port(
+        grpc_server, grpc_port,
+        service_names=["marty.ui.organization.v1.OrganizationService"],
+        health_servicer=health_servicer,
+    )
+    await grpc_server.start()
+    logger.info("Organization gRPC server listening on port %d", grpc_port)
+
+    # OrganizationClient for cache invalidation (loopback to own gRPC server)
+    org_grpc_channel = create_grpc_channel(f"localhost:{grpc_port}", service_name="organization")
+    org_client = OrganizationClient(
+        grpc_channel=org_grpc_channel,
+        redis_client=redis_client,
+    )
+    app.state.org_client = org_client
+
     logger.info(f"{SERVICE_NAME} started on port {SERVICE_PORT}")
     
     yield
     
     # Cleanup
     logger.info(f"Shutting down {SERVICE_NAME}...")
-    await org_client.close()
+    await grpc_server.stop(grace=5)
+    await org_grpc_channel.close()
     await redis_client.aclose()
     await engine.dispose()
 
@@ -221,16 +272,20 @@ def create_app() -> FastAPI:
     
     # Include routers
     app.include_router(org_router)
-    app.include_router(internal_router)
     app.include_router(preferences_router)
     app.include_router(onboarding_router)
     app.include_router(audit_router)
     app.include_router(rbac_router)
+    app.include_router(policy_set_router)
     
     # Health check endpoint
     @app.get("/health")
     async def health_check() -> dict:
         return {"status": "healthy", "service": SERVICE_NAME}
+
+    from common.metrics import init_otel_tracing, mount_metrics
+    init_otel_tracing(SERVICE_NAME)
+    mount_metrics(app)
     
     return app
 

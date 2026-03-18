@@ -27,34 +27,54 @@ import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import QrCodeIcon from '@mui/icons-material/QrCode';
 import PropTypes from 'prop-types';
 import flowsApi from '../../services/flowsApi';
+import {
+  getFlowPublishFailureState,
+  getFlowPublishInitialState,
+  publishFlowDefinition,
+  resetFlowPublishState,
+} from '../../application/flows';
 
 function FlowPublishDialog({ open, onClose, flow, onPublished }) {
   const { t } = useTranslation('vendor');
-  const [changeDescription, setChangeDescription] = useState('');
-  const [publishing, setPublishing] = useState(false);
-  const [error, setError] = useState(null);
-  const [published, setPublished] = useState(false);
-  const [publicUrl, setPublicUrl] = useState(null);
+  const [state, setState] = useState(getFlowPublishInitialState());
+  const {
+    changeDescription,
+    publishing,
+    error,
+    published,
+    publicUrl,
+  } = state;
 
   const handlePublish = async () => {
-    setPublishing(true);
-    setError(null);
+    setState((currentState) => ({
+      ...currentState,
+      publishing: true,
+      error: null,
+    }));
 
     try {
-      const result = await flowsApi.publishFlow(flow.id, {
-        change_description: changeDescription,
+      const { result, state: nextState } = await publishFlowDefinition({
+        publishFlow: flowsApi.publishFlow,
+        flow,
+        changeDescription,
+        fallbackOrigin: window.location.origin,
       });
-      
-      setPublished(true);
-      setPublicUrl(result.public_url || `${window.location.origin}/apply/${flow.id}`);
+      setState((currentState) => ({
+        ...currentState,
+        ...nextState,
+      }));
       
       if (onPublished) {
         onPublished(result);
       }
     } catch (err) {
-      setError(err.message || t('flowPublishDialog.failedToPublish'));
-    } finally {
-      setPublishing(false);
+      setState((currentState) => ({
+        ...currentState,
+        ...getFlowPublishFailureState({
+          error: err,
+          fallbackMessage: t('flowPublishDialog.failedToPublish'),
+        }),
+      }));
     }
   };
 
@@ -66,10 +86,7 @@ function FlowPublishDialog({ open, onClose, flow, onPublished }) {
   };
 
   const handleClose = () => {
-    setChangeDescription('');
-    setPublished(false);
-    setPublicUrl(null);
-    setError(null);
+    setState(resetFlowPublishState());
     onClose();
   };
 
@@ -79,6 +96,7 @@ function FlowPublishDialog({ open, onClose, flow, onPublished }) {
         {published ? t('flowPublishDialog.titlePublished') : t('flowPublishDialog.title')}
         <IconButton
           onClick={handleClose}
+          aria-label="close"
           sx={{ position: 'absolute', right: 8, top: 8 }}
         >
           <CloseIcon />
@@ -113,7 +131,13 @@ function FlowPublishDialog({ open, onClose, flow, onPublished }) {
               label={t('flowPublishDialog.changeDescriptionLabel')}
               placeholder={t('flowPublishDialog.changeDescriptionPlaceholder')}
               value={changeDescription}
-              onChange={(e) => setChangeDescription(e.target.value)}
+              inputProps={{
+                'aria-label': t('flowPublishDialog.changeDescriptionLabel'),
+              }}
+              onChange={(e) => setState((currentState) => ({
+                ...currentState,
+                changeDescription: e.target.value,
+              }))}
               sx={{ mb: 2 }}
             />
           </>
@@ -134,7 +158,7 @@ function FlowPublishDialog({ open, onClose, flow, onPublished }) {
                 readOnly: true,
                 endAdornment: (
                   <InputAdornment position="end">
-                    <IconButton onClick={handleCopyUrl} edge="end">
+                    <IconButton onClick={handleCopyUrl} edge="end" aria-label="copy public url">
                       <ContentCopyIcon />
                     </IconButton>
                   </InputAdornment>

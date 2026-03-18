@@ -19,7 +19,7 @@ import {
   Button,
   Grid,
   Chip,
-  CircularProgress,
+  Skeleton,
   Divider,
   Stack,
   Tooltip,
@@ -33,8 +33,8 @@ import VisibilityIcon from '@mui/icons-material/Visibility';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 
 import { useAuth } from '../../../hooks/useAuth';
-
-const API_URL = import.meta.env.VITE_API_URL || '';
+import sseService, { EVENT_TYPES } from '../../../services/sseService';
+import { loadIssuanceMetrics } from '../../../application/issuance';
 
 /**
  * Mini stat display
@@ -100,31 +100,9 @@ export default function IssuanceDashboardWidget({ compact = false }) {
     setError(null);
     
     try {
-      // Fetch analytics summary for last 1 day
-      const analyticsParams = new URLSearchParams({
-        organization_id: organizationId,
-        days: '1',
-      });
-      
-      const analyticsResponse = await fetch(
-        `${API_URL}/api/issuance/analytics/summary?${analyticsParams.toString()}`,
-        {
-          credentials: 'include',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-        }
-      );
-      
-      if (analyticsResponse.ok) {
-        const analyticsData = await analyticsResponse.json();
-        setMetrics({
-          activeOffers: analyticsData.active_offers || 0,
-          totalScans: analyticsData.total_scans || 0,
-          successRate: analyticsData.success_rate || 0,
-          totalOffers: analyticsData.total_offers || 0,
-        });
-      }
+      const { metrics: loaded, error: loadError } = await loadIssuanceMetrics({ organizationId });
+      if (loadError) throw new Error(loadError);
+      setMetrics(loaded);
     } catch (err) {
       console.error('Error fetching issuance metrics:', err);
       setError(t('dashboard.issuance.failedToLoad'));
@@ -147,13 +125,28 @@ export default function IssuanceDashboardWidget({ compact = false }) {
     return () => clearInterval(interval);
   }, [fetchMetrics]);
 
+  // Bump counters live when credential events arrive via SSE
+  useEffect(() => {
+    const unsub = sseService.on(EVENT_TYPES.CREDENTIAL_ISSUED, () => {
+      setMetrics((prev) => ({
+        ...prev,
+        totalScans: prev.totalScans + 1,
+        totalOffers: prev.totalOffers,
+      }));
+    });
+    return unsub;
+  }, []);
+
   if (loading && !metrics.activeOffers) {
     return (
       <Card sx={{ height: '100%' }}>
         <CardContent>
-          <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', py: 4 }}>
-            <CircularProgress size={40} />
-          </Box>
+          <Skeleton variant="text" width={180} height={28} />
+          <Skeleton variant="text" width={80} height={40} sx={{ mt: 1 }} />
+          <Stack direction="row" spacing={2} sx={{ mt: 2 }}>
+            <Skeleton variant="rounded" width={100} height={24} />
+            <Skeleton variant="rounded" width={60} height={24} />
+          </Stack>
         </CardContent>
       </Card>
     );

@@ -9,21 +9,13 @@ import { useParams } from 'react-router-dom';
 import { PreviewProvider, usePreview } from '../../contexts/PreviewContext';
 import { Box, Container, Paper, Typography, CircularProgress, Alert } from '@mui/material';
 import PreviewNotFound from './PreviewNotFound';
-
-const API_URL = import.meta.env.VITE_API_URL || '';
+import { fetchPreviewCredentialTemplate } from '../../application/vendor';
 
 function PreviewCredentialContent() {
   const { templateId } = useParams();
   const { updateContextLabel } = usePreview();
   const { data: template, loading, error } = useAsyncData(async () => {
-    const response = await fetch(
-      `${API_URL}/api/credential-templates/${templateId}?preview=true`,
-      { credentials: 'include' }
-    );
-    if (!response.ok) {
-      throw new Error('Template not found');
-    }
-    const data = await response.json();
+    const data = await fetchPreviewCredentialTemplate({ templateId });
     updateContextLabel(`Credential: ${data.name || data.credential_type || 'Unknown'}`);
     return data;
   }, [templateId]);

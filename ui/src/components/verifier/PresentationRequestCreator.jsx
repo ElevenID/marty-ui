@@ -31,16 +31,12 @@ import {
   Error as ErrorIcon,
 } from '@mui/icons-material';
 import { QRCodeSVG } from 'qrcode.react';
-
-/**
- * Credential types supported for presentation requests
- */
-const CREDENTIAL_TYPES = [
-  { value: 'mDL', label: 'Mobile Driving License (mDL)', attributes: ['given_name', 'family_name', 'birth_date', 'age_over_21', 'document_number'] },
-  { value: 'VerifiableId', label: 'Verifiable ID', attributes: ['given_name', 'family_name', 'birth_date', 'nationality'] },
-  { value: 'VerifiableDiploma', label: 'Verifiable Diploma', attributes: ['degree', 'institution', 'graduation_date'] },
-  { value: 'ProofOfAge', label: 'Proof of Age', attributes: ['age_over_18', 'age_over_21'] },
-];
+import {
+  createPresentationRequest,
+  getPresentationRequestAttributes,
+  PRESENTATION_REQUEST_CREDENTIAL_TYPES,
+  verifyPresentationRequest,
+} from '../../application/verifier';
 
 /**
  * PresentationRequestCreator - Component for creating OID4VP presentation requests
@@ -72,34 +68,30 @@ const PresentationRequestCreator = () => {
   /**
    * Generate a new presentation request
    */
-  const createPresentationRequest = async () => {
+  const handleCreatePresentationRequest = async () => {
     setLoading(true);
     setError(null);
     setRequestStatus('idle');
     setPresentationData(null);
 
     try {
-      const response = await fetch('/api/verifier/request', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          requested_credentials: [selectedCredentialType],
-          verifier_id: verifierName,
-        }),
+      const result = await createPresentationRequest({
+        selectedCredentialType,
+        verifierName,
       });
 
-      if (!response.ok) {
-        throw new Error(`Failed to create request: ${response.statusText}`);
+      if (result.error) {
+        setError(result.error);
+        setRequestStatus(result.requestStatus);
+        return;
       }
 
-      const data = await response.json();
-      
-      setRequestId(data.request_id);
-      setRequestUri(data.request_uri || '');
-      setRequestAudience(data.audience || '');
-      setRequestStatus('pending');
-    } catch (err) {
-      setError(err.message);
+      setRequestId(result.requestId);
+      setRequestUri(result.requestUri);
+      setRequestAudience(result.requestAudience);
+      setRequestStatus(result.requestStatus);
+    } catch (error) {
+      setError(error.message);
       setRequestStatus('error');
     } finally {
       setLoading(false);
@@ -109,31 +101,25 @@ const PresentationRequestCreator = () => {
   /**
    * Verify the submitted presentation
    */
-  const verifyPresentation = async () => {
+  const handleVerifyPresentation = async () => {
     if (!presentationData) return;
 
     setLoading(true);
     try {
-      const response = await fetch('/api/verifier/verify-presentation', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          presentation_jwt: presentationData.vp_jwt || presentationData,
-          expected_nonce: customNonce || null,
-          expected_audience: requestAudience || verifierName,
-        }),
+      const result = await verifyPresentationRequest({
+        presentationData,
+        customNonce,
+        requestAudience,
+        verifierName,
       });
 
-      const result = await response.json();
-      
-      if (result.valid) {
-        setRequestStatus('verified');
-      } else {
-        setError(result.error || 'Verification failed');
-        setRequestStatus('error');
+      if (result.error) {
+        setError(result.error);
       }
-    } catch (err) {
-      setError(err.message);
+
+      setRequestStatus(result.requestStatus);
+    } catch (error) {
+      setError(error.message);
       setRequestStatus('error');
     } finally {
       setLoading(false);
@@ -156,6 +142,7 @@ const PresentationRequestCreator = () => {
   const resetForm = () => {
     setRequestId(null);
     setRequestUri('');
+    setRequestAudience('');
     setRequestStatus('idle');
     setPresentationData(null);
     setError(null);
@@ -213,7 +200,7 @@ const PresentationRequestCreator = () => {
                     disabled={requestStatus === 'pending'}
                     data-testid="credential-type-select"
                   >
-                    {CREDENTIAL_TYPES.map((type) => (
+                    {PRESENTATION_REQUEST_CREDENTIAL_TYPES.map((type) => (
                       <MenuItem key={type.value} value={type.value} data-testid={`credential-type-${type.value}`}>
                         {type.label}
                       </MenuItem>
@@ -249,7 +236,7 @@ const PresentationRequestCreator = () => {
                   Requested Attributes:
                 </Typography>
                 <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mb: 2 }}>
-                  {CREDENTIAL_TYPES.find(t => t.value === selectedCredentialType)?.attributes.map((attr) => (
+                  {getPresentationRequestAttributes(selectedCredentialType).map((attr) => (
                     <Chip key={attr} label={attr} size="small" variant="outlined" data-testid={`attribute-chip-${attr}`} />
                   ))}
                 </Box>
@@ -257,7 +244,7 @@ const PresentationRequestCreator = () => {
                 <Box sx={{ display: 'flex', gap: 2 }}>
                   <Button
                     variant="contained"
-                    onClick={createPresentationRequest}
+                    onClick={handleCreatePresentationRequest}
                     disabled={loading || requestStatus === 'pending'}
                     startIcon={loading ? <CircularProgress size={20} /> : <QrCodeIcon />}
                     fullWidth
@@ -382,7 +369,7 @@ const PresentationRequestCreator = () => {
                       <Button
                         variant="contained"
                         color="primary"
-                        onClick={verifyPresentation}
+                        onClick={handleVerifyPresentation}
                         disabled={loading}
                         startIcon={loading ? <CircularProgress size={20} /> : <SecurityIcon />}
                         data-testid="verify-presentation-button"

@@ -53,9 +53,7 @@ import {
   Info as InfoIcon,
 } from '@mui/icons-material';
 import { useAuth } from '../../hooks/useAuth';
-
-// API base URL
-const API_URL = import.meta.env.VITE_API_URL || '';
+import { fetchAuditEvents, exportAuditEvents } from '../../application/vendor';
 
 
 /**
@@ -250,44 +248,20 @@ export default function AuditLogs() {
     setError(null);
 
     try {
-      // Build query parameters
-      const params = new URLSearchParams({
-        organization_id: organizationId,
+      const data = await fetchAuditEvents({
+        organizationId,
         page: page + 1,
-        per_page: rowsPerPage,
-        time_range: timeRange,
+        perPage: rowsPerPage,
+        timeRange,
+        categoryFilter,
+        severityFilter,
+        searchQuery,
       });
-
-      if (categoryFilter !== 'all') {
-        params.append('category', categoryFilter);
-      }
-
-      if (severityFilter !== 'all') {
-        params.append('severity', severityFilter);
-      }
-
-      if (searchQuery) {
-        params.append('search', searchQuery);
-      }
-
-      const response = await fetch(`${API_URL}/v1/organizations/audit/events?${params}`, {
-        method: 'GET',
-        credentials: 'include',
-      });
-
-      if (!response.ok) {
-        throw new Error(`Failed to load audit events: ${response.statusText}`);
-      }
-
-      const data = await response.json();
       setEvents(data.events || []);
       setTotalCount(data.total || 0);
     } catch (err) {
       console.error('Error loading audit events:', err);
       setError(err.message);
-      // Use mock data for development
-      setEvents(generateMockEvents());
-      setTotalCount(100);
     } finally {
       setLoading(false);
     }
@@ -326,31 +300,15 @@ export default function AuditLogs() {
    */
   const handleExport = async (format) => {
     try {
-      const params = new URLSearchParams({
-        organization_id: organizationId,
-        format: format,
-        time_range: timeRange,
+      const blob = await exportAuditEvents({
+        organizationId,
+        format,
+        timeRange,
+        categoryFilter,
+        severityFilter,
       });
-
-      if (categoryFilter !== 'all') {
-        params.append('category', categoryFilter);
-      }
-
-      if (severityFilter !== 'all') {
-        params.append('severity', severityFilter);
-      }
-
-      const response = await fetch(`${API_URL}/v1/organizations/audit/events/export?${params}`, {
-        method: 'GET',
-        credentials: 'include',
-      });
-
-      if (!response.ok) {
-        throw new Error(`Failed to export: ${response.statusText}`);
-      }
 
       // Download file
-      const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;

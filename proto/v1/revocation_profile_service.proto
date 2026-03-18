@@ -1,0 +1,202 @@
+syntax = "proto3";
+
+package marty.ui.revocation_profile.v1;
+
+import "google/api/annotations.proto";
+
+option java_multiple_files = true;
+
+// RevocationProfileService manages format-agnostic revocation configuration
+// and automation for both issuers (status list publishing) and verifiers
+// (revocation checking).
+service RevocationProfileService {
+  // Create a new RevocationProfile (draft).
+  rpc CreateRevocationProfile(CreateRevocationProfileRequest) returns (RevocationProfileResponse) {
+    option (google.api.http) = {
+      post: "/v1/revocation-profiles"
+      body: "*"
+    };
+  }
+
+  // Get a RevocationProfile by ID.
+  rpc GetRevocationProfile(GetRevocationProfileRequest) returns (RevocationProfileResponse) {
+    option (google.api.http) = {
+      get: "/v1/revocation-profiles/{profile_id}"
+    };
+  }
+
+  // List RevocationProfiles for an organization.
+  rpc ListRevocationProfiles(ListRevocationProfilesRequest) returns (ListRevocationProfilesResponse) {
+    option (google.api.http) = {
+      get: "/v1/revocation-profiles"
+    };
+  }
+
+  // Activate a draft RevocationProfile.
+  rpc ActivateRevocationProfile(ActivateRevocationProfileRequest) returns (RevocationProfileResponse) {
+    option (google.api.http) = {
+      post: "/v1/revocation-profiles/{profile_id}/activate"
+    };
+  }
+
+  // Delete a RevocationProfile.
+  rpc DeleteRevocationProfile(DeleteRevocationProfileRequest) returns (DeleteRevocationProfileResponse) {
+    option (google.api.http) = {
+      delete: "/v1/revocation-profiles/{profile_id}"
+    };
+  }
+
+  // Process a revocation/suspension/reinstatement (internal, service-to-service).
+  rpc ProcessRevocation(ProcessRevocationRequest) returns (ProcessRevocationResponse) {
+    option (google.api.http) = {
+      post: "/v1/revocation-profiles/{profile_id}/process"
+      body: "*"
+    };
+  }
+
+  // Allocate a status list index for a new credential (internal, service-to-service).
+  rpc AllocateIndex(AllocateIndexRequest) returns (AllocateIndexResponse) {
+    option (google.api.http) = {
+      post: "/v1/revocation-profiles/{profile_id}/allocate"
+      body: "*"
+    };
+  }
+
+  // Health check.
+  rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse) {
+    option (google.api.http) = {
+      get: "/v1/revocation-profiles/health"
+    };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Sub-messages: Configuration components
+// ---------------------------------------------------------------------------
+
+message IssuerRevocationConfig {
+  string status_list_strategy = 1;       // auto | manual | registry
+  string status_list_base_url = 2;       // Where to publish status lists
+  int32  status_list_size = 3;           // Default 131072 (16KB bitstring)
+  string update_mode = 4;                // sync | async | batch
+  int32  batch_interval_seconds = 5;     // For BATCH mode
+  bool   enable_rotation = 6;
+  int32  rotation_threshold_percent = 7; // Rotate at N% capacity
+  bool   enable_bitstring_status_list = 8;  // W3C SD-JWT/VC
+  bool   enable_token_status_list = 9;      // IETF mDoc/CWT
+  bool   enable_legacy_revocation_list = 10; // RevocationList2020
+}
+
+message VerifierRevocationConfig {
+  string check_mode = 1;                   // HARD_FAIL | SOFT_FAIL | SKIP
+  string timing_mode = 2;                  // ALWAYS | CACHED | OFFLINE_GRACE | DISABLED
+  repeated string mechanism_priority = 3;  // e.g. ["BITSTRING_STATUS_LIST"]
+  bool   cache_status_lists = 4;
+  int32  cache_ttl_seconds = 5;
+  int32  offline_grace_seconds = 6;        // For OFFLINE_GRACE timing mode
+  int32  check_timeout_seconds = 7;
+  int32  max_retries = 8;
+  bool   require_issuer_signature_on_status_list = 9;
+  bool   allow_third_party_registries = 10;
+}
+
+message RevocationAutomationConfig {
+  bool auto_allocate_indices = 1;
+  bool auto_publish = 2;
+  bool auto_generate_status_list_credentials = 3;
+  bool auto_discover_endpoints = 4;
+  bool use_format_defaults = 5;
+}
+
+// ---------------------------------------------------------------------------
+// Public API messages
+// ---------------------------------------------------------------------------
+
+message CreateRevocationProfileRequest {
+  string organization_id = 1;
+  string name = 2;
+  string description = 3;
+  IssuerRevocationConfig issuer_config = 4;
+  VerifierRevocationConfig verifier_config = 5;
+  RevocationAutomationConfig automation_config = 6;
+  repeated string supported_formats = 7;  // SD_JWT_VC, MDOC, VC_JWT, etc.
+}
+
+message GetRevocationProfileRequest {
+  string profile_id = 1;
+}
+
+message ListRevocationProfilesRequest {
+  string organization_id = 1;
+}
+
+message ListRevocationProfilesResponse {
+  repeated RevocationProfileResponse profiles = 1;
+}
+
+message ActivateRevocationProfileRequest {
+  string profile_id = 1;
+}
+
+message DeleteRevocationProfileRequest {
+  string profile_id = 1;
+}
+
+message DeleteRevocationProfileResponse {
+  bool success = 1;
+}
+
+message RevocationProfileResponse {
+  string id = 1;
+  string organization_id = 2;
+  string name = 3;
+  string description = 4;
+  string status = 5;                        // draft | active | suspended
+  IssuerRevocationConfig issuer_config = 6;
+  VerifierRevocationConfig verifier_config = 7;
+  RevocationAutomationConfig automation_config = 8;
+  repeated string supported_formats = 9;
+  string created_at = 10;
+  string updated_at = 11;
+}
+
+// ---------------------------------------------------------------------------
+// Internal API messages (service-to-service)
+// ---------------------------------------------------------------------------
+
+message ProcessRevocationRequest {
+  string profile_id = 1;
+  string credential_id = 2;
+  int32  index = 3;                // Status list index for this credential
+  string status = 4;              // revoked | suspended | reinstated
+  string reason = 5;
+  string credential_format = 6;   // sd_jwt_vc | mdoc | vc_jwt
+}
+
+message ProcessRevocationResponse {
+  bool   success = 1;
+  string status_list_url = 2;
+  int32  index = 3;
+  string error = 4;
+}
+
+message AllocateIndexRequest {
+  string profile_id = 1;
+  string credential_format = 2;   // sd_jwt_vc | mdoc
+}
+
+message AllocateIndexResponse {
+  int32  index = 1;
+  string status_list_url = 2;
+}
+
+// ---------------------------------------------------------------------------
+// Health check
+// ---------------------------------------------------------------------------
+
+message HealthCheckRequest {}
+
+message HealthCheckResponse {
+  string status = 1;
+  string service = 2;
+}

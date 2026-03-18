@@ -1,0 +1,372 @@
+syntax = "proto3";
+
+package marty.ui.flow.v1;
+
+import "google/api/annotations.proto";
+
+option java_multiple_files = true;
+
+// FlowService orchestrates multi-step credential issuance and verification
+// workflows including OID4VCI and OID4VP flows.
+service FlowService {
+  // -- Flow Definitions --
+
+  // Create a new flow definition.
+  rpc CreateFlowDefinition(CreateFlowDefinitionRequest) returns (FlowDefinitionResponse) {
+    option (google.api.http) = {
+      post: "/v1/flows/definitions"
+      body: "*"
+    };
+  }
+
+  // Get a flow definition by ID.
+  rpc GetFlowDefinition(GetFlowDefinitionRequest) returns (FlowDefinitionResponse) {
+    option (google.api.http) = {
+      get: "/v1/flows/definitions/{definition_id}"
+    };
+  }
+
+  // List flow definitions.
+  rpc ListFlowDefinitions(ListFlowDefinitionsRequest) returns (ListFlowDefinitionsResponse) {
+    option (google.api.http) = {
+      get: "/v1/flows/definitions"
+    };
+  }
+
+  // Activate a draft flow definition.
+  rpc ActivateFlowDefinition(ActivateFlowDefinitionRequest) returns (FlowDefinitionResponse) {
+    option (google.api.http) = {
+      post: "/v1/flows/definitions/{definition_id}/activate"
+    };
+  }
+
+  // Delete a draft flow definition.
+  rpc DeleteFlowDefinition(DeleteFlowDefinitionRequest) returns (DeleteFlowDefinitionResponse) {
+    option (google.api.http) = {
+      delete: "/v1/flows/definitions/{definition_id}"
+    };
+  }
+
+  // -- Flow Instances --
+
+  // Start a new flow instance.
+  rpc StartFlowInstance(StartFlowRequest) returns (FlowInstanceResponse) {
+    option (google.api.http) = {
+      post: "/v1/flows/instances"
+      body: "*"
+    };
+  }
+
+  // Get a flow instance by ID.
+  rpc GetFlowInstance(GetFlowInstanceRequest) returns (FlowInstanceResponse) {
+    option (google.api.http) = {
+      get: "/v1/flows/instances/{instance_id}"
+    };
+  }
+
+  // List flow instances.
+  rpc ListFlowInstances(ListFlowInstancesRequest) returns (ListFlowInstancesResponse) {
+    option (google.api.http) = {
+      get: "/v1/flows/instances"
+    };
+  }
+
+  // Advance a flow instance to the next step.
+  rpc AdvanceFlowInstance(AdvanceFlowRequest) returns (FlowInstanceResponse) {
+    option (google.api.http) = {
+      post: "/v1/flows/instances/{instance_id}/advance"
+      body: "*"
+    };
+  }
+
+  // Cancel a flow instance.
+  rpc CancelFlowInstance(CancelFlowRequest) returns (FlowInstanceResponse) {
+    option (google.api.http) = {
+      post: "/v1/flows/instances/{instance_id}/cancel"
+    };
+  }
+
+  // Get OID4VP verification result for a flow instance.
+  rpc GetFlowResult(GetFlowResultRequest) returns (FlowResultResponse) {
+    option (google.api.http) = {
+      get: "/v1/flows/instances/{instance_id}/result"
+    };
+  }
+
+  // Get OID4VCI artifacts (QR codes) for a flow instance.
+  rpc ListFlowArtifacts(ListFlowArtifactsRequest) returns (ListFlowArtifactsResponse) {
+    option (google.api.http) = {
+      get: "/v1/flows/instances/{instance_id}/artifacts"
+    };
+  }
+
+  // -- Verification (OID4VP) --
+
+  // Start an OID4VP verification flow.
+  rpc StartVerification(StartVerificationRequest) returns (VerificationRequestResponse) {
+    option (google.api.http) = {
+      post: "/v1/flows/verify"
+      body: "*"
+    };
+  }
+
+  // -- Webhook --
+
+  // Handle application-approved event (triggers OID4VCI flows).
+  rpc ApplicationApproved(ApplicationApprovedEvent) returns (ApplicationApprovedResponse) {
+    option (google.api.http) = {
+      post: "/v1/flows/webhooks/application-approved"
+      body: "*"
+    };
+  }
+
+  // -- Streaming --
+
+  // Subscribe to real-time updates for a specific flow instance.
+  // Server pushes step transitions, status changes, and artifacts.
+  rpc StreamFlowUpdates(StreamFlowUpdatesRequest) returns (stream FlowInstanceEvent) {}
+
+  // Health check.
+  rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse) {
+    option (google.api.http) = {
+      get: "/v1/flows/health"
+    };
+  }
+}
+
+message StreamFlowUpdatesRequest {
+  // Subscribe to a specific instance (empty = all instances in org).
+  string instance_id = 1;
+  string organization_id = 2;
+  // Filter by flow types (empty = all).
+  repeated string flow_types = 3;
+}
+
+message FlowInstanceEvent {
+  // Event type: "started", "step_completed", "advanced", "completed",
+  // "cancelled", "failed", "artifact_created"
+  string event_type = 1;
+  string instance_id = 2;
+  string definition_id = 3;
+  string current_step_id = 4;
+  string status = 5;
+  // Artifact details (set when event_type = "artifact_created").
+  FlowArtifact artifact = 6;
+  string timestamp = 7;
+}
+
+// -- Flow Definition messages --
+
+message CreateFlowDefinitionRequest {
+  string organization_id = 1;
+  string name = 2;
+  string description = 3;
+  string flow_type = 4;  // "issuance_oid4vci", "verification_oid4vp", etc.
+  repeated FlowStep steps = 5;
+  repeated FlowTransition transitions = 6;
+  string start_step_id = 7;
+  repeated string preconditions = 8;
+  string credential_template_id = 9;
+  string presentation_policy_id = 10;
+  string deployment_profile_id = 11;
+  int32 default_timeout_seconds = 12;
+  int32 max_retries = 13;
+  bool enable_resume = 14;
+}
+
+message FlowStep {
+  string step_id = 1;
+  string name = 2;
+  string step_type = 3;
+  map<string, string> config = 4;
+}
+
+message FlowTransition {
+  string from_step_id = 1;
+  string to_step_id = 2;
+  string condition = 3;
+}
+
+message GetFlowDefinitionRequest {
+  string flow_id = 1;
+}
+
+message ListFlowDefinitionsRequest {
+  string organization_id = 1;
+  string status = 2;
+}
+
+message ListFlowDefinitionsResponse {
+  repeated FlowDefinitionResponse definitions = 1;
+}
+
+message ActivateFlowDefinitionRequest {
+  string flow_id = 1;
+}
+
+message DeleteFlowDefinitionRequest {
+  string flow_id = 1;
+}
+
+message DeleteFlowDefinitionResponse {
+  bool success = 1;
+}
+
+message FlowDefinitionResponse {
+  string id = 1;
+  string organization_id = 2;
+  string name = 3;
+  string description = 4;
+  string status = 5;
+  string flow_type = 6;
+  repeated FlowStep steps = 7;
+  repeated FlowTransition transitions = 8;
+  string start_step_id = 9;
+  repeated string preconditions = 10;
+  string credential_template_id = 11;
+  string presentation_policy_id = 12;
+  string deployment_profile_id = 13;
+  int32 default_timeout_seconds = 14;
+  int32 version = 15;
+  string created_at = 16;
+  string updated_at = 17;
+}
+
+// -- Flow Instance messages --
+
+message StartFlowRequest {
+  string flow_definition_id = 1;
+  string subject_id = 2;
+  string subject_type = 3;
+  string external_reference = 4;
+  map<string, string> initial_context = 5;
+}
+
+message GetFlowInstanceRequest {
+  string instance_id = 1;
+}
+
+message ListFlowInstancesRequest {
+  string organization_id = 1;
+  string flow_definition_id = 2;
+  string status = 3;
+  int32 limit = 4;
+  int32 offset = 5;
+}
+
+message ListFlowInstancesResponse {
+  repeated FlowInstanceResponse instances = 1;
+  int32 total = 2;
+}
+
+message AdvanceFlowRequest {
+  string instance_id = 1;
+  string step_result = 2;  // "success", "failure"
+  map<string, string> data = 3;
+}
+
+message CancelFlowRequest {
+  string instance_id = 1;
+}
+
+message GetFlowResultRequest {
+  string instance_id = 1;
+}
+
+message FlowResultResponse {
+  string instance_id = 1;
+  string status = 2;
+  string result = 3;
+  string decision = 4;
+  string decision_reason = 5;
+  map<string, string> verified_claims = 6;
+  string evaluation_timestamp = 7;
+}
+
+message ListFlowArtifactsRequest {
+  string instance_id = 1;
+}
+
+message ListFlowArtifactsResponse {
+  repeated FlowArtifact artifacts = 1;
+}
+
+message FlowInstanceResponse {
+  string id = 1;
+  string flow_definition_id = 2;
+  string organization_id = 3;
+  string status = 4;
+  string current_step_id = 5;
+  map<string, string> context = 6;
+  string subject_id = 7;
+  string external_reference = 8;
+  string started_at = 9;
+  string completed_at = 10;
+  string expires_at = 11;
+  string result = 12;
+  string error = 13;
+  string created_at = 14;
+  string updated_at = 15;
+}
+
+message FlowArtifact {
+  string id = 1;
+  string flow_instance_id = 2;
+  string credential_offer_uri = 3;
+  string qr_payload = 4;
+  string pre_authorized_code = 5;
+  string expires_at = 6;
+  string scanned_at = 7;
+  string status = 8;
+  string state = 9;
+  int32 attempt_number = 10;
+  string created_at = 11;
+  string updated_at = 12;
+}
+
+// -- Verification (OID4VP) messages --
+
+message StartVerificationRequest {
+  string presentation_policy_id = 1;
+  string organization_id = 2;
+  string response_type = 3;  // "vp_token", "id_token"
+  string trust_profile_id = 4;
+  string deployment_profile_id = 5;
+  string external_reference = 6;
+  string callback_url = 7;
+  int32 expiry_minutes = 8;
+  string user_id = 9;  // caller identity (for org membership checks)
+}
+
+message VerificationRequestResponse {
+  string instance_id = 1;
+  string flow_definition_id = 2;
+  string request_uri = 3;
+  string qr_code_data = 4;
+  string presentation_policy_id = 5;
+  string nonce = 6;
+  string expires_at = 7;
+  string status = 8;
+}
+
+// -- Webhook messages --
+
+message ApplicationApprovedEvent {
+  string event_type = 1;
+  string aggregate_id = 2;
+  string aggregate_type = 3;
+  string organization_id = 4;
+  map<string, string> data = 5;
+  string timestamp = 6;
+}
+
+message ApplicationApprovedResponse {
+  bool success = 1;
+  int32 flows_triggered = 2;
+}
+
+message HealthCheckRequest {}
+
+message HealthCheckResponse {
+  string status = 1;
+}

@@ -31,13 +31,12 @@ from typing import Annotated
 from marty_common import (
     OrganizationClient,
     OrganizationContext,
-    require_org_admin,
     require_org_membership,
     RequestIdMiddleware,
     RequestLoggingMiddleware,
 )
 
-from status_list_manager import (
+from .status_list_manager import (
     StatusListManager,
     StatusListFormat,
     create_status_list_repository,
@@ -62,18 +61,33 @@ class RevocationProfileStatus(str, Enum):
 
 
 class RevocationCheckMode(str, Enum):
-    """How to handle revocation checks (verifier-side)."""
-    HARD_FAIL = "hard_fail"  # Fail if revocation check fails
-    SOFT_FAIL = "soft_fail"  # Continue if revocation check unavailable
-    SKIP = "skip"            # Don't check revocation
+    """Failure behavior when a revocation check is performed (verifier-side).
+    Maps to marty-protocol enum: revocation-check-modes.json
+    """
+    HARD_FAIL = "HARD_FAIL"  # Reject credential if revocation check fails
+    SOFT_FAIL = "SOFT_FAIL"  # Accept with warning if check unavailable
+    SKIP = "SKIP"            # Bypass revocation checking entirely
+
+
+class RevocationTimingMode(str, Enum):
+    """When to perform revocation checks.
+    Maps to marty-protocol enum: revocation-timing-modes.json
+    """
+    ALWAYS = "ALWAYS"              # Live check on every verification
+    CACHED = "CACHED"              # Accept cached result within TTL
+    OFFLINE_GRACE = "OFFLINE_GRACE"  # Accept last-known within grace period
+    DISABLED = "DISABLED"          # No revocation check configured
 
 
 class RevocationMechanism(str, Enum):
-    """Revocation check mechanisms."""
-    STATUS_LIST = "status_list"  # W3C/IETF status lists
-    OCSP = "ocsp"                # Online Certificate Status Protocol
-    CRL = "crl"                  # Certificate Revocation List
-    REGISTRY = "registry"        # Third-party revocation registry
+    """Revocation check mechanisms.
+    Maps to marty-protocol enum: revocation-methods.json
+    """
+    OCSP = "OCSP"                                       # Online Certificate Status Protocol
+    CRL = "CRL"                                         # Certificate Revocation List
+    STATUS_LIST_2021 = "STATUS_LIST_2021"                # W3C Status List 2021
+    BITSTRING_STATUS_LIST = "BITSTRING_STATUS_LIST"      # IETF Bitstring Status List
+    TOKEN_STATUS_LIST = "TOKEN_STATUS_LIST"              # IETF Token Status List
 
 
 class StatusListStrategy(str, Enum):
@@ -91,13 +105,14 @@ class UpdateMode(str, Enum):
 
 
 class CredentialFormat(str, Enum):
-    """Supported credential formats."""
-    SD_JWT_VC = "sd_jwt_vc"
-    MDOC = "mdoc"
-    JWT_VC = "jwt_vc"
-    JSON_LD_VC = "json_ld_vc"
-    OPEN_BADGE_V2 = "open_badge_v2"
-    OPEN_BADGE_V3 = "open_badge_v3"
+    """Supported credential formats.
+    Maps to marty-protocol enum: credential-formats.json
+    """
+    MDOC = "MDOC"
+    SD_JWT_VC = "SD_JWT_VC"
+    VC_JWT = "VC_JWT"
+    JSON_LD = "JSON_LD"
+    ZK_MDOC = "ZK_MDOC"
 
 
 @dataclass
@@ -127,18 +142,23 @@ class IssuerRevocationConfig:
 class VerifierRevocationConfig:
     """Configuration for credential verifiers."""
     
-    # Check behavior
+    # Check behavior (what to do when check fails)
     check_mode: RevocationCheckMode = RevocationCheckMode.HARD_FAIL
+    
+    # Timing behavior (when to perform checks)
+    timing_mode: RevocationTimingMode = RevocationTimingMode.ALWAYS
     
     # Mechanism priority (try in order)
     mechanism_priority: list[RevocationMechanism] = field(
-        default_factory=lambda: [RevocationMechanism.STATUS_LIST]
+        default_factory=lambda: [RevocationMechanism.BITSTRING_STATUS_LIST]
     )
     
-    # Caching for offline operation
+    # Caching (used when timing_mode=CACHED)
     cache_status_lists: bool = True
-    cache_duration_seconds: int = 3600
-    offline_grace_period_seconds: int = 86400  # 24 hours
+    cache_ttl_seconds: int = 3600
+    
+    # Offline grace (used when timing_mode=OFFLINE_GRACE)
+    offline_grace_seconds: int = 86400  # 24 hours
     
     # Timeout/retry
     check_timeout_seconds: int = 5
@@ -193,7 +213,7 @@ class RevocationProfile:
         default_factory=lambda: [
             CredentialFormat.SD_JWT_VC,
             CredentialFormat.MDOC,
-            CredentialFormat.JWT_VC,
+            CredentialFormat.VC_JWT,
         ]
     )
     
@@ -259,11 +279,12 @@ class IssuerRevocationConfigModel(BaseModel):
 
 
 class VerifierRevocationConfigModel(BaseModel):
-    check_mode: str = "hard_fail"
-    mechanism_priority: list[str] = ["status_list"]
+    check_mode: str = "HARD_FAIL"
+    timing_mode: str = "ALWAYS"
+    mechanism_priority: list[str] = ["BITSTRING_STATUS_LIST"]
     cache_status_lists: bool = True
-    cache_duration_seconds: int = 3600
-    offline_grace_period_seconds: int = 86400
+    cache_ttl_seconds: int = 3600
+    offline_grace_seconds: int = 86400
     check_timeout_seconds: int = 5
     max_retries: int = 2
     require_issuer_signature_on_status_list: bool = True
@@ -285,7 +306,7 @@ class CreateRevocationProfileRequest(BaseModel):
     issuer_config: IssuerRevocationConfigModel | None = None
     verifier_config: VerifierRevocationConfigModel | None = None
     automation_config: RevocationAutomationConfigModel | None = None
-    supported_formats: list[str] = ["sd_jwt_vc", "mdoc", "jwt_vc"]
+    supported_formats: list[str] = ["SD_JWT_VC", "MDOC", "VC_JWT"]
 
 
 class RevocationProfileResponse(BaseModel):
@@ -375,10 +396,11 @@ def _to_response(profile: RevocationProfile) -> dict:
         },
         "verifier_config": {
             "check_mode": profile.verifier_config.check_mode.value,
+            "timing_mode": profile.verifier_config.timing_mode.value,
             "mechanism_priority": [m.value for m in profile.verifier_config.mechanism_priority],
             "cache_status_lists": profile.verifier_config.cache_status_lists,
-            "cache_duration_seconds": profile.verifier_config.cache_duration_seconds,
-            "offline_grace_period_seconds": profile.verifier_config.offline_grace_period_seconds,
+            "cache_ttl_seconds": profile.verifier_config.cache_ttl_seconds,
+            "offline_grace_seconds": profile.verifier_config.offline_grace_seconds,
             "check_timeout_seconds": profile.verifier_config.check_timeout_seconds,
             "max_retries": profile.verifier_config.max_retries,
             "require_issuer_signature_on_status_list": profile.verifier_config.require_issuer_signature_on_status_list,
@@ -401,14 +423,28 @@ def _to_response(profile: RevocationProfile) -> dict:
 # Public API Endpoints (Admin Configuration)
 # =============================================================================
 
+
+async def get_current_user_id(
+    x_user_id: Annotated[str | None, Header(alias="X-User-Id")] = None
+) -> str:
+    """Get current user ID from gateway auth middleware."""
+    if not x_user_id:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required - missing user context",
+        )
+    return x_user_id
+
+
 @router.post("", response_model=RevocationProfileResponse)
 async def create_revocation_profile(
     request: CreateRevocationProfileRequest,
-    org_context: OrganizationContext = Depends(require_org_membership(lambda r: r.organization_id)),
+    http_request: Request,
     user_id: str = Depends(get_current_user_id),
     repo: InMemoryRevocationProfileRepository = Depends(get_repo),
 ) -> dict:
     """Create a new RevocationProfile."""
+    await require_org_membership(request.organization_id, http_request, user_id)
     profile = RevocationProfile(
         organization_id=request.organization_id,
         name=request.name,
@@ -434,10 +470,11 @@ async def create_revocation_profile(
     if request.verifier_config:
         profile.verifier_config = VerifierRevocationConfig(
             check_mode=RevocationCheckMode(request.verifier_config.check_mode),
+            timing_mode=RevocationTimingMode(request.verifier_config.timing_mode),
             mechanism_priority=[RevocationMechanism(m) for m in request.verifier_config.mechanism_priority],
             cache_status_lists=request.verifier_config.cache_status_lists,
-            cache_duration_seconds=request.verifier_config.cache_duration_seconds,
-            offline_grace_period_seconds=request.verifier_config.offline_grace_period_seconds,
+            cache_ttl_seconds=request.verifier_config.cache_ttl_seconds,
+            offline_grace_seconds=request.verifier_config.offline_grace_seconds,
             check_timeout_seconds=request.verifier_config.check_timeout_seconds,
             max_retries=request.verifier_config.max_retries,
             require_issuer_signature_on_status_list=request.verifier_config.require_issuer_signature_on_status_list,
@@ -723,12 +760,36 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
     logger.info(f"Initialized StatusListManager with base URL: {base_url}")
     
-    # Initialize OrganizationClient
-    org_service_url = os.environ.get("ORGANIZATION_SERVICE_URL", "http://organization:8002")
+    # Initialize gRPC channel to organization service
+    from common.grpc_factory import create_grpc_channel, create_grpc_server, start_grpc_server_port
+    org_grpc_target = os.environ.get("ORG_GRPC_TARGET", "organization:9002")
+    org_grpc_channel = create_grpc_channel(org_grpc_target, service_name="revocation-profile")
     app.state.org_client = OrganizationClient(
-        organization_service_url=org_service_url,
-        redis_client=None,
+        grpc_channel=org_grpc_channel,
     )
+    
+    # Start gRPC server
+    from revocation_profile.infrastructure.adapters.grpc_adapter import (
+        RevocationProfileServiceGrpc,
+    )
+    from marty_proto.v1.revocation_profile_service_pb2_grpc import (
+        add_RevocationProfileServiceServicer_to_server,
+    )
+
+    grpc_port = int(os.environ.get("RP_GRPC_PORT", "9013"))
+    grpc_server, health_servicer = create_grpc_server("revocation-profile")
+    rp_servicer = RevocationProfileServiceGrpc(
+        repo=_repo,
+        status_list_manager=_status_list_manager,
+    )
+    add_RevocationProfileServiceServicer_to_server(rp_servicer, grpc_server)
+    start_grpc_server_port(
+        grpc_server, grpc_port,
+        service_names=["marty.ui.revocation_profile.v1.RevocationProfileService"],
+        health_servicer=health_servicer,
+    )
+    await grpc_server.start()
+    logger.info(f"RevocationProfile gRPC server listening on :{grpc_port}")
     
     # Create default profiles
     default_profile = RevocationProfile(
@@ -742,6 +803,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     
     yield
     logger.info(f"Shutting down {SERVICE_NAME}...")
+    await grpc_server.stop(grace=5)
+    await org_grpc_channel.close()
 
 def create_app() -> FastAPI:
     app = FastAPI(
@@ -767,6 +830,10 @@ def create_app() -> FastAPI:
     @app.get("/health")
     async def health_check() -> dict:
         return {"status": "healthy", "service": SERVICE_NAME}
+
+    from common.metrics import init_otel_tracing, mount_metrics
+    init_otel_tracing(SERVICE_NAME)
+    mount_metrics(app)
     
     return app
 

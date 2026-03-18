@@ -1,0 +1,138 @@
+syntax = "proto3";
+
+package marty.ui.auth.v1;
+
+import "google/api/annotations.proto";
+
+option java_multiple_files = true;
+
+// AuthService handles session management and user authentication state.
+// This is the hottest internal service — called on every authenticated request
+// from the gateway middleware.
+service AuthService {
+  // Validate an existing session. Called by gateway on every authenticated request.
+  rpc ValidateSession(ValidateSessionRequest) returns (ValidateSessionResponse) {
+    option (google.api.http) = {
+      post: "/v1/auth/sessions/validate"
+      body: "*"
+    };
+  }
+
+  // Create a new session after successful authentication.
+  rpc CreateSession(CreateSessionRequest) returns (CreateSessionResponse) {
+    option (google.api.http) = {
+      post: "/v1/auth/sessions"
+      body: "*"
+    };
+  }
+
+  // Invalidate a session (logout).
+  rpc InvalidateSession(InvalidateSessionRequest) returns (InvalidateSessionResponse) {
+    option (google.api.http) = {
+      post: "/v1/auth/sessions/invalidate"
+      body: "*"
+    };
+  }
+
+  // Get the current user's authentication status.
+  rpc GetAuthStatus(GetAuthStatusRequest) returns (AuthStatusResponse) {
+    option (google.api.http) = {
+      get: "/v1/auth/status/{session_id}"
+    };
+  }
+
+  // Notify that a credential-based login has been verified (OID4VP callback).
+  rpc CredentialVerified(CredentialVerifiedRequest) returns (CredentialVerifiedResponse) {
+    option (google.api.http) = {
+      post: "/v1/auth/credential-verified"
+      body: "*"
+    };
+  }
+
+  // Health check.
+  rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse) {
+    option (google.api.http) = {
+      get: "/v1/auth/health"
+    };
+  }
+}
+
+message ValidateSessionRequest {
+  string session_id = 1;
+}
+
+message ValidateSessionResponse {
+  bool valid = 1;
+  UserInfo user = 2;       // populated only when valid=true
+  string expires_at = 3;   // ISO 8601
+}
+
+message CreateSessionRequest {
+  string user_id = 1;
+  string email = 2;
+  string username = 3;
+  string given_name = 4;
+  string family_name = 5;
+  string user_type = 6;
+  repeated string roles = 7;
+  int32 ttl_seconds = 8;
+}
+
+message CreateSessionResponse {
+  string session_id = 1;
+  string expires_at = 2;
+}
+
+message InvalidateSessionRequest {
+  string session_id = 1;
+}
+
+message InvalidateSessionResponse {
+  bool success = 1;
+}
+
+message GetAuthStatusRequest {
+  string session_id = 1;
+}
+
+message AuthStatusResponse {
+  bool authenticated = 1;
+  UserInfo user = 2;
+}
+
+message UserInfo {
+  string user_id = 1;
+  string email = 2;
+  string username = 3;
+  string given_name = 4;
+  string family_name = 5;
+  string user_type = 6;
+  string applicant_id = 7;
+  repeated string roles = 8;
+  string organization_id = 9;
+  string organization_name = 10;
+  bool onboarding_completed = 11;
+  string picture = 12;
+}
+
+message CredentialVerifiedRequest {
+  string nonce = 1;
+  string flow_instance_id = 2;
+  string result = 3;              // "passed", "failed", "partial"
+  string decision = 4;            // "allow", "deny", "manual_review"
+  string decision_reason = 5;
+  map<string, string> verified_claims = 6;
+  string presentation_policy_id = 7;
+  string completed_at = 8;        // ISO 8601
+}
+
+message CredentialVerifiedResponse {
+  bool ok = 1;
+  string status = 2;  // "completed", "denied"
+}
+
+message HealthCheckRequest {}
+
+message HealthCheckResponse {
+  string status = 1;  // "serving", "not_serving"
+}

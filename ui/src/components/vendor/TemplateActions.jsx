@@ -37,8 +37,12 @@ import HistoryIcon from '@mui/icons-material/History';
 import CloseIcon from '@mui/icons-material/Close';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ErrorIcon from '@mui/icons-material/Error';
-
-const API_URL = import.meta.env.VITE_API_URL || '';
+import {
+  publishCredentialType,
+  previewCredentialType,
+  fetchCredentialTypeVersions,
+  unpublishCredentialType,
+} from '../../application/vendor';
 
 export function PublishDialog({ open, onClose, configId, onPublished }) {
   const { t } = useTranslation('vendor');
@@ -52,22 +56,12 @@ export function PublishDialog({ open, onClose, configId, onPublished }) {
     setError(null);
 
     try {
-      const response = await fetch(
-        `${API_URL}/api/organizations/${configId.orgId}/credential-types/${configId.typeId}/publish?visibility=${visibility}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify({ change_description: changeDescription }),
-        }
-      );
-
-      if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.detail || t('templateActions.publishDialog.publishFailed'));
-      }
-
-      const data = await response.json();
+      const data = await publishCredentialType({
+        orgId: configId.orgId,
+        typeId: configId.typeId,
+        visibility,
+        changeDescription,
+      });
       onPublished(data.credential_type);
       onClose();
     } catch (err) {
@@ -151,21 +145,11 @@ export function PreviewDialog({ open, onClose, configId, configData }) {
     setValidationResult(null);
 
     try {
-      const response = await fetch(
-        `${API_URL}/api/organizations/${configId.orgId}/credential-types/${configId.typeId}/preview`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify(testData),
-        }
-      );
-
-      if (!response.ok) {
-        throw new Error(t('templateActions.previewDialog.validateFailed'));
-      }
-
-      const data = await response.json();
+      const data = await previewCredentialType({
+        orgId: configId.orgId,
+        typeId: configId.typeId,
+        testData,
+      });
       setValidationResult(data);
     } catch (err) {
       setValidationResult({
@@ -255,15 +239,11 @@ export function VersionHistoryDialog({ open, onClose, configId }) {
   const fetchVersions = useCallback(async () => {
     setLoading(true);
     try {
-      const response = await fetch(
-        `${API_URL}/api/organizations/${configId.orgId}/credential-types/${configId.typeId}/versions`,
-        { credentials: 'include' }
-      );
-
-      if (response.ok) {
-        const data = await response.json();
-        setVersions(data.versions || []);
-      }
+      const data = await fetchCredentialTypeVersions({
+        orgId: configId.orgId,
+        typeId: configId.typeId,
+      });
+      setVersions(data.versions || []);
     } catch (err) {
       console.error('Failed to fetch versions:', err);
     } finally {
@@ -335,18 +315,11 @@ export function TemplateActions({ configId, configData, onStatusChange }) {
   const handleUnpublish = async () => {
     setUnpublishing(true);
     try {
-      const response = await fetch(
-        `${API_URL}/api/organizations/${configId.orgId}/credential-types/${configId.typeId}/unpublish`,
-        {
-          method: 'POST',
-          credentials: 'include',
-        }
-      );
-
-      if (response.ok) {
-        const data = await response.json();
-        onStatusChange(data.credential_type);
-      }
+      const data = await unpublishCredentialType({
+        orgId: configId.orgId,
+        typeId: configId.typeId,
+      });
+      onStatusChange(data.credential_type);
     } catch (err) {
       console.error('Failed to unpublish:', err);
     } finally {

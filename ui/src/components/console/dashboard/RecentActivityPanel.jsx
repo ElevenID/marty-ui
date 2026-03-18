@@ -5,6 +5,7 @@
  * Provides quick visibility into recent system activity.
  */
 
+import { useEffect, useState } from 'react';
 import { useAsyncData } from '../../../hooks/useAsyncData';
 import {
   Box,
@@ -31,6 +32,8 @@ import VerifiedUserIcon from '@mui/icons-material/VerifiedUser';
 import PersonIcon from '@mui/icons-material/Person';
 
 import { useAuth } from '../../../hooks/useAuth';
+import { listAuditEvents } from '../../../services/auditApi';
+import sseService, { EVENT_TYPES } from '../../../services/sseService';
 
 /**
  * Severity levels and their visual styling factory
@@ -184,63 +187,58 @@ function ActivityRow({ event }) {
 export function RecentActivityPanel() {
   const { t } = useTranslation('console');
   const { organizationId } = useAuth();
-  const { data: events = [], loading } = useAsyncData(
+  const [liveEvents, setLiveEvents] = useState([]);
+  const { data: fetchedEvents = [], loading } = useAsyncData(
     async () => {
       if (!organizationId) return [];
-      // TODO: Replace with actual API call when available
-      // const response = await listAuditEvents({ limit: 5, organization_id: organizationId });
-      // return response.events || [];
-      await new Promise((resolve) => setTimeout(resolve, 300));
-      return [
-        {
-          id: 'evt-1',
-          timestamp: new Date(Date.now() - 5 * 60000).toISOString(),
-          action: 'credential.issued',
-          actor: 'john@example.com',
-          resource_type: 'credential',
-          resource_id: 'cred-123',
-          severity: 'success',
-        },
-        {
-          id: 'evt-2',
-          timestamp: new Date(Date.now() - 30 * 60000).toISOString(),
-          action: 'flow.verification_completed',
-          actor: 'jane@example.com',
-          resource_type: 'flow',
-          resource_id: 'flow-456',
-          severity: 'success',
-        },
-        {
-          id: 'evt-3',
-          timestamp: new Date(Date.now() - 2 * 3600000).toISOString(),
-          action: 'application.submitted',
-          actor: 'bob@example.com',
-          resource_type: 'application',
-          resource_id: 'app-789',
-          severity: 'info',
-        },
-        {
-          id: 'evt-4',
-          timestamp: new Date(Date.now() - 5 * 3600000).toISOString(),
-          action: 'flow.verification_failed',
-          actor: 'alice@example.com',
-          resource_type: 'flow',
-          resource_id: 'flow-012',
-          severity: 'error',
-        },
-        {
-          id: 'evt-5',
-          timestamp: new Date(Date.now() - 24 * 3600000).toISOString(),
-          action: 'trust_profile.updated',
-          actor: 'admin@example.com',
-          resource_type: 'trust_profile',
-          resource_id: 'tp-345',
-          severity: 'info',
-        },
-      ];
+      try {
+        const response = await listAuditEvents({ limit: 5 });
+        return response?.events || response || [];
+      } catch (err) {
+        console.error('Failed to fetch recent activity:', err);
+        return [];
+      }
     },
     [organizationId]
   );
+
+  // Merge live SSE events with fetched events, newest first, capped at 10
+  const events = [...liveEvents, ...fetchedEvents]
+    .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+    .slice(0, 10);
+
+  // Subscribe to SSE for live event updates
+  useEffect(() => {
+    if (!organizationId) return;
+
+    const liveEventTypes = [
+      EVENT_TYPES.CREDENTIAL_ISSUED,
+      EVENT_TYPES.CREDENTIAL_REVOKED,
+      EVENT_TYPES.APPLICATION_SUBMITTED,
+      EVENT_TYPES.APPLICATION_APPROVED,
+      EVENT_TYPES.APPLICATION_REJECTED,
+      EVENT_TYPES.FLOW_EXECUTION_COMPLETED,
+      EVENT_TYPES.FLOW_EXECUTION_FAILED,
+      EVENT_TYPES.VERIFICATION_COMPLETED,
+    ];
+
+    const unsubscribers = liveEventTypes.map((eventType) =>
+      sseService.on(eventType, (data) => {
+        const newEvent = {
+          id: data.id || `sse-${Date.now()}`,
+          timestamp: data.timestamp || new Date().toISOString(),
+          action: eventType,
+          actor: data.actor || data.user_email || '',
+          resource_type: data.resource_type || eventType.split('.')[0],
+          resource_id: data.resource_id || '',
+          severity: data.severity || getSeverity({ action: eventType }),
+        };
+        setLiveEvents((prev) => [newEvent, ...prev].slice(0, 10));
+      })
+    );
+
+    return () => unsubscribers.forEach((unsub) => unsub());
+  }, [organizationId]);
 
   return (
     <Paper sx={{ p: 3, mb: 3 }}>

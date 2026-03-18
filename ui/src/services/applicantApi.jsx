@@ -12,6 +12,12 @@ const API_BASE = '/v1/applicants';
 
 // ── Applicant Profile ─────────────────────────────────────────────────────────
 
+export async function listApplicants(organizationId) {
+  const queryString = buildTruthyQueryString({ organization_id: organizationId });
+  const data = await get(withQuery(API_BASE, queryString));
+  return Array.isArray(data) ? data : [];
+}
+
 export async function createApplicant(data) {
   return post(API_BASE, data);
 }

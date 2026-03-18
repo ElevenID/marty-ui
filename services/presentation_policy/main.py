@@ -39,7 +39,7 @@ from typing import Annotated
 from marty_common import (
     OrganizationClient,
     OrganizationContext,
-    require_org_admin,
+    CedarEngine,
     require_org_membership,
 )
 from marty_common.org_authorization import get_organization_client
@@ -128,6 +128,9 @@ class RequestedClaim:
     selective_disclosure: bool = True  # Request SD if available
     accept_derived: bool = True  # Accept derived attributes (e.g., age_over_21)
     
+    # ZK predicate specification
+    predicate_spec: dict | None = None
+    
     # Constraints
     constraints: list[ClaimConstraint] = field(default_factory=list)
 
@@ -210,6 +213,11 @@ class PresentationPolicy:
     
     # Compliance
     compliance_profile_id: str | None = None  # Reference to Compliance Profile
+    
+    # ZK predicate options
+    prefer_predicates: bool = False
+    fallback_policy: str | None = None  # e.g., "accept_raw", "require_predicate", "deny"
+    supported_circuits: list[str] = field(default_factory=list)  # e.g., ["ligero_age_over_21"]
     
     # Timestamps
     version: int = 1
@@ -299,17 +307,18 @@ class ClaimConstraintModel(BaseModel):
 
 class RequestedClaimModel(BaseModel):
     claim_name: str
-    display_name: str
+    display_name: str = ""
     description: str | None = None
     required: bool = True
     selective_disclosure: bool = True
     accept_derived: bool = True
+    predicate_spec: dict | None = None
     constraints: list[ClaimConstraintModel] = []
 
 
 class CredentialRequirementModel(BaseModel):
     credential_template_id: str
-    display_name: str
+    display_name: str = ""
     description: str | None = None
     required: bool = True
     credential_payload_format: str = "w3c_vcdm_v2_sd_jwt"
@@ -341,10 +350,14 @@ class CreatePresentationPolicyRequest(BaseModel):
     organization_id: str
     name: str
     description: str | None = None
+    purpose: str | None = None
     display_metadata: DisplayMetadataModel | None = None
     credential_requirements: list[CredentialRequirementModel] = []
     alternative_requirements: list[AlternativeRequirementModel] = []
     compliance_profile_id: str | None = None
+    prefer_predicates: bool = False
+    fallback_policy: str | None = None
+    supported_circuits: list[str] = []
 
 
 class UpdatePresentationPolicyRequest(BaseModel):
@@ -360,13 +373,16 @@ class PresentationPolicyResponse(BaseModel):
     id: str
     organization_id: str
     name: str
-    description: str | None
+    description: str | None = None
     status: str
-    display_metadata: dict
-    credential_requirements: list[dict]
-    alternative_requirements: list[dict]
-    compliance_profile_id: str | None
-    version: int
+    display_metadata: dict = {}
+    credential_requirements: list[dict] = []
+    alternative_requirements: list[dict] = []
+    compliance_profile_id: str | None = None
+    prefer_predicates: bool = False
+    fallback_policy: str | None = None
+    supported_circuits: list[str] = []
+    version: int = 1
     created_at: str
     updated_at: str
 
@@ -714,6 +730,7 @@ def _build_credential_requirement(model: CredentialRequirementModel) -> Credenti
             required=claim.required,
             selective_disclosure=claim.selective_disclosure,
             accept_derived=claim.accept_derived,
+            predicate_spec=claim.predicate_spec,
         )
         for constraint in claim.constraints:
             rc.constraints.append(ClaimConstraint(
@@ -746,6 +763,9 @@ async def create_presentation_policy(
         name=request.name,
         description=request.description,
         compliance_profile_id=request.compliance_profile_id,
+        prefer_predicates=request.prefer_predicates,
+        fallback_policy=request.fallback_policy,
+        supported_circuits=request.supported_circuits,
     )
     
     # Set display metadata
@@ -1045,6 +1065,7 @@ class EvaluateInlineRequest(BaseModel):
 async def evaluate_presentation(
     policy_id: str,
     request: EvaluatePresentationRequest,
+    http_request: Request = None,
     repo: InMemoryPresentationPolicyRepository = Depends(get_repo),
 ) -> PolicyEvaluationResponse:
     """
@@ -1171,6 +1192,59 @@ async def evaluate_presentation(
         decision_reason = "Required credentials not satisfied"
         all_satisfied = False
     
+    # Cedar policy evaluation for credential verification trust rules
+    cedar_engine = None
+    if http_request and hasattr(http_request.app.state, "cedar_engine"):
+        cedar_engine = http_request.app.state.cedar_engine
+    
+    if cedar_engine and decision == "allow":
+        cedar_context = {
+            "credential_format": verified_claims.get("_format", "VC_JWT"),
+            "compliance_code": verified_claims.get("_compliance_code", "CUSTOM"),
+            "issuer_id": credential_results[0].issuer_did if credential_results else "",
+            "issuer_trust_level": 75,
+            "credential_age_seconds": 0,
+            "is_revoked": False,
+            "is_expired": False,
+            "holder_binding_present": True,
+            "algorithm": verified_claims.get("_algorithm", "ES256"),
+        }
+        cedar_entities = [
+            {
+                "uid": {"type": "MIP::User", "id": "verifier"},
+                "attrs": {"email": "", "status": "ACTIVE"},
+                "parents": [{"type": "MIP::Organization", "id": policy.organization_id}],
+            },
+            {
+                "uid": {"type": "MIP::Organization", "id": policy.organization_id},
+                "attrs": {},
+                "parents": [],
+            },
+            {
+                "uid": {"type": "MIP::Credential", "id": "presented-credential"},
+                "attrs": {
+                    "format": cedar_context["credential_format"],
+                    "status": "ACTIVE",
+                    "compliance_code": cedar_context["compliance_code"],
+                    "issuer_id": cedar_context["issuer_id"],
+                    "trust_level": cedar_context["issuer_trust_level"],
+                },
+                "parents": [{"type": "MIP::Organization", "id": policy.organization_id}],
+            },
+        ]
+        cedar_decision = cedar_engine.is_authorized(
+            principal='MIP::User::"verifier"',
+            action='MIP::Action::"credentials:verify"',
+            resource='MIP::Credential::"presented-credential"',
+            context=cedar_context,
+            entities=cedar_entities,
+        )
+        if not cedar_decision.allowed:
+            decision = "deny"
+            decision_reason = f"Cedar policy denied: {cedar_decision.reasons or cedar_decision.errors}"
+            result = EvaluationResult.FAILED
+            logger.warning(f"Cedar denied credential verification: {cedar_decision.errors}")
+    
     return PolicyEvaluationResponse(
         result=result.value,
         policy_id=policy.id,
@@ -1276,6 +1350,7 @@ def _policy_to_response(policy: PresentationPolicy) -> PresentationPolicyRespons
                         "display_name": rc.display_name,
                         "required": rc.required,
                         "selective_disclosure": rc.selective_disclosure,
+                        "predicate_spec": rc.predicate_spec,
                         "constraints": [
                             {
                                 "constraint_type": c.constraint_type.value,
@@ -1308,6 +1383,9 @@ def _policy_to_response(policy: PresentationPolicy) -> PresentationPolicyRespons
             for alt in policy.alternative_requirements
         ],
         compliance_profile_id=policy.compliance_profile_id,
+        prefer_predicates=policy.prefer_predicates,
+        fallback_policy=policy.fallback_policy,
+        supported_circuits=policy.supported_circuits,
         version=policy.version,
         created_at=policy.created_at.isoformat(),
         updated_at=policy.updated_at.isoformat(),
@@ -1336,17 +1414,49 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     _repo = PostgresPresentationPolicyRepository(session_factory)
     logger.info("PostgreSQL adapter initialized for presentation-policy service")
     
-    # Initialize OrganizationClient
-    org_service_url = os.environ.get("ORGANIZATION_SERVICE_URL", "http://organization:8002")
+    # Initialize gRPC channel to organization service
+    from common.grpc_factory import create_grpc_channel, create_grpc_server, start_grpc_server_port
+    org_grpc_target = os.environ.get("ORG_GRPC_TARGET", "organization:9002")
+    org_grpc_channel = create_grpc_channel(org_grpc_target, service_name="presentation-policy")
     app.state.org_client = OrganizationClient(
-        base_url=org_service_url,
-        redis_client=None,
+        grpc_channel=org_grpc_channel,
     )
     
     _trust_profile_cache = TrustProfileCache()
+    
+    # Initialize Cedar engine for credential verification policies
+    app.state.cedar_engine = CedarEngine.with_defaults()
+    logger.info("Cedar engine initialized for credential verification")
+    
+    # Start gRPC server
+    from presentation_policy.infrastructure.adapters.grpc_adapter import (
+        PresentationPolicyServiceGrpc,
+    )
+    from marty_proto.v1.presentation_policy_service_pb2_grpc import (
+        add_PresentationPolicyServiceServicer_to_server,
+    )
+
+    grpc_port = int(os.environ.get("PP_GRPC_PORT", "9009"))
+    grpc_server, health_servicer = create_grpc_server("presentation-policy")
+    servicer = PresentationPolicyServiceGrpc(
+        repo=_repo,
+        evaluate_fn=evaluate_presentation,
+        to_response_fn=_policy_to_response,
+    )
+    add_PresentationPolicyServiceServicer_to_server(servicer, grpc_server)
+    start_grpc_server_port(
+        grpc_server, grpc_port,
+        service_names=["marty.ui.presentation_policy.v1.PresentationPolicyService"],
+        health_servicer=health_servicer,
+    )
+    await grpc_server.start()
+    logger.info(f"Presentation-policy gRPC server listening on :{grpc_port}")
+    
     yield
     
     logger.info(f"Shutting down {SERVICE_NAME}...")
+    await grpc_server.stop(grace=5)
+    await org_grpc_channel.close()
     await engine.dispose()
 
 
@@ -1385,6 +1495,10 @@ CRUD operations for Presentation Policies that define required credentials and c
     @app.get("/health")
     async def health_check() -> dict:
         return {"status": "healthy", "service": SERVICE_NAME}
+
+    from common.metrics import init_otel_tracing, mount_metrics
+    init_otel_tracing(SERVICE_NAME)
+    mount_metrics(app)
     
     return app
 

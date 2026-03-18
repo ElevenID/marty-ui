@@ -27,6 +27,7 @@ import {
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import { createPresentationPolicy } from '../../../services/presentationPolicyApi';
 
 import { useWizard } from '../../../hooks/useWizard';
 import {
@@ -95,14 +96,13 @@ const PresentationPolicyWizard = () => {
   }, []);
 
   const handleSubmit = useCallback(async (data) => {
-    // TODO: Implement actual API call
     const payload = {
       ...data.policyConfig,
       trust_profile_id: data.selectedTrustProfile?.id,
       template_id: data.selectedTemplate?.id,
       status: data.activateImmediately ? 'active' : 'draft',
     };
-    return { id: 'mock_policy_id', ...payload };
+    return createPresentationPolicy(payload);
   }, []);
 
   const wizard = useWizard({

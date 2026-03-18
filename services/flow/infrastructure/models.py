@@ -34,6 +34,7 @@ flow_definitions = Table(
     Column("credential_template_id", String(36), nullable=True),
     Column("presentation_policy_id", String(36), nullable=True),
     Column("deployment_profile_id", String(36), nullable=True),
+    Column("preconditions", JSON, nullable=False, server_default="[]"),
     
     # Flow settings
     Column("default_timeout_seconds", Integer, nullable=False, default=3600),

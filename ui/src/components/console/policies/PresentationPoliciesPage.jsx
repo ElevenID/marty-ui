@@ -30,6 +30,7 @@ import QrCodeIcon from '@mui/icons-material/QrCode';
 import { Link } from 'react-router-dom';
 
 import { ResourcePage, EmptyState, EmptyStates, StatusChip } from '../../common';
+import { listPresentationPolicies } from '../../../services/presentationPolicyApi';
 
 const getPoliciesTabs = (t) => [
   { label: t('policies.presentationPolicies'), path: '/console/org/policies/presentation' },
@@ -44,48 +45,10 @@ const getBreadcrumbs = (t) => [
 
 function PresentationPoliciesPage() {
   const { t } = useTranslation('console');
-  const { data: policies = [], loading, error } = useAsyncData(async () => {
-    // TODO: Fetch presentation policies from API
-    await new Promise((resolve) => setTimeout(resolve, 500));
-    return [
-      {
-        id: 'pp-1',
-        name: 'Age Verification (18+)',
-        trustProfile: 'EUDI Wallet Trust Profile',
-        requiredClaims: ['age_over_18'],
-        optionalClaims: [],
-        freshness: '24h',
-        holderBinding: true,
-        usageCount: 15420,
-        status: 'active',
-        updatedAt: '2026-02-06T10:30:00Z',
-      },
-      {
-        id: 'pp-2',
-        name: 'Full Identity Verification',
-        trustProfile: 'EUDI Wallet Trust Profile',
-        requiredClaims: ['given_name', 'family_name', 'birth_date', 'document_number'],
-        optionalClaims: ['address', 'nationality'],
-        freshness: '1h',
-        holderBinding: true,
-        usageCount: 8230,
-        status: 'active',
-        updatedAt: '2026-02-05T14:20:00Z',
-      },
-      {
-        id: 'pp-3',
-        name: 'Passport Verification',
-        trustProfile: 'ICAO PKD Profile',
-        requiredClaims: ['mrz', 'photo', 'nationality'],
-        optionalClaims: [],
-        freshness: '15m',
-        holderBinding: true,
-        usageCount: 2150,
-        status: 'active',
-        updatedAt: '2026-02-04T09:00:00Z',
-      },
-    ];
-  }, []);
+  const { data: policies = [], loading, error } = useAsyncData(
+    () => listPresentationPolicies(),
+    []
+  );
 
   const TestActions = () => (
     <Box sx={{ display: 'flex', gap: 1 }}>

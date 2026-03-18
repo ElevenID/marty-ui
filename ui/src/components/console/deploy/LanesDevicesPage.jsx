@@ -36,6 +36,8 @@ import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
 import { ResourcePage, AddButton } from '../../common';
+import { listDevices } from '../../../services/devicesApi';
+import { useAuth } from '../../../hooks/useAuth';
 
 const getDeployTabs = (t) => [
   { label: t('deploy.deploymentProfiles'), path: '/console/org/deploy/profiles' },
@@ -52,52 +54,11 @@ const getBreadcrumbs = (t) => [
 
 function LanesDevicesPage() {
   const { t } = useTranslation('console');
-  const { data: lanes = [], loading, error } = useAsyncData(async () => {
-    // TODO: Fetch lanes from API
-    await new Promise((resolve) => setTimeout(resolve, 500));
-    return [
-      {
-        id: 'ln-1',
-        name: 'Terminal 1 - Gate A1',
-        deployment: 'Production - Airport Terminals',
-        deploymentId: 'dp-1',
-        deviceCount: 2,
-        activeDevices: 2,
-        lastActivity: '2026-02-07T08:45:00Z',
-        status: 'online',
-      },
-      {
-        id: 'ln-2',
-        name: 'Terminal 1 - Gate A2',
-        deployment: 'Production - Airport Terminals',
-        deploymentId: 'dp-1',
-        deviceCount: 2,
-        activeDevices: 1,
-        lastActivity: '2026-02-07T08:30:00Z',
-        status: 'degraded',
-      },
-      {
-        id: 'ln-3',
-        name: 'Border Control - Lane 1',
-        deployment: 'Production - Border Control',
-        deploymentId: 'dp-2',
-        deviceCount: 2,
-        activeDevices: 2,
-        lastActivity: '2026-02-07T09:00:00Z',
-        status: 'online',
-      },
-      {
-        id: 'ln-4',
-        name: 'Test Lane',
-        deployment: 'Test Environment',
-        deploymentId: 'dp-3',
-        deviceCount: 2,
-        activeDevices: 0,
-        lastActivity: '2026-02-06T17:00:00Z',
-        status: 'offline',
-      },
-    ];
-  }, []);
+  const { organizationId } = useAuth();
+  const { data: lanes = [], loading, error } = useAsyncData(
+    () => listDevices(organizationId),
+    [organizationId]
+  );
   const [searchQuery, setSearchQuery] = useState('');
   const [deploymentFilter, setDeploymentFilter] = useState('all');
 

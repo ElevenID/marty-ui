@@ -34,7 +34,6 @@ from typing import Annotated
 from marty_common import (
     OrganizationClient,
     OrganizationContext,
-    require_org_admin,
     require_org_membership,
 )
 from marty_common.org_authorization import get_organization_client
@@ -178,6 +177,12 @@ class ComplianceProfile:
     description: str | None = None
     status: ComplianceProfileStatus = ComplianceProfileStatus.DRAFT
     
+    # Compliance identification
+    compliance_code: str | None = None  # e.g., "AAMVA_MDL"
+    credential_format: str = "sd_jwt_vc"  # e.g., "mso_mdoc", "sd_jwt_vc"
+    trust_profile_constraints: list[str] = field(default_factory=list)
+    system_profile: bool = False
+    
     # Regulatory framework references
     frameworks: list[str] = field(default_factory=list)  # e.g., ["GDPR", "CCPA", "eIDAS"]
     
@@ -219,6 +224,9 @@ class InMemoryComplianceProfileRepository:
     
     async def get(self, profile_id: str) -> ComplianceProfile | None:
         return self._profiles.get(profile_id)
+
+    async def get_profile(self, profile_id: str) -> ComplianceProfile | None:
+        return await self.get(profile_id)
     
     async def list(self, org_id: str) -> list[ComplianceProfile]:
         return [p for p in self._profiles.values() if p.organization_id == org_id]
@@ -285,6 +293,10 @@ class CreateComplianceProfileRequest(BaseModel):
     organization_id: str
     name: str
     description: str | None = None
+    compliance_code: str | None = None
+    credential_format: str = "sd_jwt_vc"
+    trust_profile_constraints: list[str] = []
+    system_profile: bool = False
     frameworks: list[str] = []
     data_retention: DataRetentionPolicyModel | None = None
     consent_requirement: ConsentRequirementModel | None = None
@@ -308,15 +320,19 @@ class ComplianceProfileResponse(BaseModel):
     id: str
     organization_id: str
     name: str
-    description: str | None
+    description: str | None = None
     status: str
-    frameworks: list[str]
-    data_retention: dict
-    consent_requirement: dict
-    audit_configuration: dict
-    data_minimization_rules: list[dict]
-    jurisdictional_constraints: list[dict]
-    age_verification: dict
+    compliance_code: str | None = None
+    credential_format: str = "sd_jwt_vc"
+    trust_profile_constraints: list[str] = []
+    system_profile: bool = False
+    frameworks: list[str] = []
+    data_retention: dict = {}
+    consent_requirement: dict = {}
+    audit_configuration: dict = {}
+    data_minimization_rules: list[dict] = []
+    jurisdictional_constraints: list[dict] = []
+    age_verification: dict = {}
     created_at: str
     updated_at: str
 
@@ -359,6 +375,10 @@ async def create_compliance_profile(
         organization_id=request.organization_id,
         name=request.name,
         description=request.description,
+        compliance_code=request.compliance_code,
+        credential_format=request.credential_format,
+        trust_profile_constraints=request.trust_profile_constraints,
+        system_profile=request.system_profile,
         frameworks=request.frameworks,
     )
     
@@ -553,6 +573,10 @@ def _profile_to_response(profile: ComplianceProfile) -> ComplianceProfileRespons
         name=profile.name,
         description=profile.description,
         status=profile.status.value,
+        compliance_code=profile.compliance_code,
+        credential_format=profile.credential_format,
+        trust_profile_constraints=profile.trust_profile_constraints,
+        system_profile=profile.system_profile,
         frameworks=profile.frameworks,
         data_retention={
             "retention_period": profile.data_retention.retention_period.value,
@@ -613,15 +637,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info(f"Starting {SERVICE_NAME}...")
     _repo = InMemoryComplianceProfileRepository()
     
-    # Initialize OrganizationClient
-    org_service_url = os.environ.get("ORGANIZATION_SERVICE_URL", "http://organization:8002")
+    # Initialize gRPC channel to organization service
+    from common.grpc_factory import create_grpc_channel
+    org_grpc_target = os.environ.get("ORG_GRPC_TARGET", "organization:9002")
+    org_grpc_channel = create_grpc_channel(org_grpc_target, service_name="compliance-profile")
     app.state.org_client = OrganizationClient(
-        base_url=org_service_url,
-        redis_client=None,
+        grpc_channel=org_grpc_channel,
     )
     
     yield
     logger.info(f"Shutting down {SERVICE_NAME}...")
+    await org_grpc_channel.close()
 
 
 def create_app() -> FastAPI:
@@ -647,6 +673,10 @@ def create_app() -> FastAPI:
     @app.get("/health")
     async def health_check() -> dict:
         return {"status": "healthy", "service": SERVICE_NAME}
+
+    from common.metrics import init_otel_tracing, mount_metrics
+    init_otel_tracing(SERVICE_NAME)
+    mount_metrics(app)
     
     return app
 

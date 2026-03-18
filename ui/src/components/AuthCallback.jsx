@@ -10,6 +10,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Box, CircularProgress, Typography, Alert } from '@mui/material';
 import { useAuth } from '../hooks/useAuth';
 import { useConsole, getDefaultLandingPath } from '../contexts/ConsoleContext';
+import { completeAuthCallback } from '../application/routing';
 
 function AuthCallback() {
   const navigate = useNavigate();
@@ -20,75 +21,20 @@ function AuthCallback() {
 
   useEffect(() => {
     const handleCallback = async () => {
-      // Check for error from Keycloak
-      const errorParam = searchParams.get('error');
-      const errorDescription = searchParams.get('error_description');
+      const result = await completeAuthCallback({
+        searchParams,
+        refreshUser,
+        consoleContext,
+        getDefaultLandingPath,
+      });
 
-      if (errorParam) {
-        setError(errorDescription || errorParam);
+      if (result.error) {
+        console.error('Auth callback error:', result.error);
+        setError(result.error);
         return;
       }
 
-      // Check for authorization code
-      const code = searchParams.get('code');
-      const state = searchParams.get('state');
-
-      if (!code) {
-        setError('No authorization code received');
-        return;
-      }
-
-      try {
-        // Exchange code for tokens via backend
-        // The backend /auth/callback endpoint handles the token exchange
-        const response = await fetch(
-          `/v1/auth/callback?code=${encodeURIComponent(code)}&state=${encodeURIComponent(state || '')}`,
-          {
-            method: 'GET',
-            credentials: 'include',
-          }
-        );
-
-        if (!response.ok) {
-          const data = await response.json().catch(() => ({}));
-          throw new Error(data.detail || 'Authentication failed');
-        }
-
-        // Refresh the user state
-        await refreshUser();
-
-        // Wait for console context to load before determining landing page
-        // This gives ConsoleContext time to load preferences and memberships
-        let attempts = 0;
-        const maxAttempts = 30; // 3 seconds
-        while (consoleContext.isLoading && attempts < maxAttempts) {
-          await new Promise(resolve => setTimeout(resolve, 100));
-          attempts++;
-        }
-
-        // Get the intended destination from state or default to smart home
-        let redirectTo = '/';
-        if (state) {
-          try {
-            const stateData = JSON.parse(atob(state));
-            if (stateData.returnTo) {
-              redirectTo = stateData.returnTo;
-            }
-          } catch {
-            // State wasn't our encoded data, ignore
-          }
-        }
-
-        // If redirecting to root, determine smart landing page
-        if (redirectTo === '/') {
-          redirectTo = getDefaultLandingPath(consoleContext, '/console/applicant/catalog');
-        }
-
-        navigate(redirectTo, { replace: true });
-      } catch (err) {
-        console.error('Auth callback error:', err);
-        setError(err.message || 'Authentication failed');
-      }
+      navigate(result.redirectTo, { replace: true });
     };
 
     handleCallback();

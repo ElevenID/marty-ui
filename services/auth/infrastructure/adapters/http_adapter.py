@@ -14,7 +14,6 @@ import secrets
 from typing import Annotated, Any
 from urllib.parse import quote, urlparse
 
-import httpx
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel
@@ -23,7 +22,6 @@ from ...application.ports import (
     HandleCallbackCommand,
     InitiateLoginCommand,
     LogoutCommand,
-    ValidateSessionQuery,
 )
 from ...application.use_cases import AuthenticateUseCase, SessionUseCase
 from ...domain.entities import AuthenticatedUser, Session, UserType
@@ -107,7 +105,6 @@ _ui_base_url: str = "http://localhost:3000"
 # Credential-login dependencies (injected at startup)
 _redis_client: Any | None = None  # redis.asyncio.Redis
 _session_repository: Any | None = None  # RedisSessionRepository
-_flow_service_url: str = os.environ.get("FLOW_SERVICE_URL", "http://flow:8011")
 _credential_login_policy_id: str = os.environ.get("CREDENTIAL_LOGIN_POLICY_ID", "")
 _auth_service_internal_url: str = os.environ.get(
     "AUTH_SERVICE_INTERNAL_URL", "http://auth:8001"
@@ -159,14 +156,13 @@ def configure_auth_router(
     ui_base_url: str | None = None,
     redis_client: Any | None = None,
     session_repository: Any | None = None,
-    flow_service_url: str | None = None,
     credential_login_policy_id: str | None = None,
     auth_service_internal_url: str | None = None,
     kc_admin_adapter: Any | None = None,
 ) -> None:
     """Configure the router with use cases and config."""
     global _authenticate_use_case, _session_use_case, _cookie_config, _ui_base_url
-    global _redis_client, _session_repository, _flow_service_url
+    global _redis_client, _session_repository
     global _credential_login_policy_id, _auth_service_internal_url, _kc_admin_adapter
     _authenticate_use_case = authenticate_use_case
     _session_use_case = session_use_case
@@ -178,8 +174,6 @@ def configure_auth_router(
         _redis_client = redis_client
     if session_repository is not None:
         _session_repository = session_repository
-    if flow_service_url:
-        _flow_service_url = flow_service_url
     if credential_login_policy_id:
         _credential_login_policy_id = credential_login_policy_id
     if auth_service_internal_url:
@@ -640,24 +634,26 @@ async def credential_login(request: Request) -> HTMLResponse:
         f"?nonce={nonce}"
     )
 
-    # Start OID4VP flow
+    # Start OID4VP flow via gRPC
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(
-                f"{_flow_service_url}/v1/flows/verify",
-                json={
-                    "presentation_policy_id": _credential_login_policy_id,
-                    "callback_url": callback_url,
-                },
-                headers={"X-User-Id": "auth-service"},
+        from marty_proto.v1 import flow_service_pb2, flow_service_pb2_grpc
+        flow_stub = flow_service_pb2_grpc.FlowServiceStub(
+            request.app.state.flow_grpc_channel
+        )
+        flow_resp = await flow_stub.StartVerification(
+            flow_service_pb2.StartVerificationRequest(
+                presentation_policy_id=_credential_login_policy_id,
+                callback_url=callback_url,
+                user_id="auth-service",
             )
-            resp.raise_for_status()
-            flow_data = resp.json()
-    except httpx.HTTPStatusError as exc:
-        logger.error(f"Flow service returned {exc.response.status_code}: {exc.response.text}")
-        raise HTTPException(status_code=502, detail="Could not initiate credential flow")
-    except httpx.RequestError as exc:
-        logger.error(f"Flow service unreachable: {exc}")
+        )
+        flow_data = {
+            "instance_id": flow_resp.instance_id,
+            "request_uri": flow_resp.request_uri,
+            "qr_code_data": flow_resp.qr_code_data,
+        }
+    except Exception as exc:
+        logger.error(f"Flow service gRPC error: {exc}")
         raise HTTPException(status_code=503, detail="Flow service unavailable")
 
     instance_id: str = flow_data.get("instance_id", "")
@@ -767,31 +763,6 @@ async def credential_login_finalize(
 # =============================================================================
 
 internal_router = APIRouter(prefix="/internal/v1/auth", tags=["auth-internal"])
-
-
-@internal_router.post("/validate-session")
-async def validate_session(
-    session_id: str,
-    session_use_case: SessionUseCase = Depends(get_session_use_case),
-) -> dict[str, Any]:
-    """
-    Validate a session (internal endpoint for service-to-service calls).
-    
-    This endpoint is NOT exposed via the gateway - only accessible
-    internally by other services.
-    """
-    session = await session_use_case.validate_session(
-        ValidateSessionQuery(session_id=session_id)
-    )
-    
-    if not session:
-        return {"valid": False, "user": None}
-    
-    return {
-        "valid": True,
-        "user": session.user.to_dict(),
-        "expires_at": session.expires_at.isoformat(),
-    }
 
 
 class CredentialVerifiedPayload(BaseModel):

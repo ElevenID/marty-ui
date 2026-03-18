@@ -26,6 +26,7 @@ import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 
 import { useAuth } from '../../hooks/useAuth';
 import { useDashboardData } from '../../hooks/useDashboardData';
+import { useSSE } from '../../hooks/useSSE';
 import { DASHBOARD_QUICK_ACTIONS } from '../../config/navigation';
 import { computeSetupReadiness, computeBlockers, computeQuickActionVisibility } from '../../config/dashboardRules';
 import { SystemStatusBar } from './dashboard/SystemStatusBar';
@@ -112,6 +113,7 @@ function ConsoleDashboard() {
   const { t } = useTranslation('console');
   const { user, organizationName, organizationId, isAdministrator, isVendor } = useAuth();
   const { data, loading, error, refetch } = useDashboardData();
+  useSSE(organizationId);
   const [environment, setEnvironment] = useState(data.environment || 'development');
   const [activeDrawer, setActiveDrawer] = useState(null);
 

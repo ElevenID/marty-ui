@@ -9,6 +9,28 @@ import { Navigate, useLocation } from 'react-router-dom';
 import { CircularProgress, Box, Typography } from '@mui/material';
 import { useAuth } from '../hooks/useAuth';
 import { useConsole } from '../contexts/ConsoleContext';
+import {
+  evaluateApplicantConsolePolicy,
+  evaluateOrgConsolePolicy,
+  evaluateProtectedRoutePolicy,
+} from '../application/routing';
+
+function GuardLoadingState({ message }) {
+  return (
+    <Box
+      display="flex"
+      flexDirection="column"
+      alignItems="center"
+      justifyContent="center"
+      minHeight="50vh"
+    >
+      <CircularProgress size={48} />
+      <Typography variant="body1" color="textSecondary" sx={{ mt: 2 }}>
+        {message}
+      </Typography>
+    </Box>
+  );
+}
 
 /**
  * Protected Route wrapper
@@ -41,6 +63,16 @@ function ProtectedRoute({
 }) {
   const { isAuthenticated, isLoading, user, hasCapability } = useAuth();
   const location = useLocation();
+  const decision = evaluateProtectedRoutePolicy({
+    isLoading,
+    isAuthenticated,
+    user,
+    hasCapability,
+    requiredCapabilities,
+    requireAllCapabilities,
+    redirectTo,
+    unauthorizedRedirect,
+  });
 
   // Debug logging
   console.log('[ProtectedRoute] Rendering for path:', location.pathname);
@@ -50,48 +82,23 @@ function ProtectedRoute({
   console.log('[ProtectedRoute] requiredCapabilities:', requiredCapabilities);
 
   // Show loading spinner while checking auth
-  if (isLoading) {
+  if (decision.kind === 'loading') {
     console.log('[ProtectedRoute] Showing loading spinner');
-    return (
-      <Box
-        display="flex"
-        flexDirection="column"
-        alignItems="center"
-        justifyContent="center"
-        minHeight="50vh"
-      >
-        <CircularProgress size={48} />
-        <Typography variant="body1" color="textSecondary" sx={{ mt: 2 }}>
-          Checking authentication...
-        </Typography>
-      </Box>
-    );
+    return <GuardLoadingState message="Checking authentication..." />;
   }
 
   // Redirect to login if not authenticated
-  if (!isAuthenticated) {
-    console.log('[ProtectedRoute] Not authenticated, redirecting to:', redirectTo);
+  if (decision.kind === 'redirect' && decision.reason === 'unauthenticated') {
+    console.log('[ProtectedRoute] Not authenticated, redirecting to:', decision.destination);
     // Save the attempted URL for redirecting after login
-    return <Navigate to={redirectTo} state={{ from: location }} replace />;
+    return <Navigate to={decision.destination} state={{ from: location }} replace />;
   }
 
   // Check capabilities when required
-  if (requiredCapabilities && requiredCapabilities.length > 0) {
-    const normalizedHasCapability = typeof hasCapability === 'function'
-      ? hasCapability
-      : (capability) => Boolean(user?.capabilities?.[capability]);
-
-    const isAllowed = requireAllCapabilities
-      ? requiredCapabilities.every((capability) => normalizedHasCapability(capability))
-      : requiredCapabilities.some((capability) => normalizedHasCapability(capability));
-
-    console.log('[ProtectedRoute] isAllowed:', isAllowed, 'for capabilities:', requiredCapabilities);
-
-    if (!isAllowed) {
-      console.log('[ProtectedRoute] Not allowed, redirecting to:', unauthorizedRedirect);
-      // User is authenticated but unauthorized
-      return <Navigate to={unauthorizedRedirect} replace />;
-    }
+  if (decision.kind === 'redirect' && decision.reason === 'unauthorized') {
+    console.log('[ProtectedRoute] Not allowed, redirecting to:', decision.destination);
+    // User is authenticated but unauthorized
+    return <Navigate to={decision.destination} replace />;
   }
 
   // User is authenticated and authorized
@@ -128,22 +135,10 @@ export function ApplicantRoute({ children, ...props }) {
  */
 export function ApplicantConsoleRoute({ children, ...props }) {
   const { isLoading: consoleLoading } = useConsole();
+  const decision = evaluateApplicantConsolePolicy({ consoleLoading });
 
-  if (consoleLoading) {
-    return (
-      <Box
-        display="flex"
-        flexDirection="column"
-        alignItems="center"
-        justifyContent="center"
-        minHeight="50vh"
-      >
-        <CircularProgress size={48} />
-        <Typography variant="body1" color="textSecondary" sx={{ mt: 2 }}>
-          Loading console...
-        </Typography>
-      </Box>
-    );
+  if (decision.kind === 'loading') {
+    return <GuardLoadingState message="Loading console..." />;
   }
 
   return (
@@ -173,29 +168,21 @@ export function VendorRoute({ children, ...props }) {
 export function OrgConsoleRoute({ children, ...props }) {
   const { mode, activeOrgId, isLoading: consoleLoading } = useConsole();
   const location = useLocation();
+  const decision = evaluateOrgConsolePolicy({
+    consoleLoading,
+    mode,
+    activeOrgId,
+  });
 
   // Show loading while console context initializes
-  if (consoleLoading) {
-    return (
-      <Box
-        display="flex"
-        flexDirection="column"
-        alignItems="center"
-        justifyContent="center"
-        minHeight="50vh"
-      >
-        <CircularProgress size={48} />
-        <Typography variant="body1" color="textSecondary" sx={{ mt: 2 }}>
-          Loading console...
-        </Typography>
-      </Box>
-    );
+  if (decision.kind === 'loading') {
+    return <GuardLoadingState message="Loading console..." />;
   }
 
   // If in org mode but no org selected, redirect to setup
-  if (mode === 'org' && !activeOrgId) {
+  if (decision.kind === 'redirect' && decision.reason === 'missing-org-selection') {
     console.log('[OrgConsoleRoute] No org selected, redirecting to setup');
-    return <Navigate to="/console/org/setup" state={{ from: location }} replace />;
+    return <Navigate to={decision.destination} state={{ from: location }} replace />;
   }
 
   // Otherwise, apply standard protected route check with org:view capability

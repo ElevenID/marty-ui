@@ -55,9 +55,12 @@ import {
 } from '@mui/icons-material';
 import { useAuth } from '../../hooks/useAuth';
 import { useNotifications } from '../../hooks/useNotifications';
-
-// API base URL
-const API_URL = import.meta.env.VITE_API_URL || '';
+import {
+  fetchIssuedCredentials,
+  revokeCredential,
+  batchRevokeCredentials,
+  fetchRevocationHistory,
+} from '../../application/vendor';
 
 // Revocation reason codes (RFC 5280)
 const REVOCATION_REASONS = [
@@ -287,35 +290,17 @@ function ActiveCredentialsTab({ organizationId }) {
     setError(null);
 
     try {
-      const params = new URLSearchParams({
-        organization_id: organizationId,
-        status: 'active',
+      const data = await fetchIssuedCredentials({
+        organizationId,
         page: page + 1,
-        per_page: rowsPerPage,
+        perPage: rowsPerPage,
+        searchQuery,
       });
-
-      if (searchQuery) {
-        params.append('search', searchQuery);
-      }
-
-      const response = await fetch(`${API_URL}/v1/credentials/issued?${params}`, {
-        method: 'GET',
-        credentials: 'include',
-      });
-
-      if (!response.ok) {
-        throw new Error(`Failed to load credentials: ${response.statusText}`);
-      }
-
-      const data = await response.json();
       setCredentials(data.credentials || []);
       setTotalCount(data.total || 0);
     } catch (err) {
       console.error('Error loading credentials:', err);
       setError(err.message);
-      // Use mock data
-      setCredentials(generateMockCredentials());
-      setTotalCount(50);
     } finally {
       setLoading(false);
     }
@@ -330,16 +315,7 @@ function ActiveCredentialsTab({ organizationId }) {
    */
   const handleRevoke = async (credentialId, reason, comments) => {
     try {
-      const response = await fetch(`${API_URL}/v1/credentials/issued/${credentialId}/revoke`, {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ reason, comments }),
-      });
-
-      if (!response.ok) {
-        throw new Error(`Failed to revoke credential: ${response.statusText}`);
-      }
+      await revokeCredential({ credentialId, reason, comments });
 
       showSuccess(t('revocationManager.activeTab.snackbars.revokeSuccess'));
 
@@ -357,21 +333,7 @@ function ActiveCredentialsTab({ organizationId }) {
    */
   const handleBatchRevoke = async (file, reason) => {
     try {
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('reason', reason);
-
-      const response = await fetch(`${API_URL}/v1/credentials/issued/batch-revoke`, {
-        method: 'POST',
-        credentials: 'include',
-        body: formData,
-      });
-
-      if (!response.ok) {
-        throw new Error(`Failed to batch revoke: ${response.statusText}`);
-      }
-
-      const data = await response.json();
+      const data = await batchRevokeCredentials({ file, reason });
       showSuccess(t('revocationManager.activeTab.snackbars.batchSuccess', { count: data.count }));
 
       setBatchRevokeDialogOpen(false);
@@ -526,9 +488,12 @@ function RevocationHistoryTab({ organizationId }) {
   const [rowsPerPage, setRowsPerPage] = useState(25);
 
   useEffect(() => {
-    // Mock data for now
-    setRevocations(generateMockRevocations());
-    setLoading(false);
+    if (!organizationId) return;
+    setLoading(true);
+    fetchRevocationHistory({ organizationId, limit: rowsPerPage, offset: page * rowsPerPage })
+      .then((data) => setRevocations(data.revocations || data.items || []))
+      .catch((err) => console.error('Failed to load revocation history:', err))
+      .finally(() => setLoading(false));
   }, [organizationId, page, rowsPerPage]);
 
   return (

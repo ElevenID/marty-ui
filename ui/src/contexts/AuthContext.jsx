@@ -9,6 +9,12 @@ import { createContext, useState, useEffect, useCallback, useMemo } from 'react'
 import { getCurrentUser, initiateLogin, initiateRegister, initiateLogout } from '../services/authApi';
 import { getMyOrganizations } from '../services/organizationsApi';
 import i18n from '../i18n';
+import {
+  createEnrichedUser,
+  getAuthFlags,
+  parseOrganizationClaim,
+  updateUserActiveOrganization,
+} from '../application/session/authSession';
 
 /**
  * @typedef {Object} User
@@ -68,82 +74,6 @@ const defaultContextValue = {
 const AuthContext = createContext(defaultContextValue);
 
 /**
- * Parse organization claim from Keycloak token.
- * Keycloak Organizations feature returns: { "org-id": { "name": "Org Name", ... } }
- * @param {Object|null} orgClaim - Raw organization claim from token
- * @returns {{ id: string|null, name: string|null }}
- */
-function parseOrganizationClaim(orgClaim) {
-  if (!orgClaim || typeof orgClaim !== 'object') {
-    return { id: null, name: null, organizations: [] };
-  }
-  
-  // Keycloak returns organization as { "org-id": { "name": "...", ... } }
-  const orgIds = Object.keys(orgClaim);
-  if (orgIds.length === 0) {
-    return { id: null, name: null, organizations: [] };
-  }
-  
-  const organizations = orgIds.map((orgId) => {
-    const orgData = orgClaim[orgId];
-    return {
-      id: orgId,
-      name: orgData?.name || null,
-    };
-  });
-
-  // Use the first organization as default
-  const primary = organizations[0];
-
-  return {
-    id: primary?.id || null,
-    name: primary?.name || null,
-    organizations,
-  };
-}
-
-function normalizeCapabilities(rawCapabilities) {
-  if (!rawCapabilities) return {};
-
-  if (Array.isArray(rawCapabilities)) {
-    return rawCapabilities.reduce((acc, capability) => {
-      if (typeof capability === 'string' && capability.trim()) {
-        acc[capability] = true;
-      }
-      return acc;
-    }, {});
-  }
-
-  if (typeof rawCapabilities === 'object') {
-    return Object.entries(rawCapabilities).reduce((acc, [capability, enabled]) => {
-      acc[capability] = Boolean(enabled);
-      return acc;
-    }, {});
-  }
-
-  return {};
-}
-
-function deriveCapabilities(rawUser, organizations) {
-  const roles = rawUser?.roles || [];
-  const fromApi = normalizeCapabilities(rawUser?.capabilities);
-  const hasOrganizations = organizations.length > 0;
-
-  const inferred = {
-    apply: true,
-    'org:view': hasOrganizations || roles.includes('vendor') || roles.includes('administrator'),
-    'org:manage': roles.includes('vendor') || roles.includes('administrator'),
-    'org:issue': roles.includes('vendor') || roles.includes('administrator'),
-    'admin:platform': roles.includes('administrator'),
-  };
-
-  return {
-    ...inferred,
-    ...fromApi,
-  };
-}
-
-/**
  * Authentication Provider Component
  *
  * Wraps the application and provides authentication context.
@@ -177,31 +107,8 @@ export function AuthProvider({ children }) {
               : [];
         }
         
-        // If no organizations from endpoint, use fallback
-        if (userOrganizations.length === 0) {
-          userOrganizations = org.organizations.length
-            ? org.organizations
-            : rawUser.organization_id
-              ? [{ id: rawUser.organization_id, name: rawUser.organization_name || null }]
-              : [];
-        }
-        
-        // Determine active organization (priority: localStorage > first in list > claim)
         const storedOrgId = window.localStorage.getItem('activeOrgId');
-        const activeOrg =
-          userOrganizations.find((entry) => entry.id === storedOrgId) ||
-          userOrganizations[0] ||
-          (rawUser.organization_id ? { id: rawUser.organization_id, name: rawUser.organization_name || null } : null);
-
-        const capabilities = deriveCapabilities(rawUser, userOrganizations);
-
-        const enrichedUser = {
-          ...rawUser,
-          organization_id: activeOrg?.id || null,
-          organization_name: activeOrg?.name || null,
-          organizations: userOrganizations,
-          capabilities,
-        };
+        const enrichedUser = createEnrichedUser(rawUser, userOrganizations, storedOrgId);
 
         setUser(enrichedUser);
       } else {
@@ -250,56 +157,24 @@ export function AuthProvider({ children }) {
   const setActiveOrganizationId = useCallback(
     (orgId) => {
       setUser((prev) => {
-        if (!prev) return prev;
-        const memberships = prev.organizations || [];
-        const selected = memberships.find((entry) => entry.id === orgId);
-
-        // Keep auth state aligned with ConsoleContext even when memberships are
-        // stale in AuthContext (e.g., org created in current session).
-        const resolvedOrganization = selected || (orgId ? { id: orgId, name: null } : null);
-
-        if (!resolvedOrganization && orgId) {
-          return prev;
-        }
-
         window.localStorage.setItem('activeOrgId', orgId);
-
-        const nextMemberships = selected
-          ? memberships
-          : orgId
-            ? [...memberships, resolvedOrganization]
-            : memberships;
-
-        const nextCapabilities = {
-          ...(prev.capabilities || {}),
-          ...(orgId ? { 'org:view': true } : {}),
-        };
-
-        return {
-          ...prev,
-          organization_id: resolvedOrganization?.id || null,
-          organization_name: resolvedOrganization?.name || prev.organization_name,
-          organizations: nextMemberships,
-          capabilities: nextCapabilities,
-        };
+        return updateUserActiveOrganization(prev, orgId);
       });
     },
     [setUser]
   );
 
   const contextValue = useMemo(() => {
-    const roles = user?.roles || [];
-    const capabilities = user?.capabilities || {};
+    const { isAdministrator, isVendor, isApplicant, capabilities } = getAuthFlags(user);
     const hasCapability = (capability) => Boolean(capabilities[capability]);
     
     return {
       user,
       isAuthenticated: !!user,
       isLoading,
-      // Capability-first checks
-      isAdministrator: hasCapability('admin:platform') || roles.includes('administrator'),
-      isVendor: hasCapability('org:view') || hasCapability('org:manage') || roles.includes('vendor'),
-      isApplicant: !!user,
+      isAdministrator,
+      isVendor,
+      isApplicant,
       // Organization info
       organizationId: user?.organization_id || null,
       organizationName: user?.organization_name || null,

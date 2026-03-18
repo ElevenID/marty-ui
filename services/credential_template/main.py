@@ -20,7 +20,6 @@ import logging
 import os
 import uuid
 
-import httpx
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -32,7 +31,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from typing import Annotated
-from marty_common import OrganizationClient, OrganizationContext, require_org_membership, require_org_admin
+from marty_common import OrganizationClient, OrganizationContext, require_org_membership
 from marty_common.middleware import RequestIdMiddleware, RequestLoggingMiddleware
 
 from credential_template.infrastructure.adapters import (
@@ -91,13 +90,53 @@ class ClaimType(str, Enum):
 
 
 class CredentialFormat(str, Enum):
-    """Supported credential formats."""
-    SD_JWT_VC = "sd_jwt_vc"
-    MDOC = "mdoc"
-    MSO_MDOC = "mso_mdoc"
-    JWT_VC = "jwt_vc"
-    JSON_LD_VC = "json_ld_vc"
-    ZK_MDOC = "zk_mdoc"
+    """Supported credential formats.
+    Maps to marty-protocol enum: credential-formats.json
+    """
+    MDOC = "MDOC"
+    SD_JWT_VC = "SD_JWT_VC"
+    VC_JWT = "VC_JWT"
+    JSON_LD = "JSON_LD"
+    ZK_MDOC = "ZK_MDOC"
+
+
+# Wire-format aliases from marty-protocol credential-formats.json
+_FORMAT_ALIASES: dict[str, str] = {
+    "mso_mdoc": "MDOC", "mdoc": "MDOC",
+    "dc+sd-jwt": "SD_JWT_VC", "vc+sd-jwt": "SD_JWT_VC",
+    "spruce-vc+sd-jwt": "SD_JWT_VC", "sd_jwt_vc": "SD_JWT_VC", "sd-jwt": "SD_JWT_VC",
+    "jwt_vc_json": "VC_JWT", "jwt_vc": "VC_JWT", "jwt_vc_json-ld": "VC_JWT",
+    "ldp_vc": "JSON_LD",
+    "zk_mdoc": "ZK_MDOC", "zk-mdoc": "ZK_MDOC", "zkp_mdoc": "ZK_MDOC",
+}
+
+
+def normalize_credential_format(value: str) -> CredentialFormat:
+    """Accept canonical names, upper/lower variants, and OID4VCI wire aliases."""
+    upper = value.upper()
+    try:
+        return CredentialFormat(upper)
+    except ValueError:
+        pass
+    canonical = _FORMAT_ALIASES.get(value) or _FORMAT_ALIASES.get(value.lower())
+    if canonical:
+        return CredentialFormat(canonical)
+    raise ValueError(f"'{value}' is not a valid CredentialFormat")
+
+
+# Primary wire-format names used in API responses (matches OID4VCI/test expectations)
+_FORMAT_WIRE_NAMES: dict[str, str] = {
+    "MDOC": "mdoc",
+    "SD_JWT_VC": "sd_jwt_vc",
+    "VC_JWT": "jwt_vc",
+    "JSON_LD": "ldp_vc",
+    "ZK_MDOC": "zk_mdoc",
+}
+
+
+def format_to_wire(fmt: CredentialFormat) -> str:
+    """Return the primary wire-format name for a CredentialFormat enum value."""
+    return _FORMAT_WIRE_NAMES.get(fmt.value, fmt.value.lower())
 
 
 @dataclass
@@ -237,6 +276,10 @@ class CredentialTemplate:
         default_factory=lambda: [CredentialFormat.SD_JWT_VC]
     )
 
+    # Compliance
+    compliance_profile: dict | None = None
+    compliance_profile_id: str | None = None
+    
     # Wallet compatibility
     wallet_configs: list[WalletConfig] = field(default_factory=list)
     """Per-wallet configurations: which wallets are enabled and their deep-link schemes."""
@@ -488,7 +531,10 @@ class CreateCredentialTemplateRequest(BaseModel):
     display_style: DisplayStyleModel | None = None
     validity_rules: ValidityRulesModel | None = None
     issuer_requirements: IssuerRequirementsModel | None = None
-    supported_formats: list[str] = ["sd_jwt_vc"]
+    supported_formats: list[str] = ["SD_JWT_VC"]
+    # Compliance
+    compliance_profile: dict | None = None
+    compliance_profile_id: str | None = None
     # Wallet compatibility
     wallet_configs: list[dict] = []
     issuance_protocol: str = "oid4vci"
@@ -532,6 +578,9 @@ class CredentialTemplateResponse(BaseModel):
     validity_rules: dict
     issuer_requirements: dict
     supported_formats: list[str]
+    # Compliance
+    compliance_profile: dict | None = None
+    compliance_profile_id: str | None = None
     # Wallet compatibility
     wallet_configs: list[dict]
     issuance_protocol: str
@@ -634,6 +683,11 @@ async def create_credential_template(
     """
     await require_org_membership(body.organization_id, request, user_id)
 
+    try:
+        supported_formats = [normalize_credential_format(f) for f in body.supported_formats]
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=f"Invalid credential format: {e}")
+
     template = CredentialTemplate(
         organization_id=body.organization_id,
         name=body.name,
@@ -644,10 +698,12 @@ async def create_credential_template(
         privacy_posture=PrivacyPosture(body.privacy_posture),
         selective_disclosure_fields=body.selective_disclosure_fields,
         zk_predicate_claims=body.zk_predicate_claims,
-        supported_formats=[CredentialFormat(f) for f in body.supported_formats],
+        supported_formats=supported_formats,
         wallet_configs=[WalletConfig(wallet_id=wc.get("wallet_id", ""), deep_link_scheme=wc.get("deep_link_scheme", "openid-credential-offer://"), format_variant=wc.get("format_variant")) for wc in body.wallet_configs],
         issuance_protocol=body.issuance_protocol,
         credential_payload_format=body.credential_payload_format,
+        compliance_profile=body.compliance_profile,
+        compliance_profile_id=body.compliance_profile_id,
     )
     
     # Set claims
@@ -772,7 +828,7 @@ async def update_credential_template(
     if request.zk_predicate_claims is not None:
         template.zk_predicate_claims = request.zk_predicate_claims
     if request.supported_formats is not None:
-        template.supported_formats = [CredentialFormat(f) for f in request.supported_formats]
+        template.supported_formats = [normalize_credential_format(f) for f in request.supported_formats]
     if request.wallet_configs is not None:
         template.wallet_configs = [WalletConfig(wallet_id=wc.get("wallet_id", ""), deep_link_scheme=wc.get("deep_link_scheme", "openid-credential-offer://"), format_variant=wc.get("format_variant")) for wc in request.wallet_configs]
     if request.issuance_protocol is not None:
@@ -939,7 +995,9 @@ def _template_to_response(template: CredentialTemplate) -> CredentialTemplateRes
             "trust_tier_required": template.issuer_requirements.trust_tier_required,
             "audit_level_required": template.issuer_requirements.audit_level_required,
         },
-        supported_formats=[f.value for f in template.supported_formats],
+        supported_formats=[format_to_wire(f) for f in template.supported_formats],
+        compliance_profile=template.compliance_profile,
+        compliance_profile_id=template.compliance_profile_id,
         wallet_configs=[{k: v for k, v in {"wallet_id": wc.wallet_id, "deep_link_scheme": wc.deep_link_scheme, "format_variant": wc.format_variant}.items() if v is not None} for wc in template.wallet_configs],
         issuance_protocol=template.issuance_protocol,
         credential_payload_format=template.credential_payload_format,
@@ -1074,7 +1132,7 @@ internal_router = APIRouter(prefix="/internal", tags=["internal"])
 
 
 @internal_router.get("/credential-configurations")
-async def get_credential_configurations() -> dict:
+async def get_credential_configurations(request: Request) -> dict:
     """
     Internal endpoint returning OID4VCI ``credential_configurations_supported``
     built dynamically from all **active** credential templates.
@@ -1136,21 +1194,16 @@ async def get_credential_configurations() -> dict:
     # Try to look up the issuer display name from the org service using the
     # organization_id of the first active template we found.
     issuer_display_name: str | None = None
-    org_service_url = os.environ.get("ORGANIZATION_SERVICE_URL", "http://organization:8002")
     if templates:
         org_id = getattr(templates[0], "organization_id", None)
         if org_id:
             try:
-                async with httpx.AsyncClient(timeout=3.0) as org_client:
-                    org_resp = await org_client.get(
-                        f"{org_service_url}/internal/v1/organizations/{org_id}"
-                    )
-                    if org_resp.status_code == 200:
-                        org_data = org_resp.json()
-                        issuer_display_name = (
-                            org_data.get("display_name")
-                            or org_data.get("name")
-                        )
+                from marty_proto.v1 import organization_service_pb2 as org_pb2
+                stub = request.app.state.org_client._grpc_stub
+                org_resp = await stub.GetOrganization(
+                    org_pb2.GetOrganizationRequest(organization_id=str(org_id))
+                )
+                issuer_display_name = org_resp.display_name or org_resp.name or None
             except Exception as exc:
                 logger.warning("Could not look up org name for well-known: %s", exc)
 
@@ -1181,19 +1234,44 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Initialize wallet registry (DB-backed)
     _wallet_repo = PostgresWalletRegistryRepository(session_factory)
     
-    # Initialize OrganizationClient for authorization
-    org_service_url = os.environ.get("ORGANIZATION_SERVICE_URL", "http://organization:8002")
-    org_client = OrganizationClient(
-        base_url=org_service_url,
-        redis_client=None,  # No Redis caching at service level (gateway handles it)
+    # Initialize gRPC channel to organization service
+    from common.grpc_factory import create_grpc_channel, create_grpc_server, start_grpc_server_port
+    org_grpc_target = os.environ.get("ORG_GRPC_TARGET", "organization:9002")
+    org_grpc_channel = create_grpc_channel(org_grpc_target, service_name="credential-template")
+    app.state.org_client = OrganizationClient(
+        grpc_channel=org_grpc_channel,
     )
-    app.state.org_client = org_client
+    
+    # Start gRPC server
+    from credential_template.infrastructure.adapters.grpc_adapter import (
+        CredentialTemplateServiceGrpc,
+    )
+    from marty_proto.v1.credential_template_service_pb2_grpc import (
+        add_CredentialTemplateServiceServicer_to_server,
+    )
+
+    grpc_port = int(os.environ.get("CT_GRPC_PORT", "9003"))
+    grpc_server, health_servicer = create_grpc_server("credential-template")
+    ct_servicer = CredentialTemplateServiceGrpc(
+        repo=_repo,
+        to_response_fn=_template_to_response,
+        wallet_repo=_wallet_repo,
+    )
+    add_CredentialTemplateServiceServicer_to_server(ct_servicer, grpc_server)
+    start_grpc_server_port(
+        grpc_server, grpc_port,
+        service_names=["marty.ui.credential_template.v1.CredentialTemplateService"],
+        health_servicer=health_servicer,
+    )
+    await grpc_server.start()
+    logger.info(f"Credential-template gRPC server listening on :{grpc_port}")
     
     logger.info(f"{SERVICE_NAME} started successfully")
     yield
     
     logger.info(f"Shutting down {SERVICE_NAME}...")
-    await org_client.close()
+    await grpc_server.stop(grace=5)
+    await org_grpc_channel.close()
 
 
 def create_app() -> FastAPI:
@@ -1223,6 +1301,10 @@ def create_app() -> FastAPI:
     @app.get("/health")
     async def health_check() -> dict:
         return {"status": "healthy", "service": SERVICE_NAME}
+
+    from common.metrics import init_otel_tracing, mount_metrics
+    init_otel_tracing(SERVICE_NAME)
+    mount_metrics(app)
     
     return app
 

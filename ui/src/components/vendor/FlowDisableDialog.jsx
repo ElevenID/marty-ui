@@ -22,24 +22,45 @@ import BlockIcon from '@mui/icons-material/Block';
 import CloseIcon from '@mui/icons-material/Close';
 import PropTypes from 'prop-types';
 import flowsApi from '../../services/flowsApi';
+import {
+  disableFlowDefinition,
+  getFlowDisableFailureState,
+  getFlowDisableInitialState,
+  resetFlowDisableState,
+  validateFlowDisableReason,
+} from '../../application/flows';
 
 function FlowDisableDialog({ open, onClose, flow, onDisabled }) {
   const { t } = useTranslation('vendor');
-  const [reason, setReason] = useState('');
-  const [disabling, setDisabling] = useState(false);
-  const [error, setError] = useState(null);
+  const [state, setState] = useState(getFlowDisableInitialState());
+  const { reason, disabling, error } = state;
 
   const handleDisable = async () => {
-    if (!reason.trim()) {
-      setError(t('flowDisableDialog.reasonError'));
+    const validation = validateFlowDisableReason({
+      reason,
+      reasonErrorMessage: t('flowDisableDialog.reasonError'),
+    });
+
+    if (!validation.valid) {
+      setState((currentState) => ({
+        ...currentState,
+        error: validation.error,
+      }));
       return;
     }
 
-    setDisabling(true);
-    setError(null);
+    setState((currentState) => ({
+      ...currentState,
+      disabling: true,
+      error: null,
+    }));
 
     try {
-      const result = await flowsApi.disableFlow(flow.id, { reason });
+      const { result } = await disableFlowDefinition({
+        disableFlow: flowsApi.disableFlow,
+        flow,
+        reason,
+      });
       
       if (onDisabled) {
         onDisabled(result);
@@ -47,15 +68,18 @@ function FlowDisableDialog({ open, onClose, flow, onDisabled }) {
       
       handleClose();
     } catch (err) {
-      setError(err.message || t('flowDisableDialog.failedToDisable'));
-    } finally {
-      setDisabling(false);
+      setState((currentState) => ({
+        ...currentState,
+        ...getFlowDisableFailureState({
+          error: err,
+          fallbackMessage: t('flowDisableDialog.failedToDisable'),
+        }),
+      }));
     }
   };
 
   const handleClose = () => {
-    setReason('');
-    setError(null);
+    setState(resetFlowDisableState());
     onClose();
   };
 
@@ -65,6 +89,7 @@ function FlowDisableDialog({ open, onClose, flow, onDisabled }) {
         {t('flowDisableDialog.title')}
         <IconButton
           onClick={handleClose}
+          aria-label="close"
           sx={{ position: 'absolute', right: 8, top: 8 }}
         >
           <CloseIcon />
@@ -98,8 +123,14 @@ function FlowDisableDialog({ open, onClose, flow, onDisabled }) {
           label={t('flowDisableDialog.reasonLabel')}
           placeholder={t('flowDisableDialog.reasonPlaceholder')}
           value={reason}
-          onChange={(e) => setReason(e.target.value)}
-          error={!reason && error}
+          inputProps={{
+            'aria-label': t('flowDisableDialog.reasonLabel'),
+          }}
+          onChange={(e) => setState((currentState) => ({
+            ...currentState,
+            reason: e.target.value,
+          }))}
+          error={Boolean(!reason && error)}
           helperText={!reason && error ? t('flowDisableDialog.reasonRequired') : ''}
         />
       </DialogContent>
