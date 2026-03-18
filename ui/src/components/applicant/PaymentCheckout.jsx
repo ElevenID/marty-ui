@@ -40,6 +40,14 @@ import {
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../../hooks/useAuth';
 import { usePayment } from '../../contexts/paymentHooks';
+import { post } from '../../services/api';
+import {
+  buildPaymentCheckoutInitialBillingInfo,
+  initializePaymentCheckout,
+  processPaymentCheckout,
+  updatePaymentCheckoutBillingInfo,
+  validatePaymentCheckoutBilling,
+} from '../../application/applications';
 
 const STEPS = ['Review Application', 'Payment Details', 'Confirmation'];
 
@@ -61,69 +69,52 @@ const PaymentCheckout = () => {
   
   // State
   const [activeStep, setActiveStep] = useState(0);
-  const [paymentCard, setPaymentCard] = useState(null);
   const [agreeToTerms, setAgreeToTerms] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [receiptData, setReceiptData] = useState(null);
   
   // Billing information
-  const [billingInfo, setBillingInfo] = useState({
-    name: user?.name || '',
-    email: user?.email || '',
-    address: '',
-    city: '',
-    state: '',
-    zip: '',
-    country: 'US'
-  });
+  const [billingInfo, setBillingInfo] = useState(buildPaymentCheckoutInitialBillingInfo(user));
 
-  useEffect(() => {
-    if (!credential) {
-      // Redirect if no credential context
-      navigate('/credentials');
-      return;
-    }
-    
-    // Initialize Square payment form
-    if (processingFee > 0) {
-      initSquarePayment();
-    }
-  }, [credential, processingFee, initSquarePayment, navigate]);
+  const submitCheckoutApplication = useCallback((payload) => {
+    return post('/api/applicant/applications', payload);
+  }, []);
 
-  /**
-   * Initialize Square Web Payments SDK
-   */
-  const initSquarePayment = useCallback(async () => {
+  const initPaymentForm = useCallback(async () => {
     try {
-      const payments = await initializePayment();
-      if (payments) {
-        const card = await payments.card();
-        await card.attach('#card-container');
-        setPaymentCard(card);
+      const result = await initializePaymentCheckout({
+        credential,
+        processingFee,
+        navigate,
+        initializePayment,
+      });
+
+      if (result.error) {
+        setError(result.error);
       }
     } catch (err) {
       console.error('Failed to initialize payment:', err);
       setError('Failed to load payment form. Please refresh and try again.');
     }
-  }, [initializePayment]);
+  }, [credential, processingFee, navigate, initializePayment]);
+
+  useEffect(() => {
+    initPaymentForm();
+  }, [initPaymentForm]);
 
   /**
    * Handle billing info change
    */
   const handleBillingChange = (field) => (event) => {
-    setBillingInfo(prev => ({
-      ...prev,
-      [field]: event.target.value
-    }));
+    setBillingInfo((prev) => updatePaymentCheckoutBillingInfo(prev, field, event.target.value));
   };
 
   /**
    * Validate billing information
    */
   const validateBilling = () => {
-    const required = ['name', 'email', 'address', 'city', 'state', 'zip'];
-    return required.every(field => billingInfo[field]?.trim());
+    return validatePaymentCheckoutBilling(billingInfo);
   };
 
   /**
@@ -147,17 +138,6 @@ const PaymentCheckout = () => {
    * Process the payment
    */
   const handlePayment = async () => {
-    if (processingFee === 0) {
-      // No payment needed, submit application directly
-      await submitApplication(null);
-      return;
-    }
-
-    if (!paymentCard && !isMockMode) {
-      setError('Payment form not initialized');
-      return;
-    }
-
     if (!validateBilling()) {
       setError('Please complete all billing information');
       return;
@@ -167,87 +147,21 @@ const PaymentCheckout = () => {
     setError(null);
 
     try {
-      // Tokenize the card (or use mock)
-      let token;
-      if (isMockMode) {
-        token = 'mock-payment-token-' + Date.now();
-      } else {
-        const tokenResult = await paymentCard.tokenize();
-        if (tokenResult.status !== 'OK') {
-          throw new Error(tokenResult.errors?.[0]?.message || 'Card tokenization failed');
-        }
-        token = tokenResult.token;
-      }
-
-      // Process the payment
-      const paymentResult = await processPayment({
-        token,
-        amount: processingFee * 100, // Convert to cents
-        currency: 'USD',
-        billingContact: billingInfo,
-        metadata: {
-          credentialId: credential.id,
-          credentialName: credential.name,
-          applicantEmail: user?.email
-        }
+      const result = await processPaymentCheckout({
+        processingFee,
+        billingInfo,
+        credential,
+        user,
+        processPayment,
+        submitCheckoutApplication,
       });
-
-      if (paymentResult.success) {
-        // Submit the application with payment confirmation
-        await submitApplication(paymentResult);
-      } else {
-        throw new Error(paymentResult.error || 'Payment failed');
-      }
+      setReceiptData(result.receiptData);
+      setActiveStep(result.activeStep);
     } catch (err) {
       console.error('Payment error:', err);
       setError(err.message || 'Payment processing failed');
     } finally {
       setLoading(false);
-    }
-  };
-
-  /**
-   * Submit the credential application
-   */
-  const submitApplication = async (paymentResult) => {
-    try {
-      const response = await fetch('/api/applicant/applications', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          credentialId: credential.id,
-          credentialType: credential.id,
-          paymentId: paymentResult?.paymentId,
-          processingFee: processingFee,
-          billingInfo: billingInfo
-        })
-      });
-
-      if (response.ok) {
-        const result = await response.json();
-        setReceiptData({
-          applicationId: result.applicationId,
-          paymentId: paymentResult?.paymentId,
-          amount: processingFee,
-          date: new Date().toISOString(),
-          credentialName: credential.name
-        });
-        setActiveStep(2);
-      } else {
-        throw new Error('Failed to submit application');
-      }
-    } catch (err) {
-      console.error('Application submission error:', err);
-      // If payment succeeded but application failed, still show success
-      // The backend should handle reconciliation
-      setReceiptData({
-        paymentId: paymentResult?.paymentId,
-        amount: processingFee,
-        date: new Date().toISOString(),
-        credentialName: credential.name,
-        warning: 'Application submission pending - you will receive a confirmation email'
-      });
-      setActiveStep(2);
     }
   };
 
@@ -384,6 +298,7 @@ const PaymentCheckout = () => {
                   label="Full Name"
                   value={billingInfo.name}
                   onChange={handleBillingChange('name')}
+                  inputProps={{ 'aria-label': 'Full Name' }}
                   required
                 />
               </Grid>
@@ -394,6 +309,7 @@ const PaymentCheckout = () => {
                   type="email"
                   value={billingInfo.email}
                   onChange={handleBillingChange('email')}
+                  inputProps={{ 'aria-label': 'Email' }}
                   required
                 />
               </Grid>
@@ -403,6 +319,7 @@ const PaymentCheckout = () => {
                   label="Address"
                   value={billingInfo.address}
                   onChange={handleBillingChange('address')}
+                  inputProps={{ 'aria-label': 'Address' }}
                   required
                 />
               </Grid>
@@ -412,6 +329,7 @@ const PaymentCheckout = () => {
                   label="City"
                   value={billingInfo.city}
                   onChange={handleBillingChange('city')}
+                  inputProps={{ 'aria-label': 'City' }}
                   required
                 />
               </Grid>
@@ -421,6 +339,7 @@ const PaymentCheckout = () => {
                   label="State"
                   value={billingInfo.state}
                   onChange={handleBillingChange('state')}
+                  inputProps={{ 'aria-label': 'State' }}
                   required
                 />
               </Grid>
@@ -430,6 +349,7 @@ const PaymentCheckout = () => {
                   label="ZIP"
                   value={billingInfo.zip}
                   onChange={handleBillingChange('zip')}
+                  inputProps={{ 'aria-label': 'ZIP' }}
                   required
                 />
               </Grid>

@@ -13,6 +13,10 @@ Contents:
 - dto: Common API response DTOs
 - events: Domain event base classes and messaging utilities
 - org_authorization: Organization-scoped authorization dependencies
+- cedar_engine: Cedar policy evaluation engine
+- cedar_entities: Cedar entity builders
+- cedar_actions: Route-to-Cedar action mapping
+- cedar_middleware: Cedar authorization middleware
 """
 
 from .value_objects import UserId, OrganizationId, Email
@@ -33,9 +37,12 @@ from .org_authorization import (
     OrganizationClient,
     require_org_membership,
     require_org_role,
-    require_org_admin,
-    require_org_owner,
 )
+from .cedar_engine import CedarEngine, AuthzDecision
+from .cedar_entities import build_user_entities, build_apikey_entities, build_request_context
+from .cedar_actions import resolve_action, resolve_action_and_resource, extract_org_id
+from .cedar_middleware import CedarAuthMiddleware
+from .middleware import RequestIdMiddleware, RequestLoggingMiddleware
 
 __all__ = [
     # Value Objects
@@ -61,6 +68,17 @@ __all__ = [
     "OrganizationClient",
     "require_org_membership",
     "require_org_role",
-    "require_org_admin",
-    "require_org_owner",
+    # Cedar Authorization
+    "CedarEngine",
+    "AuthzDecision",
+    "CedarAuthMiddleware",
+    "build_user_entities",
+    "build_apikey_entities",
+    "build_request_context",
+    "resolve_action",
+    "resolve_action_and_resource",
+    "extract_org_id",
+    # Middleware
+    "RequestIdMiddleware",
+    "RequestLoggingMiddleware",
 ]

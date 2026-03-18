@@ -29,6 +29,11 @@ import {
   CheckCircle as CheckIcon,
   Cancel as CancelIcon
 } from '@mui/icons-material';
+import {
+  createVerifierDemoMockPresentation,
+  serializeVerifierDemoPresentation,
+  verifyVerifierDemoPresentation,
+} from '../application/verifier';
 
 const VerifierDemo = () => {
   const [verificationState, setVerificationState] = useState('ready'); // ready, scanning, verifying, complete
@@ -41,26 +46,9 @@ const VerifierDemo = () => {
 
     // Simulate QR code scan delay
     setTimeout(() => {
-      const mockPresentation = {
-        "@context": ["https://www.w3.org/2018/credentials/v1"],
-        "type": ["VerifiablePresentation"],
-        "verifiableCredential": [{
-          "@context": ["https://www.w3.org/2018/credentials/v1"],
-          "type": ["VerifiableCredential", "mDL"],
-          "issuer": "did:example:issuer",
-          "issuanceDate": new Date().toISOString(),
-          "credentialSubject": {
-            "given_name": "Jane",
-            "family_name": "Doe",
-            "birth_date": "1990-01-01",
-            "document_number": "DL123456789",
-            "age_over_18": true,
-            "age_over_21": true
-          }
-        }]
-      };
-
-      setPresentationData(JSON.stringify(mockPresentation, null, 2));
+      setPresentationData(
+        serializeVerifierDemoPresentation(createVerifierDemoMockPresentation()),
+      );
       setVerificationState('ready');
     }, 2000);
   };
@@ -75,90 +63,15 @@ const VerifierDemo = () => {
     setVerificationState('verifying');
 
     try {
-      // Check if it's a JWT or JSON presentation
-      let endpoint = '/api/verifier/verify-presentation';
-      let body;
-      
-      if (presentationData.trim().startsWith('{')) {
-        // JSON presentation - try to extract JWT if present
-        const parsed = JSON.parse(presentationData);
-        if (parsed.presentation_jwt) {
-          body = {
-            presentation_jwt: parsed.presentation_jwt,
-            expected_audience: 'demo_verifier',
-            expected_nonce: null
-          };
-        } else if (parsed.verifiableCredential && parsed.verifiableCredential.length > 0) {
-          // Extract first credential and verify as credential
-          endpoint = '/api/verifier/verify';
-          body = {
-            credential_jwt: typeof parsed.verifiableCredential[0] === 'string' 
-              ? parsed.verifiableCredential[0] 
-              : JSON.stringify(parsed.verifiableCredential[0]),
-            expected_issuer: null
-          };
-        } else {
-          throw new Error('Invalid presentation format');
-        }
-      } else {
-        // Assume it's a JWT
-        body = {
-          presentation_jwt: presentationData.trim(),
-          expected_audience: 'demo_verifier',
-          expected_nonce: null
-        };
-      }
-      
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(body)
+      const result = await verifyVerifierDemoPresentation({
+        presentationData,
       });
 
-      const result = await response.json();
-      
-      // Map API response to component format
-      setVerificationResult({
-        success: result.valid,
-        verified: result.valid,
-        error: result.error,
-        claims: result.claims,
-        issuer: result.issuer || result.holder,
-        checks: [
-          {
-            check_name: 'JWT Structure',
-            passed: result.valid,
-            details: result.valid ? 'Valid JWT format' : result.error
-          },
-          {
-            check_name: 'Signature',
-            passed: result.valid,
-            details: result.valid ? 'Signature verified' : 'Signature verification failed'
-          },
-          {
-            check_name: 'Claims',
-            passed: result.valid && Object.keys(result.claims || {}).length > 0,
-            details: result.valid ? `Found ${Object.keys(result.claims || {}).length} claims` : 'No claims extracted'
-          }
-        ]
-      });
+      setVerificationResult(result);
       setVerificationState('complete');
     } catch (error) {
       console.error('Verification failed:', error);
-      setVerificationResult({
-        success: false,
-        verified: false,
-        error: 'Verification failed: ' + error.message,
-        checks: [
-          {
-            check_name: 'Format Check',
-            passed: false,
-            details: error.message
-          }
-        ]
-      });
+      setVerificationResult(null);
       setVerificationState('complete');
     } finally {
       setLoading(false);

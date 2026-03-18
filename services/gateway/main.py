@@ -21,6 +21,7 @@ Port: 8000
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import time
@@ -31,10 +32,10 @@ import httpx
 from fastapi import APIRouter, Depends, FastAPI, Form, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from starlette.middleware.base import BaseHTTPMiddleware
 import redis.asyncio as aioredis
-from marty_common import OrganizationClient
+from marty_common import OrganizationClient, CedarEngine, CedarAuthMiddleware
 
 logging.basicConfig(
     level=logging.INFO,
@@ -71,7 +72,7 @@ class ServiceRegistry:
             "presentation-policies": os.environ.get("PRESENTATION_POLICY_SERVICE_URL", "http://localhost:8009"),
             "deployment-profiles": os.environ.get("DEPLOYMENT_PROFILE_SERVICE_URL", "http://localhost:8010"),
             "flows": os.environ.get("FLOW_SERVICE_URL", "http://localhost:8011"),
-            "verification": os.environ.get("VERIFICATION_SERVICE_URL", "http://localhost:8012"),
+            "verification": os.environ.get("VERIFICATION_SERVICE_URL", "http://verification:8012"),
             "revocation-profiles": os.environ.get("REVOCATION_PROFILE_SERVICE_URL", "http://localhost:8013"),
         }
     
@@ -120,13 +121,11 @@ class SessionCache:
 # =============================================================================
 
 class AuthMiddleware(BaseHTTPMiddleware):
-    """Middleware that validates sessions and injects user context headers."""
+    """Middleware that validates sessions via gRPC and injects user context headers."""
     
-    def __init__(self, app, registry: ServiceRegistry, session_cache: SessionCache):
+    def __init__(self, app, session_cache: SessionCache):
         super().__init__(app)
-        self.registry = registry
         self.session_cache = session_cache
-        self._http_client: httpx.AsyncClient | None = None
     
     async def dispatch(self, request: Request, call_next):
         """Process request and inject user context headers."""
@@ -162,52 +161,21 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # Check cache first
         user_data = self.session_cache.get(session_id)
         
-        # Validate with auth service if not cached
+        # Validate with auth service via gRPC if not cached
         if not user_data:
-            auth_url = self.registry.get_service_url("auth")
-            if not auth_url:
-                logger.error("Auth service URL not configured")
-                return JSONResponse(
-                    status_code=503,
-                    content={"detail": "Auth service unavailable"},
-                )
-            
-            # Validate session
             try:
-                if not self._http_client:
-                    self._http_client = httpx.AsyncClient()
-                
-                response = await self._http_client.post(
-                    f"{auth_url}/internal/v1/auth/validate-session",
-                    params={"session_id": session_id},
-                    timeout=5.0,
-                )
-                
-                if response.status_code != 200:
-                    logger.warning(f"Session validation failed: {response.status_code}")
+                stub = request.app.state.auth_grpc_stub
+                user_data = await self._validate_session(stub, session_id)
+
+                if user_data is None:
                     return JSONResponse(
                         status_code=401,
                         content={"detail": "Invalid session"},
                     )
-                
-                validation_data = response.json()
-                if not validation_data.get("valid"):
-                    return JSONResponse(
-                        status_code=401,
-                        content={"detail": "Invalid session"},
-                    )
-                
-                user_data = validation_data.get("user", {})
-                
+
                 # Cache the result
                 self.session_cache.set(session_id, user_data)
-                
-            except httpx.TimeoutException:
-                logger.error("Auth service timeout during session validation")
-                return JSONResponse(
-                    status_code=504,
-                    content={"detail": "Auth service timeout"},
-                )
+
             except Exception as e:
                 logger.error(f"Error validating session: {e}")
                 return JSONResponse(
@@ -235,114 +203,37 @@ class AuthMiddleware(BaseHTTPMiddleware):
         response = await call_next(request)
         return response
 
+    async def _validate_session(self, stub, session_id: str) -> dict | None:
+        """Validate session via gRPC. Returns user_data dict or None."""
+        import grpc
+        from marty_proto.v1 import auth_service_pb2
 
-# =============================================================================
-# Organization Authorization Middleware
-# =============================================================================
-
-class OrgAuthMiddleware(BaseHTTPMiddleware):
-    """Middleware that verifies organization membership for org-scoped routes."""
-    
-    # Routes that should skip org membership checks
-    ORG_ALLOWLIST_PATTERNS = [
-        r"^/v1/organizations$",  # List all orgs (discovery)
-        r"^/v1/organizations/mine$",  # Get my orgs
-        r"^/v1/organizations/discover",  # Discover orgs
-        r"^/v1/organizations/join/",  # Join flows
-        r"^/v1/organizations/[^/]+/join$",  # Join specific org by ID (user may not be a member yet)
-        r"^/v1/organizations/invitations/",  # Invitation flows
-        r"^/health",
-        r"^/.well-known/",
-    ]
-    
-    def __init__(self, app):
-        super().__init__(app)
-        import re
-        self._allowlist_patterns = [re.compile(p) for p in self.ORG_ALLOWLIST_PATTERNS]
-    
-    async def dispatch(self, request: Request, call_next):
-        """Check org membership for org-scoped routes."""
-        path = request.url.path
-        
-        # Skip if path matches allowlist
-        import re
-        if any(pattern.match(path) for pattern in self._allowlist_patterns):
-            return await call_next(request)
-        
-        # Check if this is an org-scoped route: /v1/organizations/{org_id}/...
-        org_id_match = re.match(r"^/v1/organizations/([a-f0-9\-]{36})/", path)
-        if not org_id_match:
-            # Not an org-scoped route, proceed
-            return await call_next(request)
-        
-        org_id = org_id_match.group(1)
-        
-        # Get user_id from request state (injected by AuthMiddleware)
-        user_id = getattr(request.state, "user_id", None)
-        if not user_id:
-            # User not authenticated - AuthMiddleware should have caught this
-            # but just in case...
-            return JSONResponse(
-                status_code=401,
-                content={"detail": "Authentication required"},
-            )
-        
-        # Get OrganizationClient from app state
-        if not hasattr(request.app.state, "org_client"):
-            logger.error("OrganizationClient not configured in app state")
-            return JSONResponse(
-                status_code=500,
-                content={"detail": "Organization client not configured"},
-            )
-        
-        org_client: OrganizationClient = request.app.state.org_client
-        
-        # Verify membership
         try:
-            membership = await org_client.get_membership(user_id, org_id)
-            
-            if not membership:
-                logger.warning(
-                    f"User {user_id} attempted to access organization {org_id} "
-                    f"without membership (path: {path})"
-                )
-                return JSONResponse(
-                    status_code=403,
-                    content={"detail": "Not a member of this organization"},
-                )
-            
-            if membership.status != "active":
-                logger.warning(
-                    f"User {user_id} attempted to access organization {org_id} "
-                    f"with inactive membership (status: {membership.status}, path: {path})"
-                )
-                return JSONResponse(
-                    status_code=403,
-                    content={"detail": f"Organization membership is {membership.status}"},
-                )
-            
-            # Inject org role header for downstream services
-            request.state.org_role = membership.role.value
-            
-        except HTTPException as e:
-            # OrganizationClient raises HTTPException for service errors
-            logger.error(f"Error verifying membership: {e.detail}")
-            return JSONResponse(
-                status_code=e.status_code,
-                content={"detail": e.detail},
+            resp = await stub.ValidateSession(
+                auth_service_pb2.ValidateSessionRequest(session_id=session_id),
+                timeout=5.0,
             )
-        except Exception as e:
-            logger.error(f"Unexpected error in org auth middleware: {e}", exc_info=True)
-            return JSONResponse(
-                status_code=500,
-                content={"detail": "Internal server error"},
-            )
-        
-        # Membership verified, proceed
-        response = await call_next(request)
-        return response
+            if not resp.valid:
+                return None
+            user = resp.user
+            return {
+                "user_id": user.user_id,
+                "email": user.email,
+                "username": user.username,
+                "given_name": user.given_name,
+                "family_name": user.family_name,
+                "user_type": user.user_type,
+                "applicant_id": user.applicant_id,
+                "roles": list(user.roles),
+                "organization_id": user.organization_id,
+                "organization_name": user.organization_name,
+            }
+        except grpc.aio.AioRpcError as e:
+            logger.error(f"gRPC session validation error: {e.code()} {e.details()}")
+            raise
 
 
+# =============================================================================
 # =============================================================================
 # Route Configuration
 # =============================================================================
@@ -527,7 +418,8 @@ class CredentialTemplateCreate(BaseModel):
     application_template_id: str | None = None  # Optional - for application-based issuance
     
     # Embedded Compliance Profile
-    compliance_profile: dict  # Embedded compliance rules (no longer a reference)
+    compliance_profile: dict | None = None  # Embedded compliance rules
+    compliance_profile_id: str | None = None  # Reference to existing compliance profile
     trust_profile_id: str | None = None
     revocation_profile_id: str | None = None
     
@@ -568,7 +460,8 @@ class CredentialTemplateResponse(BaseModel):
     
     # Profile references
     application_template_id: str | None
-    compliance_profile: dict  # Embedded compliance rules
+    compliance_profile: dict | None = None  # Embedded compliance rules
+    compliance_profile_id: str | None = None
     trust_profile_id: str | None
     revocation_profile_id: str | None
     
@@ -641,7 +534,6 @@ class ComplianceProfileResponse(BaseModel):
     system_profile: bool
     created_at: str
     updated_at: str
-    updated_at: str
 
 
 # =============================================================================
@@ -650,14 +542,15 @@ class ComplianceProfileResponse(BaseModel):
 
 class RequestedClaimModel(BaseModel):
     claim_name: str
-    display_name: str
+    display_name: str = ""
     required: bool = True
     selective_disclosure: bool = True
+    predicate_spec: dict | None = None
 
 
 class CredentialRequirementModel(BaseModel):
     credential_template_id: str
-    display_name: str
+    display_name: str = ""
     required: bool = True
     requested_claims: list[RequestedClaimModel] = []
 
@@ -743,6 +636,15 @@ class DeploymentProfileCreate(BaseModel):
     ux_config: dict | None = None  # language, signage_text, branding
     # Update channel for version pinning
     update_channel: str = "stable"  # stable, beta, dev
+
+
+class DeploymentProfileUpdate(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    network_mode: str | None = None
+    biometric_required: bool | None = None
+    default_presentation_policy_id: str | None = None
+    ux_config: dict | None = None
 
 
 class DeploymentProfileResponse(BaseModel):
@@ -921,6 +823,13 @@ class OrganizationCreate(BaseModel):
     name: str
     display_name: str | None = None
 
+    @field_validator("name")
+    @classmethod
+    def name_must_not_be_empty(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("name must not be empty")
+        return v
+
 
 class OrganizationResponse(BaseModel):
     id: str
@@ -947,7 +856,7 @@ class OrganizationResponse(BaseModel):
 class IssuanceCreate(BaseModel):
     """Create an issuance request."""
     organization_id: str
-    credential_template_id: str
+    credential_template_id: str | None = None  # Optional — issuance service falls back to "default"
     subject_did: str | None = None
     application_id: str | None = None
     claims: dict = {}
@@ -1285,6 +1194,53 @@ async def proxy_request(
         raise HTTPException(status_code=504, detail="Service timeout")
 
 
+async def _resource_exists(service_name: str, path: str, request: Request | None = None) -> bool:
+    """Check if a resource exists by issuing a GET to the backend service."""
+    registry = get_registry()
+    client = get_http_client()
+    url = f"{registry.get_service_url(service_name)}{path}"
+    headers = _forward_headers(request)
+    try:
+        resp = await client.get(url, timeout=10.0, headers=headers)
+        return resp.status_code < 400
+    except (httpx.ConnectError, httpx.TimeoutException):
+        return False
+
+
+async def _resource_org_id(service_name: str, path: str, request: Request | None = None) -> str | None:
+    """Fetch a resource and return its organization_id, or None if not found."""
+    registry = get_registry()
+    client = get_http_client()
+    url = f"{registry.get_service_url(service_name)}{path}"
+    headers = _forward_headers(request)
+    try:
+        resp = await client.get(url, timeout=10.0, headers=headers)
+        if resp.status_code >= 400:
+            return None
+        data = resp.json()
+        return data.get("organization_id")
+    except (httpx.ConnectError, httpx.TimeoutException, Exception):
+        return None
+
+
+def _forward_headers(request: Request | None) -> dict[str, str]:
+    """Extract user context headers from the incoming request for internal calls."""
+    if request is None:
+        return {}
+    headers: dict[str, str] = {}
+    if hasattr(request.state, "user_id") and request.state.user_id:
+        headers["X-User-Id"] = request.state.user_id
+    if hasattr(request.state, "user_email") and request.state.user_email:
+        headers["X-User-Email"] = request.state.user_email
+    if hasattr(request.state, "user_domain") and request.state.user_domain:
+        headers["X-User-Domain"] = request.state.user_domain
+    # Forward auth header if present
+    auth = request.headers.get("authorization")
+    if auth:
+        headers["Authorization"] = auth
+    return headers
+
+
 # =============================================================================
 # Documented API Routes
 # =============================================================================
@@ -1443,6 +1399,15 @@ async def create_credential_template(body: CredentialTemplateCreate, request: Re
     - Cryptographic configuration (keys, certs, DIDs)
     - Validity and revocation settings
     """
+    if body.trust_profile_id:
+        if not await _resource_exists("trust-profiles", f"/v1/trust-profiles/{body.trust_profile_id}", request):
+            raise HTTPException(status_code=422, detail=f"Trust profile not found: {body.trust_profile_id}")
+    if body.compliance_profile_id:
+        owner_org = await _resource_org_id("compliance-profiles", f"/v1/compliance-profiles/{body.compliance_profile_id}", request)
+        if owner_org is None:
+            raise HTTPException(status_code=422, detail=f"Compliance profile not found: {body.compliance_profile_id}")
+        if owner_org != body.organization_id:
+            raise HTTPException(status_code=403, detail="Access denied: compliance profile belongs to another organization")
     registry = get_registry()
     service_url = registry.get_service_url("credential-templates")
     return await proxy_request(request, service_url, "/v1/credential-templates", body_override=body.model_dump_json().encode())
@@ -1612,6 +1577,9 @@ presentation_policy_router = APIRouter(prefix="/v1/presentation-policies", tags=
 @presentation_policy_router.post("", response_model=PresentationPolicyResponse, summary="Create Presentation Policy")
 async def create_presentation_policy(body: PresentationPolicyCreate, request: Request) -> Response:
     """Create a new Presentation Policy defining what credentials to request."""
+    for req in body.credential_requirements:
+        if not await _resource_exists("credential-templates", f"/v1/credential-templates/{req.credential_template_id}", request):
+            raise HTTPException(status_code=422, detail=f"Credential template not found: {req.credential_template_id}")
     registry = get_registry()
     service_url = registry.get_service_url("presentation-policies")
     return await proxy_request(request, service_url, "/v1/presentation-policies")
@@ -1696,9 +1664,18 @@ deployment_profile_router = APIRouter(prefix="/v1/deployment-profiles", tags=["D
 @deployment_profile_router.post("", response_model=DeploymentProfileResponse, summary="Create Deployment Profile")
 async def create_deployment_profile(body: DeploymentProfileCreate, request: Request) -> Response:
     """Create a new Deployment Profile for runtime configuration."""
+    raw_body = await request.body()
+    raw_data = json.loads(raw_body) if raw_body else {}
+    policy_id = raw_data.get("default_presentation_policy_id") or body.default_policy_id
+    if policy_id:
+        owner_org = await _resource_org_id("presentation-policies", f"/v1/presentation-policies/{policy_id}", request)
+        if owner_org is None:
+            raise HTTPException(status_code=422, detail=f"Presentation policy not found: {policy_id}")
+        if owner_org != body.organization_id:
+            raise HTTPException(status_code=403, detail="Access denied: presentation policy belongs to another organization")
     registry = get_registry()
     service_url = registry.get_service_url("deployment-profiles")
-    return await proxy_request(request, service_url, "/v1/deployment-profiles")
+    return await proxy_request(request, service_url, "/v1/deployment-profiles", body_override=raw_body)
 
 
 @deployment_profile_router.get("", response_model=list[DeploymentProfileResponse], summary="List Deployment Profiles")
@@ -1729,7 +1706,7 @@ async def activate_deployment_profile(profile_id: str, request: Request) -> Resp
 
 
 @deployment_profile_router.put("/{profile_id}", response_model=DeploymentProfileResponse, summary="Update Deployment Profile")
-async def update_deployment_profile(profile_id: str, body: DeploymentProfileCreate, request: Request) -> Response:
+async def update_deployment_profile(profile_id: str, body: DeploymentProfileUpdate, request: Request) -> Response:
     """Update a Deployment Profile."""
     registry = get_registry()
     service_url = registry.get_service_url("deployment-profiles")
@@ -1808,6 +1785,12 @@ flow_router = APIRouter(prefix="/v1/flows", tags=["Flows"])
 @flow_router.post("/definitions", response_model=FlowDefinitionResponse, summary="Create Flow Definition")
 async def create_flow_definition(body: FlowDefinitionCreate, request: Request) -> Response:
     """Create a new Flow Definition for orchestrating credential operations."""
+    if body.credential_template_id:
+        if not await _resource_exists("credential-templates", f"/v1/credential-templates/{body.credential_template_id}", request):
+            raise HTTPException(status_code=404, detail=f"Credential template not found: {body.credential_template_id}")
+    if body.presentation_policy_id:
+        if not await _resource_exists("presentation-policies", f"/v1/presentation-policies/{body.presentation_policy_id}", request):
+            raise HTTPException(status_code=422, detail=f"Presentation policy not found: {body.presentation_policy_id}")
     registry = get_registry()
     service_url = registry.get_service_url("flows")
     return await proxy_request(request, service_url, "/v1/flows/definitions")
@@ -1951,6 +1934,12 @@ issuance_router = APIRouter(prefix="/v1/issuance", tags=["Issuance"])
 @issuance_router.post("", response_model=IssuanceResponse, summary="Create Issuance")
 async def create_issuance(body: IssuanceCreate, request: Request) -> Response:
     """Initiate credential issuance for a subject (directly or via Application)."""
+    if body.credential_template_id:
+        owner_org = await _resource_org_id("credential-templates", f"/v1/credential-templates/{body.credential_template_id}", request)
+        if owner_org is None:
+            raise HTTPException(status_code=404, detail=f"Credential template not found: {body.credential_template_id}")
+        if owner_org != body.organization_id:
+            raise HTTPException(status_code=403, detail="Access denied: credential template belongs to another organization")
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
     return await proxy_request(request, service_url, "/v1/issuance/initiate")
@@ -1973,6 +1962,22 @@ async def get_issuance(issuance_id: str, request: Request) -> Response:
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
     return await proxy_request(request, service_url, f"/v1/issuance/transactions/{issuance_id}")
+
+
+@issuance_router.post("/{issuance_id}/revoke", summary="Revoke Issuance")
+async def revoke_issuance(issuance_id: str, request: Request) -> Response:
+    """Revoke a credential issuance transaction."""
+    registry = get_registry()
+    service_url = registry.get_service_url("issuance")
+    return await proxy_request(request, service_url, f"/v1/issuance/transactions/{issuance_id}/revoke")
+
+
+@issuance_router.get("/{issuance_id}/revocation-status", summary="Get Revocation Status")
+async def get_issuance_revocation_status(issuance_id: str, request: Request) -> Response:
+    """Get the revocation status of an issuance transaction."""
+    registry = get_registry()
+    service_url = registry.get_service_url("issuance")
+    return await proxy_request(request, service_url, f"/v1/issuance/transactions/{issuance_id}/revocation-status")
 
 
 @issuance_router.get("/offers/{tx_id}", summary="Get Credential Offer")
@@ -2198,6 +2203,68 @@ async def get_application_issuance_events(application_id: str, request: Request)
 
 # Notification routes
 notification_router = APIRouter(prefix="/v1/notifications", tags=["Notifications"])
+
+
+@notification_router.get("/events/push", summary="SSE Real-time Events")
+async def sse_events(
+    request: Request,
+    tenant_id: str | None = None,
+    user_id: str | None = None,
+    subscriptions: str | None = None,
+) -> Response:
+    """
+    Server-Sent Events endpoint that bridges browser clients to the
+    event-stream gRPC Subscribe RPC.  Filters by organization (tenant_id)
+    and optional event_types.
+    """
+    import json
+    from fastapi.responses import StreamingResponse
+    from marty_proto.v1 import (
+        event_stream_service_pb2,
+        event_stream_service_pb2_grpc,
+    )
+
+    requested_types = (
+        [s.strip() for s in subscriptions.split(",") if s.strip()]
+        if subscriptions
+        else []
+    )
+
+    async def generate():
+        try:
+            channel = request.app.state.es_grpc_channel
+            stub = event_stream_service_pb2_grpc.EventStreamServiceStub(channel)
+            sub_req = event_stream_service_pb2.EventSubscription(
+                event_types=requested_types,
+                organization_id=tenant_id or "",
+            )
+            # Send initial connection confirmation
+            yield "data: {\"type\": \"connected\"}\n\n"
+            async for event in stub.Subscribe(sub_req):
+                if await request.is_disconnected():
+                    break
+                payload = {
+                    "event_id": event.event_id,
+                    "aggregate_id": event.aggregate_id,
+                    "aggregate_type": event.aggregate_type,
+                    "organization_id": event.organization_id,
+                    "data": dict(event.data),
+                    "timestamp": event.timestamp,
+                }
+                yield f"event: {event.event_type}\ndata: {json.dumps(payload)}\n\n"
+        except Exception as exc:
+            logger.warning("SSE stream error for tenant %s: %s", tenant_id, exc)
+            yield f"data: {{\"error\": \"stream_error\"}}\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
 
 
 @notification_router.api_route("", methods=["GET", "POST", "PUT", "PATCH", "DELETE"], summary="Notifications")
@@ -2819,20 +2886,51 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
     
     # Initialize OrganizationClient for membership verification
-    org_service_url = _registry.get_service_url("organizations")
+    from common.grpc_factory import create_grpc_channel
+    from marty_proto.v1.auth_service_pb2_grpc import AuthServiceStub
+    
+    auth_grpc_target = os.environ.get("AUTH_GRPC_TARGET", "localhost:9001")
+    org_grpc_target = os.environ.get("ORG_GRPC_TARGET", "localhost:9002")
+    
+    auth_grpc_channel = create_grpc_channel(auth_grpc_target, service_name="gateway")
+    org_grpc_channel = create_grpc_channel(org_grpc_target, service_name="gateway")
+    auth_grpc_stub = AuthServiceStub(auth_grpc_channel)
+    logger.info("Gateway gRPC: auth→%s  org→%s", auth_grpc_target, org_grpc_target)
+
+    # Event-stream gRPC channel for SSE bridging
+    es_grpc_target = os.environ.get("ES_GRPC_TARGET", "event-stream:9015")
+    es_grpc_channel = create_grpc_channel(es_grpc_target, service_name="gateway")
+    app.state.es_grpc_channel = es_grpc_channel
+    logger.info("Gateway gRPC: event-stream→%s", es_grpc_target)
+
     org_client = OrganizationClient(
-        base_url=org_service_url,
+        grpc_channel=org_grpc_channel,
         redis_client=redis_client,
-        cache_ttl=120,  # 2 minutes cache
+        cache_ttl=120,
     )
     app.state.org_client = org_client
     app.state.redis_client = redis_client
+    app.state.auth_grpc_stub = auth_grpc_stub
+    
+    # Initialize Cedar policy engine
+    cedar_schema_path = os.environ.get("CEDAR_SCHEMA_PATH")
+    cedar_policies_dir = os.environ.get("CEDAR_POLICIES_DIR")
+    if cedar_schema_path and cedar_policies_dir:
+        cedar_engine = CedarEngine.from_files(cedar_schema_path, [cedar_policies_dir])
+        logger.info(f"Cedar engine loaded from {cedar_schema_path}")
+    else:
+        cedar_engine = CedarEngine.with_defaults()
+        logger.info("Cedar engine loaded with default MIP schema and gateway policies")
+    app.state.cedar_engine = cedar_engine
     
     logger.info(f"{SERVICE_NAME} started successfully")
     yield
     
     logger.info(f"Shutting down {SERVICE_NAME}...")
     await org_client.close()
+    await auth_grpc_channel.close()
+    await org_grpc_channel.close()
+    await es_grpc_channel.close()
     await redis_client.aclose()
     await _http_client.aclose()
 
@@ -2910,11 +3008,11 @@ Verification is handled through two complementary approaches:
     registry = _registry
     session_cache = _session_cache
 
-    # Add org auth middleware first, then auth middleware.
+    # Add Cedar auth middleware first, then auth middleware.
     # Starlette executes middleware in reverse registration order, so this makes
-    # AuthMiddleware run before OrgAuthMiddleware and inject user context early.
-    app.add_middleware(OrgAuthMiddleware)
-    app.add_middleware(AuthMiddleware, registry=registry, session_cache=session_cache)
+    # AuthMiddleware run before CedarAuthMiddleware and inject user context early.
+    app.add_middleware(CedarAuthMiddleware)
+    app.add_middleware(AuthMiddleware, session_cache=session_cache)
     
     # Include all routers
     app.include_router(trust_profile_router)
@@ -3154,6 +3252,10 @@ Verification is handled through two complementary approaches:
                 }
         
         return {"services": results}
+
+    from common.metrics import init_otel_tracing, mount_metrics
+    init_otel_tracing(SERVICE_NAME)
+    mount_metrics(app)
     
     return app
 

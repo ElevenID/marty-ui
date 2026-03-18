@@ -11,7 +11,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from pydantic import BaseModel, EmailStr
-from marty_common import OrganizationContext, require_org_admin, require_org_membership, OrganizationClient
+from marty_common import OrganizationContext, require_org_membership, OrganizationClient
 
 from ...application.ports import (
     CreateApiKeyCommand,
@@ -382,7 +382,7 @@ async def get_organization(
 async def update_organization(
     org_id: str,
     request: UpdateOrganizationRequest,
-    org_ctx: OrganizationContext = Depends(require_org_admin),
+    org_ctx: OrganizationContext = Depends(require_org_membership),
     use_case: OrganizationUseCase = Depends(get_org_use_case),
 ) -> OrganizationResponse:
     """Update an organization. Requires admin or owner role."""
@@ -497,7 +497,7 @@ async def invite_member(
     org_id: str,
     request: InviteMemberRequest,
     http_request: Request,
-    org_ctx: OrganizationContext = Depends(require_org_admin),
+    org_ctx: OrganizationContext = Depends(require_org_membership),
     use_case: MemberUseCase = Depends(get_member_use_case),
 ) -> MemberResponse:
     """Invite a new member to an organization. Requires admin or owner role."""
@@ -526,7 +526,7 @@ async def update_member(
     member_id: str,
     request: UpdateMemberRequest,
     http_request: Request,
-    org_ctx: OrganizationContext = Depends(require_org_admin),
+    org_ctx: OrganizationContext = Depends(require_org_membership),
     use_case: MemberUseCase = Depends(get_member_use_case),
 ) -> MemberResponse:
     """Update a member's role. Requires admin or owner role."""
@@ -555,7 +555,7 @@ async def remove_member(
     org_id: str,
     member_id: str,
     http_request: Request,
-    org_ctx: OrganizationContext = Depends(require_org_admin),
+    org_ctx: OrganizationContext = Depends(require_org_membership),
     use_case: MemberUseCase = Depends(get_member_use_case),
 ) -> dict[str, bool]:
     """Remove a member from an organization. Requires admin or owner role."""
@@ -588,7 +588,7 @@ async def remove_member(
 @router.get("/{org_id}/api-keys", response_model=list[ApiKeyResponse])
 async def list_api_keys(
     org_id: str,
-    org_ctx: OrganizationContext = Depends(require_org_admin),
+    org_ctx: OrganizationContext = Depends(require_org_membership),
     use_case: ApiKeyUseCase = Depends(get_api_key_use_case),
 ) -> list[ApiKeyResponse]:
     """List all API keys for an organization. Requires admin or owner role."""
@@ -600,7 +600,7 @@ async def list_api_keys(
 async def create_api_key(
     org_id: str,
     request: CreateApiKeyRequest,
-    org_ctx: OrganizationContext = Depends(require_org_admin),
+    org_ctx: OrganizationContext = Depends(require_org_membership),
     use_case: ApiKeyUseCase = Depends(get_api_key_use_case),
 ) -> ApiKeyCreatedResponse:
     """
@@ -633,7 +633,7 @@ async def create_api_key(
 async def revoke_api_key(
     org_id: str,
     key_id: str,
-    org_ctx: OrganizationContext = Depends(require_org_admin),
+    org_ctx: OrganizationContext = Depends(require_org_membership),
     use_case: ApiKeyUseCase = Depends(get_api_key_use_case),
 ) -> dict[str, bool]:
     """Revoke an API key. Requires admin or owner role."""
@@ -698,227 +698,3 @@ def _api_key_to_response(api_key) -> ApiKeyResponse:
         expires_at=api_key.expires_at.isoformat() if api_key.expires_at else None,
         created_at=api_key.created_at.isoformat(),
     )
-
-
-# =============================================================================
-# Internal API Router (for inter-service communication)
-# =============================================================================
-
-internal_router = APIRouter(prefix="/internal/v1", tags=["internal"])
-
-
-@internal_router.get("/organizations/{org_id}/members/{user_id}")
-async def get_membership_internal(
-    org_id: str,
-    user_id: str,
-    member_use_case: MemberUseCase = Depends(get_member_use_case),
-) -> MemberResponse:
-    """Internal API: Get user's membership in an organization.
-    
-    This endpoint is used by other services to verify organization membership
-    and retrieve role information. No authentication required - network-level
-    trust within marty-network.
-    
-    Returns 404 if user is not a member of the organization.
-    """
-    try:
-        # Use the member use case to get membership by user and org
-        member = await member_use_case.get_membership(user_id, org_id)
-        if not member:
-            raise HTTPException(status_code=404, detail="Membership not found")
-        return _member_to_response(member)
-    except HTTPException:
-        raise
-    except ValueError as e:
-        logger.warning(f"Invalid IDs in membership lookup: {e}")
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        logger.error(f"Error fetching membership: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Internal server error")
-
-
-class AddMemberDirectRequest(BaseModel):
-    """Request body for internal direct-add member endpoint."""
-    user_id: str
-    email: str | None = None
-    role: str = "member"
-
-
-@internal_router.post("/organizations/{org_id}/members", response_model=MemberResponse, status_code=201)
-async def add_member_internal(
-    org_id: str,
-    request: AddMemberDirectRequest,
-    member_use_case: MemberUseCase = Depends(get_member_use_case),
-) -> MemberResponse:
-    """Internal API: Directly add an active member to an organization (idempotent).
-
-    Used by auth provisioning to add users to the default Marty organisation
-    without going through the invitation flow.  Returns 200 if the member
-    already exists (idempotent), 201 on creation.  No authentication required
-    — network-level trust within marty-network.
-    """
-    try:
-        member = await member_use_case.add_member_direct(
-            organization_id=org_id,
-            user_id=request.user_id,
-            email=request.email,
-            role=MemberRole(request.role),
-        )
-        return _member_to_response(member)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logger.error(f"Error adding member directly to org {org_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Internal server error")
-
-
-class ApiKeyValidateRequest(BaseModel):
-    """Request to validate an API key."""
-    api_key: str
-
-
-class ApiKeyValidateResponse(BaseModel):
-    """Response for API key validation."""
-    api_key_id: str
-    organization_id: str
-    key_prefix: str
-    scopes: list[str]
-
-
-@internal_router.post("/api-keys/validate")
-async def validate_api_key_internal(
-    request: ApiKeyValidateRequest,
-    api_key_use_case: ApiKeyUseCase = Depends(get_api_key_use_case),
-) -> ApiKeyValidateResponse:
-    """Internal API: Validate an API key.
-    
-    This endpoint is used by other services (gateway, microservices) to validate
-    API keys for authentication. No authentication required - network-level
-    trust within marty-network.
-    
-    Returns 401 if the API key is invalid or expired.
-    """
-    try:
-        api_key = await api_key_use_case.validate_api_key(request.api_key)
-        
-        if not api_key:
-            raise HTTPException(status_code=401, detail="Invalid or expired API key")
-        
-        return ApiKeyValidateResponse(
-            api_key_id=api_key.id,
-            organization_id=api_key.organization_id,
-            key_prefix=api_key.key_prefix,
-            scopes=api_key.scopes or [],
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error validating API key: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Internal server error")
-
-
-@internal_router.get("/organizations/{org_id}")
-async def get_organization_internal(
-    org_id: str,
-    use_case: OrganizationUseCase = Depends(get_org_use_case),
-) -> OrganizationResponse:
-    """Internal API: Get an organization by ID (no auth — cluster-internal only)."""
-    try:
-        org = await use_case.get_organization(org_id)
-        if not org:
-            raise HTTPException(status_code=404, detail="Organization not found")
-        return _org_to_response(org)
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error fetching organization {org_id}: {e}")
-        raise HTTPException(status_code=500, detail="Internal server error")
-
-
-# --- RBAC: Internal permissions endpoint ---
-
-def _get_role_use_case():
-    """Lazy import to avoid circular dependency."""
-    from .rbac_http_adapter import get_role_use_case
-    return get_role_use_case()
-
-
-@internal_router.get("/organizations/{org_id}/members/{user_id}/permissions")
-async def get_member_permissions_internal(
-    org_id: str,
-    user_id: str,
-    member_use_case: MemberUseCase = Depends(get_member_use_case),
-):
-    """Internal API: Get a user's flattened permissions in an organization.
-    
-    Used by other services via org_authorization.require_permission() dependency.
-    No authentication required - network-level trust within marty-network.
-    """
-    try:
-        member = await member_use_case.get_membership(user_id, org_id)
-        if not member:
-            raise HTTPException(status_code=404, detail="Membership not found")
-
-        role_use_case = _get_role_use_case()
-        permissions = await role_use_case.get_member_permissions(member.id)
-        return {"permissions": [p.key for p in permissions]}
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error fetching member permissions: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Internal server error")
-
-
-class AddMemberInternalRequest(BaseModel):
-    """Request to add a member to an organization (internal API)."""
-    user_id: str
-    email: str
-    role: str = "member"
-
-
-@internal_router.post("/organizations/{org_id}/members")
-async def add_member_internal(
-    org_id: str,
-    request: AddMemberInternalRequest,
-    join_use_case: JoinUseCase = Depends(get_join_use_case),
-) -> MemberResponse:
-    """Internal API: Add a member to an organization.
-    
-    This endpoint is used by other services to automatically add users to
-    organizations. Primarily used by the auth service to add new users to
-    the default Marty organization. No authentication required - network-level
-    trust within marty-network.
-    
-    This bypasses normal join mechanisms and directly adds the user as an
-    active member with the specified role.
-    """
-    try:
-        from ...domain.entities import Member, MemberStatus
-        
-        # Check if user is already a member
-        member_use_case = get_member_use_case()
-        existing = await member_use_case.get_membership(request.user_id, org_id)
-        if existing:
-            logger.info(f"User {request.user_id} is already a member of org {org_id}")
-            return _member_to_response(existing)
-        
-        # Create member directly with active status
-        member = Member.create(
-            organization_id=org_id,
-            user_id=request.user_id,
-            email=request.email,
-            role=MemberRole(request.role),
-            status=MemberStatus.ACTIVE,
-        )
-        
-        member_repo = member_use_case.member_repo
-        await member_repo.save(member)
-        
-        logger.info(f"Added user {request.user_id} to organization {org_id} via internal API")
-        return _member_to_response(member)
-    except ValueError as e:
-        logger.error(f"Error adding member: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logger.error(f"Error adding member: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Internal server error")

@@ -30,42 +30,39 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import AccountBalanceWalletIcon from '@mui/icons-material/AccountBalanceWallet';
 import OID4VCIInviteDisplay from '../issuance/OID4VCIInviteDisplay';
 import { generateIssuanceOffer } from '../../services/credentialsApi';
+import {
+  createWalletOfferDialogState,
+  loadWalletOfferDialog,
+  resetWalletOfferDialogState,
+  startWalletOfferDialogLoad,
+} from '../../application/applications';
 
 export default function WalletOfferDialog({ open, onClose, applicationId, credentialName }) {
-  const [offerData, setOfferData] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
+  const [dialogState, setDialogState] = useState(() => createWalletOfferDialogState());
+  const { offerData, loading, error } = dialogState;
 
   const fetchOffer = useCallback(async () => {
     if (!applicationId) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const data = await generateIssuanceOffer(applicationId);
-      if (!data?.offer_url) {
-        setError('Could not generate a wallet offer. Please try again or contact support.');
-      } else {
-        setOfferData(data);
-      }
-    } catch (err) {
-      setError(err?.message || 'Failed to generate wallet offer.');
-    } finally {
-      setLoading(false);
-    }
+    setDialogState((currentState) => startWalletOfferDialogLoad(currentState));
+
+    const nextState = await loadWalletOfferDialog({
+      applicationId,
+      generateIssuanceOffer,
+    });
+
+    setDialogState(nextState);
   }, [applicationId]);
 
   // Fetch when dialog opens
   useEffect(() => {
     if (open) {
-      setOfferData(null);
-      setError(null);
+      setDialogState(resetWalletOfferDialogState());
       fetchOffer();
     }
   }, [open, fetchOffer]);
 
   const handleClose = () => {
-    setOfferData(null);
-    setError(null);
+    setDialogState(resetWalletOfferDialogState());
     onClose();
   };
 

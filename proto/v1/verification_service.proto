@@ -1,0 +1,170 @@
+syntax = "proto3";
+
+package marty.ui.verification.v1;
+
+import "google/api/annotations.proto";
+
+option py_generic_services = true;
+
+// ---------------------------------------------------------------------------
+// Verification Service — standalone credential verification sessions.
+//
+// Manages the full OID4VP presentation exchange lifecycle:
+//   1. StartVerification  — create a session with request_uri / QR code
+//   2. GetSession         — poll status
+//   3. SubmitPresentation — wallet posts VP token
+//   4. EvaluatePresentation — stateless (no session required)
+//   5. ListSessions       — audit / analytics
+//   6. GetInspectionResult — retrieve prior inspection outcome by session
+//   7. HealthCheck
+// ---------------------------------------------------------------------------
+
+service VerificationService {
+  // Create a verification session.  Returns a request_uri for OID4VP wallets.
+  rpc StartVerification(StartVerificationRequest) returns (VerificationSession) {
+    option (google.api.http) = {
+      post: "/v1/verify"
+      body: "*"
+    };
+  }
+
+  // Retrieve session state (polling by relying-party UI).
+  rpc GetSession(GetSessionRequest) returns (VerificationSession) {
+    option (google.api.http) = {
+      get: "/v1/verify/{session_id}"
+    };
+  }
+
+  // Submit a VP token to a pending session (called by wallet or proxy).
+  rpc SubmitPresentation(SubmitPresentationRequest) returns (VerificationResult) {
+    option (google.api.http) = {
+      post: "/v1/verify/{session_id}/submit"
+      body: "*"
+    };
+  }
+
+  // Stateless evaluation — no session stored.
+  rpc EvaluatePresentation(EvaluatePresentationRequest) returns (VerificationResult) {
+    option (google.api.http) = {
+      post: "/v1/verify/evaluate"
+      body: "*"
+    };
+  }
+
+  // List verification sessions for an organization.
+  rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse) {
+    option (google.api.http) = {
+      get: "/v1/verify/sessions"
+    };
+  }
+
+  // Retrieve the detailed inspection result for a completed session.
+  rpc GetInspectionResult(GetSessionRequest) returns (InspectionResultResponse) {
+    option (google.api.http) = {
+      get: "/v1/verify/{session_id}/inspection"
+    };
+  }
+
+  // Health check.
+  rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse) {
+    option (google.api.http) = {
+      get: "/v1/verify/health"
+    };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Request messages
+// ---------------------------------------------------------------------------
+
+message StartVerificationRequest {
+  string organization_id = 1;
+  string presentation_policy_id = 2;   // required for vp_token
+  string response_type = 3;            // "vp_token" (default) or "id_token"
+  string trust_profile_id = 4;
+  string deployment_profile_id = 5;
+  string external_reference = 6;
+  string callback_url = 7;
+  int32 expiry_minutes = 8;            // default 15
+  string purpose = 9;                  // human-readable description
+}
+
+message GetSessionRequest {
+  string session_id = 1;
+}
+
+message SubmitPresentationRequest {
+  string session_id = 1;
+  string vp_token = 2;
+  string presentation_submission_json = 3;  // JSON-encoded PresentationSubmission
+}
+
+message EvaluatePresentationRequest {
+  string vp_token = 1;
+  string presentation_policy_id = 2;
+  string nonce = 3;
+  string audience = 4;
+  string context_json = 5;             // JSON extra context
+}
+
+message ListSessionsRequest {
+  string organization_id = 1;
+  string status = 2;                   // "pending", "completed", "expired", "failed"
+  int32 limit = 3;
+  int32 offset = 4;
+}
+
+// ---------------------------------------------------------------------------
+// Response messages
+// ---------------------------------------------------------------------------
+
+message VerificationSession {
+  string session_id = 1;
+  string organization_id = 2;
+  string presentation_policy_id = 3;
+  string response_type = 4;
+  string status = 5;                   // "pending", "completed", "expired", "failed"
+  string request_uri = 6;              // OID4VP request_uri
+  string qr_code_data = 7;             // Same URI, ready for QR encoding
+  string nonce = 8;
+  string expires_at = 9;
+  string created_at = 10;
+  string external_reference = 11;
+  string result = 12;                  // "passed", "failed", "partial" — set on completion
+  string decision = 13;                // "allow", "deny", "manual_review"
+  string verified_claims_json = 14;    // JSON-encoded map of disclosed claims
+}
+
+message VerificationResult {
+  string session_id = 1;
+  string result = 2;                   // "passed", "failed", "partial"
+  string decision = 3;                 // "allow", "deny", "manual_review"
+  string decision_reason = 4;
+  string verified_claims_json = 5;     // JSON-encoded map
+  string credential_results_json = 6;  // JSON-encoded list of per-credential outcomes
+  int32 total_requirements = 7;
+  int32 satisfied_requirements = 8;
+  string evaluation_timestamp = 9;
+  string nonce = 10;
+  bool inspection_performed = 11;      // true if InspectionSystem was invoked
+  string inspection_result = 12;       // raw result from InspectionSystem
+}
+
+message InspectionResultResponse {
+  string session_id = 1;
+  bool performed = 2;
+  string result = 3;
+  string detail_json = 4;              // JSON-encoded raw inspection payload
+  string timestamp = 5;
+}
+
+message ListSessionsResponse {
+  repeated VerificationSession sessions = 1;
+  int32 total = 2;
+}
+
+message HealthCheckRequest {}
+
+message HealthCheckResponse {
+  string status = 1;
+}

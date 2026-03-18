@@ -1,0 +1,112 @@
+syntax = "proto3";
+
+package marty.signer.v1;
+
+
+service DocumentSigner {
+  rpc SignDocument (SignRequest) returns (SignResponse);
+  rpc CreateCredentialOffer (CreateCredentialOfferRequest) returns (CreateCredentialOfferResponse);
+  rpc GetCredentialOffer (GetCredentialOfferRequest) returns (GetCredentialOfferResponse);
+  rpc RedeemPreAuthorizedCode (RedeemPreAuthorizedCodeRequest) returns (RedeemPreAuthorizedCodeResponse);
+  rpc IssueSdJwtCredential (IssueSdJwtCredentialRequest) returns (IssueSdJwtCredentialResponse);
+}
+
+enum DocumentSignerError {
+  DOCUMENT_SIGNER_ERROR_UNSPECIFIED = 0;
+  DOCUMENT_SIGNER_ERROR_INVALID_ARGUMENT = 1;
+  DOCUMENT_SIGNER_ERROR_KEY_MISSING = 2;
+  DOCUMENT_SIGNER_ERROR_SIGNING_FAILED = 3;
+  DOCUMENT_SIGNER_ERROR_STORAGE_FAILED = 4;
+  DOCUMENT_SIGNER_ERROR_OFFER_NOT_FOUND = 5;
+  DOCUMENT_SIGNER_ERROR_TOKEN_INVALID = 6;
+  DOCUMENT_SIGNER_ERROR_EXPIRED = 7;
+  DOCUMENT_SIGNER_ERROR_NOT_CONFIGURED = 8;
+  DOCUMENT_SIGNER_ERROR_CONFLICT = 9;
+}
+
+message ApiError {
+  DocumentSignerError code = 1;
+  string message = 2;
+  map<string, string> details = 3;
+}
+
+message SignRequest {
+  string document_id = 1;
+  bytes document_content = 2;
+  // string algorithm = 3; // Optional: As per service.py, can be added later if needed
+}
+
+message SignatureInfo {
+  string signature_date = 1; // ISO format YYYY-MM-DDTHH:MM:SSZ
+  string signer_id = 2;
+  bytes signature = 3;     // The actual signature bytes
+}
+
+message SignResponse {
+  bool success = 1;
+  string error_message = 2; // Deprecated: use error
+  SignatureInfo signature_info = 3;
+  ApiError error = 4;
+}
+
+message CreateCredentialOfferRequest {
+  string subject_id = 1;
+  string credential_type = 2;
+  string base_claims_json = 3;
+  string selective_disclosures_json = 4;
+  string metadata_json = 5;
+}
+
+message CreateCredentialOfferResponse {
+  string offer_id = 1;
+  string credential_offer = 2;
+  string pre_authorized_code = 3;
+  int64 expires_in = 4;
+  ApiError error = 5;
+}
+
+message GetCredentialOfferRequest {
+  string offer_id = 1;
+}
+
+message GetCredentialOfferResponse {
+  string credential_offer = 1;
+  int64 expires_in = 2;
+  string pre_authorized_code = 3;
+  ApiError error = 4;
+}
+
+message RedeemPreAuthorizedCodeRequest {
+  string pre_authorized_code = 1;
+  string wallet_attestation = 2;
+}
+
+message RedeemPreAuthorizedCodeResponse {
+  string offer_id = 1;
+  string access_token = 2;
+  int64 expires_in = 3;
+  string c_nonce = 4;
+  ApiError error = 5;
+}
+
+message IssueSdJwtCredentialRequest {
+  string access_token = 1;
+  repeated string disclose_claims = 2;
+  string audience = 3;
+  string nonce = 4;
+  string wallet_attestation = 5;
+}
+
+message IssueSdJwtCredentialResponse {
+  string credential = 1;
+  repeated string disclosures = 2;
+  string credential_id = 3;
+  int64 expires_in = 4;
+  string format = 5;
+  string sd_jwt_location = 6;
+  string disclosures_location = 7;
+  string issuer = 8;
+  string credential_type = 9;
+  string subject_id = 10;
+  ApiError error = 11;
+}

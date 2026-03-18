@@ -11,28 +11,31 @@ import {
   CircularProgress,
 } from '@mui/material';
 import { useAuth } from '../hooks/useAuth';
+import { getLoginEntryDecision, getLoginEntryRedirect } from '../application/routing';
 
 function LoginPage() {
   const { isAuthenticated, isLoading, login } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
 
-  // Get the intended destination from state, default to home
-  const from = location.state?.from?.pathname || '/';
+  const redirectTo = getLoginEntryRedirect(location.state);
 
-  // Redirect if already authenticated
   useEffect(() => {
-    if (isAuthenticated && !isLoading) {
-      navigate(from, { replace: true });
+    const decision = getLoginEntryDecision({
+      isAuthenticated,
+      isLoading,
+      redirectTo,
+    });
+
+    if (decision.action === 'navigate' && decision.redirectTo) {
+      navigate(decision.redirectTo, { replace: true });
+      return;
     }
-  }, [isAuthenticated, isLoading, navigate, from]);
 
-  // Immediately trigger SSO login for unauthenticated users
-  useEffect(() => {
-    if (!isAuthenticated && !isLoading) {
+    if (decision.action === 'login') {
       login();
     }
-  }, [isAuthenticated, isLoading, login]);
+  }, [isAuthenticated, isLoading, login, navigate, redirectTo]);
 
   // Show a neutral loading state while auth is checked or SSO redirect is in progress
   return (

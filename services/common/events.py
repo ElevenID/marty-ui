@@ -49,26 +49,18 @@ class DomainEvent:
 
 class EventPublisher:
     """
-    Simple event publisher using HTTP callbacks.
-    
-    In production, use a message broker like RabbitMQ, Kafka, or Redis Pub/Sub.
+    Event publisher using gRPC for known services, HTTP for generic
+    webhooks, and the in-process event bus for streaming subscribers.
     """
     
     def __init__(self):
         self.subscribers: dict[EventType, list[str]] = {}
+        self._flow_grpc_channel = None
         self._load_subscriptions()
     
     def _load_subscriptions(self):
         """Load event subscriptions from environment variables."""
-        # Format: EVENT_TYPE_SUBSCRIBERS=http://service1:port/webhook,http://service2:port/webhook
-        
-        # Flow service subscribes to application approval events
-        flow_service_url = os.environ.get("FLOW_SERVICE_URL", "http://flow-service:8011")
-        self.subscribers[EventType.APPLICATION_APPROVED] = [
-            f"{flow_service_url}/v1/flows/webhooks/application-approved"
-        ]
-        
-        # Can add more subscriptions from environment
+        # Can add webhook subscriptions from environment
         for event_type in EventType:
             env_key = f"{event_type.name}_SUBSCRIBERS"
             urls = os.environ.get(env_key, "")
@@ -77,13 +69,36 @@ class EventPublisher:
                     self.subscribers[event_type] = []
                 self.subscribers[event_type].extend([u.strip() for u in urls.split(",") if u.strip()])
     
+    def _get_flow_grpc_channel(self):
+        """Lazy-create gRPC channel to flow service."""
+        if self._flow_grpc_channel is None:
+            from common.grpc_factory import create_grpc_channel
+            flow_grpc_target = os.environ.get("FLOW_GRPC_TARGET", "flow:9011")
+            self._flow_grpc_channel = create_grpc_channel(flow_grpc_target)
+        return self._flow_grpc_channel
+
     async def publish(self, event: DomainEvent) -> None:
-        """
-        Publish an event to all subscribers.
-        
-        Uses fire-and-forget pattern for now. In production, add retry logic
-        and dead letter queue handling.
-        """
+        """Publish an event to subscribers via gRPC (preferred) or HTTP,
+        and also fan out to in-process streaming subscribers."""
+        # Fan out to gRPC streaming subscribers
+        try:
+            from common.grpc_event_bus import get_event_bus
+            await get_event_bus().publish(
+                event_type=event.event_type.value,
+                aggregate_id=event.aggregate_id,
+                aggregate_type=event.aggregate_type,
+                organization_id=event.organization_id,
+                data={k: str(v) for k, v in event.data.items()},
+            )
+        except Exception as exc:
+            logger.debug("Event bus fan-out failed (ok if not running): %s", exc)
+
+        # APPLICATION_APPROVED goes directly to flow service via gRPC
+        if event.event_type == EventType.APPLICATION_APPROVED:
+            await self._publish_to_flow_grpc(event)
+            return
+
+        # Other events use HTTP webhooks
         subscribers = self.subscribers.get(event.event_type, [])
         if not subscribers:
             logger.debug(f"No subscribers for event type: {event.event_type}")
@@ -120,6 +135,29 @@ class EventPublisher:
                     logger.warning(f"Timeout publishing event to {subscriber_url}")
                 except Exception as e:
                     logger.error(f"Error publishing event to {subscriber_url}: {e}")
+
+    async def _publish_to_flow_grpc(self, event: DomainEvent) -> None:
+        """Deliver APPLICATION_APPROVED event to the flow service via gRPC."""
+        try:
+            from marty_proto.v1 import flow_service_pb2, flow_service_pb2_grpc
+            channel = self._get_flow_grpc_channel()
+            stub = flow_service_pb2_grpc.FlowServiceStub(channel)
+            resp = await stub.ApplicationApproved(
+                flow_service_pb2.ApplicationApprovedEvent(
+                    event_type=event.event_type.value,
+                    aggregate_id=event.aggregate_id,
+                    aggregate_type=event.aggregate_type,
+                    organization_id=event.organization_id,
+                    data={k: str(v) for k, v in event.data.items()},
+                    timestamp=event.timestamp.isoformat(),
+                )
+            )
+            logger.info(
+                f"APPLICATION_APPROVED delivered via gRPC: "
+                f"success={resp.success}, flows_triggered={resp.flows_triggered}"
+            )
+        except Exception as exc:
+            logger.error(f"Failed to deliver APPLICATION_APPROVED via gRPC: {exc}")
 
 
 # Global event publisher instance

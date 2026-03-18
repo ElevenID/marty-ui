@@ -19,6 +19,7 @@ import {
   Add as AddIcon,
   CheckCircle as CheckCircleIcon
 } from '@mui/icons-material';
+import { inspectPassport, issuePassport } from '../application/admin';
 
 const PassportDemo = () => {
   const [passportNumber, setPassportNumber] = useState('');
@@ -34,21 +35,15 @@ const PassportDemo = () => {
     setError(null);
     setResult(null);
 
-    try {
-      const response = await fetch('/api/passport/process', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ passport_number: passportNumber })
-      });
-      const data = await response.json();
-      
-      setResult(data);
-    } catch (err) {
-      setError('Failed to issue passport');
-      console.error(err);
-    } finally {
-      setLoading(false);
+    const issueResult = await issuePassport({ passportNumber });
+
+    if (issueResult.error) {
+      setError(issueResult.error);
+    } else {
+      setResult(issueResult.result);
     }
+
+    setLoading(false);
   };
 
   const handleInspect = async (e) => {
@@ -57,21 +52,15 @@ const PassportDemo = () => {
     setError(null);
     setInspectResult(null);
 
-    try {
-      const response = await fetch('/api/passport/inspect', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ passport_number: inspectNumber })
-      });
-      const data = await response.json();
+    const inspectionResult = await inspectPassport({ passportNumber: inspectNumber });
 
-      setInspectResult(data);
-    } catch (err) {
-      setError('Failed to inspect passport');
-      console.error(err);
-    } finally {
-      setLoading(false);
+    if (inspectionResult.error) {
+      setError(inspectionResult.error);
+    } else {
+      setInspectResult(inspectionResult.inspectResult);
     }
+
+    setLoading(false);
   };
 
   return (

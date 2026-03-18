@@ -48,9 +48,13 @@ import { useAuth } from '../../hooks/useAuth';
 import { useNotifications } from '../../hooks/useNotifications';
 import { useDialog } from '../../hooks/useDialog';
 import { ConfirmDeleteDialog } from '../common';
-
-// API base URL
-const API_URL = import.meta.env.VITE_API_URL || '';
+import {
+  fetchCredentialConfigs,
+  fetchCredentialTypeDefaults,
+  saveCredentialConfig,
+  deleteCredentialConfig,
+  toggleCredentialConfigActive,
+} from '../../application/vendor';
 
 export default function CredentialConfigManager() {
   const { t } = useTranslation(['vendor', 'common']);
@@ -122,18 +126,7 @@ export default function CredentialConfigManager() {
     setError(null);
 
     try {
-      const response = await fetch(
-        `${API_URL}/api/organizations/${organizationId}/credential-types`,
-        {
-          credentials: 'include',
-        }
-      );
-
-      if (!response.ok) {
-        throw new Error(`Failed to fetch configurations: ${response.status}`);
-      }
-
-      const data = await response.json();
+      const data = await fetchCredentialConfigs({ organizationId });
       setConfigs(data.credential_types || []);
     } catch (err) {
       console.error('Error fetching credential configs:', err);
@@ -149,27 +142,18 @@ export default function CredentialConfigManager() {
   const fetchDefaultFields = async (credentialType) => {
     setLoadingDefaults(true);
     try {
-      const response = await fetch(
-        `${API_URL}/api/organizations/credential-types/defaults/${credentialType}`,
-        {
-          credentials: 'include',
-        }
-      );
-
-      if (response.ok) {
-        const data = await response.json();
-        setAvailableFields({
-          required: data.required_fields || [],
-          optional: data.optional_fields || [],
-        });
-        // Pre-select defaults
-        setFormData(prev => ({
-          ...prev,
-          required_fields: data.required_fields || [],
-          optional_fields: [],
-          display_name: prev.display_name || getCredentialLabel(credentialType),
-        }));
-      }
+      const data = await fetchCredentialTypeDefaults({ credentialType });
+      setAvailableFields({
+        required: data.required_fields || [],
+        optional: data.optional_fields || [],
+      });
+      // Pre-select defaults
+      setFormData(prev => ({
+        ...prev,
+        required_fields: data.required_fields || [],
+        optional_fields: [],
+        display_name: prev.display_name || getCredentialLabel(credentialType),
+      }));
     } catch (err) {
       console.error('Error fetching default fields:', err);
     } finally {
@@ -255,25 +239,11 @@ export default function CredentialConfigManager() {
    */
   const handleSubmit = async () => {
     try {
-      const url = editingConfig
-        ? `${API_URL}/api/organizations/${organizationId}/credential-types/${editingConfig.id}`
-        : `${API_URL}/api/organizations/${organizationId}/credential-types`;
-
-      const method = editingConfig ? 'PUT' : 'POST';
-
-      const response = await fetch(url, {
-        method,
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        credentials: 'include',
-        body: JSON.stringify(formData),
+      await saveCredentialConfig({
+        organizationId,
+        id: editingConfig?.id || null,
+        body: formData,
       });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.detail || 'Failed to save configuration');
-      }
 
       showSuccess(editingConfig);
 
@@ -289,17 +259,7 @@ export default function CredentialConfigManager() {
    */
   const handleDelete = async () => {
     try {
-      const response = await fetch(
-        `${API_URL}/api/organizations/${organizationId}/credential-types/${deleteDialog.data.id}`,
-        {
-          method: 'DELETE',
-          credentials: 'include',
-        }
-      );
-
-      if (!response.ok) {
-        throw new Error('Failed to delete configuration');
-      }
+      await deleteCredentialConfig({ organizationId, id: deleteDialog.data.id });
 
       showSuccess(t('credentialConfigManager.snackbar.deleteSuccess'));
       fetchConfigs();
@@ -314,22 +274,7 @@ export default function CredentialConfigManager() {
    */
   const handleToggleActive = async (config) => {
     try {
-      const response = await fetch(
-        `${API_URL}/api/organizations/${organizationId}/credential-types/${config.id}`,
-        {
-          method: 'PUT',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          credentials: 'include',
-          body: JSON.stringify({ is_active: !config.is_active }),
-        }
-      );
-
-      if (!response.ok) {
-        throw new Error('Failed to update configuration');
-      }
-
+      await toggleCredentialConfigActive({ organizationId, id: config.id, isActive: !config.is_active });
       fetchConfigs();
     } catch (err) {
       showError(err.message);

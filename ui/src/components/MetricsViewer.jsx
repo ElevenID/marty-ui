@@ -27,35 +27,22 @@ import {
   AreaChart,
   Area
 } from 'recharts';
-
-const data = [
-  { name: '00:00', issuance: 4, verification: 2 },
-  { name: '04:00', issuance: 3, verification: 1 },
-  { name: '08:00', issuance: 15, verification: 8 },
-  { name: '12:00', issuance: 45, verification: 23 },
-  { name: '16:00', issuance: 38, verification: 30 },
-  { name: '20:00', issuance: 12, verification: 15 },
-  { name: '23:59', issuance: 5, verification: 4 },
-];
+import {
+  METRICS_VIEWER_CHART_FALLBACK,
+  METRICS_VIEWER_DEFAULT_METRICS,
+  getMetricsViewerRequestRateProgress,
+  loadAdminMetrics,
+} from '../application/admin';
 
 const MetricsViewer = () => {
-  const [metrics, setMetrics] = React.useState({
-    cpu_usage: 0,
-    memory_usage: 0,
-    request_rate: 0,
-    transaction_volume: []
-  });
+  const [metrics, setMetrics] = React.useState(METRICS_VIEWER_DEFAULT_METRICS);
 
   React.useEffect(() => {
     const fetchMetrics = async () => {
-      try {
-        const response = await fetch('/api/admin/metrics');
-        const data = await response.json();
-        setMetrics(data);
-      } catch (error) {
-        console.error('Failed to fetch metrics:', error);
-      }
+      const result = await loadAdminMetrics();
+      setMetrics(result);
     };
+
     fetchMetrics();
     const interval = setInterval(fetchMetrics, 5000);
     return () => clearInterval(interval);
@@ -107,7 +94,11 @@ const MetricsViewer = () => {
                 <Typography variant="h6">Request Rate</Typography>
               </Box>
               <Typography variant="h4" gutterBottom>{metrics.request_rate} req/s</Typography>
-              <LinearProgress variant="determinate" color="success" value={30} />
+              <LinearProgress
+                variant="determinate"
+                color="success"
+                value={getMetricsViewerRequestRateProgress(metrics.request_rate)}
+              />
             </CardContent>
           </Card>
         </Grid>
@@ -142,7 +133,7 @@ const MetricsViewer = () => {
             <Divider sx={{ mb: 3 }} />
             <Box sx={{ height: 250 }}>
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={data}>
+                <LineChart data={METRICS_VIEWER_CHART_FALLBACK}>
                   <CartesianGrid strokeDasharray="3 3" />
                   <XAxis dataKey="name" />
                   <YAxis />
@@ -162,7 +153,7 @@ const MetricsViewer = () => {
             <Divider sx={{ mb: 3 }} />
             <Box sx={{ height: 250 }}>
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={data}>
+                <LineChart data={METRICS_VIEWER_CHART_FALLBACK}>
                   <CartesianGrid strokeDasharray="3 3" />
                   <XAxis dataKey="name" />
                   <YAxis />

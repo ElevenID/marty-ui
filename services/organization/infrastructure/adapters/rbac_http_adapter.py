@@ -11,7 +11,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel
-from marty_common import OrganizationContext, require_org_admin, require_org_membership
+from marty_common import OrganizationContext, require_org_membership
 
 from ...application.ports import (
     AddMemberRoleCommand,
@@ -176,7 +176,7 @@ async def list_roles(
 async def create_role(
     organization_id: str,
     request: CreateRoleRequest,
-    org_ctx: OrganizationContext = Depends(require_org_admin),
+    org_ctx: OrganizationContext = Depends(require_org_membership),
     use_case: RoleUseCase = Depends(get_role_use_case),
 ) -> RoleResponse:
     """Create a custom role."""
@@ -222,7 +222,7 @@ async def update_role(
     organization_id: str,
     role_id: str,
     request: UpdateRoleRequest,
-    org_ctx: OrganizationContext = Depends(require_org_admin),
+    org_ctx: OrganizationContext = Depends(require_org_membership),
     use_case: RoleUseCase = Depends(get_role_use_case),
 ) -> RoleResponse:
     """Update a role's display name, description, or permissions."""
@@ -257,7 +257,7 @@ async def delete_role(
     organization_id: str,
     role_id: str,
     replacement_role_id: str | None = Query(default=None),
-    org_ctx: OrganizationContext = Depends(require_org_admin),
+    org_ctx: OrganizationContext = Depends(require_org_membership),
     use_case: RoleUseCase = Depends(get_role_use_case),
 ) -> None:
     """Delete a custom role."""
@@ -283,7 +283,7 @@ async def set_member_roles(
     organization_id: str,
     member_id: str,
     request: SetMemberRolesRequest,
-    org_ctx: OrganizationContext = Depends(require_org_admin),
+    org_ctx: OrganizationContext = Depends(require_org_membership),
     use_case: RoleUseCase = Depends(get_role_use_case),
 ) -> list[RoleSummaryResponse]:
     """Replace all roles for a member."""
@@ -312,7 +312,7 @@ async def add_member_role(
     organization_id: str,
     member_id: str,
     role_id: str,
-    org_ctx: OrganizationContext = Depends(require_org_admin),
+    org_ctx: OrganizationContext = Depends(require_org_membership),
     use_case: RoleUseCase = Depends(get_role_use_case),
 ) -> None:
     """Add a role to a member."""
@@ -337,7 +337,7 @@ async def remove_member_role(
     organization_id: str,
     member_id: str,
     role_id: str,
-    org_ctx: OrganizationContext = Depends(require_org_admin),
+    org_ctx: OrganizationContext = Depends(require_org_membership),
     use_case: RoleUseCase = Depends(get_role_use_case),
 ) -> None:
     """Remove a role from a member."""

@@ -241,6 +241,7 @@ function TrustRegistryContent() {
     error,
     loadTrustProfile,
     refreshHealth,
+    updateTrustProfile,
   } = useTrust();
 
   const [currentTab, setCurrentTab] = useState(0);
@@ -266,10 +267,11 @@ function TrustRegistryContent() {
     setCurrentTab(newValue);
   };
 
-  const handleFrameworkSelect = (frameworkId) => {
+  const handleFrameworkSelect = async (frameworkId) => {
     setSelectedFramework(frameworkId);
-    // TODO: Call API to update trust framework
-    console.log('Selected framework:', frameworkId);
+    if (organizationId) {
+      await updateTrustProfile({ trustFramework: frameworkId });
+    }
   };
 
   const handleRefreshHealth = async () => {

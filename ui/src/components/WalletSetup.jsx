@@ -35,8 +35,21 @@ import {
 import { QRCodeSVG } from 'qrcode.react';
 import { useAuth } from '../hooks/useAuth';
 import { useBranding } from '../hooks/useBranding';
-
-const API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
+import {
+  buildPairingState,
+  createPairingCode,
+  formatCountdown,
+  loadWalletStatus,
+  registerWalletPushNotifications,
+  resolveNotificationPermissionState,
+  resolveNotificationRequestOutcome,
+  resolveSimulatedPairing,
+  resolveSkipNotifications,
+  resolveWalletSetupComplete,
+  shouldPollWalletStatus,
+  shouldTickPairingCountdown,
+  walletSetupDefaults,
+} from '../application/wallet';
 
 /**
  * WalletSetup Component
@@ -63,6 +76,71 @@ const WalletSetup = () => {
   const [notificationsEnabled, setNotificationsEnabled] = useState(false);
   const [notificationPermission, setNotificationPermission] = useState('default');
 
+  const generatePairingCode = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const nextPairingCode = createPairingCode();
+      const nextPairingState = buildPairingState({
+        deepLinkProtocol: branding.deepLinkProtocol,
+        pairingCode: nextPairingCode,
+      });
+      setPairingCode(nextPairingState.pairingCode);
+      setQrContent(nextPairingState.qrContent);
+      setExpiresIn(nextPairingState.expiresIn);
+    } finally {
+      setLoading(false);
+    }
+  }, [branding]);
+
+  const checkWalletStatus = useCallback(async () => {
+    const nextState = await loadWalletStatus({
+      userId: user?.user_id,
+      activeStep,
+    });
+
+    if (nextState.walletConnected) {
+      setWalletConnected(nextState.walletConnected);
+      setWalletDeviceId(nextState.walletDeviceId);
+      if (nextState.nextStep !== null) {
+        setActiveStep(nextState.nextStep);
+      }
+      if (nextState.successMessage) {
+        setSuccess(nextState.successMessage);
+      }
+    }
+  }, [user, activeStep]);
+
+  const checkNotificationPermission = useCallback(() => {
+    if ('Notification' in window) {
+      const nextPermissionState = resolveNotificationPermissionState(Notification.permission);
+      setNotificationPermission(nextPermissionState.notificationPermission);
+      setNotificationsEnabled(nextPermissionState.notificationsEnabled);
+    }
+  }, []);
+
+  const registerPushNotifications = useCallback(async () => {
+    const result = await registerWalletPushNotifications({
+      userId: user?.user_id,
+      organizationId,
+      storage: window.localStorage,
+    });
+
+    if (result.deviceId) {
+      setWalletDeviceId(result.deviceId);
+    }
+  }, [user, organizationId]);
+
+  const skipNotifications = useCallback(() => {
+    const outcome = resolveSkipNotifications();
+    setActiveStep(outcome.nextStep);
+    setSuccess(outcome.successMessage);
+  }, []);
+
+  const handleComplete = useCallback(() => {
+    setSuccess(resolveWalletSetupComplete().successMessage);
+  }, []);
+
   // Generate pairing code on mount
   useEffect(() => {
     generatePairingCode();
@@ -72,7 +150,7 @@ const WalletSetup = () => {
 
   // Countdown timer for QR code expiry
   useEffect(() => {
-    if (expiresIn > 0 && pairingCode) {
+    if (shouldTickPairingCountdown({ expiresIn, pairingCode })) {
       const timer = setTimeout(() => setExpiresIn(expiresIn - 1), 1000);
       return () => clearTimeout(timer);
     }
@@ -81,61 +159,12 @@ const WalletSetup = () => {
   // Poll for wallet connection status
   useEffect(() => {
     const pollInterval = setInterval(async () => {
-      if (activeStep === 0 && !walletConnected) {
+      if (shouldPollWalletStatus({ activeStep, walletConnected })) {
         await checkWalletStatus();
       }
-    }, 3000);
+    }, walletSetupDefaults.pollIntervalMs);
     return () => clearInterval(pollInterval);
   }, [activeStep, walletConnected, checkWalletStatus]);
-
-  const generatePairingCode = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const mockCode = Math.random().toString(36).substring(2, 10).toUpperCase();
-      setPairingCode(mockCode);
-      setQrContent(`${branding.deepLinkProtocol}//pair?code=${mockCode}`);
-      setExpiresIn(300);
-    } finally {
-      setLoading(false);
-    }
-  }, [branding]);
-
-  const checkWalletStatus = useCallback(async () => {
-    try {
-      if (!user?.user_id) {
-        return;
-      }
-      const response = await fetch(`${API_BASE_URL}/devices`, {
-        headers: { 'X-User-ID': user.user_id },
-        credentials: 'include',
-      });
-
-      if (!response.ok) {
-        return;
-      }
-
-      const data = await response.json();
-      const device = data.devices?.[0];
-      if (device) {
-        setWalletConnected(true);
-        setWalletDeviceId(device.device_id);
-        if (activeStep === 0) {
-          setActiveStep(1);
-          setSuccess('Wallet paired successfully!');
-        }
-      }
-    } catch (err) {
-      // Ignore errors during polling
-    }
-  }, [user, activeStep]);
-
-  const checkNotificationPermission = useCallback(() => {
-    if ('Notification' in window) {
-      setNotificationPermission(Notification.permission);
-      setNotificationsEnabled(Notification.permission === 'granted');
-    }
-  }, []);
 
   const requestNotificationPermission = async () => {
     setLoading(true);
@@ -147,16 +176,24 @@ const WalletSetup = () => {
       }
 
       const permission = await Notification.requestPermission();
-      setNotificationPermission(permission);
-      setNotificationsEnabled(permission === 'granted');
+      const nextPermissionState = resolveNotificationPermissionState(permission);
+      const outcome = resolveNotificationRequestOutcome(permission);
+      setNotificationPermission(nextPermissionState.notificationPermission);
+      setNotificationsEnabled(nextPermissionState.notificationsEnabled);
 
       if (permission === 'granted') {
         // Register for push notifications with backend
         await registerPushNotifications();
-        setSuccess('Notifications enabled successfully!');
-        setActiveStep(2);
-      } else if (permission === 'denied') {
-        setError('Notification permission denied. Please enable in browser settings.');
+      }
+
+      if (outcome.successMessage) {
+        setSuccess(outcome.successMessage);
+      }
+      if (outcome.errorMessage) {
+        setError(outcome.errorMessage);
+      }
+      if (outcome.nextStep !== null) {
+        setActiveStep(outcome.nextStep);
       }
     } catch (err) {
       setError(err.message);
@@ -165,66 +202,6 @@ const WalletSetup = () => {
     }
   };
 
-  const getOrCreateDeviceId = useCallback(() => {
-    const prefix = organizationId ? `${organizationId}:` : '';
-    const storageKey = `wallet_device_id:${prefix || 'default'}`;
-    const existing = localStorage.getItem(storageKey);
-    if (existing) {
-      return existing;
-    }
-    const generated = `${prefix}web-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    localStorage.setItem(storageKey, generated);
-    return generated;
-  }, [organizationId]);
-
-  const registerPushNotifications = async () => {
-    try {
-      // In a real app, this would get FCM token
-      const mockToken = `fcm_token_${Date.now()}`;
-
-      if (!user?.user_id) {
-        throw new Error('Missing user context');
-      }
-
-      const deviceId = getOrCreateDeviceId();
-      const response = await fetch(`${API_BASE_URL}/devices/register`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-User-ID': user.user_id },
-        credentials: 'include',
-        body: JSON.stringify({
-          device_id: deviceId,
-          fcm_token: mockToken,
-          platform: 'web',
-          app_version: 'web-1.0.0',
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to register for notifications');
-      }
-
-      const data = await response.json();
-      setWalletDeviceId(data.device_id || deviceId);
-    } catch (err) {
-      console.error('Failed to register push notifications:', err);
-      // Continue anyway for testing
-    }
-  };
-
-  const skipNotifications = () => {
-    setActiveStep(2);
-    setSuccess('Wallet setup complete! (Notifications skipped)');
-  };
-
-  const handleComplete = useCallback(() => {
-    setSuccess('Wallet setup complete! You can now receive credentials and notifications.');
-  }, []);
-
-  const formatTime = (seconds) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${mins}:${secs.toString().padStart(2, '0')}`;
-  };
 
   return (
     <Container maxWidth="md" data-testid="wallet-setup-page">
@@ -278,7 +255,7 @@ const WalletSetup = () => {
                         Code: <strong data-testid="pairing-code">{pairingCode}</strong>
                       </Typography>
                       <Typography variant="caption" color="text.secondary">
-                        Expires in: <span data-testid="qr-expires-in">{formatTime(expiresIn)}</span>
+                        Expires in: <span data-testid="qr-expires-in">{formatCountdown(expiresIn)}</span>
                       </Typography>
                     </Box>
                   ) : (
@@ -301,9 +278,10 @@ const WalletSetup = () => {
                   variant="contained"
                   onClick={() => {
                     // For testing: simulate successful pairing
-                    setWalletConnected(true);
-                    setActiveStep(1);
-                    setSuccess('Wallet paired successfully!');
+                    const nextState = resolveSimulatedPairing();
+                    setWalletConnected(nextState.walletConnected);
+                    setActiveStep(nextState.nextStep);
+                    setSuccess(nextState.successMessage);
                   }}
                   data-testid="simulate-pairing-button"
                 >

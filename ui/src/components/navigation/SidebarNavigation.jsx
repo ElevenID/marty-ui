@@ -5,7 +5,7 @@
  * Supports console mode switching and nested navigation items.
  */
 
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useEffect } from 'react';
 import { useLocation, useNavigate, Link } from 'react-router-dom';
 import {
   Drawer,
@@ -38,6 +38,7 @@ import Badge from '@mui/material/Badge';
 import { useAuth } from '../../hooks/useAuth';
 import { usePermissions } from '../../hooks/usePermissions';
 import { useConsole } from '../../contexts/ConsoleContext';
+import { getApplicantStats } from '../../services/dashboardApi';
 import { ADMIN_VENDOR_NAV, APPLICANT_NAV, findActiveNavItem } from '../../config/navigation';
 
 const DRAWER_WIDTH = 260;
@@ -48,7 +49,7 @@ const DRAWER_WIDTH_COLLAPSED = 72;
  * Renders a single nav item with optional children
  * Supports visual hierarchy: primary items, badges, and section-specific styling
  */
-function NavItem({ item, isActive, isChildActive, expanded, onToggle, collapsed, depth = 0, parentId = null }) {
+function NavItem({ item, isActive, isChildActive, expanded, onToggle, collapsed, depth = 0, parentId = null, badgeCounts = {} }) {
   const theme = useTheme();
   const navigate = useNavigate();
   const location = useLocation();
@@ -59,7 +60,8 @@ function NavItem({ item, isActive, isChildActive, expanded, onToggle, collapsed,
   const isPrimary = item.primary;
   const isDesignSection = parentId === 'design' || item.id === 'design';
   const isDeploySection = parentId === 'deploy' || item.id === 'deploy';
-  const hasBadge = item.badge; // TODO: Wire up actual badge counts from context/API
+  const hasBadge = item.badge;
+  const badgeCount = badgeCounts[item.id] || 0;
 
   const handleClick = useCallback(() => {
     if (hasChildren) {
@@ -148,7 +150,7 @@ function NavItem({ item, isActive, isChildActive, expanded, onToggle, collapsed,
                 <ListItemText
                   primary={
                     hasBadge ? (
-                      <Badge badgeContent={0} color="error" sx={{ '& .MuiBadge-badge': { position: 'relative', transform: 'none', ml: 1 } }}>
+                      <Badge badgeContent={badgeCount} color="error" sx={{ '& .MuiBadge-badge': { position: 'relative', transform: 'none', ml: 1 } }}>
                         {item.label}
                       </Badge>
                     ) : (
@@ -261,10 +263,21 @@ function SidebarNavigation({ mobileOpen, onMobileClose }) {
   const location = useLocation();
   const navigate = useNavigate();
   const isMobile = useMediaQuery(theme.breakpoints.down('md'));
-  const { isAdministrator, isVendor, isApplicant } = useAuth();
+  const { isAdministrator, isVendor, isApplicant, organizationId } = useAuth();
   const { mode, setMode, activeOrgId, memberships, isOrgConsoleAvailable, isApplicantConsoleAvailable, isOrgBlocked } = useConsole();
   const isJoinOnlyMode = memberships.length === 0;
   const showConsoleSwitcher = isApplicantConsoleAvailable && (isOrgConsoleAvailable || isJoinOnlyMode);
+
+  // Badge counts fetched from API
+  const [badgeCounts, setBadgeCounts] = useState({});
+  useEffect(() => {
+    if (!organizationId) return;
+    let mounted = true;
+    getApplicantStats(organizationId).then((stats) => {
+      if (mounted) setBadgeCounts({ applications: stats.pending || 0 });
+    });
+    return () => { mounted = false; };
+  }, [organizationId]);
 
   // Collapsed state for desktop — persisted so mode switches don't reset it
   const [collapsed, setCollapsed] = useState(() => {
@@ -444,6 +457,7 @@ function SidebarNavigation({ mobileOpen, onMobileClose }) {
             onToggle={handleToggle}
             collapsed={collapsed}
             parentId={null}
+            badgeCounts={badgeCounts}
           />
         ))}
       </List>

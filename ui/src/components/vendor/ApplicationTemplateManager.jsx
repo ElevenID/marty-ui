@@ -74,9 +74,12 @@ import { useNotifications } from '../../hooks/useNotifications';
 import { useDialog } from '../../hooks/useDialog';
 import { ConfirmDeleteDialog } from '../common';
 import complianceProfilesApi from '../../services/complianceProfilesApi';
-
-// API base URL
-const API_URL = import.meta.env.VITE_API_URL || '';
+import {
+  fetchIssuanceTemplates,
+  fetchTrustProfiles,
+  saveIssuanceTemplate,
+  deleteIssuanceTemplate,
+} from '../../application/vendor';
 
 // Credential types by trust framework
 const CREDENTIAL_TYPES_BY_FRAMEWORK = {
@@ -778,22 +781,11 @@ export default function ApplicationTemplateManager() {
 
     setLoading(true);
     try {
-      const response = await fetch(`${API_URL}/v1/issuance/templates?organization_id=${organizationId}`, {
-        method: 'GET',
-        credentials: 'include',
-      });
-
-      if (!response.ok) {
-        throw new Error(`Failed to load templates: ${response.statusText}`);
-      }
-
-      const data = await response.json();
+      const data = await fetchIssuanceTemplates({ organizationId });
       setTemplates(data.templates || []);
     } catch (err) {
       console.error('Error loading templates:', err);
       setError(err.message);
-      // Use mock data for development
-      setTemplates(generateMockTemplates());
     } finally {
       setLoading(false);
     }
@@ -806,21 +798,11 @@ export default function ApplicationTemplateManager() {
     if (!organizationId) return;
 
     try {
-      const response = await fetch(`${API_URL}/v1/trust-profiles?organization_id=${organizationId}`, {
-        method: 'GET',
-        credentials: 'include',
-      });
-
-      if (!response.ok) {
-        throw new Error(`Failed to load trust profiles: ${response.statusText}`);
-      }
-
-      const data = await response.json();
+      const data = await fetchTrustProfiles({ organizationId });
       setTrustProfiles(data.profiles || []);
     } catch (err) {
       console.error('Error loading trust profiles:', err);
-      // Use mock data
-      setTrustProfiles(generateMockTrustProfiles());
+      setTrustProfiles([]);
     }
   }, [organizationId]);
 
@@ -851,21 +833,7 @@ export default function ApplicationTemplateManager() {
    */
   const handleSave = async (templateData) => {
     try {
-      const method = templateData.id ? 'PUT' : 'POST';
-      const url = templateData.id
-        ? `${API_URL}/v1/issuance/templates/${templateData.id}`
-        : `${API_URL}/v1/issuance/templates`;
-
-      const response = await fetch(url, {
-        method,
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...templateData, organization_id: organizationId }),
-      });
-
-      if (!response.ok) {
-        throw new Error(`Failed to save template: ${response.statusText}`);
-      }
+      await saveIssuanceTemplate({ templateData, organizationId });
 
       showSuccess(templateData.id ? t('applicationTemplateManager.snackbar.updateSuccess') : t('applicationTemplateManager.snackbar.createSuccess'));
 
@@ -882,14 +850,7 @@ export default function ApplicationTemplateManager() {
    */
   const handleDelete = async () => {
     try {
-      const response = await fetch(`${API_URL}/v1/issuance/templates/${deleteDialog.data.id}`, {
-        method: 'DELETE',
-        credentials: 'include',
-      });
-
-      if (!response.ok) {
-        throw new Error(`Failed to delete template: ${response.statusText}`);
-      }
+      await deleteIssuanceTemplate({ templateId: deleteDialog.data.id });
 
       showSuccess(t('applicationTemplateManager.snackbar.deleteSuccess'));
       loadTemplates();

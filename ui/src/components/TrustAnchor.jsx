@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   Container,
   Paper,
@@ -21,14 +21,16 @@ import {
   VerifiedUser as VerifyIcon,
   Refresh as RefreshIcon
 } from '@mui/icons-material';
+import {
+  TRUST_ANCHOR_DEFAULT_CONFIG,
+  loadTrustAnchorPageData,
+  refreshTrustAnchorStatus,
+  saveTrustAnchorConfig as saveTrustAnchorConfigAction,
+  verifyTrustAnchorEntity,
+} from '../application/admin';
 
 const TrustAnchor = () => {
-  const [config, setConfig] = useState({
-    anchorName: 'Marty Trust Anchor',
-    domain: 'trust.marty.local',
-    policy: 'strict',
-    logLevel: 'info'
-  });
+  const [config, setConfig] = useState(TRUST_ANCHOR_DEFAULT_CONFIG);
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
   
@@ -40,54 +42,23 @@ const TrustAnchor = () => {
   // Trust chain status
   const [trustChainStatus, setTrustChainStatus] = useState(null);
 
-  useEffect(() => {
-    fetchConfig();
-    fetchTrustChainStatus();
+  const loadTrustAnchorData = useCallback(async () => {
+    const result = await loadTrustAnchorPageData({
+      storage: window.localStorage,
+    });
+
+    setConfig(result.config);
+    setTrustChainStatus(result.status);
   }, []);
 
-  const fetchConfig = async () => {
-    try {
-      const response = await fetch('/api/admin/trust-anchor/config');
-      if (response.ok) {
-        const data = await response.json();
-        setConfig(prev => ({
-          ...prev,
-          anchorName: data.anchor_name || prev.anchorName,
-          domain: data.domain || prev.domain,
-          policy: data.policy || prev.policy,
-          logLevel: data.log_level || prev.logLevel
-        }));
-      }
-    } catch (err) {
-      console.log('Using default config - backend not available');
-    }
-  };
+  useEffect(() => {
+    loadTrustAnchorData();
+  }, [loadTrustAnchorData]);
 
-  const fetchTrustChainStatus = async () => {
-    try {
-      const response = await fetch('/api/admin/trust-anchor/status');
-      if (response.ok) {
-        const data = await response.json();
-        setTrustChainStatus(data);
-      } else {
-        // Use mock data if endpoint not available
-        setTrustChainStatus({
-          rootCA: { status: 'valid', expires: '2035' },
-          intermediateCA: { status: 'valid', expires: '2030' },
-          crlStatus: 'up_to_date',
-          healthy: true
-        });
-      }
-    } catch (err) {
-      // Use mock data on error
-      setTrustChainStatus({
-        rootCA: { status: 'valid', expires: '2035' },
-        intermediateCA: { status: 'valid', expires: '2030' },
-        crlStatus: 'up_to_date',
-        healthy: true
-      });
-    }
-  };
+  const fetchTrustChainStatus = useCallback(async () => {
+    const status = await refreshTrustAnchorStatus();
+    setTrustChainStatus(status);
+  }, []);
 
   const handleChange = (prop) => (event) => {
     setConfig({ ...config, [prop]: event.target.value });
@@ -98,31 +69,14 @@ const TrustAnchor = () => {
     setSaving(true);
     
     try {
-      const response = await fetch('/api/admin/trust-anchor/config', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          anchor_name: config.anchorName,
-          domain: config.domain,
-          policy: config.policy,
-          log_level: config.logLevel
-        })
+      const result = await saveTrustAnchorConfigAction({
+        config,
+        storage: window.localStorage,
       });
-      
-      if (!response.ok) {
-        // If backend doesn't support saving, store locally
-        console.log('Backend save not available - config stored locally');
+
+      if (result.success) {
+        setSaved(true);
       }
-      
-      // Store in localStorage as backup
-      localStorage.setItem('trustAnchorConfig', JSON.stringify(config));
-      
-      setSaved(true);
-      setTimeout(() => setSaved(false), 3000);
-    } catch (err) {
-      // Store locally even if API fails
-      localStorage.setItem('trustAnchorConfig', JSON.stringify(config));
-      setSaved(true);
       setTimeout(() => setSaved(false), 3000);
     } finally {
       setSaving(false);
@@ -135,26 +89,11 @@ const TrustAnchor = () => {
     setVerificationResult(null);
     
     try {
-      const response = await fetch('/api/admin/trust-anchor/verify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ entity_id: entityId })
+      const result = await verifyTrustAnchorEntity({
+        entityId,
       });
-      
-      const data = await response.json();
-      
-      if (!response.ok) throw new Error(data.detail || 'Verification failed');
-      
-      setVerificationResult({
-        success: true,
-        isTrusted: data.is_trusted,
-        message: data.is_trusted ? 'Entity is trusted.' : 'Entity is NOT trusted.'
-      });
-    } catch (err) {
-      setVerificationResult({
-        success: false,
-        message: err.message
-      });
+
+      setVerificationResult(result);
     } finally {
       setVerifying(false);
     }

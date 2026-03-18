@@ -41,10 +41,6 @@ import {
   Search as SearchIcon,
   FilterList as FilterIcon,
   CardMembership as CredentialIcon,
-  Flight as PassportIcon,
-  DirectionsCar as DLIcon,
-  Badge as BadgeIcon,
-  Login as LoginIcon,
   Info as InfoIcon,
   CheckCircle as CheckIcon,
   Schedule as PendingIcon,
@@ -55,78 +51,15 @@ import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../../hooks/useAuth';
 import { usePreview } from '../../contexts/PreviewContext';
-
-const API_URL = import.meta.env.VITE_API_URL || '';
-
-// Credential types configuration
-const CREDENTIAL_TYPES = {
-  passport: {
-    description: 'ICAO 9303 compliant digital travel credential with NFC capability',
-    icon: PassportIcon,
-    category: 'travel',
-    processingTime: '5-10 business days',
-    requirements: ['Government-issued ID', 'Proof of citizenship', 'Biometric photo']
-  },
-  drivers_license: {
-    description: 'ISO/IEC 18013-5 compliant mobile driving license',
-    icon: DLIcon,
-    category: 'identity',
-    processingTime: '3-5 business days',
-    requirements: ['Current driver\'s license', 'Proof of residence', 'Biometric photo']
-  },
-  travel_visa: {
-    description: 'Digitally issued travel visa credential for approved applicants',
-    icon: PassportIcon,
-    category: 'travel',
-    processingTime: '5-10 business days',
-    requirements: ['Valid passport', 'Proof of travel intent']
-  },
-  access_badge: {
-    description: 'Corporate access badge credential for authorized personnel',
-    icon: BadgeIcon,
-    category: 'enterprise',
-    processingTime: '1-2 business days',
-    requirements: ['Employment verification', 'Photo ID']
-  },
-  national_id: {
-    description: 'National identity credential for verified applicants',
-    icon: CredentialIcon,
-    category: 'identity',
-    processingTime: '5-10 business days',
-    requirements: ['Government-issued ID', 'Biometric photo']
-  },
-  dtc: {
-    description: 'Digital Travel Credential per ICAO DTC specification',
-    icon: PassportIcon,
-    category: 'travel',
-    processingTime: '3-5 business days',
-    requirements: ['Valid passport', 'Biometric photo']
-  },
-  open_badge: {
-    description: 'Professional Development Certificate - Open Badge 3.0 credential for continuing education and professional development in the education sector',
-    icon: BadgeIcon,
-    category: 'education',
-    processingTime: '1-2 business days',
-    requirements: ['Course completion verification', 'Instructor approval', 'Minimum passing grade']
-  },
-  MemberCredential: {
-    description: 'Free Marty platform membership credential. Use it to log in with your wallet instead of a password — no processing fee.',
-    icon: LoginIcon,
-    category: 'identity',
-    processingTime: 'Instant upon issuance',
-    requirements: ['Active Marty platform account']
-  }
-};
-
-/**
- * Get credential categories with translations
- */
-const getCategories = (t) => [
-  { value: 'all', label: t('catalog.categories.all') },
-  { value: 'travel', label: t('catalog.categories.travel') },
-  { value: 'identity', label: t('catalog.categories.identity') },
-  { value: 'enterprise', label: t('catalog.categories.enterprise') }
-];
+import { get } from '../../services/api';
+import { getApplicantByUser } from '../../services/applicantApi';
+import {
+  buildCredentialApplicationNavigationState,
+  filterCredentialCatalogItems,
+  getCredentialCatalogCategories,
+  loadCredentialCatalogItems,
+  loadExistingCredentialApplications,
+} from '../../application/applications';
 
 const CredentialCatalog = () => {
   const { t } = useTranslation('applicant');
@@ -134,7 +67,7 @@ const CredentialCatalog = () => {
   const { organizationId, organizationName, user } = useAuth();
   const { isPreview } = usePreview?.() || { isPreview: false };
   
-  const CATEGORIES = useMemo(() => getCategories(t), [t]);
+  const CATEGORIES = useMemo(() => getCredentialCatalogCategories(t), [t]);
   
   // State
   const [credentials, setCredentials] = useState([]);
@@ -145,113 +78,50 @@ const CredentialCatalog = () => {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [existingApplications, setExistingApplications] = useState([]);
 
+  const listCredentialTemplates = useCallback((currentOrganizationId) => {
+    return get(`/v1/credential-templates?organization_id=${currentOrganizationId}&status=active`);
+  }, []);
+
+  const listApplicantApplications = useCallback((applicantId) => {
+    return get(`/v1/applicants/profiles/${applicantId}/applications`);
+  }, []);
+
   /**
    * Fetch credentials available to applicants of this organization
    */
   const fetchAvailableCredentials = useCallback(async () => {
     setLoading(true);
     try {
-      const response = await fetch(
-        `${API_URL}/v1/credential-templates?organization_id=${organizationId}&status=active`,
-        { credentials: 'include' }
-      );
-      if (response.ok) {
-        const data = await response.json();
-        const templates = Array.isArray(data) ? data : (data.templates || []);
-
-        const mapped = templates.map((template) => {
-          const meta = CREDENTIAL_TYPES[template.credential_type] || {};
-
-          const claimRequirements = Array.isArray(template.claims)
-            ? template.claims
-              .filter((claim) => claim?.required)
-              .map((claim) => claim?.display_name || claim?.name)
-              .filter(Boolean)
-            : [];
-
-          const requirements = claimRequirements.length > 0
-            ? claimRequirements
-            : (meta.requirements || []);
-
-          const processingDays = template?.validity_rules?.default_validity_days;
-
-          return {
-            id: template.id,
-            credentialType: template.credential_type,
-            name: template.name,
-            description: template.description || meta.description || template.name,
-            icon: meta.icon || CredentialIcon,
-            category: meta.category || 'identity',
-            processingTime: processingDays
-              ? `${processingDays} day validity`
-              : (meta.processingTime || '3-5 business days'),
-            requirements: requirements,
-            requiredFields: Array.isArray(template.claims)
-              ? template.claims
-                .filter((claim) => claim?.required)
-                .map((claim) => claim?.name)
-                .filter(Boolean)
-              : [],
-            optionalFields: Array.isArray(template.claims)
-              ? template.claims
-                .filter((claim) => !claim?.required)
-                .map((claim) => claim?.name)
-                .filter(Boolean)
-              : [],
-            customFields: [],
-            eligibilityCriteria: null,
-            submissionInstructions: null,
-            processingFee: 0,
-            available: template.status === 'active',
-            vendorName: organizationName || 'Issuer',
-            templateVersion: template.version,
-            visibility: 'organization',
-          };
-        });
-        setCredentials(mapped);
-      } else {
-        console.warn('Credentials API not available');
-        setCredentials([]);
-      }
+      const result = await loadCredentialCatalogItems({
+        organizationId,
+        organizationName,
+        listCredentialTemplates,
+      });
+      setCredentials(result.credentials);
     } catch (error) {
       console.error('Failed to fetch credentials:', error);
       setCredentials([]);
     } finally {
       setLoading(false);
     }
-  }, [organizationId, organizationName]);
+  }, [organizationId, organizationName, listCredentialTemplates]);
 
   /**
    * Fetch applicant's existing applications
    */
   const fetchExistingApplications = useCallback(async () => {
     try {
-      if (!organizationId || !user?.user_id) {
-        return;
-      }
-      const applicantResponse = await fetch(`${API_URL}/v1/applicants/by-user/${user?.user_id}`, {
-        credentials: 'include',
+      const applicationIds = await loadExistingCredentialApplications({
+        organizationId,
+        userId: user?.user_id,
+        getApplicantByUser,
+        listApplicantApplications,
       });
-      if (!applicantResponse.ok) {
-        return;
-      }
-      const applicant = await applicantResponse.json();
-      if (!applicant?.id) {
-        return;
-      }
-      const response = await fetch(`${API_URL}/v1/applicants/profiles/${applicant.id}/applications`, {
-        credentials: 'include',
-      });
-      if (!response.ok) {
-        return;
-      }
-      const data = await response.json();
-      const apps = Array.isArray(data) ? data : (data.applications || []);
-      setExistingApplications(apps.map(app => app.credential_configuration_id).filter(Boolean));
+      setExistingApplications(applicationIds);
     } catch (error) {
       console.error('Failed to fetch applications:', error);
     }
-  }, [organizationId, user?.user_id]);
+  }, [organizationId, user?.user_id, listApplicantApplications]);
 
   // Fetch data when component mounts or organizationId changes
   useEffect(() => {
@@ -263,26 +133,15 @@ const CredentialCatalog = () => {
    * Filter credentials based on search and category
    */
   const filteredCredentials = useMemo(() => {
-    return credentials.filter(cred => {
-      const matchesSearch = cred.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                           cred.description.toLowerCase().includes(searchTerm.toLowerCase());
-      const matchesCategory = categoryFilter === 'all' || cred.category === categoryFilter;
-      return matchesSearch && matchesCategory;
-    });
+    return filterCredentialCatalogItems(credentials, { searchTerm, categoryFilter });
   }, [credentials, searchTerm, categoryFilter]);
 
   /**
    * Handle credential application
    */
   const handleApply = (credential) => {
-    // Strip non-serializable properties (icon is a React component)
-    // before passing as navigation state — pushState requires plain data.
-    const { icon, ...serializableCredential } = credential;
-    navigate(`/apply/${credential.id}`, {
-      state: {
-        credential: serializableCredential,
-      }
-    });
+    const navigation = buildCredentialApplicationNavigationState(credential);
+    navigate(navigation.path, { state: navigation.state });
   };
 
   /**

@@ -19,48 +19,35 @@ import {
   Warning as WarningIcon
 } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
+import {
+  HOME_DEFAULT_STATS,
+  HOME_DEFAULT_SYSTEM_STATUS,
+  loadHomeDashboard,
+} from '../application/home';
 
 const Home = () => {
   const navigate = useNavigate();
-  const [systemStatus, setSystemStatus] = useState({
-    healthy: true,
-    services: { issuer: 'online', verifier: 'online', wallet: 'online' }
-  });
-  const [stats, setStats] = useState({
-    credentials: 0,
-    verifications: 0,
-    masterLists: 3,
-    certificates: 11
-  });
+  const [systemStatus, setSystemStatus] = useState(HOME_DEFAULT_SYSTEM_STATUS);
+  const [stats, setStats] = useState(HOME_DEFAULT_STATS);
 
   useEffect(() => {
-    // Fetch system status
-    const fetchStatus = async () => {
-      try {
-        const response = await fetch('/api/health');
-        if (response.ok) {
-          const data = await response.json();
-          setSystemStatus({ healthy: data.status === 'healthy', services: data.services || {} });
-        }
-      } catch (err) {
-        // Use defaults
+    let active = true;
+
+    const loadDashboard = async () => {
+      const result = await loadHomeDashboard();
+      if (!active) {
+        return;
       }
+
+      setSystemStatus(result.systemStatus);
+      setStats(result.stats);
     };
 
-    const fetchStats = async () => {
-      try {
-        const response = await fetch('/api/admin/stats');
-        if (response.ok) {
-          const data = await response.json();
-          setStats(prev => ({ ...prev, ...data }));
-        }
-      } catch (err) {
-        // Use defaults
-      }
-    };
+    loadDashboard();
 
-    fetchStatus();
-    fetchStats();
+    return () => {
+      active = false;
+    };
   }, []);
 
   const quickActions = [

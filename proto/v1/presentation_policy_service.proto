@@ -1,0 +1,188 @@
+syntax = "proto3";
+
+package marty.ui.presentation_policy.v1;
+
+import "google/api/annotations.proto";
+
+option py_generic_services = true;
+
+// ---------------------------------------------------------------------------
+// Presentation Policy Service — manages OID4VP presentation policies and
+// evaluates verifiable presentations against those policies.
+//
+// Used by the flow service to:
+//   1. Look up a policy (GetPolicy) to resolve org ownership / build
+//      presentation definitions.
+//   2. Evaluate a submitted VP token (EvaluatePresentation) post-submission.
+// ---------------------------------------------------------------------------
+
+service PresentationPolicyService {
+  // Retrieve a single presentation policy by ID.
+  rpc GetPolicy(GetPolicyRequest) returns (PolicyResponse) {
+    option (google.api.http) = {
+      get: "/v1/presentation-policies/{policy_id}"
+    };
+  }
+
+  // List policies (optionally filtered by organization).
+  rpc ListPolicies(ListPoliciesRequest) returns (ListPoliciesResponse) {
+    option (google.api.http) = {
+      get: "/v1/presentation-policies"
+    };
+  }
+
+  // Create a new presentation policy (draft).
+  rpc CreatePolicy(CreatePolicyRequest) returns (PolicyResponse) {
+    option (google.api.http) = {
+      post: "/v1/presentation-policies"
+      body: "*"
+    };
+  }
+
+  // Update mutable fields of a draft policy.
+  rpc UpdatePolicy(UpdatePolicyRequest) returns (PolicyResponse) {
+    option (google.api.http) = {
+      patch: "/v1/presentation-policies/{policy_id}"
+      body: "*"
+    };
+  }
+
+  // Activate a draft or suspended policy.
+  rpc ActivatePolicy(PolicyIdRequest) returns (PolicyResponse) {
+    option (google.api.http) = {
+      post: "/v1/presentation-policies/{policy_id}/activate"
+      body: "*"
+    };
+  }
+
+  // Suspend an active policy.
+  rpc SuspendPolicy(PolicyIdRequest) returns (PolicyResponse) {
+    option (google.api.http) = {
+      post: "/v1/presentation-policies/{policy_id}/suspend"
+      body: "*"
+    };
+  }
+
+  // Create a new draft version from an existing policy.
+  rpc NewVersionPolicy(PolicyIdRequest) returns (PolicyResponse) {
+    option (google.api.http) = {
+      post: "/v1/presentation-policies/{policy_id}/new-version"
+      body: "*"
+    };
+  }
+
+  // Delete a draft policy.
+  rpc DeletePolicy(PolicyIdRequest) returns (DeletePolicyResponse) {
+    option (google.api.http) = {
+      delete: "/v1/presentation-policies/{policy_id}"
+    };
+  }
+
+  // Evaluate a verifiable presentation against a stored policy.
+  rpc EvaluatePresentation(EvaluatePresentationRequest) returns (PolicyEvaluationResponse) {
+    option (google.api.http) = {
+      post: "/v1/presentation-policies/{policy_id}/evaluate"
+      body: "*"
+    };
+  }
+
+  // Health check.
+  rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse) {
+    option (google.api.http) = {
+      get: "/v1/presentation-policies/health"
+    };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Messages
+// ---------------------------------------------------------------------------
+
+message GetPolicyRequest {
+  string policy_id = 1;
+}
+
+message PolicyIdRequest {
+  string policy_id = 1;
+}
+
+message CreatePolicyRequest {
+  string organization_id = 1;
+  string name = 2;
+  string description = 3;
+  string compliance_profile_id = 4;
+  string credential_requirements_json = 5;  // JSON-encoded list
+  string alternative_requirements_json = 6; // JSON-encoded list
+  string display_metadata_json = 7;         // JSON-encoded display metadata
+  bool prefer_predicates = 8;
+  string fallback_policy = 9;
+}
+
+message UpdatePolicyRequest {
+  string policy_id = 1;
+  string name = 2;
+  string description = 3;
+  string compliance_profile_id = 4;
+}
+
+message DeletePolicyResponse {
+  bool success = 1;
+}
+
+message ListPoliciesRequest {
+  string organization_id = 1;
+  string status = 2;       // "active", "draft", etc.
+  int32 limit = 3;
+  int32 offset = 4;
+}
+
+message ListPoliciesResponse {
+  repeated PolicyResponse policies = 1;
+  int32 total = 2;
+}
+
+message PolicyResponse {
+  string id = 1;
+  string organization_id = 2;
+  string name = 3;
+  string description = 4;
+  string status = 5;
+  string display_metadata_json = 6;          // JSON-encoded display metadata
+  string credential_requirements_json = 7;   // JSON-encoded list
+  string alternative_requirements_json = 8;  // JSON-encoded list
+  string compliance_profile_id = 9;
+  int32 version = 10;
+  string created_at = 11;
+  string updated_at = 12;
+}
+
+message EvaluatePresentationRequest {
+  string policy_id = 1;
+  string vp_token = 2;
+  string nonce = 3;
+  string audience = 4;
+  string trust_profile_id = 5;     // optional override
+  string context_json = 6;        // JSON-encoded extra context
+}
+
+message PolicyEvaluationResponse {
+  string result = 1;               // "passed", "failed"
+  string policy_id = 2;
+  string policy_name = 3;
+  string credential_results_json = 4;  // JSON-encoded list
+  int32 total_requirements = 5;
+  int32 satisfied_requirements = 6;
+  int32 required_satisfied = 7;
+  int32 required_total = 8;
+  string decision = 9;            // "allow", "deny", "manual_review"
+  string decision_reason = 10;
+  string verified_claims_json = 11; // JSON-encoded dict
+  string evaluation_timestamp = 12;
+  string nonce = 13;
+}
+
+message HealthCheckRequest {}
+
+message HealthCheckResponse {
+  string status = 1;
+}

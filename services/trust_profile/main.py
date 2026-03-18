@@ -34,7 +34,6 @@ from typing import Annotated
 from marty_common import (
     OrganizationClient,
     OrganizationContext,
-    require_org_admin,
     require_org_membership,
 )
 from marty_common.org_authorization import get_organization_client
@@ -71,18 +70,23 @@ class TrustProfileStatus(str, Enum):
 
 
 class RevocationCheckMode(str, Enum):
-    """How to handle revocation checks."""
-    HARD_FAIL = "hard_fail"  # Fail if revocation check fails
-    SOFT_FAIL = "soft_fail"  # Continue if revocation check unavailable
-    SKIP = "skip"            # Don't check revocation
+    """Failure behavior when a revocation check is performed.
+    Maps to marty-protocol enum: revocation-check-modes.json
+    """
+    HARD_FAIL = "HARD_FAIL"
+    SOFT_FAIL = "SOFT_FAIL"
+    SKIP = "SKIP"
 
 
 class CredentialFormat(str, Enum):
-    """Supported credential formats."""
-    SD_JWT_VC = "sd_jwt_vc"
-    MDOC = "mdoc"
-    JWT_VC = "jwt_vc"
-    JSON_LD_VC = "json_ld_vc"
+    """Supported credential formats.
+    Maps to marty-protocol enum: credential-formats.json
+    """
+    MDOC = "MDOC"
+    SD_JWT_VC = "SD_JWT_VC"
+    VC_JWT = "VC_JWT"
+    JSON_LD = "JSON_LD"
+    ZK_MDOC = "ZK_MDOC"
 
 
 class IssuerStatus(str, Enum):
@@ -279,7 +283,7 @@ class ValidationRulesModel(BaseModel):
 
 
 class RevocationPolicyModel(BaseModel):
-    check_mode: str = "hard_fail"
+    check_mode: str = "HARD_FAIL"
     check_ocsp: bool = True
     check_crl: bool = True
     check_status_list: bool = True
@@ -303,7 +307,7 @@ class CreateTrustProfileRequest(BaseModel):
     revocation_policy: RevocationPolicyModel | None = None  # DEPRECATED: use revocation_profile_id
     revocation_profile_id: str | None = None  # NEW: links to RevocationProfile
     time_policy: TimePolicyModel | None = None
-    supported_formats: list[str] = ["sd_jwt_vc", "mdoc"]
+    supported_formats: list[str] = ["SD_JWT_VC", "MDOC"]
 
 
 class UpdateTrustProfileRequest(BaseModel):
@@ -741,15 +745,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Initialize repository
     _repo = PostgresTrustProfileRepository(session_factory)
     
-    # Initialize OrganizationClient (no Redis at service level - gateway handles caching)
-    org_service_url = os.environ.get("ORGANIZATION_SERVICE_URL", "http://organization:8002")
+    # Initialize gRPC channel to organization service
+    from common.grpc_factory import create_grpc_channel
+    org_grpc_target = os.environ.get("ORG_GRPC_TARGET", "organization:9002")
+    org_grpc_channel = create_grpc_channel(org_grpc_target, service_name="trust-profile")
     app.state.org_client = OrganizationClient(
-        base_url=org_service_url,
-        redis_client=None,
+        grpc_channel=org_grpc_channel,
     )
     
     yield
     logger.info(f"Shutting down {SERVICE_NAME}...")
+    await org_grpc_channel.close()
 
 
 def create_app() -> FastAPI:
@@ -775,6 +781,10 @@ def create_app() -> FastAPI:
     @app.get("/health")
     async def health_check() -> dict:
         return {"status": "healthy", "service": SERVICE_NAME}
+
+    from common.metrics import init_otel_tracing, mount_metrics
+    init_otel_tracing(SERVICE_NAME)
+    mount_metrics(app)
     
     return app
 

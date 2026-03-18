@@ -1,0 +1,240 @@
+syntax = "proto3";
+
+package marty.ui.issuance.v1;
+
+import "google/api/annotations.proto";
+
+option java_multiple_files = true;
+
+// IssuanceService handles OID4VCI credential issuance, lifecycle management,
+// and application processing.
+service IssuanceService {
+  // Initiate a credential offer (returns credential_offer_uri for QR code).
+  rpc InitiateIssuance(InitiateIssuanceRequest) returns (IssuanceResponse) {
+    option (google.api.http) = {
+      post: "/v1/issuance/initiate"
+      body: "*"
+    };
+  }
+
+  // Exchange a pre-authorized code or authorization code for an access token.
+  rpc ExchangeToken(ExchangeTokenRequest) returns (TokenResponse) {
+    option (google.api.http) = {
+      post: "/v1/issuance/token"
+      body: "*"
+    };
+  }
+
+  // Issue a credential (requires valid access token and proof JWT).
+  rpc IssueCredential(IssueCredentialRequest) returns (IssueCredentialResponse) {
+    option (google.api.http) = {
+      post: "/v1/issuance/credential"
+      body: "*"
+    };
+  }
+
+  // Get a credential offer by transaction ID.
+  rpc GetOffer(GetOfferRequest) returns (OfferResponse) {
+    option (google.api.http) = {
+      get: "/v1/issuance/offers/{transaction_id}"
+    };
+  }
+
+  // List issuance transactions.
+  rpc ListTransactions(ListTransactionsRequest) returns (ListTransactionsResponse) {
+    option (google.api.http) = {
+      get: "/v1/issuance/transactions"
+    };
+  }
+
+  // Get a single issuance transaction.
+  rpc GetTransaction(GetTransactionRequest) returns (TransactionResponse) {
+    option (google.api.http) = {
+      get: "/v1/issuance/transactions/{transaction_id}"
+    };
+  }
+
+  // Revoke a credential.
+  rpc RevokeCredential(CredentialLifecycleRequest) returns (CredentialStatusResponse) {
+    option (google.api.http) = {
+      post: "/v1/issuance/credentials/{credential_id}/revoke"
+      body: "*"
+    };
+  }
+
+  // Suspend a credential.
+  rpc SuspendCredential(CredentialLifecycleRequest) returns (CredentialStatusResponse) {
+    option (google.api.http) = {
+      post: "/v1/issuance/credentials/{credential_id}/suspend"
+      body: "*"
+    };
+  }
+
+  // Reinstate a suspended credential.
+  rpc ReinstateCredential(CredentialLifecycleRequest) returns (CredentialStatusResponse) {
+    option (google.api.http) = {
+      post: "/v1/issuance/credentials/{credential_id}/reinstate"
+      body: "*"
+    };
+  }
+
+  // Get credential status.
+  rpc GetCredentialStatus(GetCredentialStatusRequest) returns (CredentialStatusResponse) {
+    option (google.api.http) = {
+      get: "/v1/issuance/credentials/{credential_id}/status"
+    };
+  }
+
+  // -- Streaming --
+
+  // Subscribe to real-time credential lifecycle events.
+  // Server pushes issuance, revocation, suspension, and reinstatement events.
+  rpc StreamCredentialEvents(StreamCredentialEventsRequest) returns (stream CredentialEvent) {}
+
+  // Health check.
+  rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse) {
+    option (google.api.http) = {
+      get: "/v1/issuance/health"
+    };
+  }
+}
+
+message StreamCredentialEventsRequest {
+  string organization_id = 1;
+  // Filter by credential template (empty = all).
+  string credential_template_id = 2;
+  // Filter by event types (empty = all):
+  // "offer_created", "issued", "revoked", "suspended", "reinstated"
+  repeated string event_types = 3;
+}
+
+message CredentialEvent {
+  // Event type: "offer_created", "issued", "revoked", "suspended", "reinstated"
+  string event_type = 1;
+  string credential_id = 2;
+  string transaction_id = 3;
+  string organization_id = 4;
+  string credential_template_id = 5;
+  string status = 6;
+  string timestamp = 7;
+}
+
+message InitiateIssuanceRequest {
+  string organization_id = 1;
+  string credential_template_id = 2;
+  string applicant_id = 3;
+  string subject_did = 4;
+  map<string, string> claims = 5;
+}
+
+message IssuanceResponse {
+  string id = 1;
+  string organization_id = 2;
+  string credential_template_id = 3;
+  string status = 4;
+  string credential_offer_uri = 5;
+  map<string, string> credential_offer_uris = 6;   // per-wallet URIs
+  map<string, string> credential_offer_labels = 7;
+  string pre_auth_code = 8;
+  string expires_at = 9;
+}
+
+message ExchangeTokenRequest {
+  string grant_type = 1;
+  // Pre-authorized code flow
+  string pre_authorized_code = 2;
+  // Authorization code flow
+  string code = 3;
+  string redirect_uri = 4;
+  string client_id = 5;
+  string code_verifier = 6;
+}
+
+message TokenResponse {
+  string access_token = 1;
+  string token_type = 2;
+  int32 expires_in = 3;
+  string c_nonce = 4;
+  string nonce = 5;
+}
+
+message IssueCredentialRequest {
+  string access_token = 1;
+  string format = 2;
+  repeated ProofJwt proofs = 3;
+  string credential_configuration_id = 4;
+  string credential_identifier = 5;
+}
+
+message ProofJwt {
+  string proof_type = 1;
+  string jwt = 2;
+}
+
+message IssueCredentialResponse {
+  repeated CredentialEntry credentials = 1;
+  string notification_id = 2;
+  string c_nonce = 3;
+}
+
+message CredentialEntry {
+  string format = 1;
+  string credential = 2;
+}
+
+message GetOfferRequest {
+  string transaction_id = 1;
+}
+
+message OfferResponse {
+  string offer_json = 1;  // JSON-encoded credential offer
+}
+
+message ListTransactionsRequest {
+  string organization_id = 1;
+  string status = 2;
+  int32 limit = 3;
+  int32 offset = 4;
+}
+
+message ListTransactionsResponse {
+  repeated TransactionResponse transactions = 1;
+  int32 total = 2;
+}
+
+message GetTransactionRequest {
+  string transaction_id = 1;
+}
+
+message TransactionResponse {
+  string id = 1;
+  string organization_id = 2;
+  string credential_template_id = 3;
+  string status = 4;
+  string applicant_id = 5;
+  string subject_did = 6;
+  string created_at = 7;
+  string updated_at = 8;
+}
+
+message CredentialLifecycleRequest {
+  string credential_id = 1;
+  string reason = 2;
+}
+
+message GetCredentialStatusRequest {
+  string credential_id = 1;
+}
+
+message CredentialStatusResponse {
+  string id = 1;
+  string status = 2;
+  string status_updated_at = 3;
+  string reason = 4;
+}
+
+message HealthCheckRequest {}
+
+message HealthCheckResponse {
+  string status = 1;
+}

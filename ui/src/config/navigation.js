@@ -86,6 +86,7 @@ export const ADMIN_VENDOR_NAV = [
       { id: 'applications', label: 'Applicant Submissions', path: '/console/org/operate/applications', badge: true },
       { id: 'issued-credentials', label: 'Issued Credentials', path: '/console/org/operate/issuance' },
       { id: 'flow-instances', label: 'Flow Instances', path: '/console/org/operate/flow-instances' },
+      { id: 'verify', label: 'Verification Sessions', path: '/console/org/operate/verify' },
     ],
   },
   {

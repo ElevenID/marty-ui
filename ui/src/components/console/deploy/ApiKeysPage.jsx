@@ -35,6 +35,8 @@ import { useTranslation } from 'react-i18next';
 // import { Link } from 'react-router-dom';
 
 import { ResourcePage } from '../../common';
+import { useAuth } from '../../../hooks/useAuth';
+import { listApiKeys, createApiKey, revokeApiKey } from '../../../services/apiKeysApi';
 
 const getDeployTabs = (t) => [
   { label: t('deploy.deploymentProfiles'), path: '/console/org/deploy/profiles' },
@@ -51,52 +53,26 @@ const getBreadcrumbs = (t) => [
 
 function ApiKeysPage() {
   const { t } = useTranslation('console');
-  const { data: apiKeys = [], loading, error } = useAsyncData(async () => {
-    // TODO: Fetch API keys from API
-    await new Promise((resolve) => setTimeout(resolve, 500));
-    return [
-      {
-        id: 'ak-1',
-        name: 'Production API Key',
-        keyPrefix: 'mk_prod_',
-        scopes: ['issuance:write', 'verification:write', 'flows:write'],
-        lastUsed: '2026-02-07T08:30:00Z',
-        createdAt: '2025-12-01T10:00:00Z',
-        status: 'active',
-      },
-      {
-        id: 'ak-2',
-        name: 'Test Environment Key',
-        keyPrefix: 'mk_test_',
-        scopes: ['issuance:write', 'verification:write'],
-        lastUsed: '2026-02-06T16:45:00Z',
-        createdAt: '2026-01-15T09:00:00Z',
-        status: 'active',
-      },
-      {
-        id: 'ak-3',
-        name: 'Read-Only Dashboard Key',
-        keyPrefix: 'mk_ro_',
-        scopes: ['read:all'],
-        lastUsed: null,
-        createdAt: '2026-02-01T14:00:00Z',
-        status: 'active',
-      },
-    ];
-  }, []);
+  const { organizationId } = useAuth();
+  const { data: apiKeys = [], loading, error, reload } = useAsyncData(
+    () => listApiKeys(organizationId),
+    [organizationId]
+  );
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [newKeyName, setNewKeyName] = useState('');
   const [createdKey, setCreatedKey] = useState(null);
 
-  const handleCreateKey = () => {
-    // Simulate key creation
-    const newKey = {
-      id: `ak-${Date.now()}`,
-      name: newKeyName,
-      fullKey: `mk_live_${Math.random().toString(36).substring(2, 15)}${Math.random().toString(36).substring(2, 15)}`,
-    };
-    setCreatedKey(newKey);
-    setNewKeyName('');
+  const handleCreateKey = async () => {
+    try {
+      const result = await createApiKey(organizationId, {
+        name: newKeyName,
+        scopes: [],
+      });
+      setCreatedKey(result);
+      setNewKeyName('');
+    } catch (err) {
+      console.error('Failed to create API key:', err);
+    }
   };
 
   const handleCopyKey = async (key) => {
@@ -191,7 +167,10 @@ function ApiKeysPage() {
                     </TableCell>
                     <TableCell align="right">
                       <Tooltip title={t('deploy.apiKeysPage.actions.revokeKey')}>
-                        <IconButton size="small" color="error">
+                        <IconButton size="small" color="error" onClick={async () => {
+                          await revokeApiKey(organizationId, apiKey.id);
+                          reload();
+                        }}>
                           <DeleteIcon fontSize="small" />
                         </IconButton>
                       </Tooltip>

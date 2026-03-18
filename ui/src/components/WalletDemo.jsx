@@ -31,6 +31,13 @@ import {
   CardMembership as CardIcon,
   Security as SecurityIcon
 } from '@mui/icons-material';
+import {
+  createSampleWalletCredential,
+  createWalletDemoPresentation,
+  deleteWalletDemoCredential,
+  getWalletCredentialStatusColor,
+  loadWalletDemoCredentials,
+} from '../application/wallet';
 
 const WalletDemo = () => {
   const [credentials, setCredentials] = useState([]);
@@ -45,65 +52,8 @@ const WalletDemo = () => {
   }, []);
 
   const loadCredentials = async () => {
-    try {
-      const response = await fetch('/v1/credentials/wallet/credentials');
-      const data = await response.json();
-
-      // API returns { credentials: [...], count: N }
-      const creds = data.credentials || [];
-      if (creds.length > 0) {
-        // Map API response to component format
-        setCredentials(creds.map(c => ({
-          id: c.id,
-          type: c.types ? c.types.join(', ') : 'VerifiableCredential',
-          issuer: c.issuer,
-          issued_date: c.issuance_date ? c.issuance_date.split('T')[0] : 'Unknown',
-          expiry_date: c.expiration_date ? c.expiration_date.split('T')[0] : 'No expiry',
-          status: 'active',
-          subject_data: c.claims || {}
-        })));
-      } else {
-        // Show mock credentials for demo
-        setCredentials([
-          {
-            id: 'demo_mdl_001',
-            type: 'DriverLicenseCredential',
-            issuer: 'Demo DMV',
-            issued_date: '2024-01-15',
-            expiry_date: '2030-01-15',
-            status: 'active',
-            subject_data: {
-              given_name: 'Jane',
-              family_name: 'Doe',
-              birth_date: '1990-01-01',
-              document_number: 'DL123456789'
-            }
-          }
-        ]);
-      }
-    } catch (error) {
-      console.error('Failed to load credentials:', error);
-
-      // Mock credentials for demo
-      setCredentials([
-        {
-          id: 'mdl_001',
-          type: 'DriverLicenseCredential',
-          issuer: 'Demo DMV',
-          issued_date: '2024-01-15',
-          expiry_date: '2030-01-15',
-          status: 'active',
-          subject_data: {
-            given_name: 'Jane',
-            family_name: 'Doe',
-            birth_date: '1990-01-01',
-            document_number: 'DL123456789',
-            age_over_18: true,
-            age_over_21: true
-          }
-        }
-      ]);
-    }
+    const result = await loadWalletDemoCredentials();
+    setCredentials(result.credentials);
   };
 
   const viewCredential = (credential) => {
@@ -118,19 +68,11 @@ const WalletDemo = () => {
 
   const deleteCredential = async (credentialId) => {
     if (window.confirm('Are you sure you want to delete this credential?')) {
-      try {
-        const response = await fetch(`/v1/credentials/wallet/credentials/${credentialId}`, {
-          method: 'DELETE'
-        });
-
-        if (response.ok) {
-          setCredentials(prev => prev.filter(cred => cred.id !== credentialId));
-        }
-      } catch (error) {
-        console.error('Failed to delete credential:', error);
-        // For demo, remove from local state
-        setCredentials(prev => prev.filter(cred => cred.id !== credentialId));
-      }
+      const result = await deleteWalletDemoCredential({
+        credentialId,
+        credentials,
+      });
+      setCredentials(result.credentials);
     }
   };
 
@@ -143,36 +85,13 @@ const WalletDemo = () => {
     setLoading(true);
 
     try {
-      // Parse verifier from presentation request or use default
-      let audience = 'demo_verifier';
-      let nonce = null;
-      
-      if (presentationRequest.trim()) {
-        try {
-          const parsed = JSON.parse(presentationRequest);
-          audience = parsed.audience || parsed.verifier || 'demo_verifier';
-          nonce = parsed.nonce || null;
-        } catch (e) {
-          // Use default if parsing fails
-        }
-      }
-
-      const response = await fetch('/v1/credentials/wallet/present', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          credential_ids: [selectedCredential.id],
-          audience: audience,
-          nonce: nonce
-        })
+      const result = await createWalletDemoPresentation({
+        selectedCredential,
+        presentationRequest,
       });
 
-      const result = await response.json();
-
       if (result.success) {
-        alert('Presentation created successfully!');
+        alert(result.message);
         setShareDialogOpen(false);
         setPresentationRequest('');
       } else {
@@ -187,38 +106,7 @@ const WalletDemo = () => {
   };
 
   const addNewCredential = async () => {
-    // Simulate adding a new credential
-    const newCredential = {
-      id: `mdl_${Date.now()}`,
-      type: 'mDL',
-      issuer: 'Demo Issuer',
-      issued_date: new Date().toISOString().split('T')[0],
-      expiry_date: '2030-12-31',
-      status: 'active',
-      subject_data: {
-        given_name: 'New',
-        family_name: 'User',
-        birth_date: '1995-05-05',
-        document_number: 'DL' + Math.random().toString().substr(2, 9),
-        age_over_18: true,
-        age_over_21: true
-      }
-    };
-
-    setCredentials(prev => [...prev, newCredential]);
-  };
-
-  const getStatusColor = (status) => {
-    switch (status) {
-      case 'active':
-        return 'success';
-      case 'expired':
-        return 'error';
-      case 'revoked':
-        return 'error';
-      default:
-        return 'default';
-    }
+    setCredentials(prev => [...prev, createSampleWalletCredential()]);
   };
 
   return (
@@ -270,7 +158,7 @@ const WalletDemo = () => {
                       <Box sx={{ flexGrow: 1 }} />
                       <Chip
                         label={credential.status}
-                        color={getStatusColor(credential.status)}
+                        color={getWalletCredentialStatusColor(credential.status)}
                         size="small"
                       />
                     </Box>
@@ -345,7 +233,7 @@ const WalletDemo = () => {
                     <Typography variant="body2" color="text.secondary">Status</Typography>
                     <Chip
                       label={selectedCredential.status}
-                      color={getStatusColor(selectedCredential.status)}
+                      color={getWalletCredentialStatusColor(selectedCredential.status)}
                       size="small"
                     />
                   </Grid>

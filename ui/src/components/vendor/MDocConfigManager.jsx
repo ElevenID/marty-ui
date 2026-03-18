@@ -47,8 +47,7 @@ import DragIndicatorIcon from '@mui/icons-material/DragIndicator';
 import { useAuth } from '../../hooks/useAuth';
 import { useNotifications } from '../../hooks/useNotifications';
 import { TemplateActions } from './TemplateActions';
-
-const API_URL = import.meta.env.VITE_API_URL || '';
+import { fetchMDocConfig, saveMDocConfig } from '../../application/vendor';
 
 // mDoc credential types
 const MDOC_TYPES = {
@@ -155,34 +154,26 @@ export default function MDocConfigManager() {
   const fetchConfiguration = async () => {
     setLoading(true);
     try {
-      const response = await fetch(`${API_URL}/api/organizations/${organizationId}/mdoc-config`, {
-        credentials: 'include',
-      });
-      
-      if (response.ok) {
-        const data = await response.json();
-        setEnabledTypes(data.enabled_types || {});
-        setTypeConfigs(data.type_configs || {});
-      } else {
-        // Initialize with defaults
-        const defaultEnabled = { 'org.iso.18013.5.1.mDL': true };
-        const defaultConfigs = {
-          'org.iso.18013.5.1.mDL': {
-            fields: MDOC_TYPES['org.iso.18013.5.1.mDL'].defaultFields,
-            validityDays: 365 * 4,
-            requireIdentityVerification: true,
-            requireDocumentVerification: true,
-            allowRenewal: true,
-            renewalWindowDays: 90,
-            processingFee: 25.00,
-          }
-        };
-        setEnabledTypes(defaultEnabled);
-        setTypeConfigs(defaultConfigs);
-      }
+      const data = await fetchMDocConfig({ organizationId });
+      setEnabledTypes(data.enabled_types || {});
+      setTypeConfigs(data.type_configs || {});
     } catch (error) {
       console.error('Failed to fetch mDoc configuration:', error);
-      showError('Failed to load configuration');
+      // Initialize with defaults
+      const defaultEnabled = { 'org.iso.18013.5.1.mDL': true };
+      const defaultConfigs = {
+        'org.iso.18013.5.1.mDL': {
+          fields: MDOC_TYPES['org.iso.18013.5.1.mDL'].defaultFields,
+          validityDays: 365 * 4,
+          requireIdentityVerification: true,
+          requireDocumentVerification: true,
+          allowRenewal: true,
+          renewalWindowDays: 90,
+          processingFee: 25.00,
+        }
+      };
+      setEnabledTypes(defaultEnabled);
+      setTypeConfigs(defaultConfigs);
     } finally {
       setLoading(false);
     }
@@ -191,21 +182,12 @@ export default function MDocConfigManager() {
   const handleSaveConfiguration = async () => {
     setSaving(true);
     try {
-      const response = await fetch(`${API_URL}/api/organizations/${organizationId}/mdoc-config`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({
-          enabled_types: enabledTypes,
-          type_configs: typeConfigs,
-        }),
+      await saveMDocConfig({
+        organizationId,
+        enabledTypes,
+        typeConfigs,
       });
-
-      if (response.ok) {
-        showSuccess('Configuration saved successfully');
-      } else {
-        throw new Error('Failed to save configuration');
-      }
+      showSuccess('Configuration saved successfully');
     } catch (error) {
       console.error('Failed to save configuration:', error);
       showError('Failed to save configuration');

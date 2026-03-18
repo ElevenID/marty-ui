@@ -5,7 +5,7 @@ Handles email and push notifications.
 
 Ports:
 - HTTP API on port 8007
-- RabbitMQ event consumer
+- gRPC event stream subscriber
 """
 
 from __future__ import annotations
@@ -452,8 +452,37 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     global _repo
     logger.info(f"Starting {SERVICE_NAME}...")
     _repo = InMemoryNotificationRepository()
+
+    # Start gRPC server
+    grpc_enabled = os.environ.get("NOTIF_GRPC_ENABLED", "true").lower() == "true"
+    grpc_server = None
+    if grpc_enabled:
+        from common.grpc_factory import create_grpc_server, start_grpc_server_port
+        from notification.infrastructure.adapters.grpc_adapter import (
+            NotificationServiceGrpc,
+        )
+        from marty_proto.v1.notification_service_pb2_grpc import (
+            add_NotificationServiceServicer_to_server,
+        )
+
+        grpc_port = int(os.environ.get("NOTIF_GRPC_PORT", "9007"))
+        grpc_server, health_servicer = create_grpc_server("notification")
+        notif_servicer = NotificationServiceGrpc(get_repo_fn=get_repo)
+        add_NotificationServiceServicer_to_server(notif_servicer, grpc_server)
+        start_grpc_server_port(
+            grpc_server,
+            grpc_port,
+            service_names=["marty.ui.notification.v1.NotificationService"],
+            health_servicer=health_servicer,
+        )
+        await grpc_server.start()
+        logger.info(f"Notification gRPC server listening on :{grpc_port}")
+
     yield
+
     logger.info(f"Shutting down {SERVICE_NAME}...")
+    if grpc_server:
+        await grpc_server.stop(grace=5)
 
 
 def create_app() -> FastAPI:
@@ -477,6 +506,10 @@ def create_app() -> FastAPI:
     @app.get("/health")
     async def health_check() -> dict:
         return {"status": "healthy", "service": SERVICE_NAME}
+
+    from common.metrics import init_otel_tracing, mount_metrics
+    init_otel_tracing(SERVICE_NAME)
+    mount_metrics(app)
     
     return app
 

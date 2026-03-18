@@ -9,7 +9,6 @@ from typing import Annotated, Optional
 import json
 import logging
 
-import httpx
 from fastapi import Depends, HTTPException, Header, Request
 from pydantic import BaseModel
 import redis.asyncio as aioredis
@@ -86,34 +85,34 @@ class ApiKeyContext(BaseModel):
 
 
 class OrganizationClient:
-    """Client for querying organization membership from the organization service.
+    """Client for querying organization membership from the organization service via gRPC.
     
-    Supports Redis caching to minimize HTTP overhead on membership lookups.
+    Supports Redis caching to minimize RPC overhead on membership lookups.
     """
     
     def __init__(
         self,
-        base_url: str,
+        grpc_channel,
         redis_client: Optional[aioredis.Redis] = None,
         cache_ttl: int = 120,
-        timeout: float = 5.0,
+        **_kwargs,
     ):
         """Initialize the organization client.
         
         Args:
-            base_url: Base URL of the organization service (e.g., "http://organization:8002")
+            grpc_channel: grpc.aio.Channel to the organization service.
             redis_client: Optional Redis client for caching. If None, caching is disabled.
             cache_ttl: Cache TTL in seconds (default: 120)
-            timeout: HTTP request timeout in seconds (default: 5.0)
         """
-        self.base_url = base_url.rstrip("/")
         self.redis_client = redis_client
         self.cache_ttl = cache_ttl
-        self.http_client = httpx.AsyncClient(timeout=timeout)
+        from marty_proto.v1.organization_service_pb2_grpc import OrganizationServiceStub
+        self._grpc_stub = OrganizationServiceStub(grpc_channel)
+        self._grpc_channel = grpc_channel
     
     async def close(self):
-        """Close HTTP client connections."""
-        await self.http_client.aclose()
+        """Close the gRPC channel."""
+        await self._grpc_channel.close()
     
     def _cache_key(self, user_id: str, organization_id: str) -> str:
         """Generate Redis cache key for a membership lookup."""
@@ -170,90 +169,58 @@ class OrganizationClient:
     ) -> Optional[OrganizationMembership]:
         """Query user's membership in an organization.
         
-        Checks Redis cache first, then queries the organization service's internal API.
-        
-        Args:
-            user_id: User ID to check
-            organization_id: Organization ID to check
-            
-        Returns:
-            OrganizationMembership if user is a member, None otherwise
+        Checks Redis cache first, then queries the organization service via gRPC.
         """
         # Try cache first
         cached = await self._get_from_cache(user_id, organization_id)
         if cached:
             return cached
         
-        # Query organization service
+        import grpc
+        from marty_proto.v1 import organization_service_pb2
+
         try:
-            url = f"{self.base_url}/internal/v1/organizations/{organization_id}/members/{user_id}"
-            logger.debug(f"Fetching membership from {url}")
-            
-            response = await self.http_client.get(url)
-            
-            if response.status_code == 404:
-                logger.debug(f"User {user_id} not found in organization {organization_id}")
-                return None
-            
-            response.raise_for_status()
-            
-            membership = OrganizationMembership.model_validate(response.json())
-            
-            # Cache the result
-            await self._set_in_cache(membership)
-            
-            return membership
-            
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code == 404:
-                return None
-            logger.error(f"HTTP error fetching membership: {e}")
-            raise HTTPException(
-                status_code=503,
-                detail="Organization service unavailable"
+            resp = await self._grpc_stub.GetMember(
+                organization_service_pb2.GetMemberRequest(
+                    organization_id=organization_id,
+                    user_id=user_id,
+                )
             )
-        except httpx.RequestError as e:
-            logger.error(f"Request error fetching membership: {e}")
+            membership = OrganizationMembership(
+                user_id=resp.user_id,
+                organization_id=resp.organization_id,
+                role=OrgRole(resp.role),
+                status=resp.status,
+            )
+            await self._set_in_cache(membership)
+            return membership
+        except grpc.aio.AioRpcError as e:
+            if e.code() in (grpc.StatusCode.NOT_FOUND, grpc.StatusCode.UNKNOWN, grpc.StatusCode.INVALID_ARGUMENT):
+                return None
+            logger.error(f"gRPC error fetching membership: {e}")
             raise HTTPException(
                 status_code=503,
-                detail="Failed to verify organization membership"
+                detail="Organization service unavailable",
             )
     
     async def validate_api_key(self, api_key: str) -> Optional[ApiKeyContext]:
-        """Validate an API key and return its context.
-        
-        Args:
-            api_key: Raw API key string
-            
-        Returns:
-            ApiKeyContext if valid, None if invalid
-        """
+        """Validate an API key and return its context via gRPC."""
+        from marty_proto.v1 import organization_service_pb2
+
         try:
-            url = f"{self.base_url}/internal/v1/api-keys/validate"
-            logger.debug(f"Validating API key via {url}")
-            
-            response = await self.http_client.post(
-                url,
-                json={"api_key": api_key}
+            resp = await self._grpc_stub.ValidateApiKey(
+                organization_service_pb2.ValidateApiKeyRequest(api_key=api_key)
             )
-            
-            if response.status_code == 200:
-                data = response.json()
-                logger.debug(f"API key validated: {data.get('key_prefix')}")
-                return ApiKeyContext(
-                    api_key_id=data["api_key_id"],
-                    organization_id=data["organization_id"],
-                    key_prefix=data["key_prefix"],
-                    scopes=data.get("scopes", []),
-                )
-            elif response.status_code == 401:
-                logger.debug("API key validation failed: invalid key")
+            if not resp.valid:
                 return None
-            else:
-                logger.warning(f"API key validation failed with status {response.status_code}")
-                return None
+            return ApiKeyContext(
+                api_key_id=resp.api_key_id,
+                organization_id=resp.organization_id,
+                key_prefix=resp.key_prefix,
+                scopes=list(resp.scopes),
+            )
         except Exception as e:
-            logger.error(f"Failed to validate API key: {e}")
+            logger.error(f"gRPC error validating API key: {e}")
             return None
 
 
@@ -390,7 +357,7 @@ async def _load_member_permissions(
 ) -> set[str]:
     """Load the effective permission set for a user in an organization.
     
-    Checks Redis cache first, then queries the organization service.
+    Checks Redis cache first, then queries the organization service via gRPC.
     """
     org_client: OrganizationClient = await get_organization_client(request)
     cache_key = f"member_permissions:{user_id}:{organization_id}"
@@ -404,33 +371,29 @@ async def _load_member_permissions(
         except Exception as e:
             logger.warning(f"Redis cache read error (permissions): {e}")
     
-    # Query organization service
+    from marty_proto.v1 import organization_service_pb2
+
     try:
-        url = (
-            f"{org_client.base_url}/internal/v1/organizations/"
-            f"{organization_id}/members/{user_id}/permissions"
-        )
-        response = await org_client.http_client.get(url)
-        if response.status_code == 200:
-            perms = set(response.json().get("permissions", []))
-            # Cache for 60 seconds
-            if org_client.redis_client:
-                try:
-                    await org_client.redis_client.setex(
-                        cache_key, 60, json.dumps(list(perms))
-                    )
-                except Exception as e:
-                    logger.warning(f"Redis cache write error (permissions): {e}")
-            return perms
-        else:
-            logger.warning(
-                f"Failed to load permissions for user {user_id} "
-                f"in org {organization_id}: {response.status_code}"
+        resp = await org_client._grpc_stub.GetMemberPermissions(
+            organization_service_pb2.GetMemberPermissionsRequest(
+                organization_id=organization_id,
+                user_id=user_id,
             )
-            return set()
+        )
+        perms = set(resp.permissions)
     except Exception as e:
-        logger.error(f"Error loading member permissions: {e}")
+        logger.error(f"gRPC error loading member permissions: {e}")
         return set()
+
+    # Cache for 60 seconds
+    if org_client.redis_client and perms:
+        try:
+            await org_client.redis_client.setex(
+                cache_key, 60, json.dumps(list(perms))
+            )
+        except Exception as e:
+            logger.warning(f"Redis cache write error (permissions): {e}")
+    return perms
 
 
 def require_permission(resource: str, action: str):

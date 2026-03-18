@@ -32,6 +32,7 @@ import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import { Link } from 'react-router-dom';
 
 import { ResourcePage, EmptyState, EmptyStates, StatusChip } from '../../common';
+import { listCredentialTemplates } from '../../../services/presentationPolicyApi';
 
 const getTemplatesTabs = (t) => [
   { label: t('templates.credentialTemplates'), path: '/console/org/templates/credentials' },
@@ -85,48 +86,10 @@ function ArtifactsStatus({ hasArtifacts, validated }) {
 
 function CredentialTemplatesPage() {
   const { t } = useTranslation('console');
-  const { data: templates = [], loading, error } = useAsyncData(async () => {
-    // TODO: Fetch credential templates from API
-    await new Promise((resolve) => setTimeout(resolve, 500));
-    return [
-      {
-        id: 'ct-1',
-        name: 'EU Digital Identity Credential',
-        format: 'sd-jwt-vc',
-        version: '1.0.0',
-        claims: 12,
-        hasArtifacts: true,
-        artifactsValidated: true,
-        status: 'active',
-        updatedAt: '2026-02-06T10:30:00Z',
-        usedByFlowsCount: 3,
-      },
-      {
-        id: 'ct-2',
-        name: 'Mobile Driving License',
-        format: 'mdoc',
-        version: '1.0.0',
-        claims: 18,
-        hasArtifacts: true,
-        artifactsValidated: true,
-        status: 'active',
-        updatedAt: '2026-02-05T14:20:00Z',
-        usedByFlowsCount: 2,
-      },
-      {
-        id: 'ct-3',
-        name: 'Employee Badge',
-        format: 'jwt-vc',
-        version: '0.9.0',
-        claims: 8,
-        hasArtifacts: false,
-        artifactsValidated: false,
-        status: 'draft',
-        updatedAt: '2026-02-07T09:00:00Z',
-        usedByFlowsCount: 0,
-      },
-    ];
-  }, []);
+  const { data: templates = [], loading, error } = useAsyncData(
+    () => listCredentialTemplates(),
+    []
+  );
 
   // Count templates with missing artifacts
   const missingArtifactsCount = templates.filter((t) => !t.hasArtifacts).length;

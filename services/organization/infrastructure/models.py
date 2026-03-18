@@ -181,6 +181,30 @@ member_roles_table = Table(
 )
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Cedar Policy Sets
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Policy sets (per-organization Cedar policy collections)
+policy_sets_table = Table(
+    "policy_sets",
+    mapper_registry.metadata,
+    Column("id", PostgresUUID(as_uuid=True), primary_key=True),
+    Column("organization_id", PostgresUUID(as_uuid=True),
+           ForeignKey(f"{SCHEMA}.organizations.id", ondelete="CASCADE"), nullable=False),
+    Column("name", String(255), nullable=False),
+    Column("description", Text),
+    Column("policy_type", String(50), nullable=False, default="CUSTOM"),
+    Column("status", String(50), nullable=False, default="active"),
+    Column("cedar_policies", Text, nullable=False),
+    Column("cedar_schema_version", String(50), nullable=False, default="1.0"),
+    Column("created_by", String(36)),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    schema=SCHEMA,
+)
+
+
 # Export metadata for Alembic migrations
 __all__ = [
     "mapper_registry",
@@ -193,5 +217,6 @@ __all__ = [
     "roles_table",
     "role_permissions_table",
     "member_roles_table",
+    "policy_sets_table",
     "SCHEMA",
 ]

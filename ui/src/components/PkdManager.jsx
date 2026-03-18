@@ -21,6 +21,11 @@ import {
   Sync as SyncIcon,
   CheckCircle as CheckCircleIcon
 } from '@mui/icons-material';
+import {
+  PKD_DEFAULT_DIRECTORY_STATUS,
+  PKD_DEFAULT_STATISTICS,
+  synchronizePkd,
+} from '../application/admin';
 
 const PkdManager = () => {
   const [syncStatus, setSyncStatus] = useState(null); // 'success', 'error', null
@@ -33,19 +38,10 @@ const PkdManager = () => {
     setMessage('');
     
     try {
-      const response = await fetch('/api/admin/pkd/sync?force_refresh=true', {
-        method: 'POST'
-      });
-      
-      const data = await response.json();
-      
-      if (!response.ok) throw new Error(data.detail || 'Sync failed');
-      
-      setSyncStatus('success');
-      setMessage(data.message || 'PKD synchronization completed successfully.');
-    } catch (err) {
-      setSyncStatus('error');
-      setMessage(err.message);
+      const result = await synchronizePkd();
+
+      setSyncStatus(result.syncStatus);
+      setMessage(result.message);
     } finally {
       setLoading(false);
     }
@@ -73,7 +69,7 @@ const PkdManager = () => {
             <Typography variant="body2" color="text.secondary" paragraph>
               Trigger a synchronization of the Public Key Directory from configured sources.
             </Typography>
-            
+
             <Box sx={{ textAlign: 'center', mb: 2, py: 4 }}>
               <SyncIcon sx={{ fontSize: 64, color: 'primary.main', mb: 2, animation: loading ? 'spin 2s linear infinite' : 'none' }} />
               <style>
@@ -81,9 +77,9 @@ const PkdManager = () => {
               </style>
             </Box>
 
-            <Button 
-              fullWidth 
-              variant="contained" 
+            <Button
+              fullWidth
+              variant="contained"
               color="primary"
               onClick={handleSync}
               disabled={loading}
@@ -97,7 +93,7 @@ const PkdManager = () => {
                 {message}
               </Alert>
             )}
-            
+
             {syncStatus === 'error' && (
               <Alert severity="error" sx={{ mt: 2 }}>
                 Error: {message}
@@ -113,27 +109,15 @@ const PkdManager = () => {
                 Directory Status
               </Typography>
               <List>
-                <ListItem>
-                  <ListItemIcon><CheckCircleIcon color="success" /></ListItemIcon>
-                  <ListItemText 
-                    primary="LDAP Service" 
-                    secondary="Running - Port 389" 
-                  />
-                </ListItem>
-                <ListItem>
-                  <ListItemIcon><CheckCircleIcon color="success" /></ListItemIcon>
-                  <ListItemText 
-                    primary="HTTP Service" 
-                    secondary="Running - Port 8080" 
-                  />
-                </ListItem>
-                <ListItem>
-                  <ListItemIcon><CheckCircleIcon color="success" /></ListItemIcon>
-                  <ListItemText 
-                    primary="Replication" 
-                    secondary="Active" 
-                  />
-                </ListItem>
+                {PKD_DEFAULT_DIRECTORY_STATUS.map((item) => (
+                  <ListItem key={item.key}>
+                    <ListItemIcon><CheckCircleIcon color="success" /></ListItemIcon>
+                    <ListItemText
+                      primary={item.primary}
+                      secondary={item.secondary}
+                    />
+                  </ListItem>
+                ))}
               </List>
             </CardContent>
           </Card>
@@ -144,22 +128,12 @@ const PkdManager = () => {
                 Statistics
               </Typography>
               <Grid container spacing={2}>
-                <Grid item xs={6}>
-                  <Typography variant="h4">142</Typography>
-                  <Typography variant="body2" color="text.secondary">Active CSCA Certs</Typography>
-                </Grid>
-                <Grid item xs={6}>
-                  <Typography variant="h4">1,205</Typography>
-                  <Typography variant="body2" color="text.secondary">Document Signer Certs</Typography>
-                </Grid>
-                <Grid item xs={6}>
-                  <Typography variant="h4">58</Typography>
-                  <Typography variant="body2" color="text.secondary">CRLs Published</Typography>
-                </Grid>
-                <Grid item xs={6}>
-                  <Typography variant="h4">24/7</Typography>
-                  <Typography variant="body2" color="text.secondary">Availability</Typography>
-                </Grid>
+                {PKD_DEFAULT_STATISTICS.map((item) => (
+                  <Grid item xs={6} key={item.key}>
+                    <Typography variant="h4">{item.value}</Typography>
+                    <Typography variant="body2" color="text.secondary">{item.label}</Typography>
+                  </Grid>
+                ))}
               </Grid>
             </CardContent>
           </Card>

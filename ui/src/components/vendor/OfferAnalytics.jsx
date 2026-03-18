@@ -46,8 +46,7 @@ import DevicesIcon from '@mui/icons-material/Devices';
 import TimelineIcon from '@mui/icons-material/Timeline';
 
 import { useAuth } from '../../hooks/useAuth';
-
-const API_URL = import.meta.env.VITE_API_URL || '';
+import { fetchAnalyticsSummary, fetchAnalyticsScans } from '../../application/vendor';
 
 // Outcome colors
 const OUTCOME_COLORS = {
@@ -165,26 +164,7 @@ export default function OfferAnalytics() {
     setError(null);
     
     try {
-      const params = new URLSearchParams({
-        organization_id: organizationId,
-        days: '30',
-      });
-      
-      const response = await fetch(
-        `${API_URL}/api/issuance/analytics/summary?${params.toString()}`,
-        {
-          credentials: 'include',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-        }
-      );
-      
-      if (!response.ok) {
-        throw new Error(`Failed to fetch analytics: ${response.statusText}`);
-      }
-      
-      const data = await response.json();
+      const data = await fetchAnalyticsSummary({ organizationId });
       setSummary(data);
     } catch (err) {
       console.error('Error fetching analytics:', err);
@@ -203,31 +183,14 @@ export default function OfferAnalytics() {
     setScansLoading(true);
     
     try {
-      const params = new URLSearchParams({
-        organization_id: organizationId,
-        page: (scansPage + 1).toString(),
-        page_size: scansRowsPerPage.toString(),
+      const data = await fetchAnalyticsScans({
+        organizationId,
+        page: scansPage + 1,
+        pageSize: scansRowsPerPage,
+        accessTypeFilter,
+        outcomeFilter,
+        walletTypeFilter,
       });
-      
-      if (accessTypeFilter) params.append('access_type', accessTypeFilter);
-      if (outcomeFilter) params.append('outcome', outcomeFilter);
-      if (walletTypeFilter) params.append('wallet_type', walletTypeFilter);
-      
-      const response = await fetch(
-        `${API_URL}/api/issuance/analytics/scans?${params.toString()}`,
-        {
-          credentials: 'include',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-        }
-      );
-      
-      if (!response.ok) {
-        throw new Error(`Failed to fetch scan logs: ${response.statusText}`);
-      }
-      
-      const data = await response.json();
       setScans(data.scans || []);
       setScansTotal(data.total || 0);
     } catch (err) {

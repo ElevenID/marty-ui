@@ -10,7 +10,8 @@
 	dev-ui-tunnel prod-ui-tunnel prod-ui-tunnel-kill tunnel-prod-static tunnel-prod-restart \
 	public-ui \
 	obs-up obs-down \
-	wallet-up wallet-down
+	wallet-up wallet-down \
+	proto-gen grpc-health
 
 # Colors
 BLUE := \033[0;34m
@@ -30,7 +31,7 @@ WHEELS_SCRIPT := ./scripts/build-rust-wheels.sh
 SETUP_LOCAL_SCRIPT := ./scripts/setup-local.sh
 
 INFRA_SERVICES := postgres redis keycloak mailhog
-APP_SERVICES := rabbitmq issuance gateway auth organization credential-template trust-profile applicant notification compliance-profile presentation-policy deployment-profile flow
+APP_SERVICES := event-stream issuance gateway auth organization credential-template trust-profile applicant notification compliance-profile presentation-policy deployment-profile flow revocation-profile verification envoy
 
 .DEFAULT_GOAL := help
 
@@ -44,8 +45,11 @@ help: ## Show this help message
 dev: up ## Start infrastructure + microservices stack
 	@echo "$(GREEN)✓ Development environment started$(NC)"
 	@echo "  Gateway:      http://localhost:8000/docs"
-	@echo "  Auth:         http://localhost:8001/docs"
-	@echo "  Organization: http://localhost:8002/docs"
+	@echo "  Auth:         http://localhost:8001/docs  (gRPC :9001)"
+	@echo "  Organization: http://localhost:8002/docs  (gRPC :9002)"
+	@echo "  Cred-Tmpl:    http://localhost:8003/docs  (gRPC :9003)"
+	@echo "  Pres-Policy:  http://localhost:8009/docs  (gRPC :9009)"
+	@echo "  Flow:         http://localhost:8011/docs  (gRPC :9011)"
 	@echo "  Keycloak:     http://localhost:8180"
 
 build-wheels: ## Build native Rust wheels for local Python development (optional)
@@ -134,8 +138,34 @@ status: ## Show status of all base services
 shell: ## Open shell in gateway container
 	@$(BASE_COMPOSE) exec gateway bash
 
-test: ## Placeholder for test runner integration
-	@echo "$(YELLOW)Use project-specific test commands for now.$(NC)"
+test: ## Run gRPC adapter and factory unit tests
+	@echo "$(BLUE)Running unit tests...$(NC)"
+	@cd services && python -m pytest -v --tb=short
+	@echo "$(GREEN)✓ Tests passed$(NC)"
+
+proto-gen: ## Regenerate Python proto stubs from .proto definitions
+	@echo "$(BLUE)Generating Python proto stubs...$(NC)"
+	@python -m grpc_tools.protoc \
+		-Iproto \
+		--python_out=packages/marty_proto/v1 \
+		--grpc_python_out=packages/marty_proto/v1 \
+		proto/v1/*.proto
+	@echo "$(GREEN)✓ Proto stubs generated$(NC)"
+
+grpc-health: ## Check gRPC health status of all gRPC-enabled services
+	@echo "$(BLUE)Checking gRPC service health...$(NC)"
+	@for pair in "auth:9001" "organization:9002" "credential-template:9003" "presentation-policy:9009" "flow:9011"; do \
+		service=$$(echo $$pair | cut -d: -f1); \
+		port=$$(echo $$pair | cut -d: -f2); \
+		if docker exec marty-$$service grpc_health_probe -addr=localhost:$$port 2>/dev/null; then \
+			echo "  $(GREEN)✓ $$service (:$$port) healthy$(NC)"; \
+		else \
+			echo "  $(YELLOW)⚠ $$service (:$$port) — checking via grpcurl...$(NC)"; \
+			docker exec marty-$$service python -c "import grpc; ch=grpc.insecure_channel('localhost:$$port'); grpc.channel_ready_future(ch).result(timeout=3); print('OK')" 2>/dev/null && \
+				echo "  $(GREEN)✓ $$service (:$$port) reachable$(NC)" || \
+				echo "  $(RED)✗ $$service (:$$port) unreachable$(NC)"; \
+		fi; \
+	done
 
 tunnel-start: ## Start Cloudflare tunnel sidecars (uses .env)
 	@if ! grep -q '^CLOUDFLARE_TUNNEL_TOKEN=eyJ' .env 2>/dev/null; then \

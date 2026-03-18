@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any, AsyncGenerator
 
 import httpx
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr
 
@@ -42,6 +42,7 @@ SERVICE_PORT = int(os.environ.get("APPLICANT_SERVICE_PORT", "8006"))
 # Use the issuance service directly for service-to-service calls so we bypass
 # the gateway's auth check (the gateway requires a bearer token on /v1/issuance).
 ISSUANCE_SERVICE_URL = os.environ.get("ISSUANCE_SERVICE_URL", "http://issuance:8005")
+ISSUANCE_GRPC_TARGET = os.environ.get("ISSUANCE_GRPC_TARGET", "issuance:9005")
 
 
 def _generate_reference_number() -> str:
@@ -49,6 +50,56 @@ def _generate_reference_number() -> str:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d")
     suffix = uuid.uuid4().hex[:6].upper()
     return f"APP-{stamp}-{suffix}"
+
+
+async def _initiate_issuance_grpc(
+    organization_id: str,
+    credential_template_id: str | None,
+    applicant_id: str,
+    claims: dict,
+) -> dict:
+    """Call IssuanceService.InitiateIssuance via gRPC, with HTTP fallback."""
+    # Try gRPC first
+    try:
+        import grpc.aio as grpc_aio
+        from marty_proto.v1 import issuance_service_pb2 as iss_pb2
+        from marty_proto.v1 import issuance_service_pb2_grpc as iss_grpc
+
+        async with grpc_aio.insecure_channel(ISSUANCE_GRPC_TARGET) as channel:
+            stub = iss_grpc.IssuanceServiceStub(channel)
+            resp = await stub.InitiateIssuance(
+                iss_pb2.InitiateIssuanceRequest(
+                    organization_id=organization_id,
+                    credential_template_id=credential_template_id or "",
+                    applicant_id=applicant_id or "",
+                    claims={k: str(v) for k, v in claims.items()},
+                )
+            )
+        return {
+            "id": resp.id,
+            "credential_offer_uri": resp.credential_offer_uri,
+            "credential_offer_uris": dict(resp.credential_offer_uris),
+            "credential_offer_labels": dict(resp.credential_offer_labels),
+            "pre_auth_code": resp.pre_auth_code,
+            "expires_at": resp.expires_at,
+            "status": resp.status,
+        }
+    except Exception as grpc_err:
+        logger.warning("gRPC InitiateIssuance failed, falling back to HTTP: %s", grpc_err)
+
+    # HTTP fallback
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        response = await client.post(
+            f"{ISSUANCE_SERVICE_URL}/v1/issuance/initiate",
+            json={
+                "organization_id": organization_id,
+                "credential_template_id": credential_template_id,
+                "applicant_id": applicant_id,
+                "claims": claims,
+            },
+        )
+        response.raise_for_status()
+        return response.json()
 
 
 # =============================================================================
@@ -1060,18 +1111,12 @@ async def auto_issue_application(
     })
 
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.post(
-                f"{ISSUANCE_SERVICE_URL}/v1/issuance/initiate",
-                json={
-                    "organization_id": application.organization_id,
-                    "credential_template_id": application.credential_configuration_id,
-                    "applicant_id": applicant.id,
-                    "claims": claims,
-                },
-            )
-            response.raise_for_status()
-            issuance = response.json()
+        issuance = await _initiate_issuance_grpc(
+            organization_id=application.organization_id,
+            credential_template_id=application.credential_configuration_id,
+            applicant_id=applicant.id,
+            claims=claims,
+        )
     except Exception as e:
         logger.warning("Issuance service unavailable for auto-issue %s: %s", application_id, e)
         issuance = {
@@ -1098,6 +1143,7 @@ async def auto_issue_application(
 async def review_application(
     application_id: str,
     request: ApplicationReviewRequest,
+    http_request: Request = None,
     repo: InMemoryApplicantRepository = Depends(get_repo),
 ) -> ApplicationResponse:
     """Approve or reject an application in org console."""
@@ -1111,6 +1157,52 @@ async def review_application(
             detail=f"Cannot review application in {application.status.value} status",
         )
     decision = request.decision.lower().strip()
+    
+    # Cedar policy evaluation for approval decisions
+    if decision == "approve" and http_request and hasattr(http_request.app.state, "cedar_engine"):
+        cedar_engine = http_request.app.state.cedar_engine
+        meta = application.metadata or {}
+        cedar_context = {
+            "risk_score": int(meta.get("risk_score", 0)),
+            "document_verification_passed": bool(meta.get("document_verification_passed", True)),
+            "biometric_match_score": int(meta.get("biometric_match_score", 100)),
+            "evidence_count": int(meta.get("evidence_count", 1)),
+            "applicant_country": str(meta.get("applicant_country", "US")),
+        }
+        org_id = str(meta.get("organization_id", application.applicant_id))
+        cedar_entities = [
+            {
+                "uid": {"type": "MIP::User", "id": "reviewer"},
+                "attrs": {"email": "", "status": "ACTIVE"},
+                "parents": [{"type": "MIP::Organization", "id": org_id}],
+            },
+            {
+                "uid": {"type": "MIP::Organization", "id": org_id},
+                "attrs": {},
+                "parents": [],
+            },
+            {
+                "uid": {"type": "MIP::Application", "id": application_id},
+                "attrs": {
+                    "risk_score": cedar_context["risk_score"],
+                    "status": application.status.value,
+                },
+                "parents": [{"type": "MIP::Organization", "id": org_id}],
+            },
+        ]
+        cedar_decision = cedar_engine.is_authorized(
+            principal='MIP::User::"reviewer"',
+            action='MIP::Action::"applications:approve"',
+            resource=f'MIP::Application::"{application_id}"',
+            context=cedar_context,
+            entities=cedar_entities,
+        )
+        if not cedar_decision.allowed:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Approval denied by policy: {cedar_decision.reasons or cedar_decision.errors}",
+            )
+    
     if decision == "approve":
         application.status = ApplicationStatus.APPROVED
         application.reviewed_at = datetime.now(timezone.utc)
@@ -1183,31 +1275,14 @@ async def issue_application(
     )
 
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.post(
-                f"{ISSUANCE_SERVICE_URL}/v1/issuance/initiate",
-                json={
-                    "organization_id": application.organization_id,
-                    "credential_template_id": application.credential_configuration_id,
-                    "applicant_id": applicant.id,
-                    "claims": claims,
-                },
-            )
-            response.raise_for_status()
-            issuance = response.json()
-    except httpx.HTTPStatusError as e:
-        logger.warning(
-            "Issuance initiation failed for %s (status=%s). Falling back to local issuance marker.",
-            application_id,
-            e.response.status_code,
+        issuance = await _initiate_issuance_grpc(
+            organization_id=application.organization_id,
+            credential_template_id=application.credential_configuration_id,
+            applicant_id=applicant.id,
+            claims=claims,
         )
-        issuance = {
-            "id": f"local-{uuid.uuid4().hex[:12]}",
-            "credential_offer_uri": None,
-            "fallback": True,
-        }
     except Exception as e:
-        logger.warning("Issuance service unavailable for %s. Using local fallback marker.", application_id)
+        logger.warning("Issuance service unavailable for %s: %s. Using local fallback marker.", application_id, e)
         issuance = {
             "id": f"local-{uuid.uuid4().hex[:12]}",
             "credential_offer_uri": None,
@@ -1620,6 +1695,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     global _repo
     logger.info(f"Starting {SERVICE_NAME}...")
     _repo = InMemoryApplicantRepository()
+    
+    # Initialize Cedar engine for approval policies
+    from marty_common import CedarEngine
+    app.state.cedar_engine = CedarEngine.with_defaults()
+    logger.info("Cedar engine initialized for approval policies")
+    
     yield
     logger.info(f"Shutting down {SERVICE_NAME}...")
 
@@ -1645,6 +1726,10 @@ def create_app() -> FastAPI:
     @app.get("/health")
     async def health_check() -> dict:
         return {"status": "healthy", "service": SERVICE_NAME}
+
+    from common.metrics import init_otel_tracing, mount_metrics
+    init_otel_tracing(SERVICE_NAME)
+    mount_metrics(app)
     
     return app
 

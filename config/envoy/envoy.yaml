@@ -1,0 +1,532 @@
+# Envoy gRPC Proxy for Marty UI
+# ==============================
+#
+# Single entry point for all gRPC services.
+#
+# Features:
+#   - gRPC routing: routes by service name to correct backend
+#   - gRPC-web: browser clients can call gRPC via fetch()
+#   - CORS: allows browser-based gRPC-web from the UI origin
+#   - Health checking: monitors backend gRPC health endpoints
+#
+# Ports:
+#   9000  — gRPC / gRPC-web listener (unified entry)
+#   9901  — Envoy admin interface
+#
+# Usage:
+#   Clients connect to envoy:9000 and Envoy routes based on the
+#   gRPC service name in the request path (/:package.Service/Method).
+
+admin:
+  address:
+    socket_address:
+      address: 0.0.0.0
+      port_value: 9901
+
+static_resources:
+  listeners:
+    - name: grpc_listener
+      address:
+        socket_address:
+          address: 0.0.0.0
+          port_value: 9000
+      filter_chains:
+        - filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: grpc_proxy
+                codec_type: AUTO
+                # gRPC timeout (5 minutes for long-running RPCs)
+                request_timeout: 300s
+                route_config:
+                  name: grpc_routes
+                  virtual_hosts:
+                    - name: grpc_services
+                      domains: ["*"]
+                      routes:
+                        # Auth Service → auth:9001
+                        - match:
+                            prefix: "/marty.ui.auth.v1.AuthService/"
+                          route:
+                            cluster: auth_grpc
+                            timeout: 30s
+
+                        # Organization Service → organization:9002
+                        - match:
+                            prefix: "/marty.ui.organization.v1.OrganizationService/"
+                          route:
+                            cluster: organization_grpc
+                            timeout: 30s
+
+                        # Credential Template Service → credential-template:9003
+                        - match:
+                            prefix: "/marty.ui.credential_template.v1.CredentialTemplateService/"
+                          route:
+                            cluster: credential_template_grpc
+                            timeout: 30s
+
+                        # Issuance Service → issuance:9005
+                        - match:
+                            prefix: "/marty.ui.issuance.v1.IssuanceService/"
+                          route:
+                            cluster: issuance_grpc
+                            timeout: 60s
+
+                        # Notification Service → notification:9007
+                        - match:
+                            prefix: "/marty.ui.notification.v1.NotificationService/"
+                          route:
+                            cluster: notification_grpc
+                            timeout: 30s
+
+                        # Presentation Policy Service → presentation-policy:9009
+                        - match:
+                            prefix: "/marty.ui.presentation_policy.v1.PresentationPolicyService/"
+                          route:
+                            cluster: presentation_policy_grpc
+                            timeout: 30s
+
+                        # Flow Service → flow:9011
+                        - match:
+                            prefix: "/marty.ui.flow.v1.FlowService/"
+                          route:
+                            cluster: flow_grpc
+                            timeout: 120s
+
+                        # Revocation Profile Service → revocation-profile:9013
+                        - match:
+                            prefix: "/marty.ui.revocation_profile.v1.RevocationProfileService/"
+                          route:
+                            cluster: revocation_profile_grpc
+                            timeout: 30s
+
+                        # Event Stream Service → event-stream:9015
+                        - match:
+                            prefix: "/marty.ui.event_stream.v1.EventStreamService/"
+                          route:
+                            cluster: event_stream_grpc
+                            timeout: 0s  # streaming — no timeout
+
+                        # Verification Service → verification:9017
+                        - match:
+                            prefix: "/marty.ui.verification.v1.VerificationService/"
+                          route:
+                            cluster: verification_grpc
+                            timeout: 60s
+
+                        # ── REST→gRPC Transcoding Routes ──────────────────
+                        # These match incoming HTTP/JSON requests before the
+                        # grpc_json_transcoder rewrites them to gRPC paths.
+
+                        # Auth Service REST → auth:9001
+                        - match:
+                            prefix: "/v1/auth/"
+                          route:
+                            cluster: auth_grpc
+                            timeout: 30s
+
+                        # Organization Service REST → organization:9002
+                        - match:
+                            prefix: "/v1/organizations"
+                          route:
+                            cluster: organization_grpc
+                            timeout: 30s
+
+                        # Credential Template Service REST → credential-template:9003
+                        - match:
+                            prefix: "/v1/credential-templates"
+                          route:
+                            cluster: credential_template_grpc
+                            timeout: 30s
+
+                        # Issuance Service REST → issuance:9005
+                        - match:
+                            prefix: "/v1/issuance/"
+                          route:
+                            cluster: issuance_grpc
+                            timeout: 60s
+
+                        # Notification Service REST → notification:9007
+                        - match:
+                            prefix: "/v1/notifications"
+                          route:
+                            cluster: notification_grpc
+                            timeout: 30s
+
+                        # Presentation Policy Service REST → presentation-policy:9009
+                        - match:
+                            prefix: "/v1/presentation-policies"
+                          route:
+                            cluster: presentation_policy_grpc
+                            timeout: 30s
+
+                        # Flow Service REST → flow:9011
+                        - match:
+                            prefix: "/v1/flows/"
+                          route:
+                            cluster: flow_grpc
+                            timeout: 120s
+
+                        # Revocation Profile Service REST → revocation-profile:9013
+                        - match:
+                            prefix: "/v1/revocation-profiles"
+                          route:
+                            cluster: revocation_profile_grpc
+                            timeout: 30s
+
+                        # Event Stream Service REST → event-stream:9015
+                        - match:
+                            prefix: "/v1/events/"
+                          route:
+                            cluster: event_stream_grpc
+                            timeout: 30s
+
+                        # Verification Service REST → verification:9017
+                        - match:
+                            prefix: "/v1/verify"
+                          route:
+                            cluster: verification_grpc
+                            timeout: 60s
+
+                        # ── gRPC Native Routes ───────────────────────────
+
+                        # gRPC Health (wildcard — route to auth as default)
+                        - match:
+                            prefix: "/grpc.health.v1.Health/"
+                          route:
+                            cluster: auth_grpc
+                            timeout: 5s
+
+                        # gRPC Reflection (route to auth for discovery)
+                        - match:
+                            prefix: "/grpc.reflection."
+                          route:
+                            cluster: auth_grpc
+                            timeout: 10s
+
+                http_filters:
+                  # gRPC-web → gRPC bridging (browser support)
+                  - name: envoy.filters.http.grpc_web
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.grpc_web.v3.GrpcWeb
+
+                  # CORS for gRPC-web from browser
+                  - name: envoy.filters.http.cors
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.cors.v3.Cors
+
+                  # REST/JSON → gRPC transcoding (uses proto HTTP annotations)
+                  - name: envoy.filters.http.grpc_json_transcoder
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.grpc_json_transcoder.v3.GrpcJsonTranscoder
+                      proto_descriptor: /etc/envoy/proto_descriptor.pb
+                      services:
+                        - marty.ui.auth.v1.AuthService
+                        - marty.ui.organization.v1.OrganizationService
+                        - marty.ui.credential_template.v1.CredentialTemplateService
+                        - marty.ui.issuance.v1.IssuanceService
+                        - marty.ui.notification.v1.NotificationService
+                        - marty.ui.presentation_policy.v1.PresentationPolicyService
+                        - marty.ui.flow.v1.FlowService
+                        - marty.ui.revocation_profile.v1.RevocationProfileService
+                        - marty.ui.event_stream.v1.EventStreamService
+                        - marty.ui.verification.v1.VerificationService
+                      print_options:
+                        add_whitespace: true
+                        always_print_primitive_fields: true
+                        always_print_enums_as_ints: false
+                        preserve_proto_field_names: true
+                      convert_grpc_status: true
+                      match_incoming_request_route: true
+
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+
+                access_log:
+                  - name: envoy.access_loggers.stdout
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog
+                      log_format:
+                        json_format:
+                          timestamp: "%START_TIME%"
+                          method: "%REQ(:METHOD)%"
+                          path: "%REQ(:PATH)%"
+                          protocol: "%PROTOCOL%"
+                          response_code: "%RESPONSE_CODE%"
+                          grpc_status: "%RESP(GRPC-STATUS)%"
+                          duration_ms: "%DURATION%"
+                          upstream_cluster: "%UPSTREAM_CLUSTER%"
+                          request_id: "%REQ(X-REQUEST-ID)%"
+
+  clusters:
+    # Auth Service
+    - name: auth_grpc
+      connect_timeout: 5s
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      typed_extension_protocol_options:
+        envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+          "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+          explicit_http_config:
+            http2_protocol_options: {}
+      load_assignment:
+        cluster_name: auth_grpc
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: auth
+                      port_value: 9001
+      health_checks:
+        - timeout: 3s
+          interval: 10s
+          unhealthy_threshold: 3
+          healthy_threshold: 2
+          grpc_health_check:
+            service_name: "marty.ui.auth.v1.AuthService"
+
+    # Organization Service
+    - name: organization_grpc
+      connect_timeout: 5s
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      typed_extension_protocol_options:
+        envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+          "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+          explicit_http_config:
+            http2_protocol_options: {}
+      load_assignment:
+        cluster_name: organization_grpc
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: organization
+                      port_value: 9002
+      health_checks:
+        - timeout: 3s
+          interval: 10s
+          unhealthy_threshold: 3
+          healthy_threshold: 2
+          grpc_health_check:
+            service_name: "marty.ui.organization.v1.OrganizationService"
+
+    # Credential Template Service
+    - name: credential_template_grpc
+      connect_timeout: 5s
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      typed_extension_protocol_options:
+        envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+          "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+          explicit_http_config:
+            http2_protocol_options: {}
+      load_assignment:
+        cluster_name: credential_template_grpc
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: credential-template
+                      port_value: 9003
+      health_checks:
+        - timeout: 3s
+          interval: 10s
+          unhealthy_threshold: 3
+          healthy_threshold: 2
+          grpc_health_check:
+            service_name: "marty.ui.credential_template.v1.CredentialTemplateService"
+
+    # Issuance Service
+    - name: issuance_grpc
+      connect_timeout: 5s
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      typed_extension_protocol_options:
+        envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+          "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+          explicit_http_config:
+            http2_protocol_options: {}
+      load_assignment:
+        cluster_name: issuance_grpc
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: issuance
+                      port_value: 9005
+      health_checks:
+        - timeout: 3s
+          interval: 10s
+          unhealthy_threshold: 3
+          healthy_threshold: 2
+          grpc_health_check:
+            service_name: "marty.ui.issuance.v1.IssuanceService"
+
+    # Notification Service
+    - name: notification_grpc
+      connect_timeout: 5s
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      typed_extension_protocol_options:
+        envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+          "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+          explicit_http_config:
+            http2_protocol_options: {}
+      load_assignment:
+        cluster_name: notification_grpc
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: notification
+                      port_value: 9007
+      health_checks:
+        - timeout: 3s
+          interval: 10s
+          unhealthy_threshold: 3
+          healthy_threshold: 2
+          grpc_health_check:
+            service_name: "marty.ui.notification.v1.NotificationService"
+
+    # Presentation Policy Service
+    - name: presentation_policy_grpc
+      connect_timeout: 5s
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      typed_extension_protocol_options:
+        envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+          "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+          explicit_http_config:
+            http2_protocol_options: {}
+      load_assignment:
+        cluster_name: presentation_policy_grpc
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: presentation-policy
+                      port_value: 9009
+      health_checks:
+        - timeout: 3s
+          interval: 10s
+          unhealthy_threshold: 3
+          healthy_threshold: 2
+          grpc_health_check:
+            service_name: "marty.ui.presentation_policy.v1.PresentationPolicyService"
+
+    # Flow Service
+    - name: flow_grpc
+      connect_timeout: 5s
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      typed_extension_protocol_options:
+        envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+          "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+          explicit_http_config:
+            http2_protocol_options: {}
+      load_assignment:
+        cluster_name: flow_grpc
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: flow
+                      port_value: 9011
+      health_checks:
+        - timeout: 3s
+          interval: 10s
+          unhealthy_threshold: 3
+          healthy_threshold: 2
+          grpc_health_check:
+            service_name: "marty.ui.flow.v1.FlowService"
+
+    # Revocation Profile Service
+    - name: revocation_profile_grpc
+      connect_timeout: 5s
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      typed_extension_protocol_options:
+        envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+          "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+          explicit_http_config:
+            http2_protocol_options: {}
+      load_assignment:
+        cluster_name: revocation_profile_grpc
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: revocation-profile
+                      port_value: 9013
+      health_checks:
+        - timeout: 3s
+          interval: 10s
+          unhealthy_threshold: 3
+          healthy_threshold: 2
+          grpc_health_check:
+            service_name: "marty.ui.revocation_profile.v1.RevocationProfileService"
+
+    # Event Stream Service
+    - name: event_stream_grpc
+      connect_timeout: 5s
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      typed_extension_protocol_options:
+        envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+          "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+          explicit_http_config:
+            http2_protocol_options: {}
+      load_assignment:
+        cluster_name: event_stream_grpc
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: event-stream
+                      port_value: 9015
+      health_checks:
+        - timeout: 3s
+          interval: 10s
+          unhealthy_threshold: 3
+          healthy_threshold: 2
+          grpc_health_check:
+            service_name: "marty.ui.event_stream.v1.EventStreamService"
+
+    # Verification Service
+    - name: verification_grpc
+      connect_timeout: 5s
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      typed_extension_protocol_options:
+        envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+          "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+          explicit_http_config:
+            http2_protocol_options: {}
+      load_assignment:
+        cluster_name: verification_grpc
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: verification
+                      port_value: 9017
+      health_checks:
+        - timeout: 3s
+          interval: 10s
+          unhealthy_threshold: 3
+          healthy_threshold: 2
+          grpc_health_check:
+            service_name: "marty.ui.verification.v1.VerificationService"

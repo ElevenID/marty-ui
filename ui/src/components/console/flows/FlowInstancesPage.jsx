@@ -38,6 +38,7 @@ import CancelIcon from '@mui/icons-material/Cancel';
 import { Link } from 'react-router-dom';
 
 import { ResourcePage, EmptyState, EmptyStates, StatusChip } from '../../common';
+import { listFlows, listFlowExecutions } from '../../../services/flowsApi';
 
 const getFlowsTabs = (t) => [
   { label: t('flows.flowDefinitions'), path: '/console/org/flows/definitions' },
@@ -53,64 +54,15 @@ const getBreadcrumbs = (t) => [
 function FlowInstancesPage() {
   const { t } = useTranslation('console');
   const { data: instances = [], loading, error } = useAsyncData(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 500));
-    return [
-      {
-        id: 'fi-1001',
-        flowName: 'Age Verification Flow',
-        flowId: 'fl-1',
-        currentStep: 3,
-        totalSteps: 3,
-        status: 'completed',
-        result: 'success',
-        startedAt: '2026-02-07T09:15:00Z',
-        completedAt: '2026-02-07T09:15:45Z',
-      },
-      {
-        id: 'fi-1002',
-        flowName: 'Full Identity Check',
-        flowId: 'fl-2',
-        currentStep: 3,
-        totalSteps: 5,
-        status: 'pending',
-        result: null,
-        startedAt: '2026-02-07T09:10:00Z',
-        completedAt: null,
-      },
-      {
-        id: 'fi-1003',
-        flowName: 'Age Verification Flow',
-        flowId: 'fl-1',
-        currentStep: 2,
-        totalSteps: 3,
-        status: 'pending',
-        result: null,
-        startedAt: '2026-02-07T09:05:00Z',
-        completedAt: null,
-      },
-      {
-        id: 'fi-1004',
-        flowName: 'mDL Issuance Flow',
-        flowId: 'fl-3',
-        currentStep: 7,
-        totalSteps: 7,
-        status: 'completed',
-        result: 'success',
-        startedAt: '2026-02-07T08:50:00Z',
-        completedAt: '2026-02-07T09:02:00Z',
-      },
-      {
-        id: 'fi-1005',
-        flowName: 'Age Verification Flow',
-        flowId: 'fl-1',
-        currentStep: 1,
-        totalSteps: 3,
-        status: 'failed',
-        result: 'credential_expired',
-        startedAt: '2026-02-07T08:45:00Z',
-        completedAt: '2026-02-07T08:45:30Z',
-      },
-    ];
+    const flows = await listFlows();
+    const allInstances = [];
+    for (const flow of (flows || [])) {
+      const executions = await listFlowExecutions(flow.id);
+      for (const exec of (executions || [])) {
+        allInstances.push({ ...exec, flowName: flow.name, flowId: flow.id });
+      }
+    }
+    return allInstances;
   }, []);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');

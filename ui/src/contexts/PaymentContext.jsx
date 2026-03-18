@@ -11,6 +11,7 @@
  */
 
 import { createContext, useState, useCallback, useMemo, useEffect } from 'react';
+import { processPayment } from '../application/payment';
 
 // Processing fee limits (defined by business rules)
 const MIN_PROCESSING_FEE = 0; // $0 minimum
@@ -160,29 +161,13 @@ class SquarePaymentProvider {
   }
 
   async createPayment(amount, currency, sourceId, metadata = {}) {
-    // This would typically call your backend API which then calls Square
     try {
-      const response = await fetch('/api/payments/process', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          amount_cents: Math.round(amount * 100),
-          currency,
-          source_id: sourceId,
-          ...metadata,
-        }),
+      const data = await processPayment({
+        amountCents: Math.round(amount * 100),
+        currency,
+        sourceId,
+        metadata,
       });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        return {
-          success: false,
-          paymentId: null,
-          error: data.error || 'Payment failed',
-          metadata: null,
-        };
-      }
 
       return {
         success: true,
@@ -194,7 +179,7 @@ class SquarePaymentProvider {
       return {
         success: false,
         paymentId: null,
-        error: error.message,
+        error: error.message || 'Payment failed',
         metadata: null,
       };
     }

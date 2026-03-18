@@ -18,6 +18,10 @@ import { useEffect } from 'react';
 import { useParams, useSearchParams, useNavigate, useLocation } from 'react-router-dom';
 import { Box, CircularProgress, Typography, Container, Paper, Alert } from '@mui/material';
 import { useAuth } from '../hooks/useAuth';
+import {
+  APPLY_CONTEXT_STORAGE_KEY,
+  getApplyEntryDecision,
+} from '../application/routing';
 
 const ApplyPage = () => {
   const { credentialType } = useParams();
@@ -28,52 +32,33 @@ const ApplyPage = () => {
 
   useEffect(() => {
     if (authLoading) {
-      // Still checking auth status
       return;
     }
 
-    // Extract org_id from URL query params
     const orgId = searchParams.get('org_id');
+    const decision = getApplyEntryDecision({
+      isAuthenticated,
+      user,
+      credentialType,
+      orgId,
+      pathname: window.location.pathname,
+      search: window.location.search,
+      locationState: location.state,
+    });
 
-    // Store context in session storage for post-login routing
-    const context = {
-      credentialType: credentialType || null,
-      orgId: orgId || null,
-      timestamp: Date.now(),
-      returnUrl: window.location.pathname + window.location.search,
-    };
-    sessionStorage.setItem('applyContext', JSON.stringify(context));
+    sessionStorage.setItem(APPLY_CONTEXT_STORAGE_KEY, JSON.stringify(decision.context));
+    Object.entries(decision.storage || {}).forEach(([key, value]) => {
+      if (value !== null && value !== undefined) {
+        sessionStorage.setItem(key, value);
+      }
+    });
 
-    if (!isAuthenticated) {
-      // Not authenticated - redirect to login
-      // The context will be picked up after successful login via AuthCallback
-      const loginUrl = `/login?return_to=${encodeURIComponent(window.location.pathname + window.location.search)}`;
-      window.location.href = loginUrl;
+    if (decision.kind === 'redirect-browser') {
+      window.location.href = decision.loginUrl;
       return;
     }
 
-    // User is authenticated - route them appropriately
-
-    // If org_id is specified and user isn't a member yet, preserve join intent
-    if (orgId && user?.organization_id !== orgId) {
-      // Store the join intent
-      sessionStorage.setItem('joinOrgId', orgId);
-
-      // Redirect to applicant dashboard with org requirement hint
-      navigate('/console/applicant?org_required=' + orgId);
-      return;
-    }
-
-    // User is authenticated and in the right org (or no org specified)
-    if (credentialType) {
-      // Navigate to specific credential application
-      navigate(`/console/applicant/apply/${credentialType}`, {
-        state: location.state, // Preserve credential data passed from catalog
-      });
-    } else {
-      // No specific credential type - go to catalog
-      navigate('/console/applicant/catalog');
-    }
+    navigate(decision.destination, decision.navigationState ? { state: decision.navigationState } : undefined);
   }, [authLoading, isAuthenticated, user, credentialType, searchParams, navigate, location.state]);
 
   // Show loading state while checking auth or redirecting

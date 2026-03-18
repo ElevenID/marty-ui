@@ -1,0 +1,238 @@
+syntax = "proto3";
+
+package marty.ui.organization.v1;
+
+import "google/api/annotations.proto";
+
+option java_multiple_files = true;
+
+// OrganizationService handles organization management, membership, and API key
+// validation. The internal RPCs (GetMember, ValidateApiKey) are called by every
+// service for authorization checks.
+service OrganizationService {
+  // Get an organization by ID.
+  rpc GetOrganization(GetOrganizationRequest) returns (OrganizationResponse) {
+    option (google.api.http) = {
+      get: "/v1/organizations/{organization_id}"
+    };
+  }
+
+  // Create a new organization.
+  rpc CreateOrganization(CreateOrganizationRequest) returns (OrganizationResponse) {
+    option (google.api.http) = {
+      post: "/v1/organizations"
+      body: "*"
+    };
+  }
+
+  // Update an organization.
+  rpc UpdateOrganization(UpdateOrganizationRequest) returns (OrganizationResponse) {
+    option (google.api.http) = {
+      patch: "/v1/organizations/{organization_id}"
+      body: "*"
+    };
+  }
+
+  // List organizations (with optional filters).
+  rpc ListOrganizations(ListOrganizationsRequest) returns (ListOrganizationsResponse) {
+    option (google.api.http) = {
+      get: "/v1/organizations"
+    };
+  }
+
+  // Get a member within an organization (internal — used for auth checks).
+  rpc GetMember(GetMemberRequest) returns (MemberResponse) {
+    option (google.api.http) = {
+      get: "/v1/organizations/{organization_id}/members/{member_id}"
+    };
+  }
+
+  // Add a member to an organization.
+  rpc AddMember(AddMemberRequest) returns (MemberResponse) {
+    option (google.api.http) = {
+      post: "/v1/organizations/{organization_id}/members"
+      body: "*"
+    };
+  }
+
+  // Update a member's role.
+  rpc UpdateMember(UpdateMemberRequest) returns (MemberResponse) {
+    option (google.api.http) = {
+      patch: "/v1/organizations/{organization_id}/members/{member_id}"
+      body: "*"
+    };
+  }
+
+  // Remove a member from an organization.
+  rpc RemoveMember(RemoveMemberRequest) returns (RemoveMemberResponse) {
+    option (google.api.http) = {
+      delete: "/v1/organizations/{organization_id}/members/{member_id}"
+    };
+  }
+
+  // List members of an organization.
+  rpc ListMembers(ListMembersRequest) returns (ListMembersResponse) {
+    option (google.api.http) = {
+      get: "/v1/organizations/{organization_id}/members"
+    };
+  }
+
+  // Validate an API key (internal — used for API key auth).
+  rpc ValidateApiKey(ValidateApiKeyRequest) returns (ValidateApiKeyResponse) {
+    option (google.api.http) = {
+      post: "/v1/organizations/api-keys/validate"
+      body: "*"
+    };
+  }
+
+  // Get member permissions (flattened).
+  rpc GetMemberPermissions(GetMemberPermissionsRequest) returns (GetMemberPermissionsResponse) {
+    option (google.api.http) = {
+      get: "/v1/organizations/{organization_id}/members/{member_id}/permissions"
+    };
+  }
+
+  // Health check.
+  rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse) {
+    option (google.api.http) = {
+      get: "/v1/organizations/health"
+    };
+  }
+}
+
+// -- Requests and Responses --
+
+message GetOrganizationRequest {
+  string organization_id = 1;
+}
+
+message CreateOrganizationRequest {
+  string name = 1;
+  string display_name = 2;
+  string org_type = 3;
+  string description = 4;
+  string contact_email = 5;
+  string creator_user_id = 6;
+}
+
+message UpdateOrganizationRequest {
+  string organization_id = 1;
+  string display_name = 2;
+  string description = 3;
+  string contact_email = 4;
+  string contact_phone = 5;
+  string website = 6;
+  string join_mechanism = 7;
+  bool requires_approval = 8;
+  bool is_discoverable = 9;
+}
+
+message ListOrganizationsRequest {
+  int32 limit = 1;
+  int32 offset = 2;
+  string search = 3;
+  string org_type = 4;
+  string join_mechanism = 5;
+}
+
+message ListOrganizationsResponse {
+  repeated OrganizationResponse organizations = 1;
+  int32 total = 2;
+}
+
+message OrganizationResponse {
+  string id = 1;
+  string name = 2;
+  string display_name = 3;
+  string slug = 4;
+  string description = 5;
+  string org_type = 6;
+  string status = 7;
+  string contact_email = 8;
+  string contact_phone = 9;
+  string website = 10;
+  string join_mechanism = 11;
+  bool requires_approval = 12;
+  bool is_discoverable = 13;
+  string created_at = 14;
+  string updated_at = 15;
+}
+
+// -- Member operations --
+
+message GetMemberRequest {
+  string organization_id = 1;
+  string user_id = 2;
+}
+
+message AddMemberRequest {
+  string organization_id = 1;
+  string user_id = 2;
+  string email = 3;
+  string role = 4;
+}
+
+message UpdateMemberRequest {
+  string organization_id = 1;
+  string member_id = 2;
+  string role = 3;
+}
+
+message RemoveMemberRequest {
+  string organization_id = 1;
+  string member_id = 2;
+}
+
+message RemoveMemberResponse {
+  bool success = 1;
+}
+
+message ListMembersRequest {
+  string organization_id = 1;
+}
+
+message ListMembersResponse {
+  repeated MemberResponse members = 1;
+}
+
+message MemberResponse {
+  string id = 1;
+  string organization_id = 2;
+  string user_id = 3;
+  string email = 4;
+  string role = 5;
+  string status = 6;
+  string invited_at = 7;
+  string joined_at = 8;
+}
+
+// -- API Key operations --
+
+message ValidateApiKeyRequest {
+  string api_key = 1;
+}
+
+message ValidateApiKeyResponse {
+  bool valid = 1;
+  string api_key_id = 2;
+  string organization_id = 3;
+  string key_prefix = 4;
+  repeated string scopes = 5;
+}
+
+// -- Permissions --
+
+message GetMemberPermissionsRequest {
+  string organization_id = 1;
+  string user_id = 2;
+}
+
+message GetMemberPermissionsResponse {
+  repeated string permissions = 1;
+}
+
+message HealthCheckRequest {}
+
+message HealthCheckResponse {
+  string status = 1;
+}

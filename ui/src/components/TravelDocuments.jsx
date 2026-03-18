@@ -46,6 +46,20 @@ import {
   DriveEta as LicenseIcon,
   Description as VisaIcon,
 } from '@mui/icons-material';
+import {
+  TRAVEL_DOCUMENTS_DEFAULT_STATS,
+  canSubmitTravelDocumentIssue,
+  createTravelDocumentIssueForm,
+  formatTravelDocumentDate,
+  formatTravelDocumentDateTime,
+  issueTravelDocument,
+  loadApprovedTravelDocumentApplicants,
+  loadTravelDocumentAudit,
+  loadTravelDocumentsDashboard,
+  prefillTravelDocumentIssueForm,
+  updateTravelDocumentStatus as updateTravelDocumentStatusAction,
+  deleteTravelDocument as deleteTravelDocumentAction,
+} from '../application/documents';
 import { useBranding } from '../hooks/useBranding';
 
 // Document types from the backend
@@ -66,99 +80,10 @@ const STATUS_COLORS = {
   draft: 'info',
 };
 
-// API functions
-const API_BASE = '/api/documents';
-
-async function fetchDocuments(params = {}) {
-  const queryParams = new URLSearchParams();
-  if (params.document_type) queryParams.append('document_type', params.document_type);
-  if (params.status) queryParams.append('status', params.status);
-  if (params.limit) queryParams.append('limit', params.limit);
-  if (params.offset) queryParams.append('offset', params.offset);
-  
-  const response = await fetch(`${API_BASE}?${queryParams}`);
-  if (!response.ok) throw new Error('Failed to fetch documents');
-  return response.json();
-}
-
-async function fetchDocumentStats() {
-  const response = await fetch(`${API_BASE}/stats`);
-  if (!response.ok) throw new Error('Failed to fetch stats');
-  return response.json();
-}
-
-async function issueDocument(data) {
-  const response = await fetch(API_BASE, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data),
-  });
-  if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.detail || 'Failed to issue document');
-  }
-  return response.json();
-}
-
-async function updateDocumentStatus(id, status, reason) {
-  const response = await fetch(`${API_BASE}/${id}/status`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ status, reason }),
-  });
-  if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.detail || 'Failed to update document');
-  }
-  return response.json();
-}
-
-async function deleteDocument(id, reason) {
-  const response = await fetch(`${API_BASE}/${id}?reason=${encodeURIComponent(reason)}`, {
-    method: 'DELETE',
-  });
-  if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.detail || 'Failed to delete document');
-  }
-}
-
-async function fetchAuditLog(documentId) {
-  const response = await fetch(`${API_BASE}/${documentId}/audit`);
-  if (!response.ok) throw new Error('Failed to fetch audit log');
-  return response.json();
-}
-
-// Approved applicants API
-async function fetchApprovedApplicants(documentType = null) {
-  const params = new URLSearchParams();
-  if (documentType) params.append('document_type', documentType);
-  const response = await fetch(`${API_BASE}/approved-applicants?${params}`);
-  if (!response.ok) throw new Error('Failed to fetch approved applicants');
-  return response.json();
-}
-
-async function issueDocumentForApplicant(applicationId, options = {}) {
-  const documentNumber = options.document_number || `DOC-${Date.now()}`;
-  const params = new URLSearchParams({
-    application_id: applicationId,
-    document_number: documentNumber,
-  });
-  const response = await fetch(`${API_BASE}/issue-from-application?${params}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-  });
-  if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.detail || 'Failed to issue document for applicant');
-  }
-  return response.json();
-}
-
 export default function TravelDocuments() {
   const [tabValue, setTabValue] = useState(0);
   const [documents, setDocuments] = useState([]);
-  const [stats, setStats] = useState(null);
+  const [stats, setStats] = useState(TRAVEL_DOCUMENTS_DEFAULT_STATS);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(null);
@@ -189,18 +114,9 @@ export default function TravelDocuments() {
   const [issueMode, setIssueMode] = useState('applicant'); // 'applicant' or 'manual'
   
   // Form state for issuing
-  const [issueForm, setIssueForm] = useState({
-    document_type: 'eMRTD',
-    document_number: '',
-    holder_name: '',
-    holder_given_name: '',
-    holder_family_name: '',
-    holder_dob: '',
-    nationality: 'USA',
-    issuing_country: 'USA',
-    issuing_authority: branding.issuingAuthority,
-    validity_years: 10,
-  });
+  const [issueForm, setIssueForm] = useState(() => createTravelDocumentIssueForm({
+    issuingAuthority: branding.issuingAuthority,
+  }));
   
   // Status change form
   const [statusForm, setStatusForm] = useState({
@@ -211,17 +127,32 @@ export default function TravelDocuments() {
   // Delete form
   const [deleteReason, setDeleteReason] = useState('');
 
-  const loadDocuments = useCallback(async () => {
+  const resetIssueForm = useCallback((documentType = 'eMRTD') => {
+    setIssueForm({
+      ...createTravelDocumentIssueForm({ issuingAuthority: branding.issuingAuthority }),
+      document_type: documentType,
+    });
+  }, [branding.issuingAuthority]);
+
+  const loadDashboard = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await fetchDocuments({
-        document_type: filterType || undefined,
-        status: filterStatus || undefined,
-        limit: rowsPerPage,
-        offset: page * rowsPerPage,
+      const result = await loadTravelDocumentsDashboard({
+        filters: {
+          document_type: filterType || undefined,
+          status: filterStatus || undefined,
+          limit: rowsPerPage,
+          offset: page * rowsPerPage,
+        },
       });
-      setDocuments(data.documents || []);
-      setTotal(data.total || 0);
+
+      setDocuments(result.documents);
+      setTotal(result.total);
+      setStats(result.stats);
+
+      if (result.statsError) {
+        console.error('Failed to load stats:', result.statsError);
+      }
     } catch (err) {
       setError(err.message);
     } finally {
@@ -229,28 +160,17 @@ export default function TravelDocuments() {
     }
   }, [page, rowsPerPage, filterType, filterStatus]);
 
-  const loadStats = useCallback(async () => {
-    try {
-      const data = await fetchDocumentStats();
-      setStats(data);
-    } catch (err) {
-      console.error('Failed to load stats:', err);
-    }
-  }, []);
-
   // Load documents on mount and when filters change
   useEffect(() => {
-    loadDocuments();
-    loadStats();
-  }, [loadDocuments, loadStats]);
+    loadDashboard();
+  }, [loadDashboard]);
 
   // Load approved applicants when issue dialog opens
   const loadApprovedApplicants = useCallback(async (documentType = null) => {
     setLoadingApplicants(true);
     try {
-      const data = await fetchApprovedApplicants(documentType);
-      const applications = Array.isArray(data) ? data : data.applications || [];
-      setApprovedApplicants(applications);
+      const applicants = await loadApprovedTravelDocumentApplicants({ documentType });
+      setApprovedApplicants(applicants);
     } catch (err) {
       console.error('Failed to load approved applicants:', err);
       setApprovedApplicants([]);
@@ -260,49 +180,37 @@ export default function TravelDocuments() {
   }, []);
 
   // Handle opening issue dialog
-  const handleOpenIssueDialog = () => {
+  const handleOpenIssueDialog = useCallback((documentType = null) => {
     setIssueDialogOpen(true);
     setSelectedApplicant(null);
-    loadApprovedApplicants();
-  };
+    setIssueMode('applicant');
+    resetIssueForm(documentType || 'eMRTD');
+    loadApprovedApplicants(documentType);
+  }, [loadApprovedApplicants, resetIssueForm]);
 
   // Handle applicant selection
   const handleApplicantSelect = (applicant) => {
     setSelectedApplicant(applicant);
     // Pre-fill form from applicant data
     if (applicant) {
-      setIssueForm(prev => ({
-        ...prev,
-        document_type: applicant.document_type || prev.document_type,
-        holder_name: applicant.applicant_name || prev.holder_name,
-        holder_given_name: applicant.applicant_given_name || '',
-        holder_family_name: applicant.applicant_family_name || '',
-        holder_dob: applicant.applicant_dob || '',
-        nationality: applicant.applicant_nationality || 'USA',
-        issuing_country: applicant.applicant_nationality || 'USA',
-      }));
+      setIssueForm((prev) => prefillTravelDocumentIssueForm(prev, applicant));
     }
   };
 
   const handleIssueDocument = async () => {
     setLoading(true);
     try {
-      if (issueMode === 'applicant' && selectedApplicant) {
-        // Issue via approved applicant
-        await issueDocumentForApplicant(selectedApplicant.application_id, {
-          document_number: issueForm.document_number || undefined,
-        });
-        setSuccess('Document issued successfully for approved applicant');
-      } else {
-        // Manual issuance (for testing/demo only)
-        await issueDocument(issueForm);
-        setSuccess('Document issued successfully');
-      }
+      const result = await issueTravelDocument({
+        issueMode,
+        selectedApplicant,
+        issueForm,
+      });
+
+      setSuccess(result.successMessage);
       setIssueDialogOpen(false);
       resetIssueForm();
       setSelectedApplicant(null);
-      loadDocuments();
-      loadStats();
+      loadDashboard();
     } catch (err) {
       setError(err.message);
     } finally {
@@ -315,12 +223,16 @@ export default function TravelDocuments() {
     
     setLoading(true);
     try {
-      await updateDocumentStatus(selectedDocument.id, statusForm.status, statusForm.reason);
-      setSuccess(`Document status updated to ${statusForm.status}`);
+      const result = await updateTravelDocumentStatusAction({
+        documentId: selectedDocument.id,
+        status: statusForm.status,
+        reason: statusForm.reason,
+      });
+
+      setSuccess(result.successMessage);
       setStatusDialogOpen(false);
       setStatusForm({ status: '', reason: '' });
-      loadDocuments();
-      loadStats();
+      loadDashboard();
     } catch (err) {
       setError(err.message);
     } finally {
@@ -333,12 +245,15 @@ export default function TravelDocuments() {
     
     setLoading(true);
     try {
-      await deleteDocument(selectedDocument.id, deleteReason);
-      setSuccess('Document deleted successfully');
+      const result = await deleteTravelDocumentAction({
+        documentId: selectedDocument.id,
+        reason: deleteReason,
+      });
+
+      setSuccess(result.successMessage);
       setDeleteDialogOpen(false);
       setDeleteReason('');
-      loadDocuments();
-      loadStats();
+      loadDashboard();
     } catch (err) {
       setError(err.message);
     } finally {
@@ -349,27 +264,12 @@ export default function TravelDocuments() {
   const handleViewAudit = async (document) => {
     setSelectedDocument(document);
     try {
-      const data = await fetchAuditLog(document.id);
-      setAuditEntries(data.entries || []);
+      const result = await loadTravelDocumentAudit({ documentId: document.id });
+      setAuditEntries(result.entries);
       setAuditDialogOpen(true);
     } catch (err) {
       setError(err.message);
     }
-  };
-
-  const resetIssueForm = () => {
-    setIssueForm({
-      document_type: 'eMRTD',
-      document_number: '',
-      holder_name: '',
-      holder_given_name: '',
-      holder_family_name: '',
-      holder_dob: '',
-      nationality: 'USA',
-      issuing_country: 'USA',
-      issuing_authority: branding.issuingAuthority,
-      validity_years: 10,
-    });
   };
 
   const getDocumentTypeIcon = (type) => {
@@ -381,16 +281,6 @@ export default function TravelDocuments() {
     return <PassportIcon />;
   };
 
-  const formatDate = (dateStr) => {
-    if (!dateStr) return 'N/A';
-    return new Date(dateStr).toLocaleDateString();
-  };
-
-  const formatDateTime = (dateStr) => {
-    if (!dateStr) return 'N/A';
-    return new Date(dateStr).toLocaleString();
-  };
-
   return (
     <Box sx={{ p: 3 }}>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
@@ -398,7 +288,7 @@ export default function TravelDocuments() {
           Travel Documents
         </Typography>
         <Box>
-          <IconButton onClick={loadDocuments} disabled={loading}>
+          <IconButton onClick={loadDashboard} disabled={loading}>
             <RefreshIcon />
           </IconButton>
           <Button
@@ -531,8 +421,8 @@ export default function TravelDocuments() {
                       <TableCell>{doc.document_number}</TableCell>
                       <TableCell>{doc.holder_name}</TableCell>
                       <TableCell>{doc.nationality}</TableCell>
-                      <TableCell>{formatDate(doc.issued_at)}</TableCell>
-                      <TableCell>{formatDate(doc.expires_at)}</TableCell>
+                      <TableCell>{formatTravelDocumentDate(doc.issued_at)}</TableCell>
+                      <TableCell>{formatTravelDocumentDate(doc.expires_at)}</TableCell>
                       <TableCell>
                         <Chip
                           label={doc.status}
@@ -632,8 +522,7 @@ export default function TravelDocuments() {
                     <Button
                       size="small"
                       onClick={() => {
-                        setIssueForm({ ...issueForm, document_type: docType.value });
-                        setIssueDialogOpen(true);
+                        handleOpenIssueDialog(docType.value);
                       }}
                     >
                       Issue New
@@ -905,10 +794,12 @@ export default function TravelDocuments() {
           <Button
             variant="contained"
             onClick={handleIssueDocument}
-            disabled={
-              loading || 
-              (issueMode === 'applicant' ? !selectedApplicant : (!issueForm.document_number || !issueForm.holder_name || !issueForm.holder_dob))
-            }
+            disabled={!canSubmitTravelDocumentIssue({
+              loading,
+              issueMode,
+              selectedApplicant,
+              issueForm,
+            })}
             data-testid="confirm-issue-document"
           >
             {loading ? <CircularProgress size={24} /> : 'Issue Document'}
@@ -940,7 +831,7 @@ export default function TravelDocuments() {
                 </Grid>
                 <Grid item xs={6}>
                   <Typography variant="subtitle2" color="textSecondary">Date of Birth</Typography>
-                  <Typography>{formatDate(selectedDocument.holder_dob)}</Typography>
+                  <Typography>{formatTravelDocumentDate(selectedDocument.holder_dob)}</Typography>
                 </Grid>
                 <Grid item xs={6}>
                   <Typography variant="subtitle2" color="textSecondary">Nationality</Typography>
@@ -959,11 +850,11 @@ export default function TravelDocuments() {
                 </Grid>
                 <Grid item xs={6}>
                   <Typography variant="subtitle2" color="textSecondary">Issued</Typography>
-                  <Typography>{formatDateTime(selectedDocument.issued_at)}</Typography>
+                  <Typography>{formatTravelDocumentDateTime(selectedDocument.issued_at)}</Typography>
                 </Grid>
                 <Grid item xs={6}>
                   <Typography variant="subtitle2" color="textSecondary">Expires</Typography>
-                  <Typography>{formatDateTime(selectedDocument.expires_at)}</Typography>
+                  <Typography>{formatTravelDocumentDateTime(selectedDocument.expires_at)}</Typography>
                 </Grid>
                 <Grid item xs={6}>
                   <Typography variant="subtitle2" color="textSecondary">Issuing Country</Typography>
@@ -1055,7 +946,7 @@ export default function TravelDocuments() {
                 ) : (
                   auditEntries.map((entry) => (
                     <TableRow key={entry.id}>
-                      <TableCell>{formatDateTime(entry.timestamp)}</TableCell>
+                      <TableCell>{formatTravelDocumentDateTime(entry.timestamp)}</TableCell>
                       <TableCell>
                         <Chip label={entry.event_type} size="small" />
                       </TableCell>

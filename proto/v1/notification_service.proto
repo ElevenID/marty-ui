@@ -1,0 +1,172 @@
+syntax = "proto3";
+
+package marty.ui.notification.v1;
+
+import "google/api/annotations.proto";
+
+option java_multiple_files = true;
+
+// NotificationService handles sending and managing in-app and external
+// notifications (email, push, SMS, webhook).
+service NotificationService {
+  // Send a notification.
+  rpc SendNotification(SendNotificationRequest) returns (NotificationResponse) {
+    option (google.api.http) = {
+      post: "/v1/notifications/send"
+      body: "*"
+    };
+  }
+
+  // Get a notification by ID.
+  rpc GetNotification(GetNotificationRequest) returns (NotificationResponse) {
+    option (google.api.http) = {
+      get: "/v1/notifications/{notification_id}"
+    };
+  }
+
+  // List notifications with optional filters.
+  rpc ListNotifications(ListNotificationsRequest) returns (ListNotificationsResponse) {
+    option (google.api.http) = {
+      get: "/v1/notifications"
+    };
+  }
+
+  // Get unread notification count for a user.
+  rpc GetUnreadCount(GetUnreadCountRequest) returns (GetUnreadCountResponse) {
+    option (google.api.http) = {
+      get: "/v1/notifications/unread/count"
+    };
+  }
+
+  // Mark a notification as read.
+  rpc MarkAsRead(MarkAsReadRequest) returns (NotificationResponse) {
+    option (google.api.http) = {
+      patch: "/v1/notifications/{notification_id}/read"
+    };
+  }
+
+  // Mark all matching notifications as read.
+  rpc MarkAllAsRead(MarkAllAsReadRequest) returns (MarkAllAsReadResponse) {
+    option (google.api.http) = {
+      post: "/v1/notifications/read-all"
+      body: "*"
+    };
+  }
+
+  // Delete a notification.
+  rpc DeleteNotification(DeleteNotificationRequest) returns (DeleteNotificationResponse) {
+    option (google.api.http) = {
+      delete: "/v1/notifications/{notification_id}"
+    };
+  }
+
+  // -- Streaming --
+
+  // Subscribe to real-time notification events for a recipient.
+  // Server pushes new notifications as they arrive.
+  rpc StreamNotifications(StreamNotificationsRequest) returns (stream NotificationEvent) {}
+
+  // Health check.
+  rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse) {
+    option (google.api.http) = {
+      get: "/v1/notifications/health"
+    };
+  }
+}
+
+message StreamNotificationsRequest {
+  string recipient_id = 1;
+  string organization_id = 2;
+  // Filter by notification types (empty = all).
+  repeated string notification_types = 3;
+  // Filter by minimum severity: "info", "warning", "error".
+  string min_severity = 4;
+}
+
+message NotificationEvent {
+  string event_type = 1;  // "created", "delivered", "read"
+  NotificationResponse notification = 2;
+  string timestamp = 3;
+}
+
+message SendNotificationRequest {
+  string organization_id = 1;
+  string recipient_id = 2;
+  string recipient_email = 3;
+  string notification_type = 4;  // "email", "push", "sms", "webhook"
+  string template_id = 5;
+  string subject = 6;
+  string body = 7;
+  string severity = 8;           // "info", "warning", "error"
+  string link = 9;
+  map<string, string> data = 10;
+  string priority = 11;          // "low", "normal", "high", "urgent"
+}
+
+message GetNotificationRequest {
+  string notification_id = 1;
+}
+
+message ListNotificationsRequest {
+  string organization_id = 1;
+  string recipient_id = 2;
+  string status = 3;
+  bool unread_only = 4;
+  int32 limit = 5;
+  int32 offset = 6;
+}
+
+message ListNotificationsResponse {
+  repeated NotificationResponse notifications = 1;
+  int32 total = 2;
+}
+
+message GetUnreadCountRequest {
+  string recipient_id = 1;
+}
+
+message GetUnreadCountResponse {
+  int32 count = 1;
+}
+
+message MarkAsReadRequest {
+  string notification_id = 1;
+}
+
+message MarkAllAsReadRequest {
+  string recipient_id = 1;
+  string organization_id = 2;
+}
+
+message MarkAllAsReadResponse {
+  int32 updated_count = 1;
+}
+
+message DeleteNotificationRequest {
+  string notification_id = 1;
+}
+
+message DeleteNotificationResponse {
+  bool success = 1;
+}
+
+message NotificationResponse {
+  string id = 1;
+  string notification_type = 2;
+  string status = 3;
+  bool read = 4;
+  string title = 5;
+  string message = 6;
+  string severity = 7;
+  string link = 8;
+  string recipient_email = 9;
+  string subject = 10;
+  string created_at = 11;
+  string delivered_at = 12;
+}
+
+message HealthCheckRequest {}
+
+message HealthCheckResponse {
+  string status = 1;
+}

@@ -33,81 +33,38 @@ import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import LoginIcon from '@mui/icons-material/Login';
 import BadgeIcon from '@mui/icons-material/Badge';
+import DirectionsCarIcon from '@mui/icons-material/DirectionsCar';
 import PersonIcon from '@mui/icons-material/Person';
 import { useAuth } from '../../hooks/useAuth';
 import { usePreview } from '../../contexts/PreviewContext';
+import { get } from '../../services/api';
+import {
+  autoIssueApplication as autoIssueApplicationApi,
+  createApplicant as createApplicantApi,
+  createApplication as createApplicationApi,
+  enrollBiometric as enrollBiometricApi,
+  getApplicant as getApplicantApi,
+  getApplicantByUser as getApplicantByUserApi,
+  submitApplication as submitApplicationApi,
+  updateApplicantProfile as updateApplicantProfileApi,
+} from '../../services/applicantApi';
 import { DynamicFieldGroup } from './DynamicFieldRenderer';
 import ClaimCredentialDialog from '../console/applicant/ClaimCredentialDialog';
-
-
-const API_URL = import.meta.env.VITE_API_URL || '';
-
-function normalizeCredentialConfigInput(config) {
-  if (!config) {
-    return null;
-  }
-
-  const requiredFields = Array.isArray(config.required_fields)
-    ? config.required_fields
-    : (Array.isArray(config.requiredFields) ? config.requiredFields : []);
-  const optionalFields = Array.isArray(config.optional_fields)
-    ? config.optional_fields
-    : (Array.isArray(config.optionalFields) ? config.optionalFields : []);
-  const customFields = Array.isArray(config.custom_fields)
-    ? config.custom_fields
-    : (Array.isArray(config.customFields) ? config.customFields : []);
-
-  return {
-    ...config,
-    id: config.id,
-    credential_type: config.credential_type || config.credentialType,
-    display_name: config.display_name || config.name,
-    required_fields: requiredFields,
-    optional_fields: optionalFields,
-    custom_fields: customFields,
-    field_validation_rules: config.field_validation_rules || {},
-  };
-}
-
-/**
- * Group fields into logical steps based on their names/prefixes
- */
-function groupFieldsIntoSteps(requiredFields = [], optionalFields = [], customFields = [], t) {
-  const steps = [];
-  
-  // Define standard field categories
-  const personalFields = ['first_name', 'last_name', 'family_name', 'given_name', 'date_of_birth', 'birth_date', 'email', 'phone', 'nationality', 'sex', 'gender'];
-  const addressFields = ['street', 'city', 'state', 'zip', 'postal_code', 'country', 'address'];
-  const documentFields = ['document_number', 'license_class', 'driving_privileges', 'restrictions', 'issue_date', 'expiry_date'];
-  const photoFields = ['portrait', 'signature', 'photo'];
-  
-  const allFields = [
-    ...requiredFields.map(f => ({ name: typeof f === 'string' ? f : f.name, required: true, ...f })),
-    ...optionalFields.map(f => ({ name: typeof f === 'string' ? f : f.name, required: false, ...f })),
-    ...customFields.map(f => ({ name: f.name, required: false, ...f })),
-  ];
-  
-  // Categorize fields
-  const personal = allFields.filter(f => personalFields.some(pf => f.name.toLowerCase().includes(pf)));
-  const address = allFields.filter(f => addressFields.some(af => f.name.toLowerCase().includes(af)));
-  const document = allFields.filter(f => documentFields.some(df => f.name.toLowerCase().includes(df)));
-  const photo = allFields.filter(f => photoFields.some(pf => f.name.toLowerCase().includes(pf)));
-  const other = allFields.filter(f => 
-    !personal.includes(f) && 
-    !address.includes(f) && 
-    !document.includes(f) && 
-    !photo.includes(f)
-  );
-  
-  if (personal.length > 0) steps.push({ label: t('applicationForm.steps.personalInfo'), fields: personal });
-  if (address.length > 0) steps.push({ label: t('applicationForm.steps.address'), fields: address });
-  if (document.length > 0) steps.push({ label: t('applicationForm.steps.documentDetails'), fields: document });
-  if (other.length > 0) steps.push({ label: t('applicationForm.steps.additionalInfo'), fields: other });
-  if (photo.length > 0) steps.push({ label: t('applicationForm.steps.photos'), fields: photo });
-  steps.push({ label: t('applicationForm.steps.review'), fields: [] });
-  
-  return steps;
-}
+import {
+  autoApplyForCredential,
+  buildApplicantProfileData,
+  buildAutoApplyContext,
+  buildStandardApplicationPayload,
+  loadCredentialApplicationConfig,
+  resolveApplicantIdForApplication,
+  submitCredentialApplication,
+  getCredentialKindFlags,
+  getOneClickSummaryFields,
+  groupFieldsIntoSteps,
+  normalizeCredentialConfigInput,
+  normalizeTemplateToFormConfig,
+  validateApplicationStep,
+} from '../../application/applications';
 
 export default function ApplicationForm() {
   const { t } = useTranslation('applicant');
@@ -141,29 +98,6 @@ export default function ApplicationForm() {
   // Validation errors
   const [validationErrors, setValidationErrors] = useState({});
 
-  const normalizeTemplateToFormConfig = (template) => {
-    const claims = Array.isArray(template?.claims) ? template.claims : [];
-    const requiredClaims = claims.filter((claim) => claim?.required).map((claim) => claim?.name).filter(Boolean);
-    const optionalClaims = claims.filter((claim) => !claim?.required).map((claim) => claim?.name).filter(Boolean);
-
-    return {
-      id: template?.id,
-      credentialType: template?.credential_type,
-      credential_type: template?.credential_type,
-      name: template?.name,
-      display_name: template?.name,
-      description: template?.description,
-      required_fields: requiredClaims,
-      optional_fields: optionalClaims,
-      custom_fields: [],
-      field_validation_rules: {},
-      submission_instructions: null,
-      validity_rules: template?.validity_rules || null,
-      issuer_requirements: template?.issuer_requirements || {},
-      claims,
-    };
-  };
-  
   // Compute steps dynamically from credential config
   const steps = useMemo(() => {
     if (!credentialConfig) return [{ label: t('applicationForm.steps.review'), fields: [] }];
@@ -185,70 +119,13 @@ export default function ApplicationForm() {
     return allFields.filter(f => f.required).map(f => f.name);
   }, [allFields]);
 
-  const fetchApplicantById = async (applicantId) => {
-    if (!applicantId) {
-      return null;
-    }
+  const getCredentialTemplate = async (templateId) => get(`/v1/credential-templates/${templateId}`);
 
-    const response = await fetch(`${API_URL}/v1/applicants/profiles/${applicantId}`, {
-      credentials: 'include',
-    });
-
-    if (!response.ok) {
-      return null;
-    }
-
-    const data = await response.json();
-    return data?.id || null;
-  };
-
-  const fetchApplicantByUser = async () => {
-    if (!user?.user_id) {
-      return null;
-    }
-
-    const response = await fetch(`${API_URL}/v1/applicants/by-user/${user.user_id}`, {
-      credentials: 'include',
-    });
-
-    if (!response.ok) {
-      return null;
-    }
-
-    const data = await response.json();
-    return data?.id || null;
-  };
-
-  const resolveApplicantId = async () => {
-    const byId = await fetchApplicantById(user?.applicant_id);
-    if (byId) {
-      return byId;
-    }
-
-    const byUser = await fetchApplicantByUser();
-    return byUser || null;
-  };
-
-  const createApplicant = async (applicantData) => {
-    if (!user?.user_id) {
-      throw new Error('Unable to resolve applicant profile');
-    }
-
-    const response = await fetch(`${API_URL}/v1/applicants`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify(applicantData),
-    });
-
-    if (!response.ok) {
-      const data = await response.json();
-      throw new Error(data.detail || 'Failed to create applicant');
-    }
-
-    const data = await response.json();
-    return data?.id || null;
-  };
+  const resolveApplicantId = async () => resolveApplicantIdForApplication({
+    user,
+    getApplicant: getApplicantApi,
+    getApplicantByUser: getApplicantByUserApi,
+  });
 
   const readFileAsBase64 = (file) =>
     new Promise((resolve, reject) => {
@@ -271,21 +148,16 @@ export default function ApplicationForm() {
       if (!credentialConfigId || credentialConfig) {
         return;
       }
-      if (!organizationId) {
-        setError('Organization context missing for credential configuration.');
-        return;
-      }
       setConfigLoading(true);
       try {
-        const response = await fetch(
-          `${API_URL}/v1/credential-templates/${credentialConfigId}`,
-          { credentials: 'include' }
-        );
-        if (!response.ok) {
-          throw new Error('Unable to load credential configuration');
-        }
-        const data = await response.json();
-        setCredentialConfig(normalizeTemplateToFormConfig(data));
+        const result = await loadCredentialApplicationConfig({
+          credentialConfigId,
+          credentialConfig,
+          organizationId,
+          getCredentialTemplate,
+        });
+        setCredentialConfig(result.credentialConfig);
+        setError(result.error);
       } catch (err) {
         setError(err.message);
       } finally {
@@ -304,82 +176,26 @@ export default function ApplicationForm() {
   }, [user, allFields]);
 
   // ===========================================================================
-  // MemberCredential: derived flag & one-click auto-apply handler
+  // MemberCredential / mDL: derived flags & one-click auto-apply handler
   // ===========================================================================
-  const isMemberCredential = credentialConfig?.credential_type === 'MemberCredential';
+  const { isMemberCredential, isMdlCredential, isOneClickCredential } = getCredentialKindFlags(credentialConfig);
 
   const handleAutoApply = async () => {
     setAutoApplying(true);
     setError(null);
     try {
-      // 1. Resolve or create the applicant profile
-      let applicantId = await resolveApplicantId();
-      if (!applicantId) {
-        applicantId = await createApplicant({
-          organization_id: organizationId,
-          user_id: user.user_id,
-          given_name: user.given_name || '',
-          family_name: user.family_name || '',
-          email: user.email,
-        });
-      }
-      if (!applicantId) throw new Error('Unable to resolve applicant profile');
-
-      // 2. Create the application — include all MemberCredential claims
-      //    in metadata so the issuance service can embed them in the VC.
-      const now = new Date().toISOString();
-      const role = (user.roles || []).find(r => ['applicant','vendor','administrator'].includes(r)) || 'applicant';
-      const createRes = await fetch(`${API_URL}/v1/applicants/applications`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({
-          applicant_id: applicantId,
-          credential_configuration_id: credentialConfig?.id || credentialConfigId,
-          issuing_authority: 'Marty Trust Services',
-          requested_validity_years: 1,
-          metadata: {
-            credential_type: 'MemberCredential',
-            credential_display_name: credentialConfig?.name || 'Member Login Credential',
-            // MemberCredential VC claims
-            member_id: user.user_id,
-            user_id: user.user_id,
-            email: user.email,
-            given_name: user.given_name || '',
-            family_name: user.family_name || '',
-            organization_id: organizationId,
-            organization_name: user.organization_name || '',
-            role,
-            issued_at: now,
-            // workflow flag — stripped before signing
-            auto_approve: true,
-          },
-        }),
+      const result = await autoApplyForCredential({
+        organizationId,
+        user,
+        credentialConfig,
+        credentialConfigId,
+        resolveApplicantId,
+        createApplicant: createApplicantApi,
+        createApplication: createApplicationApi,
+        autoIssueApplication: autoIssueApplicationApi,
       });
-      if (!createRes.ok) {
-        const d = await createRes.json();
-        throw new Error(d.detail || 'Failed to create application');
-      }
-      const created = await createRes.json();
-
-      // 3. Single call: atomically submits, approves, and initiates issuance.
-      const autoIssueRes = await fetch(
-        `${API_URL}/v1/applicants/applications/${created.id}/auto-issue`,
-        { method: 'POST', credentials: 'include' },
-      );
-      if (!autoIssueRes.ok) {
-        const d = await autoIssueRes.json();
-        throw new Error(d.detail || 'Failed to issue credential');
-      }
-      const issued = await autoIssueRes.json();
-      setApplicationId(issued.id);
-
-      // 4. Open wallet claim dialog with the offer URLs
-      setAutoOfferData({
-        offer_url: issued.credential_offer_uri,
-        credential_offer_uris: issued.credential_offer_uris || {},
-        expires_at: issued.offer_expires_at,
-      });
+      setApplicationId(result.applicationId);
+      setAutoOfferData(result.offerData);
       setClaimDialogOpen(true);
     } catch (err) {
       console.error('Auto-apply error:', err);
@@ -401,57 +217,14 @@ export default function ApplicationForm() {
   };
 
   const validateStep = (stepIndex) => {
-    const errors = {};
-    
-    // Last step is review - just check terms
-    if (stepIndex === steps.length - 1) {
-      if (!formData.acceptTerms) {
-        errors.acceptTerms = 'You must accept the terms';
-      }
-      setValidationErrors(errors);
-      return Object.keys(errors).length === 0;
-    }
-    
-    // Validate fields in current step
-    const currentStepFields = steps[stepIndex]?.fields || [];
-    const validationRules = credentialConfig?.field_validation_rules || {};
-    
-    currentStepFields.forEach(field => {
-      const fieldName = field.name;
-      const value = formData[fieldName];
-      const rules = validationRules[fieldName];
-      
-      // Check required
-      if (field.required && !value) {
-        errors[fieldName] = `${field.label || fieldName.replace(/_/g, ' ')} is required`;
-        return;
-      }
-      
-      // Skip validation if field is empty and not required
-      if (!value && !field.required) return;
-      
-      // Apply validation rules
-      if (rules) {
-        if (rules.min_length && value.length < rules.min_length) {
-          errors[fieldName] = `Minimum length is ${rules.min_length}`;
-        }
-        if (rules.max_length && value.length > rules.max_length) {
-          errors[fieldName] = `Maximum length is ${rules.max_length}`;
-        }
-        if (rules.pattern && !new RegExp(rules.pattern).test(value)) {
-          errors[fieldName] = rules.pattern_description || 'Invalid format';
-        }
-        if (rules.min_value !== undefined && value < rules.min_value) {
-          errors[fieldName] = `Minimum value is ${rules.min_value}`;
-        }
-        if (rules.max_value !== undefined && value > rules.max_value) {
-          errors[fieldName] = `Maximum value is ${rules.max_value}`;
-        }
-      }
+    const validation = validateApplicationStep({
+      stepIndex,
+      steps,
+      formData,
+      validationRules: credentialConfig?.field_validation_rules || {},
     });
-    
-    setValidationErrors(errors);
-    return Object.keys(errors).length === 0;
+    setValidationErrors(validation.errors);
+    return validation.valid;
   };
 
   const handleNext = () => {
@@ -471,144 +244,25 @@ export default function ApplicationForm() {
     setError(null);
 
     try {
-      if (!credentialConfig?.id && !credentialConfigId) {
-        throw new Error('Please select a credential to apply for.');
-      }
-      
-      // Build applicant data from form
-      const applicantData = {
-        organization_id: organizationId,
-        user_id: user.user_id,
-        given_name: formData.given_name || formData.first_name || '',
-        family_name: formData.family_name || formData.last_name || '',
-        email: formData.email || user.email,
-        date_of_birth: formData.date_of_birth || formData.birth_date,
-        nationality: formData.nationality || 'USA',
-      };
-      
-      // Build address from form (if address fields exist)
-      const address = {};
-      if (formData.street) address.street_line1 = formData.street;
-      if (formData.city) address.city = formData.city;
-      if (formData.state) address.state_province = formData.state;
-      if (formData.zip || formData.postal_code) address.postal_code = formData.zip || formData.postal_code;
-      if (formData.country) address.country = formData.country;
-      else address.country = 'USA';
-      
-      if (Object.keys(address).length > 0) {
-        applicantData.address = address;
-      }
-
-      let applicantId = await resolveApplicantId();
-      let applicantCreated = false;
-
-      if (!applicantId) {
-        applicantId = await createApplicant(applicantData);
-        applicantCreated = true;
-      }
-
-      if (!applicantId) {
-        throw new Error('Unable to resolve applicant profile');
-      }
-
-      if (!applicantCreated) {
-        const updateResponse = await fetch(`${API_URL}/v1/applicants/profiles/${applicantId}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify(applicantData),
-        });
-
-        if (!updateResponse.ok) {
-          if (updateResponse.status === 404) {
-            const fallbackApplicantId = await fetchApplicantByUser();
-            if (fallbackApplicantId) {
-              applicantId = fallbackApplicantId;
-            } else {
-              applicantId = await createApplicant(applicantData);
-              applicantCreated = true;
-            }
-            if (!applicantId) {
-              throw new Error('Unable to resolve applicant profile');
-            }
-          } else {
-            const data = await updateResponse.json();
-            throw new Error(data.detail || 'Failed to update applicant');
-          }
-        }
-      }
-
-      const createResponse = await fetch(`${API_URL}/v1/applicants/applications`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({
-          applicant_id: applicantId,
-          credential_configuration_id: credentialConfig?.id || credentialConfigId,
-          issuing_authority: 'Marty Trust Services',
-          requested_validity_years: 10,
-          metadata: {
-            document_number: formData.documentNumber,
-            credential_type: credentialConfig?.credentialType || credentialConfig?.credential_type,
-            credential_display_name: credentialConfig?.name || credentialConfig?.display_name,
-            license_class: formData.licenseClass,
-            restrictions: formData.restrictions,
-          },
-        }),
+      const result = await submitCredentialApplication({
+        organizationId,
+        user,
+        formData,
+        credentialConfig,
+        credentialConfigId,
+        allFields,
+        resolveApplicantId,
+        createApplicant: createApplicantApi,
+        updateApplicantProfile: updateApplicantProfileApi,
+        getApplicantByUser: getApplicantByUserApi,
+        createApplication: createApplicationApi,
+        submitApplication: submitApplicationApi,
+        enrollBiometric: enrollBiometricApi,
+        readFileAsBase64,
       });
 
-      if (!createResponse.ok) {
-        const data = await createResponse.json();
-        throw new Error(data.detail || 'Failed to create application');
-      }
-
-      const created = await createResponse.json();
-
-      const submitResponse = await fetch(
-        `${API_URL}/v1/applicants/applications/${created.id}/submit`,
-        {
-          method: 'POST',
-          credentials: 'include',
-        }
-      );
-
-      if (!submitResponse.ok) {
-        const data = await submitResponse.json();
-        throw new Error(data.detail || 'Failed to submit application');
-      }
-
-      const submittedApplication = await submitResponse.json();
-
-      // Upload portrait if present
-      const portraitField = allFields.find(f => f.name === 'portrait' || f.type === 'file');
-      if (portraitField && formData[portraitField.name]) {
-        const imageBase64 = await readFileAsBase64(formData[portraitField.name]);
-        const templateBase64 = imageBase64 || btoa('test-biometric-template');
-
-        const biometricResponse = await fetch(
-          `${API_URL}/v1/applicants/profiles/${applicantId}/biometrics`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'include',
-            body: JSON.stringify({
-              biometric_type: 'FACIAL',
-              template_data_base64: templateBase64,
-              image_data_base64: imageBase64,
-              is_live_capture: true,
-              capture_device_id: 'web-form',
-            }),
-          }
-        );
-
-        if (!biometricResponse.ok) {
-          const data = await biometricResponse.json();
-          throw new Error(data.detail || 'Failed to enroll biometric');
-        }
-      }
-
-      setApplicationId(submittedApplication.id);
-      setSubmitted(true);
+      setApplicationId(result.applicationId);
+      setSubmitted(result.submitted);
     } catch (err) {
       console.error('Error submitting application:', err);
       setError(err.message);
@@ -818,10 +472,26 @@ export default function ApplicationForm() {
   }
 
   // ===========================================================================
-  // MemberCredential: simplified one-click issuance UI
+  // One-click issuance UI (MemberCredential & mDL)
   // ===========================================================================
-  if (isMemberCredential) {
+  if (isOneClickCredential) {
     const displayRole = (user?.roles || []).find(r => ['applicant', 'vendor', 'administrator'].includes(r)) || 'applicant';
+
+    const HeroIcon = isMdlCredential ? DirectionsCarIcon : LoginIcon;
+    const heroTitle = isMdlCredential
+      ? (credentialConfig?.display_name || 'Mobile Driving Licence')
+      : (credentialConfig?.display_name || 'Member Login Credential');
+    const heroDescription = isMdlCredential
+      ? (credentialConfig?.description || 'An ISO/IEC 18013-5 Mobile Driving Licence in mDoc format — issued instantly to your wallet.')
+      : (credentialConfig?.description || 'A free, instant credential that lets you log in with your wallet — no password needed.');
+    const ctaLabel = isMdlCredential ? 'Get My Mobile Driver\'s Licence' : 'Get My Login Credential';
+    const ctaSubtext = isMdlCredential ? 'Free · Instant · mDoc format' : 'Free · Instant · No review required';
+
+    const summaryFields = getOneClickSummaryFields({ credentialConfig, user, organizationId });
+
+    const gradientBg = isMdlCredential
+      ? 'linear-gradient(145deg, #0f4c8108, #0f4c8114)'
+      : 'linear-gradient(145deg, #1a237e08, #1a237e14)';
     return (
       <Container maxWidth="sm" sx={{ py: 6 }}>
         <Fade in timeout={600}>
@@ -831,20 +501,19 @@ export default function ApplicationForm() {
               p: 5,
               borderRadius: 3,
               textAlign: 'center',
-              background: 'linear-gradient(145deg, #1a237e08, #1a237e14)',
+              background: gradientBg,
               border: '1px solid',
               borderColor: 'primary.light',
             }}
           >
             {/* Icon + title */}
             <Box sx={{ mb: 3 }}>
-              <LoginIcon sx={{ fontSize: 64, color: 'primary.main', mb: 1 }} />
+              <HeroIcon sx={{ fontSize: 64, color: 'primary.main', mb: 1 }} />
               <Typography variant="h5" fontWeight={700} gutterBottom>
-                {credentialConfig?.display_name || 'Member Login Credential'}
+                {heroTitle}
               </Typography>
               <Typography variant="body2" color="text.secondary">
-                {credentialConfig?.description ||
-                  'A free, instant credential that lets you log in with your wallet — no password needed.'}
+                {heroDescription}
               </Typography>
             </Box>
 
@@ -857,12 +526,7 @@ export default function ApplicationForm() {
                 Your credential will contain
               </Typography>
               <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
-                {[
-                  { label: 'Name', value: [user?.given_name, user?.family_name].filter(Boolean).join(' ') || '—' },
-                  { label: 'Email', value: user?.email || '—' },
-                  { label: 'Role', value: displayRole },
-                  { label: 'Organization', value: user?.organization_name || organizationId || '—' },
-                ].map(({ label, value }) => (
+                {summaryFields.map(({ label, value }) => (
                   <Box key={label} sx={{ display: 'flex', justifyContent: 'space-between', gap: 2 }}>
                     <Typography variant="body2" color="text.secondary">{label}</Typography>
                     <Typography variant="body2" fontWeight={500}>{value}</Typography>
@@ -885,14 +549,14 @@ export default function ApplicationForm() {
               fullWidth
               onClick={handleAutoApply}
               disabled={autoApplying}
-              startIcon={autoApplying ? <CircularProgress size={20} color="inherit" /> : <BadgeIcon />}
+              startIcon={autoApplying ? <CircularProgress size={20} color="inherit" /> : (isMdlCredential ? <DirectionsCarIcon /> : <BadgeIcon />)}
               sx={{ py: 1.5, fontSize: '1rem', borderRadius: 2 }}
             >
-              {autoApplying ? 'Issuing credential…' : 'Get My Login Credential'}
+              {autoApplying ? 'Issuing credential…' : ctaLabel}
             </Button>
 
             <Typography variant="caption" color="text.secondary" sx={{ mt: 2, display: 'block' }}>
-              Free · Instant · No review required
+              {ctaSubtext}
             </Typography>
           </Paper>
         </Fade>
