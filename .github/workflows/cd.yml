@@ -21,22 +21,25 @@ jobs:
       contents: read
     steps:
       - name: Configure Git auth for private repos
-        run: git config --global url."https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/".insteadOf "https://github.com/"
+        run: git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
 
       - uses: actions/checkout@v4
         with:
           repository: ElevenID/marty-core
+          token: ${{ secrets.REPO_ACCESS_TOKEN }}
           path: marty-core
 
       - uses: actions/checkout@v4
         with:
           repository: ElevenID/longfellow-zk
+          token: ${{ secrets.REPO_ACCESS_TOKEN }}
           path: longfellow-zk
           sparse-checkout: lib
 
       - uses: actions/checkout@v4
         with:
           repository: ElevenID/marty-credentials
+          token: ${{ secrets.REPO_ACCESS_TOKEN }}
           path: marty-credentials
 
       - uses: dtolnay/rust-toolchain@nightly
@@ -100,6 +103,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: ElevenID/marty-credentials
+          token: ${{ secrets.REPO_ACCESS_TOKEN }}
           path: _marty-credentials
           sparse-checkout: services/issuance
 
@@ -171,6 +175,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: ElevenID/marty-credentials
+          token: ${{ secrets.REPO_ACCESS_TOKEN }}
           path: _marty-credentials
           sparse-checkout: services/issuance
 
