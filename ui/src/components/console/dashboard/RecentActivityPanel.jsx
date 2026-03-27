@@ -203,7 +203,7 @@ export function RecentActivityPanel() {
   );
 
   // Merge live SSE events with fetched events, newest first, capped at 10
-  const events = [...liveEvents, ...fetchedEvents]
+  const events = [...liveEvents, ...(fetchedEvents || [])]
     .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
     .slice(0, 10);
 

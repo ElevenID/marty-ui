@@ -138,7 +138,7 @@ describe('dashboardRules', () => {
       expect(result.template.message).toContain('1 active template')
     })
 
-    it('should mark policy as BLOCKED when missing credential requirements', () => {
+    it('should mark policy as BLOCKED when missing required claims', () => {
       const data = {
         trustProfiles: [{ id: 1, status: 'active' }],
         templates: [
@@ -152,8 +152,7 @@ describe('dashboardRules', () => {
         policies: [
           {
             id: 1,
-            status: 'active',
-            credential_requirements: [],
+            required_claims: [],
           },
         ],
         deployments: [],
@@ -164,11 +163,11 @@ describe('dashboardRules', () => {
       const result = computeSetupReadiness(data)
 
       expect(result.policy.state).toBe(ReadinessState.BLOCKED)
-      expect(result.policy.message).toContain('missing requirements')
+      expect(result.policy.message).toContain('missing required claims')
       expect(result.policy.blockReason).toBeTruthy()
     })
 
-    it('should mark policy as READY when active with requirements', () => {
+    it('should mark policy as READY when configured with required claims', () => {
       const data = {
         trustProfiles: [{ id: 1, status: 'active' }],
         templates: [
@@ -182,8 +181,7 @@ describe('dashboardRules', () => {
         policies: [
           {
             id: 1,
-            status: 'active',
-            credential_requirements: [{ field: 'age', condition: 'gt', value: 21 }],
+            required_claims: [{ claim_name: 'age', credential_type: 'IdentityCredential' }],
           },
         ],
         deployments: [],
@@ -194,7 +192,7 @@ describe('dashboardRules', () => {
       const result = computeSetupReadiness(data)
 
       expect(result.policy.state).toBe(ReadinessState.READY)
-      expect(result.policy.message).toContain('1 active policy')
+      expect(result.policy.message).toContain('1 policy')
     })
 
     it('should mark deployment as BLOCKED when no API keys exist', () => {
@@ -211,8 +209,7 @@ describe('dashboardRules', () => {
         policies: [
           {
             id: 1,
-            status: 'active',
-            credential_requirements: [{ field: 'age' }],
+            required_claims: [{ claim_name: 'age' }],
           },
         ],
         deployments: [{ id: 1, status: 'active' }],
@@ -241,8 +238,7 @@ describe('dashboardRules', () => {
         policies: [
           {
             id: 1,
-            status: 'active',
-            credential_requirements: [{ field: 'age' }],
+            required_claims: [{ claim_name: 'age' }],
           },
         ],
         deployments: [{ id: 1, status: 'active' }],
@@ -271,8 +267,7 @@ describe('dashboardRules', () => {
         policies: [
           {
             id: 1,
-            status: 'active',
-            credential_requirements: [{ field: 'age' }],
+            required_claims: [{ claim_name: 'age' }],
           },
         ],
         deployments: [{ id: 1, status: 'active' }],
@@ -309,8 +304,7 @@ describe('dashboardRules', () => {
         policies: [
           {
             id: 1,
-            status: 'active',
-            credential_requirements: [{ field: 'age' }],
+            required_claims: [{ claim_name: 'age' }],
           },
         ],
         deployments: [{ id: 1, status: 'active' }],

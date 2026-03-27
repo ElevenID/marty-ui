@@ -12,6 +12,27 @@ if TYPE_CHECKING:
 from flow.infrastructure.models import flow_definitions, flow_instances
 
 
+def _serialize_preconditions_payload(flow: "FlowDefinition") -> dict:
+    return {
+        "items": list(flow.preconditions),
+        "protocol": {
+            "trust_profile_id": flow.trust_profile_id,
+            "application_template_id": flow.application_template_id,
+            "deployment_profile_ids": list(flow.deployment_profile_ids),
+            "approval_strategy": flow.approval_strategy,
+            "enabled": flow.enabled,
+            "hooks": flow.hooks,
+            "trigger": flow.trigger,
+        },
+    }
+
+
+def _deserialize_preconditions_payload(payload: list[str] | dict | None) -> tuple[list[str], dict]:
+    if isinstance(payload, dict):
+        return payload.get("items", []) or [], payload.get("protocol", {}) or {}
+    return payload or [], {}
+
+
 class PostgresFlowRepository:
     """PostgreSQL implementation of flow repository."""
     
@@ -23,6 +44,7 @@ class PostgresFlowRepository:
     async def save_definition(self, flow: "FlowDefinition") -> None:
         """Save or update a flow definition."""
         async with self._session_factory() as session:
+            preconditions_data = _serialize_preconditions_payload(flow)
             # Serialize steps
             steps_data = [
                 {
@@ -33,6 +55,7 @@ class PostgresFlowRepository:
                     "config": step.config,
                     "timeout_seconds": step.timeout_seconds,
                     "conditions": step.conditions,
+                    "approval_strategy": step.approval_strategy,
                 }
                 for step in flow.steps
             ]
@@ -72,7 +95,7 @@ class PostgresFlowRepository:
                         credential_template_id=flow.credential_template_id,
                         presentation_policy_id=flow.presentation_policy_id,
                         deployment_profile_id=flow.deployment_profile_id,
-                        preconditions=flow.preconditions,
+                        preconditions=preconditions_data,
                         default_timeout_seconds=flow.default_timeout_seconds,
                         max_retries=flow.max_retries,
                         enable_resume=flow.enable_resume,
@@ -96,7 +119,7 @@ class PostgresFlowRepository:
                         credential_template_id=flow.credential_template_id,
                         presentation_policy_id=flow.presentation_policy_id,
                         deployment_profile_id=flow.deployment_profile_id,
-                        preconditions=flow.preconditions,
+                        preconditions=preconditions_data,
                         default_timeout_seconds=flow.default_timeout_seconds,
                         max_retries=flow.max_retries,
                         enable_resume=flow.enable_resume,
@@ -110,7 +133,7 @@ class PostgresFlowRepository:
     
     async def get_definition(self, flow_id: str) -> "FlowDefinition | None":
         """Get a flow definition by ID."""
-        from flow.main import FlowDefinition, FlowStatus, FlowType, FlowStep, FlowTransition, StepType, TransitionCondition
+        from flow.main import FlowDefinition, FlowStep, FlowTransition, StepType, TransitionCondition, _parse_flow_status, _parse_flow_type
         
         async with self._session_factory() as session:
             result = await session.execute(
@@ -120,6 +143,8 @@ class PostgresFlowRepository:
             
             if not row:
                 return None
+
+            preconditions, protocol_metadata = _deserialize_preconditions_payload(getattr(row, 'preconditions', None))
             
             # Deserialize steps
             steps = [
@@ -131,6 +156,7 @@ class PostgresFlowRepository:
                     config=step_data.get("config", {}),
                     timeout_seconds=step_data.get("timeout_seconds"),
                     conditions=step_data.get("conditions", []),
+                    approval_strategy=step_data.get("approval_strategy"),
                 )
                 for step_data in row.steps
             ]
@@ -152,15 +178,22 @@ class PostgresFlowRepository:
                 organization_id=row.organization_id,
                 name=row.name,
                 description=row.description,
-                status=FlowStatus(row.status),
-                flow_type=FlowType(row.flow_type),
+                status=_parse_flow_status(row.status),
+                flow_type=_parse_flow_type(row.flow_type),
                 steps=steps,
                 transitions=transitions,
                 start_step_id=row.start_step_id,
-                preconditions=getattr(row, 'preconditions', None) or [],
+                preconditions=preconditions,
                 credential_template_id=row.credential_template_id,
+                application_template_id=protocol_metadata.get("application_template_id"),
                 presentation_policy_id=row.presentation_policy_id,
                 deployment_profile_id=row.deployment_profile_id,
+                deployment_profile_ids=protocol_metadata.get("deployment_profile_ids") or ([row.deployment_profile_id] if row.deployment_profile_id else []),
+                trust_profile_id=protocol_metadata.get("trust_profile_id"),
+                approval_strategy=protocol_metadata.get("approval_strategy", "AUTO"),
+                enabled=protocol_metadata.get("enabled", True),
+                hooks=protocol_metadata.get("hooks") or {},
+                trigger=protocol_metadata.get("trigger"),
                 default_timeout_seconds=row.default_timeout_seconds,
                 max_retries=row.max_retries,
                 enable_resume=row.enable_resume,
@@ -171,7 +204,7 @@ class PostgresFlowRepository:
     
     async def list_definitions(self, org_id: str) -> list["FlowDefinition"]:
         """List all flow definitions for an organization."""
-        from flow.main import FlowDefinition, FlowStatus, FlowType, FlowStep, FlowTransition, StepType, TransitionCondition
+        from flow.main import FlowDefinition, FlowStep, FlowTransition, StepType, TransitionCondition, _parse_flow_status, _parse_flow_type
         
         async with self._session_factory() as session:
             result = await session.execute(
@@ -183,6 +216,7 @@ class PostgresFlowRepository:
             
             definitions = []
             for row in rows:
+                preconditions, protocol_metadata = _deserialize_preconditions_payload(getattr(row, 'preconditions', None))
                 # Deserialize steps
                 steps = [
                     FlowStep(
@@ -193,6 +227,7 @@ class PostgresFlowRepository:
                         config=step_data.get("config", {}),
                         timeout_seconds=step_data.get("timeout_seconds"),
                         conditions=step_data.get("conditions", []),
+                        approval_strategy=step_data.get("approval_strategy"),
                     )
                     for step_data in row.steps
                 ]
@@ -215,15 +250,22 @@ class PostgresFlowRepository:
                         organization_id=row.organization_id,
                         name=row.name,
                         description=row.description,
-                        status=FlowStatus(row.status),
-                        flow_type=FlowType(row.flow_type),
+                        status=_parse_flow_status(row.status),
+                        flow_type=_parse_flow_type(row.flow_type),
                         steps=steps,
                         transitions=transitions,
                         start_step_id=row.start_step_id,
-                        preconditions=getattr(row, 'preconditions', None) or [],
+                        preconditions=preconditions,
                         credential_template_id=row.credential_template_id,
+                        application_template_id=protocol_metadata.get("application_template_id"),
                         presentation_policy_id=row.presentation_policy_id,
                         deployment_profile_id=row.deployment_profile_id,
+                        deployment_profile_ids=protocol_metadata.get("deployment_profile_ids") or ([row.deployment_profile_id] if row.deployment_profile_id else []),
+                        trust_profile_id=protocol_metadata.get("trust_profile_id"),
+                        approval_strategy=protocol_metadata.get("approval_strategy", "AUTO"),
+                        enabled=protocol_metadata.get("enabled", True),
+                        hooks=protocol_metadata.get("hooks") or {},
+                        trigger=protocol_metadata.get("trigger"),
                         default_timeout_seconds=row.default_timeout_seconds,
                         max_retries=row.max_retries,
                         enable_resume=row.enable_resume,

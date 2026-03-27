@@ -28,23 +28,76 @@ def _policy_to_pb(
 ) -> presentation_policy_service_pb2.PolicyResponse:
     """Map domain PresentationPolicy → protobuf PolicyResponse.
 
-    Reuses the REST layer's ``_policy_to_response`` to get a dict, then
-    serialises complex sub-objects as JSON strings so the proto stays flat.
+    Reads protocol fields from the REST response and legacy internal fields
+    (status, display_metadata, credential_requirements, etc.) directly from
+    the domain model so the proto retains full fidelity for internal callers.
     """
     resp = to_response_fn(policy)
+
+    # Legacy fields read from the domain model (not in the protocol response)
+    display_metadata = {
+        "title": policy.display_metadata.title,
+        "description": policy.display_metadata.description,
+        "purpose": policy.display_metadata.purpose.value,
+        "purpose_description": policy.display_metadata.purpose_description,
+        "verifier_name": policy.display_metadata.verifier_name,
+        "verifier_logo_url": policy.display_metadata.verifier_logo_url,
+        "privacy_policy_url": policy.display_metadata.privacy_policy_url,
+        "terms_of_service_url": policy.display_metadata.terms_of_service_url,
+    }
+    credential_requirements = [
+        {
+            "id": req.id,
+            "credential_template_id": req.credential_template_id,
+            "display_name": req.display_name,
+            "required": req.required,
+            "credential_payload_format": req.credential_payload_format,
+            "requested_claims": [
+                {
+                    "id": rc.id,
+                    "claim_name": rc.claim_name,
+                    "display_name": rc.display_name,
+                    "required": rc.required,
+                    "selective_disclosure": rc.selective_disclosure,
+                    "predicate_spec": rc.predicate_spec,
+                }
+                for rc in req.requested_claims
+            ],
+            "trust_profile_id": req.trust_profile_id,
+            "max_age_seconds": req.max_age_seconds,
+        }
+        for req in policy.credential_requirements
+    ]
+    alternative_requirements = [
+        {
+            "id": alt.id,
+            "name": alt.name,
+            "min_satisfied": alt.min_satisfied,
+            "credential_requirements": [
+                {
+                    "id": r.id,
+                    "credential_template_id": r.credential_template_id,
+                    "display_name": r.display_name,
+                }
+                for r in alt.credential_requirements
+            ],
+        }
+        for alt in policy.alternative_requirements
+    ]
+
     return presentation_policy_service_pb2.PolicyResponse(
         id=resp.id,
         organization_id=resp.organization_id,
         name=resp.name,
         description=resp.description or "",
-        status=resp.status,
-        display_metadata_json=json.dumps(resp.display_metadata),
-        credential_requirements_json=json.dumps(resp.credential_requirements),
-        alternative_requirements_json=json.dumps(resp.alternative_requirements),
-        compliance_profile_id=resp.compliance_profile_id or "",
-        version=resp.version,
+        status=policy.status.value,
+        display_metadata_json=json.dumps(display_metadata),
+        credential_requirements_json=json.dumps(credential_requirements),
+        alternative_requirements_json=json.dumps(alternative_requirements),
+        compliance_profile_id=policy.compliance_profile_id or "",
+        version=policy.version,
         created_at=resp.created_at,
-        updated_at=resp.updated_at,
+        updated_at=resp.updated_at or "",
     )
 
 

@@ -44,12 +44,14 @@ const formatTimeRemaining = (expiresAt) => {
   
   if (diff <= 0) return 'Expired';
   
-  const minutes = Math.floor(diff / 60000);
+  const days = Math.floor(diff / 86400000);
+  const hours = Math.floor((diff % 86400000) / 3600000);
+  const minutes = Math.floor((diff % 3600000) / 60000);
   const seconds = Math.floor((diff % 60000) / 1000);
   
-  if (minutes > 0) {
-    return `${minutes}m ${seconds}s`;
-  }
+  if (days > 0) return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (minutes > 0) return `${minutes}m ${seconds}s`;
   return `${seconds}s`;
 };
 

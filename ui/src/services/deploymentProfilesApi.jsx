@@ -8,7 +8,7 @@
 import { get, post, patch, del } from './api';
 import { buildTruthyQueryString, withQuery } from './queryUtils';
 
-const BASE_PATH = '/v1/identity/deployment-profiles';
+const BASE_PATH = '/v1/deployment-profiles';
 
 /**
  * Create a new deployment profile
@@ -96,8 +96,8 @@ export const listLanes = async (profileId) => {
  * @param {string} laneId - Lane ID
  * @returns {Promise<Object>} Lane details
  */
-export const getLane = async (laneId) => {
-  return get(`/v1/identity/lanes/${laneId}`);
+export const getLane = async (profileId, laneId) => {
+  return get(`${BASE_PATH}/${profileId}/lanes/${laneId}`);
 };
 
 /**
@@ -106,8 +106,8 @@ export const getLane = async (laneId) => {
  * @param {Object} updates - Lane updates
  * @returns {Promise<Object>} Updated lane
  */
-export const updateLane = async (laneId, updates) => {
-  return patch(`/v1/identity/lanes/${laneId}`, updates);
+export const updateLane = async (profileId, laneId, updates) => {
+  return patch(`${BASE_PATH}/${profileId}/lanes/${laneId}`, updates);
 };
 
 /**
@@ -115,8 +115,8 @@ export const updateLane = async (laneId, updates) => {
  * @param {string} laneId - Lane ID
  * @returns {Promise<void>}
  */
-export const deleteLane = async (laneId) => {
-  return del(`/v1/identity/lanes/${laneId}`);
+export const deleteLane = async (profileId, laneId) => {
+  return del(`${BASE_PATH}/${profileId}/lanes/${laneId}`);
 };
 
 /**
@@ -125,8 +125,8 @@ export const deleteLane = async (laneId) => {
  * @param {string} deviceId - Device identifier
  * @returns {Promise<Object>} Updated lane with device assignment
  */
-export const assignDeviceToLane = async (laneId, deviceId) => {
-  return post(`/v1/identity/lanes/${laneId}/assign-device`, { device_id: deviceId });
+export const assignDeviceToLane = async (profileId, laneId, deviceId) => {
+  return post(`${BASE_PATH}/${profileId}/lanes/${laneId}/devices`, { device_id: deviceId });
 };
 
 /**
@@ -135,8 +135,8 @@ export const assignDeviceToLane = async (laneId, deviceId) => {
  * @param {string} deviceId - Device identifier
  * @returns {Promise<void>}
  */
-export const unassignDeviceFromLane = async (laneId, deviceId) => {
-  return del(`/v1/identity/lanes/${laneId}/devices/${deviceId}`);
+export const unassignDeviceFromLane = async (profileId, laneId, deviceId) => {
+  return del(`${BASE_PATH}/${profileId}/lanes/${laneId}/devices/${deviceId}`);
 };
 
 /**

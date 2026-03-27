@@ -67,12 +67,15 @@ def _definition_to_pb(flow: Any) -> flow_service_pb2.FlowDefinitionResponse:
 
 def _instance_to_pb(inst: Any) -> flow_service_pb2.FlowInstanceResponse:
     """Map domain FlowInstance → protobuf."""
+    from flow.main import _protocol_status_for_instance, _response_flow_type
+
     ctx = {k: str(v) for k, v in (inst.context or {}).items()}
+    protocol_status = _protocol_status_for_instance(inst.status)
     return flow_service_pb2.FlowInstanceResponse(
         id=inst.id,
         flow_definition_id=inst.flow_definition_id,
         organization_id=inst.organization_id,
-        status=inst.status.value,
+        status=protocol_status,
         current_step_id=inst.current_step_id or "",
         context=ctx,
         subject_id=inst.subject_id or "",
@@ -84,6 +87,13 @@ def _instance_to_pb(inst: Any) -> flow_service_pb2.FlowInstanceResponse:
         error=inst.error or "",
         created_at=inst.created_at.isoformat(),
         updated_at=inst.updated_at.isoformat(),
+        flow_id="" if inst.flow_definition_id.startswith("__") else inst.flow_definition_id,
+        protocol_status=protocol_status,
+        flow_type=_response_flow_type(inst) or "",
+        current_step=str((inst.context or {}).get("current_step_name") or ""),
+        current_step_index=int((inst.context or {}).get("current_step_index") or 0),
+        issued_credential_id=str((inst.context or {}).get("issued_credential_id") or ""),
+        error_code=str((inst.context or {}).get("error_code") or ""),
     )
 
 
@@ -309,10 +319,10 @@ class FlowServiceGrpc(flow_service_pb2_grpc.FlowServiceServicer):
         return _instance_to_pb(instance)
 
     async def ListFlowInstances(self, request, context):
-        from flow.main import FlowInstanceStatus
+        from flow.main import _parse_flow_instance_status
 
         repo = self._get_repo()
-        status_filter = FlowInstanceStatus(request.status) if request.status else None
+        status_filter = _parse_flow_instance_status(request.status) if request.status else None
         instances = await repo.list_instances(
             request.organization_id,
             request.flow_definition_id or None,
@@ -410,6 +420,8 @@ class FlowServiceGrpc(flow_service_pb2_grpc.FlowServiceServicer):
         return _instance_to_pb(instance)
 
     async def GetFlowResult(self, request, context):
+        from flow.main import _protocol_status_for_instance
+
         repo = self._get_repo()
         instance = await repo.get_instance(request.instance_id)
         if not instance:
@@ -422,7 +434,7 @@ class FlowServiceGrpc(flow_service_pb2_grpc.FlowServiceServicer):
 
         return flow_service_pb2.FlowResultResponse(
             instance_id=instance.id,
-            status=instance.status.value,
+            status=_protocol_status_for_instance(instance.status),
             result=json.dumps(result) if result else "",
             decision=result.get("decision", "") if isinstance(result, dict) else "",
             decision_reason=result.get("decision_reason", "") if isinstance(result, dict) else "",
@@ -530,12 +542,14 @@ class FlowServiceGrpc(flow_service_pb2_grpc.FlowServiceServicer):
         artifact: Any = None,
     ) -> None:
         """Push a flow event to all active stream subscribers."""
+        from flow.main import _protocol_status_for_instance
+
         event = flow_service_pb2.FlowInstanceEvent(
             event_type=event_type,
             instance_id=instance.id,
             definition_id=instance.flow_definition_id,
             current_step_id=instance.current_step_id or "",
-            status=instance.status.value,
+            status=_protocol_status_for_instance(instance.status),
             artifact=_artifact_to_pb(artifact) if artifact else None,
             timestamp=datetime.now(timezone.utc).isoformat(),
         )

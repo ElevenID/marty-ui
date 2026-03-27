@@ -14,6 +14,7 @@ const {
   mockSubmitApplication,
   mockUpdateApplicantProfile,
   mockEnrollBiometric,
+  mockListApplications,
 } = vi.hoisted(() => ({
   mockNavigate: vi.fn(),
   mockGet: vi.fn(),
@@ -25,6 +26,7 @@ const {
   mockSubmitApplication: vi.fn(),
   mockUpdateApplicantProfile: vi.fn(),
   mockEnrollBiometric: vi.fn(),
+  mockListApplications: vi.fn(),
 }));
 
 vi.mock('react-i18next', () => ({
@@ -42,8 +44,8 @@ vi.mock('react-router-dom', async () => {
         credential: {
           id: 'cfg-1',
           credential_type: 'MemberCredential',
-          display_name: 'Member Login Credential',
-          name: 'Member Login Credential',
+          display_name: 'ElevenID Login Credential',
+          name: 'ElevenID Login Credential',
           description: 'A free, instant credential.',
           required_fields: [],
           optional_fields: [],
@@ -84,6 +86,7 @@ vi.mock('../../services/applicantApi', () => ({
   createApplicant: mockCreateApplicant,
   createApplication: mockCreateApplication,
   autoIssueApplication: mockAutoIssueApplication,
+  listApplications: mockListApplications,
   submitApplication: mockSubmitApplication,
   updateApplicantProfile: mockUpdateApplicantProfile,
   enrollBiometric: mockEnrollBiometric,
@@ -102,6 +105,7 @@ describe('ApplicationForm', () => {
     mockGetApplicantByUser.mockResolvedValue(null);
     mockCreateApplicant.mockResolvedValue({ id: 'app-created' });
     mockCreateApplication.mockResolvedValue({ id: 'application-1' });
+    mockListApplications.mockResolvedValue({ applications: [] });
     mockAutoIssueApplication.mockResolvedValue({
       id: 'issued-1',
       credential_offer_uri: 'openid-credential-offer://offer',
@@ -113,15 +117,15 @@ describe('ApplicationForm', () => {
   it('runs the one-click credential issuance flow for member credentials', async () => {
     const { user } = render(<ApplicationForm />);
 
-    expect(screen.getByText('Member Login Credential')).toBeInTheDocument();
+    expect(screen.getByText('ElevenID Login Credential')).toBeInTheDocument();
 
-    await user.click(screen.getByRole('button', { name: 'Get My Login Credential' }));
+    await user.click(screen.getByRole('button', { name: 'Add to Wallet' }));
 
     await waitFor(() => {
       expect(mockCreateApplication).toHaveBeenCalledWith(expect.objectContaining({
         applicant_id: 'app-1',
         credential_configuration_id: 'cfg-1',
-        issuing_authority: 'Marty Trust Services',
+        issuing_authority: 'ElevenID LLC',
       }));
       expect(mockAutoIssueApplication).toHaveBeenCalledWith('application-1');
       expect(screen.getByTestId('claim-credential-dialog')).toHaveTextContent('issued-1:openid-credential-offer://offer');

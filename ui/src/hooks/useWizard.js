@@ -118,7 +118,7 @@ export function useWizard({
     } catch (err) {
       console.error('Wizard submission failed:', err);
       setError(err.message || 'Submission failed');
-      throw err;
+      return null;
     } finally {
       setLoading(false);
     }

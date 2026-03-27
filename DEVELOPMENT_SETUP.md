@@ -2,145 +2,118 @@
 
 ## Overview
 
-Marty UI has been extracted from the main Marty monorepo into a standalone project. It now depends on three Marty packages:
+`marty-ui` now runs as a microservice-based local stack rather than the retired single-process `src/` monolith. The current backend is composed of independently built services behind the gateway, plus the React UI in `ui/`.
 
-- `marty-credentials` - Credential domain logic and Rust bindings (marty-rs)
-- `marty-common` - Shared infrastructure (crypto_bridge, gRPC, database, observability)
-- `marty-microservices-framework` - Microservices framework
+Primary sibling dependencies:
 
-## Quick Start (Recommended)
+- `marty-credentials` - credential issuance services and Rust bindings
+- `marty-common` - shared infrastructure, crypto bridge, gRPC, auth helpers
+- `marty-microservices-framework` - shared microservice runtime pieces
+- `marty-core` - Rust verification crates and related native components
 
-The fastest way to get started is using the Makefile with local development mode:
+## Recommended local workflow
+
+For most development work, use the Make targets that orchestrate the current compose files.
 
 ```bash
-# Start all services with local development configuration
+# full backend stack
 make dev
 
-# ⚠️ FIRST TIME STARTUP: 5-7 minutes
-# Rust extensions (marty-rs, marty-verification) will compile inside Docker
-# This only happens once - subsequent startups take ~10 seconds
+# stop everything
+make down
 
-# Services will be available at:
-# - API: http://localhost:8000
-# - UI: http://localhost:3000
+# follow logs
+make logs
 ```
 
-**What `make dev` does:**
-1. Starts Docker containers with `DEV_MODE=true`
-2. Compiles Rust extensions (`marty-rs`, `marty-verification`) on first start
-3. Caches compiled Rust binaries for fast subsequent startups
-4. Mounts sibling repos as volumes for live code changes
-5. Installs packages in editable mode for hot reload
+Key endpoints once started:
 
-**Startup Times:**
-- **Subsequent starts:** ~10 seconds (uses cached builds)
+- Gateway: http://localhost:8000
+- Gateway docs: http://localhost:8000/docs
+- Auth docs: http://localhost:8001/docs
+- Keycloak: http://localhost:8180
+- MailHog: http://localhost:9025
 
-## Fast Path: Native Development (Best for iteration)
+## Current compose layout
 
-The fastest way to iterate is running infrastructure in Docker and the application code natively. This avoids container overhead and uses fast Rust debug builds.
+The local stack is defined by:
+
+- `docker-compose.base.yml` - infrastructure + app services
+- `docker-compose.profile.dev.yml` - local development overrides
+- `docker-compose.profile.tunnel.yml` - optional Cloudflare tunnel routing
+- `docker-compose.profile.obs.yml` - optional observability overlays
+
+The legacy monolith Dockerfiles and demo-only compose entrypoints were retired and should not be referenced for new setup steps.
+
+## Workspace layout
+
+Typical sibling checkout layout:
+
+```text
+Github/work/
+├── Marty/
+│   └── packages/
+│       └── marty-common/
+├── marty-core/
+├── marty-credentials/
+├── marty-microservices-framework/
+└── marty-ui/
+```
+
+## Common development modes
+
+### 1. Full containerized backend
 
 ```bash
-# 1. Start infrastructure (DB, Redis, Keycloak)
+make dev
+```
+
+Use this when you want the current microservice topology locally.
+
+### 2. Infrastructure only
+
+```bash
 make infra
+```
 
-# 2. Setup local environment (venv + dependencies - one time)
-make setup-local
+Useful when iterating on the UI or when you want supporting services without the full app stack.
 
-# 3. Start API (with hot-reload)
+### 3. Backend stack + native UI
+
+```bash
 make run-api
-
-# 4. Start UI (in another terminal)
 make run-ui
 ```
 
-**Benefits:**
-- ✅ **Fastest startup**: No container rebuilds needed.
-- ✅ **Fastest compilation**: Rust code is built in debug mode.
-- ✅ **Best DX**: Direct access to local files and standard debugger support.
+This is the usual fast feedback loop for frontend and gateway work.
 
-## Workspace Layout
-
-Your workspace should have this structure:
-
-```
-Github/work/
-├── Marty/                          # Main Marty repo
-│   └── packages/
-│       └── marty-common/           # Shared infrastructure
-├── marty-core/                     # Core Rust crates
-│   └── marty-verification/         # Open Badges FFI
-├── marty-credentials/              # Credentials + marty-rs
-│   └── rust/marty-rs/              # Python FFI for credentials
-├── marty-microservices-framework/  # MSF framework
-└── marty-ui/                       # This project
-```
-
-## Development Modes
-
-### 1. Local Development Mode (Recommended)
-
-Uses local editable installs with pre-built Rust wheels for fast iteration.
-
-**Initial setup:**
-
-**Initial setup:**
-
-```bash
-# Start services (first time takes 5-7 minutes for Rust compilation)
-make dev
-
-# View logs (including Rust build progress)
-make logs
-
-# Stop services
-make down
-```
-
-**What gets mounted:**
-- `../marty-credentials` → `/app/marty-credentials`
-- `../marty-core` → `/app/marty-core`
-- `../marty-microservices-framework` → `/app/marty-microservices-framework`
-- `../Marty/packages/marty-common` → `/app/marty-common`
-- `./src` → `/app/src` (your local UI source)
-
-**Benefits:**
-- ✅ Fast subsequent startups (~10 seconds using cached Rust builds)
-- ✅ Hot reload for Python changes (uvicorn --reload)
-- ✅ Changes in marty-common or marty-msf are immediately reflected
-- ✅ Rust builds cached in Docker volume - no recompilation needed
-- ✅ Works consistently across macOS, Linux, and Windows
-
-**When Rust recompilation happens:**
-- First time running `make dev` (one-time, 5-7 minutes)
-- After `make clean` (removes cache)
-- After pulling changes to `marty-credentials/rust/marty-rs`
-- After pulling changes to `marty-core/marty-verification`
-
-### 2. Production Mode (Not Yet Available)
-
-Production mode uses published packages from GitHub Packages registry. **This is currently not working** and is why we're using local development mode.
-
-Once the release pipeline is fixed, you'll be able to use:
-
-```bash
-# Build with production packages
-docker-compose build --build-arg USE_BETA_PACKAGES=true --build-arg GITHUB_TOKEN=${GITHUB_TOKEN}
-docker-compose up
-```
-
-## Available Make Targets
+## Frequently used Make targets
 
 | Command | Description |
 |---------|-------------|
-| `make infra` | Start infrastructure only (DB, Redis, Keycloak) |
-| `make setup-local` | Setup native local venv + dependencies |
-| `make run-api` | Run API service natively |
-| `make run-ui` | Run React UI natively |
-| `make help` | Show all available targets |
+| `make dev` | Start infrastructure + app microservices |
+| `make down` | Stop the full stack |
+| `make infra` | Start only Postgres, Redis, Keycloak, MailHog |
+| `make run-api` | Start infra + backend microservices |
+| `make run-ui` | Run the Vite UI locally |
+| `make services-build` | Build microservice images |
+| `make services-restart` | Restart backend services |
+| `make grpc-health` | Probe gRPC-enabled services |
+| `make help` | Show all supported targets |
+
+## Native Rust wheel workflow
+
+If you need local native wheels for Rust-backed packages:
+
+```bash
+make build-wheels
+```
+
+That script writes wheels into `wheels/` using the sibling `marty-credentials` and `marty-core` repositories.
 
 ## Open Badges FFI
 
-Open Badges signing functions (`open_badge_ob2_issue`, `open_badge_ob3_verify`, etc.) are available via:
+Open Badges functions continue to be imported from `marty_common.crypto_bridge`, not from retired monolith modules and not directly from `_marty_rs`.
 
 ```python
 from marty_common.crypto_bridge import (
@@ -151,142 +124,45 @@ from marty_common.crypto_bridge import (
 )
 ```
 
-These functions are implemented in `marty-core/marty-verification` and exposed to Python via PyO3 bindings. The `marty_common.crypto_bridge` module re-exports them for convenience.
-
-**Note:** The `_marty_rs` module from `marty-credentials` does NOT include Open Badges functions (those are WASM-only for Flutter). Always import from `marty_common.crypto_bridge`.
-
-## Dependency Updates
-
-When updating Marty package imports in marty-ui code:
-
-**Old imports (from monorepo):**
-```python
-from marty_plugin.common.crypto_bridge import verify_certificate
-from status_list.application.services import StatusListService
-```
-
-**New imports (from packages):**
-```python
-from marty_common.crypto_bridge import verify_certificate
-from status_list.application.services import StatusListService
-```
-
-## Manual Python Setup (Alternative to Docker)
-
-If you prefer to run services natively without Docker:
-
-```bash
-# 1. Build and install Rust wheels
-make build-wheels
-pip install wheels/*.whl
-
-# 2. Install Python packages in editable mode
-pip install -e ../marty-credentials/python
-pip install -e ../marty-microservices-framework
-pip install -e ../Marty/packages/marty-common
-pip install -r src/requirements.txt
-
-# 3. Start services
-cd src
-uvicorn oid4vc_api:app --reload --port 8000
-```
-
-## Building & Publishing Marty Packages
-
-See individual package READMEs:
-- [marty-credentials/README.md](../marty-credentials/README.md)
-- [marty-core/marty-verification](../marty-core/marty-verification/)
-- [Marty/packages/marty-common/README.md](../Marty/packages/marty-common/README.md)
-- [marty-microservices-framework/README.md](../marty-microservices-framework/README.md)
-
 ## Troubleshooting
 
-### Import errors for Open Badges functions
-
-```python
-# Make sure to import from marty_common.crypto_bridge, not _marty_rs
-from marty_common.crypto_bridge import open_badge_ob2_issue
-
-# If you get ImportError, rebuild wheels:
-make build-wheels
-make restart
-```
-
-### Wheels not found
+### Services do not come up
 
 ```bash
-# Build wheels before starting services
-make build-wheels
-
-# Check that wheels exist
-ls -lh wheels/
-
-# Should see:
-# - marty_rs-*.whl
-# - marty_verification-*.whl
+make status
+make logs
 ```
 
-### Changes not reflected in container
+### Need only backend logs
 
 ```bash
-# For Python changes: already auto-reloaded (no action needed)
-
-# For Rust/FFI changes: rebuild wheels
-make build-wheels
-make restart
-
-# For dependency changes: rebuild container
-make down
-docker-compose build --no-cache
-make dev
+make services-logs
 ```
 
-### Container build fails with "wheels not found"
+### gRPC service reachability
 
 ```bash
-# Run make build-wheels first
-make build-wheels
-
-# Then start services
-make up
+make grpc-health
 ```
 
-### Port already in use
+### Rust-backed package changes
 
 ```bash
-# Check what's using the port
+make build-wheels
+make services-restart
+```
+
+### Port conflicts
+
+```bash
 lsof -i :8000
-
-# Stop conflicting services or change ports in docker-compose.yml
+lsof -i :8180
 ```
 
-### Import errors for marty packages (Development mode)
-
-```bash
-# Verify packages are installed in editable mode
-pip list | grep marty
-
-# Should show paths like:
-# marty-common         0.1.0  /path/to/Marty/packages/marty-common
-# marty-credentials    0.1.0  /path/to/marty-credentials
-```
-
-### Package version conflicts
-
-```bash
-# Clear pip cache
-pip cache purge
-
-# Rebuild wheels
-make build-wheels
-
-# Restart containers
-make restart
-```
-
-## Next Steps
+## Next steps
 
 After setup, see:
-- [QUICK_START.md](QUICK_START.md) - Common operations and workflows
-- [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md) - Code organization
-- [tests/README.md](tests/README.md) - Running E2E tests
+
+- `QUICK_START.md` - common day-to-day commands
+- `PROJECT_STRUCTURE.md` - current repo layout
+- `tests/README.md` - test workflows

@@ -7,7 +7,7 @@
 import { get, post, patch, del, getErrorMessage } from './api';
 import { buildDefinedQueryString, withQuery } from './queryUtils';
 
-const BASE_PATH = '/v1/notifications/webhooks';
+const BASE_PATH = '/v1/webhooks';
 
 /**
  * List webhooks for an organization
@@ -17,7 +17,7 @@ const BASE_PATH = '/v1/notifications/webhooks';
 export async function listWebhooks(organizationId) {
   const queryString = buildDefinedQueryString({ organization_id: organizationId });
   const response = await get(withQuery(BASE_PATH, queryString));
-  return response?.webhooks || [];
+  return Array.isArray(response) ? response : (response?.webhooks || []);
 }
 
 /**

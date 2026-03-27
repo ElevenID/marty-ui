@@ -138,28 +138,32 @@ export default function WalletCompatibilityStep({ data, onChange }) {
                 />
               ))
             }
-            renderOption={(props, wallet) => (
-              <Box component="li" {...props} sx={{ display: 'flex', alignItems: 'center', gap: 1.5, py: 1 }}>
-                {wallet.logo_url ? (
-                  <Box
-                    component="img"
-                    src={wallet.logo_url}
-                    alt={wallet.name}
-                    sx={{ width: 24, height: 24, objectFit: 'contain' }}
-                  />
-                ) : (
-                  <WalletIcon fontSize="small" color="action" />
-                )}
-                <Box>
-                  <Typography variant="body2">{wallet.name}</Typography>
-                  {wallet.platforms?.length > 0 && (
-                    <Typography variant="caption" color="text.secondary">
-                      {wallet.platforms.join(' · ')}
-                    </Typography>
+            renderOption={(props, wallet) => {
+              const supportedPlatforms = wallet.supported_platforms || wallet.platforms || [];
+
+              return (
+                <Box component="li" {...props} sx={{ display: 'flex', alignItems: 'center', gap: 1.5, py: 1 }}>
+                  {wallet.logo_url ? (
+                    <Box
+                      component="img"
+                      src={wallet.logo_url}
+                      alt={wallet.name}
+                      sx={{ width: 24, height: 24, objectFit: 'contain' }}
+                    />
+                  ) : (
+                    <WalletIcon fontSize="small" color="action" />
                   )}
+                  <Box>
+                    <Typography variant="body2">{wallet.name}</Typography>
+                    {supportedPlatforms.length > 0 && (
+                      <Typography variant="caption" color="text.secondary">
+                        {supportedPlatforms.join(' · ')}
+                      </Typography>
+                    )}
+                  </Box>
                 </Box>
-              </Box>
-            )}
+              );
+            }}
             renderInput={(params) => (
               <TextField
                 {...params}
@@ -185,31 +189,35 @@ export default function WalletCompatibilityStep({ data, onChange }) {
                 Preview — Wallet deep-link buttons shown to applicants:
               </Typography>
               <Stack spacing={1}>
-                {selectedWallets.map((w) => (
-                  <Box
-                    key={w.id}
-                    sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}
-                  >
-                    {w.logo_url ? (
-                      <Box
-                        component="img"
-                        src={w.logo_url}
-                        alt={w.name}
-                        sx={{ width: 20, height: 20, objectFit: 'contain' }}
-                      />
-                    ) : (
-                      <WalletIcon fontSize="small" color="action" />
-                    )}
-                    <Typography variant="body2">
-                      Add to {w.name}
-                    </Typography>
-                    <Stack direction="row" spacing={0.5} sx={{ ml: 'auto' }}>
-                      {(w.platforms || []).map((p) => (
-                        <Chip key={p} label={p} size="small" variant="outlined" sx={{ fontSize: '0.65rem', height: 18 }} />
-                      ))}
-                    </Stack>
-                  </Box>
-                ))}
+                {selectedWallets.map((w) => {
+                  const supportedPlatforms = w.supported_platforms || w.platforms || [];
+
+                  return (
+                    <Box
+                      key={w.id}
+                      sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}
+                    >
+                      {w.logo_url ? (
+                        <Box
+                          component="img"
+                          src={w.logo_url}
+                          alt={w.name}
+                          sx={{ width: 20, height: 20, objectFit: 'contain' }}
+                        />
+                      ) : (
+                        <WalletIcon fontSize="small" color="action" />
+                      )}
+                      <Typography variant="body2">
+                        Add to {w.name}
+                      </Typography>
+                      <Stack direction="row" spacing={0.5} sx={{ ml: 'auto' }}>
+                        {supportedPlatforms.map((p) => (
+                          <Chip key={p} label={p} size="small" variant="outlined" sx={{ fontSize: '0.65rem', height: 18 }} />
+                        ))}
+                      </Stack>
+                    </Box>
+                  );
+                })}
               </Stack>
             </Paper>
           )}

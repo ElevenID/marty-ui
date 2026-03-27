@@ -35,7 +35,8 @@ import {
   ListItem,
   ListItemIcon,
   ListItemText,
-  Divider
+  Divider,
+  Stack,
 } from '@mui/material';
 import {
   Search as SearchIcon,
@@ -45,7 +46,8 @@ import {
   CheckCircle as CheckIcon,
   Schedule as PendingIcon,
   AttachMoney as PriceIcon,
-  Business as BusinessIcon
+  Business as BusinessIcon,
+  Verified as VerifiedIcon,
 } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -55,6 +57,7 @@ import { get } from '../../services/api';
 import { getApplicantByUser } from '../../services/applicantApi';
 import {
   buildCredentialApplicationNavigationState,
+  extractApplicationStatusInfo,
   filterCredentialCatalogItems,
   getCredentialCatalogCategories,
   loadCredentialCatalogItems,
@@ -77,6 +80,7 @@ const CredentialCatalog = () => {
   const [selectedCredential, setSelectedCredential] = useState(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [existingApplications, setExistingApplications] = useState([]);
+  const [appStatusInfo, setAppStatusInfo] = useState({ statusByCredentialId: {}, counts: { pending: 0, approved: 0, rejected: 0, credentialed: 0 } });
 
   const listCredentialTemplates = useCallback((currentOrganizationId) => {
     return get(`/v1/credential-templates?organization_id=${currentOrganizationId}&status=active`);
@@ -107,7 +111,7 @@ const CredentialCatalog = () => {
   }, [organizationId, organizationName, listCredentialTemplates]);
 
   /**
-   * Fetch applicant's existing applications
+   * Fetch applicant's existing applications (with status data)
    */
   const fetchExistingApplications = useCallback(async () => {
     try {
@@ -118,6 +122,14 @@ const CredentialCatalog = () => {
         listApplicantApplications,
       });
       setExistingApplications(applicationIds);
+
+      // Also fetch raw application data for status counts
+      const applicant = await getApplicantByUser(user?.user_id);
+      if (applicant?.id) {
+        const data = await listApplicantApplications(applicant.id);
+        const apps = Array.isArray(data) ? data : (data?.applications || []);
+        setAppStatusInfo(extractApplicationStatusInfo(apps));
+      }
     } catch (error) {
       console.error('Failed to fetch applications:', error);
     }
@@ -160,22 +172,27 @@ const CredentialCatalog = () => {
   };
 
   /**
-   * Get application status chip
+   * Get per-credential application status chip
    */
   const getApplicationStatus = (credentialId) => {
-    if (hasExistingApplication(credentialId)) {
-      return (
-        <Chip
-          icon={<PendingIcon />}
-          label={t('catalog.card.status.pending')}
-          size="small"
-          color="warning"
-          sx={{ mt: 1 }}
-        />
-      );
+    const status = appStatusInfo.statusByCredentialId[credentialId];
+    if (!status) return null;
+    if (['credentialed', 'issued'].includes(status)) {
+      return <Chip icon={<CheckIcon />} label="Issued" size="small" color="success" sx={{ mt: 1 }} />;
     }
-    return null;
+    if (status === 'approved') {
+      return <Chip icon={<CheckIcon />} label="Approved" size="small" color="primary" sx={{ mt: 1 }} />;
+    }
+    if (status === 'rejected') {
+      return <Chip label="Rejected" size="small" color="error" sx={{ mt: 1 }} />;
+    }
+    return (
+      <Chip icon={<PendingIcon />} label={t('catalog.card.status.pending')} size="small" color="warning" sx={{ mt: 1 }} />
+    );
   };
+
+  const { counts } = appStatusInfo;
+  const hasAnyApplications = counts.pending + counts.approved + counts.rejected + counts.credentialed > 0;
 
   return (
     <Container maxWidth="lg" data-testid="credential-catalog-page">
@@ -193,6 +210,56 @@ const CredentialCatalog = () => {
               </Typography>
             </Box>
           </Box>
+        </Paper>
+      )}
+
+      {/* Application Status Bar */}
+      {hasAnyApplications && (
+        <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
+          <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1 }}>
+            Application Status
+          </Typography>
+          <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap>
+            {counts.pending > 0 && (
+              <Chip
+                icon={<PendingIcon />}
+                label={`Pending (${counts.pending})`}
+                color="warning"
+                size="small"
+                onClick={() => navigate('/console/applicant/identity?filter=in-progress')}
+                clickable
+              />
+            )}
+            {counts.approved > 0 && (
+              <Chip
+                icon={<CheckIcon />}
+                label={`Approved (${counts.approved})`}
+                color="primary"
+                size="small"
+                onClick={() => navigate('/console/applicant/identity?filter=action')}
+                clickable
+              />
+            )}
+            {counts.credentialed > 0 && (
+              <Chip
+                icon={<VerifiedIcon />}
+                label={`Issued (${counts.credentialed})`}
+                color="success"
+                size="small"
+                onClick={() => navigate('/console/applicant/identity?filter=issued')}
+                clickable
+              />
+            )}
+            {counts.rejected > 0 && (
+              <Chip
+                label={`Rejected (${counts.rejected})`}
+                color="error"
+                size="small"
+                onClick={() => navigate('/console/applicant/identity')}
+                clickable
+              />
+            )}
+          </Stack>
         </Paper>
       )}
 
@@ -340,7 +407,15 @@ const CredentialCatalog = () => {
                         color={credential.processingFee ? 'default' : 'success'}
                         data-testid="credential-fee"
                       />
+                      {credential.format && (
+                        <Chip label={credential.format} size="small" variant="outlined" color="info" />
+                      )}
                     </Box>
+                    {credential.worksWithLabel && (
+                      <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
+                        Works with: {credential.worksWithLabel}
+                      </Typography>
+                    )}
                     {getApplicationStatus(credential.id)}
                   </CardContent>
                   <CardActions sx={{ p: 2, pt: 0 }}>
@@ -363,6 +438,48 @@ const CredentialCatalog = () => {
         )}
       </Grid>
 
+      {/* Multi-standard explanation */}
+      <Paper variant="outlined" sx={{ p: 3, mt: 4, mb: 3 }}>
+        <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1.5 }}>
+          <VerifiedIcon color="primary" />
+          <Typography variant="h6">Why multiple credential types?</Typography>
+        </Stack>
+        <Typography variant="body2" color="text.secondary" paragraph sx={{ mb: 2 }}>
+          Different wallets support different standards. ElevenID supports both so you can choose
+          the format that works best for your device and use case.
+        </Typography>
+        <Grid container spacing={2}>
+          <Grid item xs={12} sm={6}>
+            <Box sx={{ p: 2, borderRadius: 1, border: 1, borderColor: 'divider' }}>
+              <Typography variant="subtitle2" gutterBottom>Open Badge / VC (W3C)</Typography>
+              <Typography variant="caption" color="text.secondary" display="block">
+                Use for: Web login, professional credentials
+              </Typography>
+              <Typography variant="caption" color="text.secondary" display="block">
+                Format: SD-JWT Verifiable Credential
+              </Typography>
+              <Typography variant="caption" color="text.secondary" display="block">
+                Compatible with: Web & VC wallets
+              </Typography>
+            </Box>
+          </Grid>
+          <Grid item xs={12} sm={6}>
+            <Box sx={{ p: 2, borderRadius: 1, border: 1, borderColor: 'divider' }}>
+              <Typography variant="subtitle2" gutterBottom>mDoc (ISO 18013-5)</Typography>
+              <Typography variant="caption" color="text.secondary" display="block">
+                Use for: Mobile-first verification, in-person ID
+              </Typography>
+              <Typography variant="caption" color="text.secondary" display="block">
+                Format: ISO mDoc (CBOR)
+              </Typography>
+              <Typography variant="caption" color="text.secondary" display="block">
+                Compatible with: Mobile wallets (Apple / Google)
+              </Typography>
+            </Box>
+          </Grid>
+        </Grid>
+      </Paper>
+
       {/* Credential Details Dialog */}
       <Dialog
         open={detailsOpen}
@@ -382,6 +499,20 @@ const CredentialCatalog = () => {
               <Typography variant="body1" paragraph>
                 {selectedCredential.description}
               </Typography>
+
+              {(selectedCredential.format || selectedCredential.standard) && (
+                <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 2 }}>
+                  {selectedCredential.standard && (
+                    <Chip label={selectedCredential.standard} size="small" color="info" variant="outlined" />
+                  )}
+                  {selectedCredential.format && (
+                    <Chip label={selectedCredential.format} size="small" variant="outlined" />
+                  )}
+                  {selectedCredential.worksWithLabel && (
+                    <Chip label={`Works with: ${selectedCredential.worksWithLabel}`} size="small" variant="outlined" />
+                  )}
+                </Box>
+              )}
               
               <Divider sx={{ my: 2 }} />
               

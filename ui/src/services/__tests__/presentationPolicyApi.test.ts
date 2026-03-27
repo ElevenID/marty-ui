@@ -15,6 +15,7 @@ import {
   deletePresentationPolicy,
   createCredentialTemplate,
   listCredentialTemplates,
+  getCredentialTemplate,
   createTrustProfile,
   listTrustProfiles,
 } from '../presentationPolicyApi'
@@ -160,6 +161,123 @@ describe('presentationPolicyApi', () => {
       await listCredentialTemplates({ status: 'active' })
 
       expect(queryParams?.toString()).toContain('status=active')
+    })
+
+    it('should normalize credential template responses for UI consumers', async () => {
+      server.use(
+        http.get('http://localhost:8000/v1/credential-templates/:id', () => {
+          return HttpResponse.json({
+            id: 'ct-1',
+            organization_id: 'org-1',
+            name: 'Canonical Template',
+            status: 'ACTIVE',
+            credential_type: 'EmployeeBadge',
+            compliance_profile_id: '123e4567-e89b-12d3-a456-426614174000',
+            claims: [
+              {
+                name: 'given_name',
+                type: 'STRING',
+                required: true,
+                display: { label: 'Given Name' },
+              },
+            ],
+            validity_rules: {
+              ttl_seconds: 30 * 86400,
+              renewable: true,
+              reissue_within_seconds: 7 * 86400,
+              not_before_offset_seconds: 300,
+            },
+            created_at: '2024-01-01T00:00:00Z',
+            updated_at: '2024-01-02T00:00:00Z',
+          })
+        })
+      )
+
+      const template = await getCredentialTemplate('ct-1')
+
+      expect(template.status).toBe('active')
+      expect(template.claims[0].display_name).toBe('Given Name')
+      expect(template.validity_rules).toMatchObject({
+        ttl_seconds: 30 * 86400,
+        default_validity_days: 30,
+        reissue_within_seconds: 7 * 86400,
+        renewal_window_days: 7,
+        not_before_offset_seconds: 300,
+        not_before_offset: 300,
+      })
+    })
+
+    it('should build credential template payloads from canonical validity fields', async () => {
+      let receivedData: any
+      server.use(
+        http.post('http://localhost:8000/v1/credential-templates', async ({ request }) => {
+          receivedData = await request.json()
+          return HttpResponse.json({
+            id: 'ct-2',
+            organization_id: 'org-1',
+            name: 'Canonical Payload',
+            status: 'DRAFT',
+            credential_type: 'EmployeeBadge',
+            compliance_profile_id: '123e4567-e89b-12d3-a456-426614174000',
+            claims: [],
+            validity_rules: {
+              ttl_seconds: 14 * 86400,
+              renewable: false,
+              reissue_within_seconds: 3 * 86400,
+              not_before_offset_seconds: 900,
+            },
+            created_at: '2024-01-01T00:00:00Z',
+            updated_at: '2024-01-01T00:00:00Z',
+          })
+        })
+      )
+
+      await createCredentialTemplate({
+        organization_id: 'org-1',
+        name: 'Canonical Payload',
+        credential_type: 'EmployeeBadge',
+        compliance_profile_id: '123e4567-e89b-12d3-a456-426614174000',
+        claims: [],
+        validity_rules: {
+          ttl_seconds: 14 * 86400,
+          renewable: false,
+          reissue_within_seconds: 3 * 86400,
+          not_before_offset: 900,
+        },
+      })
+
+      expect(receivedData.validity_rules).toMatchObject({
+        default_validity_days: 14,
+        renewable: false,
+        renewal_window_days: 3,
+        not_before_offset_seconds: 900,
+      })
+    })
+
+    it('should normalize listed credential templates', async () => {
+      server.use(
+        http.get('http://localhost:8000/v1/credential-templates', () => {
+          return HttpResponse.json([
+            {
+              id: 'ct-3',
+              organization_id: 'org-1',
+              name: 'Listed Template',
+              status: 'ACTIVE',
+              credential_type: 'EmployeeBadge',
+              compliance_profile_id: '123e4567-e89b-12d3-a456-426614174000',
+              claims: [],
+              validity_rules: { ttl_seconds: 86400 },
+              created_at: '2024-01-01T00:00:00Z',
+              updated_at: '2024-01-01T00:00:00Z',
+            },
+          ])
+        })
+      )
+
+      const templates = await listCredentialTemplates()
+
+      expect(templates[0].status).toBe('active')
+      expect(templates[0].validity_rules.default_validity_days).toBe(1)
     })
   })
 

@@ -193,3 +193,12 @@ class TestHealthCheck:
         req = ct_pb2.HealthCheckRequest()
         resp = await servicer.HealthCheck(req, ctx)
         assert resp.status == "serving"
+
+
+class TestPayloadFormatNormalization:
+    def test_template_to_pb_converts_protocol_payload_format_to_wire_name(self):
+        template = _make_template_response(credential_payload_format="SD_JWT_VC")
+
+        resp = _template_to_pb(template, _to_response_fn)
+
+        assert resp.credential_payload_format == "sd_jwt_vc"

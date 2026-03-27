@@ -314,7 +314,17 @@ class PostgresWalletRegistryRepository:
         async with self._session_factory() as session:
             row = {
                 "id": entry.id,
+                "organization_id": entry.organization_id,
+                "is_override": entry.is_override,
+                "override_precedence": entry.override_precedence,
+                "merge_strategy": entry.merge_strategy.value,
+                "credential_format": entry.credential_format,
+                "issuance_protocol": entry.issuance_protocol,
+                "compliance_profile_code": entry.compliance_profile_code,
                 "name": entry.name,
+                "description": entry.description,
+                "wallet_apps": entry.wallet_apps,
+                "specifications": entry.specifications,
                 "logo_url": entry.logo_url,
                 "deep_link_template": entry.deep_link_template,
                 "supported_formats": entry.supported_formats,
@@ -365,14 +375,24 @@ class PostgresWalletRegistryRepository:
 
     @staticmethod
     def _row_to_entry(row) -> "WalletRegistryEntry":
-        from credential_template.main import WalletRegistryEntry
+        from credential_template.main import WalletRegistryEntry, MergeStrategy
         return WalletRegistryEntry(
             id=row.id,
+            organization_id=row.organization_id,
+            is_override=row.is_override,
+            override_precedence=row.override_precedence,
+            merge_strategy=MergeStrategy(row.merge_strategy),
+            credential_format=row.credential_format,
+            issuance_protocol=row.issuance_protocol,
+            compliance_profile_code=row.compliance_profile_code,
             name=row.name,
+            description=row.description,
+            wallet_apps=list(row.wallet_apps or []),
+            specifications=list(row.specifications or []),
             logo_url=row.logo_url,
             deep_link_template=row.deep_link_template,
             supported_formats=list(row.supported_formats or []),
-            supported_protocols=list(row.supported_protocols or ["oid4vci"]),
+            supported_protocols=list(row.supported_protocols or ["OID4VCI_PRE_AUTH"]),
             platforms=list(row.platforms or []),
             supports_qr=row.supports_qr,
             supports_deeplink=row.supports_deeplink,

@@ -1,83 +1,116 @@
-# Quick Reference: Marty-UI Local Development
+# Quick Reference: Marty UI Local Development
 
-## Start Development Environment
+## Start the full local stack
+
 ```bash
 cd "/Volumes/Heart of Gold/Github/work/marty-ui"
-docker compose --profile dev up -d
+make dev
 ```
 
-## Stop Development Environment
+This starts infrastructure plus the current microservices stack using:
+
+- `docker-compose.base.yml`
+- `docker-compose.profile.dev.yml`
+
+## Stop everything
+
 ```bash
-docker compose --profile dev down
+make down
 ```
 
-## Restart a Service (Python changes auto-reload, but for Rust changes)
+## Restart services after major changes
+
 ```bash
-docker compose --profile dev restart oid4vc-api
+make restart
 ```
 
-## View Logs
+## Start only infrastructure
+
 ```bash
-# All services
-docker compose --profile dev logs -f
-
-# Specific service
-docker compose --profile dev logs -f oid4vc-api
-
-# Last 50 lines
-docker compose --profile dev logs --tail=50 oid4vc-api
+make infra
 ```
 
-## Check Status
+## Start infra + API microservices
+
 ```bash
-docker compose --profile dev ps
+make run-api
 ```
 
-## Rebuild After Major Changes
+## Run the UI natively
+
 ```bash
-docker compose --profile dev down oid4vc-api
-docker compose --profile dev build oid4vc-api
-docker compose --profile dev up -d oid4vc-api
+make run-ui
 ```
 
-## Test the API
+## View logs
+
+```bash
+# All base services
+make logs
+
+# Microservices only
+make services-logs
+```
+
+## Check status
+
+```bash
+make status
+```
+
+## Rebuild microservice images
+
+```bash
+make services-build
+make services-restart
+```
+
+## Test the gateway
+
 ```bash
 curl http://localhost:8000/health
 ```
 
-## Service URLs
-- API: http://localhost:8000
+## Useful local URLs
+
+- Gateway: http://localhost:8000
+- Gateway docs: http://localhost:8000/docs
+- Auth docs: http://localhost:8001/docs
+- Organization docs: http://localhost:8002/docs
 - Keycloak: http://localhost:8180
 - MailHog: http://localhost:9025
 - Postgres: localhost:5433
 - Redis: localhost:6379
 
-## Mounted Local Packages
-- `marty-credentials` → `/app/marty-credentials`
-- `marty-core` → `/app/marty-core`
-- `marty-microservices-framework` → `/app/marty-microservices-framework`
-- `marty-common` → `/app/marty-common`
+## Mounted sibling repositories in dev mode
 
-## First Startup Time
-~3-5 minutes (Rust compilation)
+- `../marty-credentials` → `/app/marty-credentials`
+- `../marty-core` → `/app/marty-core`
+- `../marty-microservices-framework` → `/app/marty-microservices-framework`
+- `../Marty/packages/marty-common` → `/app/marty-common`
 
-## Subsequent Startup
-~30 seconds (if container not removed)
+## Startup expectations
 
-## Configuration Files
-- `docker-compose.yml` - Base configuration
-- `docker-compose.override.yml` - Local development overrides
-- `docker/api.Dockerfile` - API service Dockerfile
+- First startup: a few minutes if images or wheels must be built
+- Subsequent startups: much faster once caches are warm
+
+## Primary configuration files
+
+- `docker-compose.base.yml` - unified base stack
+- `docker-compose.profile.dev.yml` - local development overrides
+- `docker-compose.profile.tunnel.yml` - optional public tunnel routing
+- `services/Dockerfile` - generic microservice image
+- `services/Dockerfile.migrations` - migration runner image
 
 ## Troubleshooting
+
 ```bash
-# Check if volumes are mounted
-docker exec marty-ui-oid4vc-api-1 ls -la /app/marty-credentials
-docker exec marty-ui-oid4vc-api-1 ls -la /app/marty-core
+# Check running containers
+docker ps --filter "name=marty-"
 
-# Check running processes
-docker ps --filter "name=marty-ui"
+# Open a shell in the gateway container
+make shell
 
-# Get into container
-docker exec -it marty-ui-oid4vc-api-1 sh
+# Check gRPC health for gRPC-enabled services
+make grpc-health
 ```

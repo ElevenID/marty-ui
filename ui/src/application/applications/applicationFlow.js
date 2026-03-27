@@ -8,6 +8,9 @@ const DOCUMENT_FIELDS = ['document_number', 'license_class', 'driving_privileges
 const PHOTO_FIELDS = ['portrait', 'signature', 'photo'];
 const MDL_CREDENTIAL_TYPE = 'org.iso.18013.5.1.mDL';
 const MEMBER_CREDENTIAL_TYPE = 'MemberCredential';
+const MDOC_MEMBER_CREDENTIAL_TYPE = 'com.elevenid.member_credential';
+const OPEN_BADGE_CREDENTIAL_TYPE = 'open_badge';
+const ACCESS_BADGE_CREDENTIAL_TYPE = 'access_badge';
 
 export function normalizeCredentialConfigInput(config) {
   if (!config) {
@@ -100,11 +103,17 @@ export function getCredentialKindFlags(credentialConfig) {
   const credentialType = credentialConfig?.credential_type;
   const isMemberCredential = credentialType === MEMBER_CREDENTIAL_TYPE;
   const isMdlCredential = credentialType === MDL_CREDENTIAL_TYPE;
+  const isMdocMemberCredential = credentialType === MDOC_MEMBER_CREDENTIAL_TYPE;
+  const isOpenBadgeCredential = credentialType === OPEN_BADGE_CREDENTIAL_TYPE;
+  const isAccessBadgeCredential = credentialType === ACCESS_BADGE_CREDENTIAL_TYPE;
 
   return {
     isMemberCredential,
     isMdlCredential,
-    isOneClickCredential: isMemberCredential || isMdlCredential,
+    isMdocMemberCredential,
+    isOpenBadgeCredential,
+    isAccessBadgeCredential,
+    isOneClickCredential: isMemberCredential || isMdlCredential || isMdocMemberCredential || isOpenBadgeCredential || isAccessBadgeCredential,
   };
 }
 
@@ -138,7 +147,7 @@ export function buildStandardApplicationPayload({ applicantId, credentialConfig,
   return {
     applicant_id: applicantId,
     credential_configuration_id: credentialConfig?.id || credentialConfigId,
-    issuing_authority: 'Marty Trust Services',
+    issuing_authority: 'ElevenID LLC',
     requested_validity_years: 10,
     metadata: {
       document_number: formData.documentNumber,
@@ -151,8 +160,68 @@ export function buildStandardApplicationPayload({ applicantId, credentialConfig,
 }
 
 export function buildAutoApplyContext({ credentialConfig, user, organizationId, nowIso = new Date().toISOString() }) {
-  const { isMdlCredential } = getCredentialKindFlags(credentialConfig);
+  const { isMdlCredential, isMdocMemberCredential, isOpenBadgeCredential, isAccessBadgeCredential } = getCredentialKindFlags(credentialConfig);
   const role = (user.roles || []).find((value) => ['applicant', 'vendor', 'administrator'].includes(value)) || 'applicant';
+
+  if (isOpenBadgeCredential) {
+    return {
+      requested_validity_years: 1,
+      metadata: {
+        credential_type: OPEN_BADGE_CREDENTIAL_TYPE,
+        credential_display_name: credentialConfig?.name || 'Professional Certificate',
+        given_name: user.given_name || '',
+        family_name: user.family_name || '',
+        email: user.email,
+        achievement_name: 'Platform Onboarding',
+        course_name: 'ElevenID Getting Started',
+        completion_date: nowIso.slice(0, 10),
+        institution_name: 'ElevenID LLC',
+        certificate_id: `OB-${user.user_id?.slice(0, 8)?.toUpperCase() || '00000000'}`,
+        auto_approve: true,
+      },
+    };
+  }
+
+  if (isAccessBadgeCredential) {
+    return {
+      requested_validity_years: 1,
+      metadata: {
+        credential_type: ACCESS_BADGE_CREDENTIAL_TYPE,
+        credential_display_name: credentialConfig?.name || 'Employee Access Badge',
+        given_name: user.given_name || '',
+        family_name: user.family_name || '',
+        email: user.email,
+        employee_id: `EMP-${user.user_id?.slice(0, 8)?.toUpperCase() || '00000000'}`,
+        department: 'Engineering',
+        job_title: 'Platform Member',
+        clearance_level: 'general',
+        building_access: 'HQ-A, HQ-B',
+        issue_date: nowIso.slice(0, 10),
+        expiry_date: new Date(Date.now() + 365 * 86400000).toISOString().slice(0, 10),
+        auto_approve: true,
+      },
+    };
+  }
+
+  if (isMdocMemberCredential) {
+    return {
+      requested_validity_years: 1,
+      metadata: {
+        credential_type: MDOC_MEMBER_CREDENTIAL_TYPE,
+        credential_display_name: credentialConfig?.name || 'Membership ID (mDoc)',
+        member_id: user.user_id,
+        user_id: user.user_id,
+        email: user.email,
+        given_name: user.given_name || '',
+        family_name: user.family_name || '',
+        organization_id: organizationId,
+        organization_name: user.organization_name || '',
+        role,
+        issued_at: nowIso,
+        auto_approve: true,
+      },
+    };
+  }
 
   if (isMdlCredential) {
     return {
@@ -166,7 +235,7 @@ export function buildAutoApplyContext({ credentialConfig, user, organizationId, 
         issue_date: nowIso.slice(0, 10),
         expiry_date: new Date(Date.now() + 1825 * 86400000).toISOString().slice(0, 10),
         issuing_country: 'US',
-        issuing_authority: 'Marty Trust Services',
+        issuing_authority: 'ElevenID LLC',
         document_number: `MDL-${user.user_id?.slice(0, 8)?.toUpperCase() || '00000000'}`,
         driving_privileges: 'C',
         un_distinguishing_sign: 'USA',
@@ -179,7 +248,7 @@ export function buildAutoApplyContext({ credentialConfig, user, organizationId, 
     requested_validity_years: 1,
     metadata: {
       credential_type: MEMBER_CREDENTIAL_TYPE,
-      credential_display_name: credentialConfig?.name || 'Member Login Credential',
+      credential_display_name: credentialConfig?.name || 'ElevenID Login Credential',
       member_id: user.user_id,
       user_id: user.user_id,
       email: user.email,
@@ -195,23 +264,55 @@ export function buildAutoApplyContext({ credentialConfig, user, organizationId, 
 }
 
 export function getOneClickSummaryFields({ credentialConfig, user, organizationId }) {
-  const { isMdlCredential } = getCredentialKindFlags(credentialConfig);
+  const { isMdlCredential, isMdocMemberCredential, isOpenBadgeCredential, isAccessBadgeCredential } = getCredentialKindFlags(credentialConfig);
   const displayRole = (user?.roles || []).find((value) => ['applicant', 'vendor', 'administrator'].includes(value)) || 'applicant';
+
+  if (isOpenBadgeCredential) {
+    return [
+      { label: 'Name', value: [user?.given_name, user?.family_name].filter(Boolean).join(' ') || '—' },
+      { label: 'Achievement', value: 'Platform Onboarding' },
+      { label: 'Course', value: 'ElevenID Getting Started' },
+      { label: 'Institution', value: 'ElevenID LLC' },
+    ];
+  }
+
+  if (isAccessBadgeCredential) {
+    return [
+      { label: 'Name', value: [user?.given_name, user?.family_name].filter(Boolean).join(' ') || '—' },
+      { label: 'Employee ID', value: `EMP-${user?.user_id?.slice(0, 8)?.toUpperCase() || '00000000'}` },
+      { label: 'Department', value: 'Engineering' },
+      { label: 'Clearance', value: 'General' },
+    ];
+  }
+
+  if (isMdocMemberCredential) {
+    const ROLE_DISPLAY = { applicant: 'Member', vendor: 'Vendor', administrator: 'Administrator' };
+    const roleLabel = ROLE_DISPLAY[displayRole] || displayRole.charAt(0).toUpperCase() + displayRole.slice(1);
+    return [
+      { label: 'Name', value: [user?.given_name, user?.family_name].filter(Boolean).join(' ') || '—' },
+      { label: 'Email', value: user?.email || '—' },
+      { label: 'Role', value: roleLabel },
+      { label: 'Format', value: 'mDoc (ISO 18013-5)' },
+    ];
+  }
 
   if (isMdlCredential) {
     return [
       { label: 'Name', value: [user?.given_name, user?.family_name].filter(Boolean).join(' ') || '—' },
       { label: 'Document Number', value: `MDL-${user?.user_id?.slice(0, 8)?.toUpperCase() || '00000000'}` },
       { label: 'Driving Privileges', value: 'C' },
-      { label: 'Issuing Authority', value: 'Marty Trust Services' },
+      { label: 'Issuing Authority', value: 'ElevenID LLC' },
     ];
   }
+
+  const ROLE_DISPLAY = { applicant: 'Member', vendor: 'Vendor', administrator: 'Administrator' };
+  const roleLabel = ROLE_DISPLAY[displayRole] || displayRole.charAt(0).toUpperCase() + displayRole.slice(1);
 
   return [
     { label: 'Name', value: [user?.given_name, user?.family_name].filter(Boolean).join(' ') || '—' },
     { label: 'Email', value: user?.email || '—' },
-    { label: 'Role', value: displayRole },
-    { label: 'Organization', value: user?.organization_name || organizationId || '—' },
+    { label: 'Role', value: roleLabel },
+    { label: 'Organization', value: 'ElevenID LLC' },
   ];
 }
 

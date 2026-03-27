@@ -18,7 +18,7 @@ This will compile:
 
 1. **Local Development**: Make changes to Rust code
 2. **Build Wheels**: Run `./scripts/build-rust-wheels.sh`
-3. **Test**: Verify with `docker compose --profile dev up oid4vc-api`
+3. **Test**: Verify with `docker compose -f docker-compose.base.yml -f docker-compose.profile.dev.yml up gateway`
 4. **Commit**: `git add wheels/ && git commit -m "chore: update Rust wheels"`
 5. **Push**: `git push`
 

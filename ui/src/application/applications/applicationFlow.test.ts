@@ -67,6 +67,9 @@ describe('applicationFlow helpers', () => {
     expect(getCredentialKindFlags({ credential_type: 'MemberCredential' })).toEqual({
       isMemberCredential: true,
       isMdlCredential: false,
+      isMdocMemberCredential: false,
+      isOpenBadgeCredential: false,
+      isAccessBadgeCredential: false,
       isOneClickCredential: true,
     })
   })
@@ -104,7 +107,7 @@ describe('applicationFlow helpers', () => {
     })).toMatchObject({
       applicant_id: 'app-1',
       credential_configuration_id: 'cfg-1',
-      issuing_authority: 'Marty Trust Services',
+      issuing_authority: 'ElevenID LLC',
       requested_validity_years: 10,
       metadata: {
         document_number: '1234',
@@ -134,8 +137,8 @@ describe('applicationFlow helpers', () => {
     })).toEqual([
       { label: 'Name', value: 'Jane Doe' },
       { label: 'Email', value: 'jane@example.com' },
-      { label: 'Role', value: 'vendor' },
-      { label: 'Organization', value: 'Acme' },
+      { label: 'Role', value: 'Vendor' },
+      { label: 'Organization', value: 'ElevenID LLC' },
     ])
   })
 

@@ -7,7 +7,7 @@
 
 import { apiClient, handleApiError } from './api';
 
-const BASE_PATH = '/v1/identity/compliance-profiles';
+const BASE_PATH = '/v1/compliance-profiles';
 
 /**
  * Create a new compliance profile

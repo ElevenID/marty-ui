@@ -181,6 +181,10 @@ export const handlers = [
     return HttpResponse.json(mockTrustProfiles.active)
   }),
 
+  http.get(`${API_BASE}/v1/trust-profiles/:id/issuers`, () => {
+    return HttpResponse.json(mockTrustProfiles.active.trusted_issuers)
+  }),
+
   http.post(`${API_BASE}/v1/trust-profiles`, async ({ request }) => {
     const body = await request.json() as any
     return HttpResponse.json({
@@ -197,6 +201,15 @@ export const handlers = [
       ...body,
       id: params.id,
     })
+  }),
+
+  http.post(`${API_BASE}/v1/trust-profiles/:id/issuers`, async ({ request }) => {
+    const body = await request.json() as any
+    return HttpResponse.json({
+      id: 'issuer-link-created',
+      status: 'active',
+      ...body,
+    }, { status: 201 })
   }),
 
   http.delete(`${API_BASE}/v1/trust-profiles/:id`, () => {
@@ -443,6 +456,10 @@ export const handlers = [
     return HttpResponse.json([mockTrustProfiles.active])
   }),
 
+  http.get('/v1/trust-profiles/:id/issuers', () => {
+    return HttpResponse.json(mockTrustProfiles.active.trusted_issuers)
+  }),
+
   http.post('/v1/trust-profiles', async ({ request }) => {
     const body = await request.json() as any
     return HttpResponse.json({
@@ -459,6 +476,15 @@ export const handlers = [
       ...body,
       id: params.id,
     })
+  }),
+
+  http.post('/v1/trust-profiles/:id/issuers', async ({ request }) => {
+    const body = await request.json() as any
+    return HttpResponse.json({
+      id: 'issuer-link-created',
+      status: 'active',
+      ...body,
+    }, { status: 201 })
   }),
 
   http.delete('/v1/trust-profiles/:id', () => {

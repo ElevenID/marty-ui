@@ -72,7 +72,7 @@ marty-microservices-framework>=1.0.0b0
 For marty-ui development, update the Dockerfile to install beta packages:
 
 ```dockerfile
-# In docker/api.Dockerfile
+# In services/Dockerfile
 RUN pip install --pre \
     marty-credentials \
     marty-common \
@@ -132,7 +132,7 @@ extra-index-url = https://pypi.pkg.github.com/YOUR_ORG/simple/
 ### Before (required local builds)
 
 ```yaml
-# docker-compose.override.yml - OLD approach
+# legacy dev override example (retired approach)
 volumes:
   - ../marty-credentials:/app/marty-credentials:ro
 command: |
@@ -142,7 +142,7 @@ command: |
 ### After (use beta packages)
 
 ```yaml
-# docker-compose.override.yml - NEW approach
+# compose dev overlay example (current approach)
 command: |
   pip install --pre marty-credentials marty-common marty-microservices-framework
   uvicorn app:main --reload
@@ -151,7 +151,7 @@ command: |
 Or in Dockerfile:
 
 ```dockerfile
-# docker/api.Dockerfile
+# services/Dockerfile
 ARG MARTY_CREDENTIALS_VERSION=0.2.0-beta.latest
 ARG MARTY_COMMON_VERSION=0.1.0-beta.latest
 ARG MARTY_MMF_VERSION=1.0.0-beta.latest

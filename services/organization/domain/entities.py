@@ -271,6 +271,11 @@ class Organization:
     org_type: OrganizationType = OrganizationType.STARTUP
     status: OrganizationStatus = OrganizationStatus.PENDING
     
+    # Protocol schema fields
+    owner_id: str = ""
+    join_code: str | None = None
+    visibility: str = "PRIVATE"
+    
     # Join settings
     join_mechanism: JoinMechanism = JoinMechanism.INVITE  # Default to invite-only
     requires_approval: bool = False  # Whether joining requires admin approval
@@ -309,6 +314,7 @@ class Organization:
             description=description,
             org_type=org_type,
             status=OrganizationStatus.ACTIVE,
+            owner_id=owner_id,
         )
         
         # Create owner membership
@@ -518,11 +524,14 @@ class ApiKey:
     key_prefix: str = ""  # e.g., "mk_live_" or "mk_test_"
     key_hash: str = ""  # Hashed key for verification
     
-    # Permissions
-    scopes: list[str] = field(default_factory=list)  # e.g., ["read:credentials", "write:issuance"]
+    # Permissions — MIP §21 scope format: resource:action
+    scopes: list[str] = field(default_factory=list)  # e.g., ["credentials:read", "credentials:issue"]
+    scope_type: str = "ORGANIZATION"
+    deployment_profile_id: str | None = None
     
     # Status and limits
     status: ApiKeyStatus = ApiKeyStatus.ACTIVE
+    enabled: bool = True
     rate_limit: int | None = None  # Requests per minute
     
     # Tracking
@@ -535,6 +544,7 @@ class ApiKey:
     
     # Timestamps
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     
     @classmethod
     def create(
@@ -568,7 +578,7 @@ class ApiKey:
             description=description,
             key_prefix=prefix,
             key_hash=key_hash,
-            scopes=scopes or ["read:credentials", "write:issuance"],
+            scopes=scopes or ["credentials:read", "credentials:issue"],
             status=ApiKeyStatus.ACTIVE,
             created_by=created_by,
             expires_at=expires_at,
@@ -600,13 +610,26 @@ class ApiKey:
         """Check if API key is valid for use."""
         if self.status != ApiKeyStatus.ACTIVE:
             return False
+        if not self.enabled:
+            return False
         if self.expires_at and datetime.now(timezone.utc) > self.expires_at:
             return False
         return True
     
     def has_scope(self, scope: str) -> bool:
-        """Check if API key has a specific scope."""
-        return scope in self.scopes or "*" in self.scopes
+        """Check if API key has a specific scope.
+
+        Accepts both MIP format (credentials:read) and legacy format
+        (read:credentials) for backward compatibility.
+        """
+        if scope in self.scopes or "*" in self.scopes:
+            return True
+        # Translate legacy action:resource → resource:action and vice versa
+        parts = scope.split(":", 1)
+        if len(parts) == 2:
+            flipped = f"{parts[1]}:{parts[0]}"
+            return flipped in self.scopes
+        return False
     
     def to_dict(self, include_sensitive: bool = False) -> dict[str, Any]:
         """Convert to dictionary."""

@@ -7,14 +7,16 @@
 import { get, post, del } from './api';
 import { buildTruthyQueryString, withQuery } from './queryUtils';
 
+const BASE = '/v1/devices';
+
 /**
  * List all devices for the current user
  * @param {string} organizationId - Optional org filter
- * @returns {Promise<{ devices: Array, total: number }>}
+ * @returns {Promise<Array>}
  */
 export const listDevices = async (organizationId = null) => {
   const queryString = buildTruthyQueryString({ organization_id: organizationId });
-  return get(withQuery('/api/devices', queryString));
+  return get(withQuery(BASE, queryString));
 };
 
 /**
@@ -24,7 +26,7 @@ export const listDevices = async (organizationId = null) => {
  * @returns {Promise<Object>}
  */
 export const getDevice = async (deviceId) => {
-  return get(`/api/devices/${encodeURIComponent(deviceId)}`);
+  return get(`${BASE}/${encodeURIComponent(deviceId)}`);
 };
 
 /**
@@ -33,7 +35,7 @@ export const getDevice = async (deviceId) => {
  * @returns {Promise<Object>}
  */
 export const unregisterDevice = async (deviceId) => {
-  return del(`/api/devices/${encodeURIComponent(deviceId)}`);
+  return del(`${BASE}/${encodeURIComponent(deviceId)}`);
 };
 
 /**
@@ -43,5 +45,5 @@ export const unregisterDevice = async (deviceId) => {
  * @returns {Promise<Object>}
  */
 export const registerDevice = async (deviceData) => {
-  return post('/api/devices/register', deviceData);
+  return post(BASE, deviceData);
 };

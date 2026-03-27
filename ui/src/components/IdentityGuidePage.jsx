@@ -10,8 +10,13 @@ import { SEOHead } from './seo';
 import { articleSchema, breadcrumbListSchema } from './seo/structuredData';
 import { IDENTITY_CONCEPTS } from '../data/marketingContent';
 import { TrustModelDiagram, IdentityTransactionDiagram, CredentialFlowDiagram } from './diagrams';
+import Button from '@mui/material/Button';
+import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
+import { useNavigate } from 'react-router-dom';
 
 function IdentityGuidePage() {
+  const navigate = useNavigate();
+
   return (
     <Box>
       <SEOHead
@@ -248,11 +253,24 @@ function IdentityGuidePage() {
         <Typography variant="h4" gutterBottom fontWeight="bold">
           Identity as Infrastructure
         </Typography>
-        <Typography variant="body1" sx={{ maxWidth: 800, mx: 'auto' }}>
+        <Typography variant="body1" sx={{ maxWidth: 800, mx: 'auto', mb: 2 }}>
           Digital identity becomes automatable when modeled as trust configuration, credential templates, 
           presentation policies, and deployment profiles—orchestrated by flows that handle the complete 
           lifecycle from application through verification.
         </Typography>
+        <Typography variant="body2" sx={{ maxWidth: 700, mx: 'auto', mb: 3, opacity: 0.85 }}>
+          These primitives are now formalized in the <strong>Marty Identity Protocol (MIP)</strong>—an 
+          open, vendor-neutral specification.
+        </Typography>
+        <Button
+          variant="outlined"
+          size="large"
+          onClick={() => navigate('/protocol')}
+          endIcon={<ArrowForwardIcon />}
+          sx={{ color: 'white', borderColor: 'white', '&:hover': { borderColor: 'white', bgcolor: 'rgba(255,255,255,0.1)' } }}
+        >
+          Explore the Open Protocol
+        </Button>
       </Box>
     </Box>
   );

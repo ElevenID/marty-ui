@@ -1,7 +1,7 @@
 """Status List Manager
 
 Manages Token Status Lists (IETF) and Bitstring Status Lists (W3C).
-Migrated from marty-ui/src/revocation/status_list_manager.py
+Originally migrated from the retired monolith revocation implementation.
 
 Storage:
 - Uses MMF framework ICacheManager for Redis persistence
@@ -460,7 +460,7 @@ class StatusListRepository:
     """Redis-backed repository using MMF framework's ICacheManager.
     
     Uses MMF's cache infrastructure for persistent storage following the pattern
-    from marty-ui/src/issuance/adapters.py (RedisIssuanceStorage).
+    from the retired monolith issuance Redis storage adapter.
     
     Key format: {tenant_id}:status_list:{format}
     """

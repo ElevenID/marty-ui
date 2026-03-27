@@ -143,9 +143,11 @@ export function AuthProvider({ children }) {
   }, []);
 
   // Logout handler
+  // Note: do NOT call setUser(null) here. The form POST in initiateLogout() triggers a
+  // full page navigation. Calling setUser(null) first causes React Router's ProtectedRoute
+  // to redirect to /login before the form navigation completes, cancelling the SSO logout.
   const logout = useCallback(() => {
     initiateLogout();
-    setUser(null);
   }, []);
 
   // Refresh user info

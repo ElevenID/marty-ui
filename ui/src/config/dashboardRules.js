@@ -154,25 +154,23 @@ function evaluatePolicyReadiness(policies, templates, trustProfiles) {
   }
 
   const blocked = policies.filter((p) =>
-    p.status !== 'active' ||
-    !p.credential_requirements ||
-    p.credential_requirements.length === 0
+    !p.required_claims ||
+    p.required_claims.length === 0
   );
 
   if (blocked.length > 0) {
     return {
       state: ReadinessState.BLOCKED,
-      message: `${blocked.length} of ${policies.length} policy(ies) inactive or missing requirements`,
+      message: `${blocked.length} of ${policies.length} policy(ies) missing required claims`,
       action: 'Fix',
       path: '/console/policies/presentation',
-      blockReason: 'Presentation Policy exists but is inactive or has no credential requirements',
+      blockReason: 'Presentation Policy exists but has no required claims',
     };
   }
 
-  const activePolicies = policies.filter((p) => p.status === 'active');
   return {
     state: ReadinessState.READY,
-    message: `${activePolicies.length} active policy(ies)`,
+    message: `${policies.length} policy(ies) configured`,
     action: null,
     path: null,
     blockReason: null,

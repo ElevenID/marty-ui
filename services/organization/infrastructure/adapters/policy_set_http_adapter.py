@@ -6,10 +6,10 @@ API endpoints for managing Cedar policy sets within an organization.
 from __future__ import annotations
 
 import logging
-from typing import Annotated, Optional
+from typing import Annotated, Any, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from marty_common import OrganizationContext, require_org_membership
 
@@ -34,10 +34,9 @@ class PolicySetResponse(BaseModel):
     name: str
     description: str | None = None
     policy_type: str
-    status: str
-    cedar_policies: str
+    cedar_policies: list[dict[str, Any]] = Field(default_factory=list)
     cedar_schema_version: str
-    created_by: str | None = None
+    status: str
     created_at: str
     updated_at: str
 
@@ -70,16 +69,23 @@ class ValidatePoliciesResponse(BaseModel):
 
 
 def _policy_set_response(ps) -> PolicySetResponse:
+    # cedar_policies may be stored as a string; parse to list[dict] for schema compliance
+    policies = ps.cedar_policies
+    if isinstance(policies, str):
+        import json
+        try:
+            policies = json.loads(policies)
+        except (json.JSONDecodeError, TypeError):
+            policies = []
     return PolicySetResponse(
         id=ps.id,
         organization_id=ps.organization_id,
         name=ps.name,
         description=ps.description,
         policy_type=ps.policy_type.value if hasattr(ps.policy_type, "value") else ps.policy_type,
-        status=ps.status.value if hasattr(ps.status, "value") else ps.status,
-        cedar_policies=ps.cedar_policies,
+        cedar_policies=policies if isinstance(policies, list) else [],
         cedar_schema_version=ps.cedar_schema_version,
-        created_by=ps.created_by,
+        status=ps.status.value if hasattr(ps.status, "value") else ps.status,
         created_at=ps.created_at.isoformat(),
         updated_at=ps.updated_at.isoformat(),
     )
@@ -105,7 +111,7 @@ def _get_use_case() -> PolicySetUseCase:
     return uc
 
 
-@router.get("/policy-sets", response_model=list[PolicySetResponse])
+@router.get("/policy-sets", response_model=list[PolicySetResponse], response_model_exclude_none=True)
 async def list_policy_sets(
     organization_id: str,
     status: Optional[str] = Query(None, description="Filter by status (active/archived)"),
@@ -117,7 +123,7 @@ async def list_policy_sets(
     return [_policy_set_response(ps) for ps in policy_sets]
 
 
-@router.post("/policy-sets", response_model=PolicySetResponse, status_code=201)
+@router.post("/policy-sets", response_model=PolicySetResponse, response_model_exclude_none=True, status_code=201)
 async def create_policy_set(
     organization_id: str,
     body: CreatePolicySetRequest,
@@ -145,7 +151,7 @@ async def create_policy_set(
     return _policy_set_response(ps)
 
 
-@router.get("/policy-sets/{policy_set_id}", response_model=PolicySetResponse)
+@router.get("/policy-sets/{policy_set_id}", response_model=PolicySetResponse, response_model_exclude_none=True)
 async def get_policy_set(
     organization_id: str,
     policy_set_id: str,
@@ -159,7 +165,7 @@ async def get_policy_set(
     return _policy_set_response(ps)
 
 
-@router.patch("/policy-sets/{policy_set_id}", response_model=PolicySetResponse)
+@router.patch("/policy-sets/{policy_set_id}", response_model=PolicySetResponse, response_model_exclude_none=True)
 async def update_policy_set(
     organization_id: str,
     policy_set_id: str,
@@ -189,7 +195,7 @@ async def update_policy_set(
     return _policy_set_response(ps)
 
 
-@router.post("/policy-sets/{policy_set_id}/archive", response_model=PolicySetResponse)
+@router.post("/policy-sets/{policy_set_id}/archive", response_model=PolicySetResponse, response_model_exclude_none=True)
 async def archive_policy_set(
     organization_id: str,
     policy_set_id: str,
@@ -203,7 +209,7 @@ async def archive_policy_set(
     return _policy_set_response(ps)
 
 
-@router.post("/policy-sets/{policy_set_id}/activate", response_model=PolicySetResponse)
+@router.post("/policy-sets/{policy_set_id}/activate", response_model=PolicySetResponse, response_model_exclude_none=True)
 async def activate_policy_set(
     organization_id: str,
     policy_set_id: str,
@@ -230,7 +236,7 @@ async def delete_policy_set(
         raise HTTPException(status_code=404, detail="Policy set not found")
 
 
-@router.post("/policy-sets/validate", response_model=ValidatePoliciesResponse)
+@router.post("/policy-sets/validate", response_model=ValidatePoliciesResponse, response_model_exclude_none=True)
 async def validate_policies(
     organization_id: str,
     body: ValidatePoliciesRequest,

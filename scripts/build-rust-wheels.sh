@@ -31,6 +31,6 @@ echo "Built wheels:"
 ls -lh wheels/*.whl
 echo ""
 echo "Next steps:"
-echo "1. Test the wheels: docker compose --profile dev up oid4vc-api"
+echo "1. Test the wheels: docker compose -f docker-compose.base.yml -f docker-compose.profile.dev.yml up gateway"
 echo "2. Commit to repo: git add wheels/ && git commit -m 'chore: update Rust wheels'"
 echo "3. Push to GitHub: git push"

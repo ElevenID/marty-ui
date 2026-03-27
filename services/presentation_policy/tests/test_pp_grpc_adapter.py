@@ -18,17 +18,45 @@ from marty_proto.v1 import presentation_policy_service_pb2 as pp_pb2
 
 
 def _make_policy_response(**overrides):
-    """Create a fake REST-layer policy response object."""
+    """Create a fake domain-layer policy object.
+
+    The gRPC adapter now reads protocol fields from the REST response and
+    legacy fields (status, display_metadata, credential_requirements, etc.)
+    directly from the domain model. Since the test's ``_to_response_fn`` is
+    a passthrough, the same object must satisfy both access patterns.
+    """
+    status_enum = SimpleNamespace(value=overrides.pop("status", "active"))
+    display_metadata = SimpleNamespace(
+        title="Employee Check",
+        description="Check employee credentials",
+        purpose=SimpleNamespace(value="identity_verification"),
+        purpose_description="Verify employee identity",
+        verifier_name="Acme Corp",
+        verifier_logo_url=None,
+        privacy_policy_url=None,
+        terms_of_service_url=None,
+    )
+
+    cred_claim = SimpleNamespace(
+        id="rc-1", claim_name="employee_id", display_name="Employee ID",
+        required=True, selective_disclosure=True, predicate_spec=None,
+    )
+    cred_req = SimpleNamespace(
+        id="cr-1", credential_template_id="EmployeeCredential",
+        display_name="Employee Credential", required=True,
+        credential_payload_format="w3c_vcdm_v2_sd_jwt",
+        requested_claims=[cred_claim],
+        trust_profile_id=None, max_age_seconds=None,
+    )
+
     defaults = dict(
         id="pol-1",
         organization_id="org-1",
         name="Employee Verification",
         description="Verify employee credentials",
-        status="active",
-        display_metadata={"title": "Employee Check", "icon": "badge"},
-        credential_requirements=[
-            {"credential_type": "EmployeeCredential", "required": True}
-        ],
+        status=status_enum,
+        display_metadata=display_metadata,
+        credential_requirements=[cred_req],
         alternative_requirements=[],
         compliance_profile_id="cp-1",
         version=1,
@@ -73,7 +101,7 @@ class TestGetPolicy:
         display = json.loads(resp.display_metadata_json)
         assert display["title"] == "Employee Check"
         reqs = json.loads(resp.credential_requirements_json)
-        assert reqs[0]["credential_type"] == "EmployeeCredential"
+        assert reqs[0]["credential_template_id"] == "EmployeeCredential"
         assert ctx.code is None
 
     async def test_not_found(self, ctx):

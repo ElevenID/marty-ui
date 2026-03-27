@@ -136,7 +136,7 @@ services:
       dockerfile: marty-ui/services/Dockerfile.migrations
     container_name: marty-db-migrate
     environment:
-      DATABASE_URL: postgresql://marty:marty_dev_password@postgres:5432/marty
+      DATABASE_URL: postgresql://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
       MARTY_ORG_ID: ${MARTY_ORG_ID:-00000000-0000-0000-0000-000000000001}
       MARTY_ORG_ADMIN_EMAIL: ${MARTY_ORG_ADMIN_EMAIL:-}
     depends_on:
@@ -168,6 +168,7 @@ services:
       PRESENTATION_POLICY_SERVICE_URL: http://presentation-policy:8009
       DEPLOYMENT_PROFILE_SERVICE_URL: http://deployment-profile:8010
       FLOW_SERVICE_URL: http://flow:8011
+      DEVICE_REGISTRATION_SERVICE_URL: http://device-registration:8014
       ISSUANCE_SERVICE_URL: http://issuance:8005
       ISSUER_BASE_URL: ${PUBLIC_API_URL:-http://gateway:8000}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://localhost:5173}
@@ -536,6 +537,31 @@ services:
     networks:
       - marty-network
 
+  # ── Device Registration Service ─────────────────────────────────
+  device-registration:
+    build:
+      context: ..
+      dockerfile: marty-ui/services/Dockerfile
+      args:
+        SERVICE_NAME: device_registration
+    container_name: marty-device-registration
+    environment:
+      DEVICE_REGISTRATION_SERVICE_PORT: "8014"
+      DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@postgres:5432/marty
+      ORG_GRPC_TARGET: organization:9002
+    ports:
+      - "8014:8014"
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8014/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - marty-network
+
   # ── Event Stream Service (gRPC event bus) ─────────────────────────
   event-stream:
     build:
@@ -615,6 +641,8 @@ services:
       flow:
         condition: service_healthy
       revocation-profile:
+        condition: service_healthy
+      device-registration:
         condition: service_healthy
       event-stream:
         condition: service_healthy

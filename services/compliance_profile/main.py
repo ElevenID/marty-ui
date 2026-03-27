@@ -28,7 +28,7 @@ from typing import Any, AsyncGenerator
 
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Annotated
 
 from marty_common import (
@@ -56,6 +56,40 @@ class ComplianceProfileStatus(str, Enum):
     ACTIVE = "active"
     SUSPENDED = "suspended"
     ARCHIVED = "archived"
+
+
+class CredentialFormat(str, Enum):
+    MDOC = "MDOC"
+    SD_JWT_VC = "SD_JWT_VC"
+    VC_JWT = "VC_JWT"
+    JSON_LD = "JSON_LD"
+    ZK_MDOC = "ZK_MDOC"
+
+
+class IssuanceProtocol(str, Enum):
+    OID4VCI_PRE_AUTH = "OID4VCI_PRE_AUTH"
+    OID4VCI_AUTH_CODE = "OID4VCI_AUTH_CODE"
+    DIRECT = "DIRECT"
+
+
+def _parse_credential_format(value: str | CredentialFormat) -> CredentialFormat:
+    if isinstance(value, CredentialFormat):
+        return value
+    normalized = str(value).strip().upper()
+    aliases = {
+        "SD_JWT_VC": CredentialFormat.SD_JWT_VC,
+        "SD-JWT-VC": CredentialFormat.SD_JWT_VC,
+        "JWT_VC": CredentialFormat.VC_JWT,
+        "VC_JWT": CredentialFormat.VC_JWT,
+        "MDOC": CredentialFormat.MDOC,
+        "MSO_MDOC": CredentialFormat.MDOC,
+        "JSONLD": CredentialFormat.JSON_LD,
+        "JSON_LD": CredentialFormat.JSON_LD,
+        "ZK_MDOC": CredentialFormat.ZK_MDOC,
+    }
+    if normalized in aliases:
+        return aliases[normalized]
+    return CredentialFormat(normalized)
 
 
 class DataRetentionPeriod(str, Enum):
@@ -165,6 +199,33 @@ class AgeVerificationRule:
 
 
 @dataclass
+class IssuerArtifactRequirements:
+    requires_x509_cert: bool = False
+    requires_did: bool = False
+    requires_jwk: bool = False
+    cert_key_usage: list[str] = field(default_factory=list)
+    recommended_algorithms: list[str] = field(default_factory=list)
+
+
+@dataclass
+class TrustProfileConstraints:
+    compatible_profile_types: list[str] = field(default_factory=list)
+    required_source_types: list[str] = field(default_factory=list)
+    required_formats: list[str] = field(default_factory=list)
+
+
+@dataclass
+class ApiSurfaceEndpoint:
+    rel: str = ""
+    path_template: str = ""
+    method: str = "GET"
+    auth_required: bool = True
+    org_scoped_path: str | None = None
+    response_schema_ref: str | None = None
+    standard_ref: str | None = None
+
+
+@dataclass
 class ComplianceProfile:
     """
     Compliance Profile - regulatory and policy rules.
@@ -172,16 +233,22 @@ class ComplianceProfile:
     This defines the compliance rules for credential operations.
     """
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
-    organization_id: str = ""
+    organization_id: str | None = None
     name: str = ""
     description: str | None = None
     status: ComplianceProfileStatus = ComplianceProfileStatus.DRAFT
     
     # Compliance identification
     compliance_code: str | None = None  # e.g., "AAMVA_MDL"
-    credential_format: str = "sd_jwt_vc"  # e.g., "mso_mdoc", "sd_jwt_vc"
-    trust_profile_constraints: list[str] = field(default_factory=list)
-    system_profile: bool = False
+    credential_format: CredentialFormat = CredentialFormat.SD_JWT_VC
+    issuance_protocol: IssuanceProtocol | None = None
+    issuer_artifact_requirements: IssuerArtifactRequirements | None = None
+    default_verification_rules: dict[str, Any] | None = None
+    verification_policy_set_id: str | None = None
+    trust_profile_constraints: TrustProfileConstraints = field(default_factory=TrustProfileConstraints)
+    api_surface: list[ApiSurfaceEndpoint] = field(default_factory=list)
+    discoverable: bool = True
+    is_system: bool = False
     
     # Regulatory framework references
     frameworks: list[str] = field(default_factory=list)  # e.g., ["GDPR", "CCPA", "eIDAS"]
@@ -268,18 +335,18 @@ class AuditConfigurationModel(BaseModel):
 
 class DataMinimizationRuleModel(BaseModel):
     description: str
-    applies_to_claims: list[str] = []
+    applies_to_claims: list[str] = Field(default_factory=list)
     action: str = "redact"
-    parameters: dict = {}
+    parameters: dict = Field(default_factory=dict)
 
 
 class JurisdictionalConstraintModel(BaseModel):
     name: str
     description: str | None = None
-    allowed_countries: list[str] = []
-    blocked_countries: list[str] = []
+    allowed_countries: list[str] = Field(default_factory=list)
+    blocked_countries: list[str] = Field(default_factory=list)
     data_residency_required: bool = False
-    allowed_data_regions: list[str] = []
+    allowed_data_regions: list[str] = Field(default_factory=list)
 
 
 class AgeVerificationRuleModel(BaseModel):
@@ -289,52 +356,92 @@ class AgeVerificationRuleModel(BaseModel):
     allow_credential_expiry_check: bool = True
 
 
+class IssuerArtifactRequirementsModel(BaseModel):
+    requires_x509_cert: bool = False
+    requires_did: bool = False
+    requires_jwk: bool = False
+    cert_key_usage: list[str] = Field(default_factory=list)
+    recommended_algorithms: list[str] = Field(default_factory=list)
+
+
+class TrustProfileConstraintsModel(BaseModel):
+    compatible_profile_types: list[str] = Field(default_factory=list)
+    required_source_types: list[str] = Field(default_factory=list)
+    required_formats: list[str] = Field(default_factory=list)
+
+
+class ApiSurfaceEndpointModel(BaseModel):
+    rel: str
+    path_template: str
+    method: str = "GET"
+    auth_required: bool = True
+    org_scoped_path: str | None = None
+    response_schema_ref: str | None = None
+    standard_ref: str | None = None
+
+
 class CreateComplianceProfileRequest(BaseModel):
-    organization_id: str
+    organization_id: str | None = None
     name: str
     description: str | None = None
     compliance_code: str | None = None
-    credential_format: str = "sd_jwt_vc"
-    trust_profile_constraints: list[str] = []
-    system_profile: bool = False
-    frameworks: list[str] = []
+    credential_format: str = "SD_JWT_VC"
+    issuance_protocol: str | None = None
+    issuer_artifact_requirements: IssuerArtifactRequirementsModel | None = None
+    default_verification_rules: dict[str, Any] | None = None
+    verification_policy_set_id: str | None = None
+    trust_profile_constraints: TrustProfileConstraintsModel | None = None
+    api_surface: list[ApiSurfaceEndpointModel] = Field(default_factory=list)
+    discoverable: bool = True
+    is_system: bool = False
+    system_profile: bool | None = None
+    frameworks: list[str] = Field(default_factory=list)
     data_retention: DataRetentionPolicyModel | None = None
     consent_requirement: ConsentRequirementModel | None = None
     audit_configuration: AuditConfigurationModel | None = None
-    data_minimization_rules: list[DataMinimizationRuleModel] = []
-    jurisdictional_constraints: list[JurisdictionalConstraintModel] = []
+    data_minimization_rules: list[DataMinimizationRuleModel] = Field(default_factory=list)
+    jurisdictional_constraints: list[JurisdictionalConstraintModel] = Field(default_factory=list)
     age_verification: AgeVerificationRuleModel | None = None
 
 
 class UpdateComplianceProfileRequest(BaseModel):
     name: str | None = None
     description: str | None = None
+    compliance_code: str | None = None
+    credential_format: str | None = None
+    issuance_protocol: str | None = None
+    issuer_artifact_requirements: IssuerArtifactRequirementsModel | None = None
+    default_verification_rules: dict[str, Any] | None = None
+    verification_policy_set_id: str | None = None
+    trust_profile_constraints: TrustProfileConstraintsModel | None = None
+    api_surface: list[ApiSurfaceEndpointModel] | None = None
+    discoverable: bool | None = None
+    is_system: bool | None = None
     frameworks: list[str] | None = None
     data_retention: DataRetentionPolicyModel | None = None
     consent_requirement: ConsentRequirementModel | None = None
     audit_configuration: AuditConfigurationModel | None = None
+    data_minimization_rules: list[DataMinimizationRuleModel] | None = None
+    jurisdictional_constraints: list[JurisdictionalConstraintModel] | None = None
     age_verification: AgeVerificationRuleModel | None = None
 
 
 class ComplianceProfileResponse(BaseModel):
     id: str
-    organization_id: str
+    organization_id: str | None = None
+    compliance_code: str | None = None
     name: str
     description: str | None = None
-    status: str
-    compliance_code: str | None = None
-    credential_format: str = "sd_jwt_vc"
-    trust_profile_constraints: list[str] = []
-    system_profile: bool = False
-    frameworks: list[str] = []
-    data_retention: dict = {}
-    consent_requirement: dict = {}
-    audit_configuration: dict = {}
-    data_minimization_rules: list[dict] = []
-    jurisdictional_constraints: list[dict] = []
-    age_verification: dict = {}
+    credential_format: str = "SD_JWT_VC"
+    issuance_protocol: str | None = None
+    issuer_artifact_requirements: dict | None = None
+    default_verification_rules: dict | None = None
+    verification_policy_set_id: str | None = None
+    trust_profile_constraints: dict | None = None
+    api_surface: list[dict] | None = None
+    discoverable: bool | None = None
+    is_system: bool
     created_at: str
-    updated_at: str
 
 
 # =============================================================================
@@ -357,7 +464,7 @@ def get_current_user_id(x_user_id: Annotated[str, Header()]) -> str:
     return x_user_id
 
 
-@router.post("", response_model=ComplianceProfileResponse)
+@router.post("", response_model=ComplianceProfileResponse, response_model_exclude_none=True)
 async def create_compliance_profile(
     request: CreateComplianceProfileRequest,
     fastapi_request: Request,
@@ -365,20 +472,52 @@ async def create_compliance_profile(
     repo: InMemoryComplianceProfileRepository = Depends(get_repo),
 ) -> ComplianceProfileResponse:
     """Create a new Compliance Profile."""
-    # Verify org membership
-    org_client = await get_organization_client(fastapi_request)
-    membership = await org_client.get_membership(user_id, request.organization_id)
-    if not membership or not membership.is_active():
-        raise HTTPException(status_code=403, detail="Not a member of this organization")
+    is_system_profile = request.system_profile if request.system_profile is not None else request.is_system
+    if request.organization_id is None and not is_system_profile:
+        raise HTTPException(status_code=400, detail="organization_id is required for non-system compliance profiles")
+    # MIP §10 — system profiles MUST have organization_id=null
+    if is_system_profile and request.organization_id is not None:
+        raise HTTPException(status_code=400, detail="system profiles must not have an organization_id")
+        org_client = await get_organization_client(fastapi_request)
+        membership = await org_client.get_membership(user_id, request.organization_id)
+        if not membership or not membership.is_active():
+            raise HTTPException(status_code=403, detail="Not a member of this organization")
     
     profile = ComplianceProfile(
         organization_id=request.organization_id,
         name=request.name,
         description=request.description,
         compliance_code=request.compliance_code,
-        credential_format=request.credential_format,
-        trust_profile_constraints=request.trust_profile_constraints,
-        system_profile=request.system_profile,
+        credential_format=_parse_credential_format(request.credential_format),
+        issuance_protocol=IssuanceProtocol(request.issuance_protocol) if request.issuance_protocol else None,
+        issuer_artifact_requirements=IssuerArtifactRequirements(
+            requires_x509_cert=request.issuer_artifact_requirements.requires_x509_cert,
+            requires_did=request.issuer_artifact_requirements.requires_did,
+            requires_jwk=request.issuer_artifact_requirements.requires_jwk,
+            cert_key_usage=request.issuer_artifact_requirements.cert_key_usage,
+            recommended_algorithms=request.issuer_artifact_requirements.recommended_algorithms,
+        ) if request.issuer_artifact_requirements else None,
+        default_verification_rules=request.default_verification_rules,
+        verification_policy_set_id=request.verification_policy_set_id,
+        trust_profile_constraints=TrustProfileConstraints(
+            compatible_profile_types=request.trust_profile_constraints.compatible_profile_types,
+            required_source_types=request.trust_profile_constraints.required_source_types,
+            required_formats=request.trust_profile_constraints.required_formats,
+        ) if request.trust_profile_constraints else TrustProfileConstraints(),
+        api_surface=[
+            ApiSurfaceEndpoint(
+                rel=endpoint.rel,
+                path_template=endpoint.path_template,
+                method=endpoint.method,
+                auth_required=endpoint.auth_required,
+                org_scoped_path=endpoint.org_scoped_path,
+                response_schema_ref=endpoint.response_schema_ref,
+                standard_ref=endpoint.standard_ref,
+            )
+            for endpoint in request.api_surface
+        ],
+        discoverable=request.discoverable,
+        is_system=is_system_profile,
         frameworks=request.frameworks,
     )
     
@@ -449,7 +588,7 @@ async def create_compliance_profile(
     return _profile_to_response(profile)
 
 
-@router.get("", response_model=list[ComplianceProfileResponse])
+@router.get("", response_model=list[ComplianceProfileResponse], response_model_exclude_none=True)
 async def list_compliance_profiles(
     organization_id: str = Query(..., description="Organization ID"),
     user_id: str = Depends(get_current_user_id),
@@ -462,7 +601,7 @@ async def list_compliance_profiles(
     return [_profile_to_response(p) for p in profiles]
 
 
-@router.get("/{profile_id}", response_model=ComplianceProfileResponse)
+@router.get("/{profile_id}", response_model=ComplianceProfileResponse, response_model_exclude_none=True)
 async def get_compliance_profile(
     profile_id: str,
     user_id: str = Depends(get_current_user_id),
@@ -473,11 +612,12 @@ async def get_compliance_profile(
     if not profile:
         raise HTTPException(status_code=404, detail="Compliance Profile not found")
     # Verify org membership
-    await app.state.org_client.get_membership(user_id, profile.organization_id)
+    if profile.organization_id is not None:
+        await app.state.org_client.get_membership(user_id, profile.organization_id)
     return _profile_to_response(profile)
 
 
-@router.patch("/{profile_id}", response_model=ComplianceProfileResponse)
+@router.patch("/{profile_id}", response_model=ComplianceProfileResponse, response_model_exclude_none=True)
 async def update_compliance_profile(
     profile_id: str,
     request: UpdateComplianceProfileRequest,
@@ -498,15 +638,112 @@ async def update_compliance_profile(
         profile.name = request.name
     if request.description is not None:
         profile.description = request.description
+    if request.compliance_code is not None:
+        profile.compliance_code = request.compliance_code
+    if request.credential_format is not None:
+        profile.credential_format = _parse_credential_format(request.credential_format)
+    if request.issuance_protocol is not None:
+        profile.issuance_protocol = IssuanceProtocol(request.issuance_protocol)
+    if request.issuer_artifact_requirements is not None:
+        profile.issuer_artifact_requirements = IssuerArtifactRequirements(
+            requires_x509_cert=request.issuer_artifact_requirements.requires_x509_cert,
+            requires_did=request.issuer_artifact_requirements.requires_did,
+            requires_jwk=request.issuer_artifact_requirements.requires_jwk,
+            cert_key_usage=request.issuer_artifact_requirements.cert_key_usage,
+            recommended_algorithms=request.issuer_artifact_requirements.recommended_algorithms,
+        )
+    if request.default_verification_rules is not None:
+        profile.default_verification_rules = request.default_verification_rules
+    if request.verification_policy_set_id is not None:
+        profile.verification_policy_set_id = request.verification_policy_set_id
+    if request.trust_profile_constraints is not None:
+        profile.trust_profile_constraints = TrustProfileConstraints(
+            compatible_profile_types=request.trust_profile_constraints.compatible_profile_types,
+            required_source_types=request.trust_profile_constraints.required_source_types,
+            required_formats=request.trust_profile_constraints.required_formats,
+        )
+    if request.api_surface is not None:
+        profile.api_surface = [
+            ApiSurfaceEndpoint(
+                rel=endpoint.rel,
+                path_template=endpoint.path_template,
+                method=endpoint.method,
+                auth_required=endpoint.auth_required,
+                org_scoped_path=endpoint.org_scoped_path,
+                response_schema_ref=endpoint.response_schema_ref,
+                standard_ref=endpoint.standard_ref,
+            )
+            for endpoint in request.api_surface
+        ]
+    if request.discoverable is not None:
+        profile.discoverable = request.discoverable
+    if request.is_system is not None:
+        profile.is_system = request.is_system
     if request.frameworks is not None:
         profile.frameworks = request.frameworks
+    if request.data_retention is not None:
+        profile.data_retention = DataRetentionPolicy(
+            retention_period=DataRetentionPeriod(request.data_retention.retention_period),
+            retain_metadata_only=request.data_retention.retain_metadata_only,
+            anonymize_after_days=request.data_retention.anonymize_after_days,
+            deletion_confirmation_required=request.data_retention.deletion_confirmation_required,
+            backup_retention_days=request.data_retention.backup_retention_days,
+        )
+    if request.consent_requirement is not None:
+        profile.consent_requirement = ConsentRequirement(
+            consent_type=ConsentType(request.consent_requirement.consent_type),
+            consent_text=request.consent_requirement.consent_text,
+            consent_version=request.consent_requirement.consent_version,
+            require_re_consent_days=request.consent_requirement.require_re_consent_days,
+            allow_partial_consent=request.consent_requirement.allow_partial_consent,
+            track_consent_history=request.consent_requirement.track_consent_history,
+        )
+    if request.audit_configuration is not None:
+        profile.audit_configuration = AuditConfiguration(
+            audit_level=AuditLevel(request.audit_configuration.audit_level),
+            log_credential_access=request.audit_configuration.log_credential_access,
+            log_verification_results=request.audit_configuration.log_verification_results,
+            log_consent_changes=request.audit_configuration.log_consent_changes,
+            log_data_exports=request.audit_configuration.log_data_exports,
+            tamper_evident=request.audit_configuration.tamper_evident,
+            retention_days=request.audit_configuration.retention_days,
+        )
+    if request.data_minimization_rules is not None:
+        profile.data_minimization_rules = [
+            DataMinimizationRule(
+                description=rule.description,
+                applies_to_claims=rule.applies_to_claims,
+                action=rule.action,
+                parameters=rule.parameters,
+            )
+            for rule in request.data_minimization_rules
+        ]
+    if request.jurisdictional_constraints is not None:
+        profile.jurisdictional_constraints = [
+            JurisdictionalConstraint(
+                name=constraint.name,
+                description=constraint.description,
+                allowed_countries=constraint.allowed_countries,
+                blocked_countries=constraint.blocked_countries,
+                data_residency_required=constraint.data_residency_required,
+                allowed_data_regions=constraint.allowed_data_regions,
+            )
+            for constraint in request.jurisdictional_constraints
+        ]
+    if request.age_verification is not None:
+        profile.age_verification = AgeVerificationRule(
+            enabled=request.age_verification.enabled,
+            minimum_age=request.age_verification.minimum_age,
+            verification_method=request.age_verification.verification_method,
+            allow_credential_expiry_check=request.age_verification.allow_credential_expiry_check,
+        )
     
     profile.updated_at = datetime.now(timezone.utc)
     await repo.save(profile)
     return _profile_to_response(profile)
 
 
-@router.post("/{profile_id}/activate", response_model=ComplianceProfileResponse)
+@router.post("/{profile_id}/activate", response_model=ComplianceProfileResponse, response_model_exclude_none=True)
 async def activate_compliance_profile(
     profile_id: str,
     user_id: str = Depends(get_current_user_id),
@@ -526,7 +763,7 @@ async def activate_compliance_profile(
     return _profile_to_response(profile)
 
 
-@router.post("/{profile_id}/suspend", response_model=ComplianceProfileResponse)
+@router.post("/{profile_id}/suspend", response_model=ComplianceProfileResponse, response_model_exclude_none=True)
 async def suspend_compliance_profile(
     profile_id: str,
     user_id: str = Depends(get_current_user_id),
@@ -570,60 +807,44 @@ def _profile_to_response(profile: ComplianceProfile) -> ComplianceProfileRespons
     return ComplianceProfileResponse(
         id=profile.id,
         organization_id=profile.organization_id,
+        compliance_code=profile.compliance_code,
         name=profile.name,
         description=profile.description,
-        status=profile.status.value,
-        compliance_code=profile.compliance_code,
-        credential_format=profile.credential_format,
-        trust_profile_constraints=profile.trust_profile_constraints,
-        system_profile=profile.system_profile,
-        frameworks=profile.frameworks,
-        data_retention={
-            "retention_period": profile.data_retention.retention_period.value,
-            "retain_metadata_only": profile.data_retention.retain_metadata_only,
-            "anonymize_after_days": profile.data_retention.anonymize_after_days,
-            "deletion_confirmation_required": profile.data_retention.deletion_confirmation_required,
-        },
-        consent_requirement={
-            "consent_type": profile.consent_requirement.consent_type.value,
-            "consent_text": profile.consent_requirement.consent_text,
-            "consent_version": profile.consent_requirement.consent_version,
-            "allow_partial_consent": profile.consent_requirement.allow_partial_consent,
-            "track_consent_history": profile.consent_requirement.track_consent_history,
-        },
-        audit_configuration={
-            "audit_level": profile.audit_configuration.audit_level.value,
-            "log_credential_access": profile.audit_configuration.log_credential_access,
-            "log_verification_results": profile.audit_configuration.log_verification_results,
-            "tamper_evident": profile.audit_configuration.tamper_evident,
-            "retention_days": profile.audit_configuration.retention_days,
-        },
-        data_minimization_rules=[
+        credential_format=profile.credential_format.value,
+        issuance_protocol=profile.issuance_protocol.value if profile.issuance_protocol else None,
+        issuer_artifact_requirements={
+            "requires_x509_cert": profile.issuer_artifact_requirements.requires_x509_cert,
+            "requires_did": profile.issuer_artifact_requirements.requires_did,
+            "requires_jwk": profile.issuer_artifact_requirements.requires_jwk,
+            "cert_key_usage": profile.issuer_artifact_requirements.cert_key_usage,
+            "recommended_algorithms": profile.issuer_artifact_requirements.recommended_algorithms,
+        } if profile.issuer_artifact_requirements else None,
+        default_verification_rules=profile.default_verification_rules,
+        verification_policy_set_id=profile.verification_policy_set_id,
+        trust_profile_constraints={
+            "compatible_profile_types": profile.trust_profile_constraints.compatible_profile_types,
+            "required_source_types": profile.trust_profile_constraints.required_source_types,
+            "required_formats": profile.trust_profile_constraints.required_formats,
+        } if (
+            profile.trust_profile_constraints.compatible_profile_types
+            or profile.trust_profile_constraints.required_source_types
+            or profile.trust_profile_constraints.required_formats
+        ) else {},
+        api_surface=[
             {
-                "id": r.id,
-                "description": r.description,
-                "applies_to_claims": r.applies_to_claims,
-                "action": r.action,
+                "rel": endpoint.rel,
+                "path_template": endpoint.path_template,
+                "method": endpoint.method,
+                "auth_required": endpoint.auth_required,
+                "org_scoped_path": endpoint.org_scoped_path,
+                "response_schema_ref": endpoint.response_schema_ref,
+                "standard_ref": endpoint.standard_ref,
             }
-            for r in profile.data_minimization_rules
+            for endpoint in profile.api_surface
         ],
-        jurisdictional_constraints=[
-            {
-                "id": c.id,
-                "name": c.name,
-                "allowed_countries": c.allowed_countries,
-                "blocked_countries": c.blocked_countries,
-                "data_residency_required": c.data_residency_required,
-            }
-            for c in profile.jurisdictional_constraints
-        ],
-        age_verification={
-            "enabled": profile.age_verification.enabled,
-            "minimum_age": profile.age_verification.minimum_age,
-            "verification_method": profile.age_verification.verification_method,
-        },
+        discoverable=profile.discoverable,
+        is_system=profile.is_system,
         created_at=profile.created_at.isoformat(),
-        updated_at=profile.updated_at.isoformat(),
     )
 
 

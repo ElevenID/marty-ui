@@ -118,17 +118,10 @@ export const ADMIN_VENDOR_NAV = [
  */
 export const APPLICANT_NAV = [
   {
-    id: 'my-credentials',
-    label: 'My Credentials',
-    path: '/console/applicant/credentials',
+    id: 'my-identity',
+    label: 'My Identity',
+    path: '/console/applicant/identity',
     icon: BadgeIcon,
-    exact: true,
-  },
-  {
-    id: 'my-applications',
-    label: 'My Applications',
-    path: '/console/applicant/applications',
-    icon: FolderSharedIcon,
     exact: true,
   },
   {
@@ -136,6 +129,13 @@ export const APPLICANT_NAV = [
     label: 'Catalog',
     path: '/console/applicant/catalog',
     icon: StorefrontIcon,
+    exact: true,
+  },
+  {
+    id: 'settings',
+    label: 'Settings',
+    path: '/console/applicant/settings',
+    icon: SettingsIcon,
     exact: true,
   },
 ];
@@ -150,6 +150,8 @@ export const PUBLIC_NAV = [
   { id: 'how-it-works', label: 'How It Works', path: '/identity' },
   { id: 'why-verifiable', label: 'Why Verifiable Identity', path: '/from-idv-to-verifiable-identity' },
   { id: 'standards', label: 'Standards', path: '/standards' },
+  { id: 'protocol', label: 'Protocol', path: '/protocol' },
+  { id: 'blog', label: 'Blog', path: '/blog' },
   { id: 'docs', label: 'Docs', path: '/docs' },
   { id: 'pricing', label: 'Pricing', path: '/pricing' },
 ];

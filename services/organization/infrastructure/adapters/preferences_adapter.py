@@ -81,7 +81,7 @@ class UpdatePreferencesRequest(BaseModel):
 # Endpoints
 # =============================================================================
 
-@router.get("/preferences", response_model=PreferencesResponse)
+@router.get("/preferences", response_model=PreferencesResponse, response_model_exclude_none=True)
 async def get_preferences(
     user_id: str = Depends(get_current_user_id),
     use_case: ConsoleContextPreferenceUseCase = Depends(get_preference_use_case),
@@ -104,7 +104,7 @@ async def get_preferences(
         raise HTTPException(status_code=500, detail="Error retrieving preferences")
 
 
-@router.put("/preferences", response_model=PreferencesResponse)
+@router.put("/preferences", response_model=PreferencesResponse, response_model_exclude_none=True)
 async def update_preferences(
     request: UpdatePreferencesRequest,
     user_id: str = Depends(get_current_user_id),

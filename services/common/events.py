@@ -77,6 +77,15 @@ class EventPublisher:
             self._flow_grpc_channel = create_grpc_channel(flow_grpc_target)
         return self._flow_grpc_channel
 
+    def _get_notification_ingest_url(self) -> str | None:
+        explicit = os.environ.get("NOTIFICATION_EVENT_INGEST_URL")
+        if explicit:
+            return explicit
+        base = os.environ.get("NOTIFICATION_SERVICE_URL")
+        if not base:
+            return None
+        return f"{base.rstrip('/')}/internal/events"
+
     async def publish(self, event: DomainEvent) -> None:
         """Publish an event to subscribers via gRPC (preferred) or HTTP,
         and also fan out to in-process streaming subscribers."""
@@ -96,7 +105,8 @@ class EventPublisher:
         # APPLICATION_APPROVED goes directly to flow service via gRPC
         if event.event_type == EventType.APPLICATION_APPROVED:
             await self._publish_to_flow_grpc(event)
-            return
+
+        await self._publish_to_notification_service(event)
 
         # Other events use HTTP webhooks
         subscribers = self.subscribers.get(event.event_type, [])
@@ -135,6 +145,36 @@ class EventPublisher:
                     logger.warning(f"Timeout publishing event to {subscriber_url}")
                 except Exception as e:
                     logger.error(f"Error publishing event to {subscriber_url}: {e}")
+
+    async def _publish_to_notification_service(self, event: DomainEvent) -> None:
+        """Deliver events to the notification service for dynamic subscription fan-out."""
+        ingest_url = self._get_notification_ingest_url()
+        if not ingest_url:
+            return
+
+        payload = {
+            "event_type": event.event_type.value,
+            "aggregate_id": event.aggregate_id,
+            "aggregate_type": event.aggregate_type,
+            "organization_id": event.organization_id,
+            "data": event.data,
+            "timestamp": event.timestamp.isoformat(),
+        }
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                response = await client.post(
+                    ingest_url,
+                    json=payload,
+                    headers={"Content-Type": "application/json"},
+                )
+            if response.status_code >= 400:
+                logger.warning(
+                    "Notification ingest failed: status=%s body=%s",
+                    response.status_code,
+                    response.text[:200],
+                )
+        except Exception as exc:
+            logger.warning("Notification ingest unavailable: %s", exc)
 
     async def _publish_to_flow_grpc(self, event: DomainEvent) -> None:
         """Deliver APPLICATION_APPROVED event to the flow service via gRPC."""

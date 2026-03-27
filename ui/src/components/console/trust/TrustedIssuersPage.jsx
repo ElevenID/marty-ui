@@ -31,7 +31,8 @@ import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
 import { ResourcePage, AddButton, EmptyState, EmptyStates } from '../../common';
-import { listTrustProfiles } from '../../../services/presentationPolicyApi';
+import { useAuth } from '../../../hooks/useAuth';
+import { listTrustProfileIssuers, listTrustProfiles } from '../../../services/presentationPolicyApi';
 
 const getTrustTabs = (t) => [
   { label: t('trust.trustProfiles'), path: '/console/org/trust/profiles' },
@@ -47,20 +48,27 @@ const getBreadcrumbs = (t) => [
 
 function TrustedIssuersPage() {
   const { t } = useTranslation('console');
-  const { data: issuers = [], loading, error } = useAsyncData(async () => {
-    // Trusted issuers are embedded within trust profiles
-    const profiles = await listTrustProfiles();
-    const allIssuers = [];
-    for (const profile of (profiles || [])) {
-      if (profile.trusted_issuers) {
-        for (const issuer of profile.trusted_issuers) {
-          allIssuers.push({ ...issuer, trustProfile: profile.name });
-        }
-      }
+  const { organizationId } = useAuth();
+  const { data: issuersData, loading, error } = useAsyncData(async () => {
+    if (!organizationId) {
+      return [];
     }
-    return allIssuers;
-  }, []);
+
+    const profiles = await listTrustProfiles({ organization_id: organizationId });
+    const issuerGroups = await Promise.all(
+      (profiles || []).map(async (profile) => {
+        const profileIssuers = await listTrustProfileIssuers(profile.id).catch(() => []);
+        return profileIssuers.map((issuer) => ({
+          ...issuer,
+          trustProfile: profile.name,
+        }));
+      })
+    );
+
+    return issuerGroups.flat();
+  }, [organizationId]);
   const [searchQuery, setSearchQuery] = useState('');
+  const issuers = issuersData ?? [];
 
   const filteredIssuers = issuers.filter(
     (issuer) =>
@@ -140,7 +148,7 @@ function TrustedIssuersPage() {
                       </Typography>
                     </TableCell>
                     <TableCell>
-                      <Chip label={issuer.country} size="small" variant="outlined" />
+                      <Chip label={issuer.country || '—'} size="small" variant="outlined" />
                     </TableCell>
                     <TableCell>
                       <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: '0.75rem' }}>
@@ -149,11 +157,17 @@ function TrustedIssuersPage() {
                     </TableCell>
                     <TableCell>{issuer.trustProfile}</TableCell>
                     <TableCell>
+                      {(() => {
+                        const normalizedStatus = String(issuer.status || '').toLowerCase();
+                        const isActive = normalizedStatus === 'active' || normalizedStatus === 'trusted' || normalizedStatus === 'compliant';
+                        return (
                       <Chip 
-                        label={issuer.status === 'active' ? t('trust.trustedIssuersPage.status.active') : t('trust.trustedIssuersPage.status.inactive')} 
-                        color={issuer.status === 'active' ? 'success' : 'default'}
+                        label={isActive ? t('trust.trustedIssuersPage.status.active') : t('trust.trustedIssuersPage.status.inactive')} 
+                        color={isActive ? 'success' : 'default'}
                         size="small" 
                       />
+                        );
+                      })()}
                     </TableCell>
                     <TableCell align="right">
                       <Tooltip title={t('trust.trustedIssuersPage.actions.viewDetails')}>

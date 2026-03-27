@@ -42,7 +42,23 @@ from .cedar_engine import CedarEngine, AuthzDecision
 from .cedar_entities import build_user_entities, build_apikey_entities, build_request_context
 from .cedar_actions import resolve_action, resolve_action_and_resource, extract_org_id
 from .cedar_middleware import CedarAuthMiddleware
+from .messages import (
+    ClaimResultPayload,
+    CredentialOfferPayload,
+    CredentialProofPayload,
+    CredentialRequestPayload,
+    CredentialResponsePayload,
+    MIPMessage,
+    MessageSignature,
+    MessageType,
+    PresentationRequestPayload,
+    PresentationResponsePayload,
+    TokenRequestPayload,
+    TokenResponsePayload,
+    VerificationResultPayload,
+)
 from .middleware import RequestIdMiddleware, RequestLoggingMiddleware
+from .pairwise import compute_pairwise_id, generate_holder_secret
 
 __all__ = [
     # Value Objects
@@ -78,7 +94,24 @@ __all__ = [
     "resolve_action",
     "resolve_action_and_resource",
     "extract_org_id",
+    # Message Layer
+    "ClaimResultPayload",
+    "CredentialOfferPayload",
+    "CredentialProofPayload",
+    "CredentialRequestPayload",
+    "CredentialResponsePayload",
+    "MIPMessage",
+    "MessageSignature",
+    "MessageType",
+    "PresentationRequestPayload",
+    "PresentationResponsePayload",
+    "TokenRequestPayload",
+    "TokenResponsePayload",
+    "VerificationResultPayload",
     # Middleware
     "RequestIdMiddleware",
     "RequestLoggingMiddleware",
+    # Pairwise Subject Identifiers
+    "compute_pairwise_id",
+    "generate_holder_secret",
 ]

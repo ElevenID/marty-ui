@@ -3,6 +3,8 @@ import DLIcon from '@mui/icons-material/DirectionsCar';
 import BadgeIcon from '@mui/icons-material/Badge';
 import LoginIcon from '@mui/icons-material/Login';
 import CredentialIcon from '@mui/icons-material/CardMembership';
+import SchoolIcon from '@mui/icons-material/School';
+import BusinessIcon from '@mui/icons-material/Business';
 
 export const CREDENTIAL_CATALOG_TYPES = {
   passport: {
@@ -27,11 +29,14 @@ export const CREDENTIAL_CATALOG_TYPES = {
     requirements: ['Valid passport', 'Proof of travel intent'],
   },
   access_badge: {
-    description: 'Corporate access badge credential for authorized personnel',
-    icon: BadgeIcon,
+    description: 'Corporate access badge — verifiable proof of employment, department, and building access. Issued instantly to your wallet.',
+    icon: BusinessIcon,
     category: 'enterprise',
-    processingTime: '1-2 business days',
-    requirements: ['Employment verification', 'Photo ID'],
+    processingTime: 'Instant upon issuance',
+    requirements: ['Active ElevenID account'],
+    format: 'vc+sd-jwt',
+    standard: 'W3C Verifiable Credential',
+    worksWithLabel: 'Web & VC wallets',
   },
   national_id: {
     description: 'National identity credential for verified applicants',
@@ -48,25 +53,44 @@ export const CREDENTIAL_CATALOG_TYPES = {
     requirements: ['Valid passport', 'Biometric photo'],
   },
   open_badge: {
-    description: 'Professional Development Certificate - Open Badge 3.0 credential for continuing education and professional development in the education sector',
-    icon: BadgeIcon,
+    description: 'Open Badge 3.0 professional development certificate — instantly issued, recognized by employers and institutions worldwide.',
+    icon: SchoolIcon,
     category: 'education',
-    processingTime: '1-2 business days',
-    requirements: ['Course completion verification', 'Instructor approval', 'Minimum passing grade'],
+    processingTime: 'Instant upon issuance',
+    requirements: ['Active ElevenID account'],
+    format: 'vc+sd-jwt',
+    standard: 'W3C / Open Badge 3.0',
+    worksWithLabel: 'Web & VC wallets',
   },
   MemberCredential: {
-    description: 'Free Marty platform membership credential. Use it to log in with your wallet instead of a password — no processing fee.',
+    description: 'Log in securely using your wallet — no password required. W3C Verifiable Credential in SD-JWT format, compatible with web and VC wallets.',
     icon: LoginIcon,
     category: 'identity',
     processingTime: 'Instant upon issuance',
-    requirements: ['Active Marty platform account'],
+    requirements: ['Active ElevenID account'],
+    format: 'vc+sd-jwt',
+    standard: 'W3C / Open Badge 3.0',
+    worksWithLabel: 'Web & VC wallets',
   },
   'org.iso.18013.5.1.mDL': {
-    description: 'ISO/IEC 18013-5 Mobile Driving Licence in mDoc format — issued instantly to your wallet.',
+    description: 'Mobile-first membership identity in mDoc format — compatible with Apple & Google Wallet style experiences. Issued instantly.',
     icon: DLIcon,
     category: 'identity',
     processingTime: 'Instant upon issuance',
-    requirements: ['Active Marty platform account'],
+    requirements: ['Active ElevenID account'],
+    format: 'mDoc (ISO 18013-5)',
+    standard: 'ISO/IEC 18013-5',
+    worksWithLabel: 'Mobile wallets (Apple / Google)',
+  },
+  'com.elevenid.member_credential': {
+    description: 'Membership ID in mDoc format — same identity data as the Login Credential, packaged for Apple & Google Wallet style experiences.',
+    icon: BadgeIcon,
+    category: 'identity',
+    processingTime: 'Instant upon issuance',
+    requirements: ['Active ElevenID account'],
+    format: 'mDoc (ISO 18013-5)',
+    standard: 'ISO/IEC 18013-5',
+    worksWithLabel: 'Mobile wallets (Apple / Google)',
   },
 };
 
@@ -76,6 +100,7 @@ export function getCredentialCatalogCategories(t) {
     { value: 'travel', label: t('catalog.categories.travel') },
     { value: 'identity', label: t('catalog.categories.identity') },
     { value: 'enterprise', label: t('catalog.categories.enterprise') },
+    { value: 'education', label: t('catalog.categories.education') },
   ];
 }
 
@@ -109,11 +134,43 @@ export function mapCredentialTemplateToCatalogItem(template, organizationName) {
     vendorName: organizationName || 'Issuer',
     templateVersion: template.version,
     visibility: 'organization',
+    format: meta.format || null,
+    standard: meta.standard || null,
+    worksWithLabel: meta.worksWithLabel || null,
   };
 }
 
 export function extractExistingApplicationIds(applications = []) {
   return applications.map((application) => application?.credential_configuration_id).filter(Boolean);
+}
+
+/**
+ * Extract per-credential application status and aggregate counts.
+ * Returns { statusByCredentialId, counts }.
+ */
+export function extractApplicationStatusInfo(applications = []) {
+  const statusByCredentialId = {};
+  const counts = { pending: 0, approved: 0, rejected: 0, credentialed: 0 };
+
+  for (const app of applications) {
+    const configId = app?.credential_configuration_id;
+    if (!configId) continue;
+    const status = (app.status || '').toLowerCase();
+    // Keep the most advanced status per credential
+    statusByCredentialId[configId] = status;
+
+    if (['submitted', 'under_review', 'pending_information', 'draft'].includes(status)) {
+      counts.pending++;
+    } else if (status === 'approved') {
+      counts.approved++;
+    } else if (status === 'rejected') {
+      counts.rejected++;
+    } else if (['credentialed', 'issued'].includes(status)) {
+      counts.credentialed++;
+    }
+  }
+
+  return { statusByCredentialId, counts };
 }
 
 export function filterCredentialCatalogItems(credentials = [], { searchTerm = '', categoryFilter = 'all' } = {}) {

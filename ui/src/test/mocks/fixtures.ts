@@ -69,6 +69,27 @@ export const mockTrustProfiles = {
     name: 'Test Trust Profile',
     description: 'Active trust profile',
     status: 'active',
+    profile_type: 'CUSTOM',
+    trust_sources: [
+      {
+        id: 'source-1',
+        name: 'Example Issuer',
+        source_type: 'PINNED_ISSUER',
+        issuer_did: 'did:web:issuer.example.com',
+        enabled: true,
+      },
+    ],
+    trusted_issuers: [
+      {
+        id: 'issuer-link-1',
+        name: 'Example Issuer',
+        issuer_did: 'did:web:issuer.example.com',
+        status: 'active',
+      },
+    ],
+    validation_rules: {
+      allowed_algorithms: ['ES256', 'EdDSA'],
+    },
     trust_list_url: 'https://example.com/trust-list',
     organization_id: 1,
     created_at: '2024-01-01T00:00:00Z',

@@ -69,5 +69,6 @@ export { default as AuditPage } from './audit/AuditPage';
 export { default as ApplicantDashboard } from './applicant/ApplicantDashboard';
 export { default as MyCredentialsPage } from './applicant/MyCredentialsPage';
 export { default as MyApplicationsPage } from './applicant/MyApplicationsPage';
+export { default as MyIdentityPage } from './applicant/MyIdentityPage';
 export { default as ApplicantSettingsPage } from './applicant/ApplicantSettingsPage';
 export { default as DeviceManagementPage } from './applicant/DeviceManagementPage';

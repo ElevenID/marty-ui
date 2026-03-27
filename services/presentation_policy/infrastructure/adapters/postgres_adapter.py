@@ -31,6 +31,28 @@ class PostgresPresentationPolicyRepository:
                 "verifier_logo_url": policy.display_metadata.verifier_logo_url,
                 "privacy_policy_url": policy.display_metadata.privacy_policy_url,
                 "terms_of_service_url": policy.display_metadata.terms_of_service_url,
+                "protocol": {
+                    "purpose": policy.purpose,
+                    "trust_profile_id": policy.trust_profile_id,
+                    "accepted_credential_types": policy.accepted_credential_types,
+                    "holder_binding": {
+                        "required": policy.holder_binding.required,
+                        "binding_methods": policy.holder_binding.binding_methods,
+                        "nonce_required": policy.holder_binding.nonce_required,
+                    },
+                    "freshness": {
+                        "max_age_seconds": policy.freshness.max_age_seconds,
+                        "require_not_revoked": policy.freshness.require_not_revoked,
+                        "revocation_grace_seconds": policy.freshness.revocation_grace_seconds,
+                    } if policy.freshness else None,
+                    "issuer_constraints": {
+                        "min_trust_level": policy.issuer_constraints.min_trust_level,
+                        "required_compliance_statuses": policy.issuer_constraints.required_compliance_statuses,
+                        "required_accreditations": policy.issuer_constraints.required_accreditations,
+                    } if policy.issuer_constraints else None,
+                    "credential_ranking_strategy": policy.credential_ranking_strategy,
+                    "credential_ranking_weights": policy.credential_ranking_weights,
+                },
             }
             
             credential_reqs = [
@@ -49,6 +71,7 @@ class PostgresPresentationPolicyRepository:
                             "required": claim.required,
                             "selective_disclosure": claim.selective_disclosure,
                             "accept_derived": claim.accept_derived,
+                            "predicate_spec": claim.predicate_spec,
                             "constraints": [
                                 {
                                     "id": constraint.id,
@@ -91,6 +114,7 @@ class PostgresPresentationPolicyRepository:
                                     "required": claim.required,
                                     "selective_disclosure": claim.selective_disclosure,
                                     "accept_derived": claim.accept_derived,
+                                    "predicate_spec": claim.predicate_spec,
                                     "constraints": [
                                         {
                                             "id": constraint.id,
@@ -163,7 +187,8 @@ class PostgresPresentationPolicyRepository:
         """Get a presentation policy by ID."""
         from presentation_policy.main import (
             PresentationPolicy, PolicyStatus, DisplayMetadata, CredentialRequirement,
-            AlternativeRequirement, RequestedClaim, ClaimConstraint, RequestPurpose, ConstraintType
+            AlternativeRequirement, RequestedClaim, ClaimConstraint, RequestPurpose, ConstraintType,
+            HolderBinding, FreshnessPolicy, IssuerConstraints
         )
         
         async with self._session_factory() as session:
@@ -177,6 +202,7 @@ class PostgresPresentationPolicyRepository:
             
             # Deserialize display metadata
             display_data = row.display_metadata
+            protocol_data = display_data.get("protocol", {}) if isinstance(display_data, dict) else {}
             _purpose_raw = display_data.get("purpose", "identity_verification")
             try:
                 _purpose = RequestPurpose(_purpose_raw)
@@ -218,6 +244,7 @@ class PostgresPresentationPolicyRepository:
                             required=claim_data.get("required", True),
                             selective_disclosure=claim_data.get("selective_disclosure", True),
                             accept_derived=claim_data.get("accept_derived", True),
+                            predicate_spec=claim_data.get("predicate_spec"),
                             constraints=constraints,
                         )
                     )
@@ -263,6 +290,7 @@ class PostgresPresentationPolicyRepository:
                                 required=claim_data.get("required", True),
                                 selective_disclosure=claim_data.get("selective_disclosure", True),
                                 accept_derived=claim_data.get("accept_derived", True),
+                                predicate_spec=claim_data.get("predicate_spec"),
                                 constraints=constraints,
                             )
                         )
@@ -298,8 +326,17 @@ class PostgresPresentationPolicyRepository:
                 description=row.description,
                 status=PolicyStatus(row.status),
                 display_metadata=display_metadata,
+                required_claims=[],
+                accepted_credential_types=protocol_data.get("accepted_credential_types") or [req.credential_template_id for req in credential_requirements if req.credential_template_id],
                 credential_requirements=credential_requirements,
                 alternative_requirements=alternative_requirements,
+                trust_profile_id=protocol_data.get("trust_profile_id"),
+                holder_binding=HolderBinding(**(protocol_data.get("holder_binding") or {})),
+                freshness=FreshnessPolicy(**protocol_data["freshness"]) if protocol_data.get("freshness") else None,
+                issuer_constraints=IssuerConstraints(**protocol_data["issuer_constraints"]) if protocol_data.get("issuer_constraints") else None,
+                credential_ranking_strategy=protocol_data.get("credential_ranking_strategy", "FRESHEST_FIRST"),
+                credential_ranking_weights=protocol_data.get("credential_ranking_weights"),
+                purpose=protocol_data.get("purpose") or display_metadata.purpose_description,
                 compliance_profile_id=row.compliance_profile_id,
                 version=row.version,
                 created_at=row.created_at,
@@ -310,7 +347,8 @@ class PostgresPresentationPolicyRepository:
         """List all presentation policies for an organization."""
         from presentation_policy.main import (
             PresentationPolicy, PolicyStatus, DisplayMetadata, CredentialRequirement,
-            AlternativeRequirement, RequestedClaim, ClaimConstraint, RequestPurpose, ConstraintType
+            AlternativeRequirement, RequestedClaim, ClaimConstraint, RequestPurpose, ConstraintType,
+            HolderBinding, FreshnessPolicy, IssuerConstraints
         )
         
         async with self._session_factory() as session:
@@ -325,6 +363,7 @@ class PostgresPresentationPolicyRepository:
             for row in rows:
                 # Deserialize display metadata
                 display_data = row.display_metadata
+                protocol_data = display_data.get("protocol", {}) if isinstance(display_data, dict) else {}
                 _purpose_raw2 = display_data.get("purpose", "identity_verification")
                 try:
                     _purpose2 = RequestPurpose(_purpose_raw2)
@@ -366,6 +405,7 @@ class PostgresPresentationPolicyRepository:
                                 required=claim_data.get("required", True),
                                 selective_disclosure=claim_data.get("selective_disclosure", True),
                                 accept_derived=claim_data.get("accept_derived", True),
+                                predicate_spec=claim_data.get("predicate_spec"),
                                 constraints=constraints,
                             )
                         )
@@ -411,6 +451,7 @@ class PostgresPresentationPolicyRepository:
                                     required=claim_data.get("required", True),
                                     selective_disclosure=claim_data.get("selective_disclosure", True),
                                     accept_derived=claim_data.get("accept_derived", True),
+                                    predicate_spec=claim_data.get("predicate_spec"),
                                     constraints=constraints,
                                 )
                             )
@@ -447,8 +488,17 @@ class PostgresPresentationPolicyRepository:
                         description=row.description,
                         status=PolicyStatus(row.status),
                         display_metadata=display_metadata,
+                        required_claims=[],
+                        accepted_credential_types=protocol_data.get("accepted_credential_types") or [req.credential_template_id for req in credential_requirements if req.credential_template_id],
                         credential_requirements=credential_requirements,
                         alternative_requirements=alternative_requirements,
+                        trust_profile_id=protocol_data.get("trust_profile_id"),
+                        holder_binding=HolderBinding(**(protocol_data.get("holder_binding") or {})),
+                        freshness=FreshnessPolicy(**protocol_data["freshness"]) if protocol_data.get("freshness") else None,
+                        issuer_constraints=IssuerConstraints(**protocol_data["issuer_constraints"]) if protocol_data.get("issuer_constraints") else None,
+                        credential_ranking_strategy=protocol_data.get("credential_ranking_strategy", "FRESHEST_FIRST"),
+                        credential_ranking_weights=protocol_data.get("credential_ranking_weights"),
+                        purpose=protocol_data.get("purpose") or display_metadata.purpose_description,
                         compliance_profile_id=row.compliance_profile_id,
                         version=row.version,
                         created_at=row.created_at,

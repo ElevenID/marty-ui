@@ -120,8 +120,8 @@ export default function OID4VCIInviteDisplay({ offerData, onRegenerate, loading,
         instructions={
           instructions ||
           (selectedWallet === DEFAULT_TAB
-            ? 'Have the applicant scan this QR code with any OID4VCI-compatible digital wallet to receive the credential.'
-            : `Have the applicant scan this QR code with the ${walletLabel(selectedWallet, offerLabels)} app to receive the credential.`)
+            ? 'Scan this QR code with any OID4VCI-compatible digital wallet to receive the credential.'
+            : `Scan this QR code with the ${walletLabel(selectedWallet, offerLabels)} app to receive the credential.`)
         }
       />
     </Box>

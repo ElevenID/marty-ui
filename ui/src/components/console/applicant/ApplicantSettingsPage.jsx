@@ -16,12 +16,19 @@ import {
   Switch,
   FormControlLabel,
   Divider,
+  Checkbox,
+  Chip,
+  CircularProgress,
+  Stack,
 } from '@mui/material';
 import SaveIcon from '@mui/icons-material/Save';
+import AccountBalanceWalletIcon from '@mui/icons-material/AccountBalanceWallet';
 import { useTranslation } from 'react-i18next';
 
 import { useAuth } from '../../../hooks/useAuth';
 import { getApplicantByUser, updateApplicantProfile } from '../../../services/applicantApi';
+import { listWallets } from '../../../services/walletRegistryApi';
+import useWalletPreferences from '../../../hooks/useWalletPreferences';
 
 function ApplicantSettingsPage() {
   const { t } = useTranslation('applicant');
@@ -40,6 +47,11 @@ function ApplicantSettingsPage() {
     applicationUpdates: true,
     expirationReminders: true,
   });
+
+  // Wallet preferences
+  const { walletIds: preferredWallets, addWallet, removeWallet } = useWalletPreferences(user?.user_id);
+  const [registryWallets, setRegistryWallets] = useState([]);
+  const [walletsLoading, setWalletsLoading] = useState(true);
 
   // Load applicant profile on mount
   useEffect(() => {
@@ -62,6 +74,22 @@ function ApplicantSettingsPage() {
     };
     loadProfile();
   }, [user]);
+
+  // Load wallet registry
+  useEffect(() => {
+    const loadWallets = async () => {
+      setWalletsLoading(true);
+      try {
+        const wallets = await listWallets(true);
+        setRegistryWallets(Array.isArray(wallets) ? wallets : []);
+      } catch (err) {
+        console.error('Error loading wallet registry:', err);
+      } finally {
+        setWalletsLoading(false);
+      }
+    };
+    loadWallets();
+  }, []);
 
   const handleSave = async () => {
     setSaving(true);
@@ -204,6 +232,62 @@ function ApplicantSettingsPage() {
         <Typography variant="body2" color="text.secondary" paragraph sx={{ ml: 6 }}>
           {t('settings.notifications.expirationRemindersDescription')}
         </Typography>
+      </Paper>
+
+      {/* My Wallets */}
+      <Paper sx={{ p: 3, mb: 3 }}>
+        <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+          <AccountBalanceWalletIcon color="primary" />
+          <Typography variant="h6">My Wallets</Typography>
+        </Stack>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+          Select the wallet apps you have installed. When you claim a credential, we&apos;ll show a
+          tab for each wallet so you get the right QR code.
+        </Typography>
+
+        {walletsLoading ? (
+          <Box sx={{ display: 'flex', justifyContent: 'center', py: 3 }}>
+            <CircularProgress size={24} />
+          </Box>
+        ) : registryWallets.length === 0 ? (
+          <Alert severity="info">No wallets are available in the registry yet.</Alert>
+        ) : (
+          <Stack spacing={1}>
+            {registryWallets.map((w) => {
+              const checked = preferredWallets.includes(w.id);
+              return (
+                <Box
+                  key={w.id}
+                  sx={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    p: 1.5,
+                    borderRadius: 1,
+                    border: 1,
+                    borderColor: checked ? 'primary.main' : 'divider',
+                    bgcolor: checked ? 'action.selected' : 'transparent',
+                    cursor: 'pointer',
+                    '&:hover': { bgcolor: 'action.hover' },
+                  }}
+                  onClick={() => (checked ? removeWallet(w.id) : addWallet(w.id))}
+                >
+                  <Checkbox checked={checked} sx={{ mr: 1, p: 0 }} />
+                  <Box sx={{ flex: 1 }}>
+                    <Typography variant="subtitle2">{w.name}</Typography>
+                    {w.description && (
+                      <Typography variant="caption" color="text.secondary">
+                        {w.description}
+                      </Typography>
+                    )}
+                  </Box>
+                  {(w.supported_platforms || w.platforms || []).map((p) => (
+                    <Chip key={p} label={p} size="small" variant="outlined" sx={{ ml: 0.5 }} />
+                  ))}
+                </Box>
+              );
+            })}
+          </Stack>
+        )}
       </Paper>
 
       <Button

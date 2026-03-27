@@ -8,25 +8,32 @@
 
 import { apiClient, handleApiError } from './api';
 
-const BASE_PATH = '/v1/identity/flows';
+const BASE_PATH = '/v1/flows';
 
 /**
  * Flow state constants
  */
 export const FLOW_STATES = {
-  DRAFT: 'draft',
-  PUBLISHED: 'published',
-  DISABLED: 'disabled',
+  DRAFT: 'DRAFT',
+  ACTIVE: 'ACTIVE',
+  PAUSED: 'PAUSED',
+  ARCHIVED: 'ARCHIVED',
+  // Legacy aliases
+  PUBLISHED: 'ACTIVE',
+  DISABLED: 'PAUSED',
 };
 
 /**
- * Flow approval strategies
+ * Flow approval strategies (MIP §9)
  */
 export const APPROVAL_STRATEGIES = {
   AUTO: 'AUTO',
   MANUAL: 'MANUAL',
-  AUTOMATED_RULES: 'AUTOMATED_RULES',
-  MULTI_PARTY: 'MULTI_PARTY',
+  RULES_BASED: 'RULES_BASED',
+  EXTERNAL: 'EXTERNAL',
+  // Legacy aliases
+  AUTOMATED_RULES: 'RULES_BASED',
+  MULTI_PARTY: 'EXTERNAL',
 };
 
 /**
@@ -269,6 +276,25 @@ export const disableFlow = async (flowId, disableData = {}) => {
 };
 
 /**
+ * Archive a flow - mark as ARCHIVED (terminal, no new instances)
+ * @param {string} flowId
+ * @param {Object} archiveData
+ * @param {string} archiveData.reason
+ * @returns {Promise<Object>} Archived flow
+ */
+export const archiveFlow = async (flowId, archiveData = {}) => {
+  try {
+    const response = await apiClient.post(
+      `${BASE_PATH}/${flowId}/archive`,
+      archiveData
+    );
+    return response.data;
+  } catch (error) {
+    throw handleApiError(error);
+  }
+};
+
+/**
  * Get public application URL for a published flow
  * @param {string} flowId - Flow ID
  * @returns {Promise<Object>} Public URL and QR code data
@@ -296,6 +322,7 @@ export default {
   cancelFlowExecution,
   publishFlow,
   disableFlow,
+  archiveFlow,
   getFlowPublicUrl,
   FLOW_STATES,
   APPROVAL_STRATEGIES,

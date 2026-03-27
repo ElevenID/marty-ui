@@ -75,7 +75,7 @@ def get_config() -> dict:
         "cookie": {
             "key": "sessionId",
             "httponly": True,
-            "secure": os.environ.get("COOKIE_SECURE", "false").lower() == "true",
+            "secure": os.environ.get("COOKIE_SECURE", "true").lower() == "true",
             "samesite": os.environ.get("COOKIE_SAMESITE", "lax"),
             "max_age": int(os.environ.get("SESSION_TTL_SECONDS", "86400")),
             "path": "/",
