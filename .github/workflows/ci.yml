@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    name: Lint Python
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install ruff
+      - name: Check style
+        run: ruff check services/ packages/
+      - name: Check formatting
+        run: ruff format --check services/ packages/
+
+  test-ui:
+    name: UI Tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install
+      - name: Type check
+        run: bunx tsc -p tsconfig.build.json --noEmit
+      - name: Unit tests
+        run: bun run test
+
+  test-services:
+    name: Service Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: |
+          pip install -r requirements-services.txt
+          pip install -e packages/marty_common
+      - name: Run tests
+        working-directory: services
+        run: python -m pytest -v --tb=short -x
