@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { Tabs, Tab, Box } from '@mui/material';
+import { Tabs, Tab, Box, Button } from '@mui/material';
 import { Link, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../hooks/useAuth';
@@ -33,8 +33,7 @@ const VENDOR_TABS = [
  * Applicant navigation tabs
  */
 const APPLICANT_TABS = [
-  { labelKey: 'navigation.credentials', defaultLabel: 'Credentials', path: '/credentials', exact: true },
-  { labelKey: 'navigation.myApplications', defaultLabel: 'My Applications', path: '/my-applications' },
+  { labelKey: 'navigation.myIdentity', defaultLabel: 'My Identity', path: '/console/applicant/identity', exact: true },
   { labelKey: 'navigation.myDocuments', defaultLabel: 'My Documents', path: '/my-documents' },
   { labelKey: 'navigation.profile', defaultLabel: 'Profile', path: '/profile' },
 ];
@@ -50,6 +49,7 @@ const PUBLIC_TABS = [
   { labelKey: 'navigation.whyVerifiableIdentity', defaultLabel: 'Why Verifiable Identity', path: '/from-idv-to-verifiable-identity' },
   { labelKey: 'navigation.standards', defaultLabel: 'Standards', path: '/standards' },
   { labelKey: 'navigation.docs', defaultLabel: 'Docs', path: '/docs' },
+  { labelKey: 'navigation.blog', defaultLabel: 'Blog', path: '/blog', prefixes: ['/blog', '/authors'] },
   { labelKey: 'navigation.pricing', defaultLabel: 'Pricing', path: '/pricing' },
 ];
 
@@ -90,7 +90,18 @@ function Navigation() {
   };
 
   return (
-    <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 3 }} data-testid="navigation-container">
+    <Box
+      sx={{
+        borderBottom: 1,
+        borderColor: 'divider',
+        mb: 3,
+        position: 'sticky',
+        top: 0,
+        zIndex: 1100,
+        bgcolor: 'background.paper',
+      }}
+      data-testid="navigation-container"
+    >
       <Box
         sx={{
           display: 'flex',
@@ -100,7 +111,14 @@ function Navigation() {
         }}
       >
         {/* Navigation Tabs */}
-        <Tabs value={getCurrentTab()} aria-label="navigation" data-testid="navigation-tabs">
+        <Tabs
+          value={getCurrentTab()}
+          aria-label="navigation"
+          data-testid="navigation-tabs"
+          sx={{ flexGrow: 1 }}
+          variant="scrollable"
+          scrollButtons="auto"
+        >
           {tabs.map((tab) => (
             <Tab 
               key={tab.path} 
@@ -111,6 +129,30 @@ function Navigation() {
             />
           ))}
         </Tabs>
+
+        {/* Sticky CTA for public visitors */}
+        {!isAuthenticated && (
+          <Button
+            variant="contained"
+            size="small"
+            onClick={() => {
+              // Trigger Keycloak registration
+              const event = new CustomEvent('nav-register-click');
+              window.dispatchEvent(event);
+            }}
+            component={Link}
+            to="/"
+            sx={{
+              ml: 2,
+              whiteSpace: 'nowrap',
+              fontWeight: 600,
+              textTransform: 'none',
+              display: { xs: 'none', md: 'inline-flex' },
+            }}
+          >
+            {t('navigation.startFree', 'Start Free')}
+          </Button>
+        )}
       </Box>
     </Box>
   );

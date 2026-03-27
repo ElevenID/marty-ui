@@ -408,6 +408,36 @@ class ApiKeyUseCase:
         if not org:
             raise ValueError(f"Organization {command.organization_id} not found")
         
+        # MIP §21 — validate scopes against allowed set
+        _MIP_VALID_SCOPES = {
+            "credentials:issue", "credentials:revoke", "credentials:read",
+            "flows:read", "flows:write", "flows:execute",
+            "applications:read", "applications:write", "applications:approve",
+            "trust:read", "trust:write", "trust:admin",
+            "compliance:read", "compliance:write",
+            "templates:read", "templates:write",
+            "wallet:read", "wallet:write",
+            "keys:read", "keys:write",
+            "users:read", "users:invite",
+            "roles:read", "roles:write",
+            "audit:read",
+            "webhooks:read", "webhooks:write",
+            "notifications:send", "notifications:read",
+            "deployment:read", "deployment:write",
+            "admin:full",
+        }
+        if command.scopes:
+            invalid_scopes = set(command.scopes) - _MIP_VALID_SCOPES
+            if invalid_scopes:
+                raise ValueError(
+                    f"Invalid scopes: {', '.join(sorted(invalid_scopes))}. "
+                    f"Must be one of: {', '.join(sorted(_MIP_VALID_SCOPES))}"
+                )
+            # admin:full restricted to ORGANIZATION scope_type
+            scope_type = getattr(command, "scope_type", "ORGANIZATION")
+            if "admin:full" in command.scopes and scope_type != "ORGANIZATION":
+                raise ValueError("admin:full scope is restricted to ORGANIZATION scope_type keys")
+        
         # Create API key
         api_key, raw_key = ApiKey.create(
             organization_id=command.organization_id,

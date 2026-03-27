@@ -109,6 +109,7 @@ const TrustSourcesStep = ({ data, onChange }) => {
           onChange={(e) => setNewIssuerDid(e.target.value)}
           onKeyPress={handleKeyPress}
           helperText={t('wizards.trustProfile.trustSourcesStep.issuerDid.helper')}
+          inputProps={{ 'data-testid': 'wizard.trustProfile.issuerDid' }}
         />
         <Button
           variant="contained"
@@ -116,6 +117,7 @@ const TrustSourcesStep = ({ data, onChange }) => {
           onClick={handleAddIssuer}
           disabled={!newIssuerDid.trim()}
           sx={{ minWidth: 120 }}
+          data-testid="wizard.trustProfile.addIssuer"
         >
           {t('wizards.trustProfile.trustSourcesStep.addButton')}
         </Button>

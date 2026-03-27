@@ -48,6 +48,11 @@ import ApplyPage from './components/ApplyPage';
 import ApiDocumentation from './components/ApiDocumentation';
 import ProductPage from './components/ProductPage';
 import StandardsPage from './components/StandardsPage';
+import ProtocolPage from './components/ProtocolPage';
+import BlogPage from './components/BlogPage';
+import BlogPostPage from './components/BlogPostPage';
+import AuthorsPage from './components/AuthorsPage';
+import AuthorPage from './components/AuthorPage';
 import IdentityGuidePage from './components/IdentityGuidePage';
 import FromIDVPage from './components/FromIDVPage';
 import PricingPage from './components/PricingPage';
@@ -122,6 +127,7 @@ import {
   ApplicantDashboard,
   MyCredentialsPage,
   MyApplicationsPage,
+  MyIdentityPage,
   ApplicantSettingsPage,
   DeviceManagementPage,
 } from './components/console';
@@ -443,13 +449,13 @@ function AppContent() {
           <Route path="audit" element={<AuditPage />} />
         </Route>
 
-        {/* Organization Setup Route - No org required */}
+        {/* Organization Setup Route - No org required, but vendor/admin role needed */}
         <Route
           path="/console/org/setup"
           element={
-            <ProtectedRoute>
+            <VendorRoute>
               <AuthenticatedLayout />
-            </ProtectedRoute>
+            </VendorRoute>
           }
         >
           <Route index element={<OrgSetupPage />} />
@@ -466,8 +472,9 @@ function AppContent() {
         >
           <Route index element={<Navigate to="/console/applicant/catalog" replace />} />
           <Route path="dashboard" element={<ApplicantDashboard />} />
-          <Route path="credentials" element={<MyCredentialsPage />} />
-          <Route path="applications" element={<MyApplicationsPage />} />
+          <Route path="identity" element={<MyIdentityPage />} />
+          <Route path="credentials" element={<Navigate to="/console/applicant/identity" replace />} />
+          <Route path="applications" element={<Navigate to="/console/applicant/identity" replace />} />
           <Route path="catalog" element={<CredentialCatalog />} />
           <Route path="apply/:credentialType" element={<ApplicationForm />} />
           <Route path="devices" element={<DeviceManagementPage />} />
@@ -512,6 +519,11 @@ function AppContent() {
           <Route path="/identity" element={<IdentityGuidePage />} />
           <Route path="/from-idv-to-verifiable-identity" element={<FromIDVPage />} />
           <Route path="/standards" element={<StandardsPage />} />
+          <Route path="/protocol" element={<ProtocolPage />} />
+          <Route path="/blog" element={<BlogPage />} />
+          <Route path="/blog/:slug" element={<BlogPostPage />} />
+          <Route path="/authors" element={<AuthorsPage />} />
+          <Route path="/authors/:authorId" element={<AuthorPage />} />
           <Route path="/pricing" element={<PricingPage />} />
           <Route path="/docs" element={<ApiDocumentation />} />
           <Route path="/organizations" element={<MyOrganizationsPage />} />

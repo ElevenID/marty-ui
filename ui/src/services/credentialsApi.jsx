@@ -161,11 +161,11 @@ export const createCredentialOffer = async (request) => {
       credential_config_id: request.templateId,
       applicant_id: request.applicantId,
       credential_data: request.credentialData,
-      credential_format: 'vc+sd-jwt',
+      credential_format: 'dc+sd-jwt',
       deferred: false,
     };
     
-    const response = await apiClient.post('/api/issuance/offers', payload);
+    const response = await apiClient.post('/v1/issuance/offers', payload);
     return response.data;
   } catch (error) {
     throw handleApiError(error);
@@ -179,7 +179,7 @@ export const createCredentialOffer = async (request) => {
  */
 export const getCredentialOffer = async (offerId) => {
   try {
-    const response = await apiClient.get(`/api/issuance/offers/${offerId}`);
+    const response = await apiClient.get(`/v1/issuance/offers/${offerId}`);
     return response.data;
   } catch (error) {
     throw handleApiError(error);
@@ -195,7 +195,7 @@ export const getCredentialOffer = async (offerId) => {
 export const getOfferQRCode = async (offerId, format = 'png') => {
   try {
     const response = await apiClient.get(
-      `/api/issuance/offers/${offerId}/qr?format=${format}`,
+      `/v1/issuance/offers/${offerId}/qr?format=${format}`,
       { responseType: 'blob' }
     );
     return response.data;
@@ -211,7 +211,7 @@ export const getOfferQRCode = async (offerId, format = 'png') => {
  */
 export const getIssuanceSessionStatus = async (transactionId) => {
   try {
-    const response = await apiClient.get(`/api/issuance/sessions/${transactionId}`);
+    const response = await apiClient.get(`/v1/issuance/transactions/${transactionId}`);
     return response.data;
   } catch (error) {
     throw handleApiError(error);

@@ -135,9 +135,10 @@ function WalletCompatibilityPanel({ trustProfileId }) {
  */
 function ProvenanceSection({ trustProfile }) {
   const { t } = useTranslation('console');
-  const trustAnchors = trustProfile?.trust_anchors || [];
-  const revocationStrategy = trustProfile?.revocation_strategy || 'dynamic';
-  const issuerCount = trustAnchors.length;
+  const trustAnchors = trustProfile?.trust_sources || trustProfile?.trust_anchors || [];
+  const revocationStrategy = trustProfile?.revocation_policy?.check_mode || trustProfile?.revocation_strategy || 'HARD_FAIL';
+  const issuerCount = trustProfile?.trusted_issuers?.length
+    || trustAnchors.filter((anchor) => anchor.issuer_did).length;
 
   return (
     <Paper sx={{ p: 3, mb: 3 }}>
@@ -163,7 +164,7 @@ function ProvenanceSection({ trustProfile }) {
                   </ListItemIcon>
                   <ListItemText
                     primary={anchor.name || anchor.authority || t('trust.trustProfileDetail.anchor', { number: index + 1 })}
-                    secondary={anchor.type || t('trust.trustProfileDetail.trustAuthority')}
+                    secondary={anchor.source_type || anchor.type || t('trust.trustProfileDetail.trustAuthority')}
                   />
                 </ListItem>
               ))}
@@ -194,9 +195,9 @@ function ProvenanceSection({ trustProfile }) {
                 {t('trust.trustProfileDetail.revocationStrategy')}
               </Typography>
               <Chip
-                label={revocationStrategy}
+                label={String(revocationStrategy).replaceAll('_', ' ')}
                 size="small"
-                color={revocationStrategy === 'dynamic' ? 'success' : 'default'}
+                color={String(revocationStrategy).toUpperCase() === 'HARD_FAIL' ? 'success' : 'default'}
               />
             </Box>
           </Box>

@@ -49,9 +49,10 @@ class RoleResponse(BaseModel):
     name: str
     display_name: str | None
     description: str | None
-    is_system: bool
+    is_system_role: bool
     is_default_for_new_members: bool
     permissions: list[PermissionResponse]
+    policy_set_id: str | None = None
     member_count: int | None = None
     created_at: str
     updated_at: str
@@ -129,7 +130,7 @@ async def get_current_user_id(
 # Permission Catalog
 # =============================================================================
 
-@router.get("/permissions", response_model=list[PermissionCatalogGroup])
+@router.get("/permissions", response_model=list[PermissionCatalogGroup], response_model_exclude_none=True)
 async def list_permissions(
     organization_id: str,
     org_ctx: OrganizationContext = Depends(require_org_membership),
@@ -157,7 +158,7 @@ async def list_permissions(
 # Role CRUD
 # =============================================================================
 
-@router.get("/roles", response_model=list[RoleResponse])
+@router.get("/roles", response_model=list[RoleResponse], response_model_exclude_none=True)
 async def list_roles(
     organization_id: str,
     org_ctx: OrganizationContext = Depends(require_org_membership),
@@ -172,7 +173,7 @@ async def list_roles(
     return results
 
 
-@router.post("/roles", response_model=RoleResponse, status_code=201)
+@router.post("/roles", response_model=RoleResponse, response_model_exclude_none=True, status_code=201)
 async def create_role(
     organization_id: str,
     request: CreateRoleRequest,
@@ -202,7 +203,7 @@ async def create_role(
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.get("/roles/{role_id}", response_model=RoleResponse)
+@router.get("/roles/{role_id}", response_model=RoleResponse, response_model_exclude_none=True)
 async def get_role(
     organization_id: str,
     role_id: str,
@@ -217,7 +218,7 @@ async def get_role(
     return _role_to_response(role, member_count=len(member_ids))
 
 
-@router.patch("/roles/{role_id}", response_model=RoleResponse)
+@router.patch("/roles/{role_id}", response_model=RoleResponse, response_model_exclude_none=True)
 async def update_role(
     organization_id: str,
     role_id: str,
@@ -278,7 +279,7 @@ async def delete_role(
 # Member ↔ Role Assignments
 # =============================================================================
 
-@router.put("/members/{member_id}/roles", response_model=list[RoleSummaryResponse])
+@router.put("/members/{member_id}/roles", response_model=list[RoleSummaryResponse], response_model_exclude_none=True)
 async def set_member_roles(
     organization_id: str,
     member_id: str,
@@ -358,7 +359,7 @@ async def remove_member_role(
 # Current User's Permissions
 # =============================================================================
 
-@router.get("/members/me/permissions", response_model=MemberPermissionsResponse)
+@router.get("/members/me/permissions", response_model=MemberPermissionsResponse, response_model_exclude_none=True)
 async def get_my_permissions(
     organization_id: str,
     org_ctx: OrganizationContext = Depends(require_org_membership),
@@ -398,7 +399,7 @@ def _role_to_response(role, member_count: int | None = None) -> RoleResponse:
         name=role.name,
         display_name=role.display_name,
         description=role.description,
-        is_system=role.is_system,
+        is_system_role=role.is_system,
         is_default_for_new_members=role.is_default_for_new_members,
         permissions=[
             PermissionResponse(

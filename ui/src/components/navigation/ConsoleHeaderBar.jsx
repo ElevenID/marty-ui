@@ -52,8 +52,7 @@ export function ConsoleHeaderBar({ onMobileMenuToggle }) {
   const { mode, activeOrgId, memberships, isOrgBlocked, setActiveOrgId, setMode, isApplicantConsoleAvailable, isOrgConsoleAvailable } = useConsole();
   const [anchorEl, setAnchorEl] = useState(null);
   const [orgMenuAnchor, setOrgMenuAnchor] = useState(null);
-  const isJoinOnlyMode = (memberships || []).length === 0;
-  const showConsoleSwitcher = isApplicantConsoleAvailable && (isOrgConsoleAvailable || isJoinOnlyMode);
+  const showConsoleSwitcher = isApplicantConsoleAvailable && isOrgConsoleAvailable;
 
   // Find active org details
   const activeOrg = (memberships || []).find(org => org.id === activeOrgId);
@@ -113,7 +112,7 @@ export function ConsoleHeaderBar({ onMobileMenuToggle }) {
           <Typography
             variant="h6"
             component={RouterLink}
-            to={isApplicant ? '/applicant' : '/console'}
+            to="/"
             sx={{
               color: 'white',
               textDecoration: 'none',
@@ -156,7 +155,7 @@ export function ConsoleHeaderBar({ onMobileMenuToggle }) {
               <PersonIcon sx={{ fontSize: 16, mr: 0.5 }} />
               Me
             </ToggleButton>
-            {(isOrgConsoleAvailable || isJoinOnlyMode) && (
+            {isOrgConsoleAvailable && (
               <ToggleButton value="org">
                 <BusinessIcon sx={{ fontSize: 16, mr: 0.5 }} />
                 Org

@@ -21,36 +21,80 @@ from marty_proto.v1 import (
 logger = logging.getLogger(__name__)
 
 
+_PAYLOAD_FORMAT_WIRE_NAMES = {
+    "SD_JWT_VC": "sd_jwt_vc",
+    "MDOC": "mdoc",
+    "VC_JWT": "jwt_vc",
+    "JSON_LD": "ldp_vc",
+    "ZK_MDOC": "zk_mdoc",
+}
+
+
+def _payload_format_to_wire(value: str | None) -> str:
+    if not value:
+        return ""
+    normalized = str(value).strip()
+    return _PAYLOAD_FORMAT_WIRE_NAMES.get(normalized.upper(), normalized)
+
+
 def _template_to_pb(template: Any, to_response_fn: Any) -> ct_pb2.TemplateResponse:
     """Map domain CredentialTemplate → protobuf TemplateResponse."""
     resp = to_response_fn(template)
+
+    claim_type_map = {
+        "STRING": "string",
+        "INTEGER": "integer",
+        "BOOLEAN": "boolean",
+        "DATE": "date",
+        "OBJECT": "object",
+        "ARRAY": "array",
+    }
     claims = [
         ct_pb2.ClaimDefinition(
             name=c["name"],
-            display_name=c.get("display_name", ""),
+            display_name=c.get("display_name", c.get("display", {}).get("label", "")),
             description=c.get("description", ""),
-            claim_type=c.get("claim_type", ""),
+            claim_type=c.get("claim_type", claim_type_map.get(c.get("type", ""), "")),
             required=c.get("required", False),
             selectively_disclosable=c.get("selectively_disclosable", False),
-            derivable=c.get("derivable", False),
+            derivable=c.get("derivable", "derived_from" in c),
         )
         for c in resp.claims
     ]
+    display_style_payload = getattr(resp, "display_style", {}) or {}
     display_style = ct_pb2.DisplayStyle(
-        background_color=resp.display_style.get("background_color", ""),
-        text_color=resp.display_style.get("text_color", ""),
-        logo_url=resp.display_style.get("logo_url", ""),
-        background_image_url=resp.display_style.get("background_image_url", ""),
-        icon=resp.display_style.get("icon", ""),
+        background_color=display_style_payload.get("background_color", ""),
+        text_color=display_style_payload.get("text_color", ""),
+        logo_url=display_style_payload.get("logo_url", ""),
+        background_image_url=display_style_payload.get("background_image_url", ""),
+        icon=display_style_payload.get("icon", ""),
     )
+    validity_payload = getattr(resp, "validity_rules", {}) or {}
+    ttl_seconds = validity_payload.get("ttl_seconds")
+    reissue_within_seconds = validity_payload.get("reissue_within_seconds")
     validity_rules = ct_pb2.ValidityRules(
-        default_validity_days=resp.validity_rules.get("default_validity_days", 0),
-        max_validity_days=resp.validity_rules.get("max_validity_days", 0),
-        renewable=resp.validity_rules.get("renewable", False),
-        renewal_window_days=resp.validity_rules.get("renewal_window_days", 0),
-        require_revalidation=resp.validity_rules.get("require_revalidation", False),
-        revalidation_interval_days=resp.validity_rules.get("revalidation_interval_days", 0),
+        default_validity_days=(ttl_seconds // 86400) if isinstance(ttl_seconds, int) else validity_payload.get("default_validity_days", 0),
+        max_validity_days=validity_payload.get("max_validity_days", 0),
+        renewable=validity_payload.get("renewable", False),
+        renewal_window_days=(reissue_within_seconds // 86400) if isinstance(reissue_within_seconds, int) else validity_payload.get("renewal_window_days", 0),
+        require_revalidation=validity_payload.get("require_revalidation", False),
+        revalidation_interval_days=validity_payload.get("revalidation_interval_days", 0),
     )
+    supported_formats = list(getattr(resp, "supported_formats", []) or [])
+    if not supported_formats and getattr(resp, "credential_payload_format", None):
+        supported_formats = [_payload_format_to_wire(resp.credential_payload_format)]
+
+    privacy_posture = getattr(resp, "privacy_posture", None)
+    if isinstance(privacy_posture, dict):
+        if privacy_posture.get("prefer_predicates"):
+            privacy_posture_value = "zero_knowledge"
+        elif privacy_posture.get("default_disclose_all"):
+            privacy_posture_value = "standard"
+        else:
+            privacy_posture_value = "selective_disclosure"
+    else:
+        privacy_posture_value = privacy_posture or ""
+
     return ct_pb2.TemplateResponse(
         id=resp.id,
         organization_id=resp.organization_id,
@@ -58,21 +102,21 @@ def _template_to_pb(template: Any, to_response_fn: Any) -> ct_pb2.TemplateRespon
         description=resp.description or "",
         credential_type=resp.credential_type or "",
         vct=resp.vct or "",
-        doctype=resp.doctype or "",
+        doctype=getattr(resp, "doctype", "") or "",
         claims=claims,
-        privacy_posture=resp.privacy_posture,
-        selective_disclosure_fields=list(resp.selective_disclosure_fields or []),
-        zk_predicate_claims=list(resp.zk_predicate_claims or []),
-        supported_formats=list(resp.supported_formats or []),
-        issuance_protocol=resp.issuance_protocol or "",
-        credential_payload_format=resp.credential_payload_format or "",
+        privacy_posture=privacy_posture_value,
+        selective_disclosure_fields=list(getattr(resp, "selective_disclosure_fields", []) or []),
+        zk_predicate_claims=list(getattr(resp, "zk_predicate_claims", []) or []),
+        supported_formats=supported_formats,
+        issuance_protocol=getattr(resp, "issuance_protocol", "") or "",
+        credential_payload_format=_payload_format_to_wire(resp.credential_payload_format),
         display_style=display_style,
         validity_rules=validity_rules,
         status=resp.status,
-        version=resp.version,
+        version=getattr(resp, "version", 0),
         created_at=resp.created_at,
         updated_at=resp.updated_at,
-        wallet_configs_json=json.dumps(resp.wallet_configs) if resp.wallet_configs else "[]",
+        wallet_configs_json=json.dumps(getattr(resp, "wallet_configs", [])) if getattr(resp, "wallet_configs", None) else "[]",
     )
 
 
@@ -147,6 +191,7 @@ class CredentialTemplateServiceGrpc(
             DisplayStyle,
             PrivacyPosture,
             ValidityRules,
+            normalize_credential_payload_format,
             normalize_credential_format,
         )
 
@@ -155,6 +200,16 @@ class CredentialTemplateServiceGrpc(
                 normalize_credential_format(f)
                 for f in request.supported_formats
             ]
+        except ValueError as exc:
+            context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+            context.set_details(str(exc))
+            return ct_pb2.TemplateResponse()
+
+        try:
+            credential_payload_format = normalize_credential_payload_format(
+                request.credential_payload_format or None,
+                supported_formats,
+            )
         except ValueError as exc:
             context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
             context.set_details(str(exc))
@@ -170,7 +225,7 @@ class CredentialTemplateServiceGrpc(
             privacy_posture=PrivacyPosture(request.privacy_posture) if request.privacy_posture else PrivacyPosture.SELECTIVE_DISCLOSURE,
             supported_formats=supported_formats,
             issuance_protocol=request.issuance_protocol or "oid4vci",
-            credential_payload_format=request.credential_payload_format or "w3c_vcdm_v2_sd_jwt",
+            credential_payload_format=credential_payload_format,
             selective_disclosure_fields=list(request.selective_disclosure_fields),
             zk_predicate_claims=list(request.zk_predicate_claims),
         )
@@ -236,12 +291,33 @@ class CredentialTemplateServiceGrpc(
         if request.description:
             template.description = request.description
         if request.supported_formats:
-            from credential_template.main import normalize_credential_format
+            from credential_template.main import (
+                normalize_credential_format,
+                normalize_credential_payload_format,
+            )
 
             try:
                 template.supported_formats = [
                     normalize_credential_format(f) for f in request.supported_formats
                 ]
+            except ValueError as exc:
+                context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+                context.set_details(str(exc))
+                return ct_pb2.TemplateResponse()
+            if not request.credential_payload_format:
+                template.credential_payload_format = normalize_credential_payload_format(
+                    None,
+                    template.supported_formats,
+                )
+
+        if request.credential_payload_format:
+            from credential_template.main import normalize_credential_payload_format
+
+            try:
+                template.credential_payload_format = normalize_credential_payload_format(
+                    request.credential_payload_format,
+                    template.supported_formats,
+                )
             except ValueError as exc:
                 context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
                 context.set_details(str(exc))

@@ -65,7 +65,7 @@ export const ConsoleContext = createContext(defaultContextValue);
  */
 export function ConsoleProvider({ children }) {
   const navigate = useNavigate();
-  const { isAuthenticated, isLoading: authLoading, setActiveOrganizationId: updateAuthOrg } = useContext(AuthContext);
+  const { isAuthenticated, isLoading: authLoading, isVendor, isAdministrator, setActiveOrganizationId: updateAuthOrg } = useContext(AuthContext);
   
   const [mode, setModeState] = useState('applicant');
   const [activeOrgId, setActiveOrgIdState] = useState(null);
@@ -243,12 +243,11 @@ export function ConsoleProvider({ children }) {
 
   /**
    * Computed: Is org console available?
-   * Available if user has memberships OR org discovery is enabled
+   * Only available for users with admin or vendor roles.
    */
   const isOrgConsoleAvailable = useMemo(() => {
-    // Always available: users can always access org setup/join flow.
-    return true;
-  }, []);
+    return isVendor || isAdministrator;
+  }, [isVendor, isAdministrator]);
 
   /**
    * Computed: Is applicant console available?

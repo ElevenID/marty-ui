@@ -1,4 +1,27 @@
 {
+  "protocol": {
+    "heroTitle": "Built on an Open Standard",
+    "heroSubtitle": "The Marty Identity Protocol (MIP) is a vendor-neutral, open specification for cryptographically verifiable digital identity management.",
+    "sectionPrimitives": "Five Core Primitives",
+    "primitivesSubtitle": "MIP defines the minimum automatable set of primitives for issuing, holding, presenting, and verifying digital credentials.",
+    "sectionStandards": "Standards Alignment",
+    "standardsSubtitle": "MIP unifies international identity standards into a single interoperability layer.",
+    "sectionGovernance": "Open Governance",
+    "governanceSubtitle": "No single organization controls the protocol. All decisions are made publicly on GitHub.",
+    "governanceModel": "Vendor-neutral, community-governed",
+    "governanceContributions": "Developer Certificate of Origin (DCO) — no CLA required",
+    "governanceDecisions": "All decisions made publicly on GitHub — no private steering committees",
+    "governanceCopyright": "Copyright held by The MIP Authors",
+    "sectionComponents": "What's in the Repo",
+    "componentsSubtitle": "Everything you need to implement, validate, and extend the protocol.",
+    "ctaTitle": "Get Involved",
+    "ctaDescription": "MIP is Apache 2.0 licensed and open to contributions. Read the spec, file issues, or submit a PR.",
+    "ctaGitHub": "View on GitHub",
+    "ctaSpec": "Read the Specification",
+    "badge": "Open Standard",
+    "version": "v{{version}} — {{status}}",
+    "license": "Apache 2.0"
+  },
   "valueProposition": {
     "headline": "Identity verification is not enough.",
     "subheadline": "Build verifiable identity infrastructure.",

@@ -45,6 +45,7 @@ import {
   enrollBiometric as enrollBiometricApi,
   getApplicant as getApplicantApi,
   getApplicantByUser as getApplicantByUserApi,
+  listApplications as listApplicationsApi,
   submitApplication as submitApplicationApi,
   updateApplicantProfile as updateApplicantProfileApi,
 } from '../../services/applicantApi';
@@ -178,7 +179,7 @@ export default function ApplicationForm() {
   // ===========================================================================
   // MemberCredential / mDL: derived flags & one-click auto-apply handler
   // ===========================================================================
-  const { isMemberCredential, isMdlCredential, isOneClickCredential } = getCredentialKindFlags(credentialConfig);
+  const { isMemberCredential, isMdlCredential, isMdocMemberCredential, isOpenBadgeCredential, isAccessBadgeCredential, isOneClickCredential } = getCredentialKindFlags(credentialConfig);
 
   const handleAutoApply = async () => {
     setAutoApplying(true);
@@ -193,6 +194,7 @@ export default function ApplicationForm() {
         createApplicant: createApplicantApi,
         createApplication: createApplicationApi,
         autoIssueApplication: autoIssueApplicationApi,
+        listApplications: listApplicationsApi,
       });
       setApplicationId(result.applicationId);
       setAutoOfferData(result.offerData);
@@ -479,13 +481,13 @@ export default function ApplicationForm() {
 
     const HeroIcon = isMdlCredential ? DirectionsCarIcon : LoginIcon;
     const heroTitle = isMdlCredential
-      ? (credentialConfig?.display_name || 'Mobile Driving Licence')
-      : (credentialConfig?.display_name || 'Member Login Credential');
+      ? (credentialConfig?.display_name || 'Membership ID (mDoc)')
+      : (credentialConfig?.display_name || 'Login Credential (Open Badge)');
     const heroDescription = isMdlCredential
-      ? (credentialConfig?.description || 'An ISO/IEC 18013-5 Mobile Driving Licence in mDoc format — issued instantly to your wallet.')
-      : (credentialConfig?.description || 'A free, instant credential that lets you log in with your wallet — no password needed.');
-    const ctaLabel = isMdlCredential ? 'Get My Mobile Driver\'s Licence' : 'Get My Login Credential';
-    const ctaSubtext = isMdlCredential ? 'Free · Instant · mDoc format' : 'Free · Instant · No review required';
+      ? (credentialConfig?.description || 'Mobile-first membership identity in mDoc format — compatible with Apple & Google Wallet style experiences.')
+      : (credentialConfig?.description || 'Log in securely using your wallet — no password required. W3C Verifiable Credential in SD-JWT format.');
+    const ctaLabel = isMdlCredential ? 'Get Membership ID' : 'Add to Wallet';
+    const ctaSubtext = isMdlCredential ? 'Free · Instant · mDoc (ISO 18013-5)' : 'Free · Instant · Open Badge (W3C)';
 
     const summaryFields = getOneClickSummaryFields({ credentialConfig, user, organizationId });
 
@@ -517,13 +519,23 @@ export default function ApplicationForm() {
               </Typography>
             </Box>
 
-            {/* Auto-filled user info summary */}
+            {/* Issuer info */}
+            <Box sx={{ mb: 2 }}>
+              <Typography variant="caption" color="text.secondary">
+                Issued by
+              </Typography>
+              <Typography variant="body2" fontWeight={600}>
+                ElevenID LLC
+              </Typography>
+            </Box>
+
+            {/* Credential details */}
             <Paper
               variant="outlined"
-              sx={{ p: 2.5, mb: 3, textAlign: 'left', borderRadius: 2, bgcolor: 'background.default' }}
+              sx={{ p: 2.5, mb: 2, textAlign: 'left', borderRadius: 2, bgcolor: 'background.default' }}
             >
               <Typography variant="overline" color="text.secondary" sx={{ mb: 1, display: 'block' }}>
-                Your credential will contain
+                Credential Details
               </Typography>
               <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
                 {summaryFields.map(({ label, value }) => (
@@ -534,6 +546,13 @@ export default function ApplicationForm() {
                 ))}
               </Box>
             </Paper>
+
+            {/* Trust signals */}
+            <Box sx={{ mb: 3, display: 'flex', flexDirection: 'column', gap: 0.5, alignItems: 'center' }}>
+              <Typography variant="caption" color="text.secondary">🔒 Cryptographically signed</Typography>
+              <Typography variant="caption" color="text.secondary">🪪 Verifiable credential (W3C / ISO)</Typography>
+              <Typography variant="caption" color="text.secondary">🔁 Reusable across services</Typography>
+            </Box>
 
             {/* Error */}
             {error && (
@@ -555,7 +574,12 @@ export default function ApplicationForm() {
               {autoApplying ? 'Issuing credential…' : ctaLabel}
             </Button>
 
-            <Typography variant="caption" color="text.secondary" sx={{ mt: 2, display: 'block' }}>
+            {/* Helper text */}
+            <Typography variant="caption" color="text.secondary" sx={{ mt: 1.5, display: 'block' }}>
+              You'll be prompted to open your wallet to receive this credential.
+            </Typography>
+
+            <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
               {ctaSubtext}
             </Typography>
           </Paper>

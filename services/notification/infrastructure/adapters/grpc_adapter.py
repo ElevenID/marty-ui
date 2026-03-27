@@ -59,6 +59,7 @@ class NotificationServiceGrpc(
         from notification.main import (
             Notification,
             NotificationPriority,
+            NotificationTarget,
             NotificationType,
         )
 
@@ -88,10 +89,18 @@ class NotificationServiceGrpc(
             link=request.link or None,
             data=dict(request.data),
             priority=NotificationPriority(request.priority) if request.priority else NotificationPriority.NORMAL,
+            target=NotificationTarget(
+                organization_id=request.organization_id or None,
+                recipient_id=request.recipient_id or None,
+            ),
         )
 
         notification.mark_sent()
-        notification.mark_delivered()
+
+        # Deliver via configured channels (FCM, email, webhook, etc.)
+        from notification.main import _deliver_notification, _apply_delivery_results
+        results = await _deliver_notification(notification)
+        _apply_delivery_results(notification, results)
 
         await repo.save_notification(notification)
         logger.info("gRPC SendNotification: %s → %s", notification.id, request.recipient_email)

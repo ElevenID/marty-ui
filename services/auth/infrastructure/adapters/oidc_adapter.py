@@ -173,7 +173,9 @@ class KeycloakOIDCAdapter(OIDCProviderPort):
     
     def get_logout_url(self, id_token: str | None = None, post_logout_redirect_uri: str | None = None) -> str:
         """Get Keycloak logout URL for SSO logout."""
-        params = {}
+        params = {
+            "client_id": self.config.client_id,
+        }
         
         if id_token:
             params["id_token_hint"] = id_token
@@ -182,7 +184,4 @@ class KeycloakOIDCAdapter(OIDCProviderPort):
         if post_logout_redirect_uri:
             params["post_logout_redirect_uri"] = post_logout_redirect_uri
         
-        if params:
-            return f"{self.config.logout_endpoint}?{urlencode(params)}"
-        
-        return self.config.logout_endpoint
+        return f"{self.config.logout_endpoint}?{urlencode(params)}"

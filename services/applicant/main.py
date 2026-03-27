@@ -23,7 +23,7 @@ from typing import Any, AsyncGenerator
 import httpx
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 
 try:
     from common.events import EventPublisher, DomainEvent, EventType, get_event_publisher
@@ -108,11 +108,15 @@ async def _initiate_issuance_grpc(
 
 class ApplicantStatus(str, Enum):
     """Applicant vetting status."""
-    PENDING = "pending"
-    IN_REVIEW = "in_review"
-    APPROVED = "approved"
-    REJECTED = "rejected"
-    REVOKED = "revoked"
+    DRAFT = "DRAFT"
+    SUBMITTED = "SUBMITTED"
+    UNDER_REVIEW = "UNDER_REVIEW"
+    PENDING_INFORMATION = "PENDING_INFORMATION"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+    WITHDRAWN = "WITHDRAWN"
+    CREDENTIALED = "CREDENTIALED"
+    SUSPENDED = "SUSPENDED"
 
 
 class VettingLevel(str, Enum):
@@ -124,13 +128,108 @@ class VettingLevel(str, Enum):
 
 class ApplicationStatus(str, Enum):
     """Credential application lifecycle status."""
-    DRAFT = "draft"
-    SUBMITTED = "submitted"
-    UNDER_REVIEW = "under_review"
-    NEEDS_INFO = "needs_info"
-    APPROVED = "approved"
-    ISSUED = "issued"
-    REJECTED = "rejected"
+    DRAFT = "DRAFT"
+    SUBMITTED = "SUBMITTED"
+    UNDER_REVIEW = "UNDER_REVIEW"
+    PENDING_INFORMATION = "PENDING_INFORMATION"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+    WITHDRAWN = "WITHDRAWN"
+    CREDENTIALED = "CREDENTIALED"
+    SUSPENDED = "SUSPENDED"
+
+
+LEGACY_APPLICANT_STATUS_MAP = {
+    "pending": ApplicantStatus.SUBMITTED,
+    "in_review": ApplicantStatus.UNDER_REVIEW,
+    "approved": ApplicantStatus.APPROVED,
+    "rejected": ApplicantStatus.REJECTED,
+    "revoked": ApplicantStatus.SUSPENDED,
+    "draft": ApplicantStatus.DRAFT,
+    "submitted": ApplicantStatus.SUBMITTED,
+    "under_review": ApplicantStatus.UNDER_REVIEW,
+    "needs_info": ApplicantStatus.PENDING_INFORMATION,
+    "issued": ApplicantStatus.CREDENTIALED,
+}
+
+LEGACY_APPLICATION_STATUS_MAP = {
+    "draft": ApplicationStatus.DRAFT,
+    "submitted": ApplicationStatus.SUBMITTED,
+    "under_review": ApplicationStatus.UNDER_REVIEW,
+    "needs_info": ApplicationStatus.PENDING_INFORMATION,
+    "approved": ApplicationStatus.APPROVED,
+    "issued": ApplicationStatus.CREDENTIALED,
+    "rejected": ApplicationStatus.REJECTED,
+    "revoked": ApplicationStatus.SUSPENDED,
+}
+
+APPLICANT_ALLOWED_TRANSITIONS: dict[ApplicantStatus, set[ApplicantStatus]] = {
+    ApplicantStatus.DRAFT: {ApplicantStatus.SUBMITTED, ApplicantStatus.WITHDRAWN},
+    ApplicantStatus.SUBMITTED: {ApplicantStatus.UNDER_REVIEW, ApplicantStatus.PENDING_INFORMATION, ApplicantStatus.WITHDRAWN, ApplicantStatus.SUSPENDED},
+    ApplicantStatus.UNDER_REVIEW: {ApplicantStatus.APPROVED, ApplicantStatus.REJECTED, ApplicantStatus.PENDING_INFORMATION, ApplicantStatus.SUSPENDED},
+    ApplicantStatus.PENDING_INFORMATION: {ApplicantStatus.SUBMITTED, ApplicantStatus.UNDER_REVIEW, ApplicantStatus.WITHDRAWN, ApplicantStatus.SUSPENDED},
+    ApplicantStatus.APPROVED: {ApplicantStatus.CREDENTIALED, ApplicantStatus.SUSPENDED},
+    ApplicantStatus.REJECTED: set(),
+    ApplicantStatus.WITHDRAWN: set(),
+    ApplicantStatus.CREDENTIALED: set(),
+    ApplicantStatus.SUSPENDED: set(),
+}
+
+APPLICATION_ALLOWED_TRANSITIONS: dict[ApplicationStatus, set[ApplicationStatus]] = {
+    ApplicationStatus.DRAFT: {ApplicationStatus.SUBMITTED, ApplicationStatus.WITHDRAWN},
+    ApplicationStatus.SUBMITTED: {ApplicationStatus.UNDER_REVIEW, ApplicationStatus.APPROVED, ApplicationStatus.REJECTED, ApplicationStatus.PENDING_INFORMATION, ApplicationStatus.WITHDRAWN, ApplicationStatus.SUSPENDED},
+    ApplicationStatus.UNDER_REVIEW: {ApplicationStatus.APPROVED, ApplicationStatus.REJECTED, ApplicationStatus.PENDING_INFORMATION, ApplicationStatus.SUSPENDED},
+    ApplicationStatus.PENDING_INFORMATION: {ApplicationStatus.SUBMITTED, ApplicationStatus.UNDER_REVIEW, ApplicationStatus.WITHDRAWN, ApplicationStatus.SUSPENDED},
+    ApplicationStatus.APPROVED: {ApplicationStatus.CREDENTIALED, ApplicationStatus.SUSPENDED},
+    ApplicationStatus.REJECTED: set(),
+    ApplicationStatus.WITHDRAWN: set(),
+    ApplicationStatus.CREDENTIALED: set(),
+    ApplicationStatus.SUSPENDED: set(),
+}
+
+
+def _parse_applicant_status(value: str | ApplicantStatus | None) -> ApplicantStatus:
+    if value is None:
+        return ApplicantStatus.DRAFT
+    if isinstance(value, ApplicantStatus):
+        return value
+    if value in ApplicantStatus._value2member_map_:
+        return ApplicantStatus(value)
+    mapped = LEGACY_APPLICANT_STATUS_MAP.get(value.lower())
+    if mapped:
+        return mapped
+    return ApplicantStatus(value.upper())
+
+
+def _parse_application_status(value: str | ApplicationStatus | None) -> ApplicationStatus:
+    if value is None:
+        return ApplicationStatus.DRAFT
+    if isinstance(value, ApplicationStatus):
+        return value
+    if value in ApplicationStatus._value2member_map_:
+        return ApplicationStatus(value)
+    mapped = LEGACY_APPLICATION_STATUS_MAP.get(value.lower())
+    if mapped:
+        return mapped
+    return ApplicationStatus(value.upper())
+
+
+def _transition_status(current: Enum, target: Enum, allowed: dict[Enum, set[Enum]], entity_name: str) -> Enum:
+    if current == target:
+        return target
+    if target not in allowed.get(current, set()):
+        raise HTTPException(status_code=400, detail=f"Invalid {entity_name} status transition: {current.value} -> {target.value}")
+    return target
+
+
+def _set_applicant_status(applicant: "Applicant", status: ApplicantStatus) -> None:
+    applicant.status = _transition_status(applicant.status, status, APPLICANT_ALLOWED_TRANSITIONS, "applicant")
+    applicant.updated_at = datetime.now(timezone.utc)
+
+
+def _set_application_status(application: "ApplicantApplication", status: ApplicationStatus) -> None:
+    application.status = _transition_status(application.status, status, APPLICATION_ALLOWED_TRANSITIONS, "application")
+    application.updated_at = datetime.now(timezone.utc)
 
 
 class VettingCheckStatus(str, Enum):
@@ -174,6 +273,7 @@ class Applicant:
     """
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     organization_id: str = ""
+    flow_id: str = ""
     
     # Identity
     email: str = ""
@@ -183,9 +283,24 @@ class Applicant:
     
     # External identity
     oidc_subject: str | None = None
+    user_id: str | None = None
+    external_id: str | None = None
+    
+    # Protocol schema fields
+    credential_template_id: str | None = None
+    reviewer_id: str | None = None
+    reviewer_lock_expires_at: datetime | None = None
+    submitted_at: datetime | None = None
+    approved_at: datetime | None = None
+    credentialed_at: datetime | None = None
+    rejection_code: str | None = None
+    application_data: dict[str, Any] | None = None
+    vetting_checks: list[dict[str, Any]] | None = None
+    issued_credential_id: str | None = None
+    metadata: dict[str, Any] | None = None
     
     # Vetting status
-    status: ApplicantStatus = ApplicantStatus.PENDING
+    status: ApplicantStatus = ApplicantStatus.DRAFT
     vetting_level: VettingLevel = VettingLevel.BASIC
     
     # Vetting data
@@ -209,25 +324,21 @@ class Applicant:
         return self.email.split("@")[0]
     
     def start_review(self) -> None:
-        self.status = ApplicantStatus.IN_REVIEW
-        self.updated_at = datetime.now(timezone.utc)
+        _set_applicant_status(self, ApplicantStatus.UNDER_REVIEW)
     
     def approve(self, reviewer_notes: str | None = None) -> None:
-        self.status = ApplicantStatus.APPROVED
+        _set_applicant_status(self, ApplicantStatus.APPROVED)
         self.reviewer_notes = reviewer_notes
         self.reviewed_at = datetime.now(timezone.utc)
-        self.updated_at = datetime.now(timezone.utc)
     
     def reject(self, reason: str) -> None:
-        self.status = ApplicantStatus.REJECTED
+        _set_applicant_status(self, ApplicantStatus.REJECTED)
         self.rejection_reason = reason
         self.reviewed_at = datetime.now(timezone.utc)
-        self.updated_at = datetime.now(timezone.utc)
     
     def revoke(self, reason: str) -> None:
-        self.status = ApplicantStatus.REVOKED
+        _set_applicant_status(self, ApplicantStatus.SUSPENDED)
         self.rejection_reason = reason
-        self.updated_at = datetime.now(timezone.utc)
 
 
 @dataclass
@@ -329,20 +440,34 @@ class InMemoryApplicantRepository:
         return {
             "id": applicant.id,
             "organization_id": applicant.organization_id,
+            "flow_id": applicant.flow_id,
             "email": applicant.email,
             "given_name": applicant.given_name,
             "family_name": applicant.family_name,
             "phone": applicant.phone,
             "oidc_subject": applicant.oidc_subject,
+            "user_id": applicant.user_id,
+            "external_id": applicant.external_id,
+            "credential_template_id": applicant.credential_template_id,
             "status": applicant.status.value,
             "vetting_level": applicant.vetting_level.value,
             "vetting_data": applicant.vetting_data,
             "verification_results": applicant.verification_results,
+            "reviewer_id": applicant.reviewer_id,
             "reviewer_notes": applicant.reviewer_notes,
             "rejection_reason": applicant.rejection_reason,
+            "rejection_code": applicant.rejection_code,
+            "application_data": applicant.application_data,
+            "vetting_checks": applicant.vetting_checks,
+            "issued_credential_id": applicant.issued_credential_id,
+            "metadata": applicant.metadata,
             "created_at": self._dt_to_str(applicant.created_at),
             "updated_at": self._dt_to_str(applicant.updated_at),
             "reviewed_at": self._dt_to_str(applicant.reviewed_at),
+            "submitted_at": self._dt_to_str(applicant.submitted_at),
+            "approved_at": self._dt_to_str(applicant.approved_at),
+            "credentialed_at": self._dt_to_str(applicant.credentialed_at),
+            "reviewer_lock_expires_at": self._dt_to_str(applicant.reviewer_lock_expires_at),
             "last_login": self._dt_to_str(applicant.last_login),
         }
 
@@ -350,20 +475,34 @@ class InMemoryApplicantRepository:
         return Applicant(
             id=payload.get("id", str(uuid.uuid4())),
             organization_id=payload.get("organization_id", ""),
+            flow_id=payload.get("flow_id", ""),
             email=payload.get("email", ""),
             given_name=payload.get("given_name"),
             family_name=payload.get("family_name"),
             phone=payload.get("phone"),
             oidc_subject=payload.get("oidc_subject"),
-            status=ApplicantStatus(payload.get("status", ApplicantStatus.PENDING.value)),
+            user_id=payload.get("user_id"),
+            external_id=payload.get("external_id"),
+            credential_template_id=payload.get("credential_template_id"),
+            status=_parse_applicant_status(payload.get("status", ApplicantStatus.DRAFT.value)),
             vetting_level=VettingLevel(payload.get("vetting_level", VettingLevel.BASIC.value)),
             vetting_data=payload.get("vetting_data", {}),
             verification_results=payload.get("verification_results", []),
+            reviewer_id=payload.get("reviewer_id"),
             reviewer_notes=payload.get("reviewer_notes"),
             rejection_reason=payload.get("rejection_reason"),
+            rejection_code=payload.get("rejection_code"),
+            application_data=payload.get("application_data"),
+            vetting_checks=payload.get("vetting_checks"),
+            issued_credential_id=payload.get("issued_credential_id"),
+            metadata=payload.get("metadata"),
             created_at=self._str_to_dt(payload.get("created_at")) or datetime.now(timezone.utc),
             updated_at=self._str_to_dt(payload.get("updated_at")) or datetime.now(timezone.utc),
             reviewed_at=self._str_to_dt(payload.get("reviewed_at")),
+            submitted_at=self._str_to_dt(payload.get("submitted_at")),
+            approved_at=self._str_to_dt(payload.get("approved_at")),
+            credentialed_at=self._str_to_dt(payload.get("credentialed_at")),
+            reviewer_lock_expires_at=self._str_to_dt(payload.get("reviewer_lock_expires_at")),
             last_login=self._str_to_dt(payload.get("last_login")),
         )
 
@@ -395,7 +534,7 @@ class InMemoryApplicantRepository:
             credential_configuration_id=payload.get("credential_configuration_id", ""),
             issuing_authority=payload.get("issuing_authority"),
             requested_validity_years=payload.get("requested_validity_years"),
-            status=ApplicationStatus(payload.get("status", ApplicationStatus.DRAFT.value)),
+            status=_parse_application_status(payload.get("status", ApplicationStatus.DRAFT.value)),
             metadata=payload.get("metadata", {}),
             required_checks=payload.get("required_checks", []),
             created_at=self._str_to_dt(payload.get("created_at")) or datetime.now(timezone.utc),
@@ -687,14 +826,29 @@ class ReviewRequest(BaseModel):
 class ApplicantResponse(BaseModel):
     id: str
     organization_id: str
-    email: str
-    given_name: str | None
-    family_name: str | None
-    phone: str | None
+    flow_id: str
+    credential_template_id: str | None = None
+    user_id: str | None = None
+    external_id: str | None = None
+    given_name: str | None = None
+    family_name: str | None = None
+    email: str | None = None
+    phone: str | None = None
     status: str
-    vetting_level: str
+    reviewer_id: str | None = None
+    reviewer_lock_expires_at: str | None = None
+    submitted_at: str | None = None
+    reviewed_at: str | None = None
+    approved_at: str | None = None
+    credentialed_at: str | None = None
+    rejection_reason: str | None = None
+    rejection_code: str | None = None
+    application_data: dict[str, Any] | None = None
+    vetting_checks: list[dict[str, Any]] | None = None
+    issued_credential_id: str | None = None
+    metadata: dict[str, Any] | None = None
     created_at: str
-    reviewed_at: str | None
+    updated_at: str | None = None
 
 
 class CreateApplicationRequest(BaseModel):
@@ -702,10 +856,10 @@ class CreateApplicationRequest(BaseModel):
     credential_configuration_id: str
     issuing_authority: str | None = None
     requested_validity_years: int | None = None
-    metadata: dict[str, Any] = {}
+    metadata: dict[str, Any] = Field(default_factory=dict)
     # Required checks snapshot from the application template (if known at creation time).
     # Each entry: { check_type, custom_name, is_required, order, config, external_provider, webhook_url }
-    required_checks: list[dict[str, Any]] = []
+    required_checks: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ApplicationResponse(BaseModel):
@@ -726,10 +880,10 @@ class ApplicationResponse(BaseModel):
     # Per-wallet offer URIs keyed by wallet_id (e.g. {"marty": "openid-credential-offer://..."}).
     # Populated when the credential template has wallet_configs and the issuance
     # service is running with multi-wallet support.
-    credential_offer_uris: dict[str, str] = {}
+    credential_offer_uris: dict[str, str] = Field(default_factory=dict)
     # Display labels for each wallet tab, sourced from the credential template's
     # wallet_configs display_name field (e.g. {"wr-marty-001": "SpruceKit"}).
-    credential_offer_labels: dict[str, str] = {}
+    credential_offer_labels: dict[str, str] = Field(default_factory=dict)
 
 
 class EnrollBiometricRequest(BaseModel):
@@ -749,41 +903,50 @@ class ApplicationReviewRequest(BaseModel):
 class BiometricResponse(BaseModel):
     id: str
     applicant_id: str
-    biometric_type: str
-    is_live_capture: bool
-    capture_device_id: str | None = None
+    organization_id: str | None = None
+    modality: str
+    template_hash: str | None = None
+    hash_algorithm: str | None = None
+    provider: str | None = None
+    capture_device: str | None = None
+    quality_score: float | None = None
+    liveness_verified: bool | None = None
+    status: str | None = None
+    revoked_at: str | None = None
+    revocation_reason: str | None = None
     created_at: str
 
 
 class VettingCheckResponse(BaseModel):
     id: str
-    application_id: str
+    applicant_id: str | None = None
+    organization_id: str | None = None
     check_type: str
-    custom_name: str | None = None
-    is_required: bool
-    order: int
+    provider: str | None = None
+    provider_reference_id: str | None = None
     status: str
-    config: dict[str, Any] = {}
-    result: dict[str, Any] = {}
-    notes: str | None = None
+    score: float | None = None
+    threshold: float | None = None
+    failure_reason: str | None = None
+    evidence_refs: list[str] | None = None
     performed_by: str | None = None
-    external_provider: str | None = None
-    webhook_url: str | None = None
-    created_at: str
-    updated_at: str
     started_at: str | None = None
     completed_at: str | None = None
+    expires_at: str | None = None
+    raw_result: dict[str, Any] | None = None
+    created_at: str
+    updated_at: str | None = None
 
 
 class CompleteCheckRequest(BaseModel):
     passed: bool
     notes: str | None = None
     performed_by: str | None = None
-    result: dict[str, Any] = {}
+    result: dict[str, Any] = Field(default_factory=dict)
 
 
 class RequestInfoRequest(BaseModel):
-    missing_items: list[str] = []
+    missing_items: list[str] = Field(default_factory=list)
     message: str = ""
     deadline: str | None = None
 
@@ -794,12 +957,15 @@ class AcquireLockRequest(BaseModel):
 
 
 class LockResponse(BaseModel):
-    locked: bool
-    lock_id: str | None = None
-    reviewer_id: str | None = None
-    reviewer_name: str | None = None
-    acquired_at: str | None = None
+    id: str | None = None
+    applicant_id: str | None = None
+    organization_id: str | None = None
+    holder_user_id: str | None = None
+    ttl_seconds: int | None = None
     expires_at: str | None = None
+    released_at: str | None = None
+    status: str | None = None
+    created_at: str | None = None
 
 
 class EnrichedApplicationResponse(BaseModel):
@@ -815,7 +981,7 @@ class EnrichedApplicationResponse(BaseModel):
     issued_at: str | None = None
     updated_at: str
     credential_display_name: str | None = None
-    metadata: dict[str, Any] = {}
+    metadata: dict[str, Any] = Field(default_factory=dict)
     # Enriched applicant info
     applicant_email: str | None = None
     applicant_given_name: str | None = None
@@ -823,10 +989,10 @@ class EnrichedApplicationResponse(BaseModel):
     applicant_phone: str | None = None
     applicant_status: str | None = None
     applicant_vetting_level: str | None = None
-    verification_results: list[dict[str, Any]] = []
+    verification_results: list[dict[str, Any]] = Field(default_factory=list)
 
 
-@router.post("", response_model=ApplicantResponse)
+@router.post("", response_model=ApplicantResponse, response_model_exclude_none=True)
 async def create_applicant(
     request: CreateApplicantRequest,
     repo: InMemoryApplicantRepository = Depends(get_repo),
@@ -850,7 +1016,7 @@ async def create_applicant(
     return _to_response(applicant)
 
 
-@router.get("/by-user/{user_id}", response_model=ApplicantResponse)
+@router.get("/by-user/{user_id}", response_model=ApplicantResponse, response_model_exclude_none=True)
 async def get_applicant_by_user(
     user_id: str,
     repo: InMemoryApplicantRepository = Depends(get_repo),
@@ -862,19 +1028,19 @@ async def get_applicant_by_user(
     return _to_response(applicant)
 
 
-@router.get("", response_model=list[ApplicantResponse])
+@router.get("", response_model=list[ApplicantResponse], response_model_exclude_none=True)
 async def list_applicants(
     organization_id: str = Query(...),
     status: str | None = None,
     repo: InMemoryApplicantRepository = Depends(get_repo),
 ) -> list[ApplicantResponse]:
     """List applicants for an organization."""
-    status_filter = ApplicantStatus(status) if status else None
+    status_filter = _parse_applicant_status(status) if status else None
     applicants = await repo.list_by_organization(organization_id, status_filter)
     return [_to_response(a) for a in applicants]
 
 
-@router.get("/profiles/{applicant_id}", response_model=ApplicantResponse)
+@router.get("/profiles/{applicant_id}", response_model=ApplicantResponse, response_model_exclude_none=True)
 async def get_applicant(
     applicant_id: str,
     repo: InMemoryApplicantRepository = Depends(get_repo),
@@ -886,7 +1052,7 @@ async def get_applicant(
     return _to_response(applicant)
 
 
-@router.post("/profiles/{applicant_id}/biometrics", response_model=BiometricResponse)
+@router.post("/profiles/{applicant_id}/biometrics", response_model=BiometricResponse, response_model_exclude_none=True)
 async def enroll_biometric(
     applicant_id: str,
     request: EnrollBiometricRequest,
@@ -909,7 +1075,7 @@ async def enroll_biometric(
     return _biometric_to_response(biometric)
 
 
-@router.get("/profiles/{applicant_id}/biometrics", response_model=list[BiometricResponse])
+@router.get("/profiles/{applicant_id}/biometrics", response_model=list[BiometricResponse], response_model_exclude_none=True)
 async def list_biometrics(
     applicant_id: str,
     repo: InMemoryApplicantRepository = Depends(get_repo),
@@ -922,7 +1088,7 @@ async def list_biometrics(
     return [_biometric_to_response(b) for b in biometrics]
 
 
-@router.post("/applications", response_model=ApplicationResponse)
+@router.post("/applications", response_model=ApplicationResponse, response_model_exclude_none=True)
 async def create_application(
     request: CreateApplicationRequest,
     repo: InMemoryApplicantRepository = Depends(get_repo),
@@ -931,6 +1097,25 @@ async def create_application(
     applicant = await repo.get_by_id(request.applicant_id)
     if not applicant:
         raise HTTPException(status_code=404, detail="Applicant not found")
+
+    # Prevent duplicate active applications for the same credential type
+    existing = await repo.list_applications_for_applicant(request.applicant_id)
+    _active_statuses = {
+        ApplicationStatus.DRAFT, ApplicationStatus.SUBMITTED,
+        ApplicationStatus.UNDER_REVIEW, ApplicationStatus.PENDING_INFORMATION,
+        ApplicationStatus.APPROVED, ApplicationStatus.CREDENTIALED,
+    }
+    duplicate = next(
+        (a for a in existing
+         if a.credential_configuration_id == request.credential_configuration_id
+         and a.status in _active_statuses),
+        None,
+    )
+    if duplicate:
+        raise HTTPException(
+            status_code=409,
+            detail=f"An active application for this credential already exists (ref {duplicate.reference_number})",
+        )
 
     application = ApplicantApplication(
         applicant_id=request.applicant_id,
@@ -946,7 +1131,7 @@ async def create_application(
     return _application_to_response(application)
 
 
-@router.get("/profiles/{applicant_id}/applications", response_model=list[ApplicationResponse])
+@router.get("/profiles/{applicant_id}/applications", response_model=list[ApplicationResponse], response_model_exclude_none=True)
 async def list_applications_for_applicant(
     applicant_id: str,
     repo: InMemoryApplicantRepository = Depends(get_repo),
@@ -957,20 +1142,20 @@ async def list_applications_for_applicant(
     return [_application_to_response(a) for a in applications]
 
 
-@router.get("/org-applications", response_model=list[ApplicationResponse])
+@router.get("/org-applications", response_model=list[ApplicationResponse], response_model_exclude_none=True)
 async def list_applications_for_organization(
     organization_id: str = Query(...),
     status: str | None = Query(None),
     repo: InMemoryApplicantRepository = Depends(get_repo),
 ) -> list[ApplicationResponse]:
     """List applications for an organization (used by org console)."""
-    status_filter = ApplicationStatus(status) if status else None
+    status_filter = _parse_application_status(status) if status else None
     applications = await repo.list_applications_for_organization(organization_id, status_filter)
     applications.sort(key=lambda a: a.created_at, reverse=True)
     return [_application_to_response(a) for a in applications]
 
 
-@router.post("/applications/{application_id}/submit", response_model=ApplicationResponse)
+@router.post("/applications/{application_id}/submit", response_model=ApplicationResponse, response_model_exclude_none=True)
 async def submit_application(
     application_id: str,
     repo: InMemoryApplicantRepository = Depends(get_repo),
@@ -987,7 +1172,7 @@ async def submit_application(
             await repo.save_application(application)
         return _application_to_response(application)
 
-    submittable = {ApplicationStatus.DRAFT, ApplicationStatus.NEEDS_INFO}
+    submittable = {ApplicationStatus.DRAFT, ApplicationStatus.PENDING_INFORMATION}
     if application.status not in submittable:
         raise HTTPException(
             status_code=400,
@@ -997,17 +1182,21 @@ async def submit_application(
     is_first_submission = application.status == ApplicationStatus.DRAFT
     auto_approve = bool(application.metadata.get("auto_approve"))
 
-    application.status = ApplicationStatus.SUBMITTED
+    _set_application_status(application, ApplicationStatus.SUBMITTED)
     if not application.reference_number:
         application.reference_number = _generate_reference_number()
     application.submitted_at = datetime.now(timezone.utc)
-    application.updated_at = datetime.now(timezone.utc)
+
+    applicant = await repo.get_by_id(application.applicant_id)
+    if applicant and applicant.status in {ApplicantStatus.DRAFT, ApplicantStatus.PENDING_INFORMATION}:
+        _set_applicant_status(applicant, ApplicantStatus.SUBMITTED)
+        await repo.save(applicant)
 
     # Auto-approve: skip the vetting queue entirely when the template opts out
     # of manual review.  We resolve this BEFORE creating vetting checks so no
     # orphaned NOT_STARTED checks accumulate for auto-issued credentials.
     if auto_approve:
-        application.status = ApplicationStatus.APPROVED
+        _set_application_status(application, ApplicationStatus.APPROVED)
         application.reviewed_at = datetime.now(timezone.utc)
         await repo.save_application(application)
         return _application_to_response(application)
@@ -1047,7 +1236,7 @@ async def submit_application(
     return _application_to_response(application)
 
 
-@router.post("/applications/{application_id}/auto-issue", response_model=ApplicationResponse)
+@router.post("/applications/{application_id}/auto-issue", response_model=ApplicationResponse, response_model_exclude_none=True)
 async def auto_issue_application(
     application_id: str,
     repo: InMemoryApplicantRepository = Depends(get_repo),
@@ -1073,23 +1262,22 @@ async def auto_issue_application(
     now = datetime.now(timezone.utc)
 
     # Move through SUBMITTED → APPROVED in one atomic save, skipping vetting.
-    if application.status in {ApplicationStatus.DRAFT, ApplicationStatus.NEEDS_INFO}:
-        application.status = ApplicationStatus.SUBMITTED
+    if application.status in {ApplicationStatus.DRAFT, ApplicationStatus.PENDING_INFORMATION}:
+        _set_application_status(application, ApplicationStatus.SUBMITTED)
         if not application.reference_number:
             application.reference_number = _generate_reference_number()
         application.submitted_at = now
 
     if application.status == ApplicationStatus.SUBMITTED:
-        application.status = ApplicationStatus.APPROVED
+        _set_application_status(application, ApplicationStatus.APPROVED)
         application.reviewed_at = now
 
-    if application.status not in (ApplicationStatus.APPROVED, ApplicationStatus.ISSUED):
+    if application.status not in (ApplicationStatus.APPROVED, ApplicationStatus.CREDENTIALED):
         raise HTTPException(
             status_code=400,
             detail=f"Cannot auto-issue application in {application.status.value} status",
         )
 
-    application.updated_at = now
     await repo.save_application(application)
 
     # Delegate to the issuance service.
@@ -1125,9 +1313,8 @@ async def auto_issue_application(
             "fallback": True,
         }
 
-    application.status = ApplicationStatus.ISSUED
+    _set_application_status(application, ApplicationStatus.CREDENTIALED)
     application.issued_at = datetime.now(timezone.utc)
-    application.updated_at = datetime.now(timezone.utc)
     application.metadata["issuance_transaction_id"] = issuance.get("id")
     application.metadata["credential_offer_uri"] = issuance.get("credential_offer_uri")
     application.metadata["offer_expires_at"] = issuance.get("expires_at")
@@ -1136,10 +1323,21 @@ async def auto_issue_application(
     if issuance.get("fallback"):
         application.metadata["issuance_fallback"] = True
     await repo.save_application(application)
+
+    # Step the applicant through valid intermediate states before CREDENTIALED.
+    if applicant.status == ApplicantStatus.DRAFT:
+        _set_applicant_status(applicant, ApplicantStatus.SUBMITTED)
+    if applicant.status == ApplicantStatus.SUBMITTED:
+        _set_applicant_status(applicant, ApplicantStatus.UNDER_REVIEW)
+    if applicant.status == ApplicantStatus.UNDER_REVIEW:
+        _set_applicant_status(applicant, ApplicantStatus.APPROVED)
+    if applicant.status == ApplicantStatus.APPROVED:
+        _set_applicant_status(applicant, ApplicantStatus.CREDENTIALED)
+    await repo.save(applicant)
     return _application_to_response(application)
 
 
-@router.post("/applications/{application_id}/review", response_model=ApplicationResponse)
+@router.post("/applications/{application_id}/review", response_model=ApplicationResponse, response_model_exclude_none=True)
 async def review_application(
     application_id: str,
     request: ApplicationReviewRequest,
@@ -1151,7 +1349,7 @@ async def review_application(
     if not application:
         raise HTTPException(status_code=404, detail="Application not found")
 
-    if application.status not in {ApplicationStatus.SUBMITTED, ApplicationStatus.UNDER_REVIEW, ApplicationStatus.NEEDS_INFO}:
+    if application.status not in {ApplicationStatus.SUBMITTED, ApplicationStatus.UNDER_REVIEW, ApplicationStatus.PENDING_INFORMATION}:
         raise HTTPException(
             status_code=400,
             detail=f"Cannot review application in {application.status.value} status",
@@ -1204,27 +1402,34 @@ async def review_application(
             )
     
     if decision == "approve":
-        application.status = ApplicationStatus.APPROVED
+        _set_application_status(application, ApplicationStatus.APPROVED)
         application.reviewed_at = datetime.now(timezone.utc)
         if request.notes:
             application.metadata["review_notes"] = request.notes
+        applicant = await repo.get_by_id(application.applicant_id)
+        if applicant:
+            _set_applicant_status(applicant, ApplicantStatus.APPROVED)
+            await repo.save(applicant)
     elif decision == "reject":
         if not request.reason:
             raise HTTPException(status_code=400, detail="Rejection reason required")
-        application.status = ApplicationStatus.REJECTED
+        _set_application_status(application, ApplicationStatus.REJECTED)
         application.reviewed_at = datetime.now(timezone.utc)
         application.metadata["rejection_reason"] = request.reason
         if request.notes:
             application.metadata["review_notes"] = request.notes
+        applicant = await repo.get_by_id(application.applicant_id)
+        if applicant:
+            _set_applicant_status(applicant, ApplicantStatus.REJECTED)
+            await repo.save(applicant)
     else:
         raise HTTPException(status_code=400, detail="Invalid decision")
 
-    application.updated_at = datetime.now(timezone.utc)
     await repo.save_application(application)
     return _application_to_response(application)
 
 
-@router.post("/applications/{application_id}/issue", response_model=ApplicationResponse)
+@router.post("/applications/{application_id}/issue", response_model=ApplicationResponse, response_model_exclude_none=True)
 async def issue_application(
     application_id: str,
     repo: InMemoryApplicantRepository = Depends(get_repo),
@@ -1235,7 +1440,7 @@ async def issue_application(
         raise HTTPException(status_code=404, detail="Application not found")
 
     # Always re-initiate: offers expire, and we need a fresh URL each time the admin requests one.
-    if application.status not in (ApplicationStatus.APPROVED, ApplicationStatus.ISSUED):
+    if application.status not in (ApplicationStatus.APPROVED, ApplicationStatus.CREDENTIALED):
         raise HTTPException(
             status_code=400,
             detail=f"Cannot issue application in {application.status.value} status",
@@ -1289,9 +1494,8 @@ async def issue_application(
             "fallback": True,
         }
 
-    application.status = ApplicationStatus.ISSUED
+    _set_application_status(application, ApplicationStatus.CREDENTIALED)
     application.issued_at = datetime.now(timezone.utc)
-    application.updated_at = datetime.now(timezone.utc)
     application.metadata["issuance_transaction_id"] = issuance.get("id")
     application.metadata["credential_offer_uri"] = issuance.get("credential_offer_uri")
     application.metadata["offer_expires_at"] = issuance.get("expires_at")
@@ -1300,10 +1504,21 @@ async def issue_application(
     if issuance.get("fallback"):
         application.metadata["issuance_fallback"] = True
     await repo.save_application(application)
+
+    # Step the applicant through valid intermediate states before CREDENTIALED.
+    if applicant.status == ApplicantStatus.DRAFT:
+        _set_applicant_status(applicant, ApplicantStatus.SUBMITTED)
+    if applicant.status == ApplicantStatus.SUBMITTED:
+        _set_applicant_status(applicant, ApplicantStatus.UNDER_REVIEW)
+    if applicant.status == ApplicantStatus.UNDER_REVIEW:
+        _set_applicant_status(applicant, ApplicantStatus.APPROVED)
+    if applicant.status == ApplicantStatus.APPROVED:
+        _set_applicant_status(applicant, ApplicantStatus.CREDENTIALED)
+    await repo.save(applicant)
     return _application_to_response(application)
 
 
-@router.patch("/applications/{application_id}", response_model=ApplicationResponse)
+@router.patch("/applications/{application_id}", response_model=ApplicationResponse, response_model_exclude_none=True)
 async def update_application(
     application_id: str,
     organization_id: str | None = Query(None),
@@ -1325,7 +1540,7 @@ async def update_application(
     return _application_to_response(application)
 
 
-@router.get("/applications/{application_id}", response_model=EnrichedApplicationResponse)
+@router.get("/applications/{application_id}", response_model=EnrichedApplicationResponse, response_model_exclude_none=True)
 async def get_application(
     application_id: str,
     repo: InMemoryApplicantRepository = Depends(get_repo),
@@ -1340,7 +1555,7 @@ async def get_application(
 
 # --- Vetting Checks Endpoints ---
 
-@router.get("/applications/{application_id}/checks", response_model=list[VettingCheckResponse])
+@router.get("/applications/{application_id}/checks", response_model=list[VettingCheckResponse], response_model_exclude_none=True)
 async def list_checks(
     application_id: str,
     repo: InMemoryApplicantRepository = Depends(get_repo),
@@ -1353,7 +1568,7 @@ async def list_checks(
     return [_check_to_response(c) for c in checks]
 
 
-@router.post("/checks/{check_id}/start", response_model=VettingCheckResponse)
+@router.post("/checks/{check_id}/start", response_model=VettingCheckResponse, response_model_exclude_none=True)
 async def start_check(
     check_id: str,
     repo: InMemoryApplicantRepository = Depends(get_repo),
@@ -1369,7 +1584,7 @@ async def start_check(
     return _check_to_response(check)
 
 
-@router.post("/checks/{check_id}/complete", response_model=VettingCheckResponse)
+@router.post("/checks/{check_id}/complete", response_model=VettingCheckResponse, response_model_exclude_none=True)
 async def complete_check(
     check_id: str,
     request: CompleteCheckRequest,
@@ -1389,7 +1604,7 @@ async def complete_check(
     return _check_to_response(check)
 
 
-@router.get("/checks/pending", response_model=list[VettingCheckResponse])
+@router.get("/checks/pending", response_model=list[VettingCheckResponse], response_model_exclude_none=True)
 async def get_pending_checks(
     check_type: str | None = Query(None),
     repo: InMemoryApplicantRepository = Depends(get_repo),
@@ -1401,7 +1616,7 @@ async def get_pending_checks(
 
 # --- Request Info Endpoint ---
 
-@router.post("/applications/{application_id}/request-info", response_model=ApplicationResponse)
+@router.post("/applications/{application_id}/request-info", response_model=ApplicationResponse, response_model_exclude_none=True)
 async def request_info(
     application_id: str,
     request: RequestInfoRequest,
@@ -1415,7 +1630,7 @@ async def request_info(
     reviewable_statuses = {
         ApplicationStatus.SUBMITTED,
         ApplicationStatus.UNDER_REVIEW,
-        ApplicationStatus.NEEDS_INFO,
+        ApplicationStatus.PENDING_INFORMATION,
     }
     if application.status not in reviewable_statuses:
         raise HTTPException(
@@ -1423,7 +1638,7 @@ async def request_info(
             detail=f"Cannot request info for application in {application.status.value} status",
         )
 
-    application.status = ApplicationStatus.NEEDS_INFO
+    _set_application_status(application, ApplicationStatus.PENDING_INFORMATION)
     info_requests = application.metadata.get("info_requests", [])
     info_requests.append({
         "requested_at": datetime.now(timezone.utc).isoformat(),
@@ -1432,14 +1647,17 @@ async def request_info(
         "deadline": request.deadline,
     })
     application.metadata["info_requests"] = info_requests
-    application.updated_at = datetime.now(timezone.utc)
     await repo.save_application(application)
+    applicant = await repo.get_by_id(application.applicant_id)
+    if applicant:
+        _set_applicant_status(applicant, ApplicantStatus.PENDING_INFORMATION)
+        await repo.save(applicant)
     return _application_to_response(application)
 
 
 # --- Reviewer Lock Endpoints ---
 
-@router.post("/applications/{application_id}/lock", response_model=LockResponse)
+@router.post("/applications/{application_id}/lock", response_model=LockResponse, response_model_exclude_none=True)
 async def acquire_lock(
     application_id: str,
     request: AcquireLockRequest,
@@ -1452,20 +1670,18 @@ async def acquire_lock(
     acquired, lock = await repo.acquire_lock(application_id, request.reviewer_id, request.reviewer_name)
     if not acquired and lock:
         return LockResponse(
-            locked=False,
-            lock_id=lock.lock_id,
-            reviewer_id=lock.reviewer_id,
-            reviewer_name=lock.reviewer_name,
-            acquired_at=lock.acquired_at.isoformat(),
+            id=lock.lock_id,
+            holder_user_id=lock.reviewer_id,
             expires_at=lock.expires_at.isoformat(),
+            status="HELD",
+            created_at=lock.acquired_at.isoformat(),
         )
     return LockResponse(
-        locked=True,
-        lock_id=lock.lock_id if lock else None,
-        reviewer_id=request.reviewer_id,
-        reviewer_name=request.reviewer_name,
-        acquired_at=lock.acquired_at.isoformat() if lock else None,
+        id=lock.lock_id if lock else None,
+        holder_user_id=request.reviewer_id,
         expires_at=lock.expires_at.isoformat() if lock else None,
+        status="ACQUIRED",
+        created_at=lock.acquired_at.isoformat() if lock else None,
     )
 
 
@@ -1480,7 +1696,7 @@ async def release_lock(
     return {"released": released}
 
 
-@router.get("/applications/{application_id}/lock", response_model=LockResponse)
+@router.get("/applications/{application_id}/lock", response_model=LockResponse, response_model_exclude_none=True)
 async def get_lock_status(
     application_id: str,
     repo: InMemoryApplicantRepository = Depends(get_repo),
@@ -1488,18 +1704,17 @@ async def get_lock_status(
     """Get the current lock status for an application."""
     lock = await repo.get_lock(application_id)
     if not lock:
-        return LockResponse(locked=False)
+        return LockResponse(status="RELEASED")
     return LockResponse(
-        locked=True,
-        lock_id=lock.lock_id,
-        reviewer_id=lock.reviewer_id,
-        reviewer_name=lock.reviewer_name,
-        acquired_at=lock.acquired_at.isoformat(),
+        id=lock.lock_id,
+        holder_user_id=lock.reviewer_id,
         expires_at=lock.expires_at.isoformat(),
+        status="HELD",
+        created_at=lock.acquired_at.isoformat(),
     )
 
 
-@router.patch("/profiles/{applicant_id}", response_model=ApplicantResponse)
+@router.patch("/profiles/{applicant_id}", response_model=ApplicantResponse, response_model_exclude_none=True)
 async def update_applicant(
     applicant_id: str,
     request: UpdateApplicantRequest,
@@ -1524,7 +1739,7 @@ async def update_applicant(
     return _to_response(applicant)
 
 
-@router.post("/profiles/{applicant_id}/review", response_model=ApplicantResponse)
+@router.post("/profiles/{applicant_id}/review", response_model=ApplicantResponse, response_model_exclude_none=True)
 async def review_applicant(
     applicant_id: str,
     request: ReviewRequest,
@@ -1534,6 +1749,11 @@ async def review_applicant(
     applicant = await repo.get_by_id(applicant_id)
     if not applicant:
         raise HTTPException(status_code=404, detail="Applicant not found")
+
+    if applicant.status == ApplicantStatus.DRAFT:
+        _set_applicant_status(applicant, ApplicantStatus.SUBMITTED)
+    if applicant.status in {ApplicantStatus.SUBMITTED, ApplicantStatus.PENDING_INFORMATION}:
+        _set_applicant_status(applicant, ApplicantStatus.UNDER_REVIEW)
     
     if request.decision == "approve":
         applicant.approve(request.notes)
@@ -1593,14 +1813,29 @@ def _to_response(applicant: Applicant) -> ApplicantResponse:
     return ApplicantResponse(
         id=applicant.id,
         organization_id=applicant.organization_id,
-        email=applicant.email,
+        flow_id=applicant.flow_id,
+        credential_template_id=applicant.credential_template_id,
+        user_id=applicant.user_id,
+        external_id=applicant.external_id,
         given_name=applicant.given_name,
         family_name=applicant.family_name,
+        email=applicant.email or None,
         phone=applicant.phone,
         status=applicant.status.value,
-        vetting_level=applicant.vetting_level.value,
-        created_at=applicant.created_at.isoformat(),
+        reviewer_id=applicant.reviewer_id,
+        reviewer_lock_expires_at=applicant.reviewer_lock_expires_at.isoformat() if applicant.reviewer_lock_expires_at else None,
+        submitted_at=applicant.submitted_at.isoformat() if applicant.submitted_at else None,
         reviewed_at=applicant.reviewed_at.isoformat() if applicant.reviewed_at else None,
+        approved_at=applicant.approved_at.isoformat() if applicant.approved_at else None,
+        credentialed_at=applicant.credentialed_at.isoformat() if applicant.credentialed_at else None,
+        rejection_reason=applicant.rejection_reason,
+        rejection_code=applicant.rejection_code,
+        application_data=applicant.application_data,
+        vetting_checks=applicant.vetting_checks,
+        issued_credential_id=applicant.issued_credential_id,
+        metadata=applicant.metadata,
+        created_at=applicant.created_at.isoformat(),
+        updated_at=applicant.updated_at.isoformat() if applicant.updated_at else None,
     )
 
 
@@ -1629,9 +1864,9 @@ def _biometric_to_response(biometric: ApplicantBiometric) -> BiometricResponse:
     return BiometricResponse(
         id=biometric.id,
         applicant_id=biometric.applicant_id,
-        biometric_type=biometric.biometric_type,
-        is_live_capture=biometric.is_live_capture,
-        capture_device_id=biometric.capture_device_id,
+        modality=biometric.biometric_type,
+        liveness_verified=biometric.is_live_capture,
+        capture_device=biometric.capture_device_id,
         created_at=biometric.created_at.isoformat(),
     )
 
@@ -1639,22 +1874,14 @@ def _biometric_to_response(biometric: ApplicantBiometric) -> BiometricResponse:
 def _check_to_response(check: VettingCheck) -> VettingCheckResponse:
     return VettingCheckResponse(
         id=check.id,
-        application_id=check.application_id,
         check_type=check.check_type.value,
-        custom_name=check.custom_name,
-        is_required=check.is_required,
-        order=check.order,
+        provider=check.external_provider,
         status=check.status.value,
-        config=check.config,
-        result=check.result,
-        notes=check.notes,
         performed_by=check.performed_by,
-        external_provider=check.external_provider,
-        webhook_url=check.webhook_url,
-        created_at=check.created_at.isoformat(),
-        updated_at=check.updated_at.isoformat(),
         started_at=check.started_at.isoformat() if check.started_at else None,
         completed_at=check.completed_at.isoformat() if check.completed_at else None,
+        created_at=check.created_at.isoformat(),
+        updated_at=check.updated_at.isoformat(),
     )
 
 

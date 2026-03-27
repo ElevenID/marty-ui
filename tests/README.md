@@ -1,6 +1,6 @@
-# OpenWallet Foundation Demo - E2E Tests
+# Marty UI - E2E Tests
 
-Comprehensive end-to-end tests for the mDoc/mDL demo using Playwright.
+Comprehensive end-to-end tests for the current Marty UI stack using Playwright.
 
 ## Overview
 
@@ -18,7 +18,8 @@ This test suite validates the complete functionality of the OpenWallet Foundatio
 ### Prerequisites
 
 - Node.js 18+
-- Demo running at `http://localhost` (use `./deploy-k8s.sh`)
+- Backend API running at `http://localhost:8000`
+- Frontend running at `http://localhost:9080` by default (or override with `BASE_URL`)
 
 ### Install and Run
 
@@ -44,22 +45,6 @@ npm run test:enhanced
 npm run test:integration
 ```
 
-### Using Test Runner Script
-
-```bash
-# Run tests with automatic demo setup
-./run-tests.sh
-
-# Run in headed mode
-./run-tests.sh --headed
-
-# Debug mode
-./run-tests.sh --debug
-
-# Specific browser
-./run-tests.sh --browser firefox
-```
-
 ## Test Structure
 
 ### Test Files
@@ -75,8 +60,7 @@ tests/
 │   ├── global-setup.js          # Test environment setup
 │   └── global-teardown.js       # Test cleanup
 ├── playwright.config.js         # Playwright configuration
-├── package.json                 # Dependencies and scripts
-└── run-tests.sh                 # Test runner script
+└── package.json                 # Dependencies and scripts
 ```
 
 ### Test Categories
@@ -111,7 +95,10 @@ tests/
 
 ```bash
 # Base URL for the demo application
-BASE_URL=http://localhost
+BASE_URL=http://localhost:9080
+
+# Backend API URL
+API_URL=http://localhost:8000
 
 # Browser selection
 BROWSER=chromium  # chromium, firefox, webkit
@@ -130,7 +117,7 @@ Key configuration options in `playwright.config.js`:
 - **Parallel Execution**: Faster test runs
 - **Automatic Screenshots**: On failure
 - **Video Recording**: For failed tests
-- **Global Setup/Teardown**: Demo readiness checks
+- **Global Setup/Teardown**: local stack readiness checks
 
 ## Test Utilities
 
@@ -240,7 +227,7 @@ Automated testing on:
 ### CI/CD Features
 
 - **Multi-browser Matrix**: Parallel testing across browsers
-- **Demo Deployment**: Automatic Kind cluster setup
+- **Containerized Test Stack**: Compose-managed browser and service orchestration
 - **Artifact Collection**: Screenshots, videos, reports
 - **Failure Analysis**: Logs and diagnostics
 
@@ -276,11 +263,11 @@ npm run test:ci
 
 ### Common Issues
 
-1. **Demo Not Running**:
+1. **Stack not running**:
 
    ```bash
    cd marty-ui
-   ./deploy-k8s.sh
+   make dev
    ```
 
 2. **Browser Installation**:
@@ -292,7 +279,7 @@ npm run test:ci
 3. **Port Conflicts**:
 
    ```bash
-   BASE_URL=http://localhost:3000 npm test
+   BASE_URL=http://localhost:9080 npm test
    ```
 
 4. **Timeout Issues**:
@@ -304,7 +291,7 @@ npm run test:ci
 
 For issues with the test suite:
 
-1. Check demo application logs
+1. Check Marty UI application logs
 2. Review Playwright documentation
 3. Examine test failure screenshots
 4. Run tests in debug mode

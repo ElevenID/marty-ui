@@ -120,6 +120,7 @@ export async function autoApplyForCredential({
   createApplicant,
   createApplication,
   autoIssueApplication,
+  listApplications,
 }) {
   let applicantId = await resolveApplicantId();
 
@@ -138,6 +139,34 @@ export async function autoApplyForCredential({
     throw new Error('Unable to resolve applicant profile');
   }
 
+  // Check for an existing active application for this credential type.
+  // If one already exists (credentialed / approved), return its offer
+  // instead of creating a duplicate.
+  const configId = credentialConfig?.id || credentialConfigId;
+  if (listApplications) {
+    try {
+      const { applications = [] } = await listApplications({ limit: 100 });
+      const existing = applications.find(
+        (a) =>
+          a.credential_configuration_id === configId &&
+          ['approved', 'credentialed', 'issued'].includes(a.status?.toLowerCase()),
+      );
+      if (existing) {
+        return {
+          applicationId: existing.id,
+          offerData: {
+            offer_url: existing.credential_offer_uri || null,
+            credential_offer_uris: existing.credential_offer_uris || {},
+            expires_at: existing.offer_expires_at || null,
+          },
+          existingApplication: true,
+        };
+      }
+    } catch {
+      // If listing fails, proceed with creation and let the backend guard catch duplicates
+    }
+  }
+
   const autoApplyContext = buildAutoApplyContext({
     credentialConfig,
     user,
@@ -147,7 +176,7 @@ export async function autoApplyForCredential({
   const createdApplication = await createApplication({
     applicant_id: applicantId,
     credential_configuration_id: credentialConfig?.id || credentialConfigId,
-    issuing_authority: 'Marty Trust Services',
+    issuing_authority: 'ElevenID LLC',
     requested_validity_years: autoApplyContext.requested_validity_years,
     metadata: autoApplyContext.metadata,
   });

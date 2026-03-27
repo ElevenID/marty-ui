@@ -307,6 +307,13 @@ message FlowInstanceResponse {
   string error = 13;
   string created_at = 14;
   string updated_at = 15;
+  string flow_id = 16;
+  string protocol_status = 17;
+  string flow_type = 18;
+  string current_step = 19;
+  int32 current_step_index = 20;
+  string issued_credential_id = 21;
+  string error_code = 22;
 }
 
 message FlowArtifact {

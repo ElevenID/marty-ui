@@ -266,7 +266,7 @@ function SidebarNavigation({ mobileOpen, onMobileClose }) {
   const { isAdministrator, isVendor, isApplicant, organizationId } = useAuth();
   const { mode, setMode, activeOrgId, memberships, isOrgConsoleAvailable, isApplicantConsoleAvailable, isOrgBlocked } = useConsole();
   const isJoinOnlyMode = memberships.length === 0;
-  const showConsoleSwitcher = isApplicantConsoleAvailable && (isOrgConsoleAvailable || isJoinOnlyMode);
+  const showConsoleSwitcher = isApplicantConsoleAvailable && isOrgConsoleAvailable;
 
   // Badge counts fetched from API
   const [badgeCounts, setBadgeCounts] = useState({});
@@ -375,7 +375,7 @@ function SidebarNavigation({ mobileOpen, onMobileClose }) {
               <PersonIcon fontSize="small" sx={{ mr: 0.5, flexShrink: 0 }} />
               <Box component="span" sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Applicant</Box>
             </ToggleButton>
-            {(isOrgConsoleAvailable || isJoinOnlyMode) && (
+            {isOrgConsoleAvailable && (
               <ToggleButton value="org" sx={{ textTransform: 'none', minWidth: 0, px: 1 }}>
                 <BusinessIcon fontSize="small" sx={{ mr: 0.5, flexShrink: 0 }} />
                 <Box component="span" sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Org</Box>
@@ -401,7 +401,7 @@ function SidebarNavigation({ mobileOpen, onMobileClose }) {
               <PersonIcon fontSize="small" />
             </IconButton>
           </Tooltip>
-          {(isOrgConsoleAvailable || isJoinOnlyMode) && (
+          {isOrgConsoleAvailable && (
             <Tooltip title="Organization Console" placement="right">
               <IconButton
                 size="small"
@@ -443,8 +443,8 @@ function SidebarNavigation({ mobileOpen, onMobileClose }) {
           flex: 1,
           pt: 1,
           // Disable navigation when org console is blocked
-          opacity: (isOrgBlocked || isJoinOnlyMode) ? 0.5 : 1,
-          pointerEvents: (isOrgBlocked || isJoinOnlyMode) ? 'none' : 'auto',
+          opacity: isOrgBlocked ? 0.5 : 1,
+          pointerEvents: isOrgBlocked ? 'none' : 'auto',
         }}
       >
         {navItems.map((item) => (

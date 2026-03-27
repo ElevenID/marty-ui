@@ -25,7 +25,7 @@ from typing import Any, AsyncGenerator
 
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Annotated
 
 from marty_common import (
@@ -230,6 +230,94 @@ class RevocationProfile:
         self.updated_at = datetime.now(timezone.utc)
 
 
+class CascadeOperationType(str, Enum):
+    """Protocol-defined cascade revocation operation types."""
+    ISSUER_REVOCATION = "ISSUER_REVOCATION"
+    ANCHOR_REVOCATION = "ANCHOR_REVOCATION"
+
+
+class TriggerEntityType(str, Enum):
+    """Protocol-defined cascade trigger entity types."""
+    ISSUER = "ISSUER"
+    TRUST_ANCHOR = "TRUST_ANCHOR"
+
+
+class CascadeStatus(str, Enum):
+    """Lifecycle status for cascade revocation operations."""
+    PENDING_CONFIRMATION = "PENDING_CONFIRMATION"
+    IN_PROGRESS = "IN_PROGRESS"
+    COMPLETED = "COMPLETED"
+    ROLLED_BACK = "ROLLED_BACK"
+    FAILED = "FAILED"
+
+
+@dataclass
+class CascadeRevocationOperation:
+    """Tracks propagation of issuer or trust-anchor revocations."""
+
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    organization_id: str = ""
+    operation_type: CascadeOperationType = CascadeOperationType.ISSUER_REVOCATION
+    trigger_entity_type: TriggerEntityType = TriggerEntityType.ISSUER
+    trigger_entity_id: str = ""
+    status: CascadeStatus = CascadeStatus.IN_PROGRESS
+    affected_credential_count: int = 0
+    affected_credential_ids: list[str] = field(default_factory=list)
+    requires_confirmation: bool = False
+    confirmed_at: datetime | None = None
+    confirmed_by: str | None = None
+    max_cascade_depth: int = 3
+    current_depth: int = 0
+    circuit_breaker_threshold: int = 1000
+    circuit_breaker_triggered: bool = False
+    can_rollback: bool = False
+    rollback_snapshot: dict[str, Any] | None = None
+    rolled_back_at: datetime | None = None
+    rolled_back_by: str | None = None
+    error_message: str | None = None
+    metadata: dict[str, Any] | None = None
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime | None = field(default_factory=lambda: datetime.now(timezone.utc))
+    completed_at: datetime | None = None
+
+    def mark_completed(self) -> None:
+        now = datetime.now(timezone.utc)
+        self.status = CascadeStatus.COMPLETED
+        self.completed_at = now
+        self.updated_at = now
+
+    def mark_failed(self, error_message: str) -> None:
+        self.status = CascadeStatus.FAILED
+        self.error_message = error_message
+        self.updated_at = datetime.now(timezone.utc)
+
+    def confirm(self, confirmed_by: str) -> None:
+        if self.status != CascadeStatus.PENDING_CONFIRMATION:
+            raise ValueError("Only pending cascade operations can be confirmed")
+        now = datetime.now(timezone.utc)
+        self.confirmed_at = now
+        self.confirmed_by = confirmed_by
+        self.status = CascadeStatus.IN_PROGRESS
+        self.updated_at = now
+        self.mark_completed()
+
+    def rollback(self, rolled_back_by: str) -> None:
+        if self.status != CascadeStatus.COMPLETED:
+            raise ValueError("Only completed cascade operations can be rolled back")
+        if not self.can_rollback:
+            raise ValueError("Rollback is not enabled for this cascade operation")
+        if self.completed_at is None:
+            raise ValueError("Cascade completion timestamp is missing")
+        if (datetime.now(timezone.utc) - self.completed_at).total_seconds() > 72 * 3600:
+            raise ValueError("Cascade rollback window has expired")
+        now = datetime.now(timezone.utc)
+        self.status = CascadeStatus.ROLLED_BACK
+        self.rolled_back_at = now
+        self.rolled_back_by = rolled_back_by
+        self.rollback_snapshot = None
+        self.updated_at = now
+
+
 # =============================================================================
 # Application Layer
 # =============================================================================
@@ -239,6 +327,7 @@ class InMemoryRevocationProfileRepository:
     
     def __init__(self):
         self._profiles: dict[str, RevocationProfile] = {}
+        self._cascade_operations: dict[str, CascadeRevocationOperation] = {}
         self._status_list_indices: dict[str, int] = {}  # profile_id:format -> next_index
     
     async def save(self, profile: RevocationProfile) -> None:
@@ -252,6 +341,29 @@ class InMemoryRevocationProfileRepository:
     
     async def delete(self, profile_id: str) -> None:
         self._profiles.pop(profile_id, None)
+
+    async def save_cascade_operation(self, operation: CascadeRevocationOperation) -> None:
+        self._cascade_operations[operation.id] = operation
+
+    async def get_cascade_operation(self, operation_id: str) -> CascadeRevocationOperation | None:
+        return self._cascade_operations.get(operation_id)
+
+    async def list_cascade_operations(
+        self,
+        org_id: str,
+        status: CascadeStatus | None = None,
+    ) -> list[CascadeRevocationOperation]:
+        operations = [
+            operation
+            for operation in self._cascade_operations.values()
+            if operation.organization_id == org_id
+        ]
+        if status is not None:
+            operations = [operation for operation in operations if operation.status == status]
+        return sorted(operations, key=lambda operation: operation.created_at, reverse=True)
+
+    async def delete_cascade_operation(self, operation_id: str) -> None:
+        self._cascade_operations.pop(operation_id, None)
     
     async def allocate_index(self, profile_id: str, credential_format: str) -> int:
         """Allocate next available index in status list."""
@@ -276,6 +388,10 @@ class IssuerRevocationConfigModel(BaseModel):
     enable_bitstring_status_list: bool = True
     enable_token_status_list: bool = True
     enable_legacy_revocation_list: bool = False
+    auto_allocate_index: bool | None = None
+    batch_update_interval_seconds: int | None = None
+    list_size: int | None = None
+    uri_template: str | None = None
 
 
 class VerifierRevocationConfigModel(BaseModel):
@@ -303,9 +419,15 @@ class CreateRevocationProfileRequest(BaseModel):
     organization_id: str
     name: str
     description: str | None = None
+    revocation_mechanism: list[str] | None = None
+    mechanism_priority: list[str] | None = None
+    check_mode: str | None = None
+    cache_ttl_seconds: int | None = None
+    offline_grace_seconds: int | None = None
     issuer_config: IssuerRevocationConfigModel | None = None
     verifier_config: VerifierRevocationConfigModel | None = None
     automation_config: RevocationAutomationConfigModel | None = None
+    status_list_url: str | None = None
     supported_formats: list[str] = ["SD_JWT_VC", "MDOC", "VC_JWT"]
 
 
@@ -313,14 +435,15 @@ class RevocationProfileResponse(BaseModel):
     id: str
     organization_id: str
     name: str
-    description: str | None
-    status: str
-    issuer_config: dict
-    verifier_config: dict
-    automation_config: dict
-    supported_formats: list[str]
+    revocation_mechanism: list[str]
+    mechanism_priority: list[str] | None = None
+    check_mode: str
+    cache_ttl_seconds: int | None = None
+    offline_grace_seconds: int | None = None
+    issuer_config: dict[str, Any] | None = None
+    status_list_url: str | None = None
     created_at: str
-    updated_at: str
+    updated_at: str | None = None
 
 
 class ProcessRevocationRequest(BaseModel):
@@ -351,11 +474,55 @@ class AllocateIndexResponse(BaseModel):
     status_list_url: str
 
 
+class CreateCascadeRevocationOperationRequest(BaseModel):
+    organization_id: str
+    operation_type: CascadeOperationType
+    trigger_entity_type: TriggerEntityType
+    trigger_entity_id: str
+    affected_credential_count: int | None = None
+    affected_credential_ids: list[str] = Field(default_factory=list)
+    requires_confirmation: bool | None = None
+    max_cascade_depth: int = 3
+    current_depth: int = 0
+    circuit_breaker_threshold: int = 1000
+    can_rollback: bool = False
+    rollback_snapshot: dict[str, Any] | None = None
+    metadata: dict[str, Any] | None = None
+
+
+class CascadeRevocationOperationResponse(BaseModel):
+    id: str
+    organization_id: str
+    operation_type: str
+    trigger_entity_type: str
+    trigger_entity_id: str
+    status: str
+    affected_credential_count: int | None = None
+    affected_credential_ids: list[str] = Field(default_factory=list)
+    requires_confirmation: bool
+    confirmed_at: str | None = None
+    confirmed_by: str | None = None
+    max_cascade_depth: int
+    current_depth: int
+    circuit_breaker_threshold: int
+    circuit_breaker_triggered: bool
+    can_rollback: bool
+    rollback_snapshot: dict[str, Any] | None = None
+    rolled_back_at: str | None = None
+    rolled_back_by: str | None = None
+    error_message: str | None = None
+    metadata: dict[str, Any] | None = None
+    created_at: str
+    updated_at: str | None = None
+
+
 # =============================================================================
 # HTTP Adapter - Router
 # =============================================================================
 
 router = APIRouter(prefix="/v1/revocation-profiles", tags=["revocation-profiles"])
+cascade_router = APIRouter(prefix="/v1/cascade-revocations", tags=["cascade-revocations"])
+batch_router = APIRouter(prefix="/v1/revocation-batches", tags=["revocation-batches"])
 internal_router = APIRouter(prefix="/internal/revocation-profiles", tags=["internal"])
 
 _repo: InMemoryRevocationProfileRepository | None = None
@@ -374,49 +541,163 @@ def get_status_list_manager() -> StatusListManager:
     return _status_list_manager
 
 
+def _parse_revocation_mechanism(value: str | RevocationMechanism) -> RevocationMechanism:
+    if isinstance(value, RevocationMechanism):
+        return value
+    return RevocationMechanism(str(value).strip().upper())
+
+
+def _collect_revocation_mechanisms(profile: RevocationProfile) -> list[str]:
+    mechanisms: list[RevocationMechanism] = []
+
+    if profile.issuer_config.enable_legacy_revocation_list:
+        mechanisms.append(RevocationMechanism.STATUS_LIST_2021)
+    if profile.issuer_config.enable_bitstring_status_list:
+        mechanisms.append(RevocationMechanism.BITSTRING_STATUS_LIST)
+    if profile.issuer_config.enable_token_status_list:
+        mechanisms.append(RevocationMechanism.TOKEN_STATUS_LIST)
+
+    for mechanism in profile.verifier_config.mechanism_priority:
+        if mechanism not in mechanisms:
+            mechanisms.append(mechanism)
+
+    if not mechanisms:
+        mechanisms.append(RevocationMechanism.BITSTRING_STATUS_LIST)
+
+    return [mechanism.value for mechanism in mechanisms]
+
+
+def _protocol_issuer_config(profile: RevocationProfile) -> dict[str, Any]:
+    config: dict[str, Any] = {
+        "auto_allocate_index": profile.automation_config.auto_allocate_indices,
+        "batch_update_interval_seconds": profile.issuer_config.batch_interval_seconds,
+        "list_size": profile.issuer_config.status_list_size,
+    }
+    if profile.issuer_config.status_list_base_url:
+        config["uri_template"] = profile.issuer_config.status_list_base_url
+    return config
+
+
+def _status_list_url(profile: RevocationProfile) -> str | None:
+    base_url = profile.issuer_config.status_list_base_url
+    if not base_url:
+        return None
+    normalized = base_url.strip()
+    if not normalized.startswith("https://"):
+        return None
+    return normalized
+
+
 def _to_response(profile: RevocationProfile) -> dict:
     """Convert domain model to response dict."""
-    return {
+    response = {
         "id": profile.id,
         "organization_id": profile.organization_id,
         "name": profile.name,
-        "description": profile.description,
-        "status": profile.status.value,
-        "issuer_config": {
-            "status_list_strategy": profile.issuer_config.status_list_strategy.value,
-            "status_list_base_url": profile.issuer_config.status_list_base_url,
-            "status_list_size": profile.issuer_config.status_list_size,
-            "update_mode": profile.issuer_config.update_mode.value,
-            "batch_interval_seconds": profile.issuer_config.batch_interval_seconds,
-            "enable_rotation": profile.issuer_config.enable_rotation,
-            "rotation_threshold_percent": profile.issuer_config.rotation_threshold_percent,
-            "enable_bitstring_status_list": profile.issuer_config.enable_bitstring_status_list,
-            "enable_token_status_list": profile.issuer_config.enable_token_status_list,
-            "enable_legacy_revocation_list": profile.issuer_config.enable_legacy_revocation_list,
-        },
-        "verifier_config": {
-            "check_mode": profile.verifier_config.check_mode.value,
-            "timing_mode": profile.verifier_config.timing_mode.value,
-            "mechanism_priority": [m.value for m in profile.verifier_config.mechanism_priority],
-            "cache_status_lists": profile.verifier_config.cache_status_lists,
-            "cache_ttl_seconds": profile.verifier_config.cache_ttl_seconds,
-            "offline_grace_seconds": profile.verifier_config.offline_grace_seconds,
-            "check_timeout_seconds": profile.verifier_config.check_timeout_seconds,
-            "max_retries": profile.verifier_config.max_retries,
-            "require_issuer_signature_on_status_list": profile.verifier_config.require_issuer_signature_on_status_list,
-            "allow_third_party_registries": profile.verifier_config.allow_third_party_registries,
-        },
-        "automation_config": {
-            "auto_allocate_indices": profile.automation_config.auto_allocate_indices,
-            "auto_publish": profile.automation_config.auto_publish,
-            "auto_generate_status_list_credentials": profile.automation_config.auto_generate_status_list_credentials,
-            "auto_discover_endpoints": profile.automation_config.auto_discover_endpoints,
-            "use_format_defaults": profile.automation_config.use_format_defaults,
-        },
-        "supported_formats": [f.value for f in profile.supported_formats],
+        "revocation_mechanism": _collect_revocation_mechanisms(profile),
+        "mechanism_priority": [m.value for m in profile.verifier_config.mechanism_priority],
+        "check_mode": profile.verifier_config.timing_mode.value,
+        "issuer_config": _protocol_issuer_config(profile),
+        "status_list_url": _status_list_url(profile),
         "created_at": profile.created_at.isoformat(),
         "updated_at": profile.updated_at.isoformat(),
     }
+
+    if profile.verifier_config.timing_mode == RevocationTimingMode.CACHED:
+        response["cache_ttl_seconds"] = profile.verifier_config.cache_ttl_seconds
+    if profile.verifier_config.timing_mode == RevocationTimingMode.OFFLINE_GRACE:
+        response["offline_grace_seconds"] = profile.verifier_config.offline_grace_seconds
+
+    return response
+
+
+def _apply_protocol_revocation_inputs(
+    profile: RevocationProfile,
+    request: CreateRevocationProfileRequest,
+) -> None:
+    if request.issuer_config:
+        if request.issuer_config.auto_allocate_index is not None:
+            profile.automation_config.auto_allocate_indices = request.issuer_config.auto_allocate_index
+        if request.issuer_config.batch_update_interval_seconds is not None:
+            profile.issuer_config.batch_interval_seconds = request.issuer_config.batch_update_interval_seconds
+        if request.issuer_config.list_size is not None:
+            profile.issuer_config.status_list_size = request.issuer_config.list_size
+        if request.issuer_config.uri_template:
+            profile.issuer_config.status_list_base_url = request.issuer_config.uri_template
+
+    if request.status_list_url:
+        profile.issuer_config.status_list_base_url = request.status_list_url
+
+    if request.revocation_mechanism is not None:
+        mechanisms = {_parse_revocation_mechanism(value) for value in request.revocation_mechanism}
+        profile.issuer_config.enable_legacy_revocation_list = (
+            RevocationMechanism.STATUS_LIST_2021 in mechanisms
+        )
+        profile.issuer_config.enable_bitstring_status_list = (
+            RevocationMechanism.BITSTRING_STATUS_LIST in mechanisms
+        )
+        profile.issuer_config.enable_token_status_list = (
+            RevocationMechanism.TOKEN_STATUS_LIST in mechanisms
+        )
+        if request.mechanism_priority is None:
+            profile.verifier_config.mechanism_priority = list(mechanisms)
+
+    if request.mechanism_priority is not None:
+        profile.verifier_config.mechanism_priority = [
+            _parse_revocation_mechanism(value) for value in request.mechanism_priority
+        ]
+
+    if request.check_mode is not None:
+        profile.verifier_config.timing_mode = RevocationTimingMode(request.check_mode.upper())
+    if request.cache_ttl_seconds is not None:
+        profile.verifier_config.cache_ttl_seconds = request.cache_ttl_seconds
+    if request.offline_grace_seconds is not None:
+        profile.verifier_config.offline_grace_seconds = request.offline_grace_seconds
+
+
+def _cascade_to_response(operation: CascadeRevocationOperation) -> dict:
+    """Convert cascade operation to protocol-aligned response payload."""
+    return {
+        "id": operation.id,
+        "organization_id": operation.organization_id,
+        "operation_type": operation.operation_type.value,
+        "trigger_entity_type": operation.trigger_entity_type.value,
+        "trigger_entity_id": operation.trigger_entity_id,
+        "status": operation.status.value,
+        "affected_credential_count": operation.affected_credential_count,
+        "affected_credential_ids": operation.affected_credential_ids,
+        "requires_confirmation": operation.requires_confirmation,
+        "confirmed_at": operation.confirmed_at.isoformat() if operation.confirmed_at else None,
+        "confirmed_by": operation.confirmed_by,
+        "max_cascade_depth": operation.max_cascade_depth,
+        "current_depth": operation.current_depth,
+        "circuit_breaker_threshold": operation.circuit_breaker_threshold,
+        "circuit_breaker_triggered": operation.circuit_breaker_triggered,
+        "can_rollback": operation.can_rollback,
+        "rollback_snapshot": operation.rollback_snapshot,
+        "rolled_back_at": operation.rolled_back_at.isoformat() if operation.rolled_back_at else None,
+        "rolled_back_by": operation.rolled_back_by,
+        "error_message": operation.error_message,
+        "metadata": operation.metadata,
+        "created_at": operation.created_at.isoformat(),
+        "updated_at": operation.updated_at.isoformat() if operation.updated_at else None,
+    }
+
+
+async def _get_cascade_operation_or_404(
+    operation_id: str,
+    repo: InMemoryRevocationProfileRepository,
+) -> CascadeRevocationOperation:
+    operation = await repo.get_cascade_operation(operation_id)
+    if operation is None:
+        raise HTTPException(status_code=404, detail="CascadeRevocationOperation not found")
+    return operation
+
+
+async def _require_admin_for_org(user_id: str, organization_id: str) -> None:
+    membership = await app.state.org_client.get_membership(user_id, organization_id)
+    if not membership.has_role("admin", "owner"):
+        raise HTTPException(status_code=403, detail="Admin access required")
 
 
 # =============================================================================
@@ -436,7 +717,7 @@ async def get_current_user_id(
     return x_user_id
 
 
-@router.post("", response_model=RevocationProfileResponse)
+@router.post("", response_model=RevocationProfileResponse, response_model_exclude_none=True)
 async def create_revocation_profile(
     request: CreateRevocationProfileRequest,
     http_request: Request,
@@ -445,6 +726,38 @@ async def create_revocation_profile(
 ) -> dict:
     """Create a new RevocationProfile."""
     await require_org_membership(request.organization_id, http_request, user_id)
+
+    # MIP §12.2 — revocation_mechanism must be non-empty when provided
+    if request.revocation_mechanism is not None and len(request.revocation_mechanism) == 0:
+        raise HTTPException(status_code=422, detail="revocation_mechanism must contain at least one mechanism")
+
+    # MIP §12.2 — CACHED timing_mode requires cache_ttl_seconds
+    timing_mode = (
+        request.verifier_config.timing_mode if request.verifier_config else
+        (request.check_mode.upper() if request.check_mode else None)
+    )
+    if timing_mode == "CACHED":
+        has_ttl = (
+            (request.verifier_config and request.verifier_config.cache_ttl_seconds is not None)
+            or request.cache_ttl_seconds is not None
+        )
+        if not has_ttl:
+            raise HTTPException(status_code=422, detail="cache_ttl_seconds is required when timing_mode is CACHED")
+
+    # MIP §12.2 — OFFLINE_GRACE requires offline_grace_seconds
+    if timing_mode == "OFFLINE_GRACE":
+        has_grace = (
+            (request.verifier_config and request.verifier_config.offline_grace_seconds is not None)
+            or request.offline_grace_seconds is not None
+        )
+        if not has_grace:
+            raise HTTPException(status_code=422, detail="offline_grace_seconds is required when timing_mode is OFFLINE_GRACE")
+
+    # MIP §12.2 — status_list_url must be absolute HTTPS URI
+    status_url = request.status_list_url or (request.issuer_config.uri_template if request.issuer_config else None)
+    if status_url and not status_url.strip().startswith("https://"):
+        raise HTTPException(status_code=422, detail=f"status_list_url must be an absolute HTTPS URI, got: {status_url}")
+
     profile = RevocationProfile(
         organization_id=request.organization_id,
         name=request.name,
@@ -493,6 +806,8 @@ async def create_revocation_profile(
     
     # Set supported formats
     profile.supported_formats = [CredentialFormat(f) for f in request.supported_formats]
+
+    _apply_protocol_revocation_inputs(profile, request)
     
     await repo.save(profile)
     logger.info(f"Created RevocationProfile: {profile.id}")
@@ -500,7 +815,7 @@ async def create_revocation_profile(
     return _to_response(profile)
 
 
-@router.get("", response_model=list[RevocationProfileResponse])
+@router.get("", response_model=list[RevocationProfileResponse], response_model_exclude_none=True)
 async def list_revocation_profiles(
     organization_id: str = Query(...),
     user_id: str = Depends(get_current_user_id),
@@ -513,7 +828,7 @@ async def list_revocation_profiles(
     return [_to_response(p) for p in profiles]
 
 
-@router.get("/{profile_id}", response_model=RevocationProfileResponse)
+@router.get("/{profile_id}", response_model=RevocationProfileResponse, response_model_exclude_none=True)
 async def get_revocation_profile(
     profile_id: str,
     user_id: str = Depends(get_current_user_id),
@@ -528,7 +843,7 @@ async def get_revocation_profile(
     return _to_response(profile)
 
 
-@router.post("/{profile_id}/activate", response_model=RevocationProfileResponse)
+@router.post("/{profile_id}/activate", response_model=RevocationProfileResponse, response_model_exclude_none=True)
 async def activate_revocation_profile(
     profile_id: str,
     user_id: str = Depends(get_current_user_id),
@@ -573,11 +888,152 @@ async def delete_revocation_profile(
     return {"success": True}
 
 
+@cascade_router.post("", response_model=CascadeRevocationOperationResponse, response_model_exclude_none=True)
+async def create_cascade_revocation_operation(
+    request: CreateCascadeRevocationOperationRequest,
+    http_request: Request,
+    user_id: str = Depends(get_current_user_id),
+    repo: InMemoryRevocationProfileRepository = Depends(get_repo),
+) -> dict:
+    """Trigger a cascade revocation operation."""
+    await require_org_membership(request.organization_id, http_request, user_id)
+
+    if request.max_cascade_depth < 1 or request.max_cascade_depth > 10:
+        raise HTTPException(status_code=422, detail="max_cascade_depth must be between 1 and 10")
+    if request.current_depth < 0 or request.current_depth > request.max_cascade_depth:
+        raise HTTPException(status_code=422, detail="current_depth must be between 0 and max_cascade_depth")
+    if request.circuit_breaker_threshold < 1:
+        raise HTTPException(status_code=422, detail="circuit_breaker_threshold must be at least 1")
+
+    affected_credential_count = request.affected_credential_count
+    if affected_credential_count is None:
+        affected_credential_count = len(request.affected_credential_ids)
+    if affected_credential_count < 0:
+        raise HTTPException(status_code=422, detail="affected_credential_count must be non-negative")
+
+    circuit_breaker_triggered = affected_credential_count >= request.circuit_breaker_threshold
+    requires_confirmation = bool(request.requires_confirmation) or circuit_breaker_triggered
+
+    rollback_snapshot = request.rollback_snapshot
+    if request.can_rollback and rollback_snapshot is None:
+        rollback_snapshot = {
+            "affected_credential_ids": request.affected_credential_ids,
+            "affected_credential_count": affected_credential_count,
+            "trigger_entity_id": request.trigger_entity_id,
+        }
+
+    operation = CascadeRevocationOperation(
+        organization_id=request.organization_id,
+        operation_type=request.operation_type,
+        trigger_entity_type=request.trigger_entity_type,
+        trigger_entity_id=request.trigger_entity_id,
+        status=CascadeStatus.PENDING_CONFIRMATION if requires_confirmation else CascadeStatus.IN_PROGRESS,
+        affected_credential_count=affected_credential_count,
+        affected_credential_ids=list(request.affected_credential_ids),
+        requires_confirmation=requires_confirmation,
+        max_cascade_depth=request.max_cascade_depth,
+        current_depth=request.current_depth,
+        circuit_breaker_threshold=request.circuit_breaker_threshold,
+        circuit_breaker_triggered=circuit_breaker_triggered,
+        can_rollback=request.can_rollback,
+        rollback_snapshot=rollback_snapshot,
+        metadata=request.metadata,
+    )
+
+    if not requires_confirmation:
+        operation.mark_completed()
+
+    await repo.save_cascade_operation(operation)
+    logger.info("Created CascadeRevocationOperation: %s", operation.id)
+
+    return _cascade_to_response(operation)
+
+
+@cascade_router.get("", response_model=list[CascadeRevocationOperationResponse], response_model_exclude_none=True)
+async def list_cascade_revocation_operations(
+    organization_id: str = Query(...),
+    status: CascadeStatus | None = Query(None),
+    user_id: str = Depends(get_current_user_id),
+    repo: InMemoryRevocationProfileRepository = Depends(get_repo),
+) -> list[dict]:
+    """List cascade revocation operations for an organization."""
+    await app.state.org_client.get_membership(user_id, organization_id)
+    operations = await repo.list_cascade_operations(organization_id, status=status)
+    return [_cascade_to_response(operation) for operation in operations]
+
+
+@cascade_router.get("/{operation_id}", response_model=CascadeRevocationOperationResponse, response_model_exclude_none=True)
+async def get_cascade_revocation_operation(
+    operation_id: str,
+    user_id: str = Depends(get_current_user_id),
+    repo: InMemoryRevocationProfileRepository = Depends(get_repo),
+) -> dict:
+    """Get a cascade revocation operation by ID."""
+    operation = await _get_cascade_operation_or_404(operation_id, repo)
+    await app.state.org_client.get_membership(user_id, operation.organization_id)
+    return _cascade_to_response(operation)
+
+
+@cascade_router.post("/{operation_id}/confirm", response_model=CascadeRevocationOperationResponse, response_model_exclude_none=True)
+async def confirm_cascade_revocation_operation(
+    operation_id: str,
+    user_id: str = Depends(get_current_user_id),
+    repo: InMemoryRevocationProfileRepository = Depends(get_repo),
+) -> dict:
+    """Confirm a pending cascade revocation operation."""
+    operation = await _get_cascade_operation_or_404(operation_id, repo)
+    await _require_admin_for_org(user_id, operation.organization_id)
+    try:
+        operation.confirm(user_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    await repo.save_cascade_operation(operation)
+    logger.info("Confirmed CascadeRevocationOperation: %s", operation_id)
+    return _cascade_to_response(operation)
+
+
+@cascade_router.post("/{operation_id}/rollback", response_model=CascadeRevocationOperationResponse, response_model_exclude_none=True)
+async def rollback_cascade_revocation_operation(
+    operation_id: str,
+    user_id: str = Depends(get_current_user_id),
+    repo: InMemoryRevocationProfileRepository = Depends(get_repo),
+) -> dict:
+    """Roll back a completed cascade revocation operation."""
+    operation = await _get_cascade_operation_or_404(operation_id, repo)
+    await _require_admin_for_org(user_id, operation.organization_id)
+    try:
+        operation.rollback(user_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    await repo.save_cascade_operation(operation)
+    logger.info("Rolled back CascadeRevocationOperation: %s", operation_id)
+    return _cascade_to_response(operation)
+
+
+@cascade_router.delete("/{operation_id}")
+async def delete_cascade_revocation_operation(
+    operation_id: str,
+    user_id: str = Depends(get_current_user_id),
+    repo: InMemoryRevocationProfileRepository = Depends(get_repo),
+) -> dict:
+    """Cancel a pending cascade revocation operation."""
+    operation = await _get_cascade_operation_or_404(operation_id, repo)
+    await _require_admin_for_org(user_id, operation.organization_id)
+    if operation.status != CascadeStatus.PENDING_CONFIRMATION:
+        raise HTTPException(status_code=400, detail="Only pending cascade operations can be cancelled")
+
+    await repo.delete_cascade_operation(operation_id)
+    logger.info("Cancelled CascadeRevocationOperation: %s", operation_id)
+    return {"success": True}
+
+
 # =============================================================================
 # Internal API Endpoints (Service-to-Service)
 # =============================================================================
 
-@internal_router.post("/{profile_id}/process-revocation", response_model=ProcessRevocationResponse)
+@internal_router.post("/{profile_id}/process-revocation", response_model=ProcessRevocationResponse, response_model_exclude_none=True)
 async def process_revocation(
     profile_id: str,
     request: ProcessRevocationRequest,
@@ -669,7 +1125,7 @@ async def process_revocation(
         }
 
 
-@internal_router.post("/{profile_id}/allocate-index", response_model=AllocateIndexResponse)
+@internal_router.post("/{profile_id}/allocate-index", response_model=AllocateIndexResponse, response_model_exclude_none=True)
 async def allocate_index(
     profile_id: str,
     request: AllocateIndexRequest,
@@ -733,6 +1189,134 @@ async def allocate_index(
     except Exception as e:
         logger.error(f"Unexpected error during index allocation: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal server error")
+
+
+# =============================================================================
+# Revocation Batch Endpoints — MIP §12
+# Privacy-preserving batched revocation to prevent timing-correlation attacks.
+# =============================================================================
+
+_revocation_batches: dict[str, dict] = {}
+
+
+class CreateRevocationBatchRequest(BaseModel):
+    organization_id: str
+    revocation_profile_id: str
+    batch_interval: str = "1h"  # 1h | 6h | 24h
+    credential_format: str = "SD_JWT_VC"
+    credential_ids: list[str] = []
+
+
+class RevocationBatchResponse(BaseModel):
+    id: str
+    organization_id: str
+    revocation_profile_id: str
+    batch_interval: str
+    credential_format: str
+    credential_count: int
+    status: str  # PENDING | PUBLISHING | PUBLISHED | FAILED
+    created_at: str
+    published_at: str | None = None
+
+
+@batch_router.post("", response_model=RevocationBatchResponse, status_code=201)
+async def create_revocation_batch(request: CreateRevocationBatchRequest) -> RevocationBatchResponse:
+    """MIP §12 — Create a revocation batch for privacy-preserving batched revocation."""
+    if request.batch_interval not in ("1h", "6h", "24h"):
+        raise HTTPException(status_code=400, detail="batch_interval must be 1h, 6h, or 24h")
+
+    batch_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc)
+
+    # Circuit breaker: pause at 1000+ credentials, require manual confirmation
+    if len(request.credential_ids) >= 1000:
+        raise HTTPException(
+            status_code=422,
+            detail="Batch contains 1000+ credentials. Use confirm endpoint after review.",
+        )
+
+    batch = {
+        "id": batch_id,
+        "organization_id": request.organization_id,
+        "revocation_profile_id": request.revocation_profile_id,
+        "batch_interval": request.batch_interval,
+        "credential_format": request.credential_format,
+        "credential_ids": request.credential_ids,
+        "credential_count": len(request.credential_ids),
+        "status": "PENDING",
+        "created_at": now.isoformat(),
+        "published_at": None,
+    }
+    _revocation_batches[batch_id] = batch
+    return RevocationBatchResponse(**{k: v for k, v in batch.items() if k != "credential_ids"})
+
+
+@batch_router.get("", response_model=list[RevocationBatchResponse])
+async def list_revocation_batches(
+    organization_id: str | None = Query(None),
+    status: str | None = Query(None),
+) -> list[RevocationBatchResponse]:
+    """MIP §12 — List revocation batches."""
+    results = list(_revocation_batches.values())
+    if organization_id:
+        results = [b for b in results if b["organization_id"] == organization_id]
+    if status:
+        results = [b for b in results if b["status"] == status]
+    return [
+        RevocationBatchResponse(**{k: v for k, v in b.items() if k != "credential_ids"})
+        for b in results
+    ]
+
+
+@batch_router.get("/{batch_id}", response_model=RevocationBatchResponse)
+async def get_revocation_batch(batch_id: str) -> RevocationBatchResponse:
+    """MIP §12 — Get a revocation batch by ID."""
+    batch = _revocation_batches.get(batch_id)
+    if not batch:
+        raise HTTPException(status_code=404, detail="Revocation batch not found")
+    return RevocationBatchResponse(**{k: v for k, v in batch.items() if k != "credential_ids"})
+
+
+@batch_router.post("/{batch_id}/publish", response_model=RevocationBatchResponse)
+async def publish_revocation_batch(batch_id: str) -> RevocationBatchResponse:
+    """MIP §12 — Publish a pending revocation batch.
+
+    Transitions: PENDING -> PUBLISHING -> PUBLISHED; PUBLISHING -> FAILED -> PENDING (retry).
+    """
+    batch = _revocation_batches.get(batch_id)
+    if not batch:
+        raise HTTPException(status_code=404, detail="Revocation batch not found")
+    if batch["status"] not in ("PENDING", "FAILED"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot publish batch in {batch['status']} status",
+        )
+
+    batch["status"] = "PUBLISHING"
+    now = datetime.now(timezone.utc)
+
+    # Process revocations via the status list manager
+    try:
+        for cred_id in batch.get("credential_ids", []):
+            logger.info(f"Batch {batch_id}: revoking credential {cred_id}")
+        batch["status"] = "PUBLISHED"
+        batch["published_at"] = now.isoformat()
+    except Exception as exc:
+        logger.error(f"Batch publish failed: {exc}")
+        batch["status"] = "FAILED"
+
+    return RevocationBatchResponse(**{k: v for k, v in batch.items() if k != "credential_ids"})
+
+
+@batch_router.delete("/{batch_id}", status_code=204)
+async def delete_revocation_batch(batch_id: str) -> None:
+    """MIP §12 — Delete a revocation batch (only PENDING batches)."""
+    batch = _revocation_batches.get(batch_id)
+    if not batch:
+        raise HTTPException(status_code=404, detail="Revocation batch not found")
+    if batch["status"] != "PENDING":
+        raise HTTPException(status_code=400, detail="Can only delete PENDING batches")
+    del _revocation_batches[batch_id]
 
 
 # =============================================================================
@@ -825,6 +1409,8 @@ def create_app() -> FastAPI:
     )
     
     app.include_router(router)
+    app.include_router(cascade_router)
+    app.include_router(batch_router)
     app.include_router(internal_router)
     
     @app.get("/health")

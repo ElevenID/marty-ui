@@ -24,7 +24,8 @@ import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 
 import { useWizard } from '../../../hooks/useWizard';
-import { createTrustProfile } from '../../../services/presentationPolicyApi';
+import { useAuth } from '../../../hooks/useAuth';
+import { addTrustProfileIssuer, createTrustProfile } from '../../../services/presentationPolicyApi';
 import BasicsStep from './steps/BasicsStep';
 import TrustSourcesStep from './steps/TrustSourcesStep';
 import ValidationRulesStep from './steps/ValidationRulesStep';
@@ -40,6 +41,7 @@ const getSteps = (t) => [
 const TrustProfileWizard = () => {
   const navigate = useNavigate();
   const { t } = useTranslation('console');
+  const { organizationId } = useAuth();
 
   const validateStep = useCallback((stepIndex, data) => {
     switch (stepIndex) {
@@ -50,22 +52,38 @@ const TrustProfileWizard = () => {
       case 2: // Validation Rules (optional)
         return true;
       case 3: // Review
-        return true;
+        return data.name?.trim().length > 0 && (data.trusted_issuers?.length || 0) > 0;
       default:
         return false;
     }
   }, []);
 
   const handleSubmit = useCallback(async (data) => {
-    // Set status based on activate_immediately flag
-    const payload = {
+    if (!organizationId) {
+      throw new Error(t('trust.failedToLoad', { defaultValue: 'Organization context is required to create a trust profile.' }));
+    }
+
+    const trustedIssuers = data.trusted_issuers || [];
+    if (trustedIssuers.length === 0) {
+      throw new Error(t('wizards.trustProfile.reviewStep.trustSourcesRequired', { defaultValue: 'Add at least one trusted issuer before creating this trust profile.' }));
+    }
+
+    const profile = await createTrustProfile({
       ...data,
+      organization_id: organizationId,
       status: data.activate_immediately ? 'active' : 'draft',
-    };
-    delete payload.activate_immediately;
-    
-    return await createTrustProfile(payload);
-  }, []);
+    });
+
+    await Promise.all(
+      trustedIssuers.map((issuer) => addTrustProfileIssuer(profile.id, {
+        name: issuer.name || issuer.did,
+        description: issuer.description || null,
+        issuer_did: issuer.did,
+      }))
+    );
+
+    return profile;
+  }, [organizationId, t]);
 
   const wizard = useWizard({
     steps: getSteps(t),

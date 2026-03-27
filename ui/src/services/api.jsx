@@ -80,7 +80,11 @@ async function parseErrorResponse(response) {
     if (data.error) {
       return {
         error: data.error,
-        request_id: data.request_id,
+        error_description: data.error_description,
+        field: data.field,
+        details: data.details || data.error?.details,
+        request_id: data.request_id || data.message_id,
+        message_id: data.message_id,
         timestamp: data.timestamp,
       };
     }
@@ -152,6 +156,8 @@ export async function fetchWithRetry(url, options = {}, retryConfig = {}) {
       const requestId = crypto.randomUUID?.() || 
         `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
       headers['X-Request-ID'] = requestId;
+      // MIP §23.1: All MIP messages MUST carry mip_version
+      headers['X-MIP-Version'] = '0.1';
       
       const response = await fetch(url, {
         ...options,
@@ -307,6 +313,7 @@ export async function reportClientError(errorReport) {
       headers: {
         'Content-Type': 'application/json',
         'Accept': 'application/json',
+        'X-MIP-Version': '0.1',
       },
       credentials: 'include',
       body: JSON.stringify(errorReport),

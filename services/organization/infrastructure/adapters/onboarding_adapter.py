@@ -40,7 +40,7 @@ class OnboardingStatusResponse(BaseModel):
 # =============================================================================
 
 
-@router.get("/status", response_model=OnboardingStatusResponse)
+@router.get("/status", response_model=OnboardingStatusResponse, response_model_exclude_none=True)
 async def get_onboarding_status(request: Request) -> OnboardingStatusResponse:
     """
     Check if the current user needs onboarding.

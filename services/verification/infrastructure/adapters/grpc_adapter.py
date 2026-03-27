@@ -22,12 +22,14 @@ logger = logging.getLogger(__name__)
 
 
 def _session_to_pb(s: Any) -> vs_pb2.VerificationSession:
+    from verification.main import _protocol_status_for_session
+
     return vs_pb2.VerificationSession(
         session_id=s.session_id,
         organization_id=s.organization_id,
         presentation_policy_id=s.presentation_policy_id or "",
         response_type=s.response_type,
-        status=s.status.value,
+        status=_protocol_status_for_session(s),
         request_uri=s.request_uri(),
         qr_code_data=s.qr_code_data(),
         nonce=s.nonce,
@@ -133,8 +135,9 @@ class VerificationServiceGrpc(
                 session.inspection_performed = True
                 session.inspection_result = inspection_result
 
-        session.status = SessionStatus.COMPLETED
+        session.status = SessionStatus.COMPLETED if session.result == "passed" else SessionStatus.FAILED
         session.completed_at = datetime.now(timezone.utc)
+        session.updated_at = session.completed_at
         store.save(session)
 
         return vs_pb2.VerificationResult(

@@ -18,6 +18,7 @@ describe('credentialCatalog helpers', () => {
       { value: 'travel', label: 'catalog.categories.travel' },
       { value: 'identity', label: 'catalog.categories.identity' },
       { value: 'enterprise', label: 'catalog.categories.enterprise' },
+      { value: 'education', label: 'catalog.categories.education' },
     ]);
   });
 

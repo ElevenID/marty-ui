@@ -39,6 +39,10 @@ from .infrastructure.adapters.rbac_http_adapter import (
     configure_rbac_router,
     router as rbac_router,
 )
+from .infrastructure.adapters.scim_http_adapter import (
+    configure_scim_router,
+    router as scim_router,
+)
 from .infrastructure.adapters.postgres_adapter import (
     PostgresApiKeyRepository,
     PostgresConsoleContextPreferenceRepository,
@@ -175,6 +179,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     configure_rbac_router(
         role_use_case=role_use_case,
     )
+    configure_scim_router(
+        organization_use_case=org_use_case,
+        member_use_case=member_use_case,
+        role_use_case=role_use_case,
+    )
     
     # Initialize Cedar engine and PolicySet use case
     from marty_common import CedarEngine
@@ -276,6 +285,7 @@ def create_app() -> FastAPI:
     app.include_router(onboarding_router)
     app.include_router(audit_router)
     app.include_router(rbac_router)
+    app.include_router(scim_router)
     app.include_router(policy_set_router)
     
     # Health check endpoint

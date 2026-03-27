@@ -106,7 +106,7 @@ Sitemap: https://elevenidllc.com/sitemap.xml
 
 ### 2. Configure Environment Variable
 
-Add to `.env.production` or `.env.tunnel`:
+Add to `ui/.env.production` for production builds, or to the repo root `.env` when testing through the local tunnel stack:
 ```bash
 VITE_GA_MEASUREMENT_ID=G-XXXXXXXXXX
 ```

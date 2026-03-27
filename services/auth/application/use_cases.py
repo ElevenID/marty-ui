@@ -249,12 +249,10 @@ class AuthenticateUseCase:
         await self.session_repository.delete(command.session_id)
         
         # Get SSO logout URL with redirect back to home
-        sso_logout_url = None
-        if session.id_token:
-            sso_logout_url = self.oidc_provider.get_logout_url(
-                session.id_token,
-                post_logout_redirect_uri=self.post_logout_redirect_uri
-            )
+        sso_logout_url = self.oidc_provider.get_logout_url(
+            session.id_token,
+            post_logout_redirect_uri=self.post_logout_redirect_uri
+        )
         
         # Publish events
         await self.event_publisher.publish(

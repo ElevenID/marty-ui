@@ -75,6 +75,8 @@ class VerificationSession:
         purpose: str = "",
     ) -> None:
         self.session_id = str(uuid.uuid4())
+        self.flow_id = str(uuid.uuid4())
+        self.flow_instance_id = self.session_id
         self.organization_id = organization_id
         self.presentation_policy_id = presentation_policy_id
         self.response_type = response_type
@@ -84,8 +86,10 @@ class VerificationSession:
         self.callback_url = callback_url
         self.purpose = purpose
         self.nonce = secrets.token_urlsafe(16)
+        self.holder_id: str | None = None
         self.status = SessionStatus.PENDING
         self.created_at = datetime.now(timezone.utc)
+        self.updated_at = self.created_at
         self.expires_at = self.created_at + timedelta(minutes=expiry_minutes)
         # Set on completion
         self.result: str | None = None
@@ -97,6 +101,7 @@ class VerificationSession:
         self.inspection_result: str = ""
         self.vp_token: str | None = None
         self.completed_at: datetime | None = None
+        self.error: str | None = None
 
     def is_expired(self) -> bool:
         return datetime.now(timezone.utc) > self.expires_at
@@ -123,6 +128,8 @@ class SessionStore:
         session = self._sessions.get(session_id)
         if session and session.is_expired() and session.status == SessionStatus.PENDING:
             session.status = SessionStatus.EXPIRED
+            session.error = "Session expired before presentation was submitted"
+            session.updated_at = datetime.now(timezone.utc)
         return session
 
     def list_by_org(self, org_id: str, status: str | None = None) -> list[VerificationSession]:
@@ -228,24 +235,123 @@ class EvaluateRequest(BaseModel):
     context: dict | None = None
 
 
+def _protocol_status_for_session(session: VerificationSession) -> str:
+    if session.status == SessionStatus.EXPIRED:
+        return "EXPIRED"
+    if session.status == SessionStatus.FAILED:
+        return "FAILED"
+    if session.status == SessionStatus.COMPLETED:
+        return "PASSED"
+    return "PENDING"
+
+
+def _collect_claims_missing(credential_results: list[dict[str, Any]]) -> list[str]:
+    missing: list[str] = []
+    for credential_result in credential_results:
+        for key in ("claims_missing", "missing_claims", "unsatisfied_claims"):
+            values = credential_result.get(key)
+            if isinstance(values, list):
+                missing.extend(str(value) for value in values)
+    return sorted(dict.fromkeys(missing))
+
+
+def _derive_revocation_checked(credential_results: list[dict[str, Any]]) -> bool | None:
+    for credential_result in credential_results:
+        for key in (
+            "revocation_checked",
+            "revocation_validated",
+            "revocation_status_checked",
+        ):
+            if key in credential_result:
+                return bool(credential_result[key])
+    return None
+
+
+def _protocol_result_for_session(session: VerificationSession) -> dict[str, Any] | None:
+    if not session.completed_at and not session.result:
+        return None
+
+    passed = session.result == "passed" and session.status != SessionStatus.FAILED
+    result: dict[str, Any] = {"passed": passed}
+
+    claims_satisfied = sorted(str(claim_name) for claim_name in session.verified_claims.keys())
+    if claims_satisfied:
+        result["claims_satisfied"] = claims_satisfied
+
+    claims_missing = _collect_claims_missing(session.credential_results)
+    if claims_missing:
+        result["claims_missing"] = claims_missing
+
+    if session.decision is not None:
+        result["trust_validated"] = session.decision == "allow"
+
+    revocation_checked = _derive_revocation_checked(session.credential_results)
+    if revocation_checked is not None:
+        result["revocation_checked"] = revocation_checked
+
+    failure_reason = session.decision_reason or session.error
+    if failure_reason and not passed:
+        result["failure_reason"] = failure_reason
+
+    return result
+
+
+def _session_to_protocol_dict(s: VerificationSession) -> dict:
+    """Protocol-compliant verification-session.json shape."""
+    protocol_status = _protocol_status_for_session(s)
+    d: dict[str, Any] = {
+        "id": s.session_id,
+        "flow_id": s.flow_id,
+        "flow_instance_id": s.flow_instance_id,
+        "presentation_policy_id": s.presentation_policy_id,
+        "deployment_profile_id": s.deployment_profile_id,
+        "verifier_nonce": s.nonce,
+        "holder_id": s.holder_id,
+        "status": protocol_status,
+        "result": _protocol_result_for_session(s),
+        "expires_at": s.expires_at.isoformat(),
+        "created_at": s.created_at.isoformat(),
+        "completed_at": s.completed_at.isoformat() if s.completed_at else None,
+        "updated_at": s.updated_at.isoformat() if s.updated_at else None,
+        "error": s.error,
+    }
+    return {k: v for k, v in d.items() if v is not None}
+
+
 def _session_to_dict(s: VerificationSession) -> dict:
+    """Full dict with legacy fields — used for callbacks and internal gRPC."""
+    protocol_status = _protocol_status_for_session(s)
     return {
+        "id": s.session_id,
+        "flow_id": s.flow_id,
+        "flow_instance_id": s.flow_instance_id,
+        "presentation_policy_id": s.presentation_policy_id,
+        "deployment_profile_id": s.deployment_profile_id,
+        "verifier_nonce": s.nonce,
+        "holder_id": s.holder_id,
+        "status": protocol_status,
+        "result": _protocol_result_for_session(s),
+        "expires_at": s.expires_at.isoformat(),
+        "created_at": s.created_at.isoformat(),
+        "completed_at": s.completed_at.isoformat() if s.completed_at else None,
+        "updated_at": s.updated_at.isoformat() if s.updated_at else None,
+        "error": s.error,
         "session_id": s.session_id,
         "organization_id": s.organization_id,
-        "presentation_policy_id": s.presentation_policy_id,
         "response_type": s.response_type,
-        "status": s.status.value,
         "request_uri": s.request_uri(),
         "qr_code_data": s.qr_code_data(),
         "nonce": s.nonce,
-        "expires_at": s.expires_at.isoformat(),
-        "created_at": s.created_at.isoformat(),
         "external_reference": s.external_reference,
         "purpose": s.purpose,
-        "result": s.result,
+        "result_code": s.result,
         "decision": s.decision,
         "decision_reason": s.decision_reason,
         "verified_claims": s.verified_claims,
+        "credential_results": s.credential_results,
+        "inspection_performed": s.inspection_performed,
+        "inspection_result": s.inspection_result,
+        "runtime_status": s.status.value,
     }
 
 
@@ -281,7 +387,11 @@ async def start_verification(
     )
     store.save(session)
     logger.info("Created verification session %s (org=%s)", session.session_id, body.organization_id)
-    return _session_to_dict(session)
+    resp = _session_to_protocol_dict(session)
+    # Include operational fields the wallet / UI needs to display QR and deep-link
+    resp["request_uri"] = session.request_uri()
+    resp["qr_code_data"] = session.qr_code_data()
+    return resp
 
 
 @router.get("/sessions", summary="List Verification Sessions")
@@ -295,7 +405,7 @@ async def list_sessions(
     """List verification sessions for an organization."""
     sessions = store.list_by_org(organization_id, status)
     page = sessions[offset: offset + limit]
-    return {"sessions": [_session_to_dict(s) for s in page], "total": len(sessions)}
+    return {"sessions": [_session_to_protocol_dict(s) for s in page], "total": len(sessions)}
 
 
 @router.get("/{session_id}/request", summary="OID4VP Request Object")
@@ -330,7 +440,7 @@ async def get_session(
     session = store.get(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-    return _session_to_dict(session)
+    return _session_to_protocol_dict(session)
 
 
 @router.post("/{session_id}/submit", summary="Submit VP Token")
@@ -350,9 +460,12 @@ async def submit_presentation(
         raise HTTPException(status_code=409, detail=f"Session is {session.status.value}")
     if session.is_expired():
         session.status = SessionStatus.EXPIRED
+        session.error = "Session expired before presentation was submitted"
+        session.updated_at = datetime.now(timezone.utc)
         raise HTTPException(status_code=410, detail="Session expired")
 
     session.vp_token = body.vp_token
+    session.updated_at = datetime.now(timezone.utc)
 
     try:
         eval_result = await _evaluate_via_grpc(
@@ -366,11 +479,13 @@ async def submit_presentation(
         session.decision_reason = eval_result.get("decision_reason", "")
         session.verified_claims = eval_result.get("verified_claims", {})
         session.credential_results = eval_result.get("credential_results", [])
+        session.error = None
     except Exception as exc:
         logger.error("Evaluation failed for session %s: %s", session_id, exc)
         session.result = "failed"
         session.decision = "deny"
         session.decision_reason = str(exc)
+        session.error = None
 
     # Optionally call InspectionSystem for deep document verification
     if INSPECTION_SYSTEM_TARGET and session.result != "failed":
@@ -379,8 +494,9 @@ async def submit_presentation(
             session.inspection_performed = True
             session.inspection_result = inspection_result
 
-    session.status = SessionStatus.COMPLETED
+    session.status = SessionStatus.COMPLETED if session.result == "passed" else SessionStatus.FAILED
     session.completed_at = datetime.now(timezone.utc)
+    session.updated_at = session.completed_at
     store.save(session)
 
     # Fire callback if configured
@@ -396,12 +512,7 @@ async def submit_presentation(
         "Verification session %s completed: result=%s decision=%s",
         session_id, session.result, session.decision,
     )
-    return {
-        **_session_to_dict(session),
-        "credential_results": session.credential_results,
-        "inspection_performed": session.inspection_performed,
-        "inspection_result": session.inspection_result,
-    }
+    return _session_to_protocol_dict(session)
 
 
 @router.post("/evaluate", summary="Stateless Evaluation")

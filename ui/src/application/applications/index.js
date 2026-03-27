@@ -32,6 +32,7 @@ export {
 
 export {
   buildCredentialApplicationNavigationState,
+  extractApplicationStatusInfo,
   extractExistingApplicationIds,
   filterCredentialCatalogItems,
   getCredentialCatalogCategories,

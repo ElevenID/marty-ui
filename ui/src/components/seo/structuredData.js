@@ -115,3 +115,31 @@ export const breadcrumbListSchema = (items) => ({
     item: item.url,
   })),
 });
+
+/**
+ * TechArticle schema for the protocol/specification page
+ */
+export const protocolSchema = () => ({
+  '@context': 'https://schema.org',
+  '@type': 'TechArticle',
+  name: 'Marty Identity Protocol (MIP)',
+  headline: 'An open standard for cryptographically verifiable digital identity management',
+  description: 'MIP defines the minimum automatable set of primitives required for issuing, holding, presenting, and verifying digital credentials under explicit rules of trust and disclosure.',
+  url: 'https://elevenidllc.com/protocol',
+  datePublished: '2026-03-11',
+  license: 'https://www.apache.org/licenses/LICENSE-2.0',
+  version: '0.1.0',
+  author: {
+    '@type': 'Organization',
+    name: 'The MIP Authors',
+  },
+  publisher: {
+    '@type': 'Organization',
+    name: 'ElevenID LLC',
+    url: 'https://elevenidllc.com',
+  },
+  about: {
+    '@type': 'Thing',
+    name: 'Digital Identity Management',
+  },
+});

@@ -11,7 +11,8 @@
 	public-ui \
 	obs-up obs-down \
 	wallet-up wallet-down \
-	proto-gen grpc-health
+	proto-gen grpc-health \
+	deploy-prod
 
 # Colors
 BLUE := \033[0;34m
@@ -295,4 +296,9 @@ wallet-down: ## Stop walt.id wallet stack
 	@echo "$(BLUE)Stopping walt.id wallet stack...$(NC)"
 	@$(WALTID_COMPOSE) stop $(WALTID_SERVICES)
 	@echo "$(GREEN)✓ Walt.id wallet stopped$(NC)"
+
+deploy-prod: ## Deploy with secrets from OCI Vault (no .env.production needed)
+	@echo "$(BLUE)Fetching production secrets from OCI Vault...$(NC)"
+	@bash -c 'source scripts/fetch-secrets.sh && $(BASE_COMPOSE) up -d'
+	@echo "$(GREEN)✓ Production deployment started with vault secrets$(NC)"
 

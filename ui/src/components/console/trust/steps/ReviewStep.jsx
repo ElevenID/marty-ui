@@ -44,6 +44,16 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
         {t('wizards.trustProfile.reviewStep.description')}
       </Typography>
 
+      {(data.trusted_issuers?.length || 0) === 0 && (
+        <Alert severity="warning" sx={{ mb: 2 }}>
+          <Typography variant="body2">
+            {t('wizards.trustProfile.reviewStep.trustSourcesRequired', {
+              defaultValue: 'Add at least one trusted issuer before creating this trust profile.',
+            })}
+          </Typography>
+        </Alert>
+      )}
+
       {/* Basic Information */}
       <ReviewSectionCard
         sx={{ mb: 2 }}

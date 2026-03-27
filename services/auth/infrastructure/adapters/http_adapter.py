@@ -95,7 +95,7 @@ _session_use_case: SessionUseCase | None = None
 _cookie_config: dict[str, Any] = {
     "key": "sessionId",
     "httponly": True,
-    "secure": False,  # Set to True in production
+    "secure": True,  # MIP §20 — MUST be True for production deployments
     "samesite": "lax",
     "max_age": 86400,
     "path": "/",
@@ -372,12 +372,14 @@ async def logout(
     response.delete_cookie(
         key=_cookie_config["key"],
         path=_cookie_config["path"],
+        secure=_cookie_config["secure"],
+        samesite=_cookie_config["samesite"],
     )
     
     return response
 
 
-@router.get("/me", response_model=AuthStatusResponse)
+@router.get("/me", response_model=AuthStatusResponse, response_model_exclude_none=True)
 async def get_current_user(
     user: AuthenticatedUser | None = Depends(get_current_session),
 ) -> AuthStatusResponse:
@@ -408,7 +410,7 @@ async def get_current_user(
     )
 
 
-@router.patch("/me", response_model=AuthStatusResponse)
+@router.patch("/me", response_model=AuthStatusResponse, response_model_exclude_none=True)
 async def update_current_user(
     body: UpdateUserMeRequest,
     session_id: Annotated[str | None, Cookie(alias="sessionId")] = None,

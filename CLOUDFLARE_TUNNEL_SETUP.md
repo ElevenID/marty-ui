@@ -45,27 +45,27 @@ cloudflared tunnel run --token eyJhIjoiYWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXoxMjM0N
 
 Still on the Cloudflare Tunnel configuration page:
 
-#### For UI Service:
+#### For the primary public UI entrypoint:
 
 1. Click **"Add a public hostname"**
 2. Configure:
    - **Subdomain:** `beta`
    - **Domain:** `elevenidllc.com`
    - **Service Type:** `HTTP`
-   - **URL:** `ui:80`
+    - **URL:** `nginx-proxy:80`
 3. Click **"Save hostname"**
 
-#### For API Service (Optional - for direct API access):
+#### For API Service (Optional - for direct backend access):
 
 1. Click **"Add a public hostname"** again
 2. Configure:
    - **Subdomain:** `api-beta` (or `beta-api`)
    - **Domain:** `elevenidllc.com`
    - **Service Type:** `HTTP`
-   - **URL:** `oid4vc-api:8000`
+    - **URL:** `gateway:8000`
 3. Click **"Save hostname"**
 
-> **Note:** The UI at `beta.elevenidllc.com` already proxies API requests to the backend, so the separate API hostname is optional.
+> **Note:** The primary public hostname already proxies UI, auth, and API traffic through `nginx-proxy`, so the separate API hostname is optional.
 
 ### 1.6 Skip Connector Installation
 
@@ -77,18 +77,18 @@ Still on the Cloudflare Tunnel configuration page:
 
 ## Step 2: Configure Environment Variables
 
-### 2.1 Create `.env.tunnel` File
+### 2.1 Configure `.env`
 
-In the Marty workspace root, create a file named `.env.tunnel`:
+In the `marty-ui` repository root, update `.env` with your tunnel settings:
 
 ```bash
-cd "/Volumes/Heart of Gold/Github/work/Marty"
-cp .env.tunnel.example .env.tunnel
+cd "/Volumes/Heart of Gold/Github/work/marty-ui"
+cp .env.example .env
 ```
 
-### 2.2 Edit `.env.tunnel`
+### 2.2 Edit `.env`
 
-Open `.env.tunnel` and add your tunnel token:
+Open `.env` and add your tunnel token:
 
 ```bash
 # Cloudflare Tunnel Configuration
@@ -117,7 +117,7 @@ COOKIE_SAMESITE=none
 
 ```bash
 # Add to .gitignore to prevent committing secrets
-echo ".env.tunnel" >> .gitignore
+echo ".env" >> .gitignore
 ```
 
 ---
@@ -127,24 +127,30 @@ echo ".env.tunnel" >> .gitignore
 ### 3.1 Using Make (Recommended)
 
 ```bash
-# Start dev environment with Cloudflare Tunnel
-make dev-tunnel
+# Start backend services with tunnel-aware settings
+make run-api-tunnel
+
+# Start Cloudflare tunnel sidecars
+make tunnel-start
+
+# Start the UI in tunnel mode
+make dev-ui-tunnel
 ```
 
 This will:
-- Start all dev profile services (UI, API, Keycloak, Postgres, Redis)
+- Start the backend stack with tunnel-aware environment overrides
 - Start the Cloudflare Tunnel connector
-- Use environment variables from `.env.tunnel`
+- Start the local tunnel proxy and UI dev server
+- Use environment variables from `.env`
 
 ### 3.2 Using Docker Compose Directly
 
 ```bash
 # Start with tunnel overlay
 docker compose \
-  -f docker-compose.yml \
-  -f docker-compose.tunnel.yml \
-  --env-file .env.tunnel \
-  --profile dev \
+    -f docker-compose.base.yml \
+    -f docker-compose.profile.dev.yml \
+    -f docker-compose.profile.tunnel.yml \
   up -d
 ```
 
@@ -162,7 +168,7 @@ docker compose \
 
 ```bash
 # View cloudflared logs
-docker compose logs cloudflared
+make tunnel-logs
 
 # Should see:
 # "Connection established"
@@ -191,7 +197,7 @@ docker compose logs cloudflared
 The tunnel exposes your local instance to the internet. Consider:
 
 - **Keycloak is accessible** - ensure strong admin password
-- **Demo accounts** - change default passwords in production
+- **Test accounts** - change default passwords in production
 - **Database** - not exposed (only via API)
 
 ### 5.2 Rate Limiting
@@ -217,27 +223,27 @@ Add access restrictions in Cloudflare Zero Trust:
 ### Tunnel shows "Down" or "Unhealthy"
 
 ```bash
-# Check cloudflared container
-docker compose ps cloudflared
+# Check tunnel-related containers
+make tunnel-status
 
 # View logs for errors
-docker compose logs cloudflared
+make tunnel-logs
 
 # Common fix: restart tunnel
-docker compose restart cloudflared
+make tunnel-restart
 ```
 
 ### "Connection refused" or 502 Bad Gateway
 
 ```bash
-# Check if UI service is running
-docker compose ps ui
+# Check if the tunnel proxy is running
+docker ps --filter name='tunnel-nginx-proxy|cloudflared-tunnel'
 
-# Check UI health
-curl http://localhost:9080
+# Check proxy health
+curl http://localhost:9080/health
 
 # Check network connectivity
-docker compose exec cloudflared ping ui
+docker exec -it cloudflared-tunnel sh
 ```
 
 ### Services can't reach each other
@@ -246,32 +252,21 @@ docker compose exec cloudflared ping ui
 # Verify all services are on marty-network
 docker network inspect marty-network
 
-# Ensure cloudflared and ui are both listed
+# Ensure cloudflared, tunnel-nginx-proxy, and gateway are listed
 ```
 
 ### Token Invalid
 
 - Double-check you copied the entire token (including ey... at start)
 - Regenerate token in Cloudflare dashboard if needed
-- Update `.env.tunnel` with new token
+- Update `.env` with the new token
 
 ---
 
 ## Stopping the Tunnel
 
-### Stop all services including tunnel:
-
 ```bash
-make down-tunnel
-```
-
-### Or manually:
-
-```bash
-docker compose \
-  -f docker-compose.yml \
-  -f docker-compose.tunnel.yml \
-  down
+make down
 ```
 
 ---
@@ -287,11 +282,10 @@ Docker: cloudflared container
     ↓
 Docker Network: marty-network
     ↓
-ui:80 (nginx) → oid4vc-api:8000 (FastAPI)
-                    ↓
-                keycloak:8080
-                    ↓
-                postgres:5432
+nginx-proxy:80
+    ├─ UI dev server on host (:3000 or :3002)
+    ├─ gateway:8000
+    └─ keycloak:8080
 ```
 
 ---

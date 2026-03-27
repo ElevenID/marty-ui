@@ -2,74 +2,82 @@
 
 ## Marty UI
 
-This directory contains the production Marty UI and associated services, deployed on Kubernetes with Kind.
+This repository now uses a microservice-oriented backend plus a Vite/React frontend. The retired `src/` monolith and its demo-specific Docker/K8s entrypoints have been removed.
 
-### Directory Structure
+### Directory structure
 
-```
+```text
 marty-ui/
-├── README.md                    # Comprehensive documentation
-├── build.sh                     # Script to build Docker images
-├── deploy-k8s.sh               # Script to deploy to Kind cluster
-├── cleanup.sh                   # Script to clean up resources
-│
-├── src/                         # Python backend services
-│   ├── requirements.txt         # Python dependencies
-│   ├── issuer_service.py        # Credential issuance service
-│   ├── verifier_service.py      # Credential verification service
-│   └── wallet_service.py        # Credential management service
-│
-├── ui/                          # React frontend application
-│   ├── package.json             # Node.js dependencies
-│   ├── nginx.conf               # Nginx configuration for production
-│   ├── public/                  # Static assets
-│   └── src/                     # React components
-│       ├── App.js               # Main application component
-│       ├── components/          # UI components
-│       │   ├── Navigation.js    # Navigation component
-│       │   ├── Home.js          # Home page
-│       │   ├── IssuerDemo.js    # Issuer demonstration
-│       │   ├── VerifierDemo.js  # Verifier demonstration
-│       │   └── WalletDemo.js    # Wallet demonstration
-│       └── index.js             # Application entry point
-│
-├── k8s/                         # Kubernetes manifests
-│   ├── kind-config.yaml         # Kind cluster configuration
-│   ├── namespace-and-config.yaml # Namespace and ConfigMap
-│   ├── postgres.yaml            # PostgreSQL database
-│   ├── issuer-service.yaml      # Issuer service deployment
-│   ├── verifier-service.yaml    # Verifier service deployment
-│   ├── wallet-service.yaml      # Wallet service deployment
-│   └── demo-ui.yaml             # UI application deployment
-│
-└── docker/                      # Docker configurations
-    ├── issuer.Dockerfile        # Issuer service container
-    ├── verifier.Dockerfile      # Verifier service container
-    ├── wallet.Dockerfile        # Wallet service container
-    └── ui.Dockerfile            # UI application container
+├── README.md
+├── QUICK_START.md
+├── DEVELOPMENT_SETUP.md
+├── Makefile
+├── cleanup.sh
+├── docker-compose.base.yml
+├── docker-compose.profile.dev.yml
+├── docker-compose.profile.obs.yml
+├── docker-compose.profile.tunnel.yml
+├── docker/
+│   ├── init-databases.sh
+│   ├── nginx-proxy.conf.template
+│   ├── nginx-proxy.conf
+│   └── ui.Dockerfile
+├── services/
+│   ├── Dockerfile
+│   ├── Dockerfile.migrations
+│   ├── auth/
+│   ├── organization/
+│   ├── trust_profile/
+│   ├── flow/
+│   ├── notification/
+│   ├── presentation_policy/
+│   ├── deployment_profile/
+│   ├── compliance_profile/
+│   ├── applicant/
+│   ├── gateway/
+│   ├── verification/
+│   ├── device_registration/
+│   └── ...
+├── packages/
+│   ├── marty_common/
+│   └── marty_proto/
+├── proto/
+├── ui/
+│   ├── package.json
+│   ├── tsconfig.json
+│   ├── public/
+│   └── src/
+├── config/
+├── scripts/
+├── tests/
+├── k8s/
+│   └── oracle/
+└── wheels/
 ```
 
-### Key Features
+### Key areas
 
-1. **Complete mDoc/mDL Ecosystem**: Includes issuer, verifier, wallet services and UI
-2. **Kubernetes Deployment**: Fully configured for Kind cluster deployment
-3. **Standards Compliant**: Implements ISO 18013-5 and OpenID4VP standards
-4. **Interactive Demo**: Web UI for testing all credential flows
-5. **Production Ready**: Includes health checks, ingress, and monitoring
+- `services/` - active Python microservices and migrations
+- `packages/marty_common/` - shared Python infrastructure used across services
+- `packages/marty_proto/` + `proto/` - gRPC definitions and generated stubs
+- `ui/` - Vite/React frontend
+- `docker-compose*.yml` - local stack orchestration
+- `scripts/` - local tooling, setup, tunnel, and support workflows
 
-### Quick Start
+### Local startup
 
-1. `./build.sh` - Build all Docker images
-2. `./deploy-k8s.sh` - Deploy to Kind cluster
-3. Open <http://localhost/> - Access demo UI
-4. `./cleanup.sh` - Clean up when done
+Use the Makefile targets instead of retired one-off build or Kind deployment scripts:
 
-### Technologies Used
+1. `make dev` - start infrastructure + backend microservices
+2. `make run-ui` - run the frontend locally if needed
+3. `make down` - stop the stack
 
-- **Backend**: Python, FastAPI, PostgreSQL
-- **Frontend**: React.js, Material-UI, Nginx
-- **Orchestration**: Kubernetes, Kind, Docker
-- **Standards**: ISO 18013-5, OpenID4VP, W3C VC
-- **Security**: CBOR, COSE, mso_mdoc format
+### Technologies used
 
-This demo provides a complete reference implementation for mDoc/mDL systems using modern cloud-native technologies and industry standards.
+- **Backend**: Python, FastAPI, gRPC, SQLAlchemy, PostgreSQL, Redis
+- **Frontend**: React, Vite, TypeScript, Material UI
+- **Local orchestration**: Docker Compose
+- **Identity/Auth**: Keycloak + OIDC
+- **Protocols**: OID4VCI, OID4VP, trust/revocation/profile services
+
+For command examples, see `QUICK_START.md`. For setup details, see `DEVELOPMENT_SETUP.md`.

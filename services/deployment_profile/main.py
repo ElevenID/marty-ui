@@ -27,7 +27,7 @@ from typing import Any, AsyncGenerator
 
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Annotated
 
 from marty_common import (
@@ -203,20 +203,29 @@ class DeploymentProfile:
     feature_flags: FeatureFlags = field(default_factory=FeatureFlags)
     branding: BrandingConfiguration = field(default_factory=BrandingConfiguration)
     
-    # Linked configurations (by ID)
+    # Linked protocol configurations (canonical)
+    trust_profile_id: str | None = None
+    presentation_policy_ids: list[str] = field(default_factory=list)
+    credential_template_ids: list[str] = field(default_factory=list)
+    default_policy_id: str | None = None
+
+    # Linked configurations (legacy aliases retained for compatibility)
     default_trust_profile_id: str | None = None
     default_compliance_profile_id: str | None = None
     default_presentation_policy_id: str | None = None
     
     # Deployment-specific fields
     site_id: str | None = None
-    network_mode: str = "online"
-    key_access_mode: str = "key_vault"
+    network_mode: str = "ONLINE"
+    key_access_mode: str = "KEY_VAULT"
+    environment_config: dict[str, Any] = field(default_factory=dict)
     ux_config: dict[str, Any] = field(default_factory=dict)
+    update_channel: str = "stable"
     update_policy: dict[str, Any] = field(default_factory=dict)
     offline_cache_ttl_hours: int = 24
     biometric_required: bool = False
     audit_all_events: bool = True
+    enabled_flow_ids: list[str] = field(default_factory=list)
     
     # API credentials (generated)
     api_key: str | None = None
@@ -276,14 +285,15 @@ class Lane:
     description: str | None = None
     location: str | None = None
     device_type: str = "kiosk"
+    default_policy_id: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
-    devices: list[dict[str, Any]] = field(default_factory=list)
+    device_ids: list[str] = field(default_factory=list)
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     @property
     def device_count(self) -> int:
-        return len(self.devices)
+        return len(self.device_ids)
 
 
 class InMemoryLaneRepository:
@@ -326,7 +336,7 @@ class ApiAuthConfigurationModel(BaseModel):
     api_key_header: str = "X-API-Key"
     oauth2_issuer: str | None = None
     oauth2_audience: str | None = None
-    oauth2_scopes: list[str] = []
+    oauth2_scopes: list[str] = Field(default_factory=list)
     jwt_issuer: str | None = None
     jwt_audience: str | None = None
 
@@ -337,7 +347,7 @@ class RateLimitConfigurationModel(BaseModel):
     requests_per_hour: int = 1000
     requests_per_day: int = 10000
     burst_size: int = 20
-    endpoint_limits: dict[str, int] = {}
+    endpoint_limits: dict[str, int] = Field(default_factory=dict)
 
 
 class FeatureFlagsModel(BaseModel):
@@ -349,7 +359,7 @@ class FeatureFlagsModel(BaseModel):
     enable_qr_code_generation: bool = True
     enable_push_notifications: bool = False
     enable_biometric_binding: bool = False
-    custom_flags: dict[str, bool] = {}
+    custom_flags: dict[str, bool] = Field(default_factory=dict)
 
 
 class BrandingConfigurationModel(BaseModel):
@@ -381,15 +391,22 @@ class CreateDeploymentProfileRequest(BaseModel):
     name: str
     description: str | None = None
     environment: str = "development"
+    trust_profile_id: str | None = None
+    presentation_policy_ids: list[str] = Field(default_factory=list)
+    credential_template_ids: list[str] = Field(default_factory=list)
+    default_policy_id: str | None = None
+    default_presentation_policy_id: str | None = None
     site_id: str | None = None
-    network_mode: str = "online"
-    key_access_mode: str = "key_vault"
-    ux_config: dict | None = None
+    network_mode: str = "ONLINE"
+    key_access_mode: str = "KEY_VAULT"
+    environment_config: dict[str, Any] | None = None
+    ux_config: dict[str, Any] | None = None
+    enabled_flow_ids: list[str] = Field(default_factory=list)
+    update_channel: str = "stable"
     update_policy: dict | None = None
     offline_cache_ttl_hours: int = 24
     biometric_required: bool = False
     audit_all_events: bool = True
-    default_presentation_policy_id: str | None = None
     callbacks: CallbackConfigurationModel | None = None
     api_auth: ApiAuthConfigurationModel | None = None
     rate_limits: RateLimitConfigurationModel | None = None
@@ -402,12 +419,21 @@ class CreateDeploymentProfileRequest(BaseModel):
 class UpdateDeploymentProfileRequest(BaseModel):
     name: str | None = None
     description: str | None = None
+    trust_profile_id: str | None = None
+    presentation_policy_ids: list[str] | None = None
+    credential_template_ids: list[str] | None = None
+    default_policy_id: str | None = None
+    default_presentation_policy_id: str | None = None
     network_mode: str | None = None
+    key_access_mode: str | None = None
     biometric_required: bool | None = None
     audit_all_events: bool | None = None
     offline_cache_ttl_hours: int | None = None
-    ux_config: dict | None = None
-    default_presentation_policy_id: str | None = None
+    environment_config: dict[str, Any] | None = None
+    ux_config: dict[str, Any] | None = None
+    enabled_flow_ids: list[str] | None = None
+    update_channel: str | None = None
+    update_policy: dict[str, Any] | None = None
     callbacks: CallbackConfigurationModel | None = None
     api_auth: ApiAuthConfigurationModel | None = None
     rate_limits: RateLimitConfigurationModel | None = None
@@ -422,25 +448,23 @@ class DeploymentProfileResponse(BaseModel):
     organization_id: str
     name: str
     description: str | None = None
-    status: str
-    environment: str
     site_id: str | None = None
-    network_mode: str = "online"
-    key_access_mode: str = "key_vault"
-    ux_config: dict = {}
-    update_policy: dict = {}
+    trust_profile_id: str | None = None
+    presentation_policy_ids: list[str] = Field(default_factory=list)
+    credential_template_ids: list[str] = Field(default_factory=list)
+    default_policy_id: str | None = None
+    default_presentation_policy_id: str | None = None
+    network_mode: str = "ONLINE"
+    key_access_mode: str = "KEY_VAULT"
+    environment_config: dict[str, Any] = Field(default_factory=dict)
+    ux_config: dict[str, Any] = Field(default_factory=dict)
+    enabled_flow_ids: list[str] = Field(default_factory=list)
+    update_channel: str = "stable"
+    update_policy: dict[str, Any] = Field(default_factory=dict)
     offline_cache_ttl_hours: int = 24
     biometric_required: bool = False
     audit_all_events: bool = True
-    default_presentation_policy_id: str | None = None
-    callbacks: dict = {}
-    api_auth: dict = {}
-    rate_limits: dict = {}
-    feature_flags: dict = {}
-    branding: dict = {}
-    default_trust_profile_id: str | None = None
-    default_compliance_profile_id: str | None = None
-    api_key_prefix: str | None = None
+    lanes: list[dict[str, Any]] = Field(default_factory=list)
     created_at: str
     updated_at: str
 
@@ -456,7 +480,8 @@ class CreateLaneRequest(BaseModel):
     description: str | None = None
     location: str | None = None
     device_type: str = "kiosk"
-    metadata: dict = {}
+    default_policy_id: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class UpdateLaneRequest(BaseModel):
@@ -464,25 +489,92 @@ class UpdateLaneRequest(BaseModel):
     description: str | None = None
     location: str | None = None
     device_type: str | None = None
-    metadata: dict | None = None
+    default_policy_id: str | None = None
+    metadata: dict[str, Any] | None = None
 
 
 class LaneResponse(BaseModel):
     id: str
-    deployment_profile_id: str
     name: str
-    description: str | None = None
-    location: str | None = None
-    device_type: str = "kiosk"
-    metadata: dict = {}
-    device_count: int = 0
-    created_at: str
-    updated_at: str
+    deployment_profile_id: str
+    default_policy_id: str | None = None
+    device_ids: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class AssignDeviceRequest(BaseModel):
     device_id: str
     device_name: str | None = None
+
+
+NETWORK_MODE_ALIASES = {
+    "online": "ONLINE",
+    "offline": "OFFLINE",
+    "hybrid": "HYBRID",
+}
+
+KEY_ACCESS_MODE_ALIASES = {
+    "key_vault": "KEY_VAULT",
+    "hsm": "HSM",
+    "device_keystore": "DEVICE_KEYSTORE",
+}
+
+
+def _normalize_network_mode(value: str) -> str:
+    return NETWORK_MODE_ALIASES.get(value.lower(), value.upper())
+
+
+def _normalize_key_access_mode(value: str) -> str:
+    return KEY_ACCESS_MODE_ALIASES.get(value.lower(), value.upper())
+
+
+def _resolve_default_policy_id(default_policy_id: str | None, legacy_default_policy_id: str | None) -> str | None:
+    return default_policy_id or legacy_default_policy_id
+
+
+def _normalize_presentation_policy_ids(
+    presentation_policy_ids: list[str] | None,
+    default_policy_id: str | None,
+) -> list[str]:
+    policy_ids = list(dict.fromkeys(presentation_policy_ids or []))
+    if not policy_ids and default_policy_id:
+        policy_ids = [default_policy_id]
+    return policy_ids
+
+
+def _build_environment_config(
+    environment_config: dict[str, Any] | None,
+    ux_config: dict[str, Any] | None,
+    offline_cache_ttl_hours: int | None,
+) -> dict[str, Any]:
+    merged: dict[str, Any] = {
+        "language": "en-US",
+        "signage_text": {},
+        "operator_mode": False,
+        "accessibility_mode": False,
+    }
+    if ux_config:
+        merged.update({k: v for k, v in ux_config.items() if v is not None})
+    if environment_config:
+        merged.update({k: v for k, v in environment_config.items() if v is not None})
+    if offline_cache_ttl_hours is not None and "offline_cache_ttl_seconds" not in merged:
+        merged["offline_cache_ttl_seconds"] = offline_cache_ttl_hours * 3600
+    return merged
+
+
+def _build_ux_config(environment_config: dict[str, Any]) -> dict[str, Any]:
+    allowed_keys = {"language", "signage_text", "operator_mode", "accessibility_mode", "theme"}
+    return {key: value for key, value in environment_config.items() if key in allowed_keys}
+
+
+def _sync_update_policy(
+    update_channel: str,
+    update_policy: dict[str, Any] | None,
+) -> dict[str, Any]:
+    policy = dict(update_policy or {})
+    policy.setdefault("auto_update", True)
+    policy["channel"] = update_channel
+    return policy
 
 
 # =============================================================================
@@ -505,7 +597,7 @@ def get_current_user_id(x_user_id: Annotated[str, Header()]) -> str:
     return x_user_id
 
 
-@router.post("", response_model=DeploymentProfileResponse)
+@router.post("", response_model=DeploymentProfileResponse, response_model_exclude_none=True)
 async def create_deployment_profile(
     request: CreateDeploymentProfileRequest,
     fastapi_request: Request,
@@ -519,22 +611,51 @@ async def create_deployment_profile(
     if not membership or not membership.is_active():
         raise HTTPException(status_code=403, detail="Not a member of this organization")
     
+    trust_profile_id = request.trust_profile_id or request.default_trust_profile_id
+    default_policy_id = _resolve_default_policy_id(
+        request.default_policy_id,
+        request.default_presentation_policy_id,
+    )
+    presentation_policy_ids = _normalize_presentation_policy_ids(
+        request.presentation_policy_ids,
+        default_policy_id,
+    )
+    if not trust_profile_id:
+        raise HTTPException(status_code=422, detail="trust_profile_id is required")
+    if not presentation_policy_ids:
+        raise HTTPException(status_code=422, detail="presentation_policy_ids must contain at least one policy")
+    if default_policy_id and default_policy_id not in presentation_policy_ids:
+        raise HTTPException(status_code=422, detail="default_policy_id must be included in presentation_policy_ids")
+
+    environment_config = _build_environment_config(
+        request.environment_config,
+        request.ux_config,
+        request.offline_cache_ttl_hours,
+    )
+
     profile = DeploymentProfile(
         organization_id=request.organization_id,
         name=request.name,
         description=request.description,
         environment=Environment(request.environment),
-        default_trust_profile_id=request.default_trust_profile_id,
+        trust_profile_id=trust_profile_id,
+        presentation_policy_ids=presentation_policy_ids,
+        credential_template_ids=request.credential_template_ids,
+        default_policy_id=default_policy_id,
+        default_trust_profile_id=trust_profile_id,
         default_compliance_profile_id=request.default_compliance_profile_id,
-        default_presentation_policy_id=request.default_presentation_policy_id,
+        default_presentation_policy_id=default_policy_id,
         site_id=request.site_id,
-        network_mode=request.network_mode,
-        key_access_mode=request.key_access_mode,
-        ux_config=request.ux_config or {},
-        update_policy=request.update_policy or {},
+        network_mode=_normalize_network_mode(request.network_mode),
+        key_access_mode=_normalize_key_access_mode(request.key_access_mode),
+        environment_config=environment_config,
+        ux_config=_build_ux_config(environment_config),
+        update_channel=request.update_channel,
+        update_policy=_sync_update_policy(request.update_channel, request.update_policy),
         offline_cache_ttl_hours=request.offline_cache_ttl_hours,
         biometric_required=request.biometric_required,
         audit_all_events=request.audit_all_events,
+        enabled_flow_ids=request.enabled_flow_ids,
     )
     
     # Set callbacks
@@ -604,10 +725,10 @@ async def create_deployment_profile(
     
     await repo.save(profile)
     logger.info(f"Created Deployment Profile: {profile.id}")
-    return _profile_to_response(profile)
+    return _profile_to_response(profile, [])
 
 
-@router.get("", response_model=list[DeploymentProfileResponse])
+@router.get("", response_model=list[DeploymentProfileResponse], response_model_exclude_none=True)
 async def list_deployment_profiles(
     organization_id: str = Query(..., description="Organization ID"),
     user_id: str = Depends(get_current_user_id),
@@ -617,10 +738,11 @@ async def list_deployment_profiles(
     # Verify org membership
     await app.state.org_client.get_membership(user_id, organization_id)
     profiles = await repo.list(organization_id)
-    return [_profile_to_response(p) for p in profiles]
+    lane_repo = get_lane_repo()
+    return [_profile_to_response(p, await lane_repo.list(p.id)) for p in profiles]
 
 
-@router.get("/{profile_id}", response_model=DeploymentProfileResponse)
+@router.get("/{profile_id}", response_model=DeploymentProfileResponse, response_model_exclude_none=True)
 async def get_deployment_profile(
     profile_id: str,
     user_id: str = Depends(get_current_user_id),
@@ -632,10 +754,11 @@ async def get_deployment_profile(
         raise HTTPException(status_code=404, detail="Deployment Profile not found")
     # Verify org membership
     await app.state.org_client.get_membership(user_id, profile.organization_id)
-    return _profile_to_response(profile)
+    lane_repo = get_lane_repo()
+    return _profile_to_response(profile, await lane_repo.list(profile.id))
 
 
-@router.patch("/{profile_id}", response_model=DeploymentProfileResponse)
+@router.patch("/{profile_id}", response_model=DeploymentProfileResponse, response_model_exclude_none=True)
 async def update_deployment_profile(
     profile_id: str,
     request: UpdateDeploymentProfileRequest,
@@ -656,29 +779,72 @@ async def update_deployment_profile(
         profile.name = request.name
     if request.description is not None:
         profile.description = request.description
+    if request.trust_profile_id is not None:
+        profile.trust_profile_id = request.trust_profile_id
+        profile.default_trust_profile_id = request.trust_profile_id
     if request.default_trust_profile_id is not None:
+        profile.trust_profile_id = request.default_trust_profile_id
         profile.default_trust_profile_id = request.default_trust_profile_id
     if request.default_compliance_profile_id is not None:
         profile.default_compliance_profile_id = request.default_compliance_profile_id
+    if request.presentation_policy_ids is not None:
+        profile.presentation_policy_ids = list(dict.fromkeys(request.presentation_policy_ids))
+    if request.credential_template_ids is not None:
+        profile.credential_template_ids = list(dict.fromkeys(request.credential_template_ids))
+    if request.default_policy_id is not None or request.default_presentation_policy_id is not None:
+        profile.default_policy_id = _resolve_default_policy_id(
+            request.default_policy_id,
+            request.default_presentation_policy_id,
+        )
+        profile.default_presentation_policy_id = profile.default_policy_id
     if request.network_mode is not None:
-        profile.network_mode = request.network_mode
+        profile.network_mode = _normalize_network_mode(request.network_mode)
+    if request.key_access_mode is not None:
+        profile.key_access_mode = _normalize_key_access_mode(request.key_access_mode)
     if request.biometric_required is not None:
         profile.biometric_required = request.biometric_required
     if request.audit_all_events is not None:
         profile.audit_all_events = request.audit_all_events
     if request.offline_cache_ttl_hours is not None:
         profile.offline_cache_ttl_hours = request.offline_cache_ttl_hours
+        profile.environment_config = _build_environment_config(
+            profile.environment_config,
+            profile.ux_config,
+            profile.offline_cache_ttl_hours,
+        )
+        profile.ux_config = _build_ux_config(profile.environment_config)
+    if request.environment_config is not None or request.ux_config is not None:
+        profile.environment_config = _build_environment_config(
+            request.environment_config if request.environment_config is not None else profile.environment_config,
+            request.ux_config if request.ux_config is not None else profile.ux_config,
+            request.offline_cache_ttl_hours if request.offline_cache_ttl_hours is not None else profile.offline_cache_ttl_hours,
+        )
+        profile.ux_config = _build_ux_config(profile.environment_config)
     if request.ux_config is not None:
-        profile.ux_config = request.ux_config
-    if request.default_presentation_policy_id is not None:
-        profile.default_presentation_policy_id = request.default_presentation_policy_id
+        profile.ux_config = _build_ux_config(profile.environment_config)
+    if request.enabled_flow_ids is not None:
+        profile.enabled_flow_ids = list(dict.fromkeys(request.enabled_flow_ids))
+    if request.update_channel is not None:
+        profile.update_channel = request.update_channel
+    if request.update_policy is not None:
+        profile.update_policy = _sync_update_policy(profile.update_channel, request.update_policy)
+    elif request.update_channel is not None:
+        profile.update_policy = _sync_update_policy(profile.update_channel, profile.update_policy)
+
+    if not profile.trust_profile_id:
+        raise HTTPException(status_code=422, detail="trust_profile_id is required")
+    if not profile.presentation_policy_ids:
+        raise HTTPException(status_code=422, detail="presentation_policy_ids must contain at least one policy")
+    if profile.default_policy_id and profile.default_policy_id not in profile.presentation_policy_ids:
+        raise HTTPException(status_code=422, detail="default_policy_id must be included in presentation_policy_ids")
     
     profile.updated_at = datetime.now(timezone.utc)
     await repo.save(profile)
-    return _profile_to_response(profile)
+    lane_repo = get_lane_repo()
+    return _profile_to_response(profile, await lane_repo.list(profile.id))
 
 
-@router.put("/{profile_id}", response_model=DeploymentProfileResponse)
+@router.put("/{profile_id}", response_model=DeploymentProfileResponse, response_model_exclude_none=True)
 async def update_deployment_profile_put(
     profile_id: str,
     request: UpdateDeploymentProfileRequest,
@@ -689,7 +855,7 @@ async def update_deployment_profile_put(
     return await update_deployment_profile(profile_id, request, user_id, repo)
 
 
-@router.post("/{profile_id}/activate", response_model=DeploymentProfileResponse)
+@router.post("/{profile_id}/activate", response_model=DeploymentProfileResponse, response_model_exclude_none=True)
 async def activate_deployment_profile(
     profile_id: str,
     user_id: str = Depends(get_current_user_id),
@@ -706,10 +872,11 @@ async def activate_deployment_profile(
         raise HTTPException(status_code=403, detail="Admin access required")
     profile.activate()
     await repo.save(profile)
-    return _profile_to_response(profile)
+    lane_repo = get_lane_repo()
+    return _profile_to_response(profile, await lane_repo.list(profile.id))
 
 
-@router.post("/{profile_id}/suspend", response_model=DeploymentProfileResponse)
+@router.post("/{profile_id}/suspend", response_model=DeploymentProfileResponse, response_model_exclude_none=True)
 async def suspend_deployment_profile(
     profile_id: str,
     user_id: str = Depends(get_current_user_id),
@@ -726,10 +893,11 @@ async def suspend_deployment_profile(
         raise HTTPException(status_code=403, detail="Admin access required")
     profile.suspend()
     await repo.save(profile)
-    return _profile_to_response(profile)
+    lane_repo = get_lane_repo()
+    return _profile_to_response(profile, await lane_repo.list(profile.id))
 
 
-@router.post("/{profile_id}/generate-api-key", response_model=ApiKeyResponse)
+@router.post("/{profile_id}/generate-api-key", response_model=ApiKeyResponse, response_model_exclude_none=True)
 async def generate_api_key(
     profile_id: str,
     user_id: str = Depends(get_current_user_id),
@@ -780,60 +948,29 @@ async def delete_deployment_profile(
     return {"success": True}
 
 
-def _profile_to_response(profile: DeploymentProfile) -> DeploymentProfileResponse:
+def _profile_to_response(profile: DeploymentProfile, lanes: list[Lane] | None = None) -> DeploymentProfileResponse:
     return DeploymentProfileResponse(
         id=profile.id,
         organization_id=profile.organization_id,
         name=profile.name,
         description=profile.description,
-        status=profile.status.value,
-        environment=profile.environment.value,
         site_id=profile.site_id,
+        trust_profile_id=profile.trust_profile_id,
+        presentation_policy_ids=profile.presentation_policy_ids,
+        credential_template_ids=profile.credential_template_ids,
+        default_policy_id=profile.default_policy_id,
+        default_presentation_policy_id=profile.default_policy_id,
         network_mode=profile.network_mode,
         key_access_mode=profile.key_access_mode,
+        environment_config=profile.environment_config,
         ux_config=profile.ux_config,
+        enabled_flow_ids=profile.enabled_flow_ids,
+        update_channel=profile.update_channel,
         update_policy=profile.update_policy,
         offline_cache_ttl_hours=profile.offline_cache_ttl_hours,
         biometric_required=profile.biometric_required,
         audit_all_events=profile.audit_all_events,
-        default_presentation_policy_id=profile.default_presentation_policy_id,
-        callbacks={
-            "issuance_complete_url": profile.callbacks.issuance_complete_url,
-            "issuance_failed_url": profile.callbacks.issuance_failed_url,
-            "verification_complete_url": profile.callbacks.verification_complete_url,
-            "verification_failed_url": profile.callbacks.verification_failed_url,
-            "max_retries": profile.callbacks.max_retries,
-        },
-        api_auth={
-            "auth_method": profile.api_auth.auth_method.value,
-            "api_key_header": profile.api_auth.api_key_header,
-        },
-        rate_limits={
-            "enabled": profile.rate_limits.enabled,
-            "requests_per_minute": profile.rate_limits.requests_per_minute,
-            "requests_per_hour": profile.rate_limits.requests_per_hour,
-            "requests_per_day": profile.rate_limits.requests_per_day,
-            "burst_size": profile.rate_limits.burst_size,
-        },
-        feature_flags={
-            "enable_selective_disclosure": profile.feature_flags.enable_selective_disclosure,
-            "enable_derived_attributes": profile.feature_flags.enable_derived_attributes,
-            "enable_batch_issuance": profile.feature_flags.enable_batch_issuance,
-            "enable_deferred_issuance": profile.feature_flags.enable_deferred_issuance,
-            "enable_credential_refresh": profile.feature_flags.enable_credential_refresh,
-            "enable_qr_code_generation": profile.feature_flags.enable_qr_code_generation,
-            "custom_flags": profile.feature_flags.custom_flags,
-        },
-        branding={
-            "organization_name": profile.branding.organization_name,
-            "logo_url": profile.branding.logo_url,
-            "primary_color": profile.branding.primary_color,
-            "secondary_color": profile.branding.secondary_color,
-            "custom_domain": profile.branding.custom_domain,
-        },
-        default_trust_profile_id=profile.default_trust_profile_id,
-        default_compliance_profile_id=profile.default_compliance_profile_id,
-        api_key_prefix=profile.api_key_prefix if profile.api_key else None,
+        lanes=[_lane_to_response(lane).model_dump() for lane in (lanes or [])],
         created_at=profile.created_at.isoformat(),
         updated_at=profile.updated_at.isoformat(),
     )
@@ -842,15 +979,11 @@ def _profile_to_response(profile: DeploymentProfile) -> DeploymentProfileRespons
 def _lane_to_response(lane: Lane) -> LaneResponse:
     return LaneResponse(
         id=lane.id,
-        deployment_profile_id=lane.deployment_profile_id,
         name=lane.name,
-        description=lane.description,
-        location=lane.location,
-        device_type=lane.device_type,
+        deployment_profile_id=lane.deployment_profile_id,
+        default_policy_id=lane.default_policy_id,
+        device_ids=lane.device_ids,
         metadata=lane.metadata,
-        device_count=lane.device_count,
-        created_at=lane.created_at.isoformat(),
-        updated_at=lane.updated_at.isoformat(),
     )
 
 
@@ -867,7 +1000,7 @@ def get_lane_repo() -> InMemoryLaneRepository:
     return _lane_repo
 
 
-@router.post("/{profile_id}/lanes", response_model=LaneResponse)
+@router.post("/{profile_id}/lanes", response_model=LaneResponse, response_model_exclude_none=True)
 async def create_lane(
     profile_id: str,
     request: CreateLaneRequest,
@@ -886,13 +1019,14 @@ async def create_lane(
         description=request.description,
         location=request.location,
         device_type=request.device_type,
+        default_policy_id=request.default_policy_id,
         metadata=request.metadata,
     )
     await lane_repo.save(lane)
     return _lane_to_response(lane)
 
 
-@router.get("/{profile_id}/lanes", response_model=list[LaneResponse])
+@router.get("/{profile_id}/lanes", response_model=list[LaneResponse], response_model_exclude_none=True)
 async def list_lanes(
     profile_id: str,
     user_id: str = Depends(get_current_user_id),
@@ -908,7 +1042,7 @@ async def list_lanes(
     return [_lane_to_response(l) for l in lanes]
 
 
-@router.get("/{profile_id}/lanes/{lane_id}", response_model=LaneResponse)
+@router.get("/{profile_id}/lanes/{lane_id}", response_model=LaneResponse, response_model_exclude_none=True)
 async def get_lane(
     profile_id: str,
     lane_id: str,
@@ -927,7 +1061,7 @@ async def get_lane(
     return _lane_to_response(lane)
 
 
-@router.put("/{profile_id}/lanes/{lane_id}", response_model=LaneResponse)
+@router.put("/{profile_id}/lanes/{lane_id}", response_model=LaneResponse, response_model_exclude_none=True)
 async def update_lane(
     profile_id: str,
     lane_id: str,
@@ -954,6 +1088,8 @@ async def update_lane(
         lane.location = request.location
     if request.device_type is not None:
         lane.device_type = request.device_type
+    if request.default_policy_id is not None:
+        lane.default_policy_id = request.default_policy_id
     if request.metadata is not None:
         lane.metadata = request.metadata
     lane.updated_at = datetime.now(timezone.utc)
@@ -1000,11 +1136,16 @@ async def assign_device_to_lane(
     lane = await lane_repo.get(lane_id)
     if not lane or lane.deployment_profile_id != profile_id:
         raise HTTPException(status_code=404, detail="Lane not found")
-    lane.devices.append({
-        "device_id": request.device_id,
-        "device_name": request.device_name,
-        "assigned_at": datetime.now(timezone.utc).isoformat(),
-    })
+    # MIP §8 — device_ids MUST be unique across ALL lanes in the profile
+    all_lanes = await lane_repo.list(profile_id)
+    for other_lane in all_lanes:
+        if other_lane.id != lane_id and request.device_id in other_lane.device_ids:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Device {request.device_id} is already assigned to lane {other_lane.id}",
+            )
+    if request.device_id not in lane.device_ids:
+        lane.device_ids.append(request.device_id)
     lane.updated_at = datetime.now(timezone.utc)
     await lane_repo.save(lane)
     return _lane_to_response(lane).model_dump()

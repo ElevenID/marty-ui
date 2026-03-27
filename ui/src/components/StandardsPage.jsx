@@ -14,6 +14,7 @@ import VerifiedUserIcon from '@mui/icons-material/VerifiedUser';
 import TrendingUpIcon from '@mui/icons-material/TrendingUp';
 import IntegrationInstructionsIcon from '@mui/icons-material/IntegrationInstructions';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
+import GitHubIcon from '@mui/icons-material/GitHub';
 import { useNavigate } from 'react-router-dom';
 
 const ICON_MAP = {
@@ -186,15 +187,31 @@ function StandardsPage() {
           Standards define the rules; ElevenID LLC enforces them through centrally governed policies 
           executed consistently across APIs, wallets, and devices.
         </Typography>
-        <Button
-          variant="outlined"
-          size="large"
-          onClick={() => navigate('/identity')}
-          endIcon={<ArrowForwardIcon />}
-          sx={{ color: 'white', borderColor: 'white', '&:hover': { borderColor: 'white', bgcolor: 'rgba(255,255,255,0.1)' } }}
-        >
-          See How Standards Are Governed
-        </Button>
+        <Typography variant="body2" sx={{ maxWidth: 700, mx: 'auto', mb: 3, opacity: 0.85 }}>
+          These standards are now unified in the <strong>Marty Identity Protocol (MIP)</strong>—an open, 
+          vendor-neutral specification that formalizes how trust, credentials, policies, and deployment 
+          work together.
+        </Typography>
+        <Box sx={{ display: 'flex', gap: 2, justifyContent: 'center', flexWrap: 'wrap' }}>
+          <Button
+            variant="outlined"
+            size="large"
+            onClick={() => navigate('/protocol')}
+            endIcon={<ArrowForwardIcon />}
+            sx={{ color: 'white', borderColor: 'white', '&:hover': { borderColor: 'white', bgcolor: 'rgba(255,255,255,0.1)' } }}
+          >
+            Explore the Protocol
+          </Button>
+          <Button
+            variant="outlined"
+            size="large"
+            onClick={() => navigate('/identity')}
+            endIcon={<ArrowForwardIcon />}
+            sx={{ color: 'white', borderColor: 'rgba(255,255,255,0.5)', '&:hover': { borderColor: 'white', bgcolor: 'rgba(255,255,255,0.1)' } }}
+          >
+            See How Standards Are Governed
+          </Button>
+        </Box>
       </Box>
     </Box>
   );

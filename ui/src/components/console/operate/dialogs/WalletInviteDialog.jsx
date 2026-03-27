@@ -175,38 +175,42 @@ export default function WalletInviteDialog({
                   Share the credential offer link directly via a supported wallet.
                 </Typography>
                 <Stack spacing={1}>
-                  {wallets.map((wallet) => (
-                    <Button
-                      key={wallet.id}
-                      variant="outlined"
-                      fullWidth
-                      startIcon={
-                        wallet.logo_url ? (
-                          <Box
-                            component="img"
-                            src={wallet.logo_url}
-                            alt={wallet.name}
-                            sx={{ width: 20, height: 20, objectFit: 'contain' }}
-                          />
-                        ) : (
-                          <WalletIcon />
-                        )
-                      }
-                      endIcon={<OpenInNewIcon fontSize="small" />}
-                      href={wallet.deep_link_url}
-                      target="_blank"
-                      rel="noreferrer"
-                      disabled={isExpired}
-                      sx={{ justifyContent: 'flex-start' }}
-                    >
-                      Open in {wallet.name}
-                      {wallet.platforms?.length > 0 && (
-                        <Typography variant="caption" color="text.secondary" sx={{ ml: 'auto' }}>
-                          {wallet.platforms.join(' · ')}
-                        </Typography>
-                      )}
-                    </Button>
-                  ))}
+                  {wallets.map((wallet) => {
+                    const supportedPlatforms = wallet.supported_platforms || wallet.platforms || [];
+
+                    return (
+                      <Button
+                        key={wallet.id}
+                        variant="outlined"
+                        fullWidth
+                        startIcon={
+                          wallet.logo_url ? (
+                            <Box
+                              component="img"
+                              src={wallet.logo_url}
+                              alt={wallet.name}
+                              sx={{ width: 20, height: 20, objectFit: 'contain' }}
+                            />
+                          ) : (
+                            <WalletIcon />
+                          )
+                        }
+                        endIcon={<OpenInNewIcon fontSize="small" />}
+                        href={wallet.deep_link_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        disabled={isExpired}
+                        sx={{ justifyContent: 'flex-start' }}
+                      >
+                        Open in {wallet.name}
+                        {supportedPlatforms.length > 0 && (
+                          <Typography variant="caption" color="text.secondary" sx={{ ml: 'auto' }}>
+                            {supportedPlatforms.join(' · ')}
+                          </Typography>
+                        )}
+                      </Button>
+                    );
+                  })}
                 </Stack>
                 <Divider sx={{ mt: 2, mb: 1 }} />
                 <Button

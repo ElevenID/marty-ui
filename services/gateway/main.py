@@ -26,10 +26,16 @@ import logging
 import os
 import time
 from contextlib import asynccontextmanager
-from typing import Any, AsyncGenerator, List
+from typing import Any, AsyncGenerator, List, Literal
+
+import hashlib
+import hmac
+import uuid as _uuid
+from collections import defaultdict
 
 import httpx
 from fastapi import APIRouter, Depends, FastAPI, Form, HTTPException, Query, Request, Response
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
@@ -74,6 +80,7 @@ class ServiceRegistry:
             "flows": os.environ.get("FLOW_SERVICE_URL", "http://localhost:8011"),
             "verification": os.environ.get("VERIFICATION_SERVICE_URL", "http://verification:8012"),
             "revocation-profiles": os.environ.get("REVOCATION_PROFILE_SERVICE_URL", "http://localhost:8013"),
+            "device-registration": os.environ.get("DEVICE_REGISTRATION_SERVICE_URL", "http://localhost:8014"),
         }
     
     def get_service_url(self, service_name: str) -> str | None:
@@ -153,9 +160,10 @@ class AuthMiddleware(BaseHTTPMiddleware):
         session_id = request.cookies.get("sessionId")
         if not session_id:
             logger.warning(f"No session cookie for authenticated route: {request.url.path}")
-            return JSONResponse(
+            return mip_error_response(
                 status_code=401,
-                content={"detail": "Authentication required"},
+                error="unauthorized",
+                message="Authentication required",
             )
         
         # Check cache first
@@ -168,9 +176,10 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 user_data = await self._validate_session(stub, session_id)
 
                 if user_data is None:
-                    return JSONResponse(
+                    return mip_error_response(
                         status_code=401,
-                        content={"detail": "Invalid session"},
+                        error="unauthorized",
+                        message="Invalid session",
                     )
 
                 # Cache the result
@@ -178,9 +187,10 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
             except Exception as e:
                 logger.error(f"Error validating session: {e}")
-                return JSONResponse(
+                return mip_error_response(
                     status_code=502,
-                    content={"detail": "Auth service error"},
+                    error="auth_service_error",
+                    message="Auth service unavailable",
                 )
         
         # Inject user context headers
@@ -189,9 +199,10 @@ class AuthMiddleware(BaseHTTPMiddleware):
         
         if not user_id:
             logger.error("No user_id in session data")
-            return JSONResponse(
+            return mip_error_response(
                 status_code=401,
-                content={"detail": "Invalid session data"},
+                error="unauthorized",
+                message="Invalid session data",
             )
         
         # Add headers to request for downstream services
@@ -234,6 +245,187 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
 
 # =============================================================================
+# MIP Version Middleware
+# =============================================================================
+
+MIP_VERSION = "0.1"
+MIP_SUPPORTED_VERSIONS = ["0.1"]
+
+
+class MIPVersionMiddleware(BaseHTTPMiddleware):
+    """Inject X-MIP-Version on responses and check mip_version on requests."""
+
+    async def dispatch(self, request: Request, call_next):
+        # Version negotiation: reject unsupported versions if client advertises one
+        client_version = request.headers.get("x-mip-version")
+        if client_version and client_version not in MIP_SUPPORTED_VERSIONS:
+            return mip_error_response(
+                status_code=400,
+                error="UNSUPPORTED_VERSION",
+                message=(
+                    f"MIP version {client_version!r} is not supported. "
+                    f"Supported: {MIP_SUPPORTED_VERSIONS}"
+                ),
+                extra={"supported_versions": MIP_SUPPORTED_VERSIONS},
+            )
+        response = await call_next(request)
+        response.headers["X-MIP-Version"] = MIP_VERSION
+        return response
+
+
+# =============================================================================
+# MIP §17.7 — Standardized error response envelope
+# =============================================================================
+
+def mip_error_response(
+    status_code: int,
+    error: str,
+    message: str,
+    *,
+    field: str | None = None,
+    details: list[dict] | None = None,
+    extra: dict | None = None,
+) -> JSONResponse:
+    """Return a MIP-conformant error response."""
+    body: dict[str, Any] = {
+        "error": error,
+        "error_description": message,
+        "message_id": str(_uuid.uuid4()),
+    }
+    if field:
+        body["field"] = field
+    if details:
+        body["details"] = details
+    if extra:
+        body.update(extra)
+    resp = JSONResponse(status_code=status_code, content=body)
+    resp.headers["X-MIP-Version"] = MIP_VERSION
+    return resp
+
+
+# =============================================================================
+# MIP §20.4 — Rate Limiting (MUST for all public-facing endpoints)
+# =============================================================================
+
+# Configurable limits per window (seconds).  Keyed by (client_key, bucket).
+# Bucket is derived from the first two path segments (e.g. "/v1/issuance").
+_RATE_LIMIT_RPM = int(os.environ.get("RATE_LIMIT_RPM", "120"))  # requests / minute
+_RATE_LIMIT_BURST = int(os.environ.get("RATE_LIMIT_BURST", "20"))  # max burst
+_RATE_LIMIT_WINDOW = 60  # 1-minute sliding window
+
+
+class RateLimitMiddleware(BaseHTTPMiddleware):
+    """Token-bucket rate limiter backed by Redis when available, in-process fallback."""
+
+    def __init__(self, app):
+        super().__init__(app)
+        self._local_buckets: dict[str, list[float]] = defaultdict(list)
+
+    def _client_key(self, request: Request) -> str:
+        """Derive a rate-limit key from session or IP."""
+        session_id = request.cookies.get("sessionId")
+        if session_id:
+            return f"sid:{hashlib.sha256(session_id.encode()).hexdigest()[:16]}"
+        forwarded = request.headers.get("x-forwarded-for")
+        ip = forwarded.split(",")[0].strip() if forwarded else (request.client.host if request.client else "unknown")
+        return f"ip:{ip}"
+
+    def _bucket_name(self, path: str) -> str:
+        parts = path.strip("/").split("/", 2)
+        return "/".join(parts[:2]) if len(parts) >= 2 else parts[0] if parts else "root"
+
+    async def _check_redis(self, redis_client, key: str) -> tuple[bool, int]:
+        """Sliding-window check via Redis sorted set. Returns (allowed, remaining)."""
+        now = time.time()
+        window_start = now - _RATE_LIMIT_WINDOW
+        pipe = redis_client.pipeline()
+        pipe.zremrangebyscore(key, 0, window_start)
+        pipe.zcard(key)
+        pipe.zadd(key, {f"{now}:{_uuid.uuid4().hex[:8]}": now})
+        pipe.expire(key, _RATE_LIMIT_WINDOW + 1)
+        results = await pipe.execute()
+        count = results[1]  # zcard result before the new add
+        if count >= _RATE_LIMIT_RPM:
+            # Over limit — remove the optimistically added entry
+            await redis_client.zremrangebyscore(key, now, now + 0.001)
+            return False, 0
+        return True, max(0, _RATE_LIMIT_RPM - count - 1)
+
+    def _check_local(self, key: str) -> tuple[bool, int]:
+        """In-process sliding window fallback."""
+        now = time.time()
+        window_start = now - _RATE_LIMIT_WINDOW
+        timestamps = self._local_buckets[key]
+        # Prune expired
+        self._local_buckets[key] = timestamps = [t for t in timestamps if t > window_start]
+        if len(timestamps) >= _RATE_LIMIT_RPM:
+            return False, 0
+        timestamps.append(now)
+        return True, max(0, _RATE_LIMIT_RPM - len(timestamps))
+
+    async def dispatch(self, request: Request, call_next):
+        # Skip rate limiting for internal health checks
+        if request.url.path in ("/health", "/health/services"):
+            return await call_next(request)
+
+        client_key = self._client_key(request)
+        bucket = self._bucket_name(request.url.path)
+        rate_key = f"mip:rl:{client_key}:{bucket}"
+
+        redis_client = getattr(request.app.state, "redis_client", None)
+        if redis_client:
+            try:
+                allowed, remaining = await self._check_redis(redis_client, rate_key)
+            except Exception:
+                # Redis failure — fall back to local
+                allowed, remaining = self._check_local(rate_key)
+        else:
+            allowed, remaining = self._check_local(rate_key)
+
+        if not allowed:
+            return mip_error_response(
+                status_code=429,
+                error="rate_limit_exceeded",
+                message="Too many requests. Please retry after the rate limit window resets.",
+                extra={"retry_after_seconds": _RATE_LIMIT_WINDOW},
+            )
+
+        response = await call_next(request)
+        response.headers["X-RateLimit-Limit"] = str(_RATE_LIMIT_RPM)
+        response.headers["X-RateLimit-Remaining"] = str(remaining)
+        return response
+
+
+class ContentTypeEnforcementMiddleware(BaseHTTPMiddleware):
+    """MIP §17.7: Reject requests with wrong Content-Type for JSON-body endpoints."""
+
+    _METHODS_WITH_BODY = {"POST", "PUT", "PATCH"}
+    _EXEMPT_PREFIXES = (
+        "/v1/issuance/token",       # OAuth token endpoint: application/x-www-form-urlencoded
+        "/v1/flows/instances/",     # OID4VP submit: application/x-www-form-urlencoded
+        "/v1/flows/siop/submit",    # SIOPv2 submit
+        "/v1/auth/",               # Auth service may use form data
+    )
+
+    async def dispatch(self, request: Request, call_next):
+        if request.method in self._METHODS_WITH_BODY:
+            ct = (request.headers.get("content-type") or "").split(";")[0].strip().lower()
+            if ct and ct not in (
+                "application/json",
+                "application/scim+json",
+                "application/x-www-form-urlencoded",
+                "multipart/form-data",
+            ):
+                if not any(request.url.path.startswith(p) for p in self._EXEMPT_PREFIXES):
+                    return mip_error_response(
+                        status_code=415,
+                        error="unsupported_media_type",
+                        message=f"Content-Type '{ct}' is not supported. Use application/json.",
+                    )
+        return await call_next(request)
+
+
+# =============================================================================
 # =============================================================================
 # Route Configuration
 # =============================================================================
@@ -247,17 +439,26 @@ ROUTE_CONFIG = {
     # Organization routes
     "/v1/organizations": {"service": "organizations", "requires_auth": True},
     "/v1/me": {"service": "organizations", "requires_auth": True},
+    "/v1/api-keys": {"service": "organizations", "requires_auth": True},
     
     # Digital Identity Model - Configuration Resources
     "/v1/credential-templates": {"service": "credential-templates", "requires_auth": True},
+    "/v1/wallet-registry": {"service": "credential-templates", "requires_auth": True},
     "/v1/trust-profiles": {"service": "trust-profiles", "requires_auth": True},
+    "/v1/issuer-entities": {"service": "trust-profiles", "requires_auth": True},
+    "/v1/trust-frameworks": {"service": "trust-profiles", "requires_auth": True},
+    "/v1/trust-registry": {"service": "trust-profiles", "requires_auth": False},
     "/v1/compliance-profiles": {"service": "compliance-profiles", "requires_auth": True},
     "/v1/presentation-policies": {"service": "presentation-policies", "requires_auth": True},
     "/v1/deployment-profiles": {"service": "deployment-profiles", "requires_auth": True},
     "/v1/revocation-profiles": {"service": "revocation-profiles", "requires_auth": True},
+    "/v1/revocation-batches": {"service": "revocation-profiles", "requires_auth": True},
+    "/v1/cascade-revocations": {"service": "revocation-profiles", "requires_auth": True},
+    "/v1/devices": {"service": "device-registration", "requires_auth": True},
     
     # Digital Identity Model - Operational Resources
     "/v1/applicants": {"service": "applicant", "requires_auth": True},
+    "/v1/issued-credentials": {"service": "issuance", "requires_auth": True},
     # OID4VCI wallet-facing endpoints must be public (no auth token available on wallet)
     "/v1/issuance/offers": {"service": "issuance", "requires_auth": False},
     "/v1/issuance/token": {"service": "issuance", "requires_auth": False},
@@ -265,6 +466,7 @@ ROUTE_CONFIG = {
     "/v1/issuance/nonce": {"service": "issuance", "requires_auth": False},
     "/v1/issuance/notification": {"service": "issuance", "requires_auth": False},
     "/v1/issuance/deferred-credential": {"service": "issuance", "requires_auth": False},
+    "/v1/issuance/authorize": {"service": "issuance", "requires_auth": False},
     "/v1/issuance": {"service": "issuance", "requires_auth": True},
     "/v1/application-templates": {"service": "issuance", "requires_auth": True},
     "/v1/applications": {"service": "issuance", "requires_auth": True},
@@ -279,6 +481,10 @@ ROUTE_CONFIG = {
     
     # Utility routes
     "/v1/notifications": {"service": "notifications", "requires_auth": True},
+    "/v1/subscriptions": {"service": "notifications", "requires_auth": True},
+    "/v1/webhooks": {"service": "notifications", "requires_auth": True},
+    # Cedar Policy Sets
+    "/v1/policy-sets": {"service": "organizations", "requires_auth": True},
 }
 
 
@@ -317,15 +523,21 @@ class BaseResourceResponse(BaseModel):
 # =============================================================================
 
 class TrustSourceModel(BaseModel):
-    name: str
-    source_type: str = "registry"
+    name: str = ""
+    source_type: str = "TRUST_LIST"
     url: str | None = None
+    certificate_pem: str | None = None
+    issuer_did: str | None = None
+    description: str | None = None
     enabled: bool = True
 
 
 class ValidationRulesModel(BaseModel):
-    allowed_algorithms: list[str] = ["ES256", "ES384", "EdDSA"]
+    allowed_algorithms: list[str] = Field(default_factory=lambda: ["ES256", "ES384", "EdDSA"])
     min_key_size_rsa: int = 2048
+    min_key_size_ec: int = 256
+    require_key_usage: bool = True
+    max_chain_depth: int = 5
     allow_self_signed: bool = False
 
 
@@ -333,9 +545,45 @@ class TrustProfileCreate(BaseModel):
     organization_id: str
     name: str
     description: str | None = None
-    trust_sources: list[TrustSourceModel] = []
+    profile_type: str = "CUSTOM"
+    compliance_status: str = "SETUP_REQUIRED"
+    trust_sources: list[TrustSourceModel] = Field(default_factory=list)
     validation_rules: ValidationRulesModel | None = None
-    supported_formats: list[str] = ["sd_jwt_vc", "mdoc"]
+    allowed_algorithms: list[str] | None = None
+    min_key_size_rsa: int | None = None
+    min_key_size_ec: int | None = None
+    require_key_usage: bool | None = None
+    max_chain_depth: int | None = None
+    allow_self_signed: bool | None = None
+    supported_formats: list[str] = Field(default_factory=lambda: ["SD_JWT_VC", "MDOC"])
+    allowed_issuers: list[str] | None = None
+    denied_issuers: list[str] | None = None
+    system_issuer_overrides: dict[str, dict] = Field(default_factory=dict)
+    compatible_compliance_codes: list[str] = Field(default_factory=list)
+    verification_policy_set_id: str | None = None
+    auto_generated: bool = False
+
+
+class TrustProfileUpdate(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    profile_type: str | None = None
+    compliance_status: str | None = None
+    trust_sources: list[TrustSourceModel] | None = None
+    validation_rules: ValidationRulesModel | None = None
+    allowed_algorithms: list[str] | None = None
+    min_key_size_rsa: int | None = None
+    min_key_size_ec: int | None = None
+    require_key_usage: bool | None = None
+    max_chain_depth: int | None = None
+    allow_self_signed: bool | None = None
+    supported_formats: list[str] | None = None
+    allowed_issuers: list[str] | None = None
+    denied_issuers: list[str] | None = None
+    system_issuer_overrides: dict[str, dict] | None = None
+    compatible_compliance_codes: list[str] | None = None
+    verification_policy_set_id: str | None = None
+    auto_generated: bool | None = None
 
 
 class TrustProfileResponse(BaseModel):
@@ -344,10 +592,24 @@ class TrustProfileResponse(BaseModel):
     name: str
     description: str | None
     status: str
+    profile_type: str
+    compliance_status: str
     trust_sources: list[dict]
     validation_rules: dict
+    allowed_algorithms: list[str]
+    min_key_size_rsa: int
+    min_key_size_ec: int
+    require_key_usage: bool
+    max_chain_depth: int
+    allow_self_signed: bool
     revocation_policy: dict
     supported_formats: list[str]
+    allowed_issuers: list[str] | None = None
+    denied_issuers: list[str] | None = None
+    system_issuer_overrides: dict[str, dict] = Field(default_factory=dict)
+    compatible_compliance_codes: list[str] = Field(default_factory=list)
+    verification_policy_set_id: str | None = None
+    auto_generated: bool = False
     created_at: str
     updated_at: str
 
@@ -357,17 +619,248 @@ class TrustedIssuerCreate(BaseModel):
     description: str | None = None
     issuer_did: str
     issuer_url: str | None = None
-    credential_template_ids: list[str] = []
+    credential_template_ids: list[str] = Field(default_factory=list)
+
+
+class TrustedIssuerUpdate(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    issuer_did: str | None = None
+    issuer_url: str | None = None
+    credential_template_ids: list[str] | None = None
+    verification_keys: list[dict] | None = None
+    valid_from: str | None = None
+    valid_until: str | None = None
+    trust_level: int | None = None
+    relationship_status: str | None = None
+    cascade_revocation_policy: str | None = None
 
 
 class TrustedIssuerResponse(BaseModel):
     id: str
     trust_profile_id: str
+    issuer_id: str | None = None
+    issuer_entity_id: str | None = None
     name: str
+    description: str | None = None
     issuer_did: str
+    issuer_type: str | None = None
+    issuer_url: str | None = None
     status: str
-    credential_template_ids: list[str]
+    compliance_status: str | None = None
+    trust_level: int = 100
+    relationship_status: str = "TRUSTED"
+    cascade_revocation_policy: str = "NOTIFY_ONLY"
+    credential_template_ids: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
     created_at: str
+    updated_at: str
+
+
+class IssuerEntityCreate(BaseModel):
+    organization_id: str | None = None
+    issuer_id: str
+    issuer_type: str = "ORGANIZATION"
+    display_name: str
+    description: str | None = None
+    is_system_issuer: bool = False
+    compliance_status: str = "COMPLIANT"
+    accreditation_body: str | None = None
+    accreditation_date: str | None = None
+    valid_from: str | None = None
+    valid_until: str | None = None
+    trust_anchor_id: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class IssuerEntityUpdate(BaseModel):
+    display_name: str | None = None
+    description: str | None = None
+    issuer_type: str | None = None
+    is_system_issuer: bool | None = None
+    compliance_status: str | None = None
+    accreditation_body: str | None = None
+    accreditation_date: str | None = None
+    valid_from: str | None = None
+    valid_until: str | None = None
+    trust_anchor_id: str | None = None
+    metadata: dict[str, Any] | None = None
+    revocation_reason: str | None = None
+    revoked_by: str | None = None
+
+
+class IssuerEntityResponse(BaseModel):
+    id: str
+    organization_id: str | None = None
+    issuer_id: str
+    issuer_type: str
+    display_name: str
+    description: str | None = None
+    is_system_issuer: bool = False
+    compliance_status: str
+    accreditation_body: str | None = None
+    accreditation_date: str | None = None
+    valid_from: str
+    valid_until: str | None = None
+    trust_anchor_id: str | None = None
+    revoked_at: str | None = None
+    revocation_reason: str | None = None
+    revoked_by: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: str
+    updated_at: str
+
+
+class TrustFrameworkResponse(BaseModel):
+    id: str
+    code: str
+    display_name: str
+    description: str | None = None
+    pkd_endpoints: list[str] = Field(default_factory=list)
+    default_algorithms: list[str] = Field(default_factory=list)
+    default_formats: list[str] = Field(default_factory=list)
+    validation_ruleset: dict = Field(default_factory=dict)
+    sync_config: dict = Field(default_factory=dict)
+    is_system: bool = True
+    created_at: str
+    updated_at: str
+
+
+class OrganizationTrustProfileCreate(BaseModel):
+    framework_id: str
+    name: str
+    display_name: str | None = None
+    description: str | None = None
+    enabled: bool = True
+    use_case_tags: list[str] = Field(default_factory=list)
+    compliance_status: str = "SETUP_REQUIRED"
+    auto_generated: bool = False
+    revocation_policy: dict | None = None
+    time_policy: dict | None = None
+    allowed_algorithms: list[str] | None = None
+    allowed_formats: list[str] | None = None
+    allowed_issuers: list[str] | None = None
+    denied_issuers: list[str] | None = None
+    jurisdiction_filter: list[str] | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class OrganizationTrustProfileUpdate(BaseModel):
+    name: str | None = None
+    display_name: str | None = None
+    description: str | None = None
+    enabled: bool | None = None
+    use_case_tags: list[str] | None = None
+    compliance_status: str | None = None
+    auto_generated: bool | None = None
+    revocation_policy: dict | None = None
+    time_policy: dict | None = None
+    allowed_algorithms: list[str] | None = None
+    allowed_formats: list[str] | None = None
+    allowed_issuers: list[str] | None = None
+    denied_issuers: list[str] | None = None
+    jurisdiction_filter: list[str] | None = None
+    metadata: dict[str, Any] | None = None
+
+
+class OrganizationTrustProfileResponse(BaseModel):
+    id: str
+    organization_id: str
+    framework_id: str
+    name: str
+    display_name: str | None = None
+    description: str | None = None
+    enabled: bool = True
+    use_case_tags: list[str] = Field(default_factory=list)
+    compliance_status: str
+    auto_generated: bool = False
+    revocation_policy: dict | None = None
+    time_policy: dict | None = None
+    allowed_algorithms: list[str] | None = None
+    allowed_formats: list[str] | None = None
+    allowed_issuers: list[str] | None = None
+    denied_issuers: list[str] | None = None
+    jurisdiction_filter: list[str] | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: str
+    updated_at: str
+
+
+class CreateApiKeyRequest(BaseModel):
+    name: str
+    description: str | None = None
+    scopes: list[str] | None = None
+    is_test: bool = False
+
+
+class ApiKeyResponse(BaseModel):
+    id: str
+    name: str
+    description: str | None = None
+    key_prefix: str
+    scopes: list[str]
+    status: str
+    last_used_at: str | None = None
+    expires_at: str | None = None
+    created_at: str
+
+
+class ApiKeyCreatedResponse(ApiKeyResponse):
+    key: str
+
+
+class IssuedCredentialRecordResponse(BaseModel):
+    id: str
+    credential_id: str
+    credential_type: str
+    credential_format: str
+    flow_execution_id: str
+    credential_template_id: str
+    application_id: str | None = None
+    revocation_profile_id: str | None = None
+    subject_id: str
+    subject_claims_hash: str | None = None
+    issued_at: str
+    valid_from: str | None = None
+    valid_until: str | None = None
+    status: str
+    status_list_entries: list[dict] = Field(default_factory=list)
+    credential_hash: str | None = None
+    revoked_at: str | None = None
+    revocation_reason: str | None = None
+    revoked_by: str | None = None
+    created_at: str
+    updated_at: str | None = None
+
+
+class TrustRegistryEntryResponse(BaseModel):
+    entry_id: str
+    anchor_type: str
+    operation: str
+    country_code: str
+    certificate_pem: str | None = None
+    subject_key_id: str | None = None
+    not_before: str | None = None
+    not_after: str | None = None
+    source: str
+
+
+class TrustRegistrySyncResponse(BaseModel):
+    sync_token: str
+    sequence: int
+    entries: list[TrustRegistryEntryResponse] = Field(default_factory=list)
+    has_more: bool = False
+    generated_at: str
+
+
+class TrustRegistryStatusResponse(BaseModel):
+    status: str
+    current_sequence: int
+    total_entries: int
+    current_entries: int
+    csca_entries: int
+    dsc_entries: int
+    generated_at: str
 
 
 # =============================================================================
@@ -499,41 +992,160 @@ class DataRetentionModel(BaseModel):
     retain_metadata_only: bool = False
 
 
+class IssuerArtifactRequirementsModel(BaseModel):
+    requires_x509_cert: bool = False
+    requires_did: bool = False
+    requires_jwk: bool = False
+    cert_key_usage: list[str] = Field(default_factory=list)
+    recommended_algorithms: list[str] = Field(default_factory=list)
+
+
+class TrustProfileConstraintsModel(BaseModel):
+    compatible_profile_types: list[str] = Field(default_factory=list)
+    required_source_types: list[str] = Field(default_factory=list)
+    required_formats: list[str] = Field(default_factory=list)
+
+
+class ApiSurfaceEndpointModel(BaseModel):
+    rel: str
+    path_template: str
+    method: str = "GET"
+    auth_required: bool = True
+    org_scoped_path: str | None = None
+    response_schema_ref: str | None = None
+    standard_ref: str | None = None
+
+
 class ComplianceProfileCreate(BaseModel):
     """Create a Compliance Profile for regulatory rules and format abstraction."""
-    organization_id: str
+    organization_id: str | None = None
     name: str
     description: str | None = None
     # Compliance code (e.g., ICAO_DTC, AAMVA_MDL, EUDI_PID, ENTERPRISE_VC)
     compliance_code: str | None = None
     # Credential format mapping
-    credential_format: str = "sd_jwt_vc"  # sd_jwt_vc, mdoc, jwt_vc, json_ld
+    credential_format: str = "SD_JWT_VC"
+    issuance_protocol: str | None = None
+    issuer_artifact_requirements: IssuerArtifactRequirementsModel | None = None
+    default_verification_rules: dict | None = None
+    verification_policy_set_id: str | None = None
     # Regulatory frameworks
-    frameworks: list[str] = []
+    frameworks: list[str] = Field(default_factory=list)
     # Data retention policy
     data_retention: DataRetentionModel | None = None
     # Trust profile constraints (which trust profiles can use this)
-    trust_profile_constraints: list[str] = []
+    trust_profile_constraints: TrustProfileConstraintsModel | None = None
+    api_surface: list[ApiSurfaceEndpointModel] = Field(default_factory=list)
+    discoverable: bool = True
+    is_system: bool = False
     # Whether this is a system-provided profile
-    system_profile: bool = False
+    system_profile: bool | None = None
+
+
+class ComplianceProfileUpdate(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    compliance_code: str | None = None
+    credential_format: str | None = None
+    issuance_protocol: str | None = None
+    issuer_artifact_requirements: IssuerArtifactRequirementsModel | None = None
+    default_verification_rules: dict | None = None
+    verification_policy_set_id: str | None = None
+    trust_profile_constraints: TrustProfileConstraintsModel | None = None
+    api_surface: list[ApiSurfaceEndpointModel] | None = None
+    discoverable: bool | None = None
+    is_system: bool | None = None
+    frameworks: list[str] | None = None
+    data_retention: DataRetentionModel | None = None
 
 
 class ComplianceProfileResponse(BaseModel):
     id: str
-    organization_id: str
+    organization_id: str | None
     name: str
     description: str | None
     status: str
     compliance_code: str | None
     credential_format: str
-    frameworks: list[str]
-    data_retention: dict
-    consent_requirement: dict
-    audit_configuration: dict
-    trust_profile_constraints: list[str]
-    system_profile: bool
+    issuance_protocol: str | None = None
+    issuer_artifact_requirements: dict | None = None
+    default_verification_rules: dict | None = None
+    verification_policy_set_id: str | None = None
+    trust_profile_constraints: dict = Field(default_factory=dict)
+    api_surface: list[dict] = Field(default_factory=list)
+    discoverable: bool = True
+    is_system: bool = False
+    system_profile: bool = False
+    frameworks: list[str] = Field(default_factory=list)
+    data_retention: dict = Field(default_factory=dict)
+    consent_requirement: dict = Field(default_factory=dict)
+    audit_configuration: dict = Field(default_factory=dict)
     created_at: str
     updated_at: str
+
+
+# =============================================================================
+# API Models - Device Registration
+# =============================================================================
+
+class DevicePreferencesModel(BaseModel):
+    credential_notifications: bool = True
+    verification_notifications: bool = True
+    system_notifications: bool = True
+    quiet_hours_start: str | None = None
+    quiet_hours_end: str | None = None
+
+
+class DeviceRegistrationCreate(BaseModel):
+    user_id: str | None = None
+    organization_id: str | None = None
+    device_id: str
+    platform: Literal["ios", "android", "web"]
+    fcm_token: str
+    app_version: str | None = None
+    os_version: str | None = None
+    device_model: str | None = None
+    preferences: DevicePreferencesModel = Field(default_factory=DevicePreferencesModel)
+    public_key_der: str | None = None
+    public_key_kid: str | None = None
+    key_valid_from: str | None = None
+    key_valid_until: str | None = None
+    is_active: bool = True
+
+
+class DeviceRegistrationUpdate(BaseModel):
+    fcm_token: str | None = None
+    app_version: str | None = None
+    os_version: str | None = None
+    device_model: str | None = None
+    preferences: DevicePreferencesModel | None = None
+    public_key_der: str | None = None
+    public_key_kid: str | None = None
+    key_valid_from: str | None = None
+    key_valid_until: str | None = None
+    is_active: bool | None = None
+    last_seen_at: str | None = None
+
+
+class DeviceRegistrationResponse(BaseModel):
+    id: str
+    user_id: str
+    organization_id: str | None = None
+    device_id: str
+    platform: str
+    fcm_token: str
+    app_version: str | None = None
+    os_version: str | None = None
+    device_model: str | None = None
+    preferences: dict = Field(default_factory=dict)
+    public_key_der: str | None = None
+    public_key_kid: str | None = None
+    key_valid_from: str | None = None
+    key_valid_until: str | None = None
+    is_active: bool
+    created_at: str
+    updated_at: str
+    last_seen_at: str | None = None
 
 
 # =============================================================================
@@ -552,26 +1164,35 @@ class CredentialRequirementModel(BaseModel):
     credential_template_id: str
     display_name: str = ""
     required: bool = True
-    requested_claims: list[RequestedClaimModel] = []
+    requested_claims: list[RequestedClaimModel] = Field(default_factory=list)
+
+
+class ProtocolRequiredClaimModel(BaseModel):
+    claim_name: str
+    credential_type: str | None = None
+    value_constraint: Any | None = None
+    predicate_spec: dict | None = None
 
 
 class HolderBindingModel(BaseModel):
     """How to verify the presenter is the legitimate holder."""
-    required: bool = True
-    methods: list[str] = ["key_binding"]  # key_binding, biometric, pin
+    required: bool = False
+    binding_methods: list[str] = Field(default_factory=list)
+    nonce_required: bool = False
 
 
 class IssuerConstraintsModel(BaseModel):
     """Constraints on accepted issuers."""
-    allowed_issuers: list[str] = []  # DIDs or issuer identifiers
-    trust_profile_id: str | None = None
+    min_trust_level: int | None = None
+    required_compliance_statuses: list[str] = Field(default_factory=list)
+    required_accreditations: list[str] = Field(default_factory=list)
 
 
 class FreshnessConstraintsModel(BaseModel):
     """How fresh credentials must be."""
     max_age_seconds: int | None = None
-    require_not_expired: bool = True
-    require_not_revoked: bool = True
+    require_not_revoked: bool = False
+    revocation_grace_seconds: int | None = None
 
 
 class PresentationPolicyCreate(BaseModel):
@@ -579,14 +1200,23 @@ class PresentationPolicyCreate(BaseModel):
     organization_id: str
     name: str
     description: str | None = None
-    credential_requirements: list[CredentialRequirementModel] = []
+    purpose: str | None = None
+    required_claims: list[ProtocolRequiredClaimModel] = Field(default_factory=list)
+    accepted_credential_types: list[str] = Field(default_factory=list)
+    trust_profile_id: str | None = None
+    credential_requirements: list[CredentialRequirementModel] = Field(default_factory=list)
     compliance_profile_id: str | None = None
+    prefer_predicates: bool = False
+    fallback_policy: str | None = None
+    supported_circuits: list[str] = Field(default_factory=list)
+    credential_ranking_strategy: str = "FRESHEST_FIRST"
+    credential_ranking_weights: dict[str, float] | None = None
     # Holder binding requirements
     holder_binding: HolderBindingModel | None = None
     # Issuer constraints
     issuer_constraints: IssuerConstraintsModel | None = None
     # Freshness requirements
-    freshness_constraints: FreshnessConstraintsModel | None = None
+    freshness: FreshnessConstraintsModel | None = None
 
 
 class PresentationPolicyResponse(BaseModel):
@@ -595,11 +1225,20 @@ class PresentationPolicyResponse(BaseModel):
     name: str
     description: str | None
     status: str
-    credential_requirements: list[dict]
+    purpose: str | None = None
+    required_claims: list[dict] = Field(default_factory=list)
+    accepted_credential_types: list[str] = Field(default_factory=list)
+    trust_profile_id: str | None = None
+    credential_requirements: list[dict] = Field(default_factory=list)
     compliance_profile_id: str | None
-    holder_binding: dict | None
+    holder_binding: dict = Field(default_factory=dict)
     issuer_constraints: dict | None
-    freshness_constraints: dict | None
+    freshness: dict | None
+    prefer_predicates: bool = False
+    fallback_policy: str | None = None
+    supported_circuits: list[str] = Field(default_factory=list)
+    credential_ranking_strategy: str = "FRESHEST_FIRST"
+    credential_ranking_weights: dict[str, float] | None = None
     version: int
     created_at: str
     updated_at: str
@@ -626,24 +1265,30 @@ class DeploymentProfileCreate(BaseModel):
     environment: str = "development"
     callbacks: CallbacksModel | None = None
     feature_flags: FeatureFlagsModel | None = None
-    # Enabled flows (which flow definitions can use this profile)
-    enabled_flow_ids: list[str] = []
-    # Default presentation policy for verification
+    trust_profile_id: str | None = None
+    presentation_policy_ids: list[str] = Field(default_factory=list)
+    credential_template_ids: list[str] = Field(default_factory=list)
     default_policy_id: str | None = None
-    # Network mode: online, offline, hybrid
-    network_mode: str = "online"
-    # UX configuration
-    ux_config: dict | None = None  # language, signage_text, branding
-    # Update channel for version pinning
+    default_presentation_policy_id: str | None = None
+    enabled_flow_ids: list[str] = Field(default_factory=list)
+    network_mode: str = "ONLINE"
+    environment_config: dict | None = None
+    ux_config: dict | None = None
     update_channel: str = "stable"  # stable, beta, dev
 
 
 class DeploymentProfileUpdate(BaseModel):
     name: str | None = None
     description: str | None = None
+    trust_profile_id: str | None = None
+    presentation_policy_ids: list[str] | None = None
+    credential_template_ids: list[str] | None = None
+    default_policy_id: str | None = None
     network_mode: str | None = None
+    key_access_mode: str | None = None
     biometric_required: bool | None = None
     default_presentation_policy_id: str | None = None
+    environment_config: dict | None = None
     ux_config: dict | None = None
 
 
@@ -656,11 +1301,22 @@ class DeploymentProfileResponse(BaseModel):
     environment: str
     callbacks: dict
     feature_flags: dict
-    enabled_flow_ids: list[str]
+    trust_profile_id: str | None = None
+    presentation_policy_ids: list[str] = Field(default_factory=list)
+    credential_template_ids: list[str] = Field(default_factory=list)
+    enabled_flow_ids: list[str] = Field(default_factory=list)
     default_policy_id: str | None
     network_mode: str
+    key_access_mode: str | None = None
+    default_presentation_policy_id: str | None = None
+    environment_config: dict | None = None
     ux_config: dict | None
     update_channel: str
+    update_policy: dict | None = None
+    offline_cache_ttl_hours: int | None = None
+    biometric_required: bool | None = None
+    audit_all_events: bool | None = None
+    lanes: list[dict] = Field(default_factory=list)
     api_key_prefix: str | None
     created_at: str
     updated_at: str
@@ -673,7 +1329,7 @@ class DeploymentProfileResponse(BaseModel):
 class FlowStepModel(BaseModel):
     name: str
     step_type: str = "user_input"
-    config: dict = {}
+    config: dict = Field(default_factory=dict)
 
 
 class FlowDefinitionCreate(BaseModel):
@@ -681,15 +1337,19 @@ class FlowDefinitionCreate(BaseModel):
     organization_id: str
     name: str
     description: str | None = None
-    flow_type: str = "issuance"  # issuance, verification, presentation, renewal, revocation
-    steps: list[FlowStepModel] = []
+    flow_type: str = "oid4vci_pre_authorized"
+    steps: list[FlowStepModel] = Field(default_factory=list)
+    approval_strategy: str = "AUTO"
+    enabled: bool = True
+    hooks: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
+    trigger: dict[str, Any] | None = None
     # Configuration resources this flow uses
     trust_profile_id: str | None = None
     credential_template_id: str | None = None
     application_template_id: str | None = None  # Mutually exclusive with credential_template_id
     presentation_policy_id: str | None = None
     # Deployment profiles where this flow can run
-    deployment_profile_ids: list[str] = []
+    deployment_profile_ids: list[str] = Field(default_factory=list)
 
 
 class FlowDefinitionResponse(BaseModel):
@@ -699,11 +1359,16 @@ class FlowDefinitionResponse(BaseModel):
     description: str | None
     status: str
     flow_type: str
+    flow_category: str | None = None
     steps: list[dict]
     trust_profile_id: str | None
     credential_template_id: str | None
     application_template_id: str | None
     presentation_policy_id: str | None
+    approval_strategy: str | None = None
+    enabled: bool | None = None
+    hooks: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
+    trigger: dict[str, Any] | None = None
     deployment_profile_ids: list[str]
     version: int
     created_at: str
@@ -713,15 +1378,34 @@ class FlowDefinitionResponse(BaseModel):
 class FlowInstanceCreate(BaseModel):
     flow_definition_id: str
     subject_id: str | None = None
-    initial_context: dict = {}
+    initial_context: dict = Field(default_factory=dict)
 
 
 class FlowInstanceResponse(BaseModel):
     id: str
     flow_definition_id: str
+    flow_id: str | None = None
+    organization_id: str
     status: str
+    protocol_status: str | None = None
+    flow_type: str | None = None
     current_step_id: str | None
+    current_step: str | None = None
+    current_step_index: int | None = None
     context: dict
+    context_data: dict = Field(default_factory=dict)
+    step_results: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    step_history: list[dict] = Field(default_factory=list)
+    issued_credential_id: str | None = None
+    subject_id: str | None = None
+    external_reference: str | None = None
+    started_at: str | None = None
+    completed_at: str | None = None
+    expires_at: str | None = None
+    result: dict | None = None
+    error: str | None = None
+    error_code: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
     created_at: str
     updated_at: str
 
@@ -1189,9 +1873,9 @@ async def proxy_request(
             media_type=response.headers.get("content-type"),
         )
     except httpx.ConnectError:
-        raise HTTPException(status_code=503, detail="Service unavailable")
+        return mip_error_response(status_code=503, error="service_unavailable", message="Service unavailable")
     except httpx.TimeoutException:
-        raise HTTPException(status_code=504, detail="Service timeout")
+        return mip_error_response(status_code=504, error="service_timeout", message="Service timeout")
 
 
 async def _resource_exists(service_name: str, path: str, request: Request | None = None) -> bool:
@@ -1247,6 +1931,12 @@ def _forward_headers(request: Request | None) -> dict[str, str]:
 
 # Trust Profile routes
 trust_profile_router = APIRouter(prefix="/v1/trust-profiles", tags=["Trust Profiles"])
+organization_trust_profile_router = APIRouter(prefix="/v1/organizations/{organization_id}/trust-profiles", tags=["Organization Trust Profiles"])
+issuer_entity_router = APIRouter(prefix="/v1/issuer-entities", tags=["Issuer Entities"])
+trust_framework_router = APIRouter(prefix="/v1/trust-frameworks", tags=["Trust Frameworks"])
+api_key_router = APIRouter(prefix="/v1/api-keys", tags=["API Keys"])
+trust_registry_router = APIRouter(prefix="/v1/trust-registry", tags=["Trust Registry"])
+issued_credential_router = APIRouter(prefix="/v1/issued-credentials", tags=["Issued Credentials"])
 
 
 @trust_profile_router.post("", response_model=TrustProfileResponse, summary="Create Trust Profile")
@@ -1285,7 +1975,7 @@ async def activate_trust_profile(profile_id: str, request: Request) -> Response:
 
 
 @trust_profile_router.put("/{profile_id}", response_model=TrustProfileResponse, summary="Update Trust Profile")
-async def update_trust_profile(profile_id: str, body: TrustProfileCreate, request: Request) -> Response:
+async def update_trust_profile(profile_id: str, body: TrustProfileUpdate, request: Request) -> Response:
     """Update a Trust Profile."""
     registry = get_registry()
     service_url = registry.get_service_url("trust-profiles")
@@ -1298,6 +1988,177 @@ async def delete_trust_profile(profile_id: str, request: Request) -> Response:
     registry = get_registry()
     service_url = registry.get_service_url("trust-profiles")
     return await proxy_request(request, service_url, f"/v1/trust-profiles/{profile_id}")
+
+
+@organization_trust_profile_router.post("", response_model=OrganizationTrustProfileResponse, summary="Create Organization Trust Profile")
+async def create_organization_trust_profile(
+    organization_id: str,
+    body: OrganizationTrustProfileCreate,
+    request: Request,
+) -> Response:
+    registry = get_registry()
+    service_url = registry.get_service_url("trust-profiles")
+    return await proxy_request(request, service_url, f"/v1/organizations/{organization_id}/trust-profiles")
+
+
+@organization_trust_profile_router.get("", response_model=list[OrganizationTrustProfileResponse], summary="List Organization Trust Profiles")
+async def list_organization_trust_profiles(organization_id: str, request: Request) -> Response:
+    registry = get_registry()
+    service_url = registry.get_service_url("trust-profiles")
+    return await proxy_request(request, service_url, f"/v1/organizations/{organization_id}/trust-profiles")
+
+
+@organization_trust_profile_router.get("/{profile_id}", response_model=OrganizationTrustProfileResponse, summary="Get Organization Trust Profile")
+async def get_organization_trust_profile(organization_id: str, profile_id: str, request: Request) -> Response:
+    registry = get_registry()
+    service_url = registry.get_service_url("trust-profiles")
+    return await proxy_request(request, service_url, f"/v1/organizations/{organization_id}/trust-profiles/{profile_id}")
+
+
+@organization_trust_profile_router.put("/{profile_id}", response_model=OrganizationTrustProfileResponse, summary="Update Organization Trust Profile")
+async def update_organization_trust_profile(
+    organization_id: str,
+    profile_id: str,
+    body: OrganizationTrustProfileUpdate,
+    request: Request,
+) -> Response:
+    registry = get_registry()
+    service_url = registry.get_service_url("trust-profiles")
+    return await proxy_request(request, service_url, f"/v1/organizations/{organization_id}/trust-profiles/{profile_id}")
+
+
+@issuer_entity_router.post("", response_model=IssuerEntityResponse, summary="Create Issuer Entity")
+async def create_issuer_entity(body: IssuerEntityCreate, request: Request) -> Response:
+    """Create a protocol-aligned issuer registry entry."""
+    registry = get_registry()
+    service_url = registry.get_service_url("trust-profiles")
+    return await proxy_request(request, service_url, "/v1/issuer-entities")
+
+
+@issuer_entity_router.get("", response_model=list[IssuerEntityResponse], summary="List Issuer Entities")
+async def list_issuer_entities(
+    organization_id: str | None = Query(None, description="Optional organization scope"),
+    request: Request = None,
+) -> Response:
+    """List issuer registry entities, optionally scoped to an organization."""
+    registry = get_registry()
+    service_url = registry.get_service_url("trust-profiles")
+    return await proxy_request(request, service_url, "/v1/issuer-entities")
+
+
+@issuer_entity_router.get("/{issuer_entity_id}", response_model=IssuerEntityResponse, summary="Get Issuer Entity")
+async def get_issuer_entity(issuer_entity_id: str, request: Request) -> Response:
+    """Get a single issuer registry entity."""
+    registry = get_registry()
+    service_url = registry.get_service_url("trust-profiles")
+    return await proxy_request(request, service_url, f"/v1/issuer-entities/{issuer_entity_id}")
+
+
+@issuer_entity_router.put("/{issuer_entity_id}", response_model=IssuerEntityResponse, summary="Update Issuer Entity")
+async def update_issuer_entity(issuer_entity_id: str, body: IssuerEntityUpdate, request: Request) -> Response:
+    """Update an issuer registry entity."""
+    registry = get_registry()
+    service_url = registry.get_service_url("trust-profiles")
+    return await proxy_request(request, service_url, f"/v1/issuer-entities/{issuer_entity_id}")
+
+
+@issuer_entity_router.delete("/{issuer_entity_id}", summary="Delete Issuer Entity")
+async def delete_issuer_entity(issuer_entity_id: str, request: Request) -> Response:
+    """Delete an issuer registry entity."""
+    registry = get_registry()
+    service_url = registry.get_service_url("trust-profiles")
+    return await proxy_request(request, service_url, f"/v1/issuer-entities/{issuer_entity_id}")
+
+
+@trust_framework_router.get("", response_model=list[TrustFrameworkResponse], summary="List Trust Frameworks")
+async def list_trust_frameworks(request: Request) -> Response:
+    """List system-managed trust frameworks."""
+    registry = get_registry()
+    service_url = registry.get_service_url("trust-profiles")
+    return await proxy_request(request, service_url, "/v1/trust-frameworks")
+
+
+@trust_framework_router.get("/{framework_id}", response_model=TrustFrameworkResponse, summary="Get Trust Framework")
+async def get_trust_framework(framework_id: str, request: Request) -> Response:
+    """Get a trust framework by ID."""
+    registry = get_registry()
+    service_url = registry.get_service_url("trust-profiles")
+    return await proxy_request(request, service_url, f"/v1/trust-frameworks/{framework_id}")
+
+
+@trust_registry_router.get("/sync", response_model=TrustRegistrySyncResponse, summary="Sync Trust Registry")
+async def sync_trust_registry(request: Request) -> Response:
+    """Delta-sync trust anchors for wallet offline verification."""
+    registry = get_registry()
+    service_url = registry.get_service_url("trust-profiles")
+    return await proxy_request(request, service_url, "/v1/trust-registry/sync")
+
+
+@trust_registry_router.get("/csca", response_model=list[TrustRegistryEntryResponse], summary="List CSCAs")
+async def list_csca_entries(request: Request) -> Response:
+    """List current CSCA trust anchors."""
+    registry = get_registry()
+    service_url = registry.get_service_url("trust-profiles")
+    return await proxy_request(request, service_url, "/v1/trust-registry/csca")
+
+
+@trust_registry_router.get("/dsc", response_model=list[TrustRegistryEntryResponse], summary="List DSCs")
+async def list_dsc_entries(request: Request) -> Response:
+    """List current DSC trust anchors."""
+    registry = get_registry()
+    service_url = registry.get_service_url("trust-profiles")
+    return await proxy_request(request, service_url, "/v1/trust-registry/dsc")
+
+
+@trust_registry_router.get("/csca/{country_code}", response_model=list[TrustRegistryEntryResponse], summary="List CSCAs By Country")
+async def list_country_csca_entries(country_code: str, request: Request) -> Response:
+    """List current CSCAs for a specific country."""
+    registry = get_registry()
+    service_url = registry.get_service_url("trust-profiles")
+    return await proxy_request(request, service_url, f"/v1/trust-registry/csca/{country_code}")
+
+
+@trust_registry_router.get("/status", response_model=TrustRegistryStatusResponse, summary="Trust Registry Status")
+async def get_trust_registry_status(request: Request) -> Response:
+    """Get trust registry health and sequence metadata."""
+    registry = get_registry()
+    service_url = registry.get_service_url("trust-profiles")
+    return await proxy_request(request, service_url, "/v1/trust-registry/status")
+
+
+@api_key_router.get("", response_model=list[ApiKeyResponse], summary="List API Keys")
+async def list_api_keys(
+    organization_id: str = Query(..., description="Organization ID"),
+    request: Request = None,
+) -> Response:
+    """List API keys for an organization using the protocol top-level route."""
+    registry = get_registry()
+    service_url = registry.get_service_url("organizations")
+    return await proxy_request(request, service_url, f"/v1/organizations/{organization_id}/api-keys")
+
+
+@api_key_router.post("", response_model=ApiKeyCreatedResponse, summary="Create API Key")
+async def create_api_key(
+    body: CreateApiKeyRequest,
+    organization_id: str = Query(..., description="Organization ID"),
+    request: Request = None,
+) -> Response:
+    """Create an API key for an organization using the protocol top-level route."""
+    registry = get_registry()
+    service_url = registry.get_service_url("organizations")
+    return await proxy_request(request, service_url, f"/v1/organizations/{organization_id}/api-keys")
+
+
+@api_key_router.delete("/{key_id}", summary="Delete API Key")
+async def delete_api_key(
+    key_id: str,
+    organization_id: str = Query(..., description="Organization ID"),
+    request: Request = None,
+) -> Response:
+    """Delete or revoke an API key for an organization using the protocol top-level route."""
+    registry = get_registry()
+    service_url = registry.get_service_url("organizations")
+    return await proxy_request(request, service_url, f"/v1/organizations/{organization_id}/api-keys/{key_id}")
 
 
 @trust_profile_router.post("/{profile_id}/issuers", response_model=TrustedIssuerResponse, summary="Add Trusted Issuer")
@@ -1325,7 +2186,7 @@ async def get_trusted_issuer(profile_id: str, issuer_id: str, request: Request) 
 
 
 @trust_profile_router.put("/{profile_id}/issuers/{issuer_id}", response_model=TrustedIssuerResponse, summary="Update Trusted Issuer")
-async def update_trusted_issuer(profile_id: str, issuer_id: str, body: TrustedIssuerCreate, request: Request) -> Response:
+async def update_trusted_issuer(profile_id: str, issuer_id: str, body: TrustedIssuerUpdate, request: Request) -> Response:
     """Update a Trusted Issuer."""
     registry = get_registry()
     service_url = registry.get_service_url("trust-profiles")
@@ -1342,6 +2203,7 @@ async def delete_trusted_issuer(profile_id: str, issuer_id: str, request: Reques
 
 # Revocation Profile routes
 revocation_profile_router = APIRouter(prefix="/v1/revocation-profiles", tags=["Revocation Profiles"])
+cascade_revocation_router = APIRouter(prefix="/v1/cascade-revocations", tags=["Cascade Revocations"])
 
 
 @revocation_profile_router.post("", summary="Create Revocation Profile")
@@ -1382,6 +2244,54 @@ async def delete_revocation_profile(profile_id: str, request: Request) -> Respon
     registry = get_registry()
     service_url = registry.get_service_url("revocation-profiles")
     return await proxy_request(request, service_url, f"/v1/revocation-profiles/{profile_id}")
+
+
+@cascade_revocation_router.post("", summary="Trigger Cascade Revocation")
+async def create_cascade_revocation(request: Request) -> Response:
+    """Trigger a cascade revocation operation."""
+    registry = get_registry()
+    service_url = registry.get_service_url("revocation-profiles")
+    return await proxy_request(request, service_url, "/v1/cascade-revocations")
+
+
+@cascade_revocation_router.get("", summary="List Cascade Revocations")
+async def list_cascade_revocations(request: Request) -> Response:
+    """List cascade revocation operations."""
+    registry = get_registry()
+    service_url = registry.get_service_url("revocation-profiles")
+    return await proxy_request(request, service_url, "/v1/cascade-revocations")
+
+
+@cascade_revocation_router.get("/{operation_id}", summary="Get Cascade Revocation")
+async def get_cascade_revocation(operation_id: str, request: Request) -> Response:
+    """Get a cascade revocation operation by ID."""
+    registry = get_registry()
+    service_url = registry.get_service_url("revocation-profiles")
+    return await proxy_request(request, service_url, f"/v1/cascade-revocations/{operation_id}")
+
+
+@cascade_revocation_router.post("/{operation_id}/confirm", summary="Confirm Cascade Revocation")
+async def confirm_cascade_revocation(operation_id: str, request: Request) -> Response:
+    """Confirm a paused cascade revocation operation."""
+    registry = get_registry()
+    service_url = registry.get_service_url("revocation-profiles")
+    return await proxy_request(request, service_url, f"/v1/cascade-revocations/{operation_id}/confirm")
+
+
+@cascade_revocation_router.post("/{operation_id}/rollback", summary="Rollback Cascade Revocation")
+async def rollback_cascade_revocation(operation_id: str, request: Request) -> Response:
+    """Roll back a completed cascade revocation operation."""
+    registry = get_registry()
+    service_url = registry.get_service_url("revocation-profiles")
+    return await proxy_request(request, service_url, f"/v1/cascade-revocations/{operation_id}/rollback")
+
+
+@cascade_revocation_router.delete("/{operation_id}", summary="Cancel Cascade Revocation")
+async def delete_cascade_revocation(operation_id: str, request: Request) -> Response:
+    """Cancel a pending cascade revocation operation."""
+    registry = get_registry()
+    service_url = registry.get_service_url("revocation-profiles")
+    return await proxy_request(request, service_url, f"/v1/cascade-revocations/{operation_id}")
 
 
 # Credential Template routes
@@ -1430,6 +2340,14 @@ async def get_credential_template(template_id: str, request: Request) -> Respons
     registry = get_registry()
     service_url = registry.get_service_url("credential-templates")
     return await proxy_request(request, service_url, f"/v1/credential-templates/{template_id}")
+
+
+@credential_template_router.get("/{template_id}/wallet-compatibility", summary="Get Wallet Compatibility")
+async def get_credential_template_wallet_compatibility(template_id: str, request: Request) -> Response:
+    """Resolve the protocol-derived wallet compatibility profile for a credential template."""
+    registry = get_registry()
+    service_url = registry.get_service_url("credential-templates")
+    return await proxy_request(request, service_url, f"/v1/credential-templates/{template_id}/wallet-compatibility")
 
 
 @credential_template_router.put("/{template_id}", response_model=CredentialTemplateResponse, summary="Update Credential Template")
@@ -1489,6 +2407,14 @@ async def get_wallet_registry_entry(wallet_id: str, request: Request) -> Respons
     registry = get_registry()
     service_url = registry.get_service_url("credential-templates")
     return await proxy_request(request, service_url, f"/v1/wallet-registry/{wallet_id}")
+
+
+@wallet_registry_router.get("/resolve/profile", summary="Resolve Wallet Compatibility")
+async def resolve_wallet_registry_profile(request: Request) -> Response:
+    """Resolve a derived wallet compatibility profile with organization-specific overrides."""
+    registry = get_registry()
+    service_url = registry.get_service_url("credential-templates")
+    return await proxy_request(request, service_url, "/v1/wallet-registry/resolve/profile")
 
 
 @wallet_registry_router.post("", summary="Create Wallet Entry")
@@ -1555,7 +2481,7 @@ async def activate_compliance_profile(profile_id: str, request: Request) -> Resp
 
 
 @compliance_profile_router.put("/{profile_id}", response_model=ComplianceProfileResponse, summary="Update Compliance Profile")
-async def update_compliance_profile(profile_id: str, body: ComplianceProfileCreate, request: Request) -> Response:
+async def update_compliance_profile(profile_id: str, body: ComplianceProfileUpdate, request: Request) -> Response:
     """Update a Compliance Profile."""
     registry = get_registry()
     service_url = registry.get_service_url("compliance-profiles")
@@ -1568,6 +2494,53 @@ async def delete_compliance_profile(profile_id: str, request: Request) -> Respon
     registry = get_registry()
     service_url = registry.get_service_url("compliance-profiles")
     return await proxy_request(request, service_url, f"/v1/compliance-profiles/{profile_id}")
+
+
+# Device Registration routes
+device_router = APIRouter(prefix="/v1/devices", tags=["Devices"])
+
+
+@device_router.post("", response_model=DeviceRegistrationResponse, summary="Register Device")
+async def register_device(body: DeviceRegistrationCreate, request: Request) -> Response:
+    """Register or upsert a device for the current user."""
+    registry = get_registry()
+    service_url = registry.get_service_url("device-registration")
+    return await proxy_request(request, service_url, "/v1/devices")
+
+
+@device_router.get("", response_model=list[DeviceRegistrationResponse], summary="List Devices")
+async def list_devices(
+    organization_id: str | None = Query(None, description="Optional organization filter"),
+    request: Request = None,
+) -> Response:
+    """List device registrations for the current user."""
+    registry = get_registry()
+    service_url = registry.get_service_url("device-registration")
+    return await proxy_request(request, service_url, "/v1/devices")
+
+
+@device_router.get("/{registration_id}", response_model=DeviceRegistrationResponse, summary="Get Device")
+async def get_device(registration_id: str, request: Request) -> Response:
+    """Get a device registration by ID."""
+    registry = get_registry()
+    service_url = registry.get_service_url("device-registration")
+    return await proxy_request(request, service_url, f"/v1/devices/{registration_id}")
+
+
+@device_router.patch("/{registration_id}", response_model=DeviceRegistrationResponse, summary="Update Device")
+async def update_device(registration_id: str, body: DeviceRegistrationUpdate, request: Request) -> Response:
+    """Update a device registration."""
+    registry = get_registry()
+    service_url = registry.get_service_url("device-registration")
+    return await proxy_request(request, service_url, f"/v1/devices/{registration_id}")
+
+
+@device_router.delete("/{registration_id}", summary="Delete Device")
+async def delete_device(registration_id: str, request: Request) -> Response:
+    """Delete a device registration."""
+    registry = get_registry()
+    service_url = registry.get_service_url("device-registration")
+    return await proxy_request(request, service_url, f"/v1/devices/{registration_id}")
 
 
 # Presentation Policy routes
@@ -1666,13 +2639,39 @@ async def create_deployment_profile(body: DeploymentProfileCreate, request: Requ
     """Create a new Deployment Profile for runtime configuration."""
     raw_body = await request.body()
     raw_data = json.loads(raw_body) if raw_body else {}
-    policy_id = raw_data.get("default_presentation_policy_id") or body.default_policy_id
-    if policy_id:
+    trust_profile_id = raw_data.get("trust_profile_id") or body.trust_profile_id
+    if not trust_profile_id:
+        raise HTTPException(status_code=422, detail="trust_profile_id is required")
+    if not await _resource_exists("trust-profiles", f"/v1/trust-profiles/{trust_profile_id}", request):
+        raise HTTPException(status_code=422, detail=f"Trust profile not found: {trust_profile_id}")
+
+    default_policy_id = (
+        raw_data.get("default_policy_id")
+        or raw_data.get("default_presentation_policy_id")
+        or body.default_policy_id
+        or body.default_presentation_policy_id
+    )
+    presentation_policy_ids = raw_data.get("presentation_policy_ids") or body.presentation_policy_ids
+    if not presentation_policy_ids and default_policy_id:
+        presentation_policy_ids = [default_policy_id]
+    if not presentation_policy_ids:
+        raise HTTPException(status_code=422, detail="presentation_policy_ids must contain at least one policy")
+    if default_policy_id and default_policy_id not in presentation_policy_ids:
+        raise HTTPException(status_code=422, detail="default_policy_id must be included in presentation_policy_ids")
+    for policy_id in presentation_policy_ids:
         owner_org = await _resource_org_id("presentation-policies", f"/v1/presentation-policies/{policy_id}", request)
         if owner_org is None:
             raise HTTPException(status_code=422, detail=f"Presentation policy not found: {policy_id}")
         if owner_org != body.organization_id:
             raise HTTPException(status_code=403, detail="Access denied: presentation policy belongs to another organization")
+
+    credential_template_ids = raw_data.get("credential_template_ids") or body.credential_template_ids
+    for template_id in credential_template_ids:
+        owner_org = await _resource_org_id("credential-templates", f"/v1/credential-templates/{template_id}", request)
+        if owner_org is None:
+            raise HTTPException(status_code=422, detail=f"Credential template not found: {template_id}")
+        if owner_org != body.organization_id:
+            raise HTTPException(status_code=403, detail="Access denied: credential template belongs to another organization")
     registry = get_registry()
     service_url = registry.get_service_url("deployment-profiles")
     return await proxy_request(request, service_url, "/v1/deployment-profiles", body_override=raw_body)
@@ -1980,6 +2979,50 @@ async def get_issuance_revocation_status(issuance_id: str, request: Request) -> 
     return await proxy_request(request, service_url, f"/v1/issuance/transactions/{issuance_id}/revocation-status")
 
 
+@issued_credential_router.get("", response_model=list[IssuedCredentialRecordResponse], summary="List Issued Credentials")
+async def list_issued_credentials(
+    organization_id: str = Query(..., description="Organization ID"),
+    status: str | None = Query(None),
+    request: Request = None,
+) -> Response:
+    """List issued credential lifecycle records for an organization."""
+    registry = get_registry()
+    service_url = registry.get_service_url("issuance")
+    return await proxy_request(request, service_url, "/v1/issued-credentials")
+
+
+@issued_credential_router.get("/{credential_id}", response_model=IssuedCredentialRecordResponse, summary="Get Issued Credential")
+async def get_issued_credential(credential_id: str, request: Request) -> Response:
+    """Get an issued credential lifecycle record by ID."""
+    registry = get_registry()
+    service_url = registry.get_service_url("issuance")
+    return await proxy_request(request, service_url, f"/v1/issued-credentials/{credential_id}")
+
+
+@issued_credential_router.post("/{credential_id}/revoke", response_model=IssuedCredentialRecordResponse, summary="Revoke Issued Credential")
+async def revoke_issued_credential(credential_id: str, request: Request) -> Response:
+    """Revoke an issued credential lifecycle record."""
+    registry = get_registry()
+    service_url = registry.get_service_url("issuance")
+    return await proxy_request(request, service_url, f"/v1/issued-credentials/{credential_id}/revoke")
+
+
+@issued_credential_router.post("/{credential_id}/suspend", response_model=IssuedCredentialRecordResponse, summary="Suspend Issued Credential")
+async def suspend_issued_credential(credential_id: str, request: Request) -> Response:
+    """Suspend an issued credential lifecycle record."""
+    registry = get_registry()
+    service_url = registry.get_service_url("issuance")
+    return await proxy_request(request, service_url, f"/v1/issued-credentials/{credential_id}/suspend")
+
+
+@issued_credential_router.post("/{credential_id}/reinstate", response_model=IssuedCredentialRecordResponse, summary="Reinstate Issued Credential")
+async def reinstate_issued_credential(credential_id: str, request: Request) -> Response:
+    """Reinstate a suspended issued credential lifecycle record."""
+    registry = get_registry()
+    service_url = registry.get_service_url("issuance")
+    return await proxy_request(request, service_url, f"/v1/issued-credentials/{credential_id}/reinstate")
+
+
 @issuance_router.get("/offers/{tx_id}", summary="Get Credential Offer")
 async def get_credential_offer(tx_id: str, request: Request) -> Response:
     """
@@ -2203,6 +3246,8 @@ async def get_application_issuance_events(application_id: str, request: Request)
 
 # Notification routes
 notification_router = APIRouter(prefix="/v1/notifications", tags=["Notifications"])
+subscription_router = APIRouter(prefix="/v1/subscriptions", tags=["Subscriptions"])
+webhook_router = APIRouter(prefix="/v1/webhooks", tags=["Webhooks"])
 
 
 @notification_router.get("/events/push", summary="SSE Real-time Events")
@@ -2274,6 +3319,46 @@ async def proxy_notifications(request: Request, subpath: str = "") -> Response:
     registry = get_registry()
     service_url = registry.get_service_url("notifications")
     target_path = "/v1/notifications"
+    if subpath:
+        target_path = f"{target_path}/{subpath}"
+    return await proxy_request(request, service_url, target_path)
+
+
+@subscription_router.api_route("", methods=["GET", "POST"], summary="Subscriptions")
+@subscription_router.api_route("/{subpath:path}", methods=["GET", "PUT", "DELETE"], summary="Subscriptions")
+async def proxy_subscriptions(request: Request, subpath: str = "") -> Response:
+    """Proxy protocol subscription routes to notification service."""
+    registry = get_registry()
+    service_url = registry.get_service_url("notifications")
+    target_path = "/v1/subscriptions"
+    if subpath:
+        target_path = f"{target_path}/{subpath}"
+    return await proxy_request(request, service_url, target_path)
+
+
+@webhook_router.api_route("", methods=["GET", "POST"], summary="Webhooks")
+@webhook_router.api_route("/{subpath:path}", methods=["GET", "PUT", "DELETE"], summary="Webhooks")
+async def proxy_webhooks(request: Request, subpath: str = "") -> Response:
+    """Proxy protocol webhook routes to notification service."""
+    registry = get_registry()
+    service_url = registry.get_service_url("notifications")
+    target_path = "/v1/webhooks"
+    if subpath:
+        target_path = f"{target_path}/{subpath}"
+    return await proxy_request(request, service_url, target_path)
+
+
+# Policy Sets routes (Cedar)
+policy_set_router = APIRouter(prefix="/v1/policy-sets", tags=["PolicySets"])
+
+
+@policy_set_router.api_route("", methods=["GET", "POST"], summary="Policy Sets")
+@policy_set_router.api_route("/{subpath:path}", methods=["GET", "PATCH", "DELETE", "POST"], summary="Policy Sets")
+async def proxy_policy_sets(request: Request, subpath: str = "") -> Response:
+    """Proxy policy-set CRUD (including /activate, /archive, /validate) to organization service."""
+    registry = get_registry()
+    service_url = registry.get_service_url("organizations")
+    target_path = "/v1/policy-sets"
     if subpath:
         target_path = f"{target_path}/{subpath}"
     return await proxy_request(request, service_url, target_path)
@@ -2808,6 +3893,19 @@ async def get_my_permissions(org_id: str, request: Request) -> Response:
     return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/members/me/permissions", inject_params={"organization_id": org_id})
 
 
+@organization_router.api_route(
+    "/{org_id}/scim/v2/{scim_path:path}",
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+    summary="SCIM 2.0 Proxy",
+)
+async def proxy_scim(org_id: str, scim_path: str, request: Request) -> Response:
+    """Proxy org-scoped SCIM 2.0 requests to the organization service."""
+    registry = get_registry()
+    service_url = registry.get_service_url("organizations")
+    upstream_path = f"/v1/organizations/{org_id}/scim/v2/{scim_path}" if scim_path else f"/v1/organizations/{org_id}/scim/v2"
+    return await proxy_request(request, service_url, upstream_path, inject_params={"organization_id": org_id})
+
+
 # =============================================================================
 # Preferences Routes (Console Context)
 # =============================================================================
@@ -2895,7 +3993,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     auth_grpc_channel = create_grpc_channel(auth_grpc_target, service_name="gateway")
     org_grpc_channel = create_grpc_channel(org_grpc_target, service_name="gateway")
     auth_grpc_stub = AuthServiceStub(auth_grpc_channel)
-    logger.info("Gateway gRPC: auth→%s  org→%s", auth_grpc_target, org_grpc_target)
+    grpc_tls_enabled = bool(os.environ.get("GRPC_TLS_CA_CERT"))
+    logger.info(
+        "Gateway gRPC: auth→%s  org→%s  tls=%s",
+        auth_grpc_target, org_grpc_target, grpc_tls_enabled,
+    )
 
     # Event-stream gRPC channel for SSE bridging
     es_grpc_target = os.environ.get("ES_GRPC_TARGET", "event-stream:9015")
@@ -3008,25 +4110,39 @@ Verification is handled through two complementary approaches:
     registry = _registry
     session_cache = _session_cache
 
-    # Add Cedar auth middleware first, then auth middleware.
-    # Starlette executes middleware in reverse registration order, so this makes
-    # AuthMiddleware run before CedarAuthMiddleware and inject user context early.
+    # Add Cedar auth middleware first, then auth middleware, then rate limiter,
+    # then MIP version.  Starlette executes middleware in reverse registration
+    # order, so this makes MIPVersionMiddleware run outermost.
     app.add_middleware(CedarAuthMiddleware)
+    app.add_middleware(ContentTypeEnforcementMiddleware)
     app.add_middleware(AuthMiddleware, session_cache=session_cache)
+    app.add_middleware(RateLimitMiddleware)
+    app.add_middleware(MIPVersionMiddleware)
     
     # Include all routers
     app.include_router(trust_profile_router)
+    app.include_router(organization_trust_profile_router)
+    app.include_router(issuer_entity_router)
+    app.include_router(trust_framework_router)
+    app.include_router(trust_registry_router)
+    app.include_router(api_key_router)
     app.include_router(revocation_profile_router)
+    app.include_router(cascade_revocation_router)
     app.include_router(credential_template_router)
     app.include_router(wallet_registry_router)
     app.include_router(compliance_profile_router)
+    app.include_router(device_router)
     app.include_router(presentation_policy_router)
     app.include_router(deployment_profile_router)
     app.include_router(flow_router)
+    app.include_router(issued_credential_router)
     app.include_router(issuance_router)
     app.include_router(application_template_router)
     app.include_router(application_router)
+    app.include_router(subscription_router)
+    app.include_router(webhook_router)
     app.include_router(notification_router)
+    app.include_router(policy_set_router)
     app.include_router(applicant_router)
     app.include_router(organization_router)
     app.include_router(preferences_router)
@@ -3041,7 +4157,13 @@ Verification is handled through two complementary approaches:
         registry = get_registry()
         auth_url = registry.get_service_url("auth")
         if not auth_url:
-            raise HTTPException(status_code=503, detail="Auth service unavailable")
+            return mip_error_response(status_code=503, error="service_unavailable", message="Auth service unavailable")
+        
+        # Clear session cache on logout to prevent stale sessions
+        if path.startswith("logout"):
+            session_id = request.cookies.get("sessionId")
+            if session_id and _session_cache:
+                _session_cache.clear(session_id)
         
         client = get_http_client()
         target_url = f"{auth_url}/v1/auth/{path}"
@@ -3084,13 +4206,13 @@ Verification is handled through two complementary approaches:
             )
         except httpx.ConnectError:
             logger.error(f"Auth service unavailable at {auth_url}")
-            raise HTTPException(status_code=503, detail="Auth service unavailable")
+            return mip_error_response(status_code=503, error="service_unavailable", message="Auth service unavailable")
         except httpx.TimeoutException:
             logger.error(f"Auth service timeout at {auth_url}")
-            raise HTTPException(status_code=504, detail="Auth service timeout")
+            return mip_error_response(status_code=504, error="service_timeout", message="Auth service timeout")
         except Exception as e:
             logger.error(f"Error proxying auth request: {e}")
-            raise HTTPException(status_code=502, detail="Auth service error")
+            return mip_error_response(status_code=502, error="auth_service_error", message="Auth service error")
     
     @app.get("/health")
     async def health_check() -> dict:
@@ -3226,10 +4348,93 @@ Verification is handled through two complementary approaches:
         }
 
     @app.get("/.well-known/jwks.json")
-    async def get_jwks() -> dict:
-        """Compatibility JWKS endpoint for clients that expect OIDC discovery links."""
-        return {"keys": []}
-    
+    async def get_jwks() -> Response:
+        """JWKS endpoint — proxy to issuance service for real signing keys."""
+        return await _proxy_to_issuance_well_known("/.well-known/jwks.json")
+
+    @app.get("/.well-known/mip-configuration")
+    async def get_mip_configuration() -> dict:
+        """MIP §10 — Every MIP implementation MUST expose this discovery endpoint.
+
+        Returns active compliance profiles, supported versions, and API surface
+        declarations so clients can discover available protocol capabilities.
+        """
+        issuer_url = os.environ.get("ISSUER_BASE_URL", "http://localhost:8000")
+        registry = get_registry()
+
+        # Gather active compliance profile codes from the compliance-profiles service
+        active_profiles: list[dict] = []
+        compliance_url = registry.get_service_url("compliance-profiles")
+        if compliance_url:
+            client = get_http_client()
+            try:
+                resp = await client.get(
+                    f"{compliance_url}/v1/compliance-profiles",
+                    params={"status": "active"},
+                    timeout=5.0,
+                )
+                if resp.status_code == 200:
+                    profiles_data = resp.json()
+                    items = profiles_data if isinstance(profiles_data, list) else profiles_data.get("items", [])
+                    for p in items:
+                        entry: dict[str, Any] = {
+                            "compliance_code": p.get("compliance_code"),
+                            "credential_format": p.get("credential_format"),
+                            "issuance_protocol": p.get("issuance_protocol"),
+                        }
+                        if p.get("api_surface"):
+                            entry["api_surface"] = p["api_surface"]
+                        active_profiles.append(entry)
+            except Exception as exc:
+                logger.warning("Failed to fetch compliance profiles for MIP config: %s", exc)
+
+        return {
+            "mip_version": "0.1",
+            "supported_versions": ["0.1"],
+            "issuer": issuer_url,
+            "api_base_url": f"{issuer_url}/v1",
+            "active_compliance_profiles": active_profiles,
+            "supported_credential_formats": [
+                "MDOC", "SD_JWT_VC", "VC_JWT", "JSON_LD", "ZK_MDOC",
+            ],
+            "supported_issuance_protocols": [
+                "OID4VCI_PRE_AUTH", "OID4VCI_AUTH_CODE", "DIRECT",
+            ],
+            "endpoints": {
+                "trust_profiles": f"{issuer_url}/v1/trust-profiles",
+                "credential_templates": f"{issuer_url}/v1/credential-templates",
+                "presentation_policies": f"{issuer_url}/v1/presentation-policies",
+                "deployment_profiles": f"{issuer_url}/v1/deployment-profiles",
+                "flows": f"{issuer_url}/v1/flows",
+                "compliance_profiles": f"{issuer_url}/v1/compliance-profiles",
+                "revocation_profiles": f"{issuer_url}/v1/revocation-profiles",
+                "issued_credentials": f"{issuer_url}/v1/issued-credentials",
+                "trust_registry": f"{issuer_url}/v1/trust-registry",
+                "organizations": f"{issuer_url}/v1/organizations",
+                "devices": f"{issuer_url}/v1/devices",
+                "policy_sets": f"{issuer_url}/v1/policy-sets",
+                "wallet_registry": f"{issuer_url}/v1/wallet-registry",
+                "notifications": f"{issuer_url}/v1/notifications",
+                "scim": f"{issuer_url}/v1/organizations/{{org_id}}/scim/v2",
+            },
+            "wallet_facing_endpoints": {
+                "credential_offer": f"{issuer_url}/v1/issuance/offers/{{tx_id}}",
+                "token": f"{issuer_url}/v1/issuance/token",
+                "credential": f"{issuer_url}/v1/issuance/credential",
+                "nonce": f"{issuer_url}/v1/issuance/nonce",
+                "deferred_credential": f"{issuer_url}/v1/issuance/deferred-credential",
+                "notification": f"{issuer_url}/v1/issuance/notification",
+                "verification_request": f"{issuer_url}/v1/flows/instances/{{id}}/request",
+                "verification_submit": f"{issuer_url}/v1/flows/instances/{{id}}/submit",
+                "siop_request": f"{issuer_url}/v1/flows/siop/{{id}}/request",
+                "siop_submit": f"{issuer_url}/v1/flows/siop/submit",
+            },
+            "authorization": {
+                "policy_language": "cedar",
+                "cedar_schema_version": "MIP/1.0",
+            },
+        }
+
     @app.get("/health/services")
     async def services_health() -> dict:
         """Check health of all backend services."""
@@ -3252,6 +4457,55 @@ Verification is handled through two complementary approaches:
                 }
         
         return {"services": results}
+
+    # ── MIP §17.7 — Global exception handlers ──────────────────────────
+    @app.exception_handler(HTTPException)
+    async def _http_exception_handler(request: Request, exc: HTTPException):
+        """Wrap FastAPI HTTPException in MIP error envelope."""
+        detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+        error_key = {
+            400: "bad_request",
+            401: "unauthorized",
+            403: "forbidden",
+            404: "not_found",
+            409: "conflict",
+            415: "unsupported_media_type",
+            422: "validation_error",
+            429: "rate_limit_exceeded",
+            500: "server_error",
+            502: "bad_gateway",
+            503: "service_unavailable",
+            504: "gateway_timeout",
+        }.get(exc.status_code, "error")
+        return mip_error_response(
+            status_code=exc.status_code,
+            error=error_key,
+            message=detail,
+        )
+
+    @app.exception_handler(RequestValidationError)
+    async def _request_validation_error_handler(request: Request, exc: RequestValidationError):
+        """Wrap Pydantic/FastAPI validation errors in MIP error envelope."""
+        details = []
+        for err in exc.errors():
+            field = ".".join(str(loc) for loc in err.get("loc", []))
+            details.append({"field": field, "message": err.get("msg", "")})
+        return mip_error_response(
+            status_code=422,
+            error="validation_error",
+            message="Request validation failed",
+            extra={"details": details},
+        )
+
+    @app.exception_handler(Exception)
+    async def _unhandled_exception_handler(request: Request, exc: Exception):
+        """Catch-all: return 500 in MIP envelope, never leak stack traces."""
+        logger.exception("Unhandled exception on %s %s", request.method, request.url.path)
+        return mip_error_response(
+            status_code=500,
+            error="server_error",
+            message="An unexpected error occurred",
+        )
 
     from common.metrics import init_otel_tracing, mount_metrics
     init_otel_tracing(SERVICE_NAME)

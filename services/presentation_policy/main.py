@@ -32,7 +32,7 @@ from typing import Any, AsyncGenerator
 
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from typing import Annotated
 
@@ -192,6 +192,27 @@ class DisplayMetadata:
 
 
 @dataclass
+class HolderBinding:
+    required: bool = False
+    binding_methods: list[str] = field(default_factory=list)
+    nonce_required: bool = False
+
+
+@dataclass
+class FreshnessPolicy:
+    max_age_seconds: int | None = None
+    require_not_revoked: bool = False
+    revocation_grace_seconds: int | None = None
+
+
+@dataclass
+class IssuerConstraints:
+    min_trust_level: int | None = None
+    required_compliance_statuses: list[str] = field(default_factory=list)
+    required_accreditations: list[str] = field(default_factory=list)
+
+
+@dataclass
 class PresentationPolicy:
     """
     Presentation Policy - what credentials are requested.
@@ -208,8 +229,17 @@ class PresentationPolicy:
     display_metadata: DisplayMetadata = field(default_factory=DisplayMetadata)
     
     # Requirements
+    required_claims: list[RequestedClaim] = field(default_factory=list)
+    accepted_credential_types: list[str] = field(default_factory=list)
     credential_requirements: list[CredentialRequirement] = field(default_factory=list)
     alternative_requirements: list[AlternativeRequirement] = field(default_factory=list)
+    trust_profile_id: str | None = None
+    holder_binding: HolderBinding = field(default_factory=HolderBinding)
+    freshness: FreshnessPolicy | None = None
+    issuer_constraints: IssuerConstraints | None = None
+    credential_ranking_strategy: str = "FRESHEST_FIRST"
+    credential_ranking_weights: dict[str, float] | None = None
+    purpose: str | None = None
     
     # Compliance
     compliance_profile_id: str | None = None  # Reference to Compliance Profile
@@ -231,6 +261,38 @@ class PresentationPolicy:
     def suspend(self) -> None:
         self.status = PolicyStatus.SUSPENDED
         self.updated_at = datetime.now(timezone.utc)
+
+    @property
+    def protocol_required_claims(self) -> list[dict[str, Any]]:
+        if self.required_claims:
+            return [
+                {
+                    "claim_name": claim.claim_name,
+                    "credential_type": self.accepted_credential_types[0] if self.accepted_credential_types else None,
+                    "value_constraint": claim.constraints[0].value if claim.constraints else None,
+                    "predicate_spec": claim.predicate_spec,
+                }
+                for claim in self.required_claims
+            ]
+
+        flattened: list[dict[str, Any]] = []
+        for requirement in self.credential_requirements:
+            for claim in requirement.requested_claims:
+                flattened.append(
+                    {
+                        "claim_name": claim.claim_name,
+                        "credential_type": requirement.credential_template_id,
+                        "value_constraint": claim.constraints[0].value if claim.constraints else None,
+                        "predicate_spec": claim.predicate_spec,
+                    }
+                )
+        return flattened
+
+    @property
+    def effective_accepted_credential_types(self) -> list[str]:
+        if self.accepted_credential_types:
+            return self.accepted_credential_types
+        return [req.credential_template_id for req in self.credential_requirements if req.credential_template_id]
 
 
 # =============================================================================
@@ -313,7 +375,14 @@ class RequestedClaimModel(BaseModel):
     selective_disclosure: bool = True
     accept_derived: bool = True
     predicate_spec: dict | None = None
-    constraints: list[ClaimConstraintModel] = []
+    constraints: list[ClaimConstraintModel] = Field(default_factory=list)
+
+
+class ProtocolRequiredClaimModel(BaseModel):
+    claim_name: str
+    credential_type: str | None = None
+    value_constraint: Any = None
+    predicate_spec: dict | None = None
 
 
 class CredentialRequirementModel(BaseModel):
@@ -322,7 +391,7 @@ class CredentialRequirementModel(BaseModel):
     description: str | None = None
     required: bool = True
     credential_payload_format: str = "w3c_vcdm_v2_sd_jwt"
-    requested_claims: list[RequestedClaimModel] = []
+    requested_claims: list[RequestedClaimModel] = Field(default_factory=list)
     trust_profile_id: str | None = None
     max_age_seconds: int | None = None
     require_fresh_issuance: bool = False
@@ -331,7 +400,7 @@ class CredentialRequirementModel(BaseModel):
 class AlternativeRequirementModel(BaseModel):
     name: str
     description: str | None = None
-    credential_requirements: list[CredentialRequirementModel] = []
+    credential_requirements: list[CredentialRequirementModel] = Field(default_factory=list)
     min_satisfied: int = 1
 
 
@@ -352,18 +421,35 @@ class CreatePresentationPolicyRequest(BaseModel):
     description: str | None = None
     purpose: str | None = None
     display_metadata: DisplayMetadataModel | None = None
-    credential_requirements: list[CredentialRequirementModel] = []
-    alternative_requirements: list[AlternativeRequirementModel] = []
+    required_claims: list[ProtocolRequiredClaimModel] = Field(default_factory=list)
+    accepted_credential_types: list[str] = Field(default_factory=list)
+    trust_profile_id: str | None = None
+    holder_binding: dict[str, Any] | None = None
+    freshness: dict[str, Any] | None = None
+    issuer_constraints: dict[str, Any] | None = None
+    credential_ranking_strategy: str = "FRESHEST_FIRST"
+    credential_ranking_weights: dict[str, float] | None = None
+    credential_requirements: list[CredentialRequirementModel] = Field(default_factory=list)
+    alternative_requirements: list[AlternativeRequirementModel] = Field(default_factory=list)
     compliance_profile_id: str | None = None
     prefer_predicates: bool = False
     fallback_policy: str | None = None
-    supported_circuits: list[str] = []
+    supported_circuits: list[str] = Field(default_factory=list)
 
 
 class UpdatePresentationPolicyRequest(BaseModel):
     name: str | None = None
     description: str | None = None
+    purpose: str | None = None
     display_metadata: DisplayMetadataModel | None = None
+    required_claims: list[ProtocolRequiredClaimModel] | None = None
+    accepted_credential_types: list[str] | None = None
+    trust_profile_id: str | None = None
+    holder_binding: dict[str, Any] | None = None
+    freshness: dict[str, Any] | None = None
+    issuer_constraints: dict[str, Any] | None = None
+    credential_ranking_strategy: str | None = None
+    credential_ranking_weights: dict[str, float] | None = None
     credential_requirements: list[CredentialRequirementModel] | None = None
     alternative_requirements: list[AlternativeRequirementModel] | None = None
     compliance_profile_id: str | None = None
@@ -374,17 +460,20 @@ class PresentationPolicyResponse(BaseModel):
     organization_id: str
     name: str
     description: str | None = None
-    status: str
-    display_metadata: dict = {}
-    credential_requirements: list[dict] = []
-    alternative_requirements: list[dict] = []
-    compliance_profile_id: str | None = None
+    purpose: str | None = None
+    required_claims: list[dict] = Field(default_factory=list)
+    accepted_credential_types: list[str] = Field(default_factory=list)
+    trust_profile_id: str | None = None
+    holder_binding: dict | None = None
+    freshness: dict | None = None
     prefer_predicates: bool = False
+    supported_circuits: list[str] = Field(default_factory=list)
     fallback_policy: str | None = None
-    supported_circuits: list[str] = []
-    version: int = 1
+    issuer_constraints: dict | None = None
+    credential_ranking_strategy: str = "FRESHEST_FIRST"
+    credential_ranking_weights: dict[str, float] | None = None
     created_at: str
-    updated_at: str
+    updated_at: str | None = None
 
 
 # =============================================================================
@@ -744,7 +833,42 @@ def _build_credential_requirement(model: CredentialRequirementModel) -> Credenti
     return req
 
 
-@router.post("", response_model=PresentationPolicyResponse)
+def _build_requested_claim_from_protocol(model: ProtocolRequiredClaimModel) -> RequestedClaim:
+    requested_claim = RequestedClaim(
+        claim_name=model.claim_name,
+        display_name=model.claim_name.replace("_", " ").title(),
+        predicate_spec=model.predicate_spec,
+    )
+    if model.value_constraint is not None:
+        requested_claim.constraints.append(
+            ClaimConstraint(
+                claim_name=model.claim_name,
+                constraint_type=ConstraintType.EQUALS,
+                value=model.value_constraint,
+            )
+        )
+    return requested_claim
+
+
+def _build_protocol_requirement(request: CreatePresentationPolicyRequest) -> CredentialRequirement | None:
+    if not request.required_claims:
+        return None
+
+    requirement = CredentialRequirement(
+        credential_template_id=request.accepted_credential_types[0] if request.accepted_credential_types else "protocol-inline",
+        display_name=request.name,
+        description=request.description,
+        trust_profile_id=request.trust_profile_id,
+        max_age_seconds=(request.freshness or {}).get("max_age_seconds") if request.freshness else None,
+    )
+    requirement.requested_claims.extend(
+        _build_requested_claim_from_protocol(claim)
+        for claim in request.required_claims
+    )
+    return requirement
+
+
+@router.post("", response_model=PresentationPolicyResponse, response_model_exclude_none=True)
 async def create_presentation_policy(
     request: CreatePresentationPolicyRequest,
     fastapi_request: Request,
@@ -758,10 +882,30 @@ async def create_presentation_policy(
     if not membership or not membership.is_active():
         raise HTTPException(status_code=403, detail="Not a member of this organization")
     
+    if not request.credential_requirements and not request.required_claims:
+        raise HTTPException(status_code=400, detail="At least one required claim or credential requirement is required")
+    # MIP §7.2 — each credential_requirement MUST have ≥1 requested_claims
+    for i, cr in enumerate(request.credential_requirements):
+        if not cr.requested_claims:
+            raise HTTPException(
+                status_code=422,
+                detail=f"credential_requirements[{i}] must have at least one requested_claims entry",
+            )
+    if request.credential_ranking_strategy == "CUSTOM" and not request.credential_ranking_weights:
+        raise HTTPException(status_code=400, detail="credential_ranking_weights are required when credential_ranking_strategy is CUSTOM")
+
     policy = PresentationPolicy(
         organization_id=request.organization_id,
         name=request.name,
         description=request.description,
+        purpose=request.purpose,
+        accepted_credential_types=request.accepted_credential_types,
+        trust_profile_id=request.trust_profile_id,
+        holder_binding=HolderBinding(**request.holder_binding) if request.holder_binding else HolderBinding(),
+        freshness=FreshnessPolicy(**request.freshness) if request.freshness else None,
+        issuer_constraints=IssuerConstraints(**request.issuer_constraints) if request.issuer_constraints else None,
+        credential_ranking_strategy=request.credential_ranking_strategy,
+        credential_ranking_weights=request.credential_ranking_weights,
         compliance_profile_id=request.compliance_profile_id,
         prefer_predicates=request.prefer_predicates,
         fallback_policy=request.fallback_policy,
@@ -774,16 +918,29 @@ async def create_presentation_policy(
             title=request.display_metadata.title,
             description=request.display_metadata.description,
             purpose=RequestPurpose(request.display_metadata.purpose),
-            purpose_description=request.display_metadata.purpose_description,
+            purpose_description=request.display_metadata.purpose_description or request.purpose,
             verifier_name=request.display_metadata.verifier_name,
             verifier_logo_url=request.display_metadata.verifier_logo_url,
             privacy_policy_url=request.display_metadata.privacy_policy_url,
             terms_of_service_url=request.display_metadata.terms_of_service_url,
         )
+    elif request.purpose:
+        policy.display_metadata.purpose_description = request.purpose
     
     # Set credential requirements
     for req_model in request.credential_requirements:
         policy.credential_requirements.append(_build_credential_requirement(req_model))
+
+    # Accept protocol-first required_claims and bridge into the legacy evaluator shape.
+    if request.required_claims:
+        policy.required_claims.extend(
+            _build_requested_claim_from_protocol(claim)
+            for claim in request.required_claims
+        )
+        if not policy.credential_requirements:
+            synthetic_requirement = _build_protocol_requirement(request)
+            if synthetic_requirement:
+                policy.credential_requirements.append(synthetic_requirement)
     
     # Set alternative requirements
     for alt_model in request.alternative_requirements:
@@ -801,7 +958,7 @@ async def create_presentation_policy(
     return _policy_to_response(policy)
 
 
-@router.get("", response_model=list[PresentationPolicyResponse])
+@router.get("", response_model=list[PresentationPolicyResponse], response_model_exclude_none=True)
 async def list_presentation_policies(
     organization_id: str = Query(..., description="Organization ID"),
     user_id: str = Depends(get_current_user_id),
@@ -814,7 +971,7 @@ async def list_presentation_policies(
     return [_policy_to_response(p) for p in policies]
 
 
-@router.get("/{policy_id}", response_model=PresentationPolicyResponse)
+@router.get("/{policy_id}", response_model=PresentationPolicyResponse, response_model_exclude_none=True)
 async def get_presentation_policy(
     policy_id: str,
     user_id: str = Depends(get_current_user_id),
@@ -837,7 +994,7 @@ async def get_presentation_policy(
     return _policy_to_response(policy)
 
 
-@router.patch("/{policy_id}", response_model=PresentationPolicyResponse)
+@router.patch("/{policy_id}", response_model=PresentationPolicyResponse, response_model_exclude_none=True)
 async def update_presentation_policy(
     policy_id: str,
     request: UpdatePresentationPolicyRequest,
@@ -864,15 +1021,70 @@ async def update_presentation_policy(
         policy.name = request.name
     if request.description is not None:
         policy.description = request.description
+    if request.purpose is not None:
+        policy.purpose = request.purpose
+        policy.display_metadata.purpose_description = request.purpose
     if request.compliance_profile_id is not None:
         policy.compliance_profile_id = request.compliance_profile_id
+    if request.accepted_credential_types is not None:
+        policy.accepted_credential_types = request.accepted_credential_types
+    if request.trust_profile_id is not None:
+        policy.trust_profile_id = request.trust_profile_id
+    if request.holder_binding is not None:
+        policy.holder_binding = HolderBinding(**request.holder_binding)
+    if request.freshness is not None:
+        policy.freshness = FreshnessPolicy(**request.freshness)
+    if request.issuer_constraints is not None:
+        policy.issuer_constraints = IssuerConstraints(**request.issuer_constraints)
+    if request.credential_ranking_strategy is not None:
+        if request.credential_ranking_strategy == "CUSTOM" and not request.credential_ranking_weights:
+            raise HTTPException(status_code=400, detail="credential_ranking_weights are required when credential_ranking_strategy is CUSTOM")
+        policy.credential_ranking_strategy = request.credential_ranking_strategy
+    if request.credential_ranking_weights is not None:
+        policy.credential_ranking_weights = request.credential_ranking_weights
+    if request.display_metadata is not None:
+        policy.display_metadata = DisplayMetadata(
+            title=request.display_metadata.title,
+            description=request.display_metadata.description,
+            purpose=RequestPurpose(request.display_metadata.purpose),
+            purpose_description=request.display_metadata.purpose_description or policy.purpose,
+            verifier_name=request.display_metadata.verifier_name,
+            verifier_logo_url=request.display_metadata.verifier_logo_url,
+            privacy_policy_url=request.display_metadata.privacy_policy_url,
+            terms_of_service_url=request.display_metadata.terms_of_service_url,
+        )
+    if request.credential_requirements is not None:
+        policy.credential_requirements = [_build_credential_requirement(req) for req in request.credential_requirements]
+    if request.required_claims is not None:
+        policy.required_claims = [_build_requested_claim_from_protocol(claim) for claim in request.required_claims]
+        if request.required_claims and not policy.credential_requirements:
+            synthetic_requirement = CredentialRequirement(
+                credential_template_id=policy.effective_accepted_credential_types[0] if policy.effective_accepted_credential_types else "protocol-inline",
+                display_name=policy.name,
+                description=policy.description,
+                trust_profile_id=policy.trust_profile_id,
+                max_age_seconds=policy.freshness.max_age_seconds if policy.freshness else None,
+                requested_claims=list(policy.required_claims),
+            )
+            policy.credential_requirements = [synthetic_requirement]
+    if request.alternative_requirements is not None:
+        policy.alternative_requirements = []
+        for alt_model in request.alternative_requirements:
+            alt = AlternativeRequirement(
+                name=alt_model.name,
+                description=alt_model.description,
+                min_satisfied=alt_model.min_satisfied,
+            )
+            for req_model in alt_model.credential_requirements:
+                alt.credential_requirements.append(_build_credential_requirement(req_model))
+            policy.alternative_requirements.append(alt)
     
     policy.updated_at = datetime.now(timezone.utc)
     await repo.save(policy)
     return _policy_to_response(policy)
 
 
-@router.post("/{policy_id}/activate", response_model=PresentationPolicyResponse)
+@router.post("/{policy_id}/activate", response_model=PresentationPolicyResponse, response_model_exclude_none=True)
 async def activate_presentation_policy(
     policy_id: str,
     user_id: str = Depends(get_current_user_id),
@@ -899,7 +1111,7 @@ async def activate_presentation_policy(
     return _policy_to_response(policy)
 
 
-@router.post("/{policy_id}/suspend", response_model=PresentationPolicyResponse)
+@router.post("/{policy_id}/suspend", response_model=PresentationPolicyResponse, response_model_exclude_none=True)
 async def suspend_presentation_policy(
     policy_id: str,
     user_id: str = Depends(get_current_user_id),
@@ -919,7 +1131,7 @@ async def suspend_presentation_policy(
     return _policy_to_response(policy)
 
 
-@router.post("/{policy_id}/new-version", response_model=PresentationPolicyResponse)
+@router.post("/{policy_id}/new-version", response_model=PresentationPolicyResponse, response_model_exclude_none=True)
 async def create_new_version(
     policy_id: str,
     user_id: str = Depends(get_current_user_id),
@@ -1061,7 +1273,7 @@ class EvaluateInlineRequest(BaseModel):
     audience: str | None = None
 
 
-@router.post("/{policy_id}/evaluate", response_model=PolicyEvaluationResponse)
+@router.post("/{policy_id}/evaluate", response_model=PolicyEvaluationResponse, response_model_exclude_none=True)
 async def evaluate_presentation(
     policy_id: str,
     request: EvaluatePresentationRequest,
@@ -1262,7 +1474,7 @@ async def evaluate_presentation(
     )
 
 
-@router.post("/evaluate", response_model=PolicyEvaluationResponse)
+@router.post("/evaluate", response_model=PolicyEvaluationResponse, response_model_exclude_none=True)
 async def evaluate_presentation_inline(
     request: EvaluateInlineRequest,
 ) -> PolicyEvaluationResponse:
@@ -1325,68 +1537,30 @@ def _policy_to_response(policy: PresentationPolicy) -> PresentationPolicyRespons
         organization_id=policy.organization_id,
         name=policy.name,
         description=policy.description,
-        status=policy.status.value,
-        display_metadata={
-            "title": policy.display_metadata.title,
-            "description": policy.display_metadata.description,
-            "purpose": policy.display_metadata.purpose.value,
-            "purpose_description": policy.display_metadata.purpose_description,
-            "verifier_name": policy.display_metadata.verifier_name,
-            "verifier_logo_url": policy.display_metadata.verifier_logo_url,
-            "privacy_policy_url": policy.display_metadata.privacy_policy_url,
-            "terms_of_service_url": policy.display_metadata.terms_of_service_url,
+        purpose=policy.purpose or policy.display_metadata.purpose_description,
+        required_claims=policy.protocol_required_claims,
+        accepted_credential_types=policy.effective_accepted_credential_types,
+        trust_profile_id=policy.trust_profile_id,
+        holder_binding={
+            "required": policy.holder_binding.required,
+            "binding_methods": policy.holder_binding.binding_methods,
+            "nonce_required": policy.holder_binding.nonce_required,
         },
-        credential_requirements=[
-            {
-                "id": req.id,
-                "credential_template_id": req.credential_template_id,
-                "display_name": req.display_name,
-                "required": req.required,
-                "credential_payload_format": req.credential_payload_format,
-                "requested_claims": [
-                    {
-                        "id": rc.id,
-                        "claim_name": rc.claim_name,
-                        "display_name": rc.display_name,
-                        "required": rc.required,
-                        "selective_disclosure": rc.selective_disclosure,
-                        "predicate_spec": rc.predicate_spec,
-                        "constraints": [
-                            {
-                                "constraint_type": c.constraint_type.value,
-                                "value": c.value,
-                            }
-                            for c in rc.constraints
-                        ],
-                    }
-                    for rc in req.requested_claims
-                ],
-                "trust_profile_id": req.trust_profile_id,
-                "max_age_seconds": req.max_age_seconds,
-            }
-            for req in policy.credential_requirements
-        ],
-        alternative_requirements=[
-            {
-                "id": alt.id,
-                "name": alt.name,
-                "min_satisfied": alt.min_satisfied,
-                "credential_requirements": [
-                    {
-                        "id": req.id,
-                        "credential_template_id": req.credential_template_id,
-                        "display_name": req.display_name,
-                    }
-                    for req in alt.credential_requirements
-                ],
-            }
-            for alt in policy.alternative_requirements
-        ],
-        compliance_profile_id=policy.compliance_profile_id,
+        freshness={
+            "max_age_seconds": policy.freshness.max_age_seconds,
+            "require_not_revoked": policy.freshness.require_not_revoked,
+            "revocation_grace_seconds": policy.freshness.revocation_grace_seconds,
+        } if policy.freshness else None,
         prefer_predicates=policy.prefer_predicates,
-        fallback_policy=policy.fallback_policy,
         supported_circuits=policy.supported_circuits,
-        version=policy.version,
+        fallback_policy=policy.fallback_policy,
+        issuer_constraints={
+            "min_trust_level": policy.issuer_constraints.min_trust_level,
+            "required_compliance_statuses": policy.issuer_constraints.required_compliance_statuses,
+            "required_accreditations": policy.issuer_constraints.required_accreditations,
+        } if policy.issuer_constraints else None,
+        credential_ranking_strategy=policy.credential_ranking_strategy,
+        credential_ranking_weights=policy.credential_ranking_weights,
         created_at=policy.created_at.isoformat(),
         updated_at=policy.updated_at.isoformat(),
     )

@@ -18,6 +18,7 @@ import FlightTakeoffIcon from '@mui/icons-material/FlightTakeoff';
 import SecurityIcon from '@mui/icons-material/Security';
 import AccountBalanceWalletIcon from '@mui/icons-material/AccountBalanceWallet';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
+import GitHubIcon from '@mui/icons-material/GitHub';
 import { useNavigate } from 'react-router-dom';
 import { PRODUCTS } from '../data/marketingContent';
 import { useBranding } from '../hooks/useBranding';
@@ -464,6 +465,49 @@ function ProductPage() {
           </Grid>
         ))}
       </Grid>
+
+      {/* CTA Section */}
+      <Box
+        sx={{
+          textAlign: 'center',
+          py: 4,
+          mt: 6,
+          px: 3,
+          bgcolor: 'grey.50',
+          borderRadius: 2,
+          border: '1px solid',
+          borderColor: 'grey.200',
+        }}
+      >
+        <Chip label="Open Standard" color="primary" size="small" sx={{ fontWeight: 700, mb: 2 }} />
+        <Typography variant="h5" fontWeight={700} gutterBottom>
+          Built on an Open Protocol
+        </Typography>
+        <Typography variant="body1" color="text.secondary" sx={{ mb: 3, maxWidth: 700, mx: 'auto' }}>
+          Every product is built on the Marty Identity Protocol (MIP)—an open, vendor-neutral specification.
+          No vendor lock-in. No proprietary formats. Your identity infrastructure stays portable.
+        </Typography>
+        <Box sx={{ display: 'flex', gap: 2, justifyContent: 'center', flexWrap: 'wrap' }}>
+          <Button
+            variant="contained"
+            size="large"
+            onClick={() => navigate('/protocol')}
+            endIcon={<ArrowForwardIcon />}
+          >
+            Explore the Protocol
+          </Button>
+          <Button
+            variant="outlined"
+            size="large"
+            startIcon={<GitHubIcon />}
+            href="https://github.com/mip-protocol/marty-protocol"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            View on GitHub
+          </Button>
+        </Box>
+      </Box>
 
       {/* CTA Section */}
       <Box

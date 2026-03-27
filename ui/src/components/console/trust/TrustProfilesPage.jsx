@@ -28,6 +28,7 @@ import { Link } from 'react-router-dom';
 import { ResourcePage, StatusChip, EmptyState, EmptyStates } from '../../common';
 import { TrustProvider } from '../../trust';
 import { useAsyncData } from '../../../hooks/useAsyncData';
+import { useAuth } from '../../../hooks/useAuth';
 import { listTrustProfiles } from '../../../services/presentationPolicyApi';
 
 const getTrustTabs = (t) => [
@@ -44,11 +45,12 @@ const getBreadcrumbs = (t) => [
 
 function TrustProfilesPage() {
   const { t } = useTranslation('console');
+  const { organizationId } = useAuth();
 
   // Fetch trust profiles from API
   const { data: profiles = [], loading, error } = useAsyncData(
-    () => listTrustProfiles(),
-    []
+    () => (organizationId ? listTrustProfiles({ organization_id: organizationId }) : Promise.resolve([])),
+    [organizationId]
   );
 
   return (
@@ -96,7 +98,7 @@ function TrustProfilesPage() {
                       </TableCell>
                       <TableCell>
                         <Chip 
-                          label={profile.framework.toUpperCase()} 
+                          label={(profile.framework || profile.profile_type || 'custom').toUpperCase()} 
                           size="small" 
                           variant="outlined" 
                         />
@@ -104,10 +106,10 @@ function TrustProfilesPage() {
                       <TableCell>
                         <StatusChip status={profile.status} />
                       </TableCell>
-                      <TableCell align="right">{profile.trustedIssuers}</TableCell>
-                      <TableCell align="right">{profile.validationRules}</TableCell>
+                      <TableCell align="right">{profile.trusted_issuers?.length ?? profile.trustedIssuers ?? 0}</TableCell>
+                      <TableCell align="right">{profile.validation_rules?.allowed_algorithms?.length ?? profile.validationRules ?? 0}</TableCell>
                       <TableCell>
-                        {new Date(profile.updatedAt).toLocaleDateString()}
+                        {new Date(profile.updated_at || profile.updatedAt).toLocaleDateString()}
                       </TableCell>
                       <TableCell align="right">
                         <Tooltip title={t('trust.actions.viewDetails')}>

@@ -81,18 +81,13 @@ class OrganizationResponse(BaseModel):
     id: str
     name: str
     display_name: str | None
-    slug: str
-    description: str | None
-    org_type: str
+    description: str | None = None
+    join_code: str | None = None
+    visibility: str = "PRIVATE"
+    owner_id: str
     status: str
-    contact_email: str | None
-    contact_phone: str | None
-    website: str | None
-    join_mechanism: str
-    requires_approval: bool
-    is_discoverable: bool
     created_at: str
-    updated_at: str
+    updated_at: str | None = None
 
 
 class InviteMemberRequest(BaseModel):
@@ -151,15 +146,12 @@ class OrganizationWithMembership(BaseModel):
     id: str
     name: str
     display_name: str | None
-    slug: str
-    description: str | None
-    org_type: str
+    description: str | None = None
+    visibility: str = "PRIVATE"
+    owner_id: str
     status: str
-    contact_email: str | None
-    contact_phone: str | None
-    website: str | None
     created_at: str
-    updated_at: str
+    updated_at: str | None = None
     membership: MembershipDetails
 
 
@@ -174,14 +166,18 @@ class CreateApiKeyRequest(BaseModel):
 class ApiKeyResponse(BaseModel):
     """API key response."""
     id: str
+    organization_id: str
     name: str
-    description: str | None
+    description: str | None = None
     key_prefix: str
+    scope_type: str = "ORGANIZATION"
+    deployment_profile_id: str | None = None
     scopes: list[str]
-    status: str
-    last_used_at: str | None
-    expires_at: str | None
+    enabled: bool = True
+    expires_at: str | None = None
+    last_used_at: str | None = None
     created_at: str
+    updated_at: str | None = None
 
 
 class ApiKeyCreatedResponse(ApiKeyResponse):
@@ -255,7 +251,7 @@ async def get_current_user_id(
 # Organization Endpoints
 # =============================================================================
 
-@router.post("", response_model=OrganizationResponse)
+@router.post("", response_model=OrganizationResponse, response_model_exclude_none=True)
 async def create_organization(
     request: CreateOrganizationRequest,
     user_id: str = Depends(get_current_user_id),
@@ -278,7 +274,7 @@ async def create_organization(
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.get("", response_model=list[OrganizationResponse])
+@router.get("", response_model=list[OrganizationResponse], response_model_exclude_none=True)
 async def list_organizations(
     limit: int = Query(default=100, le=1000),
     offset: int = Query(default=0, ge=0),
@@ -289,7 +285,7 @@ async def list_organizations(
     return [_org_to_response(org) for org in orgs]
 
 
-@router.get("/discover", response_model=list[OrganizationResponse])
+@router.get("/discover", response_model=list[OrganizationResponse], response_model_exclude_none=True)
 async def discover_organizations(
     search: str | None = Query(default=None, description="Search by name or display name"),
     org_type: str | None = Query(default=None, description="Filter by organization type"),
@@ -312,7 +308,7 @@ async def discover_organizations(
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.get("/mine", response_model=list[OrganizationWithMembership])
+@router.get("/mine", response_model=list[OrganizationWithMembership], response_model_exclude_none=True)
 async def get_my_organizations(
     user_id: str = Depends(get_current_user_id),
     use_case: OrganizationUseCase = Depends(get_org_use_case),
@@ -329,15 +325,12 @@ async def get_my_organizations(
             id=str(org.id),
             name=org.name,
             display_name=org.display_name,
-            slug=org.slug,
             description=org.description,
-            org_type=org.org_type.value,
+            visibility=org.visibility,
+            owner_id=org.owner_id,
             status=org.status.value,
-            contact_email=org.contact_email,
-            contact_phone=org.contact_phone,
-            website=org.website,
             created_at=org.created_at.isoformat(),
-            updated_at=org.updated_at.isoformat(),
+            updated_at=org.updated_at.isoformat() if org.updated_at else None,
             membership=MembershipDetails(
                 role=membership.role.value,
                 status=membership.status.value,
@@ -349,7 +342,7 @@ async def get_my_organizations(
     return results
 
 
-@router.get("/{org_id}", response_model=OrganizationResponse)
+@router.get("/{org_id}", response_model=OrganizationResponse, response_model_exclude_none=True)
 async def get_organization(
     org_id: str,
     org_ctx: OrganizationContext = Depends(require_org_membership),
@@ -378,7 +371,7 @@ async def get_organization(
 
 
 
-@router.patch("/{org_id}", response_model=OrganizationResponse)
+@router.patch("/{org_id}", response_model=OrganizationResponse, response_model_exclude_none=True)
 async def update_organization(
     org_id: str,
     request: UpdateOrganizationRequest,
@@ -407,7 +400,7 @@ async def update_organization(
 # Join Endpoints
 # =============================================================================
 
-@router.post("/join/code", response_model=JoinByCodeResponse, status_code=201)
+@router.post("/join/code", response_model=JoinByCodeResponse, response_model_exclude_none=True, status_code=201)
 async def join_by_code(
     request: JoinByCodeRequest,
     user_id: str = Depends(get_current_user_id),
@@ -434,7 +427,7 @@ async def join_by_code(
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.get("/join/code/validate", response_model=ValidateJoinCodeResponse)
+@router.get("/join/code/validate", response_model=ValidateJoinCodeResponse, response_model_exclude_none=True)
 async def validate_join_code(
     code: str = Query(..., description="Join/invitation code"),
     use_case: JoinUseCase = Depends(get_join_use_case),
@@ -450,7 +443,7 @@ async def validate_join_code(
     )
 
 
-@router.post("/{org_id}/join", response_model=JoinByCodeResponse, status_code=201)
+@router.post("/{org_id}/join", response_model=JoinByCodeResponse, response_model_exclude_none=True, status_code=201)
 async def join_organization(
     org_id: str,
     user_id: str = Depends(get_current_user_id),
@@ -481,7 +474,7 @@ async def join_organization(
 # Member Endpoints
 # =============================================================================
 
-@router.get("/{org_id}/members", response_model=list[MemberResponse])
+@router.get("/{org_id}/members", response_model=list[MemberResponse], response_model_exclude_none=True)
 async def list_members(
     org_id: str,
     org_ctx: OrganizationContext = Depends(require_org_membership),
@@ -492,7 +485,7 @@ async def list_members(
     return [_member_to_response(m) for m in members]
 
 
-@router.post("/{org_id}/members", response_model=MemberResponse)
+@router.post("/{org_id}/members", response_model=MemberResponse, response_model_exclude_none=True)
 async def invite_member(
     org_id: str,
     request: InviteMemberRequest,
@@ -520,7 +513,7 @@ async def invite_member(
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.patch("/{org_id}/members/{member_id}", response_model=MemberResponse)
+@router.patch("/{org_id}/members/{member_id}", response_model=MemberResponse, response_model_exclude_none=True)
 async def update_member(
     org_id: str,
     member_id: str,
@@ -585,7 +578,7 @@ async def remove_member(
 # API Key Endpoints
 # =============================================================================
 
-@router.get("/{org_id}/api-keys", response_model=list[ApiKeyResponse])
+@router.get("/{org_id}/api-keys", response_model=list[ApiKeyResponse], response_model_exclude_none=True)
 async def list_api_keys(
     org_id: str,
     org_ctx: OrganizationContext = Depends(require_org_membership),
@@ -596,7 +589,7 @@ async def list_api_keys(
     return [_api_key_to_response(k) for k in keys]
 
 
-@router.post("/{org_id}/api-keys", response_model=ApiKeyCreatedResponse)
+@router.post("/{org_id}/api-keys", response_model=ApiKeyCreatedResponse, response_model_exclude_none=True)
 async def create_api_key(
     org_id: str,
     request: CreateApiKeyRequest,
@@ -658,18 +651,13 @@ def _org_to_response(org) -> OrganizationResponse:
         id=str(org.id),
         name=org.name,
         display_name=org.display_name,
-        slug=org.slug,
         description=org.description,
-        org_type=org.org_type.value,
+        join_code=org.join_code,
+        visibility=org.visibility,
+        owner_id=org.owner_id,
         status=org.status.value,
-        contact_email=org.contact_email,
-        contact_phone=org.contact_phone,
-        website=org.website,
-        join_mechanism=org.join_mechanism.value,
-        requires_approval=org.requires_approval,
-        is_discoverable=org.is_discoverable,
         created_at=org.created_at.isoformat(),
-        updated_at=org.updated_at.isoformat(),
+        updated_at=org.updated_at.isoformat() if org.updated_at else None,
     )
 
 
@@ -689,12 +677,16 @@ def _member_to_response(member) -> MemberResponse:
 def _api_key_to_response(api_key) -> ApiKeyResponse:
     return ApiKeyResponse(
         id=api_key.id,
+        organization_id=api_key.organization_id,
         name=api_key.name,
         description=api_key.description,
         key_prefix=api_key.key_prefix,
+        scope_type=api_key.scope_type,
+        deployment_profile_id=api_key.deployment_profile_id,
         scopes=api_key.scopes,
-        status=api_key.status.value,
+        enabled=api_key.enabled,
         last_used_at=api_key.last_used_at.isoformat() if api_key.last_used_at else None,
         expires_at=api_key.expires_at.isoformat() if api_key.expires_at else None,
         created_at=api_key.created_at.isoformat(),
+        updated_at=api_key.updated_at.isoformat() if api_key.updated_at else None,
     )

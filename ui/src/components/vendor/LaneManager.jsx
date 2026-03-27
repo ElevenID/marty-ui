@@ -106,7 +106,7 @@ const LaneManager = ({ deploymentProfile, onBack }) => {
   const handleSave = async () => {
     try {
       if (editMode) {
-        await deploymentProfilesApi.updateLane(currentLane.id, currentLane);
+        await deploymentProfilesApi.updateLane(deploymentProfile.id, currentLane.id, currentLane);
       } else {
         await deploymentProfilesApi.createLane(currentLane);
       }
@@ -123,7 +123,7 @@ const LaneManager = ({ deploymentProfile, onBack }) => {
       return;
     }
     try {
-      await deploymentProfilesApi.deleteLane(laneId);
+      await deploymentProfilesApi.deleteLane(deploymentProfile.id, laneId);
       loadLanes();
     } catch (err) {
       console.error('Failed to delete lane:', err);
@@ -134,7 +134,7 @@ const LaneManager = ({ deploymentProfile, onBack }) => {
   const handleAssignDevice = async () => {
     if (!deviceToAssign || !deviceDialog.data) return;
     try {
-      await deploymentProfilesApi.assignDeviceToLane(deviceDialog.data.id, deviceToAssign);
+      await deploymentProfilesApi.assignDeviceToLane(deploymentProfile.id, deviceDialog.data.id, deviceToAssign);
       deviceDialog.close();
       loadLanes();
     } catch (err) {
@@ -147,7 +147,7 @@ const LaneManager = ({ deploymentProfile, onBack }) => {
       return;
     }
     try {
-      await deploymentProfilesApi.unassignDeviceFromLane(laneId, deviceId);
+      await deploymentProfilesApi.unassignDeviceFromLane(deploymentProfile.id, laneId, deviceId);
       loadLanes();
     } catch (err) {
       console.error('Failed to unassign device:', err);

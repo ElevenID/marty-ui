@@ -1,6 +1,7 @@
 import ResourceCreateDrawer from '../../common/ResourceCreateDrawer';
-import { createTrustProfile } from '../../../services/presentationPolicyApi';
+import { addTrustProfileIssuer, createTrustProfile } from '../../../services/presentationPolicyApi';
 import { useNotifications } from '../../../hooks/useNotifications';
+import { useAuth } from '../../../hooks/useAuth';
 import { useTranslation } from 'react-i18next';
 
 /**
@@ -12,6 +13,7 @@ import { useTranslation } from 'react-i18next';
 function CreateTrustProfileDrawer({ open, onClose, onSuccess }) {
   const { t } = useTranslation('console');
   const { showNotification } = useNotifications();
+  const { organizationId } = useAuth();
 
   const fields = [
     {
@@ -32,32 +34,36 @@ function CreateTrustProfileDrawer({ open, onClose, onSuccess }) {
       rows: 3,
     },
     {
-      name: 'required_credential_types',
-      label: t('trust.createTrustProfileDrawer.requiredCredentialTypes'),
+      name: 'issuer_did',
+      label: t('trust.createTrustProfileDrawer.issuerDid', { defaultValue: 'Trusted issuer DID' }),
       type: 'text',
-      required: false,
-      placeholder: t('trust.createTrustProfileDrawer.requiredCredentialTypesPlaceholder'),
-      helperText: t('trust.createTrustProfileDrawer.requiredCredentialTypesHelper'),
+      required: true,
+      placeholder: t('trust.createTrustProfileDrawer.issuerDidPlaceholder', { defaultValue: 'did:web:issuer.example.com' }),
+      helperText: t('trust.createTrustProfileDrawer.issuerDidHelper', { defaultValue: 'Provide one issuer DID to create a protocol-valid trust profile.' }),
     },
   ];
 
   const handleSubmit = async (formData) => {
-    // Parse comma-separated credential types
-    const credentialTypes = formData.required_credential_types
-      ? formData.required_credential_types.split(',').map((t) => t.trim()).filter(Boolean)
-      : [];
+    if (!organizationId) {
+      throw new Error(t('trust.failedToLoad', { defaultValue: 'Organization context is required to create a trust profile.' }));
+    }
 
     const payload = {
+      organization_id: organizationId,
       name: formData.name,
       description: formData.description || '',
-      required_credential_types: credentialTypes,
-      // Default values for quick creation
-      trust_anchors: [],
-      revocation_check_enabled: true,
-      signature_validation_required: true,
+      supported_formats: ['sd_jwt_vc', 'mdoc'],
+      trusted_issuers: [{
+        did: formData.issuer_did,
+        name: formData.issuer_did,
+      }],
     };
 
     const result = await createTrustProfile(payload);
+    await addTrustProfileIssuer(result.id, {
+      name: formData.issuer_did,
+      issuer_did: formData.issuer_did,
+    });
 
     showNotification({
       message: t('trust.createTrustProfileDrawer.successMessage', { name: formData.name }),
@@ -76,12 +82,12 @@ function CreateTrustProfileDrawer({ open, onClose, onSuccess }) {
       onSubmit={handleSubmit}
       title={t('trust.createTrustProfileDrawer.title')}
       resourceType="trust-profile"
-      advancedPath="/console/org/trust/new"
+      advancedPath="/console/org/trust/profiles/new"
       fields={fields}
       initialData={{
         name: '',
         description: '',
-        required_credential_types: '',
+        issuer_did: '',
       }}
     />
   );

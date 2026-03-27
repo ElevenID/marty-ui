@@ -1,6 +1,6 @@
-# Marty UI - OpenWallet Foundation Demo
+# Marty UI
 
-**Standalone repository** for the Marty UI demo application, extracted from the main Marty monorepo.
+Microservice-based control plane and UI for Marty credential, trust, policy, applicant, and flow management.
 
 ## 🚀 Quick Start
 
@@ -14,22 +14,31 @@ git clone https://github.com/ORG/marty-credentials.git
 git clone https://github.com/ORG/marty-microservices-framework.git
 git clone https://github.com/ORG/marty-ui.git
 
-# Start with Docker (auto-loads local packages)
+# Start the local microservice stack
 cd marty-ui
-docker-compose up
+make dev
 ```
 
-The [docker-compose.override.yml](docker-compose.override.yml) automatically mounts local Marty packages for live development.
+Then, if you want the UI running natively in a separate terminal:
+
+```bash
+make run-ui
+```
+
+Primary local URLs:
+
+- Gateway: <http://localhost:8000>
+- Gateway docs: <http://localhost:8000/docs>
+- Keycloak: <http://localhost:8180>
+- UI dev server: <http://localhost:5173>
 
 ### Production Deployment
 
 ```bash
-# Set GitHub token for package registry
-export GITHUB_TOKEN="your_token_here"
-
-# Build and deploy
-docker-compose -f docker-compose.yml build --build-arg GITHUB_TOKEN=${GITHUB_TOKEN}
-docker-compose -f docker-compose.yml up
+# Production deployment is environment-specific.
+# For local production-like verification, build the UI and run the backend stack:
+cd marty-ui/ui
+npm run build
 ```
 
 📖 **Full setup guide:** [DEVELOPMENT_SETUP.md](DEVELOPMENT_SETUP.md)
@@ -38,34 +47,35 @@ docker-compose -f docker-compose.yml up
 
 ## Overview
 
-A comprehensive demonstration of mobile document (mDoc) and mobile driving license (mDL) functionality using the OpenWallet Foundation's Multipaz SDK, deployed on Kubernetes with Kind.
+This repository hosts the active `marty-ui` application stack:
 
-## Overview
-
-This demo showcases a complete mDoc/mDL ecosystem including:
-
-- **Issuer Service**: Issues mDL credentials using ISO 18013-5 standards
-- **Verifier Service**: Verifies mDoc presentations using OpenID4VP
-- **Wallet Service**: Manages credential storage and selective disclosure
-- **Demo UI**: Interactive web interface for testing all flows
+- **Gateway** for public and authenticated API routing
+- **Auth** and **Organization** services for identity and tenancy
+- **Trust Profile**, **Compliance Profile**, **Presentation Policy**, and **Deployment Profile** services
+- **Applicant**, **Flow**, **Notification**, **Verification**, and **Device Registration** services
+- **React/Vite UI** for operator workflows and console experiences
 
 ## Architecture
 
 ```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   Demo UI       │    │   Issuer API    │    │  Verifier API   │
-│ (React/Nginx)   │    │   (FastAPI)     │    │   (FastAPI)     │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
-         │                       │                       │
-         └───────────────────────┼───────────────────────┘
-                                 │
-         ┌─────────────────┐    ┌─────────────────┐
-         │   Wallet API    │    │   PostgreSQL    │
-         │   (FastAPI)     │    │   (Database)    │
-         └─────────────────┘    └─────────────────┘
+┌───────────────┐
+│  React / Vite │
+└───────┬───────┘
+   │
+┌───────▼───────┐
+│    Gateway    │
+└───────┬───────┘
+   │
+ ┌──────┼─────────────────────────────────────────────┐
+ │      │                                             │
+▼▼▼    ▼▼▼                                           ▼▼▼
+Auth  Organization  Trust/Profile/Policy services  Flow/Applicant/etc.
+   │
+   ▼
+   Postgres / Redis / Keycloak / MailHog
 ```
 
-All services run in a Kubernetes cluster managed by Kind, with ingress routing and persistent storage.
+Locally, the stack is orchestrated with `docker-compose.base.yml` plus profile overlays.
 
 ## Package Dependencies
 
@@ -144,279 +154,198 @@ See [IMPORT_MIGRATION.md](IMPORT_MIGRATION.md) for import path details.
 
 ## Quick Start
 
-### 1. Build and Deploy
+### 1. Start backend services
 
 ```bash
-# Navigate to the Marty UI directory
 cd marty-ui
-
-# Build all services (including enhanced features)
-./build.sh
-
-# Deploy to Kind cluster
-./deploy-k8s.sh
-
-# Access the demo
-open http://localhost
+make dev
 ```
 
-### 2. Explore Enhanced Features
+### 2. Start the UI locally
 
-- **Basic Demo**: Use the Issuer, Verifier, and Wallet tabs for standard mDoc/mDL operations
-- **Enhanced Demo**: Click the "Enhanced" tab to explore advanced features:
-  - Age verification without birth date disclosure
-  - Offline QR code verification
-  - Certificate lifecycle monitoring
-  - Policy-based selective disclosure
+```bash
+cd ui
+npm install
+npm run dev
+```
+
+### 3. Open the app
+
+- UI: <http://localhost:5173>
+- Gateway: <http://localhost:8000>
+- API docs: <http://localhost:8000/docs>
 
 ## Prerequisites
 
-- **Docker**: For building container images
-- **Kind**: For local Kubernetes cluster
-- **kubectl**: For Kubernetes management
-- **Node.js** (optional): For UI development
+- **Docker Desktop** or Docker Engine with Compose support
+- **Node.js** (optional, for native UI development)
+- **Sibling Marty repositories** when working in editable local mode
 
 ### macOS Installation
 
 ```bash
-# Install using Homebrew
-brew install kind kubectl
+# Install using Homebrew if needed
+brew install node
 
-# Docker Desktop or Docker Engine required
-# Download from: https://docs.docker.com/desktop/mac/
+# Docker Desktop is recommended on macOS
 ```
 
 ### Ubuntu/Debian Installation
 
 ```bash
-# Install kubectl
-curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
-sudo install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
-
-# Install Kind
-curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.20.0/kind-linux-amd64
-chmod +x ./kind
-sudo mv ./kind /usr/local/bin/kind
-
-# Install Docker
 sudo apt update
-sudo apt install docker.io
+sudo apt install docker.io docker-compose-plugin nodejs npm
 sudo systemctl start docker
 sudo usermod -aG docker $USER
 ```
 
 ## Quick Start
 
-1. **Build the demo containers:**
+1. **Start the backend stack:**
 
    ```bash
-   ./build.sh
+   make dev
    ```
 
-2. **Deploy to Kind cluster:**
+2. **Start the UI locally (optional but common):**
 
    ```bash
-   ./deploy-k8s.sh
+   cd ui
+   npm install
+   npm run dev
    ```
 
-3. **Access the demo:**
-   - Demo UI: <http://localhost/>
-   - API Health Checks: <http://localhost/health>
+3. **Access the local apps:**
+   - UI: <http://localhost:5173>
+   - Gateway: <http://localhost:8000>
+   - Gateway docs: <http://localhost:8000/docs>
+   - Keycloak: <http://localhost:8180>
 
 4. **Clean up when done:**
 
    ```bash
-   ./cleanup.sh
+   make down
    ```
 
 ## Detailed Usage
 
-### Building Images
-
-The build script creates Docker images for all services:
+### Local stack commands
 
 ```bash
-./build.sh
+# start everything
+make dev
+
+# stop everything
+make down
+
+# inspect logs
+make logs
+
+# backend services only
+make services-logs
+
+# infra only
+make infra
+
+# restart backend services
+make services-restart
 ```
 
-This will:
+### Main local endpoints
 
-- Check prerequisites (Docker, Kind, kubectl)
-- Build Docker images for issuer, verifier, wallet, and UI services
-- Tag images for local registry use
-- Verify successful builds
+- Gateway: `http://localhost:8000`
+- Gateway docs: `http://localhost:8000/docs`
+- Auth docs: `http://localhost:8001/docs`
+- Organization docs: `http://localhost:8002/docs`
+- Keycloak: `http://localhost:8180`
+- MailHog: `http://localhost:9025`
 
-### Deployment
+### Active service groups
 
-The deployment script sets up a complete Kubernetes environment:
+The current compose stack centers on the gateway plus backend microservices such as:
 
-```bash
-./deploy-k8s.sh
-```
-
-This will:
-
-- Create a Kind cluster with ingress support
-- Install NGINX Ingress Controller
-- Load Docker images into the cluster
-- Deploy PostgreSQL database
-- Deploy all application services
-- Wait for all pods to be ready
-- Run health checks
-
-### Using the Demo
-
-1. **Navigate to <http://localhost/>** in your browser
-
-2. **Issuer Demo:**
-   - Click "Issuer Demo" to access credential issuance
-   - Fill in personal information (name, date of birth, license number)
-   - Click "Issue Credential" to create an mDL
-   - QR code will be generated for mobile wallet scanning
-
-3. **Verifier Demo:**
-   - Click "Verifier Demo" to access verification
-   - Select required attributes (age_over_18, driving_privileges, etc.)
-   - Generate verification request
-   - Scan QR code with mobile wallet to present credentials
-
-4. **Wallet Demo:**
-   - Click "Wallet Demo" to access credential management
-   - View stored credentials
-   - Test selective disclosure by choosing which attributes to share
-   - Manage credential lifecycle (store, present, delete)
-
-### API Endpoints
-
-#### Issuer Service (Port 8080)
-
-- `POST /issue` - Issue new mDL credential
-- `GET /health` - Health check
-- `GET /docs` - OpenAPI documentation
-
-#### Verifier Service (Port 8081)
-
-- `POST /verify` - Verify mDoc presentation
-- `POST /request` - Create verification request
-- `GET /health` - Health check
-- `GET /docs` - OpenAPI documentation
-
-#### Wallet Service (Port 8082)
-
-- `POST /store` - Store credential in wallet
-- `GET /credentials` - List stored credentials
-- `POST /present` - Create presentation
-- `DELETE /credentials/{id}` - Delete credential
-- `GET /health` - Health check
-- `GET /docs` - OpenAPI documentation
+- `auth`
+- `organization`
+- `trust-profile`
+- `credential-template`
+- `presentation-policy`
+- `deployment-profile`
+- `compliance-profile`
+- `notification`
+- `flow`
+- `issuance`
+- `verification`
+- `event-stream`
 
 ## Configuration
 
 ### Environment Variables
 
-The demo supports the following environment variables:
+The local stack supports a number of environment variables via `.env` and compose defaults. Common examples include:
 
-- `CLUSTER_NAME`: Kind cluster name (default: `marty-ui`)
-- `NAMESPACE`: Kubernetes namespace (default: `marty-ui`)
-- `IMAGE_TAG`: Docker image tag (default: `latest`)
-- `REGISTRY`: Container registry (default: `localhost:5001`)
+- `PUBLIC_API_URL`
+- `CORS_ORIGINS`
+- `KEYCLOAK_REALM`
+- `OIDC_ISSUER_URL_EXTERNAL`
+- `POSTGRES_*`
+- `REDIS_URL`
 
 ### Database Configuration
 
-PostgreSQL is configured with:
+The default local Postgres container is configured via compose and is intended for development use.
 
-- Database: `marty_ui`
-- Username: `demo_user`
-- Password: `demo_password`
-- Port: 5432
+- External port: `5433`
 
-### Kubernetes Resources
+### Compose files
 
-Each service is allocated:
-
-- CPU: 100m (request) / 500m (limit)
-- Memory: 128Mi (request) / 512Mi (limit)
-- Replicas: 1 (can be scaled)
+- `docker-compose.base.yml` - base stack definition
+- `docker-compose.profile.dev.yml` - dev-mode overlay
+- `docker-compose.profile.tunnel.yml` - optional public tunnel support
+- `docker-compose.profile.obs.yml` - optional observability profile
 
 ## Development
 
-### Local Development Setup
+### Current local development setup
 
-For development outside Kubernetes:
+Use the microservice stack managed by the Makefile and compose files:
 
-1. **Start PostgreSQL:**
+```bash
+# backend stack
+make dev
 
-   ```bash
-    docker run --name postgres-dev \
-       -e POSTGRES_DB=marty_ui \
-     -e POSTGRES_USER=demo_user \
-     -e POSTGRES_PASSWORD=demo_password \
-     -p 5432:5432 -d postgres:15
-   ```
+# or infra only
+make infra
 
-2. **Install Python dependencies:**
+# frontend in another terminal
+cd ui
+npm install
+npm run dev
+```
 
-   ```bash
-   cd src
-   pip install -r requirements.txt
-   ```
+Useful helper targets:
 
-3. **Run services:**
-
-   ```bash
-   # Terminal 1 - Issuer
-   uvicorn issuer_service:app --host 0.0.0.0 --port 8080 --reload
-
-   # Terminal 2 - Verifier  
-   uvicorn verifier_service:app --host 0.0.0.0 --port 8081 --reload
-
-   # Terminal 3 - Wallet
-   uvicorn wallet_service:app --host 0.0.0.0 --port 8082 --reload
-   ```
-
-4. **Run UI (optional):**
-
-   ```bash
-   cd ui
-   npm install
-   npm start
-   ```
+```bash
+make logs
+make status
+make services-build
+make services-restart
+make grpc-health
+```
 
 ### Customizing Services
 
-#### Adding New Document Types
+#### Adding or updating backend capabilities
 
-Edit `src/issuer_service.py` to add new document types:
+New backend features should be implemented in the relevant service under `services/`, then surfaced through `services/gateway/` and the UI as needed.
 
-```python
-DOCUMENT_TYPES = {
-    "driving_license": {
-        "namespace": "org.iso.18013.5.1.mDL",
-        "required_fields": ["family_name", "given_name", "birth_date", "issue_date", "expiry_date"]
-    },
-    "identity_card": {
-        "namespace": "org.iso.18013.5.1.mID",
-        "required_fields": ["family_name", "given_name", "birth_date", "nationality"]
-    }
-}
-```
+Typical areas:
 
-#### Modifying Verification Logic
-
-Edit `src/verifier_service.py` to customize verification requirements:
-
-```python
-VERIFICATION_POLICIES = {
-    "age_verification": {
-        "required_attributes": ["age_over_18", "age_over_21"],
-        "optional_attributes": ["birth_date"]
-    },
-    "identity_verification": {
-        "required_attributes": ["family_name", "given_name", "birth_date"],
-        "optional_attributes": ["portrait", "address"]
-    }
-}
-```
+- `services/trust_profile/`
+- `services/presentation_policy/`
+- `services/revocation_profile/`
+- `services/notification/`
+- `services/auth/`
+- `services/gateway/`
 
 ## Troubleshooting
 
@@ -425,47 +354,30 @@ VERIFICATION_POLICIES = {
 1. **Port conflicts:**
 
    ```bash
-   # Check what's using port 80
-   lsof -i :80
-
-   # Kill conflicting processes or change ingress port
-   kubectl patch service ingress-nginx-controller -n ingress-nginx -p '{"spec":{"ports":[{"port":8080,"targetPort":80}]}}'
+   lsof -i :5173
+   lsof -i :8000
+   lsof -i :8180
    ```
 
-2. **Images not loading:**
+2. **Containers or services not starting:**
 
    ```bash
-   # Verify images exist
-   docker images | grep marty-ui
-
-   # Rebuild if missing
-   ./build.sh
-
-   # Load into Kind manually
-   kind load docker-image localhost:5001/marty-ui-issuer:latest --name marty-ui
+   make status
+   make logs
    ```
 
-3. **Pods not starting:**
+3. **API/gRPC checks:**
 
    ```bash
-   # Check pod logs
-   kubectl logs -f deployment/issuer-service -n marty-ui
-
-   # Check resource usage
-   kubectl top pods -n marty-ui
-
-   # Describe pod for events
-   kubectl describe pod <pod-name> -n marty-ui
+   curl http://localhost:8000/health
+   make grpc-health
    ```
 
 4. **Database connection issues:**
 
    ```bash
-   # Check PostgreSQL pod
-   kubectl logs -f deployment/postgres -n marty-ui
-
-   # Test database connection
-   kubectl exec -it deployment/postgres -n marty-ui -- psql -U demo_user -d marty_ui
+   docker logs marty-postgres
+   docker exec -it marty-postgres psql -U postgres
    ```
 
 ### Logs and Monitoring
@@ -474,33 +386,23 @@ View service logs:
 
 ```bash
 # All services
-kubectl logs -f -l app=issuer-service -n marty-ui
-kubectl logs -f -l app=verifier-service -n marty-ui
-kubectl logs -f -l app=wallet-service -n marty-ui
-kubectl logs -f -l app=demo-ui -n marty-ui
+make logs
 
-# Combined logs
-kubectl logs -f --selector=tier=backend -n marty-ui
+# Backend services only
+make services-logs
 ```
 
 Monitor resource usage:
 
 ```bash
-# Pod resource usage
-kubectl top pods -n marty-ui
-
-# Node resource usage  
-kubectl top nodes
-
-# Describe services
-kubectl describe services -n marty-ui
+docker stats
 ```
 
 ## Security Considerations
 
 ### Production Deployment
 
-This demo is for **educational and testing purposes only**. For production use:
+This repository contains active development infrastructure, but the default local configuration is still development-oriented. For production use:
 
 1. **Use proper certificates**: Replace self-signed certificates with CA-issued ones
 2. **Implement authentication**: Add proper API authentication and authorization
@@ -512,22 +414,18 @@ This demo is for **educational and testing purposes only**. For production use:
 
 ### Known Limitations
 
-- Mock implementation of Multipaz SDK (requires JNI integration for production)
-- Self-signed certificates for testing only
-- In-memory key storage (should use HSMs in production)
-- No rate limiting or authentication
-- Development-grade database configuration
+- Default compose settings are development-focused
+- Some services rely on sibling repository checkouts during editable local development
+- Local certificates and identity settings should not be treated as production defaults
 
 ## Standards and Compliance
 
-This demo implements:
+This project works across standards and service domains including:
 
-- **ISO 18013-5**: Mobile driving license standard
-- **ISO 23220-1**: Building blocks for identity management
-- **OpenID4VP**: OpenID for Verifiable Presentations
+- **OID4VCI**
+- **OpenID4VP**
 - **W3C VC Data Model**: Verifiable Credentials specification
-- **CBOR**: Concise Binary Object Representation
-- **COSE**: CBOR Object Signing and Encryption
+- **Trust / policy / revocation profile services** used by the Marty platform
 
 ## 📋 Future Work - SEO & Analytics
 
@@ -587,7 +485,7 @@ The marketing site infrastructure is complete with prerendering, sitemap, and st
 
 ## Contributing
 
-To contribute to this demo:
+To contribute to this project:
 
 1. Fork the repository
 2. Create a feature branch
@@ -609,11 +507,9 @@ This demo is released under the MIT License. See LICENSE file for details.
 
 ## Resources
 
-- [OpenWallet Foundation](https://openwallet.foundation/)
-- [ISO 18013-5 Standard](https://www.iso.org/standard/69084.html)
+- [OID4VCI](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html)
 - [OpenID4VP Specification](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html)
-- [Kind Documentation](https://kind.sigs.k8s.io/)
-- [Kubernetes Documentation](https://kubernetes.io/docs/)
+- [W3C Verifiable Credentials Data Model](https://www.w3.org/TR/vc-data-model/)
 
 ---
 
