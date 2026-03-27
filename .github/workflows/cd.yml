@@ -1,0 +1,200 @@
+name: CD
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Image tag (default: short SHA)"
+        required: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ghcr.io/elevenid/marty-ui
+
+jobs:
+  build-wheel:
+    name: Build Rust Wheel
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Configure Git auth for private repos
+        run: git config --global url."https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/".insteadOf "https://github.com/"
+
+      - uses: actions/checkout@v4
+        with:
+          repository: ElevenID/marty-core
+          path: marty-core
+
+      - uses: actions/checkout@v4
+        with:
+          repository: ElevenID/longfellow-zk
+          path: longfellow-zk
+          sparse-checkout: lib
+
+      - uses: actions/checkout@v4
+        with:
+          repository: ElevenID/marty-credentials
+          path: marty-credentials
+
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build deps
+        run: |
+          pip install maturin
+          sudo apt-get update && sudo apt-get install -y \
+            pkg-config libssl-dev libzstd-dev clang
+
+      - name: Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            marty-credentials/rust/marty-rs/target
+          key: wheel-${{ runner.os }}-${{ hashFiles('marty-credentials/Cargo.lock') }}
+
+      - name: Build marty-rs wheel
+        run: |
+          cd marty-credentials/rust/marty-rs
+          CXX=clang++ CC=clang maturin build --release --features python --out $GITHUB_WORKSPACE/wheels
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: marty-rs-wheel
+          path: wheels/*.whl
+          retention-days: 1
+
+  determine-tag:
+    name: Determine Image Tag
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.tag.outputs.VERSION }}
+    steps:
+      - name: Set tag
+        id: tag
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "VERSION=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+          elif [[ -n "${{ inputs.tag }}" ]]; then
+            echo "VERSION=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "VERSION=${GITHUB_SHA::8}" >> "$GITHUB_OUTPUT"
+          fi
+
+  build-services:
+    name: Build & Push Services Image
+    needs: [build-wheel, determine-tag]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          repository: ElevenID/marty-credentials
+          path: _marty-credentials
+          sparse-checkout: services/issuance
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: marty-rs-wheel
+          path: wheels
+
+      - name: Include issuance service
+        run: cp -r _marty-credentials/services/issuance services/issuance
+
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: services/Dockerfile.prod
+          push: true
+          tags: |
+            ${{ env.IMAGE_PREFIX }}/services:${{ needs.determine-tag.outputs.version }}
+            ${{ env.IMAGE_PREFIX }}/services:latest
+          cache-from: type=gha,scope=services
+          cache-to: type=gha,mode=max,scope=services
+
+  build-ui:
+    name: Build & Push UI Image
+    needs: [determine-tag]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/ui.Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE_PREFIX }}/ui:${{ needs.determine-tag.outputs.version }}
+            ${{ env.IMAGE_PREFIX }}/ui:latest
+          cache-from: type=gha,scope=ui
+          cache-to: type=gha,mode=max,scope=ui
+
+  build-migrations:
+    name: Build & Push Migrations Image
+    needs: [determine-tag]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          repository: ElevenID/marty-credentials
+          path: _marty-credentials
+          sparse-checkout: services/issuance
+
+      - name: Include issuance migrations
+        run: |
+          cp -r _marty-credentials/services/issuance services/issuance
+
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: services/Dockerfile.migrations.prod
+          push: true
+          build-args: |
+            GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }}
+          tags: |
+            ${{ env.IMAGE_PREFIX }}/db-migrate:${{ needs.determine-tag.outputs.version }}
+            ${{ env.IMAGE_PREFIX }}/db-migrate:latest
+          cache-from: type=gha,scope=migrations
+          cache-to: type=gha,mode=max,scope=migrations

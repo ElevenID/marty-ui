@@ -1,0 +1,60 @@
+# Production migration Dockerfile
+# Installs mmf from GitHub Packages; no multi-repo context needed
+#
+# Build context: marty-ui root
+# Issuance migration files should be copied to services/issuance/ before build
+#
+# Requires build arg: GITHUB_TOKEN for installing marty-msf from GitHub Packages
+
+FROM python:3.11-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    postgresql-client \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+RUN pip install --no-cache-dir \
+    sqlalchemy \
+    alembic \
+    psycopg2-binary \
+    asyncpg
+
+# Install mmf from GitHub Packages
+ARG GITHUB_TOKEN=""
+RUN if [ -n "$GITHUB_TOKEN" ]; then \
+      pip install --no-cache-dir \
+        --index-url "https://__token__:${GITHUB_TOKEN}@pypi.pkg.github.com/ElevenID/" \
+        --extra-index-url https://pypi.org/simple/ \
+        marty-msf; \
+    else \
+      echo "WARNING: GITHUB_TOKEN not set, skipping marty-msf install"; \
+    fi
+
+# Copy migration runner
+COPY services/run_all_migrations.py /app/
+
+# Copy service migration directories
+COPY services/organization/infrastructure /app/organization/infrastructure/
+COPY services/organization/manage_migrations.py /app/organization/
+
+COPY services/auth/infrastructure /app/auth/infrastructure/
+COPY services/auth/manage_migrations.py /app/auth/
+
+COPY services/credential_template/infrastructure /app/credential_template/infrastructure/
+COPY services/credential_template/manage_migrations.py /app/credential_template/
+
+COPY services/trust_profile/infrastructure /app/trust_profile/infrastructure/
+COPY services/trust_profile/manage_migrations.py /app/trust_profile/
+
+COPY services/presentation_policy/infrastructure /app/presentation_policy/infrastructure/
+COPY services/presentation_policy/manage_migrations.py /app/presentation_policy/
+
+COPY services/flow/infrastructure /app/flow/infrastructure/
+COPY services/flow/manage_migrations.py /app/flow/
+
+# Issuance migrations (copied from marty-credentials at build time by CD workflow)
+COPY services/issuance/infrastructure /app/issuance/infrastructure/
+COPY services/issuance/manage_migrations.py /app/issuance/
+
+CMD ["python", "run_all_migrations.py"]
