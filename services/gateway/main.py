@@ -84,6 +84,7 @@ class ServiceRegistry:
             "verification": os.environ.get("VERIFICATION_SERVICE_URL", "http://verification:8012"),
             "revocation-profiles": os.environ.get("REVOCATION_PROFILE_SERVICE_URL", "http://localhost:8013"),
             "device-registration": os.environ.get("DEVICE_REGISTRATION_SERVICE_URL", "http://localhost:8014"),
+            "billing": os.environ.get("BILLING_SERVICE_URL", "http://localhost:8016"),
         }
     
     def get_service_url(self, service_name: str) -> str | None:
@@ -4315,6 +4316,24 @@ Verification is handled through two complementary approaches:
                 },
             })
         return {"plans": plans}
+
+    # ── Billing proxy routes ─────────────────────────────────────────
+
+    @app.api_route(
+        "/v1/billing/{path:path}",
+        methods=["GET", "POST", "PUT", "DELETE"],
+        tags=["Billing"],
+    )
+    async def proxy_billing(request: Request, path: str) -> Response:
+        """Proxy billing requests to the billing service."""
+        service_url = registry.get_service_url("billing")
+        if not service_url:
+            return mip_error_response(
+                status_code=503,
+                error="service_unavailable",
+                message="Billing service not configured",
+            )
+        return await proxy_request(request, service_url, f"/v1/billing/{path}")
 
     async def _proxy_to_issuance_well_known(path: str) -> Response:
         """Proxy a well-known request to the issuance service.

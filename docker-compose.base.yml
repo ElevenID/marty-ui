@@ -170,6 +170,7 @@ services:
       FLOW_SERVICE_URL: http://flow:8011
       DEVICE_REGISTRATION_SERVICE_URL: http://device-registration:8014
       ISSUANCE_SERVICE_URL: http://issuance:8005
+      BILLING_SERVICE_URL: http://billing:8016
       ISSUER_BASE_URL: ${PUBLIC_API_URL:-http://gateway:8000}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://localhost:5173}
       AUTH_GRPC_TARGET: auth:9001
@@ -609,6 +610,41 @@ services:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8012/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - marty-network
+
+  # ── Billing Service ──────────────────────────────────────────────
+  billing:
+    build:
+      context: ..
+      dockerfile: marty-ui/services/Dockerfile
+      args:
+        SERVICE_NAME: billing
+    container_name: marty-billing
+    environment:
+      BILLING_SERVICE_PORT: "8016"
+      DATABASE_URL: postgresql+asyncpg://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
+      ORGANIZATION_SERVICE_URL: http://organization:8002
+      SQUARE_ENVIRONMENT: ${SQUARE_ENVIRONMENT:-sandbox}
+      SQUARE_ACCESS_TOKEN: ${SQUARE_ACCESS_TOKEN:-}
+      SQUARE_LOCATION_ID: ${SQUARE_LOCATION_ID:-}
+      SQUARE_WEBHOOK_SIGNATURE_KEY: ${SQUARE_WEBHOOK_SIGNATURE_KEY:-}
+      SQUARE_PLAN_STARTER_ID: ${SQUARE_PLAN_STARTER_ID:-}
+      SQUARE_PLAN_PROFESSIONAL_ID: ${SQUARE_PLAN_PROFESSIONAL_ID:-}
+      SQUARE_PLAN_ENTERPRISE_ID: ${SQUARE_PLAN_ENTERPRISE_ID:-}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://localhost:5173}
+    ports:
+      - "8016:8016"
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+      organization:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8016/health"]
       interval: 10s
       timeout: 5s
       retries: 3
