@@ -65,6 +65,7 @@ class OrganizationUseCase:
     member_repo: MemberRepositoryPort
     event_publisher: EventPublisherPort
     role_use_case: Any = None  # Optional[RoleUseCase] — avoids circular import
+    redis_client: Any = None  # Optional[aioredis.Redis] — for plan key sync
     
     async def create_organization(self, command: CreateOrganizationCommand) -> Organization:
         """Create a new organization with owner."""
@@ -83,6 +84,13 @@ class OrganizationUseCase:
         # Save both
         await self.organization_repo.save(org)
         await self.member_repo.save(owner)
+        
+        # Write default plan tier to Redis so gateway can enforce immediately
+        if self.redis_client:
+            try:
+                await self.redis_client.set(f"org:{org.id}:plan", "free")
+            except Exception as e:
+                logger.warning(f"Failed to write plan key for org {org.id}: {e}")
         
         # Seed default RBAC roles and assign owner role
         if self.role_use_case is not None:

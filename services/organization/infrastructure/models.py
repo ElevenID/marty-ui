@@ -43,6 +43,8 @@ organizations_table = Table(
     Column("contact_phone", String(50)),
     Column("website", String(1024)),
     Column("settings", JSONB),
+    Column("plan", String(50), nullable=False, default="free"),
+    Column("plan_expires_at", DateTime(timezone=True), nullable=True),
     Column("join_mechanism", String(50), nullable=False, default="invite"),
     Column("requires_approval", Boolean, nullable=False, default=False),
     Column("is_discoverable", Boolean, nullable=False, default=False),

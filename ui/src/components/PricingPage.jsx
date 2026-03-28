@@ -16,69 +16,91 @@ import { INFRASTRUCTURE_VALUE } from '../data/marketingContent';
 
 /**
  * Pricing tier configuration
- * Matches PLAN_LIMITS in PaymentContext
+ * Mirrors PLAN_LIMITS in packages/marty_common/plans.py
+ *
+ * Billing is aligned with the protocol: verifications and issued credentials
+ * are the primary metered units. No per-API-call pricing.
  */
 const PRICING_TIERS = [
   {
     name: 'FREE',
+    displayName: 'The Sandbox',
+    focus: 'Experiment with Standards',
     price: 0,
-    description: 'Perfect for kicking the tires',
+    description: 'All OID4VCI / OID4VP features enabled. No protocol gating.',
+    keySpecs: '500 Verifications/mo + 50 Issued Credentials',
     features: [
-      { text: 'Up to 3 team members', included: true },
-      { text: '100 API calls/month', included: true },
-      { text: '10 credentials/month', included: true },
-      { text: 'Community support', included: true },
+      { text: '500 verifications/month', included: true },
+      { text: '50 issued credentials/month', included: true },
+      { text: 'Up to 5 team members', included: true },
+      { text: '3 credential templates', included: true },
+      { text: 'All protocol features (OID4VCI/OID4VP)', included: true },
+      { text: 'ZK proof verification', included: true },
       { text: 'Custom branding', included: false },
-      { text: 'Priority support', included: false },
       { text: 'Webhooks', included: false },
+      { text: 'Audit logs', included: false },
     ],
     buttonText: 'Start Free',
     highlighted: false,
   },
   {
     name: 'STARTER',
-    price: 49,
-    description: 'For small teams',
+    displayName: 'The Launchpad',
+    focus: 'First Production App',
+    price: 99,
+    description: 'Custom branding and presentation policies. Stop paying $1.50 per check.',
+    keySpecs: '1,000 Verifications included + Unlimited Templates',
     features: [
+      { text: '1,000 verifications/month', included: true },
+      { text: '500 issued credentials/month', included: true },
       { text: 'Up to 25 team members', included: true },
-      { text: '1,000 API calls/month', included: true },
-      { text: '100 credentials/month', included: true },
-      { text: 'Email support', included: true },
-      { text: 'Custom branding', included: false },
-      { text: 'Priority support', included: false },
+      { text: 'Unlimited credential templates', included: true },
+      { text: 'Custom branding', included: true },
       { text: 'Webhooks', included: true },
+      { text: 'Audit logs', included: true },
+      { text: 'Priority email support', included: true },
+      { text: 'Multi-environment', included: false },
     ],
     buttonText: 'Get Started',
     highlighted: false,
   },
   {
     name: 'PROFESSIONAL',
-    price: 199,
-    description: 'For growing businesses',
+    displayName: 'The Trust Fabric',
+    focus: 'Multi-App Orchestration',
+    price: 399,
+    description: 'Audit-ready logs and multi-environment management. Built for scale.',
+    keySpecs: '10,000 Verifications included + Priority SLA',
     features: [
+      { text: '10,000 verifications/month', included: true },
+      { text: '5,000 issued credentials/month', included: true },
       { text: 'Up to 100 team members', included: true },
-      { text: '10,000 API calls/month', included: true },
-      { text: '1,000 credentials/month', included: true },
-      { text: 'Priority email support', included: true },
-      { text: 'Custom branding', included: true },
-      { text: 'Priority support', included: true },
-      { text: 'Webhooks', included: true },
+      { text: 'Multi-environment management', included: true },
+      { text: 'Custom Cedar policies', included: true },
+      { text: 'Kiosk device registration', included: true },
+      { text: 'Priority SLA support', included: true },
+      { text: 'Everything in Starter', included: true },
+      { text: 'Self-hosted deployment', included: false },
     ],
     buttonText: 'Go Professional',
     highlighted: true,
   },
   {
     name: 'ENTERPRISE',
+    displayName: 'The Sovereign Choice',
+    focus: 'Your Trust, Your Infrastructure',
     price: null, // Custom pricing
-    description: 'For large organizations',
+    description: 'Air-gapped deployments, dedicated data residency, and 24/7 support.',
+    keySpecs: 'Unlimited everything + Self-hosted options',
     features: [
+      { text: 'Unlimited verifications', included: true },
+      { text: 'Unlimited issued credentials', included: true },
       { text: 'Unlimited team members', included: true },
-      { text: 'Unlimited API calls', included: true },
-      { text: 'Unlimited credentials', included: true },
-      { text: 'Dedicated support', included: true },
-      { text: 'Custom branding', included: true },
-      { text: 'SLA & uptime guarantees', included: true },
-      { text: 'Webhooks + Custom integrations', included: true },
+      { text: 'Self-hosted deployment options', included: true },
+      { text: 'SCIM provisioning', included: true },
+      { text: 'Dedicated support + 24/7 SLA', included: true },
+      { text: 'Air-gapped & data residency', included: true },
+      { text: 'Everything in Professional', included: true },
     ],
     buttonText: 'Contact Sales',
     highlighted: false,
@@ -127,10 +149,11 @@ function PricingPage() {
         }}
       >
         <Typography variant="h3" component="h1" gutterBottom fontWeight="bold">
-          Pricing Plans
+          Unlimited Verification. Zero Per-Event Fees.
         </Typography>
         <Typography variant="h6" sx={{ maxWidth: 800, mx: 'auto', opacity: 0.95 }}>
-          Choose the plan that fits your organization&apos;s needs
+          Every plan includes full OID4VCI &amp; OID4VP protocol support.
+          Pick a tier based on volume, not features.
         </Typography>
       </Box>
 
@@ -163,10 +186,10 @@ function PricingPage() {
                 />
               )}
               <CardHeader
-                title={tier.name}
-                subheader={tier.description}
+                title={tier.displayName || tier.name}
+                subheader={tier.focus}
                 titleTypographyProps={{ align: 'center', fontWeight: 'bold' }}
-                subheaderTypographyProps={{ align: 'center' }}
+                subheaderTypographyProps={{ align: 'center', fontStyle: 'italic' }}
                 sx={{ pb: 0 }}
               />
               <CardContent sx={{ flexGrow: 1 }}>
@@ -187,13 +210,15 @@ function PricingPage() {
                   )}
                 </Box>
                 
-                {/* Usage Narrative */}
+                {/* Key Specs + Differentiator */}
                 <Paper elevation={0} sx={{ p: 2, mb: 2, bgcolor: 'grey.50', borderRadius: 1 }}>
+                  {tier.keySpecs && (
+                    <Typography variant="body2" fontWeight="bold" sx={{ mb: 0.5 }}>
+                      {tier.keySpecs}
+                    </Typography>
+                  )}
                   <Typography variant="body2" color="text.secondary" sx={{ fontStyle: 'italic' }}>
-                    {tier.name === 'FREE' && 'Great for testing and prototyping. Try our APIs, build a demo, experiment with standards. No credit card required.'}
-                    {tier.name === 'STARTER' && 'For small teams shipping their first identity feature. Verify credentials for a single application or pilot project.'}
-                    {tier.name === 'PROFESSIONAL' && 'For growing products with regular identity verification needs. Scale to thousands of verifications per month with full support.'}
-                    {tier.name === 'ENTERPRISE' && 'For organizations running identity at scale. Unlimited usage, custom SLAs, dedicated support, and self-hosted options available.'}
+                    {tier.description}
                   </Typography>
                 </Paper>
 
@@ -362,8 +387,9 @@ function PricingPage() {
                   What&apos;s included in the free tier?
                 </Typography>
                 <Typography variant="body2" color="text.secondary">
-                  The free tier includes 5 team members, 100 API calls/month, and 10 credentials/month. 
-                  Perfect for development, testing, or small pilot projects.
+                  500 verifications and 50 credential issuances per month with full protocol support.
+                  Every OID4VCI and OID4VP feature is enabled — no &ldquo;Standard vs Pro&rdquo; gating.
+                  No credit card required.
                 </Typography>
               </CardContent>
             </Card>
@@ -376,8 +402,9 @@ function PricingPage() {
                   What&apos;s NOT limited?
                 </Typography>
                 <Typography variant="body2" color="text.secondary">
-                  All plans include unlimited access to documentation, SDKs, and community support. 
-                  There are no limits on the number of credential types or trust registries you configure.
+                  Protocol features are never gated by plan. All tiers get OID4VCI, OID4VP,
+                  ZK proof verification, mDL/mDocs, and verifiable credential support.
+                  We meter by verifications and issuances — not API calls.
                 </Typography>
               </CardContent>
             </Card>
@@ -433,8 +460,8 @@ function PricingPage() {
           {INFRASTRUCTURE_VALUE.title}
         </Typography>
         <Typography variant="body1" color="text.secondary" textAlign="center" paragraph sx={{ mb: 4, maxWidth: 800, mx: 'auto' }}>
-          Traditional IDV platforms charge per verification. ElevenID LLC provides infrastructure that 
-          enables credential reuse, reducing long-term costs while increasing value.
+          Traditional IDV platforms charge $1–$3 per verification. ElevenID charges a flat monthly rate 
+          with included verifications — aligned with the protocol, not per-event friction.
         </Typography>
         <Grid container spacing={3}>
           {INFRASTRUCTURE_VALUE.points.map((point, index) => (

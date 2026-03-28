@@ -28,6 +28,7 @@ from .infrastructure.adapters.audit_adapter import router as audit_router
 from .infrastructure.adapters.grpc_adapter import OrganizationServiceGrpc
 from .infrastructure.adapters.http_adapter import (
     configure_org_router,
+    internal_router,
     router as org_router,
 )
 from .infrastructure.adapters.onboarding_adapter import router as onboarding_router
@@ -210,6 +211,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.redis_client = redis_client
     app.state.engine = engine
     
+    # Wire Redis client into org use case for plan key sync
+    org_use_case.redis_client = redis_client
+    
     # Start gRPC server
     from common.grpc_factory import create_grpc_server, start_grpc_server_port, create_grpc_channel
     from marty_proto.v1.organization_service_pb2_grpc import (
@@ -287,6 +291,7 @@ def create_app() -> FastAPI:
     app.include_router(rbac_router)
     app.include_router(scim_router)
     app.include_router(policy_set_router)
+    app.include_router(internal_router)
     
     # Health check endpoint
     @app.get("/health")
