@@ -60,6 +60,10 @@ SERVICES = [
         "name": "flow",
         "module": "flow.infrastructure.models",
     },
+    {
+        "name": "billing",
+        "module": "billing.infrastructure.models",
+    },
 ]
 
 
@@ -88,6 +92,7 @@ def ensure_schemas(database_url: str) -> None:
         "issuance_service",
         "presentation_policy_service",
         "flow_service",
+        "billing_service",
     ]
     
     engine = create_engine(database_url)

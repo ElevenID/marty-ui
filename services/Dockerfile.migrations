@@ -57,6 +57,9 @@ COPY marty-ui/services/presentation_policy/manage_migrations.py /app/presentatio
 COPY marty-ui/services/flow/infrastructure /app/flow/infrastructure/
 COPY marty-ui/services/flow/manage_migrations.py /app/flow/
 
+COPY marty-ui/services/billing/infrastructure /app/billing/infrastructure/
+COPY marty-ui/services/billing/manage_migrations.py /app/billing/
+
 # Default command runs all migrations
 CMD ["python", "run_all_migrations.py"]
 

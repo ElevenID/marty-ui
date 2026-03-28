@@ -71,6 +71,7 @@ SKIP_PREFIXES = (
     "/v1/trust-registry",
     "/v1/plans",
     "/v1/usage",
+    "/v1/billing",
 )
 
 
