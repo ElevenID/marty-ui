@@ -59,6 +59,8 @@ from .messages import (
 )
 from .middleware import RequestIdMiddleware, RequestLoggingMiddleware
 from .pairwise import compute_pairwise_id, generate_holder_secret
+from .plans import PlanTier, PlanLimits, PLAN_LIMITS, PLAN_INFO, get_plan_limits, check_limit, check_feature
+from .usage import UsageTracker
 
 __all__ = [
     # Value Objects
@@ -114,4 +116,13 @@ __all__ = [
     # Pairwise Subject Identifiers
     "compute_pairwise_id",
     "generate_holder_secret",
+    # Plans & Usage
+    "PlanTier",
+    "PlanLimits",
+    "PLAN_LIMITS",
+    "PLAN_INFO",
+    "get_plan_limits",
+    "check_limit",
+    "check_feature",
+    "UsageTracker",
 ]

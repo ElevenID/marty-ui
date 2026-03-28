@@ -65,6 +65,9 @@ export { default as WebhooksPage } from './org/WebhooksPage';
 // Audit
 export { default as AuditPage } from './audit/AuditPage';
 
+// Billing & Usage
+export { default as UsageDashboard } from './billing/UsageDashboard';
+
 // Applicant
 export { default as ApplicantDashboard } from './applicant/ApplicantDashboard';
 export { default as MyCredentialsPage } from './applicant/MyCredentialsPage';

@@ -643,6 +643,38 @@ async def revoke_api_key(
 
 
 # =============================================================================
+# Internal Endpoints (service-to-service only, no user auth)
+# =============================================================================
+
+internal_router = APIRouter(prefix="/internal/v1/organizations", tags=["internal"])
+
+
+class UpdatePlanRequest(BaseModel):
+    """Request to update an organization's plan tier."""
+    plan_tier: str  # free | starter | professional | enterprise
+
+
+@internal_router.put("/{org_id}/plan")
+async def update_organization_plan(
+    org_id: str,
+    body: UpdatePlanRequest,
+    request: Request,
+) -> dict:
+    """Update an organization's plan tier. Called by billing service."""
+    valid_tiers = {"free", "starter", "professional", "enterprise"}
+    if body.plan_tier not in valid_tiers:
+        raise HTTPException(status_code=400, detail=f"Invalid plan tier: {body.plan_tier}")
+
+    redis_client = getattr(request.app.state, "redis_client", None)
+    if not redis_client:
+        raise HTTPException(status_code=500, detail="Redis not configured")
+
+    await redis_client.set(f"org:{org_id}:plan", body.plan_tier)
+    logger.info(f"Plan updated for org {org_id}: {body.plan_tier}")
+    return {"organization_id": org_id, "plan_tier": body.plan_tier}
+
+
+# =============================================================================
 # Response Helpers
 # =============================================================================
 

@@ -123,6 +123,8 @@ import {
   WebhooksPage,
   // Audit
   AuditPage,
+  // Billing & Usage
+  UsageDashboard,
   // Applicant
   ApplicantDashboard,
   MyCredentialsPage,
@@ -447,6 +449,8 @@ function AppContent() {
           <Route path="role-requests" element={<RoleEscalationRequestsPage />} />
           {/* Audit */}
           <Route path="audit" element={<AuditPage />} />
+          {/* Billing & Usage */}
+          <Route path="billing" element={<UsageDashboard />} />
         </Route>
 
         {/* Organization Setup Route - No org required, but vendor/admin role needed */}

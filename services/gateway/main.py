@@ -42,6 +42,9 @@ from pydantic import BaseModel, Field, field_validator
 from starlette.middleware.base import BaseHTTPMiddleware
 import redis.asyncio as aioredis
 from marty_common import OrganizationClient, CedarEngine, CedarAuthMiddleware
+from marty_common.usage import UsageTracker
+from marty_common.plans import PlanTier, get_plan_limits, PLAN_LIMITS, PLAN_INFO
+from plan_middleware import UsageTrackingMiddleware
 
 logging.basicConfig(
     level=logging.INFO,
@@ -1853,6 +1856,9 @@ async def proxy_request(
     if hasattr(request.state, "user_domain") and request.state.user_domain:
         headers["X-User-Domain"] = request.state.user_domain
     
+    if hasattr(request.state, "org_plan") and request.state.org_plan:
+        headers["X-Org-Plan"] = request.state.org_plan
+    
     try:
         response = await client.request(
             method=request.method,
@@ -1918,6 +1924,8 @@ def _forward_headers(request: Request | None) -> dict[str, str]:
         headers["X-User-Email"] = request.state.user_email
     if hasattr(request.state, "user_domain") and request.state.user_domain:
         headers["X-User-Domain"] = request.state.user_domain
+    if hasattr(request.state, "org_plan") and request.state.org_plan:
+        headers["X-Org-Plan"] = request.state.org_plan
     # Forward auth header if present
     auth = request.headers.get("authorization")
     if auth:
@@ -4012,6 +4020,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
     app.state.org_client = org_client
     app.state.redis_client = redis_client
+    app.state.usage_tracker = UsageTracker(redis_client)
     app.state.auth_grpc_stub = auth_grpc_stub
     
     # Initialize Cedar policy engine
@@ -4113,6 +4122,7 @@ Verification is handled through two complementary approaches:
     # Add Cedar auth middleware first, then auth middleware, then rate limiter,
     # then MIP version.  Starlette executes middleware in reverse registration
     # order, so this makes MIPVersionMiddleware run outermost.
+    app.add_middleware(UsageTrackingMiddleware)
     app.add_middleware(CedarAuthMiddleware)
     app.add_middleware(ContentTypeEnforcementMiddleware)
     app.add_middleware(AuthMiddleware, session_cache=session_cache)
@@ -4217,6 +4227,94 @@ Verification is handled through two complementary approaches:
     @app.get("/health")
     async def health_check() -> dict:
         return {"status": "healthy", "service": SERVICE_NAME}
+
+    # ── Usage & billing analytics ────────────────────────────────────
+
+    @app.get("/v1/usage")
+    async def get_usage(request: Request, month: str | None = None) -> dict:
+        """Get usage metrics for the authenticated user's organization."""
+        org_id = getattr(request.state, "organization_id", None)
+        if not org_id:
+            return JSONResponse(status_code=401, content={"error": "Not authenticated"})
+        tracker: UsageTracker | None = getattr(request.app.state, "usage_tracker", None)
+        if not tracker:
+            return {"metrics": {}, "plan": "free", "limits": {}}
+        metrics = await tracker.get_all(org_id, month)
+        plan_str = "free"
+        redis_client = getattr(request.app.state, "redis_client", None)
+        if redis_client:
+            cached = await redis_client.get(f"org:{org_id}:plan")
+            if cached:
+                plan_str = cached
+        try:
+            plan = PlanTier(plan_str)
+        except ValueError:
+            plan = PlanTier.FREE
+        limits = get_plan_limits(plan)
+        info = PLAN_INFO[plan]
+        return {
+            "plan": plan.value,
+            "plan_name": info.name,
+            "plan_tagline": info.tagline,
+            "metrics": metrics,
+            "limits": {
+                "verifications_per_month": limits.verifications_per_month,
+                "issued_credentials_per_month": limits.issued_credentials_per_month,
+                "active_flows": limits.active_flows,
+                "members": limits.members,
+            },
+        }
+
+    @app.get("/v1/usage/history")
+    async def get_usage_history(request: Request, metric: str = "verifications", months: int = 6) -> dict:
+        """Get historical usage for a metric over the last N months."""
+        org_id = getattr(request.state, "organization_id", None)
+        if not org_id:
+            return JSONResponse(status_code=401, content={"error": "Not authenticated"})
+        tracker: UsageTracker | None = getattr(request.app.state, "usage_tracker", None)
+        if not tracker:
+            return {"metric": metric, "history": {}}
+        allowed_metrics = {"verifications", "issued_credentials", "api_calls", "active_flows"}
+        if metric not in allowed_metrics:
+            return JSONResponse(status_code=400, content={"error": f"Invalid metric. Use one of: {allowed_metrics}"})
+        history = await tracker.get_history(org_id, metric, min(months, 12))
+        return {"metric": metric, "history": history}
+
+    @app.get("/v1/plans")
+    async def list_plans() -> dict:
+        """Return available plan tiers and their limits (public endpoint)."""
+        plans = []
+        for tier in PlanTier:
+            info = PLAN_INFO[tier]
+            limits = get_plan_limits(tier)
+            plans.append({
+                "tier": tier.value,
+                "name": info.name,
+                "tagline": info.tagline,
+                "headline": info.headline,
+                "price_monthly": info.price_monthly,
+                "differentiator": info.differentiator,
+                "limits": {
+                    "verifications_per_month": limits.verifications_per_month,
+                    "issued_credentials_per_month": limits.issued_credentials_per_month,
+                    "active_flows": limits.active_flows,
+                    "members": limits.members,
+                    "credential_templates": limits.credential_templates,
+                    "deployment_profiles": limits.deployment_profiles,
+                },
+                "features": {
+                    "custom_branding": limits.custom_branding,
+                    "webhooks": limits.webhooks,
+                    "audit_logs": limits.audit_logs,
+                    "multi_environment": limits.multi_environment,
+                    "custom_cedar_policies": limits.custom_cedar_policies,
+                    "scim_provisioning": limits.scim_provisioning,
+                    "self_hosted": limits.self_hosted,
+                    "zkp_verification": limits.zkp_verification,
+                    "device_registration": limits.device_registration,
+                },
+            })
+        return {"plans": plans}
 
     async def _proxy_to_issuance_well_known(path: str) -> Response:
         """Proxy a well-known request to the issuance service.

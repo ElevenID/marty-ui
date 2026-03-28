@@ -286,6 +286,10 @@ class Organization:
     contact_phone: str | None = None
     website: str | None = None
     
+    # Plan & billing
+    plan: str = "free"  # free | starter | professional | enterprise
+    plan_expires_at: datetime | None = None
+    
     # Settings
     settings: dict[str, Any] = field(default_factory=dict)
     
@@ -368,6 +372,8 @@ class Organization:
             "contact_email": self.contact_email,
             "contact_phone": self.contact_phone,
             "website": self.website,
+            "plan": self.plan,
+            "plan_expires_at": self.plan_expires_at.isoformat() if self.plan_expires_at else None,
             "settings": self.settings,
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat(),

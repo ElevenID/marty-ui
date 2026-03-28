@@ -15,6 +15,7 @@ def build_user_entities(
     status: str,
     org_id: str,
     role: str,
+    plan_tier: str = "free",
 ) -> list[dict[str, Any]]:
     """Build Cedar entities for a session-authenticated user request.
 
@@ -37,7 +38,7 @@ def build_user_entities(
         },
         {
             "uid": {"type": "MIP::Organization", "id": org_id},
-            "attrs": {},
+            "attrs": {"plan_tier": plan_tier},
             "parents": [],
         },
         {
@@ -56,6 +57,7 @@ def build_apikey_entities(
     scope_type: str,
     enabled: bool,
     deployment_profile_id: Optional[str] = None,
+    plan_tier: str = "free",
 ) -> list[dict[str, Any]]:
     """Build Cedar entities for an API key principal.
 
@@ -79,7 +81,7 @@ def build_apikey_entities(
         },
         {
             "uid": {"type": "MIP::Organization", "id": org_id},
-            "attrs": {},
+            "attrs": {"plan_tier": plan_tier},
             "parents": [],
         },
     ]
@@ -101,6 +103,7 @@ def build_request_context(
     mfa_authenticated: bool = False,
     session_id: Optional[str] = None,
     user_agent: Optional[str] = None,
+    plan_tier: str = "free",
 ) -> dict[str, Any]:
     """Build a Cedar RequestContext for API authorization.
 
@@ -110,6 +113,7 @@ def build_request_context(
         "ip_address": {"__extn": {"fn": "ip", "arg": ip_address or "0.0.0.0"}},
         "timestamp": int(time.time()),
         "mfa_authenticated": mfa_authenticated,
+        "plan_tier": plan_tier,
     }
     if session_id is not None:
         ctx["session_id"] = session_id
