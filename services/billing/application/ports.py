@@ -147,6 +147,10 @@ class OrgServicePort(ABC):
         """Update organization plan tier via internal API."""
         ...
 
+    async def get_contact_email(self, organization_id: str) -> str:
+        """Get the contact email for an organization. Returns empty string if unavailable."""
+        return ""
+
 
 class EventPublisherPort(ABC):
     """Abstract interface for publishing domain events."""

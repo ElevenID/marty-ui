@@ -18,16 +18,18 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Any, AsyncGenerator
+from typing import Annotated, Any, AsyncGenerator
 
 import httpx
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr, Field
+from marty_common.service_setup import create_service_app
 
 try:
     from common.events import EventPublisher, DomainEvent, EventType, get_event_publisher
 except ImportError:
+    logger.info("common.events not available; event publishing disabled")
     # Fallback if common module not available
     EventPublisher = None
     DomainEvent = None
@@ -39,8 +41,9 @@ logger = logging.getLogger(__name__)
 
 SERVICE_NAME = "applicant-service"
 SERVICE_PORT = int(os.environ.get("APPLICANT_SERVICE_PORT", "8006"))
-# Use the issuance service directly for service-to-service calls so we bypass
-# the gateway's auth check (the gateway requires a bearer token on /v1/issuance).
+# Internal service-to-service calls use gRPC (primary) or HTTP (fallback).
+# These go directly to the issuance service on the internal Docker network —
+# the gateway is only for external/browser traffic.
 ISSUANCE_SERVICE_URL = os.environ.get("ISSUANCE_SERVICE_URL", "http://issuance:8005")
 ISSUANCE_GRPC_TARGET = os.environ.get("ISSUANCE_GRPC_TARGET", "issuance:9005")
 
@@ -84,8 +87,11 @@ async def _initiate_issuance_grpc(
             "expires_at": resp.expires_at,
             "status": resp.status,
         }
+    except ImportError:
+        logger.warning("gRPC dependencies not available, falling back to HTTP")
     except Exception as grpc_err:
-        logger.warning("gRPC InitiateIssuance failed, falling back to HTTP: %s", grpc_err)
+        logger.warning("gRPC InitiateIssuance failed (status=%s), falling back to HTTP: %s",
+                       getattr(grpc_err, 'code', lambda: 'N/A')(), grpc_err)
 
     # HTTP fallback
     async with httpx.AsyncClient(timeout=10.0) as client:
@@ -801,19 +807,19 @@ def get_repo() -> InMemoryApplicantRepository:
 
 
 class CreateApplicantRequest(BaseModel):
-    organization_id: str
+    organization_id: str = Field(min_length=1, max_length=255)
     user_id: str | None = None
     email: EmailStr
-    given_name: str | None = None
-    family_name: str | None = None
-    phone: str | None = None
+    given_name: str | None = Field(None, max_length=255)
+    family_name: str | None = Field(None, max_length=255)
+    phone: str | None = Field(None, max_length=50)
     vetting_level: str = "basic"
 
 
 class UpdateApplicantRequest(BaseModel):
-    given_name: str | None = None
-    family_name: str | None = None
-    phone: str | None = None
+    given_name: str | None = Field(None, max_length=255)
+    family_name: str | None = Field(None, max_length=255)
+    phone: str | None = Field(None, max_length=50)
     vetting_data: dict[str, Any] | None = None
 
 
@@ -852,8 +858,8 @@ class ApplicantResponse(BaseModel):
 
 
 class CreateApplicationRequest(BaseModel):
-    applicant_id: str
-    credential_configuration_id: str
+    applicant_id: str = Field(min_length=1, max_length=255)
+    credential_configuration_id: str = Field(min_length=1, max_length=255)
     issuing_authority: str | None = None
     requested_validity_years: int | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -887,11 +893,18 @@ class ApplicationResponse(BaseModel):
 
 
 class EnrollBiometricRequest(BaseModel):
-    biometric_type: str = "FACIAL"
-    template_data_base64: str
-    image_data_base64: str | None = None
+    biometric_type: str = Field(
+        "FACIAL",
+        pattern=r"^(FACIAL|FINGERPRINT|IRIS|VOICE|SIGNATURE)$",
+    )
+    template_data_base64: str = Field(
+        ..., min_length=10, max_length=10 * 1024 * 1024
+    )
+    image_data_base64: str | None = Field(
+        None, max_length=50 * 1024 * 1024
+    )
     is_live_capture: bool = True
-    capture_device_id: str | None = None
+    capture_device_id: str | None = Field(None, max_length=255)
 
 
 class ApplicationReviewRequest(BaseModel):
@@ -1032,12 +1045,14 @@ async def get_applicant_by_user(
 async def list_applicants(
     organization_id: str = Query(...),
     status: str | None = None,
+    limit: int = Query(default=100, le=500, description="Max items to return"),
+    offset: int = Query(default=0, ge=0, description="Number of items to skip"),
     repo: InMemoryApplicantRepository = Depends(get_repo),
 ) -> list[ApplicantResponse]:
     """List applicants for an organization."""
     status_filter = _parse_applicant_status(status) if status else None
     applicants = await repo.list_by_organization(organization_id, status_filter)
-    return [_to_response(a) for a in applicants]
+    return [_to_response(a) for a in applicants[offset:offset + limit]]
 
 
 @router.get("/profiles/{applicant_id}", response_model=ApplicantResponse, response_model_exclude_none=True)
@@ -1057,11 +1072,14 @@ async def enroll_biometric(
     applicant_id: str,
     request: EnrollBiometricRequest,
     repo: InMemoryApplicantRepository = Depends(get_repo),
+    x_organization_id: str = Header(alias="X-Organization-Id"),
 ) -> BiometricResponse:
     """Enroll a biometric for an applicant."""
     applicant = await repo.get_by_id(applicant_id)
     if not applicant:
         raise HTTPException(status_code=404, detail="Applicant not found")
+    if applicant.organization_id and applicant.organization_id != x_organization_id:
+        raise HTTPException(status_code=403, detail="Not authorized for this applicant")
 
     biometric = ApplicantBiometric(
         applicant_id=applicant_id,
@@ -1078,6 +1096,8 @@ async def enroll_biometric(
 @router.get("/profiles/{applicant_id}/biometrics", response_model=list[BiometricResponse], response_model_exclude_none=True)
 async def list_biometrics(
     applicant_id: str,
+    limit: int = Query(default=100, le=500, description="Max items to return"),
+    offset: int = Query(default=0, ge=0, description="Number of items to skip"),
     repo: InMemoryApplicantRepository = Depends(get_repo),
 ) -> list[BiometricResponse]:
     """List biometrics for an applicant."""
@@ -1085,7 +1105,7 @@ async def list_biometrics(
     if not applicant:
         raise HTTPException(status_code=404, detail="Applicant not found")
     biometrics = await repo.list_biometrics(applicant_id)
-    return [_biometric_to_response(b) for b in biometrics]
+    return [_biometric_to_response(b) for b in biometrics[offset:offset + limit]]
 
 
 @router.post("/applications", response_model=ApplicationResponse, response_model_exclude_none=True)
@@ -1134,36 +1154,46 @@ async def create_application(
 @router.get("/profiles/{applicant_id}/applications", response_model=list[ApplicationResponse], response_model_exclude_none=True)
 async def list_applications_for_applicant(
     applicant_id: str,
+    limit: int = Query(default=100, le=500, description="Max items to return"),
+    offset: int = Query(default=0, ge=0, description="Number of items to skip"),
     repo: InMemoryApplicantRepository = Depends(get_repo),
 ) -> list[ApplicationResponse]:
     """List applications for an applicant profile."""
     applications = await repo.list_applications_for_applicant(applicant_id)
     applications.sort(key=lambda a: a.created_at, reverse=True)
-    return [_application_to_response(a) for a in applications]
+    return [_application_to_response(a) for a in applications[offset:offset + limit]]
 
 
 @router.get("/org-applications", response_model=list[ApplicationResponse], response_model_exclude_none=True)
 async def list_applications_for_organization(
     organization_id: str = Query(...),
     status: str | None = Query(None),
+    limit: int = Query(default=100, le=500, description="Max items to return"),
+    offset: int = Query(default=0, ge=0, description="Number of items to skip"),
     repo: InMemoryApplicantRepository = Depends(get_repo),
 ) -> list[ApplicationResponse]:
     """List applications for an organization (used by org console)."""
     status_filter = _parse_application_status(status) if status else None
     applications = await repo.list_applications_for_organization(organization_id, status_filter)
     applications.sort(key=lambda a: a.created_at, reverse=True)
-    return [_application_to_response(a) for a in applications]
+    return [_application_to_response(a) for a in applications[offset:offset + limit]]
 
 
 @router.post("/applications/{application_id}/submit", response_model=ApplicationResponse, response_model_exclude_none=True)
 async def submit_application(
     application_id: str,
     repo: InMemoryApplicantRepository = Depends(get_repo),
+    x_organization_id: str = Header(alias="X-Organization-Id"),
 ) -> ApplicationResponse:
     """Submit an existing application into review."""
     application = await repo.get_application(application_id)
     if not application:
         raise HTTPException(status_code=404, detail="Application not found")
+
+    # Verify organization ownership
+    applicant = await repo.get_by_id(application.applicant_id)
+    if applicant and applicant.organization_id and applicant.organization_id != x_organization_id:
+        raise HTTPException(status_code=403, detail="Not authorized for this application")
 
     if application.status == ApplicationStatus.SUBMITTED:
         if not application.reference_number:
@@ -1558,6 +1588,8 @@ async def get_application(
 @router.get("/applications/{application_id}/checks", response_model=list[VettingCheckResponse], response_model_exclude_none=True)
 async def list_checks(
     application_id: str,
+    limit: int = Query(default=100, le=500, description="Max items to return"),
+    offset: int = Query(default=0, ge=0, description="Number of items to skip"),
     repo: InMemoryApplicantRepository = Depends(get_repo),
 ) -> list[VettingCheckResponse]:
     """List vetting checks for an application."""
@@ -1565,7 +1597,7 @@ async def list_checks(
     if not application:
         raise HTTPException(status_code=404, detail="Application not found")
     checks = await repo.list_checks_for_application(application_id)
-    return [_check_to_response(c) for c in checks]
+    return [_check_to_response(c) for c in checks[offset:offset + limit]]
 
 
 @router.post("/checks/{check_id}/start", response_model=VettingCheckResponse, response_model_exclude_none=True)
@@ -1607,11 +1639,13 @@ async def complete_check(
 @router.get("/checks/pending", response_model=list[VettingCheckResponse], response_model_exclude_none=True)
 async def get_pending_checks(
     check_type: str | None = Query(None),
+    limit: int = Query(default=100, le=500, description="Max items to return"),
+    offset: int = Query(default=0, ge=0, description="Number of items to skip"),
     repo: InMemoryApplicantRepository = Depends(get_repo),
 ) -> list[VettingCheckResponse]:
     """Get all pending vetting checks (optionally filtered by type)."""
     checks = await repo.list_pending_checks(check_type)
-    return [_check_to_response(c) for c in checks]
+    return [_check_to_response(c) for c in checks[offset:offset + limit]]
 
 
 # --- Request Info Endpoint ---
@@ -1933,32 +1967,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(
+    return create_service_app(
         title="Applicant Service",
         description="Applicant vetting and management service",
-        version="1.0.0",
+        service_name=SERVICE_NAME,
         lifespan=lifespan,
+        routers=[router],
     )
-    
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-    
-    app.include_router(router)
-    
-    @app.get("/health")
-    async def health_check() -> dict:
-        return {"status": "healthy", "service": SERVICE_NAME}
-
-    from common.metrics import init_otel_tracing, mount_metrics
-    init_otel_tracing(SERVICE_NAME)
-    mount_metrics(app)
-    
-    return app
 
 
 app = create_app()

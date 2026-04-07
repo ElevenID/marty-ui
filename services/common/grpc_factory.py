@@ -28,6 +28,14 @@ correlation_id_var: contextvars.ContextVar[str] = contextvars.ContextVar(
     "correlation_id", default=""
 )
 
+# Environment names where insecure gRPC is permitted without explicit opt-in.
+_DEV_ENVIRONMENTS = {"development", "dev", "local", "test"}
+
+
+def _is_dev_environment() -> bool:
+    """Return True when the service is running in a development-like environment."""
+    return os.environ.get("ENVIRONMENT", "development").lower() in _DEV_ENVIRONMENTS
+
 
 # ---------------------------------------------------------------------------
 # Client-side interceptor: metrics for outbound gRPC calls
@@ -66,7 +74,7 @@ class MetricsClientInterceptor(grpc_aio.UnaryUnaryClientInterceptor):
                 ["source_service", "method", "error_type"],
             )
         except Exception:
-            pass
+            logger.debug("prometheus_client not available; client metrics disabled")
 
     async def intercept_unary_unary(self, continuation, client_call_details, request):
         method = client_call_details.method
@@ -120,6 +128,21 @@ class CorrelationIdClientInterceptor(grpc_aio.UnaryUnaryClientInterceptor):
         return await continuation(client_call_details, request)
 
 
+class ServiceTokenClientInterceptor(grpc_aio.UnaryUnaryClientInterceptor):
+    """Attaches ``x-service-token`` metadata on outbound gRPC calls
+    so the receiving ``ServiceAuthInterceptor`` can authenticate them.
+    """
+
+    def __init__(self, token: str) -> None:
+        self._token = token
+
+    async def intercept_unary_unary(self, continuation, client_call_details, request):
+        metadata = list(client_call_details.metadata or [])
+        metadata.append((_SERVICE_TOKEN_HEADER, self._token))
+        client_call_details = client_call_details._replace(metadata=metadata)
+        return await continuation(client_call_details, request)
+
+
 # ---------------------------------------------------------------------------
 # Server-side interceptor: structured logging + metrics
 # ---------------------------------------------------------------------------
@@ -164,7 +187,7 @@ class LoggingMetricsInterceptor(grpc_aio.ServerInterceptor):
                 ["service", "method", "error_type"],
             )
         except Exception:
-            logger.debug("prometheus_client not available; metrics disabled")
+            logger.debug("prometheus_client not available; server metrics disabled")
 
     async def intercept_service(self, continuation, handler_call_details):
         handler = await continuation(handler_call_details)
@@ -268,6 +291,55 @@ class CorrelationIdInterceptor(grpc_aio.ServerInterceptor):
 
 
 # ---------------------------------------------------------------------------
+# Service authentication interceptor
+# ---------------------------------------------------------------------------
+
+_SERVICE_TOKEN_HEADER = "x-service-token"
+
+
+class ServiceAuthInterceptor(grpc_aio.ServerInterceptor):
+    """Validates a shared service token on inbound gRPC calls.
+
+    Enabled when ``GRPC_SERVICE_TOKEN`` is set.  Health-check and
+    reflection RPCs are exempt so that probes still work without tokens.
+    """
+
+    _EXEMPT_PREFIXES = (
+        "/grpc.health.",
+        "/grpc.reflection.",
+    )
+
+    def __init__(self, expected_token: str) -> None:
+        import hmac as _hmac
+
+        self._expected_token = expected_token
+        self._hmac = _hmac
+
+    async def intercept_service(self, continuation, handler_call_details):
+        method = handler_call_details.method or ""
+        if any(method.startswith(p) for p in self._EXEMPT_PREFIXES):
+            return await continuation(handler_call_details)
+
+        metadata = dict(handler_call_details.invocation_metadata)
+        token = metadata.get(_SERVICE_TOKEN_HEADER, "")
+
+        if not self._hmac.compare_digest(token, self._expected_token):
+            logger.warning(
+                "Rejected unauthenticated gRPC call to %s", method
+            )
+
+            async def _abort(request, context):
+                await context.abort(
+                    grpc.StatusCode.UNAUTHENTICATED,
+                    "Missing or invalid service token",
+                )
+
+            return grpc.unary_unary_rpc_method_handler(_abort)
+
+        return await continuation(handler_call_details)
+
+
+# ---------------------------------------------------------------------------
 # TLS helpers
 # ---------------------------------------------------------------------------
 
@@ -362,6 +434,17 @@ def create_grpc_server(
         CorrelationIdInterceptor(),
         LoggingMetricsInterceptor(service_name),
     ]
+
+    # Service-to-service authentication when GRPC_SERVICE_TOKEN is set.
+    service_token = os.environ.get("GRPC_SERVICE_TOKEN", "")
+    if service_token:
+        all_interceptors.insert(0, ServiceAuthInterceptor(service_token))
+    elif not _is_dev_environment():
+        logger.warning(
+            "GRPC_SERVICE_TOKEN is not set in a non-dev environment — "
+            "inter-service gRPC calls are unauthenticated"
+        )
+
     if interceptors:
         all_interceptors = list(interceptors) + all_interceptors
 
@@ -384,7 +467,9 @@ def start_grpc_server_port(
     """Bind *server* to *port* (TLS-aware) and enable reflection.
 
     If ``GRPC_TLS_CERT`` / ``GRPC_TLS_KEY`` are set, the server binds
-    a secure port; otherwise an insecure port.
+    a secure port; otherwise an insecure port.  Outside development
+    environments, insecure binding is rejected unless
+    ``GRPC_INSECURE_ALLOWED=true`` is explicitly set.
 
     ``service_names`` are registered with gRPC server reflection so
     that tools like ``grpcurl`` can introspect the API.
@@ -396,8 +481,19 @@ def start_grpc_server_port(
         server.add_secure_port(addr, credentials)
         logger.info("gRPC server bound to %s (TLS enabled)", addr)
     else:
+        insecure_allowed = (
+            _is_dev_environment()
+            or os.environ.get("GRPC_INSECURE_ALLOWED", "").lower()
+            in ("true", "1", "yes")
+        )
+        if not insecure_allowed:
+            raise RuntimeError(
+                f"Refusing to start gRPC server on {addr} without TLS in "
+                f"a non-dev environment. Set GRPC_TLS_CERT/GRPC_TLS_KEY "
+                f"or GRPC_INSECURE_ALLOWED=true to override."
+            )
         server.add_insecure_port(addr)
-        logger.info("gRPC server bound to %s (insecure)", addr)
+        logger.warning("gRPC server bound to %s (insecure — dev mode)", addr)
 
     # Reflection
     reflection_names = list(service_names or [])
@@ -427,7 +523,12 @@ def create_grpc_channel(
     """Create a gRPC async channel with keepalive and optional TLS.
 
     If ``GRPC_TLS_CA_CERT`` is set, a secure channel is created;
-    otherwise an insecure one.
+    otherwise an insecure one.  Outside development environments,
+    insecure channels are rejected unless ``GRPC_INSECURE_ALLOWED=true``.
+
+    When ``GRPC_SERVICE_TOKEN`` is set the token is automatically
+    attached as ``x-service-token`` call metadata via a client
+    interceptor so that the receiving server can authenticate the call.
 
     Built-in client interceptors (when *service_name* is provided):
     - ``MetricsClientInterceptor`` — call count + latency Prometheus
@@ -447,6 +548,12 @@ def create_grpc_channel(
     if service_name:
         all_interceptors.append(CorrelationIdClientInterceptor())
         all_interceptors.append(MetricsClientInterceptor(service_name))
+
+    # Attach service token for inter-service authentication.
+    service_token = os.environ.get("GRPC_SERVICE_TOKEN", "")
+    if service_token:
+        all_interceptors.append(ServiceTokenClientInterceptor(service_token))
+
     if interceptors:
         all_interceptors.extend(interceptors)
 
@@ -465,9 +572,20 @@ def create_grpc_channel(
         )
         logger.info("gRPC channel to %s (TLS enabled)", target)
     else:
+        insecure_allowed = (
+            _is_dev_environment()
+            or os.environ.get("GRPC_INSECURE_ALLOWED", "").lower()
+            in ("true", "1", "yes")
+        )
+        if not insecure_allowed:
+            raise RuntimeError(
+                f"Refusing to open insecure gRPC channel to {target} in "
+                f"a non-dev environment. Set GRPC_TLS_CA_CERT or "
+                f"GRPC_INSECURE_ALLOWED=true to override."
+            )
         channel = grpc_aio.insecure_channel(
             target, options=options,
             interceptors=all_interceptors or None,
         )
-        logger.info("gRPC channel to %s (insecure)", target)
+        logger.warning("gRPC channel to %s (insecure — dev mode)", target)
     return channel

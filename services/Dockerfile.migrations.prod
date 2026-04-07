@@ -20,15 +20,16 @@ RUN pip install --no-cache-dir \
     psycopg2-binary \
     asyncpg
 
-# Install mmf from GitHub Packages
-ARG GITHUB_TOKEN=""
-RUN if [ -n "$GITHUB_TOKEN" ]; then \
+# Install mmf from GitHub Packages using BuildKit secret mount
+RUN --mount=type=secret,id=GITHUB_TOKEN \
+    if [ -f /run/secrets/GITHUB_TOKEN ]; then \
+      GITHUB_TOKEN=$(cat /run/secrets/GITHUB_TOKEN) && \
       pip install --no-cache-dir \
         --index-url "https://__token__:${GITHUB_TOKEN}@pypi.pkg.github.com/ElevenID/" \
         --extra-index-url https://pypi.org/simple/ \
         marty-msf; \
     else \
-      echo "WARNING: GITHUB_TOKEN not set, skipping marty-msf install"; \
+      echo "WARNING: GITHUB_TOKEN secret not mounted, skipping marty-msf install"; \
     fi
 
 # Copy migration runner

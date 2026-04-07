@@ -74,6 +74,7 @@ export {
 
 export {
   captureBiometricSample,
+  captureBiometricSampleWithQuality,
   startBiometricCaptureCamera,
   stopBiometricCaptureCamera,
 } from './biometricCaptureUseCases';

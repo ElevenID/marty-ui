@@ -1,0 +1,112 @@
+"""
+Service Registry and Route Configuration.
+
+Maps service names to URLs and defines per-route auth requirements.
+"""
+from __future__ import annotations
+
+import os
+from typing import Any
+
+
+class ServiceRegistry:
+    """Service registry for routing."""
+
+    def __init__(self):
+        self._services: dict[str, str] = {}
+        self._load_services()
+
+    def _load_services(self) -> None:
+        """Load service URLs from environment or defaults."""
+        self._services = {
+            "auth": os.environ.get("AUTH_SERVICE_URL", "http://localhost:8001"),
+            "organizations": os.environ.get("ORGANIZATION_SERVICE_URL", "http://localhost:8002"),
+            "credential-templates": os.environ.get("CREDENTIAL_TEMPLATE_SERVICE_URL", "http://localhost:8003"),
+            "trust-profiles": os.environ.get("TRUST_PROFILE_SERVICE_URL", "http://localhost:8004"),
+            "issuance": os.environ.get("ISSUANCE_SERVICE_URL", "http://localhost:8005"),
+            "applicant": os.environ.get("APPLICANT_SERVICE_URL", "http://localhost:8006"),
+            "notifications": os.environ.get("NOTIFICATION_SERVICE_URL", "http://localhost:8007"),
+            "compliance-profiles": os.environ.get("COMPLIANCE_PROFILE_SERVICE_URL", "http://localhost:8008"),
+            "presentation-policies": os.environ.get("PRESENTATION_POLICY_SERVICE_URL", "http://localhost:8009"),
+            "deployment-profiles": os.environ.get("DEPLOYMENT_PROFILE_SERVICE_URL", "http://localhost:8010"),
+            "flows": os.environ.get("FLOW_SERVICE_URL", "http://localhost:8011"),
+            "verification": os.environ.get("VERIFICATION_SERVICE_URL", "http://localhost:8012"),
+            "revocation-profiles": os.environ.get("REVOCATION_PROFILE_SERVICE_URL", "http://localhost:8013"),
+            "device-registration": os.environ.get("DEVICE_REGISTRATION_SERVICE_URL", "http://localhost:8014"),
+            "billing": os.environ.get("BILLING_SERVICE_URL", "http://localhost:8016"),
+        }
+
+    def get_service_url(self, service_name: str) -> str | None:
+        return self._services.get(service_name)
+
+    def get_all_services(self) -> dict[str, str]:
+        return self._services.copy()
+
+
+ROUTE_CONFIG = {
+    # Auth routes (no auth required)
+    "/v1/auth": {"service": "auth", "requires_auth": False},
+    "/v1/organizations/invitations/validate": {"service": "auth", "requires_auth": False},
+    "/v1/organizations/join/code/validate": {"service": "organizations", "requires_auth": False},
+
+    # Organization routes
+    "/v1/organizations": {"service": "organizations", "requires_auth": True},
+    "/v1/me": {"service": "organizations", "requires_auth": True},
+    "/v1/api-keys": {"service": "organizations", "requires_auth": True},
+
+    # Digital Identity Model - Configuration Resources
+    "/v1/credential-templates": {"service": "credential-templates", "requires_auth": True},
+    "/v1/wallet-registry": {"service": "credential-templates", "requires_auth": True},
+    "/v1/trust-profiles": {"service": "trust-profiles", "requires_auth": True},
+    "/v1/issuer-entities": {"service": "trust-profiles", "requires_auth": True},
+    "/v1/trust-frameworks": {"service": "trust-profiles", "requires_auth": True},
+    "/v1/trust-registry": {"service": "trust-profiles", "requires_auth": False},
+    "/v1/compliance-profiles": {"service": "compliance-profiles", "requires_auth": True},
+    "/v1/presentation-policies": {"service": "presentation-policies", "requires_auth": True},
+    "/v1/deployment-profiles": {"service": "deployment-profiles", "requires_auth": True},
+    "/v1/revocation-profiles": {"service": "revocation-profiles", "requires_auth": True},
+    "/v1/revocation-batches": {"service": "revocation-profiles", "requires_auth": True},
+    "/v1/cascade-revocations": {"service": "revocation-profiles", "requires_auth": True},
+    "/v1/devices": {"service": "device-registration", "requires_auth": True},
+
+    # Digital Identity Model - Operational Resources
+    "/v1/applicants": {"service": "applicant", "requires_auth": True},
+    "/v1/issued-credentials": {"service": "issuance", "requires_auth": True},
+    # OID4VCI wallet-facing endpoints must be public (no auth token available on wallet)
+    "/v1/issuance/offers": {"service": "issuance", "requires_auth": False},
+    "/v1/issuance/token": {"service": "issuance", "requires_auth": False},
+    "/v1/issuance/credential": {"service": "issuance", "requires_auth": False},
+    "/v1/issuance/nonce": {"service": "issuance", "requires_auth": False},
+    "/v1/issuance/notification": {"service": "issuance", "requires_auth": False},
+    "/v1/issuance/deferred-credential": {"service": "issuance", "requires_auth": False},
+    "/v1/issuance/authorize": {"service": "issuance", "requires_auth": False},
+    "/v1/issuance/par": {"service": "issuance", "requires_auth": False},
+    "/v1/issuance/didcomm/deliver": {"service": "issuance", "requires_auth": True},
+    "/v1/issuance/didcomm/receive": {"service": "issuance", "requires_auth": False},
+    "/v1/issuance": {"service": "issuance", "requires_auth": True},
+    "/v1/application-templates": {"service": "issuance", "requires_auth": True},
+    "/v1/applications": {"service": "issuance", "requires_auth": True},
+    "/v1/flows/instances": {"service": "flows", "requires_auth": True},  # wallet-facing /request + /submit handled by _WALLET_PUBLIC regex
+    "/v1/flows/siop/submit": {"service": "flows", "requires_auth": False},  # SIOPv2 wallet-facing
+    "/v1/flows/siop": {"service": "flows", "requires_auth": True},  # SIOPv2 session creation
+    "/v1/flows": {"service": "flows", "requires_auth": True},
+
+    # Verification & ZK Proof routes
+    "/v1/verify": {"service": "verification", "requires_auth": True},
+    "/v1/verify/zkp": {"service": "verification", "requires_auth": True},
+
+    # Utility routes
+    "/v1/notifications": {"service": "notifications", "requires_auth": True},
+    "/v1/subscriptions": {"service": "notifications", "requires_auth": True},
+    "/v1/webhooks": {"service": "notifications", "requires_auth": True},
+    # Cedar Policy Sets
+    "/v1/policy-sets": {"service": "organizations", "requires_auth": True},
+}
+
+
+def get_route_config(path: str) -> dict[str, Any] | None:
+    """Find matching route configuration for a path."""
+    for prefix, config in sorted(ROUTE_CONFIG.items(), key=lambda x: -len(x[0])):
+        if path.startswith(prefix):
+            return config
+    return None

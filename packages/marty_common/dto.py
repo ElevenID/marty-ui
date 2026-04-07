@@ -11,7 +11,19 @@ from datetime import datetime, timezone
 from typing import Any, Generic, TypeVar
 import uuid
 
+from pydantic import BaseModel
+
 T = TypeVar("T")
+
+
+class DeleteResponse(BaseModel):
+    """Standard response for DELETE operations."""
+    success: bool = True
+
+
+class CountResponse(BaseModel):
+    """Standard response for count operations."""
+    count: int
 
 
 @dataclass

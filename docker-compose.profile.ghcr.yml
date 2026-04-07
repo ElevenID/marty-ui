@@ -5,7 +5,7 @@
 #   docker compose -f docker-compose.base.yml -f docker-compose.profile.ghcr.yml pull
 #   docker compose -f docker-compose.base.yml -f docker-compose.profile.ghcr.yml up -d
 #
-# Infrastructure services (postgres, redis, keycloak, mailhog) come from
+# Infrastructure services (postgres, redis, keycloak, mailpit) come from
 # docker-compose.base.yml unchanged. Only application services are overridden.
 
 x-service-image: &service-image

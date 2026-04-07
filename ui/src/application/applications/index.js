@@ -18,6 +18,7 @@ export {
   submitCredentialApplication,
 } from './applicationFormUseCases';
 
+// Moved to @marty/subscriptions. Re-exported here for backward compatibility during migration.
 export {
   buildPaymentCheckoutInitialBillingInfo,
   buildPaymentCheckoutMetadata,
@@ -28,7 +29,7 @@ export {
   submitPaymentCheckoutApplication,
   updatePaymentCheckoutBillingInfo,
   validatePaymentCheckoutBilling,
-} from './paymentCheckoutUseCases';
+} from '@marty/subscriptions';
 
 export {
   buildCredentialApplicationNavigationState,

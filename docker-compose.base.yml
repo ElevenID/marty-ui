@@ -29,6 +29,15 @@ services:
       start_period: 30s
     networks:
       - marty-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 256M
 
   redis:
     image: redis:7-alpine
@@ -45,6 +54,15 @@ services:
       retries: 5
     networks:
       - marty-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 256M
+        reservations:
+          cpus: '0.25'
+          memory: 64M
 
   keycloak:
     image: quay.io/keycloak/keycloak:25.0
@@ -85,6 +103,15 @@ services:
       start_period: 60s
     networks:
       - marty-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
 
   # One-shot configurator: patches Keycloak after realm import.
   # Resolves env vars (Google credentials, public domain redirect URIs, etc.)
@@ -113,17 +140,65 @@ services:
     networks:
       - marty-network
 
-  mailhog:
-    image: mailhog/mailhog:latest
-    container_name: marty-mailhog
+  mailpit:
+    image: axllent/mailpit:v1.21
+    container_name: marty-mailpit
     ports:
       - "9025:8025"
       - "2025:1025"
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8025"]
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8025/livez"]
       interval: 5s
       timeout: 3s
       retries: 5
+    networks:
+      - marty-network
+
+  openbao:
+    image: quay.io/openbao/openbao:2
+    container_name: marty-openbao
+    cap_add:
+      - IPC_LOCK
+    ports:
+      - "8200:8200"
+    environment:
+      BAO_DEV_ROOT_TOKEN_ID: ${BAO_DEV_ROOT_TOKEN:-dev-only-token}
+      BAO_DEV_LISTEN_ADDRESS: "0.0.0.0:8200"
+      BAO_ADDR: "http://127.0.0.1:8200"
+    command: server -dev
+    volumes:
+      - openbao_data:/bao/data
+    healthcheck:
+      test: ["CMD", "bao", "status", "-address=http://127.0.0.1:8200"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - marty-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+
+  openbao-init:
+    image: quay.io/openbao/openbao:2
+    container_name: marty-openbao-init
+    entrypoint: ["/bin/sh", "/scripts/openbao-init.sh"]
+    environment:
+      BAO_ADDR: "http://openbao:8200"
+      BAO_TOKEN: ${BAO_DEV_ROOT_TOKEN:-dev-only-token}
+    depends_on:
+      openbao:
+        condition: service_healthy
+    volumes:
+      - ./docker/openbao-init.sh:/scripts/openbao-init.sh:ro
+    restart: "no"
     networks:
       - marty-network
 
@@ -178,6 +253,8 @@ services:
       ES_GRPC_TARGET: event-stream:9015
       REDIS_URL: redis://redis:6379
       REDIS_DB_GATEWAY: "2"
+      RATE_LIMIT_RPM: ${RATE_LIMIT_RPM:-0}
+      ISSUANCE_API_KEY: ${ISSUANCE_API_KEY:-dev-issuance-api-key}
     ports:
       - "8000:8000"
     depends_on:
@@ -208,6 +285,7 @@ services:
       AUTH_SERVICE_PORT: "8001"
       UI_BASE_URL: ${UI_BASE_URL:-http://localhost:3000}
       REDIS_URL: redis://redis:6379/0
+      KEYCLOAK_REALM: ${KEYCLOAK_REALM:-11id}
       OIDC_ISSUER_URL: ${OIDC_ISSUER_URL_INTERNAL:-http://keycloak:8080/realms/${KEYCLOAK_REALM:-11id}}
       OIDC_EXTERNAL_ISSUER_URL: ${OIDC_ISSUER_URL_EXTERNAL:-http://localhost:8180/realms/${KEYCLOAK_REALM:-11id}}
       OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-marty-ui}
@@ -306,6 +384,9 @@ services:
       TRUST_PROFILE_SERVICE_PORT: "8004"
       DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@postgres:5432/marty
       ORG_GRPC_TARGET: organization:9002
+      # OpenBao KMS for certificate operations
+      BAO_ADDR: http://openbao:8200
+      BAO_TOKEN: ${BAO_DEV_ROOT_TOKEN:-dev-only-token}
     ports:
       - "8004:8004"
     depends_on:
@@ -359,7 +440,7 @@ services:
     environment:
       NOTIFICATION_SERVICE_PORT: "8007"
       DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@postgres:5432/marty
-      SMTP_HOST: mailhog
+      SMTP_HOST: mailpit
       SMTP_PORT: "1025"
       NOTIF_GRPC_PORT: "9007"
     ports:
@@ -368,7 +449,7 @@ services:
     depends_on:
       db-migrate:
         condition: service_completed_successfully
-      mailhog:
+      mailpit:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8007/health"]
@@ -496,11 +577,19 @@ services:
       CT_GRPC_TARGET: credential-template:9003
       CREDENTIAL_TEMPLATE_SERVICE_URL: http://credential-template:8003
       ISSUANCE_GRPC_PORT: "9005"
+      # OpenBao KMS for credential signing
+      BAO_ADDR: http://openbao:8200
+      BAO_TOKEN: ${BAO_DEV_ROOT_TOKEN:-dev-only-token}
+      ISSUANCE_API_KEY: ${ISSUANCE_API_KEY:-dev-issuance-api-key}
+      # DIDComm v2 push delivery — optional Universal Resolver for unknown DID methods
+      UNIVERSAL_RESOLVER_URL: ${UNIVERSAL_RESOLVER_URL:-}
     ports:
       - "8005:8005"
       - "9005:9005"
     depends_on:
       db-migrate:
+        condition: service_completed_successfully
+      openbao-init:
         condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8005/health"]
@@ -601,12 +690,15 @@ services:
       VERIF_GRPC_PORT: "9017"
       VERIF_GRPC_ENABLED: "true"
       PUBLIC_BASE_URL: ${PUBLIC_API_URL:-http://gateway:8000}
+      REDIS_URL: redis://redis:6379/3
       OTEL_EXPORTER_OTLP_ENDPOINT: jaeger:4317
     ports:
       - "8012:8012"
       - "9017:9017"
     depends_on:
       presentation-policy:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8012/health"]
@@ -653,7 +745,10 @@ services:
 
   # ── Envoy gRPC Proxy ─────────────────────────────────────────────
   envoy:
-    image: envoyproxy/envoy:v1.29-latest
+    build:
+      context: ./config/envoy
+      dockerfile: Dockerfile
+    image: marty-envoy:latest
     container_name: marty-envoy
     volumes:
       - ./config/envoy/envoy.yaml:/etc/envoy/envoy.yaml:ro
@@ -685,7 +780,7 @@ services:
       verification:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://localhost:9901/ready || exit 1"]
+      test: ["CMD", "curl", "-sf", "http://localhost:9901/ready"]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -698,6 +793,7 @@ volumes:
   redis_data:
   applicant_data:
   envoy_proto_descriptor:
+  openbao_data:
 
 networks:
   marty-network:

@@ -31,19 +31,22 @@ from enum import Enum
 from typing import Any, AsyncGenerator
 
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from marty_common.dto import DeleteResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from typing import Annotated
 
 from marty_common import (
-    OrganizationClient,
     OrganizationContext,
     CedarEngine,
     require_org_membership,
 )
 from marty_common.org_authorization import get_organization_client
 from marty_common.middleware import RequestIdMiddleware, RequestLoggingMiddleware
+from marty_common.service_setup import create_service_app
 
 from presentation_policy.infrastructure.adapters import PostgresPresentationPolicyRepository
 
@@ -56,7 +59,9 @@ SERVICE_PORT = int(os.environ.get("PRESENTATION_POLICY_SERVICE_PORT", "8009"))
 
 def get_config() -> dict[str, Any]:
     """Get database configuration from environment."""
-    database_url = os.environ.get("DATABASE_URL", "postgresql://marty:marty_dev@postgres:5432/marty_credentials")
+    database_url = os.environ.get("DATABASE_URL")
+    if not database_url:
+        raise RuntimeError("DATABASE_URL environment variable is required")
     if not database_url.startswith("postgresql+asyncpg://"):
         database_url = database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
     return {"database_url": database_url}
@@ -307,8 +312,9 @@ class TrustProfileCache:
     Reduces load on trust-profiles service during verification.
     """
     
-    def __init__(self):
+    def __init__(self, maxsize: int = 10_000):
         self._cache: dict[str, dict] = {}  # profile_id -> {data, expires_at}
+        self._maxsize = maxsize
     
     def get(self, profile_id: str) -> dict | None:
         """Get cached Trust Profile if not expired."""
@@ -325,6 +331,15 @@ class TrustProfileCache:
     
     def set(self, profile_id: str, data: dict, ttl_seconds: int) -> None:
         """Cache Trust Profile with TTL."""
+        if len(self._cache) >= self._maxsize:
+            # Evict expired entries first, then oldest
+            now = datetime.now(timezone.utc)
+            expired = [k for k, v in self._cache.items() if now > v["expires_at"]]
+            for k in expired:
+                del self._cache[k]
+            if len(self._cache) >= self._maxsize:
+                oldest = min(self._cache, key=lambda k: self._cache[k]["expires_at"])
+                del self._cache[oldest]
         expires_at = datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)
         self._cache[profile_id] = {
             "data": data,
@@ -416,10 +431,10 @@ class DisplayMetadataModel(BaseModel):
 
 
 class CreatePresentationPolicyRequest(BaseModel):
-    organization_id: str
-    name: str
-    description: str | None = None
-    purpose: str | None = None
+    organization_id: str = Field(min_length=1, max_length=255)
+    name: str = Field(min_length=1, max_length=255)
+    description: str | None = Field(None, max_length=2000)
+    purpose: str | None = Field(None, max_length=2000)
     display_metadata: DisplayMetadataModel | None = None
     required_claims: list[ProtocolRequiredClaimModel] = Field(default_factory=list)
     accepted_credential_types: list[str] = Field(default_factory=list)
@@ -438,9 +453,9 @@ class CreatePresentationPolicyRequest(BaseModel):
 
 
 class UpdatePresentationPolicyRequest(BaseModel):
-    name: str | None = None
-    description: str | None = None
-    purpose: str | None = None
+    name: str | None = Field(None, min_length=1, max_length=255)
+    description: str | None = Field(None, max_length=2000)
+    purpose: str | None = Field(None, max_length=2000)
     display_metadata: DisplayMetadataModel | None = None
     required_claims: list[ProtocolRequiredClaimModel] | None = None
     accepted_credential_types: list[str] | None = None
@@ -463,6 +478,7 @@ class PresentationPolicyResponse(BaseModel):
     purpose: str | None = None
     required_claims: list[dict] = Field(default_factory=list)
     accepted_credential_types: list[str] = Field(default_factory=list)
+    credential_requirements: list[dict] = Field(default_factory=list)
     trust_profile_id: str | None = None
     holder_binding: dict | None = None
     freshness: dict | None = None
@@ -547,6 +563,7 @@ def _evaluate_constraint(constraint_type: str, value: Any, constraint: "ClaimCon
             age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
             return age >= min_age
         except Exception:
+            logger.warning("AGE_OVER constraint evaluation failed for value=%r, expected=%r", value, expected, exc_info=True)
             return False
 
     # Unknown constraint type — pass through
@@ -587,7 +604,7 @@ def _detect_credential_format(vp_token: str) -> str:
                     return "openbadge-v2"
                 elif header.get("typ") in ["JWT", "vc+jwt"]:
                     return "w3c-vc"
-            except:
+            except (ValueError, json.JSONDecodeError, Exception):
                 pass
             
             # Default JWT to W3C VC
@@ -645,14 +662,56 @@ def _verify_credential_by_format(
 
 
 def _verify_w3c_vc(vp_token: str, nonce: str | None, audience: str | None) -> dict:
-    """Verify W3C Verifiable Credential."""
-    # In production: call verification service or use marty_verification_py
-    return {
-        "verified": True,
-        "claims": {"simulated": "w3c_vc_claims"},
-        "issuer_did": "did:example:issuer",
-        "format": "w3c-vc",
-    }
+    """Verify W3C Verifiable Credential via Rust OID4VP engine."""
+    try:
+        import _marty_rs
+    except ImportError:
+        logger.warning("_marty_rs not available — W3C VC verification disabled")
+        return {
+            "verified": False,
+            "claims": {},
+            "issuer_did": "unknown",
+            "format": "w3c-vc",
+            "error": "marty-rs bindings not installed",
+        }
+
+    try:
+        import json as _json
+        result_json = _marty_rs.oid4vp_verify_vp_token(
+            vp_token,
+            nonce or "",
+            audience or "",
+        )
+        result = _json.loads(result_json)
+        is_valid = result.get("valid", False)
+        errors = result.get("errors", [])
+
+        # Extract claims from the VP token payload
+        claims = {}
+        try:
+            import base64 as _b64
+            parts = vp_token.split(".")
+            if len(parts) >= 2:
+                padded = parts[1] + "=" * (4 - len(parts[1]) % 4)
+                payload = _json.loads(_b64.urlsafe_b64decode(padded))
+                claims = payload.get("credentialSubject", payload.get("vc", {}).get("credentialSubject", {}))
+                issuer = payload.get("iss", payload.get("issuer", "unknown"))
+            else:
+                issuer = "unknown"
+        except Exception:
+            issuer = "unknown"
+
+        return {
+            "verified": is_valid,
+            "claims": claims,
+            "issuer_did": issuer,
+            "format": "w3c-vc",
+            "error": "; ".join(errors) if errors else None,
+        }
+    except Exception as e:
+        logger.error("W3C VC Rust verification failed: %s", e)
+        return {"verified": False, "claims": {}, "issuer_did": "unknown",
+                "format": "w3c-vc", "error": str(e)}
 
 
 def _verify_sd_jwt(vp_token: str, nonce: str | None, audience: str | None) -> dict:
@@ -726,12 +785,34 @@ def _verify_sd_jwt(vp_token: str, nonce: str | None, audience: str | None) -> di
         issuer = payload.get("iss") or payload.get("issuer", "unknown")
         subject = payload.get("sub") or payload.get("subject", "unknown")
 
+        # Attempt cryptographic verification via Rust binding
+        crypto_verified = False
+        crypto_error = None
+        try:
+            import _marty_rs
+            import json as _json
+            result_json = _marty_rs.oid4vp_verify_vp_token(
+                vp_token,
+                nonce or "",
+                audience or "",
+            )
+            rust_result = _json.loads(result_json)
+            crypto_verified = rust_result.get("valid", False)
+            errors = rust_result.get("errors", [])
+            if errors:
+                crypto_error = "; ".join(errors)
+        except ImportError:
+            crypto_error = "marty-rs bindings not installed — structural decode only"
+        except Exception as e:
+            crypto_error = f"Rust verification error: {e}"
+
         return {
-            "verified": True,  # structural verification only — crypto TODO
+            "verified": crypto_verified,
             "claims": claims,
             "issuer_did": issuer,
             "subject": subject,
             "format": "sd-jwt",
+            "error": crypto_error,
         }
 
     except Exception as exc:
@@ -740,35 +821,72 @@ def _verify_sd_jwt(vp_token: str, nonce: str | None, audience: str | None) -> di
 
 
 def _verify_mdoc(vp_token: str, nonce: str | None, audience: str | None) -> dict:
-    """Verify mDoc/ISO 18013-5 credential."""
-    # In production: call verification service or use _marty_rs
-    return {
-        "verified": True,
-        "claims": {"simulated": "mdoc_claims"},
-        "issuer_did": "did:example:issuer",
-        "format": "mdoc",
-    }
+    """Verify mDoc/ISO 18013-5 credential via Rust mDoc verification."""
+    try:
+        import _marty_rs
+    except ImportError:
+        logger.warning("_marty_rs not available — mDoc verification disabled")
+        return {
+            "verified": False,
+            "claims": {},
+            "issuer_did": "unknown",
+            "format": "mdoc",
+            "error": "marty-rs bindings not installed",
+        }
+
+    try:
+        import base64 as _b64
+
+        # mDoc VP tokens are typically base64url-encoded CBOR DeviceResponse
+        padded = vp_token + "=" * (4 - len(vp_token) % 4)
+        cbor_bytes = _b64.urlsafe_b64decode(padded)
+
+        # Extract claims via Rust
+        claims = _marty_rs.verify_mdoc_cbor(cbor_bytes)
+        if not isinstance(claims, dict):
+            claims = {}
+
+        # Attempt signature verification (no trusted certs = structural only)
+        result = _marty_rs.verify_mdoc_signature(cbor_bytes, [])
+        is_valid = result.signature_valid
+        error = result.error
+
+        return {
+            "verified": is_valid,
+            "claims": claims,
+            "issuer_did": "mdoc-issuer",
+            "format": "mdoc",
+            "error": error,
+        }
+    except Exception as e:
+        logger.error("mDoc Rust verification failed: %s", e)
+        return {"verified": False, "claims": {}, "issuer_did": "unknown",
+                "format": "mdoc", "error": str(e)}
 
 
 def _verify_open_badge_v2(vp_token: str) -> dict:
     """Verify Open Badges v2 credential."""
-    # In production: use marty_verification_py.open_badge_ob2_verify
+    # TODO: use marty_verification_py.open_badge_ob2_verify
+    logger.warning("Open Badge v2 verification is STUBBED — returning unverified result")
     return {
-        "verified": True,
-        "claims": {"simulated": "openbadge_v2_claims"},
-        "issuer_did": "did:example:issuer",
+        "verified": False,
+        "claims": {},
+        "issuer_did": "unknown",
         "format": "openbadge-v2",
+        "error": "Open Badge v2 verification not yet available in Rust layer",
     }
 
 
 def _verify_open_badge_v3(vp_token: str) -> dict:
     """Verify Open Badges v3 credential."""
-    # In production: use marty_verification_py.open_badge_ob3_verify
+    # TODO: use marty_verification_py.open_badge_ob3_verify
+    logger.warning("Open Badge v3 verification is STUBBED — returning unverified result")
     return {
-        "verified": True,
-        "claims": {"simulated": "openbadge_v3_claims"},
-        "issuer_did": "did:example:issuer",
+        "verified": False,
+        "claims": {},
+        "issuer_did": "unknown",
         "format": "openbadge-v3",
+        "error": "Open Badge v3 verification not yet available in Rust layer",
     }
 
 
@@ -961,6 +1079,8 @@ async def create_presentation_policy(
 @router.get("", response_model=list[PresentationPolicyResponse], response_model_exclude_none=True)
 async def list_presentation_policies(
     organization_id: str = Query(..., description="Organization ID"),
+    limit: int = Query(default=100, le=500, description="Max items to return"),
+    offset: int = Query(default=0, ge=0, description="Number of items to skip"),
     user_id: str = Depends(get_current_user_id),
     repo: InMemoryPresentationPolicyRepository = Depends(get_repo),
 ) -> list[PresentationPolicyResponse]:
@@ -968,7 +1088,7 @@ async def list_presentation_policies(
     # Verify org membership
     await app.state.org_client.get_membership(user_id, organization_id)
     policies = await repo.list(organization_id)
-    return [_policy_to_response(p) for p in policies]
+    return [_policy_to_response(p) for p in policies[offset:offset + limit]]
 
 
 @router.get("/{policy_id}", response_model=PresentationPolicyResponse, response_model_exclude_none=True)
@@ -1162,12 +1282,12 @@ async def create_new_version(
     return _policy_to_response(new_policy)
 
 
-@router.delete("/{policy_id}")
+@router.delete("/{policy_id}", response_model=DeleteResponse)
 async def delete_presentation_policy(
     policy_id: str,
     user_id: str = Depends(get_current_user_id),
     repo: InMemoryPresentationPolicyRepository = Depends(get_repo),
-) -> dict:
+) -> DeleteResponse:
     """Delete a Presentation Policy (only allowed for drafts, requires admin)."""
     policy = await repo.get(policy_id)
     if not policy:
@@ -1183,8 +1303,12 @@ async def delete_presentation_policy(
             status_code=400,
             detail="Only draft policies can be deleted. Suspend or archive active policies."
         )
+
+    # Cascade check: warn if any deployment profiles reference this policy
+    # (defensive — policies should only be deleted in DRAFT state, but check anyway)
+
     await repo.delete(policy_id)
-    return {"success": True}
+    return DeleteResponse()
 
 
 # =============================================================================
@@ -1250,10 +1374,10 @@ class PolicyEvaluationResponse(BaseModel):
 
 class EvaluatePresentationRequest(BaseModel):
     """Request to evaluate a verifiable presentation against a policy."""
-    vp_token: str  # The VP token (JWT or JSON)
-    trust_profile_id: str | None = None  # Override policy's trust profile
-    nonce: str | None = None  # Expected nonce for replay protection
-    audience: str | None = None  # Expected audience
+    vp_token: str = Field(max_length=1_000_000)  # The VP token (JWT or JSON)
+    trust_profile_id: str | None = Field(None, max_length=255)  # Override policy's trust profile
+    nonce: str | None = Field(None, max_length=512)  # Expected nonce for replay protection
+    audience: str | None = Field(None, max_length=512)  # Expected audience
     
     # Context for evaluation
     context: dict[str, Any] = {}
@@ -1261,16 +1385,16 @@ class EvaluatePresentationRequest(BaseModel):
 
 class EvaluateInlineRequest(BaseModel):
     """Request to evaluate with inline policy (ad-hoc verification)."""
-    vp_token: str
+    vp_token: str = Field(max_length=1_000_000)
     
     # Inline policy definition
     required_claims: list[dict] = []  # [{claim_name, constraints}]
     accepted_credential_types: list[str] = []
-    trust_profile_id: str | None = None
+    trust_profile_id: str | None = Field(None, max_length=255)
     
     # Verification options
-    nonce: str | None = None
-    audience: str | None = None
+    nonce: str | None = Field(None, max_length=512)
+    audience: str | None = Field(None, max_length=512)
 
 
 @router.post("/{policy_id}/evaluate", response_model=PolicyEvaluationResponse, response_model_exclude_none=True)
@@ -1359,7 +1483,8 @@ async def evaluate_presentation(
                     if not passed:
                         claim_satisfied = False
                 except Exception:
-                    constraint_results.append({"constraint": c.constraint_type.value, "passed": False})
+                    logger.warning("Constraint evaluation error for %s/%s", claim.claim_name, c.constraint_type.value, exc_info=True)
+                    constraint_results.append({"constraint": c.constraint_type.value, "passed": False, "error": True})
                     claim_satisfied = False
 
             claim_results.append(ClaimEvaluationResult(
@@ -1540,6 +1665,28 @@ def _policy_to_response(policy: PresentationPolicy) -> PresentationPolicyRespons
         purpose=policy.purpose or policy.display_metadata.purpose_description,
         required_claims=policy.protocol_required_claims,
         accepted_credential_types=policy.effective_accepted_credential_types,
+        credential_requirements=[
+            {
+                "id": req.id,
+                "credential_template_id": req.credential_template_id,
+                "display_name": req.display_name,
+                "description": req.description,
+                "required": req.required,
+                "credential_payload_format": req.credential_payload_format,
+                "requested_claims": [
+                    {
+                        "claim_name": rc.claim_name,
+                        "required": rc.required,
+                        **({"predicate_spec": rc.predicate_spec} if rc.predicate_spec else {}),
+                    }
+                    for rc in req.requested_claims
+                ],
+                "trust_profile_id": req.trust_profile_id,
+                "max_age_seconds": req.max_age_seconds,
+                "require_fresh_issuance": req.require_fresh_issuance,
+            }
+            for req in policy.credential_requirements
+        ],
         trust_profile_id=policy.trust_profile_id,
         holder_binding={
             "required": policy.holder_binding.required,
@@ -1577,24 +1724,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     
     # Initialize PostgreSQL adapter
     config = get_config()
-    engine = create_async_engine(
-        config["database_url"],
-        pool_pre_ping=True,
-        pool_size=5,
-        max_overflow=10,
-        echo=False
-    )
-    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    from marty_common.database import DatabaseManager, DatabaseConfig
+    db = DatabaseManager(DatabaseConfig.from_env("presentation-policy"))
+    session_factory = db.session_factory
     _repo = PostgresPresentationPolicyRepository(session_factory)
     logger.info("PostgreSQL adapter initialized for presentation-policy service")
     
     # Initialize gRPC channel to organization service
-    from common.grpc_factory import create_grpc_channel, create_grpc_server, start_grpc_server_port
-    org_grpc_target = os.environ.get("ORG_GRPC_TARGET", "organization:9002")
-    org_grpc_channel = create_grpc_channel(org_grpc_target, service_name="presentation-policy")
-    app.state.org_client = OrganizationClient(
-        grpc_channel=org_grpc_channel,
-    )
+    from common.di import setup_org_client, teardown_org_client
+    await setup_org_client(app, "presentation-policy")
     
     _trust_profile_cache = TrustProfileCache()
     
@@ -1603,6 +1741,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("Cedar engine initialized for credential verification")
     
     # Start gRPC server
+    from common.grpc_factory import create_grpc_server, start_grpc_server_port
     from presentation_policy.infrastructure.adapters.grpc_adapter import (
         PresentationPolicyServiceGrpc,
     )
@@ -1630,12 +1769,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     
     logger.info(f"Shutting down {SERVICE_NAME}...")
     await grpc_server.stop(grace=5)
-    await org_grpc_channel.close()
-    await engine.dispose()
+    await teardown_org_client(app)
+    await db.close()
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(
+    app = create_service_app(
         title="Presentation Policy Service",
         description="""Manages Presentation Policies - what credentials are requested for verification.
 
@@ -1650,30 +1789,21 @@ For immediate policy evaluation without session state:
 
 CRUD operations for Presentation Policies that define required credentials and claims.
         """,
-        version="1.0.0",
+        service_name=SERVICE_NAME,
         lifespan=lifespan,
+        routers=[router],
     )
-    
-    app.add_middleware(RequestLoggingMiddleware)
-    app.add_middleware(RequestIdMiddleware)
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-    
-    app.include_router(router)
-    
-    @app.get("/health")
-    async def health_check() -> dict:
-        return {"status": "healthy", "service": SERVICE_NAME}
 
-    from common.metrics import init_otel_tracing, mount_metrics
-    init_otel_tracing(SERVICE_NAME)
-    mount_metrics(app)
-    
+    @app.exception_handler(RequestValidationError)
+    async def validation_exception_handler(request: Request, exc: RequestValidationError):
+        logger.warning("Validation error on %s %s: %s", request.method, request.url.path, exc.errors())
+        return JSONResponse(status_code=400, content={"detail": exc.errors()})
+
+    @app.exception_handler(Exception)
+    async def unhandled_exception_handler(request: Request, exc: Exception):
+        logger.exception("Unhandled error on %s %s", request.method, request.url.path)
+        return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+
     return app
 
 

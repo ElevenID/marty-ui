@@ -112,7 +112,7 @@ class KeycloakAdminAdapter:
 
                 if results:
                     user_id: str = results[0]["id"]
-                    logger.debug(f"KC user found for {email}: {user_id}")
+                    logger.debug(f"KC user found for {email[:3]}***: {user_id}")
                     return user_id
 
                 # Create user
@@ -140,14 +140,14 @@ class KeycloakAdminAdapter:
                 location: str = c.headers.get("location", "")
                 if location:
                     new_user_id = location.rstrip("/").rsplit("/", 1)[-1]
-                    logger.info(f"KC user created for {email}: {new_user_id}")
+                    logger.info(f"KC user created for {email[:3]}***: {new_user_id}")
                     return new_user_id
 
-                logger.warning(f"KC user creation succeeded but no Location header for {email}")
+                logger.warning(f"KC user creation succeeded but no Location header for {email[:3]}***")
                 return None
 
         except Exception as exc:
-            logger.warning(f"KC user get/create failed for {email}: {exc}")
+            logger.warning(f"KC user get/create failed for {email[:3]}***: {exc}")
             return None
 
     # -------------------------------------------------------------------------
@@ -219,7 +219,7 @@ def build_keycloak_admin_adapter() -> KeycloakAdminAdapter | None:
     admin_url = os.environ.get("KEYCLOAK_ADMIN_URL", "")
     client_id = os.environ.get("MARTY_API_CLIENT_ID", "")
     client_secret = os.environ.get("MARTY_API_CLIENT_SECRET", "")
-    realm = os.environ.get("KEYCLOAK_REALM", "11id")
+    realm = os.environ.get("KEYCLOAK_REALM", "")
 
     if not (admin_url and client_id and client_secret):
         logger.info(

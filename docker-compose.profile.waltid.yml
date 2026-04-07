@@ -16,7 +16,7 @@
 
 services:
   waltid-wallet-api:
-    image: docker.io/waltid/wallet-api:latest
+    image: docker.io/waltid/wallet-api:stable
     container_name: waltid-wallet-api
     pull_policy: missing
     ports:
@@ -31,7 +31,7 @@ services:
     restart: unless-stopped
 
   waltid-web-wallet:
-    image: docker.io/waltid/waltid-demo-wallet:latest
+    image: docker.io/waltid/waltid-demo-wallet:stable
     container_name: waltid-web-wallet
     pull_policy: missing
     environment:

@@ -73,11 +73,20 @@ services:
       - cloudflared
 
   cloudflared:
-    image: cloudflare/cloudflared:latest
+    image: cloudflare/cloudflared:2024.12.2
     container_name: cloudflared-tunnel
     command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
     environment:
       TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN}
+    networks:
+      - marty-network
+    restart: unless-stopped
+
+  docs:
+    build:
+      context: ../marty-docs
+      dockerfile: Dockerfile
+    container_name: marty-docs
     networks:
       - marty-network
     restart: unless-stopped

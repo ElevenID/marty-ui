@@ -1,10 +1,9 @@
 """Status List Manager
 
 Manages Token Status Lists (IETF) and Bitstring Status Lists (W3C).
-Originally migrated from the retired monolith revocation implementation.
 
 Storage:
-- Uses MMF framework ICacheManager for Redis persistence
+- Uses CacheAdapter protocol for Redis persistence
 - Falls back to InMemoryCache when Redis unavailable
 """
 import asyncio
@@ -17,10 +16,7 @@ import zlib
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Optional, Protocol
-
-if TYPE_CHECKING:
-    from mmf.core.cache import ICacheManager
+from typing import Any, Optional, Protocol
 
 logger = logging.getLogger(__name__)
 
@@ -457,19 +453,16 @@ class StatusListManager:
 
 
 class StatusListRepository:
-    """Redis-backed repository using MMF framework's ICacheManager.
-    
-    Uses MMF's cache infrastructure for persistent storage following the pattern
-    from the retired monolith issuance Redis storage adapter.
+    """Redis-backed repository for status list persistence.
     
     Key format: {tenant_id}:status_list:{format}
     """
     
-    def __init__(self, cache_manager: "ICacheManager"):
-        """Initialize repository with MMF cache manager.
+    def __init__(self, cache_manager: "CacheAdapter"):
+        """Initialize repository with cache adapter.
         
         Args:
-            cache_manager: MMF cache manager (RedisCacheManager or InMemoryCache)
+            cache_manager: Cache adapter implementing get/set (e.g. RedisCacheAdapter)
         """
         self._cache = cache_manager
         self._next_index_suffix = ":next_index"

@@ -116,6 +116,8 @@ class PostgresTrustProfileRepository:
             )
 
     async def list_organization_trust_profiles(self, organization_id: str) -> list["OrganizationTrustProfile"]:
+        from trust_profile.main import ComplianceStatus, CredentialFormat, OrganizationTrustProfile
+
         async with self._session_factory() as session:
             result = await session.execute(
                 select(organization_trust_profiles_table)
@@ -124,12 +126,31 @@ class PostgresTrustProfileRepository:
             )
             rows = result.all()
 
-        profiles = []
-        for row in rows:
-            profile = await self.get_organization_trust_profile(row.id)
-            if profile:
-                profiles.append(profile)
-        return profiles
+        return [
+            OrganizationTrustProfile(
+                id=row.id,
+                organization_id=row.organization_id,
+                framework_id=row.framework_id,
+                name=row.name,
+                display_name=row.display_name,
+                description=row.description,
+                enabled=row.enabled,
+                use_case_tags=row.use_case_tags or [],
+                compliance_status=ComplianceStatus(row.compliance_status),
+                auto_generated=row.auto_generated,
+                revocation_policy=row.revocation_policy,
+                time_policy=row.time_policy,
+                allowed_algorithms=row.allowed_algorithms,
+                allowed_formats=[CredentialFormat(fmt) for fmt in (row.allowed_formats or [])] if row.allowed_formats is not None else None,
+                allowed_issuers=row.allowed_issuers,
+                denied_issuers=row.denied_issuers,
+                jurisdiction_filter=row.jurisdiction_filter,
+                metadata=row.metadata or {},
+                created_at=row.created_at,
+                updated_at=row.updated_at,
+            )
+            for row in rows
+        ]
 
     async def delete_organization_trust_profile(self, profile_id: str) -> None:
         await self._delete_where(organization_trust_profiles_table, organization_trust_profiles_table.c.id == profile_id)

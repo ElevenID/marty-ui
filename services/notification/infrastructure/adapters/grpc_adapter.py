@@ -88,6 +88,7 @@ class NotificationServiceGrpc(
             severity=request.severity or "info",
             link=request.link or None,
             data=dict(request.data),
+            correlation_id=getattr(request, "correlation_id", None) or None,
             priority=NotificationPriority(request.priority) if request.priority else NotificationPriority.NORMAL,
             target=NotificationTarget(
                 organization_id=request.organization_id or None,
@@ -216,6 +217,7 @@ class NotificationServiceGrpc(
             except asyncio.QueueFull:
                 logger.warning("Dropping notification event for slow subscriber %s", sub_id)
             except Exception:
+                logger.warning("Failed to enqueue notification for subscriber %s — marking stale", sub_id, exc_info=True)
                 stale.append(sub_id)
         for sid in stale:
             self._stream_queues.pop(sid, None)

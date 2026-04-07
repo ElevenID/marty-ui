@@ -22,8 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from infrastructure.models import mapper_registry
 
-# Import AlembicMigrationAdapter from MMF
-from mmf.framework.infrastructure.migration import AlembicMigrationAdapter
+from marty_common.migration import AlembicMigrationAdapter
 
 
 SERVICE_NAME = "flow"  # Will be appended with "_service" to match schema
@@ -41,7 +40,7 @@ def main():
     # Get database URL from environment
     db_url = os.environ.get(
         "DATABASE_URL",
-        "postgresql://marty:marty_dev@localhost:5432/marty_credentials"
+        "postgresql+asyncpg://marty:marty_dev@localhost:5432/marty_credentials"
     )
     
     # Create migration adapter

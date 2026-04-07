@@ -32,7 +32,6 @@ from pydantic import BaseModel, Field
 from typing import Annotated
 
 from marty_common import (
-    OrganizationClient,
     OrganizationContext,
     require_org_membership,
 )
@@ -58,38 +57,16 @@ class ComplianceProfileStatus(str, Enum):
     ARCHIVED = "archived"
 
 
-class CredentialFormat(str, Enum):
-    MDOC = "MDOC"
-    SD_JWT_VC = "SD_JWT_VC"
-    VC_JWT = "VC_JWT"
-    JSON_LD = "JSON_LD"
-    ZK_MDOC = "ZK_MDOC"
+from marty_common.domain_enums import CredentialFormat  # noqa: E402
+from marty_common.domain_enums import parse_credential_format as _parse_credential_format  # noqa: E402
 
 
 class IssuanceProtocol(str, Enum):
     OID4VCI_PRE_AUTH = "OID4VCI_PRE_AUTH"
     OID4VCI_AUTH_CODE = "OID4VCI_AUTH_CODE"
     DIRECT = "DIRECT"
-
-
-def _parse_credential_format(value: str | CredentialFormat) -> CredentialFormat:
-    if isinstance(value, CredentialFormat):
-        return value
-    normalized = str(value).strip().upper()
-    aliases = {
-        "SD_JWT_VC": CredentialFormat.SD_JWT_VC,
-        "SD-JWT-VC": CredentialFormat.SD_JWT_VC,
-        "JWT_VC": CredentialFormat.VC_JWT,
-        "VC_JWT": CredentialFormat.VC_JWT,
-        "MDOC": CredentialFormat.MDOC,
-        "MSO_MDOC": CredentialFormat.MDOC,
-        "JSONLD": CredentialFormat.JSON_LD,
-        "JSON_LD": CredentialFormat.JSON_LD,
-        "ZK_MDOC": CredentialFormat.ZK_MDOC,
-    }
-    if normalized in aliases:
-        return aliases[normalized]
-    return CredentialFormat(normalized)
+    CREDENTIAL_MANAGER = "CREDENTIAL_MANAGER"
+    APPLE_WALLET = "APPLE_WALLET"
 
 
 class DataRetentionPeriod(str, Enum):
@@ -381,9 +358,9 @@ class ApiSurfaceEndpointModel(BaseModel):
 
 
 class CreateComplianceProfileRequest(BaseModel):
-    organization_id: str | None = None
-    name: str
-    description: str | None = None
+    organization_id: str | None = Field(None, max_length=255)
+    name: str = Field(min_length=1, max_length=255)
+    description: str | None = Field(None, max_length=2000)
     compliance_code: str | None = None
     credential_format: str = "SD_JWT_VC"
     issuance_protocol: str | None = None
@@ -405,8 +382,8 @@ class CreateComplianceProfileRequest(BaseModel):
 
 
 class UpdateComplianceProfileRequest(BaseModel):
-    name: str | None = None
-    description: str | None = None
+    name: str | None = Field(None, min_length=1, max_length=255)
+    description: str | None = Field(None, max_length=2000)
     compliance_code: str | None = None
     credential_format: str | None = None
     issuance_protocol: str | None = None
@@ -441,6 +418,7 @@ class ComplianceProfileResponse(BaseModel):
     api_surface: list[dict] | None = None
     discoverable: bool | None = None
     is_system: bool
+    frameworks: list[str] = Field(default_factory=list)
     created_at: str
 
 
@@ -593,12 +571,14 @@ async def list_compliance_profiles(
     organization_id: str = Query(..., description="Organization ID"),
     user_id: str = Depends(get_current_user_id),
     repo: InMemoryComplianceProfileRepository = Depends(get_repo),
+    limit: int = Query(default=100, le=500),
+    offset: int = Query(default=0, ge=0),
 ) -> list[ComplianceProfileResponse]:
     """List Compliance Profiles for an organization."""
     # Verify org membership
     await app.state.org_client.get_membership(user_id, organization_id)
     profiles = await repo.list(organization_id)
-    return [_profile_to_response(p) for p in profiles]
+    return [_profile_to_response(p) for p in profiles[offset:offset + limit]]
 
 
 @router.get("/{profile_id}", response_model=ComplianceProfileResponse, response_model_exclude_none=True)
@@ -844,6 +824,7 @@ def _profile_to_response(profile: ComplianceProfile) -> ComplianceProfileRespons
         ],
         discoverable=profile.discoverable,
         is_system=profile.is_system,
+        frameworks=profile.frameworks,
         created_at=profile.created_at.isoformat(),
     )
 
@@ -859,46 +840,23 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     _repo = InMemoryComplianceProfileRepository()
     
     # Initialize gRPC channel to organization service
-    from common.grpc_factory import create_grpc_channel
-    org_grpc_target = os.environ.get("ORG_GRPC_TARGET", "organization:9002")
-    org_grpc_channel = create_grpc_channel(org_grpc_target, service_name="compliance-profile")
-    app.state.org_client = OrganizationClient(
-        grpc_channel=org_grpc_channel,
-    )
+    from common.di import setup_org_client, teardown_org_client
+    await setup_org_client(app, "compliance-profile")
     
     yield
     logger.info(f"Shutting down {SERVICE_NAME}...")
-    await org_grpc_channel.close()
+    await teardown_org_client(app)
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(
+    from marty_common.service_setup import create_service_app
+    app = create_service_app(
         title="Compliance Profile Service",
         description="Manages Compliance Profiles - regulatory and policy rules",
-        version="1.0.0",
+        service_name=SERVICE_NAME,
         lifespan=lifespan,
+        routers=[router],
     )
-    
-    app.add_middleware(RequestLoggingMiddleware)
-    app.add_middleware(RequestIdMiddleware)
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-    
-    app.include_router(router)
-    
-    @app.get("/health")
-    async def health_check() -> dict:
-        return {"status": "healthy", "service": SERVICE_NAME}
-
-    from common.metrics import init_otel_tracing, mount_metrics
-    init_otel_tracing(SERVICE_NAME)
-    mount_metrics(app)
-    
     return app
 
 

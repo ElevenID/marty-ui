@@ -153,3 +153,25 @@ def get_event_bus() -> GrpcEventBus:
     if _event_bus is None:
         _event_bus = GrpcEventBus()
     return _event_bus
+
+
+class GrpcEventBusPublisher:
+    """Publishes domain events to the gRPC event bus.
+
+    Shared adapter used by services that don't need a custom port interface.
+    """
+
+    async def publish(self, event) -> None:
+        try:
+            event_dict = event.to_dict() if hasattr(event, "to_dict") else {}
+            event_type = event_dict.get("event_type", type(event).__name__)
+            await get_event_bus().publish(
+                event_type=event_type,
+                aggregate_id=event_dict.get("aggregate_id", ""),
+                aggregate_type=event_dict.get("aggregate_type", ""),
+                organization_id=event_dict.get("organization_id", ""),
+                data={k: str(v) for k, v in event_dict.items()},
+            )
+            logger.debug("Published event %s via gRPC event bus", event_type)
+        except Exception as exc:
+            logger.warning("Failed to publish event via gRPC event bus: %s", exc)

@@ -27,18 +27,19 @@ from typing import Any, AsyncGenerator
 
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from marty_common.dto import DeleteResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from typing import Annotated
 
 from marty_common import (
-    OrganizationClient,
     OrganizationContext,
     require_org_membership,
 )
 from marty_common.org_authorization import get_organization_client
 from marty_common.middleware import RequestIdMiddleware, RequestLoggingMiddleware
+from marty_common.service_setup import create_service_app
 from trust_profile.infrastructure.adapters import PostgresTrustProfileRepository
 from trust_profile.infrastructure.models import mapper_registry
 
@@ -54,7 +55,6 @@ def get_config() -> dict:
     return {
         "database_url": os.environ.get(
             "DATABASE_URL",
-            "postgresql+asyncpg://marty:marty_dev@localhost:5432/marty_credentials"
         ),
     }
 
@@ -100,15 +100,7 @@ class RevocationCheckMode(str, Enum):
     SKIP = "SKIP"
 
 
-class CredentialFormat(str, Enum):
-    """Supported credential formats.
-    Maps to marty-protocol enum: credential-formats.json
-    """
-    MDOC = "MDOC"
-    SD_JWT_VC = "SD_JWT_VC"
-    VC_JWT = "VC_JWT"
-    JSON_LD = "JSON_LD"
-    ZK_MDOC = "ZK_MDOC"
+from marty_common.domain_enums import CredentialFormat  # noqa: E402
 
 
 class IssuerStatus(str, Enum):
@@ -667,9 +659,9 @@ class TimePolicyModel(BaseModel):
 
 
 class CreateTrustProfileRequest(BaseModel):
-    organization_id: str
-    name: str
-    description: str | None = None
+    organization_id: str = Field(min_length=1, max_length=255)
+    name: str = Field(min_length=1, max_length=255)
+    description: str | None = Field(None, max_length=2000)
     profile_type: str = TrustProfileType.CUSTOM.value
     compliance_status: str = ComplianceStatus.SETUP_REQUIRED.value
     trust_sources: list[TrustSourceModel] = Field(default_factory=list)
@@ -693,8 +685,8 @@ class CreateTrustProfileRequest(BaseModel):
 
 
 class UpdateTrustProfileRequest(BaseModel):
-    name: str | None = None
-    description: str | None = None
+    name: str | None = Field(None, min_length=1, max_length=255)
+    description: str | None = Field(None, max_length=2000)
     profile_type: str | None = None
     compliance_status: str | None = None
     trust_sources: list[TrustSourceModel] | None = None
@@ -742,9 +734,9 @@ class TrustProfileResponse(BaseModel):
 
 
 class CreateTrustedIssuerRequest(BaseModel):
-    name: str
-    description: str | None = None
-    issuer_did: str
+    name: str = Field(min_length=1, max_length=255)
+    description: str | None = Field(None, max_length=2000)
+    issuer_did: str = Field(min_length=1, max_length=2048)
     issuer_url: str | None = None
     credential_template_ids: list[str] = Field(default_factory=list)
     verification_keys: list[dict] = Field(default_factory=list)
@@ -753,8 +745,8 @@ class CreateTrustedIssuerRequest(BaseModel):
 
 
 class UpdateTrustedIssuerRequest(BaseModel):
-    name: str | None = None
-    description: str | None = None
+    name: str | None = Field(None, min_length=1, max_length=255)
+    description: str | None = Field(None, max_length=2000)
     issuer_did: str | None = None
     issuer_url: str | None = None
     credential_template_ids: list[str] | None = None
@@ -767,35 +759,35 @@ class UpdateTrustedIssuerRequest(BaseModel):
 
 
 class CreateIssuerEntityRequest(BaseModel):
-    organization_id: str | None = None
-    issuer_id: str
-    issuer_type: str = IssuerEntityType.ORGANIZATION.value
-    display_name: str
-    description: str | None = None
+    organization_id: str | None = Field(None, max_length=255)
+    issuer_id: str = Field(..., min_length=1, max_length=255)
+    issuer_type: str = Field(IssuerEntityType.ORGANIZATION.value, max_length=50)
+    display_name: str = Field(..., min_length=1, max_length=255)
+    description: str | None = Field(None, max_length=2000)
     is_system_issuer: bool = False
-    compliance_status: str = IssuerEntityComplianceStatus.COMPLIANT.value
-    accreditation_body: str | None = None
-    accreditation_date: str | None = None
-    valid_from: str | None = None
-    valid_until: str | None = None
-    trust_anchor_id: str | None = None
+    compliance_status: str = Field(IssuerEntityComplianceStatus.COMPLIANT.value, max_length=50)
+    accreditation_body: str | None = Field(None, max_length=255)
+    accreditation_date: str | None = Field(None, max_length=50)
+    valid_from: str | None = Field(None, max_length=50)
+    valid_until: str | None = Field(None, max_length=50)
+    trust_anchor_id: str | None = Field(None, max_length=255)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class UpdateIssuerEntityRequest(BaseModel):
-    display_name: str | None = None
-    description: str | None = None
-    issuer_type: str | None = None
+    display_name: str | None = Field(None, min_length=1, max_length=255)
+    description: str | None = Field(None, max_length=2000)
+    issuer_type: str | None = Field(None, max_length=50)
     is_system_issuer: bool | None = None
-    compliance_status: str | None = None
-    accreditation_body: str | None = None
-    accreditation_date: str | None = None
-    valid_from: str | None = None
-    valid_until: str | None = None
-    trust_anchor_id: str | None = None
+    compliance_status: str | None = Field(None, max_length=50)
+    accreditation_body: str | None = Field(None, max_length=255)
+    accreditation_date: str | None = Field(None, max_length=50)
+    valid_from: str | None = Field(None, max_length=50)
+    valid_until: str | None = Field(None, max_length=50)
+    trust_anchor_id: str | None = Field(None, max_length=255)
     metadata: dict[str, Any] | None = None
-    revocation_reason: str | None = None
-    revoked_by: str | None = None
+    revocation_reason: str | None = Field(None, max_length=500)
+    revoked_by: str | None = Field(None, max_length=255)
 
 
 class CreateTrustProfileIssuerRequest(BaseModel):
@@ -1418,12 +1410,14 @@ async def list_trust_profiles(
     user_id: str = Depends(get_current_user_id),
     repo: InMemoryTrustProfileRepository | PostgresTrustProfileRepository = Depends(get_repo),
     request: Request = None,
+    limit: int = Query(default=100, le=500),
+    offset: int = Query(default=0, ge=0),
 ) -> list[TrustProfileResponse]:
     """List Trust Profiles for an organization."""
     # Verify org membership
     await app.state.org_client.get_membership(user_id, organization_id)
     profiles = await repo.list_profiles(organization_id)
-    return [_profile_to_response(p) for p in profiles]
+    return [_profile_to_response(p) for p in profiles[offset:offset + limit]]
 
 
 @router.get("/{profile_id}", response_model=TrustProfileResponse, response_model_exclude_none=True)
@@ -1550,12 +1544,12 @@ async def suspend_trust_profile(
     return _profile_to_response(profile)
 
 
-@router.delete("/{profile_id}")
+@router.delete("/{profile_id}", response_model=DeleteResponse)
 async def delete_trust_profile(
     profile_id: str,
     user_id: str = Depends(get_current_user_id),
     repo: InMemoryTrustProfileRepository | PostgresTrustProfileRepository = Depends(get_repo),
-) -> dict:
+) -> DeleteResponse:
     """Delete a Trust Profile (requires admin)."""
     profile = await repo.get_profile(profile_id)
     if not profile:
@@ -1564,8 +1558,17 @@ async def delete_trust_profile(
     membership = await app.state.org_client.get_membership(user_id, profile.organization_id)
     if not membership.has_role("admin", "owner"):
         raise HTTPException(status_code=403, detail="Admin access required")
+
+    # Cascade check: reject if profile still has trusted issuers
+    issuers = await repo.list_issuers(profile_id)
+    if issuers:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot delete trust profile with {len(issuers)} trusted issuer(s). Remove all issuers first."
+        )
+
     await repo.delete_profile(profile_id)
-    return {"success": True}
+    return DeleteResponse()
 
 
 # Trusted Issuer endpoints (sub-resource)
@@ -1627,6 +1630,8 @@ async def list_trusted_issuers(
     profile_id: str,
     user_id: str = Depends(get_current_user_id),
     repo: InMemoryTrustProfileRepository | PostgresTrustProfileRepository = Depends(get_repo),
+    limit: int = Query(default=100, le=500),
+    offset: int = Query(default=0, ge=0),
 ) -> list[TrustedIssuerResponse]:
     """List Trusted Issuers for a Trust Profile."""
     profile = await repo.get_profile(profile_id)
@@ -1635,7 +1640,7 @@ async def list_trusted_issuers(
     # Verify org membership
     await app.state.org_client.get_membership(user_id, profile.organization_id)
     profile_issuers = await repo.list_profile_issuers(profile_id)
-    return [await _materialize_trusted_issuer(repo, profile_issuer) for profile_issuer in profile_issuers]
+    return [await _materialize_trusted_issuer(repo, profile_issuer) for profile_issuer in profile_issuers[offset:offset + limit]]
 
 
 @router.get("/{profile_id}/issuers/{issuer_id}", response_model=TrustedIssuerResponse, response_model_exclude_none=True)
@@ -2111,63 +2116,35 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     config = get_config()
     
     # Initialize database
-    engine = create_async_engine(config["database_url"], echo=False)
-    async with engine.begin() as conn:
+    from marty_common.database import DatabaseManager, DatabaseConfig
+    db = DatabaseManager(DatabaseConfig.from_env("trust-profile"))
+    async with db.engine.begin() as conn:
         await conn.execute(text("CREATE SCHEMA IF NOT EXISTS trust_profile_service"))
         await conn.run_sync(mapper_registry.metadata.create_all)
-    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    session_factory = db.session_factory
     
     # Initialize repository
     _repo = PostgresTrustProfileRepository(session_factory)
     await _seed_system_frameworks(_repo)
     
     # Initialize gRPC channel to organization service
-    from common.grpc_factory import create_grpc_channel
-    org_grpc_target = os.environ.get("ORG_GRPC_TARGET", "organization:9002")
-    org_grpc_channel = create_grpc_channel(org_grpc_target, service_name="trust-profile")
-    app.state.org_client = OrganizationClient(
-        grpc_channel=org_grpc_channel,
-    )
+    from common.di import setup_org_client, teardown_org_client
+    await setup_org_client(app, "trust-profile")
     
     yield
     logger.info(f"Shutting down {SERVICE_NAME}...")
-    await org_grpc_channel.close()
-    await engine.dispose()
+    await teardown_org_client(app)
+    await db.close()
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(
+    return create_service_app(
         title="Trust Profile Service",
         description="Manages Trust Profiles - who is trusted and how validation happens",
-        version="1.0.0",
+        service_name=SERVICE_NAME,
         lifespan=lifespan,
+        routers=[router, organization_trust_profile_router, framework_router, registry_router, issuer_router],
     )
-    
-    app.add_middleware(RequestLoggingMiddleware)
-    app.add_middleware(RequestIdMiddleware)
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-    
-    app.include_router(router)
-    app.include_router(organization_trust_profile_router)
-    app.include_router(framework_router)
-    app.include_router(registry_router)
-    app.include_router(issuer_router)
-    
-    @app.get("/health")
-    async def health_check() -> dict:
-        return {"status": "healthy", "service": SERVICE_NAME}
-
-    from common.metrics import init_otel_tracing, mount_metrics
-    init_otel_tracing(SERVICE_NAME)
-    mount_metrics(app)
-    
-    return app
 
 
 app = create_app()

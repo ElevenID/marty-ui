@@ -39,7 +39,7 @@ import {
 } from '@mui/icons-material';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../../hooks/useAuth';
-import { usePayment } from '../../contexts/paymentHooks';
+import { usePayment } from '@marty/subscriptions';
 import { post } from '../../services/api';
 import {
   buildPaymentCheckoutInitialBillingInfo,
@@ -47,7 +47,7 @@ import {
   processPaymentCheckout,
   updatePaymentCheckoutBillingInfo,
   validatePaymentCheckoutBilling,
-} from '../../application/applications';
+} from '@marty/subscriptions';
 
 const STEPS = ['Review Application', 'Payment Details', 'Confirmation'];
 

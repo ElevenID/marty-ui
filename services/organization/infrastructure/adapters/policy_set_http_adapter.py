@@ -42,15 +42,15 @@ class PolicySetResponse(BaseModel):
 
 
 class CreatePolicySetRequest(BaseModel):
-    name: str
-    cedar_policies: str
+    name: str = Field(min_length=1, max_length=255)
+    cedar_policies: str = Field(min_length=1)
     policy_type: str = "CUSTOM"
-    description: str | None = None
+    description: str | None = Field(None, max_length=2000)
 
 
 class UpdatePolicySetRequest(BaseModel):
-    name: str | None = None
-    description: str | None = None
+    name: str | None = Field(None, min_length=1, max_length=255)
+    description: str | None = Field(None, max_length=2000)
     cedar_policies: str | None = None
 
 

@@ -13,6 +13,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from marty_common import OrganizationClient
+from marty_common.service_setup import create_service_app
 import redis.asyncio as aioredis
 
 from .application.use_cases import (
@@ -78,27 +79,11 @@ def get_config() -> dict:
     return {
         "database_url": os.environ.get(
             "DATABASE_URL",
-            "postgresql+asyncpg://postgres:postgres@localhost:5432/marty"
         ),
     }
 
 
-class GrpcEventBusPublisher:
-    """Event publisher backed by the gRPC event bus."""
-    async def publish(self, event) -> None:
-        try:
-            from common.grpc_event_bus import get_event_bus
-            event_dict = event.to_dict() if hasattr(event, "to_dict") else {}
-            event_type = event_dict.get("event_type", type(event).__name__)
-            await get_event_bus().publish(
-                event_type=event_type,
-                aggregate_id=event_dict.get("aggregate_id", ""),
-                aggregate_type=event_dict.get("aggregate_type", ""),
-                organization_id=event_dict.get("organization_id", ""),
-                data={k: str(v) for k, v in event_dict.items()},
-            )
-        except Exception as exc:
-            logger.debug(f"gRPC event bus publish failed: {exc}")
+from common.grpc_event_bus import GrpcEventBusPublisher  # noqa: E402
 
 
 @asynccontextmanager
@@ -109,7 +94,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     config = get_config()
     
     # Initialize database
-    engine = create_async_engine(config["database_url"], echo=False)
+    engine = create_async_engine(
+        config["database_url"],
+        echo=False,
+        pool_size=10,
+        max_overflow=20,
+        pool_pre_ping=True,
+        pool_recycle=3600,
+    )
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     
     # Initialize repositories
@@ -259,49 +251,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
-    app = FastAPI(
+    app = create_service_app(
         title="Organization Service",
         description="Organization management microservice",
-        version="1.0.0",
+        service_name=SERVICE_NAME,
         lifespan=lifespan,
+        routers=[org_router, preferences_router, onboarding_router, audit_router, rbac_router, scim_router, policy_set_router, internal_router],
         docs_url="/docs",
         redoc_url="/redoc",
         openapi_url="/openapi.json",
     )
-    
-    # Add CORS middleware
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=os.environ.get("CORS_ORIGINS", "*").split(","),
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-    
-    # Add request middleware
-    from marty_common.middleware import RequestIdMiddleware, RequestLoggingMiddleware
-    app.add_middleware(RequestLoggingMiddleware, service_name=SERVICE_NAME)
-    app.add_middleware(RequestIdMiddleware)
-    
-    # Include routers
-    app.include_router(org_router)
-    app.include_router(preferences_router)
-    app.include_router(onboarding_router)
-    app.include_router(audit_router)
-    app.include_router(rbac_router)
-    app.include_router(scim_router)
-    app.include_router(policy_set_router)
-    app.include_router(internal_router)
-    
-    # Health check endpoint
-    @app.get("/health")
-    async def health_check() -> dict:
-        return {"status": "healthy", "service": SERVICE_NAME}
-
-    from common.metrics import init_otel_tracing, mount_metrics
-    init_otel_tracing(SERVICE_NAME)
-    mount_metrics(app)
-    
     return app
 
 

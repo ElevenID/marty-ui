@@ -28,13 +28,16 @@ import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from enum import Enum
-from typing import Any, AsyncGenerator
+from typing import Annotated, Any, AsyncGenerator
 
 import grpc
 import grpc.aio as grpc_aio
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
+from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
+from marty_common.service_setup import create_service_app
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -114,35 +117,162 @@ class VerificationSession:
 
 
 # ---------------------------------------------------------------------------
-# In-memory session store (replace with Redis/DB for production)
+# Session store — Redis-backed with in-memory fallback for local dev
 # ---------------------------------------------------------------------------
 
+REDIS_URL = os.environ.get("REDIS_URL", "")
+SESSION_PREFIX = "verification:session:"
+SESSION_TTL_SECONDS = 60 * 60  # 1 hour (covers 15-min expiry + buffer)
+
+
+def _session_to_redis_dict(session: VerificationSession) -> dict[str, Any]:
+    """Serialize a VerificationSession to a JSON-safe dict for Redis storage."""
+    return {
+        "session_id": session.session_id,
+        "flow_id": session.flow_id,
+        "flow_instance_id": session.flow_instance_id,
+        "organization_id": session.organization_id,
+        "presentation_policy_id": session.presentation_policy_id,
+        "response_type": session.response_type,
+        "trust_profile_id": session.trust_profile_id,
+        "deployment_profile_id": session.deployment_profile_id,
+        "external_reference": session.external_reference,
+        "callback_url": session.callback_url,
+        "purpose": session.purpose,
+        "nonce": session.nonce,
+        "holder_id": session.holder_id,
+        "status": session.status.value,
+        "created_at": session.created_at.isoformat(),
+        "updated_at": session.updated_at.isoformat(),
+        "expires_at": session.expires_at.isoformat(),
+        "result": session.result,
+        "decision": session.decision,
+        "decision_reason": session.decision_reason,
+        "verified_claims": session.verified_claims,
+        "credential_results": session.credential_results,
+        "inspection_performed": session.inspection_performed,
+        "inspection_result": session.inspection_result,
+        "vp_token": session.vp_token,
+        "completed_at": session.completed_at.isoformat() if session.completed_at else None,
+        "error": session.error,
+    }
+
+
+def _session_from_dict(data: dict[str, Any]) -> VerificationSession:
+    """Deserialize a dict back into a VerificationSession."""
+    session = VerificationSession.__new__(VerificationSession)
+    session.session_id = data["session_id"]
+    session.flow_id = data["flow_id"]
+    session.flow_instance_id = data["flow_instance_id"]
+    session.organization_id = data["organization_id"]
+    session.presentation_policy_id = data.get("presentation_policy_id")
+    session.response_type = data.get("response_type", "vp_token")
+    session.trust_profile_id = data.get("trust_profile_id")
+    session.deployment_profile_id = data.get("deployment_profile_id")
+    session.external_reference = data.get("external_reference")
+    session.callback_url = data.get("callback_url")
+    session.purpose = data.get("purpose", "")
+    session.nonce = data["nonce"]
+    session.holder_id = data.get("holder_id")
+    session.status = SessionStatus(data["status"])
+    session.created_at = datetime.fromisoformat(data["created_at"])
+    session.updated_at = datetime.fromisoformat(data["updated_at"])
+    session.expires_at = datetime.fromisoformat(data["expires_at"])
+    session.result = data.get("result")
+    session.decision = data.get("decision")
+    session.decision_reason = data.get("decision_reason", "")
+    session.verified_claims = data.get("verified_claims", {})
+    session.credential_results = data.get("credential_results", [])
+    session.inspection_performed = data.get("inspection_performed", False)
+    session.inspection_result = data.get("inspection_result", "")
+    session.vp_token = data.get("vp_token")
+    session.completed_at = (
+        datetime.fromisoformat(data["completed_at"]) if data.get("completed_at") else None
+    )
+    session.error = data.get("error")
+    return session
+
+
 class SessionStore:
-    def __init__(self) -> None:
-        self._sessions: dict[str, VerificationSession] = {}
+    """Redis-backed session store. Falls back to in-memory if Redis unavailable."""
 
-    def save(self, session: VerificationSession) -> None:
-        self._sessions[session.session_id] = session
+    def __init__(self, redis_client: Any | None = None) -> None:
+        self._redis = redis_client
+        self._fallback: dict[str, VerificationSession] = {}
 
-    def get(self, session_id: str) -> VerificationSession | None:
-        session = self._sessions.get(session_id)
-        if session and session.is_expired() and session.status == SessionStatus.PENDING:
+    @property
+    def _use_redis(self) -> bool:
+        return self._redis is not None
+
+    async def save(self, session: VerificationSession) -> None:
+        session.updated_at = datetime.now(timezone.utc)
+        if self._use_redis:
+            key = f"{SESSION_PREFIX}{session.session_id}"
+            await self._redis.set(key, json.dumps(_session_to_redis_dict(session)), ex=SESSION_TTL_SECONDS)
+            # Index by org for list queries
+            await self._redis.sadd(f"{SESSION_PREFIX}org:{session.organization_id}", session.session_id)
+            await self._redis.expire(f"{SESSION_PREFIX}org:{session.organization_id}", SESSION_TTL_SECONDS)
+        else:
+            self._fallback[session.session_id] = session
+
+    async def get(self, session_id: str) -> VerificationSession | None:
+        if self._use_redis:
+            raw = await self._redis.get(f"{SESSION_PREFIX}{session_id}")
+            if raw is None:
+                return None
+            session = _session_from_dict(json.loads(raw))
+        else:
+            session = self._fallback.get(session_id)
+        if session is None:
+            return None
+        if session.is_expired() and session.status == SessionStatus.PENDING:
             session.status = SessionStatus.EXPIRED
             session.error = "Session expired before presentation was submitted"
             session.updated_at = datetime.now(timezone.utc)
+            await self.save(session) if self._use_redis else None
         return session
 
-    def list_by_org(self, org_id: str, status: str | None = None) -> list[VerificationSession]:
-        sessions = [s for s in self._sessions.values() if s.organization_id == org_id]
+    async def list_by_org(self, org_id: str, status: str | None = None) -> list[VerificationSession]:
+        if self._use_redis:
+            session_ids = await self._redis.smembers(f"{SESSION_PREFIX}org:{org_id}")
+            sessions = []
+            for sid in session_ids:
+                sid_str = sid.decode() if isinstance(sid, bytes) else sid
+                session = await self.get(sid_str)
+                if session:
+                    sessions.append(session)
+        else:
+            sessions = [s for s in self._fallback.values() if s.organization_id == org_id]
         if status:
             sessions = [s for s in sessions if s.status.value == status]
         return sorted(sessions, key=lambda s: s.created_at, reverse=True)
 
 
-_store = SessionStore()
+_store: SessionStore | None = None
+
+
+async def init_store() -> SessionStore:
+    """Initialize the session store with Redis if configured, else in-memory."""
+    global _store
+    if REDIS_URL:
+        try:
+            import redis.asyncio as aioredis
+            client = aioredis.from_url(REDIS_URL, decode_responses=False)
+            await client.ping()
+            _store = SessionStore(redis_client=client)
+            logger.info("Verification session store: Redis (%s)", REDIS_URL)
+        except Exception as exc:
+            logger.warning("Redis unavailable (%s), falling back to in-memory sessions: %s", REDIS_URL, exc)
+            _store = SessionStore()
+    else:
+        logger.warning("REDIS_URL not set — using in-memory session store (not suitable for production)")
+        _store = SessionStore()
+    return _store
 
 
 def get_store() -> SessionStore:
+    if _store is None:
+        raise RuntimeError("SessionStore not initialized — call init_store() in lifespan")
     return _store
 
 
@@ -211,27 +341,27 @@ async def _inspect_via_grpc(item: str) -> str:
 # ---------------------------------------------------------------------------
 
 class StartVerificationRequest(BaseModel):
-    organization_id: str
-    presentation_policy_id: str | None = None
-    response_type: str = "vp_token"
-    trust_profile_id: str | None = None
-    deployment_profile_id: str | None = None
-    external_reference: str | None = None
-    callback_url: str | None = None
+    organization_id: str = Field(max_length=255)
+    presentation_policy_id: str | None = Field(None, max_length=255)
+    response_type: str = Field("vp_token", max_length=50)
+    trust_profile_id: str | None = Field(None, max_length=255)
+    deployment_profile_id: str | None = Field(None, max_length=255)
+    external_reference: str | None = Field(None, max_length=500)
+    callback_url: str | None = Field(None, max_length=2048)
     expiry_minutes: int = 15
-    purpose: str = ""
+    purpose: str = Field("", max_length=1000)
 
 
 class SubmitVerificationRequest(BaseModel):
-    vp_token: str
+    vp_token: str = Field(max_length=1_000_000)
     presentation_submission: dict | None = None
 
 
 class EvaluateRequest(BaseModel):
-    vp_token: str
-    presentation_policy_id: str
-    nonce: str | None = None
-    audience: str | None = None
+    vp_token: str = Field(max_length=1_000_000)
+    presentation_policy_id: str = Field(max_length=255)
+    nonce: str | None = Field(None, max_length=512)
+    audience: str | None = Field(None, max_length=512)
     context: dict | None = None
 
 
@@ -362,12 +492,21 @@ def _session_to_dict(s: VerificationSession) -> dict:
 router = APIRouter(prefix="/v1/verify", tags=["Verification"])
 
 
+def get_current_user_id(x_user_id: Annotated[str, Header()]) -> str:
+    """Extract user ID from X-User-Id header (injected by gateway)."""
+    return x_user_id
+
+
 @router.post("", summary="Start Verification Session")
 async def start_verification(
     body: StartVerificationRequest,
     store: SessionStore = Depends(get_store),
+    user_id: str = Depends(get_current_user_id),
+    x_organization_id: str = Header(alias="X-Organization-Id"),
 ) -> dict:
     """Create a verification session and return a request_uri for the wallet."""
+    if body.organization_id and body.organization_id != x_organization_id:
+        raise HTTPException(status_code=403, detail="Organization mismatch")
     if body.response_type == "vp_token" and not body.presentation_policy_id:
         raise HTTPException(
             status_code=400,
@@ -385,7 +524,7 @@ async def start_verification(
         expiry_minutes=body.expiry_minutes,
         purpose=body.purpose,
     )
-    store.save(session)
+    await store.save(session)
     logger.info("Created verification session %s (org=%s)", session.session_id, body.organization_id)
     resp = _session_to_protocol_dict(session)
     # Include operational fields the wallet / UI needs to display QR and deep-link
@@ -403,7 +542,7 @@ async def list_sessions(
     store: SessionStore = Depends(get_store),
 ) -> dict:
     """List verification sessions for an organization."""
-    sessions = store.list_by_org(organization_id, status)
+    sessions = await store.list_by_org(organization_id, status)
     page = sessions[offset: offset + limit]
     return {"sessions": [_session_to_protocol_dict(s) for s in page], "total": len(sessions)}
 
@@ -414,7 +553,7 @@ async def get_request_object(
     store: SessionStore = Depends(get_store),
 ) -> dict:
     """Return the OID4VP request object for a pending session (fetched by wallet)."""
-    session = store.get(session_id)
+    session = await store.get(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     if session.status == SessionStatus.EXPIRED:
@@ -437,7 +576,7 @@ async def get_session(
     store: SessionStore = Depends(get_store),
 ) -> dict:
     """Retrieve the current state of a verification session (poll)."""
-    session = store.get(session_id)
+    session = await store.get(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     return _session_to_protocol_dict(session)
@@ -448,12 +587,13 @@ async def submit_presentation(
     session_id: str,
     body: SubmitVerificationRequest,
     store: SessionStore = Depends(get_store),
+    user_id: str = Depends(get_current_user_id),
 ) -> dict:
     """
     Receive a VP token from a wallet and evaluate it against the session policy.
     Optionally calls the Marty InspectionSystem for credential inspection.
     """
-    session = store.get(session_id)
+    session = await store.get(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     if session.status != SessionStatus.PENDING:
@@ -497,7 +637,7 @@ async def submit_presentation(
     session.status = SessionStatus.COMPLETED if session.result == "passed" else SessionStatus.FAILED
     session.completed_at = datetime.now(timezone.utc)
     session.updated_at = session.completed_at
-    store.save(session)
+    await store.save(session)
 
     # Fire callback if configured
     if session.callback_url:
@@ -516,7 +656,10 @@ async def submit_presentation(
 
 
 @router.post("/evaluate", summary="Stateless Evaluation")
-async def evaluate_presentation(body: EvaluateRequest) -> dict:
+async def evaluate_presentation(
+    body: EvaluateRequest,
+    user_id: str = Depends(get_current_user_id),
+) -> dict:
     """
     Evaluate a VP token against a presentation policy without creating a session.
     Useful for server-side verification where session state is not needed.
@@ -530,7 +673,8 @@ async def evaluate_presentation(body: EvaluateRequest) -> dict:
         )
         return result
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Evaluation failed: {exc}") from exc
+        logger.error("Evaluation via gRPC failed: %s", exc)
+        raise HTTPException(status_code=502, detail="Evaluation failed") from exc
 
 
 @router.get("/{session_id}/inspection", summary="Inspection Result")
@@ -539,7 +683,7 @@ async def get_inspection_result(
     store: SessionStore = Depends(get_store),
 ) -> dict:
     """Get the InspectionSystem result for a completed session."""
-    session = store.get(session_id)
+    session = await store.get(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     return {
@@ -557,15 +701,22 @@ async def get_inspection_result(
 zkp_router = APIRouter(prefix="/v1/verify/zkp", tags=["ZKP Verification"])
 
 
+class ZkpSubmitRequest(BaseModel):
+    vp_token: str | None = Field(default=None, description="VP token for ZKP verification")
+    proof: str | None = Field(default=None, description="ZKP proof (alias for vp_token)")
+    presentation_policy_id: str | None = Field(default=None, description="Presentation policy ID")
+    policy_id: str | None = Field(default=None, description="Policy ID (alias)")
+    nonce: str | None = Field(default=None, description="Nonce for replay prevention")
+
+
 @zkp_router.post("", summary="Submit ZKP Proof")
-async def submit_zkp(request: Request) -> dict:
+async def submit_zkp(body: ZkpSubmitRequest) -> dict:
     """
     Submit a Zero-Knowledge Proof for verification.
     Delegates to /v1/verify/evaluate internally.
     """
-    body_data = await request.json()
-    vp_token = body_data.get("vp_token") or body_data.get("proof")
-    policy_id = body_data.get("presentation_policy_id") or body_data.get("policy_id", "")
+    vp_token = body.vp_token or body.proof
+    policy_id = body.presentation_policy_id or body.policy_id or ""
 
     if not vp_token:
         raise HTTPException(status_code=400, detail="vp_token or proof is required")
@@ -574,11 +725,12 @@ async def submit_zkp(request: Request) -> dict:
         result = await _evaluate_via_grpc(
             policy_id=policy_id,
             vp_token=vp_token,
-            nonce=body_data.get("nonce"),
+            nonce=body.nonce,
         )
         return result
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"ZKP verification failed: {exc}") from exc
+        logger.error("ZKP verification failed: %s", exc)
+        raise HTTPException(status_code=502, detail="ZKP verification failed") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -593,6 +745,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     global grpc_server
 
     logger.info(f"Starting {SERVICE_NAME} service on port {SERVICE_PORT}...")
+
+    # Initialize session store (Redis or in-memory fallback)
+    store = await init_store()
 
     if GRPC_ENABLED:
         try:
@@ -632,30 +787,39 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 # ---------------------------------------------------------------------------
 
 def create_app() -> FastAPI:
-    app = FastAPI(
+    app = create_service_app(
         title="Verification Service",
         description="Credential verification session management (OID4VP / SIOPv2)",
-        version="1.0.0",
+        service_name=SERVICE_NAME,
         lifespan=lifespan,
+        routers=[router, zkp_router],
     )
 
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+    @app.exception_handler(RequestValidationError)
+    async def validation_exception_handler(
+        request: Request, exc: RequestValidationError
+    ) -> JSONResponse:
+        errors = exc.errors()
+        missing = [e["loc"][-1] for e in errors if e.get("type") == "missing"]
+        description = (
+            f"Missing required parameter(s): {', '.join(str(m) for m in missing)}"
+            if missing
+            else "Request validation failed"
+        )
+        return JSONResponse(
+            status_code=400,
+            content={"error": "invalid_request", "error_description": description},
+        )
 
-    app.include_router(router)
-    app.include_router(zkp_router)
-
-    @app.get("/health")
-    async def health_check() -> dict:
-        return {"status": "healthy", "service": SERVICE_NAME}
-
-    from common.metrics import mount_metrics
-    mount_metrics(app)
+    @app.exception_handler(Exception)
+    async def unhandled_exception_handler(
+        request: Request, exc: Exception
+    ) -> JSONResponse:
+        logger.exception("Unhandled exception on %s %s", request.method, request.url.path)
+        return JSONResponse(
+            status_code=500,
+            content={"error": "server_error", "error_description": "Internal server error"},
+        )
 
     return app
 

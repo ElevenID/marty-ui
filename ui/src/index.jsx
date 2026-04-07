@@ -2,6 +2,11 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
 import './i18n';
+import { configureApi } from '@marty/subscriptions';
+import { get, post } from './services/api';
+
+// Configure @marty/subscriptions API client before first render
+configureApi({ get, post });
 
 console.log('[DEBUG] index.jsx - Starting app render');
 

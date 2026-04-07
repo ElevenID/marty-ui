@@ -25,7 +25,6 @@ namespace MIP {
     mfa_authenticated: Bool,
     session_id?: String,
     user_agent?: String,
-    plan_tier: String,              // free | starter | professional | enterprise
   };
 
   type CredentialContext = {
@@ -74,9 +73,7 @@ namespace MIP {
   // ========================================================================
 
   /// Top-level tenant boundary. All resources belong to an Organization.
-  entity Organization {
-    plan_tier: String,             // free | starter | professional | enterprise
-  };
+  entity Organization {};
 
   /// SCIM role granting permissions to users.
   entity Role in [Organization] {

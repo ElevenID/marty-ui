@@ -12,7 +12,7 @@ from pathlib import Path
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from mmf.framework.infrastructure.migration import AlembicMigrationAdapter
+from marty_common.migration import AlembicMigrationAdapter
 
 
 SERVICE_NAME = "trust_profile"  # Use underscore format for schema
@@ -30,7 +30,7 @@ def main():
     # Get database URL from environment
     db_url = os.environ.get(
         "DATABASE_URL",
-        "postgresql://marty:marty_dev@localhost:5432/marty_credentials"
+        "postgresql+asyncpg://marty:marty_dev@localhost:5432/marty_credentials"
     )
     
     # Import metadata from models

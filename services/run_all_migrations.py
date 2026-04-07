@@ -24,7 +24,7 @@ from sqlalchemy import create_engine, text
 services_root = Path(__file__).parent
 sys.path.insert(0, str(services_root))
 
-from mmf.framework.infrastructure.migration import (
+from marty_common.migration import (
     AlembicMigrationAdapter,
     MigrationError,
 )

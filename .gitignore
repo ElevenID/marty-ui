@@ -129,3 +129,6 @@ Thumbs.db
 # Don't ignore wheels directory - we want to commit pre-built wheels
 !wheels/
 !wheels/*.whl
+
+# WASM build artifact
+ui/src/wasm/marty-biometrics-pkg/
