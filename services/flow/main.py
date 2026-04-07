@@ -20,6 +20,7 @@ Port: 8011
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import logging
@@ -43,7 +44,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from typing import Annotated
 
@@ -52,7 +53,6 @@ from marty_common import (
     CredentialOfferPayload,
     MIPMessage,
     MessageType,
-    OrganizationClient,
     OrganizationContext,
     PresentationRequestPayload,
     VerificationResultPayload,
@@ -60,6 +60,7 @@ from marty_common import (
 )
 from marty_common.org_authorization import get_organization_client
 from marty_common.middleware import RequestIdMiddleware, RequestLoggingMiddleware
+from marty_common.service_setup import create_service_app
 from flow.infrastructure.adapters import PostgresFlowRepository
 
 logging.basicConfig(level=logging.INFO)
@@ -115,8 +116,9 @@ VERIFIER_CLIENT_ID = os.environ.get("VERIFIER_CLIENT_ID", "")  # Will be set bas
 
 # MIP §26: Nonce replay prevention — track used nonces to reject duplicates.
 # Uses Redis when available (shared across replicas); falls back to process-local dict.
-_NONCE_TTL_SECONDS = int(os.environ.get("NONCE_TTL_SECONDS", "86400"))
+_NONCE_TTL_SECONDS = int(os.environ.get("NONCE_TTL_SECONDS", "3600"))
 _used_nonces: dict[str, float] = {}  # fallback: nonce -> expiry timestamp
+_nonce_lock = asyncio.Lock()
 _NONCE_CLEANUP_INTERVAL = 600  # seconds between cleanup sweeps
 _nonce_last_cleanup: float = 0.0
 _nonce_redis = None  # set in lifespan if Redis is available
@@ -153,14 +155,17 @@ async def _check_nonce(nonce: str) -> bool:
     if _nonce_redis is not None:
         try:
             return await _record_nonce_used_redis(nonce)
-        except Exception:
-            pass  # fall through to local
-    return _record_nonce_used(nonce)
+        except Exception as exc:
+            logger.warning("Redis nonce check failed (%s) — falling back to process-local store", exc)
+    async with _nonce_lock:
+        return _record_nonce_used(nonce)
 
 
 def get_config() -> dict[str, Any]:
     """Get database configuration from environment."""
-    database_url = os.environ.get("DATABASE_URL", "postgresql://marty:marty_dev@postgres:5432/marty_credentials")
+    database_url = os.environ.get("DATABASE_URL")
+    if not database_url:
+        raise RuntimeError("DATABASE_URL environment variable is required")
     if not database_url.startswith("postgresql+asyncpg://"):
         database_url = database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
     return {"database_url": database_url}
@@ -894,45 +899,45 @@ class InMemoryFlowRepository:
 # =============================================================================
 
 class FlowStepModel(BaseModel):
-    name: str
-    description: str | None = None
-    step_type: str = "user_input"
-    type: str | None = None
+    name: str = Field(max_length=255)
+    description: str | None = Field(None, max_length=2000)
+    step_type: str = Field("user_input", max_length=50)
+    type: str | None = Field(None, max_length=50)
     config: dict = Field(default_factory=dict)
     timeout_seconds: int | None = None
     conditions: list[dict] = Field(default_factory=list)
     validation_rules: list[str] = Field(default_factory=list)
-    approval_strategy: str | None = None
+    approval_strategy: str | None = Field(None, max_length=50)
 
 
 class FlowTransitionModel(BaseModel):
-    from_step_id: str
-    to_step_id: str
-    condition: str = "success"
-    condition_expression: str | None = None
+    from_step_id: str = Field(max_length=255)
+    to_step_id: str = Field(max_length=255)
+    condition: str = Field("success", max_length=50)
+    condition_expression: str | None = Field(None, max_length=1000)
 
 
 class CreateFlowDefinitionRequest(BaseModel):
-    organization_id: str
-    name: str
-    description: str | None = None
-    flow_type: str = "issuance"
+    organization_id: str = Field(max_length=255)
+    name: str = Field(max_length=255)
+    description: str | None = Field(None, max_length=2000)
+    flow_type: str = Field("issuance", max_length=50)
     steps: list[FlowStepModel] = Field(default_factory=list)
     transitions: list[FlowTransitionModel] = Field(default_factory=list)
-    start_step_id: str | None = None
+    start_step_id: str | None = Field(None, max_length=255)
     preconditions: list[str] = Field(default_factory=list)
-    approval_strategy: str = "AUTO"
+    approval_strategy: str = Field("AUTO", max_length=50)
     enabled: bool = True
     hooks: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
     trigger: dict[str, Any] | None = None
-    credential_template_id: str | None = None
-    application_template_id: str | None = None
-    presentation_policy_id: str | None = None
+    credential_template_id: str | None = Field(None, max_length=255)
+    application_template_id: str | None = Field(None, max_length=255)
+    presentation_policy_id: str | None = Field(None, max_length=255)
     deployment_profile_ids: list[str] = Field(default_factory=list)
-    deployment_profile_id: str | None = None
-    trust_profile_id: str | None = None
-    default_timeout_seconds: int = 600
-    max_retries: int = 3
+    deployment_profile_id: str | None = Field(None, max_length=255)
+    trust_profile_id: str | None = Field(None, max_length=255)
+    default_timeout_seconds: int = Field(600, ge=1, le=86400)
+    max_retries: int = Field(3, ge=0, le=10)
     enable_resume: bool = True
 
 
@@ -958,10 +963,10 @@ class FlowDefinitionResponse(BaseModel):
 
 
 class StartFlowRequest(BaseModel):
-    flow_definition_id: str
-    subject_id: str | None = None
-    subject_type: str = "applicant"
-    external_reference: str | None = None
+    flow_definition_id: str = Field(max_length=255)
+    subject_id: str | None = Field(None, max_length=255)
+    subject_type: str = Field("applicant", max_length=50)
+    external_reference: str | None = Field(None, max_length=500)
     initial_context: dict = Field(default_factory=dict)
 
 
@@ -988,7 +993,7 @@ class FlowInstanceResponse(BaseModel):
 
 
 class AdvanceFlowRequest(BaseModel):
-    step_result: str = "success"  # success, failure, etc.
+    step_result: str = Field("success", max_length=50)  # success, failure, etc.
     data: dict = Field(default_factory=dict)
 
 
@@ -1423,6 +1428,8 @@ async def create_flow_definition(
 @router.get("/definitions", response_model=list[FlowDefinitionResponse], response_model_exclude_none=True)
 async def list_flow_definitions(
     organization_id: str = Query(..., description="Organization ID"),
+    limit: int = Query(default=100, le=500, description="Max items to return"),
+    offset: int = Query(default=0, ge=0, description="Number of items to skip"),
     user_id: str = Depends(get_current_user_id),
     repo: InMemoryFlowRepository = Depends(get_repo),
 ) -> list[FlowDefinitionResponse]:
@@ -1430,7 +1437,7 @@ async def list_flow_definitions(
     # Verify org membership
     await app.state.org_client.get_membership(user_id, organization_id)
     flows = await repo.list_definitions(organization_id)
-    return [_definition_to_response(f) for f in flows]
+    return [_definition_to_response(f) for f in flows[offset:offset + limit]]
 
 
 @router.get("/definitions/{flow_id}", response_model=FlowDefinitionResponse, response_model_exclude_none=True)
@@ -1563,6 +1570,8 @@ async def list_flow_instances(
     organization_id: str = Query(..., description="Organization ID"),
     flow_definition_id: str | None = Query(None, description="Filter by flow definition"),
     status: str | None = Query(None, description="Filter by status"),
+    limit: int = Query(default=100, le=500, description="Max items to return"),
+    offset: int = Query(default=0, ge=0, description="Number of items to skip"),
     user_id: str = Depends(get_current_user_id),
     repo: InMemoryFlowRepository = Depends(get_repo),
 ) -> list[FlowInstanceResponse]:
@@ -1571,7 +1580,7 @@ async def list_flow_instances(
     await app.state.org_client.get_membership(user_id, organization_id)
     status_filter = _parse_flow_instance_status(status) if status else None
     instances = await repo.list_instances(organization_id, flow_definition_id, status_filter)
-    return [_instance_to_response(i) for i in instances]
+    return [_instance_to_response(i) for i in instances[offset:offset + limit]]
 
 
 @router.get("/instances/{instance_id}", response_model=FlowInstanceResponse, response_model_exclude_none=True)
@@ -1741,6 +1750,8 @@ async def cancel_flow(
 @router.get("/instances/{instance_id}/artifacts", response_model=list[FlowInstanceArtifactResponse], response_model_exclude_none=True)
 async def list_flow_instance_artifacts(
     instance_id: str,
+    limit: int = Query(default=100, le=500, description="Max items to return"),
+    offset: int = Query(default=0, ge=0, description="Number of items to skip"),
     user_id: str = Depends(get_current_user_id),
     repo: InMemoryFlowRepository = Depends(get_repo),
 ) -> list[FlowInstanceArtifactResponse]:
@@ -1753,7 +1764,7 @@ async def list_flow_instance_artifacts(
     await app.state.org_client.get_membership(user_id, instance.organization_id)
     
     artifacts = await repo.list_artifacts(instance_id)
-    return [_artifact_to_response(a) for a in artifacts]
+    return [_artifact_to_response(a) for a in artifacts[offset:offset + limit]]
 
 
 @router.get("/instances/{instance_id}/artifacts/{artifact_id}", response_model=FlowInstanceArtifactResponse, response_model_exclude_none=True)
@@ -1848,8 +1859,36 @@ class StartVerificationFlowRequest(BaseModel):
     trust_profile_id: str | None = None
     deployment_profile_id: str | None = None
     external_reference: str | None = None
-    callback_url: str | None = None
+    callback_url: str | None = Field(None, max_length=2048)
     expiry_minutes: int = 15
+
+    @field_validator("callback_url")
+    @classmethod
+    def validate_callback_url(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        from urllib.parse import urlparse
+        parsed = urlparse(v)
+        _env = os.environ.get("ENVIRONMENT", "production").lower()
+        allowed_schemes = {"https"}
+        if _env in ("development", "test"):
+            allowed_schemes.add("http")
+        if parsed.scheme not in allowed_schemes:
+            raise ValueError(f"callback_url must use scheme: {', '.join(sorted(allowed_schemes))}")
+        if not parsed.netloc:
+            raise ValueError("callback_url must have a valid host")
+        # Block internal/metadata IPs
+        hostname = parsed.hostname or ""
+        _blocked = ("169.254.", "10.", "172.16.", "172.17.", "172.18.", "172.19.",
+                     "172.20.", "172.21.", "172.22.", "172.23.", "172.24.", "172.25.",
+                     "172.26.", "172.27.", "172.28.", "172.29.", "172.30.", "172.31.",
+                     "192.168.", "127.", "0.")
+        if any(hostname.startswith(prefix) for prefix in _blocked):
+            raise ValueError("callback_url must not target private/internal networks")
+        if hostname in ("localhost", "metadata.internal", "[::1]"):
+            if _env not in ("development", "test"):
+                raise ValueError("callback_url must not target localhost in production")
+        return v
 
 
 class StartSiopFlowRequest(BaseModel):
@@ -2436,6 +2475,7 @@ def _verify_vp_jwt_signature(vp_token: str) -> bool:
         header = json.loads(_b64decode_unpadded(segments[0]))
         payload = json.loads(_b64decode_unpadded(segments[1]))
     except Exception:
+        logger.debug("VP JWT header/payload decode failed", exc_info=True)
         return False  # Undecodable header/payload
 
     # Extract the holder DID from iss or kid
@@ -2528,6 +2568,7 @@ def _extract_claims_from_vp_token(vp_token: str) -> dict:
                     _salt, claim_name, claim_value = decoded
                     claims[claim_name] = claim_value
             except Exception:
+                logger.debug("Failed to decode SD-JWT disclosure: %s", disclosure[:50], exc_info=True)
                 continue
 
     except Exception as exc:
@@ -2593,24 +2634,60 @@ async def submit_verification_response(
                 detail={"error": "nonce_reused", "error_description": "This nonce has already been used"},
             )
         try:
-            _jwt_part = vp_token.split("~")[0]
-            _segments = _jwt_part.split(".")
-            if len(_segments) >= 2:
-                _pad = _segments[1] + "=" * (4 - len(_segments[1]) % 4)
-                _payload = json.loads(base64.urlsafe_b64decode(_pad))
-                vp_nonce = _payload.get("nonce")
+            # SD-JWT VP token structure: issuer-jwt~disclosure1~...~kb-jwt
+            # The nonce lives in the Key Binding JWT (last segment after ~),
+            # NOT in the issuer JWT (first segment).  Fall back to checking
+            # the issuer JWT payload for non-SD-JWT VP tokens.
+            #
+            # mDoc VP tokens are CBOR-encoded (not JWT) — the nonce lives in
+            # the DeviceAuthentication CBOR structure.  We skip inline nonce
+            # checking for non-JWT token formats and let the downstream
+            # presentation-policy service validate the nonce during evaluation.
+            _parts = vp_token.split("~")
+            _first_segment = _parts[0].strip()
+            _is_jwt_based = "." in _first_segment and len(_first_segment.split(".")) >= 3
+
+            if _is_jwt_based:
+                vp_nonce = None
+
+                # Try the KB-JWT (last non-empty segment) first
+                _kb_jwt_part = _parts[-1].strip() if len(_parts) > 1 else ""
+                if _kb_jwt_part:
+                    _kb_segments = _kb_jwt_part.split(".")
+                    if len(_kb_segments) >= 2:
+                        _pad = _kb_segments[1] + "=" * (4 - len(_kb_segments[1]) % 4)
+                        _kb_payload = json.loads(base64.urlsafe_b64decode(_pad))
+                        vp_nonce = _kb_payload.get("nonce")
+
+                # Fall back to the issuer JWT payload (for non-SD-JWT tokens)
+                if vp_nonce is None:
+                    _jwt_part = _parts[0]
+                    _segments = _jwt_part.split(".")
+                    if len(_segments) >= 2:
+                        _pad = _segments[1] + "=" * (4 - len(_segments[1]) % 4)
+                        _payload = json.loads(base64.urlsafe_b64decode(_pad))
+                        vp_nonce = _payload.get("nonce")
+
                 if vp_nonce != expected_nonce:
                     raise HTTPException(
                         status_code=400,
                         detail=f"Nonce mismatch: VP nonce does not match the authorization request nonce",
                     )
+            else:
+                # Non-JWT format (mDoc/CBOR) — nonce is in the CBOR DeviceAuthentication
+                # structure.  Defer nonce validation to the presentation-policy service.
+                logger.info("VP token is non-JWT (likely mDoc); deferring nonce check to policy service")
         except HTTPException:
             raise
         except Exception:
-            pass  # decode errors are tolerated; nonce will be verified by policy service
+            logger.debug("VP nonce decode failed; will be verified by policy service", exc_info=True)
 
     # OID4VP 1.0 Final §8.6: verify holder signature on VP JWT
-    if not _verify_vp_jwt_signature(vp_token):
+    # For non-JWT formats (mDoc/CBOR), the signature is a COSE_Sign1 structure
+    # inside the DeviceResponse — defer verification to the policy service.
+    _first_seg = vp_token.split("~")[0].strip()
+    _looks_like_jwt = "." in _first_seg and len(_first_seg.split(".")) >= 3
+    if _looks_like_jwt and not _verify_vp_jwt_signature(vp_token):
         raise HTTPException(
             status_code=400,
             detail="VP signature verification failed: invalid holder signature",
@@ -2922,7 +2999,14 @@ async def submit_siop_id_token(
         except HTTPException:
             raise
         except Exception:
-            pass  # if thumbprint computation fails, accept the token
+            logger.warning("JWK thumbprint computation failed for sub=%r — rejecting token", sub, exc_info=True)
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "invalid_id_token",
+                    "error_description": "Failed to compute JWK thumbprint for sub_jwk validation",
+                },
+            )
     else:
         # self-issued URI subject syntax: sub MUST equal iss
         if sub != iss:
@@ -3120,14 +3204,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("PostgreSQL adapter initialized for flow service")
     
     # Initialize gRPC channel to organization service
-    from common.grpc_factory import create_grpc_channel, create_grpc_server, start_grpc_server_port
-    org_grpc_target = os.environ.get("ORG_GRPC_TARGET", "organization:9002")
-    org_grpc_channel = create_grpc_channel(org_grpc_target, service_name="flow")
-    app.state.org_client = OrganizationClient(
-        grpc_channel=org_grpc_channel,
-    )
+    from common.di import setup_org_client, teardown_org_client
+    await setup_org_client(app, "flow")
     
     # gRPC channels to downstream services
+    from common.grpc_factory import create_grpc_channel, create_grpc_server, start_grpc_server_port
     pp_grpc_target = os.environ.get("PP_GRPC_TARGET", "presentation-policy:9009")
     pp_grpc_channel = create_grpc_channel(pp_grpc_target, service_name="flow")
     app.state.pp_grpc_channel = pp_grpc_channel
@@ -3164,14 +3245,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await grpc_server.stop(grace=5)
     await pp_grpc_channel.close()
     await ct_grpc_channel.close()
-    await org_grpc_channel.close()
+    await teardown_org_client(app)
     if _nonce_redis is not None:
         await _nonce_redis.aclose()
     await engine.dispose()
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(
+    app = create_service_app(
         title="Flow Service",
         description="""Manages Flows - orchestration of credential operations.
 
@@ -3187,21 +3268,10 @@ For async wallet-based verification (QR codes, deep links):
 
 For orchestrating multi-step credential journeys (issuance, renewal, revocation).
         """,
-        version="1.0.0",
+        service_name=SERVICE_NAME,
         lifespan=lifespan,
+        routers=[router],
     )
-    
-    app.add_middleware(RequestLoggingMiddleware)
-    app.add_middleware(RequestIdMiddleware)
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-    
-    app.include_router(router)
 
     @app.exception_handler(RequestValidationError)
     async def validation_exception_handler(
@@ -3224,14 +3294,6 @@ For orchestrating multi-step credential journeys (issuance, renewal, revocation)
             },
         )
 
-    @app.get("/health")
-    async def health_check() -> dict:
-        return {"status": "healthy", "service": SERVICE_NAME}
-
-    from common.metrics import init_otel_tracing, mount_metrics
-    init_otel_tracing(SERVICE_NAME)
-    mount_metrics(app)
-    
     return app
 
 

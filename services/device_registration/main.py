@@ -28,9 +28,9 @@ from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from marty_common import OrganizationClient
 from marty_common.org_authorization import get_organization_client
 from marty_common.middleware import RequestIdMiddleware, RequestLoggingMiddleware
+from marty_common.service_setup import create_service_app
 from device_registration.infrastructure.adapters import PostgresDeviceRegistrationRepository
 from device_registration.infrastructure.models import mapper_registry
 
@@ -48,8 +48,7 @@ def get_config() -> dict[str, str]:
     return {
         "database_url": os.environ.get(
             "DATABASE_URL",
-            "postgresql+asyncpg://marty:marty_dev_password@localhost:5432/marty",
-        )
+        ),
     }
 
 
@@ -132,11 +131,11 @@ class DevicePreferencesModel(BaseModel):
 
 
 class CreateDeviceRegistrationRequest(BaseModel):
-    user_id: str | None = None
-    organization_id: str | None = None
-    device_id: str
-    platform: str
-    fcm_token: str
+    user_id: str | None = Field(None, max_length=255)
+    organization_id: str | None = Field(None, max_length=255)
+    device_id: str = Field(min_length=1, max_length=255)
+    platform: str = Field(min_length=1, max_length=50)
+    fcm_token: str = Field(min_length=1, max_length=4096)
     app_version: str | None = None
     os_version: str | None = None
     device_model: str | None = None
@@ -301,7 +300,10 @@ async def _verify_org_membership(request: Request, user_id: str, organization_id
 
 # MIP §20.3 — Challenge endpoint for proof-of-possession
 @router.post("/challenge", response_model=ChallengeResponseModel)
-async def request_challenge(body: ChallengeRequest) -> ChallengeResponseModel:
+async def request_challenge(
+    body: ChallengeRequest,
+    user_id: str = Depends(get_current_user_id),
+) -> ChallengeResponseModel:
     """Issue a challenge nonce that the device must sign to prove key possession."""
     nonce = _challenge_store.create(body.device_id)
     return ChallengeResponseModel(nonce=nonce, expires_in=_CHALLENGE_TTL_SECONDS)
@@ -365,9 +367,12 @@ async def list_devices(
     organization_id: str | None = Query(None),
     user_id: str = Depends(get_current_user_id),
     repo: InMemoryDeviceRepository | PostgresDeviceRegistrationRepository = Depends(get_repo),
+    limit: int = Query(default=100, le=500),
+    offset: int = Query(default=0, ge=0),
 ) -> list[DeviceRegistrationResponse]:
     await _verify_org_membership(request, user_id, organization_id)
-    return [_to_response(record) for record in await repo.list_for_user(user_id, organization_id)]
+    records = await repo.list_for_user(user_id, organization_id)
+    return [_to_response(record) for record in records[offset:offset + limit]]
 
 
 @router.get("/{registration_id}", response_model=DeviceRegistrationResponse, response_model_exclude_none=True)
@@ -450,51 +455,32 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     global _repo
     logger.info("Starting %s...", SERVICE_NAME)
     config = get_config()
-    engine = create_async_engine(config["database_url"], future=True)
-    async with engine.begin() as conn:
+    from marty_common.database import DatabaseManager, DatabaseConfig
+    db = DatabaseManager(DatabaseConfig.from_env("device-registration"))
+    async with db.engine.begin() as conn:
         await conn.execute(text("CREATE SCHEMA IF NOT EXISTS device_registration_service"))
         await conn.run_sync(mapper_registry.metadata.create_all)
-    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    session_factory = db.session_factory
     _repo = PostgresDeviceRegistrationRepository(session_factory)
 
-    from common.grpc_factory import create_grpc_channel
-    org_grpc_target = os.environ.get("ORG_GRPC_TARGET", "organization:9002")
-    org_grpc_channel = create_grpc_channel(org_grpc_target, service_name="device-registration")
-    app.state.org_client = OrganizationClient(grpc_channel=org_grpc_channel)
-    app.state.db_engine = engine
+    from common.di import setup_org_client, teardown_org_client
+    await setup_org_client(app, "device-registration")
+    app.state.db_engine = db.engine
 
     yield
     logger.info("Shutting down %s...", SERVICE_NAME)
-    await org_grpc_channel.close()
-    await engine.dispose()
+    await teardown_org_client(app)
+    await db.close()
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(
+    return create_service_app(
         title="Device Registration Service",
         description="Manages user device registrations for push and challenge-response authentication",
-        version="1.0.0",
+        service_name=SERVICE_NAME,
         lifespan=lifespan,
+        routers=[router],
     )
-    app.add_middleware(RequestLoggingMiddleware)
-    app.add_middleware(RequestIdMiddleware)
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-    app.include_router(router)
-
-    @app.get("/health")
-    async def health_check() -> dict[str, str]:
-        return {"status": "healthy", "service": SERVICE_NAME}
-
-    from common.metrics import init_otel_tracing, mount_metrics
-    init_otel_tracing(SERVICE_NAME)
-    mount_metrics(app)
-    return app
 
 
 app = create_app()

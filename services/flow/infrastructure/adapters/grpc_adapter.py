@@ -560,6 +560,7 @@ class FlowServiceGrpc(flow_service_pb2_grpc.FlowServiceServicer):
             except asyncio.QueueFull:
                 logger.warning("Dropping flow event for slow subscriber %s", sub_id)
             except Exception:
+                logger.warning("Failed to enqueue flow event for subscriber %s — marking stale", sub_id, exc_info=True)
                 stale.append(sub_id)
         for sid in stale:
             self._stream_queues.pop(sid, None)

@@ -70,9 +70,21 @@ class BillingUseCase:
         # Get or create customer
         customer = await self.customer_repo.get_by_org_id(command.organization_id)
         if not customer:
+            # Resolve org contact email for the payment provider
+            org_email = ""
+            try:
+                org_email = await self.org_service.get_contact_email(
+                    command.organization_id
+                )
+            except Exception:
+                logger.warning(
+                    "Could not resolve contact email for org %s, "
+                    "creating Square customer without email",
+                    command.organization_id,
+                )
             square_customer_id = await self.payment_provider.create_customer(
                 org_id=command.organization_id,
-                email="",  # TODO: resolve org contact email
+                email=org_email,
             )
             customer = Customer(
                 organization_id=command.organization_id,

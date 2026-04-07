@@ -31,7 +31,7 @@ WALTID_SERVICES := waltid-wallet-api waltid-web-wallet waltid-nginx
 WHEELS_SCRIPT := ./scripts/build-rust-wheels.sh
 SETUP_LOCAL_SCRIPT := ./scripts/setup-local.sh
 
-INFRA_SERVICES := postgres redis keycloak mailhog
+INFRA_SERVICES := postgres redis keycloak mailpit openbao
 APP_SERVICES := event-stream issuance gateway auth organization credential-template trust-profile applicant notification compliance-profile presentation-policy deployment-profile flow revocation-profile verification envoy
 
 .DEFAULT_GOAL := help

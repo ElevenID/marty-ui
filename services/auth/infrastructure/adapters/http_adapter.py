@@ -288,7 +288,7 @@ async def callback(
         
         error_msg = error_description or error
         return RedirectResponse(
-            url=f"{_ui_base_url}/?auth_error={error_msg}",
+            url=f"{_ui_base_url}/?auth_error={quote(error_msg, safe='')}",
             status_code=302,
         )
     
@@ -431,7 +431,7 @@ async def update_current_user(
         raise HTTPException(status_code=401, detail="Session not found or expired")
 
     if body.picture is not None:
-        if not (body.picture.startswith("data:image/") or body.picture.startswith("http")):
+        if not (body.picture.startswith("data:image/") or body.picture.startswith("https://")):
             raise HTTPException(status_code=400, detail="picture must be an image data URL or https URL")
         session.user.picture = body.picture
         await _session_repository.save(session)

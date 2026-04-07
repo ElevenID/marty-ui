@@ -1,3 +1,4 @@
+// Moved to @marty/subscriptions. Re-exported here for backward compatibility during migration.
 export {
   subscribe,
   changePlan,
@@ -6,4 +7,5 @@ export {
   getInvoices,
   addPaymentMethod,
   getPaymentMethods,
-} from './paymentApi';
+  processPayment,
+} from '@marty/subscriptions';

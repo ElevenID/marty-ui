@@ -4,6 +4,7 @@ Organization Service Use Cases
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -104,7 +105,7 @@ class OrganizationUseCase:
                             organization_id=org.id,
                             member_id=owner.id,
                             role_id=created_roles["owner"].id,
-                            assigned_by=command.owner_id,
+                            updated_by=command.owner_id,
                         )
                     )
             except Exception as e:
@@ -171,24 +172,20 @@ class OrganizationUseCase:
     async def get_user_organizations(self, user_id: str) -> list[Organization]:
         """Get all organizations a user belongs to."""
         memberships = await self.member_repo.list_by_user(user_id)
-        orgs = []
-        for membership in memberships:
-            if membership.status == MemberStatus.ACTIVE:
-                org = await self.organization_repo.get_by_id(membership.organization_id)
-                if org:
-                    orgs.append(org)
-        return orgs
+        active_ids = [m.organization_id for m in memberships if m.status == MemberStatus.ACTIVE]
+        if not active_ids:
+            return []
+        fetched = await asyncio.gather(*(self.organization_repo.get_by_id(oid) for oid in active_ids))
+        return [org for org in fetched if org is not None]
     
     async def get_user_organizations_with_memberships(self, user_id: str) -> list[tuple[Organization, Member]]:
         """Get all organizations a user belongs to with membership details."""
         memberships = await self.member_repo.list_by_user(user_id)
-        results = []
-        for membership in memberships:
-            if membership.status == MemberStatus.ACTIVE:
-                org = await self.organization_repo.get_by_id(membership.organization_id)
-                if org:
-                    results.append((org, membership))
-        return results
+        active = [m for m in memberships if m.status == MemberStatus.ACTIVE]
+        if not active:
+            return []
+        fetched = await asyncio.gather(*(self.organization_repo.get_by_id(m.organization_id) for m in active))
+        return [(org, m) for org, m in zip(fetched, active) if org is not None]
     
     async def discover_organizations(
         self,

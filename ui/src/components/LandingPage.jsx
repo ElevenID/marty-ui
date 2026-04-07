@@ -73,7 +73,7 @@ import {
 import {
   GUIDE_CHAPTERS,
   GUIDE_ARTICLES_BY_CHAPTER,
-} from '../data/guideContent';
+} from '@marty/blog';
 import { UnifiedIdentityFlowDiagram, StandardsStackDiagram, InteractiveProtocolMap } from './diagrams';
 
 // Fade-in animation style helper

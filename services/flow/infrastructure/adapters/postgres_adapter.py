@@ -7,7 +7,7 @@ from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 if TYPE_CHECKING:
-    from flow.main import FlowDefinition, FlowInstance, FlowStatus, FlowType, FlowInstanceStatus
+    from flow.main import FlowDefinition, FlowInstance, FlowInstanceArtifact, FlowStatus, FlowType, FlowInstanceStatus
 
 from flow.infrastructure.models import flow_definitions, flow_instances
 
@@ -38,7 +38,26 @@ class PostgresFlowRepository:
     
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]):
         self._session_factory = session_factory
+        # Artifacts are kept in-memory until a dedicated table is added.
+        self._artifacts: dict[str, "FlowInstanceArtifact"] = {}
     
+    # ========== Flow Instance Artifact Operations (in-memory) ==========
+
+    async def save_artifact(self, artifact: "FlowInstanceArtifact") -> None:
+        self._artifacts[artifact.id] = artifact
+
+    async def get_artifact(self, artifact_id: str) -> "FlowInstanceArtifact | None":
+        return self._artifacts.get(artifact_id)
+
+    async def list_artifacts(self, flow_instance_id: str) -> list["FlowInstanceArtifact"]:
+        return [a for a in self._artifacts.values() if a.flow_instance_id == flow_instance_id]
+
+    async def get_artifact_by_code(self, pre_authorized_code: str) -> "FlowInstanceArtifact | None":
+        for a in self._artifacts.values():
+            if a.pre_authorized_code == pre_authorized_code:
+                return a
+        return None
+
     # ========== Flow Definition Operations ==========
     
     async def save_definition(self, flow: "FlowDefinition") -> None:

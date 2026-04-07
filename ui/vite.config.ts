@@ -15,15 +15,17 @@ export default defineConfig(({ mode }) => {
   
   return {
     resolve: {
-      dedupe: ['react', 'react-dom', 'react/jsx-runtime', 'react/jsx-dev-runtime'],
+      // Force all react-* and router packages to resolve to a single copy from this
+      // project root. This prevents duplicate instances when @marty/blog (a symlinked
+      // local package) carries its own node_modules with react-router-dom – which would
+      // create a second RouterContext that has no access to the outer <BrowserRouter>.
+      dedupe: ['react', 'react-dom', 'react/jsx-runtime', 'react/jsx-dev-runtime', 'react-router-dom', 'react-router'],
     },
     optimizeDeps: {
-      include: ['react', 'react-dom', 'react/jsx-runtime', 'react/jsx-dev-runtime', 'react-router-dom'],
+      include: ['react', 'react-dom', 'react/jsx-runtime', 'react/jsx-dev-runtime', 'react-router-dom', '@marty/blog', '@marty/subscriptions'],
     },
     plugins: [
       react(),
-      // Checker temporarily disabled for debugging
-      /*
       ...(isDev ? [checker({
         typescript: true,
         eslint: {
@@ -34,7 +36,6 @@ export default defineConfig(({ mode }) => {
           position: 'br',
         },
       })] : []),
-      */
       
       // Prerendering for SEO - only in production builds
       ...(!disablePrerender ? [
@@ -109,6 +110,12 @@ export default defineConfig(({ mode }) => {
             '/from-idv-to-verifiable-identity',
             '/standards',
             '/protocol',
+            '/ai',
+            '/what-is-verifiable-identity',
+            '/what-is-credential-verification',
+            '/what-is-open-badge',
+            '/what-is-digital-credential',
+            '/what-is-marty-protocol',
             '/blog',
             '/blog/why-identity-needs-a-protocol',
             '/blog/trust-profiles-explained',
@@ -155,6 +162,12 @@ export default defineConfig(({ mode }) => {
             '/pricing': 0.9,
             '/standards': 0.8,
             '/docs': 0.8,
+            '/ai': 0.8,
+            '/what-is-verifiable-identity': 0.7,
+            '/what-is-credential-verification': 0.7,
+            '/what-is-open-badge': 0.7,
+            '/what-is-digital-credential': 0.7,
+            '/what-is-marty-protocol': 0.7,
             '*': 0.7,
           },
           generateRobotsTxt: true,
@@ -177,6 +190,14 @@ export default defineConfig(({ mode }) => {
                 '/v1/*',
               ],
             },
+            // Explicitly allow AI crawlers
+            { userAgent: 'GPTBot', allow: '/' },
+            { userAgent: 'ChatGPT-User', allow: '/' },
+            { userAgent: 'Google-Extended', allow: '/' },
+            { userAgent: 'Anthropic-AI', allow: '/' },
+            { userAgent: 'ClaudeBot', allow: '/' },
+            { userAgent: 'PerplexityBot', allow: '/' },
+            { userAgent: 'Cohere-AI', allow: '/' },
           ],
         }),
       ] : []),

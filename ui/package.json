@@ -17,6 +17,9 @@
     "test:visual": "playwright test tests/visual"
   },
   "dependencies": {
+    "@elevenid/marty-api-core": "file:../../marty-cli/packages/api-core",
+    "@marty/blog": "file:../../marty-blog",
+    "@marty/subscriptions": "file:../../marty-subscriptions",
     "@emotion/react": "^11.11.0",
     "@emotion/styled": "^11.11.0",
     "@mui/icons-material": "^5.14.0",

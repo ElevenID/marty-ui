@@ -21,7 +21,7 @@ import PublicIcon from '@mui/icons-material/Public';
 import InventoryIcon from '@mui/icons-material/Inventory';
 import SchoolIcon from '@mui/icons-material/School';
 import { PROTOCOL } from '../data/marketingContent';
-import { GUIDE_CHAPTERS, GUIDE_ARTICLES_BY_CHAPTER } from '../data/guideContent';
+import { GUIDE_CHAPTERS, GUIDE_ARTICLES_BY_CHAPTER } from '@marty/blog';
 import { InteractiveProtocolMap } from './diagrams';
 
 const CHAPTER_ICONS = {

@@ -2000,20 +2000,20 @@ class DeviceRegistrationHelpers {
 }
 
 // =============================================================================
-// MailHog Helpers (for email verification in tests)
+// Mailpit Helpers (for email verification in tests)
 // =============================================================================
 
-class MailHogHelpers {
+class MailpitHelpers {
   constructor(page) {
     this.page = page;
-    this.mailhogUrl = process.env.MAILHOG_URL || 'http://localhost:8025';
+    this.mailpitUrl = process.env.MAILPIT_URL || 'http://localhost:8025';
   }
 
   /**
    * Get all emails from MailHog
    */
   async getAllEmails() {
-    const response = await this.page.request.get(`${this.mailhogUrl}/api/v2/messages`);
+    const response = await this.page.request.get(`${this.mailpitUrl}/api/v2/messages`);
     const data = await response.json();
     return data.items || [];
   }
@@ -2070,12 +2070,12 @@ class MailHogHelpers {
    * Clear all emails
    */
   async clearAllEmails() {
-    await this.page.request.delete(`${this.mailhogUrl}/api/v1/messages`);
+    await this.page.request.delete(`${this.mailpitUrl}/api/v1/messages`);
   }
 }
 
 // =============================================================================
-// Mock Email Helpers (for CI/CD environments without MailHog)
+// Mock Email Helpers (for CI/CD environments without Mailpit)
 // =============================================================================
 
 class MockEmailHelpers {
@@ -2222,13 +2222,13 @@ class MockEmailHelpers {
 class EmailTestHelpers {
   constructor(page) {
     this.page = page;
-    this.provider = process.env.TEST_PROVIDER || 'mailhog';
+    this.provider = process.env.TEST_PROVIDER || 'mailpit';
     
     // Initialize appropriate low-level helper based on provider
     if (this.provider === 'mock') {
       this.impl = new MockEmailHelpers(page);
     } else {
-      this.impl = new MailHogHelpers(page);
+      this.impl = new MailpitHelpers(page);
     }
   }
 
@@ -3013,7 +3013,7 @@ module.exports = {
   WalletBridge,
   PushNotificationHelpers,
   DeviceRegistrationHelpers,
-  MailHogHelpers,
+  MailpitHelpers,
   MockEmailHelpers,
   EmailTestHelpers,
   ApiTestHelpers,

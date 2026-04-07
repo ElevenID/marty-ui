@@ -64,6 +64,14 @@ server {
         proxy_set_header Host $host;
     }
 
+    # AI discovery - serve static ai-plugin.json from UI
+    location = /.well-known/ai-plugin.json {
+        root /usr/share/nginx/html;
+        try_files /.well-known/ai-plugin.json =404;
+        add_header Content-Type application/json;
+        add_header Access-Control-Allow-Origin * always;
+    }
+
     # OID4VCI discovery + well-known endpoints - proxy to gateway (no auth required by wallets)
     location /.well-known/ {
         set $backend_api host.docker.internal:8000;
@@ -87,6 +95,32 @@ server {
     location ~ "^/org/([0-9a-fA-F-]{36})/spruce/\.well-known/(openid-credential-issuer|oauth-authorization-server)$" {
         set $backend_api host.docker.internal:8000;
         proxy_pass http://$backend_api/.well-known/$2/org/$1/spruce;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        add_header Access-Control-Allow-Origin * always;
+    }
+
+    # Google CredentialManager appended form: /org/<id>/credential-manager/.well-known/openid-credential-issuer
+    # → rewrite to: /.well-known/openid-credential-issuer/org/<id>/credential-manager
+    location ~ "^/org/([0-9a-fA-F-]{36})/credential-manager/\.well-known/(openid-credential-issuer|oauth-authorization-server)$" {
+        set $backend_api host.docker.internal:8000;
+        proxy_pass http://$backend_api/.well-known/$2/org/$1/credential-manager;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        add_header Access-Control-Allow-Origin * always;
+    }
+
+    # Apple Wallet appended form: /org/<id>/apple-wallet/.well-known/openid-credential-issuer
+    # → rewrite to: /.well-known/openid-credential-issuer/org/<id>/apple-wallet
+    location ~ "^/org/([0-9a-fA-F-]{36})/apple-wallet/\.well-known/(openid-credential-issuer|oauth-authorization-server)$" {
+        set $backend_api host.docker.internal:8000;
+        proxy_pass http://$backend_api/.well-known/$2/org/$1/apple-wallet;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -142,6 +176,18 @@ server {
         proxy_pass http://$backend_api;
         proxy_http_version 1.1;
         proxy_redirect off;  # Never rewrite Location headers — backend sends absolute URLs
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # Developer documentation (Starlight)
+    # Proxies to the docs container. Will move to docs.elevenidllc.com subdomain.
+    location /developer-docs/ {
+        set $docs_upstream marty-docs:80;
+        proxy_pass http://$docs_upstream/;
+        proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;

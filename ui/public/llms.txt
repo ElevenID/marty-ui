@@ -1,0 +1,68 @@
+# ElevenID
+
+> AI-verifiable identity infrastructure.
+
+ElevenID is infrastructure for issuing and verifying verifiable credentials,
+Open Badges, and identity documents using the Marty Identity Protocol (MIP).
+
+ElevenID provides APIs for AI systems to verify credentials, badges, and identity claims.
+
+## APIs
+
+- Credential Verification API: https://elevenidllc.com/verifiable-credential-api
+- EUDI Wallet Verification: https://elevenidllc.com/eudi-wallet-verification
+- ISO 18013-5 mDoc Verification: https://elevenidllc.com/iso-18013-5-mdoc-verification
+- SD-JWT Verification: https://elevenidllc.com/sd-jwt-verification
+- Open Badges Verification: https://elevenidllc.com/open-badges-verification
+- Open Badges Issuance: https://elevenidllc.com/open-badges-issuance
+- Trust Registry Infrastructure: https://elevenidllc.com/trust-registry-infrastructure
+
+## Documentation
+
+- API Documentation: https://elevenidllc.com/docs
+- Blog: https://elevenidllc.com/blog
+- OpenAPI Specification: https://elevenidllc.com/openapi.yaml
+
+## Product
+
+- Product Overview: https://elevenidllc.com/product
+- Pricing: https://elevenidllc.com/pricing
+- Standards: https://elevenidllc.com/standards
+- Protocol: https://elevenidllc.com/protocol
+- AI Integration: https://elevenidllc.com/ai
+
+## Concept Definitions
+
+- What Is Verifiable Identity: https://elevenidllc.com/what-is-verifiable-identity
+- What Is Credential Verification: https://elevenidllc.com/what-is-credential-verification
+- What Is an Open Badge: https://elevenidllc.com/what-is-open-badge
+- What Is a Digital Credential: https://elevenidllc.com/what-is-digital-credential
+- What Is the Marty Identity Protocol: https://elevenidllc.com/what-is-marty-protocol
+
+## Topics
+
+- verifiable credentials
+- W3C Verifiable Credentials
+- Open Badges
+- EUDI Wallet
+- identity verification
+- credential issuance
+- OID4VCI (OpenID for Verifiable Credential Issuance)
+- OID4VP (OpenID for Verifiable Presentations)
+- ISO 18013-5 mDoc
+- SD-JWT (Selective Disclosure JWT)
+- trust registries
+- Marty Identity Protocol
+- digital identity
+- credential verification
+- zero-knowledge proofs
+- decentralized identity
+
+## Standards Supported
+
+- W3C Verifiable Credentials Data Model
+- OpenID4VCI / OpenID4VP
+- ISO/IEC 18013-5 (mDL / mDoc)
+- SD-JWT (IETF draft)
+- Open Badges v3.0
+- DID (Decentralized Identifiers)

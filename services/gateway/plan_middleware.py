@@ -1,16 +1,20 @@
 """
 Usage tracking middleware for the API gateway.
 
-Tracks metered usage (verifications, issued credentials, active flows) in
-Redis for billing analytics. Enforces monthly usage limits based on the
-organization's plan tier.
+Tracks protocol activity (verifications, issued credentials) in Redis for
+analytics only — these are never rejected on paid plans. Infrastructure
+resource gauges (active flows, deployments, verifier instances, badge
+templates, admin seats) are hard-enforced against the organization's plan tier.
 
-Feature gates (webhooks, audit, deployment writes, etc.) are enforced by
-Cedar forbid policies in plan_policies.cedar. This middleware only handles
-numeric metering and the remaining feature gates that don't map cleanly
-to Cedar actions (custom_cedar_policies, device_registration).
+Sandbox plans have fair-use enforcement: combined issuance + verification
+events are capped at 5,000/month. When exceeded, an upgrade banner is shown
+but requests are still processed (soft cap with warning header).
 
-Execution order: MIPVersion → RateLimit → Auth → ContentType → Cedar → UsageTracking → route
+Feature gates (webhooks, audit, custom_cedar_policies, etc.) are enforced
+by BillingAuthMiddleware using Cedar billing policies. This middleware handles
+resource gauge enforcement, sandbox fair-use tracking, and analytics counters.
+
+Execution order: MIPVersion → RateLimit → Auth → ContentType → Cedar → Billing → UsageTracking → route
 """
 
 from __future__ import annotations
@@ -21,34 +25,25 @@ from fastapi import Request, Response
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from marty_common.plans import PlanTier, get_plan_limits, check_feature, check_limit
+from marty_common.plans import PlanTier, get_plan_limits, check_limit, check_sandbox_fair_use
 from marty_common.usage import UsageTracker
 
 logger = logging.getLogger(__name__)
 
 
 # ── Route → metric mapping ──────────────────────────────────────────────
-# Which routes count toward which metered usage.
-
-ROUTE_METRIC_MAP: dict[str, str] = {
-    # Verification endpoints → count verifications
+# Analytics counters: tracked but never enforced on paid plans.
+ANALYTICS_METRIC_MAP: dict[str, str] = {
     "/v1/verify": "verifications",
     "/v1/verify/zkp": "verifications",
-    # Flow completion counts as verification (OID4VP)
     "/v1/flows/siop/submit": "verifications",
-    # Issuance endpoints → count issued credentials
     "/v1/issuance": "issued_credentials",
-    # Flow creation → active flow gauge
-    "/v1/flows": "active_flows",
 }
 
-# ── Route → feature gate mapping (non-Cedar) ────────────────────────────
-# Features that don't map cleanly to Cedar actions. Cedar handles webhooks,
-# audit_logs, and deployment writes; these remain here.
-
-ROUTE_FEATURE_GATE: dict[str, str] = {
-    "/v1/policy-sets": "custom_cedar_policies",
-    "/v1/devices": "device_registration",
+# Enforced resource gauges: creation is blocked when the plan limit is reached.
+ENFORCED_GAUGE_MAP: dict[str, str] = {
+    "/v1/flows": "active_flows",
+    "/v1/badge-templates": "badge_templates",
 }
 
 # Routes that should only increment metrics on write operations
@@ -65,20 +60,18 @@ SKIP_PREFIXES = (
     "/v1/issuance/token",
     "/v1/issuance/nonce",
     "/v1/issuance/authorize",
+    "/v1/issuance/par",
     "/v1/issuance/notification",
     "/v1/issuance/deferred-credential",
     "/v1/flows/instances/",  # wallet-facing OID4VP
-    "/v1/trust-registry",
-    "/v1/plans",
-    "/v1/usage",
-    "/v1/billing",
 )
 
 
 class UsageTrackingMiddleware(BaseHTTPMiddleware):
     """
-    Tracks metered usage and enforces monthly limits by plan tier.
-    Also enforces remaining feature gates not handled by Cedar.
+    Enforces infrastructure resource gauges and sandbox fair-use limits.
+    Tracks protocol activity for analytics on all plans.
+    Feature gates are handled by BillingAuthMiddleware (Cedar billing policies).
     """
 
     async def dispatch(self, request: Request, call_next) -> Response:
@@ -93,95 +86,88 @@ class UsageTrackingMiddleware(BaseHTTPMiddleware):
         if not org_id:
             return await call_next(request)
 
-        # Use plan from Cedar middleware (already resolved from Redis)
-        plan_str = getattr(request.state, "org_plan", "free")
+        # Resolve plan tier
+        plan_str = getattr(request.state, "org_plan", "sandbox")
         try:
             plan = PlanTier(plan_str)
         except ValueError:
-            plan = PlanTier.FREE
+            plan = PlanTier.SANDBOX
         limits = get_plan_limits(plan)
 
-        # ── Feature gates (non-Cedar) ───────────────────────────────
-        for prefix, feature in ROUTE_FEATURE_GATE.items():
-            if path.startswith(prefix) and not check_feature(limits, feature):
-                return JSONResponse(
-                    status_code=403,
-                    content={
-                        "error": "plan_feature_unavailable",
-                        "message": f"This feature requires the {_min_plan_for_feature(feature)} plan or higher.",
-                        "feature": feature,
-                        "current_plan": plan.value,
-                        "upgrade_url": "/pricing",
-                    },
-                )
-
-        # ── Usage limit checks (pre-request) ────────────────────────
         tracker: UsageTracker | None = getattr(request.app.state, "usage_tracker", None)
+
         if tracker and request.method in WRITE_METHODS:
-            metric = _resolve_metric(path)
-            if metric:
-                if metric == "active_flows":
-                    # Check concurrent flow gauge against limit
-                    current = await tracker.get(org_id, "active_flows")
-                    if not check_limit(limits, metric, current):
-                        limit_val = getattr(limits, metric, None)
-                        return JSONResponse(
-                            status_code=429,
-                            content={
-                                "error": "plan_limit_exceeded",
-                                "message": f"Concurrent active flows limit reached ({limit_val}).",
-                                "metric": metric,
-                                "current": current,
-                                "limit": limit_val,
-                                "current_plan": plan.value,
-                                "upgrade_url": "/pricing",
-                            },
-                        )
-                else:
-                    current = await tracker.get(org_id, metric)
-                    if not check_limit(limits, metric, current):
-                        limit_val = getattr(limits, f"{metric}_per_month", None)
-                        return JSONResponse(
-                            status_code=429,
-                            content={
-                                "error": "plan_limit_exceeded",
-                                "message": f"Monthly {metric.replace('_', ' ')} limit reached ({limit_val}).",
-                                "metric": metric,
-                                "current": current,
-                                "limit": limit_val,
-                                "current_plan": plan.value,
-                                "upgrade_url": "/pricing",
-                            },
-                        )
+            # ── Hard-enforced resource gauge checks ──────────────────
+            gauge_metric = _resolve_gauge(path)
+            if gauge_metric:
+                current = await tracker.get(org_id, gauge_metric)
+                if not check_limit(limits, gauge_metric, current):
+                    limit_val = getattr(limits, gauge_metric, None)
+                    return JSONResponse(
+                        status_code=429,
+                        content={
+                            "error": "plan_limit_exceeded",
+                            "message": f"Resource limit reached: {gauge_metric.replace('_', ' ')} ({limit_val}).",
+                            "metric": gauge_metric,
+                            "current": current,
+                            "limit": limit_val,
+                            "current_plan": plan.value,
+                            "upgrade_url": "/pricing",
+                        },
+                    )
+
+            # ── Sandbox fair-use check ───────────────────────────────
+            analytics_metric = _resolve_analytics(path)
+            if analytics_metric and plan == PlanTier.SANDBOX:
+                combined = await tracker.get(org_id, "sandbox_monthly_activity")
+                if not check_sandbox_fair_use(limits, combined):
+                    return JSONResponse(
+                        status_code=429,
+                        content={
+                            "error": "sandbox_fair_use_exceeded",
+                            "message": "Sandbox monthly activity limit reached. Upgrade to a paid plan for unlimited usage.",
+                            "current": combined,
+                            "limit": limits.sandbox_monthly_activity_limit,
+                            "current_plan": plan.value,
+                            "upgrade_url": "/pricing",
+                        },
+                    )
 
         # ── Execute request ──────────────────────────────────────────
         response = await call_next(request)
 
-        # ── Post-request usage tracking (only on success) ────────────
+        # ── Post-request tracking (only on success) ──────────────────
         if tracker and response.status_code < 400 and request.method in WRITE_METHODS:
-            metric = _resolve_metric(path)
-            if metric:
-                if metric == "active_flows":
-                    await tracker.increment_gauge(org_id, "active_flows")
-                else:
-                    await tracker.increment(org_id, metric)
+            # Increment enforced gauges
+            gauge_metric = _resolve_gauge(path)
+            if gauge_metric:
+                await tracker.increment_gauge(org_id, gauge_metric)
+
+            # Increment analytics counters
+            analytics_metric = _resolve_analytics(path)
+            if analytics_metric:
+                await tracker.increment(org_id, analytics_metric)
+                # Also increment sandbox combined activity counter
+                if plan == PlanTier.SANDBOX:
+                    await tracker.increment(org_id, "sandbox_monthly_activity")
+
             # Always increment API calls counter (for analytics)
             await tracker.increment(org_id, "api_calls")
 
         return response
 
 
-def _resolve_metric(path: str) -> str | None:
-    """Find the usage metric for a given path."""
-    for prefix, metric in ROUTE_METRIC_MAP.items():
+def _resolve_gauge(path: str) -> str | None:
+    """Find the enforced resource gauge for a given path."""
+    for prefix, metric in ENFORCED_GAUGE_MAP.items():
         if path.startswith(prefix):
             return metric
     return None
 
 
-def _min_plan_for_feature(feature: str) -> str:
-    """Return the minimum plan tier name that includes a feature."""
-    for tier in [PlanTier.STARTER, PlanTier.PROFESSIONAL, PlanTier.ENTERPRISE]:
-        if check_feature(get_plan_limits(tier), feature):
-            return tier.value.capitalize()
-    return "Enterprise"
+def _resolve_analytics(path: str) -> str | None:
+    """Find the analytics counter for a given path."""
+    for prefix, metric in ANALYTICS_METRIC_MAP.items():
+        if path.startswith(prefix):
+            return metric
+    return None

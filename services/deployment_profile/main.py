@@ -26,17 +26,20 @@ from enum import Enum
 from typing import Any, AsyncGenerator
 
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from marty_common.dto import DeleteResponse
 from pydantic import BaseModel, Field
 from typing import Annotated
 
 from marty_common import (
-    OrganizationClient,
     OrganizationContext,
     require_org_membership,
 )
 from marty_common.org_authorization import get_organization_client
 from marty_common.middleware import RequestIdMiddleware, RequestLoggingMiddleware
+from marty_common.service_setup import create_service_app
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -387,9 +390,9 @@ class BrandingConfigurationModel(BaseModel):
 
 
 class CreateDeploymentProfileRequest(BaseModel):
-    organization_id: str
-    name: str
-    description: str | None = None
+    organization_id: str = Field(min_length=1, max_length=255)
+    name: str = Field(min_length=1, max_length=255)
+    description: str | None = Field(None, max_length=2000)
     environment: str = "development"
     trust_profile_id: str | None = None
     presentation_policy_ids: list[str] = Field(default_factory=list)
@@ -417,8 +420,8 @@ class CreateDeploymentProfileRequest(BaseModel):
 
 
 class UpdateDeploymentProfileRequest(BaseModel):
-    name: str | None = None
-    description: str | None = None
+    name: str | None = Field(None, min_length=1, max_length=255)
+    description: str | None = Field(None, max_length=2000)
     trust_profile_id: str | None = None
     presentation_policy_ids: list[str] | None = None
     credential_template_ids: list[str] | None = None
@@ -448,6 +451,7 @@ class DeploymentProfileResponse(BaseModel):
     organization_id: str
     name: str
     description: str | None = None
+    status: str = "draft"
     site_id: str | None = None
     trust_profile_id: str | None = None
     presentation_policy_ids: list[str] = Field(default_factory=list)
@@ -476,8 +480,8 @@ class ApiKeyResponse(BaseModel):
 
 
 class CreateLaneRequest(BaseModel):
-    name: str
-    description: str | None = None
+    name: str = Field(min_length=1, max_length=255)
+    description: str | None = Field(None, max_length=2000)
     location: str | None = None
     device_type: str = "kiosk"
     default_policy_id: str | None = None
@@ -485,8 +489,8 @@ class CreateLaneRequest(BaseModel):
 
 
 class UpdateLaneRequest(BaseModel):
-    name: str | None = None
-    description: str | None = None
+    name: str | None = Field(None, min_length=1, max_length=255)
+    description: str | None = Field(None, max_length=2000)
     location: str | None = None
     device_type: str | None = None
     default_policy_id: str | None = None
@@ -497,6 +501,9 @@ class LaneResponse(BaseModel):
     id: str
     name: str
     deployment_profile_id: str
+    description: str | None = None
+    location: str | None = None
+    device_type: str = "kiosk"
     default_policy_id: str | None = None
     device_ids: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -731,6 +738,8 @@ async def create_deployment_profile(
 @router.get("", response_model=list[DeploymentProfileResponse], response_model_exclude_none=True)
 async def list_deployment_profiles(
     organization_id: str = Query(..., description="Organization ID"),
+    limit: int = Query(default=100, le=500, description="Max items to return"),
+    offset: int = Query(default=0, ge=0, description="Number of items to skip"),
     user_id: str = Depends(get_current_user_id),
     repo: InMemoryDeploymentProfileRepository = Depends(get_repo),
 ) -> list[DeploymentProfileResponse]:
@@ -738,6 +747,7 @@ async def list_deployment_profiles(
     # Verify org membership
     await app.state.org_client.get_membership(user_id, organization_id)
     profiles = await repo.list(organization_id)
+    profiles = profiles[offset:offset + limit]
     lane_repo = get_lane_repo()
     return [_profile_to_response(p, await lane_repo.list(p.id)) for p in profiles]
 
@@ -923,12 +933,12 @@ async def generate_api_key(
     )
 
 
-@router.delete("/{profile_id}")
+@router.delete("/{profile_id}", response_model=DeleteResponse)
 async def delete_deployment_profile(
     profile_id: str,
     user_id: str = Depends(get_current_user_id),
     repo: InMemoryDeploymentProfileRepository = Depends(get_repo),
-) -> dict:
+) -> DeleteResponse:
     """Delete a Deployment Profile (requires admin)."""
     profile = await repo.get(profile_id)
     if not profile:
@@ -944,8 +954,18 @@ async def delete_deployment_profile(
             status_code=400,
             detail="Cannot delete an active profile. Suspend it first."
         )
+
+    # Cascade check: reject if profile still has lanes
+    lane_repo = get_lane_repo()
+    lanes = await lane_repo.list(profile_id)
+    if lanes:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot delete profile with {len(lanes)} lane(s). Remove all lanes first."
+        )
+
     await repo.delete(profile_id)
-    return {"success": True}
+    return DeleteResponse()
 
 
 def _profile_to_response(profile: DeploymentProfile, lanes: list[Lane] | None = None) -> DeploymentProfileResponse:
@@ -954,6 +974,7 @@ def _profile_to_response(profile: DeploymentProfile, lanes: list[Lane] | None = 
         organization_id=profile.organization_id,
         name=profile.name,
         description=profile.description,
+        status=profile.status.value if hasattr(profile.status, 'value') else str(profile.status),
         site_id=profile.site_id,
         trust_profile_id=profile.trust_profile_id,
         presentation_policy_ids=profile.presentation_policy_ids,
@@ -981,6 +1002,9 @@ def _lane_to_response(lane: Lane) -> LaneResponse:
         id=lane.id,
         name=lane.name,
         deployment_profile_id=lane.deployment_profile_id,
+        description=lane.description,
+        location=lane.location,
+        device_type=lane.device_type,
         default_policy_id=lane.default_policy_id,
         device_ids=lane.device_ids,
         metadata=lane.metadata,
@@ -1029,6 +1053,8 @@ async def create_lane(
 @router.get("/{profile_id}/lanes", response_model=list[LaneResponse], response_model_exclude_none=True)
 async def list_lanes(
     profile_id: str,
+    limit: int = Query(default=100, le=500, description="Max items to return"),
+    offset: int = Query(default=0, ge=0, description="Number of items to skip"),
     user_id: str = Depends(get_current_user_id),
     repo: InMemoryDeploymentProfileRepository = Depends(get_repo),
     lane_repo: InMemoryLaneRepository = Depends(get_lane_repo),
@@ -1039,7 +1065,7 @@ async def list_lanes(
         raise HTTPException(status_code=404, detail="Deployment Profile not found")
     await app.state.org_client.get_membership(user_id, profile.organization_id)
     lanes = await lane_repo.list(profile_id)
-    return [_lane_to_response(l) for l in lanes]
+    return [_lane_to_response(l) for l in lanes[offset:offset + limit]]
 
 
 @router.get("/{profile_id}/lanes/{lane_id}", response_model=LaneResponse, response_model_exclude_none=True)
@@ -1097,14 +1123,14 @@ async def update_lane(
     return _lane_to_response(lane)
 
 
-@router.delete("/{profile_id}/lanes/{lane_id}")
+@router.delete("/{profile_id}/lanes/{lane_id}", response_model=DeleteResponse)
 async def delete_lane(
     profile_id: str,
     lane_id: str,
     user_id: str = Depends(get_current_user_id),
     repo: InMemoryDeploymentProfileRepository = Depends(get_repo),
     lane_repo: InMemoryLaneRepository = Depends(get_lane_repo),
-) -> dict:
+) -> DeleteResponse:
     """Delete a Lane."""
     profile = await repo.get(profile_id)
     if not profile:
@@ -1115,8 +1141,16 @@ async def delete_lane(
     lane = await lane_repo.get(lane_id)
     if not lane or lane.deployment_profile_id != profile_id:
         raise HTTPException(status_code=404, detail="Lane not found")
+
+    # Cascade check: reject if devices are assigned to the lane
+    if hasattr(lane, "assigned_devices") and lane.assigned_devices:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot delete lane with {len(lane.assigned_devices)} assigned device(s). Unassign devices first."
+        )
+
     await lane_repo.delete(lane_id)
-    return {"success": True}
+    return DeleteResponse()
 
 
 @router.post("/{profile_id}/lanes/{lane_id}/devices")
@@ -1163,46 +1197,33 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     _lane_repo = InMemoryLaneRepository()
     
     # Initialize gRPC channel to organization service
-    from common.grpc_factory import create_grpc_channel
-    org_grpc_target = os.environ.get("ORG_GRPC_TARGET", "organization:9002")
-    org_grpc_channel = create_grpc_channel(org_grpc_target, service_name="deployment-profile")
-    app.state.org_client = OrganizationClient(
-        grpc_channel=org_grpc_channel,
-    )
+    from common.di import setup_org_client, teardown_org_client
+    await setup_org_client(app, "deployment-profile")
     
     yield
     logger.info(f"Shutting down {SERVICE_NAME}...")
-    await org_grpc_channel.close()
+    await teardown_org_client(app)
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(
+    app = create_service_app(
         title="Deployment Profile Service",
         description="Manages Deployment Profiles - runtime configuration",
-        version="1.0.0",
+        service_name=SERVICE_NAME,
         lifespan=lifespan,
+        routers=[router],
     )
-    
-    app.add_middleware(RequestLoggingMiddleware)
-    app.add_middleware(RequestIdMiddleware)
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-    
-    app.include_router(router)
-    
-    @app.get("/health")
-    async def health_check() -> dict:
-        return {"status": "healthy", "service": SERVICE_NAME}
 
-    from common.metrics import init_otel_tracing, mount_metrics
-    init_otel_tracing(SERVICE_NAME)
-    mount_metrics(app)
-    
+    @app.exception_handler(RequestValidationError)
+    async def validation_exception_handler(request: Request, exc: RequestValidationError):
+        logger.warning("Validation error on %s %s: %s", request.method, request.url.path, exc.errors())
+        return JSONResponse(status_code=400, content={"detail": exc.errors()})
+
+    @app.exception_handler(Exception)
+    async def unhandled_exception_handler(request: Request, exc: Exception):
+        logger.exception("Unhandled error on %s %s", request.method, request.url.path)
+        return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+
     return app
 
 

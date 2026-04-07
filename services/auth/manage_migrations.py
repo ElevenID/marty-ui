@@ -13,7 +13,7 @@ from pathlib import Path
 service_root = Path(__file__).parent
 sys.path.insert(0, str(service_root))
 
-from mmf.framework.infrastructure.migration import AlembicMigrationAdapter
+from marty_common.migration import AlembicMigrationAdapter
 from infrastructure.models import mapper_registry
 
 # Configuration

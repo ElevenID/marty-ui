@@ -479,10 +479,12 @@ async def list_members(
     org_id: str,
     org_ctx: OrganizationContext = Depends(require_org_membership),
     use_case: MemberUseCase = Depends(get_member_use_case),
+    limit: int = Query(default=100, le=500),
+    offset: int = Query(default=0, ge=0),
 ) -> list[MemberResponse]:
     """List all members of an organization. Requires membership."""
     members = await use_case.list_members(org_id)
-    return [_member_to_response(m) for m in members]
+    return [_member_to_response(m) for m in members[offset:offset + limit]]
 
 
 @router.post("/{org_id}/members", response_model=MemberResponse, response_model_exclude_none=True)
@@ -583,10 +585,12 @@ async def list_api_keys(
     org_id: str,
     org_ctx: OrganizationContext = Depends(require_org_membership),
     use_case: ApiKeyUseCase = Depends(get_api_key_use_case),
+    limit: int = Query(default=100, le=500),
+    offset: int = Query(default=0, ge=0),
 ) -> list[ApiKeyResponse]:
     """List all API keys for an organization. Requires admin or owner role."""
     keys = await use_case.list_api_keys(org_id)
-    return [_api_key_to_response(k) for k in keys]
+    return [_api_key_to_response(k) for k in keys[offset:offset + limit]]
 
 
 @router.post("/{org_id}/api-keys", response_model=ApiKeyCreatedResponse, response_model_exclude_none=True)

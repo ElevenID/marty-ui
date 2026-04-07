@@ -34,6 +34,9 @@ COPY longfellow-zk/lib ./longfellow-zk/lib
 COPY marty-credentials/Cargo.toml marty-credentials/Cargo.lock ./marty-credentials/
 COPY marty-credentials/rust ./marty-credentials/rust
 
+# Patch git dependencies to use local marty-core checkout
+RUN printf '\n[patch."https://github.com/ElevenID/marty-core.git"]\nmarty-crypto = { path = "../marty-core/marty-crypto" }\nmarty-verification = { path = "../marty-core/marty-verification" }\nmarty-oid4vci = { path = "../marty-core/marty-oid4vci" }\n' >> /build/marty-credentials/Cargo.toml
+
 # Build the Python wheel for marty-rs bindings
 WORKDIR /build/marty-credentials/rust/marty-rs
 RUN CXX=clang++ CC=clang maturin build --release --features python --out /wheels

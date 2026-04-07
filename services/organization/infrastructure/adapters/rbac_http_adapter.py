@@ -10,7 +10,7 @@ import logging
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from marty_common import OrganizationContext, require_org_membership
 
 from ...application.ports import (
@@ -66,17 +66,17 @@ class RoleSummaryResponse(BaseModel):
 
 
 class CreateRoleRequest(BaseModel):
-    name: str
-    display_name: str | None = None
-    description: str | None = None
+    name: str = Field(min_length=1, max_length=255)
+    display_name: str | None = Field(None, max_length=255)
+    description: str | None = Field(None, max_length=2000)
     permission_ids: list[str] = []
     permission_keys: list[str] = []  # Backward compatibility: ["resource:action", ...]
     is_default_for_new_members: bool = False
 
 
 class UpdateRoleRequest(BaseModel):
-    display_name: str | None = None
-    description: str | None = None
+    display_name: str | None = Field(None, max_length=255)
+    description: str | None = Field(None, max_length=2000)
     permission_ids: list[str] | None = None
     permission_keys: list[str] | None = None  # Backward compatibility: ["resource:action", ...]
     is_default_for_new_members: bool | None = None

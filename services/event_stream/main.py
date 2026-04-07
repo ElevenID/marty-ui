@@ -14,6 +14,7 @@ from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
 from fastapi import FastAPI
+from marty_common.service_setup import create_service_app
 
 logger = logging.getLogger(__name__)
 
@@ -55,21 +56,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 
 def create_app() -> FastAPI:
-    from common.metrics import init_otel_tracing, mount_metrics
-
-    app = FastAPI(
+    return create_service_app(
         title="Marty Event Stream Service",
-        version="1.0.0",
+        service_name=SERVICE_NAME,
         lifespan=lifespan,
     )
-    mount_metrics(app)
-    init_otel_tracing(SERVICE_NAME)
-
-    @app.get("/health")
-    async def health():
-        return {"status": "ok", "service": SERVICE_NAME}
-
-    return app
 
 
 app = create_app()

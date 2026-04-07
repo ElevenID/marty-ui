@@ -63,6 +63,26 @@ class ScimPatchRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
 
+class ScimUserPayload(BaseModel):
+    """Validated SCIM 2.0 User resource payload (RFC 7643 §4.1)."""
+    schemas: list[str] = Field(default_factory=lambda: [SCIM_USER_SCHEMA])
+    userName: str | None = None
+    externalId: str | None = None
+    active: bool = True
+    emails: list[dict[str, Any]] | None = None
+
+    model_config = ConfigDict(extra="allow")
+
+
+class ScimGroupPayload(BaseModel):
+    """Validated SCIM 2.0 Group resource payload (RFC 7643 §4.2)."""
+    schemas: list[str] = Field(default_factory=lambda: [SCIM_GROUP_SCHEMA])
+    displayName: str | None = None
+    members: list[dict[str, Any]] | None = None
+
+    model_config = ConfigDict(extra="allow")
+
+
 async def get_current_user_id(
     x_user_id: Annotated[str | None, Header(alias="X-User-Id")] = None,
 ) -> str:
@@ -478,13 +498,14 @@ async def list_users(
 @router.post("/Users", status_code=201)
 async def create_user(
     organization_id: str,
-    payload: dict[str, Any] = Body(...),
+    payload: ScimUserPayload,
     user_id: str = Depends(get_current_user_id),
     org_ctx: OrganizationContext = Depends(require_org_membership),
     member_use_case: MemberUseCase = Depends(get_member_use_case),
     role_use_case: RoleUseCase = Depends(get_role_use_case),
 ) -> Any:
-    email = _extract_primary_email(payload)
+    payload_dict = payload.model_dump(by_alias=True, exclude_unset=False)
+    email = _extract_primary_email(payload_dict)
     if not email:
         return _scim_error(400, "userName is required", "invalidValue")
 
@@ -492,16 +513,16 @@ async def create_user(
     if existing:
         return _scim_error(409, "userName already exists in this organization", "uniqueness")
 
-    extension = payload.get(SCIM_USER_EXTENSION_SCHEMA) or {}
+    extension = payload_dict.get(SCIM_USER_EXTENSION_SCHEMA) or {}
     if extension.get("is_owner"):
         return _scim_error(400, "Ownership cannot be assigned via SCIM", "mutability")
 
     member = Member.create(
         organization_id=organization_id,
-        user_id=str(payload.get("externalId") or email),
+        user_id=str(payload_dict.get("externalId") or email),
         email=email,
         role=MemberRole.MEMBER,
-        status=MemberStatus.ACTIVE if payload.get("active", True) else MemberStatus.DEACTIVATED,
+        status=MemberStatus.ACTIVE if payload_dict.get("active", True) else MemberStatus.DEACTIVATED,
     )
     member.updated_at = _now()
     await member_use_case.member_repo.save(member)
@@ -544,7 +565,7 @@ async def get_user(
 async def replace_user(
     organization_id: str,
     member_id: str,
-    payload: dict[str, Any] = Body(...),
+    payload: ScimUserPayload,
     user_id: str = Depends(get_current_user_id),
     org_ctx: OrganizationContext = Depends(require_org_membership),
     member_use_case: MemberUseCase = Depends(get_member_use_case),
@@ -554,7 +575,8 @@ async def replace_user(
     if error:
         return error
 
-    email = _extract_primary_email(payload)
+    payload_dict = payload.model_dump(by_alias=True, exclude_unset=False)
+    email = _extract_primary_email(payload_dict)
     if not email:
         return _scim_error(400, "userName is required", "invalidValue")
 
@@ -562,17 +584,17 @@ async def replace_user(
     if existing and existing.id != member.id:
         return _scim_error(409, "userName already exists in this organization", "uniqueness")
 
-    extension = payload.get(SCIM_USER_EXTENSION_SCHEMA) or {}
+    extension = payload_dict.get(SCIM_USER_EXTENSION_SCHEMA) or {}
     if extension.get("is_owner"):
         return _scim_error(400, "Ownership cannot be assigned via SCIM", "mutability")
 
-    requested_active = bool(payload.get("active", True))
+    requested_active = bool(payload_dict.get("active", True))
     current_roles = await role_use_case.get_member_roles(member.id)
     if _member_is_owner(member, current_roles) and not requested_active:
         return _scim_error(400, "Organization owner cannot be deprovisioned via SCIM", "mutability")
 
     member.email = email
-    member.user_id = str(payload.get("externalId") or member.user_id or email)
+    member.user_id = str(payload_dict.get("externalId") or member.user_id or email)
     member.status = MemberStatus.ACTIVE if requested_active else MemberStatus.DEACTIVATED
     member.updated_at = _now()
     await member_use_case.member_repo.save(member)
@@ -735,17 +757,18 @@ async def list_groups(
 @router.post("/Groups", status_code=201)
 async def create_group(
     organization_id: str,
-    payload: dict[str, Any] = Body(...),
+    payload: ScimGroupPayload,
     user_id: str = Depends(get_current_user_id),
     org_ctx: OrganizationContext = Depends(require_org_membership),
     member_use_case: MemberUseCase = Depends(get_member_use_case),
     role_use_case: RoleUseCase = Depends(get_role_use_case),
 ) -> Any:
-    display_name = payload.get("displayName")
+    payload_dict = payload.model_dump(by_alias=True, exclude_unset=False)
+    display_name = payload_dict.get("displayName")
     if not display_name:
         return _scim_error(400, "displayName is required", "invalidValue")
 
-    extension = payload.get(SCIM_ROLE_EXTENSION_SCHEMA) or {}
+    extension = payload_dict.get(SCIM_ROLE_EXTENSION_SCHEMA) or {}
     permission_keys = extension.get("permissions") or []
     if not isinstance(permission_keys, list):
         return _scim_error(400, "permissions must be a list", "invalidValue")
@@ -767,7 +790,7 @@ async def create_group(
     except ValueError as exc:
         return _scim_error(409, str(exc), "uniqueness")
 
-    members_payload = payload.get("members") or []
+    members_payload = payload_dict.get("members") or []
     for member_ref in members_payload:
         member = await member_use_case.member_repo.get_by_id(str(member_ref.get("value")))
         if not member or member.organization_id != organization_id:
@@ -804,7 +827,7 @@ async def get_group(
 async def replace_group(
     organization_id: str,
     role_id: str,
-    payload: dict[str, Any] = Body(...),
+    payload: ScimGroupPayload,
     user_id: str = Depends(get_current_user_id),
     org_ctx: OrganizationContext = Depends(require_org_membership),
     member_use_case: MemberUseCase = Depends(get_member_use_case),
@@ -816,11 +839,12 @@ async def replace_group(
     if role.is_system:
         return _scim_error(400, "System roles cannot be modified via SCIM", "mutability")
 
-    display_name = payload.get("displayName")
+    payload_dict = payload.model_dump(by_alias=True, exclude_unset=False)
+    display_name = payload_dict.get("displayName")
     if not display_name:
         return _scim_error(400, "displayName is required", "invalidValue")
 
-    extension = payload.get(SCIM_ROLE_EXTENSION_SCHEMA) or {}
+    extension = payload_dict.get(SCIM_ROLE_EXTENSION_SCHEMA) or {}
     permission_keys = extension.get("permissions") or []
     if not isinstance(permission_keys, list):
         return _scim_error(400, "permissions must be a list", "invalidValue")
@@ -843,7 +867,7 @@ async def replace_group(
         return _scim_error(400, str(exc), "invalidValue")
 
     existing_member_ids = set(await role_use_case.role_repo.get_members_with_role(role.id))
-    desired_member_ids = {str(member_ref.get("value")) for member_ref in (payload.get("members") or []) if member_ref.get("value")}
+    desired_member_ids = {str(member_ref.get("value")) for member_ref in (payload_dict.get("members") or []) if member_ref.get("value")}
 
     for member_id in desired_member_ids - existing_member_ids:
         member = await member_use_case.member_repo.get_by_id(member_id)

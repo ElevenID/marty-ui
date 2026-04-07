@@ -31,8 +31,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from typing import Annotated
-from marty_common import OrganizationClient, OrganizationContext, require_org_membership
+from marty_common import OrganizationContext, require_org_membership
 from marty_common.middleware import RequestIdMiddleware, RequestLoggingMiddleware
+from marty_common.service_setup import create_service_app
 
 from credential_template.infrastructure.adapters import (
     PostgresCredentialTemplateRepository,
@@ -90,39 +91,12 @@ class ClaimType(str, Enum):
     BINARY = "binary"
 
 
-class CredentialFormat(str, Enum):
-    """Supported credential formats.
-    Maps to marty-protocol enum: credential-formats.json
-    """
-    MDOC = "MDOC"
-    SD_JWT_VC = "SD_JWT_VC"
-    VC_JWT = "VC_JWT"
-    JSON_LD = "JSON_LD"
-    ZK_MDOC = "ZK_MDOC"
-
-
-# Wire-format aliases from marty-protocol credential-formats.json
-_FORMAT_ALIASES: dict[str, str] = {
-    "mso_mdoc": "MDOC", "mdoc": "MDOC",
-    "dc+sd-jwt": "SD_JWT_VC", "vc+sd-jwt": "SD_JWT_VC",
-    "spruce-vc+sd-jwt": "SD_JWT_VC", "sd_jwt_vc": "SD_JWT_VC", "sd-jwt": "SD_JWT_VC",
-    "jwt_vc_json": "VC_JWT", "jwt_vc": "VC_JWT", "jwt_vc_json-ld": "VC_JWT",
-    "ldp_vc": "JSON_LD",
-    "zk_mdoc": "ZK_MDOC", "zk-mdoc": "ZK_MDOC", "zkp_mdoc": "ZK_MDOC",
-}
+from marty_common.domain_enums import CredentialFormat, parse_credential_format  # noqa: E402
 
 
 def normalize_credential_format(value: str) -> CredentialFormat:
     """Accept canonical names, upper/lower variants, and OID4VCI wire aliases."""
-    upper = value.upper()
-    try:
-        return CredentialFormat(upper)
-    except ValueError:
-        pass
-    canonical = _FORMAT_ALIASES.get(value) or _FORMAT_ALIASES.get(value.lower())
-    if canonical:
-        return CredentialFormat(canonical)
-    raise ValueError(f"'{value}' is not a valid CredentialFormat")
+    return parse_credential_format(value)
 
 
 # Primary wire-format names used in API responses (matches OID4VCI/test expectations)
@@ -153,6 +127,7 @@ _PAYLOAD_FORMAT_ALIASES: dict[str, str] = {
     "jwt_vc": CredentialFormat.VC_JWT.value,
     "jwt_vc_json": CredentialFormat.VC_JWT.value,
     "jwt_vc_json-ld": CredentialFormat.VC_JWT.value,
+    "w3c_vcdm_v2_jwt_vc": CredentialFormat.VC_JWT.value,
     "json_ld": CredentialFormat.JSON_LD.value,
     "json-ld": CredentialFormat.JSON_LD.value,
     "ldp_vc": CredentialFormat.JSON_LD.value,
@@ -503,6 +478,46 @@ SYSTEM_WALLET_CATALOG: tuple[WalletRegistryEntry, ...] = (
         supported_formats=["sd_jwt_vc", "mdoc"],
         platforms=["ios", "android"],
     ),
+    WalletRegistryEntry(
+        id="wr-google-001",
+        name="Google Wallet",
+        description="Google Wallet via Android CredentialManager API.",
+        wallet_apps=["Google Wallet"],
+        specifications=["OID4VCI", "CredentialManager"],
+        logo_url="https://wallet.google/favicon.ico",
+        supported_formats=["dc+sd-jwt"],
+        supported_protocols=["CREDENTIAL_MANAGER"],
+        platforms=["android"],
+        deep_link_template="openid-credential-offer://?credential_offer={offer}",
+        docs_url="https://developer.android.com/identity/digital-credentials",
+    ),
+    WalletRegistryEntry(
+        id="wr-apple-001",
+        name="Apple Wallet",
+        description="Apple Wallet via Verify with Wallet / ISO 18013-5 issuance.",
+        wallet_apps=["Apple Wallet"],
+        specifications=["OID4VCI", "ISO 18013-5"],
+        logo_url="https://www.apple.com/favicon.ico",
+        supported_formats=["mso_mdoc"],
+        supported_protocols=["APPLE_WALLET"],
+        platforms=["ios"],
+        deep_link_template="openid-credential-offer://?credential_offer={offer}",
+        docs_url="https://developer.apple.com/documentation/passkit/wallet",
+    ),
+    WalletRegistryEntry(
+        id="wr-didcomm-001",
+        name="DIDComm V2 Agent",
+        description="Push credential delivery via DIDComm v2 messaging. Resolves holder DID to find service endpoint.",
+        wallet_apps=["DIDComm V2 Agent"],
+        specifications=["DIDComm v2", "DIF DIDComm Messaging"],
+        supported_formats=["sd_jwt_vc", "jwt_vc", "mso_mdoc"],
+        supported_protocols=["DIDCOMM_V2"],
+        platforms=["any"],
+        supports_qr=False,
+        supports_deeplink=False,
+        deep_link_template="",
+        docs_url="https://identity.foundation/didcomm-messaging/spec/v2.1/",
+    ),
 )
 
 
@@ -714,10 +729,10 @@ class DerivedAttributeModel(BaseModel):
 
 
 class CreateCredentialTemplateRequest(BaseModel):
-    organization_id: str
-    name: str
-    description: str | None = None
-    credential_type: str
+    organization_id: str = Field(min_length=1, max_length=255)
+    name: str = Field(min_length=1, max_length=255)
+    description: str | None = Field(None, max_length=2000)
+    credential_type: str = Field(min_length=1, max_length=255)
     vct: str | None = None
     doctype: str | None = None
     claims: list[ClaimDefinitionModel] = []
@@ -735,13 +750,13 @@ class CreateCredentialTemplateRequest(BaseModel):
     # Wallet compatibility
     wallet_configs: list[dict] = []
     issuance_protocol: str = "oid4vci"
-    credential_payload_format: str = "w3c_vcdm_v2_sd_jwt"
+    credential_payload_format: str | None = None
     schema_uri: dict | None = None
 
 
 class UpdateCredentialTemplateRequest(BaseModel):
-    name: str | None = None
-    description: str | None = None
+    name: str | None = Field(None, min_length=1, max_length=255)
+    description: str | None = Field(None, max_length=2000)
     claims: list[ClaimDefinitionModel] | None = None
     privacy_posture: str | None = None
     selective_disclosure_fields: list[str] | None = None
@@ -767,6 +782,8 @@ class CredentialTemplateResponse(BaseModel):
     compliance_profile_id: str | None = None
     vct: str | None = None
     credential_payload_format: str | None = None
+    supported_formats: list[str] = []
+    zk_predicate_claims: list[str] = []
     application_template_id: str | None = None
     trust_profile_id: str | None = None
     revocation_profile_id: str | None = None
@@ -779,6 +796,7 @@ class CredentialTemplateResponse(BaseModel):
     issuer_did: str | None = None
     auto_generate_artifacts: bool = False
     privacy_posture: dict | None = None
+    wallet_configs: list[dict] = Field(default_factory=list)
     created_at: str
     updated_at: str
 
@@ -971,12 +989,15 @@ async def create_credential_template(
     """
     await require_org_membership(body.organization_id, request, user_id)
 
-    # MIP §6.2 — credential_type MUST be PascalCase: ^[A-Z][a-zA-Z0-9]+$
+    # MIP §6.2 — credential_type MUST be PascalCase OR a reverse-domain doctype
+    # PascalCase: "EmployeeBadge", "VerifiableId"
+    # Reverse-domain (ISO mdoc): "org.iso.18013.5.1.mDL"
     import re as _re
-    if not _re.fullmatch(r"[A-Z][a-zA-Z0-9]+", body.credential_type):
+    _CREDENTIAL_TYPE_RE = r"[A-Z][a-zA-Z0-9]+|[a-z][a-zA-Z0-9]*(\.[a-zA-Z0-9]+)+"
+    if not _re.fullmatch(_CREDENTIAL_TYPE_RE, body.credential_type):
         raise HTTPException(
             status_code=422,
-            detail=f"credential_type must be PascalCase (^[A-Z][a-zA-Z0-9]+$), got: {body.credential_type}",
+            detail=f"credential_type must be PascalCase or reverse-domain notation, got: {body.credential_type}",
         )
 
     # MIP §6.2 — claims MUST have ≥1 entry
@@ -1084,13 +1105,15 @@ async def list_credential_templates(
     request: Request = None,
     user_id: str = Depends(get_current_user_id),
     repo: InMemoryCredentialTemplateRepository = Depends(get_repo),
+    limit: int = Query(default=100, le=500),
+    offset: int = Query(default=0, ge=0),
 ) -> list[CredentialTemplateResponse]:
     """List Credential Templates for an organization. Requires organization membership."""
     await require_org_membership(organization_id, request, user_id)
 
     status_filter = TemplateStatus(status) if status else None
     templates = await repo.list(organization_id, status_filter)
-    return [_template_to_response(t) for t in templates]
+    return [_template_to_response(t) for t in templates[offset:offset + limit]]
 
 
 @router.get("/{template_id}", response_model=CredentialTemplateResponse, response_model_exclude_none=True)
@@ -1291,6 +1314,8 @@ def _template_to_response(template: CredentialTemplate) -> CredentialTemplateRes
         compliance_profile_id=template.compliance_profile_id,
         vct=template.vct or None,
         credential_payload_format=canonical_payload_format,
+        supported_formats=[f.value for f in template.supported_formats],
+        zk_predicate_claims=template.zk_predicate_claims or [],
         application_template_id=template.application_template_id,
         trust_profile_id=template.trust_profile_id,
         revocation_profile_id=template.revocation_profile_id,
@@ -1330,6 +1355,10 @@ def _template_to_response(template: CredentialTemplate) -> CredentialTemplateRes
             **({"not_before_offset_seconds": template.validity_rules.not_before_offset_seconds} if template.validity_rules.not_before_offset_seconds else {}),
         },
         privacy_posture=privacy_posture,
+        wallet_configs=[
+            {k: v for k, v in {"wallet_id": wc.wallet_id, "deep_link_scheme": wc.deep_link_scheme, "format_variant": wc.format_variant}.items() if v is not None}
+            for wc in template.wallet_configs
+        ],
         created_at=template.created_at.isoformat(),
         updated_at=template.updated_at.isoformat(),
     )
@@ -1403,7 +1432,12 @@ def _validate_template_protocol_requirements(
             detail="vct is required when credential_payload_format resolves to SD_JWT_VC",
         )
     # MIP §6.2 — vct MUST be an absolute URI per SD-JWT-VC §3.2.1
-    if vct and str(vct).strip() and "://" not in str(vct):
+    # Only enforced for SD-JWT-VC format; mDoc doctypes use reverse-domain notation
+    if (
+        credential_payload_format == CredentialFormat.SD_JWT_VC.value
+        and vct and str(vct).strip()
+        and "://" not in str(vct)
+    ):
         raise HTTPException(
             status_code=422,
             detail=f"vct must be an absolute URI (e.g. https://…), got: {vct}",
@@ -1860,8 +1894,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     config = get_config()
     
     # Initialize database
-    engine = create_async_engine(config["database_url"], echo=False)
-    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    from marty_common.database import DatabaseManager, DatabaseConfig
+    db = DatabaseManager(DatabaseConfig.from_env("credential-template"))
+    session_factory = db.session_factory
     
     # Initialize repository
     _repo = PostgresCredentialTemplateRepository(session_factory)
@@ -1874,14 +1909,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             await _wallet_repo.save(WalletRegistryEntry(**entry.__dict__))
     
     # Initialize gRPC channel to organization service
-    from common.grpc_factory import create_grpc_channel, create_grpc_server, start_grpc_server_port
-    org_grpc_target = os.environ.get("ORG_GRPC_TARGET", "organization:9002")
-    org_grpc_channel = create_grpc_channel(org_grpc_target, service_name="credential-template")
-    app.state.org_client = OrganizationClient(
-        grpc_channel=org_grpc_channel,
-    )
+    from common.di import setup_org_client, teardown_org_client
+    await setup_org_client(app, "credential-template")
     
     # Start gRPC server
+    from common.grpc_factory import create_grpc_server, start_grpc_server_port
     from credential_template.infrastructure.adapters.grpc_adapter import (
         CredentialTemplateServiceGrpc,
     )
@@ -1910,42 +1942,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     
     logger.info(f"Shutting down {SERVICE_NAME}...")
     await grpc_server.stop(grace=5)
-    await org_grpc_channel.close()
+    await teardown_org_client(app)
+    await db.close()
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(
+    return create_service_app(
         title="Credential Template Service",
         description="Manages Credential Templates - blueprints for credential issuance",
-        version="1.0.0",
+        service_name=SERVICE_NAME,
         lifespan=lifespan,
+        routers=[router, wallet_router, internal_router],
     )
-    
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-    
-    # Add request middleware
-    app.add_middleware(RequestLoggingMiddleware, service_name=SERVICE_NAME)
-    app.add_middleware(RequestIdMiddleware)
-    
-    app.include_router(router)
-    app.include_router(wallet_router)
-    app.include_router(internal_router)
-    
-    @app.get("/health")
-    async def health_check() -> dict:
-        return {"status": "healthy", "service": SERVICE_NAME}
-
-    from common.metrics import init_otel_tracing, mount_metrics
-    init_otel_tracing(SERVICE_NAME)
-    mount_metrics(app)
-    
-    return app
 
 
 app = create_app()

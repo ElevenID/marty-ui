@@ -62,7 +62,11 @@ class CedarEngine:
 
     @classmethod
     def with_defaults(cls) -> "CedarEngine":
-        """Create engine with bundled MIP schema and default gateway policies."""
+        """Create engine with bundled MIP schema and default gateway RBAC policies.
+
+        Loads only protocol-standard MIP authorization. Billing/plan-tier
+        feature gating is handled by a separate BillingCedarEngine.
+        """
         schema = (_CEDAR_DIR / "mip.cedarschema").read_text()
         policies = (_CEDAR_DIR / "gateway_policies.cedar").read_text()
         return cls(schema=schema, policies=policies)

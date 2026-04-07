@@ -1,0 +1,385 @@
+{
+  "catalog_version": "2025-07-10-education-v2",
+  "market_segment": "education",
+  "display_labels": {
+    "badge_templates": "Badge templates",
+    "active_flows": "Programs / workflows",
+    "admin_seats": "Admin seats",
+    "issued_credentials": "Badges issued",
+    "verifications": "Badge verifications"
+  },
+  "billing_intervals": {
+    "free": { "months": 0, "discount_pct": 0, "label": "Free" },
+    "monthly": { "months": 1, "discount_pct": 0, "label": "Monthly" },
+    "annual": { "months": 12, "discount_pct": 0, "label": "Annual" },
+    "2_year": { "months": 24, "discount_pct": 10, "label": "2-Year", "badge": "Save 10%" },
+    "3_year": { "months": 36, "discount_pct": 15, "label": "3-Year", "badge": "Save 15%" }
+  },
+  "plans": [
+    {
+      "plan_id": "sandbox",
+      "display_name": "Sandbox",
+      "tagline": "Experiment with Open Badges",
+      "market_segment": "education",
+      "sort_order": 0,
+      "is_public": true,
+      "is_self_serve": true,
+      "is_sellable": false,
+      "recommended_interval": "free",
+      "trial_available": false,
+      "billing": {
+        "monthly_price": 0,
+        "annual_price": 0,
+        "available_intervals": ["free"],
+        "payment_methods": {
+          "free": []
+        }
+      },
+      "entitlements": {
+        "deployments": 1,
+        "verifier_instances": 1,
+        "active_flows": 2,
+        "badge_templates": 2,
+        "admin_seats": 2,
+        "audit_retention_days": 7,
+        "verifications_mode": "fair_use",
+        "issuances_mode": "fair_use",
+        "sandbox_monthly_activity_limit": 5000
+      },
+      "feature_flags": {
+        "open_badge_issuance": true,
+        "badge_verification_page": true,
+        "criteria_evidence_fields": true,
+        "learner_share_pages": true,
+        "custom_branding": false,
+        "webhooks": false,
+        "audit_logs": false,
+        "csv_roster_import": false,
+        "approval_workflow": false,
+        "multi_environment": false,
+        "custom_cedar_policies": false,
+        "remote_signing": false,
+        "scim_provisioning": false,
+        "self_hosted": false,
+        "trust_registry_federation": false,
+        "byok_hsm": false,
+        "zk_verification": true
+      },
+      "key_management": ["dev_vault"],
+      "support_tier": "community",
+      "addons_allowed": [],
+      "contract_rules": {
+        "auto_renew": false,
+        "cancellation_notice_days": 0
+      },
+      "button_text": "Start Free",
+      "highlighted": false
+    },
+    {
+      "plan_id": "program",
+      "display_name": "Program Edition",
+      "tagline": "Your first production credentialing program",
+      "market_segment": "education",
+      "sort_order": 1,
+      "is_public": true,
+      "is_self_serve": true,
+      "is_sellable": true,
+      "recommended_interval": "annual",
+      "trial_available": true,
+      "billing": {
+        "monthly_price": 1250,
+        "annual_price": 12000,
+        "available_intervals": ["monthly", "annual", "2_year", "3_year"],
+        "payment_methods": {
+          "monthly": ["card"],
+          "annual": ["card", "ach", "wire", "po_invoice"],
+          "2_year": ["card", "ach", "wire", "po_invoice"],
+          "3_year": ["card", "ach", "wire", "po_invoice"]
+        }
+      },
+      "entitlements": {
+        "deployments": 1,
+        "verifier_instances": 2,
+        "active_flows": 25,
+        "badge_templates": -1,
+        "admin_seats": 10,
+        "audit_retention_days": 180,
+        "verifications_mode": "unlimited",
+        "issuances_mode": "unlimited"
+      },
+      "feature_flags": {
+        "open_badge_issuance": true,
+        "badge_verification_page": true,
+        "criteria_evidence_fields": true,
+        "learner_share_pages": true,
+        "custom_branding": true,
+        "webhooks": true,
+        "audit_logs": true,
+        "csv_roster_import": true,
+        "approval_workflow": true,
+        "multi_environment": false,
+        "custom_cedar_policies": false,
+        "remote_signing": false,
+        "scim_provisioning": false,
+        "self_hosted": false,
+        "trust_registry_federation": false,
+        "byok_hsm": false,
+        "zk_verification": true
+      },
+      "key_management": ["managed_signing"],
+      "support_tier": "standard",
+      "addons_allowed": [
+        "extra_verifier_instance",
+        "extra_admin_pack_10",
+        "extra_flow_pack_25",
+        "extended_audit_retention",
+        "priority_support_upgrade"
+      ],
+      "contract_rules": {
+        "auto_renew": true,
+        "cancellation_notice_days": 60
+      },
+      "button_text": "Get Started",
+      "highlighted": false
+    },
+    {
+      "plan_id": "institution",
+      "display_name": "Institution Edition",
+      "tagline": "Multi-program credential management",
+      "market_segment": "education",
+      "sort_order": 2,
+      "is_public": true,
+      "is_self_serve": false,
+      "is_sellable": true,
+      "recommended_interval": "annual",
+      "trial_available": false,
+      "billing": {
+        "annual_price": 24000,
+        "available_intervals": ["annual", "2_year", "3_year"],
+        "payment_methods": {
+          "annual": ["ach", "wire", "po_invoice"],
+          "2_year": ["ach", "wire", "po_invoice"],
+          "3_year": ["ach", "wire", "po_invoice"]
+        }
+      },
+      "entitlements": {
+        "deployments": 3,
+        "verifier_instances": 10,
+        "active_flows": 100,
+        "badge_templates": -1,
+        "admin_seats": 50,
+        "audit_retention_days": 365,
+        "verifications_mode": "unlimited",
+        "issuances_mode": "unlimited"
+      },
+      "feature_flags": {
+        "open_badge_issuance": true,
+        "badge_verification_page": true,
+        "criteria_evidence_fields": true,
+        "learner_share_pages": true,
+        "custom_branding": true,
+        "webhooks": true,
+        "audit_logs": true,
+        "csv_roster_import": true,
+        "approval_workflow": true,
+        "multi_environment": true,
+        "custom_cedar_policies": true,
+        "remote_signing": true,
+        "scim_provisioning": false,
+        "self_hosted": false,
+        "trust_registry_federation": false,
+        "byok_hsm": false,
+        "zk_verification": true
+      },
+      "key_management": ["managed_signing", "remote_signing"],
+      "support_tier": "priority",
+      "addons_allowed": [
+        "extra_verifier_instance",
+        "extra_admin_pack_10",
+        "extra_flow_pack_25",
+        "extended_audit_retention"
+      ],
+      "contract_rules": {
+        "auto_renew": true,
+        "cancellation_notice_days": 60
+      },
+      "button_text": "Contact Sales",
+      "highlighted": true
+    },
+    {
+      "plan_id": "system",
+      "display_name": "System Edition",
+      "tagline": "Your credentials, your infrastructure",
+      "market_segment": "education",
+      "sort_order": 3,
+      "is_public": true,
+      "is_self_serve": false,
+      "is_sellable": true,
+      "recommended_interval": "annual",
+      "trial_available": false,
+      "billing": {
+        "annual_price": null,
+        "starting_annual_price": 60000,
+        "available_intervals": ["annual", "2_year", "3_year", "custom_contract"],
+        "payment_methods": {
+          "annual": ["ach", "wire", "po_invoice"],
+          "2_year": ["ach", "wire", "po_invoice"],
+          "3_year": ["ach", "wire", "po_invoice"],
+          "custom_contract": ["ach", "wire", "po_invoice"]
+        }
+      },
+      "entitlements": {
+        "deployments": -1,
+        "verifier_instances": -1,
+        "active_flows": -1,
+        "badge_templates": -1,
+        "admin_seats": -1,
+        "audit_retention_days": null,
+        "verifications_mode": "unlimited",
+        "issuances_mode": "unlimited"
+      },
+      "feature_flags": {
+        "open_badge_issuance": true,
+        "badge_verification_page": true,
+        "criteria_evidence_fields": true,
+        "learner_share_pages": true,
+        "custom_branding": true,
+        "webhooks": true,
+        "audit_logs": true,
+        "csv_roster_import": true,
+        "approval_workflow": true,
+        "multi_environment": true,
+        "custom_cedar_policies": true,
+        "remote_signing": true,
+        "scim_provisioning": true,
+        "self_hosted": true,
+        "trust_registry_federation": true,
+        "byok_hsm": true,
+        "zk_verification": true
+      },
+      "key_management": ["managed_signing", "remote_signing", "hsm", "byok"],
+      "support_tier": "dedicated",
+      "addons_allowed": [],
+      "contract_rules": {
+        "auto_renew": true,
+        "cancellation_notice_days": 60,
+        "custom_terms_allowed": true
+      },
+      "button_text": "Contact Sales",
+      "highlighted": false
+    }
+  ],
+  "addons": [
+    {
+      "sku": "extra_verifier_instance",
+      "display_name": "Extra Verifier Instance",
+      "price_annual": 1500,
+      "entitlement_change": { "verifier_instances": 1 },
+      "entitlement_operation": "increment",
+      "allowed_plan_ids": ["program", "institution"]
+    },
+    {
+      "sku": "extra_admin_pack_10",
+      "display_name": "Admin Seat Pack (+10)",
+      "price_annual": 1200,
+      "entitlement_change": { "admin_seats": 10 },
+      "entitlement_operation": "increment",
+      "allowed_plan_ids": ["program", "institution"]
+    },
+    {
+      "sku": "extra_flow_pack_25",
+      "display_name": "Flow Pack (+25 programs)",
+      "price_annual": 2500,
+      "entitlement_change": { "active_flows": 25 },
+      "entitlement_operation": "increment",
+      "allowed_plan_ids": ["program", "institution"]
+    },
+    {
+      "sku": "extended_audit_retention",
+      "display_name": "Extended Audit Retention (+1 year)",
+      "price_annual": 2000,
+      "entitlement_change": { "audit_retention_days": 365 },
+      "entitlement_operation": "increment",
+      "allowed_plan_ids": ["program", "institution"]
+    },
+    {
+      "sku": "priority_support_upgrade",
+      "display_name": "Priority Support Upgrade",
+      "price_annual": 5000,
+      "entitlement_change": { "support_tier": "priority" },
+      "entitlement_operation": "set",
+      "allowed_plan_ids": ["program"]
+    }
+  ],
+  "onboarding_skus": [
+    {
+      "sku": "onboarding_program",
+      "display_name": "Program Onboarding",
+      "price": 3000,
+      "interval": "one_time",
+      "required": false,
+      "notes": "Optional guided setup for Program Edition",
+      "allowed_plan_ids": ["program"]
+    },
+    {
+      "sku": "onboarding_institution",
+      "display_name": "Institution Onboarding",
+      "price": 8000,
+      "interval": "one_time",
+      "required": false,
+      "notes": "Recommended for Institution Edition",
+      "allowed_plan_ids": ["institution"]
+    },
+    {
+      "sku": "onboarding_system",
+      "display_name": "System Onboarding",
+      "price": 15000,
+      "interval": "one_time",
+      "required": true,
+      "notes": "Required for System Edition — minimum $15,000",
+      "allowed_plan_ids": ["system"]
+    },
+    {
+      "sku": "training_half_day",
+      "display_name": "Half-Day Training",
+      "price": 1500,
+      "interval": "one_time",
+      "required": false,
+      "notes": "Optional",
+      "allowed_plan_ids": ["program", "institution", "system"]
+    },
+    {
+      "sku": "training_full_day",
+      "display_name": "Full-Day Training",
+      "price": 3000,
+      "interval": "one_time",
+      "required": false,
+      "notes": "Optional",
+      "allowed_plan_ids": ["program", "institution", "system"]
+    }
+  ],
+  "enforcement": {
+    "hard_enforced": [
+      "deployments",
+      "verifier_instances",
+      "active_flows",
+      "badge_templates",
+      "admin_seats"
+    ],
+    "hard_limit_behavior": {
+      "action": "block_and_prompt_upgrade",
+      "http_status": 429,
+      "ui_behavior": "upgrade_modal",
+      "error_code": "ENTITLEMENT_LIMIT_REACHED"
+    },
+    "analytics_only": [
+      "verifications",
+      "issued_credentials",
+      "api_calls"
+    ],
+    "sandbox_fair_use": {
+      "monthly_activity_limit": 5000,
+      "action_on_exceed": "upgrade_banner"
+    }
+  }
+}

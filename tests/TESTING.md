@@ -394,20 +394,20 @@ const [response] = await Promise.all([
 - **Email arrival** → Use `expect.poll()` with EmailHelpers
   ```javascript
   // OLD: await page.waitForTimeout(3000);
-  const mailhog = new MailHogHelpers(page);
-  await expect.poll(() => mailhog.getEmailsTo('user@example.com'))
+  const mailpit = new MailpitHelpers(page);
+  await expect.poll(() => mailpit.getEmailsTo('user@example.com'))
     .toHaveLength(1);
   ```
 
 ### 7. Use expect.poll() for Email/External Services
 
 ```javascript
-const { MailHogHelpers } = require('../utils/test-helpers');
+const { MailpitHelpers } = require('../utils/test-helpers');
 
-const mailhog = new MailHogHelpers(page);
+const mailpit = new MailpitHelpers(page);
 
 await expect.poll(async () => {
-  const emails = await mailhog.getEmailsTo('user@example.com');
+  const emails = await mailpit.getEmailsTo('user@example.com');
   return emails.find(e => e.Content?.Headers?.Subject?.[0]?.includes('Verify'));
 }, {
   timeout: 30000,

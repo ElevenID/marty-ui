@@ -24,8 +24,8 @@ COPY . .
 
 # Set environment variables for containerized execution
 ENV CI=true
-ENV TEST_PROVIDER=mailhog
-ENV MAILHOG_URL=http://mailhog:8025
+ENV TEST_PROVIDER=mailpit
+ENV MAILPIT_URL=http://mailpit:8025
 ENV BASE_URL=http://ui:80
 ENV API_URL=http://oid4vc-api:8000
 ENV KEYCLOAK_URL=http://keycloak:8080

@@ -7,8 +7,10 @@ Wires together all components following hexagonal architecture.
 
 from __future__ import annotations
 
+import collections
 import logging
 import os
+import time
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
@@ -16,6 +18,7 @@ import redis.asyncio as redis
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+from marty_common.service_setup import create_service_app
 
 from .application.use_cases import AuthenticateUseCase, SessionUseCase
 from .infrastructure.adapters.grpc_adapter import AuthServiceGrpc
@@ -44,7 +47,12 @@ SERVICE_PORT = int(os.environ.get("AUTH_SERVICE_PORT", "8001"))
 
 def get_config() -> dict:
     """Get service configuration from environment."""
-    realm = os.environ.get("KEYCLOAK_REALM", "11id")
+    realm = os.environ.get("KEYCLOAK_REALM")
+    if not realm:
+        raise ValueError(
+            "KEYCLOAK_REALM environment variable must be set "
+            "(e.g. 'master' or your tenant realm name)"
+        )
     issuer_default = f"http://localhost:8180/realms/{realm}"
     external_default = os.environ.get("OIDC_ISSUER_URL", issuer_default)
     return {
@@ -64,11 +72,9 @@ def get_config() -> dict:
             "client_secret": os.environ.get("OIDC_CLIENT_SECRET"),
             "redirect_uri": os.environ.get(
                 "OIDC_REDIRECT_URI",
-                "http://localhost:8001/v1/auth/callback"
             ),
             "post_logout_redirect_uri": os.environ.get(
                 "OIDC_POST_LOGOUT_REDIRECT_URI",
-                "http://localhost:3000/"
             ),
         },
         "session_ttl_seconds": int(os.environ.get("SESSION_TTL_SECONDS", "86400")),
@@ -96,12 +102,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     redis_client = redis.from_url(config["redis_url"], decode_responses=True)
     
     # Initialize PostgreSQL for audit logging
-    db_url = os.environ.get(
-        "DATABASE_URL",
-        "postgresql+asyncpg://marty:marty_dev@localhost:5432/marty_credentials"
-    )
-    async_engine = create_async_engine(db_url, echo=False)
-    async_session_factory = async_sessionmaker(async_engine, expire_on_commit=False)
+    from marty_common.database import DatabaseManager, DatabaseConfig
+    db = DatabaseManager(DatabaseConfig.from_env("auth"))
+    async_session_factory = db.session_factory
     audit_repository = PostgresAuditRepository(async_session_factory)
     
     # Initialize adapters
@@ -167,7 +170,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # Store in app state for access
     app.state.redis_client = redis_client
-    app.state.async_engine = async_engine
+    app.state.async_engine = db.engine
     app.state.audit_repository = audit_repository
     app.state.authenticate_use_case = authenticate_use_case
     app.state.session_use_case = session_use_case
@@ -204,52 +207,70 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await flow_grpc_channel.close()
     await org_grpc_channel.close()
     await redis_client.close()
-    await async_engine.dispose()
+    await db.close()
 
 
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
-    app = FastAPI(
+    # Disable API docs in production to prevent endpoint enumeration
+    _env = os.environ.get("ENVIRONMENT", "production")
+    _docs = "/docs" if _env in ("development", "test") else None
+    _redoc = "/redoc" if _env in ("development", "test") else None
+    _openapi = "/openapi.json" if _env in ("development", "test") else None
+    app = create_service_app(
         title="Auth Service",
         description="Authentication and session management microservice",
-        version="1.0.0",
+        service_name=SERVICE_NAME,
         lifespan=lifespan,
-        docs_url="/docs",
-        redoc_url="/redoc",
-        openapi_url="/openapi.json",
+        routers=[auth_router, internal_router],
+        docs_url=_docs,
+        redoc_url=_redoc,
+        openapi_url=_openapi,
     )
-    
-    # Add CORS middleware
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=os.environ.get("CORS_ORIGINS", "*").split(","),
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-    
-    # Add request ID middleware
-    from marty_common.middleware import RequestIdMiddleware, RequestLoggingMiddleware
-    app.add_middleware(RequestLoggingMiddleware, service_name=SERVICE_NAME)
-    app.add_middleware(RequestIdMiddleware)
-    
-    # Include routers
-    app.include_router(auth_router)
-    app.include_router(internal_router)
-    
-    # Health check endpoint
-    @app.get("/health")
-    async def health_check() -> dict:
-        """Health check endpoint."""
-        return {
-            "status": "healthy",
-            "service": SERVICE_NAME,
-        }
 
-    from common.metrics import init_otel_tracing, mount_metrics
-    init_otel_tracing(SERVICE_NAME)
-    mount_metrics(app)
-    
+    # In-memory sliding-window rate limiter for auth endpoints (brute-force mitigation).
+    # Covers /login, /register, /callback, /credential-login/* — all unauthenticated flows.
+    # Per-IP; configurable via AUTH_RATE_LIMIT_RPM (default 30 requests/minute).
+    _rate_limit_rpm = int(os.environ.get("AUTH_RATE_LIMIT_RPM", "30"))
+    _rate_window = 60  # seconds
+    _rate_buckets: dict[str, collections.deque] = {}
+    _RATE_LIMITED_PREFIXES = (
+        "/v1/auth/login",
+        "/v1/auth/register",
+        "/v1/auth/callback",
+        "/v1/auth/credential-login",
+    )
+
+    from fastapi.responses import JSONResponse
+
+    @app.middleware("http")
+    async def auth_rate_limit_middleware(request, call_next):
+        path = request.url.path
+        if not any(path.startswith(prefix) for prefix in _RATE_LIMITED_PREFIXES):
+            return await call_next(request)
+
+        client_ip = (request.client.host if request.client else None) or "unknown"
+        now = time.monotonic()
+        bucket = _rate_buckets.setdefault(client_ip, collections.deque())
+        # Evict timestamps older than the window
+        while bucket and bucket[0] < now - _rate_window:
+            bucket.popleft()
+        if len(bucket) >= _rate_limit_rpm:
+            logger.warning(
+                "Auth rate limit exceeded for %s on %s (%d/%d rpm)",
+                client_ip,
+                path,
+                len(bucket),
+                _rate_limit_rpm,
+            )
+            return JSONResponse(
+                status_code=429,
+                content={"detail": "Too many requests. Please try again later."},
+                headers={"Retry-After": str(_rate_window)},
+            )
+        bucket.append(now)
+        return await call_next(request)
+
     return app
 
 

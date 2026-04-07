@@ -18,7 +18,8 @@ import { AuthProvider, AuthContext } from './contexts/AuthContext';
 import { ConsoleProvider } from './contexts/ConsoleContext';
 import { NotificationProvider } from './contexts/NotificationContext';
 import { BrandingProvider, BrandingContext } from './contexts/BrandingContext';
-import { PaymentProvider } from './contexts/PaymentContext';
+import { PaymentProvider } from '@marty/subscriptions';
+import { get } from './services/api';
 import { TrustProvider } from './components/trust/TrustProvider';
 import ErrorBoundary from './components/ErrorBoundary';
 import ProtectedRoute, { AdminRoute, ApplicantRoute, ApplicantConsoleRoute, VendorRoute, OrgConsoleRoute } from './components/ProtectedRoute';
@@ -49,13 +50,10 @@ import ApiDocumentation from './components/ApiDocumentation';
 import ProductPage from './components/ProductPage';
 import StandardsPage from './components/StandardsPage';
 import ProtocolPage from './components/ProtocolPage';
-import BlogPage from './components/BlogPage';
-import BlogPostPage from './components/BlogPostPage';
-import AuthorsPage from './components/AuthorsPage';
-import AuthorPage from './components/AuthorPage';
+import { BlogPage, BlogPostPage, AuthorsPage, AuthorPage, FoundationsPage } from '@marty/blog';
 import IdentityGuidePage from './components/IdentityGuidePage';
 import FromIDVPage from './components/FromIDVPage';
-import PricingPage from './components/PricingPage';
+import { PricingPage } from '@marty/subscriptions';
 import {
   VerifiableCredentialApiPage,
   EudiWalletVerificationPage,
@@ -67,6 +65,12 @@ import {
   MyOrganizationsPage,
   DiscoverOrganizationsPage,
   JoinOrganizationPage,
+  AiCapabilityPage,
+  WhatIsVerifiableIdentityPage,
+  WhatIsCredentialVerificationPage,
+  WhatIsOpenBadgePage,
+  WhatIsDigitalCredentialPage,
+  WhatIsMartyProtocolPage,
 } from './components/pages';
 
 // New Console Pages with Sidebar Navigation
@@ -450,7 +454,7 @@ function AppContent() {
           {/* Audit */}
           <Route path="audit" element={<AuditPage />} />
           {/* Billing & Usage */}
-          <Route path="billing" element={<UsageDashboard />} />
+          <Route path="billing" element={<UsageDashboard get={get} />} />
         </Route>
 
         {/* Organization Setup Route - No org required, but vendor/admin role needed */}
@@ -524,11 +528,18 @@ function AppContent() {
           <Route path="/from-idv-to-verifiable-identity" element={<FromIDVPage />} />
           <Route path="/standards" element={<StandardsPage />} />
           <Route path="/protocol" element={<ProtocolPage />} />
+          <Route path="/ai" element={<AiCapabilityPage />} />
+          <Route path="/what-is-verifiable-identity" element={<WhatIsVerifiableIdentityPage />} />
+          <Route path="/what-is-credential-verification" element={<WhatIsCredentialVerificationPage />} />
+          <Route path="/what-is-open-badge" element={<WhatIsOpenBadgePage />} />
+          <Route path="/what-is-digital-credential" element={<WhatIsDigitalCredentialPage />} />
+          <Route path="/what-is-marty-protocol" element={<WhatIsMartyProtocolPage />} />
           <Route path="/blog" element={<BlogPage />} />
+          <Route path="/blog/foundations" element={<FoundationsPage />} />
           <Route path="/blog/:slug" element={<BlogPostPage />} />
           <Route path="/authors" element={<AuthorsPage />} />
           <Route path="/authors/:authorId" element={<AuthorPage />} />
-          <Route path="/pricing" element={<PricingPage />} />
+          <Route path="/pricing" element={<PricingPage login={login} />} />
           <Route path="/docs" element={<ApiDocumentation />} />
           <Route path="/organizations" element={<MyOrganizationsPage />} />
           <Route path="/organizations/discover" element={<DiscoverOrganizationsPage />} />

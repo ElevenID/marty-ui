@@ -35,7 +35,7 @@ import InfoIcon from '@mui/icons-material/Info';
 import ReceiptIcon from '@mui/icons-material/Receipt';
 import { useAuth } from '../../hooks/useAuth';
 import { useNotifications } from '../../hooks/useNotifications';
-import { usePayment } from '../../contexts/paymentHooks';
+import { usePayment } from '@marty/subscriptions';
 
 // Fee limits (must match PaymentContext)
 const MIN_FEE = 0;

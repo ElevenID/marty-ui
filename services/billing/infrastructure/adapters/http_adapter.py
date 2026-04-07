@@ -223,10 +223,12 @@ async def get_payment_methods(
     organization_id: str = Query(...),
     user_id: str = Depends(get_current_user_id),
     use_case: BillingUseCase = Depends(get_use_case),
+    limit: int = Query(default=100, le=500),
+    offset: int = Query(default=0, ge=0),
 ) -> list[PaymentMethodResponse]:
     """List payment methods."""
     methods = await use_case.get_payment_methods(organization_id)
-    return [_method_to_response(m) for m in methods]
+    return [_method_to_response(m) for m in methods[offset:offset + limit]]
 
 
 # =============================================================================

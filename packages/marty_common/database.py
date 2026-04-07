@@ -35,14 +35,21 @@ class DatabaseConfig:
     pool_size: int = 5
     max_overflow: int = 10
     pool_pre_ping: bool = True
+    pool_recycle: int = -1  # -1 = disabled; 3600 = recycle connections after 1 hour
     echo: bool = False
+    database_url_override: str = ""  # If set, used directly instead of building from parts
     
     @classmethod
     def from_env(cls, service_name: str) -> DatabaseConfig:
-        """Create config from environment variables."""
+        """Create config from environment variables.
+
+        Supports two modes:
+          1. ``DATABASE_URL`` env var — used directly (for existing setups).
+          2. Individual ``DB_HOST/PORT/NAME/USER/PASSWORD`` vars — composed into URL.
+        """
         # Schema is derived from service name
         schema = os.environ.get(
-            f"{service_name.upper()}_DB_SCHEMA",
+            f"{service_name.upper().replace('-', '_')}_DB_SCHEMA",
             f"{service_name.replace('-', '_')}_service"
         )
         
@@ -56,7 +63,9 @@ class DatabaseConfig:
             pool_size=int(os.environ.get("DB_POOL_SIZE", "5")),
             max_overflow=int(os.environ.get("DB_MAX_OVERFLOW", "10")),
             pool_pre_ping=os.environ.get("DB_POOL_PRE_PING", "true").lower() == "true",
+            pool_recycle=int(os.environ.get("DB_POOL_RECYCLE", "-1")),
             echo=os.environ.get("DB_ECHO", "false").lower() == "true",
+            database_url_override=os.environ.get("DATABASE_URL", ""),
         )
     
     @property
@@ -93,13 +102,16 @@ class DatabaseManager:
     def engine(self) -> AsyncEngine:
         """Get or create the database engine."""
         if self._engine is None:
-            self._engine = create_async_engine(
-                self.config.url,
-                pool_size=self.config.pool_size,
-                max_overflow=self.config.max_overflow,
-                pool_pre_ping=self.config.pool_pre_ping,
-                echo=self.config.echo,
-            )
+            url = self.config.database_url_override or self.config.url
+            engine_kwargs: dict = {
+                "pool_size": self.config.pool_size,
+                "max_overflow": self.config.max_overflow,
+                "pool_pre_ping": self.config.pool_pre_ping,
+                "echo": self.config.echo,
+            }
+            if self.config.pool_recycle > 0:
+                engine_kwargs["pool_recycle"] = self.config.pool_recycle
+            self._engine = create_async_engine(url, **engine_kwargs)
         return self._engine
     
     @property

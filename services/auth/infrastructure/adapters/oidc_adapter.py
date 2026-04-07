@@ -128,7 +128,7 @@ class KeycloakOIDCAdapter(OIDCProviderPort):
         if self.config.client_secret:
             token_data["client_secret"] = self.config.client_secret
         
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
             response = await client.post(
                 self.config.token_endpoint,
                 data=token_data,

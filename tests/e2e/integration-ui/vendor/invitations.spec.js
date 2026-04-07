@@ -2,7 +2,7 @@
  * Vendor User Invitation Tests
  * 
  * Tests for inviting users to an organization.
- * Uses MailHog to capture invitation emails.
+ * Uses Mailpit to capture invitation emails.
  * 
  * SKIPPED: User invitation UI not yet implemented
  */

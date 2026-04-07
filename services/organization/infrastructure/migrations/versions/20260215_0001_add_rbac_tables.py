@@ -283,7 +283,7 @@ def upgrade() -> None:
     # ── 6. Seed system roles for every existing organization ─────────────────
     conn = op.get_bind()
     org_rows = conn.execute(
-        sa.text(f"SELECT id FROM {SCHEMA}.organizations")
+        sa.text("SELECT id FROM organization_service.organizations")
     ).fetchall()
 
     roles_table = sa.table(
@@ -352,8 +352,8 @@ def upgrade() -> None:
         # ── 7. Migrate existing members: map members.role → member_roles ────
         members = conn.execute(
             sa.text(
-                f"SELECT id, role FROM {SCHEMA}.members "
-                f"WHERE organization_id = :org_id"
+                "SELECT id, role FROM organization_service.members "
+                "WHERE organization_id = :org_id"
             ),
             {"org_id": org_id},
         ).fetchall()

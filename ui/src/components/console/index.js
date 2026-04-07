@@ -65,8 +65,8 @@ export { default as WebhooksPage } from './org/WebhooksPage';
 // Audit
 export { default as AuditPage } from './audit/AuditPage';
 
-// Billing & Usage
-export { default as UsageDashboard } from './billing/UsageDashboard';
+// Billing & Usage — moved to @marty/subscriptions, re-exported for backward compatibility
+export { UsageDashboard } from '@marty/subscriptions';
 
 // Applicant
 export { default as ApplicantDashboard } from './applicant/ApplicantDashboard';

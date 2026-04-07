@@ -135,18 +135,7 @@ class CedarAuthMiddleware(BaseHTTPMiddleware):
                 },
             )
 
-        # Resolve org plan tier from Redis (default to "free")
-        plan_tier = "free"
-        redis_client = getattr(request.app.state, "redis_client", None)
-        if redis_client:
-            try:
-                cached = await redis_client.get(f"org:{org_id}:plan")
-                if cached:
-                    plan_tier = cached if isinstance(cached, str) else cached.decode()
-            except Exception:
-                logger.warning(f"Failed to read plan for org {org_id}, defaulting to free")
-
-        # Build Cedar entities
+        # Build Cedar entities (no plan_tier — billing is a separate engine)
         user_email = getattr(request.state, "user_email", "") or ""
         entities = build_user_entities(
             user_id=user_id,
@@ -154,7 +143,6 @@ class CedarAuthMiddleware(BaseHTTPMiddleware):
             status="ACTIVE",
             org_id=org_id,
             role=membership.role.value,
-            plan_tier=plan_tier,
         )
 
         # Add typed resource entity so Cedar schema validation passes
@@ -176,7 +164,6 @@ class CedarAuthMiddleware(BaseHTTPMiddleware):
             mfa_authenticated=bool(mfa_verified),
             session_id=session_id,
             user_agent=user_agent,
-            plan_tier=plan_tier,
         )
 
         # Evaluate Cedar policy
@@ -208,6 +195,6 @@ class CedarAuthMiddleware(BaseHTTPMiddleware):
         # Inject org context for downstream middleware and services
         request.state.org_role = membership.role.value
         request.state.organization_id = org_id
-        request.state.org_plan = plan_tier
+        request.state.cedar_action = action_name
 
         return await call_next(request)

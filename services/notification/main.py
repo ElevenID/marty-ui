@@ -29,11 +29,13 @@ from urllib.parse import urlparse
 import httpx
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from marty_common.dto import DeleteResponse
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from marty_common.middleware import RequestIdMiddleware, RequestLoggingMiddleware
+from marty_common.service_setup import create_service_app
 from notification.infrastructure.adapters.postgres_adapter import PostgresNotificationRepository
 from notification.infrastructure.models import mapper_registry
 
@@ -437,9 +439,9 @@ class RetryPolicyModel(BaseModel):
 
 
 class CreateSubscriptionRequest(BaseModel):
-    organization_id: str
-    name: str
-    description: str | None = None
+    organization_id: str = Field(min_length=1, max_length=255)
+    name: str = Field(min_length=1, max_length=255)
+    description: str | None = Field(None, max_length=2000)
     event_types: list[str] = Field(default_factory=list)
     delivery_channel: str = DeliveryChannel.WEBHOOK.value
     filter: dict[str, Any] = Field(default_factory=dict)
@@ -449,8 +451,8 @@ class CreateSubscriptionRequest(BaseModel):
 
 
 class UpdateSubscriptionRequest(BaseModel):
-    name: str | None = None
-    description: str | None = None
+    name: str | None = Field(None, min_length=1, max_length=255)
+    description: str | None = Field(None, max_length=2000)
     event_types: list[str] | None = None
     delivery_channel: str | None = None
     filter: dict[str, Any] | None = None
@@ -474,19 +476,19 @@ class SubscriptionResponse(BaseModel):
 
 
 class CreateWebhookRequest(BaseModel):
-    organization_id: str
-    name: str
-    url: str
-    description: str | None = None
+    organization_id: str = Field(min_length=1, max_length=255)
+    name: str = Field(min_length=1, max_length=255)
+    url: str = Field(min_length=1, max_length=2048)
+    description: str | None = Field(None, max_length=2000)
     event_types: list[str] = Field(default_factory=list)
     secret: str | None = None
     enabled: bool = True
 
 
 class UpdateWebhookRequest(BaseModel):
-    name: str | None = None
-    url: str | None = None
-    description: str | None = None
+    name: str | None = Field(None, min_length=1, max_length=255)
+    url: str | None = Field(None, min_length=1, max_length=2048)
+    description: str | None = Field(None, max_length=2000)
     event_types: list[str] | None = None
     secret: str | None = None
     enabled: bool | None = None
@@ -821,6 +823,41 @@ def _apply_delivery_results(notification: Notification, delivery_results: list[D
         notification.error_message = next((result.error_code for result in delivery_results if result.error_code), None)
 
 
+import ipaddress
+import socket
+
+
+def _validate_webhook_url(url: str) -> None:
+    """Validate webhook URL is HTTPS and not targeting private/loopback networks (SSRF prevention)."""
+    parsed = urlparse(url.strip())
+    if parsed.scheme.lower() != "https":
+        raise HTTPException(status_code=422, detail="Webhook URL must use HTTPS")
+    hostname = parsed.hostname
+    if not hostname:
+        raise HTTPException(status_code=422, detail="Webhook URL must include a hostname")
+    # Block localhost variants
+    if hostname in ("localhost", "127.0.0.1", "::1", "0.0.0.0"):
+        raise HTTPException(status_code=422, detail="Webhook URL must not target localhost")
+    # Resolve and check for private/reserved IPs
+    try:
+        addr = ipaddress.ip_address(hostname)
+    except ValueError:
+        # hostname is a domain name — resolve it
+        try:
+            resolved = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+            addrs = [ipaddress.ip_address(r[4][0]) for r in resolved]
+        except socket.gaierror:
+            raise HTTPException(status_code=422, detail=f"Cannot resolve webhook hostname: {hostname}")
+    else:
+        addrs = [addr]
+    for addr in addrs:
+        if addr.is_private or addr.is_loopback or addr.is_reserved or addr.is_link_local:
+            raise HTTPException(
+                status_code=422,
+                detail="Webhook URL must not target private or reserved IP addresses",
+            )
+
+
 async def _deliver_to_webhook(
     payload: dict[str, Any],
     subscription: Subscription,
@@ -1090,13 +1127,15 @@ async def list_notifications(
     recipient_id: str | None = None,
     status: str | None = None,
     unread_only: bool = Query(False),
+    limit: int = Query(default=100, le=500),
+    offset: int = Query(default=0, ge=0),
     repo: InMemoryNotificationRepository | PostgresNotificationRepository = Depends(get_repo),
 ) -> list[NotificationResponse]:
     status_filter = NotificationStatus(status) if status else None
     notifications = await repo.list_notifications(organization_id, recipient_id, status_filter)
     if unread_only:
         notifications = [notification for notification in notifications if not notification.is_read]
-    return [_to_response(notification) for notification in notifications]
+    return [_to_response(notification) for notification in notifications[offset:offset + limit]]
 
 
 @router.get("/unread/count", response_model=NotificationCountResponse, response_model_exclude_none=True)
@@ -1104,7 +1143,7 @@ async def list_notifications(
 async def get_unread_count(
     organization_id: str | None = None,
     recipient_id: str | None = None,
-    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+    x_user_id: str = Header(alias="X-User-Id"),
     repo: InMemoryNotificationRepository | PostgresNotificationRepository = Depends(get_repo),
 ) -> NotificationCountResponse:
     effective_recipient_id = recipient_id or x_user_id
@@ -1142,7 +1181,7 @@ async def mark_as_unread(
 async def mark_all_as_read(
     organization_id: str | None = None,
     recipient_id: str | None = None,
-    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+    x_user_id: str = Header(alias="X-User-Id"),
     repo: InMemoryNotificationRepository | PostgresNotificationRepository = Depends(get_repo),
 ) -> MarkAllReadResponse:
     effective_recipient_id = recipient_id or x_user_id
@@ -1156,20 +1195,22 @@ async def mark_all_as_read(
     return MarkAllReadResponse(marked_read=marked)
 
 
-@router.delete("/{notification_id}")
+@router.delete("/{notification_id}", response_model=DeleteResponse)
 async def delete_notification(
     notification_id: str,
     repo: InMemoryNotificationRepository | PostgresNotificationRepository = Depends(get_repo),
-) -> dict[str, bool]:
+) -> DeleteResponse:
     deleted = await repo.delete_notification(notification_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Notification not found")
-    return {"deleted": True}
+    return DeleteResponse()
 
 
 @router.get("/templates", response_model=list[TemplateResponse], response_model_exclude_none=True)
 async def list_templates(
     organization_id: str | None = None,
+    limit: int = Query(default=100, le=500),
+    offset: int = Query(default=0, ge=0),
     repo: InMemoryNotificationRepository | PostgresNotificationRepository = Depends(get_repo),
 ) -> list[TemplateResponse]:
     templates = await repo.list_templates(organization_id)
@@ -1181,7 +1222,7 @@ async def list_templates(
             subject_template=template.subject_template,
             active=template.active,
         )
-        for template in templates
+        for template in templates[offset:offset + limit]
     ]
 
 
@@ -1199,12 +1240,15 @@ async def get_notification(
 @router.get("/{notification_id}/delivery-results", response_model=list[DeliveryResultResponse], response_model_exclude_none=True)
 async def get_delivery_results(
     notification_id: str,
+    limit: int = Query(default=100, le=500),
+    offset: int = Query(default=0, ge=0),
     repo: InMemoryNotificationRepository | PostgresNotificationRepository = Depends(get_repo),
 ) -> list[DeliveryResultResponse]:
     notification = await repo.get_notification(notification_id)
     if not notification:
         raise HTTPException(status_code=404, detail="Notification not found")
-    return [_delivery_result_to_response(result) for result in notification.delivery_results]
+    results = notification.delivery_results[offset:offset + limit]
+    return [_delivery_result_to_response(result) for result in results]
 
 
 @subscription_router.post("", response_model=SubscriptionResponse, response_model_exclude_none=True)
@@ -1302,15 +1346,15 @@ async def update_subscription(
     return _subscription_to_response(subscription)
 
 
-@subscription_router.delete("/{subscription_id}")
+@subscription_router.delete("/{subscription_id}", response_model=DeleteResponse)
 async def delete_subscription(
     subscription_id: str,
     repo: InMemoryNotificationRepository | PostgresNotificationRepository = Depends(get_repo),
-) -> dict[str, bool]:
+) -> DeleteResponse:
     deleted = await repo.delete_subscription(subscription_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Subscription not found")
-    return {"deleted": True}
+    return DeleteResponse()
 
 
 @webhook_router.post("", response_model=WebhookResponse, response_model_exclude_none=True)
@@ -1318,9 +1362,8 @@ async def create_webhook(
     body: CreateWebhookRequest,
     repo: InMemoryNotificationRepository | PostgresNotificationRepository = Depends(get_repo),
 ) -> WebhookResponse:
-    # MIP §15.7 — webhook URLs MUST be HTTPS
-    if not body.url.strip().startswith("https://"):
-        raise HTTPException(status_code=422, detail="Webhook URL must use HTTPS")
+    # MIP §15.7 — webhook URLs MUST be HTTPS; also block private/loopback (SSRF)
+    _validate_webhook_url(body.url)
     webhook = WebhookEndpoint(
         organization_id=body.organization_id,
         name=body.name,
@@ -1366,8 +1409,7 @@ async def update_webhook(
     if body.name is not None:
         webhook.name = body.name
     if body.url is not None:
-        if not body.url.strip().startswith("https://"):
-            raise HTTPException(status_code=422, detail="Webhook URL must use HTTPS")
+        _validate_webhook_url(body.url)
         webhook.url = body.url
     if body.description is not None:
         webhook.description = body.description
@@ -1385,15 +1427,15 @@ async def update_webhook(
     return _webhook_to_response(webhook, include_secret=secret_rotated)
 
 
-@webhook_router.delete("/{webhook_id}")
+@webhook_router.delete("/{webhook_id}", response_model=DeleteResponse)
 async def delete_webhook(
     webhook_id: str,
     repo: InMemoryNotificationRepository | PostgresNotificationRepository = Depends(get_repo),
-) -> dict[str, bool]:
+) -> DeleteResponse:
     deleted = await repo.delete_webhook(webhook_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Webhook not found")
-    return {"deleted": True}
+    return DeleteResponse()
 
 
 @webhook_router.get("/{webhook_id}/deliveries", response_model=list[WebhookDeliveryResponse], response_model_exclude_none=True)
@@ -1434,8 +1476,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     global _repo
     logger.info("Starting %s...", SERVICE_NAME)
     engine = create_async_engine(
-        os.environ.get("DATABASE_URL", "postgresql+asyncpg://marty:marty_dev_password@localhost:5432/marty"),
+        os.environ.get("DATABASE_URL", "postgresql+asyncpg://marty:marty_dev@localhost:5432/marty_credentials"),
         future=True,
+        pool_size=10,
+        max_overflow=20,
+        pool_pre_ping=True,
+        pool_recycle=3600,
     )
     async with engine.begin() as conn:
         await conn.execute(text("CREATE SCHEMA IF NOT EXISTS notification_service"))
@@ -1473,35 +1519,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(
+    return create_service_app(
         title="Notification Service",
         description="Notifications, subscriptions, and webhook delivery service",
-        version="1.0.0",
+        service_name=SERVICE_NAME,
         lifespan=lifespan,
+        routers=[router, subscription_router, webhook_router, internal_router],
     )
-    app.add_middleware(RequestLoggingMiddleware)
-    app.add_middleware(RequestIdMiddleware)
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-    app.include_router(router)
-    app.include_router(subscription_router)
-    app.include_router(webhook_router)
-    app.include_router(internal_router)
-
-    @app.get("/health")
-    async def health_check() -> dict[str, str]:
-        return {"status": "healthy", "service": SERVICE_NAME}
-
-    from common.metrics import init_otel_tracing, mount_metrics
-
-    init_otel_tracing(SERVICE_NAME)
-    mount_metrics(app)
-    return app
 
 
 app = create_app()

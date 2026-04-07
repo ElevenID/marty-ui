@@ -29,7 +29,7 @@ from .errors import (
     ConflictError,
     RateLimitError,
 )
-from .dto import ApiResponse, PaginatedResponse, ErrorResponse
+from .dto import ApiResponse, PaginatedResponse, ErrorResponse, DeleteResponse, CountResponse
 from .org_authorization import (
     OrgRole,
     OrganizationMembership,
@@ -42,6 +42,8 @@ from .cedar_engine import CedarEngine, AuthzDecision
 from .cedar_entities import build_user_entities, build_apikey_entities, build_request_context
 from .cedar_actions import resolve_action, resolve_action_and_resource, extract_org_id
 from .cedar_middleware import CedarAuthMiddleware
+from .billing_engine import BillingCedarEngine
+from .billing_middleware import BillingAuthMiddleware
 from .messages import (
     ClaimResultPayload,
     CredentialOfferPayload,
@@ -58,6 +60,7 @@ from .messages import (
     VerificationResultPayload,
 )
 from .middleware import RequestIdMiddleware, RequestLoggingMiddleware
+from .service_setup import create_service_app
 from .pairwise import compute_pairwise_id, generate_holder_secret
 from .plans import PlanTier, PlanLimits, PLAN_LIMITS, PLAN_INFO, get_plan_limits, check_limit, check_feature
 from .usage import UsageTracker
@@ -96,6 +99,9 @@ __all__ = [
     "resolve_action",
     "resolve_action_and_resource",
     "extract_org_id",
+    # Billing Authorization
+    "BillingCedarEngine",
+    "BillingAuthMiddleware",
     # Message Layer
     "ClaimResultPayload",
     "CredentialOfferPayload",
@@ -113,6 +119,8 @@ __all__ = [
     # Middleware
     "RequestIdMiddleware",
     "RequestLoggingMiddleware",
+    # Service Setup
+    "create_service_app",
     # Pairwise Subject Identifiers
     "compute_pairwise_id",
     "generate_holder_secret",

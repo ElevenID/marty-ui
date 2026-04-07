@@ -1,121 +1,154 @@
 """
-Plan definitions and usage limits for ElevenID.
+Plan definitions and infrastructure limits for ElevenID.
 
-Single source of truth for plan tiers, feature gates, and usage limits.
-Used by gateway middleware (enforcement), organization service (plan field),
-and mirrored in the UI PricingPage.
+Reads from plan_catalog.json — the single source of truth shared by backend,
+middleware, and UI.
 
-Metric philosophy: track verifications, issued credentials, and active flows
-as the primary billable units — aligned with the protocol, not raw API calls.
+Philosophy: ElevenID is credentialing infrastructure for education. You pay
+for deployments, governance, and orchestration capacity — not per-verification
+or per-issuance fees. Protocol activity is unlimited on paid plans.
+
+Sandbox has fair-use limits (5,000 combined events/month) and is
+non-production only.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import json
+from dataclasses import dataclass
 from enum import Enum
-from typing import Literal
+from pathlib import Path
+from typing import Any
 
+
+# ── Load catalog ─────────────────────────────────────────────────────────
+
+_CATALOG_PATH = Path(__file__).parent / "plan_catalog.json"
+
+with open(_CATALOG_PATH, encoding="utf-8") as _f:
+    PLAN_CATALOG: dict[str, Any] = json.load(_f)
+
+
+# ── Plan IDs ─────────────────────────────────────────────────────────────
 
 class PlanTier(str, Enum):
-    """Available plan tiers."""
-    FREE = "free"
-    STARTER = "starter"
-    PROFESSIONAL = "professional"
-    ENTERPRISE = "enterprise"
+    """Stable internal plan IDs."""
+    SANDBOX = "sandbox"
+    PROGRAM = "program"
+    INSTITUTION = "institution"
+    SYSTEM = "system"
 
+
+# ── Entitlements ─────────────────────────────────────────────────────────
 
 @dataclass(frozen=True)
 class PlanLimits:
-    """Usage limits for a plan tier."""
+    """Infrastructure entitlements for a plan tier.
 
-    # Primary metrics (protocol-aligned)
-    verifications_per_month: int | None  # None = unlimited
-    issued_credentials_per_month: int | None
-    active_flows: int | None  # concurrent OID4VP/SIOP flows
+    -1 means unlimited. None for audit_retention_days means custom/negotiated.
+    """
 
-    # Organization limits
-    members: int | None
-    credential_templates: int | None
-    deployment_profiles: int | None
+    # Infrastructure capacity
+    deployments: int | None          # -1 = unlimited
+    verifier_instances: int | None
+    active_flows: int | None         # "Programs / workflows" in education UI
+    badge_templates: int | None      # "Badge templates" in education UI
+    admin_seats: int | None          # "Admin seats" in education UI
 
-    # Feature gates (bool = included or not)
-    custom_branding: bool = False
-    webhooks: bool = False
-    audit_logs: bool = False
-    multi_environment: bool = False
-    custom_cedar_policies: bool = False
-    scim_provisioning: bool = False
-    self_hosted: bool = False
-    priority_support: bool = False
-    dedicated_support: bool = False
-    zkp_verification: bool = False
-    device_registration: bool = False  # kiosk
+    # Audit & retention
+    audit_retention_days: int | None  # None = custom / unlimited
+
+    # Protocol activity mode
+    verifications_mode: str           # "fair_use" | "unlimited"
+    issuances_mode: str               # "fair_use" | "unlimited"
+    sandbox_monthly_activity_limit: int | None  # only applies when mode=fair_use
+
+    # Key management
+    key_management: tuple[str, ...]
+
+    # Support tier
+    support_tier: str                 # community | standard | priority | dedicated
+
+    # Feature gates
+    open_badge_issuance: bool
+    badge_verification_page: bool
+    criteria_evidence_fields: bool
+    learner_share_pages: bool
+    custom_branding: bool
+    webhooks: bool
+    audit_logs: bool
+    csv_roster_import: bool
+    approval_workflow: bool
+    multi_environment: bool
+    custom_cedar_policies: bool
+    remote_signing: bool
+    scim_provisioning: bool
+    self_hosted: bool
+    trust_registry_federation: bool
+    byok_hsm: bool
+    zk_verification: bool
 
 
-# ── Plan definitions ─────────────────────────────────────────────────────
+def _build_limits(plan: dict) -> PlanLimits:
+    """Build a PlanLimits from a catalog plan entry."""
+    ent = plan["entitlements"]
+    flags = plan["feature_flags"]
+    return PlanLimits(
+        deployments=ent["deployments"],
+        verifier_instances=ent["verifier_instances"],
+        active_flows=ent["active_flows"],
+        badge_templates=ent["badge_templates"],
+        admin_seats=ent["admin_seats"],
+        audit_retention_days=ent["audit_retention_days"],
+        verifications_mode=ent.get("verifications_mode", "unlimited"),
+        issuances_mode=ent.get("issuances_mode", "unlimited"),
+        sandbox_monthly_activity_limit=ent.get("sandbox_monthly_activity_limit"),
+        key_management=tuple(plan.get("key_management", [])),
+        support_tier=plan.get("support_tier", "community"),
+        open_badge_issuance=flags.get("open_badge_issuance", True),
+        badge_verification_page=flags.get("badge_verification_page", True),
+        criteria_evidence_fields=flags.get("criteria_evidence_fields", True),
+        learner_share_pages=flags.get("learner_share_pages", True),
+        custom_branding=flags.get("custom_branding", False),
+        webhooks=flags.get("webhooks", False),
+        audit_logs=flags.get("audit_logs", False),
+        csv_roster_import=flags.get("csv_roster_import", False),
+        approval_workflow=flags.get("approval_workflow", False),
+        multi_environment=flags.get("multi_environment", False),
+        custom_cedar_policies=flags.get("custom_cedar_policies", False),
+        remote_signing=flags.get("remote_signing", False),
+        scim_provisioning=flags.get("scim_provisioning", False),
+        self_hosted=flags.get("self_hosted", False),
+        trust_registry_federation=flags.get("trust_registry_federation", False),
+        byok_hsm=flags.get("byok_hsm", False),
+        zk_verification=flags.get("zk_verification", True),
+    )
 
-PLAN_LIMITS: dict[PlanTier, PlanLimits] = {
-    PlanTier.FREE: PlanLimits(
-        verifications_per_month=500,
-        issued_credentials_per_month=50,
-        active_flows=5,
-        members=5,
-        credential_templates=3,
-        deployment_profiles=1,
-        custom_branding=False,
-        webhooks=False,
-        audit_logs=False,
-        zkp_verification=True,  # all protocol features unlocked
-    ),
-    PlanTier.STARTER: PlanLimits(
-        verifications_per_month=1_000,
-        issued_credentials_per_month=500,
-        active_flows=25,
-        members=25,
-        credential_templates=None,  # unlimited
-        deployment_profiles=2,
-        custom_branding=True,
-        webhooks=True,
-        audit_logs=True,
-        zkp_verification=True,
-        priority_support=True,
-    ),
-    PlanTier.PROFESSIONAL: PlanLimits(
-        verifications_per_month=10_000,
-        issued_credentials_per_month=5_000,
-        active_flows=100,
-        members=100,
-        credential_templates=None,
-        deployment_profiles=5,
-        custom_branding=True,
-        webhooks=True,
-        audit_logs=True,
-        multi_environment=True,
-        custom_cedar_policies=True,
-        zkp_verification=True,
-        device_registration=True,
-        priority_support=True,
-    ),
-    PlanTier.ENTERPRISE: PlanLimits(
-        verifications_per_month=None,
-        issued_credentials_per_month=None,
-        active_flows=None,
-        members=None,
-        credential_templates=None,
-        deployment_profiles=None,
-        custom_branding=True,
-        webhooks=True,
-        audit_logs=True,
-        multi_environment=True,
-        custom_cedar_policies=True,
-        scim_provisioning=True,
-        self_hosted=True,
-        zkp_verification=True,
-        device_registration=True,
-        priority_support=True,
-        dedicated_support=True,
-    ),
-}
+
+# Build the lookup table from catalog
+PLAN_LIMITS: dict[PlanTier, PlanLimits] = {}
+for _plan_entry in PLAN_CATALOG["plans"]:
+    _tier = PlanTier(_plan_entry["plan_id"])
+    PLAN_LIMITS[_tier] = _build_limits(_plan_entry)
+
+
+# ── Billing ──────────────────────────────────────────────────────────────
+
+BILLING_INTERVALS: dict[str, dict] = PLAN_CATALOG["billing_intervals"]
+
+
+def price_for_interval(annual_price: int, interval: str) -> int:
+    """Calculate the total contract price for a billing interval.
+
+    Annual price is the base. Multi-year intervals get discounts.
+    Monthly is a premium on Program only (monthly_price is explicit in catalog).
+    """
+    info = BILLING_INTERVALS.get(interval)
+    if not info:
+        return annual_price
+    discount = info.get("discount_pct", 0)
+    years = info["months"] / 12
+    return round(annual_price * years * (1 - discount / 100))
 
 
 # ── Plan metadata (for display) ─────────────────────────────────────────
@@ -123,59 +156,55 @@ PLAN_LIMITS: dict[PlanTier, PlanLimits] = {
 @dataclass(frozen=True)
 class PlanInfo:
     """Display metadata for a plan tier."""
-    tier: PlanTier
-    name: str
+    plan_id: str
+    display_name: str
     tagline: str
-    headline: str
-    price_monthly: int | None  # None = custom
-    differentiator: str
+    annual_price: int | None  # None = custom
+    monthly_price: int | None
+    starting_annual_price: int | None
 
 
-PLAN_INFO: dict[PlanTier, PlanInfo] = {
-    PlanTier.FREE: PlanInfo(
-        tier=PlanTier.FREE,
-        name="The Sandbox",
-        tagline="Experiment with Standards",
-        headline="$0",
-        price_monthly=0,
-        differentiator="All OID4VCI / OID4VP features enabled. No protocol gating.",
-    ),
-    PlanTier.STARTER: PlanInfo(
-        tier=PlanTier.STARTER,
-        name="The Launchpad",
-        tagline="First Production App",
-        headline="$99/mo",
-        price_monthly=99,
-        differentiator="Custom branding and presentation policies. Stop paying $1.50 per check.",
-    ),
-    PlanTier.PROFESSIONAL: PlanInfo(
-        tier=PlanTier.PROFESSIONAL,
-        name="The Trust Fabric",
-        tagline="Multi-App Orchestration",
-        headline="$399/mo",
-        price_monthly=399,
-        differentiator="Audit-ready logs and multi-environment management. Built for scale.",
-    ),
-    PlanTier.ENTERPRISE: PlanInfo(
-        tier=PlanTier.ENTERPRISE,
-        name="The Sovereign Choice",
-        tagline="Your Trust, Your Infrastructure",
-        headline="Custom",
-        price_monthly=None,
-        differentiator="Air-gapped deployments, dedicated data residency, and 24/7 support.",
-    ),
-}
+PLAN_INFO: dict[PlanTier, PlanInfo] = {}
+for _plan_entry in PLAN_CATALOG["plans"]:
+    _tier = PlanTier(_plan_entry["plan_id"])
+    _billing = _plan_entry["billing"]
+    PLAN_INFO[_tier] = PlanInfo(
+        plan_id=_plan_entry["plan_id"],
+        display_name=_plan_entry["display_name"],
+        tagline=_plan_entry["tagline"],
+        annual_price=_billing.get("annual_price"),
+        monthly_price=_billing.get("monthly_price"),
+        starting_annual_price=_billing.get("starting_annual_price"),
+    )
 
 
-# ── Usage metric keys (for Redis counters) ───────────────────────────────
+# ── Display labels (education market) ───────────────────────────────────
 
-USAGE_METRICS = [
-    "verifications",
-    "issued_credentials",
-    "active_flows",
-    "api_calls",  # tracked for analytics, not billed
-]
+DISPLAY_LABELS: dict[str, str] = PLAN_CATALOG["display_labels"]
 
+
+# ── Enforcement categories ───────────────────────────────────────────────
+
+ENFORCEMENT = PLAN_CATALOG["enforcement"]
+
+HARD_ENFORCED = ENFORCEMENT["hard_enforced"]
+
+ANALYTICS_ONLY = ENFORCEMENT["analytics_only"]
+
+SANDBOX_FAIR_USE = ENFORCEMENT["sandbox_fair_use"]
+
+# Legacy compat aliases
+USAGE_METRICS = ANALYTICS_ONLY
+RESOURCE_GAUGES = HARD_ENFORCED
+
+
+# ── Add-ons & onboarding ────────────────────────────────────────────────
+
+ADDONS = PLAN_CATALOG["addons"]
+ONBOARDING_SKUS = PLAN_CATALOG["onboarding_skus"]
+
+
+# ── Helpers ──────────────────────────────────────────────────────────────
 
 def get_plan_limits(tier: PlanTier | str) -> PlanLimits:
     """Get limits for a plan tier."""
@@ -185,19 +214,37 @@ def get_plan_limits(tier: PlanTier | str) -> PlanLimits:
 
 
 def check_limit(limits: PlanLimits, metric: str, current_value: int) -> bool:
-    """Check if current usage is within plan limits. Returns True if allowed."""
+    """Check if current usage is within plan limits.
+
+    Returns True if allowed. -1 means unlimited.
+    """
     limit_map = {
-        "verifications": limits.verifications_per_month,
-        "issued_credentials": limits.issued_credentials_per_month,
         "active_flows": limits.active_flows,
-        "members": limits.members,
-        "credential_templates": limits.credential_templates,
-        "deployment_profiles": limits.deployment_profiles,
+        "badge_templates": limits.badge_templates,
+        "deployments": limits.deployments,
+        "verifier_instances": limits.verifier_instances,
+        "admin_seats": limits.admin_seats,
     }
     cap = limit_map.get(metric)
-    if cap is None:
+    if cap is None or cap == -1:
         return True  # unlimited
     return current_value < cap
+
+
+def check_sandbox_fair_use(
+    limits: PlanLimits,
+    current_monthly_events: int,
+) -> bool:
+    """Check if sandbox fair-use activity limit is exceeded.
+
+    Returns True if allowed.
+    """
+    if limits.verifications_mode != "fair_use":
+        return True  # paid plans are unlimited
+    cap = limits.sandbox_monthly_activity_limit
+    if cap is None:
+        return True
+    return current_monthly_events < cap
 
 
 def check_feature(limits: PlanLimits, feature: str) -> bool:

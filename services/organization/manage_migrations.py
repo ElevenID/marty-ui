@@ -15,7 +15,7 @@ from pathlib import Path
 service_root = Path(__file__).parent.parent
 sys.path.insert(0, str(service_root.parent))
 
-from mmf.framework.infrastructure.migration import (
+from marty_common.migration import (
     AlembicMigrationAdapter,
     MigrationError,
 )
@@ -26,7 +26,7 @@ def get_migration_adapter() -> AlembicMigrationAdapter:
     """Create and return configured migration adapter."""
     database_url = os.getenv(
         "DATABASE_URL",
-        "postgresql+asyncpg://marty:martypass@localhost:5432/marty_credentials",
+        "postgresql+asyncpg://marty:marty_dev@localhost:5432/marty_credentials",
     )
     
     # Convert asyncpg URL to sync for Alembic

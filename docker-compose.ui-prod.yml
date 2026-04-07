@@ -1,0 +1,29 @@
+# Production UI Service for Cloudflare Tunnel
+# Usage: docker compose -f docker-compose.base.yml -f docker-compose.ui-prod.yml up -d ui-prod
+
+services:
+  ui-prod:
+    build:
+      context: ./ui
+      dockerfile: Dockerfile.prod
+    image: marty-ui-prod:latest
+    container_name: marty-ui-prod
+    restart: unless-stopped
+    ports:
+      - "3002:80"
+    networks:
+      - default
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:80/"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    environment:
+      - NGINX_HOST=beta.elevenidllc.com
+      - NGINX_PORT=80
+
+networks:
+  default:
+    external: true
+    name: marty-infra-network

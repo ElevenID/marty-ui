@@ -29,11 +29,11 @@ from pydantic import BaseModel, Field
 from typing import Annotated
 
 from marty_common import (
-    OrganizationClient,
     OrganizationContext,
     require_org_membership,
     RequestIdMiddleware,
     RequestLoggingMiddleware,
+    create_service_app,
 )
 
 from .status_list_manager import (
@@ -416,9 +416,9 @@ class RevocationAutomationConfigModel(BaseModel):
 
 
 class CreateRevocationProfileRequest(BaseModel):
-    organization_id: str
-    name: str
-    description: str | None = None
+    organization_id: str = Field(min_length=1, max_length=255)
+    name: str = Field(min_length=1, max_length=255)
+    description: str | None = Field(None, max_length=2000)
     revocation_mechanism: list[str] | None = None
     mechanism_priority: list[str] | None = None
     check_mode: str | None = None
@@ -820,12 +820,14 @@ async def list_revocation_profiles(
     organization_id: str = Query(...),
     user_id: str = Depends(get_current_user_id),
     repo: InMemoryRevocationProfileRepository = Depends(get_repo),
+    limit: int = Query(default=100, le=500),
+    offset: int = Query(default=0, ge=0),
 ) -> list[dict]:
     """List all RevocationProfiles for an organization."""
     # Verify org membership
     await app.state.org_client.get_membership(user_id, organization_id)
     profiles = await repo.list(organization_id)
-    return [_to_response(p) for p in profiles]
+    return [_to_response(p) for p in profiles[offset:offset + limit]]
 
 
 @router.get("/{profile_id}", response_model=RevocationProfileResponse, response_model_exclude_none=True)
@@ -1121,7 +1123,7 @@ async def process_revocation(
         logger.error(f"Error processing revocation: {e}", exc_info=True)
         return {
             "success": False,
-            "error": str(e),
+            "error": "Revocation processing failed",
         }
 
 
@@ -1185,7 +1187,7 @@ async def allocate_index(
         
     except ValueError as e:
         logger.error(f"Index allocation failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Unexpected error during index allocation: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -1345,14 +1347,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info(f"Initialized StatusListManager with base URL: {base_url}")
     
     # Initialize gRPC channel to organization service
-    from common.grpc_factory import create_grpc_channel, create_grpc_server, start_grpc_server_port
-    org_grpc_target = os.environ.get("ORG_GRPC_TARGET", "organization:9002")
-    org_grpc_channel = create_grpc_channel(org_grpc_target, service_name="revocation-profile")
-    app.state.org_client = OrganizationClient(
-        grpc_channel=org_grpc_channel,
-    )
+    from common.di import setup_org_client, teardown_org_client
+    await setup_org_client(app, "revocation-profile")
     
     # Start gRPC server
+    from common.grpc_factory import create_grpc_server, start_grpc_server_port
     from revocation_profile.infrastructure.adapters.grpc_adapter import (
         RevocationProfileServiceGrpc,
     )
@@ -1388,40 +1387,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     yield
     logger.info(f"Shutting down {SERVICE_NAME}...")
     await grpc_server.stop(grace=5)
-    await org_grpc_channel.close()
+    await teardown_org_client(app)
 
 def create_app() -> FastAPI:
-    app = FastAPI(
+    return create_service_app(
         title="RevocationProfile Service",
         description="Format-agnostic revocation configuration and automation",
-        version="1.0.0",
+        service_name=SERVICE_NAME,
         lifespan=lifespan,
+        routers=[router, cascade_router, batch_router, internal_router],
     )
-    
-    app.add_middleware(RequestLoggingMiddleware)
-    app.add_middleware(RequestIdMiddleware)
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-    
-    app.include_router(router)
-    app.include_router(cascade_router)
-    app.include_router(batch_router)
-    app.include_router(internal_router)
-    
-    @app.get("/health")
-    async def health_check() -> dict:
-        return {"status": "healthy", "service": SERVICE_NAME}
-
-    from common.metrics import init_otel_tracing, mount_metrics
-    init_otel_tracing(SERVICE_NAME)
-    mount_metrics(app)
-    
-    return app
 
 
 app = create_app()
