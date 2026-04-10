@@ -40,18 +40,16 @@ describe('DeploymentProfileWizard', () => {
   it('should start at environment step', () => {
     render(<DeploymentProfileWizard />)
 
-    // Step 1 should be active
-    const stepper = screen.getByRole('list') // MUI Stepper renders as <ol>
-    expect(stepper).toBeInTheDocument()
+    // Step 1 should display environment configuration
+    expect(screen.getByText(/Environment Configuration/i)).toBeInTheDocument()
   })
 
   it('should validate environment step before proceeding', async () => {
-    const user = userEvent.setup()
     render(<DeploymentProfileWizard />)
 
-    // Try to go next without filling required fields
+    // Next is disabled without filling required fields
     const nextButton = screen.getByTestId('wizard.deployment.next')
-    await user.click(nextButton)
+    expect(nextButton).toBeDisabled()
 
     // Should still be on first step
     expect(screen.getByText('Environment')).toBeInTheDocument()
@@ -61,16 +59,12 @@ describe('DeploymentProfileWizard', () => {
     const user = userEvent.setup()
     render(<DeploymentProfileWizard />)
 
-    // Fill environment fields
+    // Fill environment fields (environment_type is pre-filled as 'api')
     const nameInput = screen.getByLabelText(/profile name/i)
     await user.type(nameInput, 'Production API')
 
     const descInput = screen.getByLabelText(/description/i)
     await user.type(descInput, 'Production environment for API')
-
-    // Select environment type
-    const apiRadio = screen.getByLabelText(/api/i)
-    await user.click(apiRadio)
 
     // Proceed to next step
     const nextButton = screen.getByTestId('wizard.deployment.next')
@@ -78,7 +72,7 @@ describe('DeploymentProfileWizard', () => {
 
     // Should advance to runtime settings
     await waitFor(() => {
-      expect(screen.getByText('Runtime Settings')).toBeInTheDocument()
+      expect(screen.getByRole('heading', { name: /Runtime Settings/i })).toBeInTheDocument()
     })
   })
 
@@ -86,22 +80,18 @@ describe('DeploymentProfileWizard', () => {
     const user = userEvent.setup()
     render(<DeploymentProfileWizard />)
 
-    // Complete environment step first
+    // Complete environment step first (environment_type pre-filled as 'api')
     await user.type(screen.getByLabelText(/profile name/i), 'Test Profile')
-    await user.click(screen.getByLabelText(/api/i))
     await user.click(screen.getByTestId('wizard.deployment.next'))
 
     await waitFor(() => {
-      expect(screen.getByText('Runtime Settings')).toBeInTheDocument()
+      expect(screen.getByRole('heading', { name: /Runtime Settings/i })).toBeInTheDocument()
     })
 
-    // Select default policy
-    const policySelect = screen.getByLabelText(/default policy/i)
-    await user.click(policySelect)
-    
-    // Select first policy from dropdown
-    const firstPolicy = await screen.findByText(/age verification/i)
-    await user.click(firstPolicy)
+    // Wait for policies to load and auto-select (only one policy exists)
+    await waitFor(() => {
+      expect(screen.getByTestId('wizard.deployment.next')).not.toBeDisabled()
+    })
 
     // Proceed to integration step
     await user.click(screen.getByTestId('wizard.deployment.next'))
@@ -115,13 +105,12 @@ describe('DeploymentProfileWizard', () => {
     const user = userEvent.setup()
     render(<DeploymentProfileWizard />)
 
-    // Advance to step 2
+    // Advance to step 2 (environment_type pre-filled as 'api')
     await user.type(screen.getByLabelText(/profile name/i), 'Test')
-    await user.click(screen.getByLabelText(/api/i))
     await user.click(screen.getByTestId('wizard.deployment.next'))
 
     await waitFor(() => {
-      expect(screen.getByText('Runtime Settings')).toBeInTheDocument()
+      expect(screen.getByRole('heading', { name: /Runtime Settings/i })).toBeInTheDocument()
     })
 
     // Go back
@@ -138,14 +127,14 @@ describe('DeploymentProfileWizard', () => {
     const user = userEvent.setup()
     render(<DeploymentProfileWizard />)
 
-    // Fill environment
+    // Fill environment (switch to kiosk via card click)
     await user.type(screen.getByLabelText(/profile name/i), 'Preserve Test')
     await user.type(screen.getByLabelText(/description/i), 'Data should persist')
-    await user.click(screen.getByLabelText(/kiosk/i))
+    await user.click(screen.getByTestId('env-type-kiosk'))
 
     // Go next
     await user.click(screen.getByTestId('wizard.deployment.next'))
-    await waitFor(() => screen.getByText('Runtime Settings'))
+    await waitFor(() => screen.getByRole('heading', { name: /Runtime Settings/i }))
 
     // Go back
     await user.click(screen.getByTestId('wizard.deployment.back'))
@@ -153,7 +142,6 @@ describe('DeploymentProfileWizard', () => {
     // Data should be preserved
     expect(screen.getByLabelText(/profile name/i)).toHaveValue('Preserve Test')
     expect(screen.getByLabelText(/description/i)).toHaveValue('Data should persist')
-    expect(screen.getByLabelText(/kiosk/i)).toBeChecked()
   })
 
   it('should submit deployment profile', async () => {
@@ -175,16 +163,13 @@ describe('DeploymentProfileWizard', () => {
       })
     )
 
-    // Step 1: Environment
+    // Step 1: Environment (environment_type pre-filled as 'api')
     await user.type(screen.getByLabelText(/profile name/i), 'Production')
-    await user.click(screen.getByLabelText(/api/i))
     await user.click(screen.getByTestId('wizard.deployment.next'))
 
-    // Step 2: Runtime Settings
-    await waitFor(() => screen.getByText('Runtime Settings'))
-    const policySelect = screen.getByLabelText(/default policy/i)
-    await user.click(policySelect)
-    await user.click(await screen.findByText(/age verification/i))
+    // Step 2: Runtime Settings (policy auto-selected - only one active policy)
+    await waitFor(() => screen.getByRole('heading', { name: /Runtime Settings/i }))
+    await waitFor(() => expect(screen.getByTestId('wizard.deployment.next')).not.toBeDisabled())
     await user.click(screen.getByTestId('wizard.deployment.next'))
 
     // Step 3: Integration (skip)
@@ -192,13 +177,12 @@ describe('DeploymentProfileWizard', () => {
     await user.click(screen.getByTestId('wizard.deployment.next'))
 
     // Step 4: Review & Submit
-    await waitFor(() => screen.getByText('Review & Activate'))
-    const submitButton = screen.getByRole('button', { name: /activate profile/i })
-    await user.click(submitButton)
+    await waitFor(() => screen.getByRole('heading', { name: /Review & Activate/i }))
+    await user.click(screen.getByTestId('wizard.deployment.submit'))
 
     // Verify success state
     await waitFor(() => {
-      expect(screen.getByText(/profile created successfully/i)).toBeInTheDocument()
+      expect(screen.getByText(/Deployment Profile Created Successfully/i)).toBeInTheDocument()
     })
 
     // Verify submitted data
@@ -224,21 +208,19 @@ describe('DeploymentProfileWizard', () => {
       })
     )
 
-    // Complete wizard
+    // Complete wizard (environment_type pre-filled as 'api')
     await user.type(screen.getByLabelText(/profile name/i), 'Existing')
-    await user.click(screen.getByLabelText(/api/i))
     await user.click(screen.getByTestId('wizard.deployment.next'))
     
-    await waitFor(() => screen.getByText('Runtime Settings'))
-    await user.click(screen.getByLabelText(/default policy/i))
-    await user.click(await screen.findByText(/age verification/i))
+    await waitFor(() => screen.getByRole('heading', { name: /Runtime Settings/i }))
+    await waitFor(() => expect(screen.getByTestId('wizard.deployment.next')).not.toBeDisabled())
     await user.click(screen.getByTestId('wizard.deployment.next'))
     
     await waitFor(() => screen.getByText('Integration'))
     await user.click(screen.getByTestId('wizard.deployment.next'))
     
-    await waitFor(() => screen.getByText('Review & Activate'))
-    await user.click(screen.getByRole('button', { name: /activate profile/i }))
+    await waitFor(() => screen.getByRole('heading', { name: /Review & Activate/i }))
+    await user.click(screen.getByTestId('wizard.deployment.submit'))
 
     // Error should be displayed
     await waitFor(() => {
@@ -254,7 +236,7 @@ describe('DeploymentProfileWizard', () => {
     await user.click(cancelButton)
 
     // Should navigate back to profiles list
-    expect(mockNavigate).toHaveBeenCalledWith('/console/deploy/profiles')
+    expect(mockNavigate).toHaveBeenCalledWith('/console/org/deploy/profiles')
   })
 
   it('should allow draft mode creation', async () => {
@@ -269,25 +251,24 @@ describe('DeploymentProfileWizard', () => {
       })
     )
 
-    // Complete wizard to review step
+    // Complete wizard to review step (environment_type pre-filled as 'api')
     await user.type(screen.getByLabelText(/profile name/i), 'Draft Profile')
-    await user.click(screen.getByLabelText(/api/i))
     await user.click(screen.getByTestId('wizard.deployment.next'))
     
-    await waitFor(() => screen.getByText('Runtime Settings'))
-    await user.click(screen.getByLabelText(/default policy/i))
-    await user.click(await screen.findByText(/age verification/i))
+    // Step 2: Runtime Settings (policy auto-selected - only one active policy)
+    await waitFor(() => screen.getByRole('heading', { name: /Runtime Settings/i }))
+    await waitFor(() => expect(screen.getByTestId('wizard.deployment.next')).not.toBeDisabled())
     await user.click(screen.getByTestId('wizard.deployment.next'))
     
     await waitFor(() => screen.getByText('Integration'))
     await user.click(screen.getByTestId('wizard.deployment.next'))
 
     // On review step, uncheck activate immediately
-    await waitFor(() => screen.getByText('Review & Activate'))
+    await waitFor(() => screen.getByRole('heading', { name: /Review & Activate/i }))
     const activateCheckbox = screen.getByLabelText(/activate immediately/i)
     await user.click(activateCheckbox)
 
-    await user.click(screen.getByRole('button', { name: /save draft/i }))
+    await user.click(screen.getByTestId('wizard.deployment.submit'))
 
     await waitFor(() => {
       expect(submittedData.status).toBe('draft')

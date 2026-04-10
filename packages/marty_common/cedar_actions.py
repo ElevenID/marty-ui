@@ -2,6 +2,10 @@
 
 Maps HTTP method + URL path to the canonical Cedar action strings defined
 in the MIP Cedar schema (mip.cedarschema).
+
+Supports both:
+- classic org-scoped paths: ``/v1/organizations/{org_id}/...``
+- top-level org-owned resources: ``/v1/application-templates/...``
 """
 
 import re
@@ -46,6 +50,97 @@ RESOURCE_ACTION_MAP: dict[str, tuple[str, str, str, str]] = {
 
 # Regex to extract org_id and resource segment from org-scoped paths.
 _ORG_PATH_RE = re.compile(r"^/v1/organizations/([a-f0-9\-]{36})/([^/]+)")
+_TOP_LEVEL_PATH_RE = re.compile(r"^/v1/([^/]+)(?:/|$)")
+_TOP_LEVEL_RESOURCE_RE = re.compile(r"^/v1/([^/]+)/([^/]+)(?:/|$)")
+
+
+RESOURCE_LOOKUP_MAP: dict[str, tuple[str, str, set[str]]] = {
+    "credential-templates": (
+        "credential-templates",
+        "/v1/credential-templates/{resource_id}",
+        set(),
+    ),
+    "trust-profiles": (
+        "trust-profiles",
+        "/v1/trust-profiles/{resource_id}",
+        set(),
+    ),
+    "issuer-entities": (
+        "trust-profiles",
+        "/v1/issuer-entities/{resource_id}",
+        set(),
+    ),
+    "compliance-profiles": (
+        "compliance-profiles",
+        "/v1/compliance-profiles/{resource_id}",
+        set(),
+    ),
+    "presentation-policies": (
+        "presentation-policies",
+        "/v1/presentation-policies/{resource_id}",
+        set(),
+    ),
+    "deployment-profiles": (
+        "deployment-profiles",
+        "/v1/deployment-profiles/{resource_id}",
+        set(),
+    ),
+    "revocation-profiles": (
+        "revocation-profiles",
+        "/v1/revocation-profiles/{resource_id}",
+        set(),
+    ),
+    "flows": (
+        "flows",
+        "/v1/flows/{resource_id}",
+        set(),
+    ),
+    "application-templates": (
+        "issuance",
+        "/v1/application-templates/{resource_id}",
+        {"validate-artifacts"},
+    ),
+    "applications": (
+        "issuance",
+        "/v1/applications/{resource_id}",
+        set(),
+    ),
+    "issued-credentials": (
+        "issuance",
+        "/v1/issued-credentials/{resource_id}",
+        set(),
+    ),
+    "issuance": (
+        "issuance",
+        "/v1/issuance/transactions/{resource_id}",
+        {
+            "offers",
+            "token",
+            "credential",
+            "nonce",
+            "notification",
+            "deferred-credential",
+            "authorize",
+            "par",
+            "didcomm",
+            "initiate",
+            "transactions",
+        },
+    ),
+}
+
+
+def _resolve_actions_for_method(
+    method: str,
+    actions: tuple[str, str, str, str],
+) -> tuple[str, str]:
+    """Return the Cedar action/resource pair for the HTTP method."""
+    read_action, write_action, delete_action, resource_type = actions
+    if method in ("GET", "HEAD", "OPTIONS"):
+        return (read_action, resource_type)
+    if method == "DELETE":
+        return (delete_action, resource_type)
+    return (write_action, resource_type)
 
 
 def resolve_action(method: str, path: str) -> Optional[str]:
@@ -56,21 +151,20 @@ def resolve_action(method: str, path: str) -> Optional[str]:
     """
     match = _ORG_PATH_RE.match(path)
     if not match:
-        return None
+        top_level = _TOP_LEVEL_PATH_RE.match(path)
+        if not top_level:
+            return None
+        actions = RESOURCE_ACTION_MAP.get(top_level.group(1))
+        if not actions:
+            return None
+        return _resolve_actions_for_method(method, actions)[0]
 
     resource_segment = match.group(2)
     actions = RESOURCE_ACTION_MAP.get(resource_segment)
     if not actions:
         # Unknown resource segment — require admin:full (fail-safe)
         return "admin:full"
-
-    read_action, write_action, delete_action, _resource_type = actions
-    if method in ("GET", "HEAD", "OPTIONS"):
-        return read_action
-    elif method == "DELETE":
-        return delete_action
-    else:
-        return write_action
+    return _resolve_actions_for_method(method, actions)[0]
 
 
 def resolve_action_and_resource(method: str, path: str) -> Optional[tuple[str, str]]:
@@ -81,20 +175,19 @@ def resolve_action_and_resource(method: str, path: str) -> Optional[tuple[str, s
     """
     match = _ORG_PATH_RE.match(path)
     if not match:
-        return None
+        top_level = _TOP_LEVEL_PATH_RE.match(path)
+        if not top_level:
+            return None
+        actions = RESOURCE_ACTION_MAP.get(top_level.group(1))
+        if not actions:
+            return None
+        return _resolve_actions_for_method(method, actions)
 
     resource_segment = match.group(2)
     actions = RESOURCE_ACTION_MAP.get(resource_segment)
     if not actions:
         return ("admin:full", "Organization")
-
-    read_action, write_action, delete_action, resource_type = actions
-    if method in ("GET", "HEAD", "OPTIONS"):
-        return (read_action, resource_type)
-    elif method == "DELETE":
-        return (delete_action, resource_type)
-    else:
-        return (write_action, resource_type)
+    return _resolve_actions_for_method(method, actions)
 
 
 def extract_org_id(path: str) -> Optional[str]:
@@ -105,3 +198,25 @@ def extract_org_id(path: str) -> Optional[str]:
     """
     match = _ORG_PATH_RE.match(path)
     return match.group(1) if match else None
+
+
+def resolve_resource_lookup(path: str) -> Optional[tuple[str, str]]:
+    """Return the backend service/path used to look up a resource owner org.
+
+    This is used for top-level resource routes where the organization is not
+    embedded in the URL, e.g. ``/v1/application-templates/{id}``.
+    """
+    match = _TOP_LEVEL_RESOURCE_RE.match(path)
+    if not match:
+        return None
+
+    resource_segment, resource_id = match.groups()
+    lookup = RESOURCE_LOOKUP_MAP.get(resource_segment)
+    if not lookup:
+        return None
+
+    service_name, lookup_template, reserved_segments = lookup
+    if resource_id in reserved_segments:
+        return None
+
+    return (service_name, lookup_template.format(resource_id=resource_id))

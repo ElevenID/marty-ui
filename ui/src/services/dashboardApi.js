@@ -8,6 +8,7 @@
  * - Environment settings
  */
 import { get, getErrorMessage } from './api';
+import { getCriticalEvents as getAuditCriticalEvents } from './auditApi';
 
 const BASE_PATH = '/v1/organizations';
 
@@ -80,13 +81,7 @@ export async function getRuntimeStatus(organizationId) {
  */
 export async function getCriticalEvents(organizationId) {
   try {
-    const params = new URLSearchParams();
-    params.append('severity', 'error,warning');
-    params.append('hours', '24');
-    params.append('limit', '10');
-    
-    const response = await get(`${BASE_PATH}/${organizationId}/audit/critical?${params.toString()}`);
-    return response?.events || [];
+    return await getAuditCriticalEvents(organizationId);
   } catch (error) {
     console.error('Failed to fetch critical events:', getErrorMessage(error));
     return [];

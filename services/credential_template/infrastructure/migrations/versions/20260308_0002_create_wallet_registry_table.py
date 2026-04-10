@@ -135,32 +135,45 @@ SEED_WALLETS = [
 ]
 
 
-def upgrade() -> None:
-    op.create_table(
-        "wallet_registry",
-        sa.Column("id", sa.String(64), primary_key=True),
-        sa.Column("name", sa.String(255), nullable=False),
-        sa.Column("logo_url", sa.Text, nullable=True),
-        sa.Column(
-            "deep_link_template",
-            sa.Text,
-            nullable=False,
-            server_default="openid-credential-offer://?credential_offer={OFFER}",
-        ),
-        sa.Column("supported_formats", sa.JSON, nullable=False, server_default="[]"),
-        sa.Column("supported_protocols", sa.JSON, nullable=False, server_default='["oid4vci"]'),
-        sa.Column("platforms", sa.JSON, nullable=False, server_default="[]"),
-        sa.Column("supports_qr", sa.Boolean, nullable=False, server_default="true"),
-        sa.Column("supports_deeplink", sa.Boolean, nullable=False, server_default="true"),
-        sa.Column("docs_url", sa.Text, nullable=True),
-        sa.Column("is_active", sa.Boolean, nullable=False, server_default="true"),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
-        schema=SCHEMA,
+def _wallet_registry_exists(conn) -> bool:
+    return bool(
+        conn.execute(
+            sa.text(
+                "SELECT 1 FROM information_schema.tables "
+                "WHERE table_schema = :schema AND table_name = 'wallet_registry' LIMIT 1"
+            ),
+            {"schema": SCHEMA},
+        ).scalar()
     )
 
-    import json
+
+def upgrade() -> None:
     conn = op.get_bind()
+    if not _wallet_registry_exists(conn):
+        op.create_table(
+            "wallet_registry",
+            sa.Column("id", sa.String(64), primary_key=True),
+            sa.Column("name", sa.String(255), nullable=False),
+            sa.Column("logo_url", sa.Text, nullable=True),
+            sa.Column(
+                "deep_link_template",
+                sa.Text,
+                nullable=False,
+                server_default="openid-credential-offer://?credential_offer={OFFER}",
+            ),
+            sa.Column("supported_formats", sa.JSON, nullable=False, server_default="[]"),
+            sa.Column("supported_protocols", sa.JSON, nullable=False, server_default='["oid4vci"]'),
+            sa.Column("platforms", sa.JSON, nullable=False, server_default="[]"),
+            sa.Column("supports_qr", sa.Boolean, nullable=False, server_default="true"),
+            sa.Column("supports_deeplink", sa.Boolean, nullable=False, server_default="true"),
+            sa.Column("docs_url", sa.Text, nullable=True),
+            sa.Column("is_active", sa.Boolean, nullable=False, server_default="true"),
+            sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+            sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
+            schema=SCHEMA,
+        )
+
+    import json
     for wallet in SEED_WALLETS:
         conn.execute(
             sa.text(
@@ -199,4 +212,6 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_table("wallet_registry", schema=SCHEMA)
+    conn = op.get_bind()
+    if _wallet_registry_exists(conn):
+        op.drop_table("wallet_registry", schema=SCHEMA)

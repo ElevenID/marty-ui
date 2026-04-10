@@ -112,6 +112,14 @@ debug-*.png
 .temp/
 tmp/
 
+# Vite timestamp cache files
+vite.config.ts.timestamp*
+
+# Lint/debug output
+eslint_output*
+full_eslint_output*
+api.log
+
 # =============================================================================
 # OS Files
 # =============================================================================

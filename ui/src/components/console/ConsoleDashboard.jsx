@@ -175,7 +175,7 @@ function ConsoleDashboard() {
 
   // Check if org is operational (setup complete + runtime ready)
   const isOperational = useMemo(() => {
-    return readiness.flow?.state === 'READY' && 
+    return readiness.flow?.state === 'ready' && 
            data.runtimeStatus?.canIssue && 
            data.runtimeStatus?.canVerify;
   }, [readiness, data.runtimeStatus]);

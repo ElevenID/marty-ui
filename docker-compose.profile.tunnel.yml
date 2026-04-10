@@ -47,6 +47,7 @@ services:
     environment:
       PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:-beta.elevenidllc.com}
       UI_DEV_PORT: ${UI_DEV_PORT:-3002}
+      DOCS_DOMAIN: ${DOCS_DOMAIN:-docs.elevenidllc.com}
     networks:
       - marty-network
     restart: unless-stopped
@@ -66,6 +67,7 @@ services:
       - ./ui/dist:/usr/share/nginx/html:ro
     environment:
       PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:-beta.elevenidllc.com}
+      DOCS_DOMAIN: ${DOCS_DOMAIN:-docs.elevenidllc.com}
     networks:
       - marty-network
     restart: unless-stopped

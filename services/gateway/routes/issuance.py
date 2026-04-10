@@ -239,9 +239,34 @@ async def deferred_credential(request: Request) -> Response:
 
 # ── Application Templates ───────────────────────────────────────────
 
+async def _validate_application_template_dependencies(
+    body: ApplicationTemplateCreate,
+    request: Request,
+) -> None:
+    """Ensure referenced credential templates stay within the same org boundary."""
+    if not body.credential_template_id:
+        return
+
+    owner_org = await _resource_org_id(
+        "credential-templates",
+        f"/v1/credential-templates/{body.credential_template_id}",
+        request,
+    )
+    if owner_org is None:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Credential template not found: {body.credential_template_id}",
+        )
+    if owner_org != body.organization_id:
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied: credential template belongs to another organization",
+        )
+
 @application_template_router.post("", response_model=ApplicationTemplateResponse, summary="Create Application Template")
 async def create_application_template(body: ApplicationTemplateCreate, request: Request) -> Response:
     """Create an Application Template defining how users apply for credentials."""
+    await _validate_application_template_dependencies(body, request)
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
     return await proxy_request(request, service_url, "/v1/application-templates", inject_headers=_ISSUANCE_HEADERS)
@@ -269,6 +294,7 @@ async def get_application_template(template_id: str, request: Request) -> Respon
 @application_template_router.put("/{template_id}", response_model=ApplicationTemplateResponse, summary="Update Application Template")
 async def update_application_template(template_id: str, body: ApplicationTemplateCreate, request: Request) -> Response:
     """Update an Application Template."""
+    await _validate_application_template_dependencies(body, request)
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
     return await proxy_request(request, service_url, f"/v1/application-templates/{template_id}", inject_headers=_ISSUANCE_HEADERS)

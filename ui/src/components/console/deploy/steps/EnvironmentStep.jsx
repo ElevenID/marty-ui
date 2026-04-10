@@ -101,6 +101,7 @@ const EnvironmentStep = ({ data, onChange }) => {
               }}
             >
               <CardActionArea
+                data-testid={`env-type-${type.value}`}
                 onClick={() => onChange({ environment_type: type.value })}
                 sx={{ height: '100%' }}
               >

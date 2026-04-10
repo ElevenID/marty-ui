@@ -407,6 +407,51 @@ export const handlers = [
     return HttpResponse.json({ message: 'Deleted' })
   }),
 
+  http.get(`${API_BASE}/v1/organizations/:orgId/audit-events`, ({ params }) => {
+    return HttpResponse.json({
+      events: [
+        {
+          id: 'evt_1',
+          organization_id: params.orgId,
+          timestamp: new Date().toISOString(),
+          actor_id: 'user_1',
+          actor_type: 'user',
+          action: 'credential.issued',
+          resource_type: 'credential',
+          resource_id: 'cred_1',
+          resource_name: 'Credential cred_1',
+          changes: null,
+          metadata: {
+            severity: 'info',
+            ip_address: '127.0.0.1',
+          },
+        },
+      ],
+      total: 1,
+      page: 1,
+      per_page: 50,
+    })
+  }),
+
+  http.get(`${API_BASE}/v1/organizations/:orgId/audit-events/:eventId`, ({ params }) => {
+    return HttpResponse.json({
+      id: params.eventId,
+      organization_id: params.orgId,
+      timestamp: new Date().toISOString(),
+      actor_id: 'user_1',
+      actor_type: 'user',
+      action: 'credential.issued',
+      resource_type: 'credential',
+      resource_id: 'cred_1',
+      resource_name: 'Credential cred_1',
+      changes: null,
+      metadata: {
+        severity: 'info',
+        ip_address: '127.0.0.1',
+      },
+    })
+  }),
+
   // Audit Logs
   http.get(`${API_BASE}/v1/audit/events`, () => {
     return HttpResponse.json({
@@ -442,8 +487,44 @@ export const handlers = [
     return HttpResponse.json({ status: 'ok' })
   }),
 
+  // Dashboard service endpoints
+  http.get(`${API_BASE}/v1/organizations/:id/team/snapshot`, () => {
+    return HttpResponse.json({
+      members: [
+        { id: 'user_1', name: 'Admin User', role: 'admin', status: 'online' },
+        { id: 'user_2', name: 'Dev User', role: 'developer', status: 'online' },
+        { id: 'user_3', name: 'Dev User 2', role: 'developer', status: 'offline' },
+        { id: 'user_4', name: 'Operator', role: 'operator', status: 'online' },
+        { id: 'user_5', name: 'Operator 2', role: 'operator', status: 'offline' },
+      ],
+      pending_invites: [],
+      role_distribution: { admin: 1, developer: 2, operator: 2 },
+    })
+  }),
+
+  http.get(`${API_BASE}/v1/organizations/:id/runtime/status`, () => {
+    return HttpResponse.json({
+      can_issue: true,
+      can_verify: true,
+      issuer_keys_valid: true,
+      issuer_active: true,
+      deployment_active: true,
+      policy_reachable: true,
+      last_issuance_timestamp: new Date().toISOString(),
+      last_verification_timestamp: new Date().toISOString(),
+    })
+  }),
+
+  http.get(`${API_BASE}/v1/organizations/:id/environment`, () => {
+    return HttpResponse.json({ environment: 'development' })
+  }),
+
   // Fallback handlers for relative URLs (without base)
   // These catch requests from services that use VITE_API_URL=''
+  http.get('/health', () => {
+    return HttpResponse.json({ status: 'ok' })
+  }),
+
   http.get('/v1/auth/me', () => {
     return HttpResponse.json({ authenticated: true, user: mockUsers.admin })
   }),
@@ -651,6 +732,23 @@ export const emptyOrgHandlers = [
   }),
   http.get(`${API_BASE}/v1/flows`, () => {
     return HttpResponse.json([])
+  }),
+  http.get(`${API_BASE}/v1/organizations/:id/runtime/status`, () => {
+    return HttpResponse.json({
+      can_issue: false,
+      can_verify: false,
+      issuer_keys_valid: false,
+      issuer_active: false,
+      deployment_active: false,
+      policy_reachable: false,
+    })
+  }),
+  http.get(`${API_BASE}/v1/organizations/:id/team/snapshot`, () => {
+    return HttpResponse.json({
+      members: [],
+      pending_invites: [],
+      role_distribution: { admin: 0, developer: 0, operator: 0 },
+    })
   }),
 ]
 

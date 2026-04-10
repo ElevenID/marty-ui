@@ -95,9 +95,9 @@ const FlowTypeStep = ({ selectedType, onSelectType }) => {
                   boxShadow: 4,
                 },
               }}
-              data-testid={`flow-type-${type.value}`}
             >
               <CardActionArea
+                data-testid={`flow-type-${type.value}`}
                 onClick={() => onSelectType(type.value)}
                 sx={{ height: '100%', p: 2 }}
                 aria-selected={selectedType === type.value}

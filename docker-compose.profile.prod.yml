@@ -14,3 +14,12 @@ services:
       KC_HOSTNAME_STRICT_HTTPS: "true"
       KC_HTTP_ENABLED: "false"
       KC_PROXY: edge
+
+  docs:
+    build:
+      context: ../marty-docs
+      dockerfile: Dockerfile
+    container_name: marty-docs
+    networks:
+      - marty-network
+    restart: unless-stopped

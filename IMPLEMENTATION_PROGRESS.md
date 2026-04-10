@@ -1,11 +1,15 @@
 # Marty-UI Post-Login Console Enhancements - Implementation Progress
 
 **Date**: February 9, 2026  
-**Status**: Phase 1 - Foundation & Core Features (In Progress)
+**Status**: Phase 1 - Foundation & Core Features (Implementation largely complete; validation & hardening in progress)
 
 ## Overview
 
 This document tracks the implementation of comprehensive improvements to the marty-ui post-login organization console. The improvements span 5 concurrent workstreams focused on infrastructure, access control, observability, operations, and UX consistency.
+
+> For the current production go/no-go checklist, see `RELEASE_READINESS.md`. This file tracks implementation progress; the readiness document is the canonical launch-validation checklist.
+
+> For the current CLI + gateway manual smoke queue, see `MANUAL_READINESS_TASKS.md`.
 
 ---
 
@@ -53,7 +57,7 @@ This document tracks the implementation of comprehensive improvements to the mar
   - Hook: `ui/src/hooks/usePermissions.js`
   - Components: `ui/src/components/common/PermissionGate.jsx`
 - **Features**:
-  - Role definitions: `admin`, `dev`, `operator`
+  - Role definitions in the UI: `admin`, `developer`, `operator`
   - Resource permissions matrix
   - Actions: `view`, `create`, `edit`, `delete`, `execute`
   - Helper functions: `hasPermission()`, `canAccessResource()`, `getPermissionDeniedMessage()`
@@ -101,21 +105,25 @@ This document tracks the implementation of comprehensive improvements to the mar
 - **Integration Points**:
   - Dashboard readiness checks (blocks deploy if no valid keys)
   - Audit log events for key operations
-- **Status**: ⚠️ **Needs routing configuration**
+- **Status**: ✅ **Route configured; dashboard integration still pending**
 
 ### API Services Created ✅
 
 #### 7. **Audit Logs API Service** ✅
 - **Location**: `ui/src/services/auditApi.js`
 - **Functions**:
-  - `listAuditEvents(filters)` - Paginated event list with rich filters
-  - `getAuditEvent(eventId)` - Get event details
-  - `exportAuditEvents(filters, format)` - Server-side export to CSV/JSON
-  - `getCriticalEvents()` - Last 24h critical events
-  - `saveFilterView(view)` - Save custom filter presets
-  - `listFilterViews()` - List saved views
+  - `listAuditEvents(organizationId, filters)` - Paginated org-scoped event list with normalized gateway payloads
+  - `getAuditEvent(organizationId, eventId)` - Get event details for the active org
+  - `exportAuditEvents(organizationId, filters, format)` - Build org-scoped gateway export URLs
+  - `getCriticalEvents(organizationId)` - Last 24h critical events derived from the audit feed
+  - `saveFilterView(organizationId, view)` - Save org-scoped filter presets locally
+  - `listFilterViews(organizationId)` - List org-scoped saved views from local persistence
 - **Filters Support**:
-  - Actor (user), Resource type/ID, Action, Severity, IP address, Date range
+  - Actor (user), search text, Resource type/ID, Action, Severity, IP address, Date range
+- **Current Contract Notes**:
+  - Uses organization-scoped gateway routes (`/v1/organizations/{org_id}/audit-events`)
+  - Normalizes gateway audit-event payloads into the UI's `category` / `resource` / `details` shape
+  - Saved views are currently local per organization rather than backend-shared
 
 #### 8. **Notifications API Service** ✅
 - **Location**: `ui/src/services/notificationsApi.js`
@@ -147,10 +155,10 @@ This document tracks the implementation of comprehensive improvements to the mar
 #### 10. **Audit Page with Real API Integration** ✅
 - **Location**: `ui/src/components/console/audit/AuditPage.jsx`
 - **Completed Features**:
-  - ✅ Replaced mock data with `auditApi.listAuditEvents()`
-  - ✅ Wired up filters (category, severity, actor, IP, date range)
-  - ✅ Implemented server-side CSV export with job tracking
-  - ✅ Added saved filter views (save/load/apply)
+  - ✅ Replaced mock data with org-scoped `auditApi.listAuditEvents(organizationId, filters)`
+  - ✅ Wired up filters (search, category, severity, actor, IP, date range)
+  - ✅ Implemented gateway-backed CSV export via direct download URL
+  - ✅ Added org-scoped saved filter views (save/load/apply)
   - ✅ Deep-linking to resources (credentials, flows, policies, templates, team)
   - ✅ Replaced LinearProgress with `TableSkeleton`
   - ✅ Added `ErrorState` with retry functionality
@@ -250,15 +258,19 @@ This document tracks the implementation of comprehensive improvements to the mar
   - `vendor/WebhookManager.jsx` → `console/deploy/WebhooksPage.jsx`
 - **Pattern**: Use `ResourcePage` wrapper, `TableSkeleton`, `ErrorState`, `EmptyState`
 
-#### 18. **Add Route Configuration**
+#### 18. **Validate Route Configuration**
 - **Location**: `ui/src/App.jsx`
-- **Routes to Add**:
-  ```javascript
-  /console/deploy/signing-keys
-  /console/org/notifications
-  /console/org/notifications/settings
-  /console/audit (update for new features)
-  ```
+- **Current State**:
+  - ✅ `/console/deploy/signing-keys`
+  - ✅ `/console/org/notifications`
+  - ✅ `/console/org/notifications/settings`
+  - ✅ `/console/audit`
+  - ✅ `/console/org/team`
+  - ✅ `/console/setup-wizard`
+- **Remaining Work**:
+  - Add regression coverage for route navigation and deep links
+  - Verify permission-based access to new console routes
+  - Validate legacy navigation still lands on the correct console pages
 
 #### 19. **Verification Context-Aware Actions**
 - **Tasks**:
@@ -295,19 +307,20 @@ This document tracks the implementation of comprehensive improvements to the mar
 - ✅ Empty states with prerequisites
 
 ### Test Coverage
-- ⚠️ Unit tests not yet added
-- ⚠️ Integration tests needed for API services
-- ⚠️ E2E tests for workflows (setup wizard, team management)
+- ✅ Initial unit coverage exists for dashboard readiness logic and some quick-create flows
+- ✅ Direct service tests now exist for `auditApi`, `notificationsApi`, and `teamApi`
+- ✅ Focused component tests now exist for `TeamPage`, notifications surfaces, and `AuditPage`
+- ⚠️ Broader cross-role component/E2E coverage is still needed to validate notifications and audit workflows across the full permission matrix
 
 ---
 
 ## 🎯 Immediate Next Actions
 
-1. **Add Routing** - Configure routes in `App.jsx` for new pages
-2. **Update Audit Page** - Connect to real API service
-3. **Build Notifications UI** - Bell icon + dropdown + full page
-4. **Enhance Team Page** - Full CRUD with invite flow
-5. **Testing** - Add component tests for new features
+1. **Testing** - Broaden cross-role component/E2E coverage for notifications, audit, and team-management workflows beyond the new focused regression suite
+2. **RBAC Validation** - Document and verify expected access for `admin`, `developer`, and `operator`
+3. **Hardening** - Run accessibility and network-failure validation across the new console surfaces
+4. **Scale Validation** - Load test large audit-log datasets and verify dashboard/signing-key readiness integration
+5. **API Docs** - Update API documentation for the new or expanded endpoints
 
 ---
 
@@ -334,20 +347,23 @@ This document tracks the implementation of comprehensive improvements to the mar
 
 ## 🚀 Deployment Checklist
 
-Before deploying to production:
+Before deploying to production (reviewed against the current codebase on April 10, 2026):
 
-- [ ] Add unit tests for new components
-- [ ] Add integration tests for API services
-- [ ] Update routing configuration
-- [ ] Connect Audit page to real API
-- [ ] Add Notifications UI to layout
-- [ ] Document permission matrix for operations team
+- [x] Update routing configuration
+- [x] Connect Audit page to real API
+- [x] Add Notifications UI to layout
+- [x] Add targeted component tests for `TeamPage`, notifications surfaces, and `AuditPage`
+- [x] Add direct service tests for `auditApi`, `notificationsApi`, and `teamApi`
+- [x] Document permission matrix for operations team (`OPERATIONS_PERMISSION_MATRIX.md`)
+- [ ] Normalize role terminology across docs/UI/tests (`admin`, `developer`, `operator`)
 - [ ] Update API documentation for new endpoints
-- [ ] Run accessibility audit
-- [ ] Test with all three roles (admin/dev/operator)
-- [ ] Verify error handling with network failures
+- [ ] Run accessibility audit across the new console surfaces
+- [ ] Test with all three roles (`admin`, `developer`, `operator`)
+- [ ] Verify error handling with network failures and notification polling interruptions
 - [ ] Load test with large audit log datasets
+- [ ] Validate dashboard readiness and signing-key integration
+- [ ] Add route/navigation regression coverage for the new console pages
 
 ---
 
-**Last Updated**: February 9, 2026 by Implementation Agent
+**Last Updated**: April 10, 2026 by GitHub Copilot

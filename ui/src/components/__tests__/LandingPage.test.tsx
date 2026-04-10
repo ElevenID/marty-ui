@@ -42,6 +42,7 @@ vi.mock('../seo', () => ({
 vi.mock('../diagrams', () => ({
   UnifiedIdentityFlowDiagram: () => <div>Unified Identity Flow</div>,
   StandardsStackDiagram: () => <div>Standards Stack</div>,
+  InteractiveProtocolMap: () => <div>Interactive Protocol Map</div>,
 }));
 
 describe('LandingPage', () => {

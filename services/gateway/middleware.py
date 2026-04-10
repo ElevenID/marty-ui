@@ -193,6 +193,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         request.state.user_id = user_id
         request.state.user_email = email
         request.state.user_domain = email.split("@")[1] if email and "@" in email else None
+        request.state.session_organization_id = user_data.get("organization_id")
 
         # Proceed with request
         response = await call_next(request)

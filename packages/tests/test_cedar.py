@@ -11,13 +11,17 @@ import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi.responses import JSONResponse
+from starlette.requests import Request
 
 from marty_common.cedar_actions import (
     RESOURCE_ACTION_MAP,
     extract_org_id,
     resolve_action,
     resolve_action_and_resource,
+    resolve_resource_lookup,
 )
+from marty_common.cedar_middleware import CedarAuthMiddleware
 from marty_common.cedar_engine import AuthzDecision, CedarEngine
 from marty_common.cedar_entities import (
     build_apikey_entities,
@@ -72,6 +76,10 @@ class TestResolveAction:
         assert resolve_action("GET", "/v1/organizations/00000000-0000-0000-0000-000000000001/policy-sets") == "trust:read"
         assert resolve_action("POST", "/v1/organizations/00000000-0000-0000-0000-000000000001/policy-sets") == "trust:admin"
 
+    def test_top_level_application_templates(self):
+        assert resolve_action("POST", "/v1/application-templates") == "applications:write"
+        assert resolve_action("GET", "/v1/application-templates/template-123") == "applications:read"
+
 
 class TestResolveActionAndResource:
     ORG_PREFIX = "/v1/organizations/00000000-0000-0000-0000-000000000001/"
@@ -112,6 +120,14 @@ class TestResolveActionAndResource:
         result = resolve_action_and_resource("DELETE", self.ORG_PREFIX + "credentials/123")
         assert result == ("credentials:revoke", "Credential")
 
+    def test_top_level_application_templates(self):
+        result = resolve_action_and_resource("POST", "/v1/application-templates")
+        assert result == ("applications:write", "Application")
+
+    def test_top_level_deployment_profile_child_route(self):
+        result = resolve_action_and_resource("POST", "/v1/deployment-profiles/profile-123/lanes")
+        assert result == ("deployment:write", "DeploymentProfile")
+
 
 class TestExtractOrgId:
     def test_extracts_uuid(self):
@@ -121,6 +137,149 @@ class TestExtractOrgId:
     def test_non_org_path(self):
         assert extract_org_id("/health") is None
         assert extract_org_id("/v1/auth/login") is None
+
+
+class TestResolveResourceLookup:
+    def test_application_template_lookup(self):
+        assert resolve_resource_lookup("/v1/application-templates/template-123") == (
+            "issuance",
+            "/v1/application-templates/template-123",
+        )
+
+    def test_deployment_lane_lookup_uses_parent_profile(self):
+        assert resolve_resource_lookup("/v1/deployment-profiles/profile-123/lanes") == (
+            "deployment-profiles",
+            "/v1/deployment-profiles/profile-123",
+        )
+
+    def test_wallet_facing_issuance_route_has_no_lookup(self):
+        assert resolve_resource_lookup("/v1/issuance/offers/tx-123") is None
+
+
+def _build_request(
+    path: str,
+    *,
+    method: str = "GET",
+    headers: dict[str, str] | None = None,
+    body: bytes = b"",
+    app: object | None = None,
+) -> Request:
+    payload = body
+
+    async def receive():
+        nonlocal payload
+        current = payload
+        payload = b""
+        return {"type": "http.request", "body": current, "more_body": False}
+
+    scope = {
+        "type": "http",
+        "http_version": "1.1",
+        "method": method,
+        "path": path,
+        "raw_path": path.encode(),
+        "query_string": b"",
+        "headers": [
+            (key.lower().encode(), value.encode())
+            for key, value in (headers or {}).items()
+        ],
+        "client": ("127.0.0.1", 12345),
+        "server": ("testserver", 80),
+        "scheme": "http",
+        "app": app,
+    }
+    return Request(scope, receive)
+
+
+@pytest.mark.asyncio
+async def test_cedar_middleware_authorizes_top_level_create_from_body_org():
+    membership = MagicMock()
+    membership.role.value = "admin"
+    membership.is_active.return_value = True
+
+    cedar_engine = MagicMock()
+    cedar_engine.is_authorized.return_value = AuthzDecision(allowed=True)
+    org_client = MagicMock()
+    org_client.get_membership = AsyncMock(return_value=membership)
+
+    app = MagicMock()
+    app.state.cedar_engine = cedar_engine
+    app.state.org_client = org_client
+    app.state.service_registry = None
+    app.state.http_client = None
+
+    request = _build_request(
+        "/v1/application-templates",
+        method="POST",
+        headers={"content-type": "application/json"},
+        body=b'{"organization_id":"00000000-0000-0000-0000-000000000001","name":"Template"}',
+        app=app,
+    )
+    request.state.user_id = "user-1"
+    request.state.user_email = "user@example.com"
+
+    call_next = AsyncMock(return_value=JSONResponse({"ok": True}))
+    middleware = CedarAuthMiddleware(app=MagicMock())
+
+    response = await middleware.dispatch(request, call_next)
+
+    assert response.status_code == 200
+    assert request.state.organization_id == "00000000-0000-0000-0000-000000000001"
+    org_client.get_membership.assert_awaited_once_with(
+        "user-1",
+        "00000000-0000-0000-0000-000000000001",
+    )
+    cedar_engine.is_authorized.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_cedar_middleware_looks_up_owner_org_for_top_level_detail_route():
+    membership = MagicMock()
+    membership.role.value = "admin"
+    membership.is_active.return_value = True
+
+    cedar_engine = MagicMock()
+    cedar_engine.is_authorized.return_value = AuthzDecision(allowed=True)
+    org_client = MagicMock()
+    org_client.get_membership = AsyncMock(return_value=membership)
+
+    service_registry = MagicMock()
+    service_registry.get_service_url.return_value = "http://issuance-service:8005"
+
+    upstream_response = MagicMock()
+    upstream_response.status_code = 200
+    upstream_response.json.return_value = {
+        "organization_id": "00000000-0000-0000-0000-000000000001"
+    }
+    http_client = MagicMock()
+    http_client.get = AsyncMock(return_value=upstream_response)
+
+    app = MagicMock()
+    app.state.cedar_engine = cedar_engine
+    app.state.org_client = org_client
+    app.state.service_registry = service_registry
+    app.state.http_client = http_client
+
+    request = _build_request(
+        "/v1/application-templates/template-123",
+        method="GET",
+        app=app,
+    )
+    request.state.user_id = "user-1"
+    request.state.user_email = "user@example.com"
+
+    call_next = AsyncMock(return_value=JSONResponse({"ok": True}))
+    middleware = CedarAuthMiddleware(app=MagicMock())
+
+    response = await middleware.dispatch(request, call_next)
+
+    assert response.status_code == 200
+    assert request.state.organization_id == "00000000-0000-0000-0000-000000000001"
+    http_client.get.assert_awaited_once()
+    org_client.get_membership.assert_awaited_once_with(
+        "user-1",
+        "00000000-0000-0000-0000-000000000001",
+    )
 
 
 # ============================================================================

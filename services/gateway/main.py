@@ -104,6 +104,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     _proxy_mod._registry = ServiceRegistry()
     _proxy_mod._http_client = httpx.AsyncClient(timeout=httpx.Timeout(30.0))
     _proxy_mod._session_cache = SessionCache(ttl_seconds=60)
+    app.state.service_registry = _proxy_mod._registry
+    app.state.http_client = _proxy_mod._http_client
 
     # Initialize Redis for membership caching
     redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379")

@@ -104,14 +104,20 @@ function TeamPage() {
     error,
     reload,
   } = useAsyncData(async () => {
-    const promises = [
+    if (!effectiveOrgId) {
+      return {
+        members: [],
+        pendingInvites: [],
+        availableRoles: [],
+      };
+    }
+
+    const [membersData, invitesData, rolesData] = await Promise.all([
       teamApi.listMembers(effectiveOrgId),
       teamApi.listInvites(effectiveOrgId).catch(() => []),
-    ];
-    if (effectiveOrgId) {
-      promises.push(listRoles(effectiveOrgId).catch(() => []));
-    }
-    const [membersData, invitesData, rolesData] = await Promise.all(promises);
+      listRoles(effectiveOrgId).catch(() => []),
+    ]);
+
     return {
       members: Array.isArray(membersData) ? membersData : (membersData?.members ?? []),
       pendingInvites: Array.isArray(invitesData) ? invitesData : (invitesData?.invites ?? []),
@@ -123,9 +129,17 @@ function TeamPage() {
   const pendingInvites = orgData?.pendingInvites ?? [];
   const availableRoles = orgData?.availableRoles ?? [];
 
+  const requireOrgId = () => {
+    if (!effectiveOrgId) {
+      throw new Error('Organization context unavailable');
+    }
+
+    return effectiveOrgId;
+  };
+
   const handleInvite = async (email, role) => {
     try {
-      await teamApi.inviteMember({ email, role });
+      await teamApi.inviteMember(requireOrgId(), { email, role });
       showNotification?.(t('org.team.dialog.invite.success'), 'success');
       inviteDialog.close();
       reload();
@@ -137,7 +151,7 @@ function TeamPage() {
 
   const handleResendInvite = async (inviteId) => {
     try {
-      await teamApi.resendInvite(inviteId);
+      await teamApi.resendInvite(requireOrgId(), inviteId);
       showNotification?.(t('org.team.dialog.resendSuccess'), 'success');
     } catch (err) {
       console.error('Failed to resend invite:', err);
@@ -148,7 +162,7 @@ function TeamPage() {
   const handleRevokeInvite = async (inviteId) => {
     if (!confirm(t('org.team.invites.actions.confirmRevoke'))) return;
     try {
-      await teamApi.revokeInvite(inviteId);
+      await teamApi.revokeInvite(requireOrgId(), inviteId);
       showNotification?.(t('org.team.dialog.revokeSuccess'), 'success');
       reload();
     } catch (err) {
@@ -159,11 +173,13 @@ function TeamPage() {
 
   const handleChangeRole = async (memberId, roleIds) => {
     try {
-      if (organizationId) {
-        await setMemberRoles(organizationId, memberId, roleIds);
+      const orgId = requireOrgId();
+
+      if (availableRoles.length > 0 || roleIds.length > 1) {
+        await setMemberRoles(orgId, memberId, roleIds);
       } else {
         // Fallback for legacy single-role
-        await teamApi.updateMemberRole(memberId, roleIds[0]);
+        await teamApi.updateMemberRole(orgId, memberId, roleIds[0]);
       }
       showNotification?.(t('org.team.dialog.changeRole.success'), 'success');
       roleDialog.close();
@@ -178,7 +194,7 @@ function TeamPage() {
   const handleRemoveMember = async (memberId, memberEmail) => {
     if (!confirm(t('org.team.members.actions.confirmRemove', { email: memberEmail }))) return;
     try {
-      await teamApi.removeMember(memberId);
+      await teamApi.removeMember(requireOrgId(), memberId);
       showNotification?.(t('org.team.dialog.removeSuccess'), 'success');
       reload();
     } catch (err) {
