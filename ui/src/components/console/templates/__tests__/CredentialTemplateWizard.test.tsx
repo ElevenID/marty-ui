@@ -51,12 +51,8 @@ describe('CredentialTemplateWizard', () => {
       const nextButton = screen.getByTestId('wizard.template.next')
       expect(nextButton).toBeDisabled()
 
-      // Enter name only
+      // Enter name only — credential_type is pre-filled via initialData
       await user.type(screen.getByLabelText(/Template Name/i), 'mDL Template')
-      expect(nextButton).toBeDisabled()
-
-      // Enter credential type
-      await user.type(screen.getByLabelText(/Credential Type/i), 'VerifiableCredential')
       expect(nextButton).toBeDisabled()
 
       // Enter vct
@@ -100,7 +96,7 @@ describe('CredentialTemplateWizard', () => {
       await user.click(screen.getByTestId('wizard.template.next'))
 
       await waitFor(() => {
-        expect(screen.getByText(/Claims/i)).toBeInTheDocument()
+        expect(screen.getByRole('heading', { name: /claims/i })).toBeInTheDocument()
       })
 
       // Add a claim (implementation depends on ClaimsStep UI)
@@ -206,7 +202,7 @@ describe('CredentialTemplateWizard', () => {
       await user.click(screen.getByTestId('wizard.template.next'))
 
       await waitFor(() => {
-        expect(screen.getByText(/Claims/i)).toBeInTheDocument()
+        expect(screen.getByRole('heading', { name: /claims/i })).toBeInTheDocument()
       })
 
       // Go back
@@ -223,7 +219,7 @@ describe('CredentialTemplateWizard', () => {
 
       await user.click(screen.getByTestId('wizard.template.cancel'))
 
-      expect(mockNavigate).toHaveBeenCalledWith('/console/templates/credentials')
+      expect(mockNavigate).toHaveBeenCalledWith('/console/org/templates/credentials')
     })
   })
 

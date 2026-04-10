@@ -94,7 +94,7 @@ export const AUDIENCE_ROUTING = {
       description: 'Docs, SDKs, and quickstarts for VC issuance and verification.',
       benefit: 'Ship VC flows fast',
       cta: 'Read Docs',
-      path: '/api-docs',
+      path: '/docs',
       color: 'info',
       icon: 'Code',
     },

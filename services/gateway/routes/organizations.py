@@ -126,20 +126,73 @@ async def accept_organization_invitation(body: InvitationAcceptRequest, request:
 
 # ── Audit Events ─────────────────────────────────────────────────────
 
-@organization_router.get("/{org_id}/audit-events", response_model=list[AuditEventResponse], summary="List Audit Events")
+@organization_router.get("/{org_id}/audit-events", summary="List Audit Events")
 async def list_audit_events(
     org_id: str,
+    actor: str | None = Query(None, description="Filter by actor"),
     resource_type: str | None = Query(None, description="Filter by resource type"),
+    resource_id: str | None = Query(None, description="Filter by resource ID"),
     action: str | None = Query(None, description="Filter by action"),
+    search: str | None = Query(None, description="Free-text search"),
+    severity: str | None = Query(None, description="Filter by severity"),
+    ip_address: str | None = Query(None, description="Filter by IP address"),
     start_date: str | None = Query(None, description="Filter from date (ISO 8601)"),
     end_date: str | None = Query(None, description="Filter to date (ISO 8601)"),
     limit: int = Query(100, description="Max results", le=1000),
+    offset: int = Query(0, description="Pagination offset", ge=0),
     request: Request = None,
 ) -> Response:
     """List Audit Events for an organization (immutable log)."""
     registry = get_registry()
     service_url = registry.get_service_url("organizations")
-    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/audit-events", inject_params={"organization_id": org_id})
+    page = (offset // limit) + 1 if limit else 1
+    inject_params = {
+        "organization_id": org_id,
+        "per_page": limit,
+        "page": page,
+    }
+
+    if resource_type:
+        inject_params["category"] = resource_type
+
+    bridged_search = search or actor or resource_id or action or ip_address
+    if bridged_search:
+        inject_params["search"] = bridged_search
+
+    return await proxy_request(request, service_url, "/v1/organizations/audit/events", inject_params=inject_params)
+
+
+@organization_router.get("/{org_id}/audit-events/export", summary="Export Audit Events")
+async def export_audit_events(
+    org_id: str,
+    actor: str | None = Query(None, description="Filter by actor"),
+    resource_type: str | None = Query(None, description="Filter by resource type"),
+    resource_id: str | None = Query(None, description="Filter by resource ID"),
+    action: str | None = Query(None, description="Filter by action"),
+    search: str | None = Query(None, description="Free-text search"),
+    severity: str | None = Query(None, description="Filter by severity"),
+    ip_address: str | None = Query(None, description="Filter by IP address"),
+    start_date: str | None = Query(None, description="Filter from date (ISO 8601)"),
+    end_date: str | None = Query(None, description="Filter to date (ISO 8601)"),
+    format: str = Query("csv", description="Export format"),
+    request: Request = None,
+) -> Response:
+    """Export Audit Events for an organization."""
+    registry = get_registry()
+    service_url = registry.get_service_url("organizations")
+    inject_params = {
+        "organization_id": org_id,
+        "format": format,
+    }
+
+    if resource_type:
+        inject_params["category"] = resource_type
+
+    bridged_search = search or actor or resource_id or action or ip_address
+    if bridged_search:
+        inject_params["search"] = bridged_search
+
+    return await proxy_request(request, service_url, "/v1/organizations/audit/events/export", inject_params=inject_params)
 
 
 @organization_router.get("/{org_id}/audit-events/{event_id}", response_model=AuditEventResponse, summary="Get Audit Event")
@@ -147,7 +200,7 @@ async def get_audit_event(org_id: str, event_id: str, request: Request) -> Respo
     """Get an Audit Event by ID."""
     registry = get_registry()
     service_url = registry.get_service_url("organizations")
-    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/audit-events/{event_id}", inject_params={"organization_id": org_id})
+    return await proxy_request(request, service_url, f"/v1/organizations/audit/events/{event_id}", inject_params={"organization_id": org_id})
 
 
 # ── RBAC: Permissions ────────────────────────────────────────────────

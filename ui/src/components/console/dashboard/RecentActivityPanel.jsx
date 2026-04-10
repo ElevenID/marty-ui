@@ -32,6 +32,7 @@ import VerifiedUserIcon from '@mui/icons-material/VerifiedUser';
 import PersonIcon from '@mui/icons-material/Person';
 
 import { useAuth } from '../../../hooks/useAuth';
+import { useConsole } from '../../../contexts/ConsoleContext';
 import { listAuditEvents } from '../../../services/auditApi';
 import sseService, { EVENT_TYPES } from '../../../services/sseService';
 
@@ -187,19 +188,21 @@ function ActivityRow({ event }) {
 export function RecentActivityPanel() {
   const { t } = useTranslation('console');
   const { organizationId } = useAuth();
+  const { activeOrgId } = useConsole();
+  const effectiveOrgId = activeOrgId || organizationId;
   const [liveEvents, setLiveEvents] = useState([]);
   const { data: fetchedEvents = [], loading } = useAsyncData(
     async () => {
-      if (!organizationId) return [];
+      if (!effectiveOrgId) return [];
       try {
-        const response = await listAuditEvents({ limit: 5 });
+        const response = await listAuditEvents(effectiveOrgId, { limit: 5 });
         return response?.events || response || [];
       } catch (err) {
         console.error('Failed to fetch recent activity:', err);
         return [];
       }
     },
-    [organizationId]
+    [effectiveOrgId]
   );
 
   // Merge live SSE events with fetched events, newest first, capped at 10
@@ -209,7 +212,7 @@ export function RecentActivityPanel() {
 
   // Subscribe to SSE for live event updates
   useEffect(() => {
-    if (!organizationId) return;
+    if (!effectiveOrgId) return;
 
     const liveEventTypes = [
       EVENT_TYPES.CREDENTIAL_ISSUED,
@@ -238,7 +241,7 @@ export function RecentActivityPanel() {
     );
 
     return () => unsubscribers.forEach((unsub) => unsub());
-  }, [organizationId]);
+  }, [effectiveOrgId]);
 
   return (
     <Paper sx={{ p: 3, mb: 3 }}>

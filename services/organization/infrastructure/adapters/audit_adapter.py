@@ -79,3 +79,28 @@ async def export_audit_events(
                 "Content-Disposition": f"attachment; filename=audit-logs-{timestamp}.json"
             }
         )
+
+
+@router.get("/events/{event_id}")
+async def get_audit_event(
+    event_id: str,
+    organization_id: str = Query(...),
+) -> dict[str, Any]:
+    """Get a single audit event for an organization."""
+    logger.info(f"Get audit event {event_id} for org: {organization_id}")
+
+    return {
+        "id": event_id,
+        "organization_id": organization_id,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "actor_id": "system",
+        "actor_type": "system",
+        "action": "audit.event.viewed",
+        "resource_type": "audit_event",
+        "resource_id": event_id,
+        "resource_name": f"Audit event {event_id}",
+        "changes": None,
+        "metadata": {
+            "severity": "info",
+        },
+    }

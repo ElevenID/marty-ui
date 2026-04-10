@@ -6,7 +6,7 @@
 
 # Stage 1: Build Rust bindings for Python
 # Using nightly because edition2024 is required by aligned-0.4.3 dependency
-FROM rustlang/rust:nightly-slim as rust-builder
+FROM rustlang/rust:nightly-slim AS rust-builder
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -42,7 +42,7 @@ WORKDIR /build/marty-credentials/rust/marty-rs
 RUN CXX=clang++ CC=clang maturin build --release --features python --out /wheels
 
 # Stage 2: Python base with dependencies  
-FROM python:3.12-slim as base
+FROM python:3.12-slim AS base
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -73,7 +73,7 @@ COPY marty-ui/packages/marty_proto /app/packages/marty_proto
 RUN pip install -e /app/packages/marty_common
 
 # Stage 3: Final service image
-FROM base as final
+FROM base AS final
 
 ARG SERVICE_NAME
 ENV SERVICE_NAME=${SERVICE_NAME}

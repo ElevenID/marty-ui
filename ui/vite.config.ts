@@ -22,7 +22,8 @@ export default defineConfig(({ mode }) => {
       dedupe: ['react', 'react-dom', 'react/jsx-runtime', 'react/jsx-dev-runtime', 'react-router-dom', 'react-router'],
     },
     optimizeDeps: {
-      include: ['react', 'react-dom', 'react/jsx-runtime', 'react/jsx-dev-runtime', 'react-router-dom', '@marty/blog', '@marty/subscriptions'],
+      include: ['react', 'react-dom', 'react/jsx-runtime', 'react/jsx-dev-runtime', 'react-router-dom', '@marty/subscriptions'],
+      exclude: ['@marty/blog'],
     },
     plugins: [
       react(),
@@ -208,6 +209,10 @@ export default defineConfig(({ mode }) => {
       strictPort: false,
       cors: true,
       allowedHosts: env.PUBLIC_DOMAIN ? [env.PUBLIC_DOMAIN, 'localhost'] : 'all',
+      fs: {
+        // Allow serving files from the marty-blog source (linked via file: dependency)
+        allow: ['..', '../../marty-blog'],
+      },
       headers: {
         'Cache-Control': 'no-store',
       },

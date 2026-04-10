@@ -5,6 +5,7 @@ Evaluates MIP Cedar policies for all org-scoped routes, checking both
 organization membership and action-level permissions.
 """
 
+import os
 import logging
 import re
 
@@ -13,12 +14,31 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 
-from .cedar_actions import extract_org_id, resolve_action_and_resource
+from .cedar_actions import extract_org_id, resolve_action_and_resource, resolve_resource_lookup
 from .cedar_engine import CedarEngine
 from .cedar_entities import build_request_context, build_user_entities
 from .org_authorization import OrganizationClient
 
 logger = logging.getLogger(__name__)
+
+# Default attribute values for Cedar entity types that have required attrs
+# in mip.cedarschema.  These are used only for the synthetic resource entity
+# created during policy evaluation (the real resource attrs are irrelevant
+# to RBAC — only type and hierarchy matter).
+_DEFAULT_RESOURCE_ATTRS: dict[str, dict] = {
+    "ComplianceProfile": {"is_system": False, "compliance_code": ""},
+    "Application": {"risk_score": 0, "status": "PENDING"},
+    "Credential": {
+        "format": "",
+        "status": "ACTIVE",
+        "compliance_code": "",
+        "issuer_id": "",
+        "trust_level": 0,
+    },
+    "CredentialTemplate": {"credential_format": ""},
+    "Flow": {"flow_type": "", "status": ""},
+    "FlowExecution": {"status": ""},
+}
 
 
 class CedarAuthMiddleware(BaseHTTPMiddleware):
@@ -52,6 +72,103 @@ class CedarAuthMiddleware(BaseHTTPMiddleware):
         super().__init__(app)
         self._skip_patterns = [re.compile(p) for p in self.SKIP_PATTERNS]
 
+    @staticmethod
+    def _forward_headers(request: Request, service_name: str | None = None) -> dict[str, str]:
+        """Forward user context headers for internal authorization lookups."""
+        headers: dict[str, str] = {}
+        user_id = getattr(request.state, "user_id", None)
+        user_email = getattr(request.state, "user_email", None)
+        user_domain = getattr(request.state, "user_domain", None)
+        if user_id:
+            headers["X-User-Id"] = user_id
+        if user_email:
+            headers["X-User-Email"] = user_email
+        if user_domain:
+            headers["X-User-Domain"] = user_domain
+
+        auth = request.headers.get("authorization")
+        if auth:
+            headers["Authorization"] = auth
+
+        if service_name == "issuance":
+            issuance_api_key = os.environ.get("ISSUANCE_API_KEY", "")
+            if issuance_api_key:
+                headers["X-API-Key"] = issuance_api_key
+
+        return headers
+
+    async def _extract_body_org_id(self, request: Request) -> str | None:
+        """Extract organization_id from a JSON request body when present."""
+        if request.method.upper() not in {"POST", "PUT", "PATCH"}:
+            return None
+
+        content_type = (request.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
+        if content_type not in {"application/json", "application/scim+json"}:
+            return None
+
+        try:
+            payload = await request.json()
+        except Exception:
+            return None
+
+        if not isinstance(payload, dict):
+            return None
+
+        org_id = payload.get("organization_id")
+        return org_id if isinstance(org_id, str) and org_id else None
+
+    async def _lookup_resource_org_id(self, request: Request, path: str) -> str | None:
+        """Look up resource ownership for top-level detail routes."""
+        lookup = resolve_resource_lookup(path)
+        if not lookup:
+            return None
+
+        service_registry = getattr(request.app.state, "service_registry", None)
+        http_client = getattr(request.app.state, "http_client", None)
+        if service_registry is None or http_client is None:
+            return None
+
+        service_name, lookup_path = lookup
+        service_url = service_registry.get_service_url(service_name)
+        if not service_url:
+            return None
+
+        try:
+            response = await http_client.get(
+                f"{service_url}{lookup_path}",
+                timeout=10.0,
+                headers=self._forward_headers(request, service_name),
+            )
+        except Exception:
+            return None
+
+        if response.status_code >= 400:
+            return None
+
+        try:
+            payload = response.json()
+        except Exception:
+            return None
+
+        org_id = payload.get("organization_id") if isinstance(payload, dict) else None
+        return org_id if isinstance(org_id, str) and org_id else None
+
+    async def _resolve_request_org_id(self, request: Request, path: str) -> str | None:
+        """Resolve org scope from path, owned resource, query, or body."""
+        org_id = extract_org_id(path)
+        if org_id:
+            return org_id
+
+        org_id = await self._lookup_resource_org_id(request, path)
+        if org_id:
+            return org_id
+
+        query_org_id = request.query_params.get("organization_id")
+        if query_org_id:
+            return query_org_id
+
+        return await self._extract_body_org_id(request)
+
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
 
@@ -59,8 +176,12 @@ class CedarAuthMiddleware(BaseHTTPMiddleware):
         if any(p.match(path) for p in self._skip_patterns):
             return await call_next(request)
 
-        # Only evaluate Cedar for org-scoped routes
-        org_id = extract_org_id(path)
+        # Only evaluate Cedar for routes we know how to authorize.
+        resolved = resolve_action_and_resource(request.method, path)
+        if not resolved:
+            return await call_next(request)
+
+        org_id = await self._resolve_request_org_id(request, path)
         if not org_id:
             return await call_next(request)
 
@@ -94,16 +215,6 @@ class CedarAuthMiddleware(BaseHTTPMiddleware):
                 content={"detail": "Organization client not configured"},
             )
 
-        # Resolve Cedar action and resource type from HTTP method + path
-        resolved = resolve_action_and_resource(request.method, path)
-        if not resolved:
-            logger.warning(
-                f"Could not resolve Cedar action for {request.method} {path}"
-            )
-            return JSONResponse(
-                status_code=403,
-                content={"detail": "Action not authorized"},
-            )
         action_name, resource_type = resolved
 
         # Verify org membership
@@ -146,10 +257,11 @@ class CedarAuthMiddleware(BaseHTTPMiddleware):
         )
 
         # Add typed resource entity so Cedar schema validation passes
+        default_attrs = _DEFAULT_RESOURCE_ATTRS.get(resource_type, {})
         entities.append(
             {
                 "uid": {"type": f"MIP::{resource_type}", "id": org_id},
-                "attrs": {},
+                "attrs": default_attrs,
                 "parents": [{"type": "MIP::Organization", "id": org_id}],
             }
         )

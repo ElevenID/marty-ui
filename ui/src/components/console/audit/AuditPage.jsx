@@ -4,7 +4,7 @@
  * Audit logs and activity monitoring.
  */
 
-import { useState, useEffect } from 'react';
+import { Fragment, useState, useEffect } from 'react';
 import {
   Box,
   Paper,
@@ -51,6 +51,8 @@ import ErrorState from '../../common/ErrorState';
 import EmptyState from '../../common/EmptyState';
 import HistoryIcon from '@mui/icons-material/History';
 import auditApi from '../../../services/auditApi';
+import { useAuth } from '../../../hooks/useAuth';
+import { useConsole } from '../../../contexts/ConsoleContext';
 import { useNotifications } from '../../../hooks/useNotifications';
 
 function AuditPage() {
@@ -81,6 +83,9 @@ function AuditPage() {
 
   const EVENT_CATEGORIES = getEventCategories();
   const SEVERITY_LEVELS = getSeverityLevels();
+  const { organizationId } = useAuth();
+  const { activeOrgId } = useConsole();
+  const effectiveOrgId = activeOrgId || organizationId;
 
   const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -107,13 +112,29 @@ function AuditPage() {
 
   useEffect(() => {
     loadEvents();
-  }, [page, rowsPerPage, category, severity, startDate, endDate]);
+  }, [effectiveOrgId, page, rowsPerPage, category, severity, actor, resourceType, ipAddress, searchQuery, startDate, endDate]);
 
   useEffect(() => {
     loadSavedViews();
-  }, []);
+  }, [effectiveOrgId]);
+
+  const requireOrgId = () => {
+    if (!effectiveOrgId) {
+      throw new Error('Organization context unavailable');
+    }
+
+    return effectiveOrgId;
+  };
 
   const loadEvents = async () => {
+    if (!effectiveOrgId) {
+      setEvents([]);
+      setTotalCount(0);
+      setLoading(false);
+      setError(null);
+      return;
+    }
+
     setLoading(true);
     setError(null);
     try {
@@ -127,10 +148,11 @@ function AuditPage() {
       if (actor) filters.actor = actor;
       if (resourceType) filters.resource_type = resourceType;
       if (ipAddress) filters.ip_address = ipAddress;
+      if (searchQuery) filters.search = searchQuery;
       if (startDate) filters.start_date = startDate.toISOString();
       if (endDate) filters.end_date = endDate.toISOString();
 
-      const data = await auditApi.listAuditEvents(filters);
+      const data = await auditApi.listAuditEvents(requireOrgId(), filters);
       setEvents(Array.isArray(data) ? data : data.events || []);
       setTotalCount(data.total || data.length || 0);
     } catch (err) {
@@ -142,8 +164,13 @@ function AuditPage() {
   };
 
   const loadSavedViews = async () => {
+    if (!effectiveOrgId) {
+      setSavedViews([]);
+      return;
+    }
+
     try {
-      const views = await auditApi.listFilterViews();
+      const views = await auditApi.listFilterViews(requireOrgId());
       setSavedViews(Array.isArray(views) ? views : []);
     } catch (err) {
       console.error('Failed to load saved views:', err);
@@ -157,12 +184,13 @@ function AuditPage() {
         resource_type: category !== 'all' ? category : undefined,
         severity: severity !== 'all' ? severity : undefined,
         actor,
+        search: searchQuery || undefined,
         ip_address: ipAddress,
         start_date: startDate?.toISOString(),
         end_date: endDate?.toISOString(),
       };
       
-      const result = await auditApi.exportAuditEvents(filters, 'csv');
+      const result = await auditApi.exportAuditEvents(requireOrgId(), filters, 'csv');
       
       // If backend returns download URL, open it
       if (result.download_url) {
@@ -184,12 +212,13 @@ function AuditPage() {
     if (!viewName) return;
 
     try {
-      await auditApi.saveFilterView({
+      await auditApi.saveFilterView(requireOrgId(), {
         name: viewName,
         filters: {
           category,
           severity,
           actor,
+          searchQuery,
           resourceType,
           ipAddress,
           startDate: startDate?.toISOString(),
@@ -209,6 +238,7 @@ function AuditPage() {
     setCategory(filters.category || 'all');
     setSeverity(filters.severity || 'all');
     setActor(filters.actor || '');
+    setSearchQuery(filters.searchQuery || filters.search || '');
     setResourceType(filters.resourceType || '');
     setIpAddress(filters.ipAddress || '');
     setStartDate(filters.startDate ? new Date(filters.startDate) : null);
@@ -303,6 +333,7 @@ function AuditPage() {
             <FormControl size="small" sx={{ minWidth: 150 }}>
               <InputLabel>{t('audit.filters.savedViews')}</InputLabel>
               <Select
+                defaultValue=""
                 label={t('audit.filters.savedViews')}
                 onChange={(e) => {
                   const view = savedViews.find(v => v.id === e.target.value);
@@ -470,9 +501,8 @@ function AuditPage() {
                   </TableRow>
                 ) : (
                   events.map((event) => (
-                    <>
+                    <Fragment key={event.id}>
                       <TableRow 
-                        key={event.id} 
                         hover
                         onClick={() => setExpandedRow(expandedRow === event.id ? null : event.id)}
                         sx={{ cursor: 'pointer' }}
@@ -548,7 +578,7 @@ function AuditPage() {
                           />
                         </TableCell>
                       </TableRow>
-                      <TableRow key={`${event.id}-details`}>
+                      <TableRow>
                         <TableCell colSpan={6} sx={{ py: 0 }}>
                           <Collapse in={expandedRow === event.id}>
                             <Box sx={{ p: 2, bgcolor: 'action.hover' }}>
@@ -596,7 +626,7 @@ function AuditPage() {
                           </Collapse>
                         </TableCell>
                       </TableRow>
-                    </>
+                    </Fragment>
                   ))
                 )}
               </TableBody>

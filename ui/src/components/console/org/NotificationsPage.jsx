@@ -104,12 +104,23 @@ function NotificationsTab({ t }) {
         limit: rowsPerPage,
         offset: page * rowsPerPage,
       };
-      if (filter === 'unread') filters.read = false;
-      if (filter === 'read') filters.read = true;
+      if (filter === 'unread') filters.unread_only = true;
 
       const data = await notificationsApi.listNotifications(filters);
-      setNotifications(Array.isArray(data) ? data : data.notifications || []);
-      setTotalCount(data.total || data.length || 0);
+      const allNotifications = Array.isArray(data) ? data : data.notifications || [];
+
+      // The backend currently supports `unread_only` but not a dedicated
+      // `read_only` query flag, so the "read" filter is narrowed client-side.
+      const visibleNotifications = filter === 'read'
+        ? allNotifications.filter((notification) => notification.read)
+        : allNotifications;
+
+      setNotifications(visibleNotifications);
+      setTotalCount(
+        filter === 'read'
+          ? visibleNotifications.length
+          : (data.total || allNotifications.length || 0)
+      );
     } catch (err) {
       console.error('Failed to load notifications:', err);
       setError(err);

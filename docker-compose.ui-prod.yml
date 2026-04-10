@@ -1,16 +1,17 @@
 # Production UI Service for Cloudflare Tunnel
-# Usage: docker compose -f docker-compose.base.yml -f docker-compose.ui-prod.yml up -d ui-prod
+# Usage: docker compose -f docker-compose.ui-prod.yml up -d ui-prod
+# Prereq: Run "cd ui && bun run vite build" first (or use make prod-ui-docker)
 
 services:
   ui-prod:
-    build:
-      context: ./ui
-      dockerfile: Dockerfile.prod
-    image: marty-ui-prod:latest
+    image: nginx:alpine
     container_name: marty-ui-prod
     restart: unless-stopped
     ports:
       - "3002:80"
+    volumes:
+      - ./ui/dist:/usr/share/nginx/html:ro
+      - ./ui/nginx.spa.conf:/etc/nginx/conf.d/default.conf:ro
     networks:
       - default
     healthcheck:
@@ -18,10 +19,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
-      start_period: 10s
-    environment:
-      - NGINX_HOST=beta.elevenidllc.com
-      - NGINX_PORT=80
+      start_period: 5s
 
 networks:
   default:

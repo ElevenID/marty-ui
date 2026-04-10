@@ -11,6 +11,7 @@ import { ReactElement } from 'react'
 import { render as rtlRender, RenderOptions } from '@testing-library/react'
 import { BrowserRouter, MemoryRouter } from 'react-router-dom'
 import { ThemeProvider, createTheme } from '@mui/material/styles'
+import { NotificationProvider } from '../contexts/NotificationContext'
 import userEvent from '@testing-library/user-event'
 
 // Create default MUI theme for tests
@@ -31,7 +32,9 @@ function customRender(
     return (
       <BrowserRouter>
         <ThemeProvider theme={theme}>
-          {children}
+          <NotificationProvider>
+            {children}
+          </NotificationProvider>
         </ThemeProvider>
       </BrowserRouter>
     )
@@ -57,7 +60,9 @@ export function renderWithRouter(
     return (
       <MemoryRouter initialEntries={initialEntries}>
         <ThemeProvider theme={theme}>
-          {children}
+          <NotificationProvider>
+            {children}
+          </NotificationProvider>
         </ThemeProvider>
       </MemoryRouter>
     )

@@ -49,7 +49,7 @@ const getFlowTypes = (t) => [
 const RuntimeSettingsStep = ({ data, onChange }) => {
   const { t } = useTranslation('console');
   const navigate = useNavigate();
-  const { data: policies = [], loading, error } = useAsyncData(
+  const { data: rawPolicies, loading, error } = useAsyncData(
     async () => {
       const response = await listPresentationPolicies();
       const items = response.data || response || [];
@@ -57,6 +57,7 @@ const RuntimeSettingsStep = ({ data, onChange }) => {
     },
     []
   );
+  const policies = rawPolicies || [];
 
   // Auto-select if only one policy and none already selected (mirrors original mount-only behavior)
   useEffect(() => {

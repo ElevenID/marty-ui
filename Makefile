@@ -8,7 +8,7 @@
 	tunnel-auth-restart tunnel-keycloak-restart tunnel-full-restart tunnel-use-prod tunnel-use-dev \
 	setup-keycloak \
 	dev-ui-tunnel prod-ui-tunnel prod-ui-tunnel-kill tunnel-prod-static tunnel-prod-restart \
-	public-ui \
+	public-ui check prod-ui-docker prod-ui-docker-rebuild prod-ui-docker-stop \
 	obs-up obs-down \
 	wallet-up wallet-down \
 	proto-gen grpc-health \
@@ -79,6 +79,26 @@ run-ui: ## Run UI natively (requires API stack)
 	@cd ui && bun run dev
 
 public-ui: run-api-tunnel tunnel-keycloak-restart tunnel-start dev-ui-tunnel ## Start all dependencies + Cloudflare tunnel/proxy + UI dev server (public tunnel mode)
+
+prod-ui-docker: ## Build UI and serve in Docker (persistent, survives terminal close)
+	@echo "$(BLUE)🔨 Building production UI...$(NC)"
+	@cp .env ui/.env
+	@cd ui && bun run vite build
+	@echo "$(BLUE)🚀 Starting UI container on :3002...$(NC)"
+	@docker compose -f docker-compose.ui-prod.yml up -d --force-recreate
+	@echo "$(GREEN)✅ UI running in Docker (restart: unless-stopped)$(NC)"
+	@echo "  Local:  http://localhost:3002/"
+
+prod-ui-docker-rebuild: ## Rebuild UI and restart Docker container
+	@echo "$(BLUE)🔨 Rebuilding UI...$(NC)"
+	@cp .env ui/.env
+	@cd ui && bun run vite build
+	@docker compose -f docker-compose.ui-prod.yml restart ui-prod
+	@echo "$(GREEN)✅ UI rebuilt and restarted$(NC)"
+
+prod-ui-docker-stop: ## Stop the Docker UI container
+	@docker compose -f docker-compose.ui-prod.yml down
+	@echo "$(GREEN)✅ UI container stopped$(NC)"
 
 services-migrate: ## Run Alembic migrations using the migration runner
 	@echo "$(BLUE)Running database migrations...$(NC)"
@@ -301,4 +321,62 @@ deploy-prod: ## Deploy with secrets from OCI Vault (no .env.production needed)
 	@echo "$(BLUE)Fetching production secrets from OCI Vault...$(NC)"
 	@bash -c 'source scripts/fetch-secrets.sh && $(BASE_COMPOSE) up -d'
 	@echo "$(GREEN)✓ Production deployment started with vault secrets$(NC)"
+
+check: ## Quick health check of all public-ui components
+	@echo "$(BLUE)━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━$(NC)"
+	@echo "$(BLUE)  Public UI Health Check$(NC)"
+	@echo "$(BLUE)━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━$(NC)"
+	@UI_PORT=$$(grep '^UI_DEV_PORT=' .env 2>/dev/null | cut -d'=' -f2); \
+	UI_PORT=$${UI_PORT:-3002}; \
+	DOMAIN=$$(grep '^PUBLIC_DOMAIN=' .env 2>/dev/null | cut -d'=' -f2); \
+	echo ""; \
+	echo "  $(BLUE)Infrastructure$(NC)"; \
+	for svc in postgres redis keycloak openbao mailpit; do \
+		if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "marty-$$svc"; then \
+			echo "    $(GREEN)✓$(NC) $$svc"; \
+		else \
+			echo "    $(RED)✗$(NC) $$svc"; \
+		fi; \
+	done; \
+	echo ""; \
+	echo "  $(BLUE)Microservices$(NC)"; \
+	for svc in gateway auth organization issuance event-stream; do \
+		if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "marty-$$svc"; then \
+			echo "    $(GREEN)✓$(NC) $$svc"; \
+		else \
+			echo "    $(RED)✗$(NC) $$svc"; \
+		fi; \
+	done; \
+	echo ""; \
+	echo "  $(BLUE)Tunnel$(NC)"; \
+	if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "cloudflared-tunnel"; then \
+		echo "    $(GREEN)✓$(NC) cloudflared"; \
+	else \
+		echo "    $(RED)✗$(NC) cloudflared"; \
+	fi; \
+	if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "tunnel-nginx-proxy"; then \
+		echo "    $(GREEN)✓$(NC) nginx-proxy"; \
+	else \
+		echo "    $(RED)✗$(NC) nginx-proxy"; \
+	fi; \
+	echo ""; \
+	echo "  $(BLUE)Vite Dev Server$(NC) (port $$UI_PORT)"; \
+	if curl -s -o /dev/null -w '%{http_code}' "http://localhost:$$UI_PORT/" 2>/dev/null | grep -q '200'; then \
+		echo "    $(GREEN)✓$(NC) http://localhost:$$UI_PORT/"; \
+	else \
+		echo "    $(RED)✗$(NC) http://localhost:$$UI_PORT/ — not responding"; \
+	fi; \
+	echo ""; \
+	echo "  $(BLUE)Public URL$(NC)"; \
+	if [ -n "$$DOMAIN" ]; then \
+		HTTP_CODE=$$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "https://$$DOMAIN/" 2>/dev/null); \
+		if [ "$$HTTP_CODE" = "200" ]; then \
+			echo "    $(GREEN)✓$(NC) https://$$DOMAIN/"; \
+		else \
+			echo "    $(RED)✗$(NC) https://$$DOMAIN/ — HTTP $$HTTP_CODE"; \
+		fi; \
+	else \
+		echo "    $(YELLOW)⚠$(NC) PUBLIC_DOMAIN not set in .env"; \
+	fi; \
+	echo ""
 

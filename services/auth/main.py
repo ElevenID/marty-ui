@@ -53,10 +53,12 @@ def get_config() -> dict:
             "KEYCLOAK_REALM environment variable must be set "
             "(e.g. 'master' or your tenant realm name)"
         )
+    ui_base_url = os.environ.get("UI_BASE_URL", "http://localhost:3000").rstrip("/")
     issuer_default = f"http://localhost:8180/realms/{realm}"
     external_default = os.environ.get("OIDC_ISSUER_URL", issuer_default)
+    redirect_default = f"{ui_base_url}/v1/auth/callback"
     return {
-        "ui_base_url": os.environ.get("UI_BASE_URL", "http://localhost:3000"),
+        "ui_base_url": ui_base_url,
         "redis_url": os.environ.get("REDIS_URL", "redis://localhost:6379/0"),
         "oidc": {
             "issuer_url": os.environ.get(
@@ -72,6 +74,7 @@ def get_config() -> dict:
             "client_secret": os.environ.get("OIDC_CLIENT_SECRET"),
             "redirect_uri": os.environ.get(
                 "OIDC_REDIRECT_URI",
+                redirect_default,
             ),
             "post_logout_redirect_uri": os.environ.get(
                 "OIDC_POST_LOGOUT_REDIRECT_URI",

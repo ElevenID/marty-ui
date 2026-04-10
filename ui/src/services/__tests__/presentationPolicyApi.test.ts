@@ -75,7 +75,7 @@ describe('presentationPolicyApi', () => {
 
       let receivedData: any
       server.use(
-        http.put('http://localhost:8000/v1/presentation-policies/:id', async ({ request }) => {
+        http.patch('http://localhost:8000/v1/presentation-policies/:id', async ({ request }) => {
           receivedData = await request.json()
           return HttpResponse.json({ ...mockPolicies.valid, ...receivedData })
         })
