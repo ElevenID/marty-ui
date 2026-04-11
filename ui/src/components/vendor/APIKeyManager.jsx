@@ -97,6 +97,12 @@ function maskApiKey(key, showFull = false) {
   return `${key.slice(0, 8)}••••••••${key.slice(-4)}`;
 }
 
+function getDisplayKey(apiKey) {
+  if (apiKey?.masked_key) return apiKey.masked_key;
+  if (apiKey?.key_prefix) return maskApiKey(`${apiKey.key_prefix}...`);
+  return '••••••••';
+}
+
 export default function APIKeyManager() {
   const { t } = useTranslation('vendor');
   const { organizationId } = useAuth();
@@ -206,7 +212,25 @@ export default function APIKeyManager() {
   const handleRevokeKey = async (keyId) => {
     try {
       const updatedKey = await revokeApiKey(organizationId, keyId);
-      setApiKeys(apiKeys.map((k) => (k.id === keyId ? updatedKey : k)));
+      setApiKeys((prevKeys) => prevKeys.map((key) => {
+        if (key.id !== keyId) return key;
+
+        return {
+          ...key,
+          ...updatedKey,
+          id: key.id,
+          name: updatedKey?.name ?? key.name,
+          scopes: Array.isArray(updatedKey?.scopes) ? updatedKey.scopes : key.scopes,
+          key_prefix: updatedKey?.key_prefix ?? key.key_prefix,
+          masked_key: updatedKey?.masked_key ?? key.masked_key,
+          created_at: updatedKey?.created_at ?? key.created_at,
+          last_used_at: updatedKey?.last_used_at ?? key.last_used_at,
+          expires_at: updatedKey?.expires_at ?? key.expires_at,
+          revoked_at: updatedKey?.revoked_at ?? key.revoked_at,
+          is_active: updatedKey?.is_active ?? false,
+          status: updatedKey?.status ?? 'revoked',
+        };
+      }));
       showSuccess(t('apiKeyManager.snackbars.revokeSuccess'));
     } catch (error) {
       console.error('Failed to revoke API key:', error);
@@ -308,13 +332,18 @@ export default function APIKeyManager() {
             {t('apiKeyManager.description')}
           </Typography>
         </Box>
-        <Button
-          variant="contained"
-          startIcon={<AddIcon />}
-          onClick={() => createDialog.open()}
-        >
-          {t('apiKeyManager.createButton')}
-        </Button>
+        <Box sx={{ display: 'flex', gap: 1 }}>
+          <IconButton onClick={fetchApiKeys} aria-label={t('apiKeyManager.refreshButton')}>
+            <RefreshIcon />
+          </IconButton>
+          <Button
+            variant="contained"
+            startIcon={<AddIcon />}
+            onClick={() => createDialog.open()}
+          >
+            {t('apiKeyManager.createButton')}
+          </Button>
+        </Box>
       </Box>
 
       {/* Filter Controls */}
@@ -403,7 +432,11 @@ export default function APIKeyManager() {
               </>
             )}
             {/* Actual Data */}
-            {!loading && apiKeys.map((apiKey) => (
+            {!loading && apiKeys.map((apiKey) => {
+              const scopes = Array.isArray(apiKey.scopes) ? apiKey.scopes : [];
+              const isActive = apiKey.is_active ?? apiKey.status === 'active';
+
+              return (
               <TableRow key={apiKey.id} hover>
                 <TableCell>
                   <Typography variant="body2" fontWeight="medium">
@@ -412,17 +445,17 @@ export default function APIKeyManager() {
                 </TableCell>
                 <TableCell>
                   <Typography variant="body2" fontFamily="monospace" color="textSecondary">
-                    {maskApiKey(apiKey.key_prefix + '...')}
+                    {getDisplayKey(apiKey)}
                   </Typography>
                 </TableCell>
                 <TableCell>
                   <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
-                    {apiKey.scopes.slice(0, 2).map((scope) => (
+                    {scopes.slice(0, 2).map((scope) => (
                       <Chip key={scope} label={scope.split(':')[1]} size="small" variant="outlined" />
                     ))}
-                    {apiKey.scopes.length > 2 && (
-                      <Tooltip title={apiKey.scopes.slice(2).join(', ')}>
-                        <Chip label={`+${apiKey.scopes.length - 2}`} size="small" />
+                    {scopes.length > 2 && (
+                      <Tooltip title={scopes.slice(2).join(', ')}>
+                        <Chip label={`+${scopes.length - 2}`} size="small" />
                       </Tooltip>
                     )}
                   </Box>
@@ -444,8 +477,8 @@ export default function APIKeyManager() {
                 </TableCell>
                 <TableCell>
                   <Chip
-                    label={apiKey.is_active ? t('apiKeyManager.table.statusActive') : t('apiKeyManager.table.statusRevoked')}
-                    color={apiKey.is_active ? 'success' : 'default'}
+                    label={isActive ? t('apiKeyManager.table.statusActive') : t('apiKeyManager.table.statusRevoked')}
+                    color={isActive ? 'success' : 'default'}
                     size="small"
                   />
                 </TableCell>
@@ -460,7 +493,7 @@ export default function APIKeyManager() {
                   </IconButton>
                 </TableCell>
               </TableRow>
-            ))}
+            );})}
             {apiKeys.length === 0 && !loading && (
               <TableRow>
                 <TableCell colSpan={8} align="center" sx={{ py: 4 }}>

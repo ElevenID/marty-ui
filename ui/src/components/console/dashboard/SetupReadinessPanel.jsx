@@ -13,6 +13,7 @@ import {
   Typography,
   List,
   ListItem,
+  ListItemButton,
   ListItemIcon,
   ListItemText,
   Button,
@@ -89,69 +90,80 @@ function ReadinessRow({ resourceKey, readiness }) {
   const config = getResourceConfig(t)[resourceKey];
   const Icon = config.icon;
   const { state, message, action, path, dependencyBlocked } = readiness;
+  const actionButton = action && path && !dependencyBlocked ? (
+    <Button
+      size="small"
+      component={Link}
+      to={path}
+      endIcon={<ArrowForwardIcon />}
+      variant={state === ReadinessState.BLOCKED ? 'contained' : 'outlined'}
+      color={state === ReadinessState.BLOCKED ? 'warning' : 'primary'}
+    >
+      {action}
+    </Button>
+  ) : null;
 
   const rowContent = (
     <ListItem
-      component={Link}
-      to={config.path}
+      disablePadding
       sx={{
-        py: 1.5,
         opacity: dependencyBlocked ? 0.6 : 1,
-        cursor: 'pointer',
-        textDecoration: 'none',
-        color: 'inherit',
-        '&:hover': {
-          bgcolor: 'action.hover',
-        },
+        alignItems: 'stretch',
       }}
     >
-      <ListItemIcon sx={{ minWidth: 36 }}>
-        <StateIndicator state={state} />
-      </ListItemIcon>
-      <ListItemIcon sx={{ minWidth: 40 }}>
-        <Icon color={state === ReadinessState.READY ? 'primary' : 'action'} />
-      </ListItemIcon>
-      <ListItemText
-        primary={
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-            <Typography variant="body1" fontWeight={500}>
-              {config.label}
-            </Typography>
-            <Tooltip title={config.tooltip} placement="top">
-              <InfoOutlinedIcon sx={{ fontSize: 16, color: 'text.secondary' }} />
-            </Tooltip>
-            {state === ReadinessState.READY && (
-              <Typography variant="caption" color="success.main" fontWeight={500}>
-                {t('setupReadiness.stateReady')}
+      <ListItemButton
+        component={Link}
+        to={config.path}
+        sx={{
+          py: 1.5,
+          textDecoration: 'none',
+          color: 'inherit',
+          flexGrow: 1,
+          '&:hover': {
+            bgcolor: 'action.hover',
+          },
+        }}
+      >
+        <ListItemIcon sx={{ minWidth: 36 }}>
+          <StateIndicator state={state} />
+        </ListItemIcon>
+        <ListItemIcon sx={{ minWidth: 40 }}>
+          <Icon color={state === ReadinessState.READY ? 'primary' : 'action'} />
+        </ListItemIcon>
+        <ListItemText
+          primary={
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <Typography variant="body1" fontWeight={500}>
+                {config.label}
               </Typography>
-            )}
-            {state === ReadinessState.BLOCKED && (
-              <Typography variant="caption" color="warning.main" fontWeight={500}>
-                {t('setupReadiness.stateBlocked')}
-              </Typography>
-            )}
-            {state === ReadinessState.MISSING && !dependencyBlocked && (
-              <Typography variant="caption" color="text.secondary" fontWeight={500}>
-                {t('setupReadiness.stateMissing')}
-              </Typography>
-            )}
-          </Box>
-        }
-        secondary={message}
-        secondaryTypographyProps={{ variant: 'caption' }}
-      />
-      {action && path && !dependencyBlocked && (
-        <Button
-          size="small"
-          component={Link}
-          to={path}
-          endIcon={<ArrowForwardIcon />}
-          variant={state === ReadinessState.BLOCKED ? 'contained' : 'outlined'}
-          color={state === ReadinessState.BLOCKED ? 'warning' : 'primary'}
-          onClick={(e) => e.stopPropagation()}
-        >
-          {action}
-        </Button>
+              <Tooltip title={config.tooltip} placement="top">
+                <InfoOutlinedIcon sx={{ fontSize: 16, color: 'text.secondary' }} />
+              </Tooltip>
+              {state === ReadinessState.READY && (
+                <Typography variant="caption" color="success.main" fontWeight={500}>
+                  {t('setupReadiness.stateReady')}
+                </Typography>
+              )}
+              {state === ReadinessState.BLOCKED && (
+                <Typography variant="caption" color="warning.main" fontWeight={500}>
+                  {t('setupReadiness.stateBlocked')}
+                </Typography>
+              )}
+              {state === ReadinessState.MISSING && !dependencyBlocked && (
+                <Typography variant="caption" color="text.secondary" fontWeight={500}>
+                  {t('setupReadiness.stateMissing')}
+                </Typography>
+              )}
+            </Box>
+          }
+          secondary={message}
+          secondaryTypographyProps={{ variant: 'caption' }}
+        />
+      </ListItemButton>
+      {actionButton && (
+        <Box sx={{ display: 'flex', alignItems: 'center', pr: 2 }}>
+          {actionButton}
+        </Box>
       )}
     </ListItem>
   );

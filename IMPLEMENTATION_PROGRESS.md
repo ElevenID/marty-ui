@@ -310,7 +310,7 @@ This document tracks the implementation of comprehensive improvements to the mar
 - ✅ Initial unit coverage exists for dashboard readiness logic and some quick-create flows
 - ✅ Direct service tests now exist for `auditApi`, `notificationsApi`, and `teamApi`
 - ✅ Focused component tests now exist for `TeamPage`, notifications surfaces, and `AuditPage`
-- ⚠️ Broader cross-role component/E2E coverage is still needed to validate notifications and audit workflows across the full permission matrix
+git clone https://github.com/ElevenID/marty-subscriptions.git- ⚠️ Broader cross-role component/E2E coverage is still needed to validate notifications and audit workflows across the full permission matrix
 
 ---
 
