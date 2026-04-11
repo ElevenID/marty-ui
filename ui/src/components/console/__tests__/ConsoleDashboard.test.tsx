@@ -11,11 +11,13 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { http, HttpResponse } from 'msw'
 import { render } from '@test/utils'
+import { server } from '@test/mocks/server'
 import ConsoleDashboard from '../ConsoleDashboard'
 
 // Mock auth hook
-vi.mock('../../hooks/useAuth', () => ({
+vi.mock('@hooks/useAuth', () => ({
   useAuth: () => ({
     user: { id: 1, name: 'Admin User', capabilities: { 'admin:platform': true } },
     organizationName: 'Test Organization',
@@ -26,7 +28,7 @@ vi.mock('../../hooks/useAuth', () => ({
 }))
 
 // Mock SSE (not needed for rendering tests)
-vi.mock('../../hooks/useSSE', () => ({
+vi.mock('@hooks/useSSE', () => ({
   useSSE: () => ({ isConnected: false }),
 }))
 
@@ -38,7 +40,7 @@ const emptyDashboardData = {
   deployments: [],
   flows: [],
   apiKeys: [],
-  systemHealth: { api: 'healthy', issuer: 'healthy', verifier: 'healthy' },
+  systemHealth: { gateway: 'healthy', issuer: 'healthy', verifier: 'healthy' },
   teamData: { members: [], pendingInvites: [], roleDistribution: { admin: 0, developer: 0, operator: 0 } },
   runtimeStatus: { canIssue: false, canVerify: false, issuerKeysValid: false, issuerActive: false, deploymentActive: false, policyReachable: false },
   criticalEvents: [],
@@ -52,7 +54,7 @@ const partialDashboardData = {
   deployments: [],
   flows: [],
   apiKeys: [],
-  systemHealth: { api: 'healthy', issuer: 'healthy', verifier: 'healthy' },
+  systemHealth: { gateway: 'healthy', issuer: 'healthy', verifier: 'healthy' },
   teamData: { members: [{ id: 'u1', name: 'Admin', role: 'admin' }], pendingInvites: [], roleDistribution: { admin: 1, developer: 0, operator: 0 } },
   runtimeStatus: { canIssue: false, canVerify: false, issuerKeysValid: false, issuerActive: false, deploymentActive: false, policyReachable: false },
   criticalEvents: [],
@@ -66,7 +68,7 @@ const fullDashboardData = {
   deployments: [{ id: 1, name: 'Prod Deploy', status: 'active' }],
   flows: [{ id: 1, name: 'Verify Flow', status: 'active', trust_profile_id: 1, presentation_policy_id: 1 }],
   apiKeys: [{ id: 'key_1', name: 'Prod Key', status: 'active' }],
-  systemHealth: { api: 'healthy', issuer: 'healthy', verifier: 'healthy' },
+  systemHealth: { gateway: 'healthy', issuer: 'healthy', verifier: 'healthy' },
   teamData: {
     members: [
       { id: 'u1', name: 'Admin User', role: 'admin', status: 'online' },
@@ -86,7 +88,7 @@ const fullDashboardData = {
 // Mock useDashboardData with a controllable return value
 let mockDashboardReturn: any = { data: fullDashboardData, loading: false, error: null, refetch: vi.fn() }
 
-vi.mock('../../hooks/useDashboardData', () => ({
+vi.mock('@hooks/useDashboardData', () => ({
   useDashboardData: () => mockDashboardReturn,
 }))
 
@@ -94,6 +96,25 @@ describe('ConsoleDashboard', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockDashboardReturn = { data: fullDashboardData, loading: false, error: null, refetch: vi.fn() }
+    server.use(
+      http.get('http://localhost:8000/v1/organizations/:orgId/dashboard/applicant-stats', () => HttpResponse.json({
+        pending: 0,
+        approved: 0,
+        issuable: 0,
+        total: 0,
+      })),
+      http.get('http://localhost:8000/v1/organizations/:orgId/integration-info', ({ params }) => HttpResponse.json({
+        orgId: params.orgId,
+        baseUrl: 'http://localhost:8000',
+        exampleRequest: `curl -X GET "http://localhost:8000/v1/organizations/${params.orgId}"`,
+      })),
+      http.get('http://localhost:8000/api/issuance/analytics/summary', () => HttpResponse.json({
+        active_offers: 0,
+        total_scans: 0,
+        success_rate: 100,
+        total_offers: 0,
+      })),
+    )
   })
 
   describe('Empty Organization State', () => {
@@ -109,9 +130,9 @@ describe('ConsoleDashboard', () => {
     it('should show setup readiness as incomplete', () => {
       render(<ConsoleDashboard />)
       expect(screen.getByText(/Setup Readiness/i)).toBeInTheDocument()
-      expect(screen.getByText(/Trust Profile/i)).toBeInTheDocument()
-      expect(screen.getByText(/Credential Template/i)).toBeInTheDocument()
-      expect(screen.getByText(/Presentation Policy/i)).toBeInTheDocument()
+      expect(screen.getAllByText(/Trust Profile/i).length).toBeGreaterThanOrEqual(1)
+      expect(screen.getAllByText(/Credential Template/i).length).toBeGreaterThanOrEqual(1)
+      expect(screen.getAllByText(/Presentation Policy/i).length).toBeGreaterThanOrEqual(1)
     })
 
     it('should show all items as missing', () => {
@@ -194,16 +215,11 @@ describe('ConsoleDashboard', () => {
       expect(screen.getByText(/Runtime Operational Status/i)).toBeInTheDocument()
     })
 
-    it('should enable all quick actions', async () => {
+    it('should show operational action buttons', () => {
       render(<ConsoleDashboard />)
-      await waitFor(() => {
-        const actions = screen.getAllByText(/get started/i)
-        expect(actions.length).toBeGreaterThan(0)
-      })
-      const cards = screen.getAllByRole('button', { name: /get started/i })
-      cards.forEach((card) => {
-        expect(card).not.toBeDisabled()
-      })
+      // In operational state, quick actions are hidden; operational banner buttons are shown
+      expect(screen.getByRole('link', { name: /Go to Operate/i })).toBeInTheDocument()
+      expect(screen.getByRole('link', { name: /View Audit/i })).toBeInTheDocument()
     })
 
     it('should show recent activity panel', () => {
@@ -221,18 +237,20 @@ describe('ConsoleDashboard', () => {
   describe('Environment Management', () => {
     it('should display current environment', () => {
       render(<ConsoleDashboard />)
-      expect(screen.getByText(/Development/i)).toBeInTheDocument()
+      // Environment badge shows short label "Dev"
+      expect(screen.getByText('Dev')).toBeInTheDocument()
     })
 
     it('should show environment warning for production', () => {
       mockDashboardReturn = { data: { ...fullDashboardData, environment: 'production' }, loading: false, error: null, refetch: vi.fn() }
       render(<ConsoleDashboard />)
-      expect(screen.getByText(/Production Environment/i)).toBeInTheDocument()
+      expect(screen.getAllByText(/Production Environment/i).length).toBeGreaterThanOrEqual(1)
     })
 
     it('should display environment context', () => {
       render(<ConsoleDashboard />)
-      expect(screen.getByText(/Development/i)).toBeInTheDocument()
+      // Environment badge shows short label "Dev"
+      expect(screen.getByText('Dev')).toBeInTheDocument()
     })
   })
 
@@ -245,16 +263,16 @@ describe('ConsoleDashboard', () => {
 
     it('should indicate degraded services', () => {
       mockDashboardReturn = {
-        data: { ...fullDashboardData, systemHealth: { api: 'healthy', issuer: 'degraded', verifier: 'healthy' } },
+        data: { ...fullDashboardData, systemHealth: { gateway: 'healthy', issuer: 'warning', verifier: 'healthy' } },
         loading: false, error: null, refetch: vi.fn(),
       }
       render(<ConsoleDashboard />)
-      expect(screen.getByText(/Degraded/i)).toBeInTheDocument()
+      expect(screen.getAllByText(/Degraded/i).length).toBeGreaterThanOrEqual(1)
     })
 
     it('should show critical events panel', () => {
       render(<ConsoleDashboard />)
-      expect(screen.getByText(/Critical/i)).toBeInTheDocument()
+      expect(screen.getByText(/Critical Signals/i)).toBeInTheDocument()
     })
   })
 
@@ -266,8 +284,9 @@ describe('ConsoleDashboard', () => {
 
     it('should show role distribution', () => {
       render(<ConsoleDashboard />)
-      expect(screen.getByText(/Admin/i)).toBeInTheDocument()
-      expect(screen.getByText(/Developer/i)).toBeInTheDocument()
+      // Role labels appear in team panel alongside welcome message
+      expect(screen.getAllByText(/Admin/i).length).toBeGreaterThanOrEqual(1)
+      expect(screen.getAllByText(/Developer/i).length).toBeGreaterThanOrEqual(1)
     })
   })
 

@@ -7,6 +7,9 @@ import consoleEn from '../../public/locales/en/console.json';
 import onboardingEn from '../../public/locales/en/onboarding.json';
 import formsEn from '../../public/locales/en/forms.json';
 import errorsEn from '../../public/locales/en/errors.json';
+import vendorEn from '../../public/locales/en/vendor.json';
+import applicantEn from '../../public/locales/en/applicant.json';
+import marketingEn from '../../public/locales/en/marketing.json';
 
 i18n
   .use(initReactI18next)
@@ -16,7 +19,7 @@ i18n
     debug: false,
     
     // Namespaces for testing
-    ns: ['common', 'console', 'onboarding', 'forms', 'errors'],
+    ns: ['common', 'console', 'onboarding', 'forms', 'errors', 'vendor', 'applicant', 'marketing'],
     defaultNS: 'common',
     
     resources: {
@@ -26,6 +29,9 @@ i18n
         onboarding: onboardingEn,
         forms: formsEn,
         errors: errorsEn,
+        vendor: vendorEn,
+        applicant: applicantEn,
+        marketing: marketingEn,
       },
     },
     
