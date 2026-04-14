@@ -1,0 +1,276 @@
+{
+	"dashboard": {
+		"title": "ダッシュボード",
+		"welcome": "お帰りなさい"
+	},
+	"flows": {
+		"title": "フロー",
+		"flowDefinitions": "フロー定義",
+		"flowInstances": "フローインスタンス",
+		"refresh": "更新",
+		"searchPlaceholder": "フローを検索...",
+		"filters": {
+			"status": "ステータス",
+			"all": "すべて",
+			"pending": "保留",
+			"completed": "完了",
+			"failed": "失敗"
+		},
+		"tableHeaders": {
+			"instanceId": "インスタンスID",
+			"flow": "フロー",
+			"progress": "進行状況",
+			"started": "開始",
+			"completed": "完了",
+			"status": "ステータス",
+			"actions": "操作"
+		},
+		"progress": "ステップ {{current}} / {{total}}",
+		"actions": {
+			"viewDetails": "詳細を表示",
+			"advanceFlow": "フローを進める",
+			"cancel": "キャンセル"
+		},
+		"noMatchingInstances": "フィルターに一致するインスタンスがありません。",
+		"breadcrumbs": {
+			"console": "コンソール",
+			"flows": "フロー",
+			"flowInstances": "フローインスタンス"
+		}
+	},
+	"deploy": {
+		"title": "デプロイ",
+		"deploymentProfiles": "デプロイプロファイル",
+		"deploymentProfilesDescription": "API、キオスク、デバイス向けのデプロイプロファイルをオンライン/オフライン環境で構成します。",
+		"apiKeys": "APIキー",
+		"apiKeysDescription": "プログラムアクセス用のAPIキーを生成・管理します。",
+		"lanesDevices": "レーンとデバイス",
+		"webhooks": "Webhook",
+		"apiKeysPage": {
+			"generateKey": "APIキーを生成",
+			"tableHeaders": {
+				"name": "名前",
+				"keyPrefix": "キー接頭辞",
+				"scopes": "権限",
+				"lastUsed": "最終利用",
+				"created": "作成日",
+				"status": "ステータス",
+				"actions": "操作"
+			},
+			"empty": "APIキーがありません。最初のキーを作成してください。",
+			"never": "未使用",
+			"status": {
+				"active": "有効",
+				"revoked": "失効"
+			},
+			"actions": {
+				"revokeKey": "キーを失効"
+			},
+			"dialog": {
+				"titleCreate": "新しいAPIキーを生成",
+				"titleCreated": "APIキーを作成しました",
+				"warning": "このキーを今すぐコピーしてください。後で再表示できません。",
+				"keyLabel": "APIキー",
+				"nameLabel": "キー名",
+				"namePlaceholder": "例: 本番APIキー",
+				"done": "完了",
+				"generate": "生成"
+			},
+			"error": "APIキーの読み込みに失敗しました"
+		},
+		"deploymentActivityCard": {
+			"status": {
+				"active": "有効",
+				"inactive": "無効"
+			},
+			"tooltips": {
+				"lastIssuance": "最終発行",
+				"lastVerification": "最終検証"
+			},
+			"labels": {
+				"issued": "発行:",
+				"verified": "検証:"
+			},
+			"chips": {
+				"qrEnabled": "QR有効",
+				"activeFlows": "{{count}} 件の有効フロー",
+				"activeFlows_plural": "{{count}} 件の有効フロー"
+			},
+			"time": {
+				"never": "未実行",
+				"justNow": "たった今",
+				"minutesAgo": "{{count}} 分前",
+				"hoursAgo": "{{count}} 時間前",
+				"daysAgo": "{{count}} 日前"
+			},
+			"actions": {
+				"viewDetails": "詳細",
+				"edit": "編集"
+			}
+		},
+		"breadcrumbs": {
+			"console": "コンソール",
+			"deploy": "デプロイ",
+			"deploymentProfiles": "デプロイプロファイル",
+			"apiKeys": "APIキー",
+			"lanesDevices": "レーンとデバイス",
+			"signingKeys": "署名鍵"
+		}
+	},
+	"audit": {
+		"title": "監査",
+		"description": "システム活動とセキュリティイベントを監視します。",
+		"refresh": "更新",
+		"export": "エクスポート",
+		"showFilters": "フィルターを表示",
+		"hideFilters": "フィルターを非表示",
+		"searchPlaceholder": "イベントを検索...",
+		"exporting": "エクスポート中...",
+		"exportSuccess": "監査ログをエクスポートしました",
+		"categories": {
+			"all": "すべてのイベント",
+			"authentication": "認証",
+			"credential": "資格情報",
+			"flow": "フロー",
+			"policy": "ポリシー",
+			"template": "テンプレート",
+			"team": "チーム",
+			"settings": "設定"
+		},
+		"severity": {
+			"all": "すべてのレベル",
+			"info": "情報",
+			"warning": "警告",
+			"error": "エラー"
+		},
+		"filters": {
+			"savedViews": "保存済みビュー",
+			"selectView": "ビューを選択...",
+			"category": "カテゴリ",
+			"severity": "重大度",
+			"actor": "実行者",
+			"resourceType": "リソース種別",
+			"ipAddress": "IPアドレス",
+			"startDate": "開始日",
+			"endDate": "終了日"
+		},
+		"tableHeaders": {
+			"timestamp": "タイムスタンプ",
+			"event": "イベント",
+			"actor": "実行者",
+			"resource": "リソース",
+			"status": "ステータス"
+		},
+		"empty": {
+			"title": "監査イベントはありません",
+			"description": "フィルターに一致するイベントがありません。",
+			"whyItMatters": "監査ログはセキュリティ監視、トラブルシュート、コンプライアンスに役立ちます。",
+			"noMatching": "条件に一致する監査イベントはありません。"
+		},
+		"actions": {
+			"saveView": "ビューを保存",
+			"expandDetails": "詳細を展開",
+			"collapseDetails": "詳細を折りたたむ",
+			"viewResource": "リソースを表示"
+		},
+		"messages": {
+			"exportJobCreated": "エクスポートジョブを作成しました。準備でき次第通知します。",
+			"exportFailed": "監査ログのエクスポートに失敗しました",
+			"enterFilterViewName": "このフィルタービュー名を入力してください:",
+			"filterViewSaved": "フィルタービューを保存しました",
+			"saveFilterViewFailed": "フィルタービューの保存に失敗しました",
+			"appliedView": "適用したビュー: {{name}}"
+		},
+		"details": {
+			"title": "イベント詳細",
+			"eventId": "イベントID",
+			"ipAddress": "IPアドレス",
+			"additionalData": "追加データ",
+			"notAvailable": "N/A"
+		},
+		"breadcrumbs": {
+			"console": "コンソール",
+			"audit": "監査"
+		}
+	},
+	"notificationPreferencesPage": {
+		"title": "通知設定",
+		"subtitle": "申請、資格情報、メンバーシップに関する通知の受け取り方法を設定します",
+		"loading": "設定を読み込み中...",
+		"sections": {
+			"notificationMethod": "通知方法",
+			"emailCategories": "メール通知カテゴリ",
+			"emailCategoriesDescription": "どのイベントでメール通知を送るかを選択します。"
+		},
+		"methods": {
+			"pushOnly": {
+				"title": "プッシュ通知のみ",
+				"description": "Marty Authenticator アプリで通知を受け取る"
+			},
+			"emailOnly": {
+				"title": "メールのみ",
+				"description": "メールで通知を受け取る"
+			},
+			"both": {
+				"title": "プッシュとメール",
+				"description": "アプリとメールの両方で通知を受け取る（推奨）"
+			}
+		},
+		"categories": {
+			"applicationUpdates": {
+				"title": "申請更新",
+				"description": "提出した申請のステータス変更"
+			},
+			"credentialIssuance": {
+				"title": "資格情報の発行",
+				"description": "ウォレットに新しい資格情報が発行されたとき"
+			},
+			"membershipUpdates": {
+				"title": "メンバーシップ更新",
+				"description": "組織メンバーシップ承認とロール変更"
+			}
+		},
+		"actions": {
+			"save": "設定を保存",
+			"saving": "保存中..."
+		},
+		"messages": {
+			"loadFailed": "通知設定の読み込みに失敗しました",
+			"saveSuccess": "通知設定を更新しました",
+			"saveFailed": "通知設定の保存に失敗しました",
+			"emailDisabledNote": "注意: 上で選択した通知方法ではメールが無効です。"
+		}
+	},
+	"wizards": {
+		"common": {
+			"optional": "任意"
+		}
+	},
+	"org": {
+		"team": {
+			"title": "チーム",
+			"subtitle": "メンバー、ロール、招待を管理"
+		},
+		"defaultsSection": {
+			"title": "組織の既定値",
+			"description": "新しいフローや設定作成時に自動選択される既定リソースを設定します。",
+			"fields": {
+				"defaultTrustProfile": "既定のトラストプロファイル",
+				"defaultPresentationPolicy": "既定の提示ポリシー",
+				"defaultCredentialTemplate": "既定の資格情報テンプレート"
+			},
+			"values": {
+				"noneManualSelection": "なし（手動選択が必要）"
+			},
+			"actions": {
+				"save": "既定値を保存",
+				"saving": "保存中..."
+			},
+			"messages": {
+				"loadFailed": "組織の既定値を読み込めませんでした",
+				"saveFailed": "組織の既定値を保存できませんでした",
+				"saveSuccess": "組織の既定値を保存しました"
+			}
+		}
+	}
+}

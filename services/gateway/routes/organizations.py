@@ -1,25 +1,35 @@
 """Organization, membership, RBAC, invites, SCIM, and preferences routes."""
 from __future__ import annotations
 
+from datetime import datetime, timezone
+import logging
+from typing import Any
+
+import httpx
 from fastapi import APIRouter, Query, Request, Response
 
+from gateway.middleware import mip_error_response
 from gateway.models import (
     AuditEventResponse,
+    HostedPilotPurgeResponse,
     InvitationAcceptRequest,
     InvitationAcceptResponse,
     InvitationValidateResponse,
     JoinByCodeRequest,
     JoinByCodeResponse,
+    OrganizationLifecycleResponse,
     OrganizationCreate,
     OrganizationResponse,
     PreferencesResponse,
     UpdatePreferencesRequest,
     ValidateJoinCodeResponse,
 )
-from gateway.proxy import get_registry, proxy_request
+from gateway.proxy import get_http_client, get_registry, proxy_request
 
 organization_router = APIRouter(prefix="/v1/organizations", tags=["Organizations"])
 preferences_router = APIRouter(prefix="/v1/me", tags=["User Preferences"])
+
+logger = logging.getLogger(__name__)
 
 
 # ── Organizations CRUD ───────────────────────────────────────────────
@@ -62,6 +72,18 @@ async def get_organization(org_id: str, request: Request) -> Response:
     registry = get_registry()
     service_url = registry.get_service_url("organizations")
     return await proxy_request(request, service_url, f"/v1/organizations/{org_id}", inject_params={"organization_id": org_id})
+
+
+@organization_router.get("/{org_id}/lifecycle", response_model=OrganizationLifecycleResponse, summary="Get Organization Lifecycle")
+async def get_organization_lifecycle(org_id: str, request: Request) -> Response | dict:
+    """Get aggregated lifecycle metadata for dashboard retention surfaces."""
+    lifecycle_payload, error_response = await _load_organization_lifecycle_payload(
+        org_id,
+        headers=_forward_context_headers(request),
+    )
+    if error_response is not None:
+        return error_response
+    return lifecycle_payload
 
 
 @organization_router.put("/{org_id}", response_model=OrganizationResponse, summary="Update Organization")
@@ -333,6 +355,18 @@ async def transfer_ownership(org_id: str, request: Request) -> Response:
     return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/transfer-ownership", inject_params={"organization_id": org_id})
 
 
+@organization_router.post("/{org_id}/lifecycle/purge", response_model=HostedPilotPurgeResponse, summary="Purge Hosted Pilot Data")
+async def purge_hosted_pilot_data(org_id: str, request: Request) -> Response | dict:
+    """Manually purge Hosted Pilot data that has aged past the retention window."""
+    purge_payload, error_response = await run_hosted_pilot_purge(
+        org_id,
+        headers=_forward_context_headers(request),
+    )
+    if error_response is not None:
+        return error_response
+    return purge_payload
+
+
 # ── Team snapshot ────────────────────────────────────────────────────
 
 @organization_router.get("/{org_id}/team/snapshot", summary="Team Snapshot")
@@ -421,3 +455,311 @@ async def update_preferences(body: UpdatePreferencesRequest, request: Request) -
     registry = get_registry()
     service_url = registry.get_service_url("organizations")
     return await proxy_request(request, service_url, "/v1/me/preferences")
+
+
+def _forward_context_headers(request: Request) -> dict[str, str]:
+    headers: dict[str, str] = {}
+    if hasattr(request.state, "user_id") and request.state.user_id:
+        headers["X-User-Id"] = request.state.user_id
+    if hasattr(request.state, "user_email") and request.state.user_email:
+        headers["X-User-Email"] = request.state.user_email
+    if hasattr(request.state, "user_domain") and request.state.user_domain:
+        headers["X-User-Domain"] = request.state.user_domain
+    if hasattr(request.state, "org_plan") and request.state.org_plan:
+        headers["X-Org-Plan"] = request.state.org_plan
+    auth = request.headers.get("authorization")
+    if auth:
+        headers["Authorization"] = auth
+    return headers
+
+
+def _proxy_error_response(response: httpx.Response) -> Response:
+    return Response(
+        content=response.content,
+        status_code=response.status_code,
+        headers={
+            k: v for k, v in response.headers.items()
+            if k.lower() not in ("content-encoding", "transfer-encoding", "content-length")
+        },
+        media_type=response.headers.get("content-type"),
+    )
+
+
+def _parse_iso_timestamp(value: str | None) -> datetime | None:
+    if not value:
+        return None
+
+    normalized = value.strip()
+    if not normalized:
+        return None
+    if len(normalized) == 10 and normalized[4] == "-" and normalized[7] == "-":
+        normalized = f"{normalized}T00:00:00+00:00"
+    normalized = normalized.replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _retention_window_days(lifecycle_payload: dict[str, Any]) -> int:
+    pilot_retention = lifecycle_payload.get("pilot_retention") or {}
+    raw_value = pilot_retention.get("window_days") or lifecycle_payload.get("audit_retention_days") or 30
+    try:
+        parsed = int(raw_value)
+    except (TypeError, ValueError):
+        return 30
+    return parsed if parsed > 0 else 30
+
+
+async def _request_service_json_with_headers(
+    service_name: str,
+    path: str,
+    *,
+    method: str = "GET",
+    params: dict[str, Any] | None = None,
+    json_body: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
+    client: httpx.AsyncClient | None = None,
+    registry: Any | None = None,
+) -> tuple[Any, Response | None]:
+    registry = registry or get_registry()
+    client = client or get_http_client()
+    url = f"{registry.get_service_url(service_name)}{path}"
+
+    try:
+        response = await client.request(
+            method=method,
+            url=url,
+            headers=headers or {},
+            params=params,
+            json=json_body,
+            timeout=30.0,
+        )
+    except httpx.ConnectError:
+        return {}, mip_error_response(status_code=503, error="service_unavailable", message=f"{service_name} service unavailable")
+    except httpx.TimeoutException:
+        return {}, mip_error_response(status_code=504, error="service_timeout", message=f"{service_name} service timed out")
+
+    if response.status_code >= 400:
+        return {}, _proxy_error_response(response)
+
+    return response.json(), None
+
+
+async def _load_organization_lifecycle_payload(
+    org_id: str,
+    *,
+    headers: dict[str, str] | None = None,
+    client: httpx.AsyncClient | None = None,
+    registry: Any | None = None,
+) -> tuple[dict[str, Any], Response | None]:
+    lifecycle_payload, error_response = await _request_service_json_with_headers(
+        "organizations",
+        f"/v1/organizations/{org_id}/lifecycle",
+        params={"organization_id": org_id},
+        headers=headers,
+        client=client,
+        registry=registry,
+    )
+    if error_response is not None:
+        return {}, error_response
+
+    pilot_retention = lifecycle_payload.get("pilot_retention") or None
+    if not pilot_retention or not pilot_retention.get("enabled"):
+        return lifecycle_payload, None
+
+    summary_payload, summary_error = await _request_service_json_with_headers(
+        "issuance",
+        f"/v1/issuance/organizations/{org_id}/retention",
+        params={"retention_days": _retention_window_days(lifecycle_payload)},
+        headers=headers,
+        client=client,
+        registry=registry,
+    )
+    if summary_error is not None:
+        logger.warning("Retention summary unavailable for org %s; returning base lifecycle payload", org_id)
+        return lifecycle_payload, None
+
+    lifecycle_payload["pilot_retention"] = {
+        **pilot_retention,
+        "cutoff_at": summary_payload.get("cutoff_at"),
+        "next_expiry_at": summary_payload.get("next_expiry_at"),
+        "oldest_retained_record_at": summary_payload.get("oldest_retained_record_at"),
+        "eligible_for_purge": summary_payload.get("eligible_for_purge", {}),
+        "tracked_scope": list(summary_payload.get("tracked_scope", [])),
+    }
+    return lifecycle_payload, None
+
+
+async def _sync_hosted_pilot_purge_metadata(
+    org_id: str,
+    lifecycle_payload: dict[str, Any],
+    purge_payload: dict[str, Any],
+    *,
+    headers: dict[str, str] | None = None,
+    client: httpx.AsyncClient | None = None,
+    registry: Any | None = None,
+) -> None:
+    purged_at = purge_payload.get("purged_at")
+    if not purged_at:
+        return
+
+    update_body: dict[str, Any] = {
+        "plan_tier": lifecycle_payload.get("plan_tier") or "free",
+        "settings_patch": {"pilot_retention_last_purged_at": purged_at},
+    }
+    if lifecycle_payload.get("plan_expires_at"):
+        update_body["plan_expires_at"] = lifecycle_payload["plan_expires_at"]
+
+    _, error_response = await _request_service_json_with_headers(
+        "organizations",
+        f"/internal/v1/organizations/{org_id}/plan",
+        method="PUT",
+        json_body=update_body,
+        headers=headers,
+        client=client,
+        registry=registry,
+    )
+    if error_response is not None:
+        logger.warning("Hosted Pilot purge metadata sync failed for org %s", org_id)
+
+
+async def run_hosted_pilot_purge(
+    org_id: str,
+    *,
+    headers: dict[str, str] | None = None,
+    client: httpx.AsyncClient | None = None,
+    registry: Any | None = None,
+    lifecycle_payload: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], Response | None]:
+    if lifecycle_payload is None:
+        lifecycle_payload, error_response = await _load_organization_lifecycle_payload(
+            org_id,
+            headers=headers,
+            client=client,
+            registry=registry,
+        )
+        if error_response is not None:
+            return {}, error_response
+
+    pilot_retention = lifecycle_payload.get("pilot_retention") or {}
+    if not pilot_retention.get("enabled"):
+        return {}, mip_error_response(
+            status_code=400,
+            error="retention_not_enabled",
+            message="Hosted Pilot retention is not enabled for this organization",
+        )
+
+    purge_payload, purge_error = await _request_service_json_with_headers(
+        "issuance",
+        f"/v1/issuance/organizations/{org_id}/retention/purge",
+        method="POST",
+        params={"retention_days": _retention_window_days(lifecycle_payload)},
+        headers=headers,
+        client=client,
+        registry=registry,
+    )
+    if purge_error is not None:
+        return {}, purge_error
+
+    await _sync_hosted_pilot_purge_metadata(
+        org_id,
+        lifecycle_payload,
+        purge_payload,
+        headers=headers,
+        client=client,
+        registry=registry,
+    )
+    return purge_payload, None
+
+
+async def run_hosted_pilot_auto_purge_sweep(
+    *,
+    client: httpx.AsyncClient | None = None,
+    registry: Any | None = None,
+    batch_size: int = 100,
+) -> dict[str, int]:
+    page_size = max(int(batch_size or 100), 1)
+    stats = {
+        "organizations_scanned": 0,
+        "hosted_pilot_orgs": 0,
+        "purge_requests": 0,
+        "purged_records": 0,
+    }
+    offset = 0
+    now = datetime.now(timezone.utc)
+
+    while True:
+        organizations_payload, error_response = await _request_service_json_with_headers(
+            "organizations",
+            "/v1/organizations",
+            params={"limit": page_size, "offset": offset},
+            client=client,
+            registry=registry,
+        )
+        if error_response is not None:
+            logger.warning("Hosted Pilot auto-purge sweep could not list organizations")
+            return stats
+
+        organizations = organizations_payload if isinstance(organizations_payload, list) else []
+        if not organizations:
+            return stats
+
+        stats["organizations_scanned"] += len(organizations)
+        for organization in organizations:
+            org_id = organization.get("id")
+            if not org_id:
+                continue
+
+            lifecycle_payload, lifecycle_error = await _load_organization_lifecycle_payload(
+                org_id,
+                client=client,
+                registry=registry,
+            )
+            if lifecycle_error is not None:
+                logger.warning("Hosted Pilot auto-purge sweep could not load lifecycle for org %s", org_id)
+                continue
+
+            pilot_retention = lifecycle_payload.get("pilot_retention") or {}
+            if not pilot_retention.get("enabled"):
+                continue
+
+            stats["hosted_pilot_orgs"] += 1
+            eligible_total = int((pilot_retention.get("eligible_for_purge") or {}).get("total") or 0)
+            next_expiry_at = _parse_iso_timestamp(pilot_retention.get("next_expiry_at"))
+            if eligible_total <= 0 and (next_expiry_at is None or next_expiry_at > now):
+                continue
+
+            purge_payload, purge_error = await run_hosted_pilot_purge(
+                org_id,
+                client=client,
+                registry=registry,
+                lifecycle_payload=lifecycle_payload,
+            )
+            if purge_error is not None:
+                logger.warning("Hosted Pilot auto-purge sweep failed for org %s", org_id)
+                continue
+
+            stats["purge_requests"] += 1
+            stats["purged_records"] += int((purge_payload.get("purged_records") or {}).get("total") or 0)
+
+        if len(organizations) < page_size:
+            return stats
+        offset += len(organizations)
+
+
+async def _request_service_json(
+    request: Request,
+    service_name: str,
+    path: str,
+    method: str = "GET",
+    params: dict | None = None,
+) -> tuple[Any, Response | None]:
+    return await _request_service_json_with_headers(
+        service_name,
+        path,
+        method=method,
+        params=params,
+        headers=_forward_context_headers(request),
+    )

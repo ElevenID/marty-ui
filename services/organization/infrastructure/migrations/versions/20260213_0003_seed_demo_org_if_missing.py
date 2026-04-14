@@ -7,6 +7,7 @@ Create Date: 2026-02-13 00:10:00.000000+00:00
 
 from alembic import op
 import sqlalchemy as sa
+from marty_common.migration_profile import skip_demo_migrations
 
 
 # revision identifiers, used by Alembic.
@@ -22,6 +23,9 @@ DEMO_ORG_SLUG = "demo-vendor-org"
 
 
 def upgrade() -> None:
+    if skip_demo_migrations():
+        return
+
     # Insert Demo Vendor Org if it is missing.
     conn = op.get_bind()
     conn.execute(
@@ -90,6 +94,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    if skip_demo_migrations():
+        return
+
     # Revert demo org settings.
     conn = op.get_bind()
     conn.execute(

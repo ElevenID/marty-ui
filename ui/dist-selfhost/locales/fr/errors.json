@@ -1,0 +1,54 @@
+{
+	"general": {
+		"unknown": "Une erreur inconnue est survenue",
+		"networkError": "Erreur réseau. Veuillez vérifier votre connexion.",
+		"serverError": "Erreur serveur. Veuillez réessayer plus tard.",
+		"unauthorized": "Vous n'êtes pas autorisé à effectuer cette action",
+		"forbidden": "Accès interdit",
+		"notFound": "La ressource demandée est introuvable",
+		"timeout": "Délai d'attente dépassé. Veuillez réessayer."
+	},
+	"validation": {
+		"required": "Ce champ est obligatoire",
+		"invalidEmail": "Adresse e-mail invalide",
+		"invalidPhone": "Numéro de téléphone invalide",
+		"invalidUrl": "URL invalide",
+		"passwordTooShort": "Le mot de passe doit comporter au moins 8 caractères",
+		"passwordsDoNotMatch": "Les mots de passe ne correspondent pas"
+	},
+	"auth": {
+		"loginFailed": "Échec de connexion. Vérifiez vos identifiants.",
+		"sessionExpired": "Votre session a expiré. Veuillez vous reconnecter.",
+		"logoutFailed": "Échec de déconnexion. Veuillez réessayer.",
+		"invalidCredentials": "Identifiant ou mot de passe invalide",
+		"accountLocked": "Votre compte a été verrouillé. Veuillez contacter le support."
+	},
+	"api": {
+		"fetchFailed": "Impossible de récupérer les données",
+		"saveFailed": "Impossible d'enregistrer les modifications",
+		"deleteFailed": "Impossible de supprimer l'élément",
+		"uploadFailed": "Impossible de téléverser le fichier",
+		"connectionFailed": "Impossible de se connecter au serveur"
+	},
+	"errorState": {
+		"defaultTitle": "Une erreur est survenue",
+		"operationFailed": "Échec de l'opération",
+		"error": "Erreur",
+		"unexpectedError": "Une erreur inattendue est survenue",
+		"genericError": "Une erreur est survenue",
+		"detailsCopied": "Les détails de l'erreur ont été copiés",
+		"errorReport": "Rapport d'erreur : {{code}}",
+		"requestId": "ID de requête :",
+		"timestamp": "Horodatage :",
+		"errorCode": "Code d'erreur :",
+		"message": "Message :",
+		"technicalDetails": "Détails techniques :",
+		"copyDetails": "Copier les détails"
+	},
+	"messages": {
+		"tryAgain": "Veuillez réessayer",
+		"contactSupport": "Si le problème persiste, contactez le support",
+		"goBack": "Revenir à la page précédente",
+		"retry": "Réessayer"
+	}
+}

@@ -20,6 +20,7 @@ import BuildButton from './BuildButton';
  * @param {string} newPath - Path for advanced form (optional)
  * @param {array} tabs - Array of tab objects { label, path }
  * @param {array} breadcrumbs - Array of breadcrumb objects { label, path }
+ * @param {string} pageTestId - Optional stable test id for the page wrapper
  * @param {node} actions - Additional action buttons
  * @param {node} children - Page content
  */
@@ -31,6 +32,7 @@ function ResourcePage({
   newPath,
   tabs,
   breadcrumbs,
+  pageTestId,
   actions,
   children,
 }) {
@@ -42,7 +44,7 @@ function ResourcePage({
   ) ?? 0;
 
   return (
-    <Box>
+    <Box data-testid={pageTestId}>
       {/* Breadcrumbs */}
       {breadcrumbs && breadcrumbs.length > 0 && (
         <Breadcrumbs

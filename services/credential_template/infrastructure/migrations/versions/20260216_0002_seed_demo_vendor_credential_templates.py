@@ -12,6 +12,7 @@ import json
 
 from alembic import op
 import sqlalchemy as sa
+from marty_common.migration_profile import skip_demo_migrations
 
 
 # revision identifiers, used by Alembic.
@@ -128,6 +129,9 @@ def _claims_for(credential_type: str) -> list[dict]:
 
 
 def upgrade() -> None:
+    if skip_demo_migrations():
+        return
+
     conn = op.get_bind()
 
     has_templates_table = conn.execute(
@@ -244,6 +248,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    if skip_demo_migrations():
+        return
+
     conn = op.get_bind()
 
     has_templates_table = conn.execute(

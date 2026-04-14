@@ -8,6 +8,7 @@ Create Date: 2026-02-17 00:00:00.000000+00:00
 from alembic import op
 import sqlalchemy as sa
 import json
+from marty_common.migration_profile import skip_demo_migrations
 
 
 # revision identifiers, used by Alembic.
@@ -37,6 +38,9 @@ OPEN_BADGE_CLAIMS = [
 
 
 def upgrade() -> None:
+    if skip_demo_migrations():
+        return
+
     conn = op.get_bind()
 
     # Check if credential_template_service.credential_templates table exists
@@ -73,6 +77,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    if skip_demo_migrations():
+        return
+
     conn = op.get_bind()
 
     has_credential_templates = conn.execute(

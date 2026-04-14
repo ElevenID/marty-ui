@@ -39,7 +39,7 @@ import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings';
 import AddIcon from '@mui/icons-material/Add';
 import SearchIcon from '@mui/icons-material/Search';
 import CodeIcon from '@mui/icons-material/Code';
-import { useNavigate, Navigate } from 'react-router-dom';
+import { useNavigate, Navigate, useSearchParams } from 'react-router-dom';
 
 import { getMyOrganizations, createOrganization } from '../../../services/organizationsApi';
 import { useConsole } from '../../../contexts/ConsoleContext';
@@ -49,7 +49,9 @@ import { useConsole } from '../../../contexts/ConsoleContext';
  */
 export function OrgSetupPage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { activeOrgId, setActiveOrgId, memberships, membershipsLoaded, refreshMemberships } = useConsole();
+  const returnTo = searchParams.get('returnTo');
   
   const { data: organizations = [], loading, error } = useAsyncData(
     () => getMyOrganizations(),
@@ -71,7 +73,7 @@ export function OrgSetupPage() {
    * (placed after all hooks to comply with Rules of Hooks)
    */
   if (membershipsLoaded && memberships && memberships.length > 0) {
-    return <Navigate to="/console/applicant/catalog" replace />;
+    return <Navigate to={returnTo || '/console/applicant/catalog'} replace />;
   }
 
   /**
@@ -80,7 +82,7 @@ export function OrgSetupPage() {
   const handleSwitchToOrg = async (orgId) => {
     try {
       await setActiveOrgId(orgId);
-      navigate('/console/org');
+      navigate(returnTo || '/console/org');
     } catch (err) {
       console.error('[OrgSetupPage] Failed to switch organization:', err);
     }
@@ -112,7 +114,7 @@ export function OrgSetupPage() {
 
       // Auto-select the new org and navigate to org console
       await setActiveOrgId(newOrg.id);
-      navigate('/console/org');
+      navigate(returnTo || '/console/org');
 
       // Close dialog
       setCreateDialogOpen(false);

@@ -1,5 +1,5 @@
-import { useState, useMemo, Suspense, useContext } from 'react';
-import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { useState, useMemo, Suspense, useContext, useEffect } from 'react';
+import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
@@ -23,7 +23,6 @@ import { get } from './services/api';
 import { TrustProvider } from './components/trust/TrustProvider';
 import ErrorBoundary from './components/ErrorBoundary';
 import ProtectedRoute, { AdminRoute, ApplicantRoute, ApplicantConsoleRoute, VendorRoute, OrgConsoleRoute } from './components/ProtectedRoute';
-import LandingPage from './components/LandingPage';
 import Home from './components/Home';
 import TravelDocuments from './components/TravelDocuments';
 import VerifierDemo from './components/VerifierDemo';
@@ -47,31 +46,12 @@ import CredentialCatalog from './components/applicant/CredentialCatalog';
 import InviteAcceptPage from './components/InviteAcceptPage';
 import ApplyPage from './components/ApplyPage';
 import ApiDocumentation from './components/ApiDocumentation';
-import ProductPage from './components/ProductPage';
-import StandardsPage from './components/StandardsPage';
-import ProtocolPage from './components/ProtocolPage';
-import { BlogPage, BlogPostPage, AuthorsPage, AuthorPage, FoundationsPage } from '@marty/blog';
-import IdentityGuidePage from './components/IdentityGuidePage';
-import FromIDVPage from './components/FromIDVPage';
-import { PricingPage } from '@marty/subscriptions';
-import {
-  VerifiableCredentialApiPage,
-  EudiWalletVerificationPage,
-  IsoMdocVerificationPage,
-  SdJwtVerificationPage,
-  OpenBadgesVerificationPage,
-  OpenBadgesIssuancePage,
-  TrustRegistryPage,
-  MyOrganizationsPage,
-  DiscoverOrganizationsPage,
-  JoinOrganizationPage,
-  AiCapabilityPage,
-  WhatIsVerifiableIdentityPage,
-  WhatIsCredentialVerificationPage,
-  WhatIsOpenBadgePage,
-  WhatIsDigitalCredentialPage,
-  WhatIsMartyProtocolPage,
-} from './components/pages';
+import MyOrganizationsPage from './components/pages/MyOrganizationsPage';
+import DiscoverOrganizationsPage from './components/pages/DiscoverOrganizationsPage';
+import JoinOrganizationPage from './components/pages/JoinOrganizationPage';
+import { initAnalytics, trackPageView, trackWebVitals } from './utils/analytics';
+import { DISABLE_PUBLIC_LOGIN_BUTTON, SHOW_PUBLIC_LOGIN_BUTTON } from '@ui-public-config';
+import { renderPublicRoot, renderMarketingRoutes } from '@ui-public-routes';
 
 // New Console Pages with Sidebar Navigation
 import { AuthenticatedLayout, PublicLayout } from './components/layouts';
@@ -166,6 +146,7 @@ function createDynamicTheme(branding) {
 }
 
 function AppContent() {
+  const location = useLocation();
   const { t } = useTranslation('common');
   const auth = useContext(AuthContext) || {};
   const brandingContext = useContext(BrandingContext);
@@ -207,6 +188,15 @@ function AppContent() {
 
   // Create theme from branding config
   const theme = useMemo(() => createDynamicTheme(branding), [branding]);
+
+  useEffect(() => {
+    initAnalytics();
+    trackWebVitals();
+  }, []);
+
+  useEffect(() => {
+    trackPageView(`${location.pathname}${location.search}`, document.title);
+  }, [location.pathname, location.search]);
 
   const getUserDisplayName = () => {
     if (!user) return t('common.user');
@@ -377,19 +367,41 @@ function AppContent() {
                   {t('common.logout')}
                 </Button>
               </>
-            ) : (
-              /* Login Button */
-              <Button
-                variant="contained"
-                size="small"
-                startIcon={<LoginIcon />}
-                onClick={login}
-                sx={{ bgcolor: 'white', color: 'primary.main', '&:hover': { bgcolor: 'rgba(255, 255, 255, 0.9)' } }}
-                data-testid="login-button"
+            ) : SHOW_PUBLIC_LOGIN_BUTTON ? (
+              <Tooltip
+                title={DISABLE_PUBLIC_LOGIN_BUTTON ? t('common.loginComingSoon', 'Login coming soon') : ''}
+                disableFocusListener={!DISABLE_PUBLIC_LOGIN_BUTTON}
+                disableHoverListener={!DISABLE_PUBLIC_LOGIN_BUTTON}
+                disableTouchListener={!DISABLE_PUBLIC_LOGIN_BUTTON}
               >
-                {t('common.login')}
-              </Button>
-            )}
+                <span>
+                  <Button
+                    variant="contained"
+                    size="small"
+                    startIcon={<LoginIcon />}
+                    onClick={DISABLE_PUBLIC_LOGIN_BUTTON ? undefined : login}
+                    disabled={DISABLE_PUBLIC_LOGIN_BUTTON}
+                    sx={{
+                      bgcolor: DISABLE_PUBLIC_LOGIN_BUTTON ? 'rgba(255, 255, 255, 0.16)' : 'white',
+                      color: DISABLE_PUBLIC_LOGIN_BUTTON ? 'rgba(255, 255, 255, 0.62)' : 'primary.main',
+                      border: DISABLE_PUBLIC_LOGIN_BUTTON ? '1px solid rgba(255, 255, 255, 0.18)' : 'none',
+                      boxShadow: 'none',
+                      '&:hover': DISABLE_PUBLIC_LOGIN_BUTTON ? undefined : { bgcolor: 'rgba(255, 255, 255, 0.9)' },
+                      '&.Mui-disabled': {
+                        bgcolor: 'rgba(255, 255, 255, 0.16)',
+                        color: 'rgba(255, 255, 255, 0.62)',
+                        border: '1px solid rgba(255, 255, 255, 0.18)',
+                        opacity: 1,
+                      },
+                    }}
+                    data-testid="login-button"
+                  >
+                    {t('common.login')}
+                  </Button>
+                </span>
+              </Tooltip>
+            ) : null
+            }
           </Box>
         </Toolbar>
       </AppBar>
@@ -508,38 +520,15 @@ function AppContent() {
         {/* All other routes use PublicLayout with Container */}
         <Route element={<PublicLayout />}>
           {/* Public Routes */}
-          <Route path="/" element={<LandingPage />} />
+          <Route path="/" element={renderPublicRoot({ isAuthenticated, isAdministrator, isVendor, isApplicant })} />
           <Route path="/login" element={<LoginPage />} />
           <Route path="/auth/callback" element={<AuthCallback />} />
           
           {/* Deep Link Entry - Apply for Credentials */}
           <Route path="/apply" element={<ApplyPage />} />
           <Route path="/apply/:credentialType" element={<ApplyPage />} />
-          
-          <Route path="/product" element={<ProductPage />} />
-          <Route path="/verifiable-credential-api" element={<VerifiableCredentialApiPage />} />
-          <Route path="/eudi-wallet-verification" element={<EudiWalletVerificationPage />} />
-          <Route path="/iso-18013-5-mdoc-verification" element={<IsoMdocVerificationPage />} />
-          <Route path="/sd-jwt-verification" element={<SdJwtVerificationPage />} />
-          <Route path="/open-badges-verification" element={<OpenBadgesVerificationPage />} />
-          <Route path="/open-badges-issuance" element={<OpenBadgesIssuancePage />} />
-          <Route path="/trust-registry-infrastructure" element={<TrustRegistryPage />} />
-          <Route path="/identity" element={<IdentityGuidePage />} />
-          <Route path="/from-idv-to-verifiable-identity" element={<FromIDVPage />} />
-          <Route path="/standards" element={<StandardsPage />} />
-          <Route path="/protocol" element={<ProtocolPage />} />
-          <Route path="/ai" element={<AiCapabilityPage />} />
-          <Route path="/what-is-verifiable-identity" element={<WhatIsVerifiableIdentityPage />} />
-          <Route path="/what-is-credential-verification" element={<WhatIsCredentialVerificationPage />} />
-          <Route path="/what-is-open-badge" element={<WhatIsOpenBadgePage />} />
-          <Route path="/what-is-digital-credential" element={<WhatIsDigitalCredentialPage />} />
-          <Route path="/what-is-marty-protocol" element={<WhatIsMartyProtocolPage />} />
-          <Route path="/blog" element={<BlogPage />} />
-          <Route path="/blog/foundations" element={<FoundationsPage />} />
-          <Route path="/blog/:slug" element={<BlogPostPage />} />
-          <Route path="/authors" element={<AuthorsPage />} />
-          <Route path="/authors/:authorId" element={<AuthorPage />} />
-          <Route path="/pricing" element={<PricingPage login={login} />} />
+
+          {renderMarketingRoutes({ login })}
           <Route path="/docs" element={<ApiDocumentation />} />
           <Route path="/organizations" element={<MyOrganizationsPage />} />
           <Route path="/organizations/discover" element={<DiscoverOrganizationsPage />} />
@@ -741,6 +730,34 @@ function AppContent() {
 
 console.log('[DEBUG] App.jsx - Module loaded');
 
+function PrerenderReadySignal() {
+  const location = useLocation();
+
+  useEffect(() => {
+    let cancelled = false;
+    const fontsReady =
+      document.fonts && typeof document.fonts.ready?.then === 'function'
+        ? document.fonts.ready.catch(() => {})
+        : Promise.resolve();
+
+    Promise.resolve(fontsReady).then(() => {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          if (!cancelled) {
+            document.dispatchEvent(new Event('app-rendered'));
+          }
+        });
+      });
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [location.pathname, location.search]);
+
+  return null;
+}
+
 function App() {
   console.log('[DEBUG] App component rendering');
   return (
@@ -758,6 +775,7 @@ function App() {
                   <AuthProvider>
                     <ConsoleProvider>
                       <AppContent />
+                      <PrerenderReadySignal />
                     </ConsoleProvider>
                   </AuthProvider>
                 </Router>

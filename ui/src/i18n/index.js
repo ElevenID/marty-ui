@@ -2,6 +2,7 @@ import i18n from 'i18next';
 import { initReactI18next } from 'react-i18next';
 import LanguageDetector from 'i18next-browser-languagedetector';
 import HttpBackend from 'i18next-http-backend';
+import { I18N_NAMESPACES } from '@ui-public-config';
 
 i18n
   // Load translation files
@@ -22,7 +23,7 @@ i18n
     debug: import.meta.env.DEV,
     
     // Namespaces
-    ns: ['common', 'console', 'onboarding', 'forms', 'errors', 'applicant', 'vendor', 'marketing'],
+    ns: I18N_NAMESPACES,
     defaultNS: 'common',
     
     // Detection options

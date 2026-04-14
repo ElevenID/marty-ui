@@ -1,4 +1,5 @@
 #!/bin/sh
+# Keep LF line endings; this script is executed directly inside Linux containers.
 set -e
 
 echo "=== OpenBao Initialization ==="

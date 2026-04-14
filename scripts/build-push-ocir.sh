@@ -133,7 +133,7 @@ cd "$PARENT_DIR"
 # ─── Build each service ───────────────────────────────────────────────────────
 
 # marty-ui/services uses a shared Dockerfile with SERVICE_NAME arg
-for svc in gateway auth organization credential-template trust-profile applicant notification compliance-profile presentation-policy deployment-profile flow; do
+for svc in gateway auth organization credential-template trust-profile applicant notification compliance-profile presentation-policy deployment-profile flow verification revocation-profile device-registration event-stream billing; do
   build_and_push \
     "$svc" \
     "marty-ui/services/Dockerfile" \

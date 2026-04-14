@@ -21,6 +21,7 @@ import {
   getRuntimeStatus, 
   getCriticalEvents,
   getOrganizationEnvironment,
+  getOrganizationLifecycle,
 } from '../services/dashboardApi';
 import { useAuth } from './useAuth';
 
@@ -42,6 +43,7 @@ export function useDashboardData() {
     runtimeStatus: null,
     criticalEvents: [],
     environment: 'development',
+    lifecycle: null,
   });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -77,6 +79,7 @@ export function useDashboardData() {
           runtimeRes,
           eventsRes,
           environmentRes,
+          lifecycleRes,
         ] = await Promise.allSettled([
           listTrustProfiles({ organization_id: organizationId }),
           listCredentialTemplates({ organization_id: organizationId }),
@@ -89,6 +92,7 @@ export function useDashboardData() {
           getRuntimeStatus(organizationId),
           getCriticalEvents(organizationId),
           getOrganizationEnvironment(organizationId),
+          getOrganizationLifecycle(organizationId),
         ]);
 
         if (!mounted) return;
@@ -105,6 +109,7 @@ export function useDashboardData() {
           runtimeStatus: runtimeRes.status === 'fulfilled' ? runtimeRes.value : null,
           criticalEvents: eventsRes.status === 'fulfilled' ? eventsRes.value : [],
           environment: environmentRes.status === 'fulfilled' ? environmentRes.value : 'development',
+          lifecycle: lifecycleRes.status === 'fulfilled' ? lifecycleRes.value : null,
         });
       } catch (err) {
         if (!mounted) return;

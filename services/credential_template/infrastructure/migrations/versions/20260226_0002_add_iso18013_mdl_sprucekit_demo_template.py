@@ -37,6 +37,7 @@ import json
 
 from alembic import op
 import sqlalchemy as sa
+from marty_common.migration_profile import skip_demo_migrations
 
 
 # revision identifiers, used by Alembic.
@@ -216,6 +217,9 @@ WALLET_CONFIGS = [
 
 
 def upgrade() -> None:
+    if skip_demo_migrations():
+        return
+
     conn = op.get_bind()
 
     # Safety guard: skip if the credential_templates table does not exist yet.
@@ -364,6 +368,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    if skip_demo_migrations():
+        return
+
     conn = op.get_bind()
 
     has_table = conn.execute(

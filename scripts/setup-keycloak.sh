@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Keep LF line endings; this script is executed directly inside Linux containers.
 # =============================================================================
 # setup-keycloak.sh — Keycloak post-startup configurator
 # =============================================================================
@@ -86,7 +87,7 @@ get_client_uuid() {
     local uuid
     
     uuid=$(kcadm_safe get clients -r "$REALM" -q "clientId=$client_id" \
-        --fields id -F id 2>/dev/null \
+        --fields id 2>/dev/null \
         | grep '"id"' | sed 's/.*"id" : "//;s/".*//' | head -1)
     
     echo "$uuid"
@@ -273,11 +274,22 @@ configure_marty_ui_redirect_uris() {
     local current_config
     current_config=$(kcadm_safe get "clients/$client_uuid" -r "$REALM" \
         --fields redirectUris,webOrigins,attributes 2>/dev/null)
+    local flattened_config
+    flattened_config=$(echo "$current_config" | tr -d '\n')
     
     # Update redirect URIs
     if ! array_contains "$public_redirect" "$current_config"; then
+        local current_redirects
+        current_redirects=$(echo "$flattened_config" \
+            | sed -n 's/.*"redirectUris"[[:space:]]*:[[:space:]]*\[\([^]]*\)\].*/\1/p')
+        local new_redirects
+        if [ -n "$current_redirects" ]; then
+            new_redirects="${current_redirects}, \"${public_redirect}\""
+        else
+            new_redirects="\"${public_redirect}\""
+        fi
         if kcadm_safe update "clients/$client_uuid" -r "$REALM" \
-            -s "redirectUris+=[\"${public_redirect}\"]"; then
+            -s "redirectUris=[${new_redirects}]"; then
             log_success "Added redirect URI: $public_redirect"
         else
             log_error "Failed to add redirect URI"
@@ -288,8 +300,17 @@ configure_marty_ui_redirect_uris() {
     
     # Update web origins
     if ! array_contains "\"$public_origin\"" "$current_config"; then
+        local current_origins
+        current_origins=$(echo "$flattened_config" \
+            | sed -n 's/.*"webOrigins"[[:space:]]*:[[:space:]]*\[\([^]]*\)\].*/\1/p')
+        local new_origins
+        if [ -n "$current_origins" ]; then
+            new_origins="${current_origins}, \"${public_origin}\""
+        else
+            new_origins="\"${public_origin}\""
+        fi
         if kcadm_safe update "clients/$client_uuid" -r "$REALM" \
-            -s "webOrigins+=[\"${public_origin}\"]"; then
+            -s "webOrigins=[${new_origins}]"; then
             log_success "Added web origin: $public_origin"
         else
             log_error "Failed to add web origin"

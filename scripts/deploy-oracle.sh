@@ -92,6 +92,41 @@ apply_manifest() {
   envsubst < "$file" | kubectl apply -f -
 }
 
+is_placeholder_secret() {
+  case "$1" in
+    ""|change-me*|CHANGE_ME*|replace-me*|REPLACE_ME*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+resolve_secret_input() {
+  local var_name="$1"
+  local file_var_name="${var_name}_FILE"
+  local current_value="${!var_name:-}"
+  local file_path="${!file_var_name:-}"
+
+  if [[ -n "$current_value" && -n "$file_path" ]]; then
+    error "Both ${var_name} and ${file_var_name} are set; choose one."
+  fi
+
+  if [[ -n "$file_path" ]]; then
+    [[ -r "$file_path" ]] || error "${file_var_name} is not readable: ${file_path}"
+    tr -d '\r' < "$file_path"
+    return 0
+  fi
+
+  printf '%s' "$current_value"
+}
+
+require_resolved_secret() {
+  local var_name="$1"
+  local value="$2"
+
+  if is_placeholder_secret "$value"; then
+    error "${var_name} must be set to a non-placeholder value before deployment."
+  fi
+}
+
 # ─── Sub-command: setup-secrets ───────────────────────────────────────────────
 cmd_setup_secrets() {
   step "Setting up Kubernetes Secrets and OCIR pull secret"
@@ -117,37 +152,84 @@ cmd_setup_secrets() {
     success "OCIR pull secret created/updated"
   fi
 
-  # Application secrets from env vars
+  local postgres_password keycloak_db_password marty_db_password keycloak_admin_password
+  local marty_api_client_secret rabbitmq_password rabbitmq_erlang_cookie
+  local google_client_id google_client_secret smtp_username smtp_password
+  local issuance_api_key openbao_service_token license_key license_public_key
+  local session_secret_key square_access_token square_webhook_signature_key
+  local cloudflare_tunnel_token
+
+  postgres_password="$(resolve_secret_input POSTGRES_PASSWORD)"
+  keycloak_db_password="$(resolve_secret_input KEYCLOAK_DB_PASSWORD)"
+  marty_db_password="$(resolve_secret_input MARTY_DB_PASSWORD)"
+  keycloak_admin_password="$(resolve_secret_input KEYCLOAK_ADMIN_PASSWORD)"
+  marty_api_client_secret="$(resolve_secret_input MARTY_API_CLIENT_SECRET)"
+  rabbitmq_password="$(resolve_secret_input RABBITMQ_PASSWORD)"
+  rabbitmq_erlang_cookie="$(resolve_secret_input RABBITMQ_ERLANG_COOKIE)"
+  session_secret_key="$(resolve_secret_input SESSION_SECRET_KEY)"
+  google_client_id="$(resolve_secret_input GOOGLE_CLIENT_ID)"
+  google_client_secret="$(resolve_secret_input GOOGLE_CLIENT_SECRET)"
+  smtp_username="$(resolve_secret_input SMTP_USERNAME)"
+  smtp_password="$(resolve_secret_input SMTP_PASSWORD)"
+  issuance_api_key="$(resolve_secret_input ISSUANCE_API_KEY)"
+  openbao_service_token="$(resolve_secret_input OPENBAO_SERVICE_TOKEN)"
+  license_key="$(resolve_secret_input LICENSE_KEY)"
+  license_public_key="$(resolve_secret_input LICENSE_PUBLIC_KEY)"
+  square_access_token="$(resolve_secret_input SQUARE_ACCESS_TOKEN)"
+  square_webhook_signature_key="$(resolve_secret_input SQUARE_WEBHOOK_SIGNATURE_KEY)"
+  cloudflare_tunnel_token="$(resolve_secret_input CLOUDFLARE_TUNNEL_TOKEN)"
+
+  require_resolved_secret POSTGRES_PASSWORD "$postgres_password"
+  require_resolved_secret KEYCLOAK_DB_PASSWORD "$keycloak_db_password"
+  require_resolved_secret MARTY_DB_PASSWORD "$marty_db_password"
+  require_resolved_secret KEYCLOAK_ADMIN_PASSWORD "$keycloak_admin_password"
+  require_resolved_secret MARTY_API_CLIENT_SECRET "$marty_api_client_secret"
+  require_resolved_secret RABBITMQ_PASSWORD "$rabbitmq_password"
+  require_resolved_secret RABBITMQ_ERLANG_COOKIE "$rabbitmq_erlang_cookie"
+  require_resolved_secret SESSION_SECRET_KEY "$session_secret_key"
+  require_resolved_secret ISSUANCE_API_KEY "$issuance_api_key"
+  require_resolved_secret OPENBAO_SERVICE_TOKEN "$openbao_service_token"
+  require_resolved_secret LICENSE_KEY "$license_key"
+  require_resolved_secret LICENSE_PUBLIC_KEY "$license_public_key"
+
+  # Application secrets from env vars or *_FILE inputs
   kubectl create secret generic marty-secrets \
     --namespace="$NAMESPACE" \
-    --from-literal=POSTGRES_PASSWORD="${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required}" \
-    --from-literal=KEYCLOAK_DB_PASSWORD="${KEYCLOAK_DB_PASSWORD:?KEYCLOAK_DB_PASSWORD required}" \
-    --from-literal=DATABASE_URL="postgresql+asyncpg://marty:${POSTGRES_PASSWORD}@postgres:5432/marty" \
-    --from-literal=DATABASE_SYNC_URL="postgresql://marty:${POSTGRES_PASSWORD}@postgres:5432/marty" \
+    --from-literal=POSTGRES_PASSWORD="$postgres_password" \
+    --from-literal=KEYCLOAK_DB_PASSWORD="$keycloak_db_password" \
+    --from-literal=MARTY_DB_PASSWORD="$marty_db_password" \
+    --from-literal=DATABASE_URL="postgresql+asyncpg://marty:${marty_db_password}@postgres:5432/marty" \
+    --from-literal=DATABASE_SYNC_URL="postgresql://marty:${marty_db_password}@postgres:5432/marty" \
     --from-literal=KEYCLOAK_DB_URL="jdbc:postgresql://postgres:5432/keycloak" \
     --from-literal=KEYCLOAK_ADMIN="${KEYCLOAK_ADMIN:-admin}" \
-    --from-literal=KEYCLOAK_ADMIN_PASSWORD="${KEYCLOAK_ADMIN_PASSWORD:?KEYCLOAK_ADMIN_PASSWORD required}" \
-    --from-literal=MARTY_API_CLIENT_SECRET="${MARTY_API_CLIENT_SECRET:?MARTY_API_CLIENT_SECRET required}" \
-    --from-literal=RABBITMQ_PASSWORD="${RABBITMQ_PASSWORD:?RABBITMQ_PASSWORD required}" \
-    --from-literal=RABBITMQ_URL="amqp://marty:${RABBITMQ_PASSWORD}@rabbitmq:5672/" \
-    --from-literal=RABBITMQ_ERLANG_COOKIE="${RABBITMQ_ERLANG_COOKIE:?RABBITMQ_ERLANG_COOKIE required}" \
-    --from-literal=SESSION_SECRET_KEY="${SESSION_SECRET_KEY:?SESSION_SECRET_KEY required}" \
-    --from-literal=GOOGLE_CLIENT_ID="${GOOGLE_CLIENT_ID:-}" \
-    --from-literal=GOOGLE_CLIENT_SECRET="${GOOGLE_CLIENT_SECRET:-}" \
-    --from-literal=SMTP_USERNAME="${SMTP_USERNAME:-}" \
-    --from-literal=SMTP_PASSWORD="${SMTP_PASSWORD:-}" \
+    --from-literal=KEYCLOAK_ADMIN_PASSWORD="$keycloak_admin_password" \
+    --from-literal=MARTY_API_CLIENT_SECRET="$marty_api_client_secret" \
+    --from-literal=RABBITMQ_PASSWORD="$rabbitmq_password" \
+    --from-literal=RABBITMQ_URL="amqp://marty:${rabbitmq_password}@rabbitmq:5672/" \
+    --from-literal=RABBITMQ_ERLANG_COOKIE="$rabbitmq_erlang_cookie" \
+    --from-literal=SESSION_SECRET_KEY="$session_secret_key" \
+    --from-literal=GOOGLE_CLIENT_ID="$google_client_id" \
+    --from-literal=GOOGLE_CLIENT_SECRET="$google_client_secret" \
+    --from-literal=SMTP_USERNAME="$smtp_username" \
+    --from-literal=SMTP_PASSWORD="$smtp_password" \
+    --from-literal=ISSUANCE_API_KEY="$issuance_api_key" \
+    --from-literal=OPENBAO_SERVICE_TOKEN="$openbao_service_token" \
+    --from-literal=LICENSE_KEY="$license_key" \
+    --from-literal=LICENSE_PUBLIC_KEY="$license_public_key" \
+    --from-literal=SQUARE_ACCESS_TOKEN="$square_access_token" \
+    --from-literal=SQUARE_WEBHOOK_SIGNATURE_KEY="$square_webhook_signature_key" \
     --dry-run=client -o yaml | kubectl apply -f -
   success "Application secrets created/updated"
 
   # Cloudflare tunnel token secret
-  if [[ -n "${CLOUDFLARE_TUNNEL_TOKEN:-}" ]]; then
+  if ! is_placeholder_secret "$cloudflare_tunnel_token"; then
     kubectl create secret generic cloudflared-secret \
       --namespace="$NAMESPACE" \
-      --from-literal=CLOUDFLARE_TUNNEL_TOKEN="${CLOUDFLARE_TUNNEL_TOKEN}" \
+      --from-literal=CLOUDFLARE_TUNNEL_TOKEN="$cloudflare_tunnel_token" \
       --dry-run=client -o yaml | kubectl apply -f -
     success "Cloudflare tunnel secret created/updated"
   else
-    warn "CLOUDFLARE_TUNNEL_TOKEN not set — cloudflared will not start. Set it in .env.production."
+    warn "CLOUDFLARE_TUNNEL_TOKEN is unset or placeholder — cloudflared will be skipped."
   fi
 }
 
@@ -167,7 +249,7 @@ cmd_status() {
 # ─── Sub-command: update-images (rolling restart with new tag) ────────────────
 cmd_update_images() {
   step "Rolling image update — tag: ${IMAGE_TAG}"
-  for svc in gateway auth organization credential-template trust-profile issuance applicant notification compliance-profile presentation-policy deployment-profile flow ui; do
+  for svc in gateway auth organization credential-template trust-profile issuance applicant notification compliance-profile presentation-policy deployment-profile flow verification revocation-profile device-registration event-stream billing ui; do
     kubectl set image deployment/"${svc}" "${svc}=${OCIR_REGISTRY}/marty-ui/${svc}:${IMAGE_TAG}" \
       -n "$NAMESPACE" 2>/dev/null && success "Updated ${svc}" || warn "Deployment '${svc}' not found (skipped)"
   done
@@ -188,7 +270,7 @@ cmd_deploy() {
   apply_manifest "${K8S_DIR}/01-configmap.yaml"
 
   # 4. Keycloak realm ConfigMap (loaded from repo files)
-  KC_REALM_DIR="${REPO_ROOT}/marty-ui/config/keycloak"
+  KC_REALM_DIR="${REPO_ROOT}/config/keycloak"
   if [[ -d "$KC_REALM_DIR" ]]; then
     info "Loading Keycloak realm config from ${KC_REALM_DIR}…"
     kubectl create configmap keycloak-realm-config \
@@ -196,15 +278,24 @@ cmd_deploy() {
       -n "$NAMESPACE" \
       --dry-run=client -o yaml | kubectl apply -f -
 
-    # Keycloak setup script
-    KC_SCRIPT="${REPO_ROOT}/marty-ui/scripts/setup-keycloak.sh"
-    if [[ -f "$KC_SCRIPT" ]]; then
-      kubectl create configmap keycloak-setup-script \
-        --from-file=setup-keycloak.sh="$KC_SCRIPT" \
+    KC_SETUP_SCRIPT_DIR="${REPO_ROOT}/scripts"
+    if [[ -f "${KC_SETUP_SCRIPT_DIR}/setup-keycloak-selfhost-production.sh" && -f "${KC_SETUP_SCRIPT_DIR}/setup-keycloak.sh" && -f "${KC_SETUP_SCRIPT_DIR}/load-secrets-env.sh" ]]; then
+      kubectl create configmap keycloak-setup-scripts \
+        --from-file=setup-keycloak-selfhost-production.sh="${KC_SETUP_SCRIPT_DIR}/setup-keycloak-selfhost-production.sh" \
+        --from-file=setup-keycloak.sh="${KC_SETUP_SCRIPT_DIR}/setup-keycloak.sh" \
+        --from-file=load-secrets-env.sh="${KC_SETUP_SCRIPT_DIR}/load-secrets-env.sh" \
         -n "$NAMESPACE" \
         --dry-run=client -o yaml | kubectl apply -f -
     fi
-    success "Keycloak realm config loaded"
+
+    if [[ -f "${KC_SETUP_SCRIPT_DIR}/load-openbao-token-and-start.sh" ]]; then
+      kubectl create configmap marty-runtime-scripts \
+        --from-file=load-openbao-token-and-start.sh="${KC_SETUP_SCRIPT_DIR}/load-openbao-token-and-start.sh" \
+        -n "$NAMESPACE" \
+        --dry-run=client -o yaml | kubectl apply -f -
+    fi
+
+    success "Keycloak and runtime script ConfigMaps loaded"
   else
     warn "config/keycloak/ not found — skipping realm import ConfigMap"
   fi
@@ -251,9 +342,13 @@ cmd_deploy() {
   kubectl rollout status deployment/ui -n "$NAMESPACE" --timeout=120s
 
   # 10. Cloudflare Tunnel
-  step "Deploying Cloudflare Tunnel…"
-  apply_manifest "${K8S_DIR}/09-cloudflared.yaml"
-  kubectl rollout status deployment/cloudflared -n "$NAMESPACE" --timeout=60s || true
+  if ! is_placeholder_secret "$(resolve_secret_input CLOUDFLARE_TUNNEL_TOKEN)"; then
+    step "Deploying Cloudflare Tunnel…"
+    apply_manifest "${K8S_DIR}/09-cloudflared.yaml"
+    kubectl rollout status deployment/cloudflared -n "$NAMESPACE" --timeout=60s || true
+  else
+    warn "Skipping cloudflared because CLOUDFLARE_TUNNEL_TOKEN is unset or placeholder."
+  fi
 
   # ─── Summary ────────────────────────────────────────────────────────────────
   echo ""
@@ -261,9 +356,9 @@ cmd_deploy() {
   success "  Deploy complete!"
   success "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   echo ""
-  info "  UI:      https://elevenidllc.com"
-  info "  API:     https://api.elevenidllc.com/docs"
-  info "  Auth:    https://auth.elevenidllc.com"
+  info "  UI:      ${UI_BASE_URL}"
+  info "  API:     ${PUBLIC_API_URL}/docs"
+  info "  Auth:    ${OIDC_ISSUER_URL_EXTERNAL}"
   echo ""
   info "Useful commands:"
   info "  Status:      ./scripts/deploy-oracle.sh status"

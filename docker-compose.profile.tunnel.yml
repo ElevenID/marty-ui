@@ -47,30 +47,13 @@ services:
     environment:
       PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:-beta.elevenidllc.com}
       UI_DEV_PORT: ${UI_DEV_PORT:-3002}
+      GATEWAY_UPSTREAM: ${GATEWAY_TUNNEL_UPSTREAM:-marty-gateway:8000}
       DOCS_DOMAIN: ${DOCS_DOMAIN:-docs.elevenidllc.com}
     networks:
       - marty-network
     restart: unless-stopped
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    depends_on:
-      - cloudflared
-
-  nginx-proxy-prod:
-    image: nginx:alpine
-    container_name: tunnel-nginx-proxy-prod
-    ports:
-      - "9081:80"
-    volumes:
-      - ./nginx-prod.conf.template:/etc/nginx/conf.d/default.conf.template:ro
-      - ./scripts/nginx-entrypoint.sh:/docker-entrypoint.d/40-substitute-env.sh:ro
-      - ./ui/dist:/usr/share/nginx/html:ro
-    environment:
-      PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:-beta.elevenidllc.com}
-      DOCS_DOMAIN: ${DOCS_DOMAIN:-docs.elevenidllc.com}
-    networks:
-      - marty-network
-    restart: unless-stopped
     depends_on:
       - cloudflared
 

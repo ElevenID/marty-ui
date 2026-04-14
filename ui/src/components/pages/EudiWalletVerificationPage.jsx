@@ -1,6 +1,8 @@
 import { Box, Typography, Button, Paper, Grid, Card, CardContent, Chip } from '@mui/material';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import { useNavigate } from 'react-router-dom';
+import { DISABLE_PUBLIC_GET_STARTED_BUTTONS, SHOW_PUBLIC_GET_STARTED_BUTTONS } from '@ui-public-config';
+import FutureFeatureButton from '../FutureFeatureButton';
 import { SEOHead, softwareApplicationSchema } from '../seo';
 
 function EudiWalletVerificationPage() {
@@ -47,7 +49,19 @@ function EudiWalletVerificationPage() {
       </Paper>
 
       <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', mb: 6 }}>
-        <Button variant="contained" onClick={() => navigate('/pricing')}>Start Free</Button>
+        {SHOW_PUBLIC_GET_STARTED_BUTTONS && (
+          <FutureFeatureButton
+            variant="contained"
+            disabled={DISABLE_PUBLIC_GET_STARTED_BUTTONS}
+            onClick={() => navigate('/pricing')}
+            disabledSx={{
+              bgcolor: 'rgba(25, 118, 210, 0.14)',
+              color: 'rgba(25, 118, 210, 0.52)',
+            }}
+          >
+            Start Free
+          </FutureFeatureButton>
+        )}
         <Button variant="outlined" onClick={() => navigate('/docs')}>View API Docs</Button>
         <Button variant="text" endIcon={<ArrowForwardIcon />} onClick={() => navigate('/trust-registry-infrastructure')}>Trust Registry Architecture</Button>
       </Box>

@@ -3,12 +3,14 @@ import { renderWithRouter, screen, waitFor } from '@test/utils'
 import AuditPage from './AuditPage'
 
 const {
+  mockCan,
   mockShowNotification,
   mockListAuditEvents,
   mockListFilterViews,
   mockExportAuditEvents,
   mockSaveFilterView,
 } = vi.hoisted(() => ({
+  mockCan: vi.fn(),
   mockShowNotification: vi.fn(),
   mockListAuditEvents: vi.fn(),
   mockListFilterViews: vi.fn(),
@@ -69,9 +71,22 @@ vi.mock('../../../hooks/useNotifications', () => ({
   }),
 }))
 
+vi.mock('../../../hooks/usePermissions', () => ({
+  usePermissions: () => ({
+    can: mockCan,
+  }),
+}))
+
 describe('AuditPage', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockCan.mockImplementation((resource: string, action: string) => {
+      if (resource === 'audit' && (action === 'view' || action === 'export')) {
+        return true
+      }
+
+      return false
+    })
 
     mockListAuditEvents.mockResolvedValue({
       events: [
@@ -190,5 +205,25 @@ describe('AuditPage', () => {
       })
       expect(mockShowNotification).toHaveBeenCalledWith('audit.messages.appliedView:Critical Team', 'info')
     })
+  })
+
+  it('developer and operator release personas retain audit visibility without export access', async () => {
+    mockCan.mockImplementation((resource: string, action: string) => {
+      if (resource === 'audit' && action === 'view') {
+        return true
+      }
+
+      return false
+    })
+
+    renderWithRouter(<AuditPage />, {
+      initialEntries: ['/console/audit'],
+    })
+
+    await waitFor(() => {
+      expect(screen.getByText('alex@example.com')).toBeInTheDocument()
+    })
+
+    expect(screen.queryByRole('button', { name: 'audit.export' })).not.toBeInTheDocument()
   })
 })

@@ -3,6 +3,7 @@ import { Tabs, Tab, Box, Button } from '@mui/material';
 import { Link, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../hooks/useAuth';
+import { PUBLIC_TABS, SHOW_PUBLIC_CTA } from '@ui-public-config';
 
 /**
  * Administrator navigation tabs
@@ -36,21 +37,6 @@ const APPLICANT_TABS = [
   { labelKey: 'navigation.myIdentity', defaultLabel: 'My Identity', path: '/console/applicant/identity', exact: true },
   { labelKey: 'navigation.myDocuments', defaultLabel: 'My Documents', path: '/my-documents' },
   { labelKey: 'navigation.profile', defaultLabel: 'Profile', path: '/profile' },
-];
-
-/**
- * Public navigation tabs (not logged in)
- * Intent-based navigation for product education and conversion
- */
-const PUBLIC_TABS = [
-  { labelKey: 'navigation.home', defaultLabel: 'Home', path: '/', exact: true },
-  { labelKey: 'navigation.product', defaultLabel: 'Product', path: '/product' },
-  { labelKey: 'navigation.howItWorks', defaultLabel: 'How It Works', path: '/identity' },
-  { labelKey: 'navigation.whyVerifiableIdentity', defaultLabel: 'Why Verifiable Identity', path: '/from-idv-to-verifiable-identity' },
-  { labelKey: 'navigation.standards', defaultLabel: 'Standards', path: '/standards' },
-  { labelKey: 'navigation.docs', defaultLabel: 'Docs', path: '/docs' },
-  { labelKey: 'navigation.blog', defaultLabel: 'Blog', path: '/blog', prefixes: ['/blog', '/authors'] },
-  { labelKey: 'navigation.pricing', defaultLabel: 'Pricing', path: '/pricing' },
 ];
 
 function Navigation() {
@@ -123,25 +109,26 @@ function Navigation() {
             <Tab 
               key={tab.path} 
               label={t(tab.labelKey, tab.defaultLabel)} 
-              component={Link} 
-              to={tab.path}
+              component={tab.disabled ? undefined : Link}
+              to={tab.disabled ? undefined : tab.path}
+              disabled={Boolean(tab.disabled)}
+              sx={tab.disabled ? {
+                '&.Mui-disabled': {
+                  opacity: 0.65,
+                },
+              } : undefined}
               data-testid={`nav-tab-${tab.defaultLabel.toLowerCase().replace(/\s+/g, '-')}`}
             />
           ))}
         </Tabs>
 
         {/* Sticky CTA for public visitors */}
-        {!isAuthenticated && (
+        {!isAuthenticated && SHOW_PUBLIC_CTA && (
           <Button
             variant="contained"
             size="small"
-            onClick={() => {
-              // Trigger Keycloak registration
-              const event = new CustomEvent('nav-register-click');
-              window.dispatchEvent(event);
-            }}
             component={Link}
-            to="/"
+            to="/developers"
             sx={{
               ml: 2,
               whiteSpace: 'nowrap',
@@ -150,7 +137,7 @@ function Navigation() {
               display: { xs: 'none', md: 'inline-flex' },
             }}
           >
-            {t('navigation.startFree', 'Start Free')}
+            {t('navigation.startVerifying', 'Start Verifying')}
           </Button>
         )}
       </Box>

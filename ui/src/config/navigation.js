@@ -156,12 +156,10 @@ export const APPLICANT_NAV = [
 export const PUBLIC_NAV = [
   { id: 'home', label: 'Home', path: '/', exact: true },
   { id: 'product', label: 'Product', path: '/product' },
-  { id: 'how-it-works', label: 'How It Works', path: '/identity' },
-  { id: 'why-verifiable', label: 'Why Verifiable Identity', path: '/from-idv-to-verifiable-identity' },
+  { id: 'solutions', label: 'Solutions', path: '/solutions' },
+  { id: 'developers', label: 'Developers', path: '/developers' },
   { id: 'standards', label: 'Standards', path: '/standards' },
-  { id: 'protocol', label: 'Protocol', path: '/protocol' },
-  { id: 'blog', label: 'Blog', path: '/blog' },
-  { id: 'docs', label: 'Docs', path: '/docs' },
+  { id: 'resources', label: 'Resources', path: '/resources' },
   { id: 'pricing', label: 'Pricing', path: '/pricing' },
 ];
 

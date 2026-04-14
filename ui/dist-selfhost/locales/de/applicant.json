@@ -1,0 +1,45 @@
+{
+  "dashboard": {
+    "title": "Willkommen zurück",
+    "titleWithName": "Willkommen zurück, {{name}}",
+    "description": "Verwalten Sie Ihre digitalen Nachweise und Anträge.",
+    "pendingAlert": {
+      "title": "Ausstehende Anträge",
+      "message": "Sie haben {{count}} Antrag/Anträge zur Prüfung ausstehend.",
+      "viewStatus": "Status anzeigen"
+    },
+    "quickActions": {
+      "title": "Schnellaktionen",
+      "applyForCredential": "Nachweis beantragen",
+      "viewMyCredentials": "Meine Nachweise anzeigen"
+    }
+  },
+  "credentials": {
+    "title": "Meine Nachweise",
+    "description": "Ihre ausgestellten digitalen Nachweise und deren Status.",
+    "tableHeaders": {
+      "credentialType": "Nachweistyp",
+      "issuer": "Aussteller",
+      "status": "Status",
+      "actions": "Aktionen"
+    }
+  },
+  "applications": {
+    "title": "Meine Anträge",
+    "description": "Verfolgen Sie den Status Ihrer Nachweisanträge.",
+    "status": {
+      "draft": "Entwurf",
+      "submitted": "Eingereicht",
+      "underReview": "In Prüfung",
+      "pendingApproval": "Ausstehende Genehmigung",
+      "approved": "Genehmigt",
+      "readyToClaim": "Bereit zum Einlösen",
+      "rejected": "Abgelehnt"
+    }
+  },
+  "catalog": {
+    "title": "Nachweis-Katalog",
+    "description": "Verfügbare Nachweise durchsuchen und beantragen",
+    "searchPlaceholder": "Nachweisen suchen..."
+  }
+}

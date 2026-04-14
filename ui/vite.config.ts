@@ -3,18 +3,107 @@ import react from '@vitejs/plugin-react'
 import checker from 'vite-plugin-checker'
 import prerender from '@prerenderer/rollup-plugin'
 import PuppeteerRenderer from '@prerenderer/renderer-puppeteer'
+import { visualizer } from 'rollup-plugin-visualizer'
 import Sitemap from 'vite-plugin-sitemap'
+import { fileURLToPath, URL } from 'node:url'
+
+function createManualChunk(id: string) {
+  const normalizedId = id.replace(/\\/g, '/')
+
+  if (normalizedId.includes('/node_modules/@marty/blog/')) return 'blog-vendor'
+  if (normalizedId.includes('/node_modules/@marty/subscriptions/')) return 'subscriptions-vendor'
+  if (normalizedId.includes('/node_modules/@elevenid/marty-api-core/')) return 'api-core-vendor'
+  if (normalizedId.includes('/node_modules/redoc/')) return 'docs-vendor'
+  if (normalizedId.includes('/node_modules/@emotion/') || normalizedId.includes('/node_modules/stylis/')) return 'emotion-vendor'
+  if (normalizedId.includes('/node_modules/@mui/icons-material/')) return 'mui-icons-vendor'
+  if (normalizedId.includes('/node_modules/@mui/x-date-pickers/') || normalizedId.includes('/node_modules/date-fns/')) return 'mui-pickers-vendor'
+  if (normalizedId.includes('/node_modules/@mui/') || normalizedId.includes('/node_modules/@popperjs/core/')) return 'mui-core-vendor'
+  if (normalizedId.includes('/node_modules/react/') || normalizedId.includes('/node_modules/react-dom/') || normalizedId.includes('/node_modules/react-router-dom/')) return 'react-vendor'
+  if (normalizedId.includes('/node_modules/recharts/')) return 'chart-vendor'
+  if (normalizedId.includes('/node_modules/i18next/') || normalizedId.includes('/node_modules/react-i18next/')) return 'i18n-vendor'
+  if (normalizedId.includes('/node_modules/qrcode.react/') || normalizedId.includes('/node_modules/react-qr-scanner/')) return 'qr-vendor'
+
+  return undefined
+}
 
 // https://vitejs.dev/config/
-export default defineConfig(({ mode }) => {
+export default defineConfig(async ({ mode }) => {
   // Load env file based on `mode` in the current working directory.
   const env = loadEnv(mode, process.cwd(), '')
   const isDev = mode === 'development'
-  const disablePrerender = isDev || process.env.DISABLE_PRERENDER === '1'
+  const enableBundleAnalysis = mode === 'analyze' || process.env.ANALYZE_BUNDLE === '1'
+  const isSelfhostBuild = mode === 'selfhost' || env.VITE_UI_VARIANT === 'selfhost'
+  const disablePrerender = isDev || isSelfhostBuild || process.env.DISABLE_PRERENDER === '1'
   const port = Number(env.VITE_PORT || env.PORT || env.UI_DEV_PORT || 3000)
+  const bundleAnalysisBaseName = isSelfhostBuild ? 'bundle-analysis-selfhost' : 'bundle-analysis-public'
+  let authorRoutes = []
+  let blogRoutes = []
+
+  if (!isSelfhostBuild) {
+    const [
+      { BLOG_POSTS },
+      { BLOG_AUTHORS },
+      {
+        BLOG_POST_CONCEPT_TAGS,
+        BLOG_POST_STANDARDS_TAGS,
+        GUIDE_ARTICLE_SLUGS,
+        GUIDE_ARTICLES,
+        GUIDE_CHAPTERS,
+      },
+      { ARTICLE_META, getBrowseVisiblePosts },
+      { buildBlogTagPath },
+    ] = await Promise.all([
+      import('../../marty-blog/src/data/blogPosts.js'),
+      import('../../marty-blog/src/data/blogAuthors.js'),
+      import('../../marty-blog/src/data/guideContent.js'),
+      import('../../marty-blog/src/data/articleMeta.js'),
+      import('../../marty-blog/src/utils/blogTagRoutes.js'),
+    ])
+
+    const chapterById = Object.fromEntries(GUIDE_CHAPTERS.map((chapter) => [chapter.id, chapter]))
+    const tagPaths = new Set()
+
+    getBrowseVisiblePosts(BLOG_POSTS).forEach((post) => {
+      const meta = ARTICLE_META[post.slug]
+      const tags = new Set([
+        ...(BLOG_POST_STANDARDS_TAGS[post.slug] || []),
+        ...(BLOG_POST_CONCEPT_TAGS[post.slug] || []),
+        ...(meta?.topic ? [meta.topic] : []),
+      ])
+
+      tags.forEach((tag) => {
+        tagPaths.add(buildBlogTagPath(tag))
+      })
+    })
+
+    GUIDE_ARTICLES.forEach((article) => {
+      const tags = new Set([
+        ...(article.conceptTags || []),
+        ...(chapterById[article.chapterId]?.title ? [chapterById[article.chapterId].title] : []),
+      ])
+
+      tags.forEach((tag) => {
+        tagPaths.add(buildBlogTagPath(tag))
+      })
+    })
+
+    authorRoutes = ['/authors', ...Object.keys(BLOG_AUTHORS).map((authorId) => `/authors/${authorId}`)]
+    blogRoutes = Array.from(
+      new Set([
+        '/blog',
+        ...tagPaths,
+        ...BLOG_POSTS.map(({ slug }) => `/blog/${slug}`),
+        ...GUIDE_ARTICLE_SLUGS.map((slug) => `/blog/${slug}`),
+      ]),
+    )
+  }
   
   return {
     resolve: {
+      alias: {
+        '@ui-public-config': fileURLToPath(new URL(`./src/variants/publicConfig.${isSelfhostBuild ? 'selfhost' : 'public'}.js`, import.meta.url)),
+        '@ui-public-routes': fileURLToPath(new URL(`./src/variants/publicSite.${isSelfhostBuild ? 'selfhost' : 'public'}.jsx`, import.meta.url)),
+      },
       // Force all react-* and router packages to resolve to a single copy from this
       // project root. This prevents duplicate instances when @marty/blog (a symlinked
       // local package) carries its own node_modules with react-router-dom – which would
@@ -23,7 +112,7 @@ export default defineConfig(({ mode }) => {
     },
     optimizeDeps: {
       include: ['react', 'react-dom', 'react/jsx-runtime', 'react/jsx-dev-runtime', 'react-router-dom', '@marty/subscriptions'],
-      exclude: ['@marty/blog'],
+      exclude: isSelfhostBuild ? [] : ['@marty/blog'],
     },
     plugins: [
       react(),
@@ -44,6 +133,11 @@ export default defineConfig(({ mode }) => {
           routes: [
             '/',
             '/product',
+            '/solutions',
+            '/developers',
+            '/architecture',
+            '/security',
+            '/resources',
             '/verifiable-credential-api',
             '/eudi-wallet-verification',
             '/iso-18013-5-mdoc-verification',
@@ -52,37 +146,20 @@ export default defineConfig(({ mode }) => {
             '/open-badges-issuance',
             '/trust-registry-infrastructure',
             '/identity',
+            '/why-verifiable-identity',
             '/from-idv-to-verifiable-identity',
+            '/what-is-verifiable-identity',
             '/standards',
             '/protocol',
-            '/blog',
-            '/blog/why-identity-needs-a-protocol',
-            '/blog/trust-profiles-explained',
-            '/blog/business-case-for-credential-portability',
-            '/blog/cryptographic-trust-anchors-primer',
-            '/blog/credential-templates-designing-what-gets-issued',
-            '/blog/presentation-policies-minimum-disclosure',
-            '/blog/eudi-wallet-readiness',
-            '/blog/deployment-profiles-from-design-to-production',
-            '/blog/zero-knowledge-predicates-identity',
-            '/blog/flows-orchestrating-identity-lifecycle',
-            '/blog/compliance-profiles-bridging-regulation',
-            '/blog/sd-jwt-selective-disclosure-deep-dive',
-            '/blog/cedar-policies-for-identity-governance',
-            '/blog/introducing-mip',
-            '/blog/mip-json-schemas-walkthrough',
-            '/blog/post-quantum-readiness-in-identity',
-            '/blog/building-trust-registries-at-scale',
-            '/blog/offline-verification-design-patterns',
-            '/blog/holder-binding-beyond-biometrics',
-            '/blog/mip-and-open-badges-education-credentials',
-            '/blog/conformance-testing-for-implementers',
-            '/blog/revocation-strategies-compared',
+            ...blogRoutes,
+            ...authorRoutes,
             '/pricing',
             '/docs',
           ],
           renderer: new PuppeteerRenderer({
-            renderAfterTime: 3000, // Wait for MUI CSS-in-JS hydration
+            renderAfterDocumentEvent: 'app-rendered',
+            timeout: 45000,
+            skipThirdPartyRequests: true,
             headless: true,
           }),
           postProcess(route) {
@@ -100,6 +177,11 @@ export default defineConfig(({ mode }) => {
           dynamicRoutes: [
             '/',
             '/product',
+            '/solutions',
+            '/developers',
+            '/architecture',
+            '/security',
+            '/resources',
             '/verifiable-credential-api',
             '/eudi-wallet-verification',
             '/iso-18013-5-mdoc-verification',
@@ -108,38 +190,16 @@ export default defineConfig(({ mode }) => {
             '/open-badges-issuance',
             '/trust-registry-infrastructure',
             '/identity',
-            '/from-idv-to-verifiable-identity',
+            '/why-verifiable-identity',
             '/standards',
             '/protocol',
             '/ai',
-            '/what-is-verifiable-identity',
             '/what-is-credential-verification',
             '/what-is-open-badge',
             '/what-is-digital-credential',
             '/what-is-marty-protocol',
-            '/blog',
-            '/blog/why-identity-needs-a-protocol',
-            '/blog/trust-profiles-explained',
-            '/blog/business-case-for-credential-portability',
-            '/blog/cryptographic-trust-anchors-primer',
-            '/blog/credential-templates-designing-what-gets-issued',
-            '/blog/presentation-policies-minimum-disclosure',
-            '/blog/eudi-wallet-readiness',
-            '/blog/deployment-profiles-from-design-to-production',
-            '/blog/zero-knowledge-predicates-identity',
-            '/blog/flows-orchestrating-identity-lifecycle',
-            '/blog/compliance-profiles-bridging-regulation',
-            '/blog/sd-jwt-selective-disclosure-deep-dive',
-            '/blog/cedar-policies-for-identity-governance',
-            '/blog/introducing-mip',
-            '/blog/mip-json-schemas-walkthrough',
-            '/blog/post-quantum-readiness-in-identity',
-            '/blog/building-trust-registries-at-scale',
-            '/blog/offline-verification-design-patterns',
-            '/blog/holder-binding-beyond-biometrics',
-            '/blog/mip-and-open-badges-education-credentials',
-            '/blog/conformance-testing-for-implementers',
-            '/blog/revocation-strategies-compared',
+            ...blogRoutes,
+            ...authorRoutes,
             '/pricing',
             '/docs',
           ],
@@ -160,11 +220,16 @@ export default defineConfig(({ mode }) => {
           priority: {
             '/': 1.0,
             '/product': 0.9,
+            '/solutions': 0.9,
+            '/developers': 0.9,
             '/pricing': 0.9,
             '/standards': 0.8,
+            '/resources': 0.8,
+            '/architecture': 0.8,
+            '/security': 0.8,
             '/docs': 0.8,
             '/ai': 0.8,
-            '/what-is-verifiable-identity': 0.7,
+            '/why-verifiable-identity': 0.8,
             '/what-is-credential-verification': 0.7,
             '/what-is-open-badge': 0.7,
             '/what-is-digital-credential': 0.7,
@@ -202,6 +267,22 @@ export default defineConfig(({ mode }) => {
           ],
         }),
       ] : []),
+
+      ...(!isDev && enableBundleAnalysis ? [
+        visualizer({
+          filename: `build/${bundleAnalysisBaseName}.html`,
+          template: 'treemap',
+          gzipSize: true,
+          brotliSize: true,
+          open: false,
+        }),
+        visualizer({
+          filename: `build/${bundleAnalysisBaseName}.json`,
+          template: 'raw-data',
+          gzipSize: true,
+          brotliSize: true,
+        }),
+      ] : []),
     ],
     server: {
       port: port,
@@ -210,8 +291,8 @@ export default defineConfig(({ mode }) => {
       cors: true,
       allowedHosts: env.PUBLIC_DOMAIN ? [env.PUBLIC_DOMAIN, 'localhost'] : 'all',
       fs: {
-        // Allow serving files from the marty-blog source (linked via file: dependency)
-        allow: ['..', '../../marty-blog'],
+        // Allow serving sibling source packages linked via file: dependencies.
+        allow: ['..', '../../marty-subscriptions', ...(!isSelfhostBuild ? ['../../marty-blog'] : [])],
       },
       headers: {
         'Cache-Control': 'no-store',
@@ -263,16 +344,12 @@ export default defineConfig(({ mode }) => {
       },
     },
     build: {
-      outDir: 'dist',
-      sourcemap: true,
+      outDir: isSelfhostBuild ? 'dist-selfhost' : 'dist',
+      sourcemap: !isSelfhostBuild,
       chunkSizeWarningLimit: 1000, // Increase from default 500kB to 1000kB
       rollupOptions: {
         output: {
-          manualChunks: {
-            'react-vendor': ['react', 'react-dom', 'react-router-dom'],
-            'mui-vendor': ['@mui/material', '@mui/icons-material', '@mui/x-date-pickers'],
-            'chart-vendor': ['recharts'],
-          },
+          manualChunks: createManualChunk,
         },
       },
     },

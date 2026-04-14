@@ -18,7 +18,13 @@ RUN pip install --no-cache-dir \
     sqlalchemy \
     alembic \
     psycopg2-binary \
-    asyncpg
+  asyncpg \
+  redis[hiredis] \
+  cedarpy \
+  fastapi \
+  pydantic \
+  httpx \
+  cryptography>=41.0.0
 
 # Install mmf from GitHub Packages using BuildKit secret mount
 RUN --mount=type=secret,id=GITHUB_TOKEN \
@@ -31,6 +37,16 @@ RUN --mount=type=secret,id=GITHUB_TOKEN \
     else \
       echo "WARNING: GITHUB_TOKEN secret not mounted, skipping marty-msf install"; \
     fi
+
+# Install marty_common from the repo so the migration runner and license gate
+# match the self-host runtime contract shipped with this repository.
+COPY packages/marty_common /app/packages/marty_common
+ENV PYTHONPATH="/app:/app/packages:${PYTHONPATH}"
+RUN pip install --no-cache-dir -e /app/packages/marty_common
+
+# Copy shared runtime helpers.
+COPY scripts/load-secrets-env.sh /app/load-secrets-env.sh
+COPY scripts/run-migrations-with-secrets.sh /app/run-migrations-with-secrets.sh
 
 # Copy migration runner
 COPY services/run_all_migrations.py /app/
@@ -54,8 +70,13 @@ COPY services/presentation_policy/manage_migrations.py /app/presentation_policy/
 COPY services/flow/infrastructure /app/flow/infrastructure/
 COPY services/flow/manage_migrations.py /app/flow/
 
+COPY services/billing/infrastructure /app/billing/infrastructure/
+COPY services/billing/manage_migrations.py /app/billing/
+
 # Issuance migrations (copied from marty-credentials at build time by CD workflow)
 COPY services/issuance/infrastructure /app/issuance/infrastructure/
 COPY services/issuance/manage_migrations.py /app/issuance/
 
-CMD ["python", "run_all_migrations.py"]
+RUN chmod +x /app/run-migrations-with-secrets.sh
+
+CMD ["/app/run-migrations-with-secrets.sh"]

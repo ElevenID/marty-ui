@@ -1,0 +1,45 @@
+{
+  "dashboard": {
+    "title": "Bienvenido de nuevo",
+    "titleWithName": "Bienvenido de nuevo, {{name}}",
+    "description": "Gestiona tus credenciales digitales y solicitudes.",
+    "pendingAlert": {
+      "title": "Solicitudes pendientes",
+      "message": "Tienes {{count}} solicitud(es) en espera de revisión.",
+      "viewStatus": "Ver estado"
+    },
+    "quickActions": {
+      "title": "Acciones rápidas",
+      "applyForCredential": "Solicitar credencial",
+      "viewMyCredentials": "Ver mis credenciales"
+    }
+  },
+  "credentials": {
+    "title": "Mis credenciales",
+    "description": "Tus credenciales digitales emitidas y su estado.",
+    "tableHeaders": {
+      "credentialType": "Tipo de credencial",
+      "issuer": "Emisor",
+      "status": "Estado",
+      "actions": "Acciones"
+    }
+  },
+  "applications": {
+    "title": "Mis solicitudes",
+    "description": "Sigue el estado de tus solicitudes de credenciales.",
+    "status": {
+      "draft": "Borrador",
+      "submitted": "Enviada",
+      "underReview": "En revisión",
+      "pendingApproval": "Aprobación pendiente",
+      "approved": "Aprobada",
+      "readyToClaim": "Lista para reclamar",
+      "rejected": "Rechazada"
+    }
+  },
+  "catalog": {
+    "title": "Catálogo de credenciales",
+    "description": "Explora y solicita credenciales disponibles",
+    "searchPlaceholder": "Buscar credenciales..."
+  }
+}

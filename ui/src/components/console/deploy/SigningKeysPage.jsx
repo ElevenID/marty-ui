@@ -107,8 +107,10 @@ export default function SigningKeysPage() {
     vault_settings: {},
   });
 
-  const { canCreate, canDelete, canExecute } = usePermissions();
+  const { can } = usePermissions();
   const { showNotification } = useNotifications();
+  const canManageSigningKeys = can('signing-key', 'create');
+  const canDeleteSigningKeys = can('signing-key', 'delete');
 
   useEffect(() => {
     if (currentTab === 1) {
@@ -217,23 +219,28 @@ export default function SigningKeysPage() {
       tabs={getTabs(t)}
       breadcrumbs={getBreadcrumbs(t)}
       icon={<VpnKeyIcon />}
+      pageTestId="deploy.signingKeys.page"
     >
       <Box>
         {/* Action buttons */}
         <Box sx={{ mb: 3, display: 'flex', gap: 2, justifyContent: 'flex-end' }}>
-          <Button
+          <PermissionButton
+            resource="signing-key"
+            action="create"
             variant="outlined"
             startIcon={<SettingsIcon />}
             onClick={settingsDialog.open}
+            data-testid="deploy.signingKeys.settings.action"
           >
             {t('deploy.signingKeys.hsmVaultSettings')}
-          </Button>
+          </PermissionButton>
           <PermissionButton
             resource="signing-key"
             action="create"
             variant="contained"
             startIcon={<AddIcon />}
             onClick={uploadDialog.open}
+            data-testid="deploy.signingKeys.upload.action"
           >
             {t('deploy.signingKeys.uploadKey')}
           </PermissionButton>
@@ -251,7 +258,7 @@ export default function SigningKeysPage() {
             description={t('deploy.signingKeys.emptyState.description')}
             whyItMatters={t('deploy.signingKeys.emptyState.whyItMatters')}
             actionLabel={t('deploy.signingKeys.emptyState.actionLabel')}
-            onAction={() => setUploadDialogOpen(true)}
+            onAction={canManageSigningKeys ? uploadDialog.open : undefined}
             docsUrl="https://docs.example.com/signing-keys"
           />
         ) : (
@@ -305,7 +312,7 @@ export default function SigningKeysPage() {
                     </TableCell>
                     <TableCell align="right">
                       <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end' }}>
-                        {canExecute('signing-key') && key.status === 'active' && (
+                        {canManageSigningKeys && key.status === 'active' && (
                           <Tooltip title={t('deploy.signingKeys.rotateKeyTooltip')}>
                             <IconButton
                               size="small"
@@ -315,7 +322,7 @@ export default function SigningKeysPage() {
                             </IconButton>
                           </Tooltip>
                         )}
-                        {canDelete('signing-key') && (
+                        {canDeleteSigningKeys && (
                           <Tooltip title={t('deploy.signingKeys.deleteKeyTooltip')}>
                             <IconButton
                               size="small"

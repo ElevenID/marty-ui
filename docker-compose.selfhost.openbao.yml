@@ -1,0 +1,45 @@
+name: marty-selfhost-openbao
+
+services:
+  openbao:
+    image: quay.io/openbao/openbao:2
+    command:
+      - server
+      - -config=/bao/config/openbao.hcl
+    ports:
+      - "127.0.0.1:${SELFHOST_OPENBAO_HOST_PORT:-18200}:8200"
+    volumes:
+      - type: bind
+        source: ${SELFHOST_OPENBAO_STATE_DIR:-../marty-selfhost-prod/openbao/state}
+        target: /bao/data
+      - ./docker/openbao-selfhost.hcl:/bao/config/openbao.hcl:ro
+    healthcheck:
+      test: ["CMD-SHELL", "bao status -address=http://127.0.0.1:8200 >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+
+  openbao-bootstrap:
+    image: quay.io/openbao/openbao:2
+    entrypoint: ["/bin/sh", "/scripts/openbao-selfhost-init.sh"]
+    environment:
+      BAO_ADDR: http://openbao:8200
+      BAO_INIT_FILE: /bao/data/selfhost-init.json
+      BAO_ROOT_TOKEN_FILE: /bao/data/root.token
+      BAO_UNSEAL_KEY_FILE: /bao/data/unseal.key
+      BAO_SERVICE_TOKEN_FILE: /bao/runtime/openbao_service_token
+    volumes:
+      - type: bind
+        source: ${SELFHOST_OPENBAO_STATE_DIR:-../marty-selfhost-prod/openbao/state}
+        target: /bao/data
+      - type: bind
+        source: ${SELFHOST_SECRET_DIR:-./docker/secrets/selfhost.example}
+        target: /bao/runtime
+      - ./docker/openbao-init.sh:/scripts/openbao-init.sh:ro
+      - ./docker/openbao-selfhost-init.sh:/scripts/openbao-selfhost-init.sh:ro
+    depends_on:
+      openbao:
+        condition: service_started
+    restart: "no"

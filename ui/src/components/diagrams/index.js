@@ -10,3 +10,4 @@ export { default as IdentityTransactionDiagram } from './IdentityTransactionDiag
 export { default as StandardsStackDiagram } from './StandardsStackDiagram';
 export { default as UnifiedIdentityFlowDiagram } from './UnifiedIdentityFlowDiagram';
 export { default as InteractiveProtocolMap } from './InteractiveProtocolMap';
+export { default as DeploymentModelDiagram } from './DeploymentModelDiagram';

@@ -8,10 +8,16 @@
 	tunnel-auth-restart tunnel-keycloak-restart tunnel-full-restart tunnel-use-prod tunnel-use-dev \
 	setup-keycloak \
 	dev-ui-tunnel prod-ui-tunnel prod-ui-tunnel-kill tunnel-prod-static tunnel-prod-restart \
-	public-ui check prod-ui-docker prod-ui-docker-rebuild prod-ui-docker-stop \
+	public-ui public-ui-dev check prod-ui-docker prod-ui-docker-rebuild prod-ui-docker-stop \
 	obs-up obs-down \
 	wallet-up wallet-down \
 	proto-gen grpc-health \
+	package-selfhost-bundle \
+	selfhost-prod-license-init-keypair selfhost-prod-license-issue \
+	selfhost-prod-openbao-up selfhost-prod-openbao-down selfhost-prod-openbao-ps selfhost-prod-openbao-logs \
+	selfhost-prod-openbao-bootstrap selfhost-prod-openbao-export \
+	selfhost-prod-ui-build selfhost-prod-config selfhost-prod-check selfhost-prod-bootstrap selfhost-prod-up \
+	selfhost-prod-down selfhost-prod-restart selfhost-prod-ps selfhost-prod-logs \
 	deploy-prod
 
 # Colors
@@ -20,6 +26,19 @@ GREEN := \033[0;32m
 YELLOW := \033[1;33m
 RED := \033[0;31m
 NC := \033[0m
+
+ifeq ($(OS),Windows_NT)
+ifneq ($(wildcard C:/PROGRA~1/Git/usr/bin/sh.exe),)
+SHELL := C:/PROGRA~1/Git/usr/bin/sh.exe
+export PATH := C:/PROGRA~1/Git/usr/bin;$(PATH)
+else ifneq ($(wildcard C:/Program Files/Git/usr/bin/sh.exe),)
+SHELL := C:/Program Files/Git/usr/bin/sh.exe
+export PATH := C:/Program Files/Git/usr/bin;$(PATH)
+else ifneq ($(wildcard C:/Program Files/Git/bin/sh.exe),)
+SHELL := C:/Program Files/Git/bin/sh.exe
+export PATH := C:/Program Files/Git/bin;$(PATH)
+endif
+endif
 
 # Configuration
 COMPOSE := docker compose
@@ -30,6 +49,24 @@ WALTID_COMPOSE := $(TUNNEL_COMPOSE) -f docker-compose.profile.waltid.yml
 WALTID_SERVICES := waltid-wallet-api waltid-web-wallet waltid-nginx
 WHEELS_SCRIPT := ./scripts/build-rust-wheels.sh
 SETUP_LOCAL_SCRIPT := ./scripts/setup-local.sh
+SELFHOST_ENV_FILE ?= .env.selfhost.production.local
+-include $(SELFHOST_ENV_FILE)
+SELFHOST_PROD_COMPOSE := $(COMPOSE) --env-file $(SELFHOST_ENV_FILE) -f docker-compose.selfhost.prod.yml
+SELFHOST_OPENBAO_COMPOSE := $(COMPOSE) --env-file $(SELFHOST_ENV_FILE) -f docker-compose.selfhost.openbao.yml
+SELFHOST_OPENBAO_LOG_SERVICES := openbao openbao-bootstrap
+SELFHOST_PROD_LOG_SERVICES := edge cloudflared gateway keycloak
+SELFHOST_ISSUER_TOOL := ../tools/selfhost-license-issuer/selfhost_license_issuer.py
+ifeq ($(OS),Windows_NT)
+SELFHOST_ISSUER_KEY_DIR ?= $(subst \\,/,$(LOCALAPPDATA))/MartyLicenseIssuer/keys
+else
+SELFHOST_ISSUER_KEY_DIR ?= $(HOME)/.local/share/MartyLicenseIssuer/keys
+endif
+SELFHOST_ISSUER_PRIVATE_KEY ?= $(SELFHOST_ISSUER_KEY_DIR)/private_key.pem
+SELFHOST_ISSUER_PUBLIC_KEY ?= $(SELFHOST_ISSUER_KEY_DIR)/public_key.pem
+SELFHOST_LICENSE_OUTPUT_FILE ?= ../marty-selfhost-prod/license-issuer/issued/selfhost-license.jwt
+SELFHOST_LICENSE_ORG_NAME ?= Marty Self-Host Local
+SELFHOST_SECRET_DIR ?=
+SELFHOST_LICENSE_SUBJECT ?= $(MARTY_ORG_ID)
 
 INFRA_SERVICES := postgres redis keycloak mailpit openbao
 APP_SERVICES := event-stream issuance gateway auth organization credential-template trust-profile applicant notification compliance-profile presentation-policy deployment-profile flow revocation-profile verification envoy
@@ -58,6 +95,103 @@ build-wheels: ## Build native Rust wheels for local Python development (optional
 	@bash $(WHEELS_SCRIPT)
 	@echo "$(GREEN)✓ Native wheels built successfully$(NC)"
 
+package-selfhost-bundle: ## Stage the image-based self-host customer bundle in dist/selfhost-bundle
+	@echo "$(BLUE)Staging self-host customer bundle...$(NC)"
+	@python scripts/package-selfhost-bundle.py
+	@echo "$(GREEN)✓ Self-host customer bundle staged$(NC)"
+
+selfhost-prod-license-init-keypair: ## Generate the operator-side self-host issuer keypair
+	@echo "$(BLUE)Generating self-host issuer keypair...$(NC)"
+	@mkdir -p "$(SELFHOST_ISSUER_KEY_DIR)"
+	@python $(SELFHOST_ISSUER_TOOL) init-keypair \
+		--private-key-file "$(SELFHOST_ISSUER_PRIVATE_KEY)" \
+		--public-key-file "$(SELFHOST_ISSUER_PUBLIC_KEY)"
+	@echo "$(GREEN)✓ Issuer keypair written$(NC)"
+	@echo "  Private key: $(SELFHOST_ISSUER_PRIVATE_KEY)"
+	@echo "  Public key:  $(SELFHOST_ISSUER_PUBLIC_KEY)"
+
+selfhost-prod-license-issue: ## Issue and install a signed self-host license into SELFHOST_SECRET_DIR
+	@if [ -z "$(SELFHOST_LICENSE_SUBJECT)" ]; then \
+		echo "$(RED)❌ Error: MARTY_ORG_ID missing from $(SELFHOST_ENV_FILE) or SELFHOST_LICENSE_SUBJECT override$(NC)"; \
+		exit 1; \
+	fi
+	@if [ -z "$(SELFHOST_SECRET_DIR)" ]; then \
+		echo "$(RED)❌ Error: SELFHOST_SECRET_DIR missing from $(SELFHOST_ENV_FILE) or SELFHOST_SECRET_DIR override$(NC)"; \
+		exit 1; \
+	fi
+	@echo "$(BLUE)Issuing self-host production license...$(NC)"
+	@mkdir -p "$(dir $(SELFHOST_LICENSE_OUTPUT_FILE))"
+	@python $(SELFHOST_ISSUER_TOOL) issue-license \
+		--env-file "$(SELFHOST_ENV_FILE)" \
+		--private-key-file "$(SELFHOST_ISSUER_PRIVATE_KEY)" \
+		--subject "$(SELFHOST_LICENSE_SUBJECT)" \
+		--org-name "$(SELFHOST_LICENSE_ORG_NAME)" \
+		--install-secret-dir "$(SELFHOST_SECRET_DIR)" \
+		--license-output-file "$(SELFHOST_LICENSE_OUTPUT_FILE)"
+	@echo "$(GREEN)✓ Self-host license installed$(NC)"
+
+selfhost-prod-openbao-up: ## Start the standalone self-host OpenBao deployment
+	@echo "$(BLUE)Starting self-host OpenBao...$(NC)"
+	@$(SELFHOST_OPENBAO_COMPOSE) up -d
+	@echo "$(GREEN)✓ Self-host OpenBao started$(NC)"
+
+selfhost-prod-openbao-down: ## Stop the standalone self-host OpenBao deployment
+	@echo "$(BLUE)Stopping self-host OpenBao...$(NC)"
+	@$(SELFHOST_OPENBAO_COMPOSE) down
+	@echo "$(GREEN)✓ Self-host OpenBao stopped$(NC)"
+
+selfhost-prod-openbao-ps: ## Show the standalone self-host OpenBao container status
+	@$(SELFHOST_OPENBAO_COMPOSE) ps
+
+selfhost-prod-openbao-logs: ## Follow logs for the standalone self-host OpenBao deployment
+	@$(SELFHOST_OPENBAO_COMPOSE) logs -f $(SELFHOST_OPENBAO_LOG_SERVICES)
+
+selfhost-prod-openbao-bootstrap: ## Re-run the standalone OpenBao bootstrap helper
+	@echo "$(BLUE)Running self-host OpenBao bootstrap...$(NC)"
+	@$(SELFHOST_OPENBAO_COMPOSE) run --rm openbao-bootstrap
+	@echo "$(GREEN)✓ Self-host OpenBao bootstrap completed$(NC)"
+
+selfhost-prod-openbao-export: ## Export the standalone OpenBao state archive
+	@echo "$(BLUE)Exporting self-host OpenBao state...$(NC)"
+	@python scripts/export-selfhost-openbao.py --env-file "$(SELFHOST_ENV_FILE)"
+	@echo "$(GREEN)✓ Self-host OpenBao export created$(NC)"
+
+selfhost-prod-ui-build: ## Build the self-host UI bundle
+	@echo "$(BLUE)Building self-host UI bundle...$(NC)"
+	@cd ui && npm run build:selfhost
+	@echo "$(GREEN)✓ Self-host UI bundle built$(NC)"
+
+selfhost-prod-config: ## Validate the self-host production compose files
+	@echo "$(BLUE)Validating self-host production compose files...$(NC)"
+	@$(SELFHOST_OPENBAO_COMPOSE) config >/dev/null
+	@$(SELFHOST_PROD_COMPOSE) config >/dev/null
+	@echo "$(GREEN)✓ Self-host production compose is valid$(NC)"
+
+selfhost-prod-check: ## Validate license, tunnel token, OpenBao state, and main self-host compose health
+	@echo "$(BLUE)Checking self-host production deployment state...$(NC)"
+	@python scripts/check-selfhost-production.py --env-file "$(SELFHOST_ENV_FILE)"
+
+selfhost-prod-bootstrap: selfhost-prod-ui-build selfhost-prod-openbao-up selfhost-prod-up ## Build the self-host UI, start OpenBao, then start the main stack
+	@echo "$(GREEN)✓ Self-host production bootstrap complete$(NC)"
+
+selfhost-prod-up: selfhost-prod-config ## Start the self-host production stack with image rebuilds
+	@echo "$(BLUE)Starting self-host production stack...$(NC)"
+	@$(SELFHOST_PROD_COMPOSE) up -d --build
+	@echo "$(GREEN)✓ Self-host production stack started$(NC)"
+
+selfhost-prod-down: ## Stop the self-host production stack
+	@echo "$(BLUE)Stopping self-host production stack...$(NC)"
+	@$(SELFHOST_PROD_COMPOSE) down
+	@echo "$(GREEN)✓ Self-host production stack stopped$(NC)"
+
+selfhost-prod-restart: selfhost-prod-down selfhost-prod-up ## Restart the self-host production stack
+
+selfhost-prod-ps: ## Show the self-host production stack status
+	@$(SELFHOST_PROD_COMPOSE) ps
+
+selfhost-prod-logs: ## Follow logs for the self-host production stack core services
+	@$(SELFHOST_PROD_COMPOSE) logs -f $(SELFHOST_PROD_LOG_SERVICES)
+
 setup-local: ## Setup native local development environment (venv + dependencies)
 	@echo "$(BLUE)Setting up native local development environment...$(NC)"
 	@bash $(SETUP_LOCAL_SCRIPT)
@@ -76,14 +210,16 @@ run-api-tunnel: infra services-up-tunnel ## Start infra + API microservices with
 
 run-ui: ## Run UI natively (requires API stack)
 	@echo "$(BLUE)Starting UI natively...$(NC)"
-	@cd ui && bun run dev
+	@cd ui && npm run dev
 
-public-ui: run-api-tunnel tunnel-keycloak-restart tunnel-start dev-ui-tunnel ## Start all dependencies + Cloudflare tunnel/proxy + UI dev server (public tunnel mode)
+public-ui: run-api-tunnel tunnel-keycloak-restart prod-ui-docker tunnel-start tunnel-use-prod ## Start all dependencies + Cloudflare tunnel/proxy + persistent Docker UI
+
+public-ui-dev: run-api-tunnel tunnel-keycloak-restart tunnel-start tunnel-use-dev dev-ui-tunnel ## Start all dependencies + Cloudflare tunnel/proxy + UI dev server (public tunnel mode)
 
 prod-ui-docker: ## Build UI and serve in Docker (persistent, survives terminal close)
 	@echo "$(BLUE)🔨 Building production UI...$(NC)"
 	@cp .env ui/.env
-	@cd ui && bun run vite build
+	@cd ui && npm run build
 	@echo "$(BLUE)🚀 Starting UI container on :3002...$(NC)"
 	@docker compose -f docker-compose.ui-prod.yml up -d --force-recreate
 	@echo "$(GREEN)✅ UI running in Docker (restart: unless-stopped)$(NC)"
@@ -92,7 +228,7 @@ prod-ui-docker: ## Build UI and serve in Docker (persistent, survives terminal c
 prod-ui-docker-rebuild: ## Rebuild UI and restart Docker container
 	@echo "$(BLUE)🔨 Rebuilding UI...$(NC)"
 	@cp .env ui/.env
-	@cd ui && bun run vite build
+	@cd ui && npm run build
 	@docker compose -f docker-compose.ui-prod.yml restart ui-prod
 	@echo "$(GREEN)✅ UI rebuilt and restarted$(NC)"
 
@@ -140,7 +276,7 @@ up: infra services-up ## Start infrastructure + microservices
 
 down: ## Stop all services (base + tunnel profile services)
 	@echo "$(BLUE)Stopping Marty stack...$(NC)"
-	@$(TUNNEL_COMPOSE) down
+	@$(TUNNEL_COMPOSE) down --remove-orphans
 	@echo "$(GREEN)✓ Services stopped$(NC)"
 
 restart: down up ## Restart full stack
@@ -200,7 +336,8 @@ tunnel-start: ## Start Cloudflare tunnel sidecars (uses .env)
 
 tunnel-stop: ## Stop Cloudflare tunnel sidecars
 	@echo "$(BLUE)🛑 Stopping Cloudflare Tunnel...$(NC)"
-	@$(TUNNEL_COMPOSE) stop cloudflared nginx-proxy nginx-proxy-prod
+	@$(TUNNEL_COMPOSE) stop cloudflared nginx-proxy
+	@docker rm -f tunnel-nginx-proxy-prod >/dev/null 2>&1 || true
 	@echo "$(GREEN)✅ Tunnel stopped$(NC)"
 
 tunnel-restart: tunnel-stop tunnel-start ## Restart Cloudflare tunnel sidecars
@@ -275,29 +412,26 @@ tunnel-use-dev: ## Route tunnel proxy to Vite dev UI (:3000)
 dev-ui-tunnel: ## Start UI dev server for tunnel mode
 	@echo "$(BLUE)🚀 Starting UI dev server for tunnel mode...$(NC)"
 	@cp .env ui/.env
-	@cd ui && bun run vite --host --mode tunnel
+	@cd ui && npm run dev -- --host --mode tunnel
 
-prod-ui-tunnel: ## Build and run production preview UI on :3002
-	@echo "$(BLUE)🚀 Building production UI...$(NC)"
-	@cp .env ui/.env
-	@cd ui && bunx vite build
-	@lsof -ti :3002 | xargs kill 2>/dev/null || true
-	@cd ui && bunx vite preview --host --port 3002 --strictPort
+# Legacy compatibility aliases — intentionally hidden from `make help`.
+prod-ui-tunnel:
+	@echo "$(YELLOW)⚠ Deprecated: use prod-ui-docker$(NC)"
+	@$(MAKE) --no-print-directory prod-ui-docker
 
-prod-ui-tunnel-kill: ## Kill process using port 3002
-	@lsof -ti :3002 | xargs kill 2>/dev/null || true
-	@echo "$(GREEN)✅ Port 3002 cleared$(NC)"
+prod-ui-tunnel-kill:
+	@echo "$(YELLOW)⚠ Deprecated: use prod-ui-docker-stop$(NC)"
+	@$(MAKE) --no-print-directory prod-ui-docker-stop
 
-tunnel-prod-static: ## Serve static built UI through nginx-proxy-prod (9081)
-	@echo "$(BLUE)📦 Building production bundle...$(NC)"
-	@cd ui && bunx vite build
-	@$(TUNNEL_COMPOSE) stop nginx-proxy || true
-	@$(TUNNEL_COMPOSE) up -d cloudflared nginx-proxy-prod
-	@echo "$(GREEN)✅ Static production tunnel proxy started on :9081$(NC)"
+tunnel-prod-static:
+	@echo "$(YELLOW)⚠ Deprecated: use public-ui$(NC)"
+	@$(MAKE) --no-print-directory prod-ui-docker
+	@$(MAKE) --no-print-directory tunnel-start
+	@$(MAKE) --no-print-directory tunnel-use-prod
 
-tunnel-prod-restart: ## Rebuild and restart static production proxy
-	@cd ui && bunx vite build
-	@$(TUNNEL_COMPOSE) restart nginx-proxy-prod
+tunnel-prod-restart:
+	@echo "$(YELLOW)⚠ Deprecated: use prod-ui-docker-rebuild$(NC)"
+	@$(MAKE) --no-print-directory prod-ui-docker-rebuild
 
 obs-up: ## Start observability profile
 	@$(OBS_COMPOSE) up -d elasticsearch kibana fluentd prometheus grafana jaeger

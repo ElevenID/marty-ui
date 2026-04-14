@@ -45,6 +45,7 @@ const emptyDashboardData = {
   runtimeStatus: { canIssue: false, canVerify: false, issuerKeysValid: false, issuerActive: false, deploymentActive: false, policyReachable: false },
   criticalEvents: [],
   environment: 'development',
+  lifecycle: null,
 }
 
 const partialDashboardData = {
@@ -59,6 +60,7 @@ const partialDashboardData = {
   runtimeStatus: { canIssue: false, canVerify: false, issuerKeysValid: false, issuerActive: false, deploymentActive: false, policyReachable: false },
   criticalEvents: [],
   environment: 'development',
+  lifecycle: null,
 }
 
 const fullDashboardData = {
@@ -83,6 +85,42 @@ const fullDashboardData = {
   runtimeStatus: { canIssue: true, canVerify: true, issuerKeysValid: true, issuerActive: true, deploymentActive: true, policyReachable: true, lastIssuance: new Date().toISOString(), lastVerification: new Date().toISOString() },
   criticalEvents: [],
   environment: 'development',
+  lifecycle: null,
+}
+
+const hostedPilotLifecycle = {
+  createdAt: new Date().toISOString(),
+  complianceProfiles: [],
+  planTier: 'starter',
+  planExpiresAt: null,
+  commercialOffer: 'Hosted Pilot',
+  dataRetentionMode: 'hosted_pilot_rolling_purge',
+  auditRetentionDays: 30,
+  pilotRetention: {
+    enabled: true,
+    windowDays: 30,
+    scopeSummary: 'Hosted Pilot data older than 30 days is purge-eligible while admin access stays available.',
+    scopeItems: [
+      'Applications and uploaded evidence',
+      'Issuance transactions and linked issued credentials',
+      'Authorization sessions',
+      'Issuance lifecycle events',
+    ],
+    accessBehavior: 'Purge affects retained pilot data only. Organization access and configuration remain available.',
+    lastPurgedAt: null,
+    cutoffAt: null,
+    nextExpiryAt: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString(),
+    oldestRetainedRecordAt: new Date().toISOString(),
+    trackedScope: ['applications', 'submitted_evidence', 'issuance_transactions', 'issued_credentials', 'authorization_sessions', 'issuance_events'],
+    eligibleForPurge: {
+      issuanceTransactions: 0,
+      applications: 0,
+      authorizationSessions: 0,
+      issuanceEvents: 0,
+      issuedCredentials: 0,
+      total: 0,
+    },
+  },
 }
 
 // Mock useDashboardData with a controllable return value
@@ -113,6 +151,23 @@ describe('ConsoleDashboard', () => {
         total_scans: 0,
         success_rate: 100,
         total_offers: 0,
+      })),
+      http.post('http://localhost:8000/v1/organizations/:orgId/lifecycle/purge', () => HttpResponse.json({
+        organization_id: 'org_123',
+        retention_days: 30,
+        cutoff_at: new Date().toISOString(),
+        purged_at: new Date().toISOString(),
+        next_expiry_at: null,
+        oldest_retained_record_at: null,
+        tracked_scope: ['applications', 'submitted_evidence', 'issuance_transactions', 'issued_credentials', 'authorization_sessions', 'issuance_events'],
+        purged_records: {
+          issuance_transactions: 1,
+          applications: 1,
+          authorization_sessions: 1,
+          issuance_events: 1,
+          issued_credentials: 0,
+          total: 4,
+        },
       })),
     )
   })
@@ -314,6 +369,56 @@ describe('ConsoleDashboard', () => {
     it('should show operational banner when fully configured', () => {
       render(<ConsoleDashboard />)
       expect(screen.getByText(/Organization is Operational/i)).toBeInTheDocument()
+    })
+  })
+
+  describe('Hosted Pilot Retention', () => {
+    it('should show the Hosted Pilot countdown banner when retention is enabled', () => {
+      mockDashboardReturn = {
+        data: { ...partialDashboardData, lifecycle: hostedPilotLifecycle },
+        loading: false,
+        error: null,
+        refetch: vi.fn(),
+      }
+
+      render(<ConsoleDashboard />)
+
+      expect(screen.getByText(/Hosted Pilot retention/i)).toBeInTheDocument()
+      expect(screen.getByText(/Next Hosted Pilot record ages out in/i)).toBeInTheDocument()
+    })
+
+    it('should allow a manual Hosted Pilot purge', async () => {
+      const user = userEvent.setup()
+      mockDashboardReturn = {
+        data: {
+          ...partialDashboardData,
+          lifecycle: {
+            ...hostedPilotLifecycle,
+            pilotRetention: {
+              ...hostedPilotLifecycle.pilotRetention,
+              nextExpiryAt: null,
+              eligibleForPurge: {
+                issuanceTransactions: 1,
+                applications: 1,
+                authorizationSessions: 1,
+                issuanceEvents: 1,
+                issuedCredentials: 0,
+                total: 4,
+              },
+            },
+          },
+        },
+        loading: false,
+        error: null,
+        refetch: vi.fn(),
+      }
+
+      render(<ConsoleDashboard />)
+      await user.click(screen.getByRole('button', { name: /Purge now/i }))
+
+      await waitFor(() => {
+        expect(screen.getByText(/Purged 4 Hosted Pilot records/i)).toBeInTheDocument()
+      })
     })
   })
 })

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from ..domain.entities import Customer, Invoice, PaymentMethod, Subscription
@@ -143,8 +144,14 @@ class OrgServicePort(ABC):
     """Abstract interface to organization service internal API."""
 
     @abstractmethod
-    async def update_plan(self, organization_id: str, plan_tier: str) -> None:
-        """Update organization plan tier via internal API."""
+    async def update_plan(
+        self,
+        organization_id: str,
+        plan_tier: str,
+        plan_expires_at: datetime | None = None,
+        settings_patch: dict[str, Any] | None = None,
+    ) -> None:
+        """Update organization plan tier and lifecycle metadata via internal API."""
         ...
 
     async def get_contact_email(self, organization_id: str) -> str:

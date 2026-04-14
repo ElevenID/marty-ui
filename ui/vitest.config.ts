@@ -48,6 +48,8 @@ export default defineConfig({
       '@hooks': resolve(__dirname, './src/hooks'),
       '@contexts': resolve(__dirname, './src/contexts'),
       '@config': resolve(__dirname, './src/config'),
+      '@ui-public-config': resolve(__dirname, './src/variants/publicConfig.public.js'),
+      '@ui-public-routes': resolve(__dirname, './src/variants/publicSite.public.jsx'),
       '@test': resolve(__dirname, './src/test'),
     },
   },

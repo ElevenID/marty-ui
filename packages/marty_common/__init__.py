@@ -64,6 +64,14 @@ from .service_setup import create_service_app
 from .pairwise import compute_pairwise_id, generate_holder_secret
 from .plans import PlanTier, PlanLimits, PLAN_LIMITS, PLAN_INFO, get_plan_limits, check_limit, check_feature
 from .usage import UsageTracker
+from .licensing import (
+    LicenseClaims,
+    LicenseValidationError,
+    license_enforcement_enabled,
+    validate_license_claims,
+    validate_license_token,
+    validate_runtime_license_from_env,
+)
 
 __all__ = [
     # Value Objects
@@ -133,4 +141,11 @@ __all__ = [
     "check_limit",
     "check_feature",
     "UsageTracker",
+    # Licensing
+    "LicenseClaims",
+    "LicenseValidationError",
+    "license_enforcement_enabled",
+    "validate_license_claims",
+    "validate_license_token",
+    "validate_runtime_license_from_env",
 ]

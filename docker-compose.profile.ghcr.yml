@@ -96,3 +96,8 @@ services:
     <<: *service-image
     environment:
       SERVICE_NAME: verification
+
+  billing:
+    <<: *service-image
+    environment:
+      SERVICE_NAME: billing

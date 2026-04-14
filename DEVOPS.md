@@ -71,11 +71,12 @@ Stores service account passwords, API keys, and other shared credentials not sui
 | Workflow | Trigger | What it does |
 |----------|---------|-------------|
 | `ci.yml` | Push/PR to `main` | Lint (ruff), UI tests (bun/vitest), service tests (pytest) |
-| `cd.yml` | Tag `v*` or manual dispatch | Builds marty-rs wheel, 3 Docker images (services, UI, db-migrate), pushes to GHCR |
+| `cd.yml` | Tag `v*` or manual dispatch | Builds marty-rs wheel, 4 Docker images (services, UI, self-host UI, db-migrate), pushes to GHCR |
 
 **Images published to:**
 - `ghcr.io/elevenid/marty-ui/services:<tag>`
 - `ghcr.io/elevenid/marty-ui/ui:<tag>`
+- `ghcr.io/elevenid/marty-ui/ui-selfhost:<tag>`
 - `ghcr.io/elevenid/marty-ui/db-migrate:<tag>`
 
 **Deploy from GHCR:**

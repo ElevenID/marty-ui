@@ -1,0 +1,117 @@
+# Switch the self-host stack from local source builds to the published images.
+#
+# Usage:
+#   docker compose \
+#     --env-file .env.selfhost.production.local \
+#     -f docker-compose.selfhost.prod.yml \
+#     -f docker-compose.selfhost.bundle.override.yml \
+#     pull
+#   docker compose \
+#     --env-file .env.selfhost.production.local \
+#     -f docker-compose.selfhost.prod.yml \
+#     -f docker-compose.selfhost.bundle.override.yml \
+#     up -d
+#
+# The base compose file still carries the runtime wiring, volumes, and secret
+# mounts. This override only swaps build contexts for the published images.
+
+x-selfhost-service-image: &selfhost-service-image
+  build: !reset null
+  image: ${SELFHOST_IMAGE_PREFIX:-ghcr.io/elevenid/marty-ui}/services:${SELFHOST_IMAGE_TAG:-latest}
+  pull_policy: always
+
+services:
+  db-migrate:
+    build: !reset null
+    image: ${SELFHOST_IMAGE_PREFIX:-ghcr.io/elevenid/marty-ui}/db-migrate:${SELFHOST_IMAGE_TAG:-latest}
+    pull_policy: always
+
+  gateway:
+    <<: *selfhost-service-image
+    environment:
+      SERVICE_NAME: gateway
+
+  auth:
+    <<: *selfhost-service-image
+    environment:
+      SERVICE_NAME: auth
+
+  organization:
+    <<: *selfhost-service-image
+    environment:
+      SERVICE_NAME: organization
+
+  credential-template:
+    <<: *selfhost-service-image
+    environment:
+      SERVICE_NAME: credential_template
+
+  trust-profile:
+    <<: *selfhost-service-image
+    environment:
+      SERVICE_NAME: trust_profile
+
+  issuance:
+    <<: *selfhost-service-image
+    environment:
+      SERVICE_NAME: issuance
+
+  applicant:
+    <<: *selfhost-service-image
+    environment:
+      SERVICE_NAME: applicant
+
+  notification:
+    <<: *selfhost-service-image
+    environment:
+      SERVICE_NAME: notification
+
+  compliance-profile:
+    <<: *selfhost-service-image
+    environment:
+      SERVICE_NAME: compliance_profile
+
+  presentation-policy:
+    <<: *selfhost-service-image
+    environment:
+      SERVICE_NAME: presentation_policy
+
+  deployment-profile:
+    <<: *selfhost-service-image
+    environment:
+      SERVICE_NAME: deployment_profile
+
+  flow:
+    <<: *selfhost-service-image
+    environment:
+      SERVICE_NAME: flow
+
+  verification:
+    <<: *selfhost-service-image
+    environment:
+      SERVICE_NAME: verification
+
+  revocation-profile:
+    <<: *selfhost-service-image
+    environment:
+      SERVICE_NAME: revocation_profile
+
+  device-registration:
+    <<: *selfhost-service-image
+    environment:
+      SERVICE_NAME: device_registration
+
+  event-stream:
+    <<: *selfhost-service-image
+    environment:
+      SERVICE_NAME: event_stream
+
+  billing:
+    <<: *selfhost-service-image
+    environment:
+      SERVICE_NAME: billing
+
+  ui:
+    image: ${SELFHOST_IMAGE_PREFIX:-ghcr.io/elevenid/marty-ui}/ui-selfhost:${SELFHOST_IMAGE_TAG:-latest}
+    pull_policy: always
+    volumes: !reset []

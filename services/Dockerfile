@@ -31,11 +31,34 @@ COPY marty-core ./marty-core
 COPY longfellow-zk/lib ./longfellow-zk/lib
 
 # Copy marty-credentials Rust workspace (preserving directory structure)
-COPY marty-credentials/Cargo.toml marty-credentials/Cargo.lock ./marty-credentials/
+COPY marty-credentials/Cargo.toml ./marty-credentials/
+COPY marty-credentials/Cargo.lock* ./marty-credentials/
 COPY marty-credentials/rust ./marty-credentials/rust
 
-# Patch git dependencies to use local marty-core checkout
-RUN printf '\n[patch."https://github.com/ElevenID/marty-core.git"]\nmarty-crypto = { path = "../marty-core/marty-crypto" }\nmarty-verification = { path = "../marty-core/marty-verification" }\nmarty-oid4vci = { path = "../marty-core/marty-oid4vci" }\n' >> /build/marty-credentials/Cargo.toml
+# Rewrite marty-core git dependencies to local path dependencies so Docker
+# builds do not require GitHub credentials.
+RUN python3 - <<'PY'
+from pathlib import Path
+
+path = Path('/build/marty-credentials/Cargo.toml')
+text = path.read_text()
+
+replacements = {
+    'marty-crypto = { git = "https://github.com/ElevenID/marty-core.git", branch = "main", features = ["sod-builder"] }': 'marty-crypto = { path = "../marty-core/marty-crypto", features = ["sod-builder"] }',
+    'marty-crypto = { git = "https://github.com/ElevenID/marty-core.git", rev = "438d0f81", features = ["sod-builder"] }': 'marty-crypto = { path = "../marty-core/marty-crypto", features = ["sod-builder"] }',
+    'marty-verification = { git = "https://github.com/ElevenID/marty-core.git", branch = "main" }': 'marty-verification = { path = "../marty-core/marty-verification" }',
+    'marty-verification = { git = "https://github.com/ElevenID/marty-core.git", rev = "438d0f81" }': 'marty-verification = { path = "../marty-core/marty-verification" }',
+    'marty-secure-storage = { git = "https://github.com/ElevenID/marty-core.git", branch = "main" }': 'marty-secure-storage = { path = "../marty-core/marty-secure-storage" }',
+    'marty-secure-storage = { git = "https://github.com/ElevenID/marty-core.git", rev = "438d0f81" }': 'marty-secure-storage = { path = "../marty-core/marty-secure-storage" }',
+    'marty-oid4vci = { git = "https://github.com/ElevenID/marty-core.git", branch = "main" }': 'marty-oid4vci = { path = "../marty-core/marty-oid4vci" }',
+    'marty-oid4vci = { git = "https://github.com/ElevenID/marty-core.git", rev = "438d0f81" }': 'marty-oid4vci = { path = "../marty-core/marty-oid4vci" }',
+}
+
+for old, new in replacements.items():
+    text = text.replace(old, new)
+
+path.write_text(text)
+PY
 
 # Build the Python wheel for marty-rs bindings
 WORKDIR /build/marty-credentials/rust/marty-rs
@@ -89,6 +112,7 @@ WORKDIR /app/services
 
 # Copy entrypoint script
 COPY marty-ui/services/entrypoint.sh /app/entrypoint.sh
+COPY marty-ui/scripts/load-secrets-env.sh /app/load-secrets-env.sh
 RUN chmod +x /app/entrypoint.sh
 
 # Create non-root user

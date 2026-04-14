@@ -1,0 +1,45 @@
+{
+	"labels": {
+		"firstName": "Prénom",
+		"lastName": "Nom",
+		"email": "Adresse e-mail",
+		"phone": "Numéro de téléphone",
+		"password": "Mot de passe",
+		"confirmPassword": "Confirmer le mot de passe",
+		"organizationName": "Nom de l'organisation",
+		"address": "Adresse",
+		"city": "Ville",
+		"state": "État/Province",
+		"country": "Pays",
+		"postalCode": "Code postal",
+		"website": "Site web",
+		"notes": "Notes",
+		"category": "Catégorie",
+		"priority": "Priorité"
+	},
+	"placeholders": {
+		"enterName": "Saisir un nom",
+		"enterEmail": "ex. user@example.com",
+		"enterPhone": "ex. +33 6 12 34 56 78",
+		"searchPlaceholder": "Rechercher...",
+		"selectOption": "Sélectionner une option",
+		"enterUrl": "https://example.com",
+		"optional": "Optionnel"
+	},
+	"helperText": {
+		"emailFormat": "Veuillez saisir une adresse e-mail valide",
+		"phoneFormat": "Veuillez saisir un numéro de téléphone valide",
+		"urlFormat": "Doit être une URL valide commençant par http:// ou https://",
+		"minChars": "Doit contenir au moins {{count}} caractères",
+		"passwordStrength": "Utilisez un mélange de lettres, chiffres et symboles",
+		"required": "Ce champ est obligatoire"
+	},
+	"validation": {
+		"required": "{{field}} est requis",
+		"invalid": "{{field}} invalide",
+		"tooShort": "{{field}} doit contenir au moins {{min}} caractères",
+		"tooLong": "{{field}} ne doit pas dépasser {{max}} caractères",
+		"mustMatch": "{{field}} doit correspondre",
+		"invalidFormat": "Format invalide pour {{field}}"
+	}
+}

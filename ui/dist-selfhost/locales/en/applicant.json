@@ -1,0 +1,263 @@
+{
+  "dashboard": {
+    "title": "Welcome back",
+    "titleWithName": "Welcome back, {{name}}",
+    "description": "Manage your digital credentials and applications.",
+    "pendingAlert": {
+      "title": "Pending Applications",
+      "message": "You have {{count}} application(s) awaiting review.",
+      "viewStatus": "View Status"
+    },
+    "stats": {
+      "activeCredentials": "Active Credentials",
+      "pendingApplications": "Pending Applications",
+      "expiringSoon": "Expiring Soon",
+      "viewAll": "View All"
+    },
+    "quickActions": {
+      "title": "Quick Actions",
+      "applyForCredential": "Apply for Credential",
+      "applyDescription": "Browse available credentials and start an application",
+      "viewMyCredentials": "View My Credentials",
+      "viewDescription": "See your issued digital credentials"
+    }
+  },
+  "credentials": {
+    "title": "My Credentials",
+    "description": "Your issued digital credentials and their status.",
+    "errorLoading": "Failed to load credentials",
+    "tableHeaders": {
+      "credentialType": "Credential Type",
+      "issuer": "Issuer",
+      "issuedDate": "Issued Date",
+      "expires": "Expires",
+      "status": "Status",
+      "actions": "Actions"
+    },
+    "empty": {
+      "message": "No credentials yet. Apply for a credential to get started.",
+      "browseButton": "Browse Credentials"
+    },
+    "actions": {
+      "viewDetails": "View Details",
+      "showQRCode": "Show QR Code",
+      "download": "Download"
+    }
+  },
+  "applications": {
+    "title": "My Applications",
+    "description": "Track the status of your credential applications.",
+    "errorLoading": "Failed to load applications",
+    "steps": {
+      "submitted": "Submitted",
+      "underReview": "Under Review",
+      "verification": "Verification",
+      "approved": "Approved",
+      "credentialReady": "Credential Ready"
+    },
+    "status": {
+      "draft": "Draft",
+      "submitted": "Submitted",
+      "underReview": "Under Review",
+      "pendingApproval": "Pending Approval",
+      "approved": "Approved",
+      "readyToClaim": "Ready to Claim",
+      "rejected": "Rejected"
+    },
+    "tableHeaders": {
+      "credentialType": "Credential Type",
+      "submitted": "Submitted",
+      "progress": "Progress",
+      "status": "Status",
+      "actions": "Actions"
+    },
+    "empty": {
+      "message": "No applications yet.",
+      "applyButton": "Apply for a Credential"
+    },
+    "actions": {
+      "viewDetails": "View Details",
+      "addToWallet": "Add to Wallet"
+    },
+    "detailsDialog": {
+      "title": "Application Details",
+      "credentialType": "Credential Type",
+      "submitted": "Submitted",
+      "status": "Status",
+      "estimatedCompletion": "Estimated Completion",
+      "close": "Close"
+    }
+  },
+  "devices": {
+    "title": "Device Management",
+    "description": "Manage your registered devices for secure credential access.",
+    "refresh": "Refresh",
+    "info": "Registered devices can receive push notifications and securely sign verification challenges. Remove devices you no longer use to maintain security.",
+    "errorLoading": "Failed to load devices",
+    "errorUnregistering": "Failed to unregister device: {{message}}",
+    "tableHeaders": {
+      "device": "Device",
+      "platform": "Platform",
+      "appVersion": "App Version",
+      "registered": "Registered",
+      "lastSeen": "Last Seen",
+      "security": "Security",
+      "actions": "Actions"
+    },
+    "status": {
+      "active": "Active",
+      "secured": "Secured",
+      "basic": "Basic"
+    },
+    "security": {
+      "hasPublicKey": "Device has registered a public key for challenge signing"
+    },
+    "empty": {
+      "title": "No Devices Registered",
+      "description": "Register your mobile wallet app to receive push notifications and use secure verification features."
+    },
+    "actions": {
+      "unregister": "Unregister device"
+    },
+    "unregisterDialog": {
+      "title": "Unregister Device?",
+      "message": "Are you sure you want to unregister this device? This will prevent it from receiving push notifications and using secure verification features.",
+      "deviceId": "Device ID: {{deviceId}}",
+      "platform": "Platform: {{platform}}",
+      "confirm": "Unregister",
+      "unregistering": "Unregistering..."
+    },
+    "formatDate": {
+      "never": "Never"
+    }
+  },
+  "settings": {
+    "title": "Settings",
+    "description": "Manage your profile and preferences.",
+    "successMessage": "Settings saved successfully.",
+    "errorNotFound": "Applicant profile not found",
+    "profile": {
+      "title": "Profile",
+      "fullName": "Full Name",
+      "email": "Email",
+      "emailHelp": "Contact support to change your email",
+      "phone": "Phone Number"
+    },
+    "notifications": {
+      "title": "Notifications",
+      "emailAlerts": "Email Alerts",
+      "emailAlertsDescription": "Receive important updates via email",
+      "applicationUpdates": "Application Updates",
+      "applicationUpdatesDescription": "Get notified when your application status changes",
+      "expirationReminders": "Expiration Reminders",
+      "expirationRemindersDescription": "Remind me before credentials expire"
+    },
+    "actions": {
+      "save": "Save Settings",
+      "saving": "Saving..."
+    }
+  },
+  "catalog": {
+    "title": "Credential Catalog",
+    "description": "Browse and apply for available credentials",
+    "descriptionWithOrg": "Browse and apply for available credentials from {{organizationName}}",
+    "searchPlaceholder": "Search credentials...",
+    "resultsCount": "{{count}} credential found",
+    "resultsCount_other": "{{count}} credentials found",
+    "categories": {
+      "all": "All Categories",
+      "travel": "Travel Documents",
+      "identity": "Identity Documents",
+      "enterprise": "Enterprise Credentials"
+    },
+    "filters": {
+      "category": "Category"
+    },
+    "empty": {
+      "title": "No Credentials Available",
+      "description": "There are no credentials available for your organization at this time.",
+      "message": "No credentials match your search criteria. Try adjusting your filters."
+    },
+    "card": {
+      "free": "Free",
+      "viewDetails": "View details",
+      "status": {
+        "pending": "Application Pending"
+      },
+      "actions": {
+        "apply": "Apply Now",
+        "preview": "Preview Application"
+      }
+    },
+    "detailsDialog": {
+      "processingTime": "Processing Time",
+      "processingFee": "Processing Fee",
+      "noFee": "No fee required",
+      "requirements": "Requirements",
+      "instructions": "Submission Instructions",
+      "requiredInfo": "Required Information",
+      "offeredBy": "Offered by: {{vendorName}}",
+      "templateVersion": "Template v{{version}}"
+    }
+  },
+  "applicationForm": {
+    "title": {
+      "default": "Credential Application",
+      "withName": "Apply for {{credentialName}}"
+    },
+    "description": "Complete the form below to apply for your credential.",
+    "loadingConfig": "Loading application form...",
+    "instructions": {
+      "default": "Please fill in all required fields."
+    },
+    "steps": {
+      "personalInfo": "Personal Information",
+      "address": "Address",
+      "documentDetails": "Document Details",
+      "additionalInfo": "Additional Information",
+      "photos": "Photos & Documents",
+      "review": "Review & Submit"
+    },
+    "navigation": {
+      "back": "Back",
+      "next": "Next",
+      "submit": "Submit Application",
+      "submitting": "Submitting...",
+      "simulating": "Simulating...",
+      "previewSubmit": "Preview Submit"
+    },
+    "review": {
+      "title": "Review Your Application",
+      "description": "Please review your information before submitting.",
+      "uploaded": "Uploaded",
+      "terms": "I certify that all information provided is accurate and complete. I understand that providing false information may result in denial of my application."
+    },
+    "success": {
+      "title": "Application Submitted!",
+      "previewTitle": "Preview: Application Would Be Submitted",
+      "message": "Your application has been submitted successfully.",
+      "applicationId": "Application ID: {{id}}",
+      "nextSteps": "You will receive updates on your application status via email. Redirecting to your applications page...",
+      "viewApplications": "View My Applications",
+      "dataCollected": "Application data collected:",
+      "previewMode": "Preview Mode",
+      "previewMessage": "In production, this application would be submitted for review.",
+      "previewNote": "The applicant would receive confirmation and be able to track the application status."
+    },
+    "errors": {
+      "noCredential": "Please select a credential from the catalog before starting an application."
+    },
+    "actions": {
+      "gotoCatalog": "Go to Credential Catalog"
+    },
+    "validation": {
+      "requiredField": "This field is required",
+      "invalidEmail": "Please enter a valid email address",
+      "invalidPhone": "Please enter a valid phone number",
+      "fillRequiredFields": "Please fill in all required fields"
+    },
+    "fields": {
+      "optional": "(optional)"
+    }
+  }
+}

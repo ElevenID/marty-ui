@@ -25,7 +25,14 @@ from fastapi import Request, Response
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from marty_common.plans import PlanTier, get_plan_limits, check_limit, check_sandbox_fair_use
+from marty_common.plans import (
+    PlanTier,
+    check_limit,
+    check_sandbox_fair_use,
+    get_plan_limits,
+    normalize_plan_identifier,
+    resolve_plan_tier,
+)
 from marty_common.usage import UsageTracker
 
 logger = logging.getLogger(__name__)
@@ -87,11 +94,8 @@ class UsageTrackingMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         # Resolve plan tier
-        plan_str = getattr(request.state, "org_plan", "sandbox")
-        try:
-            plan = PlanTier(plan_str)
-        except ValueError:
-            plan = PlanTier.SANDBOX
+        plan_identifier = normalize_plan_identifier(getattr(request.state, "org_plan", "sandbox")) or PlanTier.SANDBOX.value
+        plan = resolve_plan_tier(plan_identifier)
         limits = get_plan_limits(plan)
 
         tracker: UsageTracker | None = getattr(request.app.state, "usage_tracker", None)
@@ -111,7 +115,7 @@ class UsageTrackingMiddleware(BaseHTTPMiddleware):
                             "metric": gauge_metric,
                             "current": current,
                             "limit": limit_val,
-                            "current_plan": plan.value,
+                            "current_plan": plan_identifier,
                             "upgrade_url": "/pricing",
                         },
                     )
@@ -128,7 +132,7 @@ class UsageTrackingMiddleware(BaseHTTPMiddleware):
                             "message": "Sandbox monthly activity limit reached. Upgrade to a paid plan for unlimited usage.",
                             "current": combined,
                             "limit": limits.sandbox_monthly_activity_limit,
-                            "current_plan": plan.value,
+                            "current_plan": plan_identifier,
                             "upgrade_url": "/pricing",
                         },
                     )

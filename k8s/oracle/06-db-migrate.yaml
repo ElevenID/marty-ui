@@ -1,8 +1,8 @@
 ---
 # ================================================================
 # Database Migration Job
-# Runs Alembic migrations before any application service starts.
-# Re-run by deleting the Job and applying again (or bump the name).
+# Runs the self-host production migrations before any application service starts.
+# Re-run by deleting the Job and applying again.
 # ================================================================
 apiVersion: batch/v1
 kind: Job
@@ -28,15 +28,30 @@ spec:
             'until nc -z postgres 5432; do echo "waiting for postgres"; sleep 3; done']
       containers:
         - name: db-migrate
-          # Same migrations image as the base Dockerfile.migrations
           image: ${OCIR_REGISTRY}/marty-ui/db-migrate:${IMAGE_TAG}
           imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: marty-config
           env:
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
                   name: marty-secrets
                   key: DATABASE_SYNC_URL
+            - name: MARTY_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: MARTY_DB_PASSWORD
+            - name: LICENSE_KEY_FILE
+              value: /run/secrets/license_key
+            - name: LICENSE_PUBLIC_KEY_FILE
+              value: /run/secrets/license_public_key
+          volumeMounts:
+            - name: selfhost-secret-files
+              mountPath: /run/secrets
+              readOnly: true
           resources:
             requests:
               memory: "128Mi"
@@ -44,3 +59,14 @@ spec:
             limits:
               memory: "256Mi"
               cpu: "200m"
+      volumes:
+        - name: selfhost-secret-files
+          secret:
+            secretName: marty-secrets
+            items:
+              - key: LICENSE_KEY
+                path: license_key
+              - key: LICENSE_PUBLIC_KEY
+                path: license_public_key
+              - key: OPENBAO_SERVICE_TOKEN
+                path: openbao_service_token

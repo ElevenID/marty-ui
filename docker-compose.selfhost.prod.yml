@@ -1,0 +1,796 @@
+name: marty-selfhost-prod
+
+x-runtime-env: &runtime-env
+  ENVIRONMENT: production
+  GRPC_INSECURE_ALLOWED: ${GRPC_INSECURE_ALLOWED:-true}
+  MARTY_ORG_ID: ${MARTY_ORG_ID:-00000000-0000-0000-0000-000000000001}
+  MARTY_LICENSE_ENFORCEMENT: ${MARTY_LICENSE_ENFORCEMENT:-required}
+  MARTY_LICENSE_REQUIRED_ISSUER: ${MARTY_LICENSE_REQUIRED_ISSUER:-marty-license-issuer}
+  MARTY_LICENSE_REQUIRED_PLAN_TIER: ${MARTY_LICENSE_REQUIRED_PLAN_TIER:-system}
+  MARTY_LICENSE_REQUIRED_PRODUCTS: ${MARTY_LICENSE_REQUIRED_PRODUCTS:-ui-app}
+  LICENSE_KEY_FILE: /run/secrets/license_key
+  LICENSE_PUBLIC_KEY_FILE: /run/secrets/license_public_key
+
+x-database-url-template: &database-url-template postgresql+asyncpg://marty:$${MARTY_DB_PASSWORD}@postgres:5432/marty
+x-database-url-sync-template: &database-url-sync-template postgresql://marty:$${MARTY_DB_PASSWORD}@postgres:5432/marty
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      KEYCLOAK_DB_PASSWORD_FILE: /run/secrets/keycloak_db_password
+      MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
+    secrets:
+      - postgres_password
+      - keycloak_db_password
+      - marty_db_password
+    volumes:
+      - type: bind
+        source: ${SELFHOST_STATE_DIR:-./.selfhost-state}/postgres
+        target: /var/lib/postgresql/data
+      - ./docker/init-databases.sh:/docker-entrypoint-initdb.d/init-databases.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres && pg_isready -U keycloak -d keycloak && pg_isready -U marty -d marty"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - type: bind
+        source: ${SELFHOST_STATE_DIR:-./.selfhost-state}/redis
+        target: /data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:25.0
+    entrypoint: ["/bin/sh", "/scripts/keycloak-selfhost-start.sh"]
+    command:
+      - start
+      - --import-realm
+      - --features=organization
+    ports:
+      - "127.0.0.1:${SELFHOST_KEYCLOAK_HOST_PORT:-18180}:8080"
+    environment:
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
+      KEYCLOAK_ADMIN_PASSWORD_FILE: /run/secrets/keycloak_admin_password
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD_FILE: /run/secrets/keycloak_db_password
+      KC_HEALTH_ENABLED: "true"
+      KC_METRICS_ENABLED: "true"
+      KC_HOSTNAME: ${PUBLIC_DOMAIN:-prod.example.com}
+      KC_HOSTNAME_STRICT: "true"
+      KC_HOSTNAME_STRICT_HTTPS: "true"
+      KC_HTTP_ENABLED: "true"
+      KC_PROXY_HEADERS: xforwarded
+      KEYCLOAK_REALM: ${KEYCLOAK_REALM:-11id}
+      PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:-prod.example.com}
+      UI_BASE_URL: ${UI_BASE_URL:-https://prod.example.com}
+      GOOGLE_CLIENT_ID_FILE: /run/secrets/google_client_id
+      GOOGLE_CLIENT_SECRET_FILE: /run/secrets/google_client_secret
+      MARTY_API_CLIENT_SECRET_FILE: /run/secrets/marty_api_client_secret
+    secrets:
+      - keycloak_admin_password
+      - keycloak_db_password
+      - google_client_id
+      - google_client_secret
+      - marty_api_client_secret
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./config/keycloak:/opt/keycloak/data/import:ro
+      - ./config/keycloak/themes:/opt/keycloak/themes:ro
+      - ./scripts/load-secrets-env.sh:/scripts/load-secrets-env.sh:ro
+      - ./scripts/keycloak-selfhost-start.sh:/scripts/keycloak-selfhost-start.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/8080 && printf 'GET /realms/%s/.well-known/openid-configuration HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' \"${KEYCLOAK_REALM:-11id}\" >&3 && cat <&3 | grep -q '200 OK'"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 60s
+    restart: unless-stopped
+
+  keycloak-configurator:
+    image: quay.io/keycloak/keycloak:25.0
+    entrypoint: ["/bin/bash", "/scripts/setup-keycloak-selfhost-production.sh"]
+    environment:
+      KC_URL: http://keycloak:8080
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
+      KEYCLOAK_ADMIN_PASSWORD_FILE: /run/secrets/keycloak_admin_password
+      KEYCLOAK_REALM: ${KEYCLOAK_REALM:-11id}
+      GOOGLE_CLIENT_ID_FILE: /run/secrets/google_client_id
+      GOOGLE_CLIENT_SECRET_FILE: /run/secrets/google_client_secret
+      PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:-prod.example.com}
+      UI_BASE_URL: ${UI_BASE_URL:-https://prod.example.com}
+      MARTY_API_CLIENT_SECRET_FILE: /run/secrets/marty_api_client_secret
+      KEYCLOAK_REMOVE_DEMO_USERS: ${KEYCLOAK_REMOVE_DEMO_USERS:-true}
+    secrets:
+      - keycloak_admin_password
+      - google_client_id
+      - google_client_secret
+      - marty_api_client_secret
+    volumes:
+      - ./scripts/setup-keycloak.sh:/scripts/setup-keycloak.sh:ro
+      - ./scripts/setup-keycloak-selfhost-production.sh:/scripts/setup-keycloak-selfhost-production.sh:ro
+      - ./scripts/load-secrets-env.sh:/scripts/load-secrets-env.sh:ro
+    depends_on:
+      keycloak:
+        condition: service_healthy
+    restart: "no"
+
+  db-migrate:
+    build:
+      context: ..
+      dockerfile: marty-ui/services/Dockerfile.migrations
+    environment:
+      <<: *runtime-env
+      DATABASE_URL_TEMPLATE: *database-url-sync-template
+      MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
+      MARTY_ORG_ID: ${MARTY_ORG_ID:-00000000-0000-0000-0000-000000000001}
+      MARTY_ORG_ADMIN_EMAIL: ${MARTY_ORG_ADMIN_EMAIL:-}
+      MARTY_MIGRATION_PROFILE: ${MARTY_MIGRATION_PROFILE:-production}
+    secrets:
+      - marty_db_password
+      - license_key
+      - license_public_key
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  gateway:
+    build:
+      context: ..
+      dockerfile: marty-ui/services/Dockerfile
+      args:
+        SERVICE_NAME: gateway
+    environment:
+      <<: *runtime-env
+      GATEWAY_PORT: "8000"
+      AUTH_SERVICE_URL: http://auth:8001
+      ORGANIZATION_SERVICE_URL: http://organization:8002
+      CREDENTIAL_TEMPLATE_SERVICE_URL: http://credential-template:8003
+      TRUST_PROFILE_SERVICE_URL: http://trust-profile:8004
+      APPLICANT_SERVICE_URL: http://applicant:8006
+      NOTIFICATION_SERVICE_URL: http://notification:8007
+      COMPLIANCE_PROFILE_SERVICE_URL: http://compliance-profile:8008
+      PRESENTATION_POLICY_SERVICE_URL: http://presentation-policy:8009
+      DEPLOYMENT_PROFILE_SERVICE_URL: http://deployment-profile:8010
+      FLOW_SERVICE_URL: http://flow:8011
+      DEVICE_REGISTRATION_SERVICE_URL: http://device-registration:8014
+      ISSUANCE_SERVICE_URL: http://issuance:8005
+      BILLING_SERVICE_URL: http://billing:8016
+      ISSUER_BASE_URL: ${PUBLIC_API_URL:-https://prod.example.com}
+      CORS_ORIGINS: ${CORS_ORIGINS:-https://prod.example.com}
+      AUTH_GRPC_TARGET: auth:9001
+      ORG_GRPC_TARGET: organization:9002
+      ES_GRPC_TARGET: event-stream:9015
+      REDIS_URL: redis://redis:6379
+      REDIS_DB_GATEWAY: "2"
+      RATE_LIMIT_RPM: ${RATE_LIMIT_RPM:-300}
+      ISSUANCE_API_KEY_FILE: /run/secrets/issuance_api_key
+    secrets:
+      - issuance_api_key
+      - license_key
+      - license_public_key
+    ports:
+      - "127.0.0.1:${SELFHOST_GATEWAY_HOST_PORT:-18000}:8000"
+    depends_on:
+      auth:
+        condition: service_healthy
+      organization:
+        condition: service_healthy
+      issuance:
+        condition: service_healthy
+      event-stream:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+  auth:
+    build:
+      context: ..
+      dockerfile: marty-ui/services/Dockerfile
+      args:
+        SERVICE_NAME: auth
+    environment:
+      <<: *runtime-env
+      AUTH_SERVICE_PORT: "8001"
+      UI_BASE_URL: ${UI_BASE_URL:-https://prod.example.com}
+      REDIS_URL: redis://redis:6379/0
+      KEYCLOAK_REALM: ${KEYCLOAK_REALM:-11id}
+      OIDC_ISSUER_URL: http://keycloak:8080/realms/${KEYCLOAK_REALM:-11id}
+      OIDC_EXTERNAL_ISSUER_URL: ${OIDC_ISSUER_URL_EXTERNAL:-https://prod.example.com/realms/11id}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-marty-ui}
+      OIDC_REDIRECT_URI: ${OIDC_REDIRECT_URI:-https://prod.example.com/v1/auth/callback}
+      OIDC_POST_LOGOUT_REDIRECT_URI: ${OIDC_POST_LOGOUT_REDIRECT_URI:-https://prod.example.com/}
+      SESSION_TTL_SECONDS: "86400"
+      COOKIE_SECURE: "true"
+      COOKIE_SAMESITE: ${COOKIE_SAMESITE:-lax}
+      KEYCLOAK_ADMIN_URL: http://keycloak:8080
+      MARTY_API_CLIENT_ID: ${MARTY_API_CLIENT_ID:-marty-api}
+      MARTY_API_CLIENT_SECRET_FILE: /run/secrets/marty_api_client_secret
+      CREDENTIAL_LOGIN_POLICY_ID: ${CREDENTIAL_LOGIN_POLICY_ID:-}
+      AUTH_SERVICE_INTERNAL_URL: http://auth:8001
+      ORG_GRPC_TARGET: organization:9002
+      FLOW_GRPC_TARGET: flow:9011
+      AUTH_GRPC_PORT: "9001"
+    secrets:
+      - marty_api_client_secret
+      - license_key
+      - license_public_key
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      keycloak-configurator:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+  organization:
+    build:
+      context: ..
+      dockerfile: marty-ui/services/Dockerfile
+      args:
+        SERVICE_NAME: organization
+    environment:
+      <<: *runtime-env
+      ORGANIZATION_SERVICE_PORT: "8002"
+      DATABASE_URL_TEMPLATE: *database-url-template
+      MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
+      REDIS_URL: redis://redis:6379
+      REDIS_DB_GATEWAY: "2"
+      ORG_GRPC_PORT: "9002"
+    secrets:
+      - marty_db_password
+      - license_key
+      - license_public_key
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+  credential-template:
+    build:
+      context: ..
+      dockerfile: marty-ui/services/Dockerfile
+      args:
+        SERVICE_NAME: credential-template
+    environment:
+      <<: *runtime-env
+      CREDENTIAL_TEMPLATE_SERVICE_PORT: "8003"
+      DATABASE_URL_TEMPLATE: *database-url-template
+      MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
+      ORG_GRPC_TARGET: organization:9002
+      CT_GRPC_PORT: "9003"
+    secrets:
+      - marty_db_password
+      - license_key
+      - license_public_key
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+  trust-profile:
+    build:
+      context: ..
+      dockerfile: marty-ui/services/Dockerfile
+      args:
+        SERVICE_NAME: trust-profile
+    entrypoint: ["/bin/sh", "/app/load-openbao-token-and-start.sh"]
+    environment:
+      <<: *runtime-env
+      TRUST_PROFILE_SERVICE_PORT: "8004"
+      DATABASE_URL_TEMPLATE: *database-url-template
+      MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
+      ORG_GRPC_TARGET: organization:9002
+      BAO_ADDR: ${BAO_ADDR:-}
+      BAO_TOKEN_FILE: /run/secrets/openbao_service_token
+    secrets:
+      - marty_db_password
+      - openbao_service_token
+      - license_key
+      - license_public_key
+    volumes:
+      - ./scripts/load-openbao-token-and-start.sh:/app/load-openbao-token-and-start.sh:ro
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8004/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+  issuance:
+    build:
+      context: ..
+      dockerfile: marty-credentials/services/Dockerfile
+    entrypoint: ["/bin/sh", "/app/load-openbao-token-and-start.sh"]
+    command: ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8005"]
+    environment:
+      <<: *runtime-env
+      ISSUANCE_SERVICE_PORT: "8005"
+      DATABASE_URL_TEMPLATE: *database-url-template
+      MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
+      ISSUER_BASE_URL: ${PUBLIC_API_URL:-https://prod.example.com}
+      ISSUANCE_OFFER_TTL_MINUTES: ${ISSUANCE_OFFER_TTL_MINUTES:-10080}
+      ISSUANCE_AUTH_SESSION_TTL_MINUTES: ${ISSUANCE_AUTH_SESSION_TTL_MINUTES:-60}
+      ORG_GRPC_TARGET: organization:9002
+      CT_GRPC_TARGET: credential-template:9003
+      CREDENTIAL_TEMPLATE_SERVICE_URL: http://credential-template:8003
+      ISSUANCE_GRPC_PORT: "9005"
+      BAO_ADDR: ${BAO_ADDR:-}
+      BAO_TOKEN_FILE: /run/secrets/openbao_service_token
+      ISSUANCE_API_KEY_FILE: /run/secrets/issuance_api_key
+      UNIVERSAL_RESOLVER_URL: ${UNIVERSAL_RESOLVER_URL:-}
+    secrets:
+      - marty_db_password
+      - openbao_service_token
+      - issuance_api_key
+      - license_key
+      - license_public_key
+    volumes:
+      - ./scripts/load-openbao-token-and-start.sh:/app/load-openbao-token-and-start.sh:ro
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8005/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+  applicant:
+    build:
+      context: ..
+      dockerfile: marty-ui/services/Dockerfile
+      args:
+        SERVICE_NAME: applicant
+    environment:
+      <<: *runtime-env
+      APPLICANT_SERVICE_PORT: "8006"
+      DATABASE_URL_TEMPLATE: *database-url-template
+      MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
+      APPLICANT_DATA_FILE: /app/data/applicant_store.json
+      ISSUANCE_SERVICE_URL: http://issuance:8005
+      ORG_GRPC_TARGET: organization:9002
+      FLOW_GRPC_TARGET: flow:9011
+    secrets:
+      - marty_db_password
+      - license_key
+      - license_public_key
+    volumes:
+      - type: bind
+        source: ${SELFHOST_STATE_DIR:-./.selfhost-state}/applicant
+        target: /app/data
+    user: "0:0"
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8006/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+  notification:
+    build:
+      context: ..
+      dockerfile: marty-ui/services/Dockerfile
+      args:
+        SERVICE_NAME: notification
+    environment:
+      <<: *runtime-env
+      NOTIFICATION_SERVICE_PORT: "8007"
+      DATABASE_URL_TEMPLATE: *database-url-template
+      MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
+      NOTIF_GRPC_PORT: "9007"
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-1025}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD_FILE: /run/secrets/smtp_password
+    secrets:
+      - marty_db_password
+      - smtp_password
+      - license_key
+      - license_public_key
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8007/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+  compliance-profile:
+    build:
+      context: ..
+      dockerfile: marty-ui/services/Dockerfile
+      args:
+        SERVICE_NAME: compliance-profile
+    environment:
+      <<: *runtime-env
+      COMPLIANCE_PROFILE_SERVICE_PORT: "8008"
+      DATABASE_URL_TEMPLATE: *database-url-template
+      MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
+      ORG_GRPC_TARGET: organization:9002
+    secrets:
+      - marty_db_password
+      - license_key
+      - license_public_key
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8008/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+  presentation-policy:
+    build:
+      context: ..
+      dockerfile: marty-ui/services/Dockerfile
+      args:
+        SERVICE_NAME: presentation-policy
+    environment:
+      <<: *runtime-env
+      PRESENTATION_POLICY_SERVICE_PORT: "8009"
+      DATABASE_URL_TEMPLATE: *database-url-template
+      MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
+      ORG_GRPC_TARGET: organization:9002
+      PP_GRPC_PORT: "9009"
+    secrets:
+      - marty_db_password
+      - license_key
+      - license_public_key
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8009/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+  deployment-profile:
+    build:
+      context: ..
+      dockerfile: marty-ui/services/Dockerfile
+      args:
+        SERVICE_NAME: deployment-profile
+    environment:
+      <<: *runtime-env
+      DEPLOYMENT_PROFILE_SERVICE_PORT: "8010"
+      DATABASE_URL_TEMPLATE: *database-url-template
+      MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
+      ORG_GRPC_TARGET: organization:9002
+    secrets:
+      - marty_db_password
+      - license_key
+      - license_public_key
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8010/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+  flow:
+    build:
+      context: ..
+      dockerfile: marty-ui/services/Dockerfile
+      args:
+        SERVICE_NAME: flow
+    environment:
+      <<: *runtime-env
+      FLOW_SERVICE_PORT: "8011"
+      DATABASE_URL_TEMPLATE: *database-url-template
+      MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
+      PUBLIC_BASE_URL: ${PUBLIC_API_URL:-https://prod.example.com}
+      ORG_GRPC_TARGET: organization:9002
+      PP_GRPC_TARGET: presentation-policy:9009
+      CT_GRPC_TARGET: credential-template:9003
+      FLOW_GRPC_PORT: "9011"
+    secrets:
+      - marty_db_password
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8011/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+  verification:
+    build:
+      context: ..
+      dockerfile: marty-ui/services/Dockerfile
+      args:
+        SERVICE_NAME: verification
+    environment:
+      <<: *runtime-env
+      VERIFICATION_SERVICE_PORT: "8012"
+      PP_GRPC_TARGET: presentation-policy:9009
+      VERIF_GRPC_PORT: "9017"
+      VERIF_GRPC_ENABLED: "true"
+      PUBLIC_BASE_URL: ${PUBLIC_API_URL:-https://prod.example.com}
+      REDIS_URL: redis://redis:6379/3
+    secrets:
+      - license_key
+      - license_public_key
+    depends_on:
+      presentation-policy:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8012/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+  revocation-profile:
+    build:
+      context: ..
+      dockerfile: marty-ui/services/Dockerfile
+      args:
+        SERVICE_NAME: revocation-profile
+    environment:
+      <<: *runtime-env
+      REVOCATION_PROFILE_SERVICE_PORT: "8013"
+      DATABASE_URL_TEMPLATE: *database-url-template
+      MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
+      ORG_GRPC_TARGET: organization:9002
+      RP_GRPC_PORT: "9013"
+    secrets:
+      - marty_db_password
+      - license_key
+      - license_public_key
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8013/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+  device-registration:
+    build:
+      context: ..
+      dockerfile: marty-ui/services/Dockerfile
+      args:
+        SERVICE_NAME: device_registration
+    environment:
+      <<: *runtime-env
+      DEVICE_REGISTRATION_SERVICE_PORT: "8014"
+      DATABASE_URL_TEMPLATE: *database-url-template
+      MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
+      ORG_GRPC_TARGET: organization:9002
+    secrets:
+      - marty_db_password
+      - license_key
+      - license_public_key
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8014/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+  event-stream:
+    build:
+      context: ..
+      dockerfile: marty-ui/services/Dockerfile
+      args:
+        SERVICE_NAME: event_stream
+    environment:
+      <<: *runtime-env
+      EVENT_STREAM_GRPC_ENABLED: "true"
+      EVENT_STREAM_GRPC_PORT: "9015"
+    secrets:
+      - license_key
+      - license_public_key
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8015/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  billing:
+    build:
+      context: ..
+      dockerfile: marty-ui/services/Dockerfile
+      args:
+        SERVICE_NAME: billing
+    environment:
+      <<: *runtime-env
+      BILLING_SERVICE_PORT: "8016"
+      DATABASE_URL_TEMPLATE: *database-url-template
+      MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
+      ORGANIZATION_SERVICE_URL: http://organization:8002
+      SQUARE_ENVIRONMENT: ${SQUARE_ENVIRONMENT:-sandbox}
+      SQUARE_ACCESS_TOKEN_FILE: /run/secrets/square_access_token
+      SQUARE_LOCATION_ID: ${SQUARE_LOCATION_ID:-}
+      SQUARE_WEBHOOK_SIGNATURE_KEY_FILE: /run/secrets/square_webhook_signature_key
+      SQUARE_PLAN_STARTER_ID: ${SQUARE_PLAN_STARTER_ID:-}
+      SQUARE_PLAN_PROFESSIONAL_ID: ${SQUARE_PLAN_PROFESSIONAL_ID:-}
+      SQUARE_PLAN_ENTERPRISE_ID: ${SQUARE_PLAN_ENTERPRISE_ID:-}
+      CORS_ORIGINS: ${CORS_ORIGINS:-https://prod.example.com}
+    secrets:
+      - marty_db_password
+      - square_access_token
+      - square_webhook_signature_key
+      - license_key
+      - license_public_key
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+      organization:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8016/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+  ui:
+    image: nginx:alpine
+    environment:
+      GOOGLE_ANALYTICS_MEASUREMENT_ID_FILE: /run/secrets/google_analytics_measurement_id
+      GOOGLE_SITE_VERIFICATION_FILE: /run/secrets/google_site_verification
+    secrets:
+      - google_analytics_measurement_id
+      - google_site_verification
+    volumes:
+      - ./ui/dist-selfhost:/opt/marty-ui-static:ro
+      - ./ui/nginx.spa.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./scripts/load-secrets-env.sh:/scripts/load-secrets-env.sh:ro
+      - ./scripts/ui-selfhost-start.sh:/docker-entrypoint.d/40-ui-selfhost.sh:ro
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:80/"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped
+
+  edge:
+    image: nginx:alpine
+    ports:
+      - "127.0.0.1:${SELFHOST_EDGE_HOST_PORT:-19080}:80"
+    volumes:
+      - ./docker/nginx-selfhost.prod.conf.template:/etc/nginx/conf.d/default.conf.template:ro
+      - ./scripts/nginx-entrypoint-selfhost.sh:/docker-entrypoint.d/40-render-selfhost.sh:ro
+    environment:
+      PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:-prod.example.com}
+      UI_UPSTREAM: ui:80
+      GATEWAY_UPSTREAM: gateway:8000
+      KEYCLOAK_UPSTREAM: keycloak:8080
+    depends_on:
+      ui:
+        condition: service_healthy
+      gateway:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  cloudflared:
+    build:
+      context: .
+      dockerfile: docker/cloudflared-wrapper.Dockerfile
+    entrypoint: ["/bin/sh", "/scripts/cloudflared-selfhost.sh"]
+    environment:
+      CLOUDFLARE_TUNNEL_TOKEN_FILE: /run/secrets/cloudflare_tunnel_token
+    secrets:
+      - cloudflare_tunnel_token
+    volumes:
+      - ./scripts/cloudflared-selfhost.sh:/scripts/cloudflared-selfhost.sh:ro
+    depends_on:
+      edge:
+        condition: service_healthy
+    restart: unless-stopped
+
+secrets:
+  postgres_password:
+    file: ${SELFHOST_SECRET_DIR:-./docker/secrets/selfhost.example}/postgres_password
+  keycloak_db_password:
+    file: ${SELFHOST_SECRET_DIR:-./docker/secrets/selfhost.example}/keycloak_db_password
+  marty_db_password:
+    file: ${SELFHOST_SECRET_DIR:-./docker/secrets/selfhost.example}/marty_db_password
+  keycloak_admin_password:
+    file: ${SELFHOST_SECRET_DIR:-./docker/secrets/selfhost.example}/keycloak_admin_password
+  marty_api_client_secret:
+    file: ${SELFHOST_SECRET_DIR:-./docker/secrets/selfhost.example}/marty_api_client_secret
+  issuance_api_key:
+    file: ${SELFHOST_SECRET_DIR:-./docker/secrets/selfhost.example}/issuance_api_key
+  openbao_service_token:
+    file: ${SELFHOST_SECRET_DIR:-./docker/secrets/selfhost.example}/openbao_service_token
+  cloudflare_tunnel_token:
+    file: ${SELFHOST_SECRET_DIR:-./docker/secrets/selfhost.example}/cloudflare_tunnel_token
+  license_key:
+    file: ${SELFHOST_SECRET_DIR:-./docker/secrets/selfhost.example}/license_key
+  license_public_key:
+    file: ${SELFHOST_SECRET_DIR:-./docker/secrets/selfhost.example}/license_public_key
+  google_client_id:
+    file: ${SELFHOST_SECRET_DIR:-./docker/secrets/selfhost.example}/google_client_id
+  google_client_secret:
+    file: ${SELFHOST_SECRET_DIR:-./docker/secrets/selfhost.example}/google_client_secret
+  google_analytics_measurement_id:
+    file: ${SELFHOST_SECRET_DIR:-./docker/secrets/selfhost.example}/google_analytics_measurement_id
+  google_site_verification:
+    file: ${SELFHOST_SECRET_DIR:-./docker/secrets/selfhost.example}/google_site_verification
+  smtp_password:
+    file: ${SELFHOST_SECRET_DIR:-./docker/secrets/selfhost.example}/smtp_password
+  square_access_token:
+    file: ${SELFHOST_SECRET_DIR:-./docker/secrets/selfhost.example}/square_access_token
+  square_webhook_signature_key:
+    file: ${SELFHOST_SECRET_DIR:-./docker/secrets/selfhost.example}/square_webhook_signature_key

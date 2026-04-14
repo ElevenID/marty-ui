@@ -4,23 +4,35 @@
  * Handles Google Analytics, performance monitoring, and Core Web Vitals tracking
  */
 
+import { getGoogleAnalyticsMeasurementId } from './runtimeConfig';
+
+let analyticsInitialized = false;
+let webVitalsTrackingStarted = false;
+
 /**
  * Initialize Google Analytics
  * Call this once in App.jsx after router is ready
  */
 export const initAnalytics = () => {
-  const GA_ID = import.meta.env.VITE_GA_MEASUREMENT_ID;
+  const GA_ID = getGoogleAnalyticsMeasurementId();
   
   if (!GA_ID || typeof window === 'undefined') {
     console.log('Analytics: GA_MEASUREMENT_ID not configured or SSR mode');
     return;
   }
 
+  if (analyticsInitialized) {
+    return;
+  }
+
   // Load gtag.js script
-  const script = document.createElement('script');
-  script.async = true;
-  script.src = `https://www.googletagmanager.com/gtag/js?id=${GA_ID}`;
-  document.head.appendChild(script);
+  if (!document.querySelector(`script[data-marty-ga-id="${GA_ID}"]`)) {
+    const script = document.createElement('script');
+    script.async = true;
+    script.src = `https://www.googletagmanager.com/gtag/js?id=${GA_ID}`;
+    script.dataset.martyGaId = GA_ID;
+    document.head.appendChild(script);
+  }
 
   // Initialize dataLayer
   window.dataLayer = window.dataLayer || [];
@@ -33,6 +45,8 @@ export const initAnalytics = () => {
   gtag('config', GA_ID, {
     send_page_view: false, // Handled by router
   });
+
+  analyticsInitialized = true;
 
   console.log('Analytics: Google Analytics initialized');
 };
@@ -70,7 +84,9 @@ export const trackEvent = (eventName, params = {}) => {
  * Automatically reports CLS, FID, LCP to Google Analytics
  */
 export const trackWebVitals = () => {
-  if (typeof window === 'undefined') return;
+  if (typeof window === 'undefined' || webVitalsTrackingStarted) return;
+
+  webVitalsTrackingStarted = true;
 
   // Use web-vitals library if available
   import('web-vitals').then(({ onCLS, onFID, onLCP, onFCP, onTTFB, onINP }) => {

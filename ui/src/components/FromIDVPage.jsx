@@ -81,20 +81,20 @@ function FromIDVPage() {
   return (
     <Box>
       <SEOHead
-        title="From IDV to Verifiable Identity"
+        title="Why Verifiable Identity"
         description="Why traditional identity verification is evolving into verifiable credential infrastructure with reusable trust, standards, and governance."
-        canonicalPath="/from-idv-to-verifiable-identity"
+        canonicalPath="/why-verifiable-identity"
         keywords={['identity verification', 'verifiable identity', 'IDV modernization', 'reusable trust infrastructure']}
         structuredData={[
           articleSchema({
-            headline: 'From IDV to Verifiable Identity',
+            headline: 'Why Verifiable Identity',
             description: 'Why traditional identity verification is evolving into verifiable credential infrastructure with reusable trust, standards, and governance.',
             datePublished: '2024-01-01',
-            url: 'https://elevenidllc.com/from-idv-to-verifiable-identity',
+            url: 'https://elevenidllc.com/why-verifiable-identity',
           }),
           breadcrumbListSchema([
             { name: 'Home', url: 'https://elevenidllc.com' },
-            { name: 'From IDV to Verifiable Identity', url: 'https://elevenidllc.com/from-idv-to-verifiable-identity' },
+            { name: 'Why Verifiable Identity', url: 'https://elevenidllc.com/why-verifiable-identity' },
           ]),
         ]}
       />
@@ -332,25 +332,25 @@ function FromIDVPage() {
           Ready to move beyond traditional IDV?
         </Typography>
         <Typography variant="body1" color="text.secondary" sx={{ mb: 4, maxWidth: 600, mx: 'auto' }}>
-          Explore the products, then dive into the docs when you&apos;re ready to implement.
+          Start with the verification surface, then go deeper into the API and docs when you&apos;re ready to implement.
         </Typography>
         <Box sx={{ display: 'flex', gap: 2, justifyContent: 'center', flexWrap: 'wrap' }}>
           <Button
             variant="contained"
             size="large"
-            onClick={() => navigate('/product')}
+            onClick={() => navigate('/developers')}
             endIcon={<ArrowForwardIcon />}
             sx={{ px: 4 }}
           >
-            Explore Products
+            Start Verifying Credentials
           </Button>
           <Button
             variant="outlined"
             size="large"
-            onClick={() => navigate('/identity')}
+            onClick={() => navigate('/verifiable-credential-api')}
             sx={{ px: 4 }}
           >
-            How It Works
+            View Verification API
           </Button>
           <Button
             variant="text"

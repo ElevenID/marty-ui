@@ -1,0 +1,276 @@
+{
+	"dashboard": {
+		"title": "Dashboard",
+		"welcome": "Willkommen zurück"
+	},
+	"flows": {
+		"title": "Abläufe",
+		"flowDefinitions": "Ablaufdefinitionen",
+		"flowInstances": "Ablaufinstanzen",
+		"refresh": "Aktualisieren",
+		"searchPlaceholder": "Abläufe suchen...",
+		"filters": {
+			"status": "Status",
+			"all": "Alle",
+			"pending": "Ausstehend",
+			"completed": "Abgeschlossen",
+			"failed": "Fehlgeschlagen"
+		},
+		"tableHeaders": {
+			"instanceId": "Instanz-ID",
+			"flow": "Ablauf",
+			"progress": "Fortschritt",
+			"started": "Gestartet",
+			"completed": "Abgeschlossen",
+			"status": "Status",
+			"actions": "Aktionen"
+		},
+		"progress": "Schritt {{current}} / {{total}}",
+		"actions": {
+			"viewDetails": "Details anzeigen",
+			"advanceFlow": "Ablauf fortsetzen",
+			"cancel": "Abbrechen"
+		},
+		"noMatchingInstances": "Keine Instanzen entsprechen den Filtern.",
+		"breadcrumbs": {
+			"console": "Konsole",
+			"flows": "Abläufe",
+			"flowInstances": "Ablaufinstanzen"
+		}
+	},
+	"deploy": {
+		"title": "Bereitstellung",
+		"deploymentProfiles": "Bereitstellungsprofile",
+		"deploymentProfilesDescription": "Konfigurieren Sie Bereitstellungsprofile für APIs, Kioske und Geräte in Online-/Offline-Szenarien.",
+		"apiKeys": "API-Schlüssel",
+		"apiKeysDescription": "Erstellen und verwalten Sie API-Schlüssel für den programmatischen Zugriff.",
+		"lanesDevices": "Spuren & Geräte",
+		"webhooks": "Webhooks",
+		"apiKeysPage": {
+			"generateKey": "API-Schlüssel erstellen",
+			"tableHeaders": {
+				"name": "Name",
+				"keyPrefix": "Schlüsselpräfix",
+				"scopes": "Berechtigungen",
+				"lastUsed": "Zuletzt verwendet",
+				"created": "Erstellt",
+				"status": "Status",
+				"actions": "Aktionen"
+			},
+			"empty": "Keine API-Schlüssel vorhanden. Erstellen Sie Ihren ersten Schlüssel.",
+			"never": "Nie",
+			"status": {
+				"active": "Aktiv",
+				"revoked": "Widerrufen"
+			},
+			"actions": {
+				"revokeKey": "Schlüssel widerrufen"
+			},
+			"dialog": {
+				"titleCreate": "Neuen API-Schlüssel erstellen",
+				"titleCreated": "API-Schlüssel erstellt",
+				"warning": "Kopieren Sie diesen Schlüssel jetzt. Danach wird er nicht mehr angezeigt.",
+				"keyLabel": "API-Schlüssel",
+				"nameLabel": "Schlüsselname",
+				"namePlaceholder": "z. B. Produktions-API-Schlüssel",
+				"done": "Fertig",
+				"generate": "Erstellen"
+			},
+			"error": "API-Schlüssel konnten nicht geladen werden"
+		},
+		"deploymentActivityCard": {
+			"status": {
+				"active": "Aktiv",
+				"inactive": "Inaktiv"
+			},
+			"tooltips": {
+				"lastIssuance": "Letzte Ausstellung",
+				"lastVerification": "Letzte Verifizierung"
+			},
+			"labels": {
+				"issued": "Ausgestellt:",
+				"verified": "Verifiziert:"
+			},
+			"chips": {
+				"qrEnabled": "QR aktiviert",
+				"activeFlows": "{{count}} aktiver Ablauf",
+				"activeFlows_plural": "{{count}} aktive Abläufe"
+			},
+			"time": {
+				"never": "Nie",
+				"justNow": "Gerade eben",
+				"minutesAgo": "vor {{count}} Min.",
+				"hoursAgo": "vor {{count}} Std.",
+				"daysAgo": "vor {{count}} Tg."
+			},
+			"actions": {
+				"viewDetails": "Details anzeigen",
+				"edit": "Bearbeiten"
+			}
+		},
+		"breadcrumbs": {
+			"console": "Konsole",
+			"deploy": "Bereitstellung",
+			"deploymentProfiles": "Bereitstellungsprofile",
+			"apiKeys": "API-Schlüssel",
+			"lanesDevices": "Spuren & Geräte",
+			"signingKeys": "Signaturschlüssel"
+		}
+	},
+	"audit": {
+		"title": "Audit",
+		"description": "Überwachen Sie Systemaktivitäten und Sicherheitsereignisse.",
+		"refresh": "Aktualisieren",
+		"export": "Exportieren",
+		"showFilters": "Filter anzeigen",
+		"hideFilters": "Filter ausblenden",
+		"searchPlaceholder": "Ereignisse suchen...",
+		"exporting": "Wird exportiert...",
+		"exportSuccess": "Audit-Protokoll erfolgreich exportiert",
+		"categories": {
+			"all": "Alle Ereignisse",
+			"authentication": "Authentifizierung",
+			"credential": "Nachweise",
+			"flow": "Abläufe",
+			"policy": "Richtlinien",
+			"template": "Vorlagen",
+			"team": "Team",
+			"settings": "Einstellungen"
+		},
+		"severity": {
+			"all": "Alle Stufen",
+			"info": "Info",
+			"warning": "Warnung",
+			"error": "Fehler"
+		},
+		"filters": {
+			"savedViews": "Gespeicherte Ansichten",
+			"selectView": "Ansicht auswählen...",
+			"category": "Kategorie",
+			"severity": "Schweregrad",
+			"actor": "Akteur",
+			"resourceType": "Ressourcentyp",
+			"ipAddress": "IP-Adresse",
+			"startDate": "Startdatum",
+			"endDate": "Enddatum"
+		},
+		"tableHeaders": {
+			"timestamp": "Zeitstempel",
+			"event": "Ereignis",
+			"actor": "Akteur",
+			"resource": "Ressource",
+			"status": "Status"
+		},
+		"empty": {
+			"title": "Keine Audit-Ereignisse",
+			"description": "Keine Ereignisse entsprechen Ihren Filtern.",
+			"whyItMatters": "Audit-Protokolle helfen bei Sicherheit, Fehleranalyse und Compliance.",
+			"noMatching": "Keine Audit-Ereignisse entsprechen Ihren Kriterien."
+		},
+		"actions": {
+			"saveView": "Ansicht speichern",
+			"expandDetails": "Details ausklappen",
+			"collapseDetails": "Details einklappen",
+			"viewResource": "Ressource anzeigen"
+		},
+		"messages": {
+			"exportJobCreated": "Exportauftrag erstellt. Sie erhalten eine Benachrichtigung, sobald er bereit ist.",
+			"exportFailed": "Audit-Protokolle konnten nicht exportiert werden",
+			"enterFilterViewName": "Name für diese Filteransicht eingeben:",
+			"filterViewSaved": "Filteransicht gespeichert",
+			"saveFilterViewFailed": "Filteransicht konnte nicht gespeichert werden",
+			"appliedView": "Ansicht angewendet: {{name}}"
+		},
+		"details": {
+			"title": "Ereignisdetails",
+			"eventId": "Ereignis-ID",
+			"ipAddress": "IP-Adresse",
+			"additionalData": "Zusätzliche Daten",
+			"notAvailable": "k. A."
+		},
+		"breadcrumbs": {
+			"console": "Konsole",
+			"audit": "Audit"
+		}
+	},
+	"notificationPreferencesPage": {
+		"title": "Benachrichtigungseinstellungen",
+		"subtitle": "Legen Sie fest, wie Sie Benachrichtigungen zu Anträgen, Nachweisen und Mitgliedschaften erhalten.",
+		"loading": "Einstellungen werden geladen...",
+		"sections": {
+			"notificationMethod": "Benachrichtigungsmethode",
+			"emailCategories": "E-Mail-Kategorien",
+			"emailCategoriesDescription": "Wählen Sie, welche Ereignisse E-Mail-Benachrichtigungen auslösen sollen."
+		},
+		"methods": {
+			"pushOnly": {
+				"title": "Nur Push-Benachrichtigungen",
+				"description": "Benachrichtigungen in der Marty Authenticator App erhalten"
+			},
+			"emailOnly": {
+				"title": "Nur E-Mail",
+				"description": "Benachrichtigungen per E-Mail erhalten"
+			},
+			"both": {
+				"title": "Push und E-Mail",
+				"description": "Benachrichtigungen in App und per E-Mail erhalten (empfohlen)"
+			}
+		},
+		"categories": {
+			"applicationUpdates": {
+				"title": "Antragsaktualisierungen",
+				"description": "Statusänderungen Ihrer eingereichten Anträge"
+			},
+			"credentialIssuance": {
+				"title": "Nachweisausstellung",
+				"description": "Wenn neue Nachweise für Ihr Wallet ausgestellt werden"
+			},
+			"membershipUpdates": {
+				"title": "Mitgliedschaftsaktualisierungen",
+				"description": "Freigaben und Rollenänderungen in Organisationen"
+			}
+		},
+		"actions": {
+			"save": "Einstellungen speichern",
+			"saving": "Wird gespeichert..."
+		},
+		"messages": {
+			"loadFailed": "Benachrichtigungseinstellungen konnten nicht geladen werden",
+			"saveSuccess": "Benachrichtigungseinstellungen wurden gespeichert",
+			"saveFailed": "Benachrichtigungseinstellungen konnten nicht gespeichert werden",
+			"emailDisabledNote": "Hinweis: E-Mail ist in der oben gewählten Methode derzeit deaktiviert."
+		}
+	},
+	"wizards": {
+		"common": {
+			"optional": "Optional"
+		}
+	},
+	"org": {
+		"team": {
+			"title": "Team",
+			"subtitle": "Teammitglieder, Rollen und Einladungen verwalten"
+		},
+		"defaultsSection": {
+			"title": "Organisationsstandards",
+			"description": "Legen Sie Standardressourcen fest, die bei neuen Abläufen und Konfigurationen automatisch ausgewählt werden.",
+			"fields": {
+				"defaultTrustProfile": "Standard-Vertrauensprofil",
+				"defaultPresentationPolicy": "Standard-Präsentationsrichtlinie",
+				"defaultCredentialTemplate": "Standard-Nachweisvorlage"
+			},
+			"values": {
+				"noneManualSelection": "Keine (manuelle Auswahl erforderlich)"
+			},
+			"actions": {
+				"save": "Standards speichern",
+				"saving": "Wird gespeichert..."
+			},
+			"messages": {
+				"loadFailed": "Organisationsstandards konnten nicht geladen werden",
+				"saveFailed": "Organisationsstandards konnten nicht gespeichert werden",
+				"saveSuccess": "Organisationsstandards erfolgreich gespeichert"
+			}
+		}
+	}
+}

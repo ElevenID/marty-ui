@@ -109,6 +109,7 @@ function NavItem({ item, isActive, isChildActive, expanded, onToggle, collapsed,
         <Tooltip title={collapsed ? item.label : ''} placement="right" arrow>
           <ListItemButton
             onClick={handleClick}
+            data-testid={`sidebar.nav.${item.id}`}
             sx={{
               minHeight: isPrimary ? 52 : 48,
               justifyContent: collapsed ? 'center' : 'initial',
@@ -200,6 +201,7 @@ function NavItem({ item, isActive, isChildActive, expanded, onToggle, collapsed,
                   <ListItemButton
                     component={Link}
                     to={child.path}
+                    data-testid={`sidebar.nav.${child.id}`}
                     sx={{
                       pl: 6,
                       minHeight: child.primary ? 44 : 40,

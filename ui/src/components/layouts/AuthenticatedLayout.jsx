@@ -8,7 +8,7 @@
 import { useState } from 'react';
 import { Outlet } from 'react-router-dom';
 import { Box, useTheme, useMediaQuery } from '@mui/material';
-import { SidebarNavigation } from '../navigation';
+import { SidebarNavigation } from '../navigation/index.js';
 import { ConsoleHeaderBar } from '../navigation/ConsoleHeaderBar';
 import { useAuth } from '../../hooks/useAuth';
 

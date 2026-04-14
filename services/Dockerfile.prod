@@ -32,6 +32,7 @@ RUN pip install --no-cache-dir -r requirements-services.txt
 # Install shared packages
 COPY packages/marty_common /app/packages/marty_common
 COPY packages/marty_proto /app/packages/marty_proto
+COPY scripts/load-secrets-env.sh /app/load-secrets-env.sh
 RUN pip install --no-cache-dir -e /app/packages/marty_common
 
 # Copy all service code

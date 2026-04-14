@@ -1058,6 +1058,51 @@ class OrganizationResponse(BaseModel):
     updated_at: str
 
 
+class RetentionRecordCountsModel(BaseModel):
+    issuance_transactions: int = 0
+    applications: int = 0
+    authorization_sessions: int = 0
+    issuance_events: int = 0
+    issued_credentials: int = 0
+    total: int = 0
+
+
+class PilotRetentionModel(BaseModel):
+    enabled: bool = False
+    window_days: int = 30
+    scope_summary: str | None = None
+    scope_items: list[str] = Field(default_factory=list)
+    access_behavior: str | None = None
+    last_purged_at: str | None = None
+    cutoff_at: str | None = None
+    next_expiry_at: str | None = None
+    oldest_retained_record_at: str | None = None
+    eligible_for_purge: RetentionRecordCountsModel = Field(default_factory=RetentionRecordCountsModel)
+    tracked_scope: list[str] = Field(default_factory=list)
+
+
+class OrganizationLifecycleResponse(BaseModel):
+    created_at: str
+    compliance_profiles: list[str] = Field(default_factory=list)
+    plan_tier: str = "free"
+    plan_expires_at: str | None = None
+    commercial_offer: str = "Developer Sandbox"
+    data_retention_mode: str = "standard"
+    audit_retention_days: int = 90
+    pilot_retention: PilotRetentionModel | None = None
+
+
+class HostedPilotPurgeResponse(BaseModel):
+    organization_id: str
+    retention_days: int
+    cutoff_at: str
+    purged_at: str
+    purged_records: RetentionRecordCountsModel
+    next_expiry_at: str | None = None
+    oldest_retained_record_at: str | None = None
+    tracked_scope: list[str] = Field(default_factory=list)
+
+
 class JoinByCodeRequest(BaseModel):
     """Request to join an organization by code."""
     code: str = Field(description="8-character join code")

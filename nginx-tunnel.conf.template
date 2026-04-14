@@ -3,8 +3,9 @@
 # This template uses environment variables that are substituted at runtime
 #
 # Variables:
-#   PUBLIC_DOMAIN - The public domain (e.g., beta.elevenidllc.com)
-#   UI_DEV_PORT   - The port where Vite dev server runs (default: 3000)
+#   PUBLIC_DOMAIN    - The public domain (e.g., beta.elevenidllc.com)
+#   UI_DEV_PORT      - The port where the UI runs on the host (default: 3000)
+#   GATEWAY_UPSTREAM - The backend gateway upstream reachable from Docker
 
 # Use variable to force DNS resolution at runtime (IPv4 only)
 resolver 127.0.0.11 valid=30s ipv6=off;
@@ -24,10 +25,9 @@ server {
     add_header X-Content-Type-Options "nosniff" always;
     add_header X-XSS-Protection "1; mode=block" always;
 
-    # API routes - proxy to gateway via host-mapped port
-    # Using host.docker.internal avoids stale container-IP DNS after service recreate.
+    # API routes - proxy to gateway on the compose network.
     location /api/ {
-        set $backend_api host.docker.internal:8000;
+        set $backend_api ${GATEWAY_UPSTREAM};
         proxy_pass http://$backend_api/api/;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
@@ -47,9 +47,10 @@ server {
         }
     }
 
-    # Auth routes - proxy to gateway via host-mapped port
+    # Auth routes - proxy to gateway
     location /auth/ {
-        proxy_pass http://host.docker.internal:8000/auth/;
+        set $backend_api ${GATEWAY_UPSTREAM};
+        proxy_pass http://$backend_api/auth/;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -59,7 +60,8 @@ server {
 
     # Health check
     location /health {
-        proxy_pass http://host.docker.internal:8000/health;
+        set $backend_api ${GATEWAY_UPSTREAM};
+        proxy_pass http://$backend_api/health;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
     }
@@ -74,7 +76,7 @@ server {
 
     # OID4VCI discovery + well-known endpoints - proxy to gateway (no auth required by wallets)
     location /.well-known/ {
-        set $backend_api host.docker.internal:8000;
+        set $backend_api ${GATEWAY_UPSTREAM};
         proxy_pass http://$backend_api;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
@@ -93,7 +95,7 @@ server {
     # SpruceID SDK appended form: /org/<id>/spruce/.well-known/openid-credential-issuer
     # → rewrite to: /.well-known/openid-credential-issuer/org/<id>/spruce
     location ~ "^/org/([0-9a-fA-F-]{36})/spruce/\.well-known/(openid-credential-issuer|oauth-authorization-server)$" {
-        set $backend_api host.docker.internal:8000;
+        set $backend_api ${GATEWAY_UPSTREAM};
         proxy_pass http://$backend_api/.well-known/$2/org/$1/spruce;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
@@ -106,7 +108,7 @@ server {
     # Google CredentialManager appended form: /org/<id>/credential-manager/.well-known/openid-credential-issuer
     # → rewrite to: /.well-known/openid-credential-issuer/org/<id>/credential-manager
     location ~ "^/org/([0-9a-fA-F-]{36})/credential-manager/\.well-known/(openid-credential-issuer|oauth-authorization-server)$" {
-        set $backend_api host.docker.internal:8000;
+        set $backend_api ${GATEWAY_UPSTREAM};
         proxy_pass http://$backend_api/.well-known/$2/org/$1/credential-manager;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
@@ -119,7 +121,7 @@ server {
     # Apple Wallet appended form: /org/<id>/apple-wallet/.well-known/openid-credential-issuer
     # → rewrite to: /.well-known/openid-credential-issuer/org/<id>/apple-wallet
     location ~ "^/org/([0-9a-fA-F-]{36})/apple-wallet/\.well-known/(openid-credential-issuer|oauth-authorization-server)$" {
-        set $backend_api host.docker.internal:8000;
+        set $backend_api ${GATEWAY_UPSTREAM};
         proxy_pass http://$backend_api/.well-known/$2/org/$1/apple-wallet;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
@@ -132,7 +134,7 @@ server {
     # Standard appended form: /org/<id>/.well-known/openid-credential-issuer
     # → rewrite to: /.well-known/openid-credential-issuer/org/<id>
     location ~ "^/org/([0-9a-fA-F-]{36})/\.well-known/(openid-credential-issuer|oauth-authorization-server)$" {
-        set $backend_api host.docker.internal:8000;
+        set $backend_api ${GATEWAY_UPSTREAM};
         proxy_pass http://$backend_api/.well-known/$2/org/$1;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
@@ -172,7 +174,7 @@ server {
 
     # V1 API routes (including auth endpoints)
     location /v1/ {
-        set $backend_api host.docker.internal:8000;
+        set $backend_api ${GATEWAY_UPSTREAM};
         proxy_pass http://$backend_api;
         proxy_http_version 1.1;
         proxy_redirect off;  # Never rewrite Location headers — backend sends absolute URLs
@@ -184,7 +186,7 @@ server {
 
     # OpenAPI schema for API documentation (ReDoc on /docs page)
     location = /openapi.json {
-        set $backend_api host.docker.internal:8000;
+        set $backend_api ${GATEWAY_UPSTREAM};
         proxy_pass http://$backend_api/openapi.json;
         proxy_http_version 1.1;
         proxy_set_header Host $host;

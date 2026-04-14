@@ -519,6 +519,39 @@ export const handlers = [
     return HttpResponse.json({ environment: 'development' })
   }),
 
+  http.get(`${API_BASE}/v1/organizations/:id/lifecycle`, () => {
+    return HttpResponse.json({
+      created_at: new Date().toISOString(),
+      compliance_profiles: [],
+      plan_tier: 'free',
+      plan_expires_at: null,
+      commercial_offer: 'Developer Sandbox',
+      data_retention_mode: 'standard',
+      audit_retention_days: 90,
+      pilot_retention: null,
+    })
+  }),
+
+  http.post(`${API_BASE}/v1/organizations/:id/lifecycle/purge`, () => {
+    return HttpResponse.json({
+      organization_id: 'org_123',
+      retention_days: 30,
+      cutoff_at: new Date().toISOString(),
+      purged_at: new Date().toISOString(),
+      next_expiry_at: null,
+      oldest_retained_record_at: null,
+      tracked_scope: ['applications', 'submitted_evidence', 'issuance_transactions', 'issued_credentials', 'authorization_sessions', 'issuance_events'],
+      purged_records: {
+        issuance_transactions: 0,
+        applications: 0,
+        authorization_sessions: 0,
+        issuance_events: 0,
+        issued_credentials: 0,
+        total: 0,
+      },
+    })
+  }),
+
   // Fallback handlers for relative URLs (without base)
   // These catch requests from services that use VITE_API_URL=''
   http.get('/health', () => {
@@ -531,6 +564,39 @@ export const handlers = [
   
   http.get('/v1/auth/me/organizations', () => {
     return HttpResponse.json({ organizations: [mockOrganization] })
+  }),
+
+  http.get('/v1/organizations/:id/lifecycle', () => {
+    return HttpResponse.json({
+      created_at: new Date().toISOString(),
+      compliance_profiles: [],
+      plan_tier: 'free',
+      plan_expires_at: null,
+      commercial_offer: 'Developer Sandbox',
+      data_retention_mode: 'standard',
+      audit_retention_days: 90,
+      pilot_retention: null,
+    })
+  }),
+
+  http.post('/v1/organizations/:id/lifecycle/purge', () => {
+    return HttpResponse.json({
+      organization_id: 'org_123',
+      retention_days: 30,
+      cutoff_at: new Date().toISOString(),
+      purged_at: new Date().toISOString(),
+      next_expiry_at: null,
+      oldest_retained_record_at: null,
+      tracked_scope: ['applications', 'submitted_evidence', 'issuance_transactions', 'issued_credentials', 'authorization_sessions', 'issuance_events'],
+      purged_records: {
+        issuance_transactions: 0,
+        applications: 0,
+        authorization_sessions: 0,
+        issuance_events: 0,
+        issued_credentials: 0,
+        total: 0,
+      },
+    })
   }),
 
   http.get('/v1/trust-profiles', () => {

@@ -1,0 +1,1563 @@
+{
+  "flowDisableDialog": {
+    "title": "Disable Flow",
+    "warningMessage": "Disabling this flow will prevent new applications. Existing applications will continue processing.",
+    "flowNameLabel": "Flow Name",
+    "statusLabel": "Status",
+    "reasonLabel": "Reason for Disabling",
+    "reasonPlaceholder": "Explain why this flow is being disabled...",
+    "reasonRequired": "Reason is required",
+    "reasonError": "Please provide a reason for disabling this flow",
+    "cancel": "Cancel",
+    "disableButton": "Disable Flow",
+    "disabling": "Disabling...",
+    "failedToDisable": "Failed to disable flow",
+    "unknown": "Unknown"
+  },
+  "flowStateMachine": {
+    "title": "Application Flow",
+    "rejected": "Rejected",
+    "applicationRejected": "Application Rejected",
+    "rejectionMessage": "This application did not meet approval criteria",
+    "finalStep": "Final Step",
+    "unknown": "Unknown",
+    "steps": {
+      "submitted": {
+        "label": "Submitted",
+        "description": "Application received and validated"
+      },
+      "underReview": {
+        "label": "Under Review",
+        "description": "Application is being reviewed by approver"
+      },
+      "approved": {
+        "label": "Approved",
+        "description": "Application approved, ready for credential issuance"
+      },
+      "qrIssued": {
+        "label": "QR Issued",
+        "description": "QR code generated for credential claim"
+      },
+      "credentialIssued": {
+        "label": "Credential Issued",
+        "description": "Credential successfully issued to applicant"
+      }
+    }
+  },
+  "team": {
+    "title": "Team",
+    "description": "Manage team members, send invitations, configure API keys, and set up webhooks for event notifications.",
+    "tabs": {
+      "members": "Members",
+      "invitations": "Invitations",
+      "apiKeys": "API Keys",
+      "webhooks": "Webhooks"
+    },
+    "members": {
+      "comingSoon": "Team member management coming soon. You'll be able to add team members with different roles (Owner, Admin, Member, Viewer) and manage their permissions.",
+      "emptyTitle": "No Team Members Yet",
+      "emptyDescription": "Invite team members to collaborate on credential issuance and application review.",
+      "inviteButton": "Invite Team Member"
+    }
+  },
+  "flowPublishDialog": {
+    "title": "Publish Flow",
+    "titlePublished": "Flow Published",
+    "infoMessage": "Publishing will make this flow available to applicants and generate a public application URL. This will also lock the referenced Credential Template version.",
+    "flowNameLabel": "Flow Name",
+    "typeLabel": "Type",
+    "changeDescriptionLabel": "Change Description (Optional)",
+    "changeDescriptionPlaceholder": "Describe what's new in this version...",
+    "successMessage": "Flow successfully published! Share the URL below with applicants.",
+    "publicUrlLabel": "Public Application URL",
+    "qrCodeComingSoon": "QR code generation coming soon",
+    "cancel": "Cancel",
+    "close": "Close",
+    "publishButton": "Publish Flow",
+    "publishing": "Publishing...",
+    "failedToPublish": "Failed to publish flow",
+    "unknown": "Unknown"
+  },
+  "issuance": {
+    "title": "Issuance",
+    "description": "Configure credential templates, review issuance history, and manage issuance policies.",
+    "tabs": {
+      "templates": "Templates",
+      "activeOffers": "Active Offers",
+      "analytics": "Analytics",
+      "history": "History",
+      "settings": "Settings"
+    },
+    "templates": {
+      "title": "Credential Templates",
+      "description": "Configure and manage credential templates for issuance."
+    },
+    "history": {
+      "title": "Issuance History",
+      "description": "View all credentials issued by your organization, including status and revocation history.",
+      "generateOfferButton": "Generate Offer",
+      "comingSoon": "Issuance history coming soon. You'll be able to view all issued credentials, filter by status, and review revocation history."
+    },
+    "settings": {
+      "title": "Issuance Settings",
+      "description": "Configure global issuance policies, approval workflows, and notification preferences.",
+      "comingSoon": "Issuance settings coming soon. You'll be able to configure automatic approval rules, notification templates, and credential expiration policies."
+    }
+  },
+  "verification": {
+    "title": "Verification",
+    "description": "Define presentation policies to verify credentials from applicants and external parties.",
+    "deleteConfirm": "Are you sure you want to delete this policy?",
+    "deleteFailed": "Failed to delete policy",
+    "loadFailed": "Failed to load presentation policies",
+    "empty": {
+      "title": "No Presentation Policies Yet",
+      "description": "Presentation policies define what credentials you want to verify from applicants. You can specify required fields, accepted issuers, and validation rules.",
+      "createButton": "Create Policy"
+    },
+    "list": {
+      "title": "Presentation Policies ({{count}})",
+      "createButton": "Create Policy"
+    },
+    "table": {
+      "name": "Name",
+      "description": "Description",
+      "credentialTypes": "Credential Types",
+      "claims": "Claims",
+      "standard": "Standard",
+      "actions": "Actions",
+      "noDescription": "—",
+      "claimsCount": "{{count}} claims",
+      "moreTypes": "+{{count}}"
+    },
+    "features": {
+      "policyBuilder": {
+        "title": "Policy Builder",
+        "description": "Create presentation policies with a visual builder. Define required credentials, fields, and validation rules."
+      },
+      "verificationHistory": {
+        "title": "Verification History",
+        "description": "View all verification requests, see which passed or failed, and audit the verification log."
+      },
+      "trustedIssuers": {
+        "title": "Trusted Issuers",
+        "description": "Manage a list of trusted credential issuers whose credentials you'll accept."
+      }
+    }
+  },
+  "organizationSettings": {
+    "title": "Organization Settings",
+    "description": "Manage your organization profile and view subscription details",
+    "loading": "Loading...",
+    "nameRequired": "Organization name is required",
+    "updateSuccess": "Organization settings updated successfully",
+    "details": {
+      "title": "Organization Details",
+      "nameLabel": "Organization Name",
+      "nameHelper": "The display name for your organization",
+      "slugLabel": "Slug",
+      "slugHelper": "Organization identifier (cannot be changed)",
+      "logoUrlLabel": "Logo URL",
+      "logoUrlPlaceholder": "https://example.com/logo.png",
+      "logoUrlHelper": "URL to your organization's logo image",
+      "websiteUrlLabel": "Website URL",
+      "websiteUrlPlaceholder": "https://example.com",
+      "websiteUrlHelper": "Your organization's website",
+      "contactEmailLabel": "Contact Email",
+      "contactEmailPlaceholder": "contact@example.com",
+      "contactEmailHelper": "Primary contact email for your organization",
+      "cancelButton": "Cancel",
+      "saveButton": "Save Changes",
+      "saving": "Saving..."
+    },
+    "subscription": {
+      "title": "Subscription Plan",
+      "currentPlan": "Current Plan",
+      "status": "Status",
+      "limits": "Limits",
+      "billingPeriod": "Billing Period",
+      "noSubscription": "No active subscription found",
+      "active": "Active",
+      "free": "Free"
+    },
+    "info": {
+      "title": "Organization Info",
+      "created": "Created",
+      "organizationId": "Organization ID",
+      "notAvailable": "N/A"
+    }
+  },
+  "laneManager": {
+    "title": "Lanes - {{profileName}}",
+    "description": "Manage processing lanes and device assignments",
+    "createButton": "Create Lane",
+    "deleteConfirm": "Are you sure you want to delete this lane?",
+    "removeDeviceConfirm": "Remove this device from the lane?",
+    "loadFailed": "Failed to load lanes",
+    "saveFailed": "Failed to save: {{error}}",
+    "deleteFailed": "Failed to delete: {{error}}",
+    "assignDeviceFailed": "Failed to assign device: {{error}}",
+    "unassignDeviceFailed": "Failed to unassign device: {{error}}",
+    "empty": "No lanes configured. Create a lane to define processing stations.",
+    "card": {
+      "zone": "Zone",
+      "operator": "Operator",
+      "assignedDevices": "Assigned Devices ({{count}})",
+      "noDevices": "No devices assigned",
+      "editButton": "Edit",
+      "assignDeviceButton": "Assign Device",
+      "deleteButton": "Delete"
+    },
+    "dialog": {
+      "createTitle": "Create Lane",
+      "editTitle": "Edit Lane",
+      "nameLabel": "Lane Name",
+      "descriptionLabel": "Description",
+      "zoneLabel": "Zone",
+      "zoneHelper": "e.g., 'Terminal A', 'North Wing'",
+      "operatorLabel": "Operator Info",
+      "operatorHelper": "e.g., 'Station 12', 'Supervisor: John Doe'",
+      "cancelButton": "Cancel",
+      "createButton": "Create",
+      "updateButton": "Update"
+    },
+    "deviceDialog": {
+      "title": "Assign Device to Lane",
+      "infoMessage": "Enter the device ID to assign to {{laneName}}",
+      "deviceIdLabel": "Device ID",
+      "deviceIdPlaceholder": "device-uuid-here",
+      "cancelButton": "Cancel",
+      "assignButton": "Assign"
+    }
+  },
+  "processingFeeConfig": {
+    "title": "Processing Fees",
+    "description": "Configure fees charged to applicants when they apply for credentials.",
+    "saveButton": "Save Changes",
+    "saving": "Saving...",
+    "mockModeAlert": "Development Mode: Payments are mocked. No real charges will be made.",
+    "freeProcessing": {
+      "label": "Free Processing",
+      "description": "Waive all processing fees for applicants"
+    },
+    "defaultFee": {
+      "title": "Default Processing Fee",
+      "description": "This fee is charged to all applicants unless per-credential fees are configured."
+    },
+    "perCredentialFees": {
+      "label": "Per-Credential Fees",
+      "description": "Set different fees for each credential type",
+      "default": "Default: ${{amount}}"
+    },
+    "summary": {
+      "title": "Fee Summary",
+      "currentConfig": "Current Configuration",
+      "free": "Free",
+      "defaultAmount": "${{amount}} default",
+      "feeRange": "Fee Range",
+      "estimatedRevenue": "Estimated Monthly Revenue",
+      "revenueNote": "Based on ~100 applicants/month"
+    },
+    "info": {
+      "title": "Payment Processing",
+      "description": "Processing fees are collected via Square at the time of application. Funds are deposited to your connected Square account minus Square's transaction fees (2.6% + $0.10)."
+    },
+    "credentialTypes": {
+      "passport": "Passport Application",
+      "visa": "Visa Application",
+      "permit": "Work Permit",
+      "license": "License Renewal",
+      "certificate": "Certificate Request"
+    },
+    "messages": {
+      "loadFailed": "Failed to load settings",
+      "saveSuccess": "Fee settings saved successfully",
+      "saveFailed": "Failed to save settings",
+      "invalidFee": "Invalid fee for {{credType}}: {{error}}"
+    }
+  },
+  "templateCatalog": {
+    "title": "Template Marketplace",
+    "description": "Browse and clone pre-built credential templates based on international standards",
+    "searchPlaceholder": "Search templates...",
+    "categoryLabel": "Category",
+    "loadFailed": "Failed to load templates",
+    "cloneFailed": "Failed to clone template",
+    "noResults": "No templates found matching your search criteria.",
+    "categories": {
+      "all": "All Templates",
+      "driversLicense": "Driver's License",
+      "passport": "Passport",
+      "travelVisa": "Travel Visa",
+      "permanentResidentCard": "Permanent Resident Card",
+      "universityDegree": "University Degree",
+      "employmentAuthorization": "Employment Authorization"
+    },
+    "card": {
+      "officialTemplate": "Official Template",
+      "noDescription": "No description available",
+      "requiredFields": "{{count}} required fields",
+      "optionalFields": "{{count}} optional fields",
+      "customFields": "{{count}} custom fields",
+      "processing": "Processing: {{time}}",
+      "cloneButton": "Clone Template"
+    },
+    "cloneDialog": {
+      "title": "Clone Template",
+      "infoMessage": "Cloning creates a customizable copy of this template for your organization. You can modify fields, validation rules, and publishing settings.",
+      "detailsTitle": "Template Details:",
+      "requiredFields": "Required Fields",
+      "optionalFields": "Optional Fields",
+      "eligibility": "Eligibility",
+      "none": "None",
+      "nameLabel": "Custom Template Name",
+      "nameHelper": "Give your cloned template a unique name",
+      "cancelButton": "Cancel",
+      "cloneButton": "Clone & Customize",
+      "cloning": "Cloning..."
+    }
+  },
+  "webhookDeliveryLogs": {
+    "title": "Delivery History",
+    "description": "Recent webhook delivery attempts and their results",
+    "selectWebhook": "Select a webhook to view delivery logs",
+    "viewDetails": "View details",
+    "errorMessage": "Error Message",
+    "noError": "No error message",
+    "status": {
+      "success": "Success ({{code}})",
+      "failed": "Failed ({{code}})",
+      "notAvailable": "N/A"
+    },
+    "empty": {
+      "title": "No Delivery Attempts",
+      "description": "This webhook hasn't received any events yet"
+    },
+    "table": {
+      "timestamp": "Timestamp",
+      "eventType": "Event Type",
+      "status": "Status",
+      "responseTime": "Response Time",
+      "retryCount": "Retry Count",
+      "actions": "Actions"
+    },
+    "detailsDialog": {
+      "title": "Delivery Attempt Details",
+      "eventId": "Event ID",
+      "eventType": "Event Type",
+      "timestamp": "Timestamp",
+      "status": "Status",
+      "responseTime": "Response Time",
+      "retryCount": "Retry Count",
+      "errorMessage": "Error Message",
+      "responseBody": "Response Body",
+      "closeButton": "Close"
+    }
+  },
+  "deploymentProfiles": {
+    "title": "Deployment Profiles",
+    "description": "Configure APIs, kiosks, lanes/devices for online and offline environments",
+    "createButton": "Create Profile",
+    "loadFailed": "Failed to load deployment profiles",
+    "saveFailed": "Failed to save: {{error}}",
+    "deleteFailed": "Failed to delete: {{error}}",
+    "deleteConfirm": "Are you sure you want to delete this deployment profile?",
+    "networkModes": {
+      "online": "Online",
+      "onlineDesc": "Full cloud connectivity",
+      "offline": "Offline",
+      "offlineDesc": "No network required",
+      "hybrid": "Hybrid",
+      "hybridDesc": "Sync when available"
+    },
+    "empty": {
+      "title": "No deployment profiles yet",
+      "description": "Create a profile to configure how your APIs, kiosks, and devices integrate with credential flows."
+    },
+    "card": {
+      "templates": "{{count}} Templates",
+      "policies": "{{count}} Policies",
+      "editButton": "Edit",
+      "deleteButton": "Delete"
+    },
+    "dialog": {
+      "createTitle": "Create Deployment Profile",
+      "editTitle": "Edit Deployment Profile",
+      "nameLabel": "Name",
+      "descriptionLabel": "Description",
+      "networkModeLabel": "Network Mode",
+      "environmentConfig": "Environment Configuration",
+      "uxThemeLabel": "UX Theme",
+      "languageLabel": "Language",
+      "accessibilityFeatures": "Accessibility Features",
+      "cancelButton": "Cancel",
+      "createButton": "Create",
+      "updateButton": "Update",
+      "themes": {
+        "default": "Default",
+        "highContrast": "High Contrast",
+        "largeText": "Large Text"
+      },
+      "languages": {
+        "en": "English",
+        "es": "Spanish",
+        "fr": "French",
+        "de": "German",
+        "nl": "Dutch"
+      }
+    }
+  },
+  "templateActions": {
+    "publishButton": "Publish",
+    "unpublishButton": "Unpublish",
+    "previewButton": "Preview & Test",
+    "historyButton": "History",
+    "publishDialog": {
+      "title": "Publish Template",
+      "infoMessage": "Publishing makes this template available for applicants to use.",
+      "visibilityLabel": "Visibility",
+      "changeDescriptionLabel": "Change Description (Optional)",
+      "changeDescriptionPlaceholder": "Describe what's new in this version...",
+      "versionNote": "Publishing will increment the template version number and create a version history entry.",
+      "cancelButton": "Cancel",
+      "publishButton": "Publish",
+      "publishFailed": "Failed to publish template",
+      "visibility": {
+        "private": "Private - Only your organization",
+        "organization": "Organization - Members only",
+        "public": "Public - Available to all organizations"
+      }
+    },
+    "previewDialog": {
+      "title": "Preview & Test Template",
+      "infoMessage": "Fill out the form below to test validation rules before publishing.",
+      "closeButton": "Close",
+      "validateButton": "Validate",
+      "validateFailed": "Failed to validate",
+      "validateError": "Failed to validate: {{error}}",
+      "validationSuccess": "All fields passed validation!",
+      "validationErrors": "Found {{count}} validation errors",
+      "missingFields": "Missing required fields: {{fields}}"
+    },
+    "versionHistoryDialog": {
+      "title": "Version History",
+      "noHistory": "No version history available yet.",
+      "noDescription": "No description",
+      "unknownDate": "Unknown date",
+      "closeButton": "Close"
+    }
+  },
+  "complianceProfiles": {
+    "title": "Compliance Profiles",
+    "description": "Manage compliance profiles that abstract credential format complexity behind compliance-focused configurations",
+    "createButton": "Create Profile",
+    "loadFailed": "Failed to load compliance profiles",
+    "saveFailed": "Failed to save profile: {{error}}",
+    "deleteFailed": "Failed to delete profile: {{error}}",
+    "deleteConfirm": "Are you sure you want to delete this compliance profile?",
+    "codes": {
+      "icao": "ICAO DTC",
+      "icaoDesc": "ICAO Digital Travel Credentials for machine-readable travel documents",
+      "aamva": "AAMVA mDL",
+      "aamvaDesc": "AAMVA Mobile Driver's License standards for North America",
+      "eudi": "EUDI PID",
+      "eudiDesc": "EU Digital Identity Wallet Person Identification Data",
+      "enterprise": "Enterprise VC",
+      "enterpriseDesc": "Enterprise W3C Verifiable Credentials for business use cases"
+    },
+    "formats": {
+      "mdoc": "mDoc (ISO/IEC 18013-5)",
+      "sdJwtVc": "SD-JWT VC",
+      "jwtVc": "JWT VC",
+      "ldpVc": "JSON-LD VC"
+    },
+    "consistencyRules": {
+      "icao": "ICAO PKD certificates required, DID methods must align with ICAO trust framework",
+      "aamva": "AAMVA jurisdiction-specific certificates required, DID methods must be AAMVA-approved",
+      "eudi": "EUDI Wallet trust anchors required, DID methods must be on EU trusted list",
+      "enterprise": "Custom organizational PKI, flexible DID method support",
+      "none": "No specific consistency requirements"
+    },
+    "systemPresets": {
+      "title": "System Presets",
+      "immutable": "Immutable",
+      "description": "Pre-configured compliance profiles based on international standards. These cannot be modified but can serve as templates.",
+      "issuerConsistency": "Issuer Consistency"
+    },
+    "customProfiles": {
+      "title": "Custom Profiles",
+      "empty": "No custom profiles yet. Create one to define your own compliance requirements."
+    },
+    "table": {
+      "name": "Name",
+      "code": "Compliance Code",
+      "primaryFormat": "Primary Format",
+      "issuerConsistency": "Issuer Consistency",
+      "actions": "Actions",
+      "notAvailable": "N/A",
+      "enforced": "Enforced",
+      "optional": "Optional",
+      "edit": "Edit",
+      "delete": "Delete"
+    },
+    "dialog": {
+      "createTitle": "Create Compliance Profile",
+      "editTitle": "Edit Compliance Profile",
+      "nameLabel": "Profile Name",
+      "codeLabel": "Compliance Code",
+      "descriptionLabel": "Description",
+      "formatMapping": "Credential Format Mapping",
+      "primaryFormat": "Primary Format",
+      "supportedFormats": "Supported Formats",
+      "consistencyRules": "Issuer Consistency Rules",
+      "enforceConsistency": "Enforce Issuer Consistency",
+      "allowedDidMethods": "Allowed DID Methods",
+      "cancelButton": "Cancel",
+      "createButton": "Create",
+      "updateButton": "Update"
+    }
+  },
+  "inviteApplicants": {
+    "title": "Invite Applicants",
+    "description": "Send email invitations to join {{organization}} as applicants.",
+    "yourOrganization": "your organization",
+    "refreshButton": "Refresh",
+    "sendButton": "Send Invitations",
+    "loadFailed": "Failed to load invitations",
+    "enterEmail": "Please enter at least one email address",
+    "sentSuccess": "Sent {{count}} invitation(s) successfully",
+    "sentFailed": "{{count}} invitation(s) failed to send",
+    "sendFailed": "Failed to send invitations",
+    "resentSuccess": "Resent invitation to {{email}}",
+    "resendFailed": "Failed to resend invitation",
+    "cancelSuccess": "Invitation cancelled",
+    "cancelFailed": "Failed to cancel invitation",
+    "notAvailable": "N/A",
+    "expired": "Expired",
+    "unknown": "Unknown",
+    "status": {
+      "pending": "Pending",
+      "accepted": "Accepted",
+      "expired": "Expired",
+      "cancelled": "Cancelled"
+    },
+    "stats": {
+      "pending": "{{count}} Pending",
+      "accepted": "{{count}} Accepted"
+    },
+    "infoAlert": "Invitations are sent via email and expire after 7 days. Applicants will receive a link to create their account and join your organization. View sent emails at",
+    "mailhogLink": "MailHog (dev only)",
+    "timeRemaining": {
+      "days": "{{days}}d {{hours}}h remaining",
+      "hours": "{{hours}}h remaining"
+    },
+    "table": {
+      "email": "Email",
+      "status": "Status",
+      "invited": "Invited",
+      "expires": "Expires",
+      "accepted": "Accepted",
+      "actions": "Actions",
+      "resend": "Resend Invitation",
+      "cancel": "Cancel Invitation",
+      "empty": "No invitations sent yet. Click \"Send Invitations\" to get started."
+    },
+    "dialog": {
+      "title": "Send Invitations",
+      "description": "Invite applicants to join your organization. They will receive an email with a link to create their account.",
+      "emailLabel": "Email Address",
+      "emailPlaceholder": "applicant@example.com",
+      "bulkOr": "OR bulk invite",
+      "bulkLabel": "Bulk Email Addresses",
+      "bulkPlaceholder": "Enter multiple emails separated by commas, semicolons, or new lines...",
+      "bulkHelper": "{{count}} valid email(s) detected",
+      "cancelButton": "Cancel",
+      "sendButton": "Send {{count}} Invitation(s)",
+      "sending": "Sending..."
+    }
+  },
+  "trustRegistry": {
+    "title": "Trust Registry",
+    "description": "Configure and manage trust frameworks, certificate chains, and trust anchors for credential verification.",
+    "loadFailed": "Failed to load trust configuration. Check your settings.",
+    "notConfigured": "Trust profile not fully configured.",
+    "selectFramework": "Select a trust framework below to get started.",
+    "frameworks": {
+      "eudi": {
+        "name": "EU Digital Identity Wallet (EUDI)",
+        "description": "Use EU trusted lists and wallet-compatible certificates. Recommended for Europe."
+      },
+      "icao": {
+        "name": "ICAO PKD",
+        "description": "Use ICAO Public Key Directory for passport verification. Recommended for travel."
+      },
+      "aamva": {
+        "name": "AAMVA",
+        "description": "Use AAMVA standards for driver licenses and state IDs. Recommended for North America."
+      },
+      "openBadges": {
+        "name": "Open Badges 3.0",
+        "description": "Issue educational credentials, certifications, and skill badges. Supports X.509 certificates with W3C Verifiable Credentials."
+      },
+      "custom": {
+        "name": "Custom X.509",
+        "description": "Manage your own certificate trust anchors for private PKI."
+      },
+      "title": "Trust Framework Status",
+      "description": "Monitor the configuration status of each trust framework. Configure or fix issues as needed."
+    },
+    "status": {
+      "notConfigured": "Not Configured",
+      "needsAttention": "Active - Needs Attention",
+      "configured": "Active - Configured",
+      "pendingSetup": "Active - Pending Setup",
+      "missingVerifierCert": "Missing verifier certificate.",
+      "missingIssuerKeys": "Missing issuer keys.",
+      "certConfigured": "Certificate configured.",
+      "keysConfigured": "{{count}} key(s) configured."
+    },
+    "buttons": {
+      "viewDetails": "View Details",
+      "fixIssues": "Fix Issues",
+      "configure": "Configure"
+    },
+    "tabs": {
+      "overview": "Overview",
+      "frameworks": "Frameworks",
+      "certificates": "Certificate Chain",
+      "keys": "Keys",
+      "revocations": "Revocations"
+    },
+    "overview": {
+      "activeFramework": "Active Framework",
+      "changeFramework": "Change Framework",
+      "trustStatus": "Trust Status",
+      "notConfiguredYet": "Trust profile not configured yet. Complete onboarding to set up trust framework.",
+      "chainStatus": "Chain Status:",
+      "healthy": "Healthy",
+      "pending": "Pending",
+      "allChecks": "All Checks:",
+      "passed": "Passed",
+      "pendingSetup": "Pending Setup",
+      "refreshStatus": "Refresh Status",
+      "healthChecks": "Health Checks",
+      "allPassed": "All health checks passed ✓"
+    },
+    "certificates": {
+      "title": "Certificate Chain Status",
+      "description": "View the status of your PKI trust chain including root CA, intermediate CA, and CRL.",
+      "warnings": "Warnings:",
+      "errors": "Errors:"
+    },
+    "keys": {
+      "title": "Key Management",
+      "description": "Manage cryptographic keys for signing and verification.",
+      "comingSoon": "Key management interface coming soon. Keys are currently configured during onboarding.",
+      "verifierKeys": "Verifier Keys",
+      "issuerKeys": "Issuer Keys",
+      "location": "Location:",
+      "certificate": "Certificate:",
+      "notSpecified": "Not specified",
+      "attached": "Attached",
+      "notAttached": "Not attached"
+    }
+  },
+  "offerAnalytics": {
+    "title": "Analytics & Insights",
+    "description": "QR code scan statistics and wallet analytics (Last 30 days)",
+    "refreshButton": "Refresh",
+    "loadFailed": "Failed to load analytics data",
+    "error": "Error",
+    "notAvailable": "N/A",
+    "unknown": "Unknown",
+    "metrics": {
+      "totalOffers": "Total Offers",
+      "totalOffersSubtitle": "{{count}} active",
+      "totalScans": "Total Scans",
+      "totalScansSubtitle": "{{avg}} per offer",
+      "successRate": "Success Rate",
+      "uniqueWallets": "Unique Wallets"
+    },
+    "walletDistribution": {
+      "title": "Top Wallet Types",
+      "noData": "No wallet data available"
+    },
+    "recentActivity": {
+      "title": "Recent Activity",
+      "noActivity": "No recent activity"
+    },
+    "detailedLogs": {
+      "title": "Detailed Scan Logs"
+    },
+    "filters": {
+      "accessType": "Access Type",
+      "outcome": "Outcome",
+      "walletType": "Wallet Type",
+      "all": "All"
+    },
+    "accessTypes": {
+      "qrView": "QR View",
+      "offerRetrieval": "Offer Retrieval",
+      "tokenExchange": "Token Exchange",
+      "credentialRequest": "Credential Request"
+    },
+    "outcomes": {
+      "success": "Success",
+      "expired": "Expired",
+      "error": "Error",
+      "unauthorized": "Unauthorized"
+    },
+    "walletTypes": {
+      "microsoftAuthenticator": "Microsoft Authenticator",
+      "spruce": "Spruce Wallet",
+      "waltId": "Walt.ID Wallet",
+      "trinsic": "Trinsic Wallet",
+      "androidWallet": "Android Wallet",
+      "iosWallet": "iOS Wallet"
+    },
+    "table": {
+      "time": "Time",
+      "accessType": "Access Type",
+      "walletType": "Wallet Type",
+      "outcome": "Outcome",
+      "transactionId": "Transaction ID",
+      "ipAddress": "IP Address",
+      "noLogs": "No scan logs found"
+    }
+  },
+  "auditLogs": {
+    "title": "Audit Logs",
+    "description": "View and analyze all system events, credential operations, and security activities.",
+    "refreshButton": "Refresh",
+    "exportButton": "Export",
+    "viewDetailsTooltip": "View Details",
+    "loadFailed": "{{error}} (Showing mock data for development)",
+    "empty": "No events found for the selected filters.",
+    "categories": {
+      "all": "All Events",
+      "credential": "Credentials",
+      "verification": "Verifications",
+      "application": "Applications",
+      "trust": "Trust Operations",
+      "security": "Security",
+      "audit": "Audit"
+    },
+    "severity": {
+      "all": "All",
+      "info": "Info",
+      "warning": "Warning",
+      "error": "Error",
+      "critical": "Critical"
+    },
+    "filters": {
+      "search": "Search by event ID, user, or resource...",
+      "timeRange": "Time Range",
+      "severity": "Severity",
+      "timeRangeOptions": {
+        "lastHour": "Last Hour",
+        "last24Hours": "Last 24 Hours",
+        "last7Days": "Last 7 Days",
+        "last30Days": "Last 30 Days",
+        "allTime": "All Time"
+      }
+    },
+    "table": {
+      "severity": "Severity",
+      "timestamp": "Timestamp",
+      "eventType": "Event Type",
+      "user": "User",
+      "resource": "Resource",
+      "description": "Description",
+      "actions": "Actions"
+    },
+    "eventDetail": {
+      "title": "Event Details",
+      "eventId": "Event ID",
+      "eventType": "Event Type",
+      "timestamp": "Timestamp",
+      "user": "User",
+      "resourceId": "Resource ID",
+      "description": "Description",
+      "metadata": "Metadata",
+      "closeButton": "Close"
+    }
+  },
+  "apiKeyManager": {
+    "title": "API Keys",
+    "description": "Manage API keys for programmatic access to Marty services.",
+    "createButton": "Create API Key",
+    "refreshButton": "Refresh",
+    "loadFailed": "Failed to load API keys",
+    "scopes": {
+      "readCredentials": {
+        "label": "Read Credentials",
+        "description": "View credential data"
+      },
+      "writeCredentials": {
+        "label": "Write Credentials",
+        "description": "Issue and manage credentials"
+      },
+      "readTrustRegistry": {
+        "label": "Read Trust Registry",
+        "description": "Query trust registry"
+      },
+      "writeTrustRegistry": {
+        "label": "Write Trust Registry",
+        "description": "Update trust registry entries"
+      },
+      "readRevocation": {
+        "label": "Read Revocation",
+        "description": "Check revocation status"
+      },
+      "writeRevocation": {
+        "label": "Write Revocation",
+        "description": "Revoke credentials"
+      },
+      "manageWebhooks": {
+        "label": "Manage Webhooks",
+        "description": "Configure webhook endpoints"
+      },
+      "verifyPresentations": {
+        "label": "Verify Presentations",
+        "description": "Verify credential presentations"
+      }
+    },
+    "filters": {
+      "showRevoked": "Show revoked keys",
+      "showExpired": "Show expired keys"
+    },
+    "newKeyAlert": {
+      "title": "New API Key Created",
+      "copyButton": "Copy",
+      "warning": "Save this key now. You won't be able to see it again!"
+    },
+    "table": {
+      "name": "Name",
+      "key": "Key",
+      "scopes": "Scopes",
+      "created": "Created",
+      "lastUsed": "Last Used",
+      "expires": "Expires",
+      "status": "Status",
+      "actions": "Actions",
+      "statusActive": "Active",
+      "statusRevoked": "Revoked",
+      "statusExpired": "Expired",
+      "never": "Never",
+      "notAvailable": "N/A",
+      "empty": "No API keys yet. Create one to get started."
+    },
+    "menu": {
+      "regenerate": "Regenerate",
+      "revoke": "Revoke",
+      "delete": "Delete"
+    },
+    "createDialog": {
+      "title": "Create API Key",
+      "nameLabel": "Key Name",
+      "namePlaceholder": "e.g., Production API Key",
+      "scopesLabel": "Permissions",
+      "expiryLabel": "Expiration Date (Optional)",
+      "expiryHelper": "Leave empty for no expiration",
+      "cancelButton": "Cancel",
+      "createButton": "Create Key"
+    },
+    "deleteDialog": {
+      "title": "Delete API Key?",
+      "warning": "Are you sure you want to delete \"{{name}}\"? This action cannot be undone. Any applications using this key will lose access.",
+      "cancelButton": "Cancel",
+      "deleteButton": "Delete"
+    },
+    "snackbars": {
+      "createSuccess": "API key created successfully",
+      "createFailed": "Failed to create API key",
+      "revokeSuccess": "API key revoked",
+      "revokeFailed": "Failed to revoke API key",
+      "deleteSuccess": "API key deleted",
+      "deleteFailed": "Failed to delete API key",
+      "regenerateSuccess": "API key regenerated",
+      "regenerateFailed": "Failed to regenerate API key",
+      "copiedToClipboard": "API key copied to clipboard",
+      "copyNotSupported": "Copy not supported in this browser",
+      "copyFailed": "Failed to copy API key"
+    }
+  },
+  "revocationManager": {
+    "title": "Revocation Manager",
+    "description": "Manage credential revocations",
+    "reasons": {
+      "unspecified": "Unspecified",
+      "keyCompromise": "Key Compromise",
+      "caCompromise": "CA Compromise",
+      "affiliationChanged": "Affiliation Changed",
+      "superseded": "Superseded",
+      "cessationOfOperation": "Cessation of Operation",
+      "certificateHold": "Certificate Hold",
+      "privilegeWithdrawn": "Privilege Withdrawn",
+      "aaCompromise": "AA Compromise"
+    },
+    "tabs": {
+      "active": "Active Credentials",
+      "history": "Revocation History"
+    },
+    "activeTab": {
+      "searchPlaceholder": "Search by credential ID, holder email, or type...",
+      "refreshButton": "Refresh",
+      "batchRevokeButton": "Batch Revoke",
+      "revokeTooltip": "Revoke",
+      "loadFailed": "{{error}} (Showing mock data)",
+      "empty": "No active credentials found",
+      "table": {
+        "credentialId": "Credential ID",
+        "type": "Type",
+        "holder": "Holder",
+        "issuedDate": "Issued Date",
+        "expiryDate": "Expiry Date",
+        "status": "Status",
+        "actions": "Actions",
+        "statusActive": "Active"
+      },
+      "snackbars": {
+        "revokeSuccess": "Credential revoked successfully",
+        "revokeFailed": "Failed to revoke credential",
+        "batchSuccess": "Successfully revoked {{count}} credentials",
+        "batchFailed": "Failed to batch revoke credentials"
+      }
+    },
+    "historyTab": {
+      "table": {
+        "credentialId": "Credential ID",
+        "type": "Type",
+        "revokedDate": "Revoked Date",
+        "reason": "Reason",
+        "revokedBy": "Revoked By",
+        "comments": "Comments"
+      }
+    },
+    "batchTab": {
+      "title": "Batch Revocation",
+      "instructions": "Upload a CSV file with credential IDs (one per line) to revoke multiple credentials at once.",
+      "csvFormatLabel": "CSV Format Example",
+      "uploadButton": "Choose CSV File",
+      "revokeAllButton": "Revoke All"
+    },
+    "revokeDialog": {
+      "title": "Revoke Credential",
+      "warningAlert": "This credential will be immediately revoked. This action cannot be undone. Verifiers will be unable to accept this credential.",
+      "credentialDetailsTitle": "Credential Details",
+      "reasonLabel": "Revocation Reason",
+      "commentsLabel": "Comments (Optional)",
+      "commentsPlaceholder": "e.g., Account closed, credential no longer needed",
+      "commentsHelper": "Provide additional details about why this credential is being revoked",
+      "cancelButton": "Cancel",
+      "revokeButton": "Revoke Credential"
+    }
+  },
+  "vendorDashboard": {
+    "title": "Vendor Dashboard",
+    "welcomeMessage": "Welcome back, {{name}}. Manage your organization and applicants.",
+    "organizationId": "Organization ID: {{id}}",
+    "stats": {
+      "apiKeys": "API Keys",
+      "activeApplicants": "Active Applicants",
+      "credentialsIssued": "Credentials Issued",
+      "processingFee": "Processing Fee",
+      "trend": "+{{count}} this {{period}}"
+    },
+    "alerts": {
+      "setupIncomplete": {
+        "title": "Trust profile not configured.",
+        "message": "Complete your trust setup to verify credentials and issue your own.",
+        "action": "Configure"
+      }
+    },
+    "compliance": {
+      "sectionTitle": "Identity Compliance",
+      "description": "Monitor your credential verification and issuance readiness",
+      "manageButton": "Manage",
+      "loadingStatus": "Loading compliance status...",
+      "overallStatusTitle": "Overall Status",
+      "nextStepsTitle": "Next Steps",
+      "advancedDetailsTitle": "Advanced Details",
+      "statuses": {
+        "compliant": "Compliant",
+        "needs_attention": "Needs Attention",
+        "setup_required": "Setup Required"
+      },
+      "overallStatus": {
+        "compliant": "{{count}} Compliant",
+        "needsAttention": "{{count}} Needs Attention",
+        "setupRequired": "{{count}} Setup Required"
+      },
+      "nextSteps": {
+        "allOperational": "All systems operational",
+        "noActionRequired": "No action required",
+        "certificateExpiring": "Certificate expires in {{days}} days - renew soon",
+        "trustListStale": "Trust list is stale - refresh recommended",
+        "completeTrustProfile": "Complete trust profile configuration",
+        "uploadCertificates": "Upload or configure certificates",
+        "testVerification": "Test credential verification"
+      },
+      "advancedDetails": {
+        "framework": "Framework",
+        "technicalName": "Technical Name",
+        "useCases": "Use Cases",
+        "autoGenerated": "Auto-generated"
+      },
+      "buttons": {
+        "configure": "Configure",
+        "fixIssues": "Fix Issues"
+      }
+    },
+    "quickActions": {
+      "title": "Quick Actions",
+      "apiKeys": {
+        "title": "Manage API Keys",
+        "description": "Create and manage API keys for integrations"
+      },
+      "inviteApplicants": {
+        "title": "Invite Applicants",
+        "description": "Send email invitations to new applicants"
+      },
+      "devices": {
+        "title": "Configure Devices",
+        "description": "Manage mobile device fleet for your applicants"
+      },
+      "fees": {
+        "title": "Processing Fees",
+        "description": "Set and manage applicant processing fees"
+      },
+      "apiDocs": {
+        "title": "API Documentation",
+        "description": "View comprehensive API reference and integration guides"
+      }
+    },
+    "organizationSettings": {
+      "title": "Organization Settings",
+      "webhooks": {
+        "title": "Webhook Endpoints",
+        "description": "Configure webhook notifications"
+      },
+      "credentials": {
+        "title": "Credential Types",
+        "description": "Configure available credential types"
+      },
+      "settings": {
+        "title": "Organization Settings",
+        "description": "Update organization profile and preferences"
+      }
+    },
+    "subscription": {
+      "title": "Subscription",
+      "planInfo": "{{plan}} Plan • Renews {{date}}",
+      "manageButton": "Manage Subscription"
+    }
+  },
+  "credentialConfigManager": {
+    "title": "Credential Types",
+    "description": "Configure the types of credentials your organization will issue to applicants.",
+    "addCredentialType": "Add Credential Type",
+    "credentialTypes": {
+      "travelVisa": "Travel Visa",
+      "passport": "Passport",
+      "driversLicense": "Driver's License",
+      "accessBadge": "Access Badge",
+      "nationalId": "National ID",
+      "dtc": "Digital Travel Credential",
+      "openBadge": "Open Badge"
+    },
+    "form": {
+      "credentialType": "Credential Type",
+      "displayName": "Display Name",
+      "displayNameHelper": "Name shown to applicants",
+      "validityDays": "Validity (days)",
+      "validityHelper": "How long credentials are valid",
+      "validity": "Validity",
+      "days": "days",
+      "requiredFields": "Required Fields",
+      "optionalFields": "Optional Fields",
+      "isActive": "Active (available to applicants)"
+    },
+    "dialog": {
+      "createTitle": "Add Credential Type",
+      "editTitle": "Edit Credential Type"
+    },
+    "deleteDialog": {
+      "title": "Delete Credential Type?",
+      "message": "Are you sure you want to delete the \"{{name}}\" credential type? This action cannot be undone."
+    },
+    "empty": {
+      "title": "No Credential Types Configured",
+      "description": "Add credential types that your organization will offer to applicants.",
+      "button": "Add Your First Credential Type"
+    },
+    "snackbar": {
+      "createSuccess": "Credential configuration created successfully",
+      "updateSuccess": "Credential configuration updated successfully",
+      "deleteSuccess": "Credential configuration deleted"
+    }
+  },
+  "vendorOfferList": {
+    "title": "Credential Offers",
+    "description": "View and manage all credential offers with QR codes",
+    "statuses": {
+      "pending": "Pending",
+      "ready": "Ready",
+      "issued": "Issued",
+      "deferred": "Deferred",
+      "expired": "Expired",
+      "error": "Error",
+      "accepted": "Accepted"
+    },
+    "timeRemaining": {
+      "expired": "Expired",
+      "daysHours": "{{days}}d {{hours}}h",
+      "hoursMinutes": "{{hours}}h {{minutes}}m",
+      "minutes": "{{minutes}}m"
+    },
+    "actions": {
+      "viewQR": "View QR Code",
+      "copyLink": "Copy Link",
+      "regenerate": "Regenerate"
+    },
+    "qrDialog": {
+      "title": "Credential Offer QR Code",
+      "attempt": "Attempt {{number}}",
+      "offerDetails": "Offer Details",
+      "status": "Status",
+      "transactionId": "Transaction ID",
+      "timeRemaining": "Time Remaining",
+      "accessCount": "Access Count",
+      "lastAccessed": "Last Accessed",
+      "sharingOptions": "Sharing Options",
+      "copyDeepLink": "Copy Deep Link",
+      "copyHttpUrl": "Copy HTTP URL"
+    },
+    "filters": {
+      "status": "Status",
+      "active": "Active",
+      "all": "All",
+      "activeOnly": "Active",
+      "inactiveOnly": "Inactive"
+    },
+    "table": {
+      "created": "Created",
+      "transactionId": "Transaction ID",
+      "status": "Status",
+      "active": "Active",
+      "timeRemaining": "Time Remaining",
+      "accessCount": "Access Count",
+      "attempt": "Attempt",
+      "actions": "Actions"
+    },
+    "empty": "No credential offers found"
+  },
+  "mdocConfigManager": {
+    "title": "mDoc Configuration",
+    "description": "Configure mobile document credential types for your organization",
+    "tabs": {
+      "types": "Credential Types",
+      "fields": "Application Form",
+      "policies": "Issuance Policy"
+    },
+    "mdocTypes": {
+      "mDL": {
+        "name": "Mobile Driver's License",
+        "description": "ISO/IEC 18013-5 compliant driver's license"
+      },
+      "photoId": {
+        "name": "Photo ID",
+        "description": "ISO 23220 photo identification"
+      },
+      "travelVisa": {
+        "name": "Travel Visa",
+        "description": "Travel authorization document"
+      }
+    },
+    "fields": {
+      "familyName": "Family Name",
+      "givenName": "Given Name",
+      "birthDate": "Birth Date",
+      "issueDate": "Issue Date",
+      "expiryDate": "Expiry Date",
+      "documentNumber": "Document Number",
+      "portrait": "Portrait Photo",
+      "drivingPrivileges": "Driving Privileges",
+      "residentAddress": "Resident Address",
+      "ageOver18": "Age Over 18",
+      "ageOver21": "Age Over 21",
+      "nationality": "Nationality",
+      "eyeColor": "Eye Color",
+      "hairColor": "Hair Color",
+      "height": "Height",
+      "weight": "Weight",
+      "passportNumber": "Passport Number",
+      "visaType": "Visa Type",
+      "entryCount": "Entry Count",
+      "validityStart": "Validity Start",
+      "validityEnd": "Validity End",
+      "purpose": "Purpose",
+      "issuingCountry": "Issuing Country",
+      "issuingAuthority": "Issuing Authority"
+    },
+    "config": {
+      "enabled": "Enabled",
+      "validity": "Validity Period",
+      "required": "Required",
+      "optional": "Optional",
+      "disabled": "Disabled"
+    },
+    "formBuilder": {
+      "title": "Application Form Fields",
+      "description": "Configure which fields are required, optional, or excluded from the application form.",
+      "fieldType": "Type",
+      "derived": "Derived"
+    },
+    "policy": {
+      "title": "Validity & Verification",
+      "validityYears": "Validity Period (years)",
+      "requireIdentityVerification": "Require Identity Verification",
+      "requireDocumentVerification": "Require Document Verification",
+      "renewalTitle": "Renewal Settings",
+      "allowRenewal": "Allow Credential Renewal",
+      "renewalWindowDays": "Renewal Window (days before expiry)",
+      "feeTitle": "Processing Fee",
+      "processingFee": "Processing Fee ($)"
+    },
+    "preview": {
+      "title": "Form Preview",
+      "requiredFields": "Required Fields ({{count}})",
+      "optionalFields": "Optional Fields ({{count}})"
+    },
+    "activeTypes": {
+      "title": "Active Credential Types",
+      "none": "No credential types enabled"
+    },
+    "buttons": {
+      "configure": "Configure",
+      "savePolicy": "Save Policy"
+    },
+    "alerts": {
+      "notEnabled": "This credential type is not enabled. Enable it in the Credential Types tab first."
+    },
+    "snackbar": {
+      "saveSuccess": "Configuration saved successfully",
+      "saveFailed": "Failed to save configuration",
+      "loadFailed": "Failed to load configuration"
+    }
+  },
+  "vendorApplicationReview": {
+    "title": "Applications",
+    "description": "Manage application templates (what can be applied for) and review submitted applications.",
+    "tabs": {
+      "templates": "Application Templates",
+      "applications": "Applications"
+    },
+    "applicationStatuses": {
+      "draft": "Draft",
+      "submitted": "Submitted",
+      "identityProofing": "Identity Proofing",
+      "pendingKyc": "Pending KYC",
+      "kycReview": "KYC Review",
+      "pendingVetting": "Pending Vetting",
+      "vettingInProgress": "Vetting In Progress",
+      "pendingBiometrics": "Pending Biometrics",
+      "pendingApproval": "Pending Approval",
+      "needsRevision": "Needs Revision",
+      "approved": "Approved",
+      "rejected": "Rejected",
+      "issued": "Issued",
+      "expired": "Expired",
+      "cancelled": "Cancelled"
+    },
+    "checkTypes": {
+      "criminalHistory": "Criminal History",
+      "identityVerification": "Identity Verification",
+      "documentVerification": "Document Verification",
+      "biometricEnrollment": "Biometric Enrollment",
+      "sanctionsScreening": "Sanctions Screening",
+      "watchlistCheck": "Watchlist Check",
+      "referenceCheck": "Reference Check",
+      "addressVerification": "Address Verification",
+      "employmentVerification": "Employment Verification",
+      "financialCheck": "Financial Check"
+    },
+    "checkStatuses": {
+      "notStarted": "Not Started",
+      "pending": "Pending",
+      "inProgress": "In Progress",
+      "passed": "Passed",
+      "failed": "Failed",
+      "requiresManualReview": "Requires Manual Review",
+      "completedPassed": "Completed - Passed",
+      "completedFailed": "Completed - Failed"
+    },
+    "filters": {
+      "pendingReview": "Pending Review",
+      "needsRevision": "Needs Revision",
+      "underReview": "Under Review",
+      "approved": "Approved",
+      "rejected": "Rejected",
+      "all": "All"
+    },
+    "table": {
+      "reference": "Reference",
+      "applicant": "Applicant",
+      "documentType": "Document Type",
+      "submitted": "Submitted",
+      "status": "Status",
+      "actions": "Actions",
+      "applicationsCount": "Applications ({{count}})"
+    },
+    "actions": {
+      "view": "View Details",
+      "approve": "Approve",
+      "reject": "Reject",
+      "requestRevision": "Request Revision"
+    },
+    "viewDialog": {
+      "title": "Application Details",
+      "applicantName": "Applicant Name",
+      "dateOfBirth": "Date of Birth",
+      "vettingChecks": "Vetting Checks",
+      "noChecks": "No vetting checks configured",
+      "revisionNotes": "Revision Notes:"
+    },
+    "approveDialog": {
+      "title": "Approve Application",
+      "message": "Are you sure you want to approve this application? This will trigger credential issuance.",
+      "notesLabel": "Approval Notes (Optional)"
+    },
+    "rejectDialog": {
+      "title": "Reject Application",
+      "message": "Please provide a reason for rejecting this application.",
+      "reasonLabel": "Rejection Reason *"
+    },
+    "revisionDialog": {
+      "title": "Request Revision",
+      "message": "Request the applicant to revise their application. Provide clear instructions on what needs to be changed.",
+      "notesLabel": "Revision Notes *",
+      "notesPlaceholder": "Please provide more details about your employment history..."
+    },
+    "snackbars": {
+      "approveSuccess": "Application {{number}} approved successfully",
+      "rejectSuccess": "Application {{number}} rejected",
+      "revisionSuccess": "Revision requested for application {{number}}"
+    },
+    "empty": {
+      "noApplications": "No applications found",
+      "notSubmitted": "Not submitted"
+    }
+  },
+  "applicationTemplateManager": {
+    "title": "Application Templates",
+    "description": "Define what applicants can apply for",
+    "createButton": "Create Template",
+    "dialog": {
+      "createTitle": "Create Application Template",
+      "editTitle": "Edit Application Template"
+    },
+    "form": {
+      "templateName": "Template Name",
+      "templateNameHelper": "E.g., 'Travel Visa Application', 'Employee Badge Request'",
+      "description": "Description",
+      "trustProfile": "Trust Profile",
+      "complianceProfile": "Compliance Profile",
+      "credentialTypes": "Credential Types", 
+      "requiredDocuments": "Required Documents",
+      "requiresApproval": "Requires Approval",
+      "autoIssue": "Auto-issue on Approval",
+      "validityDays": "Validity (days)",
+      "maxApplications": "Max Applications per User"
+    },
+    "snackbar": {
+      "createSuccess": "Template created successfully",
+      "updateSuccess": "Template updated successfully",
+      "deleteSuccess": "Template deleted",
+      "loadFailed": "Failed to load templates"
+    }
+  },
+  "webhookManager": {
+    "title": "Webhooks",
+    "description": "Configure webhook endpoints for event notifications",
+    "createButton": "Create Webhook",
+    "dialog": {
+      "createTitle": "Create Webhook",
+      "editTitle": "Edit Webhook"
+    },
+    "form": {
+      "url": "Webhook URL",
+      "urlHelper": "HTTPS endpoint to receive event notifications",
+      "description": "Description",
+      "eventTypes": "Event Types",
+      "secret": "Signing Secret"
+    },
+    "eventCategories": {
+      "all": "All Events",
+      "credential": "Credential Events",
+      "verification": "Verification Events",
+      "application": "Application Events",
+      "audit": "Audit Events",
+      "trust": "Trust Events"
+    },
+    "eventTypes": {
+      "all": {
+        "label": "All Events",
+        "description": "Subscribe to all current and future events"
+      },
+      "credentialIssued": {
+        "label": "Credential Issued",
+        "description": "Triggered when a credential is issued"
+      },
+      "credentialRevoked": {
+        "label": "Credential Revoked",
+        "description": "Triggered when a credential is revoked"
+      },
+      "credentialSuspended": {
+        "label": "Credential Suspended",
+        "description": "Triggered when a credential is temporarily suspended"
+      },
+      "credentialReactivated": {
+        "label": "Credential Reactivated",
+        "description": "Triggered when a suspended credential is reactivated"
+      },
+      "verificationCompleted": {
+        "label": "Verification Completed",
+        "description": "Triggered when a verification is completed successfully"
+      },
+      "verificationFailed": {
+        "label": "Verification Failed",
+        "description": "Triggered when a verification fails"
+      },
+      "verificationInitiated": {
+        "label": "Verification Initiated",
+        "description": "Triggered when a verification request is received"
+      },
+      "applicationCreated": {
+        "label": "Application Created",
+        "description": "Triggered when a new application is created"
+      },
+      "applicationSubmitted": {
+        "label": "Application Submitted",
+        "description": "Triggered when an applicant submits an application"
+      },
+      "applicationUpdated": {
+        "label": "Application Updated",
+        "description": "Triggered when application information is updated"
+      },
+      "applicationApproved": {
+        "label": "Application Approved",
+        "description": "Triggered when an application is approved"
+      },
+      "applicationRejected": {
+        "label": "Application Rejected",
+        "description": "Triggered when an application is rejected"
+      },
+      "applicationUnderReview": {
+        "label": "Application Under Review",
+        "description": "Triggered when an application enters review status"
+      },
+      "applicationAdditionalInfo": {
+        "label": "Additional Info Requested",
+        "description": "Triggered when reviewer requests more information"
+      },
+      "applicationWithdrawn": {
+        "label": "Application Withdrawn",
+        "description": "Triggered when applicant withdraws their application"
+      },
+      "auditAccessLogged": {
+        "label": "Access Logged",
+        "description": "Triggered when a user access event is logged"
+      },
+      "auditConfigChanged": {
+        "label": "Configuration Changed",
+        "description": "Triggered when system configuration is modified"
+      },
+      "auditCredentialAccessed": {
+        "label": "Credential Accessed",
+        "description": "Triggered when credential data is accessed"
+      },
+      "auditExport": {
+        "label": "Export Performed",
+        "description": "Triggered when data is exported from the system"
+      },
+      "auditSecurityEvent": {
+        "label": "Security Event",
+        "description": "Triggered on security-related events (failed logins, etc.)"
+      },
+      "auditComplianceCheck": {
+        "label": "Compliance Check",
+        "description": "Triggered when compliance verification occurs"
+      },
+      "trustUpdated": {
+        "label": "Trust Framework Updated",
+        "description": "Triggered when trust settings change"
+      },
+      "trustCertExpiring": {
+        "label": "Certificate Expiring",
+        "description": "Triggered when a certificate is nearing expiration"
+      },
+      "trustChainFailed": {
+        "label": "Chain Validation Failed",
+        "description": "Triggered when certificate chain validation fails"
+      }
+    },
+    "table": {
+      "url": "URL",
+      "events": "Events",
+      "status": "Status",
+      "lastDelivery": "Last Delivery",
+      "actions": "Actions"
+    },
+    "snackbar": {
+      "createSuccess": "Webhook created successfully",
+      "updateSuccess": "Webhook updated successfully",
+      "deleteSuccess": "Webhook deleted",
+      "testSuccess": "Test event sent",
+      "secretCopied": "Secret copied to clipboard"
+    }
+  },
+  "flowManager": {
+    "title": "Flow Management",
+    "description": "Monitor flow executions and manage credentials",
+    "tabs": {
+      "flows": "Flows",
+      "executions": "Executions",
+      "approvals": "Approval Queue",
+      "credentials": "Credentials",
+      "revocations": "Revocations"
+    },
+    "createFlow": "Create Flow",
+    "table": {
+      "flowName": "Flow Name",
+      "type": "Type",
+      "status": "Status",
+      "template": "Template",
+      "actions": "Actions"
+    },
+    "flowTypes": {
+      "issuance": "Issuance",
+      "verification": "Verification",
+      "combined": "Combined"
+    },
+    "statuses": {
+      "active": "Active",
+      "draft": "Draft",
+      "published": "Published",
+      "disabled": "Disabled"
+    },
+    "actions": {
+      "preview": "Preview",
+      "publish": "Publish",
+      "disable": "Disable",
+      "edit": "Edit"
+    },
+    "snackbar": {
+      "flowStarted": "Flow execution started",
+      "flowCompleted": "Flow execution completed",
+      "approved": "Execution approved",
+      "credentialIssued": "Credential issued",
+      "batchRevoked": "{{count}} credentials revoked"
+    }
+  }
+}
