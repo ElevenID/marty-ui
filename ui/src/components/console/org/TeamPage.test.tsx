@@ -194,4 +194,40 @@ describe('TeamPage', () => {
       expect(mockSetMemberRoles).toHaveBeenCalledWith('console-org', 'member_1', ['role_viewer'])
     })
   })
+
+  it('developer and operator release personas can view team state but cannot mutate it', async () => {
+    mockHasPermission.mockImplementation((resource: string, action: string) => {
+      if (resource === 'team' && action === 'view') {
+        return true
+      }
+
+      return false
+    })
+    mockCan.mockImplementation((resource: string, action: string) => {
+      if (resource === 'team' && action === 'view') {
+        return true
+      }
+
+      return false
+    })
+
+    renderWithRouter(<TeamPage />, {
+      initialEntries: ['/console/org/team'],
+    })
+
+    await waitFor(() => {
+      expect(screen.getByText('alex@example.com')).toBeInTheDocument()
+      expect(screen.getByText('pending@example.com')).toBeInTheDocument()
+    })
+
+    expect(screen.queryByRole('button', { name: 'org.team.members.actions.invite' })).not.toBeInTheDocument()
+
+    const memberRow = screen.getByText('alex@example.com').closest('tr')
+    expect(memberRow).not.toBeNull()
+    expect(within(memberRow as HTMLElement).queryByRole('button')).not.toBeInTheDocument()
+
+    const inviteRow = screen.getByText('pending@example.com').closest('tr')
+    expect(inviteRow).not.toBeNull()
+    expect(within(inviteRow as HTMLElement).queryByRole('button')).not.toBeInTheDocument()
+  })
 })

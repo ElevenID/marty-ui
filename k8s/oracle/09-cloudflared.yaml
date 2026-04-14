@@ -14,21 +14,6 @@
 #   elevenidllc.com     CNAME  <tunnel-id>.cfargotunnel.com  (proxied)
 #   api.elevenidllc.com CNAME  <tunnel-id>.cfargotunnel.com  (proxied)
 #   auth.elevenidllc.com CNAME <tunnel-id>.cfargotunnel.com  (proxied)
-# ================================================================
-apiVersion: v1
-kind: Secret
-metadata:
-  name: cloudflared-secret
-  namespace: marty-prod
-  labels:
-    app: cloudflared
-    app.kubernetes.io/part-of: marty-platform
-type: Opaque
-stringData:
-  # Paste your Cloudflare Tunnel token here (starts with eyJ...).
-  # Created at: Cloudflare Zero Trust → Networks → Tunnels → Create tunnel
-  CLOUDFLARE_TUNNEL_TOKEN: "CHANGE_ME_your_cloudflare_tunnel_token"
----
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -67,6 +52,8 @@ spec:
           args:
             - tunnel
             - --no-autoupdate
+            - --metrics
+            - 0.0.0.0:2000
             - run
           env:
             - name: TUNNEL_TOKEN

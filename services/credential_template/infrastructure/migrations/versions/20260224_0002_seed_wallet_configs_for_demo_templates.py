@@ -16,6 +16,7 @@ import json
 
 from alembic import op
 import sqlalchemy as sa
+from marty_common.migration_profile import skip_demo_migrations
 
 
 # revision identifiers, used by Alembic.
@@ -43,6 +44,9 @@ MARTY_WALLET_CONFIG = {"wallet_id": "marty", "deep_link_scheme": "openid-credent
 
 
 def upgrade() -> None:
+    if skip_demo_migrations():
+        return
+
     conn = op.get_bind()
 
     # Guard: skip entirely if the wallet_configs column doesn't exist yet
@@ -84,6 +88,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    if skip_demo_migrations():
+        return
+
     conn = op.get_bind()
 
     conn.execute(

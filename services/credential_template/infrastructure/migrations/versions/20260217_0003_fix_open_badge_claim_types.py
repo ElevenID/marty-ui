@@ -8,6 +8,7 @@ Create Date: 2026-02-17 12:00:00.000000+00:00
 
 from alembic import op
 import sqlalchemy as sa
+from marty_common.migration_profile import skip_demo_migrations
 
 
 # revision identifiers, used by Alembic.
@@ -22,6 +23,9 @@ OPEN_BADGE_TEMPLATE_ID = "40000000-0000-0000-0000-000000000007"
 
 
 def upgrade() -> None:
+    if skip_demo_migrations():
+        return
+
     """Fix any 'number' claim types to 'integer' in Open Badge template."""
     conn = op.get_bind()
 
@@ -55,5 +59,8 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    if skip_demo_migrations():
+        return
+
     """No downgrade needed - this is a data fix."""
     pass

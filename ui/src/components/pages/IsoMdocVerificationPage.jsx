@@ -1,5 +1,7 @@
 import { Box, Typography, Button, Paper, Chip } from '@mui/material';
 import { useNavigate } from 'react-router-dom';
+import { DISABLE_PUBLIC_GET_STARTED_BUTTONS, SHOW_PUBLIC_GET_STARTED_BUTTONS } from '@ui-public-config';
+import FutureFeatureButton from '../FutureFeatureButton';
 import { SEOHead, softwareApplicationSchema } from '../seo';
 
 function IsoMdocVerificationPage() {
@@ -19,7 +21,19 @@ function IsoMdocVerificationPage() {
         {['ISO 18013-5', 'W3C VC', 'OpenID4VP', 'Revocation status'].map((x) => <Chip key={x} label={x} sx={{ mr: 1, mb: 1 }} />)}
       </Paper>
       <Button variant="contained" onClick={() => navigate('/docs')} sx={{ mr: 1 }}>View API Docs</Button>
-      <Button variant="outlined" onClick={() => navigate('/pricing')}>Start Free</Button>
+      {SHOW_PUBLIC_GET_STARTED_BUTTONS && (
+        <FutureFeatureButton
+          variant="outlined"
+          disabled={DISABLE_PUBLIC_GET_STARTED_BUTTONS}
+          onClick={() => navigate('/pricing')}
+          disabledSx={{
+            borderColor: 'rgba(25, 118, 210, 0.25)',
+            color: 'rgba(25, 118, 210, 0.52)',
+          }}
+        >
+          Start Free
+        </FutureFeatureButton>
+      )}
     </Box>
   );
 }

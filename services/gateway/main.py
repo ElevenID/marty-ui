@@ -21,6 +21,7 @@ Port: 8000
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from typing import Any, AsyncGenerator
@@ -36,7 +37,15 @@ from marty_common.billing_engine import BillingCedarEngine
 from marty_common.billing_middleware import BillingAuthMiddleware
 from marty_common.middleware import ETagMiddleware, IdempotencyMiddleware
 from marty_common.usage import UsageTracker
-from marty_common.plans import PlanTier, get_plan_limits, PLAN_LIMITS, PLAN_INFO
+from marty_common.plans import (
+    PLAN_INFO,
+    PLAN_LIMITS,
+    PlanTier,
+    get_plan_limits,
+    normalize_plan_identifier,
+    resolve_plan_info,
+    resolve_plan_tier,
+)
 from .plan_middleware import UsageTrackingMiddleware
 
 import gateway.proxy as _proxy_mod
@@ -73,7 +82,11 @@ from gateway.routes.notifications import (
     subscription_router,
     webhook_router,
 )
-from gateway.routes.organizations import organization_router, preferences_router
+from gateway.routes.organizations import (
+    organization_router,
+    preferences_router,
+    run_hosted_pilot_auto_purge_sweep,
+)
 from gateway.routes.revocation import cascade_revocation_router, revocation_profile_router
 from gateway.routes.trust import (
     api_key_router,
@@ -93,6 +106,61 @@ logger = logging.getLogger(__name__)
 
 SERVICE_NAME = "api-gateway"
 SERVICE_PORT = int(os.environ.get("GATEWAY_PORT", "8000"))
+
+
+def _read_bool_env(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _read_positive_int_env(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        parsed = int(raw)
+    except ValueError:
+        return default
+    return parsed if parsed > 0 else default
+
+
+HOSTED_PILOT_AUTO_PURGE_ENABLED = _read_bool_env("HOSTED_PILOT_AUTO_PURGE_ENABLED", True)
+HOSTED_PILOT_AUTO_PURGE_INTERVAL_SECONDS = _read_positive_int_env(
+    "HOSTED_PILOT_AUTO_PURGE_INTERVAL_SECONDS",
+    3600,
+)
+HOSTED_PILOT_AUTO_PURGE_BATCH_SIZE = _read_positive_int_env(
+    "HOSTED_PILOT_AUTO_PURGE_BATCH_SIZE",
+    100,
+)
+
+
+async def _hosted_pilot_auto_purge_loop(app: FastAPI, stop_event: asyncio.Event) -> None:
+    while not stop_event.is_set():
+        try:
+            stats = await run_hosted_pilot_auto_purge_sweep(
+                client=app.state.http_client,
+                registry=app.state.service_registry,
+                batch_size=HOSTED_PILOT_AUTO_PURGE_BATCH_SIZE,
+            )
+            logger.info(
+                "Hosted Pilot auto-purge sweep complete scanned=%s pilot_orgs=%s purge_requests=%s purged_records=%s",
+                stats["organizations_scanned"],
+                stats["hosted_pilot_orgs"],
+                stats["purge_requests"],
+                stats["purged_records"],
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Hosted Pilot auto-purge sweep failed")
+
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=HOSTED_PILOT_AUTO_PURGE_INTERVAL_SECONDS)
+        except asyncio.TimeoutError:
+            continue
 
 
 # =============================================================================
@@ -168,10 +236,30 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         logger.info("Billing engine loaded with default billing schema and policies")
     app.state.billing_engine = billing_engine
 
+    hosted_pilot_purge_stop = asyncio.Event()
+    hosted_pilot_purge_task = None
+    if HOSTED_PILOT_AUTO_PURGE_ENABLED:
+        hosted_pilot_purge_task = asyncio.create_task(
+            _hosted_pilot_auto_purge_loop(app, hosted_pilot_purge_stop),
+            name="hosted-pilot-auto-purge",
+        )
+        logger.info(
+            "Hosted Pilot auto-purge enabled interval=%ss batch_size=%s",
+            HOSTED_PILOT_AUTO_PURGE_INTERVAL_SECONDS,
+            HOSTED_PILOT_AUTO_PURGE_BATCH_SIZE,
+        )
+
     logger.info(f"{SERVICE_NAME} started successfully")
     yield
 
     logger.info(f"Shutting down {SERVICE_NAME}...")
+    if hosted_pilot_purge_task is not None:
+        hosted_pilot_purge_stop.set()
+        hosted_pilot_purge_task.cancel()
+        try:
+            await hosted_pilot_purge_task
+        except asyncio.CancelledError:
+            pass
     await teardown_org_client(app)
     await auth_grpc_channel.close()
     await es_grpc_channel.close()
@@ -381,13 +469,11 @@ Verification is handled through two complementary approaches:
         if redis_client:
             cached = await redis_client.get(f"org:{org_id}:plan")
             if cached:
-                plan_str = cached
-        try:
-            plan = PlanTier(plan_str)
-        except ValueError:
-            plan = PlanTier.SANDBOX
+                plan_str = cached if isinstance(cached, str) else cached.decode()
+        plan_identifier = normalize_plan_identifier(plan_str) or PlanTier.SANDBOX.value
+        plan = resolve_plan_tier(plan_identifier)
         limits = get_plan_limits(plan)
-        info = PLAN_INFO[plan]
+        info = resolve_plan_info(plan_identifier)
         return {
             "plan": plan.value,
             "plan_name": info.display_name,

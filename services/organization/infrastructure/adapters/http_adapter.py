@@ -6,6 +6,7 @@ FastAPI router providing the HTTP API for the Organization service.
 
 from __future__ import annotations
 
+from datetime import datetime
 import logging
 from typing import Annotated, Any
 
@@ -38,6 +39,9 @@ _ORG_TYPE_ALIASES: dict[str, OrganizationType] = {
     "vendor": OrganizationType.ENTERPRISE,
     "nonprofit": OrganizationType.INDIVIDUAL,
 }
+
+_HOSTED_PILOT_PLAN_ALIASES = {"starter", "hosted_pilot", "pilot"}
+_SELF_HOSTED_PLAN_ALIASES = {"professional", "enterprise", "self_hosted_production"}
 
 
 def _normalize_org_type(value: str) -> OrganizationType:
@@ -183,6 +187,28 @@ class ApiKeyResponse(BaseModel):
 class ApiKeyCreatedResponse(ApiKeyResponse):
     """API key response with raw key (only at creation)."""
     key: str  # Only returned once!
+
+
+class PilotRetentionResponse(BaseModel):
+    """Hosted Pilot retention policy details."""
+    enabled: bool = True
+    window_days: int = 30
+    scope_summary: str
+    scope_items: list[str]
+    access_behavior: str
+    last_purged_at: str | None = None
+
+
+class OrganizationLifecycleResponse(BaseModel):
+    """Lifecycle and retention metadata for dashboard surfaces."""
+    created_at: str
+    compliance_profiles: list[str] = []
+    plan_tier: str = "free"
+    plan_expires_at: str | None = None
+    commercial_offer: str = "Developer Sandbox"
+    data_retention_mode: str = "standard"
+    audit_retention_days: int = 90
+    pilot_retention: PilotRetentionResponse | None = None
 
 
 # =============================================================================
@@ -368,6 +394,19 @@ async def get_organization(
         # Re-raise if it's something else
         logger.error(f"Error getting organization {org_id}: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.get("/{org_id}/lifecycle", response_model=OrganizationLifecycleResponse, response_model_exclude_none=True)
+async def get_organization_lifecycle(
+    org_id: str,
+    org_ctx: OrganizationContext = Depends(require_org_membership),
+    use_case: OrganizationUseCase = Depends(get_org_use_case),
+) -> OrganizationLifecycleResponse:
+    """Get organization lifecycle and retention metadata for dashboards."""
+    org = await use_case.get_organization(org_id)
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found")
+    return _org_to_lifecycle_response(org)
 
 
 
@@ -655,7 +694,19 @@ internal_router = APIRouter(prefix="/internal/v1/organizations", tags=["internal
 
 class UpdatePlanRequest(BaseModel):
     """Request to update an organization's plan tier."""
-    plan_tier: str  # free | starter | professional | enterprise
+    plan_tier: str  # free | starter | professional | enterprise | hosted_pilot
+    plan_expires_at: str | None = None
+    settings_patch: dict[str, Any] | None = None
+
+
+def _body_fields_set(model: BaseModel) -> set[str]:
+    fields = getattr(model, "model_fields_set", None)
+    if fields is not None:
+        return set(fields)
+    legacy_fields = getattr(model, "__fields_set__", None)
+    if legacy_fields is not None:
+        return set(legacy_fields)
+    return set()
 
 
 @internal_router.put("/{org_id}/plan")
@@ -663,19 +714,44 @@ async def update_organization_plan(
     org_id: str,
     body: UpdatePlanRequest,
     request: Request,
+    use_case: OrganizationUseCase = Depends(get_org_use_case),
 ) -> dict:
     """Update an organization's plan tier. Called by billing service."""
+    plan_tier = _canonicalize_plan_tier(body.plan_tier)
     valid_tiers = {"free", "starter", "professional", "enterprise"}
-    if body.plan_tier not in valid_tiers:
+    if plan_tier not in valid_tiers:
         raise HTTPException(status_code=400, detail=f"Invalid plan tier: {body.plan_tier}")
 
-    redis_client = getattr(request.app.state, "redis_client", None)
-    if not redis_client:
-        raise HTTPException(status_code=500, detail="Redis not configured")
+    org = await use_case.get_organization(org_id)
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found")
 
-    await redis_client.set(f"org:{org_id}:plan", body.plan_tier)
-    logger.info(f"Plan updated for org {org_id}: {body.plan_tier}")
-    return {"organization_id": org_id, "plan_tier": body.plan_tier}
+    org.plan = plan_tier
+    body_fields = _body_fields_set(body)
+    if "plan_expires_at" in body_fields:
+        org.plan_expires_at = _parse_optional_datetime(body.plan_expires_at)
+    if "settings_patch" in body_fields and body.settings_patch:
+        org.update_settings(body.settings_patch)
+    else:
+        org.updated_at = datetime.utcnow().astimezone()
+
+    await use_case.organization_repo.save(org)
+
+    redis_client = getattr(request.app.state, "redis_client", None)
+    redis_synced = False
+    if redis_client:
+        await redis_client.set(f"org:{org_id}:plan", plan_tier)
+        redis_synced = True
+    else:
+        logger.warning("Redis not configured while updating plan for org %s", org_id)
+
+    logger.info(f"Plan updated for org {org_id}: {plan_tier}")
+    return {
+        "organization_id": org_id,
+        "plan_tier": plan_tier,
+        "plan_expires_at": org.plan_expires_at.isoformat() if org.plan_expires_at else None,
+        "redis_synced": redis_synced,
+    }
 
 
 # =============================================================================
@@ -694,6 +770,83 @@ def _org_to_response(org) -> OrganizationResponse:
         status=org.status.value,
         created_at=org.created_at.isoformat(),
         updated_at=org.updated_at.isoformat() if org.updated_at else None,
+    )
+
+
+def _canonicalize_plan_tier(plan_tier: str) -> str:
+    normalized = (plan_tier or "").strip().lower()
+    if normalized in {"hosted_pilot", "pilot"}:
+        return "starter"
+    if normalized in {"self_hosted_production", "self-hosted-production"}:
+        return "professional"
+    return normalized
+
+
+def _commercial_offer_for_plan(plan_tier: str) -> str:
+    normalized = _canonicalize_plan_tier(plan_tier)
+    if normalized in _HOSTED_PILOT_PLAN_ALIASES:
+        return "Hosted Pilot"
+    if normalized in _SELF_HOSTED_PLAN_ALIASES:
+        return "Self-Hosted Production"
+    return "Developer Sandbox"
+
+
+def _parse_optional_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    normalized = value.replace("Z", "+00:00")
+    return datetime.fromisoformat(normalized)
+
+
+def _coerce_positive_int(value: Any, default: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
+
+
+def _org_to_lifecycle_response(org) -> OrganizationLifecycleResponse:
+    settings = org.settings or {}
+    compliance_profiles = settings.get("compliance_profiles") or []
+    if not isinstance(compliance_profiles, list):
+        compliance_profiles = []
+
+    hosted_pilot_enabled = bool(settings.get("pilot_retention_enabled")) or _canonicalize_plan_tier(org.plan) in _HOSTED_PILOT_PLAN_ALIASES
+    retention_days = _coerce_positive_int(settings.get("pilot_retention_days"), 30)
+    data_retention_mode = "hosted_pilot_rolling_purge" if hosted_pilot_enabled else str(settings.get("data_retention_mode") or "standard")
+    audit_retention_days = _coerce_positive_int(
+        settings.get("audit_retention_days") if hosted_pilot_enabled or data_retention_mode != "standard" else None,
+        retention_days if hosted_pilot_enabled else 90,
+    )
+
+    pilot_retention = None
+    if hosted_pilot_enabled:
+        pilot_retention = PilotRetentionResponse(
+            enabled=True,
+            window_days=retention_days,
+            scope_summary=(
+                f"Hosted Pilot data older than {retention_days} days is purge-eligible while admin access and deployment settings stay available."
+            ),
+            scope_items=[
+                "Applications and uploaded evidence",
+                "Issuance transactions and linked issued credentials",
+                "Authorization sessions",
+                "Issuance lifecycle events",
+            ],
+            access_behavior="Purge affects retained pilot data only. Organization access, configuration, and API setup remain available.",
+            last_purged_at=settings.get("pilot_retention_last_purged_at"),
+        )
+
+    return OrganizationLifecycleResponse(
+        created_at=org.created_at.isoformat(),
+        compliance_profiles=[str(item) for item in compliance_profiles if item],
+        plan_tier=_canonicalize_plan_tier(org.plan),
+        plan_expires_at=org.plan_expires_at.isoformat() if org.plan_expires_at else None,
+        commercial_offer=_commercial_offer_for_plan(org.plan),
+        data_retention_mode=data_retention_mode,
+        audit_retention_days=audit_retention_days,
+        pilot_retention=pilot_retention,
     )
 
 

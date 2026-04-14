@@ -4,6 +4,7 @@ import NotificationsPage from './NotificationsPage'
 
 const {
   mockShowNotification,
+  mockCan,
   mockListNotifications,
   mockMarkAsRead,
   mockMarkAllAsRead,
@@ -16,6 +17,7 @@ const {
   mockUpdateNotificationPreferences,
 } = vi.hoisted(() => ({
   mockShowNotification: vi.fn(),
+  mockCan: vi.fn(),
   mockListNotifications: vi.fn(),
   mockMarkAsRead: vi.fn(),
   mockMarkAllAsRead: vi.fn(),
@@ -74,10 +76,23 @@ vi.mock('../../../hooks/useNotifications', () => ({
   }),
 }))
 
+vi.mock('../../../hooks/usePermissions', () => ({
+  usePermissions: () => ({
+    can: mockCan,
+  }),
+}))
+
 describe('NotificationsPage', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.stubGlobal('confirm', vi.fn(() => true))
+    mockCan.mockImplementation((resource: string, action: string) => {
+      if (resource === 'notification' && (action === 'view' || action === 'send')) {
+        return true
+      }
+
+      return false
+    })
 
     mockListNotifications.mockResolvedValue({
       notifications: [
@@ -230,5 +245,36 @@ describe('NotificationsPage', () => {
         digest_frequency: 'daily',
       })
     })
+  })
+
+  it('operator release personas stay read-only for alert rules and notification preferences', async () => {
+    mockCan.mockImplementation((resource: string, action: string) => {
+      if (resource === 'notification' && action === 'view') {
+        return true
+      }
+
+      return false
+    })
+
+    const { user } = renderWithRouter(<NotificationsPage />, {
+      initialEntries: ['/console/org/notifications'],
+    })
+
+    await user.click(screen.getByRole('tab', { name: 'org.notifications.tabs.alertRules' }))
+
+    await waitFor(() => {
+      expect(mockListAlertRules).toHaveBeenCalledTimes(1)
+      expect(screen.getByText('Failed sign-ins')).toBeInTheDocument()
+    })
+
+    expect(screen.queryByRole('button', { name: 'org.notifications.alertRulesTab.create' })).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('tab', { name: 'org.notifications.tabs.preferences' }))
+
+    await waitFor(() => {
+      expect(mockGetNotificationPreferences).toHaveBeenCalledTimes(1)
+    })
+
+    expect(screen.getByRole('button', { name: 'org.notifications.preferencesTab.saveButton' })).toBeDisabled()
   })
 })

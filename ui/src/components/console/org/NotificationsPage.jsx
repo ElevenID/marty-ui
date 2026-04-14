@@ -27,6 +27,7 @@ import {
   Switch,
   FormControlLabel,
   Divider,
+  Alert,
 } from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete';
 import AddIcon from '@mui/icons-material/Add';
@@ -47,6 +48,7 @@ import ErrorState from '../../common/ErrorState';
 import EmptyState from '../../common/EmptyState';
 import notificationsApi from '../../../services/notificationsApi';
 import { useNotifications } from '../../../hooks/useNotifications';
+import { usePermissions } from '../../../hooks/usePermissions';
 
 /**
  * NotificationsPage - Full page for managing notifications and alert rules
@@ -59,12 +61,15 @@ import { useNotifications } from '../../../hooks/useNotifications';
 function NotificationsPage() {
   const { t } = useTranslation('console');
   const [activeTab, setActiveTab] = useState(0);
+  const { can } = usePermissions();
+  const canManageNotifications = can('notification', 'send');
   
   return (
     <ResourcePage
       title={t('org.notifications.title')}
       subtitle={t('org.notifications.subtitle')}
       icon={<NotificationsIcon />}
+      pageTestId="org.notifications.page"
     >
       <Paper sx={{ mb: 2 }}>
         <Tabs value={activeTab} onChange={(e, val) => setActiveTab(val)}>
@@ -75,8 +80,8 @@ function NotificationsPage() {
       </Paper>
 
       {activeTab === 0 && <NotificationsTab t={t} />}
-      {activeTab === 1 && <AlertRulesTab t={t} />}
-      {activeTab === 2 && <PreferencesTab t={t} />}
+      {activeTab === 1 && <AlertRulesTab t={t} canManageNotifications={canManageNotifications} />}
+      {activeTab === 2 && <PreferencesTab t={t} canManageNotifications={canManageNotifications} />}
     </ResourcePage>
   );
 }
@@ -274,7 +279,7 @@ function NotificationsTab({ t }) {
   );
 }
 
-function AlertRulesTab({ t }) {
+function AlertRulesTab({ t, canManageNotifications }) {
   const [rules, setRules] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -302,16 +307,19 @@ function AlertRulesTab({ t }) {
   };
 
   const handleCreate = () => {
+    if (!canManageNotifications) return;
     setEditingRule(null);
     setDialogOpen(true);
   };
 
   const handleEdit = (rule) => {
+    if (!canManageNotifications) return;
     setEditingRule(rule);
     setDialogOpen(true);
   };
 
   const handleDelete = async (ruleId) => {
+    if (!canManageNotifications) return;
     if (!confirm(t('org.notifications.alertRulesTab.confirmDelete'))) return;
     try {
       await notificationsApi.deleteAlertRule(ruleId);
@@ -324,6 +332,7 @@ function AlertRulesTab({ t }) {
   };
 
   const handleSave = async (ruleData) => {
+    if (!canManageNotifications) return;
     try {
       if (editingRule) {
         await notificationsApi.updateAlertRule(editingRule.id, ruleData);
@@ -342,11 +351,19 @@ function AlertRulesTab({ t }) {
 
   return (
     <>
-      <Box sx={{ mb: 2, display: 'flex', justifyContent: 'flex-end' }}>
-        <Button variant="contained" startIcon={<AddIcon />} onClick={handleCreate}>
-          {t('org.notifications.alertRulesTab.create')}
-        </Button>
-      </Box>
+      {!canManageNotifications && (
+        <Alert severity="info" sx={{ mb: 2 }}>
+          {t('org.notifications.alertRulesTab.readOnlyNotice')}
+        </Alert>
+      )}
+
+      {canManageNotifications && (
+        <Box sx={{ mb: 2, display: 'flex', justifyContent: 'flex-end' }}>
+          <Button variant="contained" startIcon={<AddIcon />} onClick={handleCreate}>
+            {t('org.notifications.alertRulesTab.create')}
+          </Button>
+        </Box>
+      )}
 
       {loading ? (
         <TableSkeleton rows={5} columns={4} showActions />
@@ -357,11 +374,11 @@ function AlertRulesTab({ t }) {
           icon={NotificationsIcon}
           title={t('org.notifications.alertRulesTab.empty.title')}
           description={t('org.notifications.alertRulesTab.empty.description')}
-          action={
+          action={canManageNotifications ? (
             <Button variant="contained" startIcon={<AddIcon />} onClick={handleCreate}>
               {t('org.notifications.alertRulesTab.createFirst')}
             </Button>
-          }
+          ) : null}
         />
       ) : (
         <TableContainer component={Paper}>
@@ -396,12 +413,16 @@ function AlertRulesTab({ t }) {
                     />
                   </TableCell>
                   <TableCell align="right">
-                    <IconButton size="small" onClick={() => handleEdit(rule)}>
-                      <EditIcon fontSize="small" />
-                    </IconButton>
-                    <IconButton size="small" onClick={() => handleDelete(rule.id)}>
-                      <DeleteIcon fontSize="small" />
-                    </IconButton>
+                    {canManageNotifications && (
+                      <>
+                        <IconButton size="small" onClick={() => handleEdit(rule)}>
+                          <EditIcon fontSize="small" />
+                        </IconButton>
+                        <IconButton size="small" onClick={() => handleDelete(rule.id)}>
+                          <DeleteIcon fontSize="small" />
+                        </IconButton>
+                      </>
+                    )}
                   </TableCell>
                 </TableRow>
               ))}
@@ -500,7 +521,7 @@ function AlertRuleDialog({ open, rule, onClose, onSave, t }) {
   );
 }
 
-function PreferencesTab({ t }) {
+function PreferencesTab({ t, canManageNotifications }) {
   const [preferences, setPreferences] = useState({
     email_notifications: true,
     push_notifications: false,
@@ -555,6 +576,7 @@ function PreferencesTab({ t }) {
           <Switch
             checked={preferences.email_notifications}
             onChange={(e) => setPreferences({ ...preferences, email_notifications: e.target.checked })}
+            disabled={!canManageNotifications}
           />
         }
         label={t('org.notifications.preferencesTab.emailNotifications.label')}
@@ -569,6 +591,7 @@ function PreferencesTab({ t }) {
           <Switch
             checked={preferences.push_notifications}
             onChange={(e) => setPreferences({ ...preferences, push_notifications: e.target.checked })}
+            disabled={!canManageNotifications}
           />
         }
         label={t('org.notifications.preferencesTab.pushNotifications.label')}
@@ -583,6 +606,7 @@ function PreferencesTab({ t }) {
           <Switch
             checked={preferences.digest_enabled}
             onChange={(e) => setPreferences({ ...preferences, digest_enabled: e.target.checked })}
+            disabled={!canManageNotifications}
           />
         }
         label={t('org.notifications.preferencesTab.digest.label')}
@@ -599,6 +623,7 @@ function PreferencesTab({ t }) {
             value={preferences.digest_frequency}
             label={t('org.notifications.preferencesTab.digestFrequency.label')}
             onChange={(e) => setPreferences({ ...preferences, digest_frequency: e.target.value })}
+            disabled={!canManageNotifications}
           >
             <MenuItem value="daily">{t('org.notifications.preferencesTab.digestFrequency.daily')}</MenuItem>
             <MenuItem value="weekly">{t('org.notifications.preferencesTab.digestFrequency.weekly')}</MenuItem>
@@ -607,7 +632,12 @@ function PreferencesTab({ t }) {
       )}
 
       <Box sx={{ mt: 4 }}>
-        <Button variant="contained" onClick={handleSave} disabled={saving}>
+        {!canManageNotifications && (
+          <Alert severity="info" sx={{ mb: 2 }}>
+            {t('org.notifications.preferencesTab.readOnlyNotice')}
+          </Alert>
+        )}
+        <Button variant="contained" onClick={handleSave} disabled={saving || !canManageNotifications}>
           {saving ? t('org.notifications.preferencesTab.saving') : t('org.notifications.preferencesTab.saveButton')}
         </Button>
       </Box>

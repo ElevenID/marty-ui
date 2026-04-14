@@ -135,7 +135,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=services
 
   build-ui:
-    name: Build & Push UI Image
+    name: Build & Push UI Images
     needs: [determine-tag]
     runs-on: ubuntu-latest
     permissions:
@@ -150,7 +150,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push
+      - name: Build and push public UI image
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -161,6 +161,20 @@ jobs:
             ${{ env.IMAGE_PREFIX }}/ui:latest
           cache-from: type=gha,scope=ui
           cache-to: type=gha,mode=max,scope=ui
+
+      - name: Build and push self-host UI image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/ui.Dockerfile
+          push: true
+          build-args: |
+            UI_VARIANT=selfhost
+          tags: |
+            ${{ env.IMAGE_PREFIX }}/ui-selfhost:${{ needs.determine-tag.outputs.version }}
+            ${{ env.IMAGE_PREFIX }}/ui-selfhost:latest
+          cache-from: type=gha,scope=ui-selfhost
+          cache-to: type=gha,mode=max,scope=ui-selfhost
 
   build-migrations:
     name: Build & Push Migrations Image

@@ -219,12 +219,14 @@ function TeamPage() {
       icon={<PeopleIcon />}
       tabs={getOrgTabs(t)}
       breadcrumbs={getBreadcrumbs(t)}
+      pageTestId="org.team.page"
       actions={
         <PermissionGate resource="team" action="invite">
           <Button
             variant="contained"
             startIcon={<AddIcon />}
             onClick={inviteDialog.open}
+            data-testid="org.team.invite.action"
           >
             {t('org.team.members.actions.invite')}
           </Button>
@@ -345,20 +347,24 @@ function TeamPage() {
                           {invite.expires_at ? formatDistanceToNow(new Date(invite.expires_at), { addSuffix: true }) : '—'}
                         </TableCell>
                         <TableCell align="right">
-                          <IconButton
-                            size="small"
-                            onClick={() => handleResendInvite(invite.id)}
-                            title={t('org.team.invites.actions.resend')}
-                          >
-                            <SendIcon fontSize="small" />
-                          </IconButton>
-                          <IconButton
-                            size="small"
-                            onClick={() => handleRevokeInvite(invite.id)}
-                            title={t('org.team.invites.actions.revoke')}
-                          >
-                            <CancelIcon fontSize="small" />
-                          </IconButton>
+                          {hasPermission('team', 'manage') && !isMartyOrg && (
+                            <>
+                              <IconButton
+                                size="small"
+                                onClick={() => handleResendInvite(invite.id)}
+                                title={t('org.team.invites.actions.resend')}
+                              >
+                                <SendIcon fontSize="small" />
+                              </IconButton>
+                              <IconButton
+                                size="small"
+                                onClick={() => handleRevokeInvite(invite.id)}
+                                title={t('org.team.invites.actions.revoke')}
+                              >
+                                <CancelIcon fontSize="small" />
+                              </IconButton>
+                            </>
+                          )}
                         </TableCell>
                       </TableRow>
                     ))}

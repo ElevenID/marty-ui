@@ -6,6 +6,7 @@ Calls the org service internal API to update plan tier.
 
 from __future__ import annotations
 
+from datetime import datetime
 import logging
 import os
 
@@ -24,12 +25,24 @@ class OrgServiceClient(OrgServicePort):
             "ORGANIZATION_SERVICE_URL", "http://localhost:8002"
         )
 
-    async def update_plan(self, organization_id: str, plan_tier: str) -> None:
+    async def update_plan(
+        self,
+        organization_id: str,
+        plan_tier: str,
+        plan_expires_at: datetime | None = None,
+        settings_patch: dict[str, object] | None = None,
+    ) -> None:
         url = f"{self._base_url}/internal/v1/organizations/{organization_id}/plan"
+        payload: dict[str, object] = {"plan_tier": plan_tier}
+        if plan_expires_at is not None:
+            payload["plan_expires_at"] = plan_expires_at.isoformat()
+        if settings_patch is not None:
+            payload["settings_patch"] = settings_patch
+
         async with httpx.AsyncClient() as client:
             resp = await client.put(
                 url,
-                json={"plan_tier": plan_tier},
+                json=payload,
                 timeout=10.0,
             )
             resp.raise_for_status()

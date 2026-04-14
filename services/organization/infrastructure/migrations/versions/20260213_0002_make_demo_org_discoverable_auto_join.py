@@ -7,6 +7,7 @@ Create Date: 2026-02-13 00:00:00.000000+00:00
 
 from alembic import op
 import sqlalchemy as sa
+from marty_common.migration_profile import skip_demo_migrations
 
 
 # revision identifiers, used by Alembic.
@@ -17,6 +18,9 @@ depends_on = None
 
 
 def upgrade() -> None:
+    if skip_demo_migrations():
+        return
+
     # Backfill demonstration organizations so they are:
     # - publicly discoverable
     # - open to automatic membership activation (no approval gate)
@@ -39,6 +43,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    if skip_demo_migrations():
+        return
+
     # Revert demonstration organizations to invite-only and hidden defaults.
     op.execute(
         sa.text(

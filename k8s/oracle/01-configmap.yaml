@@ -1,6 +1,7 @@
 ---
 # ========================================================
-# Production ConfigMap — non-sensitive environment config
+# Kubernetes self-host reference ConfigMap
+# Non-sensitive environment config shared by the runtime and migration job.
 # ========================================================
 apiVersion: v1
 kind: ConfigMap
@@ -10,42 +11,27 @@ metadata:
   labels:
     app.kubernetes.io/part-of: marty-platform
 data:
-  # --------------------------------------------------------
-  # Core
-  # --------------------------------------------------------
   ENVIRONMENT: "production"
   LOG_LEVEL: "INFO"
 
-  # --------------------------------------------------------
-  # Public domain (elevenidllc.com)
-  # --------------------------------------------------------
-  PUBLIC_DOMAIN: "elevenidllc.com"
-  UI_BASE_URL: "https://elevenidllc.com"
-  PUBLIC_API_URL: "https://api.elevenidllc.com"
+  PUBLIC_DOMAIN: "${PUBLIC_DOMAIN}"
+  UI_BASE_URL: "${UI_BASE_URL}"
+  PUBLIC_API_URL: "${PUBLIC_API_URL}"
 
-  # --------------------------------------------------------
-  # Keycloak
-  # --------------------------------------------------------
-  KEYCLOAK_REALM: "11id"
-  KC_HOSTNAME: "auth.elevenidllc.com"
-  KC_HOSTNAME_PORT: "443"
-  OIDC_CLIENT_ID: "marty-ui"
-  OIDC_ISSUER_URL_INTERNAL: "http://keycloak:8080/realms/11id"
-  OIDC_ISSUER_URL_EXTERNAL: "https://auth.elevenidllc.com/realms/11id"
-  OIDC_REDIRECT_URI: "https://elevenidllc.com/v1/auth/callback"
-  OIDC_POST_LOGOUT_REDIRECT_URI: "https://elevenidllc.com/"
+  KEYCLOAK_REALM: "${KEYCLOAK_REALM}"
+  KC_HOSTNAME: "${KC_HOSTNAME}"
+  OIDC_CLIENT_ID: "${OIDC_CLIENT_ID}"
+  OIDC_ISSUER_URL: "http://keycloak:8080/realms/${KEYCLOAK_REALM}"
+  OIDC_EXTERNAL_ISSUER_URL: "${OIDC_ISSUER_URL_EXTERNAL}"
+  OIDC_REDIRECT_URI: "${OIDC_REDIRECT_URI}"
+  OIDC_POST_LOGOUT_REDIRECT_URI: "${OIDC_POST_LOGOUT_REDIRECT_URI}"
   KEYCLOAK_ADMIN_URL: "http://keycloak:8080"
 
-  # --------------------------------------------------------
-  # Auth service
-  # --------------------------------------------------------
   COOKIE_SECURE: "true"
+  COOKIE_SAMESITE: "${COOKIE_SAMESITE}"
   SESSION_TTL_SECONDS: "86400"
   AUTH_SERVICE_INTERNAL_URL: "http://auth:8001"
 
-  # --------------------------------------------------------
-  # Service URLs (internal cluster DNS)
-  # --------------------------------------------------------
   AUTH_SERVICE_URL: "http://auth:8001"
   ORGANIZATION_SERVICE_URL: "http://organization:8002"
   CREDENTIAL_TEMPLATE_SERVICE_URL: "http://credential-template:8003"
@@ -57,15 +43,13 @@ data:
   PRESENTATION_POLICY_SERVICE_URL: "http://presentation-policy:8009"
   DEPLOYMENT_PROFILE_SERVICE_URL: "http://deployment-profile:8010"
   FLOW_SERVICE_URL: "http://flow:8011"
+  VERIFICATION_SERVICE_URL: "http://verification:8012"
+  REVOCATION_PROFILE_SERVICE_URL: "http://revocation-profile:8013"
+  DEVICE_REGISTRATION_SERVICE_URL: "http://device-registration:8014"
+  BILLING_SERVICE_URL: "http://billing:8016"
 
-  # --------------------------------------------------------
-  # CORS — allow UI domain
-  # --------------------------------------------------------
-  CORS_ORIGINS: "https://elevenidllc.com,https://api.elevenidllc.com"
+  CORS_ORIGINS: "${CORS_ORIGINS}"
 
-  # --------------------------------------------------------
-  # Database
-  # --------------------------------------------------------
   POSTGRES_DB: "marty"
   POSTGRES_USER: "marty"
   POSTGRES_HOST: "postgres"
@@ -73,25 +57,31 @@ data:
   KEYCLOAK_DB: "keycloak"
   KEYCLOAK_DB_USER: "keycloak"
 
-  # --------------------------------------------------------
-  # Redis
-  # --------------------------------------------------------
   REDIS_URL: "redis://redis:6379/0"
   REDIS_DB_GATEWAY: "2"
 
-  # --------------------------------------------------------
-  # RabbitMQ
-  # --------------------------------------------------------
   RABBITMQ_USER: "marty"
   RABBITMQ_VHOST: "/"
 
-  # --------------------------------------------------------
-  # SMTP (override in secrets for credentials)
-  # --------------------------------------------------------
-  SMTP_HOST: "smtp.mailgun.org"
-  SMTP_PORT: "587"
+  SMTP_HOST: "${SMTP_HOST}"
+  SMTP_PORT: "${SMTP_PORT}"
 
-  # --------------------------------------------------------
-  # Credential login policy seed value
-  # --------------------------------------------------------
-  CREDENTIAL_LOGIN_POLICY_ID: "50000000-0000-0000-0000-000000000001"
+  CREDENTIAL_LOGIN_POLICY_ID: "${CREDENTIAL_LOGIN_POLICY_ID}"
+  BAO_ADDR: "${BAO_ADDR}"
+  UNIVERSAL_RESOLVER_URL: "${UNIVERSAL_RESOLVER_URL}"
+
+  MARTY_MIGRATION_PROFILE: "${MARTY_MIGRATION_PROFILE}"
+  MARTY_ORG_ID: "${MARTY_ORG_ID}"
+  MARTY_ORG_ADMIN_EMAIL: "${MARTY_ORG_ADMIN_EMAIL}"
+  KEYCLOAK_REMOVE_DEMO_USERS: "${KEYCLOAK_REMOVE_DEMO_USERS}"
+  MARTY_LICENSE_ENFORCEMENT: "${MARTY_LICENSE_ENFORCEMENT}"
+  MARTY_LICENSE_REQUIRED_ISSUER: "${MARTY_LICENSE_REQUIRED_ISSUER}"
+  MARTY_LICENSE_REQUIRED_PLAN_TIER: "${MARTY_LICENSE_REQUIRED_PLAN_TIER}"
+  MARTY_LICENSE_REQUIRED_PRODUCTS: "${MARTY_LICENSE_REQUIRED_PRODUCTS}"
+  RATE_LIMIT_RPM: "${RATE_LIMIT_RPM}"
+
+  SQUARE_ENVIRONMENT: "${SQUARE_ENVIRONMENT}"
+  SQUARE_LOCATION_ID: "${SQUARE_LOCATION_ID}"
+  SQUARE_PLAN_STARTER_ID: "${SQUARE_PLAN_STARTER_ID}"
+  SQUARE_PLAN_PROFESSIONAL_ID: "${SQUARE_PLAN_PROFESSIONAL_ID}"
+  SQUARE_PLAN_ENTERPRISE_ID: "${SQUARE_PLAN_ENTERPRISE_ID}"

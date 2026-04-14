@@ -8,6 +8,7 @@ verification using mock ports (no DB, no Square, no network).
 from __future__ import annotations
 
 import base64
+from datetime import datetime
 import hashlib
 import hmac as hmac_mod
 import json
@@ -139,6 +140,7 @@ class FakePaymentProvider(PaymentProviderPort):
         self.created_subscriptions: list[dict] = []
         self.canceled: list[str] = []
         self.plan_changes: list[dict] = []
+        self.current_period_end = "2026-05-13T00:00:00+00:00"
 
     async def create_customer(self, org_id: str, email: str) -> str:
         cid = f"sq-cust-{org_id}"
@@ -148,7 +150,10 @@ class FakePaymentProvider(PaymentProviderPort):
     async def create_subscription(
         self, customer_id: str, plan_tier: str, card_nonce: str
     ) -> dict:
-        data = {"subscription_id": f"sq-sub-{customer_id}"}
+        data = {
+            "subscription_id": f"sq-sub-{customer_id}",
+            "current_period_end": self.current_period_end,
+        }
         self.created_subscriptions.append(data)
         return data
 
@@ -156,7 +161,11 @@ class FakePaymentProvider(PaymentProviderPort):
         self.canceled.append(subscription_id)
 
     async def change_plan(self, subscription_id: str, new_plan_tier: str) -> dict:
-        data = {"subscription_id": subscription_id, "new_plan": new_plan_tier}
+        data = {
+            "subscription_id": subscription_id,
+            "new_plan": new_plan_tier,
+            "current_period_end": self.current_period_end,
+        }
         self.plan_changes.append(data)
         return data
 
@@ -166,10 +175,23 @@ class FakePaymentProvider(PaymentProviderPort):
 
 class FakeOrgService(OrgServicePort):
     def __init__(self) -> None:
-        self.updates: list[tuple[str, str]] = []
+        self.updates: list[dict[str, object]] = []
 
-    async def update_plan(self, organization_id: str, plan_tier: str) -> None:
-        self.updates.append((organization_id, plan_tier))
+    async def update_plan(
+        self,
+        organization_id: str,
+        plan_tier: str,
+        plan_expires_at: datetime | None = None,
+        settings_patch: dict[str, object] | None = None,
+    ) -> None:
+        self.updates.append(
+            {
+                "organization_id": organization_id,
+                "plan_tier": plan_tier,
+                "plan_expires_at": plan_expires_at,
+                "settings_patch": settings_patch,
+            }
+        )
 
 
 class FakeEventPublisher(EventPublisherPort):
@@ -359,7 +381,41 @@ class TestCreateSubscription:
                 payment_nonce="nonce-e",
             )
         )
-        assert ("org-1", "enterprise") in org_service.updates
+        assert any(
+            update["organization_id"] == "org-1"
+            and update["plan_tier"] == "enterprise"
+            and update["settings_patch"] == {
+                "pilot_retention_enabled": False,
+                "pilot_retention_days": None,
+                "pilot_retention_last_purged_at": None,
+                "audit_retention_days": None,
+                "data_retention_mode": "standard",
+            }
+            for update in org_service.updates
+        )
+
+    @pytest.mark.asyncio
+    async def test_starter_subscription_sets_hosted_pilot_metadata(self, use_case, org_service):
+        await use_case.create_subscription(
+            CreateSubscriptionCommand(
+                organization_id="org-1",
+                plan_tier="starter",
+                payment_nonce="nonce-starter",
+            )
+        )
+
+        assert any(
+            update["organization_id"] == "org-1"
+            and update["plan_tier"] == "starter"
+            and update["plan_expires_at"] is not None
+            and update["settings_patch"] == {
+                "pilot_retention_enabled": True,
+                "pilot_retention_days": 30,
+                "audit_retention_days": 30,
+                "data_retention_mode": "hosted_pilot_rolling_purge",
+            }
+            for update in org_service.updates
+        )
 
 
 class TestChangePlan:
@@ -392,6 +448,32 @@ class TestChangePlan:
                 ChangePlanCommand(organization_id="org-1", new_plan_tier="professional")
             )
 
+    @pytest.mark.asyncio
+    async def test_change_plan_off_hosted_pilot_clears_stale_expiry(self, use_case, repos, provider, org_service):
+        provider.current_period_end = None
+        sub = Subscription.create("org-1", "cust-1", "starter", "sq-sub-1")
+        sub.current_period_end = datetime.fromisoformat("2026-05-13T00:00:00+00:00")
+        await repos["subscription"].save(sub)
+
+        result = await use_case.change_plan(
+            ChangePlanCommand(organization_id="org-1", new_plan_tier="professional")
+        )
+
+        assert result.current_period_end is None
+        assert any(
+            update["organization_id"] == "org-1"
+            and update["plan_tier"] == "professional"
+            and update["plan_expires_at"] is None
+            and update["settings_patch"] == {
+                "pilot_retention_enabled": False,
+                "pilot_retention_days": None,
+                "pilot_retention_last_purged_at": None,
+                "audit_retention_days": None,
+                "data_retention_mode": "standard",
+            }
+            for update in org_service.updates
+        )
+
 
 class TestCancelSubscription:
     @pytest.mark.asyncio
@@ -405,6 +487,29 @@ class TestCancelSubscription:
         assert result.cancel_at_period_end is True
         assert len(provider.canceled) == 1
         assert len(publisher.events) == 1
+
+    @pytest.mark.asyncio
+    async def test_cancel_at_period_end_preserves_plan_with_expiry(self, use_case, repos, org_service):
+        sub = Subscription.create("org-1", "cust-1", "starter", "sq-sub-1")
+        await repos["subscription"].save(sub)
+
+        result = await use_case.cancel_subscription(
+            CancelSubscriptionCommand(organization_id="org-1", at_period_end=True)
+        )
+
+        assert result.current_period_end is not None
+        assert any(
+            update["organization_id"] == "org-1"
+            and update["plan_tier"] == "starter"
+            and update["plan_expires_at"] == result.current_period_end
+            and update["settings_patch"] == {
+                "pilot_retention_enabled": True,
+                "pilot_retention_days": 30,
+                "audit_retention_days": 30,
+                "data_retention_mode": "hosted_pilot_rolling_purge",
+            }
+            for update in org_service.updates
+        )
 
     @pytest.mark.asyncio
     async def test_rejects_when_no_subscription(self, use_case):
@@ -459,7 +564,11 @@ class TestWebhookHandlers:
 
         stored = await repos["subscription"].get_by_org_id("org-1")
         assert stored.status == SubscriptionStatus.ACTIVE
-        assert ("org-1", "professional") in org_service.updates
+        assert any(
+            update["organization_id"] == "org-1"
+            and update["plan_tier"] == "professional"
+            for update in org_service.updates
+        )
 
     @pytest.mark.asyncio
     async def test_payment_succeeded_unknown_sub_is_noop(self, use_case, repos):
@@ -489,7 +598,19 @@ class TestWebhookHandlers:
 
         stored = await repos["subscription"].get_by_org_id("org-1")
         assert stored.status == SubscriptionStatus.CANCELED
-        assert ("org-1", "free") in org_service.updates
+        assert any(
+            update["organization_id"] == "org-1"
+            and update["plan_tier"] == "free"
+            and update["plan_expires_at"] is None
+            and update["settings_patch"] == {
+                "pilot_retention_enabled": False,
+                "pilot_retention_days": None,
+                "pilot_retention_last_purged_at": None,
+                "audit_retention_days": None,
+                "data_retention_mode": "standard",
+            }
+            for update in org_service.updates
+        )
         assert len(publisher.events) == 1
 
 

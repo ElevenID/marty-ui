@@ -1,8 +1,11 @@
-# OpenWallet Foundation Demo - Enhanced UI Application
+# Marty UI web application image
 FROM oven/bun:alpine AS builder
+
+ARG UI_VARIANT=public
 
 # Set environment variables
 ENV NODE_ENV=production
+ENV VITE_UI_VARIANT=${UI_VARIANT}
 ENV VITE_ISSUER_API=http://localhost:8080
 ENV VITE_VERIFIER_API=http://localhost:8081
 ENV VITE_WALLET_API=http://localhost:8082
@@ -23,7 +26,7 @@ RUN bun install
 COPY ui/ .
 
 # Build the application
-RUN bun run build
+RUN if [ "$UI_VARIANT" = "selfhost" ]; then bun run build:selfhost && mv dist-selfhost dist-final; else bun run build && mv dist dist-final; fi
 
 # Use nginx to serve the built application
 FROM nginx:alpine
@@ -31,7 +34,7 @@ FROM nginx:alpine
 # Copy both nginx configs - use build arg to select which one
 # Default to PROD for safety - must explicitly opt-in to dev config
 ARG NGINX_CONFIG=nginx.prod.conf
-COPY --from=builder /app/dist /usr/share/nginx/html
+COPY --from=builder /app/dist-final /usr/share/nginx/html
 COPY ui/${NGINX_CONFIG} /etc/nginx/conf.d/default.conf
 
 # Expose port

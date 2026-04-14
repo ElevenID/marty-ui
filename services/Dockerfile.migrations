@@ -23,7 +23,8 @@ RUN pip install --no-cache-dir \
     cedarpy \
     fastapi \
     pydantic \
-    httpx
+    httpx \
+    cryptography>=41.0.0
 
 # Install MMF dependencies first using only pyproject.toml (layer is cached until pyproject.toml changes)
 COPY marty-microservices-framework/pyproject.toml /tmp/mmf-pyproject.toml
@@ -38,8 +39,12 @@ RUN pip install --no-cache-dir --no-deps /tmp/mmf && rm -rf /tmp/mmf
 COPY marty-ui/packages/marty_common /app/packages/marty_common
 ENV PYTHONPATH="/app/packages:${PYTHONPATH}"
 
+# Copy shared runtime helpers
+COPY marty-ui/scripts/load-secrets-env.sh /app/load-secrets-env.sh
+
 # Copy migration infrastructure
 COPY marty-ui/services/run_all_migrations.py /app/
+COPY marty-ui/scripts/run-migrations-with-secrets.sh /app/run-migrations-with-secrets.sh
 
 # Copy all service infrastructure directories (note: source dirs use hyphens, dest dirs use underscores for Python imports)
 COPY marty-ui/services/organization/infrastructure /app/organization/infrastructure/
@@ -70,6 +75,8 @@ COPY marty-ui/services/billing/infrastructure /app/billing/infrastructure/
 COPY marty-ui/services/billing/manage_migrations.py /app/billing/
 
 # Default command runs all migrations
-CMD ["python", "run_all_migrations.py"]
+RUN chmod +x /app/run-migrations-with-secrets.sh
+
+CMD ["/app/run-migrations-with-secrets.sh"]
 
 

@@ -8,6 +8,7 @@
  * - Environment settings
  */
 import { get, getErrorMessage } from './api';
+import { post } from './api';
 import { getCriticalEvents as getAuditCriticalEvents } from './auditApi';
 
 const BASE_PATH = '/v1/organizations';
@@ -168,17 +169,74 @@ export async function getOrganizationLifecycle(organizationId) {
     return {
       createdAt: response?.created_at || null,
       complianceProfiles: response?.compliance_profiles || [],
+      planTier: response?.plan_tier || 'free',
+      planExpiresAt: response?.plan_expires_at || null,
+      commercialOffer: response?.commercial_offer || 'Developer Sandbox',
       dataRetentionMode: response?.data_retention_mode || 'standard',
       auditRetentionDays: response?.audit_retention_days || 90,
+      pilotRetention: response?.pilot_retention ? {
+        enabled: Boolean(response?.pilot_retention?.enabled),
+        windowDays: response?.pilot_retention?.window_days || 30,
+        scopeSummary: response?.pilot_retention?.scope_summary || '',
+        scopeItems: response?.pilot_retention?.scope_items || [],
+        accessBehavior: response?.pilot_retention?.access_behavior || '',
+        lastPurgedAt: response?.pilot_retention?.last_purged_at || null,
+        cutoffAt: response?.pilot_retention?.cutoff_at || null,
+        nextExpiryAt: response?.pilot_retention?.next_expiry_at || null,
+        oldestRetainedRecordAt: response?.pilot_retention?.oldest_retained_record_at || null,
+        trackedScope: response?.pilot_retention?.tracked_scope || [],
+        eligibleForPurge: {
+          issuanceTransactions: response?.pilot_retention?.eligible_for_purge?.issuance_transactions || 0,
+          applications: response?.pilot_retention?.eligible_for_purge?.applications || 0,
+          authorizationSessions: response?.pilot_retention?.eligible_for_purge?.authorization_sessions || 0,
+          issuanceEvents: response?.pilot_retention?.eligible_for_purge?.issuance_events || 0,
+          issuedCredentials: response?.pilot_retention?.eligible_for_purge?.issued_credentials || 0,
+          total: response?.pilot_retention?.eligible_for_purge?.total || 0,
+        },
+      } : null,
     };
   } catch (error) {
     console.error('Failed to fetch organization lifecycle:', getErrorMessage(error));
     return {
       createdAt: null,
       complianceProfiles: [],
+      planTier: 'free',
+      planExpiresAt: null,
+      commercialOffer: 'Developer Sandbox',
       dataRetentionMode: 'standard',
       auditRetentionDays: 90,
+      pilotRetention: null,
     };
+  }
+}
+
+/**
+ * Run a Hosted Pilot purge for the organization.
+ * @param {string} organizationId - Organization ID
+ * @returns {Promise<Object>} Purge result
+ */
+export async function runHostedPilotPurge(organizationId) {
+  try {
+    const response = await post(`${BASE_PATH}/${organizationId}/lifecycle/purge`);
+    return {
+      organizationId: response?.organization_id || organizationId,
+      retentionDays: response?.retention_days || 30,
+      purgedAt: response?.purged_at || null,
+      nextExpiryAt: response?.next_expiry_at || null,
+      oldestRetainedRecordAt: response?.oldest_retained_record_at || null,
+      trackedScope: response?.tracked_scope || [],
+      purgedRecords: {
+        issuanceTransactions: response?.purged_records?.issuance_transactions || 0,
+        applications: response?.purged_records?.applications || 0,
+        authorizationSessions: response?.purged_records?.authorization_sessions || 0,
+        issuanceEvents: response?.purged_records?.issuance_events || 0,
+        issuedCredentials: response?.purged_records?.issued_credentials || 0,
+        total: response?.purged_records?.total || 0,
+      },
+    };
+  } catch (error) {
+    console.error('Failed to run Hosted Pilot purge:', getErrorMessage(error));
+    throw error;
   }
 }
 

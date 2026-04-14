@@ -7,7 +7,14 @@
 
 import { Box, Typography, Button, Card, CardContent, Grid, List, ListItem, ListItemIcon, ListItemText, Paper, Chip, Divider } from '@mui/material';
 import { useNavigate } from 'react-router-dom';
+import {
+  DISABLE_PUBLIC_GET_STARTED_BUTTONS,
+  DISABLE_PUBLIC_PRICING_BUTTONS,
+  SHOW_PUBLIC_GET_STARTED_BUTTONS,
+  SHOW_PUBLIC_PRICING_BUTTONS,
+} from '@ui-public-config';
 import { SEOHead, softwareApplicationSchema } from '../seo';
+import FutureFeatureButton from '../FutureFeatureButton';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import VerifiedUserIcon from '@mui/icons-material/VerifiedUser';
 import CloudIcon from '@mui/icons-material/Cloud';
@@ -71,14 +78,22 @@ function VerifiableCredentialApiPage() {
           Cryptographically verify W3C Verifiable Credentials at scale
         </Typography>
         <Box sx={{ display: 'flex', gap: 2, justifyContent: 'center', flexWrap: 'wrap' }}>
-          <Button
-            variant="contained"
-            size="large"
-            sx={{ bgcolor: 'white', color: 'primary.main', '&:hover': { bgcolor: 'grey.100' } }}
-            onClick={() => navigate('/pricing')}
-          >
-            Start Free
-          </Button>
+          {SHOW_PUBLIC_GET_STARTED_BUTTONS && (
+            <FutureFeatureButton
+              variant="contained"
+              size="large"
+              disabled={DISABLE_PUBLIC_GET_STARTED_BUTTONS}
+              sx={{ bgcolor: 'white', color: 'primary.main', '&:hover': { bgcolor: 'grey.100' } }}
+              onClick={() => navigate('/pricing')}
+              disabledSx={{
+                bgcolor: 'rgba(255, 255, 255, 0.16)',
+                color: 'rgba(255, 255, 255, 0.62)',
+                border: '1px solid rgba(255, 255, 255, 0.18)',
+              }}
+            >
+              Start Free
+            </FutureFeatureButton>
+          )}
           <Button
             variant="outlined"
             size="large"
@@ -331,17 +346,29 @@ function VerifiableCredentialApiPage() {
           Start Verifying Verifiable Credentials
         </Typography>
         <Typography variant="body1" sx={{ mb: 4, opacity: 0.9 }}>
-          Free tier available. No credit card required.
+          {DISABLE_PUBLIC_PRICING_BUTTONS
+            ? 'Pricing and onboarding are coming soon for production deployments. Explore the API and documentation in the meantime.'
+            : SHOW_PUBLIC_PRICING_BUTTONS
+            ? 'Free tier available. No credit card required.'
+            : 'Explore the API and documentation while pricing access is being finalized.'}
         </Typography>
         <Box sx={{ display: 'flex', gap: 2, justifyContent: 'center', flexWrap: 'wrap' }}>
-          <Button
-            variant="contained"
-            size="large"
-            sx={{ bgcolor: 'white', color: 'primary.main', '&:hover': { bgcolor: 'grey.100' } }}
-            onClick={() => navigate('/pricing')}
-          >
-            View Pricing
-          </Button>
+          {SHOW_PUBLIC_PRICING_BUTTONS && (
+            <FutureFeatureButton
+              variant="contained"
+              size="large"
+              disabled={DISABLE_PUBLIC_PRICING_BUTTONS}
+              sx={{ bgcolor: 'white', color: 'primary.main', '&:hover': { bgcolor: 'grey.100' } }}
+              onClick={() => navigate('/pricing')}
+              disabledSx={{
+                bgcolor: 'rgba(255, 255, 255, 0.16)',
+                color: 'rgba(255, 255, 255, 0.62)',
+                border: '1px solid rgba(255, 255, 255, 0.18)',
+              }}
+            >
+              View Pricing
+            </FutureFeatureButton>
+          )}
           <Button
             variant="outlined"
             size="large"

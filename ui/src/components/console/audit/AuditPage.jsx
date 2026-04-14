@@ -54,6 +54,7 @@ import auditApi from '../../../services/auditApi';
 import { useAuth } from '../../../hooks/useAuth';
 import { useConsole } from '../../../contexts/ConsoleContext';
 import { useNotifications } from '../../../hooks/useNotifications';
+import { usePermissions } from '../../../hooks/usePermissions';
 
 function AuditPage() {
   const { t } = useTranslation('console');
@@ -86,6 +87,8 @@ function AuditPage() {
   const { organizationId } = useAuth();
   const { activeOrgId } = useConsole();
   const effectiveOrgId = activeOrgId || organizationId;
+  const { can } = usePermissions();
+  const canExportAudit = can('audit', 'export');
 
   const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -327,6 +330,7 @@ function AuditPage() {
       title={t('audit.title')}
       description={t('audit.description')}
       breadcrumbs={getBreadcrumbs()}
+      pageTestId="org.audit.page"
       actions={
         <Box sx={{ display: 'flex', gap: 1 }}>
           {savedViews.length > 0 && (
@@ -366,15 +370,18 @@ function AuditPage() {
           >
             {showFilters ? t('audit.hideFilters') : t('audit.showFilters')}
           </Button>
-          <Button
-            variant="outlined"
-            size="small"
-            startIcon={<DownloadIcon />}
-            onClick={handleExport}
-            disabled={exporting}
-          >
-            {exporting ? t('audit.exporting') : t('audit.export')}
-          </Button>
+          {canExportAudit && (
+            <Button
+              variant="outlined"
+              size="small"
+              startIcon={<DownloadIcon />}
+              onClick={handleExport}
+              disabled={exporting}
+              data-testid="org.audit.export.action"
+            >
+              {exporting ? t('audit.exporting') : t('audit.export')}
+            </Button>
+          )}
           <IconButton size="small" onClick={loadEvents}>
             <RefreshIcon />
           </IconButton>

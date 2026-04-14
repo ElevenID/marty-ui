@@ -5,8 +5,13 @@
  * Provides information about the service, pricing tiers, and prompts login.
  */
 
-import { useEffect, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Suspense, lazy, useEffect, useState } from 'react';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import {
+  DISABLE_PUBLIC_PRICING_BUTTONS,
+  SHOW_PUBLIC_PRICING_BUTTONS,
+} from '@ui-public-config';
+import FutureFeatureButton from './FutureFeatureButton';
 import { SEOHead, organizationSchema } from './seo';
 import {
   Box,
@@ -30,7 +35,6 @@ import {
   useMediaQuery,
   useTheme,
 } from '@mui/material';
-import LoginIcon from '@mui/icons-material/Login';
 import FlightTakeoffIcon from '@mui/icons-material/FlightTakeoff';
 import VerifiedUserIcon from '@mui/icons-material/VerifiedUser';
 import SecurityIcon from '@mui/icons-material/Security';
@@ -66,6 +70,13 @@ import {
   AUDIENCE_ROUTING,
   PROOF_STRIP,
   VALUE_PROPOSITION,
+  ECOSYSTEM_SIGNALS,
+  HERO_INTERACTIVE_DEMO,
+  END_USER_EXPERIENCES,
+  DEVELOPER_QUICKSTART,
+  INTERACTIVE_PROOF_LAB,
+  DEPLOYMENT_PLAYBOOKS,
+  DEPLOYMENT_MODELS,
   STANDARDS_INFO,
   PROTOCOL,
   BLOG_POSTS,
@@ -74,7 +85,15 @@ import {
   GUIDE_CHAPTERS,
   GUIDE_ARTICLES_BY_CHAPTER,
 } from '@marty/blog';
-import { UnifiedIdentityFlowDiagram, StandardsStackDiagram, InteractiveProtocolMap } from './diagrams';
+import { UnifiedIdentityFlowDiagram, StandardsStackDiagram, InteractiveProtocolMap, DeploymentModelDiagram } from './diagrams';
+import { verifyVerifierDemoPresentation } from '../application/verifier';
+import { trackEvent } from '../utils/analytics';
+import { Section, SectionHeading } from './landing/LandingSection';
+import {
+  PROOF_LAB_RUNTIME,
+  createProofLabPresentationData,
+  createProofLabRequestPreview,
+} from './landing/proofLabRuntime';
 
 // Fade-in animation style helper
 const fadeInSx = (delay = 0) => ({
@@ -85,40 +104,6 @@ const fadeInSx = (delay = 0) => ({
   animation: `fadeInUp 0.6s ease-out ${delay}s both`,
 });
 
-// Section wrapper with alternating backgrounds and increased spacing
-function Section({ children, bgcolor, sx, ...rest }) {
-  return (
-    <Box
-      sx={{
-        py: { xs: 6, md: 10 },
-        px: { xs: 2, md: 0 },
-        bgcolor: bgcolor || 'transparent',
-        ...sx,
-      }}
-      {...rest}
-    >
-      {children}
-    </Box>
-  );
-}
-
-// Section heading
-function SectionHeading({ children, subtitle, divider, sx }) {
-  return (
-    <Box sx={{ textAlign: 'center', mb: 5, ...sx }}>
-      {divider && <Divider sx={{ mb: 3, maxWidth: 80, mx: 'auto', borderWidth: 2, borderColor: 'primary.main' }} />}
-      <Typography variant="h4" component="h2" fontWeight={800} gutterBottom sx={{ fontSize: { xs: '1.75rem', md: '2.25rem' } }}>
-        {children}
-      </Typography>
-      {subtitle && (
-        <Typography variant="body1" color="text.secondary" sx={{ maxWidth: 700, mx: 'auto' }}>
-          {subtitle}
-        </Typography>
-      )}
-    </Box>
-  );
-}
-
 // Audience path icon mapping
 const AUDIENCE_ICONS = {
   Business: <BusinessIcon sx={{ fontSize: 40 }} />,
@@ -126,13 +111,287 @@ const AUDIENCE_ICONS = {
   Code: <CodeIcon sx={{ fontSize: 40 }} />,
 };
 
-// Product icon mapping
-const PRODUCT_ICONS = {
-  'verification-api': <ApiIcon sx={{ fontSize: 36, color: 'primary.main' }} />,
-  'issuance-api': <FlightTakeoffIcon sx={{ fontSize: 36, color: 'secondary.main' }} />,
-  'kiosk': <SettingsInputAntennaIcon sx={{ fontSize: 36, color: 'warning.main' }} />,
-  'authenticator': <PhoneIphoneIcon sx={{ fontSize: 36, color: 'info.main' }} />,
+const PLAYBOOK_ICONS = {
+  'deploy-age-verification': <VerifiedUserIcon sx={{ fontSize: 32, color: 'success.main' }} />,
+  'deploy-enterprise-access': <BusinessIcon sx={{ fontSize: 32, color: 'primary.main' }} />,
+  'deploy-airline-boarding': <FlightTakeoffIcon sx={{ fontSize: 32, color: 'info.main' }} />,
+  'deploy-membership-credentials': <AccountBalanceIcon sx={{ fontSize: 32, color: 'secondary.main' }} />,
 };
+
+const QUICK_START_PATHS = [
+  {
+    id: 'verify-credentials',
+    role: 'Operations',
+    title: 'Verify Credentials',
+    description: 'Validate credentials from wallets, partner issuers, and digital IDs without repeated document review.',
+    details: ['retail age verification', 'workforce access', 'travel checkpoints'],
+    cta: 'Start Verifying Credentials',
+    path: '/product#verification-api',
+    icon: <VerifiedUserIcon sx={{ fontSize: 36, color: 'primary.main' }} />,
+  },
+  {
+    id: 'issue-credentials',
+    role: 'Issuers',
+    title: 'Issue Credentials',
+    description: 'Create reusable credentials for employees, members, and customers from one governed issuance surface.',
+    details: ['workforce badges', 'Open Badges', 'membership credentials'],
+    cta: 'Issue a Credential',
+    path: '/product#issuance-api',
+    icon: <FlightTakeoffIcon sx={{ fontSize: 36, color: 'secondary.main' }} />,
+  },
+  {
+    id: 'build-with-elevenid',
+    role: 'Developers',
+    title: 'Build With ElevenID',
+    description: 'Integrate verification APIs, wallet presentation flows, and trust registry configuration from the docs path.',
+    details: ['verification API', 'wallet presentation flows', 'trust registry configuration'],
+    cta: 'Read API Docs',
+    path: '/docs',
+    icon: <CodeIcon sx={{ fontSize: 36, color: 'info.main' }} />,
+  },
+];
+
+const ProductCapabilitiesSection = lazy(() => import('./landing/ProductCapabilitiesSection'));
+const DeploymentModelsSection = lazy(() => import('./landing/DeploymentModelsSection'));
+const ProofLabSection = lazy(() => import('./landing/ProofLabSection'));
+const EndUserExperienceSection = lazy(() => import('./landing/EndUserExperienceSection'));
+
+function LazySectionFallback({ bgcolor = 'transparent', minHeight = 260 }) {
+  return (
+    <Section bgcolor={bgcolor}>
+      <Box
+        sx={{
+          minHeight,
+          borderRadius: 3,
+          bgcolor: bgcolor === 'grey.50' ? 'grey.100' : 'grey.50',
+          border: '1px solid',
+          borderColor: 'grey.200',
+        }}
+      />
+    </Section>
+  );
+}
+
+function DeveloperQuickstartSection({ t }) {
+  return (
+    <Section>
+      <Paper
+        elevation={0}
+        sx={{
+          p: { xs: 2.5, md: 4 },
+          borderRadius: 3,
+          background: 'linear-gradient(135deg, #071427 0%, #10233d 100%)',
+          color: 'common.white',
+        }}
+      >
+        <Grid container spacing={4} alignItems="stretch">
+          <Grid item xs={12} md={4}>
+            <Chip
+              label={t('landingPage.developerQuickstart.eyebrow', 'Developer quickstart')}
+              color="info"
+              variant="outlined"
+              sx={{ mb: 2, fontWeight: 700, borderColor: 'rgba(255,255,255,0.22)', color: 'common.white' }}
+            />
+            <Typography variant="h4" fontWeight={800} sx={{ mb: 1.5 }}>
+              {t('landingPage.developerQuickstart.title', DEVELOPER_QUICKSTART.title)}
+            </Typography>
+            <Typography variant="body1" sx={{ mb: 2.5, color: 'rgba(255,255,255,0.8)' }}>
+              {t('landingPage.developerQuickstart.description', DEVELOPER_QUICKSTART.description)}
+            </Typography>
+            <List dense sx={{ mb: 2.5 }}>
+              {DEVELOPER_QUICKSTART.bullets.map((item) => (
+                <ListItem key={item} sx={{ px: 0, py: 0.5 }}>
+                  <ListItemIcon sx={{ minWidth: 32 }}>
+                    <CheckCircleIcon fontSize="small" sx={{ color: 'success.light' }} />
+                  </ListItemIcon>
+                  <ListItemText
+                    primary={item}
+                    primaryTypographyProps={{ variant: 'body2', color: 'rgba(255,255,255,0.88)' }}
+                  />
+                </ListItem>
+              ))}
+            </List>
+            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1.5 }}>
+              <Button variant="contained" component="a" href="/docs" endIcon={<ArrowForwardIcon />}>
+                Open API docs
+              </Button>
+              <Button
+                variant="outlined"
+                component="a"
+                href="/product"
+                sx={{ borderColor: 'rgba(255,255,255,0.3)', color: 'common.white' }}
+              >
+                View products
+              </Button>
+            </Box>
+          </Grid>
+
+          <Grid item xs={12} md={8}>
+            <Grid container spacing={2}>
+              <Grid item xs={12}>
+                <Paper elevation={0} sx={{ p: 2.5, bgcolor: 'rgba(255,255,255,0.06)', borderRadius: 3, border: '1px solid rgba(255,255,255,0.12)' }}>
+                  <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.68)', textTransform: 'uppercase', letterSpacing: 1.1 }}>
+                    bash
+                  </Typography>
+                  <Box
+                    component="pre"
+                    sx={{
+                      m: 0,
+                      mt: 1.25,
+                      overflowX: 'auto',
+                      whiteSpace: 'pre-wrap',
+                      wordBreak: 'break-word',
+                      fontFamily: 'Consolas, Menlo, Monaco, monospace',
+                      fontSize: '0.85rem',
+                      lineHeight: 1.65,
+                      color: 'common.white',
+                    }}
+                  >
+                    {DEVELOPER_QUICKSTART.snippet}
+                  </Box>
+                </Paper>
+              </Grid>
+
+              <Grid item xs={12} sm={6}>
+                <Paper elevation={0} sx={{ p: 2.5, height: '100%', bgcolor: 'rgba(255,255,255,0.06)', borderRadius: 3, border: '1px solid rgba(255,255,255,0.12)' }}>
+                  <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.68)', textTransform: 'uppercase', letterSpacing: 1.1 }}>
+                    sample response
+                  </Typography>
+                  <Box
+                    component="pre"
+                    sx={{
+                      m: 0,
+                      mt: 1.25,
+                      overflowX: 'auto',
+                      whiteSpace: 'pre-wrap',
+                      fontFamily: 'Consolas, Menlo, Monaco, monospace',
+                      fontSize: '0.85rem',
+                      lineHeight: 1.65,
+                      color: 'common.white',
+                    }}
+                  >
+                    {DEVELOPER_QUICKSTART.response}
+                  </Box>
+                </Paper>
+              </Grid>
+
+              <Grid item xs={12} sm={6}>
+                <Paper elevation={0} sx={{ p: 2.5, height: '100%', bgcolor: 'rgba(255,255,255,0.06)', borderRadius: 3, border: '1px solid rgba(255,255,255,0.12)' }}>
+                  <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.68)', textTransform: 'uppercase', letterSpacing: 1.1 }}>
+                    when to use it
+                  </Typography>
+                  <Typography variant="body2" sx={{ mt: 1.25, mb: 1.5, color: 'rgba(255,255,255,0.84)' }}>
+                    {DEVELOPER_QUICKSTART.note}
+                  </Typography>
+                  <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+                    <Chip label="POST /v1/credentials/verify" size="small" sx={{ bgcolor: 'rgba(255,255,255,0.08)', color: 'common.white' }} />
+                    <Chip label="/flows/verify for wallet journeys" size="small" sx={{ bgcolor: 'rgba(255,255,255,0.08)', color: 'common.white' }} />
+                  </Box>
+                </Paper>
+              </Grid>
+            </Grid>
+          </Grid>
+        </Grid>
+      </Paper>
+    </Section>
+  );
+}
+
+function StandardsArchitectureSection({ t, expandedLayer, onToggleLayer }) {
+  return (
+    <Section bgcolor="grey.50">
+      <SectionHeading divider>
+        {t('landingPage.standards.title', 'Standards-Based Architecture')}
+      </SectionHeading>
+      <Typography
+        variant="h6"
+        textAlign="center"
+        sx={{
+          mb: 4,
+          fontWeight: 700,
+          color: 'primary.main',
+          bgcolor: 'primary.50',
+          py: 1.5,
+          px: 3,
+          borderRadius: 2,
+          maxWidth: 520,
+          mx: 'auto',
+        }}
+      >
+        {t('landingPage.standards.subtitle', 'Standards are not integrations. They are the product.')}
+      </Typography>
+
+      <Box sx={{ maxWidth: 800, mx: 'auto', mb: 4 }}>
+        {(STANDARDS_INFO?.layers || []).map((layer, idx) => (
+          <Paper
+            key={idx}
+            elevation={expandedLayer === idx ? 3 : 1}
+            sx={{ mb: 1, borderRadius: 2, overflow: 'hidden', transition: 'all 0.2s ease' }}
+          >
+            <Box
+              onClick={() => onToggleLayer(expandedLayer === idx ? null : idx)}
+              sx={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                px: 3,
+                py: 2,
+                cursor: 'pointer',
+                '&:hover': { bgcolor: 'grey.100' },
+              }}
+            >
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+                <Chip label={`Layer ${idx + 1}`} size="small" color="primary" sx={{ fontWeight: 700, fontSize: '0.7rem' }} />
+                <Typography variant="subtitle1" fontWeight={700}>{layer.name}</Typography>
+              </Box>
+              {expandedLayer === idx ? <ExpandLessIcon /> : <ExpandMoreIcon />}
+            </Box>
+            <Collapse in={expandedLayer === idx}>
+              <Box sx={{ px: 3, pb: 2 }}>
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+                  {layer.description}
+                </Typography>
+                <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+                  {layer.standards?.map((std) => (
+                    <Chip
+                      key={std.name}
+                      label={`${std.name} - ${std.description}`}
+                      variant="outlined"
+                      size="small"
+                    />
+                  ))}
+                </Box>
+              </Box>
+            </Collapse>
+          </Paper>
+        ))}
+      </Box>
+
+      <Paper elevation={3} sx={{ p: { xs: 2, md: 4 }, bgcolor: 'white' }}>
+        <StandardsStackDiagram interactive={false} />
+      </Paper>
+
+      <Typography variant="body2" color="text.secondary" textAlign="center" sx={{ mt: 3, maxWidth: 700, mx: 'auto' }}>
+        {t(
+          'landingPage.standards.description',
+          "These layers let ElevenID LLC interoperate across governments, wallets, and enterprises without custom integrations."
+        )}
+      </Typography>
+      <Box sx={{ textAlign: 'center', mt: 2 }}>
+        <Button
+          variant="outlined"
+          size="large"
+          component="a"
+          href="/standards"
+          endIcon={<ArrowForwardIcon />}
+          sx={{ transition: 'all 0.2s ease', '&:hover': { transform: 'translateY(-2px)' } }}
+        >
+          {t('landingPage.standards.cta', 'Explore Standards')}
+        </Button>
+      </Box>
+    </Section>
+  );
+}
 
 function LandingPage() {
   const { t } = useTranslation('marketing');
@@ -140,11 +399,16 @@ function LandingPage() {
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
   const brandingContext = useBranding();
   const branding = brandingContext?.branding || { appName: 'ElevenID LLC' };
-  const { isAuthenticated, isLoading, register } = useAuth();
+  const { isAuthenticated, isLoading } = useAuth();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [authError, setAuthError] = useState(null);
   const [expandedLayer, setExpandedLayer] = useState(null);
+  const [activeHeroStepId, setActiveHeroStepId] = useState(HERO_INTERACTIVE_DEMO.steps?.[0]?.id || null);
+  const [activeProofLabScenarioId, setActiveProofLabScenarioId] = useState(INTERACTIVE_PROOF_LAB.scenarios?.[0]?.id || null);
+  const [proofLabStatus, setProofLabStatus] = useState('idle');
+  const [proofLabResult, setProofLabResult] = useState(null);
+  const [activeExperienceId, setActiveExperienceId] = useState(END_USER_EXPERIENCES.journeys?.[0]?.id || null);
 
   // Check for auth error in URL params
   useEffect(() => {
@@ -162,6 +426,11 @@ function LandingPage() {
       navigate(decision.redirectTo, { replace: true });
     }
   }, [isAuthenticated, isLoading, navigate]);
+
+  useEffect(() => {
+    setProofLabStatus('idle');
+    setProofLabResult(null);
+  }, [activeProofLabScenarioId]);
 
   const handleCloseError = () => {
     setAuthError(null);
@@ -317,6 +586,97 @@ function LandingPage() {
     ],
   };
 
+  const activeHeroStep =
+    HERO_INTERACTIVE_DEMO.steps.find((step) => step.id === activeHeroStepId) ||
+    HERO_INTERACTIVE_DEMO.steps[0];
+  const activeProofLabScenario =
+    INTERACTIVE_PROOF_LAB.scenarios.find((scenario) => scenario.id === activeProofLabScenarioId) ||
+    INTERACTIVE_PROOF_LAB.scenarios[0];
+  const activeProofLabRuntime = PROOF_LAB_RUNTIME[activeProofLabScenario.id] || PROOF_LAB_RUNTIME['retail-age'];
+  const activeProofLabPresentationData = createProofLabPresentationData(activeProofLabScenario.id);
+  const activeProofLabRequestPreview = createProofLabRequestPreview(activeProofLabScenario, activeProofLabRuntime);
+  const activeExperience =
+    END_USER_EXPERIENCES.journeys.find((journey) => journey.id === activeExperienceId) ||
+    END_USER_EXPERIENCES.journeys[0];
+  const heroProofClaims = proofClaims.slice(0, 3);
+  const deploymentPlaybooks = DEPLOYMENT_PLAYBOOKS.items
+    .map((item) => {
+      const matchingPost = BLOG_POSTS.find((post) => post.slug === item.slug);
+      return {
+        ...item,
+        title: matchingPost?.title || item.title,
+        summary: matchingPost?.summary || item.summary,
+        href: matchingPost ? `/blog/${matchingPost.slug}` : '/blog',
+      };
+    })
+    .filter((item) => Boolean(item.title));
+
+  const handleQuickStartSelection = (destination) => {
+    trackEvent('landing_quick_start_selected', {
+      page: 'landing',
+      section: 'quick_start',
+      card_id: destination.id,
+      card_title: destination.title,
+      role: destination.role,
+      destination_path: destination.path,
+    });
+  };
+
+  const handleDeploymentModeSelection = (mode) => {
+    trackEvent('landing_deployment_mode_selected', {
+      page: 'landing',
+      section: 'deployment_models',
+      card_id: mode.id,
+      card_title: mode.title,
+      badge: mode.badge,
+      destination_path: mode.path,
+    });
+  };
+
+  const handleLandingCtaClick = ({ section, ctaId, ctaLabel, destinationPath }) => {
+    trackEvent('landing_cta_clicked', {
+      page: 'landing',
+      section,
+      cta_id: ctaId,
+      cta_label: ctaLabel,
+      destination_path: destinationPath,
+    });
+  };
+
+  const handleFooterPricingClick = () => {
+    handleLandingCtaClick({
+      section: 'footer',
+      ctaId: 'view_pricing',
+      ctaLabel: t('landingPage.footer.viewPricing', 'View Pricing'),
+      destinationPath: '/pricing',
+    });
+    navigate('/pricing');
+  };
+
+  const handleProofLabRun = async () => {
+    setProofLabStatus('running');
+
+    trackEvent('landing_proof_lab_run', {
+      page: 'landing',
+      section: 'proof_lab',
+      scenario_id: activeProofLabScenario.id,
+      scenario_title: activeProofLabScenario.title,
+      endpoint: activeProofLabRequestPreview.endpoint,
+    });
+
+    const delay = () => new Promise((resolve) => window.setTimeout(resolve, 250));
+    await delay();
+
+    const result = await verifyVerifierDemoPresentation({
+      presentationData: activeProofLabPresentationData,
+      verifyCredential: async () => activeProofLabRuntime.expectedResult,
+      verifyPresentation: async () => activeProofLabRuntime.expectedResult,
+    });
+
+    setProofLabResult(result);
+    setProofLabStatus('complete');
+  };
+
   return (
     <Box sx={{ scrollBehavior: 'smooth' }}>
       {/* SEO Meta Tags */}
@@ -360,116 +720,360 @@ function LandingPage() {
       </Snackbar>
 
       {/* ───────────────────────────────────────────────────────────  HERO  */}
-      <Box
-        sx={{
-          textAlign: 'center',
-          py: { xs: 6, md: 10 },
-          px: { xs: 2, md: 4 },
-          background: 'linear-gradient(135deg, #1976d2 0%, #0d47a1 100%)',
-          color: 'white',
-          borderRadius: 2,
-          mb: 0,
-          ...fadeInSx(0),
-        }}
-      >
-        <Typography
-          variant="h3"
-          component="h1"
-          gutterBottom
-          fontWeight={800}
-          sx={{ fontSize: { xs: '2rem', md: '3rem' }, lineHeight: 1.15 }}
+        <Box
+          sx={{
+            py: { xs: 6, md: 8 },
+            px: { xs: 2, md: 4 },
+            background: 'linear-gradient(135deg, #1976d2 0%, #0d47a1 100%)',
+            color: 'white',
+            borderRadius: 3,
+            mb: 0,
+            overflow: 'hidden',
+            ...fadeInSx(0),
+          }}
         >
-          {t('valueProposition.headline', VALUE_PROPOSITION.headline)}
-        </Typography>
-        <Typography
-          variant="h6"
-          sx={{ mb: 2, opacity: 0.88, maxWidth: 720, mx: 'auto', fontStyle: 'italic', fontWeight: 400 }}
-        >
-          {t('valueProposition.supporting', VALUE_PROPOSITION.supportingSubheadline)}
-        </Typography>
-        <Typography
-          variant="h5"
-          sx={{ mb: 1, opacity: 0.95, maxWidth: 900, mx: 'auto', fontWeight: 600 }}
-        >
-          {t('valueProposition.subheadline', VALUE_PROPOSITION.subheadline)}
-        </Typography>
-        <Typography variant="body1" sx={{ mb: 4, opacity: 0.82, maxWidth: 800, mx: 'auto' }}>
-          {t('valueProposition.extendedSubheadline', VALUE_PROPOSITION.extendedSubheadline)}
-        </Typography>
-        <Box sx={{ display: 'flex', gap: 2, justifyContent: 'center', flexWrap: 'wrap' }}>
-          <Button
-            variant="contained"
-            size="large"
-            startIcon={<VerifiedUserIcon />}
-            onClick={() => register()}
-            data-testid="get-started-btn"
-            sx={{
-              bgcolor: 'white',
-              color: 'primary.main',
-              fontWeight: 700,
-              '&:hover': { bgcolor: 'grey.100', transform: 'translateY(-2px)', boxShadow: 4 },
-              px: { xs: 3, md: 4 },
-              py: 1.5,
-              width: { xs: '100%', sm: 'auto' },
-              transition: 'all 0.2s ease',
-            }}
-          >
-            {t('valueProposition.primaryCTA', VALUE_PROPOSITION.primaryCTA)}
-          </Button>
-          <Button
-            variant="outlined"
-            size="large"
-            component="a"
-            href="/from-idv-to-verifiable-identity"
-            endIcon={<ArrowForwardIcon />}
-            sx={{
-              borderColor: 'white',
-              color: 'white',
-              fontWeight: 600,
-              '&:hover': { bgcolor: 'rgba(255,255,255,0.12)', borderColor: 'white', transform: 'translateY(-2px)' },
-              px: { xs: 3, md: 4 },
-              py: 1.5,
-              width: { xs: '100%', sm: 'auto' },
-              transition: 'all 0.2s ease',
-            }}
-          >
-            {t('valueProposition.secondaryCTA', 'Why Verifiable Identity')}
-          </Button>
+          <Grid container spacing={4} alignItems="stretch">
+            <Grid item xs={12} lg={7}>
+              <Box
+                sx={{
+                  height: '100%',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  justifyContent: 'center',
+                  textAlign: { xs: 'center', lg: 'left' },
+                }}
+              >
+                <Chip
+                  label={t('landingPage.hero.eyebrow', 'Reusable trust for every checkpoint')}
+                  sx={{
+                    alignSelf: { xs: 'center', lg: 'flex-start' },
+                    mb: 2,
+                    bgcolor: 'rgba(255,255,255,0.14)',
+                    color: 'common.white',
+                    fontWeight: 700,
+                  }}
+                />
+                <Typography
+                  variant="h3"
+                  component="h1"
+                  gutterBottom
+                  fontWeight={800}
+                  sx={{ fontSize: { xs: '2rem', md: '3rem' }, lineHeight: 1.1 }}
+                >
+                  {t('valueProposition.headline', VALUE_PROPOSITION.headline)}
+                </Typography>
+                <Typography
+                  variant="h6"
+                  sx={{ mb: 2, opacity: 0.88, maxWidth: 720, mx: { xs: 'auto', lg: 0 }, fontStyle: 'italic', fontWeight: 400 }}
+                >
+                  {t('valueProposition.supporting', VALUE_PROPOSITION.supportingSubheadline)}
+                </Typography>
+                <Typography
+                  variant="h5"
+                  sx={{ mb: 1, opacity: 0.95, maxWidth: 900, mx: { xs: 'auto', lg: 0 }, fontWeight: 600 }}
+                >
+                  {t('valueProposition.subheadline', VALUE_PROPOSITION.subheadline)}
+                </Typography>
+                <Typography variant="body1" sx={{ mb: 3, opacity: 0.82, maxWidth: 760, mx: { xs: 'auto', lg: 0 } }}>
+                  {t('valueProposition.extendedSubheadline', VALUE_PROPOSITION.extendedSubheadline)}
+                </Typography>
+                <Box
+                  sx={{
+                    display: 'flex',
+                    gap: 1,
+                    flexWrap: 'wrap',
+                    justifyContent: { xs: 'center', lg: 'flex-start' },
+                    mb: 3,
+                  }}
+                >
+                  {heroProofClaims.map((claim) => (
+                    <Chip
+                      key={claim.label}
+                      label={claim.label}
+                      size="small"
+                      sx={{ bgcolor: 'rgba(255,255,255,0.12)', color: 'common.white', fontWeight: 600 }}
+                    />
+                  ))}
+                </Box>
+                <Box
+                  sx={{
+                    p: 2,
+                    mb: 4,
+                    borderRadius: 2,
+                    border: '1px solid rgba(255,255,255,0.16)',
+                    bgcolor: 'rgba(255,255,255,0.08)',
+                    maxWidth: 680,
+                    mx: { xs: 'auto', lg: 0 },
+                  }}
+                >
+                  <Typography variant="body2" sx={{ color: 'rgba(255,255,255,0.92)' }}>
+                    {t('valueProposition.concreteExample', VALUE_PROPOSITION.concreteExample)}
+                  </Typography>
+                </Box>
+                <Box sx={{ display: 'flex', gap: 2, justifyContent: { xs: 'center', lg: 'flex-start' }, flexWrap: 'wrap' }}>
+                  <Button
+                    component={Link}
+                    to="/developers"
+                    onClick={() => handleLandingCtaClick({
+                      section: 'hero',
+                      ctaId: 'start_verifying',
+                      ctaLabel: t('valueProposition.primaryCTA', VALUE_PROPOSITION.primaryCTA),
+                      destinationPath: '/developers',
+                    })}
+                    variant="contained"
+                    size="large"
+                    startIcon={<VerifiedUserIcon />}
+                    data-testid="get-started-btn"
+                    sx={{
+                      bgcolor: 'white',
+                      color: 'primary.main',
+                      fontWeight: 700,
+                      '&:hover': { bgcolor: 'grey.100', transform: 'translateY(-2px)', boxShadow: 4 },
+                      px: { xs: 3, md: 4 },
+                      py: 1.5,
+                      width: { xs: '100%', sm: 'auto' },
+                      transition: 'all 0.2s ease',
+                    }}
+                  >
+                    {t('valueProposition.primaryCTA', VALUE_PROPOSITION.primaryCTA)}
+                  </Button>
+                  <Button
+                    component={Link}
+                    to={VALUE_PROPOSITION.secondaryCTA.path}
+                    onClick={() => handleLandingCtaClick({
+                      section: 'hero',
+                      ctaId: 'view_verification_api',
+                      ctaLabel: t('valueProposition.secondaryCTA', VALUE_PROPOSITION.secondaryCTA.label),
+                      destinationPath: VALUE_PROPOSITION.secondaryCTA.path,
+                    })}
+                    variant="outlined"
+                    size="large"
+                    endIcon={<ArrowForwardIcon />}
+                    data-testid="hero-secondary-cta"
+                    sx={{
+                      borderColor: 'white',
+                      color: 'white',
+                      fontWeight: 600,
+                      '&:hover': { bgcolor: 'rgba(255,255,255,0.12)', borderColor: 'white', transform: 'translateY(-2px)' },
+                      px: { xs: 3, md: 4 },
+                      py: 1.5,
+                      width: { xs: '100%', sm: 'auto' },
+                      transition: 'all 0.2s ease',
+                    }}
+                  >
+                    {t('valueProposition.secondaryCTA', VALUE_PROPOSITION.secondaryCTA.label)}
+                  </Button>
+                </Box>
+              </Box>
+            </Grid>
+
+            <Grid item xs={12} lg={5}>
+              <Paper
+                elevation={0}
+                sx={{
+                  height: '100%',
+                  p: { xs: 2.5, md: 3 },
+                  bgcolor: 'rgba(7,17,36,0.28)',
+                  border: '1px solid rgba(255,255,255,0.16)',
+                  borderRadius: 3,
+                  backdropFilter: 'blur(10px)',
+                  color: 'common.white',
+                }}
+              >
+                <Typography variant="overline" sx={{ letterSpacing: 1.2, opacity: 0.75 }}>
+                  {t('landingPage.heroDemo.eyebrow', HERO_INTERACTIVE_DEMO.eyebrow)}
+                </Typography>
+                <Typography variant="h5" fontWeight={800} sx={{ mb: 0.75 }}>
+                  {t('landingPage.heroDemo.title', HERO_INTERACTIVE_DEMO.title)}
+                </Typography>
+                <Typography variant="body2" sx={{ mb: 2.5, color: 'rgba(255,255,255,0.82)' }}>
+                  {t('landingPage.heroDemo.description', HERO_INTERACTIVE_DEMO.description)}
+                </Typography>
+                <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mb: 2.5 }}>
+                  {HERO_INTERACTIVE_DEMO.steps.map((step, index) => (
+                    <Button
+                      key={step.id}
+                      size="small"
+                      variant={activeHeroStep.id === step.id ? 'contained' : 'outlined'}
+                      onClick={() => setActiveHeroStepId(step.id)}
+                      sx={{
+                        borderColor: 'rgba(255,255,255,0.24)',
+                        color: 'common.white',
+                        bgcolor: activeHeroStep.id === step.id ? 'rgba(255,255,255,0.18)' : 'transparent',
+                        '&:hover': {
+                          borderColor: 'rgba(255,255,255,0.4)',
+                          bgcolor: 'rgba(255,255,255,0.12)',
+                        },
+                      }}
+                    >
+                      {`${index + 1}. ${step.label}`}
+                    </Button>
+                  ))}
+                </Box>
+                <Paper
+                  elevation={0}
+                  sx={{
+                    p: 2.5,
+                    bgcolor: 'rgba(255,255,255,0.08)',
+                    border: '1px solid rgba(255,255,255,0.1)',
+                    borderRadius: 2,
+                  }}
+                >
+                  <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.72)', textTransform: 'uppercase', letterSpacing: 1.1 }}>
+                    {activeHeroStep.moment}
+                  </Typography>
+                  <Typography variant="h6" fontWeight={700} sx={{ mt: 0.75, mb: 1 }}>
+                    {activeHeroStep.headline}
+                  </Typography>
+                  <Typography variant="body2" sx={{ mb: 2, color: 'rgba(255,255,255,0.84)' }}>
+                    {activeHeroStep.summary}
+                  </Typography>
+                  <Grid container spacing={2}>
+                    <Grid item xs={12} sm={6}>
+                      <Box sx={{ p: 2, borderRadius: 2, bgcolor: 'rgba(255,255,255,0.06)' }}>
+                        <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.72)', textTransform: 'uppercase' }}>
+                          Credential state
+                        </Typography>
+                        <Typography variant="body2" fontWeight={600} sx={{ mt: 0.75 }}>
+                          {activeHeroStep.credential}
+                        </Typography>
+                      </Box>
+                    </Grid>
+                    <Grid item xs={12} sm={6}>
+                      <Box sx={{ p: 2, borderRadius: 2, bgcolor: 'rgba(255,255,255,0.06)' }}>
+                        <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.72)', textTransform: 'uppercase' }}>
+                          Verification result
+                        </Typography>
+                        <Typography variant="body2" fontWeight={600} sx={{ mt: 0.75 }}>
+                          {activeHeroStep.decision}
+                        </Typography>
+                      </Box>
+                    </Grid>
+                  </Grid>
+                  <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mt: 2 }}>
+                    {activeHeroStep.highlights.map((item) => (
+                      <Chip
+                        key={item}
+                        label={item}
+                        size="small"
+                        sx={{ bgcolor: 'rgba(255,255,255,0.1)', color: 'common.white' }}
+                      />
+                    ))}
+                  </Box>
+                  <Typography variant="body2" sx={{ mt: 2, pt: 2, borderTop: '1px solid rgba(255,255,255,0.12)', color: 'rgba(255,255,255,0.88)' }}>
+                    {activeHeroStep.reuseNote}
+                  </Typography>
+                </Paper>
+              </Paper>
+            </Grid>
+          </Grid>
         </Box>
-      </Box>
 
-      {/* ─── Trust signal strip right below hero ─── */}
-      <Paper
-        elevation={0}
-        sx={{
-          py: 2,
-          px: 2,
-          mb: 0,
-          bgcolor: 'grey.900',
-          color: 'grey.300',
-          borderRadius: 0,
-          textAlign: 'center',
-        }}
-      >
-        <Typography variant="caption" fontWeight={600} sx={{ letterSpacing: 1.5, textTransform: 'uppercase', mr: 2 }}>
-          Standards-aligned
-        </Typography>
-        {['W3C VC', 'ISO 18013-5', 'OpenID4VP', 'SD-JWT', 'ICAO 9303', 'eIDAS 2.0'].map((s) => (
-          <Chip
-            key={s}
-            label={s}
-            size="small"
-            sx={{ mr: 1, mb: { xs: 0.5, md: 0 }, bgcolor: 'rgba(255,255,255,0.08)', color: 'grey.300', fontSize: '0.7rem' }}
-          />
-        ))}
-      </Paper>
+      <Section bgcolor="grey.50" sx={{ py: { xs: 5, md: 6 } }}>
+        <SectionHeading
+          subtitle="Whether you are evaluating identity infrastructure, integrating verification, or deploying credentials, jump directly to the path that fits."
+          sx={{ mb: 4 }}
+        >
+          Start where you are
+        </SectionHeading>
+        <Box
+          sx={{
+            display: 'grid',
+            gap: 3,
+            gridTemplateColumns: {
+              xs: '1fr',
+              md: 'repeat(3, minmax(0, 1fr))',
+            },
+          }}
+        >
+          {QUICK_START_PATHS.map((destination) => (
+            <Card
+              key={destination.id}
+              sx={{
+                height: '100%',
+                border: '1px solid',
+                borderColor: 'divider',
+                borderRadius: 3,
+                transition: 'all 0.2s ease',
+                '&:hover': { transform: 'translateY(-4px)', boxShadow: 4 },
+              }}
+            >
+              <CardActionArea component={Link} to={destination.path} onClick={() => handleQuickStartSelection(destination)} sx={{ height: '100%' }}>
+                <CardContent sx={{ p: 3.5, height: '100%', display: 'flex', flexDirection: 'column' }}>
+                  <Typography variant="overline" sx={{ color: 'text.secondary', letterSpacing: 1.2 }}>
+                    {destination.role}
+                  </Typography>
+                  <Box sx={{ mb: 2, mt: 0.5 }}>{destination.icon}</Box>
+                  <Typography variant="h6" fontWeight={800} gutterBottom>
+                    {destination.title}
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary" sx={{ mb: 2.5 }}>
+                    {destination.description}
+                  </Typography>
+                  <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mb: 3 }}>
+                    {destination.details.map((detail) => (
+                      <Chip key={detail} label={detail} size="small" />
+                    ))}
+                  </Box>
+                  <Button
+                    variant="text"
+                    component="span"
+                    endIcon={<ArrowForwardIcon />}
+                    sx={{ mt: 'auto', alignSelf: 'flex-start', px: 0, fontWeight: 700 }}
+                  >
+                    {destination.cta}
+                  </Button>
+                </CardContent>
+              </CardActionArea>
+            </Card>
+          ))}
+        </Box>
+      </Section>
 
-      {/* ─── Concrete example ─── */}
-      <Box sx={{ textAlign: 'center', py: 3, px: 2, bgcolor: 'primary.50' }}>
-        <Typography variant="body2" color="text.secondary" sx={{ fontStyle: 'italic', maxWidth: 700, mx: 'auto' }}>
-          {t('valueProposition.concreteExample', VALUE_PROPOSITION.concreteExample)}
-        </Typography>
-      </Box>
+        <Paper
+          elevation={0}
+          sx={{
+            py: 3,
+            px: { xs: 2, md: 3 },
+            mb: 0,
+            bgcolor: 'grey.900',
+            color: 'grey.100',
+            borderRadius: 0,
+          }}
+        >
+          <Typography variant="subtitle2" fontWeight={700} textAlign="center" sx={{ mb: 2 }}>
+            {t('landingPage.ecosystemSignals.title', ECOSYSTEM_SIGNALS.title)}
+          </Typography>
+          <Grid container spacing={2}>
+            {ECOSYSTEM_SIGNALS.categories.map((category) => (
+              <Grid item xs={12} md={4} key={category.label}>
+                <Box
+                  sx={{
+                    height: '100%',
+                    p: 2,
+                    borderRadius: 2,
+                    bgcolor: 'rgba(255,255,255,0.04)',
+                    border: '1px solid rgba(255,255,255,0.08)',
+                  }}
+                >
+                  <Typography variant="caption" sx={{ color: 'grey.400', textTransform: 'uppercase', letterSpacing: 1.1 }}>
+                    {category.label}
+                  </Typography>
+                  <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mt: 1.25 }}>
+                    {category.items.map((item) => (
+                      <Chip
+                        key={item}
+                        label={item}
+                        size="small"
+                        sx={{ bgcolor: 'rgba(255,255,255,0.08)', color: 'grey.100' }}
+                      />
+                    ))}
+                  </Box>
+                </Box>
+              </Grid>
+            ))}
+          </Grid>
+        </Paper>
 
       {/* ───────────────────────────────────────  IDV COMPARISON (side-by-side table) */}
       <Section bgcolor="grey.50">
@@ -750,7 +1354,100 @@ function LandingPage() {
         </Box>
       </Section>
 
+      <Suspense fallback={<LazySectionFallback bgcolor="grey.50" minHeight={360} />}>
+        <EndUserExperienceSection
+          t={t}
+          activeExperience={activeExperience}
+          onSelectExperience={setActiveExperienceId}
+        />
+      </Suspense>
+
+      <Suspense fallback={<LazySectionFallback minHeight={420} />}>
+        <ProofLabSection
+          t={t}
+          isMobile={isMobile}
+          activeScenario={activeProofLabScenario}
+          onScenarioChange={setActiveProofLabScenarioId}
+          onRun={handleProofLabRun}
+          status={proofLabStatus}
+          result={proofLabResult}
+          requestPreview={activeProofLabRequestPreview}
+          presentationData={activeProofLabPresentationData}
+        />
+      </Suspense>
+
       {/* ───────────────────────────────────  CHOOSE YOUR PATH  */}
+      <Section bgcolor="grey.50">
+        <SectionHeading
+          subtitle={t('landingPage.deploymentPlaybooks.subtitle', DEPLOYMENT_PLAYBOOKS.subtitle)}
+          divider
+        >
+          {t('landingPage.deploymentPlaybooks.title', DEPLOYMENT_PLAYBOOKS.title)}
+        </SectionHeading>
+
+        <Grid container spacing={3}>
+          {deploymentPlaybooks.map((playbook) => (
+            <Grid item xs={12} sm={6} lg={3} key={playbook.slug}>
+              <Card
+                elevation={2}
+                sx={{
+                  height: '100%',
+                  transition: 'all 0.2s ease',
+                  '&:hover': { transform: 'translateY(-4px)', boxShadow: 6 },
+                }}
+              >
+                <CardActionArea component="a" href={playbook.href} sx={{ height: '100%' }}>
+                  <CardContent sx={{ p: 3, height: '100%', display: 'flex', flexDirection: 'column' }}>
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 1.5, mb: 2 }}>
+                      <Box
+                        sx={{
+                          width: 48,
+                          height: 48,
+                          borderRadius: 2,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          bgcolor: 'grey.100',
+                        }}
+                      >
+                        {PLAYBOOK_ICONS[playbook.slug] || <VerifiedUserIcon sx={{ fontSize: 32, color: 'primary.main' }} />}
+                      </Box>
+                      <Chip label={playbook.badge} size="small" color="primary" variant="outlined" sx={{ fontWeight: 600 }} />
+                    </Box>
+                    <Typography variant="h6" fontWeight={700} gutterBottom>
+                      {playbook.title}
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary" sx={{ mb: 2, flexGrow: 1 }}>
+                      {playbook.summary}
+                    </Typography>
+                    <Typography variant="caption" sx={{ color: 'text.secondary', textTransform: 'uppercase', letterSpacing: 1.1 }}>
+                      What it proves
+                    </Typography>
+                    <Typography variant="body2" sx={{ mt: 0.75, mb: 2 }}>
+                      {playbook.proof}
+                    </Typography>
+                    <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mb: 2 }}>
+                      {playbook.signals.map((signal) => (
+                        <Chip key={signal} label={signal} size="small" />
+                      ))}
+                    </Box>
+                    <Button variant="text" component="span" endIcon={<ArrowForwardIcon />} sx={{ px: 0, mt: 'auto', alignSelf: 'flex-start' }}>
+                      {playbook.cta}
+                    </Button>
+                  </CardContent>
+                </CardActionArea>
+              </Card>
+            </Grid>
+          ))}
+        </Grid>
+
+        <Box textAlign="center" sx={{ mt: 4 }}>
+          <Button variant="outlined" size="large" component="a" href="/blog" endIcon={<ArrowForwardIcon />}>
+            Browse all deployment guides
+          </Button>
+        </Box>
+      </Section>
+
       <Section bgcolor="grey.50">
         <SectionHeading
           subtitle={t('audienceRouting.subtitle', AUDIENCE_ROUTING.subtitle)}
@@ -849,173 +1546,21 @@ function LandingPage() {
         </Grid>
       </Section>
 
-      {/* ───────────────────────────────────  STANDARDS (collapsible layers)  */}
-      <Section bgcolor="grey.50">
-        <SectionHeading divider>
-          {t('landingPage.standards.title', 'Standards-Based Architecture')}
-        </SectionHeading>
-        <Typography
-          variant="h6"
-          textAlign="center"
-          sx={{
-            mb: 4,
-            fontWeight: 700,
-            color: 'primary.main',
-            bgcolor: 'primary.50',
-            py: 1.5,
-            px: 3,
-            borderRadius: 2,
-            maxWidth: 520,
-            mx: 'auto',
-          }}
-        >
-          {t('landingPage.standards.subtitle', 'Standards are not integrations. They are the product.')}
-        </Typography>
+      <Suspense fallback={<LazySectionFallback minHeight={260} />}>
+        <ProductCapabilitiesSection t={t} />
+      </Suspense>
 
-        {/* Collapsible layers */}
-        <Box sx={{ maxWidth: 800, mx: 'auto', mb: 4 }}>
-          {(STANDARDS_INFO?.layers || []).map((layer, idx) => (
-            <Paper
-              key={idx}
-              elevation={expandedLayer === idx ? 3 : 1}
-              sx={{ mb: 1, borderRadius: 2, overflow: 'hidden', transition: 'all 0.2s ease' }}
-            >
-              <Box
-                onClick={() => setExpandedLayer(expandedLayer === idx ? null : idx)}
-                sx={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  px: 3,
-                  py: 2,
-                  cursor: 'pointer',
-                  '&:hover': { bgcolor: 'grey.100' },
-                }}
-              >
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
-                  <Chip label={`Layer ${idx + 1}`} size="small" color="primary" sx={{ fontWeight: 700, fontSize: '0.7rem' }} />
-                  <Typography variant="subtitle1" fontWeight={700}>{layer.name}</Typography>
-                </Box>
-                {expandedLayer === idx ? <ExpandLessIcon /> : <ExpandMoreIcon />}
-              </Box>
-              <Collapse in={expandedLayer === idx}>
-                <Box sx={{ px: 3, pb: 2 }}>
-                  <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-                    {layer.description}
-                  </Typography>
-                  <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
-                    {layer.standards?.map((std) => (
-                      <Chip
-                        key={std.name}
-                        label={`${std.name} — ${std.description}`}
-                        variant="outlined"
-                        size="small"
-                      />
-                    ))}
-                  </Box>
-                </Box>
-              </Collapse>
-            </Paper>
-          ))}
-        </Box>
+      <Suspense fallback={<LazySectionFallback minHeight={420} />}>
+        <DeploymentModelsSection t={t} onSelectMode={handleDeploymentModeSelection} />
+      </Suspense>
 
-        <Paper elevation={3} sx={{ p: { xs: 2, md: 4 }, bgcolor: 'white' }}>
-          <StandardsStackDiagram interactive={false} />
-        </Paper>
+      <DeveloperQuickstartSection t={t} />
 
-        <Typography variant="body2" color="text.secondary" textAlign="center" sx={{ mt: 3, maxWidth: 700, mx: 'auto' }}>
-          {t(
-            'landingPage.standards.description',
-            "These layers let ElevenID LLC interoperate across governments, wallets, and enterprises without custom integrations."
-          )}
-        </Typography>
-        <Box sx={{ textAlign: 'center', mt: 2 }}>
-          <Button
-            variant="outlined"
-            size="large"
-            component="a"
-            href="/standards"
-            endIcon={<ArrowForwardIcon />}
-            sx={{ transition: 'all 0.2s ease', '&:hover': { transform: 'translateY(-2px)' } }}
-          >
-            {t('landingPage.standards.cta', 'Explore Standards')}
-          </Button>
-        </Box>
-      </Section>
-
-      {/* ───────────────────────────────────  PRODUCTS (cleaned up)  */}
-      <Section>
-        <SectionHeading
-          subtitle={t('landingPage.products.description', 'A complete platform—from issuance to verification and governance.')}
-          divider
-        >
-          {t('landingPage.products.title', 'Products & Capabilities')}
-        </SectionHeading>
-
-        <Grid container spacing={3}>
-          {PRODUCTS.slice(0, 4).map((product) => (
-            <Grid item xs={12} sm={6} md={3} key={product.id}>
-              <Card
-                elevation={2}
-                sx={{
-                  height: '100%',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  transition: 'all 0.2s ease',
-                  '&:hover': { transform: 'translateY(-4px)', boxShadow: 6 },
-                }}
-              >
-                <CardContent sx={{ flexGrow: 1, textAlign: 'center' }}>
-                  <Box sx={{ mb: 1 }}>{PRODUCT_ICONS[product.id]}</Box>
-                  <Typography variant="h6" fontWeight={700} gutterBottom>
-                    {product.name}
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-                    {product.tagline}
-                  </Typography>
-                  <Box sx={{ mt: 1 }}>
-                    {product.deployment.slice(0, 2).map((deploy) => (
-                      <Chip
-                        key={deploy}
-                        label={deploy}
-                        size="small"
-                        variant="outlined"
-                        sx={{ mr: 0.5, mb: 0.5 }}
-                      />
-                    ))}
-                  </Box>
-                </CardContent>
-                <Box sx={{ p: 2, pt: 0, textAlign: 'center' }}>
-                  <Button
-                    size="small"
-                    fullWidth
-                    variant="text"
-                    component="a"
-                    href="/product"
-                    endIcon={<ArrowForwardIcon fontSize="small" />}
-                    sx={{ '&:hover': { bgcolor: 'primary.50' } }}
-                  >
-                    {t('landingPage.products.viewDetails', 'View Details')}
-                  </Button>
-                </Box>
-              </Card>
-            </Grid>
-          ))}
-        </Grid>
-
-        <Box sx={{ textAlign: 'center', mt: 4 }}>
-          <Button
-            variant="outlined"
-            size="large"
-            component="a"
-            href="/product"
-            endIcon={<ArrowForwardIcon />}
-            sx={{ transition: 'all 0.2s ease', '&:hover': { transform: 'translateY(-2px)' } }}
-          >
-            {t('landingPage.products.viewAll', 'View All Products')}
-          </Button>
-        </Box>
-      </Section>
+      <StandardsArchitectureSection
+        t={t}
+        expandedLayer={expandedLayer}
+        onToggleLayer={setExpandedLayer}
+      />
 
       {/* ───────────────────────────────────  TRUST SIGNALS (enterprise-grade)  */}
       <Section bgcolor="grey.50">
@@ -1340,17 +1885,27 @@ function LandingPage() {
         }}
       >
         <Typography variant="h4" gutterBottom fontWeight={800}>
-          {t('landingPage.footer.title', 'Ready to get started?')}
+          {t('landingPage.footer.title', 'Start with the verification surface.')}
         </Typography>
-        <Typography variant="body1" sx={{ mb: 4, maxWidth: 600, mx: 'auto', opacity: 0.9 }}>
-          {t('landingPage.footer.description', 'Start free, or compare plans for your organization.')}
+        <Typography variant="body1" sx={{ mb: 4, maxWidth: 680, mx: 'auto', opacity: 0.9 }}>
+          {SHOW_PUBLIC_PRICING_BUTTONS && !DISABLE_PUBLIC_PRICING_BUTTONS
+            ? t('landingPage.footer.description', 'Start with the verification surface, then compare plans when you are ready to deploy.')
+            : t('landingPage.footer.descriptionComingSoon', 'Start with the verification surface today. Pricing and onboarding stay gated on production deployments, but the docs, product paths, and API flows are live.')}
         </Typography>
         <Box sx={{ display: 'flex', gap: 2, justifyContent: 'center', flexWrap: 'wrap' }}>
           <Button
+            component={Link}
+            to="/developers"
+            onClick={() => handleLandingCtaClick({
+              section: 'footer',
+              ctaId: 'start_verifying',
+              ctaLabel: t('valueProposition.primaryCTA', VALUE_PROPOSITION.primaryCTA),
+              destinationPath: '/developers',
+            })}
             variant="contained"
             size="large"
             startIcon={<VerifiedUserIcon />}
-            onClick={() => register()}
+            data-testid="footer-primary-cta"
             sx={{
               bgcolor: 'white',
               color: 'primary.main',
@@ -1364,10 +1919,18 @@ function LandingPage() {
             {t('valueProposition.primaryCTA', VALUE_PROPOSITION.primaryCTA)}
           </Button>
           <Button
+            component={Link}
+            to={VALUE_PROPOSITION.secondaryCTA.path}
+            onClick={() => handleLandingCtaClick({
+              section: 'footer',
+              ctaId: 'view_verification_api',
+              ctaLabel: t('valueProposition.secondaryCTA', VALUE_PROPOSITION.secondaryCTA.label),
+              destinationPath: VALUE_PROPOSITION.secondaryCTA.path,
+            })}
             variant="outlined"
             size="large"
-            component="a"
-            href="/pricing"
+            endIcon={<ArrowForwardIcon />}
+            data-testid="footer-secondary-cta"
             sx={{
               borderColor: 'white',
               color: 'white',
@@ -1377,8 +1940,32 @@ function LandingPage() {
               transition: 'all 0.2s ease',
             }}
           >
-            {t('landingPage.footer.viewPricing', 'View Pricing')}
+            {t('valueProposition.secondaryCTA', VALUE_PROPOSITION.secondaryCTA.label)}
           </Button>
+          {SHOW_PUBLIC_PRICING_BUTTONS && (
+            <FutureFeatureButton
+              variant="outlined"
+              size="large"
+              disabled={DISABLE_PUBLIC_PRICING_BUTTONS}
+              onClick={handleFooterPricingClick}
+              data-testid="footer-pricing-cta"
+              sx={{
+                borderColor: 'white',
+                color: 'white',
+                px: 4,
+                '&:hover': { bgcolor: 'rgba(255,255,255,0.12)', borderColor: 'white', transform: 'translateY(-2px)' },
+                width: { xs: '100%', sm: 'auto' },
+                transition: 'all 0.2s ease',
+              }}
+              disabledSx={{
+                borderColor: 'rgba(255, 255, 255, 0.28)',
+                color: 'rgba(255, 255, 255, 0.62)',
+                bgcolor: 'rgba(255, 255, 255, 0.06)',
+              }}
+            >
+              {t('landingPage.footer.viewPricing', 'View Pricing')}
+            </FutureFeatureButton>
+          )}
         </Box>
       </Box>
 

@@ -1,0 +1,164 @@
+resolver 127.0.0.11 valid=30s ipv6=off;
+
+server {
+    listen 80;
+    server_name ${PUBLIC_DOMAIN};
+
+    client_max_body_size 50M;
+    proxy_buffer_size 128k;
+    proxy_buffers 4 256k;
+    proxy_busy_buffers_size 256k;
+
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+
+    location /api/ {
+        set $backend_api ${GATEWAY_UPSTREAM};
+        proxy_pass http://$backend_api/api/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+    }
+
+    location /auth/ {
+        set $backend_api ${GATEWAY_UPSTREAM};
+        proxy_pass http://$backend_api/auth/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location /health {
+        set $backend_api ${GATEWAY_UPSTREAM};
+        proxy_pass http://$backend_api/health;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+    }
+
+    location = /.well-known/ai-plugin.json {
+        set $ui_upstream ${UI_UPSTREAM};
+        proxy_pass http://$ui_upstream/.well-known/ai-plugin.json;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        add_header Content-Type application/json;
+        add_header Access-Control-Allow-Origin * always;
+    }
+
+    location /.well-known/ {
+        set $backend_api ${GATEWAY_UPSTREAM};
+        proxy_pass http://$backend_api;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        add_header Access-Control-Allow-Origin * always;
+    }
+
+    location ~ "^/org/([0-9a-fA-F-]{36})/spruce/\.well-known/(openid-credential-issuer|oauth-authorization-server)$" {
+        set $backend_api ${GATEWAY_UPSTREAM};
+        proxy_pass http://$backend_api/.well-known/$2/org/$1/spruce;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        add_header Access-Control-Allow-Origin * always;
+    }
+
+    location ~ "^/org/([0-9a-fA-F-]{36})/credential-manager/\.well-known/(openid-credential-issuer|oauth-authorization-server)$" {
+        set $backend_api ${GATEWAY_UPSTREAM};
+        proxy_pass http://$backend_api/.well-known/$2/org/$1/credential-manager;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        add_header Access-Control-Allow-Origin * always;
+    }
+
+    location ~ "^/org/([0-9a-fA-F-]{36})/apple-wallet/\.well-known/(openid-credential-issuer|oauth-authorization-server)$" {
+        set $backend_api ${GATEWAY_UPSTREAM};
+        proxy_pass http://$backend_api/.well-known/$2/org/$1/apple-wallet;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        add_header Access-Control-Allow-Origin * always;
+    }
+
+    location ~ "^/org/([0-9a-fA-F-]{36})/\.well-known/(openid-credential-issuer|oauth-authorization-server)$" {
+        set $backend_api ${GATEWAY_UPSTREAM};
+        proxy_pass http://$backend_api/.well-known/$2/org/$1;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        add_header Access-Control-Allow-Origin * always;
+    }
+
+    location /realms/ {
+        set $keycloak ${KEYCLOAK_UPSTREAM};
+        proxy_pass http://$keycloak;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Port 443;
+    }
+
+    location /resources/ {
+        set $keycloak ${KEYCLOAK_UPSTREAM};
+        proxy_pass http://$keycloak;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_cache_valid 200 1h;
+        add_header X-Cache-Status $upstream_cache_status;
+    }
+
+    location /v1/ {
+        set $backend_api ${GATEWAY_UPSTREAM};
+        proxy_pass http://$backend_api;
+        proxy_http_version 1.1;
+        proxy_redirect off;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location = /openapi.json {
+        set $backend_api ${GATEWAY_UPSTREAM};
+        proxy_pass http://$backend_api/openapi.json;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        add_header Access-Control-Allow-Origin * always;
+    }
+
+    location / {
+        set $ui_upstream ${UI_UPSTREAM};
+        proxy_pass http://$ui_upstream;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+    }
+}

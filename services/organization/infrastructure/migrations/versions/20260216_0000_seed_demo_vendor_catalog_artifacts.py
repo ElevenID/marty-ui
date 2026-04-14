@@ -8,6 +8,7 @@ Create Date: 2026-02-16 00:00:00.000000+00:00
 from alembic import op
 import sqlalchemy as sa
 import json
+from marty_common.migration_profile import skip_demo_migrations
 
 
 # revision identifiers, used by Alembic.
@@ -150,6 +151,9 @@ DEMO_CREDENTIAL_ROWS = [
 
 
 def upgrade() -> None:
+    if skip_demo_migrations():
+        return
+
     conn = op.get_bind()
 
     # Ensure Demo Vendor Org remains discoverable and open join as part of demo UX.
@@ -248,6 +252,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    if skip_demo_migrations():
+        return
+
     conn = op.get_bind()
 
     has_credential_types = conn.execute(

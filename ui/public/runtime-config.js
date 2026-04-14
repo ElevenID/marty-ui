@@ -1,0 +1,1 @@
+window.__MARTY_RUNTIME_CONFIG__ = window.__MARTY_RUNTIME_CONFIG__ || {};

@@ -61,6 +61,7 @@ bun.lockb
 
 # Oracle Cloud production secrets (NEVER commit)
 .env.production
+.secrets/
 
 # Keep example env files tracked
 !.env.example

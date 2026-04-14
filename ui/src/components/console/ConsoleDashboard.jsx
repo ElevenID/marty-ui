@@ -7,6 +7,8 @@
 
 import { useMemo, useState } from 'react';
 import {
+  Alert,
+  AlertTitle,
   Box,
   Grid,
   Paper,
@@ -41,13 +43,118 @@ import { ApplicantStatsCard } from './dashboard/ApplicantStatsCard';
 import { DeveloperQuickStartPanel } from './dashboard/DeveloperQuickStartPanel';
 import { EnvironmentWarningBanner, EnvironmentContext } from './dashboard/EnvironmentBadge';
 import GuidedSetupBanner from './dashboard/GuidedSetupBanner';
-import { updateOrganizationEnvironment } from '../../services/dashboardApi';
+import { runHostedPilotPurge, updateOrganizationEnvironment } from '../../services/dashboardApi';
 import CreateTrustProfileDrawer from './trust/CreateTrustProfileDrawer';
 import CreateTemplateDrawer from './templates/CreateTemplateDrawer';
 import CreatePolicyDrawer from './policies/CreatePolicyDrawer';
 import CreateDeploymentDrawer from './deployments/CreateDeploymentDrawer';
 import CreateFlowDrawer from './flows/CreateFlowDrawer';
 import IssuanceDashboardWidget from './dashboard/IssuanceDashboardWidget';
+
+const EMPTY_RETENTION_COUNTS = {
+  issuanceTransactions: 0,
+  applications: 0,
+  authorizationSessions: 0,
+  issuanceEvents: 0,
+  issuedCredentials: 0,
+  total: 0,
+};
+
+function formatRelativeCountdown(targetIso) {
+  if (!targetIso) {
+    return null;
+  }
+
+  const deltaMs = new Date(targetIso).getTime() - Date.now();
+  if (Number.isNaN(deltaMs)) {
+    return null;
+  }
+
+  if (deltaMs <= 0) {
+    return 'now';
+  }
+
+  const totalHours = Math.ceil(deltaMs / (1000 * 60 * 60));
+  if (totalHours < 24) {
+    return `${totalHours} hour${totalHours === 1 ? '' : 's'}`;
+  }
+
+  const totalDays = Math.ceil(totalHours / 24);
+  return `${totalDays} day${totalDays === 1 ? '' : 's'}`;
+}
+
+function formatTimestamp(timestamp) {
+  if (!timestamp) {
+    return null;
+  }
+
+  const parsed = new Date(timestamp);
+  if (Number.isNaN(parsed.getTime())) {
+    return null;
+  }
+
+  return parsed.toLocaleString();
+}
+
+function HostedPilotRetentionBanner({ lifecycle, purging, purgeFeedback, onPurge }) {
+  const pilotRetention = lifecycle?.pilotRetention;
+  if (!pilotRetention?.enabled) {
+    return null;
+  }
+
+  const eligibleForPurge = pilotRetention.eligibleForPurge || EMPTY_RETENTION_COUNTS;
+  const hasEligibleRecords = eligibleForPurge.total > 0;
+  const countdownLabel = formatRelativeCountdown(pilotRetention.nextExpiryAt);
+  const lastPurgedLabel = formatTimestamp(purgeFeedback?.purgedAt || pilotRetention.lastPurgedAt);
+
+  return (
+    <Box sx={{ mt: 2 }}>
+      <Alert
+        severity={hasEligibleRecords ? 'warning' : 'info'}
+        action={hasEligibleRecords ? (
+          <Button
+            color="inherit"
+            size="small"
+            variant="outlined"
+            onClick={onPurge}
+            disabled={purging}
+          >
+            {purging ? 'Purging...' : 'Purge now'}
+          </Button>
+        ) : null}
+      >
+        <AlertTitle>Hosted Pilot retention</AlertTitle>
+        <Typography variant="body2">
+          {hasEligibleRecords
+            ? `${eligibleForPurge.total} Hosted Pilot records are older than ${pilotRetention.windowDays} days and ready to purge.`
+            : countdownLabel
+              ? `Next Hosted Pilot record ages out in ${countdownLabel}.`
+              : `No Hosted Pilot records are close to expiry yet. New pilot data ages out after ${pilotRetention.windowDays} days.`}
+        </Typography>
+        {pilotRetention.scopeSummary ? (
+          <Typography variant="body2" sx={{ mt: 0.75 }}>
+            {pilotRetention.scopeSummary}
+          </Typography>
+        ) : null}
+        {pilotRetention.accessBehavior ? (
+          <Typography variant="body2" sx={{ mt: 0.75 }}>
+            {pilotRetention.accessBehavior}
+          </Typography>
+        ) : null}
+        {lastPurgedLabel ? (
+          <Typography variant="caption" sx={{ display: 'block', mt: 1 }}>
+            Last purge completed: {lastPurgedLabel}
+          </Typography>
+        ) : null}
+      </Alert>
+      {purgeFeedback?.message ? (
+        <Alert severity={purgeFeedback.severity} sx={{ mt: 1.5 }}>
+          {purgeFeedback.message}
+        </Alert>
+      ) : null}
+    </Box>
+  );
+}
 
 
 /**
@@ -116,6 +223,8 @@ function ConsoleDashboard() {
   useSSE(organizationId);
   const [environment, setEnvironment] = useState(data.environment || 'development');
   const [activeDrawer, setActiveDrawer] = useState(null);
+  const [purgingPilotData, setPurgingPilotData] = useState(false);
+  const [purgeFeedback, setPurgeFeedback] = useState(null);
 
   // Compute setup readiness and blockers
   const readiness = useMemo(() => computeSetupReadiness(data), [data]);
@@ -173,6 +282,30 @@ function ConsoleDashboard() {
     }
   };
 
+  const handleHostedPilotPurge = async () => {
+    setPurgingPilotData(true);
+    setPurgeFeedback(null);
+
+    try {
+      const result = await runHostedPilotPurge(organizationId);
+      setPurgeFeedback({
+        severity: 'success',
+        message: `Purged ${result.purgedRecords.total} Hosted Pilot records.`,
+        purgedAt: result.purgedAt,
+      });
+      if (refetch) {
+        refetch();
+      }
+    } catch (purgeError) {
+      setPurgeFeedback({
+        severity: 'error',
+        message: purgeError?.message || 'Failed to purge Hosted Pilot data.',
+      });
+    } finally {
+      setPurgingPilotData(false);
+    }
+  };
+
   // Check if org is operational (setup complete + runtime ready)
   const isOperational = useMemo(() => {
     return readiness.flow?.state === 'ready' && 
@@ -200,7 +333,7 @@ function ConsoleDashboard() {
   const userRole = isAdministrator ? t('common:userTypes.administrator') : isVendor ? t('common:userTypes.vendor') : t('common:userTypes.user');
 
   return (
-    <Box>
+    <Box data-testid="console.dashboard.page">
       {/* Header */}
       <Box sx={{ mb: 4 }}>
         <Typography variant="h4" component="h1" gutterBottom>
@@ -230,6 +363,12 @@ function ConsoleDashboard() {
       <Box sx={{ mt: 2 }}>
         <EnvironmentWarningBanner environment={environment} />
       </Box>
+      <HostedPilotRetentionBanner
+        lifecycle={data.lifecycle}
+        purging={purgingPilotData}
+        purgeFeedback={purgeFeedback}
+        onPurge={handleHostedPilotPurge}
+      />
 
       {/* Guided Setup Banner */}
       <GuidedSetupBanner readiness={readiness} />

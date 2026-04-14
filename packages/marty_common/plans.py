@@ -39,6 +39,17 @@ class PlanTier(str, Enum):
     SYSTEM = "system"
 
 
+def normalize_plan_identifier(tier: PlanTier | str | None) -> str | None:
+    """Normalize a plan identifier without forcing it into an internal tier."""
+    if tier is None:
+        return None
+    if isinstance(tier, PlanTier):
+        return tier.value
+
+    normalized = str(tier).strip().lower()
+    return normalized or None
+
+
 # ── Entitlements ─────────────────────────────────────────────────────────
 
 @dataclass(frozen=True)
@@ -178,6 +189,99 @@ for _plan_entry in PLAN_CATALOG["plans"]:
     )
 
 
+_COMMERCIAL_PLAN_INFO: dict[str, PlanInfo] = {
+    "free": PlanInfo(
+        plan_id="free",
+        display_name="Developer Sandbox",
+        tagline="Free shared cloud for developer testing only.",
+        annual_price=0,
+        monthly_price=0,
+        starting_annual_price=0,
+    ),
+    "starter": PlanInfo(
+        plan_id="starter",
+        display_name="Hosted Pilot",
+        tagline="Managed pilot with automatic 30-day purge.",
+        annual_price=None,
+        monthly_price=299,
+        starting_annual_price=None,
+    ),
+    "hosted_pilot": PlanInfo(
+        plan_id="starter",
+        display_name="Hosted Pilot",
+        tagline="Managed pilot with automatic 30-day purge.",
+        annual_price=None,
+        monthly_price=299,
+        starting_annual_price=None,
+    ),
+    "pilot": PlanInfo(
+        plan_id="starter",
+        display_name="Hosted Pilot",
+        tagline="Managed pilot with automatic 30-day purge.",
+        annual_price=None,
+        monthly_price=299,
+        starting_annual_price=None,
+    ),
+    "professional": PlanInfo(
+        plan_id="professional",
+        display_name="Self-Hosted Production",
+        tagline="Customer-managed production deployment.",
+        annual_price=12000,
+        monthly_price=None,
+        starting_annual_price=12000,
+    ),
+    "self_hosted_production": PlanInfo(
+        plan_id="professional",
+        display_name="Self-Hosted Production",
+        tagline="Customer-managed production deployment.",
+        annual_price=12000,
+        monthly_price=None,
+        starting_annual_price=12000,
+    ),
+    "self-hosted-production": PlanInfo(
+        plan_id="professional",
+        display_name="Self-Hosted Production",
+        tagline="Customer-managed production deployment.",
+        annual_price=12000,
+        monthly_price=None,
+        starting_annual_price=12000,
+    ),
+    "production": PlanInfo(
+        plan_id="professional",
+        display_name="Self-Hosted Production",
+        tagline="Customer-managed production deployment.",
+        annual_price=12000,
+        monthly_price=None,
+        starting_annual_price=12000,
+    ),
+    "enterprise": PlanInfo(
+        plan_id="enterprise",
+        display_name="Enterprise",
+        tagline="Custom deployment and support package.",
+        annual_price=None,
+        monthly_price=None,
+        starting_annual_price=60000,
+    ),
+}
+
+
+_PLAN_TIER_ALIASES: dict[str, PlanTier] = {
+    PlanTier.SANDBOX.value: PlanTier.SANDBOX,
+    PlanTier.PROGRAM.value: PlanTier.PROGRAM,
+    PlanTier.INSTITUTION.value: PlanTier.INSTITUTION,
+    PlanTier.SYSTEM.value: PlanTier.SYSTEM,
+    "free": PlanTier.SANDBOX,
+    "starter": PlanTier.PROGRAM,
+    "hosted_pilot": PlanTier.PROGRAM,
+    "pilot": PlanTier.PROGRAM,
+    "professional": PlanTier.PROGRAM,
+    "self_hosted_production": PlanTier.PROGRAM,
+    "self-hosted-production": PlanTier.PROGRAM,
+    "production": PlanTier.PROGRAM,
+    "enterprise": PlanTier.SYSTEM,
+}
+
+
 # ── Display labels (education market) ───────────────────────────────────
 
 DISPLAY_LABELS: dict[str, str] = PLAN_CATALOG["display_labels"]
@@ -209,8 +313,36 @@ ONBOARDING_SKUS = PLAN_CATALOG["onboarding_skus"]
 def get_plan_limits(tier: PlanTier | str) -> PlanLimits:
     """Get limits for a plan tier."""
     if isinstance(tier, str):
-        tier = PlanTier(tier)
+        tier = resolve_plan_tier(tier)
     return PLAN_LIMITS[tier]
+
+
+def resolve_plan_tier(tier: PlanTier | str | None, *, default: PlanTier = PlanTier.SANDBOX) -> PlanTier:
+    """Resolve a plan identifier to an internal entitlement tier."""
+    if isinstance(tier, PlanTier):
+        return tier
+
+    normalized = normalize_plan_identifier(tier)
+    if not normalized:
+        return default
+
+    return _PLAN_TIER_ALIASES.get(normalized, default)
+
+
+def resolve_plan_info(tier: PlanTier | str | None) -> PlanInfo:
+    """Resolve user-facing plan metadata for internal or commercial plan IDs."""
+    if isinstance(tier, PlanTier):
+        return PLAN_INFO[tier]
+
+    normalized = normalize_plan_identifier(tier)
+    if not normalized:
+        return PLAN_INFO[PlanTier.SANDBOX]
+
+    commercial_info = _COMMERCIAL_PLAN_INFO.get(normalized)
+    if commercial_info is not None:
+        return commercial_info
+
+    return PLAN_INFO[resolve_plan_tier(normalized)]
 
 
 def check_limit(limits: PlanLimits, metric: str, current_value: int) -> bool:

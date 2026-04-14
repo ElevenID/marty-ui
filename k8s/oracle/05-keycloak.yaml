@@ -1,7 +1,7 @@
 ---
 # ================================================================
 # Keycloak — Deployment + headless Service
-# Exposed publicly via Cloudflare Tunnel at auth.elevenidllc.com
+# Self-host identity provider behind the UI edge proxy or a dedicated hostname.
 # ================================================================
 apiVersion: v1
 kind: Service
@@ -52,11 +52,15 @@ spec:
           image: quay.io/keycloak/keycloak:25.0
           command:
             - start
-          args:
             - --import-realm
+            - --features=organization
           ports:
             - containerPort: 8080
           env:
+            - name: KC_HEALTH_ENABLED
+              value: "true"
+            - name: KC_METRICS_ENABLED
+              value: "true"
             - name: KC_DB
               value: "postgres"
             - name: KC_DB_URL
@@ -93,11 +97,10 @@ spec:
               value: "true"
             - name: KC_HOSTNAME_STRICT_HTTPS
               value: "true"
-            # Cloudflare Tunnel terminates TLS; Keycloak sits behind it
             - name: KC_HTTP_ENABLED
               value: "true"
-            - name: KC_PROXY
-              value: "edge"
+            - name: KC_PROXY_HEADERS
+              value: xforwarded
             - name: PUBLIC_DOMAIN
               valueFrom:
                 configMapKeyRef:
@@ -188,7 +191,7 @@ spec:
       containers:
         - name: configurator
           image: quay.io/keycloak/keycloak:25.0
-          command: ["/bin/bash", "/scripts/setup-keycloak.sh"]
+          command: ["/bin/bash", "/scripts/setup-keycloak-selfhost-production.sh"]
           env:
             - name: KC_URL
               value: "http://keycloak:8080"
@@ -232,36 +235,17 @@ spec:
                 secretKeyRef:
                   name: marty-secrets
                   key: MARTY_API_CLIENT_SECRET
+            - name: KEYCLOAK_REMOVE_DEMO_USERS
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: KEYCLOAK_REMOVE_DEMO_USERS
           volumeMounts:
-            - name: setup-script
+            - name: setup-scripts
               mountPath: /scripts
               readOnly: true
       volumes:
-        - name: setup-script
+        - name: setup-scripts
           configMap:
-            name: keycloak-setup-script
+            name: keycloak-setup-scripts
             defaultMode: 0755
----
-# Placeholder ConfigMap for the realm JSON.
-# The deploy script (scripts/deploy-oracle.sh) applies the actual realm
-# from config/keycloak/ via kubectl create configmap --from-file.
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: keycloak-realm-config
-  namespace: marty-prod
-  annotations:
-    note: "Overridden by deploy-oracle.sh which loads config/keycloak/*.json"
-data: {}
----
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: keycloak-setup-script
-  namespace: marty-prod
-data:
-  setup-keycloak.sh: |
-    #!/bin/bash
-    # Inline copy of scripts/setup-keycloak.sh — kept small; the source of truth
-    # is scripts/setup-keycloak.sh in the repo which is mounted via ConfigMap.
-    echo "Keycloak configurator: using mounted script from repo."

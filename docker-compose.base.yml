@@ -211,6 +211,7 @@ services:
       dockerfile: marty-ui/services/Dockerfile.migrations
     container_name: marty-db-migrate
     environment:
+      MARTY_DB_PASSWORD: ${MARTY_DB_PASSWORD:-marty_dev_password}
       DATABASE_URL: postgresql://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
       MARTY_ORG_ID: ${MARTY_ORG_ID:-00000000-0000-0000-0000-000000000001}
       MARTY_ORG_ADMIN_EMAIL: ${MARTY_ORG_ADMIN_EMAIL:-}
@@ -256,7 +257,7 @@ services:
       RATE_LIMIT_RPM: ${RATE_LIMIT_RPM:-0}
       ISSUANCE_API_KEY: ${ISSUANCE_API_KEY:-dev-issuance-api-key}
     ports:
-      - "8000:8000"
+      - "${GATEWAY_HOST_PORT:-8000}:8000"
     depends_on:
       auth:
         condition: service_healthy
@@ -304,7 +305,7 @@ services:
       AUTH_GRPC_PORT: "9001"
     ports:
       - "8001:8001"
-      - "9001:9001"
+      - "${AUTH_GRPC_HOST_PORT:-9001}:9001"
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -754,8 +755,8 @@ services:
       - ./config/envoy/envoy.yaml:/etc/envoy/envoy.yaml:ro
       - ./config/envoy/proto_descriptor.pb:/etc/envoy/proto_descriptor.pb:ro
     ports:
-      - "9000:9000"    # gRPC / gRPC-web unified endpoint
-      - "9901:9901"    # Envoy admin
+      - "${ENVOY_HOST_PORT:-9000}:9000"    # gRPC / gRPC-web unified endpoint
+      - "${ENVOY_ADMIN_HOST_PORT:-9901}:9901"    # Envoy admin
     depends_on:
       auth:
         condition: service_healthy

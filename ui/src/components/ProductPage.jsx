@@ -20,6 +20,8 @@ import AccountBalanceWalletIcon from '@mui/icons-material/AccountBalanceWallet';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import GitHubIcon from '@mui/icons-material/GitHub';
 import { useNavigate } from 'react-router-dom';
+import { DISABLE_PUBLIC_PRICING_BUTTONS, SHOW_PUBLIC_PRICING_BUTTONS } from '@ui-public-config';
+import FutureFeatureButton from './FutureFeatureButton';
 import { PRODUCTS } from '../data/marketingContent';
 import { useBranding } from '../hooks/useBranding';
 
@@ -276,11 +278,21 @@ function ProductPage() {
             </Card>
           </Grid>
         </Grid>
-        <Box sx={{ textAlign: 'center', mt: 2 }}>
-          <Button size="small" onClick={() => navigate('/pricing')} endIcon={<ArrowForwardIcon fontSize="small" />}>
-            Compare packages
-          </Button>
-        </Box>
+        {SHOW_PUBLIC_PRICING_BUTTONS && (
+          <Box sx={{ textAlign: 'center', mt: 2 }}>
+            <FutureFeatureButton
+              size="small"
+              disabled={DISABLE_PUBLIC_PRICING_BUTTONS}
+              onClick={() => navigate('/pricing')}
+              endIcon={<ArrowForwardIcon fontSize="small" />}
+              disabledSx={{
+                color: 'rgba(25, 118, 210, 0.52)',
+              }}
+            >
+              Compare packages
+            </FutureFeatureButton>
+          </Box>
+        )}
       </Box>
 
       {/* Who This Is For */}
@@ -318,9 +330,19 @@ function ProductPage() {
             <Typography variant="body2" color="text.secondary" paragraph>
               Launch quickly with SaaS verification, expand to self-hosted issuance and wallets as needed.
             </Typography>
-            <Button size="small" onClick={() => navigate('/pricing')} endIcon={<ArrowForwardIcon fontSize="small" />}>
-              View Packages
-            </Button>
+            {SHOW_PUBLIC_PRICING_BUTTONS && (
+              <FutureFeatureButton
+                size="small"
+                disabled={DISABLE_PUBLIC_PRICING_BUTTONS}
+                onClick={() => navigate('/pricing')}
+                endIcon={<ArrowForwardIcon fontSize="small" />}
+                disabledSx={{
+                  color: 'rgba(25, 118, 210, 0.52)',
+                }}
+              >
+                View Packages
+              </FutureFeatureButton>
+            )}
           </Grid>
         </Grid>
       </Paper>
@@ -334,7 +356,7 @@ function ProductPage() {
 
       <Grid container spacing={4}>
         {PRODUCTS.map((product) => (
-          <Grid item xs={12} key={product.id} id={product.id}>
+          <Grid item xs={12} key={product.id} id={product.id} sx={{ scrollMarginTop: 96 }}>
             <Card elevation={3} sx={{ height: '100%', scrollMarginTop: 80 }}>
               <CardHeader
                 title={product.name}
@@ -523,16 +545,27 @@ function ProductPage() {
           Ready to Build with {branding.branding.appName}?
         </Typography>
         <Typography variant="body1" color="text.secondary" sx={{ mb: 3, maxWidth: 600, mx: 'auto' }}>
-          Start free, or compare plans for enterprise deployment.
+          {DISABLE_PUBLIC_PRICING_BUTTONS
+            ? 'Pricing and onboarding are coming soon for production deployments. Explore the documentation and protocol details in the meantime.'
+            : SHOW_PUBLIC_PRICING_BUTTONS
+            ? 'Start free, or compare plans for enterprise deployment.'
+            : 'Explore the documentation and protocol details while pricing and onboarding flows are still being developed.'}
         </Typography>
         <Box sx={{ display: 'flex', gap: 2, justifyContent: 'center', flexWrap: 'wrap' }}>
-          <Button
-            variant="contained"
-            size="large"
-            onClick={() => navigate('/pricing')}
-          >
-            Compare Plans
-          </Button>
+          {SHOW_PUBLIC_PRICING_BUTTONS && (
+            <FutureFeatureButton
+              variant="contained"
+              size="large"
+              disabled={DISABLE_PUBLIC_PRICING_BUTTONS}
+              onClick={() => navigate('/pricing')}
+              disabledSx={{
+                bgcolor: 'rgba(25, 118, 210, 0.14)',
+                color: 'rgba(25, 118, 210, 0.52)',
+              }}
+            >
+              Compare Plans
+            </FutureFeatureButton>
+          )}
           <Button
             variant="outlined"
             size="large"

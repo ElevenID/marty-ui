@@ -63,7 +63,7 @@ spec:
               valueFrom:
                 secretKeyRef:
                   name: marty-secrets
-                  key: POSTGRES_PASSWORD
+                  key: MARTY_DB_PASSWORD
           resources:
             requests:
               memory: "512Mi"
