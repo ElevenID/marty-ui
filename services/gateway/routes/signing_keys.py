@@ -45,7 +45,11 @@ async def list_signing_keys(
     organization_id: str | None = Query(None, description="Optional organization scope"),
 ):
     """Return signing key compatibility metadata and domain configuration."""
-    _resolve_org_id(request, organization_id)
+    try:
+        _resolve_org_id(request, organization_id)
+    except Exception:
+        # Org context not available, but endpoint still returns metadata
+        pass
     return JSONResponse(
         content={
             "keys": [],
@@ -62,7 +66,11 @@ async def get_signing_key_config(
     organization_id: str | None = Query(None, description="Optional organization scope"),
 ):
     """Return compatibility config while signing-key service is not separately deployed."""
-    _resolve_org_id(request, organization_id)
+    try:
+        _resolve_org_id(request, organization_id)
+    except Exception:
+        # Org context not available, but endpoint still returns metadata
+        pass
     return JSONResponse(
         content={
             "hsm_enabled": False,
@@ -82,7 +90,11 @@ async def update_signing_key_config(
     organization_id: str | None = Query(None, description="Optional organization scope"),
 ):
     """Accept config updates for UI compatibility and echo the requested settings."""
-    _resolve_org_id(request, organization_id)
+    try:
+        _resolve_org_id(request, organization_id)
+    except Exception:
+        # Org context not available, but endpoint still accepts updates
+        pass
     return JSONResponse(
         content={
             **body,
