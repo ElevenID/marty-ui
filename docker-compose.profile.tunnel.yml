@@ -17,6 +17,8 @@ services:
     environment:
       CORS_ORIGINS: ${CORS_ORIGINS:-https://${PUBLIC_DOMAIN},http://localhost:3000,http://localhost:5173,http://localhost:9080}
       ISSUER_BASE_URL: ${PUBLIC_API_URL:-https://${PUBLIC_DOMAIN:-beta.elevenidllc.com}}
+    volumes:
+      - ./services/gateway/routes/signing_keys.py:/app/services/gateway/routes/signing_keys.py:ro
 
   issuance:
     environment:
