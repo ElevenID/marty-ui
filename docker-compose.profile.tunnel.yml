@@ -49,7 +49,7 @@ services:
     environment:
       PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:-beta.elevenidllc.com}
       UI_DEV_PORT: ${UI_DEV_PORT:-3002}
-      GATEWAY_UPSTREAM: ${GATEWAY_TUNNEL_UPSTREAM:-marty-gateway:8000}
+      GATEWAY_UPSTREAM: ${GATEWAY_TUNNEL_UPSTREAM:-host.docker.internal:18000}
       DOCS_DOMAIN: ${DOCS_DOMAIN:-docs.elevenidllc.com}
     networks:
       - marty-network
