@@ -1,1 +1,0 @@
-import{j as r,i as t}from"./mui-vendor-B6AxObId.js";import{r as a}from"./index-Clgyqg_T.js";var e={},o=t;Object.defineProperty(e,"__esModule",{value:!0});var u=e.default=void 0,v=o(a()),i=r;u=e.default=(0,v.default)((0,i.jsx)("path",{d:"M2 20h20v-4H2zm2-3h2v2H4zM2 4v4h20V4zm4 3H4V5h2zm-4 7h20v-4H2zm2-3h2v2H4z"}),"Storage");export{u as d};

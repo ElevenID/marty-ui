@@ -84,10 +84,35 @@ const getBreadcrumbs = (t) => [
 
 export default function SigningKeysPage() {
   const { t } = useTranslation('console');
-  const { data: keys = [], loading, error, reload: reloadKeys } = useAsyncData(async () => {
+  const { data: signingKeysData, loading, error, reload: reloadKeys } = useAsyncData(async () => {
     const data = await signingKeysApi.listSigningKeys();
-    return Array.isArray(data) ? data : data.keys || [];
+    const rawKeys = Array.isArray(data) ? data : data?.keys || [];
+    if (!Array.isArray(rawKeys)) {
+      return { keys: [], providerMetadata: null, domainConfig: null };
+    }
+
+    const normalizedKeys = rawKeys
+      .filter((key) => key && typeof key === 'object')
+      .map((key) => ({
+        ...key,
+        id: typeof key.id === 'string' && key.id.length > 0 ? key.id : 'unknown-key',
+        name: typeof key.name === 'string' ? key.name : '',
+        algorithm: typeof key.algorithm === 'string' ? key.algorithm : '-',
+        status: typeof key.status === 'string' ? key.status : 'unknown',
+        expiry_date: key.expiry_date ?? null,
+        created_at: key.created_at ?? null,
+      }));
+
+    return {
+      keys: normalizedKeys,
+      providerMetadata: data?.provider_metadata || null,
+      domainConfig: data?.domain_config || null,
+    };
   }, []);
+  const keys = Array.isArray(signingKeysData?.keys) ? signingKeysData.keys : [];
+  const providerMetadata = signingKeysData?.providerMetadata || null;
+  const domainConfig = signingKeysData?.domainConfig || null;
+  const safeKeys = Array.isArray(keys) ? keys : [];
   const uploadDialog = useDialog();
   const rotateDialog = useDialog();
   const settingsDialog = useDialog();
@@ -109,8 +134,9 @@ export default function SigningKeysPage() {
 
   const { can } = usePermissions();
   const { showNotification } = useNotifications();
-  const canManageSigningKeys = can('signing-key', 'create');
-  const canDeleteSigningKeys = can('signing-key', 'delete');
+  const canManageSigningKeys = can('signing-key', 'create') && providerMetadata?.supports_upload !== false;
+  const canDeleteSigningKeys = can('signing-key', 'delete') && providerMetadata?.supports_delete !== false;
+  const canRotateSigningKeys = can('signing-key', 'create') && providerMetadata?.supports_rotation !== false;
 
   useEffect(() => {
     if (currentTab === 1) {
@@ -211,6 +237,17 @@ export default function SigningKeysPage() {
     return daysUntilExpiry <= 30 && daysUntilExpiry > 0;
   };
 
+  const formatDate = (value) => {
+    if (!value) {
+      return '-';
+    }
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) {
+      return '-';
+    }
+    return parsed.toLocaleDateString();
+  };
+
   return (
     <ResourcePage
       title={t('deploy.signingKeys.title')}
@@ -247,11 +284,25 @@ export default function SigningKeysPage() {
         </Box>
 
         {/* Content */}
+        {(providerMetadata || domainConfig) && (
+          <Alert severity="info" sx={{ mb: 2 }}>
+            <Typography variant="body2" sx={{ mb: 0.5 }}>
+              Signing key source: {providerMetadata?.provider || 'unconfigured'} ({providerMetadata?.status || 'unknown'})
+            </Typography>
+            <Typography variant="body2" sx={{ mb: 0.5 }}>
+              Marty domain: {domainConfig?.public_domain || '-'}
+            </Typography>
+            <Typography variant="body2">
+              Issuer base URL: {domainConfig?.issuer_base_url || '-'}
+            </Typography>
+          </Alert>
+        )}
+
         {loading ? (
           <TableSkeleton rows={5} columns={5} showActions={true} />
         ) : error ? (
           <ErrorState error={error} onRetry={reloadKeys} variant="inline" />
-        ) : keys.length === 0 ? (
+        ) : safeKeys.length === 0 ? (
           <EmptyState
             icon={VpnKeyIcon}
             title={t('deploy.signingKeys.emptyState.title')}
@@ -276,11 +327,11 @@ export default function SigningKeysPage() {
                 </TableRow>
               </TableHead>
               <TableBody>
-                {keys.map((key) => (
+                {safeKeys.map((key) => (
                   <TableRow key={key.id}>
                     <TableCell>
                       <Typography variant="body2" fontFamily="monospace">
-                        {key.id.slice(0, 8)}...
+                        {String(key.id).slice(0, 8)}...
                       </Typography>
                     </TableCell>
                     <TableCell>{key.name || t('deploy.signingKeys.unnamedKey')}</TableCell>
@@ -295,7 +346,7 @@ export default function SigningKeysPage() {
                       {key.expiry_date ? (
                         <Box>
                           <Typography variant="body2">
-                            {new Date(key.expiry_date).toLocaleDateString()}
+                            {formatDate(key.expiry_date)}
                           </Typography>
                           {isExpiringSoon(key.expiry_date) && (
                             <Typography variant="caption" color="warning.main">
@@ -304,15 +355,15 @@ export default function SigningKeysPage() {
                           )}
                         </Box>
                       ) : (
-                        '—'
+                        '-'
                       )}
                     </TableCell>
                     <TableCell>
-                      {new Date(key.created_at).toLocaleDateString()}
+                      {formatDate(key.created_at)}
                     </TableCell>
                     <TableCell align="right">
                       <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end' }}>
-                        {canManageSigningKeys && key.status === 'active' && (
+                        {canRotateSigningKeys && key.status === 'active' && (
                           <Tooltip title={t('deploy.signingKeys.rotateKeyTooltip')}>
                             <IconButton
                               size="small"
@@ -343,7 +394,7 @@ export default function SigningKeysPage() {
         )}
 
         {/* Check for invalid keys warning */}
-        {!loading && keys.some(k => k.status === 'invalid' || k.status === 'expired') && (
+        {!loading && safeKeys.some((k) => k.status === 'invalid' || k.status === 'expired') && (
           <Alert severity="warning" sx={{ mt: 2 }}>
             {t('deploy.signingKeys.invalidKeysWarning')}
           </Alert>
