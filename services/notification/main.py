@@ -1143,10 +1143,12 @@ async def list_notifications(
 async def get_unread_count(
     organization_id: str | None = None,
     recipient_id: str | None = None,
-    x_user_id: str = Header(alias="X-User-Id"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
     repo: InMemoryNotificationRepository | PostgresNotificationRepository = Depends(get_repo),
 ) -> NotificationCountResponse:
     effective_recipient_id = recipient_id or x_user_id
+    if not effective_recipient_id:
+        raise HTTPException(status_code=400, detail="recipient_id or X-User-Id is required")
     notifications = await repo.list_notifications(organization_id, effective_recipient_id)
     return NotificationCountResponse(count=sum(1 for notification in notifications if not notification.is_read))
 
@@ -1181,10 +1183,12 @@ async def mark_as_unread(
 async def mark_all_as_read(
     organization_id: str | None = None,
     recipient_id: str | None = None,
-    x_user_id: str = Header(alias="X-User-Id"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
     repo: InMemoryNotificationRepository | PostgresNotificationRepository = Depends(get_repo),
 ) -> MarkAllReadResponse:
     effective_recipient_id = recipient_id or x_user_id
+    if not effective_recipient_id:
+        raise HTTPException(status_code=400, detail="recipient_id or X-User-Id is required")
     notifications = await repo.list_notifications(organization_id, effective_recipient_id)
     marked = 0
     for notification in notifications:

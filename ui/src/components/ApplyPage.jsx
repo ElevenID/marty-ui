@@ -22,6 +22,7 @@ import {
   APPLY_CONTEXT_STORAGE_KEY,
   getApplyEntryDecision,
 } from '../application/routing';
+import { redirectBrowser, shouldBrowserRedirect } from '../application/routing/appHandoff';
 
 const ApplyPage = () => {
   const { credentialType } = useParams();
@@ -54,12 +55,17 @@ const ApplyPage = () => {
     });
 
     if (decision.kind === 'redirect-browser') {
-      window.location.href = decision.loginUrl;
+      redirectBrowser(decision.loginUrl);
+      return;
+    }
+
+    if (shouldBrowserRedirect({ currentPathname: location.pathname, destination: decision.destination })) {
+      redirectBrowser(decision.destination, { replace: false });
       return;
     }
 
     navigate(decision.destination, decision.navigationState ? { state: decision.navigationState } : undefined);
-  }, [authLoading, isAuthenticated, user, credentialType, searchParams, navigate, location.state]);
+  }, [authLoading, isAuthenticated, user, credentialType, searchParams, navigate, location.pathname, location.state]);
 
   // Show loading state while checking auth or redirecting
   return (

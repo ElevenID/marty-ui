@@ -3,9 +3,9 @@
 import grpc
 import warnings
 
-from . import flow_service_pb2 as flow__service__pb2
+import flow_service_pb2 as flow__service__pb2
 
-GRPC_GENERATED_VERSION = '1.76.0'
+GRPC_GENERATED_VERSION = '1.80.0'
 GRPC_VERSION = grpc.__version__
 _version_not_supported = False
 

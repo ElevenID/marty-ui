@@ -47,6 +47,7 @@ import TimelineIcon from '@mui/icons-material/Timeline';
 
 import { useAuth } from '../../hooks/useAuth';
 import { fetchAnalyticsSummary, fetchAnalyticsScans } from '../../application/vendor';
+import { formatOfficialReference } from '../../utils/officialReferences';
 
 // Outcome colors
 const OUTCOME_COLORS = {
@@ -79,6 +80,10 @@ function formatWalletType(walletType, t) {
     .split('_')
     .map(word => word.charAt(0).toUpperCase() + word.slice(1))
     .join(' ');
+}
+
+function formatTransactionReference(transactionId) {
+  return transactionId ? formatOfficialReference(transactionId, 'record') : 'N/A';
 }
 
 /**
@@ -457,7 +462,7 @@ export default function OfferAnalytics() {
                 <TableCell>{t('offerAnalytics.table.accessType')}</TableCell>
                 <TableCell>{t('offerAnalytics.table.walletType')}</TableCell>
                 <TableCell>{t('offerAnalytics.table.outcome')}</TableCell>
-                <TableCell>{t('offerAnalytics.table.transactionId')}</TableCell>
+                <TableCell>{t('offerAnalytics.table.transactionReference', 'Transaction Reference')}</TableCell>
                 <TableCell>{t('offerAnalytics.table.ipAddress')}</TableCell>
               </TableRow>
             </TableHead>
@@ -507,9 +512,9 @@ export default function OfferAnalytics() {
                     </TableCell>
                     
                     <TableCell>
-                      <Tooltip title={scan.transaction_id || 'N/A'}>
+                      <Tooltip title={formatTransactionReference(scan.transaction_id)}>
                         <Typography variant="body2" fontFamily="monospace" fontSize="0.75rem">
-                          {scan.transaction_id ? `${scan.transaction_id.slice(0, 12)}...` : 'N/A'}
+                          {formatTransactionReference(scan.transaction_id)}
                         </Typography>
                       </Tooltip>
                     </TableCell>

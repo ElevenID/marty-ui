@@ -26,10 +26,15 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import { useWizard } from '../../../hooks/useWizard';
 import { useAuth } from '../../../hooks/useAuth';
 import { addTrustProfileIssuer, createTrustProfile } from '../../../services/presentationPolicyApi';
+import signingKeysApi from '../../../services/signingKeysApi';
 import BasicsStep from './steps/BasicsStep';
 import TrustSourcesStep from './steps/TrustSourcesStep';
 import ValidationRulesStep from './steps/ValidationRulesStep';
 import ReviewStep from './steps/ReviewStep';
+import {
+  getAllowedAlgorithmsForFramework,
+  getSupportedFormatsForFramework,
+} from './trustProfileFormatCatalog';
 
 const getSteps = (t) => [
   t('wizards.trustProfile.steps.basics'),
@@ -37,6 +42,28 @@ const getSteps = (t) => [
   t('wizards.trustProfile.steps.validationRules'),
   t('wizards.trustProfile.steps.review'),
 ];
+
+const MANAGED_ISSUER_SOURCES = new Set([
+  'kms-derived-identity',
+  'auto-created',
+  'imported-did',
+  'issuer-profile',
+]);
+
+const issuerMetadata = (issuer) => (issuer && typeof issuer.metadata === 'object' ? issuer.metadata : {});
+
+const issuerProfileId = (issuer) => issuerMetadata(issuer).issuer_profile_id || issuer.issuer_profile_id || '';
+
+const issuerSigningServiceId = (issuer) => issuerMetadata(issuer).signing_service_id || issuer.signing_service_id || '';
+
+const issuerSigningKeyReference = (issuer) => issuerMetadata(issuer).signing_key_reference || issuer.signing_key_reference || '';
+
+const needsManagedIssuerProfile = (issuer) => {
+  if (!issuer?.did || issuer.certificate_pem || issuerProfileId(issuer)) {
+    return false;
+  }
+  return MANAGED_ISSUER_SOURCES.has(issuerMetadata(issuer).source);
+};
 
 const TrustProfileWizard = () => {
   const navigate = useNavigate();
@@ -52,7 +79,7 @@ const TrustProfileWizard = () => {
       case 2: // Validation Rules (optional)
         return true;
       case 3: // Review
-        return data.name?.trim().length > 0 && (data.trusted_issuers?.length || 0) > 0;
+        return data.name?.trim().length > 0;
       default:
         return false;
     }
@@ -64,18 +91,82 @@ const TrustProfileWizard = () => {
     }
 
     const trustedIssuers = data.trusted_issuers || [];
-    if (trustedIssuers.length === 0) {
-      throw new Error(t('wizards.trustProfile.reviewStep.trustSourcesRequired', { defaultValue: 'Add at least one trusted issuer before creating this trust profile.' }));
+    let keyManagementConfig = null;
+    const trustedIssuersWithProfiles = [];
+
+    for (const issuer of trustedIssuers) {
+      if (!needsManagedIssuerProfile(issuer)) {
+        trustedIssuersWithProfiles.push(issuer);
+        continue;
+      }
+
+      if (!keyManagementConfig) {
+        keyManagementConfig = await signingKeysApi.getKeyManagementConfig();
+      }
+
+      const signingServiceId = issuerSigningServiceId(issuer) || keyManagementConfig?.default_service_id || '';
+      if (!signingServiceId) {
+        throw new Error(t('trust.issuerIdentityRequiresKms', {
+          defaultValue: 'A managed DID issuer identity must be backed by a KMS signing service. Configure Key Management before creating this trust profile.',
+        }));
+      }
+
+      const response = await signingKeysApi.createIssuerProfile({
+        name: issuer.name || issuer.did,
+        issuer_did: issuer.did,
+        signing_service_id: signingServiceId,
+        signing_key_reference: issuerSigningKeyReference(issuer) || undefined,
+        key_purpose: 'vc_jwt_issuer',
+        status: 'active',
+      });
+      const profile = response?.profile || response || {};
+      trustedIssuersWithProfiles.push({
+        ...issuer,
+        issuer_profile_id: profile.id || issuerProfileId(issuer),
+        signing_service_id: profile.signing_service_id || signingServiceId,
+        signing_key_reference: profile.signing_key_reference || issuerSigningKeyReference(issuer),
+        metadata: {
+          ...issuerMetadata(issuer),
+          source: issuerMetadata(issuer).source || 'issuer-profile',
+          issuer_profile_id: profile.id || issuerProfileId(issuer),
+          signing_service_id: profile.signing_service_id || signingServiceId,
+          signing_key_reference: profile.signing_key_reference || issuerSigningKeyReference(issuer),
+        },
+      });
     }
+
+    const didIssuers = trustedIssuersWithProfiles.filter((i) => i.did);
+    const certIssuers = trustedIssuersWithProfiles.filter((i) => i.certificate_pem);
+    const hasExplicitTrustConfiguration = trustedIssuersWithProfiles.length > 0 || (data.trust_sources?.length || 0) > 0;
+    const effectiveAllowedIssuers = hasExplicitTrustConfiguration
+      ? data.allowed_issuers
+      : (data.allow_all_issuers ? null : []);
+    const effectiveValidationRules = {
+      ...(data.validation_rules || {}),
+      allowed_algorithms: getAllowedAlgorithmsForFramework(
+        data.framework_type || 'custom',
+        data.validation_rules?.allowed_algorithms,
+      ),
+    };
+    const certTrustSources = certIssuers.map((i) => ({
+      name: i.name || 'X.509 Root CA',
+      source_type: 'ROOT_CA',
+      certificate_pem: i.certificate_pem,
+      description: i.description || null,
+    }));
 
     const profile = await createTrustProfile({
       ...data,
+      trusted_issuers: trustedIssuersWithProfiles,
       organization_id: organizationId,
       status: data.activate_immediately ? 'active' : 'draft',
+      allowed_issuers: effectiveAllowedIssuers,
+      validation_rules: effectiveValidationRules,
+      trust_sources: [...(data.trust_sources || []), ...certTrustSources],
     });
 
     await Promise.all(
-      trustedIssuers.map((issuer) => addTrustProfileIssuer(profile.id, {
+      didIssuers.map((issuer) => addTrustProfileIssuer(profile.id, {
         name: issuer.name || issuer.did,
         description: issuer.description || null,
         issuer_did: issuer.did,
@@ -91,10 +182,22 @@ const TrustProfileWizard = () => {
       name: '',
       description: '',
       framework_type: 'custom',
-      supported_formats: ['jwt_vc', 'sd_jwt_vc', 'mdoc'],
+      supported_formats: getSupportedFormatsForFramework('custom'),
+      supported_wallet_ids: [],
+      issuance_protocol: 'oid4vci',
       trusted_issuers: [],
+      allow_all_issuers: false,
+      registry_imports: [],
+      revocation_policy: {
+        check_mode: 'HARD_FAIL',
+      },
+      time_policy: {
+        clock_skew_seconds: 300,
+        require_freshness: false,
+        freshness_window_seconds: 86400,
+      },
       validation_rules: {
-        allowed_algorithms: ['ES256', 'ES384', 'ES512', 'EdDSA'],
+        allowed_algorithms: getAllowedAlgorithmsForFramework('custom'),
         allow_self_signed: false,
         min_key_size: 2048,
         require_key_usage: true,

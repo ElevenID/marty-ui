@@ -33,6 +33,7 @@ export {
 
 export {
   buildCredentialApplicationNavigationState,
+  resolveCredentialApplicationPath,
   extractApplicationStatusInfo,
   extractExistingApplicationIds,
   filterCredentialCatalogItems,
@@ -68,11 +69,15 @@ export {
 } from './myApplications';
 
 export {
+  buildWalletRegistryMaps,
   createWalletOfferDialogState,
+  enrichWalletOfferForRouting,
   getWalletOfferDialogError,
+  getWalletOfferPrimaryUri,
   loadWalletOfferDialog,
   resetWalletOfferDialogState,
   resolveWalletOfferDialogLoad,
+  resolveWalletOfferRoutingWalletIds,
   startWalletOfferDialogLoad,
 } from './walletOfferDialogUseCases';
 

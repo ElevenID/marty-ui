@@ -326,7 +326,7 @@
       "framework": "Framework",
       "status": "Status",
       "trustedIssuers": "Trusted Issuers",
-      "validationRules": "Validation Rules",
+      "validationRules": "Cryptographic Policy",
       "lastUpdated": "Last Updated",
       "actions": "Actions"
     },
@@ -939,6 +939,9 @@
       "tabs": {
         "keys": "Keys",
         "settings": "Settings"
+      },
+      "errors": {
+        "sessionExpired": "Your session has expired — please sign in again."
       }
     }
   },
@@ -962,8 +965,8 @@
   "operate": {
     "title": "Operate",
     "issuance": {
-      "title": "Issuance",
-      "description": "Issue and manage digital credentials."
+      "title": "Issued Credentials",
+      "description": "Inspect issued credentials, review lifecycle details, and generate fresh wallet offers when holders need to claim again."
     },
     "applications": {
       "title": "Applications",
@@ -1007,13 +1010,13 @@
       "errorLoading": "Failed to load applications"
     },
     "tabs": {
-      "issuance": "Issuance",
+      "issuance": "Issued Credentials",
       "applications": "Applications"
     },
     "breadcrumbs": {
       "console": "Console",
       "operate": "Operate",
-      "issuance": "Issuance",
+      "issuance": "Issued Credentials",
       "applications": "Applications"
     }
   },
@@ -1153,7 +1156,7 @@
       "steps": {
         "basics": "Basics",
         "trustSources": "Trust Sources",
-        "validationRules": "Validation Rules",
+        "validationRules": "Cryptographic Policy",
         "review": "Review & Activate"
       },
       "frameworkLabels": {
@@ -1175,7 +1178,7 @@
           "name": "Trust Profile Name",
           "description": "Description",
           "frameworkType": "Framework Type",
-          "supportedFormats": "Supported Credential Formats *"
+          "supportedFormats": "Supported Credential Formats"
         },
         "placeholders": {
           "name": "Default Trust Profile"
@@ -1184,7 +1187,7 @@
           "name": "You can change this later",
           "description": "Optional: Explain the purpose and scope of this trust profile",
           "frameworkType": "Select the trust framework or standard this profile implements",
-          "supportedFormats": "Select which credential formats this trust profile accepts"
+          "supportedFormats": "Select which credential formats this trust profile supports"
         },
         "formatOptions": {
           "jwt_vc": "JWT VC (JSON Web Token Verifiable Credential)",
@@ -1201,7 +1204,17 @@
         "infoAlert": {
           "body": "Trust sources can include DIDs (Decentralized Identifiers), certificate authorities, or known issuer endpoints.",
           "skippingTitle": "Skipping this step?",
-          "skippingDescription": "Your profile will accept credentials from any issuer. You can add specific trust sources later to restrict which issuers are accepted."
+          "skippingDescription": "By default, an empty trust profile trusts no issuers. Turn on Allow any issuer below only if you intentionally want an open trust policy."
+        },
+        "allowAllIssuers": {
+          "label": "Allow any issuer",
+          "defaultDescription": "Disabled by default. If you leave this off and do not add trust sources, the profile will trust no issuers.",
+          "enabledDescription": "This empty trust profile will accept credentials from any issuer that passes the configured cryptographic validation.",
+          "disabledDescription": "Explicit trust sources are configured. Remove them if you want this profile to fall back to a global issuer policy."
+        },
+        "tabs": {
+          "manual": "Manual Issuers",
+          "registries": "Import from Registries"
         },
         "examplesTitle": "Example DIDs:",
         "issuerDid": {
@@ -1210,25 +1223,38 @@
           "helper": "Enter a DID (Decentralized Identifier) for a trusted issuer"
         },
         "addButton": "Add",
+        "importButton": "Import from Registry",
         "trustedIssuersTitle": "Trusted Issuers ({{count}})",
+        "registryImportsTitle": "Registry Imports ({{count}})",
         "emptyState": "No trusted issuers configured yet. Add DIDs above or skip this step.",
-        "comingSoon": {
-          "title": "Coming soon:",
-          "description": "Import trusted issuers from known registries (ICAO PKD, EU Trust Lists, etc.)"
+        "noRegistriesState": "No registries imported yet. Click 'Import from Registry' to add one.",
+        "registryAlert": {
+          "title": "Automatically import issuers from trusted registries",
+          "description": "Import issuers from known registries like ICAO PKD, EU Trust Lists, or AAMVA. These will be automatically synchronized based on the selected registry schedule."
+        },
+        "registryDialog": {
+          "title": "Import from Registry",
+          "label": "Select a Registry",
+          "info": "Select one of the available registries to import trusted issuers. Credentials will be auto-synced based on the registry's sync interval."
         }
       },
       "validationRulesStep": {
-        "title": "Validation Rules",
+        "title": "Cryptographic Policy",
         "optionalChip": "Optional",
         "description": "Configure cryptographic and security requirements. Defaults are pre-selected based on current best practices.",
         "defaultsAlert": {
           "title": "Defaults are production-safe.",
           "description": "These rules determine which credentials are accepted during verification. You can skip this step to use secure defaults."
         },
+        "frameworkLockedAlert": {
+          "title": "Signing algorithm selection is managed by the {{framework}} framework.",
+          "description": "Switch to Custom framework to customize signing algorithm requirements."
+        },
         "resetDefaults": "Reset to Defaults",
         "allowedAlgorithms": {
           "title": "Allowed Signing Algorithms",
-          "helper": "Select which cryptographic algorithms are accepted for credential signatures"
+          "helper": "Select which cryptographic algorithms are accepted for credential signatures",
+          "helperLocked": "This framework restricts signing algorithms. Choose Custom to edit them."
         },
         "advanced": {
           "show": "Show",
@@ -1257,7 +1283,7 @@
         "sections": {
           "basicInformation": "Basic Information",
           "trustSources": "Trust Sources",
-          "validationRules": "Validation Rules",
+          "validationRules": "Cryptographic Policy",
           "activation": "Activation"
         },
         "actions": {
@@ -1285,7 +1311,8 @@
           "trustedIssuersConfigured": "{{count}} trusted issuer configured",
           "trustedIssuersConfigured_plural": "{{count}} trusted issuers configured",
           "andMore": "... and {{count}} more",
-          "noneConfigured": "No trust sources configured (can be added later)"
+          "noneConfigured": "No trust sources are configured. This profile will trust no issuers until trust sources are added.",
+          "noneConfiguredAllowAll": "No trust sources are configured. This profile is explicitly set to trust any issuer that passes cryptographic validation."
         },
         "activationExplanation": {
           "title": "What happens after creation?",

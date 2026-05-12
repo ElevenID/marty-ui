@@ -34,14 +34,55 @@ export function resolveConsoleBootstrap({ preferences, memberships, localStoredO
   const safeMemberships = memberships || [];
   const hasMemberships = safeMemberships.length > 0;
   const restoredOrgId = normalizedPreferences.last_active_org_id || localStoredOrgId || null;
-  const activeOrgId = safeMemberships.find((entry) => entry.id === restoredOrgId)
+
+  // Prefer stored org ID if it exists in memberships
+  let activeOrgId = safeMemberships.find((entry) => entry.id === restoredOrgId)
     ? restoredOrgId
     : null;
 
+  const effectiveMode = hasMemberships ? normalizedPreferences.last_view_mode : APPLICANT_MODE;
+
+  // Auto-select first membership when in org mode but no stored org matches.
+  // Prevents falling through to the JWT organization_id which may be a system/sentinel org.
+  if (effectiveMode === ORG_MODE && !activeOrgId && hasMemberships) {
+    activeOrgId = safeMemberships[0].id;
+  }
+
   return {
-    mode: hasMemberships ? normalizedPreferences.last_view_mode : APPLICANT_MODE,
+    mode: effectiveMode,
     activeOrgId,
   };
+}
+
+/**
+ * Resolve the organization ID applicant-mode pages should use.
+ *
+ * @param {Object} params
+ * @param {string|null|undefined} params.defaultOrganizationId
+ * @param {string|null|undefined} params.currentOrganizationId
+ * @param {Array<{id: string, name?: string|null}>|null|undefined} params.organizations
+ * @returns {string | null}
+ */
+export function resolveApplicantOrganizationId({
+  defaultOrganizationId,
+  currentOrganizationId,
+  organizations,
+}) {
+  const safeOrganizations = organizations || [];
+
+  if (defaultOrganizationId) {
+    return defaultOrganizationId;
+  }
+
+  if (currentOrganizationId && safeOrganizations.find((entry) => entry.id === currentOrganizationId)) {
+    return currentOrganizationId;
+  }
+
+  if (safeOrganizations.length > 0) {
+    return safeOrganizations[0].id;
+  }
+
+  return currentOrganizationId || null;
 }
 
 /**

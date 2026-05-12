@@ -28,6 +28,7 @@ export function getSelfhostPublicUiFlags(hostname = getCurrentHostname()) {
     disablePublicGetStartedButtons: disableMarketingCtas,
     showPublicPricingButtons: true,
     disablePublicPricingButtons: disableMarketingCtas,
+    enableLegacyAdminImpersonationBanner: false,
   };
 }
 
@@ -88,6 +89,7 @@ export const SHOW_PUBLIC_GET_STARTED_BUTTONS = selfhostPublicUiFlags.showPublicG
 export const DISABLE_PUBLIC_GET_STARTED_BUTTONS = selfhostPublicUiFlags.disablePublicGetStartedButtons;
 export const SHOW_PUBLIC_PRICING_BUTTONS = selfhostPublicUiFlags.showPublicPricingButtons;
 export const DISABLE_PUBLIC_PRICING_BUTTONS = selfhostPublicUiFlags.disablePublicPricingButtons;
+export const ENABLE_LEGACY_ADMIN_IMPERSONATION_BANNER = selfhostPublicUiFlags.enableLegacyAdminImpersonationBanner;
 
 export const I18N_NAMESPACES = ['common', 'console', 'onboarding', 'forms', 'errors', 'applicant', 'vendor', 'marketing'];
 

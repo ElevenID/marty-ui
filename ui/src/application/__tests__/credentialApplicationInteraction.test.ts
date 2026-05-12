@@ -170,7 +170,7 @@ describe('Credential Application — end-to-end interaction', () => {
           {
             id: 'existing-appl',
             credential_configuration_id: 'tpl-mdl',
-            status: 'APPROVED',
+            status: 'CREDENTIALED',
             credential_offer_uri: 'openid-credential-offer://existing',
             credential_offer_uris: {},
           },

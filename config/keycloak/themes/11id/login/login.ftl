@@ -61,6 +61,28 @@
                             </#if>
                         </div>
 
+                        <#assign loginErrorText = "">
+                        <#if messagesPerField.existsError('username','password')>
+                            <#assign loginErrorText = messagesPerField.getFirstError('username','password')!"">
+                        <#elseif message?has_content && message.type = 'error'>
+                            <#assign loginErrorText = (message.summary!'')?replace('<[^>]+>', '', 'r')>
+                        </#if>
+                        <#if loginErrorText?has_content>
+                            <div class="elevenid-login-error" role="alert" aria-live="polite" data-testid="login-error-text">
+                                ${kcSanitize(loginErrorText)?no_esc}
+                            </div>
+                            <div class="elevenid-login-help" data-testid="login-password-help">
+                                <p class="elevenid-login-help-text">
+                                    If you usually sign in with Google, your account may not have a local password yet.
+                                </p>
+                                <a class="elevenid-login-help-link"
+                                   href="${url.loginResetCredentialsUrl}"
+                                   data-testid="set-password-email-link">
+                                    Set or reset password by email
+                                </a>
+                            </div>
+                        </#if>
+
                         <div class="${properties.kcFormGroupClass!} ${properties.kcFormSettingClass!}">
                             <div id="kc-form-options">
                                 <#if realm.rememberMe && !usernameHidden??>
@@ -157,7 +179,7 @@
                 <svg class="elevenid-social-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
                     <path fill="currentColor" d="M12.65 10C11.83 7.67 9.61 6 7 6c-3.31 0-6 2.69-6 6s2.69 6 6 6c2.61 0 4.83-1.67 5.65-4H17v4h4v-4h2v-4H12.65zM7 14c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2z"/>
                 </svg>
-                <span>Login with Marty Badge</span>
+                <span>Present Open Badge Credential</span>
             </a>
         </div>
     </#if>

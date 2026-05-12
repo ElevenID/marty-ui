@@ -55,6 +55,7 @@ import FilterListIcon from '@mui/icons-material/FilterList';
 import QRCodeDisplay from '../issuance/QRCodeDisplay';
 import { useAuth } from '../../hooks/useAuth';
 import { fetchOffers as fetchOffersApi, regenerateOffer } from '../../application/vendor';
+import { formatOfficialReference } from '../../utils/officialReferences';
 
 // Status configurations
 const STATUS_COLORS = {
@@ -76,6 +77,8 @@ const STATUS_LABELS = {
   error: 'Error',
   accepted: 'Accepted',
 };
+
+const formatTransactionReference = (transactionId) => formatOfficialReference(transactionId, 'record');
 
 /**
  * Format date for display
@@ -306,9 +309,9 @@ function QRCodeDialog({ open, offer, onClose }) {
                   />
                 </Box>
                 <Box display="flex" justifyContent="space-between">
-                  <Typography variant="body2" color="text.secondary">{t('vendorOfferList.qrDialog.transactionId')}:</Typography>
+                  <Typography variant="body2" color="text.secondary">Transaction Reference:</Typography>
                   <Typography variant="body2" fontFamily="monospace" fontSize="0.75rem">
-                    {offer.transaction_id.slice(0, 12)}...
+                    {formatTransactionReference(offer.transaction_id)}
                   </Typography>
                 </Box>
                 {timeRemaining && (
@@ -652,7 +655,7 @@ export default function VendorOfferList() {
           <TableHead>
             <TableRow>
               <TableCell>{t('vendorOfferList.table.created')}</TableCell>
-              <TableCell>{t('vendorOfferList.table.transactionId')}</TableCell>
+              <TableCell>{t('vendorOfferList.table.transactionReference', 'Transaction Reference')}</TableCell>
               <TableCell>{t('vendorOfferList.table.status')}</TableCell>
               <TableCell>{t('vendorOfferList.table.active')}</TableCell>
               <TableCell>{t('vendorOfferList.table.timeRemaining')}</TableCell>
@@ -686,11 +689,11 @@ export default function VendorOfferList() {
                     </Typography>
                   </TableCell>
                   
-                  {/* Transaction ID */}
+                  {/* Transaction Reference */}
                   <TableCell>
-                    <Tooltip title={offer.transaction_id}>
+                    <Tooltip title={formatTransactionReference(offer.transaction_id)}>
                       <Typography variant="body2" fontFamily="monospace" fontSize="0.75rem">
-                        {offer.transaction_id.slice(0, 12)}...
+                        {formatTransactionReference(offer.transaction_id)}
                       </Typography>
                     </Tooltip>
                   </TableCell>

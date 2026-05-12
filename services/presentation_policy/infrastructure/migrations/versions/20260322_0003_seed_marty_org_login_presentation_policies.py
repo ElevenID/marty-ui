@@ -2,16 +2,18 @@
 
 The original MemberLogin policy (20260227_0001) was seeded for the ElevenID
 demo organisation and references the ElevenID SD-JWT MemberCredential template.
-The Marty organisation now has two member credential templates of its own:
+The Marty organisation now has member credential templates of its own:
 
   - 50000000-0000-0000-0000-000000000010  SD-JWT  Member Login Credential
   - 50000000-0000-0000-0000-000000000030  mDoc    Membership ID (mDoc)
+    - 50000000-0000-0000-0000-000000000040  Open Badge Verified Member Badge
 
-This migration seeds **two** new presentation policies so that applicants who
-hold either format can use credential-based login:
+This migration seeds presentation policies so that applicants who hold a
+supported standards-based membership credential can use credential-based login:
 
   50000000-0000-0000-0000-000000000002  MemberLogin (SD-JWT) — Marty org
   50000000-0000-0000-0000-000000000003  MemberLogin (mDoc)   — Marty org
+    50000000-0000-0000-0000-000000000004  OpenBadgeLogin       — Marty org
 
 Set CREDENTIAL_LOGIN_POLICY_ID to the appropriate policy ID in the
 environment configuration.
@@ -41,16 +43,30 @@ NOW = "2026-03-22T00:00:00+00:00"
 # Marty org credential template IDs
 MARTY_SD_JWT_TEMPLATE_ID = "50000000-0000-0000-0000-000000000010"
 MARTY_MDOC_TEMPLATE_ID = "50000000-0000-0000-0000-000000000030"
+MARTY_OPEN_BADGE_TEMPLATE_ID = "50000000-0000-0000-0000-000000000040"
 
 # New policy IDs
 SD_JWT_POLICY_ID = "50000000-0000-0000-0000-000000000002"
 MDOC_POLICY_ID = "50000000-0000-0000-0000-000000000003"
+OPEN_BADGE_POLICY_ID = "50000000-0000-0000-0000-000000000004"
 
 DISPLAY_METADATA = {
     "title": "Member Login Verification",
     "purpose": (
         "Verify your membership credential to log in without a password. "
-        "Only your email, organisation, and role will be shared."
+        "Only your email will be shared."
+    ),
+    "verifier_name": "ElevenID LLC",
+    "privacy_url": None,
+    "tos_url": None,
+    "logo_url": None,
+}
+
+OPEN_BADGE_DISPLAY_METADATA = {
+    "title": "Open Badge Login Verification",
+    "purpose": (
+        "Verify your Open Badge 3.0 membership credential to log in without "
+        "a password. Only your email will be shared."
     ),
     "verifier_name": "ElevenID LLC",
     "privacy_url": None,
@@ -65,51 +81,6 @@ _REQUESTED_CLAIMS = [
         "display_name": "Email Address",
         "purpose": "Identify your account",
         "required": True,
-        "selective_disclosure": True,
-        "accept_derived": False,
-        "intent_to_retain": False,
-        "constraints": [],
-    },
-    {
-        "claim_name": "organization_id",
-        "display_name": "Organisation ID",
-        "purpose": "Confirm your organisation membership",
-        "required": True,
-        "selective_disclosure": True,
-        "accept_derived": False,
-        "intent_to_retain": False,
-        "constraints": [],
-    },
-    {
-        "claim_name": "role",
-        "display_name": "Role",
-        "purpose": "Determine your access level",
-        "required": True,
-        "selective_disclosure": True,
-        "accept_derived": False,
-        "intent_to_retain": False,
-        "constraints": [
-            {
-                "constraint_type": "in_set",
-                "value": ["applicant", "vendor", "administrator"],
-            }
-        ],
-    },
-    {
-        "claim_name": "given_name",
-        "display_name": "First Name",
-        "purpose": "Personalise your session",
-        "required": False,
-        "selective_disclosure": True,
-        "accept_derived": False,
-        "intent_to_retain": False,
-        "constraints": [],
-    },
-    {
-        "claim_name": "family_name",
-        "display_name": "Last Name",
-        "purpose": "Personalise your session",
-        "required": False,
         "selective_disclosure": True,
         "accept_derived": False,
         "intent_to_retain": False,
@@ -140,8 +111,8 @@ POLICIES = [
         "name": "MemberLogin-SD-JWT",
         "description": (
             "Marty organisation credential-based login policy (SD-JWT format). "
-            "Requests email, organisation, and role from a MemberCredential "
-            "to authenticate a holder without requiring a password."
+            "Requests only email from a MemberCredential. Organisation and "
+            "role context are resolved from Keycloak during login."
         ),
         "credential_requirements": _build_credential_requirements(
             template_id=MARTY_SD_JWT_TEMPLATE_ID,
@@ -155,14 +126,31 @@ POLICIES = [
         "name": "MemberLogin-mDoc",
         "description": (
             "Marty organisation credential-based login policy (mDoc format). "
-            "Requests email, organisation, and role from a Membership ID (mDoc) "
-            "credential to authenticate a holder without requiring a password."
+            "Requests only email from a Membership ID (mDoc) credential. "
+            "Organisation and role context are resolved from Keycloak during login."
         ),
         "credential_requirements": _build_credential_requirements(
             template_id=MARTY_MDOC_TEMPLATE_ID,
             display_name="Membership ID (mDoc)",
             payload_format="mso_mdoc",
             req_id="req-marty-member-mdoc",
+        ),
+    },
+    {
+        "id": OPEN_BADGE_POLICY_ID,
+        "name": "OpenBadgeLogin",
+        "description": (
+            "Marty organisation credential-based login policy for the "
+            "Verified Member Badge (Open Badge 3.0). Requests only email; "
+            "membership, organisation, and role context are represented by "
+            "the Open Badge credential and resolved from Keycloak during login."
+        ),
+        "display_metadata": OPEN_BADGE_DISPLAY_METADATA,
+        "credential_requirements": _build_credential_requirements(
+            template_id=MARTY_OPEN_BADGE_TEMPLATE_ID,
+            display_name="Verified Member Badge",
+            payload_format="openbadge-v3",
+            req_id="req-marty-open-badge-login",
         ),
     },
 ]
@@ -220,7 +208,7 @@ def upgrade() -> None:
                 "name": policy["name"],
                 "description": policy["description"],
                 "status": "active",
-                "display_metadata": json.dumps(DISPLAY_METADATA),
+                "display_metadata": json.dumps(policy.get("display_metadata", DISPLAY_METADATA)),
                 "credential_requirements": json.dumps(policy["credential_requirements"]),
                 "alternative_requirements": json.dumps([]),
                 "compliance_profile_id": None,

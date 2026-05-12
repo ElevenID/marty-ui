@@ -372,6 +372,45 @@ export const handlers = [
     return HttpResponse.json([])
   }),
 
+  http.get(`${API_BASE}/v1/issued-credentials`, () => {
+    return HttpResponse.json([
+      {
+        id: 'issued-rec-1',
+        credential_id: 'cred-open-badge-1',
+        credential_type: 'open_badge',
+        credential_format: 'dc+sd-jwt',
+        flow_execution_id: 'flow-exec-1',
+        credential_template_id: 'template-open-badge',
+        application_id: 'application-1',
+        subject_id: 'holder@example.com',
+        issued_at: new Date().toISOString(),
+        valid_until: new Date(Date.now() + 86400000).toISOString(),
+        status: 'active',
+        issuer_did: 'did:web:issuer.example.com',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      },
+    ])
+  }),
+
+  http.post(`${API_BASE}/v1/applicants/applications/:applicationId/issue`, ({ params }) => {
+    return HttpResponse.json({
+      id: params.applicationId,
+      credential_offer_uri: 'openid-credential-offer://offer/test',
+      offer_expires_at: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+      status: 'offered',
+    })
+  }),
+
+  http.post(`${API_BASE}/v1/applications/:applicationId/issuance-offer`, ({ params }) => {
+    return HttpResponse.json({
+      id: params.applicationId,
+      offer_url: 'openid-credential-offer://offer/test',
+      expires_at: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+      status: 'active',
+    })
+  }),
+
   // API Keys
   http.get(`${API_BASE}/v1/organizations/:orgId/api-keys`, () => {
     return HttpResponse.json([
@@ -756,6 +795,45 @@ export const handlers = [
     return HttpResponse.json({
       status: 'revoked',
       revoked_at: new Date().toISOString(),
+    })
+  }),
+
+  http.get('/v1/issued-credentials', () => {
+    return HttpResponse.json([
+      {
+        id: 'issued-rec-1',
+        credential_id: 'cred-open-badge-1',
+        credential_type: 'open_badge',
+        credential_format: 'dc+sd-jwt',
+        flow_execution_id: 'flow-exec-1',
+        credential_template_id: 'template-open-badge',
+        application_id: 'application-1',
+        subject_id: 'holder@example.com',
+        issued_at: new Date().toISOString(),
+        valid_until: new Date(Date.now() + 86400000).toISOString(),
+        status: 'active',
+        issuer_did: 'did:web:issuer.example.com',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      },
+    ])
+  }),
+
+  http.post('/v1/applicants/applications/:applicationId/issue', ({ params }) => {
+    return HttpResponse.json({
+      id: params.applicationId,
+      credential_offer_uri: 'openid-credential-offer://offer/test',
+      offer_expires_at: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+      status: 'offered',
+    })
+  }),
+
+  http.post('/v1/applications/:applicationId/issuance-offer', ({ params }) => {
+    return HttpResponse.json({
+      id: params.applicationId,
+      offer_url: 'openid-credential-offer://offer/test',
+      expires_at: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+      status: 'active',
     })
   }),
 

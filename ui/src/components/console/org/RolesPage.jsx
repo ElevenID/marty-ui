@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Box,
@@ -47,8 +47,8 @@ import { useAuth } from '../../../hooks/useAuth';
 import { useNotifications } from '../../../hooks/useNotifications';
 import { useDialog } from '../../../hooks/useDialog';
 import { usePermissions } from '../../../hooks/usePermissions';
-import { PermissionGate } from '../../common/PermissionGate';
 import { getResourceLabel } from '../../../config/permissions';
+import { useConsole } from '../../../contexts/ConsoleContext';
 
 /**
  * Org tabs navigation
@@ -86,8 +86,10 @@ function groupPermissions(permissions) {
 function RolesPage() {
   const { t } = useTranslation('console');
   const { organizationId } = useAuth();
+  const { activeOrgId } = useConsole();
   const { showNotification } = useNotifications();
   const { can, refresh: refreshPermissions } = usePermissions();
+  const effectiveOrgId = activeOrgId || organizationId;
 
   // Data state
   const [roles, setRoles] = useState([]);
@@ -108,17 +110,28 @@ function RolesPage() {
   const [formPermissionIds, setFormPermissionIds] = useState(new Set());
   const [formIsDefault, setFormIsDefault] = useState(false);
 
-  const canManageRoles = can('role', 'manage') || can('role', 'create');
+  const canCreateRoles = can('role', 'create');
+  const canEditRoles = can('role', 'edit');
+  const canDeleteRoles = can('role', 'delete');
+  const replacementRoleOptions = useMemo(
+    () => roles.filter((role) => role.id !== deleteDialog.data?.id),
+    [deleteDialog.data?.id, roles]
+  );
 
   // Load data
   const loadData = useCallback(async () => {
-    if (!organizationId) return;
+    if (!effectiveOrgId) {
+      setRoles([]);
+      setAllPermissions([]);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
       const [rolesData, permsData] = await Promise.all([
-        listRoles(organizationId, true),
-        listPermissions(organizationId),
+        listRoles(effectiveOrgId, true),
+        listPermissions(effectiveOrgId),
       ]);
       setRoles(rolesData.roles || rolesData || []);
       // permsData is grouped by resource — flatten to a flat list
@@ -139,7 +152,7 @@ function RolesPage() {
     } finally {
       setLoading(false);
     }
-  }, [organizationId]);
+  }, [effectiveOrgId]);
 
   useEffect(() => {
     loadData();
@@ -180,10 +193,10 @@ function RolesPage() {
       };
 
       if (editingRole) {
-        await updateRole(organizationId, editingRole.id, data);
+        await updateRole(effectiveOrgId, editingRole.id, data);
         showNotification(`Role "${formDisplayName || formName}" updated`, 'success');
       } else {
-        await createRole(organizationId, data);
+        await createRole(effectiveOrgId, data);
         showNotification(`Role "${formDisplayName || formName}" created`, 'success');
       }
 
@@ -202,7 +215,15 @@ function RolesPage() {
   const handleDeleteConfirm = async () => {
     setSaving(true);
     try {
-      await deleteRole(organizationId, deleteDialog.data.id);
+      const replacementRoleId = deleteDialog.data?.member_count > 0
+        ? (replacementRoleOptions.find((role) => role.is_default_for_new_members)?.id || replacementRoleOptions[0]?.id)
+        : undefined;
+
+      if (deleteDialog.data?.member_count > 0 && !replacementRoleId) {
+        throw new Error('This role still has members assigned and there is no replacement role available.');
+      }
+
+      await deleteRole(effectiveOrgId, deleteDialog.data.id, replacementRoleId);
       showNotification(`Role "${deleteDialog.data.display_name || deleteDialog.data.name}" deleted`, 'success');
       await loadData();
       await refreshPermissions();
@@ -255,7 +276,7 @@ function RolesPage() {
       tabs={getOrgTabs(t)}
       breadcrumbs={getBreadcrumbs(t)}
       actions={
-        canManageRoles ? (
+        canCreateRoles ? (
           <Button
             variant="contained"
             startIcon={<AddIcon />}
@@ -276,7 +297,7 @@ function RolesPage() {
           title="No roles configured"
           description="Roles define what permissions team members have in this organization."
           action={
-            canManageRoles && (
+            canCreateRoles && (
               <Button variant="contained" startIcon={<AddIcon />} onClick={handleCreate}>
                 Create Role
               </Button>
@@ -347,15 +368,16 @@ function RolesPage() {
                           </IconButton>
                         </span>
                       </Tooltip>
-                    ) : canManageRoles ? (
+                    ) : (canEditRoles || canDeleteRoles) ? (
                       <>
-                        <IconButton size="small" onClick={() => handleEdit(role)}>
+                        <IconButton size="small" onClick={() => handleEdit(role)} disabled={!canEditRoles}>
                           <EditIcon fontSize="small" />
                         </IconButton>
                         <IconButton
                           size="small"
                           color="error"
                           onClick={() => deleteDialog.open(role)}
+                          disabled={!canDeleteRoles}
                         >
                           <DeleteIcon fontSize="small" />
                         </IconButton>

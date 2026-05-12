@@ -1,258 +1,766 @@
 /**
  * API Keys Page
- * 
- * Manages API keys for accessing identity services.
+ *
+ * External integration surface for gateway consumers.
+ * API keys authorize synchronous calls; optional paired callbacks handle
+ * asynchronous completions and notifications.
  */
 
-import { useState } from 'react';
-import { useAsyncData } from '../../../hooks/useAsyncData';
+import { useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
+  Alert,
   Box,
+  Button,
+  Card,
+  CardContent,
+  Checkbox,
+  Chip,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
+  Divider,
+  FormControlLabel,
+  FormGroup,
+  Grid,
+  IconButton,
+  LinearProgress,
   Paper,
-  Typography,
+  Stack,
+  Switch,
   Table,
   TableBody,
   TableCell,
   TableContainer,
   TableHead,
   TableRow,
-  Chip,
-  IconButton,
-  Tooltip,
-  Alert,
-  LinearProgress,
-  Button,
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  DialogActions,
   TextField,
+  Tooltip,
+  Typography,
 } from '@mui/material';
-import ContentCopyIcon from '@mui/icons-material/ContentCopy';
-import DeleteIcon from '@mui/icons-material/Delete';
 import AddIcon from '@mui/icons-material/Add';
-import { useTranslation } from 'react-i18next';
-// import { Link } from 'react-router-dom';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import LinkIcon from '@mui/icons-material/Link';
+import VpnKeyIcon from '@mui/icons-material/VpnKey';
+import NotificationsActiveIcon from '@mui/icons-material/NotificationsActive';
+import DeleteIcon from '@mui/icons-material/Delete';
 
 import { ResourcePage } from '../../common';
+import ConfirmDeleteDialog from '../../common/ConfirmDeleteDialog';
+import { useAsyncData } from '../../../hooks/useAsyncData';
 import { useAuth } from '../../../hooks/useAuth';
-import { listApiKeys, createApiKey, revokeApiKey } from '../../../services/apiKeysApi';
+import { createApiKey, listApiKeys, revokeApiKey } from '../../../services/apiKeysApi';
+import { createWebhook, listWebhooks } from '../../../services/webhooksApi';
 
-const getDeployTabs = (t) => [
-  { label: t('deploy.deploymentProfiles'), path: '/console/org/deploy/profiles' },
-  { label: t('deploy.apiKeys'), path: '/console/org/deploy/api-keys' },
-  { label: t('deploy.lanesDevices'), path: '/console/org/deploy/lanes' },
-  { label: t('deploy.webhooks'), path: '/console/org/deploy/webhooks' },
+const API_KEY_SCOPES = [
+  {
+    id: 'read:credentials',
+    label: 'Read credentials',
+    description: 'Read issued credential and verification result data.',
+  },
+  {
+    id: 'write:credentials',
+    label: 'Issue credentials',
+    description: 'Trigger issuance and manage credential lifecycle operations.',
+  },
+  {
+    id: 'verify:presentations',
+    label: 'Verify presentations',
+    description: 'Submit and monitor verification requests.',
+  },
+  {
+    id: 'read:trust_registry',
+    label: 'Read trust registry',
+    description: 'Query trust registries, issuers, and trust anchors.',
+  },
+  {
+    id: 'write:revocation',
+    label: 'Manage revocation',
+    description: 'Revoke or update credential status from external systems.',
+  },
+  {
+    id: 'manage:webhooks',
+    label: 'Manage webhooks',
+    description: 'Provision and maintain callback endpoints programmatically.',
+  },
+];
+
+const DEFAULT_CALLBACK_EVENTS = [
+  'application.submitted',
+  'application.approved',
+  'application.rejected',
+  'credential.issued',
+  'credential.revoked',
+  'verification.completed',
+  'verification.failed',
+];
+
+const CALLBACK_EVENT_OPTIONS = [
+  { id: 'application.submitted', label: 'Application submitted' },
+  { id: 'application.approved', label: 'Application approved' },
+  { id: 'application.rejected', label: 'Application rejected' },
+  { id: 'credential.issued', label: 'Credential issued' },
+  { id: 'credential.revoked', label: 'Credential revoked' },
+  { id: 'verification.completed', label: 'Verification completed' },
+  { id: 'verification.failed', label: 'Verification failed' },
+  { id: 'audit.configuration_changed', label: 'Audit configuration changed' },
+  { id: 'audit.security_event', label: 'Audit security event' },
+];
+
+const CALLBACK_TAG_PATTERN = /\[api-key:([^\]]+)\]/i;
+
+const getOrgTabs = (t) => [
+  { label: t('org.tabs.organization'), path: '/console/org/settings' },
+  { label: t('org.tabs.team'), path: '/console/org/team' },
+  { label: t('org.tabs.apiKeys', 'API Keys'), path: '/console/org/api-keys' },
+  { label: t('org.tabs.webhooks'), path: '/console/org/webhooks' },
 ];
 
 const getBreadcrumbs = (t) => [
-  { label: t('deploy.breadcrumbs.console'), path: '/console' },
-  { label: t('deploy.breadcrumbs.deploy'), path: '/console/org/deploy' },
-  { label: t('deploy.breadcrumbs.apiKeys'), path: '/console/org/deploy/api-keys' },
+  { label: t('org.breadcrumbs.console', 'Console'), path: '/console' },
+  { label: t('org.breadcrumbs.org', 'Org'), path: '/console/org' },
+  { label: t('org.tabs.apiKeys', 'API Keys'), path: '/console/org/api-keys' },
 ];
+
+function formatDateTime(value) {
+  if (!value) {
+    return 'Never';
+  }
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return 'Never';
+  }
+
+  return parsed.toLocaleString();
+}
+
+function normalizeApiKey(apiKey) {
+  const scopes = Array.isArray(apiKey?.scopes) ? apiKey.scopes : [];
+  const keyPrefix = apiKey?.keyPrefix || apiKey?.key_prefix || apiKey?.masked_key || '';
+  const enabled = apiKey?.enabled ?? apiKey?.is_active ?? apiKey?.status !== 'revoked';
+  const status = apiKey?.status || (enabled ? 'active' : 'revoked');
+
+  return {
+    id: apiKey?.id || '',
+    name: apiKey?.name || 'Unnamed key',
+    description: apiKey?.description || '',
+    scopes,
+    keyPrefix,
+    maskedKey: apiKey?.masked_key || keyPrefix,
+    status,
+    enabled,
+    createdAt: apiKey?.createdAt || apiKey?.created_at || null,
+    updatedAt: apiKey?.updatedAt || apiKey?.updated_at || null,
+    lastUsedAt: apiKey?.lastUsedAt || apiKey?.last_used_at || apiKey?.lastUsed || apiKey?.last_used || null,
+    expiresAt: apiKey?.expiresAt || apiKey?.expires_at || null,
+    fullKey: apiKey?.fullKey || apiKey?.full_key || apiKey?.key || '',
+  };
+}
+
+function normalizeWebhook(webhook) {
+  return {
+    id: webhook?.id || '',
+    url: webhook?.url || '',
+    description: webhook?.description || '',
+    eventTypes: Array.isArray(webhook?.event_types)
+      ? webhook.event_types
+      : Array.isArray(webhook?.events)
+        ? webhook.events
+        : [],
+    enabled: webhook?.enabled ?? webhook?.status === 'active',
+    secret: webhook?.secret || '',
+  };
+}
+
+function extractAssociatedKeyId(description = '') {
+  const match = description.match(CALLBACK_TAG_PATTERN);
+  return match ? match[1] : null;
+}
+
+function buildAssociatedCallbackDescription(name, keyId, description) {
+  const base = description?.trim() || `Callback for ${name}`;
+  return `${base} [api-key:${keyId}]`;
+}
+
+async function copyToClipboard(text) {
+  if (!text) {
+    return false;
+  }
+
+  if (navigator?.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return true;
+  }
+
+  const textArea = document.createElement('textarea');
+  textArea.value = text;
+  textArea.setAttribute('readonly', '');
+  textArea.style.position = 'absolute';
+  textArea.style.left = '-9999px';
+  document.body.appendChild(textArea);
+  textArea.select();
+  const copied = document.execCommand('copy');
+  document.body.removeChild(textArea);
+  return copied;
+}
 
 function ApiKeysPage() {
   const { t } = useTranslation('console');
   const { organizationId } = useAuth();
-  const { data: apiKeys = [], loading, error, reload } = useAsyncData(
-    () => listApiKeys(organizationId),
-    [organizationId]
-  );
-  const [createDialogOpen, setCreateDialogOpen] = useState(false);
-  const [newKeyName, setNewKeyName] = useState('');
-  const [createdKey, setCreatedKey] = useState(null);
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState('');
+  const [copiedMessage, setCopiedMessage] = useState('');
+  const [createdResult, setCreatedResult] = useState(null);
+  const [keyPendingRevoke, setKeyPendingRevoke] = useState(null);
+  const [formState, setFormState] = useState({
+    name: '',
+    scopes: ['verify:presentations'],
+    expiresAt: '',
+    createCallback: true,
+    callbackUrl: '',
+    callbackDescription: '',
+    callbackEvents: [...DEFAULT_CALLBACK_EVENTS],
+  });
 
-  const handleCreateKey = async () => {
+  const { data, loading, error, reload } = useAsyncData(
+    async () => {
+      const [keys, webhooks] = await Promise.all([
+        listApiKeys(organizationId),
+        listWebhooks(organizationId).catch(() => []),
+      ]);
+
+      return {
+        keys: (keys || []).map(normalizeApiKey),
+        webhooks: (webhooks || []).map(normalizeWebhook),
+      };
+    },
+    [organizationId],
+  );
+
+  const apiKeys = data?.keys || [];
+  const callbackMap = useMemo(() => {
+    const map = new Map();
+    (data?.webhooks || []).forEach((webhook) => {
+      const keyId = extractAssociatedKeyId(webhook.description);
+      if (keyId) {
+        map.set(keyId, webhook);
+      }
+    });
+    return map;
+  }, [data?.webhooks]);
+
+  const handleScopeToggle = (scopeId) => {
+    setFormState((prev) => ({
+      ...prev,
+      scopes: prev.scopes.includes(scopeId)
+        ? prev.scopes.filter((scope) => scope !== scopeId)
+        : [...prev.scopes, scopeId],
+    }));
+  };
+
+  const handleCallbackEventToggle = (eventId) => {
+    setFormState((prev) => ({
+      ...prev,
+      callbackEvents: prev.callbackEvents.includes(eventId)
+        ? prev.callbackEvents.filter((event) => event !== eventId)
+        : [...prev.callbackEvents, eventId],
+    }));
+  };
+
+  const resetDialog = () => {
+    setDialogOpen(false);
+    setSaving(false);
+    setFormError('');
+    setCreatedResult(null);
+    setFormState({
+      name: '',
+      scopes: ['verify:presentations'],
+      expiresAt: '',
+      createCallback: true,
+      callbackUrl: '',
+      callbackDescription: '',
+      callbackEvents: [...DEFAULT_CALLBACK_EVENTS],
+    });
+  };
+
+  const handleCreate = async () => {
+    if (!organizationId) {
+      setFormError('No active organization selected.');
+      return;
+    }
+
+    if (!formState.name.trim()) {
+      setFormError('Enter a name for the API key.');
+      return;
+    }
+
+    if (formState.scopes.length === 0) {
+      setFormError('Select at least one scope for this external integration.');
+      return;
+    }
+
+    if (formState.createCallback && !formState.callbackUrl.trim()) {
+      setFormError('Enter a callback URL or turn off callback creation.');
+      return;
+    }
+
+    if (formState.createCallback && formState.callbackEvents.length === 0) {
+      setFormError('Select at least one callback event.');
+      return;
+    }
+
+    setSaving(true);
+    setFormError('');
+
+    let callbackError = null;
+
     try {
-      const result = await createApiKey(organizationId, {
-        name: newKeyName,
-        scopes: [],
+      const keyResponse = await createApiKey(organizationId, {
+        name: formState.name.trim(),
+        scopes: formState.scopes,
+        expiresAt: formState.expiresAt ? new Date(formState.expiresAt).toISOString() : null,
       });
-      setCreatedKey(result);
-      setNewKeyName('');
-    } catch (err) {
-      console.error('Failed to create API key:', err);
+
+      const createdKey = normalizeApiKey(keyResponse);
+      let createdWebhook = null;
+
+      if (formState.createCallback) {
+        try {
+          const webhookResponse = await createWebhook(organizationId, {
+            url: formState.callbackUrl.trim(),
+            description: buildAssociatedCallbackDescription(
+              createdKey.name,
+              createdKey.id,
+              formState.callbackDescription,
+            ),
+            eventTypes: formState.callbackEvents,
+          });
+          createdWebhook = normalizeWebhook(webhookResponse);
+        } catch (errorCreatingWebhook) {
+          callbackError = errorCreatingWebhook instanceof Error
+            ? errorCreatingWebhook.message
+            : String(errorCreatingWebhook);
+        }
+      }
+
+      setCreatedResult({
+        apiKey: createdKey,
+        webhook: createdWebhook,
+        callbackError,
+      });
+
+      await reload();
+    } catch (createError) {
+      setFormError(createError instanceof Error ? createError.message : String(createError));
+    } finally {
+      setSaving(false);
     }
   };
 
-  const handleCopyKey = async (key) => {
-    await navigator.clipboard.writeText(key);
+  const handleRevoke = async () => {
+    if (!organizationId || !keyPendingRevoke) {
+      return;
+    }
+
+    await revokeApiKey(organizationId, keyPendingRevoke.id);
+    setKeyPendingRevoke(null);
+    await reload();
+  };
+
+  const handleCopy = async (text, label) => {
+    const copied = await copyToClipboard(text);
+    setCopiedMessage(copied ? `${label} copied to clipboard.` : `Unable to copy ${label.toLowerCase()}.`);
   };
 
   return (
-    <ResourcePage
-      title={t('deploy.apiKeys')}
-      description={t('deploy.apiKeysDescription')}
-      tabs={getDeployTabs(t)}
-      breadcrumbs={getBreadcrumbs(t)}
-      actions={
-        <Button
-          variant="contained"
-          startIcon={<AddIcon />}
-          onClick={() => setCreateDialogOpen(true)}
-        >
-          {t('deploy.apiKeysPage.generateKey')}
-        </Button>
-      }
-    >
-      {error && (
-        <Alert severity="error" sx={{ mb: 3 }}>
-          {error?.message || String(error)}
-        </Alert>
-      )}
-
-      {loading ? (
-        <LinearProgress />
-      ) : (
-        <TableContainer component={Paper}>
-          <Table>
-            <TableHead>
-              <TableRow>
-                <TableCell>{t('deploy.apiKeysPage.tableHeaders.name')}</TableCell>
-                <TableCell>{t('deploy.apiKeysPage.tableHeaders.keyPrefix')}</TableCell>
-                <TableCell>{t('deploy.apiKeysPage.tableHeaders.scopes')}</TableCell>
-                <TableCell>{t('deploy.apiKeysPage.tableHeaders.lastUsed')}</TableCell>
-                <TableCell>{t('deploy.apiKeysPage.tableHeaders.created')}</TableCell>
-                <TableCell>{t('deploy.apiKeysPage.tableHeaders.status')}</TableCell>
-                <TableCell align="right">{t('deploy.apiKeysPage.tableHeaders.actions')}</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {apiKeys.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={7} align="center">
-                    <Typography color="text.secondary" sx={{ py: 4 }}>
-                      {t('deploy.apiKeysPage.empty')}
-                    </Typography>
-                  </TableCell>
-                </TableRow>
-              ) : (
-                apiKeys.map((apiKey) => (
-                  <TableRow key={apiKey.id} hover>
-                    <TableCell>
-                      <Typography variant="body2" fontWeight={500}>
-                        {apiKey.name}
-                      </Typography>
-                    </TableCell>
-                    <TableCell>
-                      <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
-                        {apiKey.keyPrefix}...
-                      </Typography>
-                    </TableCell>
-                    <TableCell>
-                      <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
-                        {apiKey.scopes.slice(0, 2).map((scope) => (
-                          <Chip key={scope} label={scope} size="small" variant="outlined" />
-                        ))}
-                        {apiKey.scopes.length > 2 && (
-                          <Chip label={`+${apiKey.scopes.length - 2}`} size="small" />
-                        )}
-                      </Box>
-                    </TableCell>
-                    <TableCell>
-                      {apiKey.lastUsed 
-                        ? new Date(apiKey.lastUsed).toLocaleDateString()
-                        : t('deploy.apiKeysPage.never')
-                      }
-                    </TableCell>
-                    <TableCell>
-                      {new Date(apiKey.createdAt).toLocaleDateString()}
-                    </TableCell>
-                    <TableCell>
-                      <Chip 
-                        label={apiKey.status === 'active' ? t('deploy.apiKeysPage.status.active') : t('deploy.apiKeysPage.status.revoked')} 
-                        color={apiKey.status === 'active' ? 'success' : 'error'}
-                        size="small" 
-                      />
-                    </TableCell>
-                    <TableCell align="right">
-                      <Tooltip title={t('deploy.apiKeysPage.actions.revokeKey')}>
-                        <IconButton size="small" color="error" onClick={async () => {
-                          await revokeApiKey(organizationId, apiKey.id);
-                          reload();
-                        }}>
-                          <DeleteIcon fontSize="small" />
-                        </IconButton>
-                      </Tooltip>
-                    </TableCell>
-                  </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
-        </TableContainer>
-      )}
-
-      {/* Create Key Dialog */}
-      <Dialog 
-        open={createDialogOpen} 
-        onClose={() => {
-          setCreateDialogOpen(false);
-          setCreatedKey(null);
-          setNewKeyName('');
-        }}
-        maxWidth="sm"
-        fullWidth
+    <>
+      <ResourcePage
+        title={t('deploy.apiKeys')}
+        description={t(
+          'deploy.apiKeysDescription',
+          'Provision external gateway clients and pair them with callbacks for asynchronous results.',
+        )}
+        tabs={getOrgTabs(t)}
+        breadcrumbs={getBreadcrumbs(t)}
+        actions={
+          <Button variant="contained" startIcon={<AddIcon />} onClick={() => setDialogOpen(true)}>
+            {t('deploy.apiKeysPage.generateKey', 'Create API Key')}
+          </Button>
+        }
       >
-        <DialogTitle>
-          {createdKey ? t('deploy.apiKeysPage.dialog.titleCreated') : t('deploy.apiKeysPage.dialog.titleCreate')}
-        </DialogTitle>
-        <DialogContent>
-          {createdKey ? (
-            <Box>
-              <Alert severity="warning" sx={{ mb: 2 }}>
-                {t('deploy.apiKeysPage.dialog.warning')}
+        <Stack spacing={3}>
+          <Alert severity="info">
+            Use API keys for synchronous gateway calls. Pair each key with a callback endpoint to receive
+            asynchronous completions, verification outcomes, and delivery notifications. Forward audit events through
+            Webhooks when external SIEM or compliance systems need a real-time feed.
+          </Alert>
+
+          {copiedMessage && (
+            <Alert severity={copiedMessage.startsWith('Unable') ? 'warning' : 'success'} onClose={() => setCopiedMessage('')}>
+              {copiedMessage}
+            </Alert>
+          )}
+
+          <Grid container spacing={2}>
+            <Grid item xs={12} md={4}>
+              <Card variant="outlined">
+                <CardContent>
+                  <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+                    <VpnKeyIcon color="primary" fontSize="small" />
+                    <Typography variant="subtitle2">Active gateway keys</Typography>
+                  </Stack>
+                  <Typography variant="h4">{apiKeys.filter((key) => key.enabled).length}</Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    Keys currently usable by partner systems and services.
+                  </Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+            <Grid item xs={12} md={4}>
+              <Card variant="outlined">
+                <CardContent>
+                  <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+                    <NotificationsActiveIcon color="primary" fontSize="small" />
+                    <Typography variant="subtitle2">Associated callbacks</Typography>
+                  </Stack>
+                  <Typography variant="h4">{callbackMap.size}</Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    Webhook endpoints linked to API-key provisioning flows.
+                  </Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+            <Grid item xs={12} md={4}>
+              <Card variant="outlined">
+                <CardContent>
+                  <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+                    <LinkIcon color="primary" fontSize="small" />
+                    <Typography variant="subtitle2">Audit-capable callbacks</Typography>
+                  </Stack>
+                  <Typography variant="h4">
+                    {Array.from(callbackMap.values()).filter((webhook) => webhook.eventTypes.some((eventType) => eventType.startsWith('audit.'))).length}
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    Callbacks prepared to forward audit or compliance activity.
+                  </Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+          </Grid>
+
+          {error && (
+            <Alert severity="error">
+              {error?.message || String(error)}
+            </Alert>
+          )}
+
+          {loading ? (
+            <LinearProgress />
+          ) : (
+            <TableContainer component={Paper}>
+              <Table>
+                <TableHead>
+                  <TableRow>
+                    <TableCell>Name</TableCell>
+                    <TableCell>Key</TableCell>
+                    <TableCell>Scopes</TableCell>
+                    <TableCell>Associated callback</TableCell>
+                    <TableCell>Last used</TableCell>
+                    <TableCell>Status</TableCell>
+                    <TableCell align="right">Actions</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {apiKeys.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={7} align="center">
+                        <Box sx={{ py: 5 }}>
+                          <Typography variant="subtitle1" gutterBottom>
+                            No API keys configured
+                          </Typography>
+                          <Typography color="text.secondary">
+                            Create a key for each external system that calls the gateway and optionally provision a paired callback.
+                          </Typography>
+                        </Box>
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                    apiKeys.map((apiKey) => {
+                      const callback = callbackMap.get(apiKey.id);
+                      return (
+                        <TableRow key={apiKey.id} hover>
+                          <TableCell>
+                            <Typography variant="body2" fontWeight={600}>{apiKey.name}</Typography>
+                            {apiKey.description && (
+                              <Typography variant="caption" color="text.secondary">{apiKey.description}</Typography>
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            <Stack direction="row" spacing={1} alignItems="center">
+                              <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
+                                {apiKey.maskedKey || apiKey.keyPrefix || 'Unavailable'}
+                              </Typography>
+                              {!!apiKey.fullKey && (
+                                <Tooltip title="Copy full key">
+                                  <IconButton size="small" onClick={() => handleCopy(apiKey.fullKey, 'API key')}>
+                                    <ContentCopyIcon fontSize="small" />
+                                  </IconButton>
+                                </Tooltip>
+                              )}
+                            </Stack>
+                          </TableCell>
+                          <TableCell>
+                            <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
+                              {apiKey.scopes.length === 0 ? (
+                                <Typography variant="body2" color="text.secondary">No scopes assigned</Typography>
+                              ) : (
+                                apiKey.scopes.slice(0, 2).map((scope) => (
+                                  <Chip key={scope} label={scope} size="small" variant="outlined" />
+                                ))
+                              )}
+                              {apiKey.scopes.length > 2 && (
+                                <Chip label={`+${apiKey.scopes.length - 2}`} size="small" />
+                              )}
+                            </Box>
+                          </TableCell>
+                          <TableCell>
+                            {callback ? (
+                              <Stack spacing={0.5}>
+                                <Typography variant="body2">{callback.url}</Typography>
+                                <Typography variant="caption" color="text.secondary">
+                                  {callback.eventTypes.length} subscribed event{callback.eventTypes.length === 1 ? '' : 's'}
+                                </Typography>
+                              </Stack>
+                            ) : (
+                              <Typography variant="body2" color="text.secondary">No paired callback</Typography>
+                            )}
+                          </TableCell>
+                          <TableCell>{formatDateTime(apiKey.lastUsedAt)}</TableCell>
+                          <TableCell>
+                            <Chip
+                              label={apiKey.enabled ? 'Active' : 'Revoked'}
+                              color={apiKey.enabled ? 'success' : 'default'}
+                              size="small"
+                            />
+                          </TableCell>
+                          <TableCell align="right">
+                            <Tooltip title="Revoke key">
+                              <span>
+                                <IconButton
+                                  size="small"
+                                  color="error"
+                                  aria-label="Revoke key"
+                                  disabled={!apiKey.enabled}
+                                  onClick={() => setKeyPendingRevoke(apiKey)}
+                                >
+                                  <DeleteIcon fontSize="small" />
+                                </IconButton>
+                              </span>
+                            </Tooltip>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })
+                  )}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          )}
+        </Stack>
+      </ResourcePage>
+
+      <Dialog open={dialogOpen} onClose={saving ? undefined : resetDialog} maxWidth="md" fullWidth>
+        <DialogTitle>{createdResult ? 'Integration provisioned' : 'Create API key'}</DialogTitle>
+        <DialogContent dividers>
+          {createdResult ? (
+            <Stack spacing={2}>
+              <Alert severity={createdResult.callbackError ? 'warning' : 'success'}>
+                API key created successfully.
+                {createdResult.callbackError
+                  ? ` Callback creation failed: ${createdResult.callbackError}`
+                  : ' Callback endpoint provisioned for asynchronous events.'}
               </Alert>
+
               <TextField
+                label="API key"
+                value={createdResult.apiKey.fullKey || createdResult.apiKey.maskedKey || createdResult.apiKey.keyPrefix}
                 fullWidth
-                label={t('deploy.apiKeysPage.dialog.keyLabel')}
-                value={createdKey.fullKey}
                 InputProps={{
                   readOnly: true,
                   endAdornment: (
-                    <IconButton onClick={() => handleCopyKey(createdKey.fullKey)}>
+                    <IconButton onClick={() => handleCopy(createdResult.apiKey.fullKey, 'API key')}>
                       <ContentCopyIcon />
                     </IconButton>
                   ),
                   sx: { fontFamily: 'monospace' },
                 }}
+                helperText="Save this key now. Depending on the backend response, it may not be shown again."
               />
-            </Box>
+
+              {createdResult.webhook && (
+                <>
+                  <TextField
+                    label="Callback URL"
+                    value={createdResult.webhook.url}
+                    fullWidth
+                    InputProps={{ readOnly: true }}
+                  />
+                  {createdResult.webhook.secret && (
+                    <TextField
+                      label="Webhook secret"
+                      value={createdResult.webhook.secret}
+                      fullWidth
+                      InputProps={{
+                        readOnly: true,
+                        endAdornment: (
+                          <IconButton onClick={() => handleCopy(createdResult.webhook.secret, 'Webhook secret')}>
+                            <ContentCopyIcon />
+                          </IconButton>
+                        ),
+                        sx: { fontFamily: 'monospace' },
+                      }}
+                      helperText="Store this secret in the receiving system to verify callback signatures."
+                    />
+                  )}
+                </>
+              )}
+            </Stack>
           ) : (
-            <TextField
-              autoFocus
-              margin="dense"
-              label={t('deploy.apiKeysPage.dialog.nameLabel')}
-              placeholder={t('deploy.apiKeysPage.dialog.namePlaceholder')}
-              fullWidth
-              value={newKeyName}
-              onChange={(e) => setNewKeyName(e.target.value)}
-            />
+            <Stack spacing={3} sx={{ pt: 1 }}>
+              {formError && <Alert severity="error">{formError}</Alert>}
+
+              <TextField
+                autoFocus
+                label="Key name"
+                placeholder="Production issuer integration"
+                value={formState.name}
+                onChange={(event) => setFormState((prev) => ({ ...prev, name: event.target.value }))}
+                fullWidth
+              />
+
+              <TextField
+                label="Expiration"
+                type="datetime-local"
+                value={formState.expiresAt}
+                onChange={(event) => setFormState((prev) => ({ ...prev, expiresAt: event.target.value }))}
+                InputLabelProps={{ shrink: true }}
+                fullWidth
+                helperText="Optional expiry for partner credentials or temporary environments."
+              />
+
+              <Box>
+                <Typography variant="subtitle2" gutterBottom>
+                  Scopes
+                </Typography>
+                <FormGroup>
+                  {API_KEY_SCOPES.map((scope) => (
+                    <FormControlLabel
+                      key={scope.id}
+                      control={
+                        <Checkbox
+                          checked={formState.scopes.includes(scope.id)}
+                          onChange={() => handleScopeToggle(scope.id)}
+                        />
+                      }
+                      label={
+                        <Box>
+                          <Typography variant="body2">{scope.label}</Typography>
+                          <Typography variant="caption" color="text.secondary">{scope.description}</Typography>
+                        </Box>
+                      }
+                    />
+                  ))}
+                </FormGroup>
+              </Box>
+
+              <Divider />
+
+              <Box>
+                <FormControlLabel
+                  control={
+                    <Switch
+                      checked={formState.createCallback}
+                      onChange={(event) => setFormState((prev) => ({ ...prev, createCallback: event.target.checked }))}
+                    />
+                  }
+                  label="Provision associated callback"
+                />
+                <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                  Recommended for external systems that need asynchronous status updates, completion notices, or audit forwarding.
+                </Typography>
+              </Box>
+
+              {formState.createCallback && (
+                <Stack spacing={2}>
+                  <TextField
+                    label="Callback URL"
+                    placeholder="https://partner.example.com/marty/callbacks"
+                    value={formState.callbackUrl}
+                    onChange={(event) => setFormState((prev) => ({ ...prev, callbackUrl: event.target.value }))}
+                    fullWidth
+                  />
+                  <TextField
+                    label="Callback description"
+                    placeholder="Operations callback for partner orchestration"
+                    value={formState.callbackDescription}
+                    onChange={(event) => setFormState((prev) => ({ ...prev, callbackDescription: event.target.value }))}
+                    fullWidth
+                  />
+                  <Box>
+                    <Typography variant="subtitle2" gutterBottom>
+                      Callback event subscriptions
+                    </Typography>
+                    <FormGroup>
+                      {CALLBACK_EVENT_OPTIONS.map((eventOption) => (
+                        <FormControlLabel
+                          key={eventOption.id}
+                          control={
+                            <Checkbox
+                              checked={formState.callbackEvents.includes(eventOption.id)}
+                              onChange={() => handleCallbackEventToggle(eventOption.id)}
+                            />
+                          }
+                          label={eventOption.label}
+                        />
+                      ))}
+                    </FormGroup>
+                  </Box>
+                </Stack>
+              )}
+            </Stack>
           )}
         </DialogContent>
         <DialogActions>
-          {createdKey ? (
-            <Button onClick={() => {
-              setCreateDialogOpen(false);
-              setCreatedKey(null);
-            }}>
-              {t('deploy.apiKeysPage.dialog.done')}
-            </Button>
+          {createdResult ? (
+            <Button onClick={resetDialog}>Done</Button>
           ) : (
             <>
-              <Button onClick={() => setCreateDialogOpen(false)}>{t('actions.cancel', { ns: 'common' })}</Button>
-              <Button 
-                variant="contained" 
-                onClick={handleCreateKey}
-                disabled={!newKeyName.trim()}
-              >
-                {t('deploy.apiKeysPage.dialog.generate')}
+              <Button onClick={resetDialog} disabled={saving}>Cancel</Button>
+              <Button variant="contained" onClick={handleCreate} disabled={saving}>
+                {saving ? 'Creating…' : 'Create integration key'}
               </Button>
             </>
           )}
         </DialogActions>
       </Dialog>
-    </ResourcePage>
+
+      <ConfirmDeleteDialog
+        open={Boolean(keyPendingRevoke)}
+        onClose={() => setKeyPendingRevoke(null)}
+        onConfirm={handleRevoke}
+        title="Revoke API Key"
+        itemName={keyPendingRevoke?.name}
+        confirmLabel="Revoke"
+        warning={
+          <Alert severity="warning" sx={{ mt: 2 }}>
+            External callers using this key will lose access immediately. Associated callbacks are not deleted automatically.
+          </Alert>
+        }
+      />
+    </>
   );
 }
 

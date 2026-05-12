@@ -166,3 +166,64 @@ def test_expired_session_exposes_protocol_error_field() -> None:
     assert set(body.keys()) <= PROTOCOL_KEYS
     assert body["status"] == "EXPIRED"
     assert body["error"] == "Session expired before presentation was submitted"
+
+
+def test_get_request_object_returns_dcql_only() -> None:
+    store = verification.SessionStore()
+    session = verification.VerificationSession(
+        organization_id="org-1",
+        presentation_policy_id="policy-1",
+    )
+    store.save(session)
+    client = _build_client(store)
+
+    original_builder = verification._build_presentation_definition
+
+    async def _fake_build_presentation_definition(_session: verification.VerificationSession) -> dict:
+        return {
+            "id": "pd-1",
+            "input_descriptors": [
+                {
+                    "id": "req-member-credential",
+                    "format": {"spruce-vc+sd-jwt": {"sd-jwt_alg_values": ["ES256"]}},
+                    "constraints": {
+                        "fields": [
+                            {
+                                "path": ["$.vct"],
+                                "filter": {
+                                    "type": "string",
+                                    "const": "https://example.test/credentials/member",
+                                },
+                            },
+                            {
+                                "path": [
+                                    "$.vc.credentialSubject.email",
+                                    "$.credentialSubject.email",
+                                    "$.email",
+                                ],
+                            },
+                        ]
+                    },
+                }
+            ],
+        }
+
+    verification._build_presentation_definition = _fake_build_presentation_definition
+    try:
+        response = client.get(f"/v1/verify/{session.session_id}/request")
+    finally:
+        verification._build_presentation_definition = original_builder
+
+    assert response.status_code == 200
+    body = response.json()
+    assert "presentation_definition" not in body
+    assert body["dcql_query"] == {
+        "credentials": [
+            {
+                "id": "req-member-credential",
+                "format": "dc+sd-jwt",
+                "meta": {"vct_values": ["https://example.test/credentials/member"]},
+                "claims": [{"id": "claim_email", "path": ["email"]}],
+            }
+        ]
+    }

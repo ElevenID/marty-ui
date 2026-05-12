@@ -30,6 +30,7 @@ Required files:
 
 Optional files may be left empty when the related integration is disabled:
 
+- `canvas_credentials_shared_secret`
 - `google_client_id`
 - `google_client_secret`
 - `google_analytics_measurement_id`
@@ -37,6 +38,8 @@ Optional files may be left empty when the related integration is disabled:
 - `smtp_password`
 - `square_access_token`
 - `square_webhook_signature_key`
+
+`canvas_credentials_shared_secret` signs Canvas credential-sync callbacks between the Canvas integration surface and issuance service. Leave it empty when Canvas integration is disabled.
 
 `google_client_id` and `google_client_secret` are the OAuth web client credentials used by Keycloak's Google identity provider.
 

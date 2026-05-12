@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from marty_common.org_authorization import OrganizationMembership, OrgRole
+from marty_common.org_authorization import OrganizationMembership, OrganizationRoleSummary
 
 from services.credential_template import main as credential_template
 
@@ -26,8 +26,9 @@ def _build_client(
 		return_value=OrganizationMembership(
 			user_id="user-1",
 			organization_id="org-1",
-			role=OrgRole.ADMIN,
 			status="active",
+			roles=[OrganizationRoleSummary(id="role-admin", name="admin", display_name="Admin")],
+			has_org_console_access=True,
 		)
 	)
 	org_client = SimpleNamespace(get_membership=get_membership)

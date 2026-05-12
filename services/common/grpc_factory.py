@@ -10,6 +10,7 @@ lifespans stay concise.
 from __future__ import annotations
 
 import contextvars
+import inspect
 import logging
 import os
 import time
@@ -216,7 +217,9 @@ class LoggingMetricsInterceptor(grpc_aio.ServerInterceptor):
         start = time.perf_counter()
         status = "OK"
         try:
-            result = await handler(request, context)
+            result = handler(request, context)
+            if inspect.isawaitable(result):
+                result = await result
             return result
         except Exception as exc:
             status = type(exc).__name__
@@ -281,7 +284,10 @@ class CorrelationIdInterceptor(grpc_aio.ServerInterceptor):
                 context.set_trailing_metadata(
                     [(self._HEADER, cid)]
                 )
-            return await original(request, context)
+            result = original(request, context)
+            if inspect.isawaitable(result):
+                result = await result
+            return result
 
         return grpc.unary_unary_rpc_method_handler(
             _wrapped,

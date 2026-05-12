@@ -59,6 +59,7 @@ import {
   validateJoinOrganizationInvitation,
   acceptJoinOrganizationInvitation,
 } from '../../application/onboarding';
+import { redirectBrowser } from '../../application/routing/appHandoff';
 import { useConsole } from '../../contexts/ConsoleContext';
 import { useAuth } from '../../hooks/useAuth';
 
@@ -68,7 +69,10 @@ const CAPABILITY_HINTS = [
   'Use organization-specific settings and defaults',
 ];
 
-export default function JoinOrganizationPage() {
+export default function JoinOrganizationPage({
+  managePath = '/organizations',
+  discoverPath = '/organizations/discover',
+}) {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { setActiveOrgId, refreshMemberships } = useConsole();
@@ -155,7 +159,7 @@ export default function JoinOrganizationPage() {
 
   useEffect(() => {
     async function loadSelectedFromQuery() {
-      if (!orgIdFromQuery) return;
+      if (!orgIdFromQuery || loading) return;
       setLoadingSelection(true);
 
       const result = await loadJoinOrganizationSelection({
@@ -172,7 +176,7 @@ export default function JoinOrganizationPage() {
     }
 
     loadSelectedFromQuery();
-  }, [orgIdFromQuery, organizations, isAuthenticated]);
+  }, [orgIdFromQuery, organizations, isAuthenticated, loading]);
 
   const filteredOrganizations = useMemo(() => {
     return filterDiscoverableOrganizations(organizations, searchQuery);
@@ -202,7 +206,7 @@ export default function JoinOrganizationPage() {
       setSuccessState(result.successState);
 
       if (result.successState === 'joined') {
-        setTimeout(() => navigate('/console'), 1200);
+        setTimeout(() => redirectBrowser('/console', { replace: false }), 1200);
       }
     } catch (err) {
       console.error('Failed to join by code:', err);
@@ -239,7 +243,7 @@ export default function JoinOrganizationPage() {
       setSuccessState(result.successState);
 
       if (result.successState === 'joined') {
-        setTimeout(() => navigate('/console'), 1200);
+        setTimeout(() => redirectBrowser('/console', { replace: false }), 1200);
       }
     } catch (err) {
       console.error('Failed to join organization:', err);
@@ -272,7 +276,7 @@ export default function JoinOrganizationPage() {
       setSuccessOrgName(result.successOrgName);
       setInviteState(result.inviteState);
       setSuccessState(result.successState);
-      setTimeout(() => navigate('/console'), 1200);
+      setTimeout(() => redirectBrowser('/console', { replace: false }), 1200);
     } catch (err) {
       console.error('Failed to accept invitation:', err);
       setInviteState(JOIN_ORGANIZATION_INVITE_STATES.ERROR);
@@ -345,7 +349,7 @@ export default function JoinOrganizationPage() {
               <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
                 {error || 'Please contact your organization administrator for a new invitation.'}
               </Typography>
-              <Button variant="outlined" onClick={() => navigate('/organizations/discover')}>
+              <Button variant="outlined" onClick={() => navigate(discoverPath)}>
                 Discover Organizations
               </Button>
             </Box>
@@ -367,7 +371,7 @@ export default function JoinOrganizationPage() {
             <Typography variant="body1" color="text.secondary" sx={{ mb: 3 }}>
               Your organization context is now active. Redirecting to your workspace…
             </Typography>
-            <Button variant="contained" onClick={() => navigate('/console')}>
+            <Button variant="contained" onClick={() => redirectBrowser('/console', { replace: false })}>
               Go to Organization Console
             </Button>
           </CardContent>
@@ -389,10 +393,10 @@ export default function JoinOrganizationPage() {
               An administrator must approve your membership before access is granted.
             </Typography>
             <Stack direction="row" spacing={2} justifyContent="center">
-              <Button variant="outlined" onClick={() => navigate('/organizations/mine')}>
+              <Button variant="outlined" onClick={() => navigate(managePath)}>
                 View My Organizations
               </Button>
-              <Button variant="contained" onClick={() => navigate('/organizations/discover')}>
+              <Button variant="contained" onClick={() => navigate(discoverPath)}>
                 Discover More Organizations
               </Button>
             </Stack>
@@ -489,7 +493,10 @@ export default function JoinOrganizationPage() {
                         boxShadow: selectedOrg?.id === org.id ? (theme) => `0 0 0 1px ${theme.palette.primary.main}` : 'none',
                       }}
                     >
-                      <CardActionArea onClick={() => setSelectedOrg(org)}>
+                      <CardActionArea onClick={() => {
+                        setSelectedOrg(org);
+                        setError(null);
+                      }}>
                         <CardContent sx={{ pb: 1.5 }}>
                           <Typography fontWeight={600}>{org.name || org.display_name}</Typography>
                           {org.description && (

@@ -5,7 +5,7 @@
  * Each resource type is now managed by its own dedicated service.
  */
 
-import { get, post, patch, del } from './api';
+import { get, getWithRetryConfig, post, patch, del } from './api';
 
 // Each resource type has its own service
 const PRESENTATION_POLICY_BASE = '/v1/presentation-policies';
@@ -33,6 +33,22 @@ const TRUST_SOURCE_TYPE_ALIASES = {
 };
 
 const SECONDS_PER_DAY = 86400;
+
+function resolveOrganizationId(params = {}) {
+  if (typeof params === 'string') {
+    return params;
+  }
+
+  if (params?.organization_id) {
+    return params.organization_id;
+  }
+
+  try {
+    return window.localStorage.getItem('activeOrgId') || null;
+  } catch {
+    return null;
+  }
+}
 
 function normalizeTrustProfileFormat(format) {
   if (!format) {
@@ -96,10 +112,20 @@ function normalizeValidationRules(data = {}) {
   };
 }
 
+function normalizeRegistryImport(entry = {}) {
+  return {
+    ...entry,
+    sync_enabled: entry.sync_enabled !== false,
+    sync_interval_hours: Number(entry.sync_interval_hours ?? 24),
+    credential_format_filter: Array.isArray(entry.credential_format_filter) ? entry.credential_format_filter : [],
+  };
+}
+
 function buildTrustProfilePayload(data = {}) {
   const {
     framework_type,
     trusted_issuers,
+    allow_all_issuers,
     activate_immediately,
     min_key_size,
     required_credential_types,
@@ -117,12 +143,16 @@ function buildTrustProfilePayload(data = {}) {
         source_type: normalizeTrustSourceType(source.source_type),
       }))
     : trustSourcesFromTrustedIssuers(trusted_issuers || []);
+  const registry_imports = Array.isArray(rest.registry_imports)
+    ? rest.registry_imports.map((entry) => normalizeRegistryImport(entry))
+    : [];
 
   return {
     ...rest,
     profile_type: normalizeTrustProfileType(rest.profile_type || framework_type || 'custom'),
     supported_formats: (rest.supported_formats || ['sd_jwt_vc', 'mdoc']).map(normalizeTrustProfileFormat),
     trust_sources,
+    registry_imports,
     validation_rules,
     allowed_algorithms: validation_rules.allowed_algorithms,
     min_key_size_rsa: validation_rules.min_key_size_rsa,
@@ -159,6 +189,7 @@ function normalizeTrustProfile(data = {}) {
 
   return {
     ...data,
+    status: data.status ? String(data.status).toLowerCase() : data.status,
     trust_sources,
     trusted_issuers,
     framework: (data.profile_type || data.framework || 'custom').toLowerCase(),
@@ -297,7 +328,15 @@ export async function createCredentialTemplate(data) {
  * List credential templates (for claim name autocomplete)
  */
 export async function listCredentialTemplates(params = {}) {
-  const result = await get(CREDENTIAL_TEMPLATE_BASE, { params });
+  const normalizedParams = typeof params === 'string'
+    ? { organization_id: params }
+    : (params || {});
+  const result = await get(CREDENTIAL_TEMPLATE_BASE, {
+    params: {
+      ...normalizedParams,
+      organization_id: resolveOrganizationId(normalizedParams),
+    },
+  });
   return Array.isArray(result) ? result.map((template) => normalizeCredentialTemplate(template)) : result;
 }
 
@@ -336,7 +375,15 @@ export async function createTrustProfile(data) {
  * List organization trust profiles
  */
 export async function listTrustProfiles(params = {}) {
-  const result = await get(TRUST_PROFILE_BASE, { params });
+  const normalizedParams = typeof params === 'string'
+    ? { organization_id: params }
+    : (params || {});
+  const result = await get(TRUST_PROFILE_BASE, {
+    params: {
+      ...normalizedParams,
+      organization_id: resolveOrganizationId(normalizedParams),
+    },
+  });
   return Array.isArray(result) ? result.map((profile) => normalizeTrustProfile(profile)) : result;
 }
 
@@ -386,5 +433,41 @@ export async function addTrustProfileIssuer(profileId, data) {
  */
 export async function getTrustProfileWalletCompatibility(id) {
   return get(`${TRUST_PROFILE_BASE}/${id}/wallet-compatibility`);
+}
+
+// ── Revocation Profile API ────────────────────────────────────────────────
+
+const REVOCATION_PROFILE_BASE = '/v1/revocation-profiles';
+
+/**
+ * Create a revocation profile.
+ * @param {Object} data - Profile data
+ * @returns {Promise<Object>}
+ */
+export async function createRevocationProfile(data) {
+  return post(REVOCATION_PROFILE_BASE, data);
+}
+
+/**
+ * List revocation profiles for an organization.
+ * @param {Object} params - Query parameters (organization_id required)
+ * @returns {Promise<Array>}
+ */
+export async function listRevocationProfiles(params = {}, options = {}) {
+  const retryConfig = options.retryConfig;
+  const request = retryConfig
+    ? getWithRetryConfig(REVOCATION_PROFILE_BASE, { params }, retryConfig)
+    : get(REVOCATION_PROFILE_BASE, { params });
+  const result = await request;
+  return Array.isArray(result) ? result : (result?.items ?? []);
+}
+
+/**
+ * Get a revocation profile by ID.
+ * @param {string} id
+ * @returns {Promise<Object>}
+ */
+export async function getRevocationProfile(id) {
+  return get(`${REVOCATION_PROFILE_BASE}/${id}`);
 }
 

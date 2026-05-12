@@ -15,6 +15,7 @@ const {
   mockValidateOrganizationInvitation,
   mockAcceptOrganizationInvitation,
   mockGetErrorMessage,
+  mockRedirectBrowser,
 } = vi.hoisted(() => ({
   mockNavigate: vi.fn(),
   mockSearchParams: vi.fn(),
@@ -27,6 +28,12 @@ const {
   mockValidateOrganizationInvitation: vi.fn(),
   mockAcceptOrganizationInvitation: vi.fn(),
   mockGetErrorMessage: vi.fn(),
+  mockRedirectBrowser: vi.fn(),
+}));
+
+vi.mock('../../application/routing/appHandoff', () => ({
+  redirectBrowser: (...args: unknown[]) => mockRedirectBrowser(...args),
+  shouldBrowserRedirect: () => false,
 }));
 
 vi.mock('react-router-dom', async () => {
@@ -127,7 +134,7 @@ describe('JoinOrganizationPage', () => {
     });
 
     await waitFor(() => {
-      expect(mockNavigate).toHaveBeenCalledWith('/console');
+      expect(mockRedirectBrowser).toHaveBeenCalledWith('/console', { replace: false });
     }, { timeout: 2500 });
   });
 
@@ -167,7 +174,54 @@ describe('JoinOrganizationPage', () => {
     });
 
     await waitFor(() => {
-      expect(mockNavigate).toHaveBeenCalledWith('/console');
+      expect(mockRedirectBrowser).toHaveBeenCalledWith('/console', { replace: false });
     }, { timeout: 2500 });
+  });
+
+  it('does not show a global error when stale org details fail but discovery still loads', async () => {
+    mockSearchParams.mockReturnValue(new URLSearchParams('orgId=22222222-2222-2222-2222-222222222222'));
+    mockDiscoverOrganizations.mockResolvedValue([
+      {
+        id: 'demo-org',
+        name: 'Demo Vendor Org',
+        description: 'Demo organization for context switching and join/discovery demonstrations',
+        join_mechanism: 'invite',
+        requires_approval: false,
+      },
+    ]);
+    mockGetOrganization.mockRejectedValue({ status: 500, message: 'Server exploded' });
+    mockGetErrorMessage.mockReturnValue('An unexpected error occurred. Please try again.');
+
+    const { user } = render(<JoinOrganizationPage />);
+
+    expect(await screen.findByText('Demo Vendor Org')).toBeInTheDocument();
+
+    await waitFor(() => {
+      expect(mockGetOrganization).toHaveBeenCalledWith('22222222-2222-2222-2222-222222222222');
+      expect(screen.queryByText('An unexpected error occurred. Please try again.')).not.toBeInTheDocument();
+    });
+
+    await user.click(screen.getByText('Demo Vendor Org'));
+
+    expect(screen.getByRole('heading', { name: 'Demo Vendor Org' })).toBeInTheDocument();
+  });
+
+  it('uses the configured management paths after a pending join request', async () => {
+    mockJoinOrganization.mockResolvedValue({ membership: { status: 'pending' } });
+    mockSearchParams.mockReturnValue(new URLSearchParams('orgId=org-1'));
+
+    const { user } = render(
+      <JoinOrganizationPage managePath="/console/organizations" discoverPath="/console/organizations/discover" />,
+    );
+
+    await user.click(await screen.findByRole('button', { name: 'Join Organization' }));
+
+    expect(await screen.findByText('Request submitted to Acme')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'View My Organizations' }));
+    expect(mockNavigate).toHaveBeenCalledWith('/console/organizations');
+
+    await user.click(screen.getByRole('button', { name: 'Discover More Organizations' }));
+    expect(mockNavigate).toHaveBeenCalledWith('/console/organizations/discover');
   });
 });

@@ -25,6 +25,10 @@ export async function verifyVerifierDemoPresentation({
       expectedAudience,
     });
 
+    if (!request || !request.payload) {
+      throw new Error('Invalid presentation format');
+    }
+
     const result = request.requestType === 'credential'
       ? await verifyCredential(request.payload)
       : await verifyPresentation(request.payload);

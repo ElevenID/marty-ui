@@ -61,6 +61,7 @@ SKIP_PREFIXES = (
     "/health",
     "/v1/auth",
     "/.well-known",
+    "/orgs/",
     "/openapi.json",
     "/docs",
     "/v1/issuance/offers",

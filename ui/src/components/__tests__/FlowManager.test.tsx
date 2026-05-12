@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, screen, waitFor, within } from '@test/utils'
 
 import FlowManager from '../vendor/FlowManager'
+import { formatOfficialReference } from '../../utils/officialReferences'
 
 const {
   mockNavigate,
@@ -160,11 +161,13 @@ describe('FlowManager', () => {
 
     await user.click(screen.getByRole('tab', { name: 'flowManager.tabs.approvals' }))
 
+    const flowReference = formatOfficialReference('flow-1', 'flow')
+
     await waitFor(() => {
-      expect(screen.getByText('flow-1')).toBeInTheDocument()
+      expect(screen.getByText(flowReference)).toBeInTheDocument()
     })
 
-    const row = screen.getByText('flow-1').closest('tr')
+    const row = screen.getByText(flowReference).closest('tr')
     expect(row).not.toBeNull()
     const buttons = within(row as HTMLElement).getAllByRole('button')
     await user.click(buttons[0])

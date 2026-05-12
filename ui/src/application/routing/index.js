@@ -13,6 +13,7 @@ export {
   APPLY_CONTEXT_MAX_AGE_MS,
   APPLY_CONTEXT_STORAGE_KEY,
   APPLY_JOIN_ORG_STORAGE_KEY,
+  APPLY_LOCATION_STATE_STORAGE_KEY,
   buildApplyEntryContext,
   getApplyEntryDecision,
   getApplyLoginRedirectUrl,

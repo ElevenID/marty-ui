@@ -24,9 +24,15 @@
  *   instructions  {string}      — optional instruction text override
  */
 
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Box, CircularProgress, Tab, Tabs } from '@mui/material';
 import QRCodeDisplay from './QRCodeDisplay';
+import {
+  createCredentialOfferTransport,
+  resolvePreferredWalletId,
+  resolveWalletTransportArtifact,
+} from '../../services/walletTransportService';
+import { buildWalletOpenLink } from '../../services/walletRegistryApi';
 
 /**
  * Fallback labels for known wallet IDs when no display_name comes from the
@@ -44,23 +50,42 @@ const FALLBACK_WALLET_LABELS = {
   vcwallet:        'VC Wallet',
 };
 
-/** Wallet IDs that use the SpruceID SDK — preferred as the initial tab. */
-const SPRUCE_WALLET_IDS = new Set(['marty', 'spruce', 'sprucekit', 'wr-marty-001', 'wr-spruce-001']);
-
 const walletLabel = (id, labels = {}) => labels[id] || FALLBACK_WALLET_LABELS[id] || id;
 
 const DEFAULT_TAB = '__default__';
 
-export default function OID4VCIInviteDisplay({ offerData, onRegenerate, loading, showDeepLink = false, title, instructions }) {
-  // Prefer the SpruceKit wallet tab when available; otherwise fall back to the
-  // first per-wallet tab so the correct QR is visible without an extra click.
-  const initialWallet = (() => {
-    const ids = Object.keys(offerData?.credential_offer_uris || {});
-    if (ids.length === 0) return DEFAULT_TAB;
-    const spruceId = ids.find((id) => SPRUCE_WALLET_IDS.has(id));
-    return spruceId || ids[0];
-  })();
+export default function OID4VCIInviteDisplay({
+  offerData,
+  onRegenerate,
+  loading,
+  showDeepLink = false,
+  allowedWalletIds = null,
+  showDefaultWalletTab = true,
+  title,
+  instructions,
+}) {
+  const rawOfferUris = useMemo(() => offerData?.credential_offer_uris || {}, [offerData]);
+  const offerUris = useMemo(() => {
+    if (!Array.isArray(allowedWalletIds)) return rawOfferUris;
+    const allowed = new Set(allowedWalletIds.filter(Boolean));
+    if (allowed.size === 0) return {};
+
+    return Object.fromEntries(
+      Object.entries(rawOfferUris).filter(([walletId]) => allowed.has(walletId)),
+    );
+  }, [allowedWalletIds, rawOfferUris]);
+  const walletIds = useMemo(() => Object.keys(offerUris), [offerUris]);
+  const initialWallet = walletIds.length > 0 ? resolvePreferredWalletId(walletIds, allowedWalletIds || []) : DEFAULT_TAB;
   const [selectedWallet, setSelectedWallet] = useState(initialWallet);
+  const walletOptionsKey = walletIds.join('|');
+
+  useEffect(() => {
+    setSelectedWallet((current) => {
+      if (current !== DEFAULT_TAB && walletIds.includes(current)) return current;
+      if (current === DEFAULT_TAB && walletIds.length === 0) return current;
+      return initialWallet;
+    });
+  }, [initialWallet, walletOptionsKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (loading && !offerData) {
     return (
@@ -73,16 +98,43 @@ export default function OID4VCIInviteDisplay({ offerData, onRegenerate, loading,
   if (!offerData) return null;
 
   // Per-wallet offer URIs and template-provided labels from the backend
-  const offerUris = offerData.credential_offer_uris || {};
   const offerLabels = offerData.credential_offer_labels || {};
-  const walletIds = Object.keys(offerUris);
   const hasPerWalletUris = walletIds.length > 0;
+  const defaultUri = offerData.offer_url || offerData.credential_offer_uri || '';
+  const canShowDefaultTab = showDefaultWalletTab && Boolean(defaultUri);
+  const showWalletTabs = hasPerWalletUris && (walletIds.length > 1 || canShowDefaultTab);
 
   // Resolve the URI to display for the currently selected tab
   const activeUri =
     selectedWallet === DEFAULT_TAB
-      ? offerData.offer_url || offerData.credential_offer_uri || ''
-      : offerUris[selectedWallet] || offerData.offer_url || offerData.credential_offer_uri || '';
+      ? defaultUri
+      : offerUris[selectedWallet] || defaultUri;
+  const selectedTransportArtifact = resolveWalletTransportArtifact(
+    offerData.transport_artifacts || offerData.wallet_transport_artifacts,
+    selectedWallet === DEFAULT_TAB ? null : selectedWallet,
+  );
+  const transport = selectedTransportArtifact || createCredentialOfferTransport({
+    offerUri: activeUri,
+    wallet: offerData.wallet_registry?.[selectedWallet] || offerData.wallets_by_id?.[selectedWallet],
+    walletId: selectedWallet === DEFAULT_TAB ? '' : selectedWallet,
+  });
+  const handleOpenLink = async (fallbackOpenLink) => {
+    const walletId = selectedWallet === DEFAULT_TAB ? '' : selectedWallet;
+    if (!walletId || !transport.innerUri) {
+      window.location.href = fallbackOpenLink;
+      return;
+    }
+
+    try {
+      const response = await buildWalletOpenLink(walletId, {
+        innerUri: transport.innerUri,
+        platform: transport.platform,
+      });
+      window.location.href = response?.open_uri || fallbackOpenLink;
+    } catch {
+      window.location.href = fallbackOpenLink;
+    }
+  };
 
   const expiresAt = offerData.expires_at || null;
   const createdAt = offerData.created_at || null;
@@ -95,7 +147,7 @@ export default function OID4VCIInviteDisplay({ offerData, onRegenerate, loading,
 
   return (
     <Box>
-      {hasPerWalletUris && (
+      {showWalletTabs && (
         <Tabs
           value={selectedWallet}
           onChange={(_, value) => setSelectedWallet(value)}
@@ -104,12 +156,16 @@ export default function OID4VCIInviteDisplay({ offerData, onRegenerate, loading,
           {walletIds.map((id) => (
             <Tab key={id} label={walletLabel(id, offerLabels)} value={id} />
           ))}
-          <Tab label="Other Wallets" value={DEFAULT_TAB} />
+          {canShowDefaultTab && <Tab label="Other Wallets" value={DEFAULT_TAB} />}
         </Tabs>
       )}
 
       <QRCodeDisplay
         offerUri={activeUri}
+        qrValue={transport.qrUri || transport.innerUri || activeUri}
+        copyValue={transport.copyUri || transport.innerUri || activeUri}
+        openLink={transport.openUri || transport.innerUri || activeUri}
+        onOpenLink={handleOpenLink}
         expiresAt={expiresAt}
         createdAt={createdAt}
         status={status}

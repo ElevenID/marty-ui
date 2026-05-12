@@ -12,13 +12,16 @@
  */
 
 import { createContext, useState, useEffect, useCallback, useContext, useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { getPreferences, updatePreferences } from '../services/preferencesApi';
 import { getMyOrganizations } from '../services/organizationsApi';
 import { AuthContext } from './AuthContext';
+import { redirectBrowser, shouldBrowserRedirect } from '../application/routing/appHandoff';
+import { getConsoleEligibleOrganizations } from '../application/session/authSession';
 import {
   getDefaultLandingPath,
   isOrgConsoleBlocked,
+  resolveApplicantOrganizationId,
   resolveActiveOrgSelection,
   resolveConsoleBootstrap,
   resolveModeChange,
@@ -65,13 +68,38 @@ export const ConsoleContext = createContext(defaultContextValue);
  */
 export function ConsoleProvider({ children }) {
   const navigate = useNavigate();
-  const { isAuthenticated, isLoading: authLoading, isVendor, isAdministrator, setActiveOrganizationId: updateAuthOrg } = useContext(AuthContext);
+  const location = useLocation();
+  const {
+    user,
+    isAuthenticated,
+    isLoading: authLoading,
+    setActiveOrganizationId: updateAuthOrg,
+  } = useContext(AuthContext);
   
   const [mode, setModeState] = useState('applicant');
   const [activeOrgId, setActiveOrgIdState] = useState(null);
   const [memberships, setMemberships] = useState([]);
   const [membershipsLoaded, setMembershipsLoaded] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const fallbackMemberships = useMemo(
+    () => getConsoleEligibleOrganizations(user?.organizations),
+    [user?.organizations]
+  );
+  const currentOrganizationId = user?.organization_id || null;
+  const defaultApplicantOrgId = user?.default_organization_id || null;
+
+  const transitionTo = useCallback((destination, options = {}) => {
+    if (!destination) {
+      return;
+    }
+
+    if (shouldBrowserRedirect({ currentPathname: location.pathname, destination })) {
+      redirectBrowser(destination, { replace: options.replace === true });
+      return;
+    }
+
+    navigate(destination, options);
+  }, [location.pathname, navigate]);
 
   /**
    * Load preferences and memberships from backend
@@ -91,37 +119,78 @@ export function ConsoleProvider({ children }) {
         getMyOrganizations().catch(() => []),
       ]);
 
-      setMemberships(orgs || []);
-      setMembershipsLoaded(true);
+      const resolvedMemberships = Array.isArray(orgs) && orgs.length > 0
+        ? getConsoleEligibleOrganizations(orgs)
+        : fallbackMemberships;
+      const applicantOrganizations = Array.isArray(orgs) && orgs.length > 0
+        ? orgs
+        : (Array.isArray(user?.organizations) ? user.organizations : []);
+      const resolvedApplicantOrgId = resolveApplicantOrganizationId({
+        defaultOrganizationId: defaultApplicantOrgId,
+        currentOrganizationId,
+        organizations: applicantOrganizations,
+      });
 
-      const hasMemberships = (orgs || []).length > 0;
+      setMemberships(resolvedMemberships);
+      setMembershipsLoaded(true);
 
       // Restore last mode and org (fallback to localStorage when backend prefs are stale/unavailable)
       const localStoredOrgId = window.localStorage.getItem('activeOrgId');
       const { mode: effectiveMode, activeOrgId: validOrgId } = resolveConsoleBootstrap({
         preferences: prefs,
-        memberships: orgs || [],
+        memberships: resolvedMemberships,
         localStoredOrgId,
       });
 
       setModeState(effectiveMode);
       setActiveOrgIdState(validOrgId);
 
+      if (validOrgId) {
+        window.localStorage.setItem('activeOrgId', validOrgId);
+      } else {
+        window.localStorage.removeItem('activeOrgId');
+      }
+
       // Sync with AuthContext
-      if (validOrgId && updateAuthOrg) {
+      if (validOrgId && updateAuthOrg && currentOrganizationId !== validOrgId) {
         updateAuthOrg(validOrgId);
+      } else if (!validOrgId && updateAuthOrg && currentOrganizationId !== resolvedApplicantOrgId) {
+        updateAuthOrg(resolvedApplicantOrgId);
+      }
+
+      if (
+        prefs?.last_view_mode !== effectiveMode
+        || (prefs?.last_active_org_id || null) !== validOrgId
+      ) {
+        updatePreferences({
+          last_view_mode: effectiveMode,
+          last_active_org_id: validOrgId,
+        }).catch((error) => {
+          console.warn('[ConsoleContext] Failed to heal stale console preferences:', error);
+        });
       }
     } catch (error) {
       console.error('[ConsoleContext] Failed to load state:', error);
       // Use defaults on error
       setModeState('applicant');
       setActiveOrgIdState(null);
-      setMemberships([]);
+      setMemberships(fallbackMemberships);
       setMembershipsLoaded(true);
+      if (updateAuthOrg && currentOrganizationId !== defaultApplicantOrgId) {
+        updateAuthOrg(defaultApplicantOrgId);
+      }
     } finally {
       setIsLoading(false);
     }
-  }, [isAuthenticated, authLoading, updateAuthOrg]);
+  }, [
+    isAuthenticated,
+    authLoading,
+    currentOrganizationId,
+    defaultApplicantOrgId,
+    fallbackMemberships,
+    user?.organizations,
+    updateAuthOrg,
+  ]);
 
   /**
    * Load state on mount and when auth state changes
@@ -148,9 +217,17 @@ export function ConsoleProvider({ children }) {
 
     if (nextState.authOrgId && updateAuthOrg) {
       updateAuthOrg(nextState.authOrgId);
+    } else if (newMode === 'applicant' && updateAuthOrg) {
+      updateAuthOrg(defaultApplicantOrgId);
     }
 
-    navigate(nextState.destination);
+    if (nextState.activeOrgId) {
+      window.localStorage.setItem('activeOrgId', nextState.activeOrgId);
+    } else {
+      window.localStorage.removeItem('activeOrgId');
+    }
+
+    transitionTo(nextState.destination);
 
     try {
       await updatePreferences(nextState.persistence);
@@ -158,7 +235,7 @@ export function ConsoleProvider({ children }) {
       // Keep in-memory UI state even if persistence fails (backend may reject some payloads)
       console.warn('[ConsoleContext] Failed to persist mode preference, keeping local state:', error);
     }
-  }, [mode, activeOrgId, memberships, navigate, updateAuthOrg]);
+  }, [mode, activeOrgId, memberships, transitionTo, updateAuthOrg, defaultApplicantOrgId]);
 
   /**
    * Set active organization
@@ -194,7 +271,7 @@ export function ConsoleProvider({ children }) {
 
     // Sync with AuthContext for permissions
     if (updateAuthOrg) {
-      updateAuthOrg(orgId);
+      updateAuthOrg(orgId || defaultApplicantOrgId);
     }
 
     try {
@@ -202,26 +279,30 @@ export function ConsoleProvider({ children }) {
 
       // Always navigate to org console when selecting an org
       if (nextSelection.destination) {
-        navigate(nextSelection.destination);
+        transitionTo(nextSelection.destination);
       }
     } catch (error) {
       // Keep selected org locally even if preference persistence fails
       console.warn('[ConsoleContext] Failed to persist active org preference, keeping local selection:', error);
       if (nextSelection.destination) {
-        navigate(nextSelection.destination);
+        transitionTo(nextSelection.destination);
       }
     }
-  }, [activeOrgId, mode, memberships, navigate, updateAuthOrg]);
+  }, [activeOrgId, mode, memberships, transitionTo, updateAuthOrg, defaultApplicantOrgId]);
 
   /**
    * Clear active org (triggers setup flow)
    */
   const clearActiveOrg = useCallback(() => {
     setActiveOrgIdState(null);
-    if (mode === 'org') {
-      navigate('/console/org/setup');
+    window.localStorage.removeItem('activeOrgId');
+    if (updateAuthOrg) {
+      updateAuthOrg(defaultApplicantOrgId);
     }
-  }, [mode, navigate]);
+    if (mode === 'org') {
+      transitionTo('/console/org/setup');
+    }
+  }, [defaultApplicantOrgId, mode, transitionTo, updateAuthOrg]);
 
   /**
    * Refresh memberships from backend
@@ -229,25 +310,29 @@ export function ConsoleProvider({ children }) {
   const refreshMemberships = useCallback(async () => {
     try {
       const orgs = await getMyOrganizations();
-      setMemberships(orgs || []);
+      const resolvedMemberships = Array.isArray(orgs) && orgs.length > 0
+        ? getConsoleEligibleOrganizations(orgs)
+        : fallbackMemberships;
+
+      setMemberships(resolvedMemberships);
       setMembershipsLoaded(true);
 
       // If current activeOrgId is no longer valid, clear it
-      if (activeOrgId && !orgs?.find(o => o.id === activeOrgId)) {
+      if (activeOrgId && !resolvedMemberships.find((organization) => organization.id === activeOrgId)) {
         clearActiveOrg();
       }
     } catch (error) {
       console.error('[ConsoleContext] Failed to refresh memberships:', error);
     }
-  }, [activeOrgId, clearActiveOrg]);
+  }, [activeOrgId, clearActiveOrg, fallbackMemberships]);
 
   /**
    * Computed: Is org console available?
    * Only available for users with admin or vendor roles.
    */
   const isOrgConsoleAvailable = useMemo(() => {
-    return isVendor || isAdministrator;
-  }, [isVendor, isAdministrator]);
+    return memberships.length > 0;
+  }, [memberships.length]);
 
   /**
    * Computed: Is applicant console available?

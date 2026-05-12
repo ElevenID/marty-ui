@@ -31,9 +31,10 @@ import {
 import { useTranslation } from 'react-i18next';
 
 import { getMyApplications } from '../../../services/applicantApi';
+import { generateIssuanceOffer } from '../../../services/credentialsApi';
 import ClaimCredentialDialog from './ClaimCredentialDialog';
 
-const TERMINAL_STATUSES = new Set(['issued', 'rejected']);
+const TERMINAL_STATUSES = new Set(['credentialed', 'issued', 'rejected']);
 
 function getStepFromStatus(status) {
   switch (status) {
@@ -46,7 +47,9 @@ function getStepFromStatus(status) {
     case 'needs_info':
       return 2;
     case 'approved':
+    case 'offered':
       return 3;
+    case 'credentialed':
     case 'issued':
       return 4;
     case 'rejected':
@@ -75,6 +78,27 @@ function MyApplicationsPage() {
   const [error, setError] = useState(null);
   const [selectedApp, setSelectedApp] = useState(null);
   const [claimApp, setClaimApp] = useState(null);
+  const [reissuingId, setReissuingId] = useState(null);
+  const [reissueError, setReissueError] = useState(null);
+
+  const handleReclaim = async (app) => {
+    setReissuingId(app.id);
+    setReissueError(null);
+    try {
+      const offerData = await generateIssuanceOffer(app.id);
+      setClaimApp({
+        ...app,
+        offerUrl: offerData.offer_url || null,
+        offerUris: offerData.credential_offer_uris || {},
+        offerLabels: offerData.credential_offer_labels || {},
+        offerExpiresAt: offerData.expires_at || null,
+      });
+    } catch (err) {
+      setReissueError(err.message || t('applications.reissue.error', 'Failed to request re-issuance. Please contact your issuer.'));
+    } finally {
+      setReissuingId(null);
+    }
+  };
 
   useEffect(() => {
     const loadApplications = async (showLoading = true) => {
@@ -92,7 +116,7 @@ function MyApplicationsPage() {
             submittedAt: app.submitted_at,
             status: status || 'submitted',
             step,
-            completedAt: app.approved_at || app.issued_at,
+            completedAt: app.issued_at || app.approved_at,
             // Preserve offer data so ClaimCredentialDialog can use it directly
             offerUrl: app.credential_offer_uri || null,
             offerUris: app.credential_offer_uris || {},
@@ -140,6 +164,9 @@ function MyApplicationsPage() {
     switch (status) {
       case 'approved':
         return 'success';
+      case 'offered':
+        return 'primary';
+      case 'credentialed':
       case 'issued':
         return 'primary';
       case 'rejected':
@@ -170,8 +197,12 @@ function MyApplicationsPage() {
         return t('applications.status.pendingApproval', 'Pending Approval');
       case 'approved':
         return t('applications.status.approved');
+      case 'offered':
+        return t('applications.status.walletInviteReady', 'Wallet Invite Ready');
+      case 'credentialed':
+        return t('applications.status.credentialIssued', 'Credential Issued');
       case 'issued':
-        return t('applications.status.readyToClaim', 'Ready to Claim');
+        return t('applications.status.credentialIssued', 'Credential Issued');
       case 'rejected':
         return t('applications.status.rejected');
       default:
@@ -191,6 +222,12 @@ function MyApplicationsPage() {
       {error && (
         <Alert severity="error" sx={{ mb: 3 }}>
           {error}
+        </Alert>
+      )}
+
+      {reissueError && (
+        <Alert severity="error" sx={{ mb: 3 }} onClose={() => setReissueError(null)}>
+          {reissueError}
         </Alert>
       )}
 
@@ -249,7 +286,7 @@ function MyApplicationsPage() {
                       <Button size="small" onClick={() => setSelectedApp(app)} sx={{ mr: 1 }}>
                         {t('applications.actions.viewDetails')}
                       </Button>
-                      {(app.status === 'approved' || app.status === 'issued') && (
+                      {(app.status === 'approved' || app.status === 'offered') && (
                         <Button
                           size="small"
                           variant="contained"
@@ -257,6 +294,19 @@ function MyApplicationsPage() {
                           onClick={() => setClaimApp(app)}
                         >
                           {t('applications.actions.addToWallet', 'Add to Wallet')}
+                        </Button>
+                      )}
+                      {(app.status === 'credentialed' || app.status === 'issued') && (
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          color="secondary"
+                          disabled={reissuingId === app.id}
+                          onClick={() => handleReclaim(app)}
+                        >
+                          {reissuingId === app.id
+                            ? t('applications.actions.requesting', 'Requesting…')
+                            : t('applications.actions.reclaim', 'Reclaim')}
                         </Button>
                       )}
                     </TableCell>

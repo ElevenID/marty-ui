@@ -47,9 +47,11 @@ import OfflineBoltIcon from '@mui/icons-material/OfflineBolt';
 import deploymentProfilesApi from '../../services/deploymentProfilesApi';
 import { CardSkeleton } from '../common/skeletons';
 import ErrorState from '../common/ErrorState';
+import { useAuth } from '../../hooks/useAuth';
 
-const DeploymentProfileManager = () => {
+const DeploymentProfileManager = ({ hideHeader = false }) => {
   const { t } = useTranslation('vendor');
+  const { organizationId } = useAuth();
   const NETWORK_MODES = [
     { value: 'ONLINE', label: t('deploymentProfiles.networkModes.online'), description: t('deploymentProfiles.networkModes.onlineDesc'), icon: <PublicIcon /> },
     { value: 'OFFLINE', label: t('deploymentProfiles.networkModes.offline'), description: t('deploymentProfiles.networkModes.offlineDesc'), icon: <OfflineBoltIcon /> },
@@ -83,7 +85,7 @@ const DeploymentProfileManager = () => {
   const loadProfiles = async () => {
     setLoading(true);
     try {
-      const data = await deploymentProfilesApi.listDeploymentProfiles();
+      const data = await deploymentProfilesApi.listDeploymentProfiles({ organization_id: organizationId });
       setProfiles(data);
       setError(null);
     } catch (err) {
@@ -148,8 +150,7 @@ const DeploymentProfileManager = () => {
     }
   };
 
-  // Show header always
-  const header = (
+  const header = !hideHeader ? (
     <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
       <Box>
         <Typography variant="h4">{t('deploymentProfiles.title')}</Typography>
@@ -167,7 +168,7 @@ const DeploymentProfileManager = () => {
         {t('deploymentProfiles.createButton')}
       </Button>
     </Box>
-  );
+  ) : null;
 
   if (loading) {
     return (

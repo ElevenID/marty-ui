@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { renderWithRouter, screen, waitFor, within } from '@test/utils'
 import TeamPage from './TeamPage'
 
@@ -7,15 +7,10 @@ const {
   mockUseConsole,
   mockShowNotification,
   mockHasPermission,
-  mockCan,
   mockRefreshPermissions,
   mockListMembers,
-  mockListInvites,
   mockInviteMember,
-  mockResendInvite,
-  mockRevokeInvite,
   mockRemoveMember,
-  mockUpdateMemberRole,
   mockListRoles,
   mockSetMemberRoles,
 } = vi.hoisted(() => ({
@@ -23,15 +18,10 @@ const {
   mockUseConsole: vi.fn(),
   mockShowNotification: vi.fn(),
   mockHasPermission: vi.fn(),
-  mockCan: vi.fn(),
   mockRefreshPermissions: vi.fn(),
   mockListMembers: vi.fn(),
-  mockListInvites: vi.fn(),
   mockInviteMember: vi.fn(),
-  mockResendInvite: vi.fn(),
-  mockRevokeInvite: vi.fn(),
   mockRemoveMember: vi.fn(),
-  mockUpdateMemberRole: vi.fn(),
   mockListRoles: vi.fn(),
   mockSetMemberRoles: vi.fn(),
 }))
@@ -55,11 +45,7 @@ vi.mock('react-i18next', () => ({
 vi.mock('../../../services/teamApi', () => ({
   default: {
     listMembers: (...args: unknown[]) => mockListMembers(...args),
-    listInvites: (...args: unknown[]) => mockListInvites(...args),
     inviteMember: (...args: unknown[]) => mockInviteMember(...args),
-    resendInvite: (...args: unknown[]) => mockResendInvite(...args),
-    revokeInvite: (...args: unknown[]) => mockRevokeInvite(...args),
-    updateMemberRole: (...args: unknown[]) => mockUpdateMemberRole(...args),
     removeMember: (...args: unknown[]) => mockRemoveMember(...args),
   },
 }))
@@ -85,8 +71,8 @@ vi.mock('../../../hooks/useNotifications', () => ({
 
 vi.mock('../../../hooks/usePermissions', () => ({
   usePermissions: () => ({
+    can: mockHasPermission,
     hasPermission: mockHasPermission,
-    can: mockCan,
     refresh: mockRefreshPermissions,
     getPermissionMessage: () => '',
   }),
@@ -105,31 +91,28 @@ describe('TeamPage', () => {
       activeOrgId: 'console-org',
     })
     mockHasPermission.mockReturnValue(true)
-    mockCan.mockReturnValue(true)
     mockRefreshPermissions.mockResolvedValue(undefined)
     mockListMembers.mockResolvedValue([
       {
         id: 'member_1',
-        name: 'Alex Admin',
+        user_id: 'user_2',
         email: 'alex@example.com',
-        role: 'admin',
+        roles: [{ id: 'role_admin', name: 'admin', display_name: 'Admin' }],
+        status: 'active',
         joined_at: '2026-04-01T00:00:00Z',
+        is_owner: false,
       },
-    ])
-    mockListInvites.mockResolvedValue([
       {
-        id: 'invite_1',
+        id: 'member_invite_1',
         email: 'pending@example.com',
-        role: 'developer',
-        created_at: '2026-04-01T00:00:00Z',
-        expires_at: '2026-04-08T00:00:00Z',
+        roles: [{ id: 'role_viewer', name: 'viewer', display_name: 'Viewer' }],
+        status: 'invited',
+        invited_at: '2026-04-01T00:00:00Z',
+        is_owner: false,
       },
     ])
     mockInviteMember.mockResolvedValue({ id: 'invite_2' })
-    mockResendInvite.mockResolvedValue({ id: 'invite_1', resent: true })
-    mockRevokeInvite.mockResolvedValue({ ok: true })
     mockRemoveMember.mockResolvedValue({ ok: true })
-    mockUpdateMemberRole.mockResolvedValue({ id: 'member_1', role: 'viewer' })
     mockListRoles.mockResolvedValue({
       roles: [
         {
@@ -137,6 +120,14 @@ describe('TeamPage', () => {
           name: 'viewer',
           display_name: 'Viewer',
           description: 'Read-only access',
+          is_system: true,
+          is_default_for_new_members: true,
+        },
+        {
+          id: 'role_operator',
+          name: 'operator',
+          display_name: 'Operator',
+          description: 'Operational access',
           is_system: true,
         },
       ],
@@ -155,7 +146,7 @@ describe('TeamPage', () => {
 
     await waitFor(() => {
       expect(mockListMembers).toHaveBeenCalledWith('console-org')
-      expect(mockListInvites).toHaveBeenCalledWith('console-org')
+      expect(mockListRoles).toHaveBeenCalledWith('console-org')
     })
 
     await user.click(screen.getByRole('button', { name: 'org.team.members.actions.invite' }))
@@ -163,12 +154,13 @@ describe('TeamPage', () => {
       screen.getByLabelText('org.team.dialog.invite.emailLabel'),
       'new.member@example.com'
     )
+    await user.click(screen.getByText('Operator'))
     await user.click(screen.getByRole('button', { name: 'org.team.dialog.invite.send' }))
 
     await waitFor(() => {
       expect(mockInviteMember).toHaveBeenCalledWith('console-org', {
         email: 'new.member@example.com',
-        role: 'developer',
+        role_ids: ['role_viewer', 'role_operator'],
       })
     })
   })
@@ -179,54 +171,43 @@ describe('TeamPage', () => {
     })
 
     await waitFor(() => {
-      expect(screen.getByText('alex@example.com')).toBeInTheDocument()
+      expect(screen.getAllByText('alex@example.com').length).toBeGreaterThan(0)
     })
 
-    const memberRow = screen.getByText('alex@example.com').closest('tr')
+    const memberRow = screen.getAllByText('alex@example.com')[0].closest('tr')
     expect(memberRow).not.toBeNull()
 
     await user.click(within(memberRow as HTMLElement).getByRole('button'))
     await user.click(screen.getByText('org.team.members.actions.changeRole'))
-    await user.click(screen.getByText('Viewer'))
+    await user.click(screen.getByText('Operator'))
     await user.click(screen.getByRole('button', { name: 'org.team.dialog.changeRole.update' }))
 
     await waitFor(() => {
-      expect(mockSetMemberRoles).toHaveBeenCalledWith('console-org', 'member_1', ['role_viewer'])
+      expect(mockSetMemberRoles).toHaveBeenCalledWith('console-org', 'member_1', ['role_admin', 'role_operator'])
     })
   })
 
-  it('developer and operator release personas can view team state but cannot mutate it', async () => {
-    mockHasPermission.mockImplementation((resource: string, action: string) => {
-      if (resource === 'team' && action === 'view') {
-        return true
-      }
-
-      return false
-    })
-    mockCan.mockImplementation((resource: string, action: string) => {
-      if (resource === 'team' && action === 'view') {
-        return true
-      }
-
-      return false
-    })
+  it('release personas can view team state but cannot mutate it', async () => {
+    mockHasPermission.mockImplementation((resource: string, action: string) => (
+      resource === 'team' && action === 'view'
+    ))
 
     renderWithRouter(<TeamPage />, {
       initialEntries: ['/console/org/team'],
     })
 
     await waitFor(() => {
-      expect(screen.getByText('alex@example.com')).toBeInTheDocument()
-      expect(screen.getByText('pending@example.com')).toBeInTheDocument()
+      expect(screen.getAllByText('alex@example.com').length).toBeGreaterThan(0)
+      expect(screen.getAllByText('pending@example.com').length).toBeGreaterThan(0)
     })
 
     expect(screen.queryByRole('button', { name: 'org.team.members.actions.invite' })).not.toBeInTheDocument()
 
-    const memberRow = screen.getByText('alex@example.com').closest('tr')
+    const memberRow = screen.getAllByText('alex@example.com')[0].closest('tr')
     expect(memberRow).not.toBeNull()
     expect(within(memberRow as HTMLElement).queryByRole('button')).not.toBeInTheDocument()
 
-    const inviteRow = screen.getByText('pending@example.com').closest('tr')
+    const inviteRow = screen.getAllByText('pending@example.com')[0].closest('tr')
     expect(inviteRow).not.toBeNull()
     expect(within(inviteRow as HTMLElement).queryByRole('button')).not.toBeInTheDocument()
   })

@@ -8,7 +8,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
 
-from ..domain.entities import ApiKey, ConsoleContextPreference, JoinCode, Member, MemberRole, Organization, OrganizationType, Permission, Role, ViewMode
+from ..domain.entities import ApiKey, ConsoleContextPreference, JoinCode, Member, Organization, OrganizationType, Permission, Role, ViewMode
 
 
 # =============================================================================
@@ -43,15 +43,16 @@ class InviteMemberCommand:
     """Command to invite a member."""
     organization_id: str
     email: str
-    role: MemberRole
+    role_ids: list[str]
     invited_by: str
 
 
 @dataclass
-class UpdateMemberRoleCommand:
-    """Command to update member's role."""
+class SetMemberRolesCommand:
+    """Command to replace a member's roles."""
     member_id: str
-    new_role: MemberRole
+    organization_id: str
+    role_ids: list[str]
     updated_by: str
 
 
@@ -130,15 +131,6 @@ class DeleteRoleCommand:
     organization_id: str
     deleted_by: str
     replacement_role_id: str | None = None
-
-
-@dataclass
-class SetMemberRolesCommand:
-    """Command to set member's roles (replace all)."""
-    member_id: str
-    organization_id: str
-    role_ids: list[str]
-    updated_by: str
 
 
 @dataclass

@@ -170,7 +170,7 @@ class AuthenticateUseCase:
             raise ValueError("No ID token in response")
         
         # Parse user claims from ID token (already validated via PKCE)
-        oidc_user = self.oidc_provider.parse_id_token(id_token)
+        oidc_user = self.oidc_provider.parse_id_token(id_token, access_token)
         
         # JIT provision user
         user = await self.user_provisioning.provision_user(oidc_user)

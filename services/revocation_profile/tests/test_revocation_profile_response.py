@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from marty_common.org_authorization import OrganizationMembership, OrgRole
+from marty_common.org_authorization import OrganizationMembership, OrganizationRoleSummary
 
 from services.revocation_profile import main as revocation_profile
 
@@ -23,8 +23,15 @@ def _build_client(
         return_value=OrganizationMembership(
             user_id="user-1",
             organization_id="org-1",
-            role=OrgRole.ADMIN,
             status="active",
+            roles=[OrganizationRoleSummary(id="role-admin", name="admin", display_name="Admin")],
+            permissions={
+                "revocation-profile:view",
+                "revocation-profile:create",
+                "revocation-profile:delete",
+                "revocation-profile:activate",
+            },
+            has_org_console_access=True,
         )
     )
     org_client = SimpleNamespace(get_membership=get_membership)
@@ -97,7 +104,10 @@ def test_get_revocation_profile_returns_protocol_shape_only() -> None:
         "list_size": 262144,
         "uri_template": "https://status.example.com/lists",
     }
-    assert body["status_list_url"] == "https://status.example.com/lists"
+    assert body["status_list_url"] == (
+        f"https://status.example.com/v1/organizations/org-1"
+        f"/revocation-profiles/{profile.id}/status-lists/{{mechanism}}/{{purpose}}"
+    )
     assert "description" not in body
     assert "status" not in body
     assert "verifier_config" not in body
@@ -141,7 +151,10 @@ def test_create_revocation_profile_accepts_protocol_fields() -> None:
         "list_size": 131072,
         "uri_template": "https://status.example.com/tenant-a",
     }
-    assert body["status_list_url"] == "https://status.example.com/tenant-a"
+    assert body["status_list_url"] == (
+        f"https://status.example.com/tenant-a/v1/organizations/org-1"
+        f"/revocation-profiles/{body['id']}/status-lists/{{mechanism}}/{{purpose}}"
+    )
     get_membership.assert_awaited_once_with("user-1", "org-1")
 
 

@@ -29,7 +29,7 @@ services:
       - marty_db_password
     volumes:
       - type: bind
-        source: ${SELFHOST_STATE_DIR:-./.selfhost-state}/postgres
+        source: ${SELFHOST_STATE_DIR}/postgres
         target: /var/lib/postgresql/data
       - ./docker/init-databases.sh:/docker-entrypoint-initdb.d/init-databases.sh:ro
     healthcheck:
@@ -45,7 +45,7 @@ services:
     command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
     volumes:
       - type: bind
-        source: ${SELFHOST_STATE_DIR:-./.selfhost-state}/redis
+        source: ${SELFHOST_STATE_DIR}/redis
         target: /data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -118,12 +118,28 @@ services:
       PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:-prod.example.com}
       UI_BASE_URL: ${UI_BASE_URL:-https://prod.example.com}
       MARTY_API_CLIENT_SECRET_FILE: /run/secrets/marty_api_client_secret
+      MARTY_ORG_NAME: ${MARTY_ORG_NAME:-Marty}
+      MARTY_ORG_DOMAIN: ${MARTY_ORG_DOMAIN:-prod.example.com}
+      MARTY_ORG_ADMIN_EMAIL: ${MARTY_ORG_ADMIN_EMAIL:-}
       KEYCLOAK_REMOVE_DEMO_USERS: ${KEYCLOAK_REMOVE_DEMO_USERS:-true}
+      KEYCLOAK_USER_REGISTRATION_ENABLED: ${KEYCLOAK_USER_REGISTRATION_ENABLED:-true}
+      KEYCLOAK_VERIFY_EMAIL: ${KEYCLOAK_VERIFY_EMAIL:-true}
+      KEYCLOAK_RESET_PASSWORD_ENABLED: ${KEYCLOAK_RESET_PASSWORD_ENABLED:-true}
+      KEYCLOAK_SOCIAL_LOGIN_ENABLED: ${KEYCLOAK_SOCIAL_LOGIN_ENABLED:-false}
+      KEYCLOAK_SMTP_HOST: ${KEYCLOAK_SMTP_HOST:-}
+      KEYCLOAK_SMTP_PORT: ${KEYCLOAK_SMTP_PORT:-587}
+      KEYCLOAK_SMTP_FROM: ${KEYCLOAK_SMTP_FROM:-noreply@prod.example.com}
+      KEYCLOAK_SMTP_FROM_DISPLAY_NAME: ${KEYCLOAK_SMTP_FROM_DISPLAY_NAME:-Marty Trust Services}
+      KEYCLOAK_SMTP_USERNAME: ${KEYCLOAK_SMTP_USERNAME:-${SMTP_USERNAME:-}}
+      SMTP_PASSWORD_FILE: /run/secrets/smtp_password
+      KEYCLOAK_SMTP_SSL: ${KEYCLOAK_SMTP_SSL:-false}
+      KEYCLOAK_SMTP_STARTTLS: ${KEYCLOAK_SMTP_STARTTLS:-true}
     secrets:
       - keycloak_admin_password
       - google_client_id
       - google_client_secret
       - marty_api_client_secret
+      - smtp_password
     volumes:
       - ./scripts/setup-keycloak.sh:/scripts/setup-keycloak.sh:ro
       - ./scripts/setup-keycloak-selfhost-production.sh:/scripts/setup-keycloak-selfhost-production.sh:ro
@@ -142,14 +158,26 @@ services:
       DATABASE_URL_TEMPLATE: *database-url-sync-template
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
       MARTY_ORG_ID: ${MARTY_ORG_ID:-00000000-0000-0000-0000-000000000001}
+      MARTY_ORG_SLUG: ${MARTY_ORG_SLUG:-marty}
       MARTY_ORG_ADMIN_EMAIL: ${MARTY_ORG_ADMIN_EMAIL:-}
       MARTY_MIGRATION_PROFILE: ${MARTY_MIGRATION_PROFILE:-production}
+      PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:-prod.example.com}
+      PUBLIC_API_URL: ${PUBLIC_API_URL:-https://prod.example.com}
+      ISSUER_BASE_URL: ${PUBLIC_API_URL:-https://prod.example.com}
+      REDIS_URL: redis://redis:6379
+      REDIS_DB_GATEWAY: "2"
+      MARTY_KMS_BOOTSTRAP_ENABLED: ${MARTY_KMS_BOOTSTRAP_ENABLED:-true}
+      BAO_ADDR: ${BAO_ADDR:-}
+      BAO_TOKEN_FILE: /run/secrets/openbao_service_token
     secrets:
       - marty_db_password
+      - openbao_service_token
       - license_key
       - license_public_key
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     restart: "no"
 
@@ -184,6 +212,7 @@ services:
       REDIS_DB_GATEWAY: "2"
       RATE_LIMIT_RPM: ${RATE_LIMIT_RPM:-300}
       ISSUANCE_API_KEY_FILE: /run/secrets/issuance_api_key
+      SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/issuance_api_key
     secrets:
       - issuance_api_key
       - license_key
@@ -230,6 +259,8 @@ services:
       MARTY_API_CLIENT_ID: ${MARTY_API_CLIENT_ID:-marty-api}
       MARTY_API_CLIENT_SECRET_FILE: /run/secrets/marty_api_client_secret
       CREDENTIAL_LOGIN_POLICY_ID: ${CREDENTIAL_LOGIN_POLICY_ID:-}
+      CREDENTIAL_LOGIN_REQUIRE_EXISTING_KEYCLOAK_USER: ${CREDENTIAL_LOGIN_REQUIRE_EXISTING_KEYCLOAK_USER:-true}
+      CREDENTIAL_LOGIN_CREATE_USERS: ${CREDENTIAL_LOGIN_CREATE_USERS:-false}
       AUTH_SERVICE_INTERNAL_URL: http://auth:8001
       ORG_GRPC_TARGET: organization:9002
       FLOW_GRPC_TARGET: flow:9011
@@ -362,11 +393,15 @@ services:
       BAO_ADDR: ${BAO_ADDR:-}
       BAO_TOKEN_FILE: /run/secrets/openbao_service_token
       ISSUANCE_API_KEY_FILE: /run/secrets/issuance_api_key
+      SIGNING_KEYS_INTERNAL_URL: http://gateway:8000/internal/signing-keys
+      SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/issuance_api_key
+      CANVAS_CREDENTIALS_SHARED_SECRET_FILE: /run/secrets/canvas_credentials_shared_secret
       UNIVERSAL_RESOLVER_URL: ${UNIVERSAL_RESOLVER_URL:-}
     secrets:
       - marty_db_password
       - openbao_service_token
       - issuance_api_key
+      - canvas_credentials_shared_secret
       - license_key
       - license_public_key
     volumes:
@@ -403,7 +438,7 @@ services:
       - license_public_key
     volumes:
       - type: bind
-        source: ${SELFHOST_STATE_DIR:-./.selfhost-state}/applicant
+        source: ${SELFHOST_STATE_DIR}/applicant
         target: /app/data
     user: "0:0"
     depends_on:
@@ -486,6 +521,7 @@ services:
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
       ORG_GRPC_TARGET: organization:9002
       PP_GRPC_PORT: "9009"
+      DID_RESOLUTION_BASE_URL: http://gateway:8000
     secrets:
       - marty_db_password
       - license_key
@@ -541,9 +577,13 @@ services:
       ORG_GRPC_TARGET: organization:9002
       PP_GRPC_TARGET: presentation-policy:9009
       CT_GRPC_TARGET: credential-template:9003
+      ISSUANCE_GRPC_TARGET: issuance:9005
+      ISSUANCE_SERVICE_URL: http://issuance:8005
       FLOW_GRPC_PORT: "9011"
     secrets:
       - marty_db_password
+      - license_key
+      - license_public_key
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -568,7 +608,10 @@ services:
       VERIF_GRPC_ENABLED: "true"
       PUBLIC_BASE_URL: ${PUBLIC_API_URL:-https://prod.example.com}
       REDIS_URL: redis://redis:6379/3
+      SIGNING_KEYS_INTERNAL_URL: http://gateway:8000/internal/signing-keys
+      SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/issuance_api_key
     secrets:
+      - issuance_api_key
       - license_key
       - license_public_key
     depends_on:
@@ -772,6 +815,8 @@ secrets:
     file: ${SELFHOST_SECRET_DIR:-./docker/secrets/selfhost.example}/marty_api_client_secret
   issuance_api_key:
     file: ${SELFHOST_SECRET_DIR:-./docker/secrets/selfhost.example}/issuance_api_key
+  canvas_credentials_shared_secret:
+    file: ${SELFHOST_SECRET_DIR:-./docker/secrets/selfhost.example}/canvas_credentials_shared_secret
   openbao_service_token:
     file: ${SELFHOST_SECRET_DIR:-./docker/secrets/selfhost.example}/openbao_service_token
   cloudflare_tunnel_token:

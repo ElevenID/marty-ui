@@ -9,6 +9,8 @@ const { mockNavigate, mockGet, mockGetApplicantByUser } = vi.hoisted(() => ({
   mockGetApplicantByUser: vi.fn(),
 }));
 
+let mockPathname = '/';
+
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string, options?: any) => options?.count !== undefined ? `${key}:${options.count}` : key }),
 }));
@@ -18,6 +20,7 @@ vi.mock('react-router-dom', async () => {
   return {
     ...actual,
     useNavigate: () => mockNavigate,
+    useLocation: () => ({ pathname: mockPathname }),
   };
 });
 
@@ -44,6 +47,7 @@ vi.mock('../../services/applicantApi', () => ({
 describe('CredentialCatalog', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockPathname = '/';
     mockGet.mockImplementation((endpoint: string) => {
       if (endpoint.includes('/v1/credential-templates')) {
         return Promise.resolve([
@@ -98,6 +102,26 @@ describe('CredentialCatalog', () => {
     await user.click(within(memberCard).getByTestId('apply-btn'));
 
     expect(mockNavigate).toHaveBeenCalledWith('/apply/cfg-1', {
+      state: {
+        credential: expect.objectContaining({
+          id: 'cfg-1',
+          name: 'Member Login Credential',
+        }),
+      },
+    });
+  });
+
+  it('navigates directly to the applicant application route from the console catalog', async () => {
+    mockPathname = '/console/applicant/catalog';
+    const { user } = render(<CredentialCatalog />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('credential-card-cfg-1')).toBeInTheDocument();
+    });
+
+    await user.click(within(screen.getByTestId('credential-card-cfg-1')).getByTestId('apply-btn'));
+
+    expect(mockNavigate).toHaveBeenCalledWith('/console/applicant/apply/cfg-1', {
       state: {
         credential: expect.objectContaining({
           id: 'cfg-1',

@@ -207,7 +207,7 @@ class ErrorBoundary extends Component {
       if (import.meta.env.DEV) {
         console.error('Error caught by ErrorBoundary:', error);
         console.error('Component stack:', errorInfo?.componentStack);
-        console.error('Error ID:', response?.error_id);
+        console.error('Error ID:', this.state.errorId);
       }
     } catch (reportError) {
       // Don't let reporting failure cause more problems

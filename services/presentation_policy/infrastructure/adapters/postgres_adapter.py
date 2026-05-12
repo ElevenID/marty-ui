@@ -62,6 +62,7 @@ class PostgresPresentationPolicyRepository:
                     "display_name": req.display_name,
                     "description": req.description,
                     "required": req.required,
+                    "credential_payload_format": req.credential_payload_format,
                     "requested_claims": [
                         {
                             "id": claim.id,
@@ -105,6 +106,7 @@ class PostgresPresentationPolicyRepository:
                             "display_name": req.display_name,
                             "description": req.description,
                             "required": req.required,
+                            "credential_payload_format": req.credential_payload_format,
                             "requested_claims": [
                                 {
                                     "id": claim.id,
@@ -256,6 +258,7 @@ class PostgresPresentationPolicyRepository:
                         display_name=req_data.get("display_name", ""),
                         description=req_data.get("description"),
                         required=req_data.get("required", True),
+                        credential_payload_format=req_data.get("credential_payload_format", "w3c_vcdm_v2_sd_jwt"),
                         requested_claims=requested_claims,
                         trust_profile_id=req_data.get("trust_profile_id"),
                         max_age_seconds=req_data.get("max_age_seconds"),
@@ -302,6 +305,7 @@ class PostgresPresentationPolicyRepository:
                             display_name=req_data.get("display_name", ""),
                             description=req_data.get("description"),
                             required=req_data.get("required", True),
+                            credential_payload_format=req_data.get("credential_payload_format", "w3c_vcdm_v2_sd_jwt"),
                             requested_claims=requested_claims,
                             trust_profile_id=req_data.get("trust_profile_id"),
                             max_age_seconds=req_data.get("max_age_seconds"),
@@ -417,6 +421,7 @@ class PostgresPresentationPolicyRepository:
                             display_name=req_data.get("display_name", ""),
                             description=req_data.get("description"),
                             required=req_data.get("required", True),
+                            credential_payload_format=req_data.get("credential_payload_format", "w3c_vcdm_v2_sd_jwt"),
                             requested_claims=requested_claims,
                             trust_profile_id=req_data.get("trust_profile_id"),
                             max_age_seconds=req_data.get("max_age_seconds"),
@@ -463,6 +468,7 @@ class PostgresPresentationPolicyRepository:
                                 display_name=req_data.get("display_name", ""),
                                 description=req_data.get("description"),
                                 required=req_data.get("required", True),
+                                credential_payload_format=req_data.get("credential_payload_format", "w3c_vcdm_v2_sd_jwt"),
                                 requested_claims=requested_claims,
                                 trust_profile_id=req_data.get("trust_profile_id"),
                                 max_age_seconds=req_data.get("max_age_seconds"),

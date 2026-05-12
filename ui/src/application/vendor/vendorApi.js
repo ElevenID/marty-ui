@@ -96,16 +96,53 @@ export async function fetchAnalyticsScans({ organizationId, page, pageSize, acce
 export async function fetchIssuedCredentials({ organizationId, page, perPage, searchQuery }) {
   const params = new URLSearchParams({
     organization_id: organizationId,
-    status: 'active',
-    page: String(page),
-    per_page: String(perPage),
   });
-  if (searchQuery) params.append('search', searchQuery);
-  return get(`${API_URL}/v1/credentials/issued?${params.toString()}`);
+
+  const data = await get(`${API_URL}/v1/issued-credentials?${params.toString()}`);
+  const records = Array.isArray(data)
+    ? data
+    : (data?.credentials || data?.items || data?.issued_credentials || []);
+
+  const normalized = records
+    .map((record) => ({
+      ...record,
+      type: record.credential_display_name || record.credential_type || 'Credential',
+      holder_email: record.holder_email || record.subject_email || record.subject_id || 'Unknown holder',
+      issued_date: record.issued_date || record.issued_at,
+      expiry_date: record.expiry_date || record.valid_until,
+      application_id: record.application_id || null,
+    }))
+    .sort((left, right) => new Date(right.issued_date || 0).getTime() - new Date(left.issued_date || 0).getTime());
+
+  const query = (searchQuery || '').trim().toLowerCase();
+  const filtered = query
+    ? normalized.filter((record) => [
+      record.id,
+      record.credential_id,
+      record.credential_type,
+      record.type,
+      record.holder_email,
+      record.subject_id,
+      record.application_id,
+      record.issuer_did,
+    ].some((value) => String(value || '').toLowerCase().includes(query)))
+    : normalized;
+
+  const safePage = Math.max(page || 1, 1);
+  const safePerPage = Math.max(perPage || filtered.length || 1, 1);
+  const start = (safePage - 1) * safePerPage;
+  const end = start + safePerPage;
+
+  return {
+    credentials: filtered.slice(start, end),
+    total: filtered.length,
+    page: safePage,
+    perPage: safePerPage,
+  };
 }
 
 export async function revokeCredential({ credentialId, reason, comments }) {
-  return post(`${API_URL}/v1/credentials/issued/${credentialId}/revoke`, { reason, comments });
+  return post(`${API_URL}/v1/issued-credentials/${credentialId}/revoke`, { reason, comments });
 }
 
 export async function batchRevokeCredentials({ file, reason }) {

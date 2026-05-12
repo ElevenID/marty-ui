@@ -13,6 +13,10 @@ import { getCriticalEvents as getAuditCriticalEvents } from './auditApi';
 
 const BASE_PATH = '/v1/organizations';
 
+function shouldLogDashboardError(error) {
+  return error?.status !== 403;
+}
+
 /**
  * Get team snapshot data for dashboard
  * @param {string} organizationId - Organization ID
@@ -31,7 +35,9 @@ export async function getTeamSnapshot(organizationId) {
       },
     };
   } catch (error) {
-    console.error('Failed to fetch team snapshot:', getErrorMessage(error));
+    if (shouldLogDashboardError(error)) {
+      console.error('Failed to fetch team snapshot:', getErrorMessage(error));
+    }
     // Return empty data on failure
     return {
       members: [],
@@ -60,7 +66,9 @@ export async function getRuntimeStatus(organizationId) {
       lastVerification: response?.last_verification_timestamp || null,
     };
   } catch (error) {
-    console.error('Failed to fetch runtime status:', getErrorMessage(error));
+    if (shouldLogDashboardError(error)) {
+      console.error('Failed to fetch runtime status:', getErrorMessage(error));
+    }
     // Return safe defaults on failure
     return {
       canIssue: false,
@@ -84,7 +92,9 @@ export async function getCriticalEvents(organizationId) {
   try {
     return await getAuditCriticalEvents(organizationId);
   } catch (error) {
-    console.error('Failed to fetch critical events:', getErrorMessage(error));
+    if (shouldLogDashboardError(error)) {
+      console.error('Failed to fetch critical events:', getErrorMessage(error));
+    }
     return [];
   }
 }
@@ -99,7 +109,9 @@ export async function getOrganizationEnvironment(organizationId) {
     const response = await get(`${BASE_PATH}/${organizationId}/environment`);
     return response?.environment || 'development';
   } catch (error) {
-    console.error('Failed to fetch organization environment:', getErrorMessage(error));
+    if (shouldLogDashboardError(error)) {
+      console.error('Failed to fetch organization environment:', getErrorMessage(error));
+    }
     return 'development';
   }
 }
@@ -149,7 +161,9 @@ export async function getApiIntegrationStatus(organizationId) {
       },
     };
   } catch (error) {
-    console.error('Failed to fetch API integration status:', getErrorMessage(error));
+    if (shouldLogDashboardError(error)) {
+      console.error('Failed to fetch API integration status:', getErrorMessage(error));
+    }
     return {
       activeApiKeys: 0,
       lastApiCall: null,
@@ -196,7 +210,9 @@ export async function getOrganizationLifecycle(organizationId) {
       } : null,
     };
   } catch (error) {
-    console.error('Failed to fetch organization lifecycle:', getErrorMessage(error));
+    if (shouldLogDashboardError(error)) {
+      console.error('Failed to fetch organization lifecycle:', getErrorMessage(error));
+    }
     return {
       createdAt: null,
       complianceProfiles: [],
@@ -255,7 +271,9 @@ export async function getApplicantStats(organizationId) {
       total: response?.total || 0,
     };
   } catch (error) {
-    console.error('Failed to fetch applicant stats:', getErrorMessage(error));
+    if (error?.status !== 403) {
+      console.error('Failed to fetch applicant stats:', getErrorMessage(error));
+    }
     return {
       pending: 0,
       approved: 0,
@@ -279,7 +297,9 @@ export async function getOrganizationIntegrationInfo(organizationId) {
       exampleRequest: response?.example_request || null,
     };
   } catch (error) {
-    console.error('Failed to fetch integration info:', getErrorMessage(error));
+    if (shouldLogDashboardError(error)) {
+      console.error('Failed to fetch integration info:', getErrorMessage(error));
+    }
     return {
       orgId: organizationId,
       baseUrl: window.location.origin + '/api',

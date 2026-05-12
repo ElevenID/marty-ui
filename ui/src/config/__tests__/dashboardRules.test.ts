@@ -13,10 +13,20 @@ import {
   ReadinessState,
 } from '../dashboardRules'
 
+const readyTrustDependencies = {
+  signingKeys: [{ id: 'key_1', name: 'Issuer Key' }],
+  issuerProfiles: [],
+  keyManagementConfig: {
+    default_service_id: 'managed-openbao-transit',
+    services: [{ id: 'managed-openbao-transit', name: 'Managed OpenBao', status: 'configured' }],
+  },
+}
+
 describe('dashboardRules', () => {
   describe('computeSetupReadiness', () => {
     it('should return all MISSING when org is empty', () => {
       const data = {
+        ...readyTrustDependencies,
         trustProfiles: [],
         templates: [],
         policies: [],
@@ -43,6 +53,54 @@ describe('dashboardRules', () => {
 
       expect(result.flow.state).toBe(ReadinessState.MISSING)
       expect(result.flow.dependencyBlocked).toBe(true)
+    })
+
+    it('should block trust when key management is missing and no trust profile exists', () => {
+      const data = {
+        trustProfiles: [],
+        signingKeys: [],
+        issuerProfiles: [],
+        keyManagementConfig: {
+          default_service_id: null,
+          services: [],
+        },
+        templates: [],
+        policies: [],
+        deployments: [],
+        flows: [],
+        apiKeys: [],
+      }
+
+      const result = computeSetupReadiness(data)
+
+      expect(result.trust.state).toBe(ReadinessState.BLOCKED)
+      expect(result.trust.action).toBe('Configure KMS')
+      expect(result.trust.path).toBe('/console/org/deploy/key-management')
+      expect(result.template.dependencyBlocked).toBe(true)
+    })
+
+    it('should block trust when issuer input is missing and no trust profile exists', () => {
+      const data = {
+        trustProfiles: [],
+        signingKeys: [],
+        issuerProfiles: [],
+        keyManagementConfig: {
+          default_service_id: 'managed-openbao-transit',
+          services: [{ id: 'managed-openbao-transit', name: 'Managed OpenBao', status: 'configured' }],
+        },
+        templates: [],
+        policies: [],
+        deployments: [],
+        flows: [],
+        apiKeys: [],
+      }
+
+      const result = computeSetupReadiness(data)
+
+      expect(result.trust.state).toBe(ReadinessState.BLOCKED)
+      expect(result.trust.action).toBe('Set Up Issuer Identity')
+      expect(result.trust.path).toBe('/console/org/deploy/issuer-identity')
+      expect(result.template.dependencyBlocked).toBe(true)
     })
 
     it('should mark trust as BLOCKED when profile exists but inactive', () => {
@@ -397,6 +455,38 @@ describe('dashboardRules', () => {
   })
 
   describe('computeQuickActionVisibility', () => {
+    it('should show register-signing-service when trust is blocked on key management', () => {
+      const readiness = {
+        trust: { state: ReadinessState.BLOCKED, path: '/console/org/deploy/key-management' },
+        template: { state: ReadinessState.MISSING, dependencyBlocked: true },
+        policy: { state: ReadinessState.MISSING, dependencyBlocked: true },
+        deployment: { state: ReadinessState.MISSING, dependencyBlocked: true },
+        flow: { state: ReadinessState.MISSING, dependencyBlocked: true },
+      }
+
+      const actions = computeQuickActionVisibility(readiness)
+
+      expect(actions['register-signing-service'].visible).toBe(true)
+      expect(actions['create-trust-profile'].visible).toBe(false)
+      expect(actions['create-template'].visible).toBe(false)
+    })
+
+    it('should show create-issuer-identity when trust is blocked on issuer input', () => {
+      const readiness = {
+        trust: { state: ReadinessState.BLOCKED, path: '/console/org/deploy/issuer-identity' },
+        template: { state: ReadinessState.MISSING, dependencyBlocked: true },
+        policy: { state: ReadinessState.MISSING, dependencyBlocked: true },
+        deployment: { state: ReadinessState.MISSING, dependencyBlocked: true },
+        flow: { state: ReadinessState.MISSING, dependencyBlocked: true },
+      }
+
+      const actions = computeQuickActionVisibility(readiness)
+
+      expect(actions['register-signing-service'].visible).toBe(false)
+      expect(actions['create-issuer-identity'].visible).toBe(true)
+      expect(actions['create-trust-profile'].visible).toBe(false)
+    })
+
     it('should show create-trust-profile when trust is missing', () => {
       const readiness = {
         trust: { state: ReadinessState.MISSING },
@@ -409,10 +499,12 @@ describe('dashboardRules', () => {
       const actions = computeQuickActionVisibility(readiness)
 
       expect(actions['create-trust-profile'].visible).toBe(true)
+      expect(actions['register-signing-service'].visible).toBe(false)
+      expect(actions['create-issuer-identity'].visible).toBe(false)
       expect(actions['create-template'].visible).toBe(false)
       expect(actions['create-policy'].visible).toBe(false)
       expect(actions['generate-api-key'].visible).toBe(false)
-      expect(actions['start-verification'].visible).toBe(false)
+      expect(actions['create-flow'].visible).toBe(false)
     })
 
     it('should show create-template when trust ready but template not', () => {
@@ -461,10 +553,10 @@ describe('dashboardRules', () => {
 
       expect(actions['create-policy'].visible).toBe(false)
       expect(actions['generate-api-key'].visible).toBe(true)
-      expect(actions['start-verification'].visible).toBe(false)
+      expect(actions['create-flow'].visible).toBe(false)
     })
 
-    it('should show start-verification when deployment ready', () => {
+    it('should show create-flow when deployment ready', () => {
       const readiness = {
         trust: { state: ReadinessState.READY },
         template: { state: ReadinessState.READY },
@@ -476,7 +568,7 @@ describe('dashboardRules', () => {
       const actions = computeQuickActionVisibility(readiness)
 
       expect(actions['generate-api-key'].visible).toBe(false)
-      expect(actions['start-verification'].visible).toBe(true)
+      expect(actions['create-flow'].visible).toBe(true)
     })
 
     it('should hide all actions when fully ready', () => {
@@ -494,7 +586,7 @@ describe('dashboardRules', () => {
       expect(actions['create-template'].visible).toBe(false)
       expect(actions['create-policy'].visible).toBe(false)
       expect(actions['generate-api-key'].visible).toBe(false)
-      expect(actions['start-verification'].visible).toBe(false)
+      expect(actions['create-flow'].visible).toBe(false)
     })
   })
 })

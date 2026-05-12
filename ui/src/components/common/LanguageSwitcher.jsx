@@ -11,7 +11,7 @@ const languages = [
   { code: 'nl', name: 'Dutch', nativeName: 'Nederlands' },
 ];
 
-function LanguageSwitcher({ variant = 'standard', sx = {} }) {
+function LanguageSwitcher({ variant = 'standard', sx = {}, compact = false }) {
   const { i18n } = useTranslation();
   const selectedLanguage = (i18n.resolvedLanguage || i18n.language || 'en').split('-')[0];
 
@@ -21,13 +21,19 @@ function LanguageSwitcher({ variant = 'standard', sx = {} }) {
   };
 
   return (
-    <FormControl variant={variant} sx={{ minWidth: 120, ...sx }} data-testid="language-switcher">
+    <FormControl
+      variant={variant}
+      sx={{ minWidth: compact ? 72 : 120, ...sx }}
+      data-testid="language-switcher"
+      data-compact={compact ? 'true' : 'false'}
+    >
       <Select
         value={selectedLanguage}
         onChange={handleLanguageChange}
         displayEmpty
+        renderValue={compact ? (value) => String(value).toUpperCase() : undefined}
         startAdornment={
-          <Box sx={{ display: 'flex', alignItems: 'center', mr: 1 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', mr: compact ? 0.5 : 1 }}>
             <LanguageIcon fontSize="small" />
           </Box>
         }
@@ -35,6 +41,8 @@ function LanguageSwitcher({ variant = 'standard', sx = {} }) {
           '& .MuiSelect-select': {
             display: 'flex',
             alignItems: 'center',
+            fontSize: compact ? '0.8125rem' : undefined,
+            fontWeight: compact ? 600 : undefined,
           },
         }}
         data-testid="language-select"

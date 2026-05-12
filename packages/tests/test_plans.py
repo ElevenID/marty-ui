@@ -7,6 +7,11 @@ def test_resolve_plan_tier_maps_current_commercial_aliases_to_internal_tiers():
     assert resolve_plan_tier("hosted_pilot") == PlanTier.PROGRAM
     assert resolve_plan_tier("professional") == PlanTier.PROGRAM
     assert resolve_plan_tier("enterprise") == PlanTier.SYSTEM
+    # New Sovereign-to-Scale commercial names
+    assert resolve_plan_tier("production") == PlanTier.PROGRAM
+    assert resolve_plan_tier("sovereign_plus") == PlanTier.SYSTEM
+    assert resolve_plan_tier("sovereign+") == PlanTier.SYSTEM
+    assert resolve_plan_tier("pilot") == PlanTier.PROGRAM
 
 
 def test_get_plan_limits_accepts_commercial_billing_tiers():
@@ -14,6 +19,9 @@ def test_get_plan_limits_accepts_commercial_billing_tiers():
     assert get_plan_limits("starter") == get_plan_limits(PlanTier.PROGRAM)
     assert get_plan_limits("professional") == get_plan_limits(PlanTier.PROGRAM)
     assert get_plan_limits("enterprise") == get_plan_limits(PlanTier.SYSTEM)
+    # New Sovereign-to-Scale commercial names
+    assert get_plan_limits("production") == get_plan_limits(PlanTier.PROGRAM)
+    assert get_plan_limits("sovereign_plus") == get_plan_limits(PlanTier.SYSTEM)
 
 
 def test_resolve_plan_info_prefers_current_commercial_labels():

@@ -9,7 +9,7 @@
  * the same browser each keep their own list.
  */
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 
 const STORAGE_KEY_PREFIX = 'elevenid_wallets_';
 
@@ -38,6 +38,10 @@ function writeToStorage(userId, ids) {
  */
 export default function useWalletPreferences(userId) {
   const [walletIds, setWalletIdsState] = useState(() => readFromStorage(userId));
+
+  useEffect(() => {
+    setWalletIdsState(readFromStorage(userId));
+  }, [userId]);
 
   const setWalletIds = useCallback(
     (ids) => {

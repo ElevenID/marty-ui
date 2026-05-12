@@ -27,6 +27,7 @@ from .infrastructure.adapters.http_adapter import (
     internal_router,
     router as auth_router,
 )
+from .infrastructure.adapters.applicant_profile_adapter import ApplicantProfileProvisioningAdapter
 from .infrastructure.adapters.keycloak_admin_adapter import build_keycloak_admin_adapter
 from .infrastructure.adapters.oidc_adapter import KeycloakOIDCAdapter, OIDCConfig
 from .infrastructure.adapters.postgres_audit_adapter import PostgresAuditRepository
@@ -134,6 +135,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # Use in-memory provisioning for now (can swap to JIT adapter)
     user_provisioning = InMemoryUserProvisioningAdapter(org_grpc_channel=org_grpc_channel)
+    applicant_profile_provisioner = ApplicantProfileProvisioningAdapter()
     
     # Initialize event publisher (gRPC event bus)
     from auth.infrastructure.adapters.event_adapter import GrpcEventBusPublisher
@@ -169,6 +171,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         credential_login_policy_id=config["credential_login_policy_id"],
         auth_service_internal_url=config["auth_service_internal_url"],
         kc_admin_adapter=kc_admin_adapter,
+        user_provisioning=user_provisioning,
+        applicant_profile_provisioner=applicant_profile_provisioner,
     )
 
     # Store in app state for access
@@ -190,6 +194,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         session_repository=session_repository,
         redis_client=redis_client,
         kc_admin_adapter=kc_admin_adapter,
+        user_provisioning=user_provisioning,
+        applicant_profile_provisioner=applicant_profile_provisioner,
     )
     add_AuthServiceServicer_to_server(auth_servicer, grpc_server)
     start_grpc_server_port(
@@ -243,12 +249,18 @@ def create_app() -> FastAPI:
         "/v1/auth/callback",
         "/v1/auth/credential-login",
     )
+    _RATE_LIMIT_EXCLUDED_PREFIXES = (
+        "/v1/auth/credential-login/status",
+        "/v1/auth/credential-login/assets/",
+    )
 
     from fastapi.responses import JSONResponse
 
     @app.middleware("http")
     async def auth_rate_limit_middleware(request, call_next):
         path = request.url.path
+        if any(path.startswith(prefix) for prefix in _RATE_LIMIT_EXCLUDED_PREFIXES):
+            return await call_next(request)
         if not any(path.startswith(prefix) for prefix in _RATE_LIMITED_PREFIXES):
             return await call_next(request)
 

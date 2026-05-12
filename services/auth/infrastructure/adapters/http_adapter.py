@@ -7,12 +7,14 @@ This is the inbound adapter that exposes the use cases via REST.
 
 from __future__ import annotations
 
+import base64
+import html as _html
 import json
 import logging
 import os
 import secrets
 from typing import Annotated, Any
-from urllib.parse import quote, urlparse
+from urllib.parse import parse_qs, quote, urlencode, urlparse
 
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -22,16 +24,241 @@ from ...application.ports import (
     HandleCallbackCommand,
     InitiateLoginCommand,
     LogoutCommand,
+    UserProvisioningPort,
 )
 from ...application.use_cases import AuthenticateUseCase, SessionUseCase
-from ...domain.entities import AuthenticatedUser, Session, UserType
+from ...domain.entities import AuthenticatedUser, ImpersonationContext, Session, UserType
+from .applicant_profile_adapter import apply_credential_login_defaults
+from .credential_login_enricher import build_credential_login_user
+from .oidc_adapter import build_oidc_user_info
 
 try:
-    from .keycloak_admin_adapter import KeycloakAdminAdapter
+    from .keycloak_admin_adapter import KeycloakAdminAdapter, merge_oidc_user_info
 except ImportError:
     KeycloakAdminAdapter = None  # type: ignore[assignment,misc]
+    merge_oidc_user_info = None  # type: ignore[assignment,misc]
 
 logger = logging.getLogger(__name__)
+
+
+_CREDENTIAL_LOGIN_ASSET_VERSION = "20260503-wallet-routing-v6"
+
+
+_CREDENTIAL_LOGIN_WALLET_CHOICES: tuple[dict[str, str], ...] = (
+    {
+        "id": "sprucekit",
+        "label": "SpruceKit",
+        "description": "Selected wallet: SpruceKit.",
+        "template_env": "CREDENTIAL_LOGIN_SPRUCEKIT_DEEP_LINK_TEMPLATE",
+        "android_template_env": "CREDENTIAL_LOGIN_SPRUCEKIT_ANDROID_DEEP_LINK_TEMPLATE",
+        "ios_template_env": "CREDENTIAL_LOGIN_SPRUCEKIT_IOS_DEEP_LINK_TEMPLATE",
+        "ios_universal_template_env": "CREDENTIAL_LOGIN_SPRUCEKIT_IOS_UNIVERSAL_LINK_TEMPLATE",
+        "android_package_env": "CREDENTIAL_LOGIN_SPRUCEKIT_ANDROID_PACKAGE",
+        "default_template": "openid4vp://authorize?request_uri={request_uri_encoded}",
+        "default_android_template": "intent://authorize?request_uri={request_uri_encoded}#Intent;scheme=openid4vp;{android_package_param}end",
+        "default_ios_template": "openid4vp://authorize?request_uri={request_uri_encoded}",
+        "default_android_package": "com.spruceid.mobilesdkexample",
+    },
+    {
+        "id": "lissi",
+        "label": "LISSI Wallet",
+        "description": "Selected wallet: LISSI Wallet.",
+        "template_env": "CREDENTIAL_LOGIN_LISSI_DEEP_LINK_TEMPLATE",
+        "android_template_env": "CREDENTIAL_LOGIN_LISSI_ANDROID_DEEP_LINK_TEMPLATE",
+        "ios_template_env": "CREDENTIAL_LOGIN_LISSI_IOS_DEEP_LINK_TEMPLATE",
+        "ios_universal_template_env": "CREDENTIAL_LOGIN_LISSI_IOS_UNIVERSAL_LINK_TEMPLATE",
+        "android_package_env": "CREDENTIAL_LOGIN_LISSI_ANDROID_PACKAGE",
+        "legacy_template_env": "CREDENTIAL_LOGIN_LUCY_DEEP_LINK_TEMPLATE",
+        "default_template": "{oid4vp_uri}",
+        "default_android_template": "intent://authorize?request_uri={request_uri_encoded}#Intent;scheme=openid4vp;{android_package_param}end",
+        "default_ios_template": "{oid4vp_uri}",
+        "default_android_package": "",
+        "request_object_compat": "lissi",
+    },
+)
+
+
+def _extract_oid4vp_request_uri(oid4vp_uri: str) -> str:
+    parsed = urlparse(oid4vp_uri)
+    request_uri_values = parse_qs(parsed.query).get("request_uri")
+    if request_uri_values:
+        return request_uri_values[0]
+    return oid4vp_uri
+
+
+def _with_query_parameter(url: str, key: str, value: str) -> str:
+    parsed = urlparse(url)
+    query = parse_qs(parsed.query, keep_blank_values=True)
+    query[key] = [value]
+    return parsed._replace(query=urlencode(query, doseq=True)).geturl()
+
+
+def _wallet_request_uri(wallet_choice: dict[str, str], request_uri: str, oid4vp_uri: str) -> str:
+    normalized_request_uri = _extract_oid4vp_request_uri(request_uri or oid4vp_uri)
+    compat = wallet_choice.get("request_object_compat", "").strip().lower()
+    if compat:
+        normalized_request_uri = _with_query_parameter(normalized_request_uri, "compat", compat)
+    return normalized_request_uri
+
+
+def _wallet_oid4vp_uri(oid4vp_uri: str, wallet_request_uri: str) -> str:
+    # Always rebuild the outer openid4vp:// URI via urlencode so that the
+    # wallet_request_uri value (which may contain '?' and '=') is properly
+    # percent-encoded as a query parameter value.
+    return _with_query_parameter(oid4vp_uri, "request_uri", wallet_request_uri)
+
+
+def _credential_login_wallet_template(wallet_choice: dict[str, str], platform: str) -> str:
+    if platform == "ios":
+        universal_template_env = wallet_choice.get("ios_universal_template_env")
+        if universal_template_env and os.environ.get(universal_template_env):
+            return os.environ[universal_template_env]
+
+    template_env = wallet_choice.get(f"{platform}_template_env") or wallet_choice["template_env"]
+    default_template = wallet_choice.get(f"default_{platform}_template") or wallet_choice["default_template"]
+    legacy_template_env = wallet_choice.get("legacy_template_env") if platform == "" else None
+
+    if os.environ.get(template_env):
+        return os.environ[template_env]
+    if legacy_template_env and os.environ.get(legacy_template_env):
+        return os.environ[legacy_template_env]
+
+    return default_template
+
+
+def _credential_login_android_package(wallet_choice: dict[str, str]) -> str:
+    package_env = wallet_choice.get("android_package_env")
+    if package_env and os.environ.get(package_env):
+        return os.environ[package_env]
+    return wallet_choice.get("default_android_package", "")
+
+
+def _render_credential_login_wallet_link(
+    template: str,
+    oid4vp_uri: str,
+    request_uri: str,
+    android_package: str = "",
+) -> str:
+    normalized_request_uri = _extract_oid4vp_request_uri(request_uri or oid4vp_uri)
+    android_package_param = f"package={android_package};" if android_package else ""
+
+    try:
+        rendered = template.format(
+            oid4vp_uri=oid4vp_uri,
+            oid4vp_uri_encoded=quote(oid4vp_uri, safe=""),
+            request_uri=normalized_request_uri,
+            request_uri_encoded=quote(normalized_request_uri, safe=""),
+            android_package=android_package,
+            android_package_param=android_package_param,
+        )
+    except Exception as exc:
+        logger.warning("Invalid credential-login wallet template %r: %s", template, exc)
+        return oid4vp_uri
+
+    return rendered or oid4vp_uri
+
+
+def _build_credential_login_wallet_options(
+    oid4vp_uri: str,
+    request_uri: str,
+) -> list[dict[str, str]]:
+    options: list[dict[str, str]] = []
+
+    for wallet_choice in _CREDENTIAL_LOGIN_WALLET_CHOICES:
+        generic_template = _credential_login_wallet_template(wallet_choice, "")
+        android_template = _credential_login_wallet_template(wallet_choice, "android")
+        ios_template = _credential_login_wallet_template(wallet_choice, "ios")
+        android_package = _credential_login_android_package(wallet_choice)
+        wallet_request_uri = _wallet_request_uri(wallet_choice, request_uri, oid4vp_uri)
+        wallet_oid4vp_uri = _wallet_oid4vp_uri(oid4vp_uri, wallet_request_uri)
+        options.append(
+            {
+                "id": wallet_choice["id"],
+                "label": wallet_choice["label"],
+                "description": wallet_choice["description"],
+                "href": _render_credential_login_wallet_link(
+                    generic_template,
+                    oid4vp_uri=wallet_oid4vp_uri,
+                    request_uri=wallet_request_uri,
+                ),
+                "android_href": _render_credential_login_wallet_link(
+                    android_template,
+                    oid4vp_uri=wallet_oid4vp_uri,
+                    request_uri=wallet_request_uri,
+                    android_package=android_package,
+                ),
+                "ios_href": _render_credential_login_wallet_link(
+                    ios_template,
+                    oid4vp_uri=wallet_oid4vp_uri,
+                    request_uri=wallet_request_uri,
+                ),
+            }
+        )
+
+    return options
+
+
+def _render_credential_login_wallet_option_tags(
+    wallet_options: list[dict[str, str]],
+) -> str:
+    rendered_options: list[str] = []
+
+    for index, wallet_option in enumerate(wallet_options):
+        selected_attr = " selected" if index == 0 else ""
+        rendered_options.append(
+            """
+            <option value="{value}" data-link="{href}" data-android-link="{android_href}" data-ios-link="{ios_href}" data-label="{label}" data-description="{description}"{selected_attr}>{label}</option>
+            """.format(
+                value=_html.escape(wallet_option["id"], quote=True),
+                href=_html.escape(wallet_option["href"], quote=True),
+                android_href=_html.escape(wallet_option["android_href"], quote=True),
+                ios_href=_html.escape(wallet_option["ios_href"], quote=True),
+                label=_html.escape(wallet_option["label"], quote=True),
+                description=_html.escape(wallet_option["description"], quote=True),
+                selected_attr=selected_attr,
+            ).strip()
+        )
+
+    return "\n".join(rendered_options)
+
+
+def _render_credential_login_page(
+    *,
+    nonce: str,
+    flow_instance_id: str,
+    qr_encoded: str,
+    oid4vp_uri: str,
+    request_uri: str,
+) -> str:
+    wallet_options = _build_credential_login_wallet_options(
+        oid4vp_uri=oid4vp_uri,
+        request_uri=request_uri,
+    )
+    default_wallet = wallet_options[0] if wallet_options else {
+        "label": "Wallet App",
+        "description": "Open the login request in your wallet.",
+        "href": oid4vp_uri,
+    }
+    qr_encoded_value = quote(default_wallet.get("href") or oid4vp_uri, safe="") if wallet_options else qr_encoded
+    dc_api_request_url = ""
+    dc_api_submit_url = ""
+    if flow_instance_id:
+        encoded_instance_id = quote(flow_instance_id, safe="")
+        dc_api_request_url = f"/v1/flows/instances/{encoded_instance_id}/request?transport=dc_api"
+        dc_api_submit_url = f"/v1/flows/instances/{encoded_instance_id}/submit/dc-api"
+
+    return _CREDENTIAL_LOGIN_PAGE.format(
+        qr_encoded=qr_encoded_value,
+        oid4vp_uri_escaped=_html.escape(default_wallet["href"], quote=True),
+        nonce_attr=_html.escape(nonce, quote=True),
+        dc_api_request_url_attr=_html.escape(dc_api_request_url, quote=True),
+        dc_api_submit_url_attr=_html.escape(dc_api_submit_url, quote=True),
+        dc_api_protocol_attr=_html.escape("openid4vp-v1-signed", quote=True),
+        nonce_json=json.dumps(nonce),
+        asset_version=_html.escape(_CREDENTIAL_LOGIN_ASSET_VERSION, quote=True),
+        wallet_option_tags=_render_credential_login_wallet_option_tags(wallet_options),
+        wallet_help_text=_html.escape(default_wallet["description"], quote=True),
+    )
 
 # Create router with versioned prefix
 router = APIRouter(prefix="/v1/auth", tags=["authentication"])
@@ -40,6 +267,22 @@ router = APIRouter(prefix="/v1/auth", tags=["authentication"])
 # =============================================================================
 # Response Models
 # =============================================================================
+
+class ImpersonationInfoResponse(BaseModel):
+    """Admin impersonation session details surfaced to the UI."""
+
+    active: bool = True
+    admin_user_id: str | None = None
+    admin_username: str | None = None
+    admin_email: str | None = None
+    admin_display_name: str | None = None
+    target_user_id: str | None = None
+    target_email: str | None = None
+    organization_id: str | None = None
+    organization_name: str | None = None
+    started_at: str | None = None
+    launch_mode: str | None = None
+
 
 class UserInfoResponse(BaseModel):
     """User information response."""
@@ -54,8 +297,11 @@ class UserInfoResponse(BaseModel):
     roles: list[str] = []
     organization_id: str | None = None
     organization_name: str | None = None
+    organization: dict[str, Any] | None = None
     onboarding_completed: str | None = None
     picture: str | None = None
+    impersonation: ImpersonationInfoResponse | None = None
+    did_subject: str | None = None  # MIP §5 — DID from credential login
 
 
 class AuthStatusResponse(BaseModel):
@@ -110,6 +356,15 @@ _auth_service_internal_url: str = os.environ.get(
     "AUTH_SERVICE_INTERNAL_URL", "http://auth:8001"
 )
 _kc_admin_adapter: Any | None = None  # KeycloakAdminAdapter | None
+_user_provisioning: UserProvisioningPort | None = None
+_applicant_profile_provisioner: Any | None = None
+_impersonation_handoff_cookie_name = "marty_impersonation_handoff"
+_credential_login_require_existing_keycloak_user = os.environ.get(
+    "CREDENTIAL_LOGIN_REQUIRE_EXISTING_KEYCLOAK_USER", "false"
+).lower() in {"1", "true", "yes", "on"}
+_credential_login_create_users = os.environ.get(
+    "CREDENTIAL_LOGIN_CREATE_USERS", "false"
+).lower() in {"1", "true", "yes", "on"}
 
 # Redis key prefixes for credential-login state
 _PENDING_KEY = "marty:cred_login:pending:"
@@ -149,6 +404,109 @@ def _sanitize_redirect_uri(redirect_uri: str | None, ui_base_url: str) -> str:
         return "/"
 
 
+def _decode_jwt_claims(token: str | None) -> dict[str, Any]:
+    """Decode JWT claims without signature verification."""
+    if not token:
+        return {}
+
+    try:
+        parts = token.split(".")
+        if len(parts) != 3:
+            return {}
+
+        payload = parts[1]
+        padding = (-len(payload)) % 4
+        if padding:
+            payload += "=" * padding
+
+        decoded = base64.urlsafe_b64decode(payload.encode("utf-8")).decode("utf-8")
+        claims = json.loads(decoded)
+        return claims if isinstance(claims, dict) else {}
+    except Exception:
+        logger.debug("Failed to decode JWT claims for impersonation detection", exc_info=True)
+        return {}
+
+
+def _decode_impersonation_handoff(raw_cookie: str | None) -> dict[str, Any] | None:
+    """Decode the short-lived impersonation handoff cookie set before Keycloak redirect."""
+    if not raw_cookie:
+        return None
+
+    try:
+        padding = (-len(raw_cookie)) % 4
+        encoded = raw_cookie + ("=" * padding)
+        payload = base64.urlsafe_b64decode(encoded.encode("utf-8")).decode("utf-8")
+        data = json.loads(payload)
+        return data if isinstance(data, dict) else None
+    except Exception:
+        logger.debug("Failed to decode impersonation handoff cookie", exc_info=True)
+        return None
+
+
+def _get_native_impersonator_claims(claims: dict[str, Any]) -> tuple[str | None, str | None]:
+    """Extract impersonator identity from Keycloak session-note mappers when available."""
+    impersonator = claims.get("impersonator")
+    if isinstance(impersonator, dict):
+        return impersonator.get("id"), impersonator.get("username")
+
+    return (
+        claims.get("IMPERSONATOR_ID") or claims.get("impersonator_id"),
+        claims.get("IMPERSONATOR_USERNAME") or claims.get("impersonator_username"),
+    )
+
+
+def _build_session_impersonation(
+    session: Session,
+    request: Request,
+) -> ImpersonationContext | None:
+    """
+    Resolve impersonation context for the session.
+
+    Prefers native Keycloak impersonator session-note claims when available and
+    falls back to the short-lived handoff cookie we set before redirecting to
+    Keycloak's native impersonation endpoint.
+    """
+    claims = _decode_jwt_claims(session.id_token)
+    native_admin_user_id, native_admin_username = _get_native_impersonator_claims(claims)
+    handoff = _decode_impersonation_handoff(request.cookies.get(_impersonation_handoff_cookie_name))
+
+    if handoff:
+        target_user_id = handoff.get("target_user_id")
+        target_email = handoff.get("target_email")
+        matches_target = (
+            (target_user_id and target_user_id == session.user.user_id) or
+            (target_email and target_email.lower() == session.user.email.lower())
+        )
+
+        if matches_target:
+            return ImpersonationContext(
+                active=True,
+                admin_user_id=native_admin_user_id or handoff.get("admin_user_id"),
+                admin_username=native_admin_username or handoff.get("admin_username"),
+                admin_email=handoff.get("admin_email"),
+                admin_display_name=handoff.get("admin_display_name"),
+                target_user_id=session.user.user_id,
+                target_email=session.user.email,
+                organization_id=handoff.get("organization_id") or session.user.organization_id,
+                organization_name=handoff.get("organization_name") or session.user.organization_name,
+                started_at=handoff.get("started_at"),
+                launch_mode=handoff.get("launch_mode"),
+            )
+
+    if native_admin_user_id or native_admin_username:
+        return ImpersonationContext(
+            active=True,
+            admin_user_id=native_admin_user_id,
+            admin_username=native_admin_username,
+            target_user_id=session.user.user_id,
+            target_email=session.user.email,
+            organization_id=session.user.organization_id,
+            organization_name=session.user.organization_name,
+        )
+
+    return None
+
+
 def configure_auth_router(
     authenticate_use_case: AuthenticateUseCase,
     session_use_case: SessionUseCase,
@@ -159,11 +517,14 @@ def configure_auth_router(
     credential_login_policy_id: str | None = None,
     auth_service_internal_url: str | None = None,
     kc_admin_adapter: Any | None = None,
+    user_provisioning: UserProvisioningPort | None = None,
+    applicant_profile_provisioner: Any | None = None,
 ) -> None:
     """Configure the router with use cases and config."""
     global _authenticate_use_case, _session_use_case, _cookie_config, _ui_base_url
     global _redis_client, _session_repository
     global _credential_login_policy_id, _auth_service_internal_url, _kc_admin_adapter
+    global _user_provisioning, _applicant_profile_provisioner
     _authenticate_use_case = authenticate_use_case
     _session_use_case = session_use_case
     if cookie_config:
@@ -180,6 +541,10 @@ def configure_auth_router(
         _auth_service_internal_url = auth_service_internal_url
     if kc_admin_adapter is not None:
         _kc_admin_adapter = kc_admin_adapter
+    if user_provisioning is not None:
+        _user_provisioning = user_provisioning
+    if applicant_profile_provisioner is not None:
+        _applicant_profile_provisioner = applicant_profile_provisioner
 
 
 def get_authenticate_use_case() -> AuthenticateUseCase:
@@ -338,6 +703,18 @@ async def callback(
             max_age=_cookie_config["max_age"],
             path=_cookie_config["path"],
         )
+
+        impersonation = _build_session_impersonation(result.session, request)
+        if impersonation is not None and _session_repository is not None:
+            result.session.user.impersonation = impersonation
+            await _session_repository.save(result.session)
+
+        response.delete_cookie(
+            key=_impersonation_handoff_cookie_name,
+            path="/",
+            secure=_cookie_config["secure"],
+            samesite=_cookie_config["samesite"],
+        )
         
         logger.info(f"User {result.session.user.email} authenticated successfully")
         return response
@@ -375,6 +752,12 @@ async def logout(
         secure=_cookie_config["secure"],
         samesite=_cookie_config["samesite"],
     )
+    response.delete_cookie(
+        key=_impersonation_handoff_cookie_name,
+        path="/",
+        secure=_cookie_config["secure"],
+        samesite=_cookie_config["samesite"],
+    )
     
     return response
 
@@ -404,8 +787,11 @@ async def get_current_user(
             roles=user.roles,
             organization_id=user.organization_id,
             organization_name=user.organization_name,
+            organization=user.organization,
             onboarding_completed=user.onboarding_completed.isoformat() if user.onboarding_completed else None,
             picture=user.picture,
+            impersonation=ImpersonationInfoResponse(**user.impersonation.to_dict()) if user.impersonation else None,
+            did_subject=user.did_subject,
         ),
     )
 
@@ -450,15 +836,495 @@ async def update_current_user(
             roles=session.user.roles,
             organization_id=session.user.organization_id,
             organization_name=session.user.organization_name,
+            organization=session.user.organization,
             onboarding_completed=session.user.onboarding_completed.isoformat() if session.user.onboarding_completed else None,
             picture=session.user.picture,
+            impersonation=ImpersonationInfoResponse(**session.user.impersonation.to_dict()) if session.user.impersonation else None,
+            did_subject=session.user.did_subject,
         ),
     )
 
 
 # =============================================================================
-# Credential Login (SD-JWT / OID4VP) Endpoints
+# Credential Login (Open Badge / OID4VP) Endpoints
 # =============================================================================
+
+_CREDENTIAL_LOGIN_CSS = """\
+*, *::before, *::after { box-sizing: border-box }
+body {
+  font-family: system-ui, -apple-system, sans-serif;
+  background: #f5f6fa;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 100vh;
+  margin: 0;
+  padding: 1rem;
+}
+.card {
+  background: #fff;
+  border-radius: 16px;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, .1);
+  padding: 2.5rem 2rem;
+  max-width: 420px;
+  width: 100%;
+  text-align: center;
+}
+.logo { width: 48px; height: 48px; margin: 0 auto 1rem; display: block }
+h1 { font-size: 1.35rem; margin: 0 0 .4rem; color: #1a1a2e }
+.subtitle { color: #666; font-size: .9rem; margin: 0 0 1.75rem; line-height: 1.5 }
+.qr-section img {
+  width: 220px;
+  height: 220px;
+  border: 1px solid #e8e8e8;
+  border-radius: 10px;
+  display: block;
+  margin: 0 auto;
+}
+.qr-label { font-size: .8rem; color: #999; margin: .6rem 0 0 }
+.mobile-section { display: none }
+.open-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: .5rem;
+  margin-top: .5rem;
+  padding: .75rem 1.5rem;
+  border-radius: 10px;
+  background: #1a73e8;
+  color: #fff;
+  text-decoration: none;
+  font-size: 1rem;
+  font-weight: 600;
+  width: 100%;
+  justify-content: center;
+  transition: background .15s;
+}
+.open-btn:hover { background: #1558b0 }
+.open-btn svg { width: 20px; height: 20px; flex-shrink: 0 }
+.wallet-controls { display: grid; gap: .75rem; margin: 0 0 1rem }
+.wallet-picker { text-align: left }
+.wallet-label { display: block; font-size: .82rem; font-weight: 600; color: #555; margin-bottom: .4rem }
+.wallet-select {
+    width: 100%;
+    border: 1px solid #d0d7e2;
+    border-radius: 10px;
+    padding: .75rem .9rem;
+    font-size: .95rem;
+    background: #fff;
+    color: #1a1a2e;
+}
+.toggle-link {
+  font-size: .82rem;
+  color: #1a73e8;
+  cursor: pointer;
+  text-decoration: underline;
+  margin-top: 1rem;
+  display: inline-block;
+  background: none;
+  border: none;
+  padding: 0;
+}
+.divider { border: none; border-top: 1px solid #eee; margin: 1.5rem 0 }
+.status { margin-top: 1.25rem; font-size: .875rem; color: #555; min-height: 1.4em }
+.spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid #ccc;
+  border-top-color: #1a73e8;
+  border-radius: 50%;
+  animation: spin .8s linear infinite;
+  vertical-align: middle;
+  margin-right: 6px;
+}
+.mobile-help { font-size: .8rem; color: #999; margin: .75rem 0 0 }
+.qr-fallback { display: none; margin-top: 1rem }
+.qr-small { width: 180px !important; height: 180px !important }
+@keyframes spin { to { transform: rotate(360deg) } }
+.done { color: #27ae60; font-weight: 600 }
+.err { color: #e74c3c }
+@media (max-width: 600px) {
+  .qr-section { display: none }
+  .mobile-section { display: block }
+}
+"""
+
+
+_CREDENTIAL_LOGIN_JS = """\
+(function () {
+    var body = document.body;
+    var nonce = body ? body.getAttribute('data-nonce') : '';
+    var dcApiRequestUrl = body ? body.getAttribute('data-dc-api-request-url') : '';
+    var dcApiSubmitUrl = body ? body.getAttribute('data-dc-api-submit-url') : '';
+    var dcApiProtocol = body ? body.getAttribute('data-dc-api-protocol') : 'openid4vp-v1-signed';
+  var qrSection = document.getElementById('qr-section');
+  var mobileSection = document.getElementById('mobile-section');
+  var qrFallback = document.getElementById('qr-fallback');
+  var status = document.getElementById('status');
+    var walletSelect = document.getElementById('wallet-select');
+    var platformSelect = document.getElementById('platform-select');
+    var walletLink = document.getElementById('wallet-link');
+    var walletHelp = document.getElementById('wallet-help');
+    var userAgent = navigator.userAgent || '';
+    var dcApiRequestJwt = '';
+    var dcApiPrefetch = null;
+
+    function supportsDigitalCredentials() {
+        if (!window.isSecureContext || !dcApiRequestUrl || !dcApiSubmitUrl) {
+            return false;
+        }
+        if (typeof DigitalCredential === 'undefined') {
+            return false;
+        }
+        if (!navigator.credentials || typeof navigator.credentials.get !== 'function') {
+            return false;
+        }
+        try {
+            return !!DigitalCredential.userAgentAllowsProtocol(dcApiProtocol);
+        } catch (error) {
+            return false;
+        }
+    }
+
+    var dcApiSupported = supportsDigitalCredentials();
+
+  function setStatus(html) {
+    if (status) {
+      status.innerHTML = html;
+    }
+  }
+
+  function showMobile() {
+    if (qrSection) {
+      qrSection.style.display = 'none';
+    }
+    if (mobileSection) {
+      mobileSection.style.display = 'block';
+    }
+  }
+
+  function showQr() {
+    if (qrFallback) {
+      qrFallback.style.display = 'block';
+    }
+  }
+
+    function formatDcApiError(error) {
+        if (!error) {
+            return 'Wallet request failed.';
+        }
+        if (typeof error === 'string') {
+            return error;
+        }
+        if (error.error_description) {
+            return error.error_description;
+        }
+        if (error.detail) {
+            if (typeof error.detail === 'string') {
+                return error.detail;
+            }
+            if (error.detail.error_description) {
+                return error.detail.error_description;
+            }
+            if (error.detail.error) {
+                return error.detail.error;
+            }
+        }
+        if (error.name === 'NotAllowedError') {
+            return 'Wallet request was canceled.';
+        }
+        if (error.message) {
+            return error.message;
+        }
+        return 'Wallet request failed.';
+    }
+
+    function prefetchDigitalCredentialRequest() {
+        if (!dcApiSupported || !dcApiRequestUrl || dcApiRequestJwt || dcApiPrefetch) {
+            return;
+        }
+
+        dcApiPrefetch = fetch(dcApiRequestUrl, {
+            credentials: 'same-origin',
+            headers: { Accept: 'application/oauth-authz-req+jwt' }
+        })
+            .then(function (response) {
+                if (!response.ok) {
+                    throw new Error('Failed to prepare wallet request.');
+                }
+                return response.text();
+            })
+            .then(function (requestJwt) {
+                dcApiRequestJwt = requestJwt;
+                return requestJwt;
+            })
+            .catch(function (error) {
+                console.warn('Digital Credentials request prefetch failed', error);
+            })
+            .finally(function () {
+                dcApiPrefetch = null;
+            });
+    }
+
+    function setWalletBusy(isBusy) {
+        if (!walletLink) {
+            return;
+        }
+        if (isBusy) {
+            walletLink.setAttribute('aria-disabled', 'true');
+            walletLink.setAttribute('data-busy', 'true');
+            walletLink.style.pointerEvents = 'none';
+            walletLink.style.opacity = '0.75';
+            return;
+        }
+        walletLink.removeAttribute('aria-disabled');
+        walletLink.removeAttribute('data-busy');
+        walletLink.style.pointerEvents = '';
+        walletLink.style.opacity = '';
+    }
+
+    function submitDigitalCredential(credential) {
+        return fetch(dcApiSubmitUrl, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                protocol: credential && credential.protocol ? credential.protocol : dcApiProtocol,
+                origin: window.location.origin,
+                data: credential && credential.data ? credential.data : {}
+            })
+        }).then(function (response) {
+            if (response.ok) {
+                return response.json().catch(function () { return {}; });
+            }
+            return response.json()
+                .catch(function () { return {}; })
+                .then(function (payload) {
+                    throw payload;
+                });
+        });
+    }
+
+    function launchDigitalCredentials() {
+        if (!dcApiRequestJwt) {
+            prefetchDigitalCredentialRequest();
+            setStatus('<span class="err">Preparing the wallet chooser. Tap Open wallet again in a moment.</span>');
+            setWalletBusy(false);
+            return Promise.resolve();
+        }
+
+        return navigator.credentials.get({
+            mediation: 'required',
+            digital: {
+                requests: [{
+                    protocol: dcApiProtocol,
+                    data: {
+                        request: dcApiRequestJwt
+                    }
+                }]
+            }
+        })
+            .then(function (credential) {
+                if (!credential || !credential.data) {
+                    throw new Error('Wallet returned an empty credential response.');
+                }
+                if (credential.data.error) {
+                    throw credential.data;
+                }
+                setStatus('<span class="spinner"></span> Wallet response received. Finalizing sign-in&hellip;');
+                return submitDigitalCredential(credential);
+            })
+            .catch(function (error) {
+                setStatus('<span class="err">' + formatDcApiError(error) + '</span>');
+            })
+            .finally(function () {
+                setWalletBusy(false);
+            });
+    }
+
+    function detectPlatform() {
+        if (/Android/i.test(userAgent)) {
+            return 'android';
+    }
+        if (/iPhone|iPad|iPod/i.test(userAgent)) {
+            return 'ios';
+        }
+        return 'generic';
+    }
+
+    function selectedPlatform() {
+        var platform = platformSelect ? platformSelect.value : 'auto';
+        return platform === 'auto' ? detectPlatform() : platform;
+    }
+
+    function syncWalletLaunch() {
+        if (!walletSelect) {
+            return;
+        }
+
+        var selectedOption = walletSelect.options[walletSelect.selectedIndex];
+        if (!selectedOption) {
+            return;
+        }
+
+        try {
+            window.localStorage.setItem('marty.credential_login.wallet', walletSelect.value || '');
+        } catch (storageError) {
+            // Private mode or quota errors are non-fatal.
+        }
+
+        var href = selectedOption.getAttribute('data-link') || '';
+        var platform = selectedPlatform();
+        var label = selectedOption.textContent || 'selected wallet';
+        var description = selectedOption.getAttribute('data-description') || 'Select your wallet, then tap Open wallet.';
+
+        if (platform === 'android') {
+            href = selectedOption.getAttribute('data-android-link') || href;
+        } else if (platform === 'ios') {
+            href = selectedOption.getAttribute('data-ios-link') || href;
+        }
+
+        if (walletLink && href) {
+            walletLink.setAttribute('href', href);
+            walletLink.setAttribute('aria-label', 'Open wallet with ' + label);
+        }
+
+        if (walletHelp) {
+            walletHelp.textContent = dcApiSupported
+                ? 'Your browser will open the system wallet chooser on this device. Use the QR code if you prefer another device.'
+                : description;
+    }
+    }
+
+    function restoreWalletPreference() {
+        if (!walletSelect) {
+            return;
+        }
+        var storedWallet = '';
+        var storedPlatform = '';
+        try {
+            storedWallet = window.localStorage.getItem('marty.credential_login.wallet') || '';
+            storedPlatform = window.localStorage.getItem('marty.credential_login.platform') || '';
+        } catch (storageError) {
+            return;
+        }
+        if (storedWallet) {
+            for (var i = 0; i < walletSelect.options.length; i += 1) {
+                if (walletSelect.options[i].value === storedWallet) {
+                    walletSelect.selectedIndex = i;
+                    break;
+                }
+            }
+        }
+        if (storedPlatform && platformSelect) {
+            for (var j = 0; j < platformSelect.options.length; j += 1) {
+                if (platformSelect.options[j].value === storedPlatform) {
+                    platformSelect.selectedIndex = j;
+                    break;
+                }
+            }
+        }
+    }
+
+    function persistPlatformPreference() {
+        if (!platformSelect) {
+            return;
+        }
+        try {
+            window.localStorage.setItem('marty.credential_login.platform', platformSelect.value || '');
+        } catch (storageError) {
+            // Non-fatal.
+        }
+    }
+
+  var showMobileButton = document.querySelector('[data-action="show-mobile"]');
+  if (showMobileButton) {
+    showMobileButton.addEventListener('click', showMobile);
+  }
+
+  var showQrButton = document.querySelector('[data-action="show-qr"]');
+  if (showQrButton) {
+    showQrButton.addEventListener('click', showQr);
+  }
+
+    if (walletSelect) {
+        restoreWalletPreference();
+        walletSelect.addEventListener('change', syncWalletLaunch);
+        syncWalletLaunch();
+    }
+
+    if (platformSelect) {
+        platformSelect.addEventListener('change', function () {
+            persistPlatformPreference();
+            syncWalletLaunch();
+        });
+        syncWalletLaunch();
+    }
+
+    if (walletLink) {
+        walletLink.addEventListener('click', function (event) {
+            if (!dcApiSupported) {
+                return;
+            }
+            event.preventDefault();
+            if (walletLink.getAttribute('data-busy') === 'true') {
+                return;
+            }
+            setWalletBusy(true);
+            setStatus('<span class="spinner"></span> Opening your wallet chooser&hellip;');
+            launchDigitalCredentials();
+        });
+    }
+
+    if (dcApiSupported) {
+        prefetchDigitalCredentialRequest();
+    }
+
+    if (/Android|iPhone|iPad|iPod|Mobile/i.test(userAgent)) {
+        showMobile();
+    }
+
+    if (!nonce) {
+        setStatus('<span class="err">Login session missing. <a href="/v1/auth/credential-login">Try again</a></span>');
+        return;
+    }
+
+    var attempts = 0;
+    var maxAttempts = 180;
+    var timer = setInterval(function () {
+        attempts += 1;
+        if (attempts > maxAttempts) {
+            clearInterval(timer);
+            setStatus('<span class="err">Timed out. <a href="/v1/auth/credential-login">Try again</a></span>');
+            return;
+    }
+
+    fetch('/v1/auth/credential-login/status?nonce=' + encodeURIComponent(nonce), {
+      credentials: 'same-origin'
+    })
+      .then(function (response) { return response.json(); })
+      .then(function (data) {
+        if (data.status === 'completed') {
+          clearInterval(timer);
+          setStatus('<span class="done">&#10003; Verified! Redirecting&hellip;</span>');
+          window.location.href = data.redirect_to || '/';
+        } else if (data.status === 'failed') {
+          clearInterval(timer);
+          setStatus('<span class="err">Verification failed. <a href="/v1/auth/credential-login">Try again</a></span>');
+        } else if (data.status === 'expired') {
+          clearInterval(timer);
+          setStatus('<span class="err">Login session expired. <a href="/v1/auth/credential-login">Try again</a></span>');
+        }
+      })
+      .catch(function () {
+        // Keep polling through transient network hiccups.
+      });
+  }, 2500);
+})();
+"""
+
 
 _CREDENTIAL_LOGIN_PAGE = """\
 <!DOCTYPE html>
@@ -466,54 +1332,11 @@ _CREDENTIAL_LOGIN_PAGE = """\
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Login with Marty Badge &mdash; Marty</title>
-  <style>
-    *, *::before, *::after {{ box-sizing: border-box }}
-    body {{ font-family: system-ui, -apple-system, sans-serif; background: #f5f6fa;
-           display:flex; justify-content:center; align-items:center;
-           min-height:100vh; margin:0; padding: 1rem }}
-    .card {{ background:#fff; border-radius:16px;
-             box-shadow:0 4px 24px rgba(0,0,0,.1);
-             padding:2.5rem 2rem; max-width:420px; width:100%; text-align:center }}
-    .logo {{ width:48px; height:48px; margin:0 auto 1rem; display:block }}
-    h1 {{ font-size:1.35rem; margin:0 0 .4rem; color:#1a1a2e }}
-    .subtitle {{ color:#666; font-size:.9rem; margin:0 0 1.75rem; line-height:1.5 }}
-    /* QR section (shown on desktop) */
-    .qr-section img {{ width:220px; height:220px; border:1px solid #e8e8e8;
-                      border-radius:10px; display:block; margin:0 auto }}
-    .qr-label {{ font-size:.8rem; color:#999; margin:.6rem 0 0 }}
-    /* Deep-link section (shown on mobile) */
-    .mobile-section {{ display:none }}
-    .open-btn {{ display:inline-flex; align-items:center; gap:.5rem;
-                 margin-top:.5rem; padding:.75rem 1.5rem; border-radius:10px;
-                 background:#1a73e8; color:#fff; text-decoration:none;
-                 font-size:1rem; font-weight:600; width:100%;
-                 justify-content:center; transition: background .15s }}
-    .open-btn:hover {{ background:#1558b0 }}
-    .open-btn svg {{ width:20px; height:20px; flex-shrink:0 }}
-    /* Secondary toggle link */
-    .toggle-link {{ font-size:.82rem; color:#1a73e8; cursor:pointer;
-                    text-decoration:underline; margin-top:1rem;
-                    display:inline-block; background:none; border:none;
-                    padding:0 }}
-    .divider {{ border:none; border-top:1px solid #eee; margin:1.5rem 0 }}
-    .status {{ margin-top:1.25rem; font-size:.875rem; color:#555;
-               min-height:1.4em }}
-    .spinner {{ display:inline-block; width:14px; height:14px;
-                border:2px solid #ccc; border-top-color:#1a73e8;
-                border-radius:50%; animation:spin .8s linear infinite;
-                vertical-align:middle; margin-right:6px }}
-    @keyframes spin {{ to {{ transform:rotate(360deg) }} }}
-    .done {{ color:#27ae60; font-weight:600 }}
-    .err  {{ color:#e74c3c }}
-    /* Mobile override */
-    @media (max-width: 600px) {{
-      .qr-section {{ display:none }}
-      .mobile-section {{ display:block }}
-    }}
-  </style>
+  <title>Sign in with Open Badge Credential &mdash; Marty</title>
+    <link rel="stylesheet" href="/v1/auth/credential-login/assets/styles.css?v={asset_version}">
+    <script src="/v1/auth/credential-login/assets/app.js?v={asset_version}" defer></script>
 </head>
-<body>
+<body data-nonce="{nonce_attr}" data-dc-api-request-url="{dc_api_request_url_attr}" data-dc-api-submit-url="{dc_api_submit_url_attr}" data-dc-api-protocol="{dc_api_protocol_attr}">
   <div class="card">
     <!-- Icon -->
     <svg class="logo" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -523,8 +1346,26 @@ _CREDENTIAL_LOGIN_PAGE = """\
       <circle cx="24" cy="29" r="3" fill="#1a73e8"/>
     </svg>
 
-    <h1>Login with Marty Badge</h1>
-    <p class="subtitle">Use your Marty wallet to authenticate securely &mdash; no password needed.</p>
+    <h1>Sign in with Open Badge Credential</h1>
+    <p class="subtitle">Use your wallet to present an Open Badge credential and authenticate securely &mdash; no password needed.</p>
+
+        <div class="wallet-controls">
+            <div class="wallet-picker">
+                <label class="wallet-label" for="wallet-select">Select wallet app</label>
+                <select class="wallet-select" id="wallet-select" name="wallet-select">
+                    {wallet_option_tags}
+                </select>
+            </div>
+            <div class="wallet-picker">
+                <label class="wallet-label" for="platform-select">Platform</label>
+                <select class="wallet-select" id="platform-select" name="platform-select">
+                    <option value="auto" selected>Auto-detect</option>
+                    <option value="android">Android</option>
+                    <option value="ios">iOS</option>
+                    <option value="generic">Generic</option>
+                </select>
+            </div>
+        </div>
 
     <!-- Desktop: QR code -->
     <div class="qr-section" id="qr-section">
@@ -532,8 +1373,8 @@ _CREDENTIAL_LOGIN_PAGE = """\
         src="https://api.qrserver.com/v1/create-qr-code/?size=220x220&margin=8&data={qr_encoded}"
         alt="Scan QR with Marty wallet"
       >
-      <p class="qr-label">Scan with the Marty wallet app</p>
-      <button class="toggle-link" onclick="showMobile()">On this device? Open in wallet &rsaquo;</button>
+      <p class="qr-label">Scan with your wallet app</p>
+      <button class="toggle-link" type="button" data-action="show-mobile">On this device? Open in wallet &rsaquo;</button>
     </div>
 
     <!-- Mobile: deep-link button -->
@@ -544,15 +1385,15 @@ _CREDENTIAL_LOGIN_PAGE = """\
           <rect x="2" y="3" width="20" height="14" rx="2"/>
           <path d="M8 21h8M12 17v4"/>
         </svg>
-        Open in Wallet App
+                <span>Open wallet</span>
       </a>
-      <p style="font-size:.8rem;color:#999;margin:.75rem 0 0">Tap the button to open your Marty wallet</p>
-      <button class="toggle-link" onclick="showQr()">Show QR code instead &rsaquo;</button>
-      <div style="margin-top:1rem">
-        <div class="qr-section" id="qr-fallback" style="display:none">
+            <p class="mobile-help" id="wallet-help">{wallet_help_text}</p>
+      <button class="toggle-link" type="button" data-action="show-qr">Show QR code instead &rsaquo;</button>
+      <div>
+        <div class="qr-section qr-fallback" id="qr-fallback">
           <img
             src="https://api.qrserver.com/v1/create-qr-code/?size=180x180&margin=6&data={qr_encoded}"
-            alt="Scan QR with Marty wallet" style="width:180px;height:180px"
+            alt="Scan QR with Marty wallet" class="qr-small"
           >
         </div>
       </div>
@@ -564,7 +1405,7 @@ _CREDENTIAL_LOGIN_PAGE = """\
     </div>
   </div>
 
-  <script>
+  <!-- Legacy inline script kept inert; CSP-safe script is loaded from /assets/app.js.
     (function() {{
       // Detect mobile (phones/tablets) and show deep-link instead of QR
       var isMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
@@ -611,10 +1452,28 @@ _CREDENTIAL_LOGIN_PAGE = """\
           .catch(function() {{ /* network hiccup — keep polling */ }});
       }}, 1000);
     }})();
-  </script>
+  -->
 </body>
 </html>
 """
+
+
+@router.get("/credential-login/assets/styles.css", include_in_schema=False)
+async def credential_login_styles() -> Response:
+    return Response(
+        content=_CREDENTIAL_LOGIN_CSS,
+        media_type="text/css",
+        headers={"Cache-Control": "no-store, max-age=0"},
+    )
+
+
+@router.get("/credential-login/assets/app.js", include_in_schema=False)
+async def credential_login_script() -> Response:
+    return Response(
+        content=_CREDENTIAL_LOGIN_JS,
+        media_type="application/javascript",
+        headers={"Cache-Control": "no-store, max-age=0"},
+    )
 
 
 @router.get("/credential-login", response_class=HTMLResponse)
@@ -662,19 +1521,20 @@ async def credential_login(request: Request) -> HTMLResponse:
     # request_uri is the full openid4vp://authorize?... URI
     oid4vp_uri: str = flow_data.get("request_uri", flow_data.get("qr_code_data", ""))
 
-    # Persist pending state
+    # Persist pending state with MIP Flow instance linkage
     await _redis_client.setex(
         f"{_PENDING_KEY}{nonce}",
         _PENDING_TTL,
-        json.dumps({"nonce": nonce, "flow_instance_id": instance_id, "status": "pending"}),
+        json.dumps({"nonce": nonce, "flow_instance_id": instance_id, "status": "pending", "revocation_checked": False}),
     )
 
     qr_encoded = quote(oid4vp_uri, safe="")
-    import html as _html
-    html_content = _CREDENTIAL_LOGIN_PAGE.format(
+    html_content = _render_credential_login_page(
+        nonce=nonce,
+        flow_instance_id=instance_id,
         qr_encoded=qr_encoded,
-        oid4vp_uri_escaped=_html.escape(oid4vp_uri, quote=True),
-        nonce_json=json.dumps(nonce),
+        oid4vp_uri=oid4vp_uri,
+        request_uri=flow_data.get("request_uri", ""),
     )
     return HTMLResponse(content=html_content)
 
@@ -699,8 +1559,15 @@ async def credential_login_status(nonce: str) -> dict[str, Any]:
             return {
                 "status": "completed",
                 "redirect_to": f"/v1/auth/credential-login/finalize?nonce={quote(nonce, safe='')}",
+                "revocation_checked": data.get("revocation_checked", False),
+                "revocation_status": data.get("revocation_status", "unknown"),
             }
-        return {"status": status, "redirect_to": data.get("redirect_to", "/")}
+        return {
+            "status": status,
+            "redirect_to": data.get("redirect_to", "/"),
+            "revocation_checked": data.get("revocation_checked", False),
+            "revocation_status": data.get("revocation_status", "unknown"),
+        }
 
     # Check if the nonce even exists (i.e. not expired)
     pending = await _redis_client.get(f"{_PENDING_KEY}{nonce}")
@@ -779,6 +1646,17 @@ class CredentialVerifiedPayload(BaseModel):
     completed_at: str = ""
 
 
+async def _mark_credential_login_failed(nonce: str, reason: str) -> None:
+    if _redis_client is None:
+        return
+    await _redis_client.setex(
+        f"{_COMPLETE_KEY}{nonce}",
+        _COMPLETE_TTL,
+        json.dumps({"status": "failed", "reason": reason}),
+    )
+    await _redis_client.delete(f"{_PENDING_KEY}{nonce}")
+
+
 @internal_router.post("/credential-verified")
 async def credential_verified(
     payload: CredentialVerifiedPayload,
@@ -818,38 +1696,86 @@ async def credential_verified(
     email: str = claims.get("email", "")
     given_name: str | None = claims.get("given_name")
     family_name: str | None = claims.get("family_name")
-    organization_id: str | None = claims.get("organization_id")
     role: str = claims.get("role", "applicant")
-    member_id: str | None = claims.get("member_id")
-
+    preferred_username = claims.get("preferred_username") if isinstance(claims.get("preferred_username"), str) else email
     if not email:
         logger.error("credential-verified: no email in verified_claims")
         raise HTTPException(status_code=422, detail="Credential missing email claim")
 
-    # Derive a stable user_id: prefer sub claim, then fall back to a deterministic UUID
-    user_id: str = claims.get("sub") or claims.get("subject") or ""
-    if not user_id:
-        import hashlib as _hashlib
-        user_id = str(
-            __import__("uuid").UUID(
-                bytes=_hashlib.sha256(email.lower().encode()).digest()[:16]
-            )
-        )
+    keycloak_user = None
+    kc_tokens: dict[str, str] | None = None
 
-    # Map credential role to UserType
-    role_map = {"administrator": UserType.ADMINISTRATOR, "vendor": UserType.VENDOR}
-    user_type: UserType = role_map.get(role, UserType.APPLICANT)
+    if _kc_admin_adapter is not None:
+        try:
+            kc_user_id = None
+            get_existing_verified_user_id = getattr(_kc_admin_adapter, "get_existing_verified_user_id", None)
+            if callable(get_existing_verified_user_id):
+                kc_user_id = await get_existing_verified_user_id(email=email, username=preferred_username)
+            elif _credential_login_create_users:
+                kc_user_id = await _kc_admin_adapter.get_or_create_user(
+                    email=email,
+                    username=preferred_username,
+                    given_name=given_name,
+                    family_name=family_name,
+                    role=role,
+                )
+            # Keep credential-login session parity with OIDC login:
+            # when Keycloak admin integration is enabled and user creation is
+            # disabled, require an existing Keycloak user and deny fallback to
+            # synthetic claim-only identities.
+            require_existing_kc_user = _credential_login_require_existing_keycloak_user or not _credential_login_create_users
+            if not kc_user_id and require_existing_kc_user:
+                await _mark_credential_login_failed(nonce, "keycloak_user_not_found")
+                return {"ok": True, "status": "denied"}
+            if kc_user_id:
+                kc_tokens = await _kc_admin_adapter.exchange_token_for_user(kc_user_id)
+                if kc_tokens and (kc_tokens.get("id_token") or kc_tokens.get("access_token")):
+                    try:
+                        keycloak_user = build_oidc_user_info(
+                            id_token=kc_tokens.get("id_token"),
+                            access_token=kc_tokens.get("access_token"),
+                        )
+                    except ValueError as kc_claim_exc:
+                        logger.warning(
+                            "KC token claim parsing failed during credential login for %s: %s",
+                            email,
+                            kc_claim_exc,
+                        )
+                admin_keycloak_user = None
+                get_user_info = getattr(_kc_admin_adapter, "get_user_info", None)
+                if callable(get_user_info):
+                    admin_keycloak_user = await get_user_info(kc_user_id)
+                if merge_oidc_user_info is not None:
+                    keycloak_user = merge_oidc_user_info(keycloak_user, admin_keycloak_user)
+                elif keycloak_user is None:
+                    keycloak_user = admin_keycloak_user
+        except Exception as kc_exc:
+            logger.warning("KC enrichment failed during credential login for %s: %s", email, kc_exc)
+            require_existing_kc_user = _credential_login_require_existing_keycloak_user or not _credential_login_create_users
+            if require_existing_kc_user:
+                await _mark_credential_login_failed(nonce, "keycloak_user_not_eligible")
+                return {"ok": True, "status": "denied"}
+    elif _credential_login_require_existing_keycloak_user or not _credential_login_create_users:
+        await _mark_credential_login_failed(nonce, "keycloak_admin_unavailable")
+        return {"ok": True, "status": "denied"}
 
-    user = AuthenticatedUser(
-        user_id=user_id,
-        email=email,
-        given_name=given_name,
-        family_name=family_name,
-        user_type=user_type,
-        roles=[role],
-        organization_id=organization_id,
-        applicant_id=member_id,
+    user = await build_credential_login_user(
+        claims,
+        _user_provisioning,
+        keycloak_user=keycloak_user,
     )
+    user = apply_credential_login_defaults(user)
+    if _applicant_profile_provisioner is not None:
+        try:
+            applicant_id = await _applicant_profile_provisioner(user)
+            if applicant_id:
+                user.applicant_id = applicant_id
+        except Exception as exc:
+            logger.warning(
+                "Applicant profile provisioning failed during credential login for %s: %s",
+                email,
+                exc,
+            )
 
     ip_address = request.client.host if request.client else None
     user_agent = request.headers.get("user-agent")
@@ -860,23 +1786,10 @@ async def credential_verified(
         user_agent=user_agent,
     )
 
-    # Optionally enrich with KC-issued tokens via token exchange
-    if _kc_admin_adapter is not None:
-        try:
-            kc_user_id = await _kc_admin_adapter.get_or_create_user(
-                email=email,
-                given_name=given_name,
-                family_name=family_name,
-                role=role,
-            )
-            if kc_user_id:
-                kc_tokens = await _kc_admin_adapter.exchange_token_for_user(kc_user_id)
-                if kc_tokens:
-                    session.id_token = kc_tokens.get("id_token")
-                    session.refresh_token = kc_tokens.get("refresh_token")
-                    logger.debug(f"KC tokens obtained for {email}")
-        except Exception as kc_exc:
-            logger.warning(f"KC token exchange optional step failed: {kc_exc}")
+    if kc_tokens:
+        session.id_token = kc_tokens.get("id_token")
+        session.refresh_token = kc_tokens.get("refresh_token")
+        logger.debug("KC tokens obtained for %s", email)
 
     await _session_repository.save(session)
 
@@ -884,13 +1797,17 @@ async def credential_verified(
         f"Credential login succeeded: user={email} session={session.session_id[:8]}..."
     )
 
-    # Signal the polling endpoint
+    # Signal the polling endpoint with revocation status
+    revocation_checked = bool(payload.verified_claims.get("revocation_checked"))
+    revocation_status = str(payload.verified_claims.get("revocation_status", "unknown"))
     await _redis_client.setex(
         f"{_COMPLETE_KEY}{nonce}",
         _COMPLETE_TTL,
         json.dumps({
             "status": "completed",
             "session_id": session.session_id,
+            "revocation_checked": revocation_checked,
+            "revocation_status": revocation_status,
         }),
     )
     # Clean up pending key

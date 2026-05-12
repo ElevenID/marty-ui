@@ -38,10 +38,21 @@ function ResourcePage({
 }) {
   const location = useLocation();
 
-  // Find active tab
-  const activeTab = tabs?.findIndex((tab) => 
-    location.pathname === tab.path || location.pathname.startsWith(tab.path + '/')
-  ) ?? 0;
+  // Prefer the most specific matching tab when nested tab paths share a prefix.
+  const activeTab = tabs?.reduce((bestMatchIndex, tab, index, allTabs) => {
+    const isMatch = location.pathname === tab.path || location.pathname.startsWith(tab.path + '/');
+    if (!isMatch) {
+      return bestMatchIndex;
+    }
+
+    if (bestMatchIndex < 0) {
+      return index;
+    }
+
+    return allTabs[index].path.length > allTabs[bestMatchIndex].path.length
+      ? index
+      : bestMatchIndex;
+  }, -1) ?? -1;
 
   return (
     <Box data-testid={pageTestId}>

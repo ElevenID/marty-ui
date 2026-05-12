@@ -205,6 +205,7 @@ class RevocationProfileServiceGrpc(
     async def ProcessRevocation(self, request, context):
         from revocation_profile.main import RevocationProfileStatus
         from revocation_profile.status_list_manager import StatusListFormat
+        from revocation_profile.main import _build_status_list_url, _status_list_purpose_for_status
 
         profile = await self._repo.get(request.profile_id)
         if not profile:
@@ -252,16 +253,15 @@ class RevocationProfileServiceGrpc(
                     error="Failed to update status list",
                 )
 
+            purpose = _status_list_purpose_for_status(request.status)
+            status_list_url = _build_status_list_url(profile, sl_format, purpose)
+
             # Publish if auto-publish enabled
-            status_list_url = None
             if profile.automation_config.auto_publish:
-                status_list_url = await self._status_mgr.publish(
+                await self._status_mgr.publish(
                     tenant_id=profile.organization_id,
                     format=sl_format,
                 )
-            else:
-                status_list_url = profile.issuer_config.status_list_base_url or "https://status.example.com"
-                status_list_url = f"{status_list_url}/{request.credential_format}/1"
 
             logger.info(
                 "gRPC ProcessRevocation: org=%s index=%d status=%d format=%s",
@@ -270,7 +270,7 @@ class RevocationProfileServiceGrpc(
 
             return rp_pb2.ProcessRevocationResponse(
                 success=True,
-                status_list_url=status_list_url or "",
+                status_list_url=status_list_url,
                 index=request.index,
             )
 
@@ -283,6 +283,7 @@ class RevocationProfileServiceGrpc(
 
     async def AllocateIndex(self, request, context):
         from revocation_profile.status_list_manager import StatusListFormat
+        from revocation_profile.main import _build_status_list_url
 
         profile = await self._repo.get(request.profile_id)
         if not profile:
@@ -307,15 +308,18 @@ class RevocationProfileServiceGrpc(
                 format=sl_format,
             )
 
-            # Generate status list URL
+            # Generate canonical status list URL
+            status_list_url = _build_status_list_url(
+                profile,
+                sl_format,
+                purpose="revocation",
+            )
+
             if profile.automation_config.auto_publish:
-                status_list = await self._status_mgr.get_or_create(
+                await self._status_mgr.get_or_create(
                     tenant_id=profile.organization_id,
                     format=sl_format,
                 )
-                status_list_url = status_list.url or f"{profile.issuer_config.status_list_base_url or 'https://status.example.com'}/{request.credential_format}/1"
-            else:
-                status_list_url = f"{profile.issuer_config.status_list_base_url or 'https://status.example.com'}/{request.credential_format}/1"
 
             logger.info(
                 "gRPC AllocateIndex: profile=%s format=%s index=%d",

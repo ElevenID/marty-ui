@@ -4,11 +4,7 @@ This policy defines which claims the verifier (auth service) requests from
 a holder's MemberCredential during the "Login with Credential" flow.
 
 The policy requests:
-  - email          (required — used to look up / create the Keycloak user)
-  - organization_id (required — used to resolve org membership context)
-  - role           (required — determines the Keycloak realm role on login)
-  - given_name     (optional)
-  - family_name    (optional)
+    - email          (required — used to look up / create the Keycloak user)
 
 The well-known policy ID (CREDENTIAL_LOGIN_POLICY_ID env var) is seeded as:
   50000000-0000-0000-0000-000000000001
@@ -48,7 +44,7 @@ DISPLAY_METADATA = {
     "title": "Member Login Verification",
     "purpose": (
         "Verify your membership credential to log in without a password. "
-        "Only your email, organisation, and role will be shared."
+        "Only your email will be shared."
     ),
     "verifier_name": "ElevenID LLC",
     "privacy_url": None,
@@ -72,51 +68,6 @@ CREDENTIAL_REQUIREMENTS = [
                 "display_name": "Email Address",
                 "purpose": "Identify your account",
                 "required": True,
-                "selective_disclosure": True,
-                "accept_derived": False,
-                "intent_to_retain": False,
-                "constraints": [],
-            },
-            {
-                "claim_name": "organization_id",
-                "display_name": "Organisation ID",
-                "purpose": "Confirm your organisation membership",
-                "required": True,
-                "selective_disclosure": True,
-                "accept_derived": False,
-                "intent_to_retain": False,
-                "constraints": [],
-            },
-            {
-                "claim_name": "role",
-                "display_name": "Role",
-                "purpose": "Determine your access level",
-                "required": True,
-                "selective_disclosure": True,
-                "accept_derived": False,
-                "intent_to_retain": False,
-                "constraints": [
-                    {
-                        "constraint_type": "in_set",
-                        "value": ["applicant", "vendor", "administrator"],
-                    }
-                ],
-            },
-            {
-                "claim_name": "given_name",
-                "display_name": "First Name",
-                "purpose": "Personalise your session",
-                "required": False,
-                "selective_disclosure": True,
-                "accept_derived": False,
-                "intent_to_retain": False,
-                "constraints": [],
-            },
-            {
-                "claim_name": "family_name",
-                "display_name": "Last Name",
-                "purpose": "Personalise your session",
-                "required": False,
                 "selective_disclosure": True,
                 "accept_derived": False,
                 "intent_to_retain": False,
@@ -177,9 +128,9 @@ def upgrade() -> None:
             "organization_id": ELEVNID_ORG_ID,
             "name": "MemberLogin",
             "description": (
-                "Credential-based login policy. Requests email, organisation, "
-                "and role from a MemberCredential to authenticate a holder "
-                "without requiring a password."
+                "Credential-based login policy. Requests only email from a "
+                "MemberCredential. Organisation and role context are resolved "
+                "from Keycloak during login."
             ),
             "status": "active",
             "display_metadata": json.dumps(DISPLAY_METADATA),

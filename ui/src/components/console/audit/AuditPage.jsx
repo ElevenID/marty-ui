@@ -55,6 +55,7 @@ import { useAuth } from '../../../hooks/useAuth';
 import { useConsole } from '../../../contexts/ConsoleContext';
 import { useNotifications } from '../../../hooks/useNotifications';
 import { usePermissions } from '../../../hooks/usePermissions';
+import { formatOfficialReference, formatStructuredIdentifiers } from '../../../utils/officialReferences';
 
 function AuditPage() {
   const { t } = useTranslation('console');
@@ -281,15 +282,15 @@ function AuditPage() {
     // Generate deep links based on event category and details
     switch (category) {
       case 'credential':
-        return details?.credentialId ? `/console/operate/issuance/${details.credentialId}` : null;
+        return details?.credentialId ? `/console/org/operate/issuance/${details.credentialId}` : null;
       case 'flow':
-        return details?.instanceId ? `/console/operate/flow-instances/${details.instanceId}` 
-             : details?.flowId ? `/console/flows/definitions/${details.flowId}` 
+        return details?.instanceId ? `/console/org/operate/flow-instances/${details.instanceId}` 
+             : details?.flowId ? `/console/org/flows/definitions/${details.flowId}` 
              : null;
       case 'policy':
-        return details?.policyId ? `/console/policies/presentation/${details.policyId}` : null;
+        return details?.policyId ? `/console/org/policies/presentation/${details.policyId}` : null;
       case 'template':
-        return details?.templateId ? `/console/templates/credentials/${details.templateId}` : null;
+        return details?.templateId ? `/console/org/templates/credentials/${details.templateId}` : null;
       case 'authentication':
         return null; // No deep link for auth events
       case 'team':
@@ -598,7 +599,7 @@ function AuditPage() {
                                     {t('audit.details.eventId')}
                                   </Typography>
                                   <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
-                                    {event.id}
+                                    {formatOfficialReference(event.id, 'event')}
                                   </Typography>
                                 </Box>
                                 <Box>
@@ -625,7 +626,7 @@ function AuditPage() {
                                       overflow: 'auto',
                                     }}
                                   >
-                                    {JSON.stringify(event.details, null, 2)}
+                                    {JSON.stringify(formatStructuredIdentifiers(event.details), null, 2)}
                                   </Typography>
                                 </Box>
                               </Box>

@@ -72,7 +72,7 @@ def seeded(repo, client):
         email="test@example.com",
         given_name="Test",
         family_name="User",
-        status=ApplicantStatus.ACTIVE,
+        status=ApplicantStatus.APPROVED,
     )
     _run(repo.save(applicant))
     return repo, client, applicant
@@ -190,7 +190,7 @@ class TestAutoIssueEndpoint:
             resp = client.post(f"/v1/applicants/applications/{app_id}/auto-issue")
         assert resp.status_code == 200, resp.text
         body = resp.json()
-        assert body["status"] == ApplicationStatus.ISSUED.value
+        assert body["status"] == ApplicationStatus.OFFERED.value
         assert body["credential_offer_uri"] is not None
 
     def test_works_from_draft_without_prior_submit(self, seeded):
@@ -201,7 +201,7 @@ class TestAutoIssueEndpoint:
         with _fake_issuance_post():
             resp = client.post(f"/v1/applicants/applications/{app_id}/auto-issue")
         assert resp.status_code == 200, resp.text
-        assert resp.json()["status"] == ApplicationStatus.ISSUED.value
+        assert resp.json()["status"] == ApplicationStatus.OFFERED.value
 
     def test_rejected_without_flag(self, seeded):
         repo, client, applicant = seeded

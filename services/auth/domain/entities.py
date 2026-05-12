@@ -28,6 +28,155 @@ class UserType(str, Enum):
     ADMINISTRATOR = "administrator"
 
 
+def _first_string(*values: Any) -> str | None:
+    for value in values:
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def _first_bool(*values: Any, default: bool = False) -> bool:
+    for value in values:
+        if isinstance(value, bool):
+            return value
+    return default
+
+
+def _append_unique_roles(target: list[str], candidate_roles: Any) -> None:
+    if not isinstance(candidate_roles, list):
+        return
+
+    for role in candidate_roles:
+        if isinstance(role, str) and role and role not in target:
+            target.append(role)
+
+
+def _collect_roles(*claim_sets: Any) -> list[str]:
+    roles: list[str] = []
+
+    for claim_set in claim_sets:
+        if not isinstance(claim_set, dict):
+            continue
+
+        _append_unique_roles(roles, claim_set.get("roles"))
+
+        realm_access = claim_set.get("realm_access")
+        if isinstance(realm_access, dict):
+            _append_unique_roles(roles, realm_access.get("roles"))
+
+        resource_access = claim_set.get("resource_access")
+        if isinstance(resource_access, dict):
+            for client_access in resource_access.values():
+                if isinstance(client_access, dict):
+                    _append_unique_roles(roles, client_access.get("roles"))
+
+    return roles
+
+
+def _extract_organization_claim(*claim_sets: Any) -> dict[str, Any] | None:
+    for claim_set in claim_sets:
+        if not isinstance(claim_set, dict):
+            continue
+
+        organization = claim_set.get("organization")
+        if isinstance(organization, dict) and organization:
+            return organization
+
+    return None
+
+
+def _extract_organization_id(organization_claim: dict[str, Any] | None, *claim_sets: Any) -> str | None:
+    for claim_set in claim_sets:
+        if not isinstance(claim_set, dict):
+            continue
+
+        organization_id = claim_set.get("organization_id")
+        if isinstance(organization_id, str) and organization_id:
+            return organization_id
+
+    if organization_claim:
+        for organization_id in organization_claim.keys():
+            if isinstance(organization_id, str) and organization_id:
+                return organization_id
+
+    return None
+
+
+def _extract_organization_name(organization_claim: dict[str, Any] | None, *claim_sets: Any) -> str | None:
+    for claim_set in claim_sets:
+        if not isinstance(claim_set, dict):
+            continue
+
+        organization_name = claim_set.get("organization_name")
+        if isinstance(organization_name, str) and organization_name:
+            return organization_name
+
+    if organization_claim:
+        for organization in organization_claim.values():
+            if not isinstance(organization, dict):
+                continue
+
+            organization_name = (
+                organization.get("display_name")
+                or organization.get("displayName")
+                or organization.get("name")
+            )
+            if isinstance(organization_name, str) and organization_name:
+                return organization_name
+
+    return None
+
+
+@dataclass
+class ImpersonationContext:
+    """Represents an active admin impersonation session."""
+
+    active: bool = True
+    admin_user_id: str | None = None
+    admin_username: str | None = None
+    admin_email: str | None = None
+    admin_display_name: str | None = None
+    target_user_id: str | None = None
+    target_email: str | None = None
+    organization_id: str | None = None
+    organization_name: str | None = None
+    started_at: str | None = None
+    launch_mode: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary for serialization."""
+        return {
+            "active": self.active,
+            "admin_user_id": self.admin_user_id,
+            "admin_username": self.admin_username,
+            "admin_email": self.admin_email,
+            "admin_display_name": self.admin_display_name,
+            "target_user_id": self.target_user_id,
+            "target_email": self.target_email,
+            "organization_id": self.organization_id,
+            "organization_name": self.organization_name,
+            "started_at": self.started_at,
+            "launch_mode": self.launch_mode,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "ImpersonationContext":
+        """Create from dictionary."""
+        return cls(
+            active=bool(data.get("active", True)),
+            admin_user_id=data.get("admin_user_id"),
+            admin_username=data.get("admin_username"),
+            admin_email=data.get("admin_email"),
+            admin_display_name=data.get("admin_display_name"),
+            target_user_id=data.get("target_user_id"),
+            target_email=data.get("target_email"),
+            organization_id=data.get("organization_id"),
+            organization_name=data.get("organization_name"),
+            started_at=data.get("started_at"),
+            launch_mode=data.get("launch_mode"),
+        )
+
+
 @dataclass
 class AuthenticatedUser:
     """
@@ -47,9 +196,12 @@ class AuthenticatedUser:
     roles: list[str] = field(default_factory=list)
     organization_id: str | None = None
     organization_name: str | None = None
+    organization: dict[str, Any] | None = None
     onboarding_completed: datetime | None = None
     picture: str | None = None
-    
+    impersonation: ImpersonationContext | None = None
+    did_subject: str | None = None  # MIP §5 — DID subject from credential (Open Badge login)
+
     @property
     def display_name(self) -> str:
         """Get user's display name."""
@@ -88,8 +240,11 @@ class AuthenticatedUser:
             "roles": self.roles,
             "organization_id": self.organization_id,
             "organization_name": self.organization_name,
+            "organization": self.organization,
             "onboarding_completed": self.onboarding_completed.isoformat() if self.onboarding_completed else None,
             "picture": self.picture,
+            "impersonation": self.impersonation.to_dict() if self.impersonation else None,
+            "did_subject": self.did_subject,
         }
     
     @classmethod
@@ -114,8 +269,11 @@ class AuthenticatedUser:
             roles=data.get("roles", []),
             organization_id=data.get("organization_id"),
             organization_name=data.get("organization_name"),
+            organization=data.get("organization"),
             onboarding_completed=onboarding,
             picture=data.get("picture"),
+            impersonation=ImpersonationContext.from_dict(data["impersonation"]) if data.get("impersonation") else None,
+            did_subject=data.get("did_subject"),
         )
 
 
@@ -282,32 +440,48 @@ class OIDCUserInfo:
     
     # Custom claims
     organization_id: str | None = None
+    organization_name: str | None = None
+    organization: dict[str, Any] | None = None
     roles: list[str] = field(default_factory=list)
     
     @classmethod
-    def from_claims(cls, claims: dict[str, Any]) -> OIDCUserInfo:
+    def from_claims(
+        cls,
+        claims: dict[str, Any],
+        extra_claims: dict[str, Any] | None = None,
+    ) -> OIDCUserInfo:
         """Create from OIDC claims dictionary."""
-        # Extract roles from various claim formats
-        roles = []
-        if "roles" in claims:
-            roles = claims["roles"]
-        elif "realm_access" in claims:
-            roles = claims["realm_access"].get("roles", [])
-        elif "resource_access" in claims:
-            # Keycloak client roles
-            for client_roles in claims["resource_access"].values():
-                roles.extend(client_roles.get("roles", []))
+        primary_claims = claims if isinstance(claims, dict) else {}
+        secondary_claims = extra_claims if isinstance(extra_claims, dict) else {}
+        organization_claim = _extract_organization_claim(primary_claims, secondary_claims)
+        roles = _collect_roles(primary_claims, secondary_claims)
         
         return cls(
-            sub=claims.get("sub", ""),
-            email=claims.get("email", ""),
-            email_verified=claims.get("email_verified", False),
-            name=claims.get("name"),
-            given_name=claims.get("given_name"),
-            family_name=claims.get("family_name"),
-            preferred_username=claims.get("preferred_username"),
-            picture=claims.get("picture"),
-            locale=claims.get("locale"),
-            organization_id=claims.get("organization_id"),
+            sub=_first_string(
+                primary_claims.get("sub"),
+                secondary_claims.get("sub"),
+                primary_claims.get("subject"),
+                secondary_claims.get("subject"),
+            ) or "",
+            email=_first_string(primary_claims.get("email"), secondary_claims.get("email")) or "",
+            email_verified=_first_bool(
+                primary_claims.get("email_verified"),
+                secondary_claims.get("email_verified"),
+                default=False,
+            ),
+            name=_first_string(primary_claims.get("name"), secondary_claims.get("name")),
+            given_name=_first_string(primary_claims.get("given_name"), secondary_claims.get("given_name")),
+            family_name=_first_string(primary_claims.get("family_name"), secondary_claims.get("family_name")),
+            preferred_username=_first_string(
+                primary_claims.get("preferred_username"),
+                secondary_claims.get("preferred_username"),
+                primary_claims.get("username"),
+                secondary_claims.get("username"),
+            ),
+            picture=_first_string(primary_claims.get("picture"), secondary_claims.get("picture")),
+            locale=_first_string(primary_claims.get("locale"), secondary_claims.get("locale")),
+            organization_id=_extract_organization_id(organization_claim, primary_claims, secondary_claims),
+            organization_name=_extract_organization_name(organization_claim, primary_claims, secondary_claims),
+            organization=organization_claim,
             roles=roles,
         )

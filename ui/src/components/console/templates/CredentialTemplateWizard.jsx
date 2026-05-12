@@ -93,6 +93,7 @@ const CredentialTemplateWizard = () => {
       claims: [],
       trust_profile_id: null,
       compliance_profile_id: null,
+      issuer_profile_id: null,
       signing_algorithm: 'ES256',
       validity_rules: {
         ttl_seconds: 31536000, // 1 year

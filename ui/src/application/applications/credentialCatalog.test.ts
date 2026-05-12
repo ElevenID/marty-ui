@@ -8,6 +8,7 @@ import {
   loadCredentialCatalogItems,
   loadExistingCredentialApplications,
   mapCredentialTemplateToCatalogItem,
+  resolveCredentialApplicationPath,
 } from './credentialCatalog';
 
 describe('credentialCatalog helpers', () => {
@@ -37,6 +38,24 @@ describe('credentialCatalog helpers', () => {
       requirements: ['email'],
       vendorName: 'Acme',
       available: true,
+    });
+  });
+
+  it('maps open badge templates as identity membership credentials', () => {
+    expect(mapCredentialTemplateToCatalogItem({
+      id: 'tpl-ob',
+      credential_type: 'open_badge',
+      name: 'Verified Member Badge',
+      claims: [{ name: 'email', required: true }, { name: 'role', required: true }],
+      status: 'active',
+    }, 'Acme')).toMatchObject({
+      id: 'tpl-ob',
+      credentialType: 'open_badge',
+      category: 'identity',
+      requirements: ['email', 'role'],
+      format: 'vc+sd-jwt',
+      standard: '1EdTech Open Badges 3.0',
+      worksWithLabel: 'Web & VC wallets',
     });
   });
 
@@ -76,6 +95,24 @@ describe('credentialCatalog helpers', () => {
         },
       },
     });
+  });
+
+  it('resolves direct application paths for console and preview contexts', () => {
+    expect(resolveCredentialApplicationPath({
+      credentialId: 'cfg-1',
+      currentPathname: '/console/applicant/catalog',
+    })).toBe('/console/applicant/apply/cfg-1');
+
+    expect(resolveCredentialApplicationPath({
+      credentialId: 'cfg-1',
+      currentPathname: '/applicant/preview/catalog',
+      isPreview: true,
+    })).toBe('/applicant/preview/applications/cfg-1');
+
+    expect(resolveCredentialApplicationPath({
+      credentialId: 'cfg-1',
+      currentPathname: '/catalog',
+    })).toBe('/apply/cfg-1');
   });
 
   it('loads catalog items and existing application ids safely', async () => {

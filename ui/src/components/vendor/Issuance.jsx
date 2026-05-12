@@ -56,7 +56,7 @@ function TabPanel({ children, value, index, ...other }) {
 /**
  * Issuance Main Component
  */
-export default function Issuance() {
+export default function Issuance({ hideHeader = false }) {
   const { t } = useTranslation('vendor');
   const { organizationId } = useAuth();
   const [currentTab, setCurrentTab] = useState(0);
@@ -126,16 +126,18 @@ export default function Issuance() {
 
   return (
     <Box data-testid="issuance-page">
-      {/* Page Header */}
-      <Box sx={{ mb: 4 }}>
-        <Typography variant="h4" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          <BadgeIcon fontSize="large" />
-          {t('issuance.title')}
-        </Typography>
-        <Typography variant="body1" color="text.secondary">
-          {t('issuance.description')}
-        </Typography>
-      </Box>
+      {!hideHeader && (
+        /* Page Header */
+        <Box sx={{ mb: 4 }}>
+          <Typography variant="h4" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <BadgeIcon fontSize="large" />
+            {t('issuance.title')}
+          </Typography>
+          <Typography variant="body1" color="text.secondary">
+            {t('issuance.description')}
+          </Typography>
+        </Box>
+      )}
 
       {/* Tabs */}
       <Paper sx={{ mb: 3 }}>

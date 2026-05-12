@@ -31,6 +31,7 @@ import {
   Info as InfoIcon,
   PhoneAndroid as PhoneAndroidIcon,
 } from '@mui/icons-material';
+import { buildOid4vciCredentialOfferUri } from '../../services/credentialLinkUtils';
 
 /**
  * Format time remaining as human-readable string
@@ -84,6 +85,11 @@ const QRCodeDisplay = ({
   onRefresh = null,
   showDeepLink = true,
   showCopyLink = true,
+  qrValue = null,
+  copyValue = null,
+  openLink = null,
+  openLinkLabel = 'Open in Wallet',
+  onOpenLink = null,
   size = 256,
   title = 'Scan with Wallet',
   instructions = 'Open your digital wallet app and scan this QR code to receive your credential.',
@@ -110,6 +116,9 @@ const QRCodeDisplay = ({
   const effectiveLogoUrl = branding?.qr_logo_url || logoUrl;
   const effectiveInstructions = branding?.qr_custom_instruction_text || customInstructions || instructions;
   const showInstructions = branding?.qr_show_instructions ?? true;
+  const effectiveQrValue = qrValue || offerUri || '';
+  const effectiveCopyValue = copyValue || buildOid4vciCredentialOfferUri(offerUri);
+  const effectiveOpenLink = openLink || effectiveCopyValue;
 
   // Update timer every second
   useEffect(() => {
@@ -138,12 +147,7 @@ const QRCodeDisplay = ({
   // Handle copy link
   const handleCopyLink = async () => {
     try {
-      // Always copy the deep link format for mobile sharing
-      let linkToCopy = offerUri;
-      if (!offerUri.startsWith('openid-credential-offer://')) {
-        linkToCopy = `openid-credential-offer://?credential_offer_uri=${encodeURIComponent(offerUri)}`;
-      }
-      await navigator.clipboard.writeText(linkToCopy);
+      await navigator.clipboard.writeText(effectiveCopyValue);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch (err) {
@@ -153,13 +157,11 @@ const QRCodeDisplay = ({
 
   // Handle deep link (mobile)
   const handleOpenLink = () => {
-    // If already in deep link format, use directly
-    // Otherwise, convert http:// URL to openid-credential-offer:// URL
-    let deepLinkUrl = offerUri;
-    if (!offerUri.startsWith('openid-credential-offer://')) {
-      deepLinkUrl = `openid-credential-offer://?credential_offer_uri=${encodeURIComponent(offerUri)}`;
+    if (onOpenLink) {
+      onOpenLink(effectiveOpenLink);
+      return;
     }
-    window.location.href = deepLinkUrl;
+    window.location.href = effectiveOpenLink;
   };
 
   // Determine status color and icon
@@ -271,7 +273,7 @@ const QRCodeDisplay = ({
               // Generate QR code from URI
               <Box sx={{ position: 'relative' }}>
                 <QRCodeSVG
-                  value={offerUri}
+                  value={effectiveQrValue}
                   size={effectiveSize}
                   level={branding?.qr_error_correction || "H"}
                   includeMargin={true}
@@ -406,7 +408,7 @@ const QRCodeDisplay = ({
                   onClick={handleOpenLink}
                   disabled={isExpired}
                 >
-                  Open in Wallet
+                  {openLinkLabel}
                 </Button>
               </Tooltip>
             )}

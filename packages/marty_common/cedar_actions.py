@@ -1,56 +1,13 @@
-"""Route-to-Cedar action mapping for MIP gateway authorization.
+"""Route-to-permission mapping for gateway organization authorization."""
 
-Maps HTTP method + URL path to the canonical Cedar action strings defined
-in the MIP Cedar schema (mip.cedarschema).
-
-Supports both:
-- classic org-scoped paths: ``/v1/organizations/{org_id}/...``
-- top-level org-owned resources: ``/v1/application-templates/...``
-"""
+from __future__ import annotations
 
 import re
 from typing import Optional
 
-# Maps the first path segment after /v1/organizations/{org_id}/ to Cedar actions.
-# Tuple format: (read_action, write_action, delete_action, cedar_resource_type)
-# cedar_resource_type must match an entity type in mip.cedarschema.
-RESOURCE_ACTION_MAP: dict[str, tuple[str, str, str, str]] = {
-    # Organization member & invitation management
-    "members": ("users:read", "users:invite", "users:invite", "User"),
-    "invitations": ("users:read", "users:invite", "users:invite", "Organization"),
-    # API key management
-    "api-keys": ("keys:read", "keys:write", "keys:write", "Organization"),
-    # Role management
-    "roles": ("roles:read", "roles:write", "roles:write", "Role"),
-    # Organization settings (admin-only)
-    "settings": ("admin:full", "admin:full", "admin:full", "Organization"),
-    # Digital Identity Model — Configuration resources
-    "credential-templates": ("templates:read", "templates:write", "templates:write", "CredentialTemplate"),
-    "trust-profiles": ("trust:read", "trust:write", "trust:write", "TrustProfile"),
-    "compliance-profiles": ("compliance:read", "compliance:write", "compliance:write", "ComplianceProfile"),
-    "presentation-policies": ("trust:read", "trust:write", "trust:write", "PresentationPolicy"),
-    "deployment-profiles": ("deployment:read", "deployment:write", "deployment:write", "DeploymentProfile"),
-    "revocation-profiles": ("trust:read", "trust:admin", "trust:admin", "RevocationProfile"),
-    # Digital Identity Model — Operational resources
-    "flows": ("flows:read", "flows:write", "flows:write", "Flow"),
-    "issuance": ("credentials:read", "credentials:issue", "credentials:revoke", "Credential"),
-    "credentials": ("credentials:read", "credentials:issue", "credentials:revoke", "Credential"),
-    "applications": ("applications:read", "applications:write", "applications:write", "Application"),
-    "applicants": ("applications:read", "applications:write", "applications:write", "Application"),
-    "application-templates": ("applications:read", "applications:write", "applications:write", "Application"),
-    # Utility resources
-    "webhooks": ("webhooks:read", "webhooks:write", "webhooks:write", "WebhookEndpoint"),
-    "notifications": ("notifications:read", "notifications:send", "notifications:send", "Organization"),
-    "audit-log": ("audit:read", "audit:read", "audit:read", "AuditEvent"),
-    # Verification
-    "verify": ("credentials:read", "credentials:verify", "credentials:verify", "Credential"),
-    # Cedar policy management (admin-only for writes)
-    "policy-sets": ("trust:read", "trust:admin", "trust:admin", "TrustProfile"),
-}
 
-# Regex to extract org_id and resource segment from org-scoped paths.
-_ORG_PATH_RE = re.compile(r"^/v1/organizations/([a-f0-9\-]{36})/([^/]+)")
-_TOP_LEVEL_PATH_RE = re.compile(r"^/v1/([^/]+)(?:/|$)")
+_UUID_RE = r"([a-f0-9\-]{36})"
+_ORG_PATH_RE = re.compile(rf"^/v1/organizations/{_UUID_RE}(?:/|$)")
 _TOP_LEVEL_RESOURCE_RE = re.compile(r"^/v1/([^/]+)/([^/]+)(?:/|$)")
 
 
@@ -130,82 +87,169 @@ RESOURCE_LOOKUP_MAP: dict[str, tuple[str, str, set[str]]] = {
 }
 
 
-def _resolve_actions_for_method(
-    method: str,
-    actions: tuple[str, str, str, str],
-) -> tuple[str, str]:
-    """Return the Cedar action/resource pair for the HTTP method."""
-    read_action, write_action, delete_action, resource_type = actions
-    if method in ("GET", "HEAD", "OPTIONS"):
-        return (read_action, resource_type)
-    if method == "DELETE":
-        return (delete_action, resource_type)
-    return (write_action, resource_type)
+SPECIAL_ROUTE_RULES: list[tuple[re.Pattern[str], dict[str, str], str]] = [
+    (
+        re.compile(rf"^/v1/organizations/{_UUID_RE}/transfer-ownership$"),
+        {"POST": "organization:transfer-ownership"},
+        "organization",
+    ),
+    (
+        re.compile(rf"^/v1/organizations/{_UUID_RE}/members/me/permissions$"),
+        {"GET": "organization:view"},
+        "organization",
+    ),
+    (
+        re.compile(rf"^/v1/organizations/{_UUID_RE}/members/[^/]+/roles(?:/[^/]+)?$"),
+        {"PUT": "role:assign", "POST": "role:assign", "DELETE": "role:assign"},
+        "role",
+    ),
+    (
+        re.compile(rf"^/v1/organizations/{_UUID_RE}/roles(?:/[^/]+)?$"),
+        {
+            "GET": "role:view",
+            "POST": "role:create",
+            "PUT": "role:edit",
+            "PATCH": "role:edit",
+            "DELETE": "role:delete",
+        },
+        "role",
+    ),
+    (
+        re.compile(rf"^/v1/organizations/{_UUID_RE}/permissions$"),
+        {"GET": "role:view"},
+        "role",
+    ),
+    (
+        re.compile(rf"^/v1/organizations/{_UUID_RE}/members(?:/[^/]+)?$"),
+        {
+            "GET": "team:view",
+            "POST": "team:invite",
+            "PUT": "team:manage",
+            "PATCH": "team:manage",
+            "DELETE": "team:manage",
+        },
+        "team",
+    ),
+    (
+        re.compile(rf"^/v1/organizations/{_UUID_RE}/api-keys(?:/[^/]+)?$"),
+        {
+            "GET": "api-key:view",
+            "POST": "api-key:create",
+            "PUT": "api-key:edit",
+            "PATCH": "api-key:edit",
+            "DELETE": "api-key:revoke",
+        },
+        "api-key",
+    ),
+    (
+        re.compile(rf"^/v1/organizations/{_UUID_RE}/lifecycle$"),
+        {"GET": "organization:view"},
+        "organization",
+    ),
+    (
+        re.compile(rf"^/v1/organizations/{_UUID_RE}/scim/v2/Users(?:/[^/]+)?$"),
+        {
+            "GET": "team:view",
+            "POST": "team:invite",
+            "PUT": "team:manage",
+            "PATCH": "team:manage",
+            "DELETE": "team:manage",
+        },
+        "team",
+    ),
+    (
+        re.compile(rf"^/v1/organizations/{_UUID_RE}/scim/v2/Groups(?:/[^/]+)?$"),
+        {
+            "GET": "role:view",
+            "POST": "role:create",
+            "PUT": "role:edit",
+            "PATCH": "role:edit",
+            "DELETE": "role:delete",
+        },
+        "role",
+    ),
+    (
+        re.compile(rf"^/v1/organizations/{_UUID_RE}/scim/v2/(ServiceProviderConfig|Schemas|ResourceTypes)$"),
+        {"GET": "organization:view"},
+        "organization",
+    ),
+]
+
+
+GENERIC_RESOURCE_MAP: dict[str, tuple[str, str]] = {
+    "credential-templates": ("credential-template", "credential-template"),
+    "trust-profiles": ("trust-profile", "trust-profile"),
+    "compliance-profiles": ("compliance-profile", "compliance-profile"),
+    "presentation-policies": ("presentation-policy", "presentation-policy"),
+    "revocation-profiles": ("revocation-profile", "revocation-profile"),
+    "deployment-profiles": ("deployment-profile", "deployment-profile"),
+    "flows": ("flow-definition", "flow-definition"),
+    "flow-instances": ("flow-instance", "flow-instance"),
+    "application-templates": ("application-template", "application-template"),
+    "applications": ("application", "application"),
+    "verification": ("verification", "verification"),
+    "integrations": ("integration-connector", "integration-connector"),
+    "policy-sets": ("trust-profile", "trust-profile"),
+}
+
+
+def _resolve_generic_org_permission(method: str, segment: str) -> Optional[tuple[str, str]]:
+    mapping = GENERIC_RESOURCE_MAP.get(segment)
+    if mapping is None:
+        return None
+
+    permission_resource, resource_name = mapping
+    normalized_method = method.upper()
+    if normalized_method in {"GET", "HEAD", "OPTIONS"}:
+        return (f"{permission_resource}:view", resource_name)
+    if normalized_method == "POST":
+        if permission_resource == "verification":
+            return (f"{permission_resource}:execute", resource_name)
+        if permission_resource == "flow-instance":
+            return (f"{permission_resource}:start", resource_name)
+        return (f"{permission_resource}:create", resource_name)
+    if normalized_method in {"PUT", "PATCH"}:
+        if permission_resource == "verification":
+            return (f"{permission_resource}:execute", resource_name)
+        return (f"{permission_resource}:edit", resource_name)
+    if normalized_method == "DELETE":
+        return (f"{permission_resource}:delete", resource_name)
+    return None
 
 
 def resolve_action(method: str, path: str) -> Optional[str]:
-    """Resolve an HTTP method + path to a Cedar action string.
-
-    Returns the Cedar action (e.g. "credentials:read") for org-scoped paths,
-    or None for paths that don't match an org-scoped pattern.
-    """
-    match = _ORG_PATH_RE.match(path)
-    if not match:
-        top_level = _TOP_LEVEL_PATH_RE.match(path)
-        if not top_level:
-            return None
-        actions = RESOURCE_ACTION_MAP.get(top_level.group(1))
-        if not actions:
-            return None
-        return _resolve_actions_for_method(method, actions)[0]
-
-    resource_segment = match.group(2)
-    actions = RESOURCE_ACTION_MAP.get(resource_segment)
-    if not actions:
-        # Unknown resource segment — require admin:full (fail-safe)
-        return "admin:full"
-    return _resolve_actions_for_method(method, actions)[0]
+    resolved = resolve_action_and_resource(method, path)
+    return resolved[0] if resolved else None
 
 
 def resolve_action_and_resource(method: str, path: str) -> Optional[tuple[str, str]]:
-    """Resolve an HTTP method + path to a Cedar action and resource type.
-
-    Returns (action, resource_type) for org-scoped paths, e.g.
-    ("credentials:read", "Credential"), or None for non-org paths.
-    """
-    match = _ORG_PATH_RE.match(path)
-    if not match:
-        top_level = _TOP_LEVEL_PATH_RE.match(path)
-        if not top_level:
+    for pattern, method_map, resource_name in SPECIAL_ROUTE_RULES:
+        if pattern.match(path):
+            permission_key = method_map.get(method.upper())
+            if permission_key:
+                return (permission_key, resource_name)
             return None
-        actions = RESOURCE_ACTION_MAP.get(top_level.group(1))
-        if not actions:
-            return None
-        return _resolve_actions_for_method(method, actions)
 
-    resource_segment = match.group(2)
-    actions = RESOURCE_ACTION_MAP.get(resource_segment)
-    if not actions:
-        return ("admin:full", "Organization")
-    return _resolve_actions_for_method(method, actions)
+    org_match = re.match(rf"^/v1/organizations/{_UUID_RE}/([^/]+)", path)
+    if org_match:
+        return _resolve_generic_org_permission(method, org_match.group(2))
+
+    top_level_match = re.match(r"^/v1/([^/]+)(?:/|$)", path)
+    if top_level_match:
+        return _resolve_generic_org_permission(method, top_level_match.group(1))
+
+    return None
 
 
 def extract_org_id(path: str) -> Optional[str]:
-    """Extract organization ID from an org-scoped path.
-
-    Returns the org_id for paths like /v1/organizations/{uuid}/...,
-    or None for non-org-scoped paths.
-    """
     match = _ORG_PATH_RE.match(path)
-    return match.group(1) if match else None
+    if not match:
+        return None
+    uuid_match = re.match(rf"^/v1/organizations/{_UUID_RE}", path)
+    return uuid_match.group(1) if uuid_match else None
 
 
 def resolve_resource_lookup(path: str) -> Optional[tuple[str, str]]:
-    """Return the backend service/path used to look up a resource owner org.
-
-    This is used for top-level resource routes where the organization is not
-    embedded in the URL, e.g. ``/v1/application-templates/{id}``.
-    """
     match = _TOP_LEVEL_RESOURCE_RE.match(path)
     if not match:
         return None

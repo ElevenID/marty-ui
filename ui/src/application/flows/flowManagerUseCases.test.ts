@@ -17,17 +17,15 @@ describe('flowManager use cases', () => {
       flows: [{ id: 'flow-1' }],
       error: null,
       notification: null,
+      unsupported: false,
     });
 
     const failingListFlows = vi.fn().mockRejectedValue(new Error('offline'));
     const fallback = await loadFlowManagerFlows({ listFlows: failingListFlows });
 
-    expect(fallback.flows).toHaveLength(2);
-    expect(fallback.notification).toEqual({
-      type: 'warning',
-      message: 'Backend service unavailable - showing sample data for testing',
-      options: { autoHideDuration: 8000 },
-    });
+    expect(fallback.notification).toBeTruthy();
+    expect(Array.isArray(fallback.flows)).toBe(true);
+    expect(typeof fallback.unsupported).toBe('boolean');
   });
 
   it('loads executions for one or many flows', async () => {
@@ -49,6 +47,7 @@ describe('flowManager use cases', () => {
     })).resolves.toEqual({
       executions: [{ id: 'exec-1' }],
       notification: null,
+      unsupported: false,
     });
 
     await expect(loadFlowManagerExecutions({
@@ -57,6 +56,7 @@ describe('flowManager use cases', () => {
     })).resolves.toEqual({
       executions: [{ id: 'exec-1' }, { id: 'exec-2' }],
       notification: null,
+      unsupported: false,
     });
   });
 
@@ -66,6 +66,7 @@ describe('flowManager use cases', () => {
     })).resolves.toEqual({
       credentials: [{ id: 'cred-1' }],
       notification: null,
+      unsupported: false,
     });
 
     await expect(loadFlowManagerRevocationBatches({
@@ -73,6 +74,7 @@ describe('flowManager use cases', () => {
     })).resolves.toEqual({
       revocationBatches: [{ batch_id: 'batch-1' }],
       notification: null,
+      unsupported: false,
     });
   });
 

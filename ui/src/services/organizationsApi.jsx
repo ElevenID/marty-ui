@@ -26,6 +26,10 @@ export async function getOrganization(organizationId) {
  * @param {string} data.org_type - Organization type (e.g., 'enterprise', 'startup')
  * @param {string} [data.description] - Optional description
  * @param {string} [data.contact_email] - Optional contact email
+ * @param {string} [data.jurisdiction] - Optional jurisdiction code
+ * @param {boolean} [data.is_discoverable] - Whether the organization appears in discovery
+ * @param {string} [data.visibility] - PUBLIC or PRIVATE discovery visibility
+ * @param {string} [data.membership_mode] - invite_only, approval, or open
  * @returns {Promise<Object>} - Created organization object
  */
 export async function createOrganization(data) {
@@ -192,13 +196,13 @@ export async function getOrganizationMembers(organizationId) {
  * @param {string} organizationId - Organization ID
  * @param {Object} memberData - Member data
  * @param {string} memberData.userId - User ID to add
- * @param {string} memberData.role - Role ('owner', 'admin', 'member')
+ * @param {string[]} memberData.roleIds - Role IDs to assign
  * @returns {Promise<Object>} - Created member object
  */
-export async function addOrganizationMember(organizationId, { userId, role }) {
+export async function addOrganizationMember(organizationId, { userId, roleIds }) {
   return post(`${BASE_PATH}/${organizationId}/members`, {
     user_id: userId,
-    role,
+    role_ids: roleIds,
   });
 }
 
@@ -206,11 +210,11 @@ export async function addOrganizationMember(organizationId, { userId, role }) {
  * Update a member's role
  * @param {string} organizationId - Organization ID
  * @param {string} userId - User ID
- * @param {string} role - New role ('owner', 'admin', 'member')
+ * @param {string[]} roleIds - Role IDs to assign
  * @returns {Promise<Object>} - Updated member object
  */
-export async function updateOrganizationMember(organizationId, userId, role) {
-  return patch(`${BASE_PATH}/${organizationId}/members/${userId}`, { role });
+export async function updateOrganizationMember(organizationId, userId, roleIds) {
+  return patch(`${BASE_PATH}/${organizationId}/members/${userId}`, { role_ids: roleIds });
 }
 
 /**
@@ -263,13 +267,13 @@ export async function getOrganizationInvitations(organizationId) {
  * @param {string} organizationId - Organization ID
  * @param {Object} invitationData - Invitation data
  * @param {string} invitationData.email - Email to invite
- * @param {string} invitationData.role - Role for the invited user
+ * @param {string[]} invitationData.roleIds - Role IDs for the invited user
  * @returns {Promise<Object>} - Created invitation with invite code
  */
-export async function createOrganizationInvitation(organizationId, { email, role }) {
-  return post(`${BASE_PATH}/${organizationId}/invitations`, {
+export async function createOrganizationInvitation(organizationId, { email, roleIds }) {
+  return post(`${BASE_PATH}/${organizationId}/members`, {
     email,
-    role,
+    role_ids: roleIds,
   });
 }
 

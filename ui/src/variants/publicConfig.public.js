@@ -6,6 +6,7 @@ export const SHOW_PUBLIC_GET_STARTED_BUTTONS = true;
 export const DISABLE_PUBLIC_GET_STARTED_BUTTONS = false;
 export const SHOW_PUBLIC_PRICING_BUTTONS = true;
 export const DISABLE_PUBLIC_PRICING_BUTTONS = false;
+export const ENABLE_LEGACY_ADMIN_IMPERSONATION_BANNER = false;
 
 export const I18N_NAMESPACES = ['common', 'console', 'onboarding', 'forms', 'errors', 'applicant', 'vendor', 'marketing'];
 

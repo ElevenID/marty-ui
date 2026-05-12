@@ -27,6 +27,10 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import { useTranslation } from 'react-i18next';
 
+import { useAsyncData } from '../../../../hooks/useAsyncData';
+import { useAuth } from '../../../../hooks/useAuth';
+import { listRevocationProfiles } from '../../../../services/presentationPolicyApi';
+
 const getSigningAlgorithms = (t) => [
   { value: 'ES256', label: t('wizards.credentialTemplate.cryptoValidityStep.signingAlgorithm.labels.ES256') },
   { value: 'ES384', label: t('wizards.credentialTemplate.cryptoValidityStep.signingAlgorithm.labels.ES384') },
@@ -37,7 +41,16 @@ const getSigningAlgorithms = (t) => [
 
 const CryptoValidityStep = ({ data, onChange }) => {
   const { t } = useTranslation('console');
+  const { organizationId } = useAuth();
   const [showAdvanced, setShowAdvanced] = useState(false);
+
+  const { data: revocationProfiles = [] } = useAsyncData(
+    () =>
+      organizationId
+        ? listRevocationProfiles({ organization_id: organizationId })
+        : Promise.resolve([]),
+    [organizationId],
+  );
   
   const validity = data.validity_rules || {
     ttl_seconds: 31536000,
@@ -187,10 +200,12 @@ const CryptoValidityStep = ({ data, onChange }) => {
                 <MenuItem value="">
                   <em>{t('wizards.credentialTemplate.cryptoValidityStep.revocationProfile.none')}</em>
                 </MenuItem>
-                {/* TODO: Load actual revocation profiles when available */}
-                <MenuItem value="status-list" disabled>
-                  {t('wizards.credentialTemplate.cryptoValidityStep.revocationProfile.statusListComingSoon')}
-                </MenuItem>
+                {revocationProfiles.map((profile) => (
+                  <MenuItem key={profile.id} value={profile.id}>
+                    {profile.name}
+                    {profile.check_mode ? ` (${profile.check_mode.replace('_', ' ')})` : ''}
+                  </MenuItem>
+                ))}
               </Select>
               <FormHelperText>
                 {t('wizards.credentialTemplate.cryptoValidityStep.revocationProfile.helper')}

@@ -2,13 +2,17 @@ import { Navigate, Route, Routes } from 'react-router-dom';
 import { Box, CircularProgress, Typography } from '@mui/material';
 
 import { get } from '../../services/api';
-import ProtectedRoute, { ApplicantConsoleRoute, OrgConsoleRoute, VendorRoute } from '../../components/ProtectedRoute';
+import ProtectedRoute, { ApplicantConsoleRoute, OrgConsoleRoute } from '../../components/ProtectedRoute';
 import AuthCallback from '../../components/AuthCallback';
 import ProfilePage from '../../components/ProfilePage';
 import { ApplicationForm } from '../../components/applicant';
 import CredentialCatalog from '../../components/applicant/CredentialCatalog';
 import { AuthenticatedLayout } from '../../components/layouts';
 import BrowserRedirect from '../../components/BrowserRedirect';
+import MyOrganizationsPage from '../../components/pages/MyOrganizationsPage';
+import DiscoverOrganizationsPage from '../../components/pages/DiscoverOrganizationsPage';
+import JoinOrganizationPage from '../../components/pages/JoinOrganizationPage';
+import CreateOrganizationPage from '../../components/organizations/CreateOrganizationPage';
 import { useAuth } from '../../hooks/useAuth';
 import { useConsole, getDefaultLandingPath } from '../../contexts/ConsoleContext';
 import {
@@ -16,10 +20,12 @@ import {
   GuidedSetupWizard,
   TrustPage,
   TrustProfilesPage,
-  TrustedIssuersPage,
   RevocationProfilesPage,
+  RevocationProfileDetailPage,
+  RevocationProfileWizard,
   TrustProfileWizard,
   TrustProfileDetailPage,
+  TrustProfileEditPage,
   TemplatesPage,
   CredentialTemplatesPage,
   ApplicationTemplatesPage,
@@ -31,8 +37,11 @@ import {
   DeployPage,
   DeploymentProfilesPage,
   ApiKeysPage,
+  DidIdentitiesPage,
   LanesDevicesPage,
   DeploymentProfileWizard,
+  KeyManagementServiceWizard,
+  IssuerIdentityWizard,
   FlowsPage,
   FlowDefinitionsPage,
   FlowInstancesPage,
@@ -123,8 +132,11 @@ function ConsoleRoutes() {
         <Route path="trust/profiles" element={<TrustProfilesPage />} />
         <Route path="trust/profiles/new" element={<TrustProfileWizard />} />
         <Route path="trust/profiles/:id" element={<TrustProfileDetailPage />} />
-        <Route path="trust/issuers" element={<TrustedIssuersPage />} />
+        <Route path="trust/profiles/:id/edit" element={<TrustProfileEditPage />} />
+        <Route path="trust/issuers" element={<Navigate to="/console/org/trust/profiles" replace />} />
         <Route path="trust/revocation" element={<RevocationProfilesPage />} />
+        <Route path="trust/revocation/new" element={<RevocationProfileWizard />} />
+        <Route path="trust/revocation/:id" element={<RevocationProfileDetailPage />} />
         <Route path="templates" element={<TemplatesPage />} />
         <Route path="templates/credentials" element={<CredentialTemplatesPage />} />
         <Route path="templates/credentials/new" element={<CredentialTemplateWizard />} />
@@ -136,22 +148,34 @@ function ConsoleRoutes() {
         <Route path="deploy" element={<DeployPage />} />
         <Route path="deploy/profiles" element={<DeploymentProfilesPage />} />
         <Route path="deploy/profiles/new" element={<DeploymentProfileWizard />} />
-        <Route path="deploy/api-keys" element={<ApiKeysPage />} />
-        <Route path="deploy/signing-keys" element={<SigningKeysPage />} />
-        <Route path="deploy/signing-keys/settings" element={<SigningKeysPage />} />
+        <Route path="deploy/api-keys" element={<Navigate to="/console/org/api-keys" replace />} />
+        <Route path="deploy/issuer-identity" element={<DidIdentitiesPage />} />
+        <Route path="deploy/issuer-identity/new" element={<IssuerIdentityWizard />} />
+        <Route path="deploy/key-management" element={<SigningKeysPage />} />
+        <Route path="deploy/key-management/services" element={<Navigate to="/console/org/deploy/key-management" replace />} />
+        <Route path="deploy/key-management/services/new" element={<KeyManagementServiceWizard />} />
+        {/* Legacy redirects */}
+        <Route path="deploy/dids" element={<Navigate to="/console/org/deploy/issuer-identity" replace />} />
+        <Route path="deploy/signing-keys" element={<Navigate to="/console/org/deploy/key-management" replace />} />
+        <Route path="deploy/signing-keys/settings" element={<Navigate to="/console/org/deploy/key-management/services" replace />} />
+        <Route path="deploy/signing-keys/services/new" element={<Navigate to="/console/org/deploy/key-management/services/new" replace />} />
         <Route path="deploy/lanes" element={<LanesDevicesPage />} />
-        <Route path="deploy/webhooks" element={<WebhooksPage />} />
+        <Route path="deploy/webhooks" element={<Navigate to="/console/org/webhooks" replace />} />
         <Route path="flows" element={<FlowsPage />} />
         <Route path="flows/definitions" element={<FlowDefinitionsPage />} />
         <Route path="flows/definitions/new" element={<FlowDefinitionWizard />} />
         <Route path="flows/definitions/:flowId" element={<FlowDetailPage />} />
         <Route path="operate" element={<OperatePage />} />
         <Route path="operate/issuance" element={<IssuancePage />} />
+        <Route path="operate/issuance/:credentialId" element={<IssuancePage />} />
         <Route path="operate/applications" element={<ApplicationsPage />} />
         <Route path="operate/applications/:applicationId" element={<ApplicationReviewPage />} />
         <Route path="operate/flow-instances" element={<FlowInstancesPage />} />
+        <Route path="operate/flow-instances/:instanceId" element={<FlowInstancesPage />} />
         <Route path="operate/verify" element={<VerificationSessionsPage />} />
         <Route path="settings" element={<OrganizationSettingsPage />} />
+        <Route path="api-keys" element={<ApiKeysPage />} />
+        <Route path="webhooks" element={<WebhooksPage />} />
         <Route path="team" element={<TeamPage />} />
         <Route path="roles" element={<RolesPage />} />
         <Route path="notifications" element={<NotificationsPage />} />
@@ -164,9 +188,9 @@ function ConsoleRoutes() {
       <Route
         path="/console/org/setup"
         element={
-          <VendorRoute redirectTo="/login">
+          <ProtectedRoute redirectTo="/login">
             <AuthenticatedLayout />
-          </VendorRoute>
+          </ProtectedRoute>
         }
       >
         <Route index element={<OrgSetupPage />} />
@@ -190,6 +214,32 @@ function ConsoleRoutes() {
         <Route path="devices" element={<DeviceManagementPage />} />
         <Route path="settings" element={<ApplicantSettingsPage />} />
         <Route path="profile" element={<ProfilePage />} />
+      </Route>
+
+      <Route
+        path="/console/organizations"
+        element={
+          <ProtectedRoute redirectTo="/login">
+            <AuthenticatedLayout />
+          </ProtectedRoute>
+        }
+      >
+        <Route
+          index
+          element={
+            <MyOrganizationsPage
+              managePath="/console/organizations"
+              discoverPath="/console/organizations/discover"
+              joinPath="/console/organizations/join"
+            />
+          }
+        />
+        <Route path="discover" element={<DiscoverOrganizationsPage joinPath="/console/organizations/join" />} />
+        <Route
+          path="join"
+          element={<JoinOrganizationPage managePath="/console/organizations" discoverPath="/console/organizations/discover" />}
+        />
+        <Route path="create" element={<CreateOrganizationPage />} />
       </Route>
 
       <Route

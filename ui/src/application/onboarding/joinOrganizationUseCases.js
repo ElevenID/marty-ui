@@ -8,6 +8,11 @@ import {
   resolveJoinSelectedOrganizationSuccess,
 } from './joinOrganizationFlow';
 
+function shouldIgnoreJoinOrganizationSelectionError(error) {
+  const status = error?.status || error?.response?.status;
+  return [400, 401, 403, 404, 422].includes(status);
+}
+
 export async function validateJoinOrganizationInvitation({ inviteToken, validateOrganizationInvitation, getErrorMessage }) {
   try {
     const data = await validateOrganizationInvitation(inviteToken);
@@ -85,6 +90,20 @@ export async function loadJoinOrganizationSelection({ orgIdFromQuery, organizati
       error: null,
     };
   } catch (error) {
+    if ((organizations?.length || 0) > 0) {
+      return {
+        selectedOrg: null,
+        error: null,
+      };
+    }
+
+    if (shouldIgnoreJoinOrganizationSelectionError(error)) {
+      return {
+        selectedOrg: null,
+        error: null,
+      };
+    }
+
     return {
       selectedOrg: null,
       error: getJoinOrganizationErrorText(error, getErrorMessage, 'Failed to load organization details'),

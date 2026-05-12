@@ -25,38 +25,39 @@ CREDENTIAL_TYPES = [
     {
         "id": "marty-open-badge-credential-type",
         "name": "open_badge",
-        "description": "Open Badge 3.0 professional development certificate — education sector credential",
+        "description": "Open Badge 3.0-compatible membership credential — verifiable proof of active organization membership",
         "format": "ietf_sd_jwt",
         "schema_definition": {
             "required_fields": [
-                "given_name",
-                "family_name",
+                "member_id",
                 "email",
+                "organization_id",
+                "role",
                 "achievement_name",
-                "course_name",
-                "completion_date",
-                "institution_name",
+                "issued_at",
             ],
             "optional_fields": [
-                "certificate_id",
-                "grade",
-                "credit_hours",
+                "given_name",
+                "family_name",
+                "organization_name",
+                "achievement_description",
             ],
             "doctype": "org.openbadges.v3",
         },
         "display_config": {
-            "display_name": "Professional Certificate (Open Badge)",
+            "display_name": "Verified Member Badge",
             "is_published": True,
             "is_system_template": True,
             "is_active": True,
             "visibility": "public",
             "estimated_processing_time": "Instant",
             "description": (
-                "Open Badge 3.0 professional development certificate — "
-                "instantly issued, recognized by employers and institutions."
+                "Open Badge 3.0-compatible membership credential — "
+                "verifiable proof of active organization membership for "
+                "wallet-first sign-in and membership verification."
             ),
-            "icon": "school",
-            "category": "education",
+            "icon": "badge",
+            "category": "identity",
         },
         "validity_days": 365,
     },

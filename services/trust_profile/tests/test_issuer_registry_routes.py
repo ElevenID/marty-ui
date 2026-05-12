@@ -21,6 +21,12 @@ class FakeMembership:
     def has_role(self, *roles: str) -> bool:
         return any(role in self._roles for role in roles)
 
+    def has_permission(self, resource: str, action: str | None = None) -> bool:
+        if {"admin", "owner"} & self._roles:
+            return True
+        permission_key = resource if action is None else f"{resource}:{action}"
+        return permission_key in set()
+
 
 def _build_client(
     repo: trust_profile.InMemoryTrustProfileRepository,
@@ -465,4 +471,93 @@ def test_update_organization_trust_profile_requires_admin_membership():
     )
 
     assert response.status_code == 403
-    assert response.json()["detail"] == "Admin access required"
+    assert response.json()["detail"] == "Missing required permission: trust-profile:edit"
+
+
+def test_organization_trust_profile_key_management_round_trip_and_connection_test():
+    repo = trust_profile.InMemoryTrustProfileRepository()
+    asyncio.run(trust_profile._seed_system_frameworks(repo))
+    framework = asyncio.run(repo.get_framework_by_code("ICAO"))
+    assert framework is not None
+    client, _ = _build_client(repo)
+
+    create_response = client.post(
+        "/v1/organizations/org-1/trust-profiles",
+        headers={"x-user-id": "user-1"},
+        json={
+            "framework_id": framework.id,
+            "name": "Org ICAO Key Overlay",
+            "key_management": {
+                "source": "kms",
+                "kms_arn": "arn:aws:kms:us-east-1:123456789012:key/test",
+                "kms_region": "us-east-1",
+                "algorithm": "ES256",
+            },
+        },
+    )
+
+    assert create_response.status_code == 200
+    created = create_response.json()
+    assert created["key_management"]["source"] == "kms"
+    assert created["metadata"]["key_management"]["kms_arn"].startswith("arn:aws:kms")
+
+    connection_response = client.post(
+        f"/v1/organizations/org-1/trust-profiles/{created['id']}/test-key-connection",
+        headers={"x-user-id": "user-1"},
+        json={
+            "key_management": {
+                "source": "kms",
+                "kms_arn": "arn:aws:kms:us-east-1:123456789012:key/test",
+                "kms_region": "us-east-1",
+            }
+        },
+    )
+
+    assert connection_response.status_code == 200
+    connection = connection_response.json()
+    assert connection["success"] is True
+    assert connection["source"] == "kms"
+
+
+def test_organization_trust_profile_create_or_associate_key_sets_binding_metadata():
+    repo = trust_profile.InMemoryTrustProfileRepository()
+    asyncio.run(trust_profile._seed_system_frameworks(repo))
+    framework = asyncio.run(repo.get_framework_by_code("EUDI"))
+    assert framework is not None
+    client, _ = _build_client(repo)
+
+    create_response = client.post(
+        "/v1/organizations/org-1/trust-profiles",
+        headers={"x-user-id": "user-1"},
+        json={
+            "framework_id": framework.id,
+            "name": "Org EUDI Key Overlay",
+            "key_management": {
+                "source": "signing_agent",
+                "signing_agent_url": "https://signer.example",
+                "signing_agent_auth": "mtls",
+            },
+        },
+    )
+    assert create_response.status_code == 200
+    profile_id = create_response.json()["id"]
+
+    key_action_response = client.post(
+        f"/v1/organizations/org-1/trust-profiles/{profile_id}/create-or-associate-key",
+        headers={"x-user-id": "user-1"},
+        json={
+            "algorithm": "EdDSA",
+            "key_reference": "agent-key-123",
+        },
+    )
+
+    assert key_action_response.status_code == 200
+    payload = key_action_response.json()
+    assert payload["success"] is True
+    assert payload["action"] == "associated"
+    assert payload["source"] == "signing_agent"
+    assert payload["key_id"].startswith("key_")
+
+    saved_profile = asyncio.run(repo.get_organization_trust_profile(profile_id))
+    assert saved_profile is not None
+    assert saved_profile.metadata["key_binding"]["associated_reference"] == "agent-key-123"

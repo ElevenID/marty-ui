@@ -41,6 +41,7 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../../hooks/useAuth';
 import { usePayment } from '@marty/subscriptions';
 import { post } from '../../services/api';
+import { pickOfficialReference } from '../../utils/officialReferences';
 import {
   buildPaymentCheckoutInitialBillingInfo,
   initializePaymentCheckout,
@@ -73,6 +74,16 @@ const PaymentCheckout = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [receiptData, setReceiptData] = useState(null);
+  const applicationReference = pickOfficialReference({
+    reference: receiptData?.applicationReference,
+    rawId: receiptData?.applicationId,
+    kind: 'application',
+  });
+  const paymentReference = pickOfficialReference({
+    reference: receiptData?.paymentReference,
+    rawId: receiptData?.paymentId,
+    kind: 'payment',
+  });
   
   // Billing information
   const [billingInfo, setBillingInfo] = useState(buildPaymentCheckoutInitialBillingInfo(user));
@@ -456,19 +467,21 @@ const PaymentCheckout = () => {
           </Typography>
           <Divider sx={{ my: 2 }} />
           <List dense>
-            {receiptData?.applicationId && (
+            {(receiptData?.applicationId || receiptData?.applicationReference) && (
               <ListItem>
                 <ListItemText 
-                  primary="Application ID"
-                  secondary={receiptData.applicationId}
+                  primary="Application Reference"
+                  secondary={applicationReference}
+                  secondaryTypographyProps={{ fontFamily: 'monospace' }}
                 />
               </ListItem>
             )}
-            {receiptData?.paymentId && (
+            {(receiptData?.paymentId || receiptData?.paymentReference) && (
               <ListItem>
                 <ListItemText 
-                  primary="Payment ID"
-                  secondary={receiptData.paymentId}
+                  primary="Payment Reference"
+                  secondary={paymentReference}
+                  secondaryTypographyProps={{ fontFamily: 'monospace' }}
                 />
               </ListItem>
             )}

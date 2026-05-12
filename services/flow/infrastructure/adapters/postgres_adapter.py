@@ -1,6 +1,7 @@
 """
 PostgreSQL adapter for flow repository.
 """
+import logging
 from typing import TYPE_CHECKING
 
 from sqlalchemy import select, delete
@@ -10,6 +11,8 @@ if TYPE_CHECKING:
     from flow.main import FlowDefinition, FlowInstance, FlowInstanceArtifact, FlowStatus, FlowType, FlowInstanceStatus
 
 from flow.infrastructure.models import flow_definitions, flow_instances
+
+logger = logging.getLogger(__name__)
 
 
 def _serialize_preconditions_payload(flow: "FlowDefinition") -> dict:
@@ -31,6 +34,32 @@ def _deserialize_preconditions_payload(payload: list[str] | dict | None) -> tupl
     if isinstance(payload, dict):
         return payload.get("items", []) or [], payload.get("protocol", {}) or {}
     return payload or [], {}
+
+
+def _coerce_step_type(value):
+    from flow.main import StepType
+
+    normalized = str(value or StepType.USER_INPUT.value).strip().lower()
+    try:
+        return StepType(normalized)
+    except ValueError:
+        logger.warning("Unknown flow step_type '%s'; defaulting to '%s'", value, StepType.USER_INPUT.value)
+        return StepType.USER_INPUT
+
+
+def _coerce_transition_condition(value):
+    from flow.main import TransitionCondition
+
+    normalized = str(value or TransitionCondition.SUCCESS.value).strip().lower()
+    try:
+        return TransitionCondition(normalized)
+    except ValueError:
+        logger.warning(
+            "Unknown flow transition condition '%s'; defaulting to '%s'",
+            value,
+            TransitionCondition.SUCCESS.value,
+        )
+        return TransitionCondition.SUCCESS
 
 
 class PostgresFlowRepository:
@@ -152,7 +181,7 @@ class PostgresFlowRepository:
     
     async def get_definition(self, flow_id: str) -> "FlowDefinition | None":
         """Get a flow definition by ID."""
-        from flow.main import FlowDefinition, FlowStep, FlowTransition, StepType, TransitionCondition, _parse_flow_status, _parse_flow_type
+        from flow.main import FlowDefinition, FlowStep, FlowTransition, _parse_flow_status, _parse_flow_type
         
         async with self._session_factory() as session:
             result = await session.execute(
@@ -164,6 +193,9 @@ class PostgresFlowRepository:
                 return None
 
             preconditions, protocol_metadata = _deserialize_preconditions_payload(getattr(row, 'preconditions', None))
+
+            steps_payload = row.steps if isinstance(row.steps, list) else []
+            transitions_payload = row.transitions if isinstance(row.transitions, list) else []
             
             # Deserialize steps
             steps = [
@@ -171,13 +203,14 @@ class PostgresFlowRepository:
                     id=step_data.get("id", ""),
                     name=step_data.get("name", ""),
                     description=step_data.get("description"),
-                    step_type=StepType(step_data.get("step_type", "user_input")),
+                    step_type=_coerce_step_type(step_data.get("step_type")),
                     config=step_data.get("config", {}),
                     timeout_seconds=step_data.get("timeout_seconds"),
                     conditions=step_data.get("conditions", []),
                     approval_strategy=step_data.get("approval_strategy"),
                 )
-                for step_data in row.steps
+                for step_data in steps_payload
+                if isinstance(step_data, dict)
             ]
             
             # Deserialize transitions
@@ -186,10 +219,11 @@ class PostgresFlowRepository:
                     id=trans_data.get("id", ""),
                     from_step_id=trans_data.get("from_step_id", ""),
                     to_step_id=trans_data.get("to_step_id", ""),
-                    condition=TransitionCondition(trans_data.get("condition", "success")),
+                    condition=_coerce_transition_condition(trans_data.get("condition")),
                     condition_expression=trans_data.get("condition_expression"),
                 )
-                for trans_data in row.transitions
+                for trans_data in transitions_payload
+                if isinstance(trans_data, dict)
             ]
             
             return FlowDefinition(
@@ -223,7 +257,7 @@ class PostgresFlowRepository:
     
     async def list_definitions(self, org_id: str) -> list["FlowDefinition"]:
         """List all flow definitions for an organization."""
-        from flow.main import FlowDefinition, FlowStep, FlowTransition, StepType, TransitionCondition, _parse_flow_status, _parse_flow_type
+        from flow.main import FlowDefinition, FlowStep, FlowTransition, _parse_flow_status, _parse_flow_type
         
         async with self._session_factory() as session:
             result = await session.execute(
@@ -236,19 +270,22 @@ class PostgresFlowRepository:
             definitions = []
             for row in rows:
                 preconditions, protocol_metadata = _deserialize_preconditions_payload(getattr(row, 'preconditions', None))
+                steps_payload = row.steps if isinstance(row.steps, list) else []
+                transitions_payload = row.transitions if isinstance(row.transitions, list) else []
                 # Deserialize steps
                 steps = [
                     FlowStep(
                         id=step_data.get("id", ""),
                         name=step_data.get("name", ""),
                         description=step_data.get("description"),
-                        step_type=StepType(step_data.get("step_type", "user_input")),
+                        step_type=_coerce_step_type(step_data.get("step_type")),
                         config=step_data.get("config", {}),
                         timeout_seconds=step_data.get("timeout_seconds"),
                         conditions=step_data.get("conditions", []),
                         approval_strategy=step_data.get("approval_strategy"),
                     )
-                    for step_data in row.steps
+                    for step_data in steps_payload
+                    if isinstance(step_data, dict)
                 ]
                 
                 # Deserialize transitions
@@ -257,10 +294,11 @@ class PostgresFlowRepository:
                         id=trans_data.get("id", ""),
                         from_step_id=trans_data.get("from_step_id", ""),
                         to_step_id=trans_data.get("to_step_id", ""),
-                        condition=TransitionCondition(trans_data.get("condition", "success")),
+                        condition=_coerce_transition_condition(trans_data.get("condition")),
                         condition_expression=trans_data.get("condition_expression"),
                     )
-                    for trans_data in row.transitions
+                    for trans_data in transitions_payload
+                    if isinstance(trans_data, dict)
                 ]
                 
                 definitions.append(

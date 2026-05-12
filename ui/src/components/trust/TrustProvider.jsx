@@ -97,7 +97,7 @@ export const TrustProvider = ({ children, config = {}, organizationId = null }) 
    */
   const updateTrustProfile = useCallback(async (updates) => {
     if (!currentOrgId) {
-      throw new Error('No organization ID set');
+      throw new Error('Organization context is not set');
     }
 
     setLoading(true);
@@ -140,7 +140,7 @@ export const TrustProvider = ({ children, config = {}, organizationId = null }) 
    */
   const uploadCertificates = useCallback(async (certificates) => {
     if (!currentOrgId) {
-      throw new Error('No organization ID set');
+      throw new Error('Organization context is not set');
     }
 
     setLoading(true);
@@ -167,7 +167,7 @@ export const TrustProvider = ({ children, config = {}, organizationId = null }) 
    */
   const generateKey = useCallback(async (options = {}) => {
     if (!currentOrgId) {
-      throw new Error('No organization ID set');
+      throw new Error('Organization context is not set');
     }
 
     setLoading(true);
@@ -194,7 +194,7 @@ export const TrustProvider = ({ children, config = {}, organizationId = null }) 
    */
   const testKeyConnection = useCallback(async (keyConfig) => {
     if (!currentOrgId) {
-      throw new Error('No organization ID set');
+      throw new Error('Organization context is not set');
     }
 
     return trustService.testKeyConnection(currentOrgId, keyConfig);

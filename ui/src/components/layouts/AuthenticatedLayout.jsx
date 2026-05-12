@@ -6,14 +6,41 @@
  */
 
 import { useState } from 'react';
-import { Outlet } from 'react-router-dom';
-import { Box, useTheme, useMediaQuery } from '@mui/material';
+import { Outlet, useLocation } from 'react-router-dom';
+import { Box, Button, Alert, Typography, useTheme, useMediaQuery } from '@mui/material';
 import { SidebarNavigation } from '../navigation/index.js';
 import { ConsoleHeaderBar } from '../navigation/ConsoleHeaderBar';
 import { useAuth } from '../../hooks/useAuth';
+import ErrorBoundary from '../ErrorBoundary';
 
-const DRAWER_WIDTH = 260;
 const HEADER_HEIGHT = 64;
+
+function ConsoleContentFallback({ error, onRetry }) {
+  return (
+    <Box sx={{ py: 2 }}>
+      <Alert
+        severity="error"
+        sx={{ mb: 2 }}
+        action={
+          <Button color="inherit" size="small" onClick={onRetry}>
+            Retry
+          </Button>
+        }
+      >
+        This page hit an unexpected error. You can retry or continue using sidebar navigation.
+      </Alert>
+      {import.meta.env.DEV && error && (
+        <Typography
+          variant="body2"
+          color="text.secondary"
+          sx={{ fontFamily: 'monospace', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
+        >
+          {String(error)}
+        </Typography>
+      )}
+    </Box>
+  );
+}
 
 /**
  * Main layout for authenticated users
@@ -24,6 +51,7 @@ function AuthenticatedLayout({ children }) {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('md'));
   const { isAdministrator, isVendor, isApplicant } = useAuth();
+  const location = useLocation();
 
   // Debug logging
   console.log('[AuthenticatedLayout] Rendering');
@@ -70,12 +98,13 @@ function AuthenticatedLayout({ children }) {
           sx={{
             flexGrow: 1,
             p: 3,
-            width: { md: `calc(100% - ${DRAWER_WIDTH}px)` },
             minHeight: '100%',
             bgcolor: 'background.default',
           }}
         >
-          {children || <Outlet />}
+          <ErrorBoundary key={location.pathname} FallbackComponent={ConsoleContentFallback}>
+            {children || <Outlet />}
+          </ErrorBoundary>
         </Box>
       </Box>
     </Box>

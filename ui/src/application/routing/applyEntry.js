@@ -4,7 +4,20 @@
 
 export const APPLY_CONTEXT_STORAGE_KEY = 'applyContext';
 export const APPLY_JOIN_ORG_STORAGE_KEY = 'joinOrgId';
+export const APPLY_LOCATION_STATE_STORAGE_KEY = 'applyLocationState';
 export const APPLY_CONTEXT_MAX_AGE_MS = 5 * 60 * 1000;
+
+function serializeApplyLocationState(locationState) {
+  if (!locationState) {
+    return null;
+  }
+
+  try {
+    return JSON.stringify(locationState);
+  } catch {
+    return null;
+  }
+}
 
 /**
  * @param {{
@@ -65,13 +78,17 @@ export function getApplyEntryDecision({
     search,
     now,
   });
+  const serializedLocationState = serializeApplyLocationState(locationState);
+  const applyStateStorage = serializedLocationState
+    ? { [APPLY_LOCATION_STATE_STORAGE_KEY]: serializedLocationState }
+    : {};
 
   if (!isAuthenticated) {
     return {
       kind: 'redirect-browser',
       context,
       loginUrl: getApplyLoginRedirectUrl(context.returnUrl),
-      storage: {},
+      storage: applyStateStorage,
     };
   }
 
@@ -83,6 +100,7 @@ export function getApplyEntryDecision({
       navigationState: null,
       storage: {
         [APPLY_JOIN_ORG_STORAGE_KEY]: orgId,
+        ...applyStateStorage,
       },
     };
   }
@@ -93,7 +111,7 @@ export function getApplyEntryDecision({
       context,
       destination: `/console/applicant/apply/${credentialType}`,
       navigationState: locationState || null,
-      storage: {},
+      storage: applyStateStorage,
     };
   }
 
@@ -102,6 +120,6 @@ export function getApplyEntryDecision({
     context,
     destination: '/console/applicant/catalog',
     navigationState: null,
-    storage: {},
+    storage: applyStateStorage,
   };
 }

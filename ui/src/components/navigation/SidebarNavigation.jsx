@@ -34,6 +34,7 @@ import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
 import StarIcon from '@mui/icons-material/Star';
 import PersonIcon from '@mui/icons-material/Person';
 import BusinessIcon from '@mui/icons-material/Business';
+import LogoutIcon from '@mui/icons-material/Logout';
 import Badge from '@mui/material/Badge';
 import { useAuth } from '../../hooks/useAuth';
 import { usePermissions } from '../../hooks/usePermissions';
@@ -43,6 +44,7 @@ import { ADMIN_VENDOR_NAV, APPLICANT_NAV, findActiveNavItem } from '../../config
 
 const DRAWER_WIDTH = 260;
 const DRAWER_WIDTH_COLLAPSED = 72;
+const HEADER_HEIGHT = 64;
 
 /**
  * Navigation Item Component
@@ -65,11 +67,16 @@ function NavItem({ item, isActive, isChildActive, expanded, onToggle, collapsed,
 
   const handleClick = useCallback(() => {
     if (hasChildren) {
+      if (collapsed && item.path) {
+        navigate(item.path);
+        return;
+      }
+
       onToggle(item.id);
     } else {
       navigate(item.path);
     }
-  }, [hasChildren, item.id, item.path, navigate, onToggle]);
+  }, [collapsed, hasChildren, item.id, item.path, navigate, onToggle]);
 
   const isItemActive = isActive || isChildActive;
 
@@ -109,6 +116,7 @@ function NavItem({ item, isActive, isChildActive, expanded, onToggle, collapsed,
         <Tooltip title={collapsed ? item.label : ''} placement="right" arrow>
           <ListItemButton
             onClick={handleClick}
+            aria-label={item.label}
             data-testid={`sidebar.nav.${item.id}`}
             sx={{
               minHeight: isPrimary ? 52 : 48,
@@ -179,28 +187,26 @@ function NavItem({ item, isActive, isChildActive, expanded, onToggle, collapsed,
         <Collapse in={expanded} timeout="auto" unmountOnExit>
           <List component="div" disablePadding>
             {item.children.map((child) => {
-              const childActive = isChildActive && child.path === location.pathname;
+              const childActive = isChildActive
+                && (child.path === location.pathname || location.pathname.startsWith(`${child.path}/`));
               const childColors = child.primary 
                 ? {
                     textColor: childActive ? 'primary.main' : 'primary.dark',
-                    iconColor: childActive ? 'primary.main' : 'primary.light',
                   }
                 : isDesignSection
                 ? {
                     textColor: childActive ? 'text.primary' : 'text.secondary',
-                    iconColor: childActive ? 'text.primary' : 'text.disabled',
                   }
                 : {
                     textColor: childActive ? 'primary.main' : 'text.secondary',
-                    iconColor: childActive ? 'primary.main' : 'text.secondary',
                   };
-              
-              const ChildIcon = child.icon;
+
               return (
                 <ListItem key={child.id} disablePadding>
                   <ListItemButton
                     component={Link}
                     to={child.path}
+                    aria-current={childActive ? 'page' : undefined}
                     data-testid={`sidebar.nav.${child.id}`}
                     sx={{
                       pl: 6,
@@ -212,30 +218,6 @@ function NavItem({ item, isActive, isChildActive, expanded, onToggle, collapsed,
                       },
                     }}
                   >
-                    {ChildIcon && (
-                      <ListItemIcon
-                        sx={{
-                          minWidth: 0,
-                          mr: 2,
-                          justifyContent: 'center',
-                          color: childColors.iconColor,
-                          position: 'relative',
-                        }}
-                      >
-                        <ChildIcon fontSize="small" />
-                        {child.primary && (
-                          <StarIcon
-                            sx={{
-                              position: 'absolute',
-                              top: -4,
-                              right: -4,
-                              fontSize: 10,
-                              color: 'primary.main',
-                            }}
-                          />
-                        )}
-                      </ListItemIcon>
-                    )}
                     <ListItemText
                       primary={child.label}
                       sx={{
@@ -265,21 +247,30 @@ function SidebarNavigation({ mobileOpen, onMobileClose }) {
   const location = useLocation();
   const navigate = useNavigate();
   const isMobile = useMediaQuery(theme.breakpoints.down('md'));
-  const { isAdministrator, isVendor, isApplicant, organizationId } = useAuth();
+  const { isAdministrator, isVendor, isApplicant, organizationId, logout } = useAuth();
   const { mode, setMode, activeOrgId, memberships, isOrgConsoleAvailable, isApplicantConsoleAvailable, isOrgBlocked } = useConsole();
   const isJoinOnlyMode = memberships.length === 0;
   const showConsoleSwitcher = isApplicantConsoleAvailable && isOrgConsoleAvailable;
 
+  // System/sentinel org IDs that backend policy blocks member-level operations on.
+  const SYSTEM_ORG_IDS = new Set(['00000000-0000-0000-0000-000000000001']);
+
   // Badge counts fetched from API
   const [badgeCounts, setBadgeCounts] = useState({});
   useEffect(() => {
-    if (!organizationId) return;
+    const fallbackOrgId = SYSTEM_ORG_IDS.has(organizationId) ? null : organizationId;
+    const effectiveOrgId = activeOrgId || fallbackOrgId;
+    if (mode !== 'applicant' || !effectiveOrgId) {
+      setBadgeCounts({});
+      return;
+    }
+
     let mounted = true;
-    getApplicantStats(organizationId).then((stats) => {
+    getApplicantStats(effectiveOrgId).then((stats) => {
       if (mounted) setBadgeCounts({ applications: stats.pending || 0 });
     });
     return () => { mounted = false; };
-  }, [organizationId]);
+  }, [activeOrgId, mode, organizationId]);
 
   // Collapsed state for desktop — persisted so mode switches don't reset it
   const [collapsed, setCollapsed] = useState(() => {
@@ -356,6 +347,7 @@ function SidebarNavigation({ mobileOpen, onMobileClose }) {
         display: 'flex',
         flexDirection: 'column',
         height: '100%',
+        minHeight: 0,
         bgcolor: 'background.paper',
       }}
     >
@@ -443,6 +435,8 @@ function SidebarNavigation({ mobileOpen, onMobileClose }) {
       <List
         sx={{
           flex: 1,
+          minHeight: 0,
+          overflowY: 'auto',
           pt: 1,
           // Disable navigation when org console is blocked
           opacity: isOrgBlocked ? 0.5 : 1,
@@ -469,6 +463,22 @@ function SidebarNavigation({ mobileOpen, onMobileClose }) {
         <>
           <Divider />
           <Box sx={{ p: 2 }}>
+            {isMobile && (
+              <Box sx={{ display: 'grid', gap: 1, mb: 2 }}>
+                <Button
+                  startIcon={<LogoutIcon />}
+                  variant="contained"
+                  fullWidth
+                  onClick={() => {
+                    onMobileClose();
+                    logout();
+                  }}
+                  sx={{ justifyContent: 'flex-start', textTransform: 'none' }}
+                >
+                  Sign out
+                </Button>
+              </Box>
+            )}
             <Typography variant="caption" color="text.secondary">
               Need help?{' '}
               <Link to="/docs" style={{ color: theme.palette.primary.main }}>
@@ -489,12 +499,16 @@ function SidebarNavigation({ mobileOpen, onMobileClose }) {
         open={mobileOpen}
         onClose={onMobileClose}
         ModalProps={{ keepMounted: true }}
-        sx={{
-          display: { xs: 'block', md: 'none' },
-          '& .MuiDrawer-paper': {
+        PaperProps={{
+          sx: {
             boxSizing: 'border-box',
             width: DRAWER_WIDTH,
+            top: HEADER_HEIGHT,
+            height: `calc(100% - ${HEADER_HEIGHT}px)`,
           },
+        }}
+        sx={{
+          display: { xs: 'block', md: 'none' },
         }}
       >
         {drawerContent}
@@ -508,17 +522,27 @@ function SidebarNavigation({ mobileOpen, onMobileClose }) {
       variant="permanent"
       sx={{
         width: collapsed ? DRAWER_WIDTH_COLLAPSED : DRAWER_WIDTH,
+        position: 'sticky',
+        top: HEADER_HEIGHT,
+        alignSelf: 'flex-start',
+        height: `calc(100vh - ${HEADER_HEIGHT}px)`,
+        minHeight: 0,
         flexShrink: 0,
+        '&.MuiDrawer-docked': {
+          height: `calc(100vh - ${HEADER_HEIGHT}px)`,
+        },
         '& .MuiDrawer-paper': {
           width: collapsed ? DRAWER_WIDTH_COLLAPSED : DRAWER_WIDTH,
           boxSizing: 'border-box',
-          position: 'relative',
+          position: 'static',
           height: '100%',
+          minHeight: 0,
           transition: theme.transitions.create('width', {
             easing: theme.transitions.easing.sharp,
             duration: theme.transitions.duration.enteringScreen,
           }),
           overflowX: 'hidden',
+          overflowY: 'hidden',
         },
       }}
     >

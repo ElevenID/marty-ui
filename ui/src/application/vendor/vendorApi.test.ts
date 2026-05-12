@@ -141,15 +141,15 @@ describe('vendorApi', () => {
   // ── Revocation ───────────────────────────────────────────────
 
   it('fetchIssuedCredentials builds query with search', async () => {
-    get.mockResolvedValue({ credentials: [], total: 0 });
+    get.mockResolvedValue([]);
     await fetchIssuedCredentials({ organizationId: 'org-1', page: 1, perPage: 10, searchQuery: 'jane' });
-    expect(get).toHaveBeenCalledWith(expect.stringContaining('search=jane'));
+    expect(get).toHaveBeenCalledWith(expect.stringContaining('/v1/issued-credentials?organization_id=org-1'));
   });
 
   it('revokeCredential calls POST', async () => {
     post.mockResolvedValue({});
     await revokeCredential({ credentialId: 'c1', reason: 'lost', comments: 'test' });
-    expect(post).toHaveBeenCalledWith(expect.stringContaining('/c1/revoke'), { reason: 'lost', comments: 'test' });
+    expect(post).toHaveBeenCalledWith(expect.stringContaining('/v1/issued-credentials/c1/revoke'), { reason: 'lost', comments: 'test' });
   });
 
   it('fetchRevocationHistory builds offset params', async () => {

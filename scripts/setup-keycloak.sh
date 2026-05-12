@@ -26,7 +26,23 @@ GOOGLE_SEC="${GOOGLE_CLIENT_SECRET:-}"
 PUBLIC_DOMAIN="${PUBLIC_DOMAIN:-}"
 UI_BASE_URL="${UI_BASE_URL:-}"
 MARTY_API_SECRET="${MARTY_API_CLIENT_SECRET:-}"
+MARTY_ORG_NAME="${MARTY_ORG_NAME:-Marty}"
+MARTY_ORG_DOMAIN="${MARTY_ORG_DOMAIN:-${PUBLIC_DOMAIN:-marty.local}}"
+MARTY_ORG_ADMIN_EMAIL="$(printf '%s' "${MARTY_ORG_ADMIN_EMAIL:-}" | tr '[:upper:]' '[:lower:]' | tr -d '\r')"
 KCADM="${KCADM_PATH:-/opt/keycloak/bin/kcadm.sh}"
+
+KEYCLOAK_USER_REGISTRATION_ENABLED="${KEYCLOAK_USER_REGISTRATION_ENABLED:-true}"
+KEYCLOAK_VERIFY_EMAIL="${KEYCLOAK_VERIFY_EMAIL:-false}"
+KEYCLOAK_RESET_PASSWORD_ENABLED="${KEYCLOAK_RESET_PASSWORD_ENABLED:-true}"
+KEYCLOAK_SOCIAL_LOGIN_ENABLED="${KEYCLOAK_SOCIAL_LOGIN_ENABLED:-true}"
+KEYCLOAK_SMTP_HOST="${KEYCLOAK_SMTP_HOST:-${SMTP_HOST:-}}"
+KEYCLOAK_SMTP_PORT="${KEYCLOAK_SMTP_PORT:-${SMTP_PORT:-1025}}"
+KEYCLOAK_SMTP_FROM="${KEYCLOAK_SMTP_FROM:-${SMTP_FROM:-noreply@marty.demo}}"
+KEYCLOAK_SMTP_FROM_DISPLAY_NAME="${KEYCLOAK_SMTP_FROM_DISPLAY_NAME:-${SMTP_FROM_DISPLAY_NAME:-Marty Trust Services}}"
+KEYCLOAK_SMTP_USERNAME="${KEYCLOAK_SMTP_USERNAME:-${SMTP_USERNAME:-}}"
+KEYCLOAK_SMTP_PASSWORD="${KEYCLOAK_SMTP_PASSWORD:-${SMTP_PASSWORD:-}}"
+KEYCLOAK_SMTP_SSL="${KEYCLOAK_SMTP_SSL:-${SMTP_SSL:-false}}"
+KEYCLOAK_SMTP_STARTTLS="${KEYCLOAK_SMTP_STARTTLS:-${SMTP_STARTTLS:-false}}"
 
 # Retry configuration
 MAX_RETRIES=60
@@ -99,6 +115,33 @@ array_contains() {
     echo "$haystack" | grep -qF "$needle"
 }
 
+normalize_bool() {
+    local raw default normalized
+    raw="$1"
+    default="$2"
+    normalized="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]')"
+    case "$normalized" in
+        true|1|yes|y|on) echo "true" ;;
+        false|0|no|n|off) echo "false" ;;
+        *) echo "$default" ;;
+    esac
+}
+
+kcadm_secret_safe() {
+    local output
+    local exit_code
+
+    if output=$("$KCADM" "$@" 2>&1); then
+        echo "$output"
+        return 0
+    else
+        exit_code=$?
+        log_error "kcadm command failed while applying secret-bearing configuration (exit $exit_code)"
+        log_error "Output: $output"
+        return "$exit_code"
+    fi
+}
+
 # ─── Main Setup ──────────────────────────────────────────────────────────────
 main() {
     log_info "=== Keycloak Setup Starting ==="
@@ -108,13 +151,111 @@ main() {
     echo ""
     
     authenticate_keycloak
+    configure_realm_login_settings
+    configure_realm_smtp_settings
     configure_google_idp
     configure_google_picture_mapper
     configure_profile_scope_picture_mapper
     configure_marty_ui_redirect_uris
     configure_marty_api_secret
+    ensure_marty_org_exists
+    ensure_marty_org_admin_role
     
     log_success "=== Keycloak Setup Complete ==="
+}
+
+find_user_id_by_email() {
+    local email="$1"
+    local payload
+    payload=$(kcadm_safe get users -r "$REALM" -q "email=${email}" --fields id,email 2>/dev/null || echo "")
+    echo "$payload" | tr -d '\n' | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
+}
+
+get_realm_role_id() {
+    local role_name="$1"
+    local payload
+    payload=$(kcadm_safe get "roles/${role_name}" -r "$REALM" 2>/dev/null || echo "")
+    echo "$payload" | tr -d '\n' | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
+}
+
+ensure_marty_org_exists() {
+    log_info "Ensuring Keycloak organization exists: ${MARTY_ORG_NAME}"
+
+    local orgs
+    orgs=$(kcadm_safe get organizations -r "$REALM" 2>/dev/null || echo "[]")
+    if echo "$orgs" | tr -d '\n' | grep -q "\"name\"[[:space:]]*:[[:space:]]*\"${MARTY_ORG_NAME}\""; then
+        log_success "Keycloak organization already present: ${MARTY_ORG_NAME}"
+        return 0
+    fi
+
+        local payload
+        payload=$(create_temp_file)
+        cat > "$payload" <<EOF
+{
+    "name": "${MARTY_ORG_NAME}",
+    "enabled": true,
+    "domains": [
+        {
+            "name": "${MARTY_ORG_DOMAIN}",
+            "verified": true
+        }
+    ]
+}
+EOF
+
+        if kcadm_safe create organizations -r "$REALM" -f "$payload" > /dev/null; then
+        log_success "Created Keycloak organization: ${MARTY_ORG_NAME}"
+    else
+        log_warning "Could not create Keycloak organization '${MARTY_ORG_NAME}' (may already exist or org API unavailable)"
+    fi
+}
+
+ensure_marty_org_admin_role() {
+    if [ -z "$MARTY_ORG_ADMIN_EMAIL" ]; then
+        log_info "MARTY_ORG_ADMIN_EMAIL not set — skipping Keycloak admin role bootstrap"
+        return 0
+    fi
+
+    log_info "Ensuring Keycloak administrator role for ${MARTY_ORG_ADMIN_EMAIL}"
+
+    local user_id
+    user_id=$(find_user_id_by_email "$MARTY_ORG_ADMIN_EMAIL")
+    if [ -z "$user_id" ]; then
+        log_warning "User ${MARTY_ORG_ADMIN_EMAIL} not found in Keycloak yet — role will be applied after first login"
+        return 0
+    fi
+
+    local role_id
+    role_id=$(get_realm_role_id "administrator")
+    if [ -z "$role_id" ]; then
+        log_error "Realm role 'administrator' not found in realm ${REALM}"
+        return 1
+    fi
+
+    local current_roles
+    current_roles=$(kcadm_safe get "users/${user_id}/role-mappings/realm" -r "$REALM" 2>/dev/null || echo "[]")
+    if echo "$current_roles" | tr -d '\n' | grep -q '"name"[[:space:]]*:[[:space:]]*"administrator"'; then
+        log_success "Keycloak user already has administrator role: ${MARTY_ORG_ADMIN_EMAIL}"
+        return 0
+    fi
+
+    local role_payload
+    role_payload=$(create_temp_file)
+    cat > "$role_payload" <<EOF
+[
+  {
+    "id": "${role_id}",
+    "name": "administrator"
+  }
+]
+EOF
+
+    if kcadm_safe create "users/${user_id}/role-mappings/realm" -r "$REALM" -f "$role_payload" > /dev/null; then
+        log_success "Granted Keycloak administrator role to ${MARTY_ORG_ADMIN_EMAIL}"
+    else
+        log_error "Failed to grant Keycloak administrator role to ${MARTY_ORG_ADMIN_EMAIL}"
+        return 1
+    fi
 }
 
 # ─── Authentication ──────────────────────────────────────────────────────────
@@ -138,8 +279,82 @@ authenticate_keycloak() {
     exit 1
 }
 
+# ─── Realm Login & Email Settings ────────────────────────────────────────────
+configure_realm_login_settings() {
+    local registration_enabled verify_email reset_password_enabled
+    registration_enabled="$(normalize_bool "$KEYCLOAK_USER_REGISTRATION_ENABLED" true)"
+    verify_email="$(normalize_bool "$KEYCLOAK_VERIFY_EMAIL" false)"
+    reset_password_enabled="$(normalize_bool "$KEYCLOAK_RESET_PASSWORD_ENABLED" true)"
+
+    log_info "Patching realm login settings (registration=${registration_enabled}, verifyEmail=${verify_email}, resetPassword=${reset_password_enabled})"
+
+    if kcadm_safe update "realms/${REALM}" \
+        -s "registrationAllowed=${registration_enabled}" \
+        -s "verifyEmail=${verify_email}" \
+        -s "resetPasswordAllowed=${reset_password_enabled}"; then
+        log_success "Realm login settings configured"
+    else
+        log_error "Failed to configure realm login settings"
+        return 1
+    fi
+}
+
+configure_realm_smtp_settings() {
+    if [ -z "$KEYCLOAK_SMTP_HOST" ]; then
+        if [ "$(normalize_bool "$KEYCLOAK_VERIFY_EMAIL" false)" = "true" ]; then
+            log_warning "KEYCLOAK_VERIFY_EMAIL=true but no KEYCLOAK_SMTP_HOST/SMTP_HOST configured"
+        else
+            log_info "No Keycloak SMTP host configured — preserving imported realm SMTP settings"
+        fi
+        return 0
+    fi
+
+    local smtp_auth smtp_ssl smtp_starttls
+    smtp_auth="false"
+    if [ -n "$KEYCLOAK_SMTP_USERNAME" ] || [ -n "$KEYCLOAK_SMTP_PASSWORD" ]; then
+        smtp_auth="true"
+    fi
+    smtp_ssl="$(normalize_bool "$KEYCLOAK_SMTP_SSL" false)"
+    smtp_starttls="$(normalize_bool "$KEYCLOAK_SMTP_STARTTLS" false)"
+
+    log_info "Patching realm SMTP settings (host=${KEYCLOAK_SMTP_HOST}, port=${KEYCLOAK_SMTP_PORT}, auth=${smtp_auth}, ssl=${smtp_ssl}, starttls=${smtp_starttls})"
+
+    local args=(
+        update "realms/${REALM}"
+        -s "smtpServer.host=${KEYCLOAK_SMTP_HOST}"
+        -s "smtpServer.port=${KEYCLOAK_SMTP_PORT}"
+        -s "smtpServer.from=${KEYCLOAK_SMTP_FROM}"
+        -s "smtpServer.fromDisplayName=${KEYCLOAK_SMTP_FROM_DISPLAY_NAME}"
+        -s "smtpServer.auth=${smtp_auth}"
+        -s "smtpServer.ssl=${smtp_ssl}"
+        -s "smtpServer.starttls=${smtp_starttls}"
+    )
+    if [ -n "$KEYCLOAK_SMTP_USERNAME" ]; then
+        args+=(-s "smtpServer.user=${KEYCLOAK_SMTP_USERNAME}")
+    fi
+    if [ -n "$KEYCLOAK_SMTP_PASSWORD" ]; then
+        args+=(-s "smtpServer.password=${KEYCLOAK_SMTP_PASSWORD}")
+    fi
+
+    if kcadm_secret_safe "${args[@]}"; then
+        log_success "Realm SMTP settings configured"
+    else
+        log_error "Failed to configure realm SMTP settings"
+        return 1
+    fi
+}
+
 # ─── Google Identity Provider ────────────────────────────────────────────────
 configure_google_idp() {
+    local social_enabled
+    social_enabled="$(normalize_bool "$KEYCLOAK_SOCIAL_LOGIN_ENABLED" true)"
+    if [ "$social_enabled" != "true" ]; then
+        log_info "KEYCLOAK_SOCIAL_LOGIN_ENABLED=false — disabling Google IdP if present"
+        kcadm_safe update identity-provider/instances/google -r "$REALM" -s enabled=false > /dev/null || \
+            log_warning "Google IdP not found or could not be disabled"
+        return 0
+    fi
+
     if [ -z "$GOOGLE_CID" ]; then
         log_warning "GOOGLE_CLIENT_ID not set — skipping Google IdP configuration"
         return 0
@@ -149,6 +364,7 @@ configure_google_idp() {
     
     if kcadm_safe update identity-provider/instances/google \
         -r "$REALM" \
+        -s enabled=true \
         -s "config.clientId=${GOOGLE_CID}" \
         -s "config.clientSecret=${GOOGLE_SEC}"; then
         log_success "Google IdP configured (clientId: ${GOOGLE_CID:0:20}...)"

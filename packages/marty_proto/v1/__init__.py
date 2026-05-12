@@ -7,7 +7,17 @@ service startup when a service requests one stub (for example
 
 from __future__ import annotations
 
+import sys
 from importlib import import_module
+from pathlib import Path
+
+# The generated ``*_pb2_grpc.py`` modules use sibling imports like
+# ``import organization_service_pb2`` rather than package-relative imports.
+# Make the package directory importable as a top-level lookup target so those
+# generated imports resolve consistently in local runs and container images.
+_PACKAGE_DIR = Path(__file__).resolve().parent
+if str(_PACKAGE_DIR) not in sys.path:
+	sys.path.insert(0, str(_PACKAGE_DIR))
 
 _SUBMODULES = {
 	"auth_service_pb2",

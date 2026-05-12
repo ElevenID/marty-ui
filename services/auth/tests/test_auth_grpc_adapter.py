@@ -9,9 +9,10 @@ from unittest.mock import AsyncMock, MagicMock
 import grpc
 import pytest
 
-from auth.domain.entities import AuthenticatedUser, Session, UserType
+from auth.domain.entities import AuthenticatedUser, OIDCUserInfo, Session, UserType
 from auth.application.ports import ValidateSessionQuery
 from auth.infrastructure.adapters.grpc_adapter import AuthServiceGrpc
+from auth.infrastructure.adapters.user_provisioning_adapter import MARTY_ORG_ID
 from marty_proto.v1 import auth_service_pb2
 
 
@@ -49,6 +50,8 @@ def _build_servicer(**overrides) -> AuthServiceGrpc:
         session_use_case=MagicMock(),
         session_repository=MagicMock(),
         redis_client=AsyncMock(),
+        user_provisioning=None,
+        applicant_profile_provisioner=None,
     )
     defaults.update(overrides)
     return AuthServiceGrpc(**defaults)
@@ -205,6 +208,162 @@ class TestCredentialVerified:
         assert resp.status == "completed"
         repo.save.assert_awaited_once()
         redis.delete.assert_awaited()
+
+    async def test_successful_verification_enriches_user_with_provisioned_org(self, ctx):
+        redis = AsyncMock()
+        redis.get = AsyncMock(return_value=json.dumps({"state": "pending"}))
+        redis.setex = AsyncMock()
+        redis.delete = AsyncMock()
+        repo = MagicMock()
+        repo.save = AsyncMock()
+        provisioned_user = _make_user(
+            user_id="prov-user-1",
+            user_type=UserType.APPLICANT,
+            roles=["applicant", "admin"],
+            organization_id=MARTY_ORG_ID,
+            organization_name="Marty Identity Platform",
+            applicant_id="prov-app-1",
+        )
+        user_provisioning = MagicMock()
+        user_provisioning.provision_user = AsyncMock(return_value=provisioned_user)
+        servicer = _build_servicer(
+            session_repository=repo,
+            redis_client=redis,
+            user_provisioning=user_provisioning,
+        )
+
+        req = auth_service_pb2.CredentialVerifiedRequest(
+            nonce="nonce-124",
+            decision="allow",
+            result="success",
+            verified_claims={
+                "email": "alice@example.com",
+                "given_name": "Alice",
+                "member_id": "member-123",
+            },
+        )
+        resp = await servicer.CredentialVerified(req, ctx)
+
+        assert resp.ok is True
+        saved_session = repo.save.call_args[0][0]
+        assert saved_session.user.organization_id == MARTY_ORG_ID
+        assert saved_session.user.organization_name == "Marty Identity Platform"
+        assert saved_session.user.applicant_id == "member-123"
+        assert "admin" in saved_session.user.roles
+
+    async def test_successful_verification_uses_keycloak_admin_fallback_when_token_exchange_unavailable(self, ctx):
+        redis = AsyncMock()
+        redis.get = AsyncMock(return_value=json.dumps({"state": "pending"}))
+        redis.setex = AsyncMock()
+        redis.delete = AsyncMock()
+        repo = MagicMock()
+        repo.save = AsyncMock()
+        kc_admin = MagicMock()
+        kc_admin.get_existing_verified_user_id = AsyncMock(return_value="kc-user-1")
+        kc_admin.get_or_create_user = AsyncMock(return_value="created-user-should-not-be-used")
+        kc_admin.exchange_token_for_user = AsyncMock(return_value=None)
+        kc_admin.get_user_info = AsyncMock(return_value=OIDCUserInfo(
+            sub="kc-user-1",
+            email="alice@example.com",
+            preferred_username="kc-alice",
+            organization={MARTY_ORG_ID: {"name": "Marty Identity Platform"}},
+            organization_id=MARTY_ORG_ID,
+            organization_name="Marty Identity Platform",
+            roles=["administrator", "organization-admin"],
+        ))
+        servicer = _build_servicer(
+            session_repository=repo,
+            redis_client=redis,
+            kc_admin_adapter=kc_admin,
+        )
+
+        req = auth_service_pb2.CredentialVerifiedRequest(
+            nonce="nonce-125",
+            decision="allow",
+            result="success",
+            verified_claims={
+                "email": "alice@example.com",
+                "preferred_username": "badge-alice",
+            },
+        )
+        resp = await servicer.CredentialVerified(req, ctx)
+
+        assert resp.ok is True
+        saved_session = repo.save.call_args[0][0]
+        assert saved_session.user.username == "badge-alice"
+        assert saved_session.user.organization_id == MARTY_ORG_ID
+        assert saved_session.user.organization == {MARTY_ORG_ID: {"name": "Marty Identity Platform"}}
+        assert "administrator" in saved_session.user.roles
+        kc_admin.get_existing_verified_user_id.assert_awaited_once_with(
+            email="alice@example.com",
+            username="badge-alice",
+        )
+        kc_admin.get_or_create_user.assert_not_awaited()
+        kc_admin.get_user_info.assert_awaited_once_with("kc-user-1")
+
+    async def test_verification_denies_when_existing_keycloak_user_required_but_missing(self, ctx, monkeypatch):
+        monkeypatch.setenv("CREDENTIAL_LOGIN_REQUIRE_EXISTING_KEYCLOAK_USER", "true")
+        redis = AsyncMock()
+        redis.get = AsyncMock(return_value=json.dumps({"state": "pending"}))
+        redis.setex = AsyncMock()
+        redis.delete = AsyncMock()
+        repo = MagicMock()
+        repo.save = AsyncMock()
+        kc_admin = MagicMock()
+        kc_admin.get_existing_verified_user_id = AsyncMock(return_value=None)
+        kc_admin.get_or_create_user = AsyncMock(return_value="created-user-should-not-be-used")
+        servicer = _build_servicer(
+            session_repository=repo,
+            redis_client=redis,
+            kc_admin_adapter=kc_admin,
+        )
+
+        req = auth_service_pb2.CredentialVerifiedRequest(
+            nonce="nonce-127",
+            decision="allow",
+            result="success",
+            verified_claims={"email": "alice@example.com"},
+        )
+        resp = await servicer.CredentialVerified(req, ctx)
+
+        assert resp.ok is True
+        assert resp.status == "denied"
+        repo.save.assert_not_awaited()
+        kc_admin.get_or_create_user.assert_not_awaited()
+        redis.setex.assert_awaited_once()
+        assert json.loads(redis.setex.call_args.args[2])["reason"] == "keycloak_user_not_found"
+
+    async def test_successful_verification_defaults_to_marty_org_and_syncs_applicant_profile(self, ctx):
+        redis = AsyncMock()
+        redis.get = AsyncMock(return_value=json.dumps({"state": "pending"}))
+        redis.setex = AsyncMock()
+        redis.delete = AsyncMock()
+        repo = MagicMock()
+        repo.save = AsyncMock()
+        applicant_profile_provisioner = AsyncMock(return_value="applicant-42")
+        servicer = _build_servicer(
+            session_repository=repo,
+            redis_client=redis,
+            applicant_profile_provisioner=applicant_profile_provisioner,
+        )
+
+        req = auth_service_pb2.CredentialVerifiedRequest(
+            nonce="nonce-126",
+            decision="allow",
+            result="success",
+            verified_claims={
+                "email": "alice@example.com",
+                "given_name": "Alice",
+                "family_name": "Smith",
+            },
+        )
+        resp = await servicer.CredentialVerified(req, ctx)
+
+        assert resp.ok is True
+        saved_session = repo.save.call_args[0][0]
+        assert saved_session.user.organization_id == MARTY_ORG_ID
+        assert saved_session.user.applicant_id == "applicant-42"
+        applicant_profile_provisioner.assert_awaited_once()
 
     async def test_expired_nonce(self, ctx):
         redis = AsyncMock()

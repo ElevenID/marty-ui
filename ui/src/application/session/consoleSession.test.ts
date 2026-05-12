@@ -3,6 +3,7 @@ import {
   getDefaultLandingPath,
   isOrgConsoleBlocked,
   normalizeConsolePreferences,
+  resolveApplicantOrganizationId,
   resolveActiveOrgSelection,
   resolveConsoleBootstrap,
   resolveModeChange,
@@ -43,6 +44,26 @@ describe('consoleSession helpers', () => {
       mode: 'applicant',
       activeOrgId: null,
     })
+  })
+
+  it('resolves the applicant organization from fetched organizations when no explicit default is present', () => {
+    expect(
+      resolveApplicantOrganizationId({
+        defaultOrganizationId: null,
+        currentOrganizationId: null,
+        organizations: [{ id: 'org-1' }, { id: 'org-2' }],
+      })
+    ).toBe('org-1')
+  })
+
+  it('keeps the current applicant organization when it still exists in fetched organizations', () => {
+    expect(
+      resolveApplicantOrganizationId({
+        defaultOrganizationId: null,
+        currentOrganizationId: 'org-2',
+        organizations: [{ id: 'org-1' }, { id: 'org-2' }],
+      })
+    ).toBe('org-2')
   })
 
   it('resolves mode changes to applicant mode', () => {

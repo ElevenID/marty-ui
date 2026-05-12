@@ -32,8 +32,50 @@ const getFormatLabel = (t, format) => {
   return t(key, { defaultValue: format });
 };
 
+const getRevocationLabel = (t, mode) => {
+  const normalizedMode = String(mode || 'HARD_FAIL').toUpperCase();
+  const key = `wizards.trustProfile.reviewStep.values.revocation.${normalizedMode.toLowerCase()}`;
+  return t(key, { defaultValue: normalizedMode.replaceAll('_', ' ') });
+};
+
+const formatSeconds = (seconds) => {
+  const value = Number(seconds || 0);
+
+  if (value % 86400 === 0) {
+    const days = value / 86400;
+    return `${days} day${days === 1 ? '' : 's'}`;
+  }
+
+  if (value % 3600 === 0) {
+    const hours = value / 3600;
+    return `${hours} hour${hours === 1 ? '' : 's'}`;
+  }
+
+  if (value % 60 === 0) {
+    const minutes = value / 60;
+    return `${minutes} minute${minutes === 1 ? '' : 's'}`;
+  }
+
+  return `${value} seconds`;
+};
+
 const ReviewStep = ({ data, onChange, onEdit }) => {
   const { t } = useTranslation('console');
+  const allowAllIssuers = data.allow_all_issuers === true;
+  const hasTrustSourcesConfigured = (data.trusted_issuers?.length || 0) > 0 || (data.trust_sources?.length || 0) > 0;
+  const emptyTrustSummaryKey = allowAllIssuers
+    ? 'wizards.trustProfile.reviewStep.trustSourcesSummary.noneConfiguredAllowAll'
+    : 'wizards.trustProfile.reviewStep.trustSourcesSummary.noneConfigured';
+  const emptyTrustSummaryDefault = allowAllIssuers
+    ? 'No trust sources are configured. This profile is explicitly set to trust any issuer that passes cryptographic validation.'
+    : 'No trust sources are configured. This profile will trust no issuers until trust sources are added.';
+  const timePolicy = {
+    clock_skew_seconds: 300,
+    require_freshness: false,
+    freshness_window_seconds: 86400,
+    ...(data.time_policy || {}),
+  };
+  const supportedWallets = data.supported_wallet_ids || [];
 
   return (
     <Box>
@@ -44,12 +86,10 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
         {t('wizards.trustProfile.reviewStep.description')}
       </Typography>
 
-      {(data.trusted_issuers?.length || 0) === 0 && (
-        <Alert severity="warning" sx={{ mb: 2 }}>
+      {!hasTrustSourcesConfigured && (
+        <Alert severity={allowAllIssuers ? 'warning' : 'info'} sx={{ mb: 2 }}>
           <Typography variant="body2">
-            {t('wizards.trustProfile.reviewStep.trustSourcesRequired', {
-              defaultValue: 'Add at least one trusted issuer before creating this trust profile.',
-            })}
+            {t(emptyTrustSummaryKey, { defaultValue: emptyTrustSummaryDefault })}
           </Typography>
         </Alert>
       )}
@@ -128,9 +168,16 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
                   <ListItem key={index} sx={{ px: 0 }}>
                     <ListItemText
                       primary={
-                        <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: '0.875rem' }}>
-                          {issuer.did}
-                        </Typography>
+                        issuer.certificate_pem ? (
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                            <Chip label="X.509" size="small" color="warning" />
+                            <Typography variant="body2">{issuer.name || 'Root CA Certificate'}</Typography>
+                          </Box>
+                        ) : (
+                          <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: '0.875rem' }}>
+                            {issuer.did}
+                          </Typography>
+                        )
                       }
                     />
                   </ListItem>
@@ -146,7 +193,7 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
             </Box>
           ) : (
             <Typography variant="body2" color="text.secondary">
-              {t('wizards.trustProfile.reviewStep.trustSourcesSummary.noneConfigured')}
+              {t(emptyTrustSummaryKey, { defaultValue: emptyTrustSummaryDefault })}
             </Typography>
           )}
       </ReviewSectionCard>
@@ -193,6 +240,71 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
                   ? t('wizards.trustProfile.reviewStep.values.required')
                   : t('wizards.trustProfile.reviewStep.values.notRequired')}
               />
+            </Grid>
+
+            <Grid item xs={12} md={6}>
+              <ReviewField
+                label={t(
+                  'wizards.trustProfile.reviewStep.fields.revocationStrategy',
+                  { defaultValue: 'Revocation strategy' },
+                )}
+                value={getRevocationLabel(t, data.revocation_policy?.check_mode)}
+              />
+            </Grid>
+
+            <Grid item xs={12} md={6}>
+              <ReviewField
+                label={t(
+                  'wizards.trustProfile.reviewStep.fields.clockSkew',
+                  { defaultValue: 'Clock skew tolerance' },
+                )}
+                value={formatSeconds(timePolicy.clock_skew_seconds)}
+              />
+            </Grid>
+
+            <Grid item xs={12} md={6}>
+              <ReviewField
+                label={t(
+                  'wizards.trustProfile.reviewStep.fields.credentialFreshness',
+                  { defaultValue: 'Credential freshness' },
+                )}
+                value={timePolicy.require_freshness
+                  ? `${t('wizards.trustProfile.reviewStep.values.required')} (${formatSeconds(timePolicy.freshness_window_seconds)})`
+                  : t('wizards.trustProfile.reviewStep.values.notRequired')}
+              />
+            </Grid>
+
+            <Grid item xs={12}>
+              <ReviewField
+                label={t(
+                  'wizards.trustProfile.reviewStep.fields.issuanceProtocol',
+                  { defaultValue: 'Issuance protocol' },
+                )}
+                value={String(data.issuance_protocol || 'oid4vci').toUpperCase()}
+              />
+            </Grid>
+
+            <Grid item xs={12}>
+              <Typography variant="subtitle2" color="text.secondary" gutterBottom>
+                {t(
+                  'wizards.trustProfile.reviewStep.fields.supportedWallets',
+                  { defaultValue: 'Supported wallets' },
+                )}
+              </Typography>
+              {supportedWallets.length > 0 ? (
+                <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+                  {supportedWallets.map((walletId) => (
+                    <Chip key={walletId} label={walletId} size="small" />
+                  ))}
+                </Box>
+              ) : (
+                <Typography variant="body2" color="text.secondary">
+                  {t(
+                    'wizards.trustProfile.reviewStep.values.allCompatibleWallets',
+                    { defaultValue: 'No wallet targeting configured' },
+                  )}
+                </Typography>
+              )}
             </Grid>
           </Grid>
       </ReviewSectionCard>

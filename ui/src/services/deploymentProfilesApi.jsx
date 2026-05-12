@@ -6,9 +6,21 @@
  */
 
 import { get, post, patch, del } from './api';
-import { buildTruthyQueryString, withQuery } from './queryUtils';
+import { buildDefinedQueryString, withQuery } from './queryUtils';
 
 const BASE_PATH = '/v1/deployment-profiles';
+
+const resolveOrganizationId = (filters = {}) => {
+  if (filters?.organization_id) {
+    return filters.organization_id;
+  }
+
+  try {
+    return window.localStorage.getItem('activeOrgId') || null;
+  } catch {
+    return null;
+  }
+};
 
 /**
  * Create a new deployment profile
@@ -23,7 +35,10 @@ const BASE_PATH = '/v1/deployment-profiles';
  * @returns {Promise<Object>} Created deployment profile
  */
 export const createDeploymentProfile = async (profileData) => {
-  return post(BASE_PATH, profileData);
+  return post(BASE_PATH, {
+    ...profileData,
+    organization_id: profileData?.organization_id || resolveOrganizationId(),
+  });
 };
 
 /**
@@ -34,7 +49,8 @@ export const createDeploymentProfile = async (profileData) => {
  * @returns {Promise<Array>} List of deployment profiles
  */
 export const listDeploymentProfiles = async (filters = {}) => {
-  const queryString = buildTruthyQueryString({
+  const queryString = buildDefinedQueryString({
+    organization_id: resolveOrganizationId(filters),
     limit: filters.limit,
     offset: filters.offset,
   });

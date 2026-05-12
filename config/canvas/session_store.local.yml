@@ -1,0 +1,12 @@
+# Local-only Canvas session cookie settings for HTTP localhost testing.
+# This file is mounted into the canvas-real container as config/session_store.yml.
+#
+# Why: Canvas initializer defaults `same_site: :none`, which modern browsers
+# require to be paired with `Secure=true`. On plain HTTP localhost this leads to
+# CSRF/session mismatches (`Invalid Authenticity Token`) during login.
+
+production:
+  session_store: encrypted_cookie_store
+  expire_after: 86400
+  same_site: Lax
+  secure: false

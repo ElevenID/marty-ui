@@ -30,6 +30,7 @@ import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../../../hooks/useAuth';
 import { listApplicationTemplates } from '../../../services/applicationTemplatesApi';
+import { listCredentialTemplates } from '../../../services/presentationPolicyApi';
 import { ResourcePage, EmptyState, EmptyStates, StatusChip } from '../../common';
 import CheckConfigurationDialog from './CheckConfigurationDialog';
 
@@ -41,6 +42,25 @@ function ApplicationTemplatesPage() {
     const data = await listApplicationTemplates(organizationId);
     return data || [];
   }, [organizationId]);
+
+  const { data: credentialTemplates = [] } = useAsyncData(async () => {
+    if (!organizationId) return [];
+    const result = await listCredentialTemplates({ organization_id: organizationId });
+    const items = Array.isArray(result) ? result : (result?.items || []);
+    return items;
+  }, [organizationId]);
+
+  const credentialTemplateNameById = Object.fromEntries(
+    (Array.isArray(credentialTemplates) ? credentialTemplates : []).map((ct) => [ct.id, ct.name])
+  );
+  const credentialTemplateClaimsCountById = Object.fromEntries(
+    (Array.isArray(credentialTemplates) ? credentialTemplates : []).map((ct) => {
+      const claimsCount = Array.isArray(ct?.claims)
+        ? ct.claims.length
+        : (typeof ct?.claims === 'number' ? ct.claims : 0);
+      return [ct.id, claimsCount];
+    })
+  );
   const checksDialog = useDialog();
 
   const getTemplatesTabs = () => [
@@ -56,6 +76,14 @@ function ApplicationTemplatesPage() {
 
   const handleChecksSaved = () => {
     reload();
+  };
+
+  const getTemplateFieldsCount = (template) => {
+    if (Array.isArray(template?.form_fields) && template.form_fields.length > 0) {
+      return template.form_fields.length;
+    }
+
+    return credentialTemplateClaimsCountById[template?.credential_template_id] || 0;
   };
 
   return (
@@ -111,8 +139,10 @@ function ApplicationTemplatesPage() {
                         </Typography>
                       )}
                     </TableCell>
-                    <TableCell>{template.credential_template_id || '—'}</TableCell>
-                    <TableCell align="right">{(template.form_fields || []).length}</TableCell>
+                    <TableCell>
+                      {credentialTemplateNameById[template.credential_template_id] || template.credential_template_id || '—'}
+                    </TableCell>
+                    <TableCell align="right">{getTemplateFieldsCount(template)}</TableCell>
                     <TableCell>
                       <Box sx={{ display: 'flex', gap: 0.5, alignItems: 'center' }}>
                         {(template.required_checks || []).length === 0 ? (

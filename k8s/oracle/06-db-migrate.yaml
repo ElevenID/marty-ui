@@ -48,6 +48,8 @@ spec:
               value: /run/secrets/license_key
             - name: LICENSE_PUBLIC_KEY_FILE
               value: /run/secrets/license_public_key
+            - name: OPENBAO_SERVICE_TOKEN_FILE
+              value: /run/secrets/openbao_service_token
           volumeMounts:
             - name: selfhost-secret-files
               mountPath: /run/secrets

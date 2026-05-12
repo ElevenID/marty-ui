@@ -33,6 +33,10 @@ export function parseOrganizationClaim(orgClaim) {
   };
 }
 
+function getOrganizationDisplayName(organization) {
+  return organization?.display_name || organization?.displayName || organization?.name || null;
+}
+
 /**
  * Normalize capabilities into a capability map.
  *
@@ -72,37 +76,149 @@ export function deriveCapabilities(rawUser, organizations = []) {
   const roles = rawUser?.roles || [];
   const fromApi = normalizeCapabilities(rawUser?.capabilities);
   const hasOrganizations = organizations.length > 0;
+  const hasAdminRole = roles.includes('admin') || roles.includes('administrator');
+  const hasOrgRole = roles.some((role) => ['vendor', 'org_admin', 'organization-admin'].includes(role));
+  const roleDerivedCapabilities = {
+    'org:view': hasOrganizations || hasOrgRole || hasAdminRole,
+    'org:manage': hasOrgRole || hasAdminRole,
+    'org:issue': hasOrgRole || hasAdminRole,
+    'admin:platform': hasAdminRole,
+  };
 
   return {
-    apply: true,
-    'org:view': hasOrganizations || roles.includes('vendor') || roles.includes('administrator'),
-    'org:manage': roles.includes('vendor') || roles.includes('administrator'),
-    'org:issue': roles.includes('vendor') || roles.includes('administrator'),
-    'admin:platform': roles.includes('administrator'),
+    apply: fromApi.apply !== undefined ? Boolean(fromApi.apply) : true,
     ...fromApi,
+    'org:view': Boolean(fromApi['org:view']) || roleDerivedCapabilities['org:view'],
+    'org:manage': Boolean(fromApi['org:manage']) || roleDerivedCapabilities['org:manage'],
+    'org:issue': Boolean(fromApi['org:issue']) || roleDerivedCapabilities['org:issue'],
+    'admin:platform': Boolean(fromApi['admin:platform']) || roleDerivedCapabilities['admin:platform'],
   };
 }
 
 /**
- * Fallback memberships when the organization endpoint is unavailable.
+ * Fallback memberships when the organizations endpoint is empty or unavailable.
  *
  * @param {Object|null|undefined} rawUser
  * @param {{ organizations: Array<{id: string, name: string|null}> }} [parsedClaim]
- * @returns {Array<{id: string, name: string|null}>}
+ * @returns {Array<{id: string, name: string|null, display_name?: string|null}>}
  */
 export function getFallbackOrganizations(rawUser, parsedClaim = parseOrganizationClaim(rawUser?.organization)) {
   if (parsedClaim.organizations.length > 0) {
-    return parsedClaim.organizations;
+    return parsedClaim.organizations.map((organization) => ({
+      ...organization,
+      display_name: organization.name || null,
+    }));
   }
 
   if (rawUser?.organization_id) {
     return [{
       id: rawUser.organization_id,
       name: rawUser.organization_name || null,
+      display_name: rawUser.organization_name || null,
     }];
   }
 
   return [];
+}
+
+const APPLICANT_ONLY_PERMISSIONS = new Set([
+  'organization:view',
+  'credential-template:view',
+  'application-template:view',
+  'application:view',
+  'issuance:view',
+]);
+
+const ORG_CONSOLE_ROLES = new Set([
+  'owner',
+  'admin',
+  'administrator',
+  'vendor',
+  'org_admin',
+  'organization-admin',
+  'access_admin',
+  'catalog_admin',
+  'reviewer',
+  'operator',
+  'viewer',
+]);
+
+function rawUserHasOrgAuthority(rawUser) {
+  const roles = rawUser?.roles || [];
+  return roles.some((role) => ORG_CONSOLE_ROLES.has(role)) || ['administrator', 'vendor'].includes(rawUser?.user_type);
+}
+
+function isClaimedKeycloakOrganization(rawUser, orgId) {
+  if (!orgId) {
+    return false;
+  }
+  const parsed = parseOrganizationClaim(rawUser?.organization);
+  return parsed.organizations.some((organization) => organization.id === orgId) || rawUser?.organization_id === orgId;
+}
+
+function promoteKeycloakOrganizationMembership(rawUser, organization) {
+  if (!rawUserHasOrgAuthority(rawUser) || !isClaimedKeycloakOrganization(rawUser, organization?.id)) {
+    return organization;
+  }
+
+  return {
+    ...organization,
+    membership: {
+      ...(organization.membership || {}),
+      has_org_console_access: true,
+    },
+  };
+}
+
+export function membershipHasOrgConsoleAccess(organization) {
+  const membership = organization?.membership;
+
+  if (!membership) {
+    return true;
+  }
+
+  if (membership.has_org_console_access || membership.is_owner) {
+    return true;
+  }
+
+  const roleNames = (membership.roles || []).map((role) => role?.name).filter(Boolean);
+  if (roleNames.some((roleName) => ORG_CONSOLE_ROLES.has(roleName))) {
+    return true;
+  }
+
+  const permissions = membership.permissions || [];
+  return permissions.some((permission) => !APPLICANT_ONLY_PERMISSIONS.has(permission));
+}
+
+export function getConsoleEligibleOrganizations(organizations = []) {
+  if (!Array.isArray(organizations)) {
+    return [];
+  }
+
+  return organizations.filter((organization) => membershipHasOrgConsoleAccess(organization));
+}
+
+function mergeFetchedAndClaimOrganizations(rawUser, fetchedOrganizations = []) {
+  const fallbackOrganizations = getFallbackOrganizations(rawUser);
+  if (!Array.isArray(fetchedOrganizations) || fetchedOrganizations.length === 0) {
+    return fallbackOrganizations;
+  }
+
+  const byId = new Map(fallbackOrganizations.map((organization) => [organization.id, organization]));
+  for (const organization of fetchedOrganizations) {
+    const claimOrganization = byId.get(organization.id);
+    const merged = claimOrganization
+      ? {
+        ...claimOrganization,
+        ...organization,
+        name: organization.name || claimOrganization.name,
+        display_name: organization.display_name || claimOrganization.display_name || claimOrganization.name,
+      }
+      : organization;
+    byId.set(organization.id, promoteKeycloakOrganizationMembership(rawUser, merged));
+  }
+
+  return Array.from(byId.values());
 }
 
 /**
@@ -113,11 +229,7 @@ export function getFallbackOrganizations(rawUser, parsedClaim = parseOrganizatio
  * @returns {Array<{id: string, name: string|null}>}
  */
 export function resolveUserOrganizations(rawUser, fetchedOrganizations) {
-  if (Array.isArray(fetchedOrganizations) && fetchedOrganizations.length > 0) {
-    return fetchedOrganizations;
-  }
-
-  return getFallbackOrganizations(rawUser);
+  return mergeFetchedAndClaimOrganizations(rawUser, fetchedOrganizations);
 }
 
 /**
@@ -134,8 +246,44 @@ export function resolveActiveOrganization({ storedOrgId, organizations = [], raw
     organizations.find((entry) => entry.id === storedOrgId) ||
     organizations[0] ||
     (rawUser?.organization_id
-      ? { id: rawUser.organization_id, name: rawUser.organization_name || null }
-      : null)
+      ? {
+        id: rawUser.organization_id,
+        name: rawUser.organization_name || null,
+        display_name: rawUser.organization_name || null,
+      }
+      : null) ||
+    null
+  );
+}
+
+function resolveDefaultApplicantOrganization({ rawUser, organizations = [], activeOrganization }) {
+  const explicitDefaultOrgId = rawUser?.default_organization_id || null;
+  const explicitDefaultOrganization = explicitDefaultOrgId
+    ? organizations.find((entry) => entry.id === explicitDefaultOrgId)
+      || {
+        id: explicitDefaultOrgId,
+        name: rawUser?.default_organization_name || null,
+        display_name: rawUser?.default_organization_name || null,
+      }
+    : null;
+
+  const claimedOrganization = rawUser?.organization_id
+    ? organizations.find((entry) => entry.id === rawUser.organization_id) || null
+    : null;
+
+  return (
+    explicitDefaultOrganization ||
+    claimedOrganization ||
+    organizations[0] ||
+    activeOrganization ||
+    (rawUser?.organization_id
+      ? {
+        id: rawUser.organization_id,
+        name: rawUser.organization_name || null,
+        display_name: rawUser.organization_name || null,
+      }
+      : null) ||
+    null
   );
 }
 
@@ -158,11 +306,18 @@ export function createEnrichedUser(rawUser, fetchedOrganizations, storedOrgId) {
     organizations,
     rawUser,
   });
+  const defaultApplicantOrganization = resolveDefaultApplicantOrganization({
+    rawUser,
+    organizations,
+    activeOrganization,
+  });
 
   return {
     ...rawUser,
     organization_id: activeOrganization?.id || null,
-    organization_name: activeOrganization?.name || null,
+    organization_name: getOrganizationDisplayName(activeOrganization),
+    default_organization_id: defaultApplicantOrganization?.id || null,
+    default_organization_name: getOrganizationDisplayName(defaultApplicantOrganization),
     organizations,
     capabilities: deriveCapabilities(rawUser, organizations),
   };
@@ -199,10 +354,26 @@ export function updateUserActiveOrganization(previousUser, orgId) {
     ...(orgId ? { 'org:view': true } : {}),
   };
 
+  const nextOrganizationId = resolvedOrganization?.id || null;
+  const nextOrganizationName = resolvedOrganization
+    ? (getOrganizationDisplayName(resolvedOrganization) || previousUser.organization_name || null)
+    : null;
+
+  // Preserve referential stability when the requested org is already active so
+  // auth/bootstrap effects do not keep retriggering on identical state writes.
+  if (
+    (previousUser.organization_id || null) === nextOrganizationId &&
+    (previousUser.organization_name || null) === nextOrganizationName &&
+    nextMemberships === memberships &&
+    (!orgId || previousUser.capabilities?.['org:view'] === true)
+  ) {
+    return previousUser;
+  }
+
   return {
     ...previousUser,
-    organization_id: resolvedOrganization?.id || null,
-    organization_name: resolvedOrganization?.name || previousUser.organization_name,
+    organization_id: nextOrganizationId,
+    organization_name: nextOrganizationName,
     organizations: nextMemberships,
     capabilities: nextCapabilities,
   };
@@ -220,7 +391,7 @@ export function getAuthFlags(user) {
   const hasCapability = (capability) => Boolean(capabilities[capability]);
 
   return {
-    isAdministrator: hasCapability('admin:platform') || roles.includes('administrator'),
+    isAdministrator: hasCapability('admin:platform') || roles.includes('administrator') || roles.includes('admin'),
     isVendor: hasCapability('org:view') || hasCapability('org:manage') || roles.includes('vendor'),
     isApplicant: Boolean(user),
     capabilities,

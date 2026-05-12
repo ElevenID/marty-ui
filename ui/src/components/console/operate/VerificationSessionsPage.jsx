@@ -1,4 +1,3 @@
-import { Box } from '@mui/material';
 import { useTranslation } from 'react-i18next';
 import VerificationSessionManager from '../../vendor/verification/VerificationSessionManager';
 import { ResourcePage } from '../../common';
@@ -25,11 +24,7 @@ function VerificationSessionsPage() {
       tabs={getOperateTabs(t)}
       breadcrumbs={getBreadcrumbs(t)}
     >
-      <Box sx={{ mx: -3, mt: -2 }}>
-        <Box sx={{ px: 3, pt: 2 }}>
-          <VerificationSessionManager />
-        </Box>
-      </Box>
+      <VerificationSessionManager />
     </ResourcePage>
   );
 }

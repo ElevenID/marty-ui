@@ -169,13 +169,13 @@ message AddMemberRequest {
   string organization_id = 1;
   string user_id = 2;
   string email = 3;
-  string role = 4;
+  repeated string role_ids = 4;
 }
 
 message UpdateMemberRequest {
   string organization_id = 1;
   string member_id = 2;
-  string role = 3;
+  repeated string role_ids = 3;
 }
 
 message RemoveMemberRequest {
@@ -195,15 +195,24 @@ message ListMembersResponse {
   repeated MemberResponse members = 1;
 }
 
+message RoleSummary {
+  string id = 1;
+  string name = 2;
+  string display_name = 3;
+}
+
 message MemberResponse {
   string id = 1;
   string organization_id = 2;
   string user_id = 3;
   string email = 4;
-  string role = 5;
+  repeated RoleSummary roles = 5;
   string status = 6;
   string invited_at = 7;
   string joined_at = 8;
+  repeated string permissions = 9;
+  bool has_org_console_access = 10;
+  bool is_owner = 11;
 }
 
 // -- API Key operations --
@@ -229,6 +238,9 @@ message GetMemberPermissionsRequest {
 
 message GetMemberPermissionsResponse {
   repeated string permissions = 1;
+  repeated RoleSummary roles = 2;
+  bool has_org_console_access = 3;
+  bool is_owner = 4;
 }
 
 message HealthCheckRequest {}

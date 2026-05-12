@@ -136,6 +136,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
             or request.url.path == "/health"
             or request.url.path.startswith("/health/")
             or request.url.path.startswith("/.well-known/")
+            or request.url.path.startswith("/credentials/")
+            or request.url.path.endswith("/did.json")
             or _WALLET_PUBLIC.match(request.url.path)
         ):
             return await call_next(request)
@@ -364,6 +366,7 @@ class ContentTypeEnforcementMiddleware(BaseHTTPMiddleware):
     _EXEMPT_PREFIXES = (
         "/v1/issuance/token",       # OAuth token endpoint: application/x-www-form-urlencoded
         "/v1/issuance/par",         # PAR endpoint (RFC 9126): application/x-www-form-urlencoded
+        "/v1/issuance/nonce",       # OID4VCI nonce endpoint: wallets may POST empty/non-JSON bodies
         "/v1/issuance/didcomm/",    # DIDComm v2: application/didcomm-plain+json
         "/v1/flows/instances/",     # OID4VP submit: application/x-www-form-urlencoded
         "/v1/flows/siop/submit",    # SIOPv2 submit

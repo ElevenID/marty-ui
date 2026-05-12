@@ -8,17 +8,22 @@
  * - Revocation strategy
  */
 
+import { useState, useCallback } from 'react';
 import { useAsyncData } from '../../../hooks/useAsyncData';
 import { useParams, useNavigate, Link as RouterLink } from 'react-router-dom';
 import {
   Box,
+  Button,
   Paper,
   Typography,
   Grid,
   Chip,
-  Button,
   Breadcrumbs,
   Link,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
   Divider,
   List,
   ListItem,
@@ -26,7 +31,16 @@ import {
   ListItemText,
   Skeleton,
   Alert,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+  TextField,
+  Tooltip,
 } from '@mui/material';
+import AddIcon from '@mui/icons-material/Add';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import EditIcon from '@mui/icons-material/Edit';
 import VerifiedUserIcon from '@mui/icons-material/VerifiedUser';
@@ -36,7 +50,7 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import SecurityIcon from '@mui/icons-material/Security';
 import { useTranslation } from 'react-i18next';
 
-import { getTrustProfile, getTrustProfileWalletCompatibility } from '../../../services/presentationPolicyApi';
+import { getTrustProfile, getTrustProfileWalletCompatibility, listTrustProfileIssuers, addTrustProfileIssuer } from '../../../services/presentationPolicyApi';
 
 /**
  * Format badge icons for supported formats
@@ -220,6 +234,184 @@ function ProvenanceSection({ trustProfile }) {
 }
 
 /**
+ * Add Trusted Issuer Dialog
+ */
+function AddIssuerDialog({ open, profileId, onClose, onAdded }) {
+  const { t } = useTranslation('console');
+  const [form, setForm] = useState({ name: '', issuer_did: '', description: '' });
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState(null);
+
+  const handleClose = () => {
+    setForm({ name: '', issuer_did: '', description: '' });
+    setError(null);
+    onClose();
+  };
+
+  const handleSubmit = useCallback(async () => {
+    if (!form.name.trim() || !form.issuer_did.trim()) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      const added = await addTrustProfileIssuer(profileId, {
+        name: form.name.trim(),
+        issuer_did: form.issuer_did.trim(),
+        description: form.description.trim() || null,
+      });
+      onAdded(added);
+      handleClose();
+    } catch (err) {
+      setError(err?.message || t('trust.addIssuerDialog.failed', 'Failed to add trusted issuer.'));
+    } finally {
+      setSubmitting(false);
+    }
+  }, [form, profileId, onAdded, t]);
+
+  return (
+    <Dialog open={open} onClose={handleClose} maxWidth="sm" fullWidth>
+      <DialogTitle>{t('trust.addIssuerDialog.title', 'Add Trusted Issuer')}</DialogTitle>
+      <DialogContent>
+        {error && (
+          <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>
+        )}
+        <TextField
+          fullWidth
+          required
+          label={t('trust.addIssuerDialog.nameLabel', 'Name')}
+          value={form.name}
+          onChange={(e) => setForm((prev) => ({ ...prev, name: e.target.value }))}
+          sx={{ mt: 1, mb: 2 }}
+          helperText={t('trust.addIssuerDialog.nameHelper', 'A short display name for this issuer.')}
+          inputProps={{ 'data-testid': 'addIssuer.name' }}
+        />
+        <TextField
+          fullWidth
+          required
+          label={t('trust.addIssuerDialog.didLabel', 'Issuer DID')}
+          value={form.issuer_did}
+          onChange={(e) => setForm((prev) => ({ ...prev, issuer_did: e.target.value }))}
+          sx={{ mb: 2 }}
+          placeholder="did:example:123..."
+          helperText={t('trust.addIssuerDialog.didHelper', 'The decentralised identifier (DID) of the issuer.')}
+          inputProps={{ 'data-testid': 'addIssuer.did', style: { fontFamily: 'monospace' } }}
+        />
+        <TextField
+          fullWidth
+          multiline
+          rows={2}
+          label={t('trust.addIssuerDialog.descriptionLabel', 'Description (optional)')}
+          value={form.description}
+          onChange={(e) => setForm((prev) => ({ ...prev, description: e.target.value }))}
+          inputProps={{ 'data-testid': 'addIssuer.description' }}
+        />
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={handleClose} disabled={submitting}>
+          {t('actions.cancel', { ns: 'common', defaultValue: 'Cancel' })}
+        </Button>
+        <Button
+          variant="contained"
+          onClick={handleSubmit}
+          disabled={submitting || !form.name.trim() || !form.issuer_did.trim()}
+          data-testid="addIssuer.submit"
+        >
+          {submitting
+            ? t('trust.addIssuerDialog.adding', 'Adding...')
+            : t('trust.addIssuerDialog.addButton', 'Add Issuer')}
+        </Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
+/**
+ * Trusted Issuers Section
+ */
+function TrustedIssuersSection({ profileId }) {
+  const { t } = useTranslation('console');
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [extraIssuers, setExtraIssuers] = useState([]);
+
+  const { data: loadedIssuers = [], loading } = useAsyncData(
+    () => (profileId ? listTrustProfileIssuers(profileId).catch(() => []) : Promise.resolve([])),
+    [profileId]
+  );
+
+  const safeIssuers = [...(Array.isArray(loadedIssuers) ? loadedIssuers : []), ...extraIssuers];
+
+  const handleIssuerAdded = useCallback((issuer) => {
+    setExtraIssuers((prev) => [...prev, issuer]);
+  }, []);
+
+  return (
+    <Paper sx={{ p: 3, mb: 3 }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
+        <VerifiedUserIcon color="primary" />
+        <Typography variant="h6" fontWeight={600} sx={{ flex: 1 }}>
+          {t('trust.trustedIssuers')}
+        </Typography>
+        <Chip label={safeIssuers.length} size="small" sx={{ mr: 1 }} />
+        <Tooltip title={t('trust.addIssuerDialog.title', 'Add Trusted Issuer')}>
+          <Button
+            size="small"
+            variant="outlined"
+            startIcon={<AddIcon />}
+            onClick={() => setDialogOpen(true)}
+            data-testid="issuers.addButton"
+          >
+            {t('trust.addIssuer', 'Add Issuer')}
+          </Button>
+        </Tooltip>
+      </Box>
+
+      {loading ? (
+        <Skeleton variant="rectangular" height={80} />
+      ) : safeIssuers.length === 0 ? (
+        <Typography variant="body2" color="text.secondary">
+          {t('trust.noIssuersConfigured', 'No trusted issuers configured for this profile.')}
+        </Typography>
+      ) : (
+        <TableContainer>
+          <Table size="small">
+            <TableHead>
+              <TableRow>
+                <TableCell>{t('trust.trustedIssuersPage.tableHeaders.name', 'Name')}</TableCell>
+                <TableCell>{t('trust.trustedIssuersPage.tableHeaders.did', 'DID')}</TableCell>
+                <TableCell>{t('trust.trustedIssuersPage.tableHeaders.status', 'Status')}</TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {safeIssuers.map((issuer) => (
+                <TableRow key={issuer.id}>
+                  <TableCell>{issuer.name}</TableCell>
+                  <TableCell sx={{ fontFamily: 'monospace', fontSize: '0.75rem', maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {issuer.did}
+                  </TableCell>
+                  <TableCell>
+                    <Chip
+                      label={issuer.status || 'Active'}
+                      size="small"
+                      color={String(issuer.status).toLowerCase() === 'active' ? 'success' : 'default'}
+                    />
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </TableContainer>
+      )}
+
+      <AddIssuerDialog
+        open={dialogOpen}
+        profileId={profileId}
+        onClose={() => setDialogOpen(false)}
+        onAdded={handleIssuerAdded}
+      />
+    </Paper>
+  );
+}
+
+/**
  * Trust Profile Detail Page Component
  */
 export function TrustProfileDetailPage() {
@@ -338,6 +530,9 @@ export function TrustProfileDetailPage() {
 
       {/* Trust Provenance */}
       <ProvenanceSection trustProfile={profile} />
+
+      {/* Trusted Issuers */}
+      <TrustedIssuersSection profileId={id} />
 
       {/* Wallet Compatibility */}
       <WalletCompatibilityPanel trustProfileId={id} />

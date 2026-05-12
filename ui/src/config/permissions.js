@@ -125,6 +125,7 @@ export const RESOURCE_LABELS = {
   'api-key': 'API Keys',
   'signing-key': 'Signing Keys',
   webhook: 'Webhooks',
+  'integration-connector': 'Integration Connectors',
   notification: 'Notifications',
   audit: 'Audit Logs',
   verification: 'Verification',

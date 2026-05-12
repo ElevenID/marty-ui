@@ -19,6 +19,14 @@ import {
   getPermissionDeniedMessage,
 } from '../config/permissions';
 
+const permissionsCache = new Map();
+const inflightPermissionsRequests = new Map();
+
+// System/sentinel org IDs that backend policy blocks member-level operations on.
+const SYSTEM_ORG_IDS = new Set([
+  '00000000-0000-0000-0000-000000000001',
+]);
+
 /**
  * @typedef {Object} UsePermissionsReturn
  * @property {function(string, string): boolean} can - Check a single permission
@@ -38,8 +46,12 @@ import {
  */
 export function usePermissions() {
   const { organizationId, isAuthenticated } = useAuth();
-  const { activeOrgId } = useConsole();
-  const effectiveOrganizationId = activeOrgId || organizationId;
+  const { activeOrgId, mode } = useConsole();
+  // Never fall through to the system/sentinel org — it's policy-blocked for member operations.
+  const fallbackOrgId = SYSTEM_ORG_IDS.has(organizationId) ? null : organizationId;
+  const effectiveOrganizationId = mode === 'org'
+    ? (activeOrgId || fallbackOrgId)
+    : null;
   const [permissions, setPermissions] = useState(/** @type {Set<string>} */ new Set());
   const [roles, setRoles] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -53,18 +65,61 @@ export function usePermissions() {
       return;
     }
 
+    const cached = permissionsCache.get(effectiveOrganizationId);
+    if (cached) {
+      setPermissions(new Set(cached.permissions || []));
+      setRoles(cached.roles || []);
+      setIsLoading(false);
+      lastOrgRef.current = effectiveOrganizationId;
+      return;
+    }
+
     setIsLoading(true);
+
+    const existingRequest = inflightPermissionsRequests.get(effectiveOrganizationId);
+    if (existingRequest) {
+      try {
+        const data = await existingRequest;
+        setPermissions(new Set(data.permissions || []));
+        setRoles(data.roles || []);
+      } catch {
+        setPermissions(new Set());
+        setRoles([]);
+      } finally {
+        setIsLoading(false);
+        lastOrgRef.current = effectiveOrganizationId;
+      }
+      return;
+    }
+
+    const request = getMyPermissions(effectiveOrganizationId);
+    inflightPermissionsRequests.set(effectiveOrganizationId, request);
+
     try {
-      const data = await getMyPermissions(effectiveOrganizationId);
+      const data = await request;
+      permissionsCache.set(effectiveOrganizationId, {
+        permissions: data.permissions || [],
+        roles: data.roles || [],
+      });
       setPermissions(new Set(data.permissions || []));
       setRoles(data.roles || []);
       lastOrgRef.current = effectiveOrganizationId;
     } catch (err) {
-      console.error('Failed to load permissions:', err);
+      // 403 is expected for routes where this endpoint is policy-protected.
+      if (err?.status === 403) {
+        permissionsCache.set(effectiveOrganizationId, {
+          permissions: [],
+          roles: [],
+        });
+      } else {
+        console.error('Failed to load permissions:', err);
+      }
       // On error, grant no permissions (fail-closed)
       setPermissions(new Set());
       setRoles([]);
+      lastOrgRef.current = effectiveOrganizationId;
     } finally {
+      inflightPermissionsRequests.delete(effectiveOrganizationId);
       setIsLoading(false);
     }
   }, [effectiveOrganizationId, isAuthenticated]);
@@ -106,9 +161,13 @@ export function usePermissions() {
   );
 
   const refresh = useCallback(async () => {
+    if (effectiveOrganizationId) {
+      permissionsCache.delete(effectiveOrganizationId);
+      inflightPermissionsRequests.delete(effectiveOrganizationId);
+    }
     lastOrgRef.current = null; // Force reload
     await loadPermissions();
-  }, [loadPermissions]);
+  }, [effectiveOrganizationId, loadPermissions]);
 
   return useMemo(
     () => ({

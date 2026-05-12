@@ -25,12 +25,13 @@ from typing import Any, AsyncGenerator
 
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from typing import Annotated
 
 from marty_common import (
     OrganizationContext,
-    require_org_membership,
+    ensure_membership_permission,
     RequestIdMiddleware,
     RequestLoggingMiddleware,
     create_service_app,
@@ -524,6 +525,7 @@ router = APIRouter(prefix="/v1/revocation-profiles", tags=["revocation-profiles"
 cascade_router = APIRouter(prefix="/v1/cascade-revocations", tags=["cascade-revocations"])
 batch_router = APIRouter(prefix="/v1/revocation-batches", tags=["revocation-batches"])
 internal_router = APIRouter(prefix="/internal/revocation-profiles", tags=["internal"])
+status_router = APIRouter(prefix="/v1/organizations", tags=["status-lists"])
 
 _repo: InMemoryRevocationProfileRepository | None = None
 _status_list_manager: StatusListManager | None = None
@@ -588,6 +590,82 @@ def _status_list_url(profile: RevocationProfile) -> str | None:
     return normalized
 
 
+def _status_list_scope(profile: RevocationProfile) -> str:
+    """Build a profile-scoped status-list storage key.
+
+    This allows multiple revocation services per org by isolating indices
+    at the revocation profile boundary.
+    """
+    return f"{profile.organization_id}:{profile.id}"
+
+
+def _status_list_mechanism_for_format(format: StatusListFormat) -> str:
+    if format == StatusListFormat.TOKEN_STATUS_LIST:
+        return "token-status-list"
+    return "bitstring-status-list"
+
+
+def _status_list_format_from_mechanism(mechanism: str) -> StatusListFormat:
+    normalized = mechanism.strip().lower()
+    if normalized in {"bitstring", "bitstring-status-list", "bitstring_status_list"}:
+        return StatusListFormat.BITSTRING
+    if normalized in {"token", "token-status-list", "token_status_list"}:
+        return StatusListFormat.TOKEN_STATUS_LIST
+    raise ValueError(f"Unsupported status list mechanism: {mechanism}")
+
+
+def _status_list_purpose_for_status(status: str) -> str:
+    if status == "suspended":
+        return "suspension"
+    return "revocation"
+
+
+def _status_list_public_base_url(profile: RevocationProfile) -> str:
+    configured = (profile.issuer_config.status_list_base_url or "").strip()
+    if configured:
+        normalized = configured.rstrip("/")
+
+        # If a canonical template is stored, derive the public base from it.
+        if "/v1/organizations/" in normalized:
+            return normalized.split("/v1/organizations/", 1)[0]
+
+        # Backward compatibility: older seeds used a plain `/lists` endpoint.
+        if normalized.endswith("/lists"):
+            normalized = normalized[: -len("/lists")]
+
+        if all(
+            token not in normalized
+            for token in ("{organization_id}", "{profile_id}", "{mechanism}", "{purpose}")
+        ):
+            return normalized
+
+    env_base = os.environ.get("STATUS_LIST_PUBLIC_BASE_URL") or os.environ.get(
+        "STATUS_LIST_BASE_URL"
+    )
+    return (env_base or "https://status.example.com").rstrip("/")
+
+
+def _build_status_list_url(
+    profile: RevocationProfile,
+    format: StatusListFormat,
+    purpose: str,
+) -> str:
+    base_url = _status_list_public_base_url(profile)
+    mechanism = _status_list_mechanism_for_format(format)
+    return (
+        f"{base_url}/v1/organizations/{profile.organization_id}"
+        f"/revocation-profiles/{profile.id}/status-lists/{mechanism}/{purpose}"
+    )
+
+
+def _build_status_list_url_template(profile: RevocationProfile) -> str:
+    base_url = _status_list_public_base_url(profile)
+    return (
+        f"{base_url}/v1/organizations/{profile.organization_id}"
+        f"/revocation-profiles/{profile.id}/status-lists/{{mechanism}}/{{purpose}}"
+    )
+
+
 def _to_response(profile: RevocationProfile) -> dict:
     """Convert domain model to response dict."""
     response = {
@@ -598,7 +676,7 @@ def _to_response(profile: RevocationProfile) -> dict:
         "mechanism_priority": [m.value for m in profile.verifier_config.mechanism_priority],
         "check_mode": profile.verifier_config.timing_mode.value,
         "issuer_config": _protocol_issuer_config(profile),
-        "status_list_url": _status_list_url(profile),
+        "status_list_url": _build_status_list_url_template(profile),
         "created_at": profile.created_at.isoformat(),
         "updated_at": profile.updated_at.isoformat(),
     }
@@ -696,8 +774,7 @@ async def _get_cascade_operation_or_404(
 
 async def _require_admin_for_org(user_id: str, organization_id: str) -> None:
     membership = await app.state.org_client.get_membership(user_id, organization_id)
-    if not membership.has_role("admin", "owner"):
-        raise HTTPException(status_code=403, detail="Admin access required")
+    ensure_membership_permission(membership, "revocation-profile", "activate")
 
 
 # =============================================================================
@@ -725,7 +802,8 @@ async def create_revocation_profile(
     repo: InMemoryRevocationProfileRepository = Depends(get_repo),
 ) -> dict:
     """Create a new RevocationProfile."""
-    await require_org_membership(request.organization_id, http_request, user_id)
+    membership = await http_request.app.state.org_client.get_membership(user_id, request.organization_id)
+    ensure_membership_permission(membership, "revocation-profile", "create")
 
     # MIP §12.2 — revocation_mechanism must be non-empty when provided
     if request.revocation_mechanism is not None and len(request.revocation_mechanism) == 0:
@@ -824,8 +902,8 @@ async def list_revocation_profiles(
     offset: int = Query(default=0, ge=0),
 ) -> list[dict]:
     """List all RevocationProfiles for an organization."""
-    # Verify org membership
-    await app.state.org_client.get_membership(user_id, organization_id)
+    membership = await app.state.org_client.get_membership(user_id, organization_id)
+    ensure_membership_permission(membership, "revocation-profile", "view")
     profiles = await repo.list(organization_id)
     return [_to_response(p) for p in profiles[offset:offset + limit]]
 
@@ -840,8 +918,8 @@ async def get_revocation_profile(
     profile = await repo.get(profile_id)
     if not profile:
         raise HTTPException(status_code=404, detail="RevocationProfile not found")
-    # Verify org membership
-    await app.state.org_client.get_membership(user_id, profile.organization_id)
+    membership = await app.state.org_client.get_membership(user_id, profile.organization_id)
+    ensure_membership_permission(membership, "revocation-profile", "view")
     return _to_response(profile)
 
 
@@ -858,8 +936,7 @@ async def activate_revocation_profile(
     
     # Verify admin access
     membership = await app.state.org_client.get_membership(user_id, profile.organization_id)
-    if not membership.has_role("admin", "owner"):
-        raise HTTPException(status_code=403, detail="Admin access required")
+    ensure_membership_permission(membership, "revocation-profile", "activate")
     
     profile.activate()
     await repo.save(profile)
@@ -881,8 +958,7 @@ async def delete_revocation_profile(
     
     # Verify admin access
     membership = await app.state.org_client.get_membership(user_id, profile.organization_id)
-    if not membership.has_role("admin", "owner"):
-        raise HTTPException(status_code=403, detail="Admin access required")
+    ensure_membership_permission(membership, "revocation-profile", "delete")
     
     await repo.delete(profile_id)
     logger.info(f"Deleted RevocationProfile: {profile_id}")
@@ -898,7 +974,8 @@ async def create_cascade_revocation_operation(
     repo: InMemoryRevocationProfileRepository = Depends(get_repo),
 ) -> dict:
     """Trigger a cascade revocation operation."""
-    await require_org_membership(request.organization_id, http_request, user_id)
+    membership = await http_request.app.state.org_client.get_membership(user_id, request.organization_id)
+    ensure_membership_permission(membership, "revocation-profile", "activate")
 
     if request.max_cascade_depth < 1 or request.max_cascade_depth > 10:
         raise HTTPException(status_code=422, detail="max_cascade_depth must be between 1 and 10")
@@ -959,7 +1036,8 @@ async def list_cascade_revocation_operations(
     repo: InMemoryRevocationProfileRepository = Depends(get_repo),
 ) -> list[dict]:
     """List cascade revocation operations for an organization."""
-    await app.state.org_client.get_membership(user_id, organization_id)
+    membership = await app.state.org_client.get_membership(user_id, organization_id)
+    ensure_membership_permission(membership, "revocation-profile", "view")
     operations = await repo.list_cascade_operations(organization_id, status=status)
     return [_cascade_to_response(operation) for operation in operations]
 
@@ -972,7 +1050,8 @@ async def get_cascade_revocation_operation(
 ) -> dict:
     """Get a cascade revocation operation by ID."""
     operation = await _get_cascade_operation_or_404(operation_id, repo)
-    await app.state.org_client.get_membership(user_id, operation.organization_id)
+    membership = await app.state.org_client.get_membership(user_id, operation.organization_id)
+    ensure_membership_permission(membership, "revocation-profile", "view")
     return _cascade_to_response(operation)
 
 
@@ -1085,9 +1164,11 @@ async def process_revocation(
         else:
             return {"success": False, "error": f"Unknown status: {request.status}"}
         
+        status_scope = _status_list_scope(profile)
+
         # Update status list
         success = await status_mgr.set_status(
-            tenant_id=profile.organization_id,
+            tenant_id=status_scope,
             index=request.index,
             status=status_value,
             format=sl_format,
@@ -1096,17 +1177,15 @@ async def process_revocation(
         if not success:
             return {"success": False, "error": "Failed to update status list"}
         
+        purpose = _status_list_purpose_for_status(request.status)
+        status_list_url = _build_status_list_url(profile, sl_format, purpose)
+
         # Publish if auto-publish enabled
-        status_list_url = None
         if profile.automation_config.auto_publish:
-            status_list_url = await status_mgr.publish(
-                tenant_id=profile.organization_id,
+            await status_mgr.publish(
+                tenant_id=status_scope,
                 format=sl_format,
             )
-        else:
-            # Generate URL without publishing
-            status_list_url = profile.issuer_config.status_list_base_url or "https://status.example.com"
-            status_list_url = f"{status_list_url}/{request.credential_format}/1"
         
         logger.info(
             f"Updated status list: organization={profile.organization_id} "
@@ -1158,22 +1237,25 @@ async def allocate_index(
         else:
             sl_format = StatusListFormat.BITSTRING
         
+        status_scope = _status_list_scope(profile)
+
         # Allocate index using StatusListManager
         index = await status_mgr.allocate_index(
-            tenant_id=profile.organization_id,
+            tenant_id=status_scope,
             format=sl_format,
         )
-        
-        # Generate status list URL
+
         if profile.automation_config.auto_publish:
-            # If auto-publish, use the published URL
-            status_list = await status_mgr.get_or_create(
-                tenant_id=profile.organization_id,
+            await status_mgr.publish(
+                tenant_id=status_scope,
                 format=sl_format,
             )
-            status_list_url = status_list.url or f"{profile.issuer_config.status_list_base_url or 'https://status.example.com'}/{request.credential_format}/1"
-        else:
-            status_list_url = f"{profile.issuer_config.status_list_base_url or 'https://status.example.com'}/{request.credential_format}/1"
+
+        status_list_url = _build_status_list_url(
+            profile,
+            sl_format,
+            purpose="revocation",
+        )
         
         logger.info(
             f"Allocated index {index} for format {request.credential_format} "
@@ -1191,6 +1273,60 @@ async def allocate_index(
     except Exception as e:
         logger.error(f"Unexpected error during index allocation: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@status_router.get("/{organization_id}/revocation-profiles/{profile_id}/status-lists/{mechanism}/{purpose}")
+async def get_status_list_document(
+    organization_id: str,
+    profile_id: str,
+    mechanism: str,
+    purpose: str,
+    repo: InMemoryRevocationProfileRepository = Depends(get_repo),
+    status_mgr: StatusListManager = Depends(get_status_list_manager),
+) -> JSONResponse:
+    """Public verifier endpoint for status-list retrieval using org/path routing."""
+    profile = await repo.get(profile_id)
+    if not profile or profile.organization_id != organization_id:
+        raise HTTPException(status_code=404, detail="RevocationProfile not found")
+
+    if purpose not in {"revocation", "suspension"}:
+        raise HTTPException(status_code=400, detail="purpose must be revocation or suspension")
+
+    try:
+        sl_format = _status_list_format_from_mechanism(mechanism)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    status_scope = _status_list_scope(profile)
+    status_list = await status_mgr.get_or_create(status_scope, sl_format)
+    canonical_url = _build_status_list_url(profile, sl_format, purpose)
+    status_list.url = canonical_url
+
+    if sl_format == StatusListFormat.BITSTRING:
+        payload = status_mgr.encode_bitstring_status_list(
+            status_list,
+            issuer=f"did:example:org:{organization_id}",
+            status_purpose=purpose,
+        )
+        return JSONResponse(
+            content=payload,
+            headers={
+                "Cache-Control": "public, max-age=300",
+                "Content-Type": "application/vc+ld+json",
+            },
+        )
+
+    payload = status_mgr.encode_status_list_token(
+        status_list,
+        issuer=f"did:example:org:{organization_id}",
+        subject=canonical_url,
+    )
+    return JSONResponse(
+        content=payload,
+        headers={
+            "Cache-Control": "public, max-age=300",
+        },
+    )
 
 
 # =============================================================================
@@ -1329,9 +1465,33 @@ async def delete_revocation_batch(batch_id: str) -> None:
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     global _repo, _status_list_manager
     logger.info(f"Starting {SERVICE_NAME}...")
-    
-    # Initialize repositories
-    _repo = InMemoryRevocationProfileRepository()
+
+    # Use postgres-backed repository when DATABASE_URL is configured
+    database_url = os.environ.get("DATABASE_URL")
+    if database_url:
+        try:
+            from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+            from revocation_profile.infrastructure.adapters.postgres_adapter import (
+                PostgresRevocationProfileRepository,
+            )
+            # Convert sync psycopg2 URL to asyncpg if needed
+            async_url = database_url.replace(
+                "postgresql://", "postgresql+asyncpg://"
+            ).replace(
+                "postgresql+psycopg2://", "postgresql+asyncpg://"
+            )
+            engine = create_async_engine(async_url, echo=False)
+            session_factory = async_sessionmaker(engine, expire_on_commit=False)
+            _repo = PostgresRevocationProfileRepository(session_factory)
+            logger.info("RevocationProfile: using PostgresRevocationProfileRepository")
+        except Exception as exc:
+            logger.warning(
+                f"Failed to initialise postgres repo for revocation_profile ({exc}); "
+                "falling back to InMemoryRevocationProfileRepository"
+            )
+            _repo = InMemoryRevocationProfileRepository()
+    else:
+        _repo = InMemoryRevocationProfileRepository()
     
     # Initialize status list repository (Redis with fallback to in-memory)
     status_list_repo = create_status_list_repository()
@@ -1395,7 +1555,7 @@ def create_app() -> FastAPI:
         description="Format-agnostic revocation configuration and automation",
         service_name=SERVICE_NAME,
         lifespan=lifespan,
-        routers=[router, cascade_router, batch_router, internal_router],
+        routers=[router, status_router, cascade_router, batch_router, internal_router],
     )
 
 

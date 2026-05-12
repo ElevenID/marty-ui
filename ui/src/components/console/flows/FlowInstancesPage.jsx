@@ -38,32 +38,47 @@ import CancelIcon from '@mui/icons-material/Cancel';
 import { Link } from 'react-router-dom';
 
 import { ResourcePage, EmptyState, EmptyStates, StatusChip } from '../../common';
+import { useAuth } from '../../../hooks/useAuth';
 import { listFlows, listFlowExecutions } from '../../../services/flowsApi';
 
 const getFlowsTabs = (t) => [
   { label: t('flows.flowDefinitions'), path: '/console/org/flows/definitions' },
-  { label: t('flows.flowInstances'), path: '/console/org/flows/instances' },
+  { label: t('flows.flowInstances'), path: '/console/org/operate/flow-instances' },
 ];
 
 const getBreadcrumbs = (t) => [
   { label: t('flows.breadcrumbs.console'), path: '/console' },
-  { label: t('flows.breadcrumbs.flows'), path: '/console/org/flows' },
-  { label: t('flows.breadcrumbs.flowInstances'), path: '/console/org/flows/instances' },
+  { label: t('flows.breadcrumbs.flows'), path: '/console/org/operate' },
+  { label: t('flows.breadcrumbs.flowInstances'), path: '/console/org/operate/flow-instances' },
 ];
 
 function FlowInstancesPage() {
   const { t } = useTranslation('console');
-  const { data: instances = [], loading, error } = useAsyncData(async () => {
-    const flows = await listFlows();
+  const { organizationId } = useAuth();
+  const { data: instances = [], loading, error, reload: loadInstances } = useAsyncData(async () => {
+    const flowsResponse = await listFlows({ organization_id: organizationId });
+    const flows = Array.isArray(flowsResponse) ? flowsResponse : [];
     const allInstances = [];
-    for (const flow of (flows || [])) {
-      const executions = await listFlowExecutions(flow.id);
-      for (const exec of (executions || [])) {
-        allInstances.push({ ...exec, flowName: flow.name, flowId: flow.id });
+    for (const flow of flows) {
+      if (!flow?.id) {
+        continue;
+      }
+
+      const executionsResponse = await listFlowExecutions(flow.id, { organization_id: organizationId });
+      const executions = Array.isArray(executionsResponse) ? executionsResponse : [];
+      for (const exec of executions) {
+        allInstances.push({
+          ...exec,
+          id: exec?.id ? String(exec.id) : `unknown-${flow.id}`,
+          flowName: typeof flow.name === 'string' ? flow.name : 'Unnamed Flow',
+          flowId: flow.id,
+          status: typeof exec?.status === 'string' ? exec.status : 'unknown',
+        });
       }
     }
     return allInstances;
-  }, []);
+  }, [organizationId]);
+  const safeInstances = Array.isArray(instances) ? instances : [];
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
 
@@ -77,9 +92,11 @@ function FlowInstancesPage() {
     return status;
   };
 
-  const filteredInstances = instances.filter((instance) => {
-    const matchesSearch = instance.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      instance.flowName.toLowerCase().includes(searchQuery.toLowerCase());
+  const filteredInstances = safeInstances.filter((instance) => {
+    const normalizedId = String(instance.id || '').toLowerCase();
+    const normalizedFlowName = String(instance.flowName || '').toLowerCase();
+    const normalizedQuery = searchQuery.toLowerCase();
+    const matchesSearch = normalizedId.includes(normalizedQuery) || normalizedFlowName.includes(normalizedQuery);
     const matchesStatus = statusFilter === 'all' || instance.status === statusFilter;
     return matchesSearch && matchesStatus;
   });
@@ -140,7 +157,7 @@ function FlowInstancesPage() {
 
       {loading ? (
         <LinearProgress />
-      ) : instances.length === 0 ? (
+      ) : safeInstances.length === 0 ? (
         <EmptyState {...EmptyStates.flowInstances} />
       ) : (
         <TableContainer component={Paper}>
@@ -199,7 +216,7 @@ function FlowInstancesPage() {
                       <Tooltip title={t('flows.actions.viewDetails')}>
                         <IconButton
                           component={Link}
-                          to={`/console/flows/instances/${instance.id}`}
+                          to={`/console/org/operate/flow-instances/${instance.id}`}
                           size="small"
                         >
                           <VisibilityIcon fontSize="small" />

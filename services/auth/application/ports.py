@@ -188,7 +188,7 @@ class OIDCProviderPort(ABC):
         ...
     
     @abstractmethod
-    def parse_id_token(self, id_token: str) -> OIDCUserInfo:
+    def parse_id_token(self, id_token: str, access_token: str | None = None) -> OIDCUserInfo:
         """Parse user claims from ID token (already validated via PKCE)."""
         ...
     

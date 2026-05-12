@@ -293,6 +293,47 @@ label,
   text-align: left;
 }
 
+.kc-password-toggle-wrap {
+  position: relative;
+}
+
+#kc-form-wrapper .kc-password-toggle-input {
+  padding-right: 44px;
+}
+
+.kc-password-toggle-btn {
+  position: absolute;
+  top: 50%;
+  right: 12px;
+  transform: translateY(-50%);
+  border: 0;
+  background: transparent;
+  color: rgba(0, 0, 0, 0.6);
+  cursor: pointer;
+  padding: 4px;
+  line-height: 0;
+}
+
+.kc-password-toggle-btn:hover {
+  color: #1976d2;
+}
+
+.kc-password-toggle-btn:focus {
+  outline: 2px solid #1976d2;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.kc-password-toggle-btn.is-visible {
+  color: #1976d2;
+}
+
+.kc-password-toggle-icon {
+  width: 20px;
+  height: 20px;
+  display: block;
+}
+
 .pf-c-form-control:focus,
 #kc-form-wrapper input[type="text"]:focus,
 #kc-form-wrapper input[type="password"]:focus,
@@ -349,6 +390,39 @@ a:hover {
 
 #kc-form-options + div {
   text-align: center;
+}
+
+.elevenid-login-error {
+  margin: 4px 0 16px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid #f5c6cb;
+  background: #fdeded;
+  color: #7f1d1d;
+  font-size: 0.88rem;
+  text-align: left;
+  line-height: 1.4;
+}
+
+.elevenid-login-help {
+  margin: -6px 0 16px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid #bfd7ff;
+  background: #eef5ff;
+  text-align: left;
+}
+
+.elevenid-login-help-text {
+  margin: 0 0 6px;
+  color: #0d3c61;
+  font-size: 0.85rem;
+  line-height: 1.4;
+}
+
+.elevenid-login-help-link {
+  font-size: 0.86rem;
+  font-weight: 600;
 }
 
 /* ===== Registration link ===== */

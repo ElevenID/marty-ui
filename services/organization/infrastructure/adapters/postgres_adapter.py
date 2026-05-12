@@ -27,19 +27,24 @@ from ...domain.entities import (
     JoinCode,
     JoinMechanism,
     Member,
-    MemberRole,
     MemberStatus,
     Organization,
     OrganizationStatus,
     OrganizationType,
+    Permission,
+    Role,
     ViewMode,
 )
 from ..models import (
     api_keys_table,
     console_context_preferences_table,
     join_codes_table,
+    member_roles_table,
     members_table,
     organizations_table,
+    permissions_table,
+    role_permissions_table,
+    roles_table,
 )
 
 logger = logging.getLogger(__name__)
@@ -70,13 +75,14 @@ class PostgresOrganizationRepository(OrganizationRepositoryPort):
                     .values(
                         name=organization.name,
                         display_name=organization.display_name,
+                        owner_id=organization.owner_id,
                         slug=organization.slug,
                         description=organization.description,
                         org_type=organization.org_type.value,
                         status=organization.status.value,
                         join_mechanism=organization.join_mechanism.value,
-                        requires_approval="true" if organization.requires_approval else "false",
-                        is_discoverable="true" if organization.is_discoverable else "false",
+                        requires_approval=organization.requires_approval,
+                        is_discoverable=organization.is_discoverable,
                         contact_email=organization.contact_email,
                         contact_phone=organization.contact_phone,
                         website=organization.website,
@@ -93,6 +99,7 @@ class PostgresOrganizationRepository(OrganizationRepositoryPort):
                         id=organization.id,
                         name=organization.name,
                         display_name=organization.display_name,
+                        owner_id=organization.owner_id,
                         slug=organization.slug,
                         description=organization.description,
                         org_type=organization.org_type.value,
@@ -220,6 +227,7 @@ class PostgresOrganizationRepository(OrganizationRepositoryPort):
             description=row.description,
             org_type=org_type,
             status=status,
+            owner_id=getattr(row, "owner_id", "") or "",
             join_mechanism=JoinMechanism(row.join_mechanism) if row.join_mechanism else JoinMechanism.INVITE,
             requires_approval=bool(row.requires_approval) if hasattr(row, 'requires_approval') else False,
             is_discoverable=bool(row.is_discoverable) if hasattr(row, 'is_discoverable') else False,
@@ -255,8 +263,9 @@ class PostgresMemberRepository(MemberRepositoryPort):
                     .values(
                         user_id=member.user_id,
                         email=member.email,
-                        role=member.role.value,
                         status=member.status.value,
+                        invited_by=member.invited_by,
+                        invited_at=member.invited_at,
                         joined_at=member.joined_at,
                         updated_at=member.updated_at,
                     )
@@ -268,7 +277,6 @@ class PostgresMemberRepository(MemberRepositoryPort):
                         organization_id=member.organization_id,
                         user_id=member.user_id,
                         email=member.email,
-                        role=member.role.value,
                         status=member.status.value,
                         invited_by=member.invited_by,
                         invited_at=member.invited_at,
@@ -287,7 +295,7 @@ class PostgresMemberRepository(MemberRepositoryPort):
                 select(members_table).where(members_table.c.id == member_id)
             )
             row = result.first()
-            return self._row_to_entity(row) if row else None
+            return await self._row_to_entity(session, row) if row else None
     
     async def get_by_user_and_org(self, user_id: str, org_id: str) -> Member | None:
         """Get member by user ID and organization ID."""
@@ -299,7 +307,7 @@ class PostgresMemberRepository(MemberRepositoryPort):
                 )
             )
             row = result.first()
-            return self._row_to_entity(row) if row else None
+            return await self._row_to_entity(session, row) if row else None
     
     async def list_by_organization(self, org_id: str) -> list[Member]:
         """List all members of an organization."""
@@ -307,7 +315,7 @@ class PostgresMemberRepository(MemberRepositoryPort):
             result = await session.execute(
                 select(members_table).where(members_table.c.organization_id == org_id)
             )
-            return [self._row_to_entity(row) for row in result]
+            return [await self._row_to_entity(session, row) for row in result]
     
     async def list_by_user(self, user_id: str) -> list[Member]:
         """List all memberships for a user."""
@@ -315,7 +323,7 @@ class PostgresMemberRepository(MemberRepositoryPort):
             result = await session.execute(
                 select(members_table).where(members_table.c.user_id == user_id)
             )
-            return [self._row_to_entity(row) for row in result]
+            return [await self._row_to_entity(session, row) for row in result]
     
     async def get_by_email_and_org(self, email: str, org_id: str) -> Member | None:
         """Get member by email and organization ID."""
@@ -327,7 +335,7 @@ class PostgresMemberRepository(MemberRepositoryPort):
                 )
             )
             row = result.first()
-            return self._row_to_entity(row) if row else None
+            return await self._row_to_entity(session, row) if row else None
     
     async def delete(self, member_id: str) -> None:
         """Delete a member."""
@@ -337,20 +345,72 @@ class PostgresMemberRepository(MemberRepositoryPort):
             )
             await session.commit()
     
-    def _row_to_entity(self, row: Any) -> Member:
+    async def _load_role_permissions(self, session: AsyncSession, role_id: str) -> list[Permission]:
+        result = await session.execute(
+            select(permissions_table)
+            .join(
+                role_permissions_table,
+                role_permissions_table.c.permission_id == permissions_table.c.id,
+            )
+            .where(role_permissions_table.c.role_id == role_id)
+        )
+        return [self._permission_row_to_entity(row) for row in result]
+
+    async def _load_member_roles(self, session: AsyncSession, member_id: str) -> list[Role]:
+        result = await session.execute(
+            select(roles_table)
+            .join(
+                member_roles_table,
+                member_roles_table.c.role_id == roles_table.c.id,
+            )
+            .where(member_roles_table.c.member_id == member_id)
+            .order_by(roles_table.c.is_system.desc(), roles_table.c.name)
+        )
+        roles: list[Role] = []
+        for row in result:
+            permissions = await self._load_role_permissions(session, str(row.id))
+            roles.append(self._role_row_to_entity(row, permissions))
+        return roles
+
+    async def _row_to_entity(self, session: AsyncSession, row: Any) -> Member:
         """Convert database row to entity."""
+        roles = await self._load_member_roles(session, str(row.id))
         return Member(
             id=row.id,
             organization_id=row.organization_id,
             user_id=row.user_id,
             email=row.email,
-            role=MemberRole(row.role),
             status=MemberStatus(row.status),
+            roles=roles,
             invited_by=row.invited_by,
             invited_at=row.invited_at,
             joined_at=row.joined_at,
             created_at=row.created_at,
             updated_at=row.updated_at,
+        )
+
+    @staticmethod
+    def _role_row_to_entity(row: Any, permissions: list[Permission]) -> Role:
+        return Role(
+            id=str(row.id),
+            organization_id=str(row.organization_id),
+            name=row.name,
+            display_name=row.display_name,
+            description=row.description,
+            is_system=bool(row.is_system),
+            is_default_for_new_members=bool(row.is_default_for_new_members),
+            permissions=permissions,
+            created_at=row.created_at,
+            updated_at=row.updated_at,
+        )
+
+    @staticmethod
+    def _permission_row_to_entity(row: Any) -> Permission:
+        return Permission(
+            id=str(row.id),
+            resource=row.resource,
+            action=row.action,
+            description=row.description,
         )
 
 

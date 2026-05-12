@@ -32,7 +32,8 @@ import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import { Link } from 'react-router-dom';
 
 import { ResourcePage, EmptyState, EmptyStates, StatusChip } from '../../common';
-import { listCredentialTemplates } from '../../../services/presentationPolicyApi';
+import { useAuth } from '../../../hooks/useAuth';
+import { listCredentialTemplates, listTrustProfiles } from '../../../services/presentationPolicyApi';
 
 const getTemplatesTabs = (t) => [
   { label: t('templates.credentialTemplates'), path: '/console/org/templates/credentials' },
@@ -86,13 +87,101 @@ function ArtifactsStatus({ hasArtifacts, validated }) {
 
 function CredentialTemplatesPage() {
   const { t } = useTranslation('console');
-  const { data: templates = [], loading, error } = useAsyncData(
-    () => listCredentialTemplates(),
-    []
+  const { organizationId } = useAuth();
+  const { data: templatesData, loading, error } = useAsyncData(
+    () => (organizationId ? listCredentialTemplates({ organization_id: organizationId }) : Promise.resolve([])),
+    [organizationId]
   );
 
+  const { data: trustProfiles = [] } = useAsyncData(
+    () =>
+      organizationId
+        ? listTrustProfiles({ organization_id: organizationId, limit: 1 }).catch(() => [])
+        : Promise.resolve([]),
+    [organizationId]
+  );
+  const safeTrustProfiles = Array.isArray(trustProfiles) ? trustProfiles : [];
+
+  const templatePrerequisites = [
+    {
+      label: t('templates.prerequisites.trustProfile', { defaultValue: 'Trust Profile' }),
+      status: safeTrustProfiles.length > 0 ? 'ready' : 'missing',
+      path: '/console/org/trust/profiles',
+    },
+  ];
+  const templates = Array.isArray(templatesData)
+    ? templatesData
+    : Array.isArray(templatesData?.items)
+      ? templatesData.items
+      : Array.isArray(templatesData?.templates)
+        ? templatesData.templates
+        : [];
+
+  const normalizeFormatLabel = (rawFormat) => {
+    if (!rawFormat) {
+      return null;
+    }
+
+    const normalized = String(rawFormat).trim().toLowerCase();
+    if (!normalized) {
+      return null;
+    }
+
+    const aliasMap = {
+      sd_jwt_vc: 'SD_JWT_VC',
+      ietf_sd_jwt_vc: 'SD_JWT_VC',
+      w3c_vcdm_v2_sd_jwt: 'SD_JWT_VC',
+      mdoc: 'MDOC',
+      iso_mdoc: 'MDOC',
+      vc_jwt: 'VC_JWT',
+      jwt_vc: 'VC_JWT',
+      json_ld: 'JSON_LD',
+      ldp_vc: 'JSON_LD',
+    };
+
+    return aliasMap[normalized] || String(rawFormat).toUpperCase();
+  };
+
+  const getTemplateFormatLabel = (template) => {
+    const direct = normalizeFormatLabel(template?.format)
+      || normalizeFormatLabel(template?.credential_format)
+      || normalizeFormatLabel(template?.credential_payload_format);
+
+    if (direct) {
+      return direct;
+    }
+
+    if (Array.isArray(template?.supported_formats) && template.supported_formats.length > 0) {
+      return normalizeFormatLabel(template.supported_formats[0]) || 'UNKNOWN';
+    }
+
+    return 'UNKNOWN';
+  };
+
+  const getClaimsCount = (template) => {
+    if (Array.isArray(template?.claims)) {
+      return template.claims.length;
+    }
+    if (typeof template?.claims === 'number') {
+      return template.claims;
+    }
+    if (Array.isArray(template?.schema?.claims)) {
+      return template.schema.claims.length;
+    }
+    return 0;
+  };
+
+  const getUpdatedDateLabel = (template) => {
+    const raw = template?.updatedAt || template?.updated_at || template?.createdAt || template?.created_at;
+    if (!raw) {
+      return '—';
+    }
+    const parsed = new Date(raw);
+    return Number.isNaN(parsed.getTime()) ? '—' : parsed.toLocaleDateString();
+  };
+
   // Count templates with missing artifacts
-  const missingArtifactsCount = templates.filter((t) => !t.hasArtifacts).length;
+  const missingArtifactsCount = templates.filter((template) => !template?.hasArtifacts).length;
 
   return (
     <ResourcePage
@@ -141,7 +230,14 @@ function CredentialTemplatesPage() {
       {loading ? (
         <LinearProgress />
       ) : templates.length === 0 ? (
-        <EmptyState {...EmptyStates.templates} />
+        <EmptyState
+          {...EmptyStates.templates}
+          prerequisites={templatePrerequisites}
+          whyItMatters={t(
+            'templates.prerequisites.whyItMatters',
+            { defaultValue: 'Credential templates define the claims schema and format for issuable credentials. A trust profile must be configured first so signatures can be verified when the credential is presented.' }
+          )}
+        />
       ) : (
         <TableContainer component={Paper}>
           <Table>
@@ -168,13 +264,13 @@ function CredentialTemplatesPage() {
                     </TableCell>
                     <TableCell>
                       <Chip 
-                        label={template.format.toUpperCase()} 
+                        label={getTemplateFormatLabel(template)} 
                         size="small" 
                         variant="outlined" 
                       />
                     </TableCell>
                     <TableCell>{template.version}</TableCell>
-                    <TableCell align="right">{template.claims}</TableCell>
+                    <TableCell align="right">{getClaimsCount(template)}</TableCell>
                     <TableCell>
                       <ArtifactsStatus 
                         hasArtifacts={template.hasArtifacts} 
@@ -195,7 +291,7 @@ function CredentialTemplatesPage() {
                       <StatusChip status={template.status} />
                     </TableCell>
                     <TableCell>
-                      {new Date(template.updatedAt).toLocaleDateString()}
+                      {getUpdatedDateLabel(template)}
                     </TableCell>
                     <TableCell align="right">
                       <Tooltip title={t('templates.actions.viewDetails')}>

@@ -116,7 +116,7 @@ def _template_to_pb(template: Any, to_response_fn: Any) -> ct_pb2.TemplateRespon
         version=getattr(resp, "version", 0),
         created_at=resp.created_at,
         updated_at=resp.updated_at,
-        wallet_configs_json=json.dumps(getattr(resp, "wallet_configs", [])) if getattr(resp, "wallet_configs", None) else "[]",
+        wallet_configs_json=getattr(resp, "wallet_configs_json", None) or "[]",
     )
 
 

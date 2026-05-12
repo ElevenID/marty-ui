@@ -32,7 +32,7 @@ export async function listApiKeys(organizationId, { includeRevoked = false, incl
   });
   const url = withQuery(`${BASE_PATH}/${organizationId}/api-keys`, queryString);
   const response = await get(url);
-  return response?.keys || [];
+  return Array.isArray(response) ? response : (response?.keys || []);
 }
 
 /**

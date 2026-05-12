@@ -33,7 +33,8 @@ describe('myApplications helpers', () => {
     expect(canEditMyApplication({ status: 'needs_revision' })).toBe(true)
     expect(canEditMyApplication({ status: 'submitted' })).toBe(false)
     expect(canAddMyApplicationToWallet({ status: 'approved' })).toBe(true)
-    expect(canAddMyApplicationToWallet({ status: 'issued' })).toBe(true)
+    expect(canAddMyApplicationToWallet({ status: 'offered' })).toBe(true)
+    expect(canAddMyApplicationToWallet({ status: 'issued' })).toBe(false)
     expect(canAddMyApplicationToWallet({ status: 'under_review' })).toBe(false)
   })
 

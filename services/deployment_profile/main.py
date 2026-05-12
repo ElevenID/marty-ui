@@ -31,21 +31,35 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from marty_common.dto import DeleteResponse
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine, AsyncEngine
 from typing import Annotated
 
 from marty_common import (
     OrganizationContext,
-    require_org_membership,
+    ensure_membership_permission,
 )
 from marty_common.org_authorization import get_organization_client
 from marty_common.middleware import RequestIdMiddleware, RequestLoggingMiddleware
 from marty_common.service_setup import create_service_app
+from deployment_profile.infrastructure.adapters import (
+    PostgresDeploymentProfileRepository,
+    PostgresLaneRepository,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 SERVICE_NAME = "deployment-profile-service"
 SERVICE_PORT = int(os.environ.get("DEPLOYMENT_PROFILE_SERVICE_PORT", "8010"))
+
+
+def get_config() -> dict[str, Any]:
+    database_url = os.environ.get("DATABASE_URL")
+    if not database_url:
+        raise RuntimeError("DATABASE_URL environment variable is required")
+    if not database_url.startswith("postgresql+asyncpg://"):
+        database_url = database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    return {"database_url": database_url}
 
 
 # =============================================================================
@@ -451,7 +465,7 @@ class DeploymentProfileResponse(BaseModel):
     organization_id: str
     name: str
     description: str | None = None
-    status: str = "draft"
+    status: str | None = None
     site_id: str | None = None
     trust_profile_id: str | None = None
     presentation_policy_ids: list[str] = Field(default_factory=list)
@@ -503,7 +517,7 @@ class LaneResponse(BaseModel):
     deployment_profile_id: str
     description: str | None = None
     location: str | None = None
-    device_type: str = "kiosk"
+    device_type: str | None = None
     default_policy_id: str | None = None
     device_ids: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -590,10 +604,11 @@ def _sync_update_policy(
 
 router = APIRouter(prefix="/v1/deployment-profiles", tags=["deployment-profiles"])
 
-_repo: InMemoryDeploymentProfileRepository | None = None
+_repo: InMemoryDeploymentProfileRepository | PostgresDeploymentProfileRepository | None = None
+_db_engine: AsyncEngine | None = None
 
 
-def get_repo() -> InMemoryDeploymentProfileRepository:
+def get_repo() -> InMemoryDeploymentProfileRepository | PostgresDeploymentProfileRepository:
     if _repo is None:
         raise RuntimeError("Service not configured")
     return _repo
@@ -612,11 +627,9 @@ async def create_deployment_profile(
     repo: InMemoryDeploymentProfileRepository = Depends(get_repo),
 ) -> DeploymentProfileResponse:
     """Create a new Deployment Profile."""
-    # Verify org membership
     org_client = await get_organization_client(fastapi_request)
     membership = await org_client.get_membership(user_id, request.organization_id)
-    if not membership or not membership.is_active():
-        raise HTTPException(status_code=403, detail="Not a member of this organization")
+    ensure_membership_permission(membership, "deployment-profile", "create")
     
     trust_profile_id = request.trust_profile_id or request.default_trust_profile_id
     default_policy_id = _resolve_default_policy_id(
@@ -744,8 +757,8 @@ async def list_deployment_profiles(
     repo: InMemoryDeploymentProfileRepository = Depends(get_repo),
 ) -> list[DeploymentProfileResponse]:
     """List Deployment Profiles for an organization."""
-    # Verify org membership
-    await app.state.org_client.get_membership(user_id, organization_id)
+    membership = await app.state.org_client.get_membership(user_id, organization_id)
+    ensure_membership_permission(membership, "deployment-profile", "view")
     profiles = await repo.list(organization_id)
     profiles = profiles[offset:offset + limit]
     lane_repo = get_lane_repo()
@@ -762,8 +775,8 @@ async def get_deployment_profile(
     profile = await repo.get(profile_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Deployment Profile not found")
-    # Verify org membership
-    await app.state.org_client.get_membership(user_id, profile.organization_id)
+    membership = await app.state.org_client.get_membership(user_id, profile.organization_id)
+    ensure_membership_permission(membership, "deployment-profile", "view")
     lane_repo = get_lane_repo()
     return _profile_to_response(profile, await lane_repo.list(profile.id))
 
@@ -782,8 +795,7 @@ async def update_deployment_profile(
     
     # Verify admin access
     membership = await app.state.org_client.get_membership(user_id, profile.organization_id)
-    if not membership.has_role("admin", "owner"):
-        raise HTTPException(status_code=403, detail="Admin access required")
+    ensure_membership_permission(membership, "deployment-profile", "edit")
     
     if request.name is not None:
         profile.name = request.name
@@ -878,8 +890,7 @@ async def activate_deployment_profile(
     
     # Verify admin access
     membership = await app.state.org_client.get_membership(user_id, profile.organization_id)
-    if not membership.has_role("admin", "owner"):
-        raise HTTPException(status_code=403, detail="Admin access required")
+    ensure_membership_permission(membership, "deployment-profile", "activate")
     profile.activate()
     await repo.save(profile)
     lane_repo = get_lane_repo()
@@ -899,8 +910,7 @@ async def suspend_deployment_profile(
     
     # Verify admin access
     membership = await app.state.org_client.get_membership(user_id, profile.organization_id)
-    if not membership.has_role("admin", "owner"):
-        raise HTTPException(status_code=403, detail="Admin access required")
+    ensure_membership_permission(membership, "deployment-profile", "suspend")
     profile.suspend()
     await repo.save(profile)
     lane_repo = get_lane_repo()
@@ -920,8 +930,7 @@ async def generate_api_key(
     
     # Verify admin access
     membership = await app.state.org_client.get_membership(user_id, profile.organization_id)
-    if not membership.has_role("admin", "owner"):
-        raise HTTPException(status_code=403, detail="Admin access required")
+    ensure_membership_permission(membership, "api-key", "create")
     
     api_key = profile.generate_api_key()
     await repo.save(profile)
@@ -946,8 +955,7 @@ async def delete_deployment_profile(
     
     # Verify admin access
     membership = await app.state.org_client.get_membership(user_id, profile.organization_id)
-    if not membership.has_role("admin", "owner"):
-        raise HTTPException(status_code=403, detail="Admin access required")
+    ensure_membership_permission(membership, "deployment-profile", "delete")
     
     if profile.status == ProfileStatus.ACTIVE:
         raise HTTPException(
@@ -974,7 +982,7 @@ def _profile_to_response(profile: DeploymentProfile, lanes: list[Lane] | None = 
         organization_id=profile.organization_id,
         name=profile.name,
         description=profile.description,
-        status=profile.status.value if hasattr(profile.status, 'value') else str(profile.status),
+        status=None,
         site_id=profile.site_id,
         trust_profile_id=profile.trust_profile_id,
         presentation_policy_ids=profile.presentation_policy_ids,
@@ -991,7 +999,7 @@ def _profile_to_response(profile: DeploymentProfile, lanes: list[Lane] | None = 
         offline_cache_ttl_hours=profile.offline_cache_ttl_hours,
         biometric_required=profile.biometric_required,
         audit_all_events=profile.audit_all_events,
-        lanes=[_lane_to_response(lane).model_dump() for lane in (lanes or [])],
+        lanes=[_lane_to_response(lane).model_dump(exclude_none=True) for lane in (lanes or [])],
         created_at=profile.created_at.isoformat(),
         updated_at=profile.updated_at.isoformat(),
     )
@@ -1004,7 +1012,7 @@ def _lane_to_response(lane: Lane) -> LaneResponse:
         deployment_profile_id=lane.deployment_profile_id,
         description=lane.description,
         location=lane.location,
-        device_type=lane.device_type,
+        device_type=lane.device_type if lane.device_type != "kiosk" else None,
         default_policy_id=lane.default_policy_id,
         device_ids=lane.device_ids,
         metadata=lane.metadata,
@@ -1015,10 +1023,10 @@ def _lane_to_response(lane: Lane) -> LaneResponse:
 # Lane Endpoints
 # =============================================================================
 
-_lane_repo: InMemoryLaneRepository | None = None
+_lane_repo: InMemoryLaneRepository | PostgresLaneRepository | None = None
 
 
-def get_lane_repo() -> InMemoryLaneRepository:
+def get_lane_repo() -> InMemoryLaneRepository | PostgresLaneRepository:
     if _lane_repo is None:
         raise RuntimeError("Service not configured")
     return _lane_repo
@@ -1036,7 +1044,8 @@ async def create_lane(
     profile = await repo.get(profile_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Deployment Profile not found")
-    await app.state.org_client.get_membership(user_id, profile.organization_id)
+    membership = await app.state.org_client.get_membership(user_id, profile.organization_id)
+    ensure_membership_permission(membership, "deployment-profile", "edit")
     lane = Lane(
         deployment_profile_id=profile_id,
         name=request.name,
@@ -1063,7 +1072,8 @@ async def list_lanes(
     profile = await repo.get(profile_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Deployment Profile not found")
-    await app.state.org_client.get_membership(user_id, profile.organization_id)
+    membership = await app.state.org_client.get_membership(user_id, profile.organization_id)
+    ensure_membership_permission(membership, "deployment-profile", "view")
     lanes = await lane_repo.list(profile_id)
     return [_lane_to_response(l) for l in lanes[offset:offset + limit]]
 
@@ -1080,7 +1090,8 @@ async def get_lane(
     profile = await repo.get(profile_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Deployment Profile not found")
-    await app.state.org_client.get_membership(user_id, profile.organization_id)
+    membership = await app.state.org_client.get_membership(user_id, profile.organization_id)
+    ensure_membership_permission(membership, "deployment-profile", "view")
     lane = await lane_repo.get(lane_id)
     if not lane or lane.deployment_profile_id != profile_id:
         raise HTTPException(status_code=404, detail="Lane not found")
@@ -1101,8 +1112,7 @@ async def update_lane(
     if not profile:
         raise HTTPException(status_code=404, detail="Deployment Profile not found")
     membership = await app.state.org_client.get_membership(user_id, profile.organization_id)
-    if not membership.has_role("admin", "owner"):
-        raise HTTPException(status_code=403, detail="Admin access required")
+    ensure_membership_permission(membership, "deployment-profile", "edit")
     lane = await lane_repo.get(lane_id)
     if not lane or lane.deployment_profile_id != profile_id:
         raise HTTPException(status_code=404, detail="Lane not found")
@@ -1136,8 +1146,7 @@ async def delete_lane(
     if not profile:
         raise HTTPException(status_code=404, detail="Deployment Profile not found")
     membership = await app.state.org_client.get_membership(user_id, profile.organization_id)
-    if not membership.has_role("admin", "owner"):
-        raise HTTPException(status_code=403, detail="Admin access required")
+    ensure_membership_permission(membership, "deployment-profile", "edit")
     lane = await lane_repo.get(lane_id)
     if not lane or lane.deployment_profile_id != profile_id:
         raise HTTPException(status_code=404, detail="Lane not found")
@@ -1166,7 +1175,8 @@ async def assign_device_to_lane(
     profile = await repo.get(profile_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Deployment Profile not found")
-    await app.state.org_client.get_membership(user_id, profile.organization_id)
+    membership = await app.state.org_client.get_membership(user_id, profile.organization_id)
+    ensure_membership_permission(membership, "deployment-profile", "edit")
     lane = await lane_repo.get(lane_id)
     if not lane or lane.deployment_profile_id != profile_id:
         raise HTTPException(status_code=404, detail="Lane not found")
@@ -1191,10 +1201,20 @@ async def assign_device_to_lane(
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    global _repo, _lane_repo
+    global _repo, _lane_repo, _db_engine
     logger.info(f"Starting {SERVICE_NAME}...")
-    _repo = InMemoryDeploymentProfileRepository()
-    _lane_repo = InMemoryLaneRepository()
+    config = get_config()
+    _db_engine = create_async_engine(
+        config["database_url"],
+        pool_pre_ping=True,
+        pool_size=5,
+        max_overflow=10,
+        echo=False,
+    )
+    session_factory = async_sessionmaker(_db_engine, expire_on_commit=False)
+    _repo = PostgresDeploymentProfileRepository(session_factory)
+    _lane_repo = PostgresLaneRepository(session_factory)
+    logger.info("PostgreSQL adapter initialized for deployment profile service")
     
     # Initialize gRPC channel to organization service
     from common.di import setup_org_client, teardown_org_client
@@ -1203,6 +1223,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     yield
     logger.info(f"Shutting down {SERVICE_NAME}...")
     await teardown_org_client(app)
+    if _db_engine is not None:
+        await _db_engine.dispose()
 
 
 def create_app() -> FastAPI:

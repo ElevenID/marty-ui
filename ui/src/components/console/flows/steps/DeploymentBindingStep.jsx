@@ -27,9 +27,11 @@ import { useTranslation } from 'react-i18next';
 
 import { listDeploymentProfiles } from '../../../../services/deploymentProfilesApi';
 import { listPresentationPolicies } from '../../../../services/presentationPolicyApi';
+import { useAuth } from '../../../../hooks/useAuth';
 
 const DeploymentBindingStep = ({ selectedDeployment, defaultPolicyId, onUpdate }) => {
   const { t } = useTranslation('console');
+  const { organizationId } = useAuth();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [deploymentProfiles, setDeploymentProfiles] = useState([]);
@@ -41,7 +43,7 @@ const DeploymentBindingStep = ({ selectedDeployment, defaultPolicyId, onUpdate }
 
     try {
       const [deploymentsResponse, policiesResponse] = await Promise.all([
-        listDeploymentProfiles(),
+        listDeploymentProfiles({ organization_id: organizationId }),
         listPresentationPolicies(),
       ]);
 
@@ -53,7 +55,7 @@ const DeploymentBindingStep = ({ selectedDeployment, defaultPolicyId, onUpdate }
     } finally {
       setLoading(false);
     }
-  }, [t]);
+  }, [organizationId, t]);
 
   useEffect(() => {
     fetchData();

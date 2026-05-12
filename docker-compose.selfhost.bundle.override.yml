@@ -81,6 +81,11 @@ services:
     environment:
       SERVICE_NAME: deployment_profile
 
+  signing-keys:
+    <<: *selfhost-service-image
+    environment:
+      SERVICE_NAME: signing_keys
+
   flow:
     <<: *selfhost-service-image
     environment:

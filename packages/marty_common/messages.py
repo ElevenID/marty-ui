@@ -119,8 +119,9 @@ class CredentialResponsePayload:
 class PresentationRequestPayload:
     client_id: str
     response_type: str
-    presentation_definition: dict[str, Any]
     nonce: str
+    presentation_definition: dict[str, Any] | None = None
+    dcql_query: dict[str, Any] | None = None
     mip_flow_instance_id: str | None = None
     mip_policy_id: str | None = None
     response_mode: str | None = None

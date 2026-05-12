@@ -7,6 +7,7 @@ import {
   DISABLE_PUBLIC_GET_STARTED_BUTTONS as publicGetStartedButtonsDisabled,
   DISABLE_PUBLIC_LOGIN_BUTTON as publicLoginButtonDisabled,
   DISABLE_PUBLIC_PRICING_BUTTONS as publicPricingButtonsDisabled,
+  ENABLE_LEGACY_ADMIN_IMPERSONATION_BANNER as publicLegacyImpersonationBannerEnabled,
   SHOW_PUBLIC_GET_STARTED_BUTTONS as publicGetStartedButtons,
   SHOW_PUBLIC_LOGIN_BUTTON as publicLoginButton,
   SHOW_PUBLIC_PRICING_BUTTONS as publicPricingButtons,
@@ -16,6 +17,7 @@ import {
   DISABLE_PUBLIC_GET_STARTED_BUTTONS as selfhostGetStartedButtonsDisabled,
   DISABLE_PUBLIC_LOGIN_BUTTON as selfhostLoginButtonDisabled,
   DISABLE_PUBLIC_PRICING_BUTTONS as selfhostPricingButtonsDisabled,
+  ENABLE_LEGACY_ADMIN_IMPERSONATION_BANNER as selfhostLegacyImpersonationBannerEnabled,
   SHOW_PUBLIC_GET_STARTED_BUTTONS as selfhostGetStartedButtons,
   SHOW_PUBLIC_LOGIN_BUTTON as selfhostLoginButton,
   SHOW_PUBLIC_PRICING_BUTTONS as selfhostPricingButtons,
@@ -41,7 +43,6 @@ function renderSelfhostRoot(authState: {
     <MemoryRouter initialEntries={['/']}>
       <Routes>
         <Route path="/" element={renderPublicRoot(authState)} />
-        <Route path="/dashboard" element={<div>Admin dashboard</div>} />
         <Route path="/console/org" element={<div>Vendor console</div>} />
         <Route path="/console/applicant/catalog" element={<div>Applicant catalog</div>} />
       </Routes>
@@ -59,6 +60,7 @@ describe('publicSite.selfhost', () => {
     expect(publicGetStartedButtonsDisabled).toBe(false);
     expect(publicPricingButtons).toBe(true);
     expect(publicPricingButtonsDisabled).toBe(false);
+    expect(publicLegacyImpersonationBannerEnabled).toBe(false);
     expect(publicTabs.map((tab) => tab.path)).toEqual(expectedPublicPaths);
 
     expect(isSelfhostProductionPublicHost('elevenidllc.com')).toBe(true);
@@ -70,6 +72,7 @@ describe('publicSite.selfhost', () => {
     expect(selfhostGetStartedButtonsDisabled).toBe(false);
     expect(selfhostPricingButtons).toBe(true);
     expect(selfhostPricingButtonsDisabled).toBe(false);
+    expect(selfhostLegacyImpersonationBannerEnabled).toBe(false);
     expect(selfhostTabs.map((tab) => tab.path)).toEqual(expectedPublicPaths);
     expect(selfhostTabs).toEqual(publicTabs);
 
@@ -80,6 +83,7 @@ describe('publicSite.selfhost', () => {
       disablePublicGetStartedButtons: true,
       showPublicPricingButtons: true,
       disablePublicPricingButtons: true,
+      enableLegacyAdminImpersonationBanner: false,
     });
     expect(getSelfhostPublicTabs('elevenidllc.com')).toEqual(
       publicTabs.map((tab) => (tab.path === '/pricing' ? { ...tab, disabled: true } : tab)),
@@ -92,6 +96,7 @@ describe('publicSite.selfhost', () => {
       disablePublicGetStartedButtons: false,
       showPublicPricingButtons: true,
       disablePublicPricingButtons: false,
+      enableLegacyAdminImpersonationBanner: false,
     });
     expect(getSelfhostPublicTabs('beta.elevenidllc.com')).toEqual(publicTabs);
   });
@@ -107,7 +112,7 @@ describe('publicSite.selfhost', () => {
     expect(screen.getByText('Original landing page')).toBeInTheDocument();
   });
 
-  it('redirects authenticated administrators to the dashboard', () => {
+  it('redirects authenticated administrators to the console', () => {
     renderSelfhostRoot({
       isAuthenticated: true,
       isAdministrator: true,
@@ -115,6 +120,6 @@ describe('publicSite.selfhost', () => {
       isApplicant: false,
     });
 
-    expect(screen.getByText('Admin dashboard')).toBeInTheDocument();
+    expect(screen.getByTestId('browser-redirect')).toBeInTheDocument();
   });
 });

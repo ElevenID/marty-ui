@@ -9,6 +9,11 @@ const { mockNavigate, mockLocation, mockUseAuth } = vi.hoisted(() => ({
   mockUseAuth: vi.fn(),
 }));
 
+vi.mock('../../application/routing/appHandoff', () => ({
+  shouldBrowserRedirect: () => false,
+  redirectBrowser: vi.fn(),
+}));
+
 vi.mock('react-router-dom', async () => {
   const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom');
   return {

@@ -10,6 +10,7 @@ import pytest
 from auth.domain.entities import OIDCUserInfo
 from auth.infrastructure.applicant_record_model import ApplicantRecord
 from auth.infrastructure.adapters.user_provisioning_adapter import (
+    InMemoryUserProvisioningAdapter,
     JITUserProvisioningAdapter,
     MARTY_ORG_ID,
     UNKNOWN_DATE_OF_BIRTH,
@@ -36,7 +37,8 @@ async def test_resolve_marty_organization_context_returns_membership_and_org_nam
         GetMember=AsyncMock(
             return_value=SimpleNamespace(
                 organization_id=MARTY_ORG_ID,
-                role="member",
+                roles=[SimpleNamespace(name="applicant"), SimpleNamespace(name="admin")],
+                has_org_console_access=True,
             )
         ),
         GetOrganization=AsyncMock(
@@ -47,11 +49,12 @@ async def test_resolve_marty_organization_context_returns_membership_and_org_nam
         ),
     )
 
-    org_id, org_name, member_role = await adapter._resolve_marty_organization_context("user-123")
+    org_id, org_name, member_roles, has_org_console_access = await adapter._resolve_marty_organization_context("user-123")
 
     assert org_id == MARTY_ORG_ID
     assert org_name == "Marty Default Org"
-    assert member_role == "member"
+    assert member_roles == ["applicant", "admin"]
+    assert has_org_console_access is True
 
 
 @pytest.mark.asyncio
@@ -62,11 +65,12 @@ async def test_resolve_marty_organization_context_returns_none_when_membership_m
         GetOrganization=AsyncMock(),
     )
 
-    org_id, org_name, member_role = await adapter._resolve_marty_organization_context("user-123")
+    org_id, org_name, member_roles, has_org_console_access = await adapter._resolve_marty_organization_context("user-123")
 
     assert org_id is None
     assert org_name is None
-    assert member_role is None
+    assert member_roles == []
+    assert has_org_console_access is False
     adapter._org_stub.GetOrganization.assert_not_awaited()
 
 
@@ -140,3 +144,46 @@ def test_to_authenticated_name_parts_hides_unknown_placeholders():
 
     assert given_name is None
     assert family_name is None
+
+
+@pytest.mark.asyncio
+async def test_in_memory_provisioning_enriches_session_with_marty_org_context():
+    adapter = InMemoryUserProvisioningAdapter()
+    adapter._org_stub = SimpleNamespace(
+        AddMember=AsyncMock(),
+        GetMember=AsyncMock(
+            return_value=SimpleNamespace(
+                organization_id=MARTY_ORG_ID,
+                roles=[SimpleNamespace(name="admin")],
+                has_org_console_access=True,
+            )
+        ),
+        GetOrganization=AsyncMock(
+            return_value=SimpleNamespace(
+                display_name="Marty Identity Platform",
+                name="Marty",
+            )
+        ),
+    )
+
+    user = await adapter.provision_user(
+        OIDCUserInfo(
+            sub="user-123",
+            email="marty@example.com",
+            preferred_username="marty@example.com",
+            given_name="Marty",
+            family_name="McFly",
+            organization={
+                MARTY_ORG_ID: {"name": "Marty Identity Platform"},
+            },
+            roles=["administrator"],
+        )
+    )
+
+    assert user.organization_id == MARTY_ORG_ID
+    assert user.organization_name == "Marty Identity Platform"
+    assert user.organization == {
+        MARTY_ORG_ID: {"name": "Marty Identity Platform"},
+    }
+    assert "admin" in user.roles
+    assert user.user_type.value == "administrator"

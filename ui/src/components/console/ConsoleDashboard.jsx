@@ -22,7 +22,7 @@ import {
   Chip,
 } from '@mui/material';
 import { useTranslation } from 'react-i18next';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 
@@ -44,7 +44,6 @@ import { DeveloperQuickStartPanel } from './dashboard/DeveloperQuickStartPanel';
 import { EnvironmentWarningBanner, EnvironmentContext } from './dashboard/EnvironmentBadge';
 import GuidedSetupBanner from './dashboard/GuidedSetupBanner';
 import { runHostedPilotPurge, updateOrganizationEnvironment } from '../../services/dashboardApi';
-import CreateTrustProfileDrawer from './trust/CreateTrustProfileDrawer';
 import CreateTemplateDrawer from './templates/CreateTemplateDrawer';
 import CreatePolicyDrawer from './policies/CreatePolicyDrawer';
 import CreateDeploymentDrawer from './deployments/CreateDeploymentDrawer';
@@ -218,6 +217,7 @@ function QuickActionCard({ action, disabled, tooltip, onClick }) {
 
 function ConsoleDashboard() {
   const { t } = useTranslation('console');
+  const navigate = useNavigate();
   const { user, organizationName, organizationId, isAdministrator, isVendor } = useAuth();
   const { data, loading, error, refetch } = useDashboardData();
   useSSE(organizationId);
@@ -234,7 +234,7 @@ function ConsoleDashboard() {
   // Filter visible quick actions
   const visibleQuickActions = useMemo(() => {
     return DASHBOARD_QUICK_ACTIONS.adminVendor.filter(
-      (action) => quickActionVisibility[action.id]?.visible !== false
+      (action) => quickActionVisibility[action.id]?.visible === true
     );
   }, [quickActionVisibility]);
 
@@ -251,8 +251,14 @@ function ConsoleDashboard() {
   // Handle quick action clicks
   const handleQuickAction = (actionId) => {
     switch (actionId) {
+      case 'register-signing-service':
+        navigate('/console/org/deploy/key-management/services/new');
+        break;
+      case 'create-issuer-identity':
+        navigate('/console/org/deploy/issuer-identity');
+        break;
       case 'create-trust-profile':
-        setActiveDrawer('trust');
+        navigate('/console/org/trust/profiles/new');
         break;
       case 'create-template':
         setActiveDrawer('template');
@@ -261,9 +267,9 @@ function ConsoleDashboard() {
         setActiveDrawer('policy');
         break;
       case 'generate-api-key':
-        setActiveDrawer('deployment');
+        navigate('/console/org/api-keys');
         break;
-      case 'start-verification':
+      case 'create-flow':
         setActiveDrawer('flow');
         break;
       default:
@@ -470,11 +476,6 @@ function ConsoleDashboard() {
       <DeveloperQuickStartPanel />
 
       {/* Resource Creation Drawers */}
-      <CreateTrustProfileDrawer
-        open={activeDrawer === 'trust'}
-        onClose={handleDrawerClose}
-        onSuccess={handleDrawerSuccess}
-      />
       <CreateTemplateDrawer
         open={activeDrawer === 'template'}
         onClose={handleDrawerClose}

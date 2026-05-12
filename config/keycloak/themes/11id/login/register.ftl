@@ -150,6 +150,17 @@
                                 </span>
                             </#if>
                         </div>
+
+                        <div class="elevenid-login-help" data-testid="register-password-help">
+                            <p class="elevenid-login-help-text">
+                                If you normally sign in with Google, you can set a local password by email.
+                            </p>
+                            <a class="elevenid-login-help-link"
+                               href="${url.loginResetCredentialsUrl}"
+                               data-testid="register-set-password-email-link">
+                                Set or reset password by email
+                            </a>
+                        </div>
                     </#if>
 
                     <#if recaptchaRequired??>

@@ -11,10 +11,12 @@ export { default as GuidedSetupWizard } from './dashboard/GuidedSetupWizard';
 // Trust
 export { default as TrustPage } from './trust/TrustPage';
 export { default as TrustProfilesPage } from './trust/TrustProfilesPage';
-export { default as TrustedIssuersPage } from './trust/TrustedIssuersPage';
 export { default as RevocationProfilesPage } from './trust/RevocationProfilesPage';
 export { default as TrustProfileWizard } from './trust/TrustProfileWizard';
 export { default as TrustProfileDetailPage } from './trust/TrustProfileDetailPage';
+export { default as TrustProfileEditPage } from './trust/TrustProfileEditPage';
+export { default as RevocationProfileDetailPage } from './trust/RevocationProfileDetailPage';
+export { default as RevocationProfileWizard } from './trust/RevocationProfileWizard';
 
 // Templates
 export { default as TemplatesPage } from './templates/TemplatesPage';
@@ -32,7 +34,10 @@ export { default as PresentationPolicyWizard } from './policies/PresentationPoli
 export { default as DeployPage } from './deploy/DeployPage';
 export { default as DeploymentProfilesPage } from './deploy/DeploymentsPage';
 export { default as ApiKeysPage } from './deploy/ApiKeysPage';
+export { default as DidIdentitiesPage } from './deploy/DidIdentitiesPage';
 export { default as SigningKeysPage } from './deploy/SigningKeysPage';
+export { default as KeyManagementServiceWizard } from './deploy/KeyManagementServiceWizard';
+export { default as IssuerIdentityWizard } from './deploy/IssuerIdentityWizard';
 export { default as LanesDevicesPage } from './deploy/LanesDevicesPage';
 export { default as DeploymentProfileWizard } from './deploy/DeploymentProfileWizard';
 

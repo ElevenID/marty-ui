@@ -87,12 +87,14 @@ describe('applicationForm use cases', () => {
       createApplication: vi.fn().mockResolvedValue({ id: 'application-1' }),
       autoIssueApplication: vi.fn().mockResolvedValue({
         id: 'issued-1',
+        reference_number: 'APP-20260317-ISSUED',
         credential_offer_uri: 'openid-credential-offer://offer',
         credential_offer_uris: { apple: 'apple://offer' },
         offer_expires_at: '2026-03-17T00:00:00.000Z',
       }),
     })).resolves.toEqual({
       applicationId: 'issued-1',
+      applicationReference: 'APP-20260317-ISSUED',
       offerData: {
         offer_url: 'openid-credential-offer://offer',
         credential_offer_uris: { apple: 'apple://offer' },
@@ -102,8 +104,8 @@ describe('applicationForm use cases', () => {
   });
 
   it('submits applications and uploads biometrics when a portrait is provided', async () => {
-    const createApplication = vi.fn().mockResolvedValue({ id: 'application-1' });
-    const submitApplication = vi.fn().mockResolvedValue({ id: 'submitted-1' });
+    const createApplication = vi.fn().mockResolvedValue({ id: 'application-1', reference_number: 'APP-20260317-CREATED' });
+    const submitApplication = vi.fn().mockResolvedValue({ id: 'submitted-1', reference_number: 'APP-20260317-SUBMIT' });
     const enrollBiometric = vi.fn().mockResolvedValue({ id: 'bio-1' });
     const file = { name: 'portrait.png' };
 
@@ -124,6 +126,7 @@ describe('applicationForm use cases', () => {
       readFileAsBase64: vi.fn().mockResolvedValue('image-base64'),
     })).resolves.toEqual({
       applicationId: 'submitted-1',
+      applicationReference: 'APP-20260317-SUBMIT',
       submitted: true,
     });
 

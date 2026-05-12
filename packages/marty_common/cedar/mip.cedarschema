@@ -136,6 +136,12 @@ namespace MIP {
   /// Webhook or notification target.
   entity WebhookEndpoint in [Organization] {};
 
+  /// Organization-managed external protocol connector.
+  entity IntegrationConnector in [Organization] {
+    provider: String,
+    enabled: Bool,
+  };
+
   /// Audit log entry (read-only resource).
   entity AuditEvent in [Organization] {};
 
@@ -270,6 +276,18 @@ namespace MIP {
   action "webhooks:write" appliesTo {
     principal: [User, ApiKey, ServiceAccount],
     resource: [WebhookEndpoint],
+    context: RequestContext,
+  };
+
+  action "integrations:read" appliesTo {
+    principal: [User, ApiKey, ServiceAccount],
+    resource: [IntegrationConnector],
+    context: RequestContext,
+  };
+
+  action "integrations:write" appliesTo {
+    principal: [User, ApiKey, ServiceAccount],
+    resource: [IntegrationConnector],
     context: RequestContext,
   };
 

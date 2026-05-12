@@ -33,7 +33,7 @@ describe('orgSettingsUseCases', () => {
         membershipMode: 'open',
         allowedEmailDomains: [],
         domainJoinPolicy: 'approval',
-        defaultRole: 'member',
+        defaultRole: 'applicant',
         requireDeviceRegistration: false,
         allowPushNotifications: true,
         deviceRegistrationPrompt: 'first_action',

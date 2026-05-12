@@ -20,6 +20,13 @@ import {
 } from '@mui/material';
 import { useTranslation } from 'react-i18next';
 
+import {
+  TRUST_PROFILE_SUPPORTED_FORMATS,
+  getAllowedAlgorithmsForFramework,
+  getSupportedFormatsForFramework,
+  isFrameworkFormatSelectionLocked,
+} from '../trustProfileFormatCatalog';
+
 const getFrameworkTypes = (t) => [
   { value: 'icao', label: t('wizards.trustProfile.frameworkLabels.icao') },
   { value: 'aamva', label: t('wizards.trustProfile.frameworkLabels.aamva') },
@@ -27,18 +34,38 @@ const getFrameworkTypes = (t) => [
   { value: 'custom', label: t('wizards.trustProfile.frameworkLabels.custom') },
 ];
 
-const getSupportedFormats = (t) => [
-  { value: 'jwt_vc', label: t('wizards.trustProfile.basicsStep.formatOptions.jwt_vc'), recommended: true },
-  { value: 'sd_jwt_vc', label: t('wizards.trustProfile.basicsStep.formatOptions.sd_jwt_vc'), recommended: true },
-  { value: 'mdoc', label: t('wizards.trustProfile.basicsStep.formatOptions.mdoc'), recommended: true },
-  { value: 'ldp_vc', label: t('wizards.trustProfile.basicsStep.formatOptions.ldp_vc'), recommended: false },
-];
-
 const BasicsStep = ({ data, onChange }) => {
   const { t } = useTranslation('console');
+  const frameworkType = data.framework_type || 'custom';
+  const supportedFormatsLabel = t('wizards.trustProfile.basicsStep.fields.supportedFormats').replace(/\s*\*$/, '');
+  const supportedFormats = TRUST_PROFILE_SUPPORTED_FORMATS.map((format) => ({
+    ...format,
+    label: t(format.labelKey),
+  }));
+  const formatSelectionLocked = isFrameworkFormatSelectionLocked(frameworkType);
+
+  const handleFrameworkChange = (nextFrameworkType) => {
+    const currentValidationRules = data.validation_rules || {};
+
+    onChange({
+      framework_type: nextFrameworkType,
+      supported_formats: getSupportedFormatsForFramework(nextFrameworkType, data.supported_formats),
+      validation_rules: {
+        ...currentValidationRules,
+        allowed_algorithms: getAllowedAlgorithmsForFramework(
+          nextFrameworkType,
+          currentValidationRules.allowed_algorithms,
+        ),
+      },
+    });
+  };
 
   const handleFormatToggle = (format) => {
-    const formats = data.supported_formats || [];
+    if (formatSelectionLocked) {
+      return;
+    }
+
+    const formats = getSupportedFormatsForFramework('custom', data.supported_formats);
     const newFormats = formats.includes(format)
       ? formats.filter((f) => f !== format)
       : [...formats, format];
@@ -81,11 +108,11 @@ const BasicsStep = ({ data, onChange }) => {
       />
 
       {/* Framework Type */}
-      <FormControl fullWidth sx={{ mb: 3 }}>
+      <FormControl fullWidth sx={{ mb: 3 }} data-testid="wizard.trustProfile.frameworkTypeField">
         <InputLabel>{t('wizards.trustProfile.basicsStep.fields.frameworkType')}</InputLabel>
         <Select
-          value={data.framework_type || 'custom'}
-          onChange={(e) => onChange({ framework_type: e.target.value })}
+          value={frameworkType}
+          onChange={(e) => handleFrameworkChange(e.target.value)}
           label={t('wizards.trustProfile.basicsStep.fields.frameworkType')}
           data-testid="wizard.trustProfile.frameworkType"
         >
@@ -103,19 +130,25 @@ const BasicsStep = ({ data, onChange }) => {
       {/* Supported Formats */}
       <FormControl component="fieldset" fullWidth sx={{ mb: 2 }}>
         <Typography variant="subtitle2" gutterBottom>
-          {t('wizards.trustProfile.basicsStep.fields.supportedFormats')}
+          {supportedFormatsLabel}
         </Typography>
         <FormHelperText sx={{ mt: 0, mb: 1 }}>
-          {t('wizards.trustProfile.basicsStep.helpers.supportedFormats')}
+          {formatSelectionLocked
+            ? t('wizards.trustProfile.basicsStep.helpers.supportedFormatsLocked', {
+                defaultValue: 'This framework uses pre-configured credential formats. Choose Custom to edit them.',
+              })
+            : t('wizards.trustProfile.basicsStep.helpers.supportedFormats')}
         </FormHelperText>
         <FormGroup>
-          {getSupportedFormats(t).map((format) => (
+          {supportedFormats.map((format) => (
             <FormControlLabel
               key={format.value}
               control={
                 <Checkbox
                   checked={(data.supported_formats || []).includes(format.value)}
                   onChange={() => handleFormatToggle(format.value)}
+                  disabled={formatSelectionLocked}
+                  inputProps={{ 'data-testid': `wizard.trustProfile.format.${format.value}` }}
                 />
               }
               label={

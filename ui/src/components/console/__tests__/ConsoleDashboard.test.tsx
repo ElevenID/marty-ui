@@ -16,6 +16,8 @@ import { render } from '@test/utils'
 import { server } from '@test/mocks/server'
 import ConsoleDashboard from '../ConsoleDashboard'
 
+const mockNavigate = vi.fn()
+
 // Mock auth hook
 vi.mock('@hooks/useAuth', () => ({
   useAuth: () => ({
@@ -32,9 +34,23 @@ vi.mock('@hooks/useSSE', () => ({
   useSSE: () => ({ isConnected: false }),
 }))
 
+vi.mock('react-router-dom', async () => {
+  const actual = await vi.importActual('react-router-dom')
+  return {
+    ...actual,
+    useNavigate: () => mockNavigate,
+  }
+})
+
 // Dashboard data fixtures
 const emptyDashboardData = {
   trustProfiles: [],
+  signingKeys: [{ id: 'key_1', name: 'Issuer Key' }],
+  issuerProfiles: [],
+  keyManagementConfig: {
+    default_service_id: 'managed-openbao-transit',
+    services: [{ id: 'managed-openbao-transit', name: 'Managed OpenBao', status: 'configured' }],
+  },
   templates: [],
   policies: [],
   deployments: [],
@@ -50,6 +66,12 @@ const emptyDashboardData = {
 
 const partialDashboardData = {
   trustProfiles: [{ id: 1, name: 'Active Profile', status: 'active' }],
+  signingKeys: [{ id: 'key_1', name: 'Issuer Key' }],
+  issuerProfiles: [],
+  keyManagementConfig: {
+    default_service_id: 'managed-openbao-transit',
+    services: [{ id: 'managed-openbao-transit', name: 'Managed OpenBao', status: 'configured' }],
+  },
   templates: [{ id: 1, name: 'Test Template', status: 'active', artifacts_status: 'missing', trust_profile_id: 1 }],
   policies: [],
   deployments: [],
@@ -65,6 +87,12 @@ const partialDashboardData = {
 
 const fullDashboardData = {
   trustProfiles: [{ id: 1, name: 'Active Profile', status: 'active' }],
+  signingKeys: [{ id: 'key_1', name: 'Issuer Key' }],
+  issuerProfiles: [{ id: 'issuer_1', issuer_did: 'did:web:issuer.example.com' }],
+  keyManagementConfig: {
+    default_service_id: 'managed-openbao-transit',
+    services: [{ id: 'managed-openbao-transit', name: 'Managed OpenBao', status: 'configured' }],
+  },
   templates: [{ id: 1, name: 'Test Template', status: 'active', artifacts_status: 'valid', trust_profile_id: 1 }],
   policies: [{ id: 1, name: 'Test Policy', status: 'active', required_claims: ['age'] }],
   deployments: [{ id: 1, name: 'Prod Deploy', status: 'active' }],
@@ -133,6 +161,7 @@ vi.mock('@hooks/useDashboardData', () => ({
 describe('ConsoleDashboard', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockNavigate.mockReset()
     mockDashboardReturn = { data: fullDashboardData, loading: false, error: null, refetch: vi.fn() }
     server.use(
       http.get('http://localhost:8000/v1/organizations/:orgId/dashboard/applicant-stats', () => HttpResponse.json({
@@ -364,6 +393,57 @@ describe('ConsoleDashboard', () => {
       mockDashboardReturn = { data: emptyDashboardData, loading: false, error: null, refetch: vi.fn() }
       render(<ConsoleDashboard />)
       expect(screen.getByText(/Next Step/i)).toBeInTheDocument()
+    })
+
+    it('should route the trust quick action to the full trust profile wizard', async () => {
+      const user = userEvent.setup()
+
+      mockDashboardReturn = { data: emptyDashboardData, loading: false, error: null, refetch: vi.fn() }
+
+      render(<ConsoleDashboard />)
+      await user.click(screen.getByText('Create Trust Profile'))
+
+      expect(mockNavigate).toHaveBeenCalledWith('/console/org/trust/profiles/new')
+    })
+
+    it('should prioritize signing service setup when trust dependencies are blocked by KMS', () => {
+      mockDashboardReturn = {
+        data: {
+          ...emptyDashboardData,
+          signingKeys: [],
+          issuerProfiles: [],
+          keyManagementConfig: {
+            default_service_id: null,
+            services: [],
+          },
+        },
+        loading: false,
+        error: null,
+        refetch: vi.fn(),
+      }
+
+      render(<ConsoleDashboard />)
+
+      expect(screen.getByText('Register Signing Service')).toBeInTheDocument()
+      expect(screen.queryByText('Create Trust Profile')).not.toBeInTheDocument()
+    })
+
+    it('should prioritize issuer identity setup when KMS is ready but issuer input is missing', () => {
+      mockDashboardReturn = {
+        data: {
+          ...emptyDashboardData,
+          signingKeys: [],
+          issuerProfiles: [],
+        },
+        loading: false,
+        error: null,
+        refetch: vi.fn(),
+      }
+
+      render(<ConsoleDashboard />)
+
+      expect(screen.getAllByText('Set Up Issuer Identity').length).toBeGreaterThan(0)
+      expect(screen.queryByText('Create Trust Profile')).not.toBeInTheDocument()
     })
 
     it('should show operational banner when fully configured', () => {

@@ -53,8 +53,9 @@ class Role:
     An organisation-scoped role that bundles a set of permissions.
     
     Each organisation gets its own copy of the system roles
-    (owner, admin, member, viewer) and may create any number of
-    custom roles on top.
+    (owner, admin, access_admin, catalog_admin, reviewer,
+    operator, viewer, applicant) and may create any number
+    of custom roles on top.
     """
 
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
@@ -127,14 +128,6 @@ class OrganizationType(str, Enum):
     EDUCATION = "education"
 
 
-class MemberRole(str, Enum):
-    """Organization member role values."""
-    OWNER = "owner"
-    ADMIN = "admin"
-    MEMBER = "member"
-    VIEWER = "viewer"
-
-
 class MemberStatus(str, Enum):
     """Member status values."""
     ACTIVE = "active"
@@ -162,6 +155,17 @@ class JoinMechanism(str, Enum):
     CODE = "code"  # Join via invite code
     INVITE = "invite"  # Email invitation only
     DOMAIN = "domain"  # Domain-based suggestions (future)
+
+
+APPLICANT_PERMISSION_KEYS: frozenset[str] = frozenset(
+    {
+        "organization:view",
+        "credential-template:view",
+        "application-template:view",
+        "application:view",
+        "issuance:view",
+    }
+)
 
 
 @dataclass
@@ -321,12 +325,13 @@ class Organization:
             owner_id=owner_id,
         )
         
-        # Create owner membership
+        # Create owner membership. The owner role is assigned after RBAC roles
+        # are seeded for the organization.
         owner = Member(
             organization_id=org.id,
             user_id=owner_id,
-            role=MemberRole.OWNER,
             status=MemberStatus.ACTIVE,
+            joined_at=datetime.now(timezone.utc),
         )
         
         return org, owner
@@ -392,9 +397,8 @@ class Member:
     organization_id: str = ""
     user_id: str = ""
     email: str | None = None  # For invitations
-    role: MemberRole = MemberRole.MEMBER  # Legacy – kept for backward compat
     status: MemberStatus = MemberStatus.ACTIVE
-    
+
     # RBAC roles (populated from member_roles join table)
     roles: list[Role] = field(default_factory=list)
     
@@ -417,15 +421,32 @@ class Member:
             perms |= r.permission_keys
         return perms
 
-    def has_permission(self, resource: str, action: str) -> bool:
+    @property
+    def role_names(self) -> set[str]:
+        """Return the assigned role names."""
+        return {role.name for role in self.roles}
+
+    def has_permission(self, resource: str, action: str | None = None) -> bool:
         """Check whether the member has a specific permission via any role."""
-        key = f"{resource}:{action}"
+        key = resource if action is None else f"{resource}:{action}"
         return key in self.effective_permissions
 
-    def has_any_role(self, *role_names: str) -> bool:
+    def has_role(self, *role_names: str) -> bool:
         """Check if the member holds any of the given role names."""
-        member_role_names = {r.name for r in self.roles}
-        return bool(member_role_names & set(role_names))
+        return bool(self.role_names & set(role_names))
+
+    @property
+    def has_org_console_access(self) -> bool:
+        """Return whether the membership should be allowed into org console."""
+        return any(
+            permission_key not in APPLICANT_PERMISSION_KEYS
+            for permission_key in self.effective_permissions
+        )
+
+    @property
+    def is_owner(self) -> bool:
+        """Return whether the member currently holds the owner role."""
+        return "owner" in self.role_names
 
     @classmethod
     def create(
@@ -433,7 +454,6 @@ class Member:
         organization_id: str,
         user_id: str,
         email: str | None = None,
-        role: MemberRole = MemberRole.MEMBER,
         status: MemberStatus = MemberStatus.ACTIVE,
     ) -> Member:
         """Create a direct membership (non-invitation flow)."""
@@ -442,7 +462,6 @@ class Member:
             organization_id=organization_id,
             user_id=user_id,
             email=email,
-            role=role,
             status=status,
             joined_at=now,
             created_at=now,
@@ -454,7 +473,6 @@ class Member:
         cls,
         organization_id: str,
         email: str,
-        role: MemberRole,
         invited_by: str,
     ) -> Member:
         """Create a member invitation."""
@@ -462,7 +480,6 @@ class Member:
             organization_id=organization_id,
             user_id="",  # Set when user accepts
             email=email,
-            role=role,
             status=MemberStatus.INVITED,
             invited_by=invited_by,
             invited_at=datetime.now(timezone.utc),
@@ -478,21 +495,11 @@ class Member:
         self.joined_at = datetime.now(timezone.utc)
         self.updated_at = datetime.now(timezone.utc)
     
-    def change_role(self, new_role: MemberRole) -> None:
-        """Change member's role."""
-        self.role = new_role
-        self.updated_at = datetime.now(timezone.utc)
-    
     def deactivate(self) -> None:
         """Deactivate the membership."""
         self.status = MemberStatus.DEACTIVATED
         self.updated_at = datetime.now(timezone.utc)
-    
-    @property
-    def is_admin(self) -> bool:
-        """Check if member has admin privileges."""
-        return self.role in (MemberRole.OWNER, MemberRole.ADMIN)
-    
+
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         return {
@@ -500,9 +507,11 @@ class Member:
             "organization_id": self.organization_id,
             "user_id": self.user_id,
             "email": self.email,
-            "role": self.role.value,
             "roles": [{"id": r.id, "name": r.name, "display_name": r.display_name} for r in self.roles],
             "status": self.status.value,
+            "permissions": sorted(self.effective_permissions),
+            "has_org_console_access": self.has_org_console_access,
+            "is_owner": self.is_owner,
             "invited_by": self.invited_by,
             "invited_at": self.invited_at.isoformat() if self.invited_at else None,
             "joined_at": self.joined_at.isoformat() if self.joined_at else None,

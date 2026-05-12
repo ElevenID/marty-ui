@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from marty_common import OrganizationContext, require_org_membership
 
@@ -90,6 +90,8 @@ class MemberPermissionsResponse(BaseModel):
     """Flattened permission set for the current user."""
     permissions: list[str]  # ["resource:action", ...]
     roles: list[RoleSummaryResponse]
+    has_org_console_access: bool
+    is_owner: bool
 
 
 class PermissionCatalogGroup(BaseModel):
@@ -126,6 +128,34 @@ async def get_current_user_id(
     return x_user_id
 
 
+def require_role_permission(action: str):
+    async def _check_role_permission(
+        request: Request,
+        org_ctx: Annotated[OrganizationContext, Depends(require_org_membership)],
+    ) -> OrganizationContext:
+        required_key = f"role:{action}"
+        if org_ctx.permissions is None and org_ctx.membership is None:
+            return org_ctx
+        if org_ctx.has_permission(required_key):
+            return org_ctx
+        if org_ctx.membership and (
+            org_ctx.membership.has_permission("role", action)
+            or org_ctx.membership.is_owner
+            or org_ctx.membership.has_org_console_access
+            or org_ctx.membership.has_role("admin", "owner")
+        ):
+            return org_ctx
+        logger.warning(
+            "User %s denied permission %s in org %s",
+            org_ctx.user_id,
+            required_key,
+            org_ctx.organization_id,
+        )
+        raise HTTPException(status_code=403, detail=f"Missing required permission: {required_key}")
+
+    return _check_role_permission
+
+
 # =============================================================================
 # Permission Catalog
 # =============================================================================
@@ -133,7 +163,7 @@ async def get_current_user_id(
 @router.get("/permissions", response_model=list[PermissionCatalogGroup], response_model_exclude_none=True)
 async def list_permissions(
     organization_id: str,
-    org_ctx: OrganizationContext = Depends(require_org_membership),
+    org_ctx: OrganizationContext = Depends(require_role_permission("view")),
     use_case: RoleUseCase = Depends(get_role_use_case),
 ) -> list[PermissionCatalogGroup]:
     """List all available permissions, grouped by resource."""
@@ -161,7 +191,7 @@ async def list_permissions(
 @router.get("/roles", response_model=list[RoleResponse], response_model_exclude_none=True)
 async def list_roles(
     organization_id: str,
-    org_ctx: OrganizationContext = Depends(require_org_membership),
+    org_ctx: OrganizationContext = Depends(require_role_permission("view")),
     use_case: RoleUseCase = Depends(get_role_use_case),
 ) -> list[RoleResponse]:
     """List all roles for the organization."""
@@ -177,7 +207,7 @@ async def list_roles(
 async def create_role(
     organization_id: str,
     request: CreateRoleRequest,
-    org_ctx: OrganizationContext = Depends(require_org_membership),
+    org_ctx: OrganizationContext = Depends(require_role_permission("create")),
     use_case: RoleUseCase = Depends(get_role_use_case),
 ) -> RoleResponse:
     """Create a custom role."""
@@ -207,7 +237,7 @@ async def create_role(
 async def get_role(
     organization_id: str,
     role_id: str,
-    org_ctx: OrganizationContext = Depends(require_org_membership),
+    org_ctx: OrganizationContext = Depends(require_role_permission("view")),
     use_case: RoleUseCase = Depends(get_role_use_case),
 ) -> RoleResponse:
     """Get role details with permissions."""
@@ -223,7 +253,7 @@ async def update_role(
     organization_id: str,
     role_id: str,
     request: UpdateRoleRequest,
-    org_ctx: OrganizationContext = Depends(require_org_membership),
+    org_ctx: OrganizationContext = Depends(require_role_permission("edit")),
     use_case: RoleUseCase = Depends(get_role_use_case),
 ) -> RoleResponse:
     """Update a role's display name, description, or permissions."""
@@ -258,7 +288,7 @@ async def delete_role(
     organization_id: str,
     role_id: str,
     replacement_role_id: str | None = Query(default=None),
-    org_ctx: OrganizationContext = Depends(require_org_membership),
+    org_ctx: OrganizationContext = Depends(require_role_permission("delete")),
     use_case: RoleUseCase = Depends(get_role_use_case),
 ) -> None:
     """Delete a custom role."""
@@ -284,7 +314,7 @@ async def set_member_roles(
     organization_id: str,
     member_id: str,
     request: SetMemberRolesRequest,
-    org_ctx: OrganizationContext = Depends(require_org_membership),
+    org_ctx: OrganizationContext = Depends(require_role_permission("assign")),
     use_case: RoleUseCase = Depends(get_role_use_case),
 ) -> list[RoleSummaryResponse]:
     """Replace all roles for a member."""
@@ -313,7 +343,7 @@ async def add_member_role(
     organization_id: str,
     member_id: str,
     role_id: str,
-    org_ctx: OrganizationContext = Depends(require_org_membership),
+    org_ctx: OrganizationContext = Depends(require_role_permission("assign")),
     use_case: RoleUseCase = Depends(get_role_use_case),
 ) -> None:
     """Add a role to a member."""
@@ -338,7 +368,7 @@ async def remove_member_role(
     organization_id: str,
     member_id: str,
     role_id: str,
-    org_ctx: OrganizationContext = Depends(require_org_membership),
+    org_ctx: OrganizationContext = Depends(require_role_permission("assign")),
     use_case: RoleUseCase = Depends(get_role_use_case),
 ) -> None:
     """Remove a role from a member."""
@@ -385,6 +415,8 @@ async def get_my_permissions(
             RoleSummaryResponse(id=r.id, name=r.name, display_name=r.display_name)
             for r in roles
         ],
+        has_org_console_access=member.has_org_console_access,
+        is_owner=member.is_owner,
     )
 
 

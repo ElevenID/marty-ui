@@ -1,6 +1,15 @@
 #!/usr/bin/env python3
 """Integration test for StatusListManager migration"""
+import os
+
+import pytest
 import requests
+
+if os.environ.get("RUN_REVOCATION_INTEGRATION_TESTS") != "1":
+    pytest.skip(
+        "live revocation profile integration test requires RUN_REVOCATION_INTEGRATION_TESTS=1",
+        allow_module_level=True,
+    )
 
 BASE_URL = "http://localhost:8013"
 

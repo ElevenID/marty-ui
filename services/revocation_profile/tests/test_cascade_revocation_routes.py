@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from marty_common.org_authorization import OrgRole, OrganizationMembership
+from marty_common.org_authorization import OrganizationMembership, OrganizationRoleSummary
 from services.revocation_profile import main as revocation_profile
 
 
@@ -16,8 +16,15 @@ def _membership(*, role: str = "admin") -> OrganizationMembership:
     return OrganizationMembership(
         user_id="user-1",
         organization_id="org-1",
-        role=OrgRole(role),
         status="active",
+        roles=[OrganizationRoleSummary(id=f"role-{role}", name=role, display_name=role.title())],
+        permissions={
+            "revocation-profile:view",
+            "revocation-profile:create",
+            "revocation-profile:delete",
+            "revocation-profile:activate",
+        },
+        has_org_console_access=True,
     )
 
 

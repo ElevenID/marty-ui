@@ -3,15 +3,37 @@ import {
   getFlowManagerMockFlows,
 } from './flowManager';
 
-export async function loadFlowManagerFlows({ listFlows }) {
+function isUnsupportedEndpointError(error) {
+  return error?.status === 404 || error?.status === 422;
+}
+
+function shouldUseMockFlowData() {
+  return Boolean(import.meta?.env?.DEV);
+}
+
+export async function loadFlowManagerFlows({ listFlows, organizationId }) {
   try {
-    const flows = await listFlows({ limit: 100 });
+    const flows = await listFlows({ organization_id: organizationId, limit: 100 });
     return {
       flows,
       error: null,
       notification: null,
+      unsupported: false,
     };
   } catch (error) {
+    if (!shouldUseMockFlowData()) {
+      return {
+        flows: [],
+        error: null,
+        notification: {
+          type: 'warning',
+          message: 'Flow services are unavailable for this environment',
+          options: { autoHideDuration: 8000 },
+        },
+        unsupported: isUnsupportedEndpointError(error),
+      };
+    }
+
     return {
       flows: getFlowManagerMockFlows(),
       error: null,
@@ -20,35 +42,74 @@ export async function loadFlowManagerFlows({ listFlows }) {
         message: 'Backend service unavailable - showing sample data for testing',
         options: { autoHideDuration: 8000 },
       },
+      unsupported: false,
     };
   }
 }
 
-export async function loadFlowManagerExecutions({ listFlowExecutions, flows = [], flowId = null }) {
+export async function loadFlowManagerExecutions({
+  listFlowExecutions,
+  organizationId,
+  flows = [],
+  flowId = null,
+}) {
   if (flowId) {
-    return {
-      executions: await listFlowExecutions(flowId, { limit: 50 }),
-      notification: null,
-    };
+    try {
+      return {
+        executions: await listFlowExecutions(flowId, { organization_id: organizationId, limit: 50 }),
+        notification: null,
+        unsupported: false,
+      };
+    } catch (error) {
+      if (isUnsupportedEndpointError(error)) {
+        return {
+          executions: [],
+          notification: null,
+          unsupported: true,
+        };
+      }
+
+      return {
+        executions: [],
+        notification: {
+          type: 'error',
+          message: 'Unable to load flow executions',
+          options: {
+            details: 'The backend service may be unavailable. Check console for details.',
+          },
+        },
+        unsupported: false,
+      };
+    }
   }
 
   if (flows.length === 0) {
     return {
       executions: [],
       notification: null,
+      unsupported: false,
     };
   }
 
   try {
     const executionSets = await Promise.all(
-      flows.map((flow) => listFlowExecutions(flow.id, { limit: 10 }))
+      flows.map((flow) => listFlowExecutions(flow.id, { organization_id: organizationId, limit: 10 }))
     );
 
     return {
       executions: executionSets.flat(),
       notification: null,
+      unsupported: false,
     };
   } catch (error) {
+    if (isUnsupportedEndpointError(error)) {
+      return {
+        executions: [],
+        notification: null,
+        unsupported: true,
+      };
+    }
+
     return {
       executions: [],
       notification: {
@@ -58,17 +119,27 @@ export async function loadFlowManagerExecutions({ listFlowExecutions, flows = []
           details: 'The backend service may be unavailable. Check console for details.',
         },
       },
+      unsupported: false,
     };
   }
 }
 
-export async function loadFlowManagerCredentials({ listCredentials }) {
+export async function loadFlowManagerCredentials({ listCredentials, organizationId }) {
   try {
     return {
-      credentials: await listCredentials({ limit: 100 }),
+      credentials: await listCredentials({ organization_id: organizationId, limit: 100 }),
       notification: null,
+      unsupported: false,
     };
   } catch (error) {
+    if (isUnsupportedEndpointError(error)) {
+      return {
+        credentials: [],
+        notification: null,
+        unsupported: true,
+      };
+    }
+
     return {
       credentials: [],
       notification: {
@@ -78,17 +149,27 @@ export async function loadFlowManagerCredentials({ listCredentials }) {
           details: 'The backend service may be unavailable. Check console for details.',
         },
       },
+      unsupported: false,
     };
   }
 }
 
-export async function loadFlowManagerRevocationBatches({ listRevocationBatches }) {
+export async function loadFlowManagerRevocationBatches({ listRevocationBatches, organizationId }) {
   try {
     return {
-      revocationBatches: await listRevocationBatches(),
+      revocationBatches: await listRevocationBatches({ organization_id: organizationId }),
       notification: null,
+      unsupported: false,
     };
   } catch (error) {
+    if (isUnsupportedEndpointError(error)) {
+      return {
+        revocationBatches: [],
+        notification: null,
+        unsupported: true,
+      };
+    }
+
     return {
       revocationBatches: [],
       notification: {
@@ -98,6 +179,7 @@ export async function loadFlowManagerRevocationBatches({ listRevocationBatches }
           details: 'The backend service may be unavailable. Check console for details.',
         },
       },
+      unsupported: false,
     };
   }
 }

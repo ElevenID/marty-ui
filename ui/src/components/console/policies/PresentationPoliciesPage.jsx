@@ -30,7 +30,8 @@ import QrCodeIcon from '@mui/icons-material/QrCode';
 import { Link } from 'react-router-dom';
 
 import { ResourcePage, EmptyState, EmptyStates, StatusChip } from '../../common';
-import { listPresentationPolicies } from '../../../services/presentationPolicyApi';
+import { useAuth } from '../../../hooks/useAuth';
+import { listPresentationPolicies, listCredentialTemplates, listTrustProfiles } from '../../../services/presentationPolicyApi';
 
 const getPoliciesTabs = (t) => [
   { label: t('policies.presentationPolicies'), path: '/console/org/policies/presentation' },
@@ -45,10 +46,40 @@ const getBreadcrumbs = (t) => [
 
 function PresentationPoliciesPage() {
   const { t } = useTranslation('console');
+  const { organizationId } = useAuth();
   const { data: policies = [], loading, error } = useAsyncData(
     () => listPresentationPolicies(),
     []
   );
+
+  const { data: depData = { templates: [], trustProfiles: [] } } = useAsyncData(
+    async () => {
+      if (!organizationId) return { templates: [], trustProfiles: [] };
+      const [templatesResult, trustProfilesResult] = await Promise.all([
+        listCredentialTemplates({ organization_id: organizationId, limit: 1 }).catch(() => []),
+        listTrustProfiles({ organization_id: organizationId, limit: 1 }).catch(() => []),
+      ]);
+      return {
+        templates: Array.isArray(templatesResult) ? templatesResult : (templatesResult?.items ?? []),
+        trustProfiles: Array.isArray(trustProfilesResult) ? trustProfilesResult : [],
+      };
+    },
+    [organizationId]
+  );
+  const safeDepData = depData ?? { templates: [], trustProfiles: [] };
+
+  const policyPrerequisites = [
+    {
+      label: t('policies.prerequisites.trustProfile', { defaultValue: 'Trust Profile' }),
+      status: safeDepData.trustProfiles.length > 0 ? 'ready' : 'missing',
+      path: '/console/org/trust/profiles',
+    },
+    {
+      label: t('policies.prerequisites.credentialTemplate', { defaultValue: 'Credential Template' }),
+      status: safeDepData.templates.length > 0 ? 'ready' : 'missing',
+      path: '/console/org/templates/credentials',
+    },
+  ];
 
   const TestActions = () => (
     <Box sx={{ display: 'flex', gap: 1 }}>
@@ -93,7 +124,14 @@ function PresentationPoliciesPage() {
       {loading ? (
         <LinearProgress />
       ) : policies.length === 0 ? (
-        <EmptyState {...EmptyStates.policies} />
+        <EmptyState
+          {...EmptyStates.policies}
+          prerequisites={policyPrerequisites}
+          whyItMatters={t(
+            'policies.prerequisites.whyItMatters',
+            { defaultValue: 'Presentation policies define what credentials and claims are required during verification. They reference credential templates and are validated against trust profiles.' }
+          )}
+        />
       ) : (
         <TableContainer component={Paper}>
           <Table>

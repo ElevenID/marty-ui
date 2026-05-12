@@ -11,7 +11,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from ..domain.entities import Permission, Role
+from ..domain.entities import APPLICANT_PERMISSION_KEYS, Permission, Role
 from ..domain.events import (
     RoleAssignedEvent,
     RoleCreatedEvent,
@@ -38,13 +38,6 @@ logger = logging.getLogger(__name__)
 # ─────────────────────────────────────────────────────────────────────────────
 # System role templates  (used when seeding roles for a new org)
 # ─────────────────────────────────────────────────────────────────────────────
-
-# Resources that only admins/owners can manage
-_ADMIN_ONLY_RESOURCES = {"team", "role", "organization"}
-
-# Resources where viewers only get "view"
-_VIEW_ONLY_ACTIONS = {"view"}
-
 
 @dataclass
 class RoleUseCase:
@@ -188,13 +181,7 @@ class RoleUseCase:
                 if default:
                     replacement_id = default.id
                 else:
-                    # Last resort: find the "member" system role
-                    member_role = next(
-                        (r for r in org_roles if r.name == "member" and r.is_system),
-                        None,
-                    )
-                    if member_role:
-                        replacement_id = member_role.id
+                    raise ValueError("A replacement role is required to delete this role")
 
             if replacement_id:
                 for mid in affected_member_ids:
@@ -314,11 +301,7 @@ class RoleUseCase:
     # ── Org lifecycle helpers ────────────────────────────────────────────
 
     async def seed_default_roles(self, organization_id: str) -> dict[str, Role]:
-        """
-        Create the four system roles for a newly created organization.
-        
-        Returns a mapping of role name → Role entity.
-        """
+        """Seed the platform system roles for a newly created organization."""
         all_perms = await self.permission_repo.list_all()
         perm_by_key: dict[str, Permission] = {p.key: p for p in all_perms}
 
@@ -338,7 +321,7 @@ class RoleUseCase:
                 display_name=tmpl["display_name"],
                 description=tmpl["description"],
                 is_system=True,
-                is_default_for_new_members=tmpl["name"] == "member",
+                is_default_for_new_members=tmpl["name"] == "applicant",
                 permissions=perms,
                 created_at=now,
                 updated_at=now,
@@ -377,41 +360,102 @@ def _build_system_templates() -> list[dict]:
     pass
 
 
-# Hard-coded for reliability — mirrors the migration seed data.
-_ALL_RESOURCES = [
-    "trust-profile", "trusted-issuer", "credential-template",
-    "compliance-profile", "presentation-policy", "revocation-profile",
-    "deployment-profile", "flow-definition", "flow-instance",
-    "issuance", "application-template", "application",
-    "organization", "team", "role", "api-key", "signing-key",
-    "webhook", "notification", "audit", "verification",
-]
-
-_ALL_ACTIONS = [
-    "view", "create", "edit", "delete", "activate", "suspend",
-    "deprecate", "version", "evaluate", "start", "advance",
-    "cancel", "initiate", "approve", "reject", "invite", "manage",
-    "assign", "revoke", "test", "send", "export", "execute",
-]
-
-# We build the "all permissions" set from the migration seed data pattern.
-# Any key that doesn't exist in the DB will be ignored at runtime.
-_ALL_PERMISSION_KEYS: list[str] = []
-_MEMBER_PERMISSION_KEYS: list[str] = []
-_VIEWER_PERMISSION_KEYS: list[str] = []
-
 # Import the canonical list to stay in sync
 from .._migration_permissions import PERMISSION_CATALOG as _CATALOG
 
+_ALL_PERMISSION_KEYS = [f"{resource}:{action}" for resource, action, _desc in _CATALOG]
+_PERMISSIONS_BY_RESOURCE: dict[str, list[str]] = {}
 for resource, action, _desc in _CATALOG:
-    key = f"{resource}:{action}"
-    _ALL_PERMISSION_KEYS.append(key)
+    _PERMISSIONS_BY_RESOURCE.setdefault(resource, []).append(f"{resource}:{action}")
 
-    if resource not in _ADMIN_ONLY_RESOURCES or action == "view":
-        _MEMBER_PERMISSION_KEYS.append(key)
 
-    if action == "view":
-        _VIEWER_PERMISSION_KEYS.append(key)
+def _keys_for(*resources: str) -> list[str]:
+    keys: list[str] = []
+    for resource in resources:
+        keys.extend(_PERMISSIONS_BY_RESOURCE.get(resource, []))
+    return keys
+
+
+def _view_keys_for(*resources: str) -> list[str]:
+    return [
+        permission_key
+        for resource in resources
+        for permission_key in _PERMISSIONS_BY_RESOURCE.get(resource, [])
+        if permission_key.endswith(":view")
+    ]
+
+
+_ACCESS_ADMIN_PERMISSION_KEYS = _keys_for(
+    "organization",
+    "team",
+    "role",
+    "api-key",
+    "signing-key",
+    "webhook",
+    "integration-connector",
+    "notification",
+    "audit",
+)
+
+_CATALOG_ADMIN_PERMISSION_KEYS = _keys_for(
+    "trust-profile",
+    "trusted-issuer",
+    "credential-template",
+    "compliance-profile",
+    "presentation-policy",
+    "revocation-profile",
+    "deployment-profile",
+    "flow-definition",
+    "application-template",
+    "integration-connector",
+)
+
+_REVIEWER_PERMISSION_KEYS = sorted(
+    set(
+        _view_keys_for(
+            "organization",
+            "trust-profile",
+            "trusted-issuer",
+            "credential-template",
+            "compliance-profile",
+            "presentation-policy",
+            "revocation-profile",
+            "deployment-profile",
+            "application-template",
+            "application",
+        )
+        + ["application:approve", "application:reject"]
+    )
+)
+
+_OPERATOR_PERMISSION_KEYS = sorted(
+    set(
+        _view_keys_for(
+            "organization",
+            "trust-profile",
+            "credential-template",
+            "application-template",
+            "deployment-profile",
+            "flow-definition",
+            "flow-instance",
+            "issuance",
+            "verification",
+        )
+        + [
+            "flow-instance:start",
+            "flow-instance:advance",
+            "flow-instance:cancel",
+            "issuance:initiate",
+            "verification:execute",
+        ]
+    )
+)
+
+_VIEWER_PERMISSION_KEYS = [
+    f"{resource}:{action}"
+    for resource, action, _desc in _CATALOG
+    if action == "view"
+]
 
 
 _SYSTEM_ROLE_TEMPLATES = [
@@ -424,19 +468,43 @@ _SYSTEM_ROLE_TEMPLATES = [
     {
         "name": "admin",
         "display_name": "Administrator",
-        "description": "Full access to all resources and settings.",
+        "description": "Full access to all organization resources and settings.",
         "permission_keys": _ALL_PERMISSION_KEYS,
     },
     {
-        "name": "member",
-        "display_name": "Member",
-        "description": "Can create and manage resources. No team or org management.",
-        "permission_keys": _MEMBER_PERMISSION_KEYS,
+        "name": "access_admin",
+        "display_name": "Access Administrator",
+        "description": "Manages organization settings, team access, roles, keys, webhooks, notifications, and audit.",
+        "permission_keys": sorted(set(_ACCESS_ADMIN_PERMISSION_KEYS)),
+    },
+    {
+        "name": "catalog_admin",
+        "display_name": "Catalog Administrator",
+        "description": "Manages trust, compliance, templates, deployment profiles, flow definitions, and application templates.",
+        "permission_keys": sorted(set(_CATALOG_ADMIN_PERMISSION_KEYS)),
+    },
+    {
+        "name": "reviewer",
+        "display_name": "Reviewer",
+        "description": "Reviews applications and related organization artifacts.",
+        "permission_keys": _REVIEWER_PERMISSION_KEYS,
+    },
+    {
+        "name": "operator",
+        "display_name": "Operator",
+        "description": "Runs issuance, verification, and operational flows.",
+        "permission_keys": _OPERATOR_PERMISSION_KEYS,
     },
     {
         "name": "viewer",
         "display_name": "Viewer",
-        "description": "Read-only access to all resources.",
+        "description": "Read-only access to organization console resources.",
         "permission_keys": _VIEWER_PERMISSION_KEYS,
+    },
+    {
+        "name": "applicant",
+        "display_name": "Applicant",
+        "description": "Catalog and application access without organization console access.",
+        "permission_keys": sorted(APPLICANT_PERMISSION_KEYS),
     },
 ]

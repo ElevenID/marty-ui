@@ -7,7 +7,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from marty_common import OrganizationContext, require_org_membership
-from services.organization.domain.entities import Member, MemberRole, MemberStatus, Permission, Role
+from services.organization.domain.entities import Member, MemberStatus, Permission, Role
 from services.organization.infrastructure.adapters import scim_http_adapter as adapter
 
 
@@ -44,7 +44,7 @@ def test_list_users_supports_required_scim_filter_and_extension_mapping():
         organization_id="org-1",
         user_id="auth0|abc123",
         email="alice@example.com",
-        role=MemberRole.MEMBER,
+        roles=[],
         status=MemberStatus.ACTIVE,
     )
     owner_role = Role(id="role-owner", organization_id="org-1", name="owner", display_name="Owner")
@@ -83,7 +83,7 @@ def test_patch_user_deprovisions_member_and_clears_roles():
         organization_id="org-1",
         user_id="auth0|abc123",
         email="alice@example.com",
-        role=MemberRole.MEMBER,
+        roles=[],
         status=MemberStatus.ACTIVE,
     )
     member_repo = SimpleNamespace(
