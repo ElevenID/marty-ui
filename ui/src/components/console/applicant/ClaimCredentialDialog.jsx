@@ -20,6 +20,7 @@
  */
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
+import { Link as RouterLink } from 'react-router-dom';
 import {
   Dialog,
   DialogTitle,
@@ -31,6 +32,7 @@ import {
   Alert,
   Collapse,
   Chip,
+  CircularProgress,
   Typography,
   useMediaQuery,
   useTheme,
@@ -43,19 +45,22 @@ import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import PhoneAndroidIcon from '@mui/icons-material/PhoneAndroid';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import LockIcon from '@mui/icons-material/Lock';
-import SettingsIcon from '@mui/icons-material/Settings';
 
 import OID4VCIInviteDisplay from '../../issuance/OID4VCIInviteDisplay';
 import { generateIssuanceOffer } from '../../../services/credentialsApi';
 import { useAuth } from '../../../hooks/useAuth';
 import useWalletPreferences from '../../../hooks/useWalletPreferences';
-import { listWallets } from '../../../services/walletRegistryApi';
+import { buildWalletOpenLink, listWallets } from '../../../services/walletRegistryApi';
+import { resolvePreferredCredentialOfferTransport } from '../../../services/walletTransportService';
+
+const APPLICANT_WALLET_SELECTION_SETTINGS_PATH = '/console/applicant/settings#wallet-selection';
 
 export default function ClaimCredentialDialog({ open, onClose, applicationId, offerData }) {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
   const { user } = useAuth();
   const { walletIds: preferredWallets } = useWalletPreferences(user?.user_id);
+  const hasRegisteredWallet = preferredWallets.length > 0;
   const [registryWallets, setRegistryWallets] = useState([]);
 
   const [liveOffer, setLiveOffer] = useState(offerData);
@@ -67,14 +72,14 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
 
   useEffect(() => {
     if (open) {
-      setLiveOffer(offerData);
+      setLiveOffer(applicationId ? null : offerData);
       setRefreshing(false);
       setError(null);
       setEmailTab(false);
       setEmailSent(false);
       setEmailValue(user?.email || '');
     }
-  }, [open, offerData]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [open, applicationId]); // eslint-disable-line react-hooks/exhaustive-deps -- keep active QR stable while parent data refreshes
 
   // Load wallet registry once for label resolution
   useEffect(() => {
@@ -97,17 +102,13 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
     }
   }, [applicationId]);
 
-  // Auto-regenerate on open when the offer is expired, close to expiring (< 5 min), or missing
+  // OID4VCI pre-authorized codes are single-use. A previous wallet attempt can
+  // consume a code even when its offer has not expired, so mint a fresh offer on
+  // every claim dialog open instead of trusting cached application metadata.
   useEffect(() => {
-    if (!open || !applicationId || refreshing) return;
-    const url = offerData?.offer_url;
-    const expiresAt = offerData?.expires_at;
-    const expired = offerData?.status === 'expired';
-    const nearlyExpired = expiresAt && (new Date(expiresAt) - Date.now()) < 5 * 60 * 1000;
-    if (!url || expired || nearlyExpired) {
-      handleRegenerate();
-    }
-  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (!open || !applicationId || !hasRegisteredWallet) return;
+    handleRegenerate();
+  }, [open, applicationId, hasRegisteredWallet, handleRegenerate]);
 
   // Build per-wallet offer data.
   // When the backend already provides per-wallet URIs, use them.
@@ -117,22 +118,49 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
   const enrichedOffer = useMemo(() => {
     if (!liveOffer) return liveOffer;
     const backendUris = liveOffer.credential_offer_uris;
-    if (backendUris && Object.keys(backendUris).length > 0) return liveOffer;
 
-    const baseUrl = liveOffer.offer_url || liveOffer.credential_offer_uri;
-    if (!baseUrl) return liveOffer;
+    if (!hasRegisteredWallet) {
+      return liveOffer;
+    }
 
-    // Build a label map from the registry
+    // Build wallet maps from the registry for labels and fallback routing.
     const labelMap = {};
+    const walletMap = {};
     for (const w of registryWallets) {
+      walletMap[w.id] = w;
       labelMap[w.id] = w.name;
     }
 
+    const walletRegistry = {
+      ...(liveOffer.wallet_registry || {}),
+      ...walletMap,
+    };
+    const walletsById = {
+      ...(liveOffer.wallets_by_id || {}),
+      ...walletMap,
+    };
+
+    if (backendUris && Object.keys(backendUris).length > 0) {
+      return {
+        ...liveOffer,
+        wallet_registry: walletRegistry,
+        wallets_by_id: walletsById,
+      };
+    }
+
+    const baseUrl = liveOffer.offer_url || liveOffer.credential_offer_uri;
+    if (!baseUrl) {
+      return {
+        ...liveOffer,
+        wallet_registry: walletRegistry,
+        wallets_by_id: walletsById,
+      };
+    }
+
     // Use user's preferred wallets if they've registered any
-    const ids = preferredWallets.length > 0 ? preferredWallets : ['wr-marty-001'];
     const uris = {};
     const labels = { ...(liveOffer.credential_offer_labels || {}) };
-    for (const id of ids) {
+    for (const id of preferredWallets) {
       uris[id] = baseUrl;
       if (!labels[id]) {
         labels[id] = labelMap[id] || id;
@@ -143,30 +171,52 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
       ...liveOffer,
       credential_offer_uris: uris,
       credential_offer_labels: labels,
+      wallet_registry: walletRegistry,
+      wallets_by_id: walletsById,
     };
-  }, [liveOffer, preferredWallets, registryWallets]);
+  }, [liveOffer, hasRegisteredWallet, preferredWallets, registryWallets]);
+
+  const preferredTransport = useMemo(
+    () => resolvePreferredCredentialOfferTransport({ offerData: enrichedOffer, preferredWalletIds: preferredWallets }),
+    [enrichedOffer, preferredWallets],
+  );
 
   const offerUrl = liveOffer?.offer_url || null;
+  const primaryOfferUrl = preferredTransport.offerUri || offerUrl;
   const isExpired = liveOffer?.status === 'expired';
-  const notGenerated = liveOffer !== undefined && !offerUrl && !error;
-  const showContent = !notGenerated && !!offerUrl && !isExpired && !error;
+  const loadingInitialOffer = hasRegisteredWallet && (refreshing || (applicationId && liveOffer === null)) && !primaryOfferUrl && !error;
+  const notGenerated = hasRegisteredWallet && !loadingInitialOffer && liveOffer != null && !primaryOfferUrl && !error;
+  const showWalletRegistrationGuard = !hasRegisteredWallet;
+  const showContent = hasRegisteredWallet && !loadingInitialOffer && !notGenerated && !!primaryOfferUrl && !isExpired && !error;
 
   // Deep link handler for mobile
-  const handleOpenInWallet = () => {
-    if (!offerUrl) return;
-    let deepLinkUrl = offerUrl;
-    if (!offerUrl.startsWith('openid-credential-offer://')) {
-      deepLinkUrl = `openid-credential-offer://?credential_offer_uri=${encodeURIComponent(offerUrl)}`;
+  const handleOpenInWallet = async () => {
+    if (!primaryOfferUrl) return;
+
+    const fallbackOpenLink = preferredTransport.transport?.openUri || preferredTransport.transport?.innerUri || primaryOfferUrl;
+
+    if (!preferredTransport.walletId || !preferredTransport.transport?.innerUri) {
+      window.location.href = fallbackOpenLink;
+      return;
     }
-    window.location.href = deepLinkUrl;
+
+    try {
+      const response = await buildWalletOpenLink(preferredTransport.walletId, {
+        innerUri: preferredTransport.transport.innerUri,
+        platform: preferredTransport.transport.platform,
+      });
+      window.location.href = response?.open_uri || fallbackOpenLink;
+    } catch {
+      window.location.href = fallbackOpenLink;
+    }
   };
 
   const handleEmailSelf = () => {
     const to = user?.email || emailValue;
-    if (!to || !offerUrl) return;
+    if (!to || !primaryOfferUrl) return;
     const subject = encodeURIComponent('Your credential is ready');
     const body = encodeURIComponent(
-      `Your credential is ready to add to your wallet.\n\nOpen the link on your phone:\n\n${offerUrl}`
+      `Your credential is ready to add to your wallet.\n\nOpen the link on your phone:\n\n${primaryOfferUrl}`
     );
     window.open(`mailto:${to}?subject=${subject}&body=${body}`, '_blank');
     setEmailSent(true);
@@ -177,14 +227,45 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
       <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1, pb: 1 }}>
         <WalletIcon color="primary" />
         Add to Wallet
+        {showWalletRegistrationGuard && <Chip label="Wallet required" color="warning" size="small" sx={{ ml: 'auto' }} />}
         {isExpired && <Chip label="Expired" color="error" size="small" sx={{ ml: 'auto' }} />}
         {showContent && <Chip label="Ready" color="success" size="small" sx={{ ml: 'auto' }} />}
         {error && <Chip label="Error" color="error" size="small" sx={{ ml: 'auto' }} />}
       </DialogTitle>
 
       <DialogContent dividers>
+        {showWalletRegistrationGuard && (
+          <Stack spacing={2} sx={{ py: 1 }} data-testid="wallet-registration-guard">
+            <Alert severity="warning" icon={<WalletIcon fontSize="small" />}>
+              Select a wallet app before you can receive this credential.
+            </Alert>
+            <Typography variant="body2" color="text.secondary">
+              Choose the wallet app you use in Settings, then come back here to receive the
+              credential. Right now, wallet selection is the registration step.
+            </Typography>
+            <Button
+              component={RouterLink}
+              to={APPLICANT_WALLET_SELECTION_SETTINGS_PATH}
+              variant="contained"
+              startIcon={<WalletIcon />}
+              onClick={onClose}
+              sx={{ alignSelf: 'flex-start' }}
+            >
+              Choose Wallet
+            </Button>
+          </Stack>
+        )}
+
+        {loadingInitialOffer && (
+          <Stack spacing={2} alignItems="center" sx={{ py: 4 }}>
+            <CircularProgress />
+            <Typography variant="body2" color="text.secondary" textAlign="center">
+              Generating a fresh wallet invite...
+            </Typography>
+          </Stack>
+        )}
         {/* ── Error state with retry ── */}
-        {error && (
+        {hasRegisteredWallet && error && (
           <Stack spacing={2} alignItems="center" sx={{ py: 2 }}>
             <Alert severity="error" sx={{ width: '100%' }}>{error}</Alert>
             <Button
@@ -207,7 +288,7 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
         )}
 
         {/* ── Expired ── */}
-        {isExpired && (
+        {hasRegisteredWallet && isExpired && (
           <Alert
             severity="warning"
             action={
@@ -250,6 +331,8 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
               onRegenerate={applicationId ? handleRegenerate : undefined}
               loading={refreshing}
               showDeepLink={!isMobile}
+              allowedWalletIds={hasRegisteredWallet ? preferredWallets : null}
+              showDefaultWalletTab={!hasRegisteredWallet}
               title={isMobile ? 'Or scan with another device' : 'Scan with your wallet app'}
               instructions={
                 isMobile
@@ -259,25 +342,6 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
             />
 
             {/* Nudge to register wallets if none selected */}
-            {preferredWallets.length === 0 && (
-              <Alert
-                severity="info"
-                icon={<SettingsIcon fontSize="small" />}
-                sx={{ mt: 1.5 }}
-                action={
-                  <Button
-                    size="small"
-                    href="/console/applicant/settings"
-                    onClick={onClose}
-                  >
-                    Settings
-                  </Button>
-                }
-              >
-                Register your wallet apps in Settings to see wallet-specific tabs here.
-              </Alert>
-            )}
-
             {/* ── Email link ── */}
             {
               <>

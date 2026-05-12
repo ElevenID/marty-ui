@@ -12,9 +12,12 @@ from fastapi.responses import JSONResponse
 
 from gateway.middleware import (
     AuthMiddleware,
+    ContentTypeEnforcementMiddleware,
+    MIPVersionMiddleware,
     RateLimitMiddleware,
     SessionCache,
     _RATE_LIMIT_RPM,
+    mip_error_response,
 )
 
 # ---------------------------------------------------------------------------
@@ -50,6 +53,7 @@ def _make_validate_response(valid: bool = True, **user_overrides):
 _FAKE_ROUTES: dict[str, dict] = {
     "/v1/organizations": {"service": "organizations", "requires_auth": True},
     "/v1/auth": {"service": "auth", "requires_auth": False},
+    "/credentials": {"service": "gateway", "requires_auth": True},
 }
 
 
@@ -107,6 +111,10 @@ def auth_app(session_cache, grpc_stub):
     async def well_known():
         return JSONResponse({"issuer": "https://example.com"})
 
+    @app.get("/credentials/marty-verified-member-badge")
+    async def credential_metadata():
+        return JSONResponse({"name": "Marty Verified Member Badge"})
+
     return app
 
 
@@ -124,6 +132,23 @@ def rate_app():
     @app.get("/health")
     async def health():
         return JSONResponse({"status": "ok"})
+
+    return app
+
+
+@pytest.fixture()
+def content_type_app():
+    """FastAPI app with ContentTypeEnforcementMiddleware only."""
+    app = FastAPI()
+    app.add_middleware(ContentTypeEnforcementMiddleware)
+
+    @app.post("/v1/issuance/nonce")
+    async def nonce_endpoint():
+        return JSONResponse({"ok": True})
+
+    @app.post("/v1/example")
+    async def example_endpoint():
+        return JSONResponse({"ok": True})
 
     return app
 
@@ -196,6 +221,15 @@ class TestAuthMiddleware:
         ) as client:
             resp = await client.get("/.well-known/openid-configuration")
         assert resp.status_code == 200
+
+    @patch("gateway.middleware.get_route_config", side_effect=_fake_get_route_config)
+    async def test_credential_metadata_bypass(self, _mock, auth_app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=auth_app), base_url="http://test"
+        ) as client:
+            resp = await client.get("/credentials/marty-verified-member-badge")
+        assert resp.status_code == 200
+        assert resp.json()["name"] == "Marty Verified Member Badge"
 
     @patch("gateway.middleware.get_route_config", side_effect=_fake_get_route_config)
     async def test_missing_session_cookie(self, _mock, auth_app):
@@ -352,3 +386,118 @@ class TestRateLimitMiddleware:
         assert resp.status_code == 200
         # Health responses should not have rate limit headers
         assert "X-RateLimit-Limit" not in resp.headers
+
+
+@pytest.mark.asyncio
+class TestContentTypeEnforcementMiddleware:
+    async def test_nonce_endpoint_allows_wallet_media_type(self, content_type_app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=content_type_app), base_url="http://test"
+        ) as client:
+            resp = await client.post(
+                "/v1/issuance/nonce",
+                headers={"Content-Type": "application/octet-stream"},
+                content=b"",
+            )
+
+        assert resp.status_code == 200
+        assert resp.json() == {"ok": True}
+
+    async def test_unknown_media_type_still_rejected_for_non_exempt_paths(self, content_type_app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=content_type_app), base_url="http://test"
+        ) as client:
+            resp = await client.post(
+                "/v1/example",
+                headers={"Content-Type": "application/octet-stream"},
+                content=b"",
+            )
+
+        assert resp.status_code == 415
+        assert resp.json()["error"] == "unsupported_media_type"
+
+
+# ---------------------------------------------------------------------------
+# MIP Compliance tests (MIP 10, 17.7)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def mip_app():
+    """FastAPI app with MIPVersionMiddleware for compliance header testing."""
+    app = FastAPI()
+    app.add_middleware(MIPVersionMiddleware)
+
+    @app.get("/v1/test")
+    async def test_endpoint():
+        return JSONResponse({"ok": True})
+
+    @app.get("/health")
+    async def health():
+        return JSONResponse({"status": "ok"})
+
+    return app
+
+
+class TestMIPCompliance:
+    """MIP 10 - Discovery, MIP 17.7 - Error envelope, MIP 20 - Headers."""
+
+    def test_mip_version_header_on_all_responses(self, mip_app):
+        """MIP 20 - Every response MUST include X-MIP-Version header."""
+        import httpx
+        with httpx.Client(
+            transport=httpx.WSGIorASGITransport(app=mip_app) if hasattr(httpx, "WSGIorASGITransport") else httpx.ASGITransport(app=mip_app),
+            base_url="http://test",
+        ) as client:
+            resp = client.get("/v1/test")
+        assert resp.headers.get("X-MIP-Version") == "0.1"
+
+    def test_mip_version_header_on_health(self, mip_app):
+        """MIP 20 - Health endpoints also carry MIP version."""
+        import httpx
+        with httpx.Client(
+            transport=httpx.ASGITransport(app=mip_app),
+            base_url="http://test",
+        ) as client:
+            resp = client.get("/health")
+        assert resp.headers.get("X-MIP-Version") == "0.1"
+
+    def test_mip_error_response_format(self):
+        """MIP 17.7 - Error responses MUST include error, error_description, message_id."""
+        resp = mip_error_response(400, "bad_request", "Missing required field", field="email")
+        body = resp.body
+        import json as _json
+        data = _json.loads(body)
+        assert data["error"] == "bad_request"
+        assert data["error_description"] == "Missing required field"
+        assert "message_id" in data
+        assert data["field"] == "email"
+        assert resp.headers.get("X-MIP-Version") == "0.1"
+
+    def test_mip_error_response_503_format(self):
+        """MIP 17.7 - Service unavailable errors follow the same envelope."""
+        resp = mip_error_response(503, "service_unavailable", "Auth service unreachable")
+        import json as _json
+        data = _json.loads(resp.body)
+        assert data["error"] == "service_unavailable"
+        assert "message_id" in data
+        assert resp.status_code == 503
+        assert resp.headers.get("X-MIP-Version") == "0.1"
+
+    def test_mip_error_response_includes_details(self):
+        """MIP 17.7 - Validation errors include details array."""
+        resp = mip_error_response(
+            422,
+            "validation_error",
+            "Constraint violations",
+            details=[
+                {"field": "email", "message": "Email is required"},
+                {"field": "role", "message": "Role must be one of: admin, vendor, applicant"},
+            ],
+        )
+        import json as _json
+        data = _json.loads(resp.body)
+        assert data["error"] == "validation_error"
+        assert len(data["details"]) == 2
+        assert data["details"][0]["field"] == "email"
+        assert resp.headers.get("X-MIP-Version") == "0.1"

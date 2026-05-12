@@ -45,7 +45,7 @@ import { discoverOrganizations } from '../../services/organizationsApi';
 /**
  * Discover Organizations Page Component
  */
-export function DiscoverOrganizationsPage() {
+export function DiscoverOrganizationsPage({ joinPath = '/organizations/join' }) {
   const navigate = useNavigate();
   
   const [organizations, setOrganizations] = useState([]);
@@ -104,7 +104,7 @@ export function DiscoverOrganizationsPage() {
     setJoinCodeDialog(false);
     const code = joinCode.trim().toUpperCase();
     setJoinCode('');
-    navigate(`/organizations/join?mode=code&code=${encodeURIComponent(code)}`);
+    navigate(`${joinPath}?mode=code&code=${encodeURIComponent(code)}`);
     setJoiningCode(false);
   };
 
@@ -151,7 +151,7 @@ export function DiscoverOrganizationsPage() {
    * Open the canonical join/details flow for the selected organization.
    */
   const handleViewOrganization = (org) => {
-    navigate(`/organizations/join?orgId=${encodeURIComponent(org.id)}`);
+    navigate(`${joinPath}?orgId=${encodeURIComponent(org.id)}`);
   };
 
   return (

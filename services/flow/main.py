@@ -51,12 +51,12 @@ from typing import Annotated
 from marty_common import (
     ClaimResultPayload,
     CredentialOfferPayload,
+    ensure_membership_permission,
     MIPMessage,
     MessageType,
     OrganizationContext,
     PresentationRequestPayload,
     VerificationResultPayload,
-    require_org_membership,
 )
 from marty_common.org_authorization import get_organization_client
 from marty_common.middleware import RequestIdMiddleware, RequestLoggingMiddleware
@@ -68,6 +68,8 @@ logger = logging.getLogger(__name__)
 
 SERVICE_NAME = "flow-service"
 SERVICE_PORT = int(os.environ.get("FLOW_SERVICE_PORT", "8011"))
+ISSUANCE_SERVICE_URL = os.environ.get("ISSUANCE_SERVICE_URL", "http://issuance:8005")
+ISSUANCE_GRPC_TARGET = os.environ.get("ISSUANCE_GRPC_TARGET", "issuance:9005")
 
 # OID4VP Request Object signing key.
 # MIP §20.1: production deployments MUST use persistent key storage.
@@ -75,6 +77,42 @@ SERVICE_PORT = int(os.environ.get("FLOW_SERVICE_PORT", "8011"))
 # Otherwise, an ephemeral key is generated (valid for dev/test only).
 _SIGNING_KEY_PAIR = None
 _SIGNING_JWK = None
+_OID4VP_DID_WEB_PATH = "oid4vp"
+_OID4VP_VERIFICATION_METHOD_FRAGMENT = "oid4vp-verifier-key-1"
+_SD_JWT_PRESENTATION_ALGS = {
+    "sd-jwt_alg_values": ["ES256", "EdDSA"],
+    "kb-jwt_alg_values": ["ES256", "EdDSA"],
+}
+_DC_API_PROTOCOL = "openid4vp-v1-signed"
+_DC_API_JWT_RESPONSE_MODE = "dc_api.jwt"
+_HAIP_JWE_ALG = "ECDH-ES"
+_HAIP_JWE_ENC = "A256GCM"
+_HAIP_ENCRYPTION_KEY_ID = "oid4vp-verifier-enc-key-1"
+_SUPPORTED_HAIP_JWE_ALGS = {_HAIP_JWE_ALG}
+_SUPPORTED_HAIP_JWE_ENCS = {_HAIP_JWE_ENC}
+
+
+def _origin_for_base_url(base_url: str) -> str:
+    """Normalize a verifier base URL to its origin."""
+    parsed = urllib.parse.urlparse(base_url)
+    if not parsed.scheme or not parsed.netloc:
+        raise RuntimeError(f"PUBLIC_BASE_URL must include scheme and host: {base_url}")
+    return f"{parsed.scheme}://{parsed.netloc}".rstrip("/")
+
+
+def _expected_origins_for_dc_api(base_url: str) -> list[str]:
+    """Return allowed verifier origins for OpenID4VP over the DC API."""
+    configured_origins = os.environ.get("VERIFIER_EXPECTED_ORIGINS", "")
+    if configured_origins.strip():
+        origins = [value.strip().rstrip("/") for value in configured_origins.split(",") if value.strip()]
+        if origins:
+            return origins
+    return [_origin_for_base_url(base_url)]
+
+
+def _verification_audience_for_origin(origin: str) -> str:
+    """Return the OpenID4VP audience value for DC API responses."""
+    return f"origin:{origin.rstrip('/')}"
 
 def get_or_create_signing_key():
     """Get or create ES256 signing key pair for Request Objects."""
@@ -356,6 +394,104 @@ def _validate_flow_request(request: "CreateFlowDefinitionRequest", flow_type: Fl
         raise HTTPException(status_code=400, detail="presentation_policy_id is required for this flow_type")
 
 
+def _is_reference_not_found(exc: Exception) -> bool:
+    code_fn = getattr(exc, "code", None)
+    code = code_fn() if callable(code_fn) else None
+    if getattr(code, "name", "") == "NOT_FOUND":
+        return True
+    return "not found" in str(exc).lower()
+
+
+def _require_reference_org(kind: str, reference_id: str, actual_org: str, expected_org: str) -> None:
+    if actual_org and actual_org != expected_org:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{kind} {reference_id} belongs to organization {actual_org}, not {expected_org}",
+        )
+
+
+def _require_reference_active(kind: str, reference_id: str, status: str, require_active: bool) -> None:
+    if require_active and str(status or "").lower() != "active":
+        raise HTTPException(
+            status_code=400,
+            detail=f"{kind} {reference_id} must be active before activating a flow",
+        )
+
+
+async def _get_credential_template_reference(template_id: str):
+    from marty_proto.v1 import credential_template_service_pb2 as ct_pb2
+    from marty_proto.v1 import credential_template_service_pb2_grpc as ct_grpc
+
+    channel = getattr(app.state, "ct_grpc_channel", None)
+    if channel is None:
+        raise HTTPException(status_code=503, detail="Credential template service is not configured for flow validation")
+    try:
+        stub = ct_grpc.CredentialTemplateServiceStub(channel)
+        resp = await stub.GetTemplate(ct_pb2.GetTemplateRequest(template_id=template_id))
+    except Exception as exc:
+        status_code = 404 if _is_reference_not_found(exc) else 502
+        raise HTTPException(status_code=status_code, detail=f"Credential template {template_id} could not be resolved: {exc}") from exc
+    if not getattr(resp, "id", ""):
+        raise HTTPException(status_code=404, detail=f"Credential template {template_id} not found")
+    return resp
+
+
+async def _get_presentation_policy_reference(policy_id: str):
+    from marty_proto.v1 import presentation_policy_service_pb2 as pp_pb2
+    from marty_proto.v1 import presentation_policy_service_pb2_grpc as pp_grpc
+
+    channel = getattr(app.state, "pp_grpc_channel", None)
+    if channel is None:
+        raise HTTPException(status_code=503, detail="Presentation policy service is not configured for flow validation")
+    try:
+        stub = pp_grpc.PresentationPolicyServiceStub(channel)
+        resp = await stub.GetPolicy(pp_pb2.GetPolicyRequest(policy_id=policy_id))
+    except Exception as exc:
+        status_code = 404 if _is_reference_not_found(exc) else 502
+        raise HTTPException(status_code=status_code, detail=f"Presentation policy {policy_id} could not be resolved: {exc}") from exc
+    if not getattr(resp, "id", ""):
+        raise HTTPException(status_code=404, detail=f"Presentation policy {policy_id} not found")
+    return resp
+
+
+async def _validate_credential_layer_references(
+    *,
+    organization_id: str,
+    credential_template_id: str | None = None,
+    presentation_policy_id: str | None = None,
+    require_active: bool = False,
+) -> None:
+    """Validate dynamic flow references against credential-layer services."""
+    template_cache: dict[str, Any] = {}
+
+    async def _validate_template(template_id: str) -> None:
+        if template_id in template_cache:
+            template = template_cache[template_id]
+        else:
+            template = await _get_credential_template_reference(template_id)
+            template_cache[template_id] = template
+        _require_reference_org("Credential template", template_id, getattr(template, "organization_id", ""), organization_id)
+        _require_reference_active("Credential template", template_id, getattr(template, "status", ""), require_active)
+
+    if credential_template_id:
+        await _validate_template(credential_template_id)
+
+    if presentation_policy_id:
+        policy = await _get_presentation_policy_reference(presentation_policy_id)
+        _require_reference_org("Presentation policy", presentation_policy_id, getattr(policy, "organization_id", ""), organization_id)
+        _require_reference_active("Presentation policy", presentation_policy_id, getattr(policy, "status", ""), require_active)
+
+        requirements_json = getattr(policy, "credential_requirements_json", "") or "[]"
+        try:
+            requirements = json.loads(requirements_json)
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=400, detail=f"Presentation policy {presentation_policy_id} has invalid credential requirements JSON") from exc
+        if isinstance(requirements, list):
+            for requirement in requirements:
+                if isinstance(requirement, dict) and requirement.get("credential_template_id"):
+                    await _validate_template(str(requirement["credential_template_id"]))
+
+
 class StepType(str, Enum):
     """Types of steps in a flow."""
     START = "start"
@@ -617,6 +753,8 @@ class FlowInstanceStatus(str, Enum):
     AWAITING_WALLET = "awaiting_wallet"
     AWAITING_APPROVAL = "awaiting_approval"
     AWAITING_EVIDENCE = "awaiting_evidence"
+    WAITING = "awaiting_wallet"
+    WAITING_APPROVAL = "awaiting_approval"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
@@ -956,7 +1094,7 @@ class FlowDefinitionResponse(BaseModel):
     approval_strategy: str
     enabled: bool
     hooks: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
-    trigger: dict[str, Any] | None = None
+    trigger: dict[str, Any] | str | None = None
     status: str
     created_at: str
     updated_at: str
@@ -986,7 +1124,6 @@ class FlowInstanceResponse(BaseModel):
     expires_at: str | None
     error_code: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
-    step_history: list[dict[str, Any]] = Field(default_factory=list)
     state_history: list[dict[str, Any]] = Field(default_factory=list)
     created_at: str
     updated_at: str
@@ -1018,6 +1155,7 @@ class FlowInstanceArtifactResponse(BaseModel):
 # =============================================================================
 
 router = APIRouter(prefix="/v1/flows", tags=["flows"])
+did_router = APIRouter(tags=["oid4vp-did"])
 
 _repo: InMemoryFlowRepository | None = None
 
@@ -1160,6 +1298,11 @@ def _sync_protocol_context(instance: FlowInstance, flow_def: FlowDefinition | No
 
 def _definition_to_response(flow: FlowDefinition) -> FlowDefinitionResponse:
     """Convert FlowDefinition to response model."""
+    trigger_value = flow.trigger
+    if isinstance(trigger_value, str):
+        # Normalize legacy trigger format persisted by older migrations.
+        trigger_value = {"event": trigger_value}
+
     return FlowDefinitionResponse(
         id=flow.id,
         organization_id=flow.organization_id,
@@ -1176,7 +1319,7 @@ def _definition_to_response(flow: FlowDefinition) -> FlowDefinitionResponse:
         approval_strategy=flow.approval_strategy,
         enabled=flow.enabled,
         hooks=flow.hooks,
-        trigger=flow.trigger,
+        trigger=trigger_value,
         created_at=flow.created_at.isoformat(),
         updated_at=flow.updated_at.isoformat(),
     )
@@ -1210,7 +1353,6 @@ def _instance_to_response(instance: FlowInstance) -> FlowInstanceResponse:
         expires_at=instance.expires_at.isoformat() if instance.expires_at else None,
         error_code=instance.context.get("error_code"),
         metadata=metadata,
-        step_history=instance.step_history,
         state_history=instance.state_history,
         created_at=instance.created_at.isoformat(),
         updated_at=instance.updated_at.isoformat(),
@@ -1252,6 +1394,208 @@ def _record_mip_message(instance: FlowInstance, label: str, message: MIPMessage)
             del history[:-25]
 
 
+async def _initiate_credential_layer_issuance(
+    instance: FlowInstance,
+    flow_def: FlowDefinition,
+) -> dict[str, Any]:
+    """Initiate an OID4VCI offer through the credential-layer issuance service.
+
+    Dynamic flows are orchestration only; credential protocol state lives in the
+    issuance service. Use gRPC first and retain an HTTP fallback so local/dev
+    stacks can still run when protobuf stubs lag the service image.
+    """
+    claims = instance.context.get("claims") or instance.context.get("credential_claims") or {}
+    if not isinstance(claims, dict):
+        claims = {}
+
+    # MIP §8.3 – when an application_id is present, pass it to the issuance
+    # service so it can resolve credential claims from the application's
+    # form_data.  The issuance service owns the application aggregate and is
+    # the authoritative source for claim values.
+    application_id = str(instance.context.get("application_id") or "")
+    if application_id and not claims:
+        claims = {"_application_id": application_id}
+        logger.info(
+            "[flow] _initiate_credential_layer_issuance instance=%s application=%s "
+            "deferring claims resolution to issuance service",
+            instance.id, application_id,
+        )
+    else:
+        logger.info(
+            "[flow] _initiate_credential_layer_issuance instance=%s template=%s claims_keys=%s",
+            instance.id, flow_def.credential_template_id, list(claims.keys()),
+        )
+
+    try:
+        from marty_proto.v1 import issuance_service_pb2 as iss_pb2
+        from marty_proto.v1 import issuance_service_pb2_grpc as iss_grpc
+
+        channel = getattr(app.state, "issuance_grpc_channel", None)
+        if channel is None:
+            import grpc.aio as grpc_aio
+            channel = grpc_aio.insecure_channel(ISSUANCE_GRPC_TARGET)
+            close_channel = True
+        else:
+            close_channel = False
+
+        try:
+            stub = iss_grpc.IssuanceServiceStub(channel)
+            resp = await stub.InitiateIssuance(
+                iss_pb2.InitiateIssuanceRequest(
+                    organization_id=instance.organization_id,
+                    credential_template_id=flow_def.credential_template_id or "",
+                    applicant_id=instance.subject_id or "",
+                    subject_did=str(instance.context.get("subject_did") or ""),
+                    holder_did=str(instance.context.get("holder_did") or ""),
+                    claims={k: str(v) for k, v in claims.items()},
+                ),
+                timeout=10.0,
+            )
+        finally:
+            if close_channel:
+                await channel.close()
+
+        return {
+            "id": resp.id,
+            "organization_id": resp.organization_id,
+            "credential_template_id": resp.credential_template_id,
+            "status": resp.status,
+            "credential_offer_uri": resp.credential_offer_uri,
+            "credential_offer_uris": dict(resp.credential_offer_uris),
+            "credential_offer_labels": dict(resp.credential_offer_labels),
+            "pre_auth_code": resp.pre_auth_code,
+            "expires_at": resp.expires_at,
+        }
+    except ImportError:
+        logger.warning("Issuance gRPC stubs unavailable, falling back to HTTP")
+    except Exception as grpc_err:
+        logger.warning(
+            "Credential-layer InitiateIssuance failed over gRPC (status=%s), falling back to HTTP: %s",
+            getattr(grpc_err, "code", lambda: "N/A")(),
+            grpc_err,
+        )
+
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        response = await client.post(
+            f"{ISSUANCE_SERVICE_URL}/v1/issuance/initiate",
+            json={
+                "organization_id": instance.organization_id,
+                "credential_template_id": flow_def.credential_template_id,
+                "applicant_id": instance.subject_id,
+                "subject_did": instance.context.get("subject_did"),
+                "holder_did": instance.context.get("holder_did"),
+                "claims": claims,
+            },
+        )
+        response.raise_for_status()
+        return response.json()
+
+
+async def _build_wallet_offers_from_template(
+    template_id: str,
+    org_id: str,
+    pre_auth_code: str,
+) -> tuple[dict[str, str], dict[str, str]]:
+    """
+    Build per-wallet credential offer URIs and labels from a credential template.
+
+    Fallback when issuance service doesn't populate credential_offer_uris.
+    This handles missing per-wallet offers for wallets like SpruceID.
+
+    Args:
+        template_id: Credential template ID
+        org_id: Organization ID
+        pre_auth_code: Pre-authorized code for the offer
+
+    Returns:
+        Tuple of (credential_offer_uris dict, credential_offer_labels dict)
+    """
+    from urllib.parse import quote
+
+    credential_offer_uris: dict[str, str] = {}
+    credential_offer_labels: dict[str, str] = {}
+
+    try:
+        # Fetch credential template via gRPC
+        from marty_proto.v1 import credential_template_service_pb2 as ct_pb2
+        from marty_proto.v1 import credential_template_service_pb2_grpc as ct_grpc
+        import grpc.aio as grpc_aio
+
+        ct_grpc_target = os.environ.get("CT_GRPC_TARGET", "credential-template:9003")
+        async with grpc_aio.insecure_channel(ct_grpc_target) as channel:
+            ct_stub = ct_grpc.CredentialTemplateServiceStub(channel)
+            tmpl_resp = await ct_stub.GetTemplate(
+                ct_pb2.GetTemplateRequest(template_id=template_id)
+            )
+
+            if not tmpl_resp.id:
+                logger.warning(f"Template {template_id} not found for wallet offer generation")
+                return {}, {}
+
+            # Parse wallet configs
+            wallet_configs_json = tmpl_resp.wallet_configs_json
+            if not wallet_configs_json:
+                logger.warning(f"Template {template_id} has no wallet configs")
+                return {}, {}
+
+            wallet_configs = json.loads(wallet_configs_json) if isinstance(wallet_configs_json, str) else wallet_configs_json
+            logger.info(f"Building wallet offers from {len(wallet_configs)} wallet configs")
+
+            # Build per-wallet offers
+            from issuance.infrastructure.api.application_routes import org_issuer_url, org_issuer_url_spruce
+            from issuance.application.rust_integration import oid4vci_create_credential_offer
+
+            credential_type = tmpl_resp.credential_type or "default"
+
+            for wc in wallet_configs:
+                wallet_id = wc.get("wallet_id", "")
+                scheme = wc.get("deep_link_scheme", "openid-credential-offer://")
+                fmt_variant = wc.get("format_variant")
+                display_name = wc.get("display_name", "")
+
+                if not wallet_id:
+                    continue
+
+                # Select credential_configuration_id based on format variant
+                if fmt_variant == "spruce-vc+sd-jwt":
+                    config_id = f"{credential_type}#spruce-sd-jwt"
+                    issuer_url = org_issuer_url_spruce(org_id)
+                elif fmt_variant == "mso_mdoc":
+                    config_id = f"{credential_type}#mdoc"
+                    issuer_url = org_issuer_url_spruce(org_id)
+                else:
+                    config_id = f"{credential_type}#sd-jwt"
+                    issuer_url = org_issuer_url(org_id)
+
+                try:
+                    # Create wallet-specific offer
+                    offer_json = oid4vci_create_credential_offer(
+                        issuer_url=issuer_url,
+                        credential_types=[config_id],
+                        pre_authorized_code=pre_auth_code,
+                        user_pin_required=False,
+                    )
+
+                    # Encode and build offer URI
+                    sep = "&" if "?" in scheme else "?"
+                    credential_offer_uris[wallet_id] = f"{scheme}{sep}credential_offer={quote(offer_json)}"
+                    if display_name:
+                        credential_offer_labels[wallet_id] = display_name
+
+                    logger.info(f"Built offer for wallet {wallet_id} ({fmt_variant})")
+
+                except Exception as e:
+                    logger.warning(f"Failed to build offer for wallet {wallet_id}: {e}")
+                    continue
+
+    except ImportError as e:
+        logger.warning(f"Could not import template service stubs: {e}")
+    except Exception as e:
+        logger.warning(f"Failed to build wallet offers from template: {e}")
+
+    return credential_offer_uris, credential_offer_labels
+
+
 async def _create_oid4vci_artifact(
     instance: FlowInstance,
     flow_def: FlowDefinition,
@@ -1272,28 +1616,57 @@ async def _create_oid4vci_artifact(
     """
     if flow_def.flow_type != FlowType.OID4VCI_PRE_AUTHORIZED:
         return None
+
+    issuance = await _initiate_credential_layer_issuance(instance, flow_def)
+    pre_auth_code = issuance.get("pre_auth_code") or None
+    state = issuance.get("id") or str(uuid.uuid4())
+    credential_offer_uri = issuance.get("credential_offer_uri")
+    credential_offer_uris = issuance.get("credential_offer_uris") or {}
+    credential_offer_labels = issuance.get("credential_offer_labels") or {}
     
-    # Generate pre-authorized code
-    import secrets
-    pre_auth_code = secrets.token_urlsafe(32)
-    state = secrets.token_urlsafe(16)
+    # Log the condition values for debugging
+    logger.info(
+        f"OID4VCI artifact conditions: credential_offer_uris={credential_offer_uris}, "
+        f"template_id={flow_def.credential_template_id}, pre_auth_code={bool(pre_auth_code)}"
+    )
     
-    # Get issuer URL from environment
+    # FALLBACK: If issuance service didn't populate per-wallet offers,
+    # fetch the template and build them locally (issue #SpruceID-parsing).
+    # This handles cases where the issuance service has empty wallet_configs.
+    if not credential_offer_uris and flow_def.credential_template_id and pre_auth_code:
+        logger.warning(
+            "Issuance service returned empty credential_offer_uris; "
+            "building wallet-specific offers from credential template..."
+        )
+        credential_offer_uris, credential_offer_labels = await _build_wallet_offers_from_template(
+            flow_def.credential_template_id,
+            instance.organization_id,
+            pre_auth_code,
+        )
+    
+    if not credential_offer_uri:
+        if isinstance(credential_offer_uris, dict):
+            credential_offer_uri = next((uri for uri in credential_offer_uris.values() if uri), None)
+    if not credential_offer_uri:
+        raise HTTPException(status_code=502, detail="Issuance service did not return a credential offer URI")
+
     issuer_url = os.environ.get("PUBLIC_BASE_URL", "http://localhost:8000")
-    
-    # Build credential offer URI
-    # Format: openid-credential-offer://?credential_offer_uri=<url>
-    offer_id = str(uuid.uuid4())
-    credential_offer_uri = f"{issuer_url}/api/issuance/offers/{offer_id}"
-    
-    # Create artifact
-    from datetime import timedelta
+    expires_at = None
+    if issuance.get("expires_at"):
+        try:
+            expires_at = datetime.fromisoformat(str(issuance["expires_at"]).replace("Z", "+00:00"))
+        except ValueError:
+            logger.warning("Invalid issuance expires_at value: %s", issuance.get("expires_at"))
+    if expires_at is None:
+        from datetime import timedelta
+        expires_at = datetime.now(timezone.utc) + timedelta(minutes=15)
+
     artifact = FlowInstanceArtifact(
         flow_instance_id=instance.id,
         credential_offer_uri=credential_offer_uri,
         pre_authorized_code=pre_auth_code,
         state=state,
-        expires_at=datetime.now(timezone.utc) + timedelta(minutes=15),  # Default 15 min expiry
+        expires_at=expires_at,
         status=ArtifactStatus.ACTIVE,
         attempt_number=attempt_number,
     )
@@ -1302,8 +1675,14 @@ async def _create_oid4vci_artifact(
     
     # Store artifact ID and offer details in instance context
     instance.context["oid4vci_artifact_id"] = artifact.id
-    instance.context["offer_id"] = offer_id
+    instance.context["credential_offer_transaction_id"] = issuance.get("id")
+    instance.context["offer_id"] = issuance.get("id")
     instance.context["credential_offer_uri"] = credential_offer_uri
+    instance.context["credential_offer_uris"] = credential_offer_uris or {}
+    instance.context["credential_offer_labels"] = credential_offer_labels or {}
+    instance.context["issuance_status"] = issuance.get("status")
+    if pre_auth_code:
+        instance.context["pre_auth_code"] = pre_auth_code
 
     credential_offer_message = MIPMessage(
         message_type=MessageType.CREDENTIAL_OFFER,
@@ -1323,7 +1702,12 @@ async def _create_oid4vci_artifact(
     _record_mip_message(instance, "credential_offer", credential_offer_message)
     await repo.save_instance(instance)
     
-    logger.info(f"Created OID4VCI artifact for instance {instance.id}: {artifact.id}")
+    logger.info(
+        "Created credential-layer OID4VCI artifact for instance %s: artifact=%s transaction=%s",
+        instance.id,
+        artifact.id,
+        issuance.get("id"),
+    )
     
     return artifact
 
@@ -1339,14 +1723,18 @@ async def create_flow_definition(
     repo: InMemoryFlowRepository = Depends(get_repo),
 ) -> FlowDefinitionResponse:
     """Create a new Flow Definition."""
-    # Verify org membership
     org_client = await get_organization_client(fastapi_request)
     membership = await org_client.get_membership(user_id, request.organization_id)
-    if not membership or not membership.is_active():
-        raise HTTPException(status_code=403, detail="Not a member of this organization")
+    ensure_membership_permission(membership, "flow-definition", "create")
     
     flow_type = _parse_flow_type(request.flow_type)
     _validate_flow_request(request, flow_type)
+    await _validate_credential_layer_references(
+        organization_id=request.organization_id,
+        credential_template_id=request.credential_template_id,
+        presentation_policy_id=request.presentation_policy_id,
+        require_active=request.enabled,
+    )
     deployment_profile_ids = _normalize_deployment_profile_ids(
         request.deployment_profile_ids,
         request.deployment_profile_id,
@@ -1434,8 +1822,8 @@ async def list_flow_definitions(
     repo: InMemoryFlowRepository = Depends(get_repo),
 ) -> list[FlowDefinitionResponse]:
     """List Flow Definitions for an organization."""
-    # Verify org membership
-    await app.state.org_client.get_membership(user_id, organization_id)
+    membership = await app.state.org_client.get_membership(user_id, organization_id)
+    ensure_membership_permission(membership, "flow-definition", "view")
     flows = await repo.list_definitions(organization_id)
     return [_definition_to_response(f) for f in flows[offset:offset + limit]]
 
@@ -1450,8 +1838,8 @@ async def get_flow_definition(
     flow = await repo.get_definition(flow_id)
     if not flow:
         raise HTTPException(status_code=404, detail="Flow Definition not found")
-    # Verify org membership
-    await app.state.org_client.get_membership(user_id, flow.organization_id)
+    membership = await app.state.org_client.get_membership(user_id, flow.organization_id)
+    ensure_membership_permission(membership, "flow-definition", "view")
     return _definition_to_response(flow)
 
 
@@ -1468,11 +1856,17 @@ async def activate_flow_definition(
     
     # Verify admin access
     membership = await app.state.org_client.get_membership(user_id, flow.organization_id)
-    if not membership.has_role("admin", "owner"):
-        raise HTTPException(status_code=403, detail="Admin access required")
+    ensure_membership_permission(membership, "flow-definition", "activate")
     
     if not flow.steps:
         raise HTTPException(status_code=400, detail="Flow must have at least one step")
+
+    await _validate_credential_layer_references(
+        organization_id=flow.organization_id,
+        credential_template_id=flow.credential_template_id,
+        presentation_policy_id=flow.presentation_policy_id,
+        require_active=True,
+    )
     
     flow.activate()
     await repo.save_definition(flow)
@@ -1492,8 +1886,7 @@ async def delete_flow_definition(
     
     # Verify admin access
     membership = await app.state.org_client.get_membership(user_id, flow.organization_id)
-    if not membership.has_role("admin", "owner"):
-        raise HTTPException(status_code=403, detail="Admin access required")
+    ensure_membership_permission(membership, "flow-definition", "delete")
     
     if flow.status != FlowStatus.DRAFT:
         raise HTTPException(status_code=400, detail="Only draft flows can be deleted")
@@ -1512,9 +1905,9 @@ async def start_flow(
     flow_def = await repo.get_definition(request.flow_definition_id)
     if not flow_def:
         raise HTTPException(status_code=404, detail="Flow Definition not found")
-    
-    # Verify org membership
-    await app.state.org_client.get_membership(user_id, flow_def.organization_id)
+
+    membership = await app.state.org_client.get_membership(user_id, flow_def.organization_id)
+    ensure_membership_permission(membership, "flow-instance", "start")
     
     if flow_def.status != FlowStatus.ACTIVE or not flow_def.enabled:
         raise HTTPException(status_code=400, detail="Flow Definition is not active")
@@ -1576,8 +1969,8 @@ async def list_flow_instances(
     repo: InMemoryFlowRepository = Depends(get_repo),
 ) -> list[FlowInstanceResponse]:
     """List Flow Instances."""
-    # Verify org membership
-    await app.state.org_client.get_membership(user_id, organization_id)
+    membership = await app.state.org_client.get_membership(user_id, organization_id)
+    ensure_membership_permission(membership, "flow-instance", "view")
     status_filter = _parse_flow_instance_status(status) if status else None
     instances = await repo.list_instances(organization_id, flow_definition_id, status_filter)
     return [_instance_to_response(i) for i in instances[offset:offset + limit]]
@@ -1593,8 +1986,8 @@ async def get_flow_instance(
     instance = await repo.get_instance(instance_id)
     if not instance:
         raise HTTPException(status_code=404, detail="Flow Instance not found")
-    # Verify org membership
-    await app.state.org_client.get_membership(user_id, instance.organization_id)
+    membership = await app.state.org_client.get_membership(user_id, instance.organization_id)
+    ensure_membership_permission(membership, "flow-instance", "view")
     return _instance_to_response(instance)
 
 
@@ -1613,7 +2006,8 @@ async def get_flow_instance_result(
     instance = await repo.get_instance(instance_id)
     if not instance:
         raise HTTPException(status_code=404, detail="Flow Instance not found")
-    await app.state.org_client.get_membership(user_id, instance.organization_id)
+    membership = await app.state.org_client.get_membership(user_id, instance.organization_id)
+    ensure_membership_permission(membership, "flow-instance", "view")
     return {
         "instance_id": instance.id,
         "status": instance.status.value,
@@ -1635,9 +2029,9 @@ async def advance_flow(
     instance = await repo.get_instance(instance_id)
     if not instance:
         raise HTTPException(status_code=404, detail="Flow Instance not found")
-    
-    # Verify org membership
-    await app.state.org_client.get_membership(user_id, instance.organization_id)
+
+    membership = await app.state.org_client.get_membership(user_id, instance.organization_id)
+    ensure_membership_permission(membership, "flow-instance", "advance")
     
     if instance.status not in [FlowInstanceStatus.IN_PROGRESS, FlowInstanceStatus.AWAITING_WALLET]:
         raise HTTPException(status_code=400, detail=f"Cannot advance flow in {instance.status} status")
@@ -1727,9 +2121,9 @@ async def cancel_flow(
     instance = await repo.get_instance(instance_id)
     if not instance:
         raise HTTPException(status_code=404, detail="Flow Instance not found")
-    
-    # Verify org membership
-    await app.state.org_client.get_membership(user_id, instance.organization_id)
+
+    membership = await app.state.org_client.get_membership(user_id, instance.organization_id)
+    ensure_membership_permission(membership, "flow-instance", "cancel")
     
     if instance.status in TERMINAL_STATES:
         raise HTTPException(status_code=400, detail="Flow already ended")
@@ -1759,9 +2153,9 @@ async def list_flow_instance_artifacts(
     instance = await repo.get_instance(instance_id)
     if not instance:
         raise HTTPException(status_code=404, detail="Flow Instance not found")
-    
-    # Verify org membership
-    await app.state.org_client.get_membership(user_id, instance.organization_id)
+
+    membership = await app.state.org_client.get_membership(user_id, instance.organization_id)
+    ensure_membership_permission(membership, "flow-instance", "view")
     
     artifacts = await repo.list_artifacts(instance_id)
     return [_artifact_to_response(a) for a in artifacts[offset:offset + limit]]
@@ -1783,7 +2177,8 @@ async def get_flow_instance_artifact(
     instance = await repo.get_instance(instance_id)
     if not instance:
         raise HTTPException(status_code=404, detail="Flow Instance not found")
-    await app.state.org_client.get_membership(user_id, instance.organization_id)
+    membership = await app.state.org_client.get_membership(user_id, instance.organization_id)
+    ensure_membership_permission(membership, "flow-instance", "view")
     
     return _artifact_to_response(artifact)
 
@@ -1798,9 +2193,9 @@ async def generate_qr_code(
     instance = await repo.get_instance(instance_id)
     if not instance:
         raise HTTPException(status_code=404, detail="Flow Instance not found")
-    
-    # Verify org membership
-    await app.state.org_client.get_membership(user_id, instance.organization_id)
+
+    membership = await app.state.org_client.get_membership(user_id, instance.organization_id)
+    ensure_membership_permission(membership, "flow-instance", "advance")
     
     flow_def = await repo.get_definition(instance.flow_definition_id)
     if not flow_def:
@@ -1907,6 +2302,14 @@ class SubmitVerificationRequest(BaseModel):
     """Request to submit a VP token to a verification flow."""
     vp_token: str
     presentation_submission: dict | None = None
+
+
+class DigitalCredentialSubmissionRequest(BaseModel):
+    """Browser-mediated DC API response payload."""
+
+    protocol: str | None = Field(None, max_length=128)
+    origin: str | None = Field(None, max_length=512)
+    data: dict[str, Any] = Field(default_factory=dict)
 
 
 class VerificationResultResponse(BaseModel):
@@ -2022,7 +2425,8 @@ async def start_verification_flow(
     except (ValueError, AttributeError):
         is_service_user = True
     if not is_service_user:
-        await app.state.org_client.get_membership(user_id, organization_id)
+        membership = await app.state.org_client.get_membership(user_id, organization_id)
+        ensure_membership_permission(membership, "verification", "execute")
 
     # Create a verification flow instance directly
     flow_definition_id = str(uuid.uuid4())
@@ -2118,6 +2522,7 @@ async def _build_presentation_definition(presentation_policy_id: str) -> dict:
         purpose = req.get("description") or f"Present {display_name}"
 
         credential_type: str | None = None
+        credential_vct: str | None = None
         supported_formats: list[str] = []
         if template_id:
             try:
@@ -2126,6 +2531,7 @@ async def _build_presentation_definition(presentation_policy_id: str) -> dict:
                 )
                 if tmpl_resp.id:
                     credential_type = tmpl_resp.credential_type or None
+                    credential_vct = tmpl_resp.vct or None
                     supported_formats = list(tmpl_resp.supported_formats) or []
             except Exception as exc:
                 logger.warning(
@@ -2133,10 +2539,14 @@ async def _build_presentation_definition(presentation_policy_id: str) -> dict:
                     f"{template_id}: {exc}"
                 )
 
-        # Build type-filter constraint based on format
+        # Build type-filter constraint based on format.  Presentation Exchange
+        # fields are conjunctive, so the SD-JWT vct selector must be the only
+        # required type selector for an SD-JWT login badge.  Compatibility type
+        # hints are optional; otherwise wallets can report "no credentials" for
+        # a perfectly valid SD-JWT VC that does not also carry vc.type.
         fields: list[dict] = []
         if credential_type:
-            if "mdoc" in supported_formats:
+            if _is_mdoc_format(supported_formats):
                 # ISO 18013-5 mDoc — filter by docType
                 fields.append(
                     {
@@ -2144,12 +2554,27 @@ async def _build_presentation_definition(presentation_policy_id: str) -> dict:
                         "filter": {"type": "string", "const": credential_type},
                     }
                 )
-            elif "sd_jwt_vc" in supported_formats:
-                # SD-JWT VC — filter by vct claim
+            elif _is_sd_jwt_format(supported_formats):
+                # SD-JWT VC — primary filter by vct claim
+                vct_values = _sd_jwt_vct_values(credential_vct, credential_type)
                 fields.append(
                     {
                         "path": ["$.vct"],
-                        "filter": {"type": "string", "const": credential_type},
+                        "filter": _string_filter_for_values(vct_values),
+                    }
+                )
+                # Optional W3C/Open Badge type hint for wallets that use it for
+                # display/ranking. It MUST NOT be required for SD-JWT matching.
+                fields.append(
+                    {
+                        "path": ["$.vc.type", "$.type"],
+                        "filter": {
+                            "anyOf": [
+                                {"type": "array", "contains": {"const": credential_type}},
+                                {"type": "string", "const": credential_type},
+                            ],
+                        },
+                        "optional": True,
                     }
                 )
             else:
@@ -2158,8 +2583,10 @@ async def _build_presentation_definition(presentation_policy_id: str) -> dict:
                     {
                         "path": ["$.vc.type", "$.type"],
                         "filter": {
-                            "type": "array",
-                            "contains": {"const": credential_type},
+                            "anyOf": [
+                                {"type": "array", "contains": {"const": credential_type}},
+                                {"type": "string", "const": credential_type},
+                            ],
                         },
                     }
                 )
@@ -2168,30 +2595,37 @@ async def _build_presentation_definition(presentation_policy_id: str) -> dict:
         for claim in req.get("requested_claims", []):
             claim_name = claim.get("claim_name") if isinstance(claim, dict) else getattr(claim, "claim_name", None)
             if claim_name:
+                claim_display_name = (
+                    claim.get("display_name") if isinstance(claim, dict) else getattr(claim, "display_name", None)
+                ) or str(claim_name).replace("_", " ").title()
+                claim_purpose = (
+                    claim.get("purpose") if isinstance(claim, dict) else getattr(claim, "purpose", None)
+                ) or f"Share {claim_display_name}"
+                retain_claim = (
+                    claim.get("intent_to_retain", False)
+                    if isinstance(claim, dict)
+                    else getattr(claim, "intent_to_retain", False)
+                )
                 fields.append(
                     {
+                        "name": claim_display_name,
+                        "purpose": claim_purpose,
                         "path": [
                             f"$.vc.credentialSubject.{claim_name}",
                             f"$.credentialSubject.{claim_name}",
                             f"$.{claim_name}",
                         ],
-                        "intent_to_retain": True,
+                        "intent_to_retain": bool(retain_claim),
                         "optional": not (claim.get("required", False) if isinstance(claim, dict) else getattr(claim, "required", False)),
                     }
                 )
 
         descriptor: dict = {"id": descriptor_id, "name": display_name, "purpose": purpose}
-        if "mdoc" in supported_formats:
-            descriptor["format"] = {"mso_mdoc": {"alg": ["ES256", "ES384"]}}
-        elif "sd_jwt_vc" in supported_formats:
-            descriptor["format"] = {"vc+sd-jwt": {"alg": ["ES256", "EdDSA"]}}
-        else:
-            descriptor["format"] = {
-                "jwt_vp": {"alg": ["ES256", "EdDSA"]},
-                "ldp_vp": {"proof_type": ["Ed25519Signature2020"]},
-            }
+        descriptor["format"] = _oid4vp_presentation_formats(supported_formats)
         if fields:
             descriptor["constraints"] = {"fields": fields}
+            if _is_sd_jwt_format(supported_formats):
+                descriptor["constraints"]["limit_disclosure"] = "required"
 
         input_descriptors.append(descriptor)
 
@@ -2206,21 +2640,246 @@ async def _build_presentation_definition(presentation_policy_id: str) -> dict:
             }
         ]
 
+    # Collect all unique supported formats across descriptors for the top-level format
+    _top_formats: dict[str, Any] = {}
+    for desc in input_descriptors:
+        for fmt_key, fmt_val in desc.get("format", {}).items():
+            if fmt_key not in _top_formats:
+                _top_formats[fmt_key] = fmt_val
+    if not _top_formats:
+        _top_formats = {"jwt_vp": {"alg": ["ES256", "EdDSA"]}}
+
     return {
         "id": str(uuid.uuid4()),
-        "format": {
-            "jwt_vp": {"alg": ["ES256", "EdDSA"]},
-            "ldp_vp": {"proof_type": ["Ed25519Signature2020"]},
-            "mso_mdoc": {"alg": ["ES256"]},
-        },
+        "format": _top_formats,
         "input_descriptors": input_descriptors,
     }
+
+
+# ── OID4VP presentation formats: derived from wallet registry entries ─────
+# Each wallet registry entry declares supported_formats that map directly to
+# OID4VP presentation format identifiers.  The canonical catalog lives in
+# credential_template/main.py (SYSTEM_WALLET_CATALOG); a local fallback keeps
+# presentation working when the module isn't importable at runtime.
+
+_WALLET_FORMATS_FALLBACK: dict[str, dict[str, Any]] = {
+    "vc+sd-jwt":        {"sd-jwt_alg_values": ["ES256", "EdDSA"], "kb-jwt_alg_values": ["ES256", "EdDSA"]},
+    "dc+sd-jwt":        {"sd-jwt_alg_values": ["ES256", "EdDSA"], "kb-jwt_alg_values": ["ES256", "EdDSA"]},
+    "spruce-vc+sd-jwt": {"sd-jwt_alg_values": ["ES256", "EdDSA"], "kb-jwt_alg_values": ["ES256", "EdDSA"]},
+    "mso_mdoc":         {"alg": ["ES256", "ES384"]},
+    "jwt_vp":           {"alg": ["ES256", "EdDSA"]},
+    "ldp_vp":           {"proof_type": ["Ed25519Signature2020"]},
+}
+
+
+def _oid4vp_wallet_registry_formats() -> dict[str, dict[str, Any]]:
+    """Collect all unique OID4VP format identifiers from the wallet registry."""
+    try:
+        from credential_template.main import SYSTEM_WALLET_CATALOG  # type: ignore[import-untyped]
+        result: dict[str, dict[str, Any]] = {}
+        for entry in SYSTEM_WALLET_CATALOG:
+            for fmt in entry.supported_formats:
+                fmt_s = (fmt or "").strip()
+                if fmt_s and fmt_s not in result:
+                    result[fmt_s] = _oid4vp_format_alg(fmt_s)
+        if result:
+            logger.debug("_oid4vp_wallet_registry_formats: loaded %d formats from SYSTEM_WALLET_CATALOG", len(result))
+            return result
+    except ImportError:
+        pass
+    # Fallback: use the locally-maintained copy (must match SYSTEM_WALLET_CATALOG)
+    logger.debug("_oid4vp_wallet_registry_formats: using local fallback (%d formats)", len(_WALLET_FORMATS_FALLBACK))
+    return dict(_WALLET_FORMATS_FALLBACK)
+
+
+def _oid4vp_format_alg(fmt: str) -> dict[str, Any]:
+    """Return algorithm constraints for a given OID4VP format identifier."""
+    fmt_n = (fmt or "").strip().lower()
+    if fmt_n in {"vc+sd-jwt", "dc+sd-jwt", "sd_jwt_vc", "spruce-vc+sd-jwt"}:
+        return dict(_SD_JWT_PRESENTATION_ALGS)
+    if fmt_n in {"mso_mdoc", "mdoc"}:
+        return {"alg": ["ES256", "ES384"]}
+    if fmt_n in {"jwt_vp", "jwt_vc", "jwt_vc_json"}:
+        return {"alg": ["ES256", "EdDSA"]}
+    if fmt_n == "ldp_vp":
+        return {"proof_type": ["Ed25519Signature2020"]}
+    return {"alg": ["ES256", "EdDSA"]}
+
+
+def _oid4vp_presentation_formats(template_supported_formats: list[str]) -> dict[str, Any]:
+    """Derive OID4VP format identifiers from template formats × wallet registry.
+
+    The credential template declares format *families* (e.g. sd_jwt_vc, mso_mdoc).
+    The wallet registry declares the exact format *identifiers* each wallet expects.
+    This function returns the union of all wallet-supported identifiers in the
+    template's format families, so the presentation request works for every
+    registered wallet without hardcoding format strings.
+    """
+    _SD_FAMILY = {"sd_jwt_vc", "vc+sd-jwt", "dc+sd-jwt", "spruce-vc+sd-jwt"}
+    _DOC_FAMILY = {"mso_mdoc", "mdoc"}
+    _JWTVP_FAMILY = {"jwt_vc", "jwt_vc_json", "jwt_vp"}
+
+    template_family: set[str] = set()
+    for f in template_supported_formats:
+        fn = (f or "").strip().lower()
+        if fn in _SD_FAMILY:
+            template_family.add("sd_jwt")
+        elif fn in _DOC_FAMILY:
+            template_family.add("mdoc")
+        elif fn in _JWTVP_FAMILY:
+            template_family.add("jwt_vp")
+        else:
+            template_family.add(fn)
+
+    # Collect wallet-registry formats in the template's families
+    result: dict[str, Any] = {}
+    registry_formats = _oid4vp_wallet_registry_formats()
+    for fmt_key, fmt_alg in registry_formats.items():
+        fn = (fmt_key or "").strip().lower()
+        if (
+            ("sd_jwt" in template_family and fn in _SD_FAMILY)
+            or ("mdoc" in template_family and fn in _DOC_FAMILY)
+            or ("jwt_vp" in template_family and fn in _JWTVP_FAMILY)
+            or fn in template_family
+        ):
+            result[fmt_key] = fmt_alg
+
+    if not result:
+        return {"jwt_vp": {"alg": ["ES256", "EdDSA"]}, "ldp_vp": {"proof_type": ["Ed25519Signature2020"]}}
+    return result
+
+
+def _is_sd_jwt_format(supported_formats: list[str]) -> bool:
+    _SD = {"sd_jwt_vc", "vc+sd-jwt", "dc+sd-jwt", "spruce-vc+sd-jwt"}
+    return any((f or "").strip().lower() in _SD for f in supported_formats)
+
+
+def _is_mdoc_format(supported_formats: list[str]) -> bool:
+    _DOC = {"mso_mdoc", "mdoc"}
+    return any((f or "").strip().lower() in _DOC for f in supported_formats)
+
+
+def _string_filter_for_values(values: list[str]) -> dict[str, Any]:
+    """Build a JSON Schema string filter for one or more accepted values."""
+    unique_values = [value for i, value in enumerate(values) if value and value not in values[:i]]
+    if len(unique_values) == 1:
+        return {"type": "string", "const": unique_values[0]}
+    return {"type": "string", "enum": unique_values}
+
+
+def _sd_jwt_vct_values(credential_vct: str | None, credential_type: str | None) -> list[str]:
+    """Return accepted SD-JWT VC type values for the request object.
+
+    Marty Open Badge credentials were issued with an early development vct
+    before the beta.elevenidllc.com production vct was introduced. Including
+    the legacy value lets wallets find already-issued badges while the verifier
+    still enforces issuer trust, signature, claims, and revocation.
+    """
+    values = [credential_vct or credential_type] if (credential_vct or credential_type) else []
+    if credential_type == "open_badge" or credential_vct == "https://beta.elevenidllc.com/credentials/marty-verified-member-badge":
+        values.append("https://marty.example/credentials/open_badge")
+    return [value for i, value in enumerate(values) if value and value not in values[:i]]
+
+
+def _dcql_format_name(fmt: str) -> str:
+    """Normalize OID4VP/registry format identifiers to DCQL format names."""
+    fmt_n = (fmt or "").strip().lower()
+    if fmt_n in {"jwt_vp", "jwt_vc", "jwt_vc_json"}:
+        return "jwt_vc_json"
+    if fmt_n == "ldp_vp":
+        return "ldp_vc"
+    if fmt_n in {"vc+sd-jwt", "dc+sd-jwt", "sd_jwt_vc", "spruce-vc+sd-jwt"}:
+        return "dc+sd-jwt"
+    if fmt_n in {"mso_mdoc", "mdoc"}:
+        return "mso_mdoc"
+    return fmt
+
+
+def _json_schema_const_values(schema: dict[str, Any] | None) -> list[str]:
+    """Extract string const/enum values from a JSON Schema fragment."""
+    if not isinstance(schema, dict):
+        return []
+
+    values: list[str] = []
+
+    def _append(value: Any) -> None:
+        if isinstance(value, str) and value not in values:
+            values.append(value)
+
+    _append(schema.get("const"))
+    enum_values = schema.get("enum")
+    if isinstance(enum_values, list):
+        for enum_value in enum_values:
+            _append(enum_value)
+
+    contains = schema.get("contains")
+    if isinstance(contains, dict):
+        for value in _json_schema_const_values(contains):
+            _append(value)
+
+    for keyword in ("anyOf", "oneOf", "allOf"):
+        options = schema.get(keyword)
+        if isinstance(options, list):
+            for option in options:
+                if isinstance(option, dict):
+                    for value in _json_schema_const_values(option):
+                        _append(value)
+
+    return values
+
+
+def _dcql_meta_for_descriptor(descriptor: dict[str, Any], fmt_name: str) -> dict[str, Any]:
+    """Derive DCQL meta from Presentation Exchange type/vct filters."""
+    sd_jwt_formats = {"dc+sd-jwt", "vc+sd-jwt", "spruce-vc+sd-jwt", "sd_jwt_vc"}
+    for field in descriptor.get("constraints", {}).get("fields", []):
+        values = _json_schema_const_values(field.get("filter"))
+        if not values:
+            continue
+        paths = field.get("path", [])
+        if fmt_name in sd_jwt_formats or "$.vct" in paths:
+            return {"vct_values": values}
+        if any(path in {"$.vc.type", "$.type"} for path in paths):
+            return {"type_values": [["VerifiableCredential", value] for value in values]}
+    return {}
+
+
+def _dcql_claims_for_descriptor(descriptor: dict[str, Any]) -> list[dict[str, Any]]:
+    """Derive DCQL claim requests from Presentation Exchange fields."""
+    fields = descriptor.get("constraints", {}).get("fields", [])
+    required_fields = [field for field in fields if not field.get("optional")]
+    candidate_fields = required_fields or fields
+
+    claims: list[dict[str, Any]] = []
+    seen: set[tuple[str, ...]] = set()
+    for field in candidate_fields:
+        if field.get("filter"):
+            continue
+        for path in reversed(field.get("path", [])):
+            if not isinstance(path, str) or not path.startswith("$."):
+                continue
+            claim_path = path[2:].split(".")
+            if not claim_path or claim_path[0] in {"vc", "credentialSubject", "type", "vct"}:
+                continue
+            key = tuple(claim_path)
+            if key in seen:
+                break
+            seen.add(key)
+            claims.append(
+                {
+                    "id": "claim_" + "_".join(part.replace("-", "_") for part in claim_path),
+                    "path": claim_path,
+                }
+            )
+            break
+    return claims
 
 
 @router.get("/instances/{instance_id}/request")
 async def get_verification_request_object(
     instance_id: str,
     repo: InMemoryFlowRepository = Depends(get_repo),
+    transport: Annotated[str, Query()] = "request_uri",
+    compat: Annotated[str | None, Query()] = None,
 ) -> Response:
     """
     Get the verification request object (for wallet to fetch via request_uri).
@@ -2233,6 +2892,9 @@ async def get_verification_request_object(
 
     Content-Type: application/oauth-authz-req+jwt
     """
+    if transport not in {"request_uri", "dc_api"}:
+        raise HTTPException(status_code=400, detail="transport must be either 'request_uri' or 'dc_api'")
+
     instance = await repo.get_instance(instance_id)
     if not instance:
         raise HTTPException(status_code=404, detail="Flow instance not found")
@@ -2253,6 +2915,7 @@ async def get_verification_request_object(
     client_id = os.environ.get("VERIFIER_CLIENT_ID", f"{base_url}/verifier")
 
     flow_type = instance.context.get("flow_type", "verification")
+    compat_profile = (compat or "").strip().lower()
 
     if flow_type == "siop_v2":
         # SIOPv2 Draft 13 §9: authentication request for a self-issued OP.
@@ -2278,34 +2941,57 @@ async def get_verification_request_object(
         }
     else:
         response_uri = f"{base_url}/v1/flows/instances/{instance_id}/submit"
-        # OID4VP 1.0 Final §5.10: use client_id_scheme=did with the verifier's DID:key.
+        # OID4VP 1.0 Final §5.10: identify the verifier with a DID-based
+        # client identifier. SpruceID Kit rejects did:key/did:jwk for request
+        # object verification, so the default verifier DID is path-scoped did:web.
         # The response_uri is where the wallet POSTs the VP token (the submit endpoint).
-        verifier_did = _derive_verifier_did()
+        verifier_did = _derive_verifier_did(base_url)
+        lissi_compat = compat_profile == "lissi"
+        client_identifier = verifier_did if lissi_compat else f"decentralized_identifier:{verifier_did}"
         # Build OID4VP Request Object payload
         # This will be signed as a JWT per OID4VP spec section 5
         request_payload = {
             # Standard OAuth 2.0 parameters
             "response_type": "vp_token",
-            "response_mode": "direct_post",
-            "client_id": verifier_did,
-            # OID4VP 1.0 Final §5.10: client_id_scheme=did — client_id is the verifier DID.
-            "client_id_scheme": "did",
-            "response_uri": response_uri,
+            "client_id": client_identifier,
             "nonce": instance.context.get("nonce"),
-            "state": instance_id,
 
             # JWT claims
-            "iss": verifier_did,  # Issuer is the verifier DID
+            "iss": client_identifier,
             "aud": "https://self-issued.me/v2",  # Audience (standard for OID4VP)
             "iat": int(datetime.now(timezone.utc).timestamp()),
             "exp": int(instance.expires_at.timestamp()) if instance.expires_at else int((datetime.now(timezone.utc).timestamp() + 900)),
         }
 
+        if lissi_compat:
+            request_payload["client_id_scheme"] = "did"
+        else:
+            request_payload["client_metadata"] = _oid4vp_client_metadata(base_url)
+
+        if transport == "dc_api":
+            expected_origins = _expected_origins_for_dc_api(base_url)
+            if not lissi_compat:
+                request_payload["client_metadata"] = _oid4vp_client_metadata(
+                    base_url,
+                    include_encrypted_response=True,
+                )
+            request_payload["response_mode"] = _DC_API_JWT_RESPONSE_MODE
+            request_payload["expected_origins"] = expected_origins
+            instance.context["dc_api_expected_origins"] = expected_origins
+            instance.context["dc_api_protocol"] = _DC_API_PROTOCOL
+            instance.context["dc_api_response_mode"] = _DC_API_JWT_RESPONSE_MODE
+            instance.context["dc_api_jwe_alg"] = _HAIP_JWE_ALG
+            instance.context["dc_api_jwe_enc"] = _HAIP_JWE_ENC
+        else:
+            request_payload["response_mode"] = "direct_post"
+            request_payload["response_uri"] = response_uri
+            request_payload["state"] = instance_id
+            instance.context["verification_audience"] = client_identifier
+
         # OID4VP presentation definition (built from the real policy)
         pd = await _build_presentation_definition(
             instance.context.get("presentation_policy_id", "")
         )
-        request_payload["presentation_definition"] = pd
 
         # OID4VP Final §6: dcql_query as alternative credential query format.
         # Derived from the presentation_definition so no extra HTTP calls are needed.
@@ -2314,34 +3000,34 @@ async def get_verification_request_object(
             fmt_map = descriptor.get("format", {})
             first_fmt = next(iter(fmt_map), "jwt_vc_json")
             # Normalize format key to the DCQL format identifier
-            fmt_name = {
-                "jwt_vp": "jwt_vc_json",
-                "ldp_vp": "ldp_vc",
-                "vc+sd-jwt": "dc+sd-jwt",
-                "mso_mdoc": "mso_mdoc",
-            }.get(first_fmt, first_fmt)
+            fmt_name = _dcql_format_name(first_fmt)
             entry: dict = {"id": descriptor["id"], "format": fmt_name}
             # Include type filter as meta.type_values if present
-            for field in descriptor.get("constraints", {}).get("fields", []):
-                ctype = field.get("filter", {}).get("const")
-                if ctype:
-                    entry["meta"] = {"type_values": [["VerifiableCredential", ctype]]}
-                    break
+            dcql_meta = _dcql_meta_for_descriptor(descriptor, fmt_name)
+            if dcql_meta:
+                entry["meta"] = dcql_meta
+            claims = _dcql_claims_for_descriptor(descriptor)
+            if claims:
+                entry["claims"] = claims
             dcql_entries.append(entry)
         if not dcql_entries:
             dcql_entries = [{"id": "default-credential", "format": "jwt_vc_json"}]
-        request_payload["dcql_query"] = {"credentials": dcql_entries}
+        if lissi_compat:
+            request_payload["presentation_definition"] = pd
+        else:
+            request_payload["dcql_query"] = {"credentials": dcql_entries}
 
         presentation_request_message = MIPMessage(
             message_type=MessageType.PRESENTATION_REQUEST,
             correlation_id=instance.id,
-            sender_id=verifier_did,
+            sender_id=client_identifier,
             nonce=request_payload.get("nonce"),
             payload=PresentationRequestPayload(
-                client_id=verifier_did,
+                client_id=client_identifier,
                 response_type=request_payload["response_type"],
-                presentation_definition=request_payload["presentation_definition"],
                 nonce=request_payload["nonce"],
+                presentation_definition=request_payload.get("presentation_definition"),
+                dcql_query=request_payload.get("dcql_query"),
                 mip_flow_instance_id=instance.id,
                 mip_policy_id=instance.context.get("presentation_policy_id"),
                 response_mode=request_payload.get("response_mode"),
@@ -2352,6 +3038,13 @@ async def get_verification_request_object(
         await repo.save_instance(instance)
 
 
+    jwt_headers = {
+        'typ': 'oauth-authz-req+jwt',
+        'alg': 'ES256',
+    }
+    if flow_type != "siop_v2":
+        jwt_headers['kid'] = _verification_method_for_did(verifier_did)
+
     # Sign the Request Object as a JWT
     # Per OID4VP spec: "The Request Object [...] MUST be signed"
     try:
@@ -2359,10 +3052,7 @@ async def get_verification_request_object(
             request_payload,
             signing_jwk.to_dict(),
             algorithm='ES256',
-            headers={
-                'typ': 'oauth-authz-req+jwt',
-                'alg': 'ES256',
-            }
+            headers=jwt_headers,
         )
 
         logger.info(f"Generated signed Request Object JWT for instance {instance_id}")
@@ -2379,6 +3069,24 @@ async def get_verification_request_object(
     except Exception as e:
         logger.error(f"Failed to sign Request Object: {e}")
         raise HTTPException(status_code=500, detail="Failed to generate request object")
+
+
+@did_router.get(f"/{_OID4VP_DID_WEB_PATH}/did.json", include_in_schema=False)
+async def get_oid4vp_did_web_document(request: Request) -> JSONResponse:
+    """Serve the path-scoped did:web document used by OID4VP login."""
+    forwarded_proto = request.headers.get("x-forwarded-proto", request.url.scheme)
+    forwarded_host = request.headers.get("x-forwarded-host") or request.headers.get("host")
+    fallback_base_url = f"{forwarded_proto}://{forwarded_host}" if forwarded_host else str(request.base_url).rstrip("/")
+    base_url = os.environ.get("PUBLIC_BASE_URL") or fallback_base_url
+    return JSONResponse(
+        content=_oid4vp_did_web_document(base_url),
+        media_type="application/did+json",
+        headers={
+            "Cache-Control": "no-store",
+            "Pragma": "no-cache",
+            "Access-Control-Allow-Origin": "*",
+        },
+    )
 
 
 def _base58_decode(s: str) -> bytes:
@@ -2414,7 +3122,85 @@ def _base58_encode(data: bytes) -> str:
     return "".join(reversed(result))
 
 
-def _derive_verifier_did() -> str:
+def _base64url_encode(data: bytes) -> str:
+    """Base64url encode without padding."""
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
+
+
+def _base64url_decode(data: str) -> bytes:
+    """Base64url decode with optional padding omitted."""
+    padding = "=" * (-len(data) % 4)
+    return base64.urlsafe_b64decode((data + padding).encode("ascii"))
+
+
+def _verifier_public_jwk() -> dict[str, str]:
+    """Return the public JWK for the verifier's ES256 signing key."""
+    key_pair, _ = get_or_create_signing_key()
+    public_numbers = key_pair["public"].public_numbers()
+    coordinate_size = (key_pair["public"].curve.key_size + 7) // 8
+    return {
+        "crv": "P-256",
+        "kty": "EC",
+        "x": _base64url_encode(public_numbers.x.to_bytes(coordinate_size, "big")),
+        "y": _base64url_encode(public_numbers.y.to_bytes(coordinate_size, "big")),
+    }
+
+
+def _verifier_encryption_public_jwk() -> dict[str, str]:
+    """Return the public JWK advertised for HAIP encrypted dc_api.jwt responses."""
+    return {
+        **_verifier_public_jwk(),
+        "alg": _HAIP_JWE_ALG,
+        "kid": _HAIP_ENCRYPTION_KEY_ID,
+        "use": "enc",
+    }
+
+
+def _verifier_encryption_private_jwk() -> dict[str, str]:
+    """Return the verifier's private EC JWK for HAIP JWE decryption."""
+    key_pair, _ = get_or_create_signing_key()
+    private_numbers = key_pair["private"].private_numbers()
+    coordinate_size = (key_pair["private"].curve.key_size + 7) // 8
+    return {
+        **_verifier_encryption_public_jwk(),
+        "d": _base64url_encode(private_numbers.private_value.to_bytes(coordinate_size, "big")),
+    }
+
+
+def _derive_verifier_did(base_url: str | None = None) -> str:
+    """Derive the verifier DID used as the OID4VP client identifier.
+
+    Defaults to did:web because SpruceID Kit currently rejects did:key and
+    did:jwk request object verification methods. VERIFIER_DID_METHOD can still
+    select did:key or did:jwk for other wallet profiles.
+    """
+    did_method = os.environ.get("VERIFIER_DID_METHOD", "did:web").strip().lower()
+    if did_method in {"web", "did:web"}:
+        return _derive_verifier_did_web(base_url)
+    if did_method in {"jwk", "did:jwk"}:
+        return _derive_verifier_did_jwk()
+    if did_method in {"key", "did:key"}:
+        return _derive_verifier_did_key()
+    raise RuntimeError(f"Unsupported VERIFIER_DID_METHOD: {did_method}")
+
+
+def _derive_verifier_did_web(base_url: str | None = None) -> str:
+    """Derive the path-scoped did:web identifier for the verifier."""
+    resolved_base_url = base_url or os.environ.get("PUBLIC_BASE_URL", "http://marty-gateway:8000")
+    parsed = urllib.parse.urlparse(resolved_base_url)
+    host = parsed.netloc or parsed.path
+    encoded_host = urllib.parse.quote(host, safe=".")
+    return f"did:web:{encoded_host}:{_OID4VP_DID_WEB_PATH}"
+
+
+def _derive_verifier_did_jwk() -> str:
+    """Derive a did:jwk from the verifier's P-256 public signing key."""
+    public_jwk = _verifier_public_jwk()
+    jwk_json = json.dumps(public_jwk, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    return f"did:jwk:{_base64url_encode(jwk_json)}"
+
+
+def _derive_verifier_did_key() -> str:
     """Derive a did:key from the verifier's P-256 (secp256r1) signing key.
 
     Uses multicodec code 0x1200 (varint: b'\\x80\\x24') for secp256r1-pub,
@@ -2428,6 +3214,70 @@ def _derive_verifier_did() -> str:
     # varint(0x1200) = b'\x80\x24' (secp256r1-pub multicodec prefix)
     multicodec_bytes = b"\x80\x24" + compressed_pub
     return f"did:key:z{_base58_encode(multicodec_bytes)}"
+
+
+def _verification_method_for_did(did: str) -> str:
+    """Return the default verification method fragment for verifier DIDs."""
+    if did.startswith("did:web:"):
+        return f"{did}#{_OID4VP_VERIFICATION_METHOD_FRAGMENT}"
+    if did.startswith("did:jwk:"):
+        return f"{did}#0"
+    if did.startswith("did:key:"):
+        return f"{did}#{did.removeprefix('did:key:')}"
+    return f"{did}#key-1"
+
+
+def _oid4vp_did_web_document(base_url: str) -> dict[str, Any]:
+    """DID document for the OID4VP verifier did:web identity."""
+    did = _derive_verifier_did_web(base_url)
+    verification_method_id = _verification_method_for_did(did)
+    public_jwk = _verifier_public_jwk()
+    return {
+        "@context": [
+            "https://www.w3.org/ns/did/v1",
+            "https://w3id.org/security/suites/jws-2020/v1",
+        ],
+        "id": did,
+        "verificationMethod": [
+            {
+                "id": verification_method_id,
+                "type": "JsonWebKey2020",
+                "controller": did,
+                "publicKeyJwk": {
+                    **public_jwk,
+                    "alg": "ES256",
+                    "use": "sig",
+                },
+            }
+        ],
+        "authentication": [verification_method_id],
+        "assertionMethod": [verification_method_id],
+    }
+
+
+def _oid4vp_client_metadata(base_url: str, *, include_encrypted_response: bool = False) -> dict[str, Any]:
+    """Verifier metadata advertised to wallets in OID4VP request objects."""
+    metadata: dict[str, Any] = {
+        "client_name": os.environ.get("VERIFIER_DISPLAY_NAME", "ElevenID LLC"),
+        "logo_uri": os.environ.get("VERIFIER_LOGO_URI", f"{base_url}/favicon.svg"),
+        "vp_formats_supported": {
+            "jwt_vp": {"alg_values_supported": ["ES256", "EdDSA"]},
+            "ldp_vp": {"proof_type_values_supported": ["Ed25519Signature2020"]},
+            "jwt_vc_json": {"alg_values_supported": ["ES256", "EdDSA"]},
+            "vc+sd-jwt": dict(_SD_JWT_PRESENTATION_ALGS),
+            "dc+sd-jwt": dict(_SD_JWT_PRESENTATION_ALGS),
+            "mso_mdoc": {"alg_values_supported": ["ES256"]},
+        },
+    }
+    if include_encrypted_response:
+        metadata.update(
+            {
+                "authorization_encrypted_response_alg": _HAIP_JWE_ALG,
+                "authorization_encrypted_response_enc": _HAIP_JWE_ENC,
+                "jwks": {"keys": [_verifier_encryption_public_jwk()]},
+            }
+        )
+    return metadata
 
 
 def _resolve_did_key_to_ed25519_pubkey(did: str) -> bytes | None:
@@ -2450,11 +3300,13 @@ def _resolve_did_key_to_ed25519_pubkey(did: str) -> bytes | None:
 
 
 def _verify_vp_jwt_signature(vp_token: str) -> bool:
-    """Verify the Ed25519 signature on a VP JWT using its embedded DID:key.
+    """Verify the Ed25519 holder signature on a VP JWT when we can.
 
-    Returns True if the signature is valid, False otherwise.
-    Skips verification (returns True) if the cryptography package is unavailable
-    or if the DID method is not did:key.
+    Returns True if the signature is valid, False otherwise. Unsupported holder
+    DID methods/algorithms are deferred to downstream policy verification.
+
+    SD-JWT presentations are shaped as issuer-jwt~disclosures~kb-jwt. The
+    holder proof is the key-binding JWT at the end, not the first issuer JWT.
     """
     import base64 as _b64
 
@@ -2465,8 +3317,22 @@ def _verify_vp_jwt_signature(vp_token: str) -> bool:
             s += "=" * padding
         return _b64.b64decode(s)
 
-    # VP tokens can be SD-JWT (split on ~) — take only the JWT part
-    jwt_part = vp_token.split("~")[0]
+    # Plain JWT VPs carry the holder signature directly. SD-JWT VPs carry it
+    # in the final key-binding JWT.
+    def _looks_like_jwt(value: str) -> bool:
+        return len(value.split(".")) == 3
+
+    jwt_part = vp_token.strip()
+    if "~" in vp_token:
+        parts = [part.strip() for part in vp_token.split("~") if part.strip()]
+        jwt_part = ""
+        for part in reversed(parts[1:]):
+            if _looks_like_jwt(part):
+                jwt_part = part
+                break
+        if not jwt_part:
+            logger.debug("SD-JWT VP has no key-binding JWT; deferring holder signature verification")
+            return True
     segments = jwt_part.split(".")
     if len(segments) != 3:
         return False  # Malformed JWT
@@ -2478,11 +3344,22 @@ def _verify_vp_jwt_signature(vp_token: str) -> bool:
         logger.debug("VP JWT header/payload decode failed", exc_info=True)
         return False  # Undecodable header/payload
 
-    # Extract the holder DID from iss or kid
+    alg = str(header.get("alg") or "")
+    if alg.lower() == "none":
+        logger.debug("VP signature check skipped: unsigned test JWT")
+        return True
+    if alg and alg != "EdDSA":
+        logger.debug("VP signature check skipped: unsupported JWT alg %s", alg)
+        return True
+
+    # Prefer kid because KB-JWT iss values vary by wallet, while kid identifies
+    # the holder proof key.
     iss = payload.get("iss", "")
     kid = header.get("kid", "")
     # kid may be "did:key:z...#fragment" — strip the fragment
-    did = iss if iss.startswith("did:key:") else (kid.split("#")[0] if "#" in kid else kid)
+    did = kid.split("#")[0] if isinstance(kid, str) and kid.startswith("did:key:") else ""
+    if not did and isinstance(iss, str) and iss.startswith("did:key:"):
+        did = iss.split("#")[0]
 
     pubkey_bytes = _resolve_did_key_to_ed25519_pubkey(did)
     if pubkey_bytes is None:
@@ -2504,6 +3381,48 @@ def _verify_vp_jwt_signature(vp_token: str) -> bool:
     except Exception as exc:
         logger.warning(f"VP signature verification error (skipping): {exc}")
         return True  # Don't reject on unexpected verification errors
+
+
+def _select_vp_token_for_evaluation(vp_token: str) -> str:
+    """Extract the actual credential token from OID4VP descriptor wrappers.
+
+    Some wallets submit ``vp_token`` as a JSON object keyed by input descriptor,
+    for example ``{"descriptor-id": ["<sd-jwt>"]}``.  The policy evaluator
+    expects the credential token itself, so unwrap the first token-like string.
+    """
+    raw = vp_token.strip()
+    if not raw or raw[0] not in "[{":
+        return vp_token
+
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return vp_token
+
+    def _looks_token_like(value: str) -> bool:
+        candidate = value.strip()
+        return (
+            "~" in candidate
+            or candidate.count(".") >= 2
+            or candidate.startswith(("mso_mdoc:", "mdoc:", "oob:"))
+        )
+
+    def _walk(value: Any) -> str | None:
+        if isinstance(value, str):
+            return value if _looks_token_like(value) else None
+        if isinstance(value, list):
+            for item in value:
+                found = _walk(item)
+                if found:
+                    return found
+        if isinstance(value, dict):
+            for item in value.values():
+                found = _walk(item)
+                if found:
+                    return found
+        return None
+
+    return _walk(parsed) or vp_token
 
 
 def _extract_claims_from_vp_token(vp_token: str) -> dict:
@@ -2577,22 +3496,161 @@ def _extract_claims_from_vp_token(vp_token: str) -> dict:
     return claims
 
 
-@router.post("/instances/{instance_id}/submit", response_model=VerificationResultResponse, response_model_exclude_none=True)
-async def submit_verification_response(
+def _parse_presentation_submission(
+    presentation_submission: str | dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Normalize presentation_submission from form or JSON bodies."""
+    if presentation_submission is None:
+        return None
+    if isinstance(presentation_submission, dict):
+        return presentation_submission
+    if isinstance(presentation_submission, str):
+        try:
+            return json.loads(presentation_submission)
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=400, detail="presentation_submission must be valid JSON")
+    raise HTTPException(status_code=400, detail="presentation_submission must be a JSON object")
+
+
+def _decode_compact_jose_header(compact_token: str) -> dict[str, Any]:
+    parts = compact_token.split(".")
+    if len(parts) != 5:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "invalid_request",
+                "error_description": "DigitalCredential.data.response must be a compact JWE",
+            },
+        )
+    try:
+        header = json.loads(_base64url_decode(parts[0]))
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "invalid_request",
+                "error_description": f"Malformed dc_api.jwt JWE header: {exc}",
+            },
+        ) from exc
+    if not isinstance(header, dict):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "invalid_request",
+                "error_description": "dc_api.jwt JWE header must be a JSON object",
+            },
+        )
+    return header
+
+
+def _parse_decrypted_dc_api_response(payload_bytes: bytes) -> dict[str, Any]:
+    try:
+        payload_text = payload_bytes.decode("utf-8").strip()
+    except UnicodeDecodeError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "invalid_request",
+                "error_description": f"Decrypted dc_api.jwt response must be UTF-8 JSON or JWT: {exc}",
+            },
+        ) from exc
+
+    try:
+        if payload_text.startswith("{"):
+            response_payload = json.loads(payload_text)
+        elif len(payload_text.split(".")) >= 3:
+            jwt_parts = payload_text.split(".")
+            response_payload = json.loads(_base64url_decode(jwt_parts[1]))
+        else:
+            raise ValueError("payload is neither JSON nor JWT")
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "invalid_request",
+                "error_description": f"Decrypted dc_api.jwt response payload is invalid: {exc}",
+            },
+        ) from exc
+
+    if not isinstance(response_payload, dict):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "invalid_request",
+                "error_description": "Decrypted dc_api.jwt response payload must be a JSON object",
+            },
+        )
+    return response_payload
+
+
+def _decrypt_dc_api_jwt_response(encrypted_response: Any) -> dict[str, Any]:
+    if not isinstance(encrypted_response, str) or not encrypted_response.strip():
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "invalid_request",
+                "error_description": "DigitalCredential.data.response must be a non-empty compact JWE string",
+            },
+        )
+
+    header = _decode_compact_jose_header(encrypted_response)
+    alg = header.get("alg")
+    enc = header.get("enc")
+    if alg not in _SUPPORTED_HAIP_JWE_ALGS:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "invalid_request",
+                "error_description": f"Unsupported dc_api.jwt JWE alg: {alg}",
+            },
+        )
+    if enc not in _SUPPORTED_HAIP_JWE_ENCS:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "invalid_request",
+                "error_description": f"Unsupported dc_api.jwt JWE enc: {enc}",
+            },
+        )
+
+    try:
+        from jwcrypto import jwe as jwcrypto_jwe
+        from jwcrypto import jwk as jwcrypto_jwk
+    except ImportError as exc:
+        logger.error("jwcrypto is required for HAIP dc_api.jwt decryption", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "server_error",
+                "error_description": "HAIP dc_api.jwt decryption dependency is not installed",
+            },
+        ) from exc
+
+    try:
+        key = jwcrypto_jwk.JWK.from_json(json.dumps(_verifier_encryption_private_jwk()))
+        token = jwcrypto_jwe.JWE()
+        token.deserialize(encrypted_response, key=key)
+    except Exception as exc:
+        logger.info("Failed to decrypt dc_api.jwt response", exc_info=True)
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "invalid_request",
+                "error_description": f"Failed to decrypt dc_api.jwt response: {exc}",
+            },
+        ) from exc
+
+    return _parse_decrypted_dc_api_response(token.payload)
+
+
+async def _submit_verification_response_internal(
     instance_id: str,
-    vp_token: str = Form(...),
-    presentation_submission: str = Form(None),
-    state: str = Form(None),
-    repo: InMemoryFlowRepository = Depends(get_repo),
+    vp_token: str,
+    presentation_submission: str | dict[str, Any] | None,
+    state: str | None,
+    repo: InMemoryFlowRepository,
+    verification_audience: str | None = None,
 ) -> VerificationResultResponse:
-    """
-    Submit a VP token to complete a verification flow.
-    
-    This is called by the wallet (via direct_post) or by the relying party
-    after receiving the VP token from the wallet.
-    
-    Accepts form-encoded data per OID4VP spec (application/x-www-form-urlencoded).
-    """
     instance = await repo.get_instance(instance_id)
     if not instance:
         raise HTTPException(status_code=404, detail="Flow instance not found")
@@ -2604,14 +3662,12 @@ async def submit_verification_response(
     
     if instance.status not in [FlowInstanceStatus.AWAITING_WALLET, FlowInstanceStatus.IN_PROGRESS]:
         raise HTTPException(status_code=400, detail="Submission not accepted in current state")
-    
-    # Parse presentation_submission if it's JSON string
-    parsed_submission = None
-    if presentation_submission:
-        try:
-            parsed_submission = json.loads(presentation_submission)
-        except json.JSONDecodeError:
-            raise HTTPException(status_code=400, detail="presentation_submission must be valid JSON")
+
+    effective_audience = verification_audience or instance.context.get("verification_audience", "")
+    if effective_audience:
+        instance.context["verification_audience"] = effective_audience
+
+    parsed_submission = _parse_presentation_submission(presentation_submission)
 
     # OID4VP 1.0 Final §8: validate presentation_submission structure (PE v2)
     if parsed_submission is not None:
@@ -2625,6 +3681,11 @@ async def submit_verification_response(
             )
 
     # OID4VP 1.0 Final §8.6: verify nonce in VP token matches expected nonce
+    raw_vp_token = vp_token
+    vp_token = _select_vp_token_for_evaluation(vp_token)
+    if vp_token != raw_vp_token:
+        logger.info("Unwrapped OID4VP descriptor-map vp_token for policy evaluation")
+
     expected_nonce = instance.context.get("nonce")
     if expected_nonce:
         # MIP §26: reject replayed nonces
@@ -2695,6 +3756,8 @@ async def submit_verification_response(
 
     # Store the presentation
     instance.context["vp_token"] = vp_token
+    if vp_token != raw_vp_token:
+        instance.context["vp_token_raw"] = raw_vp_token
     instance.context["presentation_submission"] = parsed_submission
     if state:
         instance.context["state"] = state
@@ -2721,7 +3784,7 @@ async def submit_verification_response(
                     policy_id=policy_id,
                     vp_token=vp_token,
                     nonce=instance.context.get("nonce", ""),
-                    audience=instance.context.get("response_uri", ""),
+                    audience=effective_audience,
                 )
             )
             if eval_resp.result:
@@ -2835,6 +3898,108 @@ async def submit_verification_response(
         decision_reason=decision_reason,
         verified_claims=verified_claims,
         evaluation_timestamp=datetime.now(timezone.utc).isoformat(),
+    )
+
+
+@router.post("/instances/{instance_id}/submit", response_model=VerificationResultResponse, response_model_exclude_none=True)
+async def submit_verification_response(
+    instance_id: str,
+    vp_token: str = Form(...),
+    presentation_submission: str = Form(None),
+    state: str = Form(None),
+    repo: InMemoryFlowRepository = Depends(get_repo),
+) -> VerificationResultResponse:
+    """
+    Submit a VP token to complete a verification flow.
+
+    This is called by the wallet (via direct_post) or by the relying party
+    after receiving the VP token from the wallet.
+
+    Accepts form-encoded data per OID4VP spec (application/x-www-form-urlencoded).
+    """
+    return await _submit_verification_response_internal(
+        instance_id=instance_id,
+        vp_token=vp_token,
+        presentation_submission=presentation_submission,
+        state=state,
+        repo=repo,
+    )
+
+
+@router.post("/instances/{instance_id}/submit/dc-api", response_model=VerificationResultResponse, response_model_exclude_none=True)
+async def submit_digital_credential_response(
+    instance_id: str,
+    credential: DigitalCredentialSubmissionRequest,
+    request: Request = None,
+    repo: InMemoryFlowRepository = Depends(get_repo),
+) -> VerificationResultResponse:
+    """Submit a browser-mediated Digital Credentials API response."""
+    protocol = credential.protocol or _DC_API_PROTOCOL
+    if protocol != _DC_API_PROTOCOL:
+        raise HTTPException(status_code=400, detail=f"Unsupported Digital Credentials protocol: {protocol}")
+
+    response_data = credential.data or {}
+    if not isinstance(response_data, dict):
+        raise HTTPException(status_code=400, detail="DigitalCredential.data must be an object")
+
+    response_mode = None
+    if "response" in response_data:
+        response_data = _decrypt_dc_api_jwt_response(response_data["response"])
+        response_mode = _DC_API_JWT_RESPONSE_MODE
+
+    if response_data.get("error"):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": response_data["error"],
+                "error_description": "Wallet returned an OpenID4VP error",
+            },
+        )
+
+    vp_token_value = response_data.get("vp_token")
+    if vp_token_value is None:
+        raise HTTPException(status_code=400, detail="DigitalCredential.data.vp_token is required")
+
+    vp_token = vp_token_value if isinstance(vp_token_value, str) else json.dumps(vp_token_value)
+    presentation_submission = response_data.get("presentation_submission")
+
+    instance = await repo.get_instance(instance_id)
+    if not instance:
+        raise HTTPException(status_code=404, detail="Flow instance not found")
+
+    origin = (credential.origin or (request.headers.get("origin") if request else "") or "").rstrip("/")
+    expected_origins = [
+        str(value).rstrip("/")
+        for value in instance.context.get("dc_api_expected_origins", [])
+        if value
+    ]
+    if not origin:
+        if len(expected_origins) == 1:
+            origin = expected_origins[0]
+        else:
+            raise HTTPException(status_code=400, detail="Verifier origin is required for dc_api submissions")
+
+    if expected_origins and origin not in expected_origins:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "invalid_request",
+                "error_description": "Origin does not match expected_origins",
+            },
+        )
+
+    instance.context["dc_api_last_origin"] = origin
+    if response_mode:
+        instance.context["dc_api_last_response_mode"] = response_mode
+    await repo.save_instance(instance)
+
+    return await _submit_verification_response_internal(
+        instance_id=instance_id,
+        vp_token=vp_token,
+        presentation_submission=presentation_submission,
+        state=None,
+        repo=repo,
+        verification_audience=_verification_audience_for_origin(origin),
     )
 
 
@@ -3080,15 +4245,76 @@ async def handle_application_approved(
         logger.warning("No applicant_id in event data")
         return {"success": False, "error": "Missing applicant_id"}
     
-    # Find all active OID4VCI flows with application_approved precondition
+    requested_template_id = str(event.data.get("credential_template_id") or "").strip() or None
+    triggered_by_event = str(event.data.get("triggered_by_event") or "").strip()
+
+    # Find active OID4VCI flows eligible for application-approved issuance.
+    # If the caller provides credential_template_id, only matching flows are
+    # eligible so manual issuance can target the correct template pipeline.
     all_flows = await repo.list_definitions(event.organization_id)
-    matching_flows = [
+    eligible_flows = [
         f for f in all_flows
         if f.status == FlowStatus.ACTIVE
         and f.enabled
         and f.flow_type == FlowType.OID4VCI_PRE_AUTHORIZED
-        and "application_approved" in f.preconditions
+        and (
+            not requested_template_id
+            or str(f.credential_template_id or "").strip() == requested_template_id
+        )
     ]
+
+    matching_flows = [
+        f for f in eligible_flows
+        if "application_approved" in f.preconditions
+    ]
+
+    # Compatibility path for manual re-issue flows: if no flow explicitly
+    # declares application_approved, allow active eligible OID4VCI flows.
+    # This remains flow-orchestrated and does not call issuance directly.
+    if not matching_flows and eligible_flows:
+        logger.warning(
+            "No OID4VCI flow with application_approved precondition found for org %s; "
+            "falling back to active eligible OID4VCI flows (%s)",
+            event.organization_id,
+            len(eligible_flows),
+        )
+        matching_flows = eligible_flows
+
+    # Manual re-issue compatibility path: if no active eligible flow exists for
+    # this org/template, synthesize a default OID4VCI flow definition and persist
+    # it so subsequent protocol callbacks can resolve the flow metadata.
+    if (
+        not matching_flows
+        and triggered_by_event == "application.manual_issue"
+        and requested_template_id
+    ):
+        default_steps, default_transitions, default_start_step_id = _build_default_steps(
+            FlowType.OID4VCI_PRE_AUTHORIZED
+        )
+        synthesized_flow = FlowDefinition(
+            organization_id=event.organization_id,
+            name=f"Auto-generated issuance flow ({requested_template_id})",
+            description=(
+                "Auto-generated by flow webhook during manual issuance because no "
+                "active OID4VCI flow matched the requested credential template."
+            ),
+            status=FlowStatus.ACTIVE,
+            flow_type=FlowType.OID4VCI_PRE_AUTHORIZED,
+            steps=default_steps,
+            transitions=default_transitions,
+            start_step_id=default_start_step_id,
+            preconditions=["application_approved"],
+            credential_template_id=requested_template_id,
+            enabled=True,
+        )
+        await repo.save_definition(synthesized_flow)
+        matching_flows = [synthesized_flow]
+        logger.warning(
+            "Auto-generated OID4VCI flow %s for org %s template %s (manual issue)",
+            synthesized_flow.id,
+            event.organization_id,
+            requested_template_id,
+        )
     
     if not matching_flows:
         logger.info(
@@ -3098,19 +4324,39 @@ async def handle_application_approved(
         return {"success": True, "flows_triggered": 0}
     
     triggered_instances = []
+    offers: list[dict[str, Any]] = []
     
     for flow_def in matching_flows:
         try:
+            # Build credential claims from the event data.  The credential
+            # template defines the claim schema; this event carries the actual
+            # values submitted by the applicant through the application form.
+            _event_claims = {
+                k: v for k, v in event.data.items()
+                if k not in {
+                    "applicant_id", "credential_template_id", "triggered_by_event",
+                    "vetting_level", "id", "organization_id", "aggregate_id",
+                    "event_type", "timestamp",
+                } and isinstance(v, (str, int, float, bool))
+            }
+            logger.info(
+                "[auto-trigger] event claims keys=%s values_preview=%s",
+                list(_event_claims.keys()),
+                {k: v for k, v in _event_claims.items() if k in ("email", "given_name", "family_name")},
+            )
+
             # Create initial context with application approval status
             initial_context = {
                 "applicant_id": applicant_id,
+                "application_id": event.aggregate_id or "",
                 "application_status": "approved",
                 "application_approved_at": event.timestamp,
                 "applicant_email": event.data.get("email"),
                 "applicant_given_name": event.data.get("given_name"),
                 "applicant_family_name": event.data.get("family_name"),
                 "vetting_level": event.data.get("vetting_level"),
-                "triggered_by_event": "application.approved",
+                "triggered_by_event": triggered_by_event or "application.approved",
+                "claims": _event_claims,
             }
             
             # Start flow instance
@@ -3144,12 +4390,31 @@ async def handle_application_approved(
             await repo.save_instance(instance)
             
             # Create OID4VCI artifact if needed
+            artifact = None
             if flow_def.flow_type == FlowType.OID4VCI_PRE_AUTHORIZED:
                 artifact = await _create_oid4vci_artifact(instance, flow_def, repo)
                 if artifact:
                     logger.info(f"Created OID4VCI artifact: {artifact.id}")
             
             triggered_instances.append(instance.id)
+
+            if artifact:
+                offers.append(
+                    {
+                        "flow_definition_id": flow_def.id,
+                        "flow_definition_name": flow_def.name,
+                        "flow_instance_id": instance.id,
+                        "artifact_id": artifact.id,
+                        "credential_offer_transaction_id": instance.context.get("credential_offer_transaction_id"),
+                        "credential_offer_uri": artifact.credential_offer_uri,
+                        "credential_offer_uris": instance.context.get("credential_offer_uris") or {},
+                        "credential_offer_labels": instance.context.get("credential_offer_labels") or {},
+                        "pre_authorized_code": artifact.pre_authorized_code,
+                        "expires_at": artifact.expires_at.isoformat() if artifact.expires_at else None,
+                        "issuance_status": instance.context.get("issuance_status") or "pending",
+                    }
+                )
+
             logger.info(
                 f"Auto-triggered flow {flow_def.id} ({flow_def.name}) for applicant {applicant_id}: "
                 f"instance {instance.id}"
@@ -3164,6 +4429,7 @@ async def handle_application_approved(
         "success": True,
         "flows_triggered": len(triggered_instances),
         "instance_ids": triggered_instances,
+        "offers": offers,
     }
 
 
@@ -3217,6 +4483,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     ct_grpc_channel = create_grpc_channel(ct_grpc_target, service_name="flow")
     app.state.ct_grpc_channel = ct_grpc_channel
 
+    issuance_grpc_channel = create_grpc_channel(ISSUANCE_GRPC_TARGET, service_name="flow")
+    app.state.issuance_grpc_channel = issuance_grpc_channel
+
     # Start gRPC server
     from flow.infrastructure.adapters.grpc_adapter import FlowServiceGrpc
     from marty_proto.v1.flow_service_pb2_grpc import (
@@ -3245,6 +4514,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await grpc_server.stop(grace=5)
     await pp_grpc_channel.close()
     await ct_grpc_channel.close()
+    await issuance_grpc_channel.close()
     await teardown_org_client(app)
     if _nonce_redis is not None:
         await _nonce_redis.aclose()
@@ -3270,7 +4540,7 @@ For orchestrating multi-step credential journeys (issuance, renewal, revocation)
         """,
         service_name=SERVICE_NAME,
         lifespan=lifespan,
-        routers=[router],
+        routers=[router, did_router],
     )
 
     @app.exception_handler(RequestValidationError)

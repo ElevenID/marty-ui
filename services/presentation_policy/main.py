@@ -20,6 +20,7 @@ Port: 8009
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import os
@@ -29,6 +30,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any, AsyncGenerator
+from urllib.parse import unquote
 
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
@@ -42,11 +44,12 @@ from typing import Annotated
 from marty_common import (
     OrganizationContext,
     CedarEngine,
-    require_org_membership,
+    ensure_membership_permission,
 )
 from marty_common.org_authorization import get_organization_client
 from marty_common.middleware import RequestIdMiddleware, RequestLoggingMiddleware
 from marty_common.service_setup import create_service_app
+from marty_common.domain_enums import parse_credential_format
 
 from presentation_policy.infrastructure.adapters import PostgresPresentationPolicyRepository
 
@@ -478,7 +481,7 @@ class PresentationPolicyResponse(BaseModel):
     purpose: str | None = None
     required_claims: list[dict] = Field(default_factory=list)
     accepted_credential_types: list[str] = Field(default_factory=list)
-    credential_requirements: list[dict] = Field(default_factory=list)
+    credential_requirements: list[dict] | None = None
     trust_profile_id: str | None = None
     holder_binding: dict | None = None
     freshness: dict | None = None
@@ -575,6 +578,212 @@ def _evaluate_constraint(constraint_type: str, value: Any, constraint: "ClaimCon
 # Format Detection & Verification Utilities
 # =============================================================================
 
+_SD_JWT_FORMAT_ALIASES = {
+    "sd-jwt",
+    "sd_jwt",
+    "sd-jwt-vc",
+    "sd_jwt_vc",
+    "dc+sd-jwt",
+    "vc+sd-jwt",
+    "spruce-vc+sd-jwt",
+    "ietf_sd_jwt",
+    "w3c_vcdm_v2_sd_jwt",
+}
+
+
+def _b64decode_unpadded(segment: str) -> bytes:
+    padded = segment + "=" * (-len(segment) % 4)
+    return base64.urlsafe_b64decode(padded.encode())
+
+
+def _load_marty_rs_binding() -> Any | None:
+    """Load whichever Python package path exposes the marty-rs functions."""
+    try:
+        from _marty_rs import _marty_rs as binding
+        return binding
+    except Exception:
+        pass
+
+    try:
+        import _marty_rs as binding
+        inner = getattr(binding, "_marty_rs", None)
+        return inner or binding
+    except Exception:
+        return None
+
+
+def _detected_format_to_canonical(credential_format: str) -> str:
+    normalized = str(credential_format or "").strip().lower().replace("_", "-")
+    sd_jwt_aliases = {value.replace("_", "-") for value in _SD_JWT_FORMAT_ALIASES}
+    if normalized in sd_jwt_aliases:
+        return "SD_JWT_VC"
+    if normalized in {"w3c-vc", "jwt-vc", "vc-jwt", "jwt-vc-json"}:
+        return "VC_JWT"
+    if normalized in {"mdoc", "mso-mdoc"}:
+        return "MDOC"
+    if normalized in {"openbadge-v3", "open-badge-v3", "openbadge3"}:
+        return "OPENBADGE_V3"
+    if normalized in {"openbadge-v2", "open-badge-v2", "openbadge2"}:
+        return "OPENBADGE_V2"
+    return normalized.upper() or "UNKNOWN"
+
+
+def _required_format_to_canonical(required_format: str | None) -> str | None:
+    if not required_format:
+        return None
+    normalized = str(required_format).strip().lower()
+    if not normalized:
+        return None
+    sd_jwt_aliases = {value.replace("_", "-") for value in _SD_JWT_FORMAT_ALIASES}
+    if normalized in _SD_JWT_FORMAT_ALIASES or normalized.replace("_", "-") in sd_jwt_aliases:
+        return "SD_JWT_VC"
+    if normalized in {"openbadge-v3", "open-badge-v3", "openbadge3"}:
+        return "OPENBADGE_V3"
+    if normalized in {"openbadge-v2", "open-badge-v2", "openbadge2"}:
+        return "OPENBADGE_V2"
+    try:
+        return parse_credential_format(required_format).value
+    except ValueError:
+        return normalized.upper()
+
+
+def _credential_format_satisfies_requirement(detected_format: str, required_format: str | None) -> bool:
+    expected = _required_format_to_canonical(required_format)
+    if expected is None:
+        return True
+    actual = _detected_format_to_canonical(detected_format)
+    return actual == expected
+
+
+def _jwt_header_and_payload(jwt_part: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    segments = jwt_part.split(".")
+    if len(segments) < 2:
+        raise ValueError("Malformed JWT")
+    header = json.loads(_b64decode_unpadded(segments[0]))
+    payload = json.loads(_b64decode_unpadded(segments[1]))
+    if not isinstance(header, dict) or not isinstance(payload, dict):
+        raise ValueError("Malformed JWT header or payload")
+    return header, payload
+
+
+def _did_web_resolution_path(did: str) -> str:
+    if not did.startswith("did:web:"):
+        raise ValueError(f"Unsupported issuer DID method for SD-JWT verification: {did}")
+
+    did_parts = did[len("did:web:"):].split(":")
+    if not did_parts or not did_parts[0]:
+        raise ValueError(f"Malformed did:web issuer DID: {did}")
+
+    path_parts = [unquote(part) for part in did_parts[1:] if part]
+    if not path_parts:
+        return "/.well-known/did.json"
+    return "/" + "/".join(path_parts) + "/did.json"
+
+
+def _did_web_external_url(did: str) -> str:
+    did_parts = did[len("did:web:"):].split(":")
+    domain = unquote(did_parts[0])
+    return f"https://{domain}{_did_web_resolution_path(did)}"
+
+
+def _did_resolution_candidate_urls(did: str) -> list[str]:
+    path = _did_web_resolution_path(did)
+    candidates: list[str] = []
+    for base in (
+        os.environ.get("DID_RESOLUTION_BASE_URL"),
+        os.environ.get("PUBLIC_BASE_URL"),
+        os.environ.get("ISSUER_BASE_URL"),
+        os.environ.get("PUBLIC_API_URL"),
+        "http://gateway:8000",
+    ):
+        if not base:
+            continue
+        url = f"{base.rstrip('/')}{path}"
+        if url not in candidates:
+            candidates.append(url)
+
+    external_url = _did_web_external_url(did)
+    if external_url not in candidates:
+        candidates.append(external_url)
+    return candidates
+
+
+def _resolve_did_document(did: str) -> dict[str, Any]:
+    import httpx
+
+    errors: list[str] = []
+    for url in _did_resolution_candidate_urls(did):
+        try:
+            response = httpx.get(url, headers={"Accept": "application/did+json, application/json"}, timeout=5.0)
+            if response.status_code == 200:
+                document = response.json()
+                if isinstance(document, dict):
+                    return document
+                errors.append(f"{url}: DID document was not a JSON object")
+                continue
+            errors.append(f"{url}: HTTP {response.status_code}")
+        except Exception as exc:
+            errors.append(f"{url}: {exc}")
+
+    suffix = "; ".join(errors[-3:]) if errors else "no resolution URLs configured"
+    raise RuntimeError(f"DID resolution failed for {did}: {suffix}")
+
+
+def _method_id_matches_kid(method_id: str, kid: str, issuer_did: str) -> bool:
+    if not kid:
+        return False
+    if method_id == kid:
+        return True
+    if kid.startswith("#") and method_id == f"{issuer_did}{kid}":
+        return True
+    if "#" not in kid and method_id == f"{issuer_did}#{kid}":
+        return True
+    return False
+
+
+def _select_public_jwk_from_did_document(
+    did_document: dict[str, Any],
+    issuer_did: str,
+    kid: str | None,
+) -> dict[str, Any]:
+    methods = did_document.get("verificationMethod") if isinstance(did_document.get("verificationMethod"), list) else []
+    method_by_id = {
+        method.get("id"): method
+        for method in methods
+        if isinstance(method, dict) and isinstance(method.get("id"), str)
+    }
+
+    if kid:
+        for method_id, method in method_by_id.items():
+            if _method_id_matches_kid(method_id, kid, issuer_did) and isinstance(method.get("publicKeyJwk"), dict):
+                return dict(method["publicKeyJwk"])
+
+    assertion = did_document.get("assertionMethod") if isinstance(did_document.get("assertionMethod"), list) else []
+    for entry in assertion:
+        method = entry if isinstance(entry, dict) else method_by_id.get(entry)
+        if isinstance(method, dict) and isinstance(method.get("publicKeyJwk"), dict):
+            return dict(method["publicKeyJwk"])
+
+    for method in methods:
+        if isinstance(method, dict) and isinstance(method.get("publicKeyJwk"), dict):
+            return dict(method["publicKeyJwk"])
+
+    raise RuntimeError(f"DID resolution failed for {issuer_did}: no publicKeyJwk assertion method found")
+
+
+def _public_jwk_to_pem(public_jwk: dict[str, Any]) -> str:
+    try:
+        from jwcrypto import jwk
+
+        sanitized = {
+            key: value
+            for key, value in public_jwk.items()
+            if key not in {"d", "p", "q", "dp", "dq", "qi", "oth", "k"}
+        }
+        return jwk.JWK(**sanitized).export_to_pem(private_key=False, password=None).decode()
+    except Exception as exc:
+        raise RuntimeError(f"DID resolution failed: issuer public key could not be converted to PEM ({exc})") from exc
+
 def _detect_credential_format(vp_token: str) -> str:
     """
     Auto-detect credential format from VP token.
@@ -582,6 +791,24 @@ def _detect_credential_format(vp_token: str) -> str:
     Returns: "w3c-vc", "sd-jwt", "mdoc", "openbadge-v2", "openbadge-v3", or "unknown"
     """
     try:
+        stripped = vp_token.strip()
+        if stripped.startswith("{"):
+            credential, _document_store = _extract_open_badge_payload(stripped, "credential")
+            if isinstance(credential, dict):
+                context = credential.get("@context", [])
+                contexts = context if isinstance(context, list) else [context]
+                type_value = credential.get("type", [])
+                types = type_value if isinstance(type_value, list) else [type_value]
+                if "https://w3id.org/openbadges/v2" in contexts:
+                    return "openbadge-v2"
+                if (
+                    "OpenBadgeCredential" in types
+                    or "AchievementCredential" in types
+                    or "https://purl.imsglobal.org/spec/ob/v3p0/context.json" in contexts
+                    or "https://w3id.org/openbadges/v3" in contexts
+                ):
+                    return "openbadge-v3"
+
         # Try JWT-based formats first
         if "." in vp_token and vp_token.count(".") >= 2:
             # Could be JWT, SD-JWT, W3C VC, or Open Badge
@@ -663,9 +890,8 @@ def _verify_credential_by_format(
 
 def _verify_w3c_vc(vp_token: str, nonce: str | None, audience: str | None) -> dict:
     """Verify W3C Verifiable Credential via Rust OID4VP engine."""
-    try:
-        import _marty_rs
-    except ImportError:
+    _marty_rs = _load_marty_rs_binding()
+    if _marty_rs is None:
         logger.warning("_marty_rs not available — W3C VC verification disabled")
         return {
             "verified": False,
@@ -677,11 +903,21 @@ def _verify_w3c_vc(vp_token: str, nonce: str | None, audience: str | None) -> di
 
     try:
         import json as _json
-        result_json = _marty_rs.oid4vp_verify_vp_token(
-            vp_token,
-            nonce or "",
-            audience or "",
-        )
+        if hasattr(_marty_rs, "oid4vp_verify_vp_token"):
+            result_json = _marty_rs.oid4vp_verify_vp_token(
+                vp_token,
+                nonce or "",
+                audience or "",
+            )
+        elif hasattr(_marty_rs, "verify_vp_token_jwt"):
+            result_json = _marty_rs.verify_vp_token_jwt(
+                audience or "",
+                audience or "",
+                vp_token,
+                nonce or "",
+            )
+        else:
+            raise RuntimeError("marty-rs OID4VP verification function is not available")
         result = _json.loads(result_json)
         is_valid = result.get("valid", False)
         errors = result.get("errors", [])
@@ -730,15 +966,6 @@ def _verify_sd_jwt(vp_token: str, nonce: str | None, audience: str | None) -> di
     ``marty_rs.SdJwtVerifier(issuer_public_key_pem).verify(vp_token)``
     before trusting the extracted claims.
     """
-    import base64 as _b64
-
-    def _b64decode_unpadded(s: str) -> bytes:
-        s = s.replace("-", "+").replace("_", "/")
-        padding = 4 - len(s) % 4
-        if padding != 4:
-            s += "=" * padding
-        return _b64.b64decode(s)
-
     try:
         # Split SD-JWT into JWT part and disclosures
         # The last segment may be a key-binding JWT (non-empty, starts with 'e')
@@ -750,12 +977,7 @@ def _verify_sd_jwt(vp_token: str, nonce: str | None, audience: str | None) -> di
         ]
 
         # Decode JWT payload
-        jwt_segs = jwt_part.split(".")
-        if len(jwt_segs) < 2:
-            return {"verified": False, "error": "Malformed SD-JWT", "claims": {}}
-
-        payload_bytes = _b64decode_unpadded(jwt_segs[1])
-        payload: dict = json.loads(payload_bytes)
+        header, payload = _jwt_header_and_payload(jwt_part)
 
         # Collect base (non-selective) claims — exclude SD-JWT internals
         _SD_INTERNAL = {"_sd", "_sd_alg", "cnf", "..."}
@@ -785,34 +1007,78 @@ def _verify_sd_jwt(vp_token: str, nonce: str | None, audience: str | None) -> di
         issuer = payload.get("iss") or payload.get("issuer", "unknown")
         subject = payload.get("sub") or payload.get("subject", "unknown")
 
-        # Attempt cryptographic verification via Rust binding
-        crypto_verified = False
-        crypto_error = None
+        if not isinstance(issuer, str) or not issuer.startswith("did:"):
+            return {
+                "verified": False,
+                "claims": claims,
+                "issuer_did": str(issuer or "unknown"),
+                "subject": subject,
+                "format": "sd-jwt",
+                "error": "DID resolution failed: SD-JWT issuer is not a DID",
+            }
+
+        marty_rs = _load_marty_rs_binding()
+        if marty_rs is None or not hasattr(marty_rs, "verify_sd_jwt"):
+            return {
+                "verified": False,
+                "claims": claims,
+                "issuer_did": issuer,
+                "subject": subject,
+                "format": "sd-jwt",
+                "error": "marty-rs SD-JWT verification bindings are not installed",
+            }
+
         try:
-            import _marty_rs
-            import json as _json
-            result_json = _marty_rs.oid4vp_verify_vp_token(
+            did_document = _resolve_did_document(issuer)
+            public_jwk = _select_public_jwk_from_did_document(did_document, issuer, header.get("kid"))
+            public_key_pem = _public_jwk_to_pem(public_jwk)
+            result_json = marty_rs.verify_sd_jwt(
                 vp_token,
-                nonce or "",
-                audience or "",
+                public_key_pem,
+                header.get("alg") or None,
+                nonce,
+                audience,
             )
-            rust_result = _json.loads(result_json)
-            crypto_verified = rust_result.get("valid", False)
-            errors = rust_result.get("errors", [])
-            if errors:
-                crypto_error = "; ".join(errors)
-        except ImportError:
-            crypto_error = "marty-rs bindings not installed — structural decode only"
-        except Exception as e:
-            crypto_error = f"Rust verification error: {e}"
+            rust_result = json.loads(result_json) if isinstance(result_json, str) and result_json.strip() else {}
+            if isinstance(rust_result, dict) and rust_result.get("valid") is False:
+                errors = rust_result.get("errors") or []
+                error_message = "; ".join(str(error) for error in errors) or rust_result.get("error") or "SD-JWT verification failed"
+                return {
+                    "verified": False,
+                    "claims": claims,
+                    "issuer_did": issuer,
+                    "subject": subject,
+                    "format": "sd-jwt",
+                    "error": error_message,
+                }
+            if isinstance(rust_result, dict):
+                claims.update(
+                    {
+                        key: value
+                        for key, value in rust_result.items()
+                        if key not in _SD_INTERNAL and not str(key).startswith("_")
+                    }
+                )
+        except Exception as exc:
+            error_message = str(exc)
+            if "DID resolution failed" not in error_message:
+                error_message = f"SD-JWT verification failed: {error_message}"
+            return {
+                "verified": False,
+                "claims": claims,
+                "issuer_did": issuer,
+                "subject": subject,
+                "format": "sd-jwt",
+                "error": error_message,
+            }
 
         return {
-            "verified": crypto_verified,
+            "verified": True,
             "claims": claims,
             "issuer_did": issuer,
             "subject": subject,
             "format": "sd-jwt",
-            "error": crypto_error,
+            "error": None,
         }
 
     except Exception as exc:
@@ -864,30 +1130,228 @@ def _verify_mdoc(vp_token: str, nonce: str | None, audience: str | None) -> dict
                 "format": "mdoc", "error": str(e)}
 
 
+def _b64url_json_decode(segment: str) -> dict[str, Any]:
+    import base64 as _b64
+
+    padded = segment + "=" * (-len(segment) % 4)
+    return json.loads(_b64.urlsafe_b64decode(padded.encode()).decode())
+
+
+def _extract_open_badge_payload(vp_token: str, default_key: str) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    """Extract an Open Badge credential/assertion and offline document store."""
+    token = vp_token.strip()
+    document_store: dict[str, Any] = {}
+
+    if token.startswith("{"):
+        parsed = json.loads(token)
+        if not isinstance(parsed, dict):
+            return None, document_store
+        document_store = parsed.get("document_store") or parsed.get("documentStore") or {}
+        if not isinstance(document_store, dict):
+            document_store = {}
+
+        for key in (default_key, "credential", "assertion"):
+            value = parsed.get(key)
+            if isinstance(value, dict):
+                return value, document_store
+
+        vp = parsed.get("vp") if isinstance(parsed.get("vp"), dict) else parsed
+        verifiable_credential = vp.get("verifiableCredential") if isinstance(vp, dict) else None
+        if isinstance(verifiable_credential, list) and verifiable_credential:
+            first = verifiable_credential[0]
+            if isinstance(first, dict):
+                return first, document_store
+        if isinstance(verifiable_credential, dict):
+            return verifiable_credential, document_store
+
+        return parsed, document_store
+
+    # JWT VC fallback: extract the embedded vc object when present. Signature
+    # verification remains the responsibility of the JWT/W3C path; this branch
+    # only enables claim normalization for OB JWT payloads that are explicitly
+    # routed here by format detection.
+    parts = token.split("~", 1)[0].split(".")
+    if len(parts) >= 2:
+        payload = _b64url_json_decode(parts[1])
+        vc = payload.get("vc") if isinstance(payload, dict) else None
+        if isinstance(vc, dict):
+            if "issuer" not in vc and payload.get("iss"):
+                vc["issuer"] = payload["iss"]
+            if "id" not in vc and payload.get("jti"):
+                vc["id"] = payload["jti"]
+            return vc, document_store
+        if isinstance(payload, dict):
+            return payload, document_store
+
+    return None, document_store
+
+
+def _run_open_badge_verify(version: str, credential: dict[str, Any], document_store: dict[str, Any]) -> dict[str, Any]:
+    try:
+        from marty_verification_py import open_badge_ob2_verify, open_badge_ob3_verify
+    except ImportError as exc:
+        raise RuntimeError("marty_verification_py Open Badge bindings are not installed") from exc
+
+    if version == "v2":
+        request = {"assertion": credential, "document_store": document_store}
+        result_json = open_badge_ob2_verify(json.dumps(request))
+    else:
+        request = {"credential": credential, "document_store": document_store}
+        result_json = open_badge_ob3_verify(json.dumps(request))
+    return json.loads(result_json)
+
+
+def _claims_from_open_badge_result(result: dict[str, Any], credential: dict[str, Any]) -> dict[str, Any]:
+    normalized = result.get("normalized") if isinstance(result, dict) else {}
+    claims = normalized.copy() if isinstance(normalized, dict) else {}
+
+    credential_subject = (
+        claims.get("credential_subject")
+        or claims.get("credentialSubject")
+        or credential.get("credentialSubject")
+        or credential.get("recipient")
+    )
+    if isinstance(credential_subject, dict):
+        claims.setdefault("credential_subject", credential_subject)
+        if credential_subject.get("id"):
+            claims.setdefault("recipient", credential_subject["id"])
+
+        for key, value in credential_subject.items():
+            if key in {"achievement", "identifier", "type", "id"}:
+                continue
+            if isinstance(value, (str, int, float, bool)):
+                claims.setdefault(key, value)
+
+        achievement = credential_subject.get("achievement")
+        if isinstance(achievement, dict):
+            if achievement.get("name"):
+                claims.setdefault("name", achievement["name"])
+            if achievement.get("description"):
+                claims.setdefault("description", achievement["description"])
+
+    return claims
+
+
+_REVOCATION_CHECK_KEYS = {
+    "revocation_checked",
+    "revocation_validated",
+    "revocation_status_checked",
+    "status_list_checked",
+    "status_checked",
+}
+
+_NOT_REVOKED_KEYS = {
+    "not_revoked",
+    "is_not_revoked",
+    "revocation_passed",
+}
+
+_REVOKED_KEYS = {
+    "revoked",
+    "is_revoked",
+}
+
+
+def _collect_bool_values(payload: Any, target_keys: set[str]) -> list[bool]:
+    values: list[bool] = []
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            key_lc = str(key).strip().lower()
+            if key_lc in target_keys and isinstance(value, bool):
+                values.append(value)
+            values.extend(_collect_bool_values(value, target_keys))
+    elif isinstance(payload, list):
+        for item in payload:
+            values.extend(_collect_bool_values(item, target_keys))
+    return values
+
+
+def _derive_revocation_state(verification_result: dict[str, Any]) -> tuple[bool | None, bool | None]:
+    """Derive revocation evidence from verifier output in a format-agnostic way.
+
+    Returns:
+      - revocation_checked: whether status/revocation was actually checked
+      - not_revoked: whether credential is confirmed not revoked
+    """
+    checked_values = _collect_bool_values(verification_result, _REVOCATION_CHECK_KEYS)
+    not_revoked_values = _collect_bool_values(verification_result, _NOT_REVOKED_KEYS)
+    revoked_values = _collect_bool_values(verification_result, _REVOKED_KEYS)
+
+    revocation_checked: bool | None = None
+    if checked_values:
+        revocation_checked = any(checked_values)
+
+    not_revoked: bool | None = None
+    if any(revoked_values):
+        not_revoked = False
+    elif not_revoked_values:
+        # Any explicit false should fail closed.
+        not_revoked = all(not_revoked_values)
+
+    # If revocation outcome is present, treat that as evidence a check occurred.
+    if revocation_checked is None and (revoked_values or not_revoked_values):
+        revocation_checked = True
+
+    return revocation_checked, not_revoked
+
+
+def _issuer_from_open_badge(credential: dict[str, Any], claims: dict[str, Any]) -> str:
+    issuer = claims.get("issuer") or credential.get("issuer", "unknown")
+    if isinstance(issuer, dict):
+        return str(issuer.get("id") or issuer.get("url") or "unknown")
+    return str(issuer or "unknown")
+
+
+def _verify_open_badge(vp_token: str, version: str) -> dict:
+    request_key = "assertion" if version == "v2" else "credential"
+    credential, document_store = _extract_open_badge_payload(vp_token, request_key)
+    if not credential:
+        return {
+            "verified": False,
+            "claims": {},
+            "issuer_did": "unknown",
+            "format": f"openbadge-{version}",
+            "error": "Open Badge credential payload could not be extracted",
+        }
+
+    try:
+        result = _run_open_badge_verify(version, credential, document_store)
+    except Exception as exc:
+        logger.error("Open Badge %s verification failed: %s", version, exc)
+        return {
+            "verified": False,
+            "claims": {},
+            "issuer_did": "unknown",
+            "format": f"openbadge-{version}",
+            "error": str(exc),
+        }
+
+    claims = _claims_from_open_badge_result(result, credential)
+    errors = result.get("errors") or []
+    error_message = None if result.get("valid") else "; ".join(str(e) for e in errors) or result.get("error") or "Open Badge verification failed"
+    revocation_checked, not_revoked = _derive_revocation_state(result)
+    is_revoked = (not_revoked is False) if not_revoked is not None else None
+    return {
+        "verified": bool(result.get("valid")),
+        "claims": claims,
+        "issuer_did": _issuer_from_open_badge(credential, claims),
+        "format": f"openbadge-{version}",
+        "error": error_message,
+        "revocation_checked": revocation_checked,
+        "not_revoked": not_revoked,
+        "is_revoked": is_revoked,
+        "credential_results": result,
+    }
+
+
 def _verify_open_badge_v2(vp_token: str) -> dict:
     """Verify Open Badges v2 credential."""
-    # TODO: use marty_verification_py.open_badge_ob2_verify
-    logger.warning("Open Badge v2 verification is STUBBED — returning unverified result")
-    return {
-        "verified": False,
-        "claims": {},
-        "issuer_did": "unknown",
-        "format": "openbadge-v2",
-        "error": "Open Badge v2 verification not yet available in Rust layer",
-    }
+    return _verify_open_badge(vp_token, "v2")
 
 
 def _verify_open_badge_v3(vp_token: str) -> dict:
     """Verify Open Badges v3 credential."""
-    # TODO: use marty_verification_py.open_badge_ob3_verify
-    logger.warning("Open Badge v3 verification is STUBBED — returning unverified result")
-    return {
-        "verified": False,
-        "claims": {},
-        "issuer_did": "unknown",
-        "format": "openbadge-v3",
-        "error": "Open Badge v3 verification not yet available in Rust layer",
-    }
+    return _verify_open_badge(vp_token, "v3")
 
 
 # =============================================================================
@@ -915,6 +1379,16 @@ def get_trust_cache() -> TrustProfileCache:
     if _trust_profile_cache is None:
         raise RuntimeError("Service not configured")
     return _trust_profile_cache
+
+
+def _trust_profile_service_url() -> str:
+    """Return the internal Trust Profile service base URL."""
+    return os.environ.get("TRUST_PROFILE_SERVICE_URL", "http://trust-profile:8004")
+
+
+def _trust_profile_lookup_url(profile_id: str) -> str:
+    """Return the service-to-service Trust Profile lookup URL."""
+    return f"{_trust_profile_service_url()}/internal/v1/trust-profiles/{profile_id}"
 
 
 def _build_credential_requirement(model: CredentialRequirementModel) -> CredentialRequirement:
@@ -994,11 +1468,9 @@ async def create_presentation_policy(
     repo: InMemoryPresentationPolicyRepository = Depends(get_repo),
 ) -> PresentationPolicyResponse:
     """Create a new Presentation Policy."""
-    # Verify org membership
     org_client = await get_organization_client(fastapi_request)
     membership = await org_client.get_membership(user_id, request.organization_id)
-    if not membership or not membership.is_active():
-        raise HTTPException(status_code=403, detail="Not a member of this organization")
+    ensure_membership_permission(membership, "presentation-policy", "create")
     
     if not request.credential_requirements and not request.required_claims:
         raise HTTPException(status_code=400, detail="At least one required claim or credential requirement is required")
@@ -1085,8 +1557,8 @@ async def list_presentation_policies(
     repo: InMemoryPresentationPolicyRepository = Depends(get_repo),
 ) -> list[PresentationPolicyResponse]:
     """List Presentation Policies for an organization."""
-    # Verify org membership
-    await app.state.org_client.get_membership(user_id, organization_id)
+    membership = await app.state.org_client.get_membership(user_id, organization_id)
+    ensure_membership_permission(membership, "presentation-policy", "view")
     policies = await repo.list(organization_id)
     return [_policy_to_response(p) for p in policies[offset:offset + limit]]
 
@@ -1109,8 +1581,8 @@ async def get_presentation_policy(
     except (ValueError, AttributeError):
         is_service_user = True
     if not is_service_user:
-        # Verify org membership for real users
-        await app.state.org_client.get_membership(user_id, policy.organization_id)
+        membership = await app.state.org_client.get_membership(user_id, policy.organization_id)
+        ensure_membership_permission(membership, "presentation-policy", "view")
     return _policy_to_response(policy)
 
 
@@ -1128,8 +1600,7 @@ async def update_presentation_policy(
     
     # Verify admin access
     membership = await app.state.org_client.get_membership(user_id, policy.organization_id)
-    if not membership.has_role("admin", "owner"):
-        raise HTTPException(status_code=403, detail="Admin access required")
+    ensure_membership_permission(membership, "presentation-policy", "edit")
     
     if policy.status != PolicyStatus.DRAFT:
         raise HTTPException(
@@ -1217,8 +1688,7 @@ async def activate_presentation_policy(
     
     # Verify admin access
     membership = await app.state.org_client.get_membership(user_id, policy.organization_id)
-    if not membership.has_role("admin", "owner"):
-        raise HTTPException(status_code=403, detail="Admin access required")
+    ensure_membership_permission(membership, "presentation-policy", "activate")
     
     if not policy.credential_requirements and not policy.alternative_requirements:
         raise HTTPException(
@@ -1244,8 +1714,7 @@ async def suspend_presentation_policy(
     
     # Verify admin access
     membership = await app.state.org_client.get_membership(user_id, policy.organization_id)
-    if not membership.has_role("admin", "owner"):
-        raise HTTPException(status_code=403, detail="Admin access required")
+    ensure_membership_permission(membership, "presentation-policy", "suspend")
     policy.suspend()
     await repo.save(policy)
     return _policy_to_response(policy)
@@ -1264,8 +1733,7 @@ async def create_new_version(
     
     # Verify admin access
     membership = await app.state.org_client.get_membership(user_id, policy.organization_id)
-    if not membership.has_role("admin", "owner"):
-        raise HTTPException(status_code=403, detail="Admin access required")
+    ensure_membership_permission(membership, "presentation-policy", "version")
     
     new_policy = PresentationPolicy(
         organization_id=policy.organization_id,
@@ -1295,8 +1763,7 @@ async def delete_presentation_policy(
     
     # Verify admin access
     membership = await app.state.org_client.get_membership(user_id, policy.organization_id)
-    if not membership.has_role("admin", "owner"):
-        raise HTTPException(status_code=403, detail="Admin access required")
+    ensure_membership_permission(membership, "presentation-policy", "delete")
     
     if policy.status != PolicyStatus.DRAFT:
         raise HTTPException(
@@ -1439,12 +1906,24 @@ async def evaluate_presentation(
     credential_format = _detect_credential_format(request.vp_token)
     logger.info(f"Detected credential format: {credential_format}")
     
-    # Verify credential based on format
+    # Verify credential based on format.
+    #
+    # MIP flow note:
+    # - Some credential-login policies intentionally do NOT require holder
+    #   binding (`holder_binding.required=false`, `nonce_required=false`).
+    # - Passing nonce/audience unconditionally can force SD-JWT key-binding
+    #   checks and reject otherwise valid issuer-signed credentials.
+    #
+    # Therefore only enforce nonce/audience at credential-verification time when
+    # the policy requires holder binding (or explicitly requires nonce).
+    verify_nonce = request.nonce if (policy.holder_binding.required or policy.holder_binding.nonce_required) else None
+    verify_audience = request.audience if policy.holder_binding.required else None
+
     verification_result = _verify_credential_by_format(
-        request.vp_token, 
+        request.vp_token,
         credential_format,
-        request.nonce,
-        request.audience,
+        verify_nonce,
+        verify_audience,
     )
     # 4. Check issuer trust using Trust Profile
     # 5. Evaluate claims against policy constraints
@@ -1454,6 +1933,204 @@ async def evaluate_presentation(
     extracted_claims: dict[str, Any] = verification_result.get("claims", {})
     issuer_did: str = verification_result.get("issuer_did", "unknown")
     verification_ok: bool = verification_result.get("verified", False)
+    revocation_checked, not_revoked = _derive_revocation_state(verification_result)
+
+    if not verification_ok:
+        verification_error = verification_result.get("error") or "Credential verification failed"
+        credential_results = [
+            CredentialEvaluationResult(
+                credential_template_id=req.credential_template_id,
+                satisfied=False,
+                issuer_did=issuer_did,
+                claim_results=[],
+                signature_valid=False,
+                errors=[str(verification_error)],
+            )
+            for req in policy.credential_requirements
+        ]
+        required_total = sum(1 for req in policy.credential_requirements if req.required)
+        return PolicyEvaluationResponse(
+            result=EvaluationResult.FAILED.value,
+            policy_id=policy.id,
+            policy_name=policy.name,
+            credential_results=credential_results,
+            total_requirements=len(policy.credential_requirements),
+            satisfied_requirements=0,
+            required_satisfied=0,
+            required_total=required_total,
+            decision="deny",
+            decision_reason=f"Credential verification failed: {verification_error}",
+            verified_claims={},
+            evaluation_timestamp=datetime.now(timezone.utc).isoformat(),
+            nonce=request.nonce,
+        )
+
+    # Validate issuer DID against the policy's Trust Profile (MIP §8.3).
+    # Resolve trust_profile_id: per-requirement override takes precedence over policy-level.
+    trust_profile_id = request.trust_profile_id or policy.trust_profile_id
+    if not trust_profile_id:
+        for req in policy.credential_requirements:
+            if req.trust_profile_id:
+                trust_profile_id = req.trust_profile_id
+                break
+
+    trust_check_passed = True
+    trust_check_error: str | None = None
+    if trust_profile_id and issuer_did and issuer_did != "unknown":
+        try:
+            trust_cache = get_trust_cache()
+            trust_profile_data = trust_cache.get(trust_profile_id)
+            if trust_profile_data is None:
+                # Fetch from trust-profiles service via HTTP
+                import httpx as _httpx
+                resp = _httpx.get(
+                    _trust_profile_lookup_url(trust_profile_id),
+                    timeout=5.0,
+                )
+                if resp.status_code == 200:
+                    trust_profile_data = resp.json()
+                    ttl = int(trust_profile_data.get("time_policy", {}).get("freshness_window_seconds", 3600))
+                    trust_cache.set(trust_profile_id, trust_profile_data, ttl)
+                else:
+                    trust_check_passed = False
+                    trust_check_error = (
+                        f"Trust Profile {trust_profile_id} could not be loaded "
+                        f"(HTTP {resp.status_code})"
+                    )
+                    logger.warning(trust_check_error)
+
+            if trust_profile_data:
+                allowed_issuers: list[str] = trust_profile_data.get("allowed_issuers") or []
+                denied_issuers: list[str] = trust_profile_data.get("denied_issuers") or []
+                trust_sources: list[dict] = trust_profile_data.get("trust_sources") or []
+                # Check denied list first (fail-closed)
+                if denied_issuers and issuer_did in denied_issuers:
+                    trust_check_passed = False
+                    trust_check_error = f"Issuer {issuer_did} is explicitly denied by Trust Profile"
+                elif allowed_issuers:
+                    # If allowed list is specified, issuer MUST be in it
+                    if issuer_did not in allowed_issuers:
+                        trust_check_passed = False
+                        trust_check_error = f"Issuer {issuer_did} is not in Trust Profile allowed_issuers"
+                elif trust_sources:
+                    # Check if issuer DID matches any trust source's issuer_did
+                    source_dids = [
+                        source.get("issuer_did") or ""
+                        for source in trust_sources
+                        if isinstance(source, dict)
+                    ]
+                    if source_dids and issuer_did not in source_dids:
+                        trust_check_passed = False
+                        trust_check_error = (
+                            f"Issuer {issuer_did} does not match any trust source "
+                            f"in Trust Profile {trust_profile_id}"
+                        )
+                    elif not source_dids:
+                        logger.debug(
+                            "Trust Profile %s has no trust_source issuer_dids — skipping issuer match",
+                            trust_profile_id,
+                        )
+            elif trust_check_passed:
+                trust_check_passed = False
+                trust_check_error = f"Trust Profile {trust_profile_id} could not be loaded"
+        except Exception as exc:
+            trust_check_passed = False
+            trust_check_error = f"Trust Profile validation failed for {issuer_did}: {exc}"
+            logger.warning(trust_check_error)
+
+    if not trust_check_passed:
+        credential_results = [
+            CredentialEvaluationResult(
+                credential_template_id=req.credential_template_id,
+                satisfied=False,
+                issuer_did=issuer_did,
+                claim_results=[],
+                trust_check_passed=False,
+                signature_valid=False,
+                errors=[str(trust_check_error)],
+            )
+            for req in policy.credential_requirements
+        ]
+        required_total = sum(1 for req in policy.credential_requirements if req.required)
+        return PolicyEvaluationResponse(
+            result=EvaluationResult.FAILED.value,
+            policy_id=policy.id,
+            policy_name=policy.name,
+            credential_results=credential_results,
+            total_requirements=len(policy.credential_requirements),
+            satisfied_requirements=0,
+            required_satisfied=0,
+            required_total=required_total,
+            decision="deny",
+            decision_reason=f"Credential verification failed: {trust_check_error}",
+            verified_claims={},
+            evaluation_timestamp=datetime.now(timezone.utc).isoformat(),
+            nonce=request.nonce,
+        )
+
+    # Apply freshness/revocation requirements from MIP policy abstractions.
+    # This must remain format-agnostic and not tied to a specific login flow.
+    if policy.freshness and policy.freshness.require_not_revoked:
+        if revocation_checked is not True:
+            verification_error = "Revocation status was not checked by the verifier"
+            credential_results = [
+                CredentialEvaluationResult(
+                    credential_template_id=req.credential_template_id,
+                    satisfied=False,
+                    issuer_did=issuer_did,
+                    claim_results=[],
+                    freshness_check_passed=False,
+                    signature_valid=False,
+                    errors=[verification_error],
+                )
+                for req in policy.credential_requirements
+            ]
+            required_total = sum(1 for req in policy.credential_requirements if req.required)
+            return PolicyEvaluationResponse(
+                result=EvaluationResult.FAILED.value,
+                policy_id=policy.id,
+                policy_name=policy.name,
+                credential_results=credential_results,
+                total_requirements=len(policy.credential_requirements),
+                satisfied_requirements=0,
+                required_satisfied=0,
+                required_total=required_total,
+                decision="deny",
+                decision_reason=f"Credential verification failed: {verification_error}",
+                verified_claims={},
+                evaluation_timestamp=datetime.now(timezone.utc).isoformat(),
+                nonce=request.nonce,
+            )
+        if not_revoked is not True:
+            verification_error = "Credential is revoked"
+            credential_results = [
+                CredentialEvaluationResult(
+                    credential_template_id=req.credential_template_id,
+                    satisfied=False,
+                    issuer_did=issuer_did,
+                    claim_results=[],
+                    freshness_check_passed=False,
+                    signature_valid=False,
+                    errors=[verification_error],
+                )
+                for req in policy.credential_requirements
+            ]
+            required_total = sum(1 for req in policy.credential_requirements if req.required)
+            return PolicyEvaluationResponse(
+                result=EvaluationResult.FAILED.value,
+                policy_id=policy.id,
+                policy_name=policy.name,
+                credential_results=credential_results,
+                total_requirements=len(policy.credential_requirements),
+                satisfied_requirements=0,
+                required_satisfied=0,
+                required_total=required_total,
+                decision="deny",
+                decision_reason=f"Credential verification failed: {verification_error}",
+                verified_claims={},
+                evaluation_timestamp=datetime.now(timezone.utc).isoformat(),
+                nonce=request.nonce,
+            )
 
     credential_results = []
     verified_claims: dict[str, Any] = {}
@@ -1467,6 +2144,14 @@ async def evaluate_presentation(
         
         claim_results = []
         req_satisfied = True
+        req_errors: list[str] = []
+
+        if not _credential_format_satisfies_requirement(credential_format, req.credential_payload_format):
+            req_satisfied = False
+            req_errors.append(
+                "Credential format mismatch: "
+                f"policy requires {req.credential_payload_format}, presentation is {credential_format}"
+            )
         
         for claim in req.requested_claims:
             # Use real extracted value; fall back to None if not present
@@ -1505,6 +2190,7 @@ async def evaluate_presentation(
             issuer_did=issuer_did,
             issuer_name=None,
             claim_results=claim_results,
+            errors=req_errors,
         ))
         
         if req.required:
@@ -1536,12 +2222,12 @@ async def evaluate_presentation(
     
     if cedar_engine and decision == "allow":
         cedar_context = {
-            "credential_format": verified_claims.get("_format", "VC_JWT"),
+            "credential_format": _detected_format_to_canonical(credential_format),
             "compliance_code": verified_claims.get("_compliance_code", "CUSTOM"),
             "issuer_id": credential_results[0].issuer_did if credential_results else "",
             "issuer_trust_level": 75,
             "credential_age_seconds": 0,
-            "is_revoked": False,
+            "is_revoked": not_revoked is False,
             "is_expired": False,
             "holder_binding_present": True,
             "algorithm": verified_claims.get("_algorithm", "ES256"),
@@ -1665,28 +2351,7 @@ def _policy_to_response(policy: PresentationPolicy) -> PresentationPolicyRespons
         purpose=policy.purpose or policy.display_metadata.purpose_description,
         required_claims=policy.protocol_required_claims,
         accepted_credential_types=policy.effective_accepted_credential_types,
-        credential_requirements=[
-            {
-                "id": req.id,
-                "credential_template_id": req.credential_template_id,
-                "display_name": req.display_name,
-                "description": req.description,
-                "required": req.required,
-                "credential_payload_format": req.credential_payload_format,
-                "requested_claims": [
-                    {
-                        "claim_name": rc.claim_name,
-                        "required": rc.required,
-                        **({"predicate_spec": rc.predicate_spec} if rc.predicate_spec else {}),
-                    }
-                    for rc in req.requested_claims
-                ],
-                "trust_profile_id": req.trust_profile_id,
-                "max_age_seconds": req.max_age_seconds,
-                "require_fresh_issuance": req.require_fresh_issuance,
-            }
-            for req in policy.credential_requirements
-        ],
+        credential_requirements=None,
         trust_profile_id=policy.trust_profile_id,
         holder_binding={
             "required": policy.holder_binding.required,
@@ -1736,9 +2401,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     
     _trust_profile_cache = TrustProfileCache()
     
-    # Initialize Cedar engine for credential verification policies
-    app.state.cedar_engine = CedarEngine.with_defaults()
-    logger.info("Cedar engine initialized for credential verification")
+    # Initialize Cedar engine for credential verification policies.
+    # Some deployed images may carry an older marty_common package that does not
+    # yet expose with_credential_verification(); gracefully fall back to defaults.
+    if hasattr(CedarEngine, "with_credential_verification"):
+        app.state.cedar_engine = CedarEngine.with_credential_verification()
+        logger.info("Cedar engine initialized for credential verification")
+    else:
+        app.state.cedar_engine = CedarEngine.with_defaults()
+        logger.warning(
+            "CedarEngine.with_credential_verification unavailable; falling back to default Cedar policies"
+        )
     
     # Start gRPC server
     from common.grpc_factory import create_grpc_server, start_grpc_server_port

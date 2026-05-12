@@ -29,6 +29,22 @@ export const getWallet = async (walletId) => {
 };
 
 /**
+ * Build a wallet-specific outer open link around a standard OID4VC inner URI.
+ * @param {string} walletId
+ * @param {{ innerUri: string, platform?: string }} params
+ * @returns {Promise<Object>}
+ */
+export const buildWalletOpenLink = async (walletId, { innerUri, platform } = {}) => {
+  const response = await apiClient.get(`${BASE}/${walletId}/open-link`, {
+    params: {
+      inner_uri: innerUri,
+      ...(platform ? { platform } : {}),
+    },
+  });
+  return response.data;
+};
+
+/**
  * Create a new wallet registry entry (admin only).
  * @param {Object} data
  * @returns {Promise<Object>}

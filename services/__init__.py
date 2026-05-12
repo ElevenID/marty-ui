@@ -12,6 +12,7 @@ Services:
 - organization: Organization, members, and API key management  
 - credential: Credential type configuration
 - trust: Trust framework and key configuration
+- signing_keys: KMS-backed signing key registry and publication workflows
 - issuance: OID4VCI credential issuance
 - applicant: Applicant vetting and KYC
 - notification: Notifications and push messaging

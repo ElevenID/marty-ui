@@ -1,15 +1,12 @@
 import { Navigate } from 'react-router-dom';
+import BrowserRedirect from '../components/BrowserRedirect';
 import {
   renderMarketingRoutes as renderOriginalMarketingRoutes,
   renderPublicRoot as renderOriginalPublicRoot,
 } from './publicSite.public';
 
 function getSelfhostRootPath({ isAuthenticated, isAdministrator, isVendor, isApplicant }) {
-  if (isAdministrator) {
-    return '/dashboard';
-  }
-
-  if (isVendor) {
+  if (isAdministrator || isVendor) {
     return '/console/org';
   }
 
@@ -25,7 +22,13 @@ export function renderPublicRoot(authState) {
     return renderOriginalPublicRoot();
   }
 
-  return <Navigate to={getSelfhostRootPath(authState)} replace />;
+  const destination = getSelfhostRootPath(authState);
+
+  if (destination.startsWith('/console')) {
+    return <BrowserRedirect to={destination} />;
+  }
+
+  return <Navigate to={destination} replace />;
 }
 
 export function renderMarketingRoutes(options) {

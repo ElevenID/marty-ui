@@ -28,7 +28,7 @@ import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from enum import Enum
-from typing import Annotated, Any, AsyncGenerator
+from typing import Annotated, Any, AsyncGenerator, Awaitable
 
 import grpc
 import grpc.aio as grpc_aio
@@ -125,6 +125,13 @@ SESSION_PREFIX = "verification:session:"
 SESSION_TTL_SECONDS = 60 * 60  # 1 hour (covers 15-min expiry + buffer)
 
 
+class _CompletedAwaitable:
+    def __await__(self):
+        if False:
+            yield None
+        return None
+
+
 def _session_to_redis_dict(session: VerificationSession) -> dict[str, Any]:
     """Serialize a VerificationSession to a JSON-safe dict for Redis storage."""
     return {
@@ -204,16 +211,19 @@ class SessionStore:
     def _use_redis(self) -> bool:
         return self._redis is not None
 
-    async def save(self, session: VerificationSession) -> None:
+    def save(self, session: VerificationSession) -> Awaitable[None]:
         session.updated_at = datetime.now(timezone.utc)
         if self._use_redis:
-            key = f"{SESSION_PREFIX}{session.session_id}"
-            await self._redis.set(key, json.dumps(_session_to_redis_dict(session)), ex=SESSION_TTL_SECONDS)
-            # Index by org for list queries
-            await self._redis.sadd(f"{SESSION_PREFIX}org:{session.organization_id}", session.session_id)
-            await self._redis.expire(f"{SESSION_PREFIX}org:{session.organization_id}", SESSION_TTL_SECONDS)
-        else:
-            self._fallback[session.session_id] = session
+            async def _save_to_redis() -> None:
+                key = f"{SESSION_PREFIX}{session.session_id}"
+                await self._redis.set(key, json.dumps(_session_to_redis_dict(session)), ex=SESSION_TTL_SECONDS)
+                await self._redis.sadd(f"{SESSION_PREFIX}org:{session.organization_id}", session.session_id)
+                await self._redis.expire(f"{SESSION_PREFIX}org:{session.organization_id}", SESSION_TTL_SECONDS)
+
+            return _save_to_redis()
+
+        self._fallback[session.session_id] = session
+        return _CompletedAwaitable()
 
     async def get(self, session_id: str) -> VerificationSession | None:
         if self._use_redis:
@@ -492,9 +502,9 @@ def _session_to_dict(s: VerificationSession) -> dict:
 router = APIRouter(prefix="/v1/verify", tags=["Verification"])
 
 
-def get_current_user_id(x_user_id: Annotated[str, Header()]) -> str:
+def get_current_user_id(x_user_id: Annotated[str | None, Header(alias="X-User-Id")] = None) -> str:
     """Extract user ID from X-User-Id header (injected by gateway)."""
-    return x_user_id
+    return x_user_id or "anonymous"
 
 
 @router.post("", summary="Start Verification Session")
@@ -502,10 +512,10 @@ async def start_verification(
     body: StartVerificationRequest,
     store: SessionStore = Depends(get_store),
     user_id: str = Depends(get_current_user_id),
-    x_organization_id: str = Header(alias="X-Organization-Id"),
+    x_organization_id: str | None = Header(default=None, alias="X-Organization-Id"),
 ) -> dict:
     """Create a verification session and return a request_uri for the wallet."""
-    if body.organization_id and body.organization_id != x_organization_id:
+    if x_organization_id and body.organization_id and body.organization_id != x_organization_id:
         raise HTTPException(status_code=403, detail="Organization mismatch")
     if body.response_type == "vp_token" and not body.presentation_policy_id:
         raise HTTPException(
@@ -547,6 +557,369 @@ async def list_sessions(
     return {"sessions": [_session_to_protocol_dict(s) for s in page], "total": len(sessions)}
 
 
+# SD-JWT presentation format algorithms (matches flow._SD_JWT_PRESENTATION_ALGS)
+_SD_JWT_PRESENTATION_ALGS = {
+    "sd-jwt_alg_values": ["ES256", "EdDSA"],
+    "kb-jwt_alg_values": ["ES256", "EdDSA"],
+}
+CT_GRPC_TARGET = os.environ.get("CT_GRPC_TARGET", "credential-template:9003")
+
+# ── OID4VP presentation formats: derived from wallet registry entries ─────
+# Each wallet registry entry declares supported_formats that map directly to
+# OID4VP presentation format identifiers.  A local fallback keeps presentation
+# working when the credential_template module isn't importable at runtime.
+
+_WALLET_FORMATS_FALLBACK: dict[str, dict[str, Any]] = {
+    "vc+sd-jwt":        {"sd-jwt_alg_values": ["ES256", "EdDSA"], "kb-jwt_alg_values": ["ES256", "EdDSA"]},
+    "dc+sd-jwt":        {"sd-jwt_alg_values": ["ES256", "EdDSA"], "kb-jwt_alg_values": ["ES256", "EdDSA"]},
+    "spruce-vc+sd-jwt": {"sd-jwt_alg_values": ["ES256", "EdDSA"], "kb-jwt_alg_values": ["ES256", "EdDSA"]},
+    "mso_mdoc":         {"alg": ["ES256", "ES384"]},
+    "jwt_vp":           {"alg": ["ES256", "EdDSA"]},
+    "ldp_vp":           {"proof_type": ["Ed25519Signature2020"]},
+}
+
+
+def _oid4vp_wallet_registry_formats() -> dict[str, dict[str, Any]]:
+    """Collect all unique OID4VP format identifiers from the wallet registry."""
+    try:
+        from credential_template.main import SYSTEM_WALLET_CATALOG  # type: ignore[import-untyped]
+        result: dict[str, dict[str, Any]] = {}
+        for entry in SYSTEM_WALLET_CATALOG:
+            for fmt in entry.supported_formats:
+                fmt_s = (fmt or "").strip()
+                if fmt_s and fmt_s not in result:
+                    result[fmt_s] = _oid4vp_format_alg(fmt_s)
+        if result:
+            return result
+    except ImportError:
+        pass
+    return dict(_WALLET_FORMATS_FALLBACK)
+
+
+def _oid4vp_format_alg(fmt: str) -> dict[str, Any]:
+    """Return algorithm constraints for a given OID4VP format identifier."""
+    fmt_n = (fmt or "").strip().lower()
+    if fmt_n in {"vc+sd-jwt", "dc+sd-jwt", "sd_jwt_vc", "spruce-vc+sd-jwt"}:
+        return dict(_SD_JWT_PRESENTATION_ALGS)
+    if fmt_n in {"mso_mdoc", "mdoc"}:
+        return {"alg": ["ES256", "ES384"]}
+    if fmt_n in {"jwt_vp", "jwt_vc", "jwt_vc_json"}:
+        return {"alg": ["ES256", "EdDSA"]}
+    if fmt_n == "ldp_vp":
+        return {"proof_type": ["Ed25519Signature2020"]}
+    return {"alg": ["ES256", "EdDSA"]}
+
+
+def _oid4vp_presentation_formats(template_supported_formats: list[str]) -> dict[str, Any]:
+    """Derive OID4VP format identifiers from template formats × wallet registry."""
+    _SD_FAMILY = {"sd_jwt_vc", "vc+sd-jwt", "dc+sd-jwt", "spruce-vc+sd-jwt"}
+    _DOC_FAMILY = {"mso_mdoc", "mdoc"}
+    _JWTVP_FAMILY = {"jwt_vc", "jwt_vc_json", "jwt_vp"}
+
+    template_family: set[str] = set()
+    for f in template_supported_formats:
+        fn = (f or "").strip().lower()
+        if fn in _SD_FAMILY:
+            template_family.add("sd_jwt")
+        elif fn in _DOC_FAMILY:
+            template_family.add("mdoc")
+        elif fn in _JWTVP_FAMILY:
+            template_family.add("jwt_vp")
+        else:
+            template_family.add(fn)
+
+    result: dict[str, Any] = {}
+    registry_formats = _oid4vp_wallet_registry_formats()
+    for fmt_key, fmt_alg in registry_formats.items():
+        fn = (fmt_key or "").strip().lower()
+        if ("sd_jwt" in template_family and fn in _SD_FAMILY) or \
+           ("mdoc" in template_family and fn in _DOC_FAMILY) or \
+           ("jwt_vp" in template_family and fn in _JWTVP_FAMILY) or \
+           fn in template_family:
+            result[fmt_key] = fmt_alg
+
+    if not result:
+        return {"jwt_vp": {"alg": ["ES256", "EdDSA"]}, "ldp_vp": {"proof_type": ["Ed25519Signature2020"]}}
+    return result
+
+
+def _is_sd_jwt_format(supported_formats: list[str]) -> bool:
+    """Return True if any supported format is in the SD-JWT family."""
+    _SD = {"sd_jwt_vc", "vc+sd-jwt", "dc+sd-jwt", "spruce-vc+sd-jwt"}
+    return any((f or "").strip().lower() in _SD for f in supported_formats)
+
+
+def _is_mdoc_format(supported_formats: list[str]) -> bool:
+    """Return True if any supported format is in the ISO mDoc family."""
+    _DOC = {"mso_mdoc", "mdoc"}
+    return any((f or "").strip().lower() in _DOC for f in supported_formats)
+
+
+def _string_filter_for_values(values: list[str]) -> dict[str, Any]:
+    """Build a JSON Schema string filter for one or more accepted values."""
+    unique_values = [value for i, value in enumerate(values) if value and value not in values[:i]]
+    if len(unique_values) == 1:
+        return {"type": "string", "const": unique_values[0]}
+    return {"type": "string", "enum": unique_values}
+
+
+def _sd_jwt_vct_values(credential_vct: str | None, credential_type: str | None) -> list[str]:
+    """Return accepted SD-JWT VC type values for the request object."""
+    values = [credential_vct or credential_type] if (credential_vct or credential_type) else []
+    if credential_type == "open_badge" or credential_vct == "https://beta.elevenidllc.com/credentials/marty-verified-member-badge":
+        values.append("https://marty.example/credentials/open_badge")
+    return [value for i, value in enumerate(values) if value and value not in values[:i]]
+
+
+def _dcql_format_name(fmt: str) -> str:
+    """Normalize OID4VP format identifiers to DCQL format names."""
+    fmt_n = (fmt or "").strip().lower()
+    if fmt_n in {"jwt_vp", "jwt_vc", "jwt_vc_json"}:
+        return "jwt_vc_json"
+    if fmt_n == "ldp_vp":
+        return "ldp_vc"
+    if fmt_n in {"vc+sd-jwt", "dc+sd-jwt", "sd_jwt_vc", "spruce-vc+sd-jwt"}:
+        return "dc+sd-jwt"
+    if fmt_n in {"mso_mdoc", "mdoc"}:
+        return "mso_mdoc"
+    return fmt
+
+
+def _json_schema_const_values(schema: dict[str, Any] | None) -> list[str]:
+    """Extract string const/enum values from a JSON Schema fragment."""
+    if not isinstance(schema, dict):
+        return []
+
+    values: list[str] = []
+
+    def _append(value: Any) -> None:
+        if isinstance(value, str) and value not in values:
+            values.append(value)
+
+    _append(schema.get("const"))
+    enum_values = schema.get("enum")
+    if isinstance(enum_values, list):
+        for enum_value in enum_values:
+            _append(enum_value)
+
+    contains = schema.get("contains")
+    if isinstance(contains, dict):
+        for value in _json_schema_const_values(contains):
+            _append(value)
+
+    for keyword in ("anyOf", "oneOf", "allOf"):
+        options = schema.get(keyword)
+        if isinstance(options, list):
+            for option in options:
+                if isinstance(option, dict):
+                    for value in _json_schema_const_values(option):
+                        _append(value)
+
+    return values
+
+
+def _dcql_meta_for_descriptor(descriptor: dict[str, Any], fmt_name: str) -> dict[str, Any]:
+    """Derive DCQL meta from Presentation Exchange type/vct filters."""
+    sd_jwt_formats = {"dc+sd-jwt", "vc+sd-jwt", "spruce-vc+sd-jwt", "sd_jwt_vc"}
+    for field in descriptor.get("constraints", {}).get("fields", []):
+        values = _json_schema_const_values(field.get("filter"))
+        if not values:
+            continue
+        paths = field.get("path", [])
+        if fmt_name in sd_jwt_formats or "$.vct" in paths:
+            return {"vct_values": values}
+        if any(path in {"$.vc.type", "$.type"} for path in paths):
+            return {"type_values": [["VerifiableCredential", value] for value in values]}
+    return {}
+
+
+def _dcql_claims_for_descriptor(descriptor: dict[str, Any]) -> list[dict[str, Any]]:
+    """Derive DCQL claim requests from Presentation Exchange fields."""
+    fields = descriptor.get("constraints", {}).get("fields", [])
+    required_fields = [field for field in fields if not field.get("optional")]
+    candidate_fields = required_fields or fields
+
+    claims: list[dict[str, Any]] = []
+    seen: set[tuple[str, ...]] = set()
+    for field in candidate_fields:
+        if field.get("filter"):
+            continue
+        for path in reversed(field.get("path", [])):
+            if not isinstance(path, str) or not path.startswith("$."):
+                continue
+            claim_path = path[2:].split(".")
+            if not claim_path or claim_path[0] in {"vc", "credentialSubject", "type", "vct"}:
+                continue
+            key = tuple(claim_path)
+            if key in seen:
+                break
+            seen.add(key)
+            claims.append(
+                {
+                    "id": "claim_" + "_".join(part.replace("-", "_") for part in claim_path),
+                    "path": claim_path,
+                }
+            )
+            break
+    return claims
+
+
+async def _build_presentation_definition(session: VerificationSession) -> dict[str, Any]:
+    """Build an OID4VP presentation_definition with proper input_descriptors.
+
+    Fetches the presentation policy and each referenced credential template
+    so that input_descriptors contain real credential-type filters that a
+    wallet (including SpruceKit) can match against its stored credentials.
+    Mirrors the canonical MIP implementation in the flow service.
+    """
+    policy_id = session.presentation_policy_id
+    if not policy_id or policy_id == "adhoc":
+        return {"id": "adhoc"}
+
+    try:
+        from marty_proto.v1 import (
+            presentation_policy_service_pb2,
+            presentation_policy_service_pb2_grpc,
+            credential_template_service_pb2,
+            credential_template_service_pb2_grpc,
+        )
+
+        pp_channel = grpc_aio.insecure_channel(PP_GRPC_TARGET)
+        pp_stub = presentation_policy_service_pb2_grpc.PresentationPolicyServiceStub(pp_channel)
+        pp_resp = await pp_stub.GetPolicy(
+            presentation_policy_service_pb2.GetPolicyRequest(policy_id=policy_id)
+        )
+        await pp_channel.close()
+
+        if not pp_resp.id:
+            return {"id": policy_id}
+        credential_requirements = json.loads(pp_resp.credential_requirements_json or "[]")
+    except Exception as exc:
+        logger.warning(
+            "Could not fetch presentation policy %s for request object: %s",
+            policy_id, exc,
+        )
+        return {"id": policy_id}
+
+    if not credential_requirements:
+        return {"id": policy_id}
+
+    ct_channel = grpc_aio.insecure_channel(CT_GRPC_TARGET)
+    ct_stub = credential_template_service_pb2_grpc.CredentialTemplateServiceStub(ct_channel)
+
+    input_descriptors: list[dict[str, Any]] = []
+    for i, req in enumerate(credential_requirements):
+        template_id = req.get("credential_template_id", "")
+        descriptor_id = req.get("id") or f"descriptor-{i}"
+        display_name = req.get("display_name") or f"Credential {i + 1}"
+        purpose = req.get("description") or f"Present {display_name}"
+
+        # Fetch the credential template to get supported_formats and credential type
+        credential_type: str | None = None
+        credential_vct: str | None = None
+        supported_formats: list[str] = []
+        if template_id:
+            try:
+                tmpl_resp = await ct_stub.GetTemplate(
+                    credential_template_service_pb2.GetTemplateRequest(template_id=template_id)
+                )
+                if tmpl_resp.id:
+                    credential_type = tmpl_resp.credential_type or None
+                    credential_vct = tmpl_resp.vct or None
+                    supported_formats = list(tmpl_resp.supported_formats) or []
+            except Exception as exc:
+                logger.warning(
+                    "_build_presentation_definition: could not fetch template %s: %s",
+                    template_id, exc,
+                )
+
+        # Build type-filter constraint based on format. Presentation Exchange
+        # fields are conjunctive, so only the SD-JWT vct selector is required
+        # for SD-JWT credentials; W3C/Open Badge type hints stay optional.
+        fields: list[dict[str, Any]] = []
+        if credential_type:
+            if _is_mdoc_format(supported_formats):
+                fields.append({
+                    "path": ["$.mdoc.docType", "$.docType"],
+                    "filter": {"type": "string", "const": credential_type},
+                })
+            elif _is_sd_jwt_format(supported_formats):
+                vct_values = _sd_jwt_vct_values(credential_vct, credential_type)
+                fields.append({
+                    "path": ["$.vct"],
+                    "filter": _string_filter_for_values(vct_values),
+                })
+                fields.append({
+                    "path": ["$.vc.type", "$.type"],
+                    "filter": {
+                        "anyOf": [
+                            {"type": "array", "contains": {"const": credential_type}},
+                            {"type": "string", "const": credential_type},
+                        ],
+                    },
+                    "optional": True,
+                })
+            else:
+                fields.append({
+                    "path": ["$.vc.type", "$.type"],
+                    "filter": {
+                        "anyOf": [
+                            {"type": "array", "contains": {"const": credential_type}},
+                            {"type": "string", "const": credential_type},
+                        ],
+                    },
+                })
+
+        # Add path hints for requested claims (selective disclosure support)
+        for claim in req.get("requested_claims", []) or []:
+            claim_name = claim.get("claim_name") if isinstance(claim, dict) else getattr(claim, "claim_name", None)
+            if claim_name:
+                fields.append({
+                    "path": [
+                        f"$.vc.credentialSubject.{claim_name}",
+                        f"$.credentialSubject.{claim_name}",
+                        f"$.{claim_name}",
+                    ],
+                })
+
+        # Build format object from template supported_formats (wallet-registry-driven)
+        descriptor: dict[str, Any] = {"id": descriptor_id, "name": display_name, "purpose": purpose}
+        descriptor["format"] = _oid4vp_presentation_formats(supported_formats)
+
+        if fields:
+            descriptor["constraints"] = {"fields": fields}
+            if _is_sd_jwt_format(supported_formats):
+                descriptor["constraints"]["limit_disclosure"] = "required"
+
+        input_descriptors.append(descriptor)
+
+    await ct_channel.close()
+
+    # Collect unique formats for the top-level format block
+    _top_formats: dict[str, Any] = {}
+    for desc in input_descriptors:
+        for fmt_key, fmt_val in desc.get("format", {}).items():
+            if fmt_key not in _top_formats:
+                _top_formats[fmt_key] = fmt_val
+    if not _top_formats:
+        _top_formats = {"jwt_vp": {"alg": ["ES256", "EdDSA"]}}
+
+    # Fallback: no requirements
+    if not input_descriptors:
+        input_descriptors = [{
+            "id": "default_requirement",
+            "name": "Credential Presentation",
+            "purpose": "Present credentials per policy requirements",
+            "constraints": {"fields": []},
+        }]
+
+    return {
+        "id": str(uuid.uuid4()),
+        "format": _top_formats,
+        "input_descriptors": input_descriptors,
+    }
+
+
 @router.get("/{session_id}/request", summary="OID4VP Request Object")
 async def get_request_object(
     session_id: str,
@@ -559,14 +932,29 @@ async def get_request_object(
     if session.status == SessionStatus.EXPIRED:
         raise HTTPException(status_code=410, detail="Session expired")
 
+    presentation_definition = await _build_presentation_definition(session)
+    dcql_entries: list[dict[str, Any]] = []
+    for descriptor in presentation_definition.get("input_descriptors", []):
+        fmt_map = descriptor.get("format", {})
+        first_fmt = next(iter(fmt_map), "jwt_vc_json")
+        fmt_name = _dcql_format_name(first_fmt)
+        entry: dict[str, Any] = {"id": descriptor["id"], "format": fmt_name}
+        dcql_meta = _dcql_meta_for_descriptor(descriptor, fmt_name)
+        if dcql_meta:
+            entry["meta"] = dcql_meta
+        claims = _dcql_claims_for_descriptor(descriptor)
+        if claims:
+            entry["claims"] = claims
+        dcql_entries.append(entry)
+    if not dcql_entries:
+        dcql_entries = [{"id": "default-credential", "format": "jwt_vc_json"}]
+
     return {
         "response_type": session.response_type,
         "client_id": PUBLIC_BASE_URL,
         "nonce": session.nonce,
         "response_uri": f"{PUBLIC_BASE_URL}/v1/verify/{session_id}/submit",
-        "presentation_definition": {
-            "id": session.presentation_policy_id or "adhoc",
-        },
+        "dcql_query": {"credentials": dcql_entries},
     }
 
 

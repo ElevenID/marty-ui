@@ -11,6 +11,13 @@ const { mockNavigate, mockUseParams, mockSearchParams, mockLocationState, mockUs
   mockUseAuth: vi.fn(),
 }));
 
+vi.mock('../../application/routing/appHandoff', () => ({
+  shouldBrowserRedirect: () => false,
+  redirectBrowser: (destination: string) => {
+    window.location.href = destination;
+  },
+}));
+
 vi.mock('react-router-dom', async () => {
   const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom');
   return {

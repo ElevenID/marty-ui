@@ -9,10 +9,20 @@ import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import { useNavigate, useLocation } from 'react-router-dom';
 import PropTypes from 'prop-types';
+import { redirectBrowser, shouldBrowserRedirect } from '../../application/routing/appHandoff';
 
 function PreviewNotFound({ resourceType = 'resource', returnUrl = '/console' }) {
   const navigate = useNavigate();
   const location = useLocation();
+
+  const handleReturnToConsole = () => {
+    if (shouldBrowserRedirect({ currentPathname: location.pathname, destination: returnUrl })) {
+      redirectBrowser(returnUrl, { replace: false });
+      return;
+    }
+
+    navigate(returnUrl);
+  };
 
   const getResourceLabel = () => {
     switch (resourceType) {
@@ -66,7 +76,7 @@ function PreviewNotFound({ resourceType = 'resource', returnUrl = '/console' }) 
           </Button>
           <Button
             variant="contained"
-            onClick={() => navigate(returnUrl)}
+            onClick={handleReturnToConsole}
           >
             Return to Console
           </Button>

@@ -61,6 +61,7 @@ from .infrastructure.adapters.policy_set_http_adapter import (
     configure as configure_policy_set_router,
     router as policy_set_router,
 )
+from .domain.entities import Member, MemberStatus
 
 # Configure logging
 logging.basicConfig(
@@ -72,6 +73,73 @@ logger = logging.getLogger(__name__)
 # Service configuration
 SERVICE_NAME = "organization-service"
 SERVICE_PORT = int(os.environ.get("ORGANIZATION_SERVICE_PORT", "8002"))
+MARTY_ORG_ID = os.environ.get("MARTY_ORG_ID", "00000000-0000-0000-0000-000000000001")
+MARTY_ORG_ADMIN_EMAIL = os.environ.get("MARTY_ORG_ADMIN_EMAIL", "").strip().lower()
+
+
+async def _ensure_system_roles_for_existing_orgs(
+    org_use_case: OrganizationUseCase,
+    role_use_case: RoleUseCase,
+) -> None:
+    """Seed system roles for orgs created outside the current runtime path."""
+
+    organizations = await org_use_case.list_organizations(limit=1000, offset=0)
+    for organization in organizations:
+        existing_roles = await role_use_case.list_roles(str(organization.id))
+        if existing_roles:
+            continue
+        logger.info("Seeding missing system roles for existing org %s", organization.id)
+        await role_use_case.seed_default_roles(str(organization.id))
+
+
+async def _ensure_marty_admin_membership(
+    member_repo: PostgresMemberRepository,
+    role_use_case: RoleUseCase,
+) -> None:
+    """Ensure the configured Marty admin email is pre-seeded with the admin role."""
+
+    if not MARTY_ORG_ADMIN_EMAIL:
+        return
+
+    admin_role = await role_use_case.role_repo.get_by_name(MARTY_ORG_ID, "admin")
+    if admin_role is None:
+        logger.warning("Marty admin role missing during bootstrap; skipping pre-seed")
+        return
+
+    member = await member_repo.get_by_email_and_org(MARTY_ORG_ADMIN_EMAIL, MARTY_ORG_ID)
+    if member is None:
+        member = Member(
+            organization_id=MARTY_ORG_ID,
+            user_id="",
+            email=MARTY_ORG_ADMIN_EMAIL,
+            status=MemberStatus.ACTIVE,
+        )
+        await member_repo.save(member)
+
+    existing_role_ids = {role.id for role in member.roles}
+    existing_role_names = {role.name for role in member.roles}
+    if admin_role.id in existing_role_ids:
+        return
+
+    if not existing_role_names or existing_role_names <= {"applicant"}:
+        await role_use_case.set_member_roles(
+            SetMemberRolesCommand(
+                member_id=member.id,
+                organization_id=MARTY_ORG_ID,
+                role_ids=[admin_role.id],
+                updated_by="system",
+            )
+        )
+        return
+
+    await role_use_case.add_member_role(
+        AddMemberRoleCommand(
+            member_id=member.id,
+            organization_id=MARTY_ORG_ID,
+            role_id=admin_role.id,
+            updated_by="system",
+        )
+    )
 
 
 def get_config() -> dict:
@@ -84,6 +152,7 @@ def get_config() -> dict:
 
 
 from common.grpc_event_bus import GrpcEventBusPublisher  # noqa: E402
+from .application.ports import AddMemberRoleCommand, SetMemberRolesCommand  # noqa: E402
 
 
 @asynccontextmanager
@@ -123,11 +192,19 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         member_repo=member_repo,
         event_publisher=event_publisher,
     )
+
+    role_use_case = RoleUseCase(
+        role_repo=role_repo,
+        permission_repo=permission_repo,
+        member_repo=member_repo,
+        event_publisher=event_publisher,
+    )
     
     member_use_case = MemberUseCase(
         member_repo=member_repo,
         organization_repo=org_repo,
         event_publisher=event_publisher,
+        role_use_case=role_use_case,
     )
     
     api_key_use_case = ApiKeyUseCase(
@@ -145,17 +222,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         organization_repo=org_repo,
         member_repo=member_repo,
         event_publisher=event_publisher,
-    )
-    
-    role_use_case = RoleUseCase(
-        role_repo=role_repo,
-        permission_repo=permission_repo,
-        member_repo=member_repo,
-        event_publisher=event_publisher,
+        role_use_case=role_use_case,
     )
     
     # Wire RBAC seeding into org creation
     org_use_case.role_use_case = role_use_case
+    await _ensure_system_roles_for_existing_orgs(org_use_case, role_use_case)
+    await _ensure_marty_admin_membership(member_repo, role_use_case)
     
     # Configure routers
     configure_org_router(

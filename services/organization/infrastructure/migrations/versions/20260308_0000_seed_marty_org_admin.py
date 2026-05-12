@@ -6,11 +6,7 @@ Create Date: 2026-03-08 00:00:00.000000+00:00
 
 Inserts (or promotes) a member record for the configured admin email address
 so that the first person to log in with that email is immediately granted the
-'admin' role in the Marty organisation.
-
-If the member already exists (e.g. they logged in before this migration ran)
-their role is updated to 'admin'.  If the env var is not set the migration is
-a no-op.
+"admin" RBAC role in the Marty organisation.
 """
 
 import os
@@ -39,41 +35,63 @@ def upgrade() -> None:
 
     conn = op.get_bind()
     now = datetime.now(timezone.utc)
-
-    # Promote to admin if they're already a member (e.g. logged in before this ran)
-    result = conn.execute(
+    admin_role_id = conn.execute(
         sa.text(
             f"""
-            UPDATE {SCHEMA}.members
-               SET role       = 'admin',
-                   updated_at = :now
+            SELECT id
+              FROM {SCHEMA}.roles
              WHERE organization_id = CAST(:org_id AS uuid)
-               AND LOWER(email)    = :email
+               AND name = 'admin'
+             LIMIT 1
             """
         ),
-        {"org_id": MARTY_ORG_ID, "email": MARTY_ORG_ADMIN_EMAIL, "now": now},
-    )
+        {"org_id": MARTY_ORG_ID},
+    ).scalar()
 
-    if result.rowcount > 0:
-        return  # Already existed — role upgraded, done
+    if not admin_role_id:
+        return
 
-    # Not a member yet — pre-seed so the first login links this record
+    member_id = conn.execute(
+        sa.text(
+            f"""
+            SELECT id
+              FROM {SCHEMA}.members
+             WHERE organization_id = CAST(:org_id AS uuid)
+               AND LOWER(email) = :email
+             LIMIT 1
+            """
+        ),
+        {"org_id": MARTY_ORG_ID, "email": MARTY_ORG_ADMIN_EMAIL},
+    ).scalar()
+
+    if not member_id:
+        member_id = str(uuid.uuid4())
+        conn.execute(
+            sa.text(
+                f"""
+                INSERT INTO {SCHEMA}.members
+                    (id, organization_id, user_id, email, status, created_at, updated_at)
+                VALUES
+                    (CAST(:id AS uuid), CAST(:org_id AS uuid), '', :email, 'active', :now, :now)
+                """
+            ),
+            {
+                "id": member_id,
+                "org_id": MARTY_ORG_ID,
+                "email": MARTY_ORG_ADMIN_EMAIL,
+                "now": now,
+            },
+        )
+
     conn.execute(
         sa.text(
             f"""
-            INSERT INTO {SCHEMA}.members
-                (id, organization_id, user_id, email, role, status, created_at, updated_at)
-            VALUES
-                (CAST(:id AS uuid), CAST(:org_id AS uuid), '', :email, 'admin', 'active', :now, :now)
+            INSERT INTO {SCHEMA}.member_roles (member_id, role_id)
+            VALUES (CAST(:member_id AS uuid), CAST(:role_id AS uuid))
             ON CONFLICT DO NOTHING
             """
         ),
-        {
-            "id": str(uuid.uuid4()),
-            "org_id": MARTY_ORG_ID,
-            "email": MARTY_ORG_ADMIN_EMAIL,
-            "now": now,
-        },
+        {"member_id": member_id, "role_id": admin_role_id},
     )
 
 
@@ -82,16 +100,33 @@ def downgrade() -> None:
         return
 
     conn = op.get_bind()
+    admin_role_id = conn.execute(
+        sa.text(
+            f"""
+            SELECT id
+              FROM {SCHEMA}.roles
+             WHERE organization_id = CAST(:org_id AS uuid)
+               AND name = 'admin'
+             LIMIT 1
+            """
+        ),
+        {"org_id": MARTY_ORG_ID},
+    ).scalar()
+    if not admin_role_id:
+        return
+
     conn.execute(
         sa.text(
             f"""
-            UPDATE {SCHEMA}.members
-               SET role       = 'member',
-                   updated_at = NOW()
-             WHERE organization_id = CAST(:org_id AS uuid)
-               AND LOWER(email)    = :email
-               AND role            = 'admin'
+            DELETE FROM {SCHEMA}.member_roles
+             WHERE role_id = CAST(:role_id AS uuid)
+               AND member_id IN (
+                    SELECT id
+                      FROM {SCHEMA}.members
+                     WHERE organization_id = CAST(:org_id AS uuid)
+                       AND LOWER(email) = :email
+               )
             """
         ),
-        {"org_id": MARTY_ORG_ID, "email": MARTY_ORG_ADMIN_EMAIL},
+        {"org_id": MARTY_ORG_ID, "email": MARTY_ORG_ADMIN_EMAIL, "role_id": admin_role_id},
     )

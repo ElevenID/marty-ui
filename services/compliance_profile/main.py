@@ -33,6 +33,7 @@ from typing import Annotated
 
 from marty_common import (
     OrganizationContext,
+    ensure_membership_permission,
     require_org_membership,
 )
 from marty_common.org_authorization import get_organization_client
@@ -418,7 +419,6 @@ class ComplianceProfileResponse(BaseModel):
     api_surface: list[dict] | None = None
     discoverable: bool | None = None
     is_system: bool
-    frameworks: list[str] = Field(default_factory=list)
     created_at: str
 
 
@@ -442,6 +442,18 @@ def get_current_user_id(x_user_id: Annotated[str, Header()]) -> str:
     return x_user_id
 
 
+def _ensure_compliance_profile_permission(membership: Any, action: str) -> None:
+    if membership is not None and membership.is_active():
+        if (
+            membership.has_permission("compliance-profile", action)
+            or membership.is_owner
+            or membership.has_org_console_access
+            or membership.has_role("admin", "owner")
+        ):
+            return
+    ensure_membership_permission(membership, "compliance-profile", action)
+
+
 @router.post("", response_model=ComplianceProfileResponse, response_model_exclude_none=True)
 async def create_compliance_profile(
     request: CreateComplianceProfileRequest,
@@ -456,10 +468,10 @@ async def create_compliance_profile(
     # MIP §10 — system profiles MUST have organization_id=null
     if is_system_profile and request.organization_id is not None:
         raise HTTPException(status_code=400, detail="system profiles must not have an organization_id")
+    if request.organization_id is not None:
         org_client = await get_organization_client(fastapi_request)
         membership = await org_client.get_membership(user_id, request.organization_id)
-        if not membership or not membership.is_active():
-            raise HTTPException(status_code=403, detail="Not a member of this organization")
+        _ensure_compliance_profile_permission(membership, "create")
     
     profile = ComplianceProfile(
         organization_id=request.organization_id,
@@ -611,8 +623,7 @@ async def update_compliance_profile(
     
     # Verify admin access
     membership = await app.state.org_client.get_membership(user_id, profile.organization_id)
-    if not membership.has_role("admin", "owner"):
-        raise HTTPException(status_code=403, detail="Admin access required")
+    _ensure_compliance_profile_permission(membership, "edit")
     
     if request.name is not None:
         profile.name = request.name
@@ -736,8 +747,7 @@ async def activate_compliance_profile(
     
     # Verify admin access
     membership = await app.state.org_client.get_membership(user_id, profile.organization_id)
-    if not membership.has_role("admin", "owner"):
-        raise HTTPException(status_code=403, detail="Admin access required")
+    _ensure_compliance_profile_permission(membership, "activate")
     profile.activate()
     await repo.save(profile)
     return _profile_to_response(profile)
@@ -756,8 +766,7 @@ async def suspend_compliance_profile(
     
     # Verify admin access
     membership = await app.state.org_client.get_membership(user_id, profile.organization_id)
-    if not membership.has_role("admin", "owner"):
-        raise HTTPException(status_code=403, detail="Admin access required")
+    _ensure_compliance_profile_permission(membership, "suspend")
     profile.suspend()
     await repo.save(profile)
     return _profile_to_response(profile)
@@ -776,8 +785,7 @@ async def delete_compliance_profile(
     
     # Verify admin access
     membership = await app.state.org_client.get_membership(user_id, profile.organization_id)
-    if not membership.has_role("admin", "owner"):
-        raise HTTPException(status_code=403, detail="Admin access required")
+    _ensure_compliance_profile_permission(membership, "delete")
     
     await repo.delete(profile_id)
     return {"success": True}
@@ -824,7 +832,6 @@ def _profile_to_response(profile: ComplianceProfile) -> ComplianceProfileRespons
         ],
         discoverable=profile.discoverable,
         is_system=profile.is_system,
-        frameworks=profile.frameworks,
         created_at=profile.created_at.isoformat(),
     )
 

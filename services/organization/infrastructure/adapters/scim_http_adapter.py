@@ -19,7 +19,7 @@ from marty_common import OrganizationContext, require_org_membership
 from ...application.ports import CreateRoleCommand, DeleteRoleCommand, UpdateRoleCommand
 from ...application.rbac_use_cases import RoleUseCase
 from ...application.use_cases import MemberUseCase, OrganizationUseCase
-from ...domain.entities import Member, MemberRole, MemberStatus, Role
+from ...domain.entities import Member, MemberStatus, Role
 
 logger = logging.getLogger(__name__)
 
@@ -177,7 +177,7 @@ def _member_is_active(member: Member) -> bool:
 
 
 def _member_is_owner(member: Member, roles: list[Role]) -> bool:
-    return member.role == MemberRole.OWNER or any(role.name == "owner" for role in roles)
+    return member.user_id is not None and any(role.name == "owner" for role in roles)
 
 
 def _member_display_name(member: Member) -> str:
@@ -207,7 +207,7 @@ async def _get_default_role_ids(role_use_case: RoleUseCase, organization_id: str
     defaults = [role.id for role in roles if role.is_default_for_new_members]
     if defaults:
         return defaults
-    fallback = next((role.id for role in roles if role.name == "member"), None)
+    fallback = next((role.id for role in roles if role.name == "applicant"), None)
     return [fallback] if fallback else []
 
 
@@ -521,7 +521,6 @@ async def create_user(
         organization_id=organization_id,
         user_id=str(payload_dict.get("externalId") or email),
         email=email,
-        role=MemberRole.MEMBER,
         status=MemberStatus.ACTIVE if payload_dict.get("active", True) else MemberStatus.DEACTIVATED,
     )
     member.updated_at = _now()

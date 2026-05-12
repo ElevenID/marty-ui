@@ -115,6 +115,7 @@ export const batchRevokeCredentials = async (credentialIds, options = {}) => {
 export const listCredentials = async (filters = {}) => {
   try {
     const params = new URLSearchParams();
+    if (filters.organization_id) params.append('organization_id', filters.organization_id);
     if (filters.flow_id) params.append('flow_id', filters.flow_id);
     if (filters.credential_template_id) params.append('credential_template_id', filters.credential_template_id);
     if (filters.status) params.append('status', filters.status);
@@ -137,6 +138,7 @@ export const listCredentials = async (filters = {}) => {
 export const listRevocationBatches = async (filters = {}) => {
   try {
     const params = new URLSearchParams();
+    if (filters.organization_id) params.append('organization_id', filters.organization_id);
     if (filters.status) params.append('status', filters.status);
     
     const response = await apiClient.get(`${BASE_PATH}/revocation-batches?${params.toString()}`);
@@ -219,9 +221,9 @@ export const getIssuanceSessionStatus = async (transactionId) => {
 };
 
 /**
- * Generate (or refresh) the issuance offer for an approved application.
- * Calls the applicant service's issue endpoint which triggers OID4VCI initiation
- * via the issuance service and returns the credential_offer_uri.
+ * Generate (or refresh) the issuance offer for an application.
+ * Uses the applicant issue endpoint, which now delegates issuance strictly
+ * through flow orchestration (no direct issuance fallback).
  *
  * @param {string} applicationId
  * @returns {Promise<{offer_url: string, expires_at: string|null, status: string}>}
@@ -232,9 +234,9 @@ export const generateIssuanceOffer = async (applicationId) => {
     const data = response.data;
     // Normalise to the shape OID4VCIInviteDisplay / IssuingSection expect
     return {
-      offer_url: data.credential_offer_uri || null,
-      expires_at: data.offer_expires_at || null,
-      status: data.credential_offer_uri ? 'active' : 'pending',
+      offer_url: data.credential_offer_uri || data.offer_url || null,
+      expires_at: data.offer_expires_at || data.expires_at || null,
+      status: data.status || (data.credential_offer_uri || data.offer_url ? 'active' : 'pending'),
       // Pass through in case callers want raw fields too
       ...data,
     };

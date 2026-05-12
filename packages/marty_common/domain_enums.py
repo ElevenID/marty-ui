@@ -21,6 +21,7 @@ class CredentialFormat(str, Enum):
     VC_JWT = "VC_JWT"
     JSON_LD = "JSON_LD"
     ZK_MDOC = "ZK_MDOC"
+    VDS_NC = "VDS_NC"
 
 
 # Wire-format / alternate-name aliases → canonical enum member.
@@ -48,6 +49,10 @@ CREDENTIAL_FORMAT_WIRE_MAP: dict[str, CredentialFormat] = {
     "zk_mdoc": CredentialFormat.ZK_MDOC,
     "zk-mdoc": CredentialFormat.ZK_MDOC,
     "zkp_mdoc": CredentialFormat.ZK_MDOC,
+    # VDS-NC variants (ICAO Visible Digital Seal – Non-Constrained)
+    "vds_nc": CredentialFormat.VDS_NC,
+    "vds-nc": CredentialFormat.VDS_NC,
+    "vds_nc_barcode": CredentialFormat.VDS_NC,
 }
 
 

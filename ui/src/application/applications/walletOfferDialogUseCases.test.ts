@@ -6,7 +6,9 @@ import {
   getWalletOfferDialogError,
   loadWalletOfferDialog,
   resetWalletOfferDialogState,
+  enrichWalletOfferForRouting,
   resolveWalletOfferDialogLoad,
+  resolveWalletOfferRoutingWalletIds,
   startWalletOfferDialogLoad,
 } from './walletOfferDialogUseCases'
 
@@ -79,6 +81,135 @@ describe('walletOfferDialogUseCases', () => {
       offerData: null,
       loading: false,
       error: 'No wallet today',
+    })
+  })
+
+  it('falls back to routable registry wallets when no preferred wallet is set', () => {
+    const walletIds = resolveWalletOfferRoutingWalletIds({
+      offerData: { offer_url: 'https://issuer.example/offers/123' },
+      preferredWallets: [],
+      registryWallets: [
+        {
+          id: 'wr-spruce-001',
+          name: 'SpruceKit',
+          routing_templates: {
+            android: 'intent://?credential_offer_uri={offer_uri_encoded}#Intent;scheme=openid-credential-offer;package=com.spruceid.mobilesdkexample;end',
+          },
+        },
+        {
+          id: 'wr-marty-001',
+          name: 'Marty Authenticator',
+          routing_templates: { ios: 'marty-authenticator://open?inner={inner_uri_encoded}' },
+        },
+        {
+          id: 'wr-default',
+          name: 'Any OID4VCI Wallet',
+          deep_link_pattern: 'openid-credential-offer://?credential_offer_uri={offer_uri_encoded}',
+        },
+      ],
+    })
+
+    expect(walletIds).toEqual(['wr-spruce-001', 'wr-marty-001'])
+  })
+
+  it('ignores protocol-only preferred wallets when choosing same-device routing', () => {
+    const walletIds = resolveWalletOfferRoutingWalletIds({
+      offerData: { offer_url: 'https://issuer.example/offers/123' },
+      preferredWallets: ['wr-lissi-001'],
+      registryWallets: [
+        {
+          id: 'wr-lissi-001',
+          name: 'LISSI Wallet',
+          deep_link_pattern: 'openid-credential-offer://?credential_offer_uri={offer_uri_encoded}',
+        },
+        {
+          id: 'wr-spruce-001',
+          name: 'SpruceKit',
+          routing_templates: {
+            android: 'intent://?credential_offer_uri={offer_uri_encoded}#Intent;scheme=openid-credential-offer;package=com.spruceid.mobilesdkexample;end',
+          },
+        },
+      ],
+    })
+
+    expect(walletIds).toEqual(['wr-spruce-001'])
+  })
+
+  it('ignores protocol-only backend wallet offer keys when choosing same-device routing', () => {
+    const walletIds = resolveWalletOfferRoutingWalletIds({
+      offerData: {
+        offer_url: 'https://issuer.example/offers/123',
+        credential_offer_uris: {
+          'wr-lissi-001': 'https://issuer.example/offers/lissi',
+          'wr-spruce-001': 'https://issuer.example/offers/spruce',
+        },
+      },
+      preferredWallets: [],
+      registryWallets: [
+        {
+          id: 'wr-lissi-001',
+          name: 'LISSI Wallet',
+          deep_link_pattern: 'openid-credential-offer://?credential_offer_uri={offer_uri_encoded}',
+        },
+        {
+          id: 'wr-spruce-001',
+          name: 'SpruceKit',
+          routing_templates: {
+            android: 'intent://?credential_offer_uri={offer_uri_encoded}#Intent;scheme=openid-credential-offer;package=com.spruceid.mobilesdkexample;end',
+          },
+        },
+      ],
+    })
+
+    expect(walletIds).toEqual(['wr-spruce-001'])
+  })
+
+  it('uses known wallet route metadata when registry rows are stale', () => {
+    const walletIds = resolveWalletOfferRoutingWalletIds({
+      offerData: { offer_url: 'https://issuer.example/offers/123' },
+      preferredWallets: ['wr-lissi-001'],
+      registryWallets: [
+        {
+          id: 'wr-lissi-001',
+          name: 'LISSI Wallet',
+          deep_link_pattern: 'openid-credential-offer://?credential_offer_uri={offer_uri_encoded}',
+        },
+        {
+          id: 'wr-spruce-001',
+          name: 'SpruceKit',
+        },
+      ],
+    })
+
+    expect(walletIds).toEqual(['wr-spruce-001'])
+  })
+
+  it('enriches an offer with wallet registry routing data', () => {
+    const routing = enrichWalletOfferForRouting({
+      offerData: { offer_url: 'https://issuer.example/offers/123' },
+      registryWallets: [
+        {
+          id: 'wr-marty-001',
+          name: 'Marty Authenticator',
+          routing_templates: { ios: 'marty-authenticator://open?inner={inner_uri_encoded}' },
+        },
+      ],
+    })
+
+    expect(routing.walletIds).toEqual(['wr-marty-001'])
+    expect(routing.hasWalletRouting).toBe(true)
+    expect(routing.offerData).toMatchObject({
+      credential_offer_uris: {
+        'wr-marty-001': 'https://issuer.example/offers/123',
+      },
+      credential_offer_labels: {
+        'wr-marty-001': 'Marty Authenticator',
+      },
+      wallet_registry: {
+        'wr-marty-001': {
+          id: 'wr-marty-001',
+        },
+      },
     })
   })
 })

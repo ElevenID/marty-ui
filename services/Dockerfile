@@ -27,6 +27,9 @@ WORKDIR /build
 # Copy marty-core first (dependency)
 COPY marty-core ./marty-core
 
+# Copy vendored Rust crates required by workspace patches
+COPY marty-credentials/vendor/core2-0.4.0 ./marty-credentials/vendor/core2-0.4.0/
+
 # Copy longfellow-zk C++ library (required by marty-zkp build.rs)
 COPY longfellow-zk/lib ./longfellow-zk/lib
 

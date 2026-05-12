@@ -73,6 +73,9 @@ load_secret_env() {
     load_secret_var GOOGLE_SITE_VERIFICATION
     load_secret_var MARTY_API_CLIENT_SECRET
     load_secret_var ISSUANCE_API_KEY
+    load_secret_var CANVAS_CREDENTIALS_SHARED_SECRET
+    load_secret_var BAO_TOKEN
+    load_secret_var OPENBAO_SERVICE_TOKEN
     load_secret_var SMTP_PASSWORD
     load_secret_var SQUARE_ACCESS_TOKEN
     load_secret_var SQUARE_WEBHOOK_SIGNATURE_KEY

@@ -11,6 +11,11 @@ const MEMBER_CREDENTIAL_TYPE = 'MemberCredential';
 const MDOC_MEMBER_CREDENTIAL_TYPE = 'com.elevenid.member_credential';
 const OPEN_BADGE_CREDENTIAL_TYPE = 'open_badge';
 const ACCESS_BADGE_CREDENTIAL_TYPE = 'access_badge';
+const ROLE_DISPLAY = { applicant: 'Member', vendor: 'Vendor', administrator: 'Administrator' };
+
+function formatRoleLabel(role) {
+  return ROLE_DISPLAY[role] || role.charAt(0).toUpperCase() + role.slice(1);
+}
 
 export function normalizeCredentialConfigInput(config) {
   if (!config) {
@@ -162,21 +167,24 @@ export function buildStandardApplicationPayload({ applicantId, credentialConfig,
 export function buildAutoApplyContext({ credentialConfig, user, organizationId, nowIso = new Date().toISOString() }) {
   const { isMdlCredential, isMdocMemberCredential, isOpenBadgeCredential, isAccessBadgeCredential } = getCredentialKindFlags(credentialConfig);
   const role = (user.roles || []).find((value) => ['applicant', 'vendor', 'administrator'].includes(value)) || 'applicant';
+  const organizationName = user.organization_name || 'ElevenID LLC';
 
   if (isOpenBadgeCredential) {
     return {
       requested_validity_years: 1,
       metadata: {
         credential_type: OPEN_BADGE_CREDENTIAL_TYPE,
-        credential_display_name: credentialConfig?.name || 'Professional Certificate',
+        credential_display_name: credentialConfig?.name || 'Verified Member Badge',
+        member_id: user.user_id,
         given_name: user.given_name || '',
         family_name: user.family_name || '',
         email: user.email,
-        achievement_name: 'Platform Onboarding',
-        course_name: 'ElevenID Getting Started',
-        completion_date: nowIso.slice(0, 10),
-        institution_name: 'ElevenID LLC',
-        certificate_id: `OB-${user.user_id?.slice(0, 8)?.toUpperCase() || '00000000'}`,
+        organization_id: organizationId,
+        organization_name: organizationName,
+        role,
+        achievement_name: credentialConfig?.name || 'Verified Member Badge',
+        achievement_description: 'Verifiable proof of active membership in the issuing organization.',
+        issued_at: nowIso,
         auto_approve: true,
       },
     };
@@ -270,9 +278,9 @@ export function getOneClickSummaryFields({ credentialConfig, user, organizationI
   if (isOpenBadgeCredential) {
     return [
       { label: 'Name', value: [user?.given_name, user?.family_name].filter(Boolean).join(' ') || '—' },
-      { label: 'Achievement', value: 'Platform Onboarding' },
-      { label: 'Course', value: 'ElevenID Getting Started' },
-      { label: 'Institution', value: 'ElevenID LLC' },
+      { label: 'Email', value: user?.email || '—' },
+      { label: 'Role', value: formatRoleLabel(displayRole) },
+      { label: 'Badge', value: credentialConfig?.name || 'Verified Member Badge' },
     ];
   }
 
@@ -286,8 +294,7 @@ export function getOneClickSummaryFields({ credentialConfig, user, organizationI
   }
 
   if (isMdocMemberCredential) {
-    const ROLE_DISPLAY = { applicant: 'Member', vendor: 'Vendor', administrator: 'Administrator' };
-    const roleLabel = ROLE_DISPLAY[displayRole] || displayRole.charAt(0).toUpperCase() + displayRole.slice(1);
+    const roleLabel = formatRoleLabel(displayRole);
     return [
       { label: 'Name', value: [user?.given_name, user?.family_name].filter(Boolean).join(' ') || '—' },
       { label: 'Email', value: user?.email || '—' },
@@ -305,8 +312,7 @@ export function getOneClickSummaryFields({ credentialConfig, user, organizationI
     ];
   }
 
-  const ROLE_DISPLAY = { applicant: 'Member', vendor: 'Vendor', administrator: 'Administrator' };
-  const roleLabel = ROLE_DISPLAY[displayRole] || displayRole.charAt(0).toUpperCase() + displayRole.slice(1);
+  const roleLabel = formatRoleLabel(displayRole);
 
   return [
     { label: 'Name', value: [user?.given_name, user?.family_name].filter(Boolean).join(' ') || '—' },

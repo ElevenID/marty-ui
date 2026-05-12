@@ -1,7 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { MemoryRouter } from 'react-router-dom'
 import { renderWithoutRouter, screen, waitFor } from '../../test/utils'
 import WalletOfferDialog from '../applicant/WalletOfferDialog'
 import { generateIssuanceOffer } from '../../services/credentialsApi'
+
+const { mockWalletPreferenceState } = vi.hoisted(() => ({
+  mockWalletPreferenceState: { walletIds: [] as string[] },
+}))
 
 type WalletOfferDisplayProps = {
   offerData?: { offer_url?: string | null }
@@ -13,6 +18,21 @@ type WalletOfferDisplayProps = {
 
 vi.mock('../../services/credentialsApi', () => ({
   generateIssuanceOffer: vi.fn(),
+}))
+
+vi.mock('../../hooks/useAuth', () => ({
+  useAuth: () => ({
+    user: {
+      user_id: 'user-1',
+      email: 'applicant@example.com',
+    },
+  }),
+}))
+
+vi.mock('../../hooks/useWalletPreferences', () => ({
+  default: () => ({
+    walletIds: mockWalletPreferenceState.walletIds,
+  }),
 }))
 
 vi.mock('../issuance/OID4VCIInviteDisplay', () => ({
@@ -32,10 +52,39 @@ vi.mock('../issuance/OID4VCIInviteDisplay', () => ({
 describe('WalletOfferDialog', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockWalletPreferenceState.walletIds = []
   })
 
-  it('loads a wallet offer on open, retries after an error, and closes cleanly', async () => {
+  it('blocks the QR handoff until a wallet app is selected', async () => {
     const onClose = vi.fn()
+    const { user } = renderWithoutRouter(
+      <MemoryRouter>
+        <WalletOfferDialog
+          open
+          onClose={onClose}
+          applicationId="app-1"
+          credentialName="Member Pass"
+        />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByTestId('wallet-registration-guard')).toHaveTextContent(
+      'Select a wallet app before you can receive this credential.',
+    )
+    expect(screen.queryByTestId('wallet-offer-display')).not.toBeInTheDocument()
+    expect(generateIssuanceOffer).not.toHaveBeenCalled()
+
+    const setupLink = screen.getByRole('link', { name: 'Choose Wallet' })
+    expect(setupLink).toHaveAttribute('href', '/console/applicant/settings#wallet-selection')
+    setupLink.addEventListener('click', (event) => event.preventDefault())
+
+    await user.click(setupLink)
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('loads a wallet offer on open, retries after an error, and closes cleanly once a wallet app is selected', async () => {
+    const onClose = vi.fn()
+    mockWalletPreferenceState.walletIds = ['wallet-1']
 
     vi.mocked(generateIssuanceOffer)
       .mockRejectedValueOnce(new Error('No wallet today'))
@@ -46,12 +95,14 @@ describe('WalletOfferDialog', () => {
       })
 
     const { user } = renderWithoutRouter(
-      <WalletOfferDialog
-        open
-        onClose={onClose}
-        applicationId="app-1"
-        credentialName="Member Pass"
-      />,
+      <MemoryRouter>
+        <WalletOfferDialog
+          open
+          onClose={onClose}
+          applicationId="app-1"
+          credentialName="Member Pass"
+        />
+      </MemoryRouter>,
     )
 
     expect(await screen.findByText('No wallet today')).toBeInTheDocument()

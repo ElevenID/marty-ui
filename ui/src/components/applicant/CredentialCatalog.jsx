@@ -49,7 +49,7 @@ import {
   Business as BusinessIcon,
   Verified as VerifiedIcon,
 } from '@mui/icons-material';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../../hooks/useAuth';
 import { usePreview } from '../../contexts/PreviewContext';
@@ -67,6 +67,7 @@ import {
 const CredentialCatalog = () => {
   const { t } = useTranslation('applicant');
   const navigate = useNavigate();
+  const location = useLocation();
   const { organizationId, organizationName, user } = useAuth();
   const { isPreview } = usePreview?.() || { isPreview: false };
   
@@ -80,7 +81,10 @@ const CredentialCatalog = () => {
   const [selectedCredential, setSelectedCredential] = useState(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [existingApplications, setExistingApplications] = useState([]);
-  const [appStatusInfo, setAppStatusInfo] = useState({ statusByCredentialId: {}, counts: { pending: 0, approved: 0, rejected: 0, credentialed: 0 } });
+  const [appStatusInfo, setAppStatusInfo] = useState({
+    statusByCredentialId: {},
+    counts: { pending: 0, approved: 0, offered: 0, rejected: 0, credentialed: 0 },
+  });
 
   const listCredentialTemplates = useCallback((currentOrganizationId) => {
     return get(`/v1/credential-templates?organization_id=${currentOrganizationId}&status=active`);
@@ -152,7 +156,10 @@ const CredentialCatalog = () => {
    * Handle credential application
    */
   const handleApply = (credential) => {
-    const navigation = buildCredentialApplicationNavigationState(credential);
+    const navigation = buildCredentialApplicationNavigationState(credential, {
+      currentPathname: location.pathname,
+      isPreview,
+    });
     navigate(navigation.path, { state: navigation.state });
   };
 
@@ -183,6 +190,9 @@ const CredentialCatalog = () => {
     if (status === 'approved') {
       return <Chip icon={<CheckIcon />} label="Approved" size="small" color="primary" sx={{ mt: 1 }} />;
     }
+    if (status === 'offered') {
+      return <Chip icon={<CheckIcon />} label="Wallet Invite Ready" size="small" color="primary" sx={{ mt: 1 }} />;
+    }
     if (status === 'rejected') {
       return <Chip label="Rejected" size="small" color="error" sx={{ mt: 1 }} />;
     }
@@ -192,7 +202,7 @@ const CredentialCatalog = () => {
   };
 
   const { counts } = appStatusInfo;
-  const hasAnyApplications = counts.pending + counts.approved + counts.rejected + counts.credentialed > 0;
+  const hasAnyApplications = counts.pending + counts.approved + counts.offered + counts.rejected + counts.credentialed > 0;
 
   return (
     <Container maxWidth="lg" data-testid="credential-catalog-page">
@@ -237,6 +247,16 @@ const CredentialCatalog = () => {
                 color="primary"
                 size="small"
                 onClick={() => navigate('/console/applicant/identity?filter=action')}
+                clickable
+              />
+            )}
+            {counts.offered > 0 && (
+              <Chip
+                icon={<CheckIcon />}
+                label={`Wallet Invite Ready (${counts.offered})`}
+                color="primary"
+                size="small"
+                onClick={() => navigate('/console/applicant/identity?filter=in-progress')}
                 clickable
               />
             )}
@@ -350,6 +370,17 @@ const CredentialCatalog = () => {
           filteredCredentials.map((credential) => {
             const IconComponent = credential.icon || CredentialIcon;
             const hasApplied = hasExistingApplication(credential.id);
+            const applicationStatus = appStatusInfo.statusByCredentialId[credential.id];
+            const canClaim = ['approved', 'offered'].includes(applicationStatus);
+            const alreadyIssued = ['credentialed', 'issued'].includes(applicationStatus);
+            const isDisabled = !isPreview && hasApplied && !canClaim;
+            const actionLabel = isPreview
+              ? t('catalog.card.actions.preview')
+              : canClaim
+                ? t('catalog.card.actions.claim', 'Claim')
+                : alreadyIssued
+                  ? t('catalog.card.status.issued', 'Issued')
+                  : (hasApplied ? t('catalog.card.status.pending') : t('catalog.card.actions.apply'));
             
             return (
               <Grid item xs={12} sm={6} md={4} key={credential.id}>
@@ -422,13 +453,11 @@ const CredentialCatalog = () => {
                     <Button
                       fullWidth
                       variant={hasApplied ? 'outlined' : 'contained'}
-                      disabled={hasApplied}
+                      disabled={isDisabled}
                       onClick={() => handleApply(credential)}
                       data-testid="apply-btn"
                     >
-                      {isPreview 
-                        ? t('catalog.card.actions.preview') 
-                        : (hasApplied ? t('catalog.card.status.pending') : t('catalog.card.actions.apply'))}
+                      {actionLabel}
                     </Button>
                   </CardActions>
                 </Card>
@@ -593,9 +622,17 @@ const CredentialCatalog = () => {
                   setDetailsOpen(false);
                   handleApply(selectedCredential);
                 }}
-                disabled={hasExistingApplication(selectedCredential.id)}
+                disabled={
+                  !isPreview &&
+                  hasExistingApplication(selectedCredential.id) &&
+                  !['approved', 'offered'].includes(appStatusInfo.statusByCredentialId[selectedCredential.id])
+                }
               >
-                {isPreview ? t('catalog.card.actions.preview') : t('catalog.card.actions.apply')}
+                {isPreview
+                  ? t('catalog.card.actions.preview')
+                  : ['approved', 'offered'].includes(appStatusInfo.statusByCredentialId[selectedCredential.id])
+                    ? t('catalog.card.actions.claim', 'Claim')
+                    : t('catalog.card.actions.apply')}
               </Button>
             </DialogActions>
           </>

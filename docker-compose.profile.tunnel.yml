@@ -49,15 +49,32 @@ services:
     environment:
       PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:-beta.elevenidllc.com}
       UI_DEV_PORT: ${UI_DEV_PORT:-3002}
-      GATEWAY_UPSTREAM: ${GATEWAY_TUNNEL_UPSTREAM:-host.docker.internal:18000}
+      # Default beta/public tunnel traffic to the local Marty gateway.
+      # Self-host stacks can still override this via GATEWAY_TUNNEL_UPSTREAM.
+      GATEWAY_UPSTREAM: ${GATEWAY_TUNNEL_UPSTREAM:-gateway:8000}
       DOCS_DOMAIN: ${DOCS_DOMAIN:-docs.elevenidllc.com}
+      CANVAS_REAL_PUBLIC_HOST: ${CANVAS_REAL_PUBLIC_HOST:-}
+      CANVAS_SANDBOX_PUBLIC_HOST: ${CANVAS_SANDBOX_PUBLIC_HOST:-}
     networks:
       - marty-network
     restart: unless-stopped
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
-      - cloudflared
+      gateway:
+        condition: service_healthy
+      auth:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+      docs:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://127.0.0.1/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
 
   cloudflared:
     image: cloudflare/cloudflared:2024.12.2
@@ -68,6 +85,9 @@ services:
     networks:
       - marty-network
     restart: unless-stopped
+    depends_on:
+      nginx-proxy:
+        condition: service_healthy
 
   docs:
     build:

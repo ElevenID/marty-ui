@@ -56,6 +56,19 @@ class ValidationRulesModel(BaseModel):
     allow_self_signed: bool = False
 
 
+class KeyManagementConfigModel(BaseModel):
+    source: Literal["platform_managed", "kms", "signing_agent"]
+    algorithm: str | None = "ES256"
+    kms_arn: str | None = None
+    kms_region: str | None = None
+    signing_agent_url: str | None = None
+    signing_agent_auth: str | None = None
+    managed_key_id: str | None = None
+    key_reference: str | None = None
+    connection_status: str | None = None
+    last_checked_at: str | None = None
+
+
 class TrustProfileCreate(BaseModel):
     organization_id: str = Field(min_length=1, max_length=255)
     name: str = Field(min_length=1, max_length=255)
@@ -257,6 +270,7 @@ class OrganizationTrustProfileCreate(BaseModel):
     allowed_issuers: list[str] | None = None
     denied_issuers: list[str] | None = None
     jurisdiction_filter: list[str] | None = None
+    key_management: KeyManagementConfigModel | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -275,6 +289,7 @@ class OrganizationTrustProfileUpdate(BaseModel):
     allowed_issuers: list[str] | None = None
     denied_issuers: list[str] | None = None
     jurisdiction_filter: list[str] | None = None
+    key_management: KeyManagementConfigModel | None = None
     metadata: dict[str, Any] | None = None
 
 
@@ -296,9 +311,35 @@ class OrganizationTrustProfileResponse(BaseModel):
     allowed_issuers: list[str] | None = None
     denied_issuers: list[str] | None = None
     jurisdiction_filter: list[str] | None = None
+    key_management: KeyManagementConfigModel | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     created_at: str
     updated_at: str
+
+
+class KeyConnectionTestRequest(BaseModel):
+    key_management: KeyManagementConfigModel
+
+
+class KeyConnectionTestResponse(BaseModel):
+    success: bool
+    message: str
+    source: str
+
+
+class KeyCreateAssociateRequest(BaseModel):
+    key_management: KeyManagementConfigModel | None = None
+    algorithm: str = "ES256"
+    key_reference: str | None = None
+
+
+class KeyCreateAssociateResponse(BaseModel):
+    success: bool
+    action: str
+    key_id: str
+    source: str
+    message: str
+    key_management: KeyManagementConfigModel
 
 
 class CreateApiKeyRequest(BaseModel):
@@ -343,6 +384,7 @@ class IssuedCredentialRecordResponse(BaseModel):
     credential_hash: str | None = None
     revoked_at: str | None = None
     revocation_reason: str | None = None
+    issuer_did: str | None = None
     revoked_by: str | None = None
     created_at: str
     updated_at: str | None = None

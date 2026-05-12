@@ -7,6 +7,8 @@ import {
   getTeamSnapshot,
 } from '../dashboardApi'
 import {
+  getKeyManagementConfig,
+  listIssuerProfiles,
   listSigningKeys,
   rotateSigningKey,
   updateKeyManagementConfig,
@@ -73,7 +75,7 @@ describe('readiness gateway smoke', () => {
     expect(environment).toBe('staging')
   })
 
-  it('exercises signing-key gateway list, rotate, and config endpoints', async () => {
+  it('exercises signing-key, key-management, and issuer-profile gateway endpoints', async () => {
     let queryParams: URLSearchParams | undefined
     let rotatedKeyId: string | undefined
     let rotationBody: unknown
@@ -86,6 +88,13 @@ describe('readiness gateway smoke', () => {
           keys: [{ id: 'key_1', name: 'Issuer Key', status: 'active' }],
         })
       }),
+      http.get('*/v1/signing-keys/config', () => HttpResponse.json({
+        default_service_id: 'managed-openbao-transit',
+        services: [{ id: 'managed-openbao-transit', name: 'Managed OpenBao', status: 'configured' }],
+      })),
+      http.get('*/v1/signing-keys/issuer-profiles', () => HttpResponse.json({
+        profiles: [{ id: 'issuer_1', issuer_did: 'did:web:issuer.example.com', status: 'active' }],
+      })),
       http.post('*/v1/signing-keys/:keyId/rotate', async ({ params, request }) => {
         rotatedKeyId = params.keyId as string
         rotationBody = await request.json()
@@ -98,6 +107,8 @@ describe('readiness gateway smoke', () => {
     )
 
     const listedKeys = await listSigningKeys({ status: 'active', limit: 25, offset: 50 })
+    const keyManagementConfig = await getKeyManagementConfig()
+    const issuerProfiles = await listIssuerProfiles()
     const rotatedKey = await rotateSigningKey('key_1', { immediate: true })
     const config = await updateKeyManagementConfig({
       hsm_enabled: true,
@@ -111,6 +122,13 @@ describe('readiness gateway smoke', () => {
     expect(queryParams?.get('offset')).toBe('50')
     expect(listedKeys).toEqual({
       keys: [{ id: 'key_1', name: 'Issuer Key', status: 'active' }],
+    })
+    expect(keyManagementConfig).toEqual({
+      default_service_id: 'managed-openbao-transit',
+      services: [{ id: 'managed-openbao-transit', name: 'Managed OpenBao', status: 'configured' }],
+    })
+    expect(issuerProfiles).toEqual({
+      profiles: [{ id: 'issuer_1', issuer_did: 'did:web:issuer.example.com', status: 'active' }],
     })
     expect(rotatedKeyId).toBe('key_1')
     expect(rotationBody).toEqual({ immediate: true })

@@ -97,6 +97,17 @@
                         </#if>
                     </div>
 
+                    <div class="elevenid-login-help" data-testid="update-password-help">
+                        <p class="elevenid-login-help-text">
+                            Need the email-based flow instead? Send yourself a password reset link.
+                        </p>
+                        <a class="elevenid-login-help-link"
+                           href="${url.loginResetCredentialsUrl}"
+                           data-testid="update-password-email-link">
+                            Set or reset password by email
+                        </a>
+                    </div>
+
                     <div class="${properties.kcFormGroupClass!}">
                         <div id="kc-form-buttons" class="${properties.kcFormButtonsClass!}">
                             <#if isAppInitiatedAction??>

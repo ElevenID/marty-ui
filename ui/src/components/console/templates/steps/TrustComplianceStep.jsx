@@ -24,9 +24,11 @@ import { useNavigate } from 'react-router-dom';
 import SecurityIcon from '@mui/icons-material/Security';
 import WarningIcon from '@mui/icons-material/Warning';
 import AddCircleOutlineIcon from '@mui/icons-material/AddCircleOutline';
+import LanguageIcon from '@mui/icons-material/Language';
 import { useTranslation } from 'react-i18next';
 
 import { listTrustProfiles } from '../../../../services/presentationPolicyApi';
+import signingKeysApi from '../../../../services/signingKeysApi';
 
 const TrustComplianceStep = ({ data, onChange }) => {
   const { t } = useTranslation('console');
@@ -35,6 +37,15 @@ const TrustComplianceStep = ({ data, onChange }) => {
     async () => {
       const response = await listTrustProfiles();
       const profiles = response.data || response || [];
+      return profiles.filter((p) => p.status === 'active');
+    },
+    []
+  );
+
+  const { data: issuerProfiles = [], loading: issuerProfilesLoading } = useAsyncData(
+    async () => {
+      const response = await signingKeysApi.listIssuerProfiles();
+      const profiles = response?.profiles || [];
       return profiles.filter((p) => p.status === 'active');
     },
     []
@@ -155,6 +166,55 @@ const TrustComplianceStep = ({ data, onChange }) => {
             color="primary"
             icon={<SecurityIcon />}
           />
+        </Box>
+      )}
+
+      {/* Issuer Profile Selection (Optional) */}
+      <FormControl fullWidth sx={{ mb: 3 }}>
+        <InputLabel>Issuer Profile</InputLabel>
+        <Select
+          value={data.issuer_profile_id || ''}
+          onChange={(e) => onChange({ issuer_profile_id: e.target.value || null })}
+          label="Issuer Profile"
+          disabled={issuerProfilesLoading}
+        >
+          <MenuItem value="">
+            <em>Default (org signing key)</em>
+          </MenuItem>
+          {issuerProfiles.map((profile) => (
+            <MenuItem key={profile.id} value={profile.id}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, width: '100%' }}>
+                <span>{profile.name || profile.issuer_did}</span>
+                <Chip
+                  label={profile.issuer_did?.split(':').slice(0, 3).join(':')}
+                  size="small"
+                  sx={{ ml: 'auto', fontFamily: 'monospace', fontSize: '0.75rem' }}
+                />
+              </Box>
+            </MenuItem>
+          ))}
+        </Select>
+        <FormHelperText>
+          {issuerProfiles.length > 0
+            ? `${issuerProfiles.length} active issuer profile${issuerProfiles.length !== 1 ? 's' : ''} available. Credentials will claim this DID as the issuer.`
+            : 'No active issuer profiles. Credentials will use the default org signing key.'}
+        </FormHelperText>
+      </FormControl>
+
+      {/* Show selected issuer profile */}
+      {data.issuer_profile_id && (
+        <Box sx={{ mb: 3, p: 2, bgcolor: 'action.hover', borderRadius: 1 }}>
+          <Typography variant="caption" color="text.secondary" gutterBottom display="block">
+            Selected issuer identity
+          </Typography>
+          <Chip
+            label={issuerProfiles.find((p) => p.id === data.issuer_profile_id)?.name || 'Unknown profile'}
+            color="primary"
+            icon={<LanguageIcon />}
+          />
+          <Typography variant="body2" fontFamily="monospace" color="text.secondary" sx={{ mt: 0.5 }}>
+            {issuerProfiles.find((p) => p.id === data.issuer_profile_id)?.issuer_did || ''}
+          </Typography>
         </Box>
       )}
 

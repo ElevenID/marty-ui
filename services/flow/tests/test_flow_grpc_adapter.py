@@ -71,6 +71,50 @@ class TestStartVerification:
         assert resp.status == "pending"
         assert ctx.code is None
 
+    async def test_internal_http_callback_is_allowed_for_grpc(self, ctx):
+        result = SimpleNamespace(
+            instance_id="inst-1",
+            flow_definition_id="fdef-1",
+            request_uri="https://example.com/request",
+            qr_code_data="openid4vp://...",
+            presentation_policy_id="pp-1",
+            nonce="nonce-abc",
+            expires_at="2026-03-15T00:00:00Z",
+            status="pending",
+        )
+        start_verification = AsyncMock(return_value=result)
+        servicer = _build_servicer(start_verification_fn=start_verification)
+
+        req = flow_service_pb2.StartVerificationRequest(
+            presentation_policy_id="pp-1",
+            organization_id="org-1",
+            user_id="auth-service",
+            callback_url="http://auth:8001/internal/v1/auth/credential-verified?nonce=abc",
+        )
+        resp = await servicer.StartVerification(req, ctx)
+
+        assert resp.instance_id == "inst-1"
+        assert ctx.code is None
+        forwarded = start_verification.call_args.kwargs["request"]
+        assert forwarded.callback_url == "http://auth:8001/internal/v1/auth/credential-verified?nonce=abc"
+
+    async def test_external_http_callback_is_rejected_for_grpc(self, ctx):
+        start_verification = AsyncMock()
+        servicer = _build_servicer(start_verification_fn=start_verification)
+
+        req = flow_service_pb2.StartVerificationRequest(
+            presentation_policy_id="pp-1",
+            organization_id="org-1",
+            user_id="auth-service",
+            callback_url="http://example.com/callback",
+        )
+        resp = await servicer.StartVerification(req, ctx)
+
+        assert resp.instance_id == ""
+        assert ctx.code == grpc.StatusCode.INVALID_ARGUMENT
+        assert "callback_url" in ctx.details
+        start_verification.assert_not_called()
+
     async def test_not_found_error(self, ctx):
         servicer = _build_servicer(
             start_verification_fn=AsyncMock(side_effect=Exception("Policy not found"))

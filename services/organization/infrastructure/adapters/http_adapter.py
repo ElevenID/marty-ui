@@ -12,7 +12,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from pydantic import BaseModel, EmailStr
-from marty_common import OrganizationContext, require_org_membership, OrganizationClient
+from marty_common import OrganizationClient, OrganizationContext, require_org_membership, require_permission
 
 from ...application.ports import (
     CreateApiKeyCommand,
@@ -21,11 +21,11 @@ from ...application.ports import (
     JoinByCodeCommand,
     JoinOrganizationCommand,
     RevokeApiKeyCommand,
-    UpdateMemberRoleCommand,
+    SetMemberRolesCommand,
     UpdateOrganizationCommand,
 )
 from ...application.use_cases import ApiKeyUseCase, JoinUseCase, MemberUseCase, OrganizationUseCase
-from ...domain.entities import MemberRole, OrganizationType
+from ...domain.entities import OrganizationType
 
 logger = logging.getLogger(__name__)
 
@@ -97,7 +97,14 @@ class OrganizationResponse(BaseModel):
 class InviteMemberRequest(BaseModel):
     """Request to invite a member."""
     email: EmailStr
-    role: str = "member"
+    role_ids: list[str]
+
+
+class RoleSummaryResponse(BaseModel):
+    """Lightweight role representation."""
+    id: str
+    name: str
+    display_name: str | None = None
 
 
 class MemberResponse(BaseModel):
@@ -106,15 +113,18 @@ class MemberResponse(BaseModel):
     organization_id: str
     user_id: str | None
     email: str | None
-    role: str
+    roles: list[RoleSummaryResponse]
     status: str
+    permissions: list[str]
+    has_org_console_access: bool
+    is_owner: bool
     invited_at: str | None
     joined_at: str | None
 
 
 class UpdateMemberRequest(BaseModel):
     """Request to update member role."""
-    role: str
+    role_ids: list[str]
 
 
 class JoinByCodeRequest(BaseModel):
@@ -139,9 +149,11 @@ class ValidateJoinCodeResponse(BaseModel):
 
 class MembershipDetails(BaseModel):
     """Membership details for the current user."""
-    role: str
+    roles: list[RoleSummaryResponse]
     status: str
-    is_admin_capable: bool
+    permissions: list[str]
+    has_org_console_access: bool
+    is_owner: bool
     joined_at: str | None
 
 
@@ -344,9 +356,6 @@ async def get_my_organizations(
     
     results = []
     for org, membership in org_memberships:
-        # Compute is_admin_capable server-side
-        is_admin_capable = membership.role in [MemberRole.OWNER, MemberRole.ADMIN]
-        
         results.append(OrganizationWithMembership(
             id=str(org.id),
             name=org.name,
@@ -358,9 +367,18 @@ async def get_my_organizations(
             created_at=org.created_at.isoformat(),
             updated_at=org.updated_at.isoformat() if org.updated_at else None,
             membership=MembershipDetails(
-                role=membership.role.value,
+                roles=[
+                    RoleSummaryResponse(
+                        id=role.id,
+                        name=role.name,
+                        display_name=role.display_name,
+                    )
+                    for role in membership.roles
+                ],
                 status=membership.status.value,
-                is_admin_capable=is_admin_capable,
+                permissions=sorted(membership.effective_permissions),
+                has_org_console_access=membership.has_org_console_access,
+                is_owner=membership.is_owner,
                 joined_at=membership.joined_at.isoformat() if membership.joined_at else None,
             ),
         ))
@@ -414,10 +432,10 @@ async def get_organization_lifecycle(
 async def update_organization(
     org_id: str,
     request: UpdateOrganizationRequest,
-    org_ctx: OrganizationContext = Depends(require_org_membership),
+    org_ctx: OrganizationContext = Depends(require_permission("organization", "edit")),
     use_case: OrganizationUseCase = Depends(get_org_use_case),
 ) -> OrganizationResponse:
-    """Update an organization. Requires admin or owner role."""
+    """Update an organization."""
     try:
         org = await use_case.update_organization(
             UpdateOrganizationCommand(
@@ -516,7 +534,7 @@ async def join_organization(
 @router.get("/{org_id}/members", response_model=list[MemberResponse], response_model_exclude_none=True)
 async def list_members(
     org_id: str,
-    org_ctx: OrganizationContext = Depends(require_org_membership),
+    org_ctx: OrganizationContext = Depends(require_permission("team", "view")),
     use_case: MemberUseCase = Depends(get_member_use_case),
     limit: int = Query(default=100, le=500),
     offset: int = Query(default=0, ge=0),
@@ -531,16 +549,16 @@ async def invite_member(
     org_id: str,
     request: InviteMemberRequest,
     http_request: Request,
-    org_ctx: OrganizationContext = Depends(require_org_membership),
+    org_ctx: OrganizationContext = Depends(require_permission("team", "invite")),
     use_case: MemberUseCase = Depends(get_member_use_case),
 ) -> MemberResponse:
-    """Invite a new member to an organization. Requires admin or owner role."""
+    """Invite a new member to an organization."""
     try:
         member = await use_case.invite_member(
             InviteMemberCommand(
                 organization_id=org_id,
                 email=request.email,
-                role=MemberRole(request.role),
+                role_ids=request.role_ids,
                 invited_by=org_ctx.user_id,
             )
         )
@@ -560,15 +578,16 @@ async def update_member(
     member_id: str,
     request: UpdateMemberRequest,
     http_request: Request,
-    org_ctx: OrganizationContext = Depends(require_org_membership),
+    org_ctx: OrganizationContext = Depends(require_permission("team", "manage")),
     use_case: MemberUseCase = Depends(get_member_use_case),
 ) -> MemberResponse:
-    """Update a member's role. Requires admin or owner role."""
+    """Update a member's role assignments."""
     try:
-        member = await use_case.update_role(
-            UpdateMemberRoleCommand(
+        member = await use_case.set_member_roles(
+            SetMemberRolesCommand(
                 member_id=member_id,
-                new_role=MemberRole(request.role),
+                organization_id=org_id,
+                role_ids=request.role_ids,
                 updated_by=org_ctx.user_id,
             )
         )
@@ -589,27 +608,17 @@ async def remove_member(
     org_id: str,
     member_id: str,
     http_request: Request,
-    org_ctx: OrganizationContext = Depends(require_org_membership),
+    org_ctx: OrganizationContext = Depends(require_permission("team", "manage")),
     use_case: MemberUseCase = Depends(get_member_use_case),
 ) -> dict[str, bool]:
-    """Remove a member from an organization. Requires admin or owner role."""
+    """Remove a member from an organization."""
     if org_id == MARTY_ORG_ID:
         raise HTTPException(
             status_code=403,
             detail="Members cannot be removed from the Marty default organization.",
         )
     try:
-        # Get member before deleting to get user_id for cache invalidation
-        member = await use_case.get_membership(None, org_id)  # Need to get member first
-        # Actually, we need to fetch by member_id from use_case
-        # For now, let's just delete and invalidate based on any user_id we can find
-        
         await use_case.remove_member(member_id, org_ctx.user_id)
-        
-        # Try to invalidate cache if we can determine user_id
-        # Note: In a production system, we'd want to fetch the member first to get user_id
-        # For now, cache will expire naturally after TTL
-        
         return {"success": True}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -622,7 +631,7 @@ async def remove_member(
 @router.get("/{org_id}/api-keys", response_model=list[ApiKeyResponse], response_model_exclude_none=True)
 async def list_api_keys(
     org_id: str,
-    org_ctx: OrganizationContext = Depends(require_org_membership),
+    org_ctx: OrganizationContext = Depends(require_permission("api-key", "view")),
     use_case: ApiKeyUseCase = Depends(get_api_key_use_case),
     limit: int = Query(default=100, le=500),
     offset: int = Query(default=0, ge=0),
@@ -636,7 +645,7 @@ async def list_api_keys(
 async def create_api_key(
     org_id: str,
     request: CreateApiKeyRequest,
-    org_ctx: OrganizationContext = Depends(require_org_membership),
+    org_ctx: OrganizationContext = Depends(require_permission("api-key", "create")),
     use_case: ApiKeyUseCase = Depends(get_api_key_use_case),
 ) -> ApiKeyCreatedResponse:
     """
@@ -669,10 +678,10 @@ async def create_api_key(
 async def revoke_api_key(
     org_id: str,
     key_id: str,
-    org_ctx: OrganizationContext = Depends(require_org_membership),
+    org_ctx: OrganizationContext = Depends(require_permission("api-key", "revoke")),
     use_case: ApiKeyUseCase = Depends(get_api_key_use_case),
 ) -> dict[str, bool]:
-    """Revoke an API key. Requires admin or owner role."""
+    """Revoke an API key."""
     try:
         await use_case.revoke_api_key(
             RevokeApiKeyCommand(
@@ -718,7 +727,7 @@ async def update_organization_plan(
 ) -> dict:
     """Update an organization's plan tier. Called by billing service."""
     plan_tier = _canonicalize_plan_tier(body.plan_tier)
-    valid_tiers = {"free", "starter", "professional", "enterprise"}
+    valid_tiers = {"free", "starter", "professional", "enterprise", "production", "sovereign_plus"}
     if plan_tier not in valid_tiers:
         raise HTTPException(status_code=400, detail=f"Invalid plan tier: {body.plan_tier}")
 
@@ -779,6 +788,10 @@ def _canonicalize_plan_tier(plan_tier: str) -> str:
         return "starter"
     if normalized in {"self_hosted_production", "self-hosted-production"}:
         return "professional"
+    if normalized == "production":
+        return "professional"
+    if normalized in {"sovereign_plus", "sovereign+"}:
+        return "enterprise"
     return normalized
 
 
@@ -856,8 +869,18 @@ def _member_to_response(member) -> MemberResponse:
         organization_id=str(member.organization_id),
         user_id=str(member.user_id) if member.user_id else None,
         email=member.email,
-        role=member.role.value,
+        roles=[
+            RoleSummaryResponse(
+                id=role.id,
+                name=role.name,
+                display_name=role.display_name,
+            )
+            for role in member.roles
+        ],
         status=member.status.value,
+        permissions=sorted(member.effective_permissions),
+        has_org_console_access=member.has_org_console_access,
+        is_owner=member.is_owner,
         invited_at=member.invited_at.isoformat() if member.invited_at else None,
         joined_at=member.joined_at.isoformat() if member.joined_at else None,
     )

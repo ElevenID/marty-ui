@@ -2,6 +2,8 @@
 
 This guide walks you through setting up a Cloudflare Tunnel to expose your local ElevenID LLC instance at **beta.elevenidllc.com** for external review.
 
+Before editing env values, review [deploy-config/env/tunnel-beta/README.md](deploy-config/env/tunnel-beta/README.md) so tunnel settings stay separate from selfhost production settings.
+
 ## Prerequisites
 
 1. **Cloudflare account** with your domain `elevenidllc.com` added
@@ -142,6 +144,8 @@ This will:
 - Start the Cloudflare Tunnel connector
 - Start the local tunnel proxy and UI dev server
 - Use environment variables from `.env`
+
+If you change `PUBLIC_DOMAIN`, `UI_BASE_URL`, or other Keycloak-facing tunnel values after the stack is already running, run `make tunnel-keycloak-restart` so the beta Keycloak container is recreated with the updated hostname settings.
 
 ### 3.2 Using Docker Compose Directly
 

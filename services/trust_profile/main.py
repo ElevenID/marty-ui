@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, AsyncGenerator
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -35,13 +36,14 @@ from typing import Annotated
 
 from marty_common import (
     OrganizationContext,
-    require_org_membership,
+    ensure_membership_permission,
 )
 from marty_common.org_authorization import get_organization_client
 from marty_common.middleware import RequestIdMiddleware, RequestLoggingMiddleware
 from marty_common.service_setup import create_service_app
 from trust_profile.infrastructure.adapters import PostgresTrustProfileRepository
 from trust_profile.infrastructure.models import mapper_registry
+from trust_profile.routes.registry_imports import registry_router as registry_imports_router
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -311,6 +313,7 @@ class OrganizationTrustProfile:
     allowed_issuers: list[str] | None = None
     denied_issuers: list[str] | None = None
     jurisdiction_filter: list[str] | None = None
+    key_management: dict[str, Any] | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
@@ -714,6 +717,7 @@ class TrustProfileResponse(BaseModel):
     organization_id: str
     name: str
     description: str | None
+    status: str
     profile_type: str
     compliance_status: str
     trust_sources: list[dict]
@@ -756,6 +760,18 @@ class UpdateTrustedIssuerRequest(BaseModel):
     trust_level: int | None = None
     relationship_status: str | None = None
     cascade_revocation_policy: str | None = None
+
+
+def _field_was_provided(model: BaseModel, field_name: str) -> bool:
+    fields = getattr(model, "model_fields_set", None)
+    if fields is not None:
+        return field_name in fields
+
+    legacy_fields = getattr(model, "__fields_set__", None)
+    if legacy_fields is not None:
+        return field_name in legacy_fields
+
+    return False
 
 
 class CreateIssuerEntityRequest(BaseModel):
@@ -917,6 +933,56 @@ def _validate_jurisdiction_filter(values: list[str] | None) -> None:
             raise HTTPException(status_code=422, detail=f"Invalid jurisdiction code: {value}")
         if len(parts) == 2 and (not 1 <= len(parts[1]) <= 3 or not parts[1].isalnum()):
             raise HTTPException(status_code=422, detail=f"Invalid jurisdiction code: {value}")
+
+
+def _normalize_key_management(value: dict[str, Any] | None) -> dict[str, Any] | None:
+    if value is None:
+        return None
+
+    source = str(value.get("source", "")).strip().lower()
+    allowed_sources = {"platform_managed", "kms", "signing_agent"}
+    if source not in allowed_sources:
+        raise HTTPException(
+            status_code=422,
+            detail="key_management.source must be one of: platform_managed, kms, signing_agent",
+        )
+
+    normalized: dict[str, Any] = {
+        "source": source,
+        "algorithm": str(value.get("algorithm") or "ES256"),
+    }
+
+    if source == "kms":
+        kms_arn = str(value.get("kms_arn") or value.get("key_reference") or "").strip()
+        if not kms_arn:
+            raise HTTPException(status_code=422, detail="key_management.kms_arn is required when source=kms")
+        normalized["kms_arn"] = kms_arn
+        if value.get("kms_region"):
+            normalized["kms_region"] = str(value.get("kms_region"))
+    elif source == "signing_agent":
+        signing_agent_url = str(value.get("signing_agent_url") or "").strip()
+        if not signing_agent_url:
+            raise HTTPException(status_code=422, detail="key_management.signing_agent_url is required when source=signing_agent")
+        normalized["signing_agent_url"] = signing_agent_url
+        normalized["signing_agent_auth"] = str(value.get("signing_agent_auth") or "mtls")
+
+    for optional_key in ("managed_key_id", "key_reference", "connection_status", "last_checked_at"):
+        if optional_key in value and value.get(optional_key) is not None:
+            normalized[optional_key] = value.get(optional_key)
+
+    return normalized
+
+
+def _metadata_with_key_management(
+    metadata: dict[str, Any] | None,
+    key_management: dict[str, Any] | None,
+) -> dict[str, Any]:
+    merged = dict(metadata or {})
+    if key_management is None:
+        merged.pop("key_management", None)
+    else:
+        merged["key_management"] = key_management
+    return merged
 
 
 def _normalize_jurisdiction_filter(values: list[str] | None) -> list[str] | None:
@@ -1119,6 +1185,7 @@ class CreateOrganizationTrustProfileRequest(BaseModel):
     allowed_issuers: list[str] | None = None
     denied_issuers: list[str] | None = None
     jurisdiction_filter: list[str] | None = None
+    key_management: dict[str, Any] | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -1137,6 +1204,7 @@ class UpdateOrganizationTrustProfileRequest(BaseModel):
     allowed_issuers: list[str] | None = None
     denied_issuers: list[str] | None = None
     jurisdiction_filter: list[str] | None = None
+    key_management: dict[str, Any] | None = None
     metadata: dict[str, Any] | None = None
 
 
@@ -1158,9 +1226,35 @@ class OrganizationTrustProfileResponse(BaseModel):
     allowed_issuers: list[str] | None = None
     denied_issuers: list[str] | None = None
     jurisdiction_filter: list[str] | None = None
+    key_management: dict[str, Any] | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     created_at: str
     updated_at: str
+
+
+class KeyConnectionTestRequest(BaseModel):
+    key_management: dict[str, Any]
+
+
+class KeyConnectionTestResponse(BaseModel):
+    success: bool
+    message: str
+    source: str
+
+
+class KeyCreateAssociateRequest(BaseModel):
+    key_management: dict[str, Any] | None = None
+    algorithm: str = "ES256"
+    key_reference: str | None = None
+
+
+class KeyCreateAssociateResponse(BaseModel):
+    success: bool
+    action: str
+    key_id: str
+    source: str
+    message: str
+    key_management: dict[str, Any]
 
 
 # =============================================================================
@@ -1168,12 +1262,41 @@ class OrganizationTrustProfileResponse(BaseModel):
 # =============================================================================
 
 router = APIRouter(prefix="/v1/trust-profiles", tags=["trust-profiles"])
+internal_router = APIRouter(prefix="/internal/v1/trust-profiles", tags=["internal-trust-profiles"])
 organization_trust_profile_router = APIRouter(prefix="/v1/organizations/{organization_id}/trust-profiles", tags=["organization-trust-profiles"])
 framework_router = APIRouter(prefix="/v1/trust-frameworks", tags=["trust-frameworks"])
 registry_router = APIRouter(prefix="/v1/trust-registry", tags=["trust-registry"])
 issuer_router = APIRouter(prefix="/v1/issuer-entities", tags=["issuer-entities"])
 
 _repo: InMemoryTrustProfileRepository | PostgresTrustProfileRepository | None = None
+
+MARTY_ORG_ID = "00000000-0000-0000-0000-000000000001"
+MARTY_TRUST_PROFILE_ID = "60000000-0000-0000-0000-000000000001"
+MARTY_TRUSTED_ISSUER_ID = "60000000-0000-0000-0000-000000000011"
+MARTY_REVOCATION_PROFILE_ID = "70000000-0000-0000-0000-000000000001"
+MARTY_DEFAULT_ORG_SLUG = "marty"
+
+
+def _marty_issuer_base_url() -> str:
+    return (
+        os.environ.get("MARTY_ISSUER_BASE_URL")
+        or os.environ.get("ISSUER_BASE_URL")
+        or os.environ.get("PUBLIC_API_URL")
+        or "https://beta.elevenidllc.com"
+    ).rstrip("/")
+
+
+def _marty_issuer_did() -> str:
+    configured = os.environ.get("MARTY_ISSUER_DID", "").strip()
+    if configured:
+        return configured
+    public_domain = os.environ.get("PUBLIC_DOMAIN")
+    if not public_domain:
+        public_domain = urlparse(_marty_issuer_base_url()).netloc or "beta.elevenidllc.com"
+    did_web_domain = public_domain.strip().strip("/").replace(":", "%3A").replace("/", ":")
+    org_slug = os.environ.get("MARTY_ORG_SLUG", MARTY_DEFAULT_ORG_SLUG).strip().lower()
+    org_slug = "".join(ch for ch in org_slug if ch.isalnum() or ch in "._-") or MARTY_DEFAULT_ORG_SLUG
+    return f"did:web:{did_web_domain}:orgs:{org_slug}"
 
 
 def get_repo() -> InMemoryTrustProfileRepository | PostgresTrustProfileRepository:
@@ -1190,6 +1313,109 @@ async def _seed_system_frameworks(repo: InMemoryTrustProfileRepository | Postgre
         await repo.save_framework(framework)
 
 
+async def _bootstrap_marty_login_trust_profile(
+    repo: InMemoryTrustProfileRepository | PostgresTrustProfileRepository,
+) -> None:
+    """Ensure Marty org has a trust profile linked to the default revocation profile."""
+    issuer_did = _marty_issuer_did()
+    issuer_url = _marty_issuer_base_url()
+    managed_trust_source = TrustSource(
+        id="60000000-0000-0000-0000-000000000021",
+        name="Marty Managed Issuer",
+        source_type=TrustSourceType.PINNED_ISSUER.value,
+        issuer_did=issuer_did,
+        description="Marty managed issuer DID",
+        enabled=True,
+        refresh_interval_hours=24,
+        pinned_certificates=[],
+    )
+    profile = await repo.get_profile(MARTY_TRUST_PROFILE_ID)
+
+    if profile is None:
+        profile = TrustProfile(
+            id=MARTY_TRUST_PROFILE_ID,
+            organization_id=MARTY_ORG_ID,
+            name="Marty Credential Login Trust",
+            description="Default trust profile for Marty credential-login preview flows.",
+            status=TrustProfileStatus.ACTIVE,
+            trust_sources=[managed_trust_source],
+            validation_rules=ValidationRules(
+                allowed_algorithms=["ES256", "EdDSA"],
+                min_key_size_rsa=2048,
+                min_key_size_ec=256,
+                require_key_usage=True,
+                max_chain_depth=5,
+                allow_self_signed=False,
+            ),
+            revocation_policy=RevocationPolicy(
+                check_mode=RevocationCheckMode.HARD_FAIL,
+                check_ocsp=True,
+                check_crl=True,
+                check_status_list=True,
+                offline_grace_period_hours=12,
+                cache_duration_hours=24,
+            ),
+            revocation_profile_id=MARTY_REVOCATION_PROFILE_ID,
+            time_policy=TimePolicy(
+                max_clock_skew_seconds=300,
+                credential_freshness_hours=24,
+                require_not_before=True,
+                require_expiration=True,
+            ),
+            supported_formats=[CredentialFormat.SD_JWT_VC, CredentialFormat.MDOC],
+        )
+        await repo.save_profile(profile)
+    elif profile.organization_id == MARTY_ORG_ID:
+        changed = False
+        if profile.revocation_profile_id != MARTY_REVOCATION_PROFILE_ID:
+            profile.revocation_profile_id = MARTY_REVOCATION_PROFILE_ID
+            changed = True
+        trust_sources = list(profile.trust_sources or [])
+        matched_source = False
+        for index, source in enumerate(trust_sources):
+            if source.id == managed_trust_source.id or source.name == managed_trust_source.name:
+                matched_source = True
+                if source.issuer_did != issuer_did or source.source_type != TrustSourceType.PINNED_ISSUER.value:
+                    trust_sources[index] = managed_trust_source
+                    changed = True
+                break
+        if not matched_source:
+            trust_sources.append(managed_trust_source)
+            changed = True
+        if changed:
+            profile.trust_sources = trust_sources
+            profile.updated_at = datetime.now(timezone.utc)
+            await repo.save_profile(profile)
+
+    issuer = await repo.get_issuer(MARTY_TRUSTED_ISSUER_ID)
+    if issuer is None:
+        await repo.save_issuer(
+            TrustedIssuer(
+                id=MARTY_TRUSTED_ISSUER_ID,
+                trust_profile_id=MARTY_TRUST_PROFILE_ID,
+                name="Marty Managed Issuer",
+                description="Default issuer for Marty credential-login bootstrap.",
+                issuer_did=issuer_did,
+                issuer_url=issuer_url,
+                status=IssuerStatus.ACTIVE,
+                credential_template_ids=[
+                    "50000000-0000-0000-0000-000000000010",
+                    "50000000-0000-0000-0000-000000000030",
+                ],
+                verification_keys=[],
+                valid_from=datetime.now(timezone.utc),
+                valid_until=None,
+            )
+        )
+    elif issuer.trust_profile_id == MARTY_TRUST_PROFILE_ID and (
+        issuer.issuer_did != issuer_did or issuer.issuer_url != issuer_url
+    ):
+        issuer.issuer_did = issuer_did
+        issuer.issuer_url = issuer_url
+        issuer.updated_at = datetime.now(timezone.utc)
+        await repo.save_issuer(issuer)
+
+
 def get_current_user_id(x_user_id: Annotated[str, Header()]) -> str:
     """Extract user ID from X-User-Id header (injected by gateway)."""
     return x_user_id
@@ -1203,12 +1429,13 @@ async def create_organization_trust_profile(
     repo: InMemoryTrustProfileRepository | PostgresTrustProfileRepository = Depends(get_repo),
 ) -> OrganizationTrustProfileResponse:
     membership = await app.state.org_client.get_membership(user_id, organization_id)
-    if not membership.has_role("admin", "owner"):
-        raise HTTPException(status_code=403, detail="Admin access required")
+    ensure_membership_permission(membership, "trust-profile", "create")
 
     framework = await repo.get_framework(request.framework_id)
     if not framework:
         raise HTTPException(status_code=422, detail="Trust Framework not found")
+
+    normalized_key_management = _normalize_key_management(request.key_management)
 
     profile = OrganizationTrustProfile(
         organization_id=organization_id,
@@ -1227,7 +1454,8 @@ async def create_organization_trust_profile(
         allowed_issuers=request.allowed_issuers,
         denied_issuers=request.denied_issuers,
         jurisdiction_filter=_normalize_jurisdiction_filter(request.jurisdiction_filter),
-        metadata=request.metadata,
+        key_management=normalized_key_management,
+        metadata=_metadata_with_key_management(request.metadata, normalized_key_management),
     )
     await repo.save_organization_trust_profile(profile)
     return _organization_trust_profile_to_response(profile)
@@ -1239,7 +1467,8 @@ async def list_organization_trust_profiles(
     user_id: str = Depends(get_current_user_id),
     repo: InMemoryTrustProfileRepository | PostgresTrustProfileRepository = Depends(get_repo),
 ) -> list[OrganizationTrustProfileResponse]:
-    await app.state.org_client.get_membership(user_id, organization_id)
+    membership = await app.state.org_client.get_membership(user_id, organization_id)
+    ensure_membership_permission(membership, "trust-profile", "view")
     profiles = await repo.list_organization_trust_profiles(organization_id)
     return [_organization_trust_profile_to_response(profile) for profile in profiles]
 
@@ -1254,7 +1483,8 @@ async def get_organization_trust_profile(
     profile = await _get_organization_trust_profile_or_404(repo, profile_id)
     if profile.organization_id != organization_id:
         raise HTTPException(status_code=404, detail="Organization Trust Profile not found")
-    await app.state.org_client.get_membership(user_id, organization_id)
+    membership = await app.state.org_client.get_membership(user_id, organization_id)
+    ensure_membership_permission(membership, "trust-profile", "view")
     return _organization_trust_profile_to_response(profile)
 
 
@@ -1270,8 +1500,7 @@ async def update_organization_trust_profile(
     if profile.organization_id != organization_id:
         raise HTTPException(status_code=404, detail="Organization Trust Profile not found")
     membership = await app.state.org_client.get_membership(user_id, organization_id)
-    if not membership.has_role("admin", "owner"):
-        raise HTTPException(status_code=403, detail="Admin access required")
+    ensure_membership_permission(membership, "trust-profile", "edit")
 
     if request.name is not None:
         profile.name = request.name
@@ -1301,12 +1530,94 @@ async def update_organization_trust_profile(
         profile.denied_issuers = request.denied_issuers
     if request.jurisdiction_filter is not None:
         profile.jurisdiction_filter = _normalize_jurisdiction_filter(request.jurisdiction_filter)
+    if request.key_management is not None:
+        profile.key_management = _normalize_key_management(request.key_management)
     if request.metadata is not None:
         profile.metadata = request.metadata
+
+    profile.metadata = _metadata_with_key_management(profile.metadata, profile.key_management)
 
     profile.updated_at = datetime.now(timezone.utc)
     await repo.save_organization_trust_profile(profile)
     return _organization_trust_profile_to_response(profile)
+
+
+@organization_trust_profile_router.post("/{profile_id}/test-key-connection", response_model=KeyConnectionTestResponse)
+async def test_organization_trust_profile_key_connection(
+    organization_id: str,
+    profile_id: str,
+    request: KeyConnectionTestRequest,
+    user_id: str = Depends(get_current_user_id),
+    repo: InMemoryTrustProfileRepository | PostgresTrustProfileRepository = Depends(get_repo),
+) -> KeyConnectionTestResponse:
+    profile = await _get_organization_trust_profile_or_404(repo, profile_id)
+    if profile.organization_id != organization_id:
+        raise HTTPException(status_code=404, detail="Organization Trust Profile not found")
+    membership = await app.state.org_client.get_membership(user_id, organization_id)
+    ensure_membership_permission(membership, "trust-profile", "edit")
+
+    key_management = _normalize_key_management(request.key_management)
+    if key_management is None:
+        raise HTTPException(status_code=422, detail="key_management is required")
+
+    source = str(key_management.get("source"))
+    if source == "platform_managed":
+        message = "Platform-managed key service is available"
+    elif source == "kms":
+        message = "KMS key reference accepted"
+    else:
+        message = "Signing agent URL accepted"
+
+    return KeyConnectionTestResponse(success=True, message=message, source=source)
+
+
+@organization_trust_profile_router.post("/{profile_id}/create-or-associate-key", response_model=KeyCreateAssociateResponse)
+async def create_or_associate_organization_trust_profile_key(
+    organization_id: str,
+    profile_id: str,
+    request: KeyCreateAssociateRequest,
+    user_id: str = Depends(get_current_user_id),
+    repo: InMemoryTrustProfileRepository | PostgresTrustProfileRepository = Depends(get_repo),
+) -> KeyCreateAssociateResponse:
+    profile = await _get_organization_trust_profile_or_404(repo, profile_id)
+    if profile.organization_id != organization_id:
+        raise HTTPException(status_code=404, detail="Organization Trust Profile not found")
+
+    membership = await app.state.org_client.get_membership(user_id, organization_id)
+    ensure_membership_permission(membership, "trust-profile", "edit")
+
+    effective_key_management = _normalize_key_management(request.key_management or profile.key_management)
+    if effective_key_management is None:
+        raise HTTPException(status_code=422, detail="key_management must be configured before key creation/association")
+
+    source = str(effective_key_management.get("source"))
+    key_id = str(effective_key_management.get("managed_key_id") or f"key_{uuid.uuid4().hex[:12]}")
+    effective_key_management["managed_key_id"] = key_id
+    effective_key_management["algorithm"] = request.algorithm or str(effective_key_management.get("algorithm") or "ES256")
+
+    action = "associated" if request.key_reference else "created"
+    profile.key_management = effective_key_management
+    profile.metadata = _metadata_with_key_management(profile.metadata, effective_key_management)
+    profile.metadata["key_binding"] = {
+        "key_id": key_id,
+        "action": action,
+        "source": source,
+        "associated_reference": request.key_reference,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    profile.updated_at = datetime.now(timezone.utc)
+    await repo.save_organization_trust_profile(profile)
+
+    return KeyCreateAssociateResponse(
+        success=True,
+        action=action,
+        key_id=key_id,
+        source=source,
+        message=(
+            "Key associated to trust profile" if action == "associated" else "Key created for trust profile"
+        ),
+        key_management=effective_key_management,
+    )
 
 
 # Trust Profile endpoints
@@ -1318,12 +1629,12 @@ async def create_trust_profile(
     repo: InMemoryTrustProfileRepository | PostgresTrustProfileRepository = Depends(get_repo),
 ) -> TrustProfileResponse:
     """Create a new Trust Profile."""
-    # Verify org membership
     org_client = await get_organization_client(fastapi_request)
     membership = await org_client.get_membership(user_id, request.organization_id)
-    if not membership or not membership.is_active():
-        raise HTTPException(status_code=403, detail="Not a member of this organization")
+    ensure_membership_permission(membership, "trust-profile", "create")
     
+    allowed_issuers_was_provided = _field_was_provided(request, "allowed_issuers")
+
     profile = TrustProfile(
         organization_id=request.organization_id,
         name=request.name,
@@ -1332,7 +1643,7 @@ async def create_trust_profile(
         compliance_status=ComplianceStatus(request.compliance_status.upper()),
         revocation_profile_id=request.revocation_profile_id,
         supported_formats=_normalize_supported_formats(request.supported_formats),
-        allowed_issuers=request.allowed_issuers,
+        allowed_issuers=request.allowed_issuers if allowed_issuers_was_provided else ([] if not request.trust_sources else None),
         denied_issuers=request.denied_issuers,
         system_issuer_overrides=request.system_issuer_overrides,
         compatible_compliance_codes=request.compatible_compliance_codes,
@@ -1340,8 +1651,6 @@ async def create_trust_profile(
         auto_generated=request.auto_generated,
     )
 
-    if not request.trust_sources:
-        raise HTTPException(status_code=422, detail="trust_sources must contain at least one source")
     if not request.supported_formats:
         raise HTTPException(status_code=422, detail="supported_formats must contain at least one format")
 
@@ -1414,8 +1723,8 @@ async def list_trust_profiles(
     offset: int = Query(default=0, ge=0),
 ) -> list[TrustProfileResponse]:
     """List Trust Profiles for an organization."""
-    # Verify org membership
-    await app.state.org_client.get_membership(user_id, organization_id)
+    membership = await app.state.org_client.get_membership(user_id, organization_id)
+    ensure_membership_permission(membership, "trust-profile", "view")
     profiles = await repo.list_profiles(organization_id)
     return [_profile_to_response(p) for p in profiles[offset:offset + limit]]
 
@@ -1430,8 +1739,20 @@ async def get_trust_profile(
     profile = await repo.get_profile(profile_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Trust Profile not found")
-    # Verify org membership
-    await app.state.org_client.get_membership(user_id, profile.organization_id)
+    membership = await app.state.org_client.get_membership(user_id, profile.organization_id)
+    ensure_membership_permission(membership, "trust-profile", "view")
+    return _profile_to_response(profile)
+
+
+@internal_router.get("/{profile_id}", response_model=TrustProfileResponse, response_model_exclude_none=True, include_in_schema=False)
+async def internal_get_trust_profile(
+    profile_id: str,
+    repo: InMemoryTrustProfileRepository | PostgresTrustProfileRepository = Depends(get_repo),
+) -> TrustProfileResponse:
+    """Read a Trust Profile for internal verifier/policy evaluation."""
+    profile = await repo.get_profile(profile_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Trust Profile not found")
     return _profile_to_response(profile)
 
 
@@ -1448,9 +1769,10 @@ async def update_trust_profile(
         raise HTTPException(status_code=404, detail="Trust Profile not found")
     # Verify admin access
     membership = await app.state.org_client.get_membership(user_id, profile.organization_id)
-    if not membership.has_role("admin", "owner"):
-        raise HTTPException(status_code=403, detail="Admin access required")
+    ensure_membership_permission(membership, "trust-profile", "edit")
     
+    allowed_issuers_was_provided = _field_was_provided(request, "allowed_issuers")
+
     if request.name is not None:
         profile.name = request.name
     if request.description is not None:
@@ -1460,9 +1782,9 @@ async def update_trust_profile(
     if request.compliance_status is not None:
         profile.compliance_status = ComplianceStatus(request.compliance_status.upper())
     if request.trust_sources is not None:
-        if not request.trust_sources:
-            raise HTTPException(status_code=422, detail="trust_sources must contain at least one source")
         profile.trust_sources = _build_trust_sources(request.trust_sources)
+        if not request.trust_sources and not allowed_issuers_was_provided and profile.allowed_issuers is None:
+            profile.allowed_issuers = []
     if (
         request.validation_rules is not None
         or request.allowed_algorithms is not None
@@ -1488,7 +1810,7 @@ async def update_trust_profile(
         if not request.supported_formats:
             raise HTTPException(status_code=422, detail="supported_formats must contain at least one format")
         profile.supported_formats = _normalize_supported_formats(request.supported_formats)
-    if request.allowed_issuers is not None:
+    if allowed_issuers_was_provided:
         profile.allowed_issuers = request.allowed_issuers
     if request.denied_issuers is not None:
         profile.denied_issuers = request.denied_issuers
@@ -1518,8 +1840,7 @@ async def activate_trust_profile(
         raise HTTPException(status_code=404, detail="Trust Profile not found")
     # Verify admin access
     membership = await app.state.org_client.get_membership(user_id, profile.organization_id)
-    if not membership.has_role("admin", "owner"):
-        raise HTTPException(status_code=403, detail="Admin access required")
+    ensure_membership_permission(membership, "trust-profile", "activate")
     profile.activate()
     await repo.save_profile(profile)
     return _profile_to_response(profile)
@@ -1537,8 +1858,7 @@ async def suspend_trust_profile(
         raise HTTPException(status_code=404, detail="Trust Profile not found")
     # Verify admin access
     membership = await app.state.org_client.get_membership(user_id, profile.organization_id)
-    if not membership.has_role("admin", "owner"):
-        raise HTTPException(status_code=403, detail="Admin access required")
+    ensure_membership_permission(membership, "trust-profile", "suspend")
     profile.suspend()
     await repo.save_profile(profile)
     return _profile_to_response(profile)
@@ -1556,8 +1876,7 @@ async def delete_trust_profile(
         raise HTTPException(status_code=404, detail="Trust Profile not found")
     # Verify admin access
     membership = await app.state.org_client.get_membership(user_id, profile.organization_id)
-    if not membership.has_role("admin", "owner"):
-        raise HTTPException(status_code=403, detail="Admin access required")
+    ensure_membership_permission(membership, "trust-profile", "delete")
 
     # Cascade check: reject if profile still has trusted issuers
     issuers = await repo.list_issuers(profile_id)
@@ -1585,8 +1904,7 @@ async def add_trusted_issuer(
         raise HTTPException(status_code=404, detail="Trust Profile not found")
     # Verify admin access
     membership = await app.state.org_client.get_membership(user_id, profile.organization_id)
-    if not membership.has_role("admin", "owner"):
-        raise HTTPException(status_code=403, detail="Admin access required")
+    ensure_membership_permission(membership, "trusted-issuer", "create")
 
     issuer_entity = await repo.find_issuer_entity_by_identifier(profile.organization_id, request.issuer_did)
     if issuer_entity is None:
@@ -1637,8 +1955,8 @@ async def list_trusted_issuers(
     profile = await repo.get_profile(profile_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Trust Profile not found")
-    # Verify org membership
-    await app.state.org_client.get_membership(user_id, profile.organization_id)
+    membership = await app.state.org_client.get_membership(user_id, profile.organization_id)
+    ensure_membership_permission(membership, "trusted-issuer", "view")
     profile_issuers = await repo.list_profile_issuers(profile_id)
     return [await _materialize_trusted_issuer(repo, profile_issuer) for profile_issuer in profile_issuers[offset:offset + limit]]
 
@@ -1654,11 +1972,11 @@ async def get_trusted_issuer(
     profile_issuer = await repo.get_profile_issuer(issuer_id)
     if not profile_issuer or profile_issuer.trust_profile_id != profile_id:
         raise HTTPException(status_code=404, detail="Trusted Issuer not found")
-    # Verify org membership via profile
     profile = await repo.get_profile(profile_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Trust Profile not found")
-    await app.state.org_client.get_membership(user_id, profile.organization_id)
+    membership = await app.state.org_client.get_membership(user_id, profile.organization_id)
+    ensure_membership_permission(membership, "trusted-issuer", "view")
     return await _materialize_trusted_issuer(repo, profile_issuer)
 
 
@@ -1674,8 +1992,7 @@ async def update_trusted_issuer(
     if not profile:
         raise HTTPException(status_code=404, detail="Trust Profile not found")
     membership = await app.state.org_client.get_membership(user_id, profile.organization_id)
-    if not membership.has_role("admin", "owner"):
-        raise HTTPException(status_code=403, detail="Admin access required")
+    ensure_membership_permission(membership, "trusted-issuer", "edit")
 
     profile_issuer = await repo.get_profile_issuer(issuer_id)
     if not profile_issuer or profile_issuer.trust_profile_id != profile_id:
@@ -1734,8 +2051,7 @@ async def remove_trusted_issuer(
     if not profile:
         raise HTTPException(status_code=404, detail="Trust Profile not found")
     membership = await app.state.org_client.get_membership(user_id, profile.organization_id)
-    if not membership.has_role("admin", "owner"):
-        raise HTTPException(status_code=403, detail="Admin access required")
+    ensure_membership_permission(membership, "trusted-issuer", "delete")
     await repo.delete_profile_issuer(issuer_id)
     return {"success": True}
 
@@ -1848,8 +2164,7 @@ async def create_issuer_entity(
         raise HTTPException(status_code=400, detail="organization_id is required for non-system issuers")
     if request.organization_id is not None:
         membership = await app.state.org_client.get_membership(user_id, request.organization_id)
-        if not membership.has_role("admin", "owner"):
-            raise HTTPException(status_code=403, detail="Admin access required")
+        ensure_membership_permission(membership, "trusted-issuer", "create")
     await _ensure_unique_issuer_identifier(repo, request.organization_id, request.issuer_id)
     issuer_entity = _build_issuer_entity_from_request(request)
     await repo.save_issuer_entity(issuer_entity)
@@ -1863,7 +2178,8 @@ async def list_issuer_entities(
     repo: InMemoryTrustProfileRepository | PostgresTrustProfileRepository = Depends(get_repo),
 ) -> list[IssuerEntityResponse]:
     if organization_id is not None:
-        await app.state.org_client.get_membership(user_id, organization_id)
+        membership = await app.state.org_client.get_membership(user_id, organization_id)
+        ensure_membership_permission(membership, "trusted-issuer", "view")
         issuer_entities = await repo.list_issuer_entities(organization_id)
     else:
         issuer_entities = [
@@ -1882,7 +2198,8 @@ async def get_issuer_entity(
 ) -> IssuerEntityResponse:
     issuer_entity = await _get_issuer_entity_or_404(repo, issuer_entity_id)
     if issuer_entity.organization_id is not None:
-        await app.state.org_client.get_membership(user_id, issuer_entity.organization_id)
+        membership = await app.state.org_client.get_membership(user_id, issuer_entity.organization_id)
+        ensure_membership_permission(membership, "trusted-issuer", "view")
     return _issuer_entity_to_response(issuer_entity)
 
 
@@ -1896,8 +2213,7 @@ async def update_issuer_entity(
     issuer_entity = await _get_issuer_entity_or_404(repo, issuer_entity_id)
     if issuer_entity.organization_id is not None:
         membership = await app.state.org_client.get_membership(user_id, issuer_entity.organization_id)
-        if not membership.has_role("admin", "owner"):
-            raise HTTPException(status_code=403, detail="Admin access required")
+        ensure_membership_permission(membership, "trusted-issuer", "edit")
     if issuer_entity.compliance_status == IssuerEntityComplianceStatus.REVOKED and request.compliance_status not in {None, IssuerEntityComplianceStatus.REVOKED.value}:
         raise HTTPException(status_code=400, detail="Revoked issuer cannot be reinstated; create a new IssuerEntity instead")
     if request.display_name is not None:
@@ -1941,8 +2257,7 @@ async def delete_issuer_entity(
     issuer_entity = await _get_issuer_entity_or_404(repo, issuer_entity_id)
     if issuer_entity.organization_id is not None:
         membership = await app.state.org_client.get_membership(user_id, issuer_entity.organization_id)
-        if not membership.has_role("admin", "owner"):
-            raise HTTPException(status_code=403, detail="Admin access required")
+        ensure_membership_permission(membership, "trusted-issuer", "delete")
     await repo.delete_issuer_entity(issuer_entity_id)
     return {"success": True}
 
@@ -1969,6 +2284,7 @@ def _profile_to_response(profile: TrustProfile) -> TrustProfileResponse:
         organization_id=profile.organization_id,
         name=profile.name,
         description=profile.description,
+        status=profile.status.value,
         profile_type=profile.profile_type.value,
         compliance_status=profile.compliance_status.value,
         trust_sources=[
@@ -2066,6 +2382,10 @@ def _framework_to_response(framework: TrustFramework) -> TrustFrameworkResponse:
 
 
 def _organization_trust_profile_to_response(profile: OrganizationTrustProfile) -> OrganizationTrustProfileResponse:
+    response_key_management = profile.key_management
+    if response_key_management is None:
+        response_key_management = (profile.metadata or {}).get("key_management")
+
     return OrganizationTrustProfileResponse(
         id=profile.id,
         organization_id=profile.organization_id,
@@ -2084,6 +2404,7 @@ def _organization_trust_profile_to_response(profile: OrganizationTrustProfile) -
         allowed_issuers=profile.allowed_issuers,
         denied_issuers=profile.denied_issuers,
         jurisdiction_filter=profile.jurisdiction_filter,
+        key_management=response_key_management,
         metadata=profile.metadata,
         created_at=profile.created_at.isoformat(),
         updated_at=profile.updated_at.isoformat(),
@@ -2126,6 +2447,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Initialize repository
     _repo = PostgresTrustProfileRepository(session_factory)
     await _seed_system_frameworks(_repo)
+    await _bootstrap_marty_login_trust_profile(_repo)
     
     # Initialize gRPC channel to organization service
     from common.di import setup_org_client, teardown_org_client
@@ -2143,7 +2465,7 @@ def create_app() -> FastAPI:
         description="Manages Trust Profiles - who is trusted and how validation happens",
         service_name=SERVICE_NAME,
         lifespan=lifespan,
-        routers=[router, organization_trust_profile_router, framework_router, registry_router, issuer_router],
+        routers=[router, internal_router, organization_trust_profile_router, framework_router, registry_router, issuer_router, registry_imports_router],
     )
 
 

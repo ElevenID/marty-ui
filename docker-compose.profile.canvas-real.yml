@@ -1,0 +1,72 @@
+# Real Canvas LMS Test Environment Profile
+# ========================================
+# Uses a prebuilt Canvas LMS image for development/testing.
+#
+# Primary image selected:
+#   readystack/canvas (active updates as of 2026)
+#
+# Start with:
+#   docker compose --env-file .env.tunnel.beta.local \
+#     -f docker-compose.base.yml \
+#     -f docker-compose.profile.dev.yml \
+#     -f docker-compose.profile.tunnel.yml \
+#     -f docker-compose.profile.canvas-real.yml \
+#     up -d canvas-real
+#
+# Public hostname expected through tunnel/nginx:
+#   https://canvas-test.${PUBLIC_DOMAIN}
+#
+# Internal URL from other containers:
+#   http://canvas-real:3000
+
+services:
+  issuance:
+    environment:
+      CANVAS_ALLOW_PRIVATE_BASE_URLS: "true"
+      CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS: "true"
+
+  issuance-canvas-localhost-bridge:
+    image: python:3.12-alpine
+    container_name: marty-issuance-canvas-localhost-bridge
+    network_mode: "service:issuance"
+    depends_on:
+      issuance:
+        condition: service_started
+    volumes:
+      - ./docker/canvas-localhost-bridge/server.py:/bridge/server.py:ro
+    command:
+      - python
+      - /bridge/server.py
+    restart: unless-stopped
+
+  canvas-real:
+    image: ${CANVAS_REAL_IMAGE:-readystack/canvas:v5.14.2-CE-ubuntu24.04-r1}
+    container_name: marty-canvas-real
+    ports:
+      - "${CANVAS_REAL_HOST_PORT:-8088}:3000"
+    networks:
+      - marty-network
+    volumes:
+      - canvas_real_data:/var/lib/postgresql
+      - canvas_real_files:/var/canvas/files
+      - ./config/canvas/production-local.rb:/usr/src/app/config/environments/production-local.rb:ro
+      - ./config/canvas/dynamic_settings.local.yml:/usr/src/app/config/dynamic_settings.yml:ro
+      - ./config/canvas/session_store.local.yml:/usr/src/app/config/session_store.yml:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://127.0.0.1:3000/ || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 15
+      start_period: 180s
+
+  # Let tunnel nginx wait for canvas-real when this profile is active.
+  nginx-proxy:
+    depends_on:
+      canvas-real:
+        condition: service_started
+        required: false
+
+volumes:
+  canvas_real_data:
+  canvas_real_files:

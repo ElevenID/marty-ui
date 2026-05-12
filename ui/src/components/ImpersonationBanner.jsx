@@ -1,144 +1,101 @@
-import { useState, useEffect } from 'react';
+import { useMemo } from 'react';
 import {
   Alert,
   AlertTitle,
-  Button,
   Box,
+  Button,
   Typography,
-  Snackbar,
 } from '@mui/material';
 import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings';
-import VisibilityIcon from '@mui/icons-material/Visibility';
-import {
-  getImpersonationStatus,
-  stopImpersonation,
-} from '../services/adminImpersonationApi';
+import LaunchIcon from '@mui/icons-material/Launch';
+import LogoutIcon from '@mui/icons-material/Logout';
 import { useAuth } from '../hooks/useAuth';
 
-/**
- * Impersonation Banner
- * 
- * Displays a prominent banner when a platform admin is impersonating an organization.
- * Shows read-only indicator and provides a button to stop impersonation.
- */
-export default function ImpersonationBanner() {
-  const { isAuthenticated, isAdministrator, hasCapability } = useAuth();
-  const [status, setStatus] = useState({ is_impersonating: false });
-  const [stopping, setStopping] = useState(false);
-  const [error, setError] = useState(null);
-
-  useEffect(() => {
-    // Only check status for authenticated platform admins.
-    const canUseImpersonation = isAuthenticated && (isAdministrator || hasCapability?.('admin:platform'));
-    if (!canUseImpersonation) {
-      setStatus({ is_impersonating: false });
-      return;
-    }
-
-    let mounted = true;
-    
-    const checkStatus = async () => {
-      try {
-        const impersonationStatus = await getImpersonationStatus();
-        if (mounted) {
-          setStatus(impersonationStatus);
-        }
-      } catch (err) {
-        // Silently fail - not impersonating or API not available
-        console.debug('Impersonation status check failed (expected if not admin):', err.message);
-        if (mounted) {
-          setStatus({ is_impersonating: false });
-        }
-      }
-    };
-    
-    checkStatus();
-    // Poll status every 30 seconds
-    const interval = setInterval(checkStatus, 30000);
-    
-    return () => {
-      mounted = false;
-      clearInterval(interval);
-    };
-  }, [isAuthenticated, isAdministrator, hasCapability]);
-
-  const handleStopImpersonation = async () => {
-    try {
-      setStopping(true);
-      setError(null);
-      await stopImpersonation();
-      
-      // Refresh the page to clear impersonated state
-      window.location.reload();
-    } catch (err) {
-      console.error('Failed to stop impersonation:', err);
-      setError(err.message || 'Failed to stop impersonation');
-    } finally {
-      setStopping(false);
-    }
-  };
-
-  // Don't render anything if not impersonating
-  if (!status || !status.is_impersonating) {
+function formatStartedAt(startedAt) {
+  if (!startedAt) {
     return null;
   }
 
-  return (
-    <>
-      <Alert
-        severity="warning"
-        icon={<AdminPanelSettingsIcon />}
-        sx={{
-          position: 'sticky',
-          top: 0,
-          zIndex: 1200,
-          borderRadius: 0,
-          borderBottom: '2px solid',
-          borderColor: 'warning.main',
-        }}
-        action={
-          <Button
-            color="inherit"
-            size="small"
-            onClick={handleStopImpersonation}
-            disabled={stopping}
-          >
-            {stopping ? 'Stopping...' : 'Stop Impersonation'}
-          </Button>
-        }
-      >
-        <AlertTitle sx={{ fontWeight: 'bold' }}>
-          Platform Admin - Impersonation Active
-        </AlertTitle>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
-          <Typography variant="body2">
-            You are currently impersonating:{' '}
-            <strong>{status.impersonated_org_name}</strong>
-          </Typography>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-            <VisibilityIcon fontSize="small" />
-            <Typography variant="body2" fontWeight="medium">
-              Read-Only Mode
-            </Typography>
-          </Box>
-          {status.impersonation_started_at && (
-            <Typography variant="caption" color="text.secondary">
-              Started: {new Date(status.impersonation_started_at).toLocaleString()}
-            </Typography>
-          )}
-        </Box>
-      </Alert>
+  const parsed = new Date(startedAt);
+  if (Number.isNaN(parsed.getTime())) {
+    return null;
+  }
 
-      <Snackbar
-        open={!!error}
-        autoHideDuration={6000}
-        onClose={() => setError(null)}
-        anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
-      >
-        <Alert severity="error" onClose={() => setError(null)}>
-          {error}
-        </Alert>
-      </Snackbar>
-    </>
+  return parsed.toLocaleString();
+}
+
+export default function ImpersonationBanner() {
+  const { impersonation, logout } = useAuth();
+  const startedAtLabel = useMemo(
+    () => formatStartedAt(impersonation?.started_at),
+    [impersonation?.started_at]
+  );
+
+  if (!impersonation?.active) {
+    return null;
+  }
+
+  const adminLabel =
+    impersonation.admin_display_name ||
+    impersonation.admin_email ||
+    impersonation.admin_username ||
+    'Platform administrator';
+
+  const organizationLabel =
+    impersonation.organization_name ||
+    impersonation.organization_id ||
+    'this organization';
+
+  const handleReturnToAdmin = () => {
+    if (window.opener && !window.opener.closed) {
+      window.opener.focus();
+      return;
+    }
+
+    window.location.href = '/admin';
+  };
+
+  return (
+    <Alert
+      severity="warning"
+      icon={<AdminPanelSettingsIcon />}
+      sx={{
+        position: 'sticky',
+        top: 0,
+        zIndex: 1200,
+        borderRadius: 0,
+        borderBottom: '2px solid',
+        borderColor: 'warning.main',
+      }}
+      action={
+        <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+          {impersonation.launch_mode === 'new-tab' && (
+            <Button color="inherit" size="small" startIcon={<LaunchIcon />} onClick={handleReturnToAdmin}>
+              Return to admin
+            </Button>
+          )}
+          <Button color="inherit" size="small" startIcon={<LogoutIcon />} onClick={logout}>
+            Exit impersonation
+          </Button>
+        </Box>
+      }
+    >
+      <AlertTitle sx={{ fontWeight: 'bold' }}>
+        Admin impersonation active
+      </AlertTitle>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
+        <Typography variant="body2">
+          {adminLabel} is viewing {organizationLabel} as {impersonation.target_email || 'the impersonated user'}.
+        </Typography>
+        <Typography variant="body2" fontWeight="medium">
+          Actions in this session are performed as the impersonated account.
+        </Typography>
+        {startedAtLabel && (
+          <Typography variant="caption" color="text.secondary">
+            Started: {startedAtLabel}
+          </Typography>
+        )}
+      </Box>
+    </Alert>
   );
 }

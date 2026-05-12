@@ -87,6 +87,39 @@ describe('joinOrganization use cases', () => {
       selectedOrg: { id: 'org-9', name: 'Gamma' },
       error: null,
     });
+
+    await expect(loadJoinOrganizationSelection({
+      orgIdFromQuery: 'org-stale',
+      organizations,
+      isAuthenticated: true,
+      getOrganization: vi.fn().mockRejectedValue({ status: 403, message: 'Forbidden' }),
+      getErrorMessage: vi.fn().mockReturnValue('Forbidden'),
+    })).resolves.toEqual({
+      selectedOrg: null,
+      error: null,
+    });
+
+    await expect(loadJoinOrganizationSelection({
+      orgIdFromQuery: 'org-stale',
+      organizations,
+      isAuthenticated: true,
+      getOrganization: vi.fn().mockRejectedValue({ status: 500, message: 'Server exploded' }),
+      getErrorMessage: vi.fn().mockReturnValue('Server exploded'),
+    })).resolves.toEqual({
+      selectedOrg: null,
+      error: null,
+    });
+
+    await expect(loadJoinOrganizationSelection({
+      orgIdFromQuery: 'org-stale',
+      organizations: [],
+      isAuthenticated: true,
+      getOrganization: vi.fn().mockRejectedValue({ status: 500, message: 'Server exploded' }),
+      getErrorMessage: vi.fn().mockReturnValue('Server exploded'),
+    })).resolves.toEqual({
+      selectedOrg: null,
+      error: 'Server exploded',
+    });
   });
 
   it('joins by code, direct join, and invitation accept while refreshing memberships', async () => {

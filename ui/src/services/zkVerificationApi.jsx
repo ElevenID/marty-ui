@@ -46,6 +46,21 @@ export const getVerificationRequest = async (instanceId) => {
 };
 
 /**
+ * Get a flow instance status by ID.
+ *
+ * @param {string} instanceId - Flow instance ID
+ * @returns {Promise<Object>} Flow instance status/context
+ */
+export const getVerificationFlowInstance = async (instanceId) => {
+  try {
+    const response = await apiClient.get(`${FLOW_PATH}/instances/${instanceId}`);
+    return response.data;
+  } catch (error) {
+    throw handleApiError(error);
+  }
+};
+
+/**
  * Submit a VP token to complete verification flow
  *
  * @param {string} instanceId - Flow instance ID
@@ -104,6 +119,7 @@ export default {
   startVerificationFlow,
   getVerificationRequest,
   submitVerification,
+  getVerificationFlowInstance,
   evaluatePresentation,
   evaluateInline,
   // Legacy

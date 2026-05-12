@@ -32,6 +32,7 @@ const getStatusConfigs = (t) => ({
   pending_review: { label: t('status.pendingReview'), color: 'warning', icon: PendingIcon },
   documents_pending: { label: t('status.documentsPending'), color: 'info', icon: PendingIcon },
   approved: { label: t('status.approved'), color: 'success', icon: CheckCircleIcon },
+  offered: { label: t('status.offered', 'Wallet Invite Ready'), color: 'info', icon: SendIcon },
   offer_generated: { label: t('status.offerGenerated'), color: 'info', icon: SendIcon },
   rejected: { label: t('status.rejected'), color: 'error', icon: ErrorIcon },
   verification_failed: { label: t('status.verificationFailed'), color: 'error', icon: WarningIcon },
@@ -42,6 +43,7 @@ const getStatusConfigs = (t) => ({
   failed: { label: t('status.failed'), color: 'error', icon: ErrorIcon },
   
   // Credential statuses
+  credentialed: { label: t('status.credentialed', 'Credential Issued'), color: 'success', icon: CheckCircleIcon },
   issued: { label: t('status.issued'), color: 'success', icon: CheckCircleIcon },
   revoked: { label: t('status.revoked'), color: 'error', icon: BlockIcon },
   expired: { label: t('status.expired'), color: 'warning', icon: WarningIcon },

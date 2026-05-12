@@ -66,7 +66,7 @@ const STAGES = [
 ];
 
 const TERMINAL_STATUSES = new Set(['issued', 'credentialed', 'rejected']);
-const ACTION_STATUSES = new Set(['approved', 'issued', 'credentialed', 'needs_info']);
+const ACTION_STATUSES = new Set(['approved', 'needs_info']);
 
 /** Map raw status → pipeline step index (0-based). */
 function getStepIndex(status) {
@@ -77,6 +77,7 @@ function getStepIndex(status) {
     case 'vetting_in_progress':     return 1;
     case 'pending_approval':        return 2;
     case 'approved':                return 3;
+    case 'offered':                 return 3;
     case 'needs_info':              return 1;
     case 'credentialed':
     case 'issued':                  return 4;
@@ -95,8 +96,9 @@ function getStatusMessage(status) {
     case 'pending_approval':        return 'Awaiting final approval';
     case 'needs_info':              return 'Additional information required';
     case 'approved':                return 'Ready for you to claim';
+    case 'offered':                 return 'Wallet invite ready';
     case 'credentialed':
-    case 'issued':                  return 'Ready for you to claim';
+    case 'issued':                  return 'Credential issued';
     case 'rejected':                return 'Application was not approved';
     default:                        return '';
   }
@@ -117,8 +119,7 @@ function getActionLabel(row) {
   }
   switch (row.status) {
     case 'approved':
-    case 'credentialed':
-    case 'issued':       return 'Claim';
+    case 'offered':      return 'Claim';
     case 'needs_info':   return 'Continue';
     default:             return null;
   }
@@ -222,8 +223,9 @@ function getStatusColor(row) {
   }
   switch (row.status) {
     case 'approved':
+    case 'offered':               return 'primary';
     case 'credentialed':
-    case 'issued':                return 'primary';
+    case 'issued':                return 'success';
     case 'rejected':              return 'error';
     case 'needs_info':            return 'warning';
     case 'under_review':
@@ -248,8 +250,9 @@ function getStatusLabel(row) {
     case 'pending_approval':      return 'Pending Approval';
     case 'needs_info':            return 'Info Required';
     case 'approved':              return 'Ready to Claim';
+    case 'offered':               return 'Wallet Invite Ready';
     case 'credentialed':
-    case 'issued':                return 'Ready to Claim';
+    case 'issued':                return 'Credential Issued';
     case 'rejected':              return 'Rejected';
     default:                      return row.status;
   }
@@ -395,7 +398,8 @@ const STATUS_META = {
   pending_approval:    { label: 'Pending Approval',  color: '#6366f1', variant: 'outlined'  },
   needs_info:          { label: 'Info Required',     color: '#f97316', variant: 'filled'    },
   approved:            { label: 'Ready to Claim',    color: '#3b82f6', variant: 'emphasis'  },
-  credentialed:        { label: 'Ready to Claim',    color: '#3b82f6', variant: 'emphasis'  },
+  offered:             { label: 'Wallet Invite Ready', color: '#3b82f6', variant: 'emphasis'  },
+  credentialed:        { label: 'Credential Issued', color: '#22c55e', variant: 'filled'    },
   issued:              { label: 'Issued',            color: '#22c55e', variant: 'filled'    },
   rejected:            { label: 'Rejected',          color: '#ef4444', variant: 'filled'    },
   // Credential document
@@ -445,7 +449,7 @@ function StatusCircle({ status, showLabel = false, size = 'sm' }) {
   } else if (isEmphasis) {
     // inbox / ready-to-claim arrow
     inner = <MoveToInboxIcon sx={{ fontSize: iconSz, color: 'white' }} />;
-  } else if (['issued', 'active'].includes(status)) {
+  } else if (['issued', 'credentialed', 'active'].includes(status)) {
     inner = <CheckIcon sx={{ fontSize: iconSz, color: 'white' }} />;
   } else if (['rejected', 'revoked', 'expired'].includes(status)) {
     inner = <CloseIcon sx={{ fontSize: iconSz, color: 'white' }} />;

@@ -6,7 +6,6 @@
  * Embeds the existing DeploymentProfileManager component.
  */
 
-import { Box } from '@mui/material';
 import { useTranslation } from 'react-i18next';
 import DeploymentProfileManager from '../../vendor/DeploymentProfileManager';
 import { ResourcePage } from '../../common';
@@ -33,10 +32,10 @@ function DeploymentProfilesPage() {
       description={t('deploy.deploymentProfilesDescription')}
       tabs={getDeployTabs(t)}
       breadcrumbs={getBreadcrumbs(t)}
+      buildPath="/console/org/deploy/profiles/new"
+      resourceName={t('deploy.deploymentProfile')}
     >
-      <Box sx={{ mx: -3, mt: -2 }}>
-        <DeploymentProfileManager />
-      </Box>
+      <DeploymentProfileManager hideHeader />
     </ResourcePage>
   );
 }

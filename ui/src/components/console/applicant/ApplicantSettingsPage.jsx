@@ -5,6 +5,7 @@
  */
 
 import { useState, useEffect } from 'react';
+import { useLocation } from 'react-router-dom';
 import {
   Box,
   Paper,
@@ -26,12 +27,14 @@ import AccountBalanceWalletIcon from '@mui/icons-material/AccountBalanceWallet';
 import { useTranslation } from 'react-i18next';
 
 import { useAuth } from '../../../hooks/useAuth';
-import { getApplicantByUser, updateApplicantProfile } from '../../../services/applicantApi';
+import { getApplicantByUser, createApplicant, updateApplicantProfile } from '../../../services/applicantApi';
 import { listWallets } from '../../../services/walletRegistryApi';
 import useWalletPreferences from '../../../hooks/useWalletPreferences';
+import { getPlatform } from '../../../utils/deviceDetection';
 
 function ApplicantSettingsPage() {
   const { t } = useTranslation('applicant');
+  const location = useLocation();
   const { user } = useAuth();
   const [saving, setSaving] = useState(false);
   const [success, setSuccess] = useState(false);
@@ -52,28 +55,54 @@ function ApplicantSettingsPage() {
   const { walletIds: preferredWallets, addWallet, removeWallet } = useWalletPreferences(user?.user_id);
   const [registryWallets, setRegistryWallets] = useState([]);
   const [walletsLoading, setWalletsLoading] = useState(true);
+  const platform = getPlatform();
+  const iosSameDeviceLimitedWallets = platform === 'ios'
+    ? registryWallets.filter(
+      (wallet) => preferredWallets.includes(wallet.id) && wallet.ios_same_device_single_wallet_only,
+    )
+    : [];
+  const iosSameDeviceLimitedWalletNames = Array.from(
+    new Set(iosSameDeviceLimitedWallets.map((wallet) => wallet.name).filter(Boolean)),
+  );
 
   // Load applicant profile on mount
   useEffect(() => {
     const loadProfile = async () => {
       if (user?.user_id) {
         try {
-          const applicant = await getApplicantByUser(user.user_id);
+          let applicant = await getApplicantByUser(user.user_id);
+
+          // If no profile exists, create one
+          if (!applicant) {
+            const nameParts = (user.name || '').trim().split(' ');
+            const created = await createApplicant({
+              user_id: user.user_id,
+              email: user.email || '',
+              given_name: nameParts[0] || '',
+              family_name: nameParts.slice(1).join(' ') || '',
+            });
+            applicant = created;
+          }
+
           if (applicant) {
             setApplicantId(applicant.id);
             setProfile({
-              name: applicant.full_name || user.name || '',
+              name: applicant.full_name || applicant.given_name
+                ? `${applicant.given_name} ${applicant.family_name || ''}`.trim()
+                : user.name || '',
               email: applicant.email || user.email || '',
               phone: applicant.phone_number || '',
             });
           }
         } catch (err) {
           console.error('Error loading applicant profile:', err);
+          setError(err.message || t('settings.errorNotFound'));
         }
       }
     };
+
     loadProfile();
-  }, [user]);
+  }, [user, t]);
 
   // Load wallet registry
   useEffect(() => {
@@ -88,29 +117,44 @@ function ApplicantSettingsPage() {
         setWalletsLoading(false);
       }
     };
+
     loadWallets();
   }, []);
+
+  useEffect(() => {
+    if (location.hash !== '#wallet-selection') {
+      return;
+    }
+
+    const target = document.getElementById('wallet-selection');
+    if (!target) {
+      return;
+    }
+
+    target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, [location.hash]);
 
   const handleSave = async () => {
     setSaving(true);
     setError(null);
     setSuccess(false);
+
     try {
       if (!applicantId) {
         throw new Error(t('settings.errorNotFound'));
       }
-      
+
       // Split name into given_name and family_name
       const nameParts = profile.name.trim().split(' ');
       const given_name = nameParts[0] || '';
       const family_name = nameParts.slice(1).join(' ') || '';
-      
+
       await updateApplicantProfile(applicantId, {
         given_name,
         family_name,
         phone_number: profile.phone,
       });
-      
+
       setSuccess(true);
       setTimeout(() => setSuccess(false), 3000);
     } catch (err) {
@@ -235,15 +279,29 @@ function ApplicantSettingsPage() {
       </Paper>
 
       {/* My Wallets */}
-      <Paper sx={{ p: 3, mb: 3 }}>
+      <Paper
+        id="wallet-selection"
+        sx={{ p: 3, mb: 3, scrollMarginTop: { xs: 80, sm: 96 } }}
+        data-testid="wallet-selection-section"
+      >
         <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
           <AccountBalanceWalletIcon color="primary" />
           <Typography variant="h6">My Wallets</Typography>
         </Stack>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          Select the wallet apps you have installed. When you claim a credential, we&apos;ll show a
-          tab for each wallet so you get the right QR code.
+          Choose the wallet apps you use. When you claim a credential, we&apos;ll show a tab for each
+          selected wallet so you get the right handoff and QR code.
         </Typography>
+
+        {iosSameDeviceLimitedWalletNames.length > 0 && (
+          <Alert severity="warning" sx={{ mb: 2 }} data-testid="ios-same-device-wallet-warning">
+            iOS same-device flows for {iosSameDeviceLimitedWalletNames.join(', ')} are effectively
+            limited to single-wallet support. Those wallets only expose raw{' '}
+            <code>openid-credential-offer://</code> / <code>openid4vp://</code> links, and iOS does
+            not deterministically choose the intended app when multiple wallets register the same
+            scheme.
+          </Alert>
+        )}
 
         {walletsLoading ? (
           <Box sx={{ display: 'flex', justifyContent: 'center', py: 3 }}>

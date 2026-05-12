@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   APPLY_CONTEXT_MAX_AGE_MS,
   APPLY_JOIN_ORG_STORAGE_KEY,
+  APPLY_LOCATION_STATE_STORAGE_KEY,
   buildApplyEntryContext,
   getApplyEntryDecision,
   getApplyLoginRedirectUrl,
@@ -94,7 +95,9 @@ describe('applyEntry helpers', () => {
       }),
       destination: '/console/applicant/apply/mdl',
       navigationState: { credential: { id: 'cfg-1' } },
-      storage: {},
+      storage: {
+        [APPLY_LOCATION_STATE_STORAGE_KEY]: JSON.stringify({ credential: { id: 'cfg-1' } }),
+      },
     });
 
     expect(getApplyEntryDecision({

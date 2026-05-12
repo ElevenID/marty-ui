@@ -27,12 +27,17 @@ import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import { useTranslation } from 'react-i18next';
 
 import { listCredentialTemplates } from '../../../../services/presentationPolicyApi';
+import { useAuth } from '../../../../hooks/useAuth';
 
 const ClaimsConfigurationStep = ({ policyConfig, onConfigChange }) => {
   const { t } = useTranslation('console');
+  const { organizationId } = useAuth();
   const { data: { templates: credentialTemplates = [], claims: availableClaims = [] } = {} } = useAsyncData(
     async () => {
-      const response = await listCredentialTemplates();
+      if (!organizationId) {
+        return { templates: [], claims: [] };
+      }
+      const response = await listCredentialTemplates({ organization_id: organizationId });
       const templates = response.data || response || [];
       const claims = templates.flatMap(template =>
         (template.claims || []).map(claim => ({
@@ -45,7 +50,7 @@ const ClaimsConfigurationStep = ({ policyConfig, onConfigChange }) => {
       );
       return { templates, claims };
     },
-    []
+    [organizationId]
   );
 
   const handleFieldChange = (field, value) => {

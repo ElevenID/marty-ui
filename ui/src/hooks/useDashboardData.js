@@ -16,6 +16,7 @@ import { listTrustProfiles, listCredentialTemplates, listPresentationPolicies } 
 import { listDeploymentProfiles } from '../services/deploymentProfilesApi';
 import { listFlows } from '../services/flowsApi';
 import { listApiKeys } from '../services/apiKeysApi';
+import { getKeyManagementConfig, listIssuerProfiles, listSigningKeys } from '../services/signingKeysApi';
 import { 
   getTeamSnapshot, 
   getRuntimeStatus, 
@@ -23,6 +24,10 @@ import {
   getOrganizationEnvironment,
   getOrganizationLifecycle,
 } from '../services/dashboardApi';
+import {
+  DEFAULT_KEY_MANAGEMENT_CONFIG,
+  normalizeKeyManagementConfig,
+} from '../components/console/deploy/keyManagementServiceCatalog';
 import { useAuth } from './useAuth';
 
 /**
@@ -33,6 +38,9 @@ export function useDashboardData() {
   const { organizationId } = useAuth();
   const [data, setData] = useState({
     trustProfiles: [],
+    signingKeys: [],
+    issuerProfiles: [],
+    keyManagementConfig: DEFAULT_KEY_MANAGEMENT_CONFIG,
     templates: [],
     policies: [],
     deployments: [],
@@ -73,6 +81,9 @@ export function useDashboardData() {
           policiesRes,
           deploymentsRes,
           flowsRes,
+          signingKeysRes,
+          issuerProfilesRes,
+          keyManagementConfigRes,
           apiKeysRes,
           healthRes,
           teamRes,
@@ -86,6 +97,9 @@ export function useDashboardData() {
           listPresentationPolicies({ organization_id: organizationId }),
           listDeploymentProfiles({ organization_id: organizationId }),
           listFlows({ organization_id: organizationId }),
+          listSigningKeys({ limit: 1 }),
+          listIssuerProfiles(),
+          getKeyManagementConfig(),
           listApiKeys(organizationId),
           fetch('/health').then((r) => (r.ok ? r.json() : { status: 'error' })),
           getTeamSnapshot(organizationId),
@@ -97,8 +111,19 @@ export function useDashboardData() {
 
         if (!mounted) return;
 
+        const rawSigningKeys = signingKeysRes.status === 'fulfilled' ? signingKeysRes.value : [];
+        const rawIssuerProfiles = issuerProfilesRes.status === 'fulfilled' ? issuerProfilesRes.value : { profiles: [] };
+        const rawKeyManagementConfig = keyManagementConfigRes.status === 'fulfilled'
+          ? keyManagementConfigRes.value
+          : DEFAULT_KEY_MANAGEMENT_CONFIG;
+
         setData({
           trustProfiles: trustProfilesRes.status === 'fulfilled' ? trustProfilesRes.value : [],
+          signingKeys: Array.isArray(rawSigningKeys)
+            ? rawSigningKeys
+            : (Array.isArray(rawSigningKeys?.keys) ? rawSigningKeys.keys : []),
+          issuerProfiles: Array.isArray(rawIssuerProfiles?.profiles) ? rawIssuerProfiles.profiles : [],
+          keyManagementConfig: normalizeKeyManagementConfig(rawKeyManagementConfig || DEFAULT_KEY_MANAGEMENT_CONFIG),
           templates: templatesRes.status === 'fulfilled' ? templatesRes.value : [],
           policies: policiesRes.status === 'fulfilled' ? policiesRes.value : [],
           deployments: deploymentsRes.status === 'fulfilled' ? deploymentsRes.value : [],

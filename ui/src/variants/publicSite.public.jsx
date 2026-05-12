@@ -89,8 +89,8 @@ export function renderMarketingRoutes({ login }) {
           <SubscriptionCheckout
             useAuth={useAuth}
             login={login}
-            setupPath="/console/org/setup"
-            billingPath="/console/org/billing"
+            setupPath="/console-handoff/org/setup"
+            billingPath="/console-handoff/org/billing"
           />
         }
       />

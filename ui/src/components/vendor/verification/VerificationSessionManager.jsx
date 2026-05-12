@@ -39,9 +39,11 @@ import {
   listVerificationSessions,
   getInspectionResult,
 } from '../../../services/verificationApi';
+import { startVerificationFlow } from '../../../services/zkVerificationApi';
 import PolicySelectStep from './steps/PolicySelectStep';
 import SessionConfigStep from './steps/SessionConfigStep';
 import QRDisplayStep from './steps/QRDisplayStep';
+import { formatOfficialReference } from '../../../utils/officialReferences';
 
 const WIZARD_STEPS = ['Select Policy', 'Configure Session', 'Scan & Verify'];
 
@@ -54,6 +56,17 @@ const STATUS_CHIP = {
 
 const ACTIVE_STATUSES   = ['pending'];
 const HISTORY_STATUSES  = ['completed', 'failed', 'expired'];
+
+function normalizeFlowSession(session) {
+  if (!session?.instance_id) return session;
+  return {
+    ...session,
+    session_id: session.instance_id,
+    status: session.status === 'awaiting_wallet' ? 'pending' : session.status,
+    dc_api_request_url: `/v1/flows/instances/${encodeURIComponent(session.instance_id)}/request?transport=dc_api`,
+    dc_api_submit_url: `/v1/flows/instances/${encodeURIComponent(session.instance_id)}/submit/dc-api`,
+  };
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -82,10 +95,7 @@ function formatDate(iso) {
   return new Date(iso).toLocaleString();
 }
 
-function truncateId(id) {
-  if (!id) return '—';
-  return id.length > 12 ? `${id.slice(0, 8)}…${id.slice(-4)}` : id;
-}
+const formatSessionReference = (id) => formatOfficialReference(id, 'record');
 
 function VerificationSessionManager() {
   const { user } = useAuth();
@@ -157,13 +167,23 @@ function VerificationSessionManager() {
       setWizardLoading(true);
       setWizardError(null);
       try {
-        const session = await startVerificationSession({
-          organization_id: user.organization_id,
-          policy_id: wizardData.policy_id || undefined,
-          inline_policy: wizardData.inline_policy || undefined,
-          purpose: wizardData.purpose || undefined,
-          request_inspection: wizardData.request_inspection || false,
-        });
+        let session;
+        try {
+          session = await startVerificationFlow({
+            organization_id: user.organization_id,
+            presentation_policy_id: wizardData.policy_id || undefined,
+            external_reference: wizardData.purpose || undefined,
+          });
+          session = normalizeFlowSession(session);
+        } catch {
+          session = await startVerificationSession({
+            organization_id: user.organization_id,
+            policy_id: wizardData.policy_id || undefined,
+            inline_policy: wizardData.inline_policy || undefined,
+            purpose: wizardData.purpose || undefined,
+            request_inspection: wizardData.request_inspection || false,
+          });
+        }
         setPendingSession(session);
         setWizardStep(2);
       } catch (err) {
@@ -215,7 +235,7 @@ function VerificationSessionManager() {
       <Table size="small">
         <TableHead>
           <TableRow>
-            <TableCell>Session ID</TableCell>
+            <TableCell>Session Reference</TableCell>
             <TableCell>Purpose</TableCell>
             <TableCell>Status</TableCell>
             <TableCell>Created</TableCell>
@@ -236,9 +256,9 @@ function VerificationSessionManager() {
             rows.map((session) => (
               <TableRow key={session.session_id} hover>
                 <TableCell>
-                  <Tooltip title={session.session_id}>
+                  <Tooltip title={formatSessionReference(session.session_id)}>
                     <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
-                      {truncateId(session.session_id)}
+                      {formatSessionReference(session.session_id)}
                     </Typography>
                   </Tooltip>
                 </TableCell>

@@ -7,10 +7,12 @@ const {
   mockNavigate,
   mockShowError,
   mockLoadAdminDashboardBootstrap,
+  mockIsAdminImpersonationEnabled,
 } = vi.hoisted(() => ({
   mockNavigate: vi.fn(),
   mockShowError: vi.fn(),
   mockLoadAdminDashboardBootstrap: vi.fn(),
+  mockIsAdminImpersonationEnabled: vi.fn(() => true),
 }));
 
 vi.mock('react-router-dom', async () => {
@@ -23,6 +25,12 @@ vi.mock('react-router-dom', async () => {
 
 vi.mock('../../hooks/useAuth', () => ({
   useAuth: () => ({
+    user: {
+      user_id: 'admin-1',
+      email: 'admin@example.com',
+      given_name: 'Admin',
+      family_name: 'User',
+    },
     keycloak: {
       token: 'admin-token',
       realm: 'demo',
@@ -46,9 +54,14 @@ vi.mock('../../application/admin', async () => {
   };
 });
 
+vi.mock('../../utils/runtimeConfig', () => ({
+  isAdminImpersonationEnabled: () => mockIsAdminImpersonationEnabled(),
+}));
+
 describe('AdminDashboard', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockIsAdminImpersonationEnabled.mockReturnValue(true);
     mockLoadAdminDashboardBootstrap.mockResolvedValue({
       stats: {
         passport: 5,
@@ -81,5 +94,16 @@ describe('AdminDashboard', () => {
     expect(await screen.findByText('Vendor Org')).toBeInTheDocument();
     expect(screen.getByText('5')).toBeInTheDocument();
     expect(mockLoadAdminDashboardBootstrap).toHaveBeenCalledTimes(1);
+  });
+
+  it('hides impersonation action when impersonation is disabled', async () => {
+    mockIsAdminImpersonationEnabled.mockReturnValue(false);
+
+    render(<AdminDashboard />);
+
+    expect(await screen.findByText('Vendor Org')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Impersonate' })).not.toBeInTheDocument();
+    expect(screen.getByText('Impersonation is disabled')).toBeInTheDocument();
+    expect(screen.getByText('Disabled')).toBeInTheDocument();
   });
 });

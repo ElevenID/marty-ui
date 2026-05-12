@@ -26,6 +26,36 @@ function createManualChunk(id: string) {
   return undefined
 }
 
+function isConsoleAppRoute(url = '') {
+  const pathname = url.split('?')[0]
+
+  if (!pathname.startsWith('/console')) {
+    return false
+  }
+
+  return !/\.[a-z0-9]+$/i.test(pathname)
+}
+
+function consoleEntryRewritePlugin() {
+  const rewriteConsoleRequest = (req: { url?: string }, _res: unknown, next: () => void) => {
+    if (req.url && isConsoleAppRoute(req.url)) {
+      req.url = '/console/index.html'
+    }
+
+    next()
+  }
+
+  return {
+    name: 'console-entry-rewrite',
+    configureServer(server: { middlewares: { use: (handler: typeof rewriteConsoleRequest) => void } }) {
+      server.middlewares.use(rewriteConsoleRequest)
+    },
+    configurePreviewServer(server: { middlewares: { use: (handler: typeof rewriteConsoleRequest) => void } }) {
+      server.middlewares.use(rewriteConsoleRequest)
+    },
+  }
+}
+
 // https://vitejs.dev/config/
 export default defineConfig(async ({ mode }) => {
   // Load env file based on `mode` in the current working directory.
@@ -116,6 +146,7 @@ export default defineConfig(async ({ mode }) => {
     },
     plugins: [
       react(),
+      consoleEntryRewritePlugin(),
       ...(isDev ? [checker({
         typescript: true,
         eslint: {
@@ -348,6 +379,10 @@ export default defineConfig(async ({ mode }) => {
       sourcemap: !isSelfhostBuild,
       chunkSizeWarningLimit: 1000, // Increase from default 500kB to 1000kB
       rollupOptions: {
+        input: {
+          main: fileURLToPath(new URL('./index.html', import.meta.url)),
+          console: fileURLToPath(new URL('./console/index.html', import.meta.url)),
+        },
         output: {
           manualChunks: createManualChunk,
         },

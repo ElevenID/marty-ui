@@ -3,7 +3,6 @@ import DLIcon from '@mui/icons-material/DirectionsCar';
 import BadgeIcon from '@mui/icons-material/Badge';
 import LoginIcon from '@mui/icons-material/Login';
 import CredentialIcon from '@mui/icons-material/CardMembership';
-import SchoolIcon from '@mui/icons-material/School';
 import BusinessIcon from '@mui/icons-material/Business';
 
 export const CREDENTIAL_CATALOG_TYPES = {
@@ -53,13 +52,13 @@ export const CREDENTIAL_CATALOG_TYPES = {
     requirements: ['Valid passport', 'Biometric photo'],
   },
   open_badge: {
-    description: 'Open Badge 3.0 professional development certificate — instantly issued, recognized by employers and institutions worldwide.',
-    icon: SchoolIcon,
-    category: 'education',
+    description: 'Open Badge 3.0-compatible membership credential — verifiable proof of active organization membership that can be used for passwordless sign-in where accepted.',
+    icon: CredentialIcon,
+    category: 'identity',
     processingTime: 'Instant upon issuance',
     requirements: ['Active ElevenID account'],
     format: 'vc+sd-jwt',
-    standard: 'W3C / Open Badge 3.0',
+    standard: '1EdTech Open Badges 3.0',
     worksWithLabel: 'Web & VC wallets',
   },
   MemberCredential: {
@@ -150,7 +149,7 @@ export function extractExistingApplicationIds(applications = []) {
  */
 export function extractApplicationStatusInfo(applications = []) {
   const statusByCredentialId = {};
-  const counts = { pending: 0, approved: 0, rejected: 0, credentialed: 0 };
+  const counts = { pending: 0, approved: 0, offered: 0, rejected: 0, credentialed: 0 };
 
   for (const app of applications) {
     const configId = app?.credential_configuration_id;
@@ -163,6 +162,8 @@ export function extractApplicationStatusInfo(applications = []) {
       counts.pending++;
     } else if (status === 'approved') {
       counts.approved++;
+    } else if (status === 'offered') {
+      counts.offered++;
     } else if (status === 'rejected') {
       counts.rejected++;
     } else if (['credentialed', 'issued'].includes(status)) {
@@ -184,11 +185,31 @@ export function filterCredentialCatalogItems(credentials = [], { searchTerm = ''
   });
 }
 
-export function buildCredentialApplicationNavigationState(credential) {
+export function resolveCredentialApplicationPath({
+  credentialId,
+  currentPathname = '',
+  isPreview = false,
+}) {
+  if (isPreview) {
+    return `/applicant/preview/applications/${credentialId}`;
+  }
+
+  if (currentPathname.startsWith('/console/applicant')) {
+    return `/console/applicant/apply/${credentialId}`;
+  }
+
+  return `/apply/${credentialId}`;
+}
+
+export function buildCredentialApplicationNavigationState(credential, options = {}) {
   const serializableCredential = { ...credential };
   delete serializableCredential.icon;
   return {
-    path: `/apply/${credential.id}`,
+    path: resolveCredentialApplicationPath({
+      credentialId: credential.id,
+      currentPathname: options.currentPathname,
+      isPreview: options.isPreview,
+    }),
     state: {
       credential: serializableCredential,
     },

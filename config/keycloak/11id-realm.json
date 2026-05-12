@@ -34,7 +34,7 @@
   "quickLoginCheckMilliSeconds": 1000,
   "maxDeltaTimeSeconds": 43200,
   "failureFactor": 5,
-  "organizationsEnabled": true,
+  "organizationsEnabled": false,
   "roles": {
     "realm": [
       {
@@ -461,6 +461,34 @@
             "id.token.claim": "true",
             "access.token.claim": "true",
             "claim.name": "picture",
+            "jsonType.label": "String"
+          }
+        },
+        {
+          "name": "impersonator_id",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usersessionmodel-note-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.session.note": "IMPERSONATOR_ID",
+            "userinfo.token.claim": "true",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "claim.name": "IMPERSONATOR_ID",
+            "jsonType.label": "String"
+          }
+        },
+        {
+          "name": "impersonator_username",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usersessionmodel-note-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.session.note": "IMPERSONATOR_USERNAME",
+            "userinfo.token.claim": "true",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "claim.name": "IMPERSONATOR_USERNAME",
             "jsonType.label": "String"
           }
         }

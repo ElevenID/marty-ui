@@ -29,6 +29,7 @@ import {
   resolveActiveOrgSelection,
 } from '../session/consoleSession';
 import {
+  createEnrichedUser,
   parseOrganizationClaim,
   normalizeCapabilities,
 } from '../session/authSession';
@@ -127,6 +128,54 @@ describe('Auth Callback → Session Bootstrap → Route Guard', () => {
 
   it('guard shows loading while auth state initializes', () => {
     expect(evaluateProtectedRoutePolicy({ isLoading: true, isAuthenticated: false })).toEqual({ kind: 'loading' });
+  });
+
+  it('preserves the recovered Marty org through auth enrichment, console bootstrap, and org guard evaluation', () => {
+    const rawUser = {
+      user_id: 'user-1',
+      roles: ['administrator'],
+      organization: {
+        'marty-org': { name: 'Marty Identity Platform' },
+        'org-2': { name: 'Beta Org' },
+      },
+    };
+
+    const enrichedUser = createEnrichedUser(rawUser, [], 'marty-org');
+
+    expect(enrichedUser.organization_id).toBe('marty-org');
+    expect(enrichedUser.organization_name).toBe('Marty Identity Platform');
+    expect(enrichedUser.organizations).toEqual([
+      { id: 'marty-org', name: 'Marty Identity Platform', display_name: 'Marty Identity Platform' },
+      { id: 'org-2', name: 'Beta Org', display_name: 'Beta Org' },
+    ]);
+
+    const consoleBootstrap = resolveConsoleBootstrap({
+      preferences: { last_view_mode: 'org', last_active_org_id: 'marty-org' },
+      memberships: enrichedUser.organizations,
+      localStoredOrgId: 'marty-org',
+    });
+
+    expect(consoleBootstrap).toEqual({
+      mode: 'org',
+      activeOrgId: 'marty-org',
+    });
+
+    expect(
+      evaluateOrgConsolePolicy({
+        consoleLoading: false,
+        mode: consoleBootstrap.mode,
+        activeOrgId: consoleBootstrap.activeOrgId,
+      })
+    ).toEqual({ kind: 'allow' });
+
+    expect(
+      evaluateProtectedRoutePolicy({
+        isLoading: false,
+        isAuthenticated: true,
+        user: enrichedUser,
+        requiredCapabilities: ['org:view'],
+      })
+    ).toEqual({ kind: 'allow' });
   });
 });
 

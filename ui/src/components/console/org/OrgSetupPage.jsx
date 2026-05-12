@@ -3,10 +3,9 @@
  * 
  * Blocking setup page for organization console.
  * User must select/join/create an organization before accessing org console.
- * Replaces the old MyOrganizationsPage at /organizations/mine.
+ * Replaces the old public-only organizations hub as the org-console gate.
  */
 
-import { useState } from 'react';
 import { useAsyncData } from '../../../hooks/useAsyncData';
 import {
   Box,
@@ -22,15 +21,6 @@ import {
   CircularProgress,
   Divider,
   Stack,
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  DialogActions,
-  TextField,
-  Select,
-  MenuItem,
-  FormControl,
-  InputLabel,
 } from '@mui/material';
 import BusinessIcon from '@mui/icons-material/Business';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
@@ -41,8 +31,12 @@ import SearchIcon from '@mui/icons-material/Search';
 import CodeIcon from '@mui/icons-material/Code';
 import { useNavigate, Navigate, useSearchParams } from 'react-router-dom';
 
-import { getMyOrganizations, createOrganization } from '../../../services/organizationsApi';
+import { getMyOrganizations } from '../../../services/organizationsApi';
+import { useAuth } from '../../../hooks/useAuth';
 import { useConsole } from '../../../contexts/ConsoleContext';
+import {
+  membershipHasOrgConsoleAccess,
+} from '../../../application/session/authSession';
 
 /**
  * Organization Setup Page Component
@@ -50,93 +44,60 @@ import { useConsole } from '../../../contexts/ConsoleContext';
 export function OrgSetupPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const { activeOrgId, setActiveOrgId, memberships, membershipsLoaded, refreshMemberships } = useConsole();
+  const {
+    activeOrgId,
+    setActiveOrgId,
+    setMode,
+    membershipsLoaded,
+  } = useConsole();
+  const {
+    organizationId: currentOrganizationId,
+    organizations: authOrganizations,
+    setActiveOrganizationId,
+  } = useAuth();
   const returnTo = searchParams.get('returnTo');
+  const createOnlyMode = searchParams.get('intent') === 'create';
+  const createOrganizationPath = (() => {
+    const params = new URLSearchParams();
+    if (returnTo) params.set('returnTo', returnTo);
+    const query = params.toString();
+    return query ? `/console/organizations/create?${query}` : '/console/organizations/create';
+  })();
   
   const { data: organizations = [], loading, error } = useAsyncData(
     () => getMyOrganizations(),
     []
   );
-  const [createDialogOpen, setCreateDialogOpen] = useState(false);
-  const [creating, setCreating] = useState(false);
-  const [createError, setCreateError] = useState(null);
+  const resolvedOrganizations = Array.isArray(organizations) && organizations.length > 0
+    ? organizations
+    : Array.isArray(authOrganizations)
+      ? authOrganizations
+      : [];
+  if (createOnlyMode) {
+    return <Navigate to={createOrganizationPath} replace />;
+  }
 
-  // Create org form state
-  const [orgName, setOrgName] = useState('');
-  const [displayName, setDisplayName] = useState('');
-  const [orgType, setOrgType] = useState('enterprise');
-  const [description, setDescription] = useState('');
-  const [contactEmail, setContactEmail] = useState('');
-
-  /**
-   * Redirect to catalog if user has memberships
-   * (placed after all hooks to comply with Rules of Hooks)
-   */
-  if (membershipsLoaded && memberships && memberships.length > 0) {
-    return <Navigate to={returnTo || '/console/applicant/catalog'} replace />;
+  if (membershipsLoaded && activeOrgId) {
+    return <Navigate to={returnTo || '/console/org'} replace />;
   }
 
   /**
    * Handle switching to an organization
    */
-  const handleSwitchToOrg = async (orgId) => {
+  const handleSelectOrganization = async (org) => {
     try {
-      await setActiveOrgId(orgId);
-      navigate(returnTo || '/console/org');
+      if (membershipHasOrgConsoleAccess(org)) {
+        await setActiveOrgId(org.id);
+        navigate(returnTo || '/console/org');
+        return;
+      }
+
+      await setMode('applicant');
+      setActiveOrganizationId(org.id);
+      navigate('/console/applicant/catalog');
     } catch (err) {
       console.error('[OrgSetupPage] Failed to switch organization:', err);
     }
-  };
-
-  /**
-   * Handle create organization
-   */
-  const handleCreateOrg = async () => {
-    if (!orgName || !displayName) {
-      setCreateError('Organization name and display name are required');
-      return;
-    }
-
-    try {
-      setCreating(true);
-      setCreateError(null);
-
-      const newOrg = await createOrganization({
-        name: orgName,
-        display_name: displayName,
-        org_type: orgType,
-        description: description || undefined,
-        contact_email: contactEmail || undefined,
-      });
-
-      // Refresh memberships
-      await refreshMemberships();
-
-      // Auto-select the new org and navigate to org console
-      await setActiveOrgId(newOrg.id);
-      navigate(returnTo || '/console/org');
-
-      // Close dialog
-      setCreateDialogOpen(false);
-      resetCreateForm();
-    } catch (err) {
-      console.error('[OrgSetupPage] Failed to create organization:', err);
-      setCreateError(err.message || 'Failed to create organization');
-    } finally {
-      setCreating(false);
-    }
-  };
-
-  /**
-   * Reset create form
-   */
-  const resetCreateForm = () => {
-    setOrgName('');
-    setDisplayName('');
-    setOrgType('enterprise');
-    setDescription('');
-    setContactEmail('');
-    setCreateError(null);
   };
 
   /**
@@ -165,21 +126,26 @@ export function OrgSetupPage() {
   /**
    * Get role badge
    */
-  const getRoleBadge = (role, isAdminCapable) => {
+  const getRoleBadge = (roles, hasOrgConsoleAccess) => {
     const roleColors = {
       owner: 'primary',
       admin: 'secondary',
-      member: 'default',
+      access_admin: 'secondary',
+      catalog_admin: 'success',
+      reviewer: 'info',
+      operator: 'warning',
       viewer: 'default',
+      applicant: 'default',
     };
+
+    const primaryRole = Array.isArray(roles) && roles.length > 0 ? roles[0] : null;
 
     return (
       <Chip
-        icon={isAdminCapable ? <AdminPanelSettingsIcon fontSize="small" /> : null}
-        label={role}
-        color={roleColors[role] || 'default'}
+        icon={hasOrgConsoleAccess ? <AdminPanelSettingsIcon fontSize="small" /> : null}
+        label={primaryRole?.display_name || primaryRole?.name || 'No roles'}
+        color={roleColors[primaryRole?.name] || 'default'}
         size="small"
-        sx={{ textTransform: 'capitalize' }}
       />
     );
   };
@@ -214,7 +180,7 @@ export function OrgSetupPage() {
       )}
 
       {/* Empty State - No Organizations */}
-      {!loading && organizations.length === 0 && (
+      {!loading && resolvedOrganizations.length === 0 && (
         <Card sx={{ textAlign: 'center', py: 6, mb: 3 }}>
           <CardContent>
             <BusinessIcon sx={{ fontSize: 64, color: 'text.secondary', mb: 2 }} />
@@ -222,35 +188,58 @@ export function OrgSetupPage() {
               No Organizations Yet
             </Typography>
             <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-              Create an organization to get started with issuing credentials.
+              Create an organization, discover a public organization, or join with a code to get started.
             </Typography>
-            <Button
-              variant="contained"
-              startIcon={<AddIcon />}
-              onClick={() => setCreateDialogOpen(true)}
-            >
-              Create Organization
-            </Button>
+            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} justifyContent="center">
+              <Button
+                variant="contained"
+                startIcon={<AddIcon />}
+                onClick={() => navigate(createOrganizationPath)}
+              >
+                Create Organization
+              </Button>
+              <Button
+                variant="outlined"
+                startIcon={<SearchIcon />}
+                onClick={() => navigate('/console/organizations/discover')}
+              >
+                Discover Organizations
+              </Button>
+              <Button
+                variant="outlined"
+                startIcon={<CodeIcon />}
+                onClick={() => navigate('/console/organizations/join?mode=code')}
+              >
+                Use Join Code
+              </Button>
+            </Stack>
           </CardContent>
         </Card>
       )}
 
       {/* Organizations Grid */}
-      {organizations.length > 0 && (
+      {resolvedOrganizations.length > 0 && (
         <>
           <Typography variant="h6" gutterBottom sx={{ mb: 2 }}>
             Select from memberships
           </Typography>
           <Grid container spacing={3} sx={{ mb: 4 }}>
-            {organizations.map((org) => (
+            {resolvedOrganizations.map((org) => (
               <Grid item xs={12} sm={6} md={4} key={org.id}>
+                {(() => {
+                  const hasOrgConsoleAccess = membershipHasOrgConsoleAccess(org);
+                  const isSelected = hasOrgConsoleAccess
+                    ? org.id === activeOrgId
+                    : org.id === currentOrganizationId;
+
+                  return (
                 <Card
                   sx={{
                     height: '100%',
                     display: 'flex',
                     flexDirection: 'column',
-                    border: org.id === activeOrgId ? 2 : 1,
-                    borderColor: org.id === activeOrgId ? 'primary.main' : 'divider',
+                    border: isSelected ? 2 : 1,
+                    borderColor: isSelected ? 'primary.main' : 'divider',
                     transition: 'all 0.2s',
                     '&:hover': {
                       boxShadow: 4,
@@ -283,8 +272,8 @@ export function OrgSetupPage() {
                           Role:
                         </Typography>
                         {getRoleBadge(
-                          org.membership?.role,
-                          org.membership?.is_admin_capable
+                          org.membership?.roles,
+                          org.membership?.has_org_console_access
                         )}
                       </Box>
 
@@ -320,14 +309,20 @@ export function OrgSetupPage() {
                   <CardActions sx={{ p: 2, pt: 0 }}>
                     <Button
                       fullWidth
-                      variant={org.id === activeOrgId ? 'outlined' : 'contained'}
-                      onClick={() => handleSwitchToOrg(org.id)}
+                      variant={isSelected ? 'outlined' : 'contained'}
+                      onClick={() => handleSelectOrganization(org)}
                       disabled={org.membership?.status !== 'active'}
                     >
-                      {org.id === activeOrgId ? 'Current Organization' : 'Switch to This Org'}
+                      {hasOrgConsoleAccess
+                        ? (org.id === activeOrgId ? 'Current Organization' : 'Open Org Console')
+                        : (org.id === currentOrganizationId
+                          ? 'Current Applicant Organization'
+                          : 'Use for Applications')}
                     </Button>
                   </CardActions>
                 </Card>
+                  );
+                })()}
               </Grid>
             ))}
           </Grid>
@@ -336,113 +331,34 @@ export function OrgSetupPage() {
           <Divider sx={{ my: 4 }} />
           <Box sx={{ textAlign: 'center' }}>
             <Typography variant="h6" gutterBottom>
-              Or Create a New Organization
+              Manage Organizations
             </Typography>
-            <Stack direction="row" spacing={2} justifyContent="center" sx={{ mt: 2 }}>
+            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} justifyContent="center" sx={{ mt: 2 }}>
               <Button
                 variant="outlined"
                 startIcon={<AddIcon />}
-                onClick={() => setCreateDialogOpen(true)}
+                onClick={() => navigate(createOrganizationPath)}
               >
                 Create Organization
+              </Button>
+              <Button
+                variant="outlined"
+                startIcon={<SearchIcon />}
+                onClick={() => navigate('/console/organizations/discover')}
+              >
+                Discover Organizations
+              </Button>
+              <Button
+                variant="outlined"
+                startIcon={<CodeIcon />}
+                onClick={() => navigate('/console/organizations/join?mode=code')}
+              >
+                Use Join Code
               </Button>
             </Stack>
           </Box>
         </>
       )}
-
-      {/* Create Organization Dialog */}
-      <Dialog
-        open={createDialogOpen}
-        onClose={() => {
-          setCreateDialogOpen(false);
-          resetCreateForm();
-        }}
-        maxWidth="sm"
-        fullWidth
-      >
-        <DialogTitle>Create Organization</DialogTitle>
-        <DialogContent>
-          <Box sx={{ pt: 1 }}>
-            {createError && (
-              <Alert severity="error" sx={{ mb: 2 }}>
-                {createError}
-              </Alert>
-            )}
-
-            <TextField
-              fullWidth
-              label="Organization Name *"
-              value={orgName}
-              onChange={(e) => setOrgName(e.target.value)}
-              helperText="Unique identifier (lowercase, no spaces)"
-              sx={{ mb: 2 }}
-            />
-
-            <TextField
-              fullWidth
-              label="Display Name *"
-              value={displayName}
-              onChange={(e) => setDisplayName(e.target.value)}
-              helperText="How your organization appears to users"
-              sx={{ mb: 2 }}
-            />
-
-            <FormControl fullWidth sx={{ mb: 2 }}>
-              <InputLabel>Organization Type</InputLabel>
-              <Select
-                value={orgType}
-                onChange={(e) => setOrgType(e.target.value)}
-                label="Organization Type"
-              >
-                <MenuItem value="enterprise">Enterprise</MenuItem>
-                <MenuItem value="startup">Startup</MenuItem>
-                <MenuItem value="individual">Individual</MenuItem>
-                <MenuItem value="government">Government</MenuItem>
-                <MenuItem value="education">Education</MenuItem>
-              </Select>
-            </FormControl>
-
-            <TextField
-              fullWidth
-              label="Description"
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              multiline
-              rows={3}
-              helperText="Optional description of your organization"
-              sx={{ mb: 2 }}
-            />
-
-            <TextField
-              fullWidth
-              label="Contact Email"
-              type="email"
-              value={contactEmail}
-              onChange={(e) => setContactEmail(e.target.value)}
-              helperText="Optional contact email"
-            />
-          </Box>
-        </DialogContent>
-        <DialogActions>
-          <Button
-            onClick={() => {
-              setCreateDialogOpen(false);
-              resetCreateForm();
-            }}
-            disabled={creating}
-          >
-            Cancel
-          </Button>
-          <Button
-            onClick={handleCreateOrg}
-            variant="contained"
-            disabled={creating || !orgName || !displayName}
-          >
-            {creating ? <CircularProgress size={24} /> : 'Create'}
-          </Button>
-        </DialogActions>
-      </Dialog>
     </Container>
   );
 }

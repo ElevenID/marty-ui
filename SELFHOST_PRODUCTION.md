@@ -12,6 +12,13 @@ This stack is for running a production-like Marty deployment on the same machine
 - Standalone OpenBao state and exports under `SELFHOST_OPENBAO_STATE_DIR` and `SELFHOST_OPENBAO_EXPORT_DIR`
 - Dedicated Cloudflare tunnel sidecar driven by its own env file
 
+## Config boundary map
+
+To avoid cross-domain redirect and OIDC drift between environments, use the scoped layout in [deploy-config/README.md](deploy-config/README.md).
+
+- Selfhost production guidance: [deploy-config/env/selfhost-production/README.md](deploy-config/env/selfhost-production/README.md)
+- Tunnel beta guidance: [deploy-config/env/tunnel-beta/README.md](deploy-config/env/tunnel-beta/README.md)
+
 ## What is production-specific
 
 - `MARTY_MIGRATION_PROFILE=production` skips the demo org and demo template Alembic revisions

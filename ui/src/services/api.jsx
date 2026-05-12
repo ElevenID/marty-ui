@@ -35,12 +35,39 @@ export const {
   apiClient,
 } = client;
 
+export async function getWithRetryConfig(endpoint, options = {}, retryConfig = {}) {
+  let url = endpoint.startsWith('http') ? endpoint : `${import.meta.env.VITE_API_URL || ''}${endpoint}`;
+  if (options.params) {
+    const query = new URLSearchParams(options.params).toString();
+    if (query) {
+      url += `${url.includes('?') ? '&' : '?'}${query}`;
+    }
+  }
+
+  const { params: _params, ...fetchOptions } = options;
+  const response = await fetchWithRetry(
+    url,
+    {
+      ...fetchOptions,
+      method: 'GET',
+      headers: { 'Content-Type': 'application/json', ...fetchOptions.headers },
+    },
+    retryConfig,
+  );
+  const contentType = response.headers.get('Content-Type');
+  if (!contentType || !contentType.includes('application/json')) {
+    return null;
+  }
+  return response.json();
+}
+
 export { getErrorMessage, getErrorCode, isAuthError, isRetryableError, handleApiError };
 
 export default {
   fetchWithRetry,
   apiRequest,
   get,
+  getWithRetryConfig,
   post,
   put,
   patch,

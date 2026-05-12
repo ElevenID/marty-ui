@@ -33,6 +33,7 @@ import VisibilityIcon from '@mui/icons-material/Visibility';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import CancelIcon from '@mui/icons-material/Cancel';
 import RefreshIcon from '@mui/icons-material/Refresh';
+import ReplayIcon from '@mui/icons-material/Replay';
 import SendIcon from '@mui/icons-material/Send';
 import { Link, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -43,7 +44,9 @@ import {
   issueOrganizationApplication,
   reviewOrganizationApplication,
 } from '../../../services/applicantApi';
+import { generateIssuanceOffer } from '../../../services/credentialsApi';
 import { loadOrganizationApplications } from '../../../application/applications';
+import { pickOfficialReference } from '../../../utils/officialReferences';
 
 import { ResourcePage, EmptyState, EmptyStates, StatusChip } from '../../common';
 
@@ -68,14 +71,14 @@ function ApplicationsPage() {
   const { t } = useTranslation('console');
   const { organizationId } = useAuth();
   const navigate = useNavigate();
-  const { showError } = useNotifications();
+  const { showError, showSuccess } = useNotifications();
   const { data: _applicationsData, loading, error, reload } = useAsyncData(async () => {
     if (!organizationId) return [];
     return loadOrganizationApplications({ organizationId });
   }, [organizationId]);
   const applications = _applicationsData ?? [];
   const [searchQuery, setSearchQuery] = useState('');
-  const [statusFilter, setStatusFilter] = useState('pending');
+  const [statusFilter, setStatusFilter] = useState('all');
 
   const handleApprove = async (applicationId) => {
     try {
@@ -106,9 +109,25 @@ function ApplicationsPage() {
     }
   };
 
+  const handleReissue = async (applicationId) => {
+    try {
+      await generateIssuanceOffer(applicationId);
+      showSuccess('New wallet invite generated — the applicant can now re-claim their credential.');
+      await reload();
+    } catch (err) {
+      showError(err.message || 'Failed to reissue credential');
+    }
+  };
+
   const filteredApplications = applications.filter((app) => {
     const q = searchQuery.toLowerCase();
+    const applicationReference = pickOfficialReference({
+      reference: app.reference,
+      rawId: app.id,
+      kind: 'application',
+    });
     const matchesSearch = app.id.toLowerCase().includes(q) ||
+      applicationReference.toLowerCase().includes(q) ||
       app.applicant.toLowerCase().includes(q) ||
       app.credentialType.toLowerCase().includes(q);
     const matchesStatus = statusFilter === 'all' ||
@@ -181,7 +200,7 @@ function ApplicationsPage() {
           <Table>
             <TableHead>
               <TableRow>
-                <TableCell>{t('operate.applications.tableHeaders.applicationId')}</TableCell>
+                <TableCell>{t('operate.applications.tableHeaders.applicationReference', 'Application Reference')}</TableCell>
                 <TableCell>{t('operate.applications.tableHeaders.applicant')}</TableCell>
                 <TableCell>{t('operate.applications.tableHeaders.credentialType')}</TableCell>
                 <TableCell>{t('operate.applications.tableHeaders.submitted')}</TableCell>
@@ -213,7 +232,11 @@ function ApplicationsPage() {
                   >
                     <TableCell>
                       <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
-                        {app.id}
+                        {pickOfficialReference({
+                          reference: app.reference,
+                          rawId: app.id,
+                          kind: 'application',
+                        })}
                       </Typography>
                     </TableCell>
                     <TableCell>{app.applicant}</TableCell>
@@ -272,6 +295,13 @@ function ApplicationsPage() {
                         <Tooltip title={t('operate.issuance.title')}>
                           <IconButton size="small" color="primary" onClick={() => handleIssue(app.id)}>
                             <SendIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                      )}
+                      {(app.rawStatus === 'credential_issued' || app.rawStatus === 'wallet_invite_ready') && (
+                        <Tooltip title="Resend wallet invite">
+                          <IconButton size="small" color="secondary" onClick={() => handleReissue(app.id)}>
+                            <ReplayIcon fontSize="small" />
                           </IconButton>
                         </Tooltip>
                       )}

@@ -29,13 +29,13 @@ import { ResourcePage, StatusChip, EmptyState, EmptyStates } from '../../common'
 import { TrustProvider } from '../../trust';
 import { useAsyncData } from '../../../hooks/useAsyncData';
 import { useAuth } from '../../../hooks/useAuth';
-import { listTrustProfiles } from '../../../services/presentationPolicyApi';
-
-const getTrustTabs = (t) => [
-  { label: t('trust.trustProfiles'), path: '/console/org/trust/profiles' },
-  { label: t('trust.trustedIssuers'), path: '/console/org/trust/issuers' },
-  { label: t('trust.revocationProfiles'), path: '/console/org/trust/revocation' },
-];
+import { listRevocationProfiles, listTrustProfiles } from '../../../services/presentationPolicyApi';
+import { getKeyManagementConfig, listIssuerProfiles, listSigningKeys } from '../../../services/signingKeysApi';
+import {
+  DEFAULT_KEY_MANAGEMENT_CONFIG,
+  getDefaultKeyManagementService,
+  normalizeKeyManagementConfig,
+} from '../deploy/keyManagementServiceCatalog';
 
 const getBreadcrumbs = (t) => [
   { label: t('trust.breadcrumbs.console'), path: '/console' },
@@ -53,6 +53,77 @@ function TrustProfilesPage() {
     [organizationId]
   );
 
+  const safeProfiles = Array.isArray(profiles) ? profiles : [];
+  const { data: dependencies = { signingKeys: [], issuerProfiles: [], revocationProfiles: [], keyManagementConfig: DEFAULT_KEY_MANAGEMENT_CONFIG } } = useAsyncData(
+    async () => {
+      if (!organizationId) {
+        return {
+          signingKeys: [],
+          issuerProfiles: [],
+          revocationProfiles: [],
+          keyManagementConfig: DEFAULT_KEY_MANAGEMENT_CONFIG,
+        };
+      }
+
+      const [signingKeysResult, issuerProfilesResult, keyManagementConfigResult, revocationProfilesResult] = await Promise.all([
+        listSigningKeys({ limit: 1 }).catch(() => ({ keys: [] })),
+        listIssuerProfiles().catch(() => ({ profiles: [] })),
+        getKeyManagementConfig().catch(() => DEFAULT_KEY_MANAGEMENT_CONFIG),
+        listRevocationProfiles({ organization_id: organizationId, limit: 1 }).catch(() => []),
+      ]);
+
+      const signingKeys = Array.isArray(signingKeysResult)
+        ? signingKeysResult
+        : (Array.isArray(signingKeysResult?.keys) ? signingKeysResult.keys : []);
+      const issuerProfiles = Array.isArray(issuerProfilesResult?.profiles)
+        ? issuerProfilesResult.profiles
+        : [];
+
+      return {
+        signingKeys,
+        issuerProfiles,
+        revocationProfiles: Array.isArray(revocationProfilesResult) ? revocationProfilesResult : [],
+        keyManagementConfig: normalizeKeyManagementConfig(keyManagementConfigResult || DEFAULT_KEY_MANAGEMENT_CONFIG),
+      };
+    },
+    [organizationId]
+  );
+  const safeDependencies = dependencies ?? {
+    signingKeys: [],
+    issuerProfiles: [],
+    revocationProfiles: [],
+    keyManagementConfig: DEFAULT_KEY_MANAGEMENT_CONFIG,
+  };
+  const defaultSigningService = getDefaultKeyManagementService(safeDependencies.keyManagementConfig);
+  const hasManagedIssuerInput = safeDependencies.issuerProfiles.length > 0 || safeDependencies.signingKeys.length > 0;
+
+  const trustProfilePrerequisites = [
+    {
+      label: t('trust.trustProfilesPage.prerequisites.keyManagement', { defaultValue: 'Key Management Service' }),
+      status: defaultSigningService ? 'ready' : 'missing',
+      path: '/console/org/deploy/key-management',
+    },
+    {
+      label: t('trust.trustProfilesPage.prerequisites.issuerIdentity', { defaultValue: 'Issuer Identity or Signing Key' }),
+      status: hasManagedIssuerInput ? 'ready' : 'missing',
+      path: '/console/org/deploy/issuer-identity',
+    },
+    {
+      label: t('trust.trustProfilesPage.prerequisites.revocationProfile', { defaultValue: 'Revocation Profile' }),
+      status: safeDependencies.revocationProfiles.length > 0 ? 'ready' : 'missing',
+      path: '/console/org/trust/revocation',
+    },
+  ];
+
+  const getLastUpdatedLabel = (profile) => {
+    const raw = profile?.updated_at || profile?.updatedAt || profile?.created_at || profile?.createdAt;
+    if (!raw) {
+      return '—';
+    }
+    const parsed = new Date(raw);
+    return Number.isNaN(parsed.getTime()) ? '—' : parsed.toLocaleDateString();
+  };
+
   return (
     <TrustProvider>
       <ResourcePage
@@ -61,7 +132,6 @@ function TrustProfilesPage() {
         resourceName={t('trust.trustProfiles')}
         buildPath="/console/org/trust/profiles/new"
         newPath="/console/org/trust/profiles/new?mode=advanced"
-        tabs={getTrustTabs(t)}
         breadcrumbs={getBreadcrumbs(t)}
       >
         {error && (
@@ -72,8 +142,15 @@ function TrustProfilesPage() {
 
         {loading ? (
           <LinearProgress />
-        ) : profiles.length === 0 ? (
-          <EmptyState {...EmptyStates.trustProfiles} />
+        ) : safeProfiles.length === 0 ? (
+          <EmptyState
+            {...EmptyStates.trustProfiles}
+            prerequisites={trustProfilePrerequisites}
+            whyItMatters={t(
+              'trust.trustProfilesPage.prerequisites.whyItMatters',
+              { defaultValue: 'Trust profiles validate issuer signatures and revocation state, so key management, issuer identity, and revocation setup should come first.' }
+            )}
+          />
         ) : (
           <TableContainer component={Paper}>
             <Table>
@@ -89,7 +166,7 @@ function TrustProfilesPage() {
                 </TableRow>
               </TableHead>
               <TableBody>
-                {profiles.map((profile) => (
+                {safeProfiles.map((profile) => (
                     <TableRow key={profile.id} hover>
                       <TableCell>
                         <Typography variant="body2" fontWeight={500}>
@@ -109,7 +186,7 @@ function TrustProfilesPage() {
                       <TableCell align="right">{profile.trusted_issuers?.length ?? profile.trustedIssuers ?? 0}</TableCell>
                       <TableCell align="right">{profile.validation_rules?.allowed_algorithms?.length ?? profile.validationRules ?? 0}</TableCell>
                       <TableCell>
-                        {new Date(profile.updated_at || profile.updatedAt).toLocaleDateString()}
+                        {getLastUpdatedLabel(profile)}
                       </TableCell>
                       <TableCell align="right">
                         <Tooltip title={t('trust.actions.viewDetails')}>

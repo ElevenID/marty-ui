@@ -21,6 +21,41 @@ from ...domain.entities import OIDCUserInfo
 logger = logging.getLogger(__name__)
 
 
+def decode_jwt_claims(token: str | None) -> dict[str, Any]:
+    """Decode JWT claims without signature verification."""
+    if not token:
+        return {}
+
+    parts = token.split(".")
+    if len(parts) != 3:
+        return {}
+
+    payload = parts[1]
+    padding = 4 - len(payload) % 4
+    if padding != 4:
+        payload += "=" * padding
+
+    try:
+        claims_json = base64.urlsafe_b64decode(payload).decode("utf-8")
+        return json.loads(claims_json)
+    except (ValueError, json.JSONDecodeError):
+        return {}
+
+
+def build_oidc_user_info(id_token: str | None = None, access_token: str | None = None) -> OIDCUserInfo:
+    """Build OIDC user info from Keycloak-issued ID/access tokens."""
+    id_claims = decode_jwt_claims(id_token)
+    access_claims = decode_jwt_claims(access_token)
+
+    if not id_claims and not access_claims:
+        raise ValueError("Invalid token payload")
+
+    if id_claims:
+        return OIDCUserInfo.from_claims(id_claims, access_claims)
+
+    return OIDCUserInfo.from_claims(access_claims)
+
+
 @dataclass
 class OIDCConfig:
     """OIDC configuration for Keycloak."""
@@ -141,7 +176,7 @@ class KeycloakOIDCAdapter(OIDCProviderPort):
             
             return response.json()
     
-    def parse_id_token(self, id_token: str) -> OIDCUserInfo:
+    def parse_id_token(self, id_token: str, access_token: str | None = None) -> OIDCUserInfo:
         """
         Parse user claims from ID token.
         
@@ -150,24 +185,10 @@ class KeycloakOIDCAdapter(OIDCProviderPort):
         All user claims are included in the ID token per Keycloak configuration.
         """
         try:
-            # JWT structure: header.payload.signature
-            parts = id_token.split(".")
-            if len(parts) != 3:
-                raise ValueError("Invalid ID token format")
-            
-            # Decode the payload (middle part)
-            payload = parts[1]
-            padding = 4 - len(payload) % 4
-            if padding != 4:
-                payload += "=" * padding
-            
-            claims_json = base64.urlsafe_b64decode(payload).decode("utf-8")
-            claims = json.loads(claims_json)
-            
-            logger.debug(f"Parsed ID token for subject: {claims.get('sub')}")
-            return OIDCUserInfo.from_claims(claims)
-            
-        except (ValueError, json.JSONDecodeError) as e:
+            oidc_user = build_oidc_user_info(id_token=id_token, access_token=access_token)
+            logger.debug("Parsed Keycloak token claims for subject: %s", oidc_user.sub)
+            return oidc_user
+        except ValueError as e:
             logger.error(f"Failed to parse ID token: {e}")
             raise ValueError(f"Invalid ID token: {e}")
     

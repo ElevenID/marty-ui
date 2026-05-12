@@ -47,14 +47,36 @@ export const ADMIN_VENDOR_NAV = [
     icon: DesignServicesIcon,
     description: 'Trust Profiles, Credential Templates, Application Rules, Compliance',
     children: [
-      { id: 'trust-profiles', label: 'Trust Profiles', path: '/console/org/trust/profiles' },
+      {
+        id: 'trust-profiles',
+        label: 'Trust Profiles',
+        path: '/console/org/trust/profiles',
+        requiredPermission: { resource: 'trust-profile', action: 'view' },
+      },
+      {
+        id: 'revocation-profiles',
+        label: 'Revocation Profiles',
+        path: '/console/org/trust/revocation',
+        requiredPermission: { resource: 'revocation-profile', action: 'view' },
+      },
       { 
         id: 'credential-templates', 
         label: 'Credential Templates', 
         path: '/console/org/templates/credentials',
+        requiredPermission: { resource: 'credential-template', action: 'view' },
         children: [
-          { id: 'application-templates', label: 'Application Rules', path: '/console/org/templates/applications' },
-          { id: 'compliance-profiles', label: 'Compliance Profiles', path: '/console/org/policies/compliance' },
+          {
+            id: 'application-templates',
+            label: 'Application Rules',
+            path: '/console/org/templates/applications',
+            requiredPermission: { resource: 'application-template', action: 'view' },
+          },
+          {
+            id: 'compliance-profiles',
+            label: 'Compliance Profiles',
+            path: '/console/org/policies/compliance',
+            requiredPermission: { resource: 'compliance-profile', action: 'view' },
+          },
         ],
       },
     ],
@@ -71,10 +93,21 @@ export const ADMIN_VENDOR_NAV = [
         label: 'Issuance Flows', 
         path: '/console/org/flows/definitions', 
         primary: true,
-        icon: AccountTreeIcon,
+        requiredPermission: { resource: 'flow-definition', action: 'view' },
       },
-      { id: 'deployment-profiles', label: 'Deployment Profiles', path: '/console/org/deploy/profiles' },
-      { id: 'signing-keys', label: 'Signing Keys', path: '/console/org/deploy/signing-keys' },
+      {
+        id: 'deployment-profiles',
+        label: 'Deployment Profiles',
+        path: '/console/org/deploy/profiles',
+        requiredPermission: { resource: 'deployment-profile', action: 'view' },
+      },
+      { id: 'issuer-identity', label: 'Issuer Identity', path: '/console/org/deploy/issuer-identity' },
+      {
+        id: 'key-management',
+        label: 'Key Management',
+        path: '/console/org/deploy/key-management',
+        requiredPermission: { resource: 'signing-key', action: 'view' },
+      },
     ],
   },
   {
@@ -84,10 +117,31 @@ export const ADMIN_VENDOR_NAV = [
     icon: PlayArrowIcon,
     description: 'Applications, Issued Credentials, Flow Instances',
     children: [
-      { id: 'applications', label: 'Applicant Submissions', path: '/console/org/operate/applications', badge: true },
-      { id: 'issued-credentials', label: 'Issued Credentials', path: '/console/org/operate/issuance' },
-      { id: 'flow-instances', label: 'Flow Instances', path: '/console/org/operate/flow-instances' },
-      { id: 'verify', label: 'Verification Sessions', path: '/console/org/operate/verify' },
+      {
+        id: 'applications',
+        label: 'Applicant Submissions',
+        path: '/console/org/operate/applications',
+        badge: true,
+        requiredPermission: { resource: 'application', action: 'view' },
+      },
+      {
+        id: 'issued-credentials',
+        label: 'Issued Credentials',
+        path: '/console/org/operate/issuance',
+        requiredPermission: { resource: 'issuance', action: 'view' },
+      },
+      {
+        id: 'flow-instances',
+        label: 'Flow Instances',
+        path: '/console/org/operate/flow-instances',
+        requiredPermission: { resource: 'flow-instance', action: 'view' },
+      },
+      {
+        id: 'verify',
+        label: 'Verification Sessions',
+        path: '/console/org/operate/verify',
+        requiredPermission: { resource: 'verification', action: 'view' },
+      },
     ],
   },
   {
@@ -95,12 +149,17 @@ export const ADMIN_VENDOR_NAV = [
     label: 'Org',
     path: '/console/org',
     icon: BusinessIcon,
-    description: 'Organization, Team, Roles, Notifications',
+    description: 'Organization, Team, Roles, API Keys, Webhooks',
     children: [
-      { id: 'organization', label: 'Organization', path: '/console/org/settings' },
+      { id: 'my-organizations', label: 'My Organizations', path: '/console/organizations' },
+      { id: 'organization', label: 'Organization', path: '/console/org/settings', requiredPermission: { resource: 'organization', action: 'view' } },
       { id: 'team', label: 'Team', path: '/console/org/team', requiredPermission: { resource: 'team', action: 'view' } },
+      { id: 'membership-requests', label: 'Membership Requests', path: '/console/org/membership-requests', requiredPermission: { resource: 'team', action: 'view' } },
       { id: 'roles', label: 'Roles', path: '/console/org/roles', requiredPermission: { resource: 'role', action: 'view' } },
-      { id: 'notifications', label: 'Notifications', path: '/console/org/notifications' },
+      { id: 'role-requests', label: 'Role Requests', path: '/console/org/role-requests', requiredPermission: { resource: 'role', action: 'view' } },
+      { id: 'api-keys', label: 'API Keys', path: '/console/org/api-keys', requiredPermission: { resource: 'api-key', action: 'view' } },
+      { id: 'webhooks', label: 'Webhooks', path: '/console/org/webhooks', requiredPermission: { resource: 'webhook', action: 'view' } },
+      { id: 'notifications', label: 'Notifications', path: '/console/org/notifications', requiredPermission: { resource: 'notification', action: 'view' } },
     ],
   },
   {
@@ -110,6 +169,7 @@ export const ADMIN_VENDOR_NAV = [
     icon: HistoryIcon,
     description: 'Audit Events',
     exact: true,
+    requiredPermission: { resource: 'audit', action: 'view' },
   },
   {
     id: 'billing',
@@ -138,6 +198,13 @@ export const APPLICANT_NAV = [
     label: 'Catalog',
     path: '/console/applicant/catalog',
     icon: StorefrontIcon,
+    exact: true,
+  },
+  {
+    id: 'organizations',
+    label: 'Organizations',
+    path: '/console/organizations',
+    icon: BusinessIcon,
     exact: true,
   },
   {
@@ -170,11 +237,13 @@ export const PUBLIC_NAV = [
  */
 export const DASHBOARD_QUICK_ACTIONS = {
   adminVendor: [
-    { id: 'create-flow', label: 'Create Issuance Flow', path: '/console/org/flows/definitions/new', icon: AccountTreeIcon, primary: true },
+    { id: 'register-signing-service', label: 'Register Signing Service', path: '/console/org/deploy/key-management/services/new', icon: CloudUploadIcon },
+    { id: 'create-issuer-identity', label: 'Set Up Issuer Identity', path: '/console/org/deploy/issuer-identity', icon: BadgeIcon },
     { id: 'create-trust-profile', label: 'Create Trust Profile', path: '/console/org/trust/profiles/new', icon: VerifiedUserIcon },
     { id: 'create-template', label: 'Create Credential Template', path: '/console/org/templates/credentials/new', icon: DescriptionIcon },
     { id: 'create-policy', label: 'Create Compliance Profile', path: '/console/org/policies/compliance/new', icon: PolicyIcon },
-    { id: 'generate-signing-key', label: 'Generate Signing Key', path: '/console/org/deploy/signing-keys/new', icon: CloudUploadIcon },
+    { id: 'generate-api-key', label: 'Generate API Key', path: '/console/org/api-keys', icon: CloudUploadIcon },
+    { id: 'create-flow', label: 'Create Issuance Flow', path: '/console/org/flows/definitions/new', icon: AccountTreeIcon, primary: true },
   ],
   applicant: [
     { id: 'browse-catalog', label: 'Browse Credentials', path: '/console/applicant/catalog', icon: StorefrontIcon },
@@ -209,22 +278,71 @@ export function getNavigationForRole(role) {
 /**
  * Find active navigation item based on current path
  */
-export function findActiveNavItem(navItems, pathname) {
-  for (const item of navItems) {
-    if (item.exact && pathname === item.path) {
-      return { parent: item, child: null };
-    }
-    if (!item.exact && pathname.startsWith(item.path)) {
-      // Check children first for more specific match
-      if (item.children) {
-        for (const child of item.children) {
-          if (pathname.startsWith(child.path)) {
-            return { parent: item, child };
-          }
-        }
+function matchesPath(pathname, path, exact = false) {
+  if (!path) {
+    return false;
+  }
+
+  if (exact) {
+    return pathname === path;
+  }
+
+  return pathname === path || pathname.startsWith(`${path}/`);
+}
+
+function findBestNavMatch(items, pathname, ancestors = []) {
+  let bestMatch = null;
+
+  for (const item of items) {
+    const nextAncestors = [...ancestors, item];
+
+    if (item.children) {
+      const childMatch = findBestNavMatch(item.children, pathname, nextAncestors);
+      if (
+        childMatch
+        && (!bestMatch
+          || childMatch.matchedPath.length > bestMatch.matchedPath.length
+          || (
+            childMatch.matchedPath.length === bestMatch.matchedPath.length
+            && childMatch.ancestors.length > bestMatch.ancestors.length
+          ))
+      ) {
+        bestMatch = childMatch;
       }
-      return { parent: item, child: null };
+    }
+
+    if (matchesPath(pathname, item.path, item.exact)) {
+      const itemMatch = {
+        ancestors: nextAncestors,
+        matchedPath: item.path,
+      };
+
+      if (
+        !bestMatch
+        || itemMatch.matchedPath.length > bestMatch.matchedPath.length
+        || (
+          itemMatch.matchedPath.length === bestMatch.matchedPath.length
+          && itemMatch.ancestors.length > bestMatch.ancestors.length
+        )
+      ) {
+        bestMatch = itemMatch;
+      }
     }
   }
-  return { parent: null, child: null };
+
+  return bestMatch;
+}
+
+export function findActiveNavItem(navItems, pathname) {
+  const bestMatch = findBestNavMatch(navItems, pathname);
+
+  if (!bestMatch) {
+    return { parent: null, child: null };
+  }
+
+  const [parent, child] = bestMatch.ancestors;
+  return {
+    parent: parent || null,
+    child: child || null,
+  };
 }

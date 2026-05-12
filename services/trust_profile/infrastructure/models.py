@@ -197,6 +197,64 @@ issuer_entities_table = Table(
 )
 
 
+# Trust Registry Sources - Configured registry imports for a trust profile
+trust_registry_sources_table = Table(
+    "trust_registry_sources",
+    mapper_registry.metadata,
+    Column("id", String, primary_key=True),
+    Column("trust_profile_id", String, nullable=False),
+    Column("registry_type", String, nullable=False),  # ICAO_PKD, EU_TRUST_LIST, AAMVA
+    Column("registry_name", String, nullable=False),
+    Column("registry_url", String, nullable=True),
+    Column("enabled", Boolean, nullable=False, default=True),
+    Column("sync_enabled", Boolean, nullable=False, default=True),
+    Column("last_synced_at", DateTime(timezone=True), nullable=True),
+    Column("next_sync_at", DateTime(timezone=True), nullable=True),
+    Column("sync_interval_hours", Integer, nullable=False, default=24),
+    Column("credential_format_filter", JSON, nullable=False, default=list),
+    Column("metadata", JSON, nullable=False, default=dict),
+    Column("created_at", DateTime(timezone=True), nullable=False, default=utcnow),
+    Column("updated_at", DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow),
+    
+    Index("ix_registry_sources_trust_profile", "trust_profile_id"),
+    Index("ix_registry_sources_type", "registry_type"),
+    Index("ix_registry_sources_enabled", "enabled"),
+    Index("ix_registry_sources_sync_enabled", "sync_enabled"),
+    
+    schema="trust_profile_service"
+)
+
+
+# Trust Registry Issuers - Issuers imported from registries
+trust_registry_issuers_table = Table(
+    "trust_registry_issuers",
+    mapper_registry.metadata,
+    Column("id", String, primary_key=True),
+    Column("registry_source_id", String, nullable=False),
+    Column("trust_profile_id", String, nullable=False),
+    Column("issuer_did", String, nullable=False),
+    Column("issuer_name", String, nullable=True),
+    Column("country_code", String, nullable=True),
+    Column("issuer_type", String, nullable=True),
+    Column("verification_keys", JSON, nullable=False, default=list),
+    Column("credential_templates", JSON, nullable=False, default=list),
+    Column("status", String, nullable=False, default="active"),
+    Column("imported_at", DateTime(timezone=True), nullable=False),
+    Column("valid_from", DateTime(timezone=True), nullable=True),
+    Column("valid_until", DateTime(timezone=True), nullable=True),
+    Column("created_at", DateTime(timezone=True), nullable=False, default=utcnow),
+    Column("updated_at", DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow),
+    
+    Index("ix_registry_issuers_registry_source", "registry_source_id"),
+    Index("ix_registry_issuers_trust_profile", "trust_profile_id"),
+    Index("ix_registry_issuers_did", "issuer_did"),
+    Index("ix_registry_issuers_status", "status"),
+    Index("ix_registry_issuers_country", "country_code"),
+    
+    schema="trust_profile_service"
+)
+
+
 trust_profile_issuers_table = Table(
     "trust_profile_issuers",
     mapper_registry.metadata,

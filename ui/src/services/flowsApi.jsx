@@ -7,8 +7,28 @@
  */
 
 import { apiClient, handleApiError } from './api';
+import { buildDefinedQueryString, withQuery } from './queryUtils';
 
-const BASE_PATH = '/v1/flows';
+const FLOW_DEFINITIONS_PATH = '/v1/flows/definitions';
+const FLOW_INSTANCES_PATH = '/v1/flows/instances';
+
+function createUnsupportedFlowActionError(message) {
+  const error = new Error(message);
+  error.status = 501;
+  return error;
+}
+
+function getStoredOrganizationId() {
+  try {
+    return window.localStorage.getItem('activeOrgId') || null;
+  } catch {
+    return null;
+  }
+}
+
+function resolveOrganizationId(organizationId) {
+  return organizationId || getStoredOrganizationId();
+}
 
 /**
  * Flow state constants
@@ -52,7 +72,11 @@ export const APPROVAL_STRATEGIES = {
  */
 export const createFlow = async (flowData) => {
   try {
-    const response = await apiClient.post(BASE_PATH, flowData);
+    const organizationId = resolveOrganizationId(flowData?.organization_id);
+    const response = await apiClient.post(FLOW_DEFINITIONS_PATH, {
+      ...flowData,
+      ...(organizationId ? { organization_id: organizationId } : {}),
+    });
     return response.data;
   } catch (error) {
     throw handleApiError(error);
@@ -69,12 +93,14 @@ export const createFlow = async (flowData) => {
  */
 export const listFlows = async (filters = {}) => {
   try {
-    const params = new URLSearchParams();
-    if (filters.flow_type) params.append('flow_type', filters.flow_type);
-    if (filters.limit) params.append('limit', filters.limit);
-    if (filters.offset) params.append('offset', filters.offset);
-    
-    const response = await apiClient.get(`${BASE_PATH}?${params.toString()}`);
+    const queryString = buildDefinedQueryString({
+      organization_id: resolveOrganizationId(filters.organization_id),
+      flow_type: filters.flow_type,
+      limit: filters.limit,
+      offset: filters.offset,
+    });
+
+    const response = await apiClient.get(withQuery(FLOW_DEFINITIONS_PATH, queryString));
     return response.data;
   } catch (error) {
     throw handleApiError(error);
@@ -88,7 +114,7 @@ export const listFlows = async (filters = {}) => {
  */
 export const getFlow = async (flowId) => {
   try {
-    const response = await apiClient.get(`${BASE_PATH}/${flowId}`);
+    const response = await apiClient.get(`${FLOW_DEFINITIONS_PATH}/${flowId}`);
     return response.data;
   } catch (error) {
     throw handleApiError(error);
@@ -103,7 +129,7 @@ export const getFlow = async (flowId) => {
  */
 export const updateFlow = async (flowId, updates) => {
   try {
-    const response = await apiClient.patch(`${BASE_PATH}/${flowId}`, updates);
+    const response = await apiClient.put(`${FLOW_DEFINITIONS_PATH}/${flowId}`, updates);
     return response.data;
   } catch (error) {
     throw handleApiError(error);
@@ -117,7 +143,7 @@ export const updateFlow = async (flowId, updates) => {
  */
 export const deleteFlow = async (flowId) => {
   try {
-    await apiClient.delete(`${BASE_PATH}/${flowId}`);
+    await apiClient.delete(`${FLOW_DEFINITIONS_PATH}/${flowId}`);
   } catch (error) {
     throw handleApiError(error);
   }
@@ -131,7 +157,10 @@ export const deleteFlow = async (flowId) => {
  */
 export const startFlowExecution = async (flowId, context = {}) => {
   try {
-    const response = await apiClient.post(`${BASE_PATH}/${flowId}/executions`, { context });
+    const response = await apiClient.post(FLOW_INSTANCES_PATH, {
+      flow_definition_id: flowId,
+      initial_context: context,
+    });
     return response.data;
   } catch (error) {
     throw handleApiError(error);
@@ -149,12 +178,15 @@ export const startFlowExecution = async (flowId, context = {}) => {
  */
 export const listFlowExecutions = async (flowId, filters = {}) => {
   try {
-    const params = new URLSearchParams();
-    if (filters.status) params.append('status', filters.status);
-    if (filters.limit) params.append('limit', filters.limit);
-    if (filters.offset) params.append('offset', filters.offset);
-    
-    const response = await apiClient.get(`${BASE_PATH}/${flowId}/executions?${params.toString()}`);
+    const queryString = buildDefinedQueryString({
+      organization_id: resolveOrganizationId(filters.organization_id),
+      flow_definition_id: flowId,
+      status: filters.status,
+      limit: filters.limit,
+      offset: filters.offset,
+    });
+
+    const response = await apiClient.get(withQuery(FLOW_INSTANCES_PATH, queryString));
     return response.data;
   } catch (error) {
     throw handleApiError(error);
@@ -169,7 +201,7 @@ export const listFlowExecutions = async (flowId, filters = {}) => {
  */
 export const getFlowExecution = async (flowId, executionId) => {
   try {
-    const response = await apiClient.get(`${BASE_PATH}/${flowId}/executions/${executionId}`);
+    const response = await apiClient.get(`${FLOW_INSTANCES_PATH}/${executionId}`);
     return response.data;
   } catch (error) {
     throw handleApiError(error);
@@ -187,10 +219,14 @@ export const getFlowExecution = async (flowId, executionId) => {
  */
 export const approveFlowExecution = async (flowId, executionId, approvalData = {}) => {
   try {
-    const response = await apiClient.post(
-      `${BASE_PATH}/${flowId}/executions/${executionId}/approve`,
-      approvalData
-    );
+    const response = await apiClient.post(`${FLOW_INSTANCES_PATH}/${executionId}/advance`, {
+      step_result: 'success',
+      data: {
+        flow_definition_id: flowId,
+        approver_id: approvalData.approver_id,
+        approval_notes: approvalData.notes,
+      },
+    });
     return response.data;
   } catch (error) {
     throw handleApiError(error);
@@ -208,10 +244,14 @@ export const approveFlowExecution = async (flowId, executionId, approvalData = {
  */
 export const rejectFlowExecution = async (flowId, executionId, rejectionData) => {
   try {
-    const response = await apiClient.post(
-      `${BASE_PATH}/${flowId}/executions/${executionId}/reject`,
-      rejectionData
-    );
+    const response = await apiClient.post(`${FLOW_INSTANCES_PATH}/${executionId}/advance`, {
+      step_result: 'failure',
+      data: {
+        flow_definition_id: flowId,
+        rejection_reason: rejectionData?.reason,
+        rejection_notes: rejectionData?.notes,
+      },
+    });
     return response.data;
   } catch (error) {
     throw handleApiError(error);
@@ -227,10 +267,7 @@ export const rejectFlowExecution = async (flowId, executionId, rejectionData) =>
  */
 export const cancelFlowExecution = async (flowId, executionId, reason) => {
   try {
-    const response = await apiClient.post(
-      `${BASE_PATH}/${flowId}/executions/${executionId}/cancel`,
-      { reason }
-    );
+    const response = await apiClient.post(`${FLOW_INSTANCES_PATH}/${executionId}/cancel`, { reason });
     return response.data;
   } catch (error) {
     throw handleApiError(error);
@@ -246,10 +283,7 @@ export const cancelFlowExecution = async (flowId, executionId, reason) => {
  */
 export const publishFlow = async (flowId, publishData = {}) => {
   try {
-    const response = await apiClient.post(
-      `${BASE_PATH}/${flowId}/publish`,
-      publishData
-    );
+    const response = await apiClient.post(`${FLOW_DEFINITIONS_PATH}/${flowId}/activate`, publishData);
     return response.data;
   } catch (error) {
     throw handleApiError(error);
@@ -264,15 +298,9 @@ export const publishFlow = async (flowId, publishData = {}) => {
  * @returns {Promise<Object>} Disabled flow
  */
 export const disableFlow = async (flowId, disableData = {}) => {
-  try {
-    const response = await apiClient.post(
-      `${BASE_PATH}/${flowId}/disable`,
-      disableData
-    );
-    return response.data;
-  } catch (error) {
-    throw handleApiError(error);
-  }
+  void flowId;
+  void disableData;
+  throw createUnsupportedFlowActionError('Disabling flow definitions is not supported by this environment yet.');
 };
 
 /**
@@ -283,15 +311,9 @@ export const disableFlow = async (flowId, disableData = {}) => {
  * @returns {Promise<Object>} Archived flow
  */
 export const archiveFlow = async (flowId, archiveData = {}) => {
-  try {
-    const response = await apiClient.post(
-      `${BASE_PATH}/${flowId}/archive`,
-      archiveData
-    );
-    return response.data;
-  } catch (error) {
-    throw handleApiError(error);
-  }
+  void flowId;
+  void archiveData;
+  throw createUnsupportedFlowActionError('Archiving flow definitions is not supported by this environment yet.');
 };
 
 /**
@@ -300,12 +322,8 @@ export const archiveFlow = async (flowId, archiveData = {}) => {
  * @returns {Promise<Object>} Public URL and QR code data
  */
 export const getFlowPublicUrl = async (flowId) => {
-  try {
-    const response = await apiClient.get(`${BASE_PATH}/${flowId}/public-url`);
-    return response.data;
-  } catch (error) {
-    throw handleApiError(error);
-  }
+  void flowId;
+  throw createUnsupportedFlowActionError('Public flow URLs are derived client-side in this environment.');
 };
 
 export default {

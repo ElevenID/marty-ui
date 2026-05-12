@@ -129,6 +129,39 @@ describe('applicationFlow helpers', () => {
     expect(result.metadata.document_number).toBe('MDL-ABCDEF12')
   })
 
+  it('builds auto-apply context for open badge membership credentials', () => {
+    const result = buildAutoApplyContext({
+      credentialConfig: { credential_type: 'open_badge', name: 'Verified Member Badge' },
+      user: {
+        user_id: 'abcdef12',
+        family_name: 'Doe',
+        given_name: 'Jane',
+        email: 'jane@example.com',
+        organization_name: 'Acme Org',
+        roles: ['vendor'],
+      },
+      organizationId: 'org-1',
+      nowIso: '2026-03-16T10:00:00.000Z',
+    })
+
+    expect(result).toMatchObject({
+      requested_validity_years: 1,
+      metadata: {
+        credential_type: 'open_badge',
+        credential_display_name: 'Verified Member Badge',
+        member_id: 'abcdef12',
+        email: 'jane@example.com',
+        organization_id: 'org-1',
+        organization_name: 'Acme Org',
+        role: 'vendor',
+        achievement_name: 'Verified Member Badge',
+        achievement_description: 'Verifiable proof of active membership in the issuing organization.',
+        issued_at: '2026-03-16T10:00:00.000Z',
+        auto_approve: true,
+      },
+    })
+  })
+
   it('builds one-click summary fields for member credentials', () => {
     expect(getOneClickSummaryFields({
       credentialConfig: { credential_type: 'MemberCredential' },
@@ -139,6 +172,19 @@ describe('applicationFlow helpers', () => {
       { label: 'Email', value: 'jane@example.com' },
       { label: 'Role', value: 'Vendor' },
       { label: 'Organization', value: 'ElevenID LLC' },
+    ])
+  })
+
+  it('builds one-click summary fields for open badge membership credentials', () => {
+    expect(getOneClickSummaryFields({
+      credentialConfig: { credential_type: 'open_badge', name: 'Verified Member Badge' },
+      user: { given_name: 'Jane', family_name: 'Doe', email: 'jane@example.com', roles: ['vendor'] },
+      organizationId: 'org-1',
+    })).toEqual([
+      { label: 'Name', value: 'Jane Doe' },
+      { label: 'Email', value: 'jane@example.com' },
+      { label: 'Role', value: 'Vendor' },
+      { label: 'Badge', value: 'Verified Member Badge' },
     ])
   })
 

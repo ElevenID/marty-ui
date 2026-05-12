@@ -4,7 +4,9 @@ export const MY_APPLICATION_STATUS_COLORS = {
   pending_approval: 'warning',
   under_review: 'info',
   approved: 'success',
+  offered: 'primary',
   rejected: 'error',
+  credentialed: 'success',
   issued: 'success',
   completed: 'success',
   needs_revision: 'warning',
@@ -16,7 +18,9 @@ export const MY_APPLICATION_STATUS_LABELS = {
   pending_approval: 'Pending Approval',
   under_review: 'Under Review',
   approved: 'Approved',
+  offered: 'Wallet Invite Ready',
   rejected: 'Rejected',
+  credentialed: 'Credential Issued',
   issued: 'Issued',
   completed: 'Completed',
   needs_revision: 'Needs Revision',
@@ -60,7 +64,7 @@ export function canEditMyApplication(application) {
 
 export function canAddMyApplicationToWallet(application) {
   const normalizedStatus = normalizeMyApplicationStatus(application?.status);
-  return ['approved', 'issued'].includes(normalizedStatus);
+  return ['approved', 'offered'].includes(normalizedStatus);
 }
 
 export function buildMyApplicationEditNavigation(application) {

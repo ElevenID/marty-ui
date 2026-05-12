@@ -118,11 +118,13 @@ export async function autoApplyForCredential({
   credentialConfigId,
   resolveApplicantId,
   createApplicant,
+  updateApplicantProfile,
   createApplication,
   autoIssueApplication,
   listApplications,
 }) {
   let applicantId = await resolveApplicantId();
+  let applicantCreated = false;
 
   if (!applicantId) {
     const createdApplicant = await createApplicant({
@@ -133,10 +135,19 @@ export async function autoApplyForCredential({
       email: user.email,
     });
     applicantId = createdApplicant?.id || null;
+    applicantCreated = true;
   }
 
   if (!applicantId) {
     throw new Error('Unable to resolve applicant profile');
+  }
+
+  if (!applicantCreated && updateApplicantProfile) {
+    await updateApplicantProfile(applicantId, {
+      email: user.email,
+      given_name: user.given_name || '',
+      family_name: user.family_name || '',
+    });
   }
 
   // Check for an existing active application for this credential type.
@@ -146,14 +157,31 @@ export async function autoApplyForCredential({
   if (listApplications) {
     try {
       const { applications = [] } = await listApplications({ limit: 100 });
-      const existing = applications.find(
-        (a) =>
+      const existing = applications.find((a) => {
+        const status = a.status?.toLowerCase();
+        return (
           a.credential_configuration_id === configId &&
-          ['approved', 'credentialed', 'issued'].includes(a.status?.toLowerCase()),
-      );
+          ['approved', 'offered', 'credentialed', 'issued'].includes(status)
+        );
+      });
       if (existing) {
+        const status = existing.status?.toLowerCase();
+        if (['approved', 'offered'].includes(status) && autoIssueApplication) {
+          const refreshedApplication = await autoIssueApplication(existing.id);
+          return {
+            applicationId: refreshedApplication.id,
+            applicationReference: refreshedApplication.reference_number || refreshedApplication.referenceNumber || existing.reference_number || existing.referenceNumber || null,
+            offerData: {
+              offer_url: refreshedApplication.credential_offer_uri || null,
+              credential_offer_uris: refreshedApplication.credential_offer_uris || {},
+              expires_at: refreshedApplication.offer_expires_at || null,
+            },
+            existingApplication: true,
+          };
+        }
         return {
           applicationId: existing.id,
+          applicationReference: existing.reference_number || existing.referenceNumber || null,
           offerData: {
             offer_url: existing.credential_offer_uri || null,
             credential_offer_uris: existing.credential_offer_uris || {},
@@ -185,6 +213,7 @@ export async function autoApplyForCredential({
 
   return {
     applicationId: issuedApplication.id,
+    applicationReference: issuedApplication.reference_number || issuedApplication.referenceNumber || createdApplication.reference_number || createdApplication.referenceNumber || null,
     offerData: {
       offer_url: issuedApplication.credential_offer_uri,
       credential_offer_uris: issuedApplication.credential_offer_uris || {},
@@ -251,6 +280,7 @@ export async function submitCredentialApplication({
 
   return {
     applicationId: submittedApplication.id,
+    applicationReference: submittedApplication.reference_number || submittedApplication.referenceNumber || createdApplication.reference_number || createdApplication.referenceNumber || null,
     submitted: true,
   };
 }

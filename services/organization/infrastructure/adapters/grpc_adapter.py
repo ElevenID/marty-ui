@@ -15,9 +15,8 @@ import grpc
 
 from marty_proto.v1 import organization_service_pb2, organization_service_pb2_grpc
 
+from ...application.ports import SetMemberRolesCommand
 from ...application.use_cases import ApiKeyUseCase, MemberUseCase, OrganizationUseCase
-from ...domain.entities import MemberRole
-
 logger = logging.getLogger(__name__)
 
 
@@ -49,10 +48,20 @@ def _member_to_pb(member: Any) -> organization_service_pb2.MemberResponse:
         organization_id=str(member.organization_id),
         user_id=str(member.user_id) if member.user_id else "",
         email=member.email or "",
-        role=member.role.value,
+        roles=[
+            organization_service_pb2.RoleSummary(
+                id=role.id,
+                name=role.name,
+                display_name=role.display_name or "",
+            )
+            for role in member.roles
+        ],
         status=member.status.value,
         invited_at=member.invited_at.isoformat() if member.invited_at else "",
         joined_at=member.joined_at.isoformat() if member.joined_at else "",
+        permissions=sorted(member.effective_permissions),
+        has_org_console_access=member.has_org_console_access,
+        is_owner=member.is_owner,
     )
 
 
@@ -113,7 +122,23 @@ class OrganizationServiceGrpc(organization_service_pb2_grpc.OrganizationServiceS
                 organization_id=request.organization_id,
                 user_id=request.user_id,
                 email=request.email or None,
-                role=MemberRole(request.role) if request.role else MemberRole.MEMBER,
+                role_ids=list(request.role_ids),
+            )
+            return _member_to_pb(member)
+        except ValueError as exc:
+            context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+            context.set_details(str(exc))
+            return organization_service_pb2.MemberResponse()
+
+    async def UpdateMember(self, request, context):
+        try:
+            member = await self._member_uc.set_member_roles(
+                SetMemberRolesCommand(
+                    member_id=request.member_id,
+                    organization_id=request.organization_id,
+                    role_ids=list(request.role_ids),
+                    updated_by="grpc",
+                )
             )
             return _member_to_pb(member)
         except ValueError as exc:
@@ -161,8 +186,19 @@ class OrganizationServiceGrpc(organization_service_pb2_grpc.OrganizationServiceS
             return organization_service_pb2.GetMemberPermissionsResponse()
 
         permissions = await self._role_uc.get_member_permissions(member.id)
+        roles = await self._role_uc.get_member_roles(member.id)
         return organization_service_pb2.GetMemberPermissionsResponse(
             permissions=[p.key for p in permissions],
+            roles=[
+                organization_service_pb2.RoleSummary(
+                    id=role.id,
+                    name=role.name,
+                    display_name=role.display_name or "",
+                )
+                for role in roles
+            ],
+            has_org_console_access=member.has_org_console_access,
+            is_owner=member.is_owner,
         )
 
     # ------------------------------------------------------------------

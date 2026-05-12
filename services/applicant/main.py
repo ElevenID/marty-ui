@@ -41,11 +41,9 @@ logger = logging.getLogger(__name__)
 
 SERVICE_NAME = "applicant-service"
 SERVICE_PORT = int(os.environ.get("APPLICANT_SERVICE_PORT", "8006"))
-# Internal service-to-service calls use gRPC (primary) or HTTP (fallback).
-# These go directly to the issuance service on the internal Docker network —
-# the gateway is only for external/browser traffic.
+# Internal issuance orchestration is delegated to flow-service.
 ISSUANCE_SERVICE_URL = os.environ.get("ISSUANCE_SERVICE_URL", "http://issuance:8005")
-ISSUANCE_GRPC_TARGET = os.environ.get("ISSUANCE_GRPC_TARGET", "issuance:9005")
+FLOW_SERVICE_URL = os.environ.get("FLOW_SERVICE_URL", "http://flow:8011")
 
 
 def _generate_reference_number() -> str:
@@ -55,57 +53,89 @@ def _generate_reference_number() -> str:
     return f"APP-{stamp}-{suffix}"
 
 
-async def _initiate_issuance_grpc(
-    organization_id: str,
-    credential_template_id: str | None,
-    applicant_id: str,
-    claims: dict,
-) -> dict:
-    """Call IssuanceService.InitiateIssuance via gRPC, with HTTP fallback."""
-    # Try gRPC first
-    try:
-        import grpc.aio as grpc_aio
-        from marty_proto.v1 import issuance_service_pb2 as iss_pb2
-        from marty_proto.v1 import issuance_service_pb2_grpc as iss_grpc
+async def _initiate_issuance_via_flow(
+    *,
+    application: "ApplicantApplication",
+    applicant: "Applicant",
+    claims: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Trigger OID4VCI issuance via flow-service webhook orchestration.
 
-        async with grpc_aio.insecure_channel(ISSUANCE_GRPC_TARGET) as channel:
-            stub = iss_grpc.IssuanceServiceStub(channel)
-            resp = await stub.InitiateIssuance(
-                iss_pb2.InitiateIssuanceRequest(
-                    organization_id=organization_id,
-                    credential_template_id=credential_template_id or "",
-                    applicant_id=applicant_id or "",
-                    claims={k: str(v) for k, v in claims.items()},
-                )
-            )
-        return {
-            "id": resp.id,
-            "credential_offer_uri": resp.credential_offer_uri,
-            "credential_offer_uris": dict(resp.credential_offer_uris),
-            "credential_offer_labels": dict(resp.credential_offer_labels),
-            "pre_auth_code": resp.pre_auth_code,
-            "expires_at": resp.expires_at,
-            "status": resp.status,
-        }
-    except ImportError:
-        logger.warning("gRPC dependencies not available, falling back to HTTP")
-    except Exception as grpc_err:
-        logger.warning("gRPC InitiateIssuance failed (status=%s), falling back to HTTP: %s",
-                       getattr(grpc_err, 'code', lambda: 'N/A')(), grpc_err)
+    Returns an issuance-shaped payload when a matching flow produced an offer.
+    Raises HTTPException when no eligible flow/offer exists.
+    """
+    timestamp = datetime.now(timezone.utc).isoformat()
+    event_payload = {
+        "event_type": "application.approved",
+        "aggregate_id": application.id,
+        "aggregate_type": "application",
+        "organization_id": application.organization_id,
+        "timestamp": timestamp,
+        "data": {
+            "applicant_id": applicant.id,
+            "application_id": application.id,
+            "credential_template_id": application.credential_configuration_id,
+            "email": applicant.email,
+            "given_name": applicant.given_name,
+            "family_name": applicant.family_name,
+            "vetting_level": applicant.vetting_level.value,
+            "application_status": application.status.value.lower(),
+            "application_approved_at": application.reviewed_at.isoformat() if application.reviewed_at else timestamp,
+            "triggered_by_event": "application.manual_issue",
+            "claims": claims,
+        },
+    }
 
-    # HTTP fallback
     async with httpx.AsyncClient(timeout=10.0) as client:
         response = await client.post(
-            f"{ISSUANCE_SERVICE_URL}/v1/issuance/initiate",
-            json={
-                "organization_id": organization_id,
-                "credential_template_id": credential_template_id,
-                "applicant_id": applicant_id,
-                "claims": claims,
-            },
+            f"{FLOW_SERVICE_URL}/v1/flows/webhooks/application-approved",
+            json=event_payload,
         )
-        response.raise_for_status()
-        return response.json()
+
+    if response.status_code >= 400:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Flow service issuance trigger failed with status {response.status_code}",
+        )
+
+    body = response.json() if response.content else {}
+    offers = body.get("offers") if isinstance(body, dict) else None
+    if not isinstance(offers, list) or not offers:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "No active issuance flow produced an offer for this application. "
+                "Configure and activate an OID4VCI flow for the credential template."
+            ),
+        )
+
+    selected_offer = next(
+        (
+            offer
+            for offer in offers
+            if isinstance(offer, dict)
+            and (offer.get("credential_offer_uri") or offer.get("credential_offer_uris"))
+        ),
+        None,
+    )
+    if not selected_offer:
+        raise HTTPException(
+            status_code=502,
+            detail="Flow orchestration completed without a credential offer URI",
+        )
+
+    return {
+        "id": selected_offer.get("credential_offer_transaction_id") or selected_offer.get("flow_instance_id"),
+        "flow_instance_id": selected_offer.get("flow_instance_id"),
+        "flow_definition_id": selected_offer.get("flow_definition_id"),
+        "credential_offer_uri": selected_offer.get("credential_offer_uri"),
+        "credential_offer_uris": selected_offer.get("credential_offer_uris") or {},
+        "credential_offer_labels": selected_offer.get("credential_offer_labels") or {},
+        "pre_auth_code": selected_offer.get("pre_authorized_code"),
+        "expires_at": selected_offer.get("expires_at"),
+        "status": selected_offer.get("issuance_status") or "pending",
+        "source": "flow",
+    }
 
 
 # =============================================================================
@@ -119,6 +149,7 @@ class ApplicantStatus(str, Enum):
     UNDER_REVIEW = "UNDER_REVIEW"
     PENDING_INFORMATION = "PENDING_INFORMATION"
     APPROVED = "APPROVED"
+    OFFERED = "OFFERED"
     REJECTED = "REJECTED"
     WITHDRAWN = "WITHDRAWN"
     CREDENTIALED = "CREDENTIALED"
@@ -139,6 +170,7 @@ class ApplicationStatus(str, Enum):
     UNDER_REVIEW = "UNDER_REVIEW"
     PENDING_INFORMATION = "PENDING_INFORMATION"
     APPROVED = "APPROVED"
+    OFFERED = "OFFERED"
     REJECTED = "REJECTED"
     WITHDRAWN = "WITHDRAWN"
     CREDENTIALED = "CREDENTIALED"
@@ -155,6 +187,7 @@ LEGACY_APPLICANT_STATUS_MAP = {
     "submitted": ApplicantStatus.SUBMITTED,
     "under_review": ApplicantStatus.UNDER_REVIEW,
     "needs_info": ApplicantStatus.PENDING_INFORMATION,
+    "offered": ApplicantStatus.OFFERED,
     "issued": ApplicantStatus.CREDENTIALED,
 }
 
@@ -164,6 +197,7 @@ LEGACY_APPLICATION_STATUS_MAP = {
     "under_review": ApplicationStatus.UNDER_REVIEW,
     "needs_info": ApplicationStatus.PENDING_INFORMATION,
     "approved": ApplicationStatus.APPROVED,
+    "offered": ApplicationStatus.OFFERED,
     "issued": ApplicationStatus.CREDENTIALED,
     "rejected": ApplicationStatus.REJECTED,
     "revoked": ApplicationStatus.SUSPENDED,
@@ -174,7 +208,8 @@ APPLICANT_ALLOWED_TRANSITIONS: dict[ApplicantStatus, set[ApplicantStatus]] = {
     ApplicantStatus.SUBMITTED: {ApplicantStatus.UNDER_REVIEW, ApplicantStatus.PENDING_INFORMATION, ApplicantStatus.WITHDRAWN, ApplicantStatus.SUSPENDED},
     ApplicantStatus.UNDER_REVIEW: {ApplicantStatus.APPROVED, ApplicantStatus.REJECTED, ApplicantStatus.PENDING_INFORMATION, ApplicantStatus.SUSPENDED},
     ApplicantStatus.PENDING_INFORMATION: {ApplicantStatus.SUBMITTED, ApplicantStatus.UNDER_REVIEW, ApplicantStatus.WITHDRAWN, ApplicantStatus.SUSPENDED},
-    ApplicantStatus.APPROVED: {ApplicantStatus.CREDENTIALED, ApplicantStatus.SUSPENDED},
+    ApplicantStatus.APPROVED: {ApplicantStatus.OFFERED, ApplicantStatus.CREDENTIALED, ApplicantStatus.SUSPENDED},
+    ApplicantStatus.OFFERED: {ApplicantStatus.CREDENTIALED, ApplicantStatus.SUSPENDED},
     ApplicantStatus.REJECTED: set(),
     ApplicantStatus.WITHDRAWN: set(),
     ApplicantStatus.CREDENTIALED: set(),
@@ -186,7 +221,8 @@ APPLICATION_ALLOWED_TRANSITIONS: dict[ApplicationStatus, set[ApplicationStatus]]
     ApplicationStatus.SUBMITTED: {ApplicationStatus.UNDER_REVIEW, ApplicationStatus.APPROVED, ApplicationStatus.REJECTED, ApplicationStatus.PENDING_INFORMATION, ApplicationStatus.WITHDRAWN, ApplicationStatus.SUSPENDED},
     ApplicationStatus.UNDER_REVIEW: {ApplicationStatus.APPROVED, ApplicationStatus.REJECTED, ApplicationStatus.PENDING_INFORMATION, ApplicationStatus.SUSPENDED},
     ApplicationStatus.PENDING_INFORMATION: {ApplicationStatus.SUBMITTED, ApplicationStatus.UNDER_REVIEW, ApplicationStatus.WITHDRAWN, ApplicationStatus.SUSPENDED},
-    ApplicationStatus.APPROVED: {ApplicationStatus.CREDENTIALED, ApplicationStatus.SUSPENDED},
+    ApplicationStatus.APPROVED: {ApplicationStatus.OFFERED, ApplicationStatus.CREDENTIALED, ApplicationStatus.SUSPENDED},
+    ApplicationStatus.OFFERED: {ApplicationStatus.CREDENTIALED, ApplicationStatus.SUSPENDED},
     ApplicationStatus.REJECTED: set(),
     ApplicationStatus.WITHDRAWN: set(),
     ApplicationStatus.CREDENTIALED: set(),
@@ -236,6 +272,127 @@ def _set_applicant_status(applicant: "Applicant", status: ApplicantStatus) -> No
 def _set_application_status(application: "ApplicantApplication", status: ApplicationStatus) -> None:
     application.status = _transition_status(application.status, status, APPLICATION_ALLOWED_TRANSITIONS, "application")
     application.updated_at = datetime.now(timezone.utc)
+
+
+def _force_application_status(application: "ApplicantApplication", status: ApplicationStatus) -> None:
+    application.status = status
+    application.updated_at = datetime.now(timezone.utc)
+
+
+def _force_applicant_status(applicant: "Applicant", status: ApplicantStatus) -> None:
+    applicant.status = status
+    applicant.updated_at = datetime.now(timezone.utc)
+
+
+def _parse_iso_datetime(value: str | datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _credential_claim_value(application: "ApplicantApplication", applicant: "Applicant", key: str) -> Any:
+    if key == "email" and applicant.email:
+        return applicant.email
+    value = application.metadata.get(key)
+    if value not in (None, ""):
+        return value
+    return getattr(applicant, key, None)
+
+
+def _advance_applicant_to_offered(applicant: "Applicant") -> None:
+    if applicant.status == ApplicantStatus.CREDENTIALED:
+        return
+    if applicant.status == ApplicantStatus.DRAFT:
+        _set_applicant_status(applicant, ApplicantStatus.SUBMITTED)
+    if applicant.status == ApplicantStatus.SUBMITTED:
+        _set_applicant_status(applicant, ApplicantStatus.UNDER_REVIEW)
+    if applicant.status in {ApplicantStatus.UNDER_REVIEW, ApplicantStatus.PENDING_INFORMATION}:
+        _set_applicant_status(applicant, ApplicantStatus.APPROVED)
+    if applicant.status == ApplicantStatus.APPROVED:
+        _set_applicant_status(applicant, ApplicantStatus.OFFERED)
+
+
+def _advance_applicant_to_credentialed(applicant: "Applicant") -> None:
+    if applicant.status == ApplicantStatus.CREDENTIALED:
+        return
+    _advance_applicant_to_offered(applicant)
+    if applicant.status == ApplicantStatus.OFFERED:
+        _set_applicant_status(applicant, ApplicantStatus.CREDENTIALED)
+
+
+async def _get_issuance_transaction_context(transaction_id: str | None) -> dict[str, Any] | None:
+    if not transaction_id or transaction_id.startswith("local-"):
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            response = await client.get(f"{ISSUANCE_SERVICE_URL}/v1/issuance/transactions/{transaction_id}")
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+        return response.json()
+    except Exception as exc:
+        logger.debug("Unable to sync issuance transaction %s: %s", transaction_id, exc)
+        return None
+
+
+async def _sync_application_issuance_state(
+    application: "ApplicantApplication",
+    repo: "InMemoryApplicantRepository",
+    *,
+    save: bool = True,
+) -> bool:
+    """Reconcile application status with the real OID4VCI transaction state."""
+    transaction_id = application.metadata.get("issuance_transaction_id")
+    tx = await _get_issuance_transaction_context(transaction_id)
+    if not tx:
+        return False
+
+    status = str(tx.get("status") or "").lower()
+    changed = False
+
+    if status == "issued":
+        issued_at = _parse_iso_datetime(tx.get("issued_at")) or datetime.now(timezone.utc)
+        if application.status != ApplicationStatus.CREDENTIALED:
+            try:
+                _set_application_status(application, ApplicationStatus.CREDENTIALED)
+            except HTTPException:
+                _force_application_status(application, ApplicationStatus.CREDENTIALED)
+            changed = True
+        if application.issued_at != issued_at:
+            application.issued_at = issued_at
+            application.updated_at = datetime.now(timezone.utc)
+            changed = True
+        if application.metadata.get("issuance_status") != status:
+            application.metadata["issuance_status"] = status
+            changed = True
+
+        applicant = await repo.get_by_id(application.applicant_id)
+        if applicant and applicant.status != ApplicantStatus.CREDENTIALED:
+            try:
+                _advance_applicant_to_credentialed(applicant)
+            except HTTPException:
+                _force_applicant_status(applicant, ApplicantStatus.CREDENTIALED)
+            if save:
+                await repo.save(applicant)
+    elif status in {"pending", "authorized"}:
+        if application.metadata.get("issuance_status") != status:
+            application.metadata["issuance_status"] = status
+            changed = True
+        if application.status == ApplicationStatus.CREDENTIALED:
+            # Older builds marked a generated offer as CREDENTIALED. If the
+            # wallet has not completed issuance yet, repair that optimistic state.
+            _force_application_status(application, ApplicationStatus.OFFERED)
+            application.issued_at = None
+            changed = True
+
+    if changed and save:
+        await repo.save_application(application)
+    return changed
 
 
 class VettingCheckStatus(str, Enum):
@@ -817,6 +974,7 @@ class CreateApplicantRequest(BaseModel):
 
 
 class UpdateApplicantRequest(BaseModel):
+    email: EmailStr | None = None
     given_name: str | None = Field(None, max_length=255)
     family_name: str | None = Field(None, max_length=255)
     phone: str | None = Field(None, max_length=50)
@@ -1014,7 +1172,24 @@ async def create_applicant(
     # Check for existing
     existing = await repo.get_by_email(request.email, request.organization_id)
     if existing:
-        raise HTTPException(status_code=409, detail="Applicant already exists")
+        updated = False
+        if request.user_id and existing.oidc_subject != request.user_id:
+            existing.oidc_subject = request.user_id
+            existing.user_id = request.user_id
+            updated = True
+        if request.given_name and existing.given_name != request.given_name:
+            existing.given_name = request.given_name
+            updated = True
+        if request.family_name and existing.family_name != request.family_name:
+            existing.family_name = request.family_name
+            updated = True
+        if request.phone and existing.phone != request.phone:
+            existing.phone = request.phone
+            updated = True
+        if updated:
+            existing.updated_at = datetime.now(timezone.utc)
+            await repo.save(existing)
+        return _to_response(existing)
     
     applicant = Applicant(
         organization_id=request.organization_id,
@@ -1023,6 +1198,7 @@ async def create_applicant(
         family_name=request.family_name,
         phone=request.phone,
         oidc_subject=request.user_id,
+        user_id=request.user_id,
         vetting_level=VettingLevel(request.vetting_level),
     )
     await repo.save(applicant)
@@ -1123,7 +1299,8 @@ async def create_application(
     _active_statuses = {
         ApplicationStatus.DRAFT, ApplicationStatus.SUBMITTED,
         ApplicationStatus.UNDER_REVIEW, ApplicationStatus.PENDING_INFORMATION,
-        ApplicationStatus.APPROVED, ApplicationStatus.CREDENTIALED,
+        ApplicationStatus.APPROVED, ApplicationStatus.OFFERED,
+        ApplicationStatus.CREDENTIALED,
     }
     duplicate = next(
         (a for a in existing
@@ -1160,6 +1337,8 @@ async def list_applications_for_applicant(
 ) -> list[ApplicationResponse]:
     """List applications for an applicant profile."""
     applications = await repo.list_applications_for_applicant(applicant_id)
+    for application in applications:
+        await _sync_application_issuance_state(application, repo)
     applications.sort(key=lambda a: a.created_at, reverse=True)
     return [_application_to_response(a) for a in applications[offset:offset + limit]]
 
@@ -1175,6 +1354,8 @@ async def list_applications_for_organization(
     """List applications for an organization (used by org console)."""
     status_filter = _parse_application_status(status) if status else None
     applications = await repo.list_applications_for_organization(organization_id, status_filter)
+    for application in applications:
+        await _sync_application_issuance_state(application, repo)
     applications.sort(key=lambda a: a.created_at, reverse=True)
     return [_application_to_response(a) for a in applications[offset:offset + limit]]
 
@@ -1183,16 +1364,17 @@ async def list_applications_for_organization(
 async def submit_application(
     application_id: str,
     repo: InMemoryApplicantRepository = Depends(get_repo),
-    x_organization_id: str = Header(alias="X-Organization-Id"),
+    x_organization_id: str | None = Header(default=None, alias="X-Organization-Id"),
 ) -> ApplicationResponse:
     """Submit an existing application into review."""
     application = await repo.get_application(application_id)
     if not application:
         raise HTTPException(status_code=404, detail="Application not found")
+    await _sync_application_issuance_state(application, repo)
 
     # Verify organization ownership
     applicant = await repo.get_by_id(application.applicant_id)
-    if applicant and applicant.organization_id and applicant.organization_id != x_organization_id:
+    if x_organization_id and applicant and applicant.organization_id and applicant.organization_id != x_organization_id:
         raise HTTPException(status_code=403, detail="Not authorized for this application")
 
     if application.status == ApplicationStatus.SUBMITTED:
@@ -1282,6 +1464,7 @@ async def auto_issue_application(
     application = await repo.get_application(application_id)
     if not application:
         raise HTTPException(status_code=404, detail="Application not found")
+    await _sync_application_issuance_state(application, repo)
 
     if not application.metadata.get("auto_approve"):
         raise HTTPException(
@@ -1302,7 +1485,7 @@ async def auto_issue_application(
         _set_application_status(application, ApplicationStatus.APPROVED)
         application.reviewed_at = now
 
-    if application.status not in (ApplicationStatus.APPROVED, ApplicationStatus.CREDENTIALED):
+    if application.status not in (ApplicationStatus.APPROVED, ApplicationStatus.OFFERED):
         raise HTTPException(
             status_code=400,
             detail=f"Cannot auto-issue application in {application.status.value} status",
@@ -1319,50 +1502,47 @@ async def auto_issue_application(
         "credential_offer_uri", "offer_expires_at", "issuance_transaction_id",
         "issuance_fallback", "credential_type", "credential_display_name",
         "rejection_reason", "review_notes", "info_requests", "auto_approve",
+        "flow_instance_id", "flow_definition_id", "issuance_source",
     }
     claims = {k: v for k, v in application.metadata.items() if k not in _AUTO_INTERNAL_FIELDS}
     claims.update({
         "applicant_id": str(applicant.id),
-        "email": applicant.email,
-        "given_name": applicant.given_name,
-        "family_name": applicant.family_name,
+        "email": _credential_claim_value(application, applicant, "email"),
+        "given_name": _credential_claim_value(application, applicant, "given_name"),
+        "family_name": _credential_claim_value(application, applicant, "family_name"),
     })
 
-    try:
-        issuance = await _initiate_issuance_grpc(
-            organization_id=application.organization_id,
-            credential_template_id=application.credential_configuration_id,
-            applicant_id=applicant.id,
-            claims=claims,
-        )
-    except Exception as e:
-        logger.warning("Issuance service unavailable for auto-issue %s: %s", application_id, e)
-        issuance = {
-            "id": f"local-{uuid.uuid4().hex[:12]}",
-            "credential_offer_uri": None,
-            "fallback": True,
-        }
+    issuance = await _initiate_issuance_via_flow(
+        application=application,
+        applicant=applicant,
+        claims=claims,
+    )
 
-    _set_application_status(application, ApplicationStatus.CREDENTIALED)
-    application.issued_at = datetime.now(timezone.utc)
+    has_offer = bool(issuance.get("credential_offer_uri") or issuance.get("credential_offer_uris"))
+    if has_offer:
+        if application.status == ApplicationStatus.APPROVED:
+            _set_application_status(application, ApplicationStatus.OFFERED)
+        application.issued_at = None
     application.metadata["issuance_transaction_id"] = issuance.get("id")
     application.metadata["credential_offer_uri"] = issuance.get("credential_offer_uri")
     application.metadata["offer_expires_at"] = issuance.get("expires_at")
     application.metadata["credential_offer_uris"] = issuance.get("credential_offer_uris") or {}
     application.metadata["credential_offer_labels"] = issuance.get("credential_offer_labels") or {}
-    if issuance.get("fallback"):
-        application.metadata["issuance_fallback"] = True
+    application.metadata["offer_generated_at"] = datetime.now(timezone.utc).isoformat()
+    application.metadata["issuance_status"] = issuance.get("status") or "pending"
+    if issuance.get("flow_instance_id"):
+        application.metadata["flow_instance_id"] = issuance.get("flow_instance_id")
+    if issuance.get("flow_definition_id"):
+        application.metadata["flow_definition_id"] = issuance.get("flow_definition_id")
+    if issuance.get("source"):
+        application.metadata["issuance_source"] = issuance.get("source")
+    application.updated_at = datetime.now(timezone.utc)
     await repo.save_application(application)
 
-    # Step the applicant through valid intermediate states before CREDENTIALED.
-    if applicant.status == ApplicantStatus.DRAFT:
-        _set_applicant_status(applicant, ApplicantStatus.SUBMITTED)
-    if applicant.status == ApplicantStatus.SUBMITTED:
-        _set_applicant_status(applicant, ApplicantStatus.UNDER_REVIEW)
-    if applicant.status == ApplicantStatus.UNDER_REVIEW:
-        _set_applicant_status(applicant, ApplicantStatus.APPROVED)
-    if applicant.status == ApplicantStatus.APPROVED:
-        _set_applicant_status(applicant, ApplicantStatus.CREDENTIALED)
+    # A generated QR/offer is not a credential yet. The status becomes
+    # CREDENTIALED only after the issuance transaction reaches "issued".
+    if has_offer:
+        _advance_applicant_to_offered(applicant)
     await repo.save(applicant)
     return _application_to_response(application)
 
@@ -1468,13 +1648,22 @@ async def issue_application(
     application = await repo.get_application(application_id)
     if not application:
         raise HTTPException(status_code=404, detail="Application not found")
+    await _sync_application_issuance_state(application, repo)
 
     # Always re-initiate: offers expire, and we need a fresh URL each time the admin requests one.
-    if application.status not in (ApplicationStatus.APPROVED, ApplicationStatus.CREDENTIALED):
+    # Also allow CREDENTIALED so an already-issued credential can be re-offered (re-issuance).
+    REISSUABLE_STATUSES = (ApplicationStatus.APPROVED, ApplicationStatus.OFFERED, ApplicationStatus.CREDENTIALED)
+    if application.status not in REISSUABLE_STATUSES:
         raise HTTPException(
             status_code=400,
             detail=f"Cannot issue application in {application.status.value} status",
         )
+
+    # For already-credentialed applications, roll back to OFFERED so the
+    # issuance flow can generate a fresh wallet invite without a transition error.
+    if application.status == ApplicationStatus.CREDENTIALED:
+        _force_application_status(application, ApplicationStatus.OFFERED)
+        application.issued_at = None
 
     applicant = await repo.get_by_id(application.applicant_id)
     if not applicant:
@@ -1494,6 +1683,9 @@ async def issue_application(
         "review_notes",
         "info_requests",
         "auto_approve",  # workflow flag — never a credential claim
+        "flow_instance_id",
+        "flow_definition_id",
+        "issuance_source",
     }
     claims = {
         k: v
@@ -1503,47 +1695,43 @@ async def issue_application(
     claims.update(
         {
             "applicant_id": str(applicant.id),
-            "email": applicant.email,
-            "given_name": applicant.given_name,
-            "family_name": applicant.family_name,
+            "email": _credential_claim_value(application, applicant, "email"),
+            "given_name": _credential_claim_value(application, applicant, "given_name"),
+            "family_name": _credential_claim_value(application, applicant, "family_name"),
         }
     )
 
-    try:
-        issuance = await _initiate_issuance_grpc(
-            organization_id=application.organization_id,
-            credential_template_id=application.credential_configuration_id,
-            applicant_id=applicant.id,
-            claims=claims,
-        )
-    except Exception as e:
-        logger.warning("Issuance service unavailable for %s: %s. Using local fallback marker.", application_id, e)
-        issuance = {
-            "id": f"local-{uuid.uuid4().hex[:12]}",
-            "credential_offer_uri": None,
-            "fallback": True,
-        }
+    issuance = await _initiate_issuance_via_flow(
+        application=application,
+        applicant=applicant,
+        claims=claims,
+    )
 
-    _set_application_status(application, ApplicationStatus.CREDENTIALED)
-    application.issued_at = datetime.now(timezone.utc)
+    has_offer = bool(issuance.get("credential_offer_uri") or issuance.get("credential_offer_uris"))
+    if has_offer:
+        if application.status == ApplicationStatus.APPROVED:
+            _set_application_status(application, ApplicationStatus.OFFERED)
+        application.issued_at = None
     application.metadata["issuance_transaction_id"] = issuance.get("id")
     application.metadata["credential_offer_uri"] = issuance.get("credential_offer_uri")
     application.metadata["offer_expires_at"] = issuance.get("expires_at")
     application.metadata["credential_offer_uris"] = issuance.get("credential_offer_uris") or {}
     application.metadata["credential_offer_labels"] = issuance.get("credential_offer_labels") or {}
-    if issuance.get("fallback"):
-        application.metadata["issuance_fallback"] = True
+    application.metadata["offer_generated_at"] = datetime.now(timezone.utc).isoformat()
+    application.metadata["issuance_status"] = issuance.get("status") or "pending"
+    if issuance.get("flow_instance_id"):
+        application.metadata["flow_instance_id"] = issuance.get("flow_instance_id")
+    if issuance.get("flow_definition_id"):
+        application.metadata["flow_definition_id"] = issuance.get("flow_definition_id")
+    if issuance.get("source"):
+        application.metadata["issuance_source"] = issuance.get("source")
+    application.updated_at = datetime.now(timezone.utc)
     await repo.save_application(application)
 
-    # Step the applicant through valid intermediate states before CREDENTIALED.
-    if applicant.status == ApplicantStatus.DRAFT:
-        _set_applicant_status(applicant, ApplicantStatus.SUBMITTED)
-    if applicant.status == ApplicantStatus.SUBMITTED:
-        _set_applicant_status(applicant, ApplicantStatus.UNDER_REVIEW)
-    if applicant.status == ApplicantStatus.UNDER_REVIEW:
-        _set_applicant_status(applicant, ApplicantStatus.APPROVED)
-    if applicant.status == ApplicantStatus.APPROVED:
-        _set_applicant_status(applicant, ApplicantStatus.CREDENTIALED)
+    # A generated QR/offer is not a credential yet. The status becomes
+    # CREDENTIALED only after the issuance transaction reaches "issued".
+    if has_offer:
+        _advance_applicant_to_offered(applicant)
     await repo.save(applicant)
     return _application_to_response(application)
 
@@ -1579,6 +1767,7 @@ async def get_application(
     application = await repo.get_application(application_id)
     if not application:
         raise HTTPException(status_code=404, detail="Application not found")
+    await _sync_application_issuance_state(application, repo)
     applicant = await repo.get_by_id(application.applicant_id)
     return _enriched_application_to_response(application, applicant)
 
@@ -1759,6 +1948,8 @@ async def update_applicant(
     if not applicant:
         raise HTTPException(status_code=404, detail="Applicant not found")
     
+    if request.email is not None:
+        applicant.email = request.email
     if request.given_name is not None:
         applicant.given_name = request.given_name
     if request.family_name is not None:

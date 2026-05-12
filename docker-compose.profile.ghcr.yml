@@ -67,6 +67,11 @@ services:
     environment:
       SERVICE_NAME: deployment_profile
 
+  signing-keys:
+    <<: *service-image
+    environment:
+      SERVICE_NAME: signing_keys
+
   flow:
     <<: *service-image
     environment:

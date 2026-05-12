@@ -40,7 +40,10 @@ import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings';
 import BusinessIcon from '@mui/icons-material/Business';
 import PhotoCameraIcon from '@mui/icons-material/PhotoCamera';
 import { useAuth } from '../hooks/useAuth';
+import { useConsole } from '../contexts/ConsoleContext';
 import { updateProfilePicture } from '../services/authApi';
+import { formatOfficialReference, pickOfficialReference } from '../utils/officialReferences';
+import OrganizationMembershipHub from './organizations/OrganizationMembershipHub';
 
 function ProfilePage() {
   const {
@@ -48,10 +51,11 @@ function ProfilePage() {
     isAdministrator,
     isApplicant,
     organizationId,
-    organizations,
+    organizations = [],
     setActiveOrganizationId,
     refreshUser,
   } = useAuth();
+  const { activeOrgId, setActiveOrgId } = useConsole();
 
   const fileInputRef = useRef(null);
   const [previewUrl, setPreviewUrl] = useState(null);
@@ -78,6 +82,14 @@ function ProfilePage() {
 
   const displayPicture = previewUrl || user.picture || undefined;
   const userInitial = (user.given_name || user.name || user.email || 'U')[0].toUpperCase();
+  const accountReference = pickOfficialReference({
+    rawId: user.id || user.subject,
+    kind: 'account',
+  });
+  const applicantReference = pickOfficialReference({
+    rawId: user.applicant_id,
+    kind: 'applicant',
+  });
 
   const handleFileChange = (e) => {
     const file = e.target.files?.[0];
@@ -273,7 +285,7 @@ function ProfilePage() {
                       >
                         {organizations.map((org) => (
                           <MenuItem key={org.id} value={org.id}>
-                            {org.name || org.id}
+                            {org.name || formatOfficialReference(org.id, 'organization')}
                           </MenuItem>
                         ))}
                       </Select>
@@ -281,7 +293,10 @@ function ProfilePage() {
                   ) : (
                     <ListItemText
                       primary="Organization"
-                      secondary={(organizations || [])[0]?.name || 'Not assigned'}
+                      secondary={
+                        (organizations || [])[0]?.name
+                        || ((organizations || [])[0]?.id ? formatOfficialReference((organizations || [])[0].id, 'organization') : 'Not assigned')
+                      }
                     />
                   )}
                 </ListItem>
@@ -291,10 +306,10 @@ function ProfilePage() {
                     <BadgeIcon />
                   </ListItemIcon>
                   <ListItemText
-                    primary="Account ID"
+                    primary="Account Reference"
                     secondary={
                       <Typography variant="body2" fontFamily="monospace">
-                        {user.id || user.subject || 'N/A'}
+                        {accountReference}
                       </Typography>
                     }
                   />
@@ -345,10 +360,10 @@ function ProfilePage() {
                       <BadgeIcon />
                     </ListItemIcon>
                     <ListItemText
-                      primary="Applicant Record ID"
+                      primary="Applicant Reference"
                       secondary={
                         <Typography variant="body2" fontFamily="monospace">
-                          {user.applicant_id}
+                          {applicantReference}
                         </Typography>
                       }
                     />
@@ -370,6 +385,26 @@ function ProfilePage() {
                   </Box>
                 </>
               )}
+            </CardContent>
+          </Card>
+        </Grid>
+
+        <Grid item xs={12}>
+          <Card>
+            <CardContent>
+              <OrganizationMembershipHub
+                organizations={organizations}
+                activeOrgId={activeOrgId || organizationId}
+                onSwitchToOrg={setActiveOrgId}
+                embedded
+                showManagePageLink
+                managePath="/console/organizations"
+                discoverPath="/console/organizations/discover"
+                joinPath="/console/organizations/join"
+                dataTestId="profile-organization-membership-section"
+                title="Organization Memberships"
+                description="Manage your current memberships and jump into the existing organizations flow to discover public organizations or join one with a code."
+              />
             </CardContent>
           </Card>
         </Grid>

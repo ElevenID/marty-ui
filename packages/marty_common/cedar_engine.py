@@ -71,6 +71,20 @@ class CedarEngine:
         policies = (_CEDAR_DIR / "gateway_policies.cedar").read_text()
         return cls(schema=schema, policies=policies)
 
+    @classmethod
+    def with_credential_verification(cls) -> "CedarEngine":
+        """Create engine with gateway RBAC policies + credential verification trust rules.
+
+        Used by the presentation-policy service for credential-level
+        authorization during VP token evaluation.
+        """
+        engine = cls.with_defaults()
+        verification_policies = (
+            _CEDAR_DIR / "credential_verification.cedar"
+        ).read_text()
+        engine.append_policies(verification_policies)
+        return engine
+
     @property
     def policies(self) -> str:
         return self._policies

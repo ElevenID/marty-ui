@@ -151,6 +151,28 @@ server {
         add_header Access-Control-Allow-Origin * always;
     }
 
+    location = /console {
+        set $ui_upstream ${UI_UPSTREAM};
+        proxy_pass http://$ui_upstream/console;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+    }
+
+    location ^~ /console/ {
+        set $ui_upstream ${UI_UPSTREAM};
+        proxy_pass http://$ui_upstream/console;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+    }
+
     location / {
         set $ui_upstream ${UI_UPSTREAM};
         proxy_pass http://$ui_upstream;

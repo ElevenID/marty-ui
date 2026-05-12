@@ -112,6 +112,11 @@ PERMISSION_CATALOG: list[tuple[str, str, str]] = [
     ("webhook", "edit", "Edit webhooks"),
     ("webhook", "delete", "Delete webhooks"),
     ("webhook", "test", "Test webhooks"),
+    # Integration connectors
+    ("integration-connector", "view", "View external protocol connectors"),
+    ("integration-connector", "create", "Create external protocol connectors"),
+    ("integration-connector", "edit", "Edit external protocol connectors"),
+    ("integration-connector", "delete", "Delete external protocol connectors"),
     # Notifications
     ("notification", "view", "View notifications"),
     ("notification", "send", "Send notifications"),

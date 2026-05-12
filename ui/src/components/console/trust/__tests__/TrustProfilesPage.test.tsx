@@ -4,6 +4,10 @@ import { renderWithRouter, screen, waitFor } from '@test/utils'
 import TrustProfilesPage from '../TrustProfilesPage'
 
 const listTrustProfiles = vi.fn()
+const listRevocationProfiles = vi.fn()
+const listSigningKeys = vi.fn()
+const listIssuerProfiles = vi.fn()
+const getKeyManagementConfig = vi.fn()
 
 const translations: Record<string, string> = {
   'trust.trustProfiles': 'Trust Profiles',
@@ -12,7 +16,7 @@ const translations: Record<string, string> = {
   'trust.tableHeaders.framework': 'Framework',
   'trust.tableHeaders.status': 'Status',
   'trust.tableHeaders.trustedIssuers': 'Trusted Issuers',
-  'trust.tableHeaders.validationRules': 'Validation Rules',
+  'trust.tableHeaders.validationRules': 'Cryptographic Policy',
   'trust.tableHeaders.lastUpdated': 'Last Updated',
   'trust.tableHeaders.actions': 'Actions',
   'trust.actions.viewDetails': 'View details',
@@ -39,17 +43,32 @@ vi.mock('../../../../hooks/useAuth', () => ({
 
 vi.mock('../../../../services/presentationPolicyApi', () => ({
   listTrustProfiles: (...args: unknown[]) => listTrustProfiles(...args),
+  listRevocationProfiles: (...args: unknown[]) => listRevocationProfiles(...args),
+}))
+
+vi.mock('../../../../services/signingKeysApi', () => ({
+  listSigningKeys: (...args: unknown[]) => listSigningKeys(...args),
+  listIssuerProfiles: (...args: unknown[]) => listIssuerProfiles(...args),
+  getKeyManagementConfig: (...args: unknown[]) => getKeyManagementConfig(...args),
 }))
 
 vi.mock('../../../common', () => ({
-  ResourcePage: ({ children, title }: { children: React.ReactNode; title: string }) => (
+  ResourcePage: ({ children, title, tabs }: { children: React.ReactNode; title: string; tabs?: Array<{ label: string }> }) => (
     <div>
       <h1>{title}</h1>
+      {tabs?.length ? <div data-testid="resource-tabs">{tabs.map((tab) => tab.label).join(',')}</div> : null}
       {children}
     </div>
   ),
   StatusChip: ({ status }: { status: string }) => <span>{status}</span>,
-  EmptyState: ({ title }: { title?: string }) => <div>{title || 'empty-state'}</div>,
+  EmptyState: ({ title, prerequisites }: { title?: string; prerequisites?: Array<{ label: string; status: string }> }) => (
+    <div>
+      <div>{title || 'empty-state'}</div>
+      {prerequisites?.map((prereq) => (
+        <span key={prereq.label}>{`${prereq.label}:${prereq.status}`}</span>
+      ))}
+    </div>
+  ),
   EmptyStates: {
     trustProfiles: { title: 'No trust profiles' },
   },
@@ -63,6 +82,14 @@ describe('TrustProfilesPage', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     authState = { organizationId: 'org-1' }
+    listRevocationProfiles.mockResolvedValue([])
+    listSigningKeys.mockResolvedValue({ keys: [] })
+    listIssuerProfiles.mockResolvedValue({ profiles: [] })
+    getKeyManagementConfig.mockResolvedValue({
+      supports_native_key_management: false,
+      default_service_id: null,
+      services: [],
+    })
   })
 
   it('loads organization-scoped profiles and renders canonical fields', async () => {
@@ -84,6 +111,13 @@ describe('TrustProfilesPage', () => {
       expect(listTrustProfiles).toHaveBeenCalledWith({ organization_id: 'org-1' })
     })
 
+    await waitFor(() => {
+      expect(listSigningKeys).toHaveBeenCalledWith({ limit: 1 })
+      expect(listIssuerProfiles).toHaveBeenCalledTimes(1)
+      expect(getKeyManagementConfig).toHaveBeenCalledTimes(1)
+      expect(listRevocationProfiles).toHaveBeenCalledWith({ organization_id: 'org-1', limit: 1 })
+    })
+
     expect(await screen.findByText('Production Trust')).toBeInTheDocument()
     expect(screen.getByText('CUSTOM')).toBeInTheDocument()
     expect(screen.getByText('active')).toBeInTheDocument()
@@ -98,6 +132,70 @@ describe('TrustProfilesPage', () => {
 
     await waitFor(() => {
       expect(listTrustProfiles).not.toHaveBeenCalled()
+      expect(listSigningKeys).not.toHaveBeenCalled()
+      expect(listIssuerProfiles).not.toHaveBeenCalled()
+      expect(getKeyManagementConfig).not.toHaveBeenCalled()
+      expect(listRevocationProfiles).not.toHaveBeenCalled()
     })
+  })
+
+  it('shows trust profile prerequisites in empty state', async () => {
+    listTrustProfiles.mockResolvedValue([])
+    listSigningKeys.mockResolvedValue({ keys: [] })
+    listIssuerProfiles.mockResolvedValue({ profiles: [] })
+    getKeyManagementConfig.mockResolvedValue({
+      supports_native_key_management: false,
+      default_service_id: null,
+      services: [],
+    })
+    listRevocationProfiles.mockResolvedValue([])
+
+    renderWithRouter(<TrustProfilesPage />)
+
+    expect(await screen.findByText('No trust profiles')).toBeInTheDocument()
+    expect(screen.getByText('Key Management Service:missing')).toBeInTheDocument()
+    expect(screen.getByText('Issuer Identity or Signing Key:missing')).toBeInTheDocument()
+    expect(screen.getByText('Revocation Profile:missing')).toBeInTheDocument()
+  })
+
+  it('treats managed issuer prerequisites as ready when KMS and issuer input exist', async () => {
+    listTrustProfiles.mockResolvedValue([])
+    listSigningKeys.mockResolvedValue({
+      keys: [
+        {
+          id: 'key-1',
+          name: 'Issuer key',
+        },
+      ],
+    })
+    listIssuerProfiles.mockResolvedValue({ profiles: [] })
+    getKeyManagementConfig.mockResolvedValue({
+      supports_native_key_management: false,
+      default_service_id: 'managed-openbao-transit',
+      services: [
+        {
+          id: 'managed-openbao-transit',
+          name: 'Managed OpenBao',
+          service_type: 'openbao-transit',
+          status: 'configured',
+        },
+      ],
+    })
+    listRevocationProfiles.mockResolvedValue([])
+
+    renderWithRouter(<TrustProfilesPage />)
+
+    expect(await screen.findByText('No trust profiles')).toBeInTheDocument()
+    expect(screen.getByText('Key Management Service:ready')).toBeInTheDocument()
+    expect(screen.getByText('Issuer Identity or Signing Key:ready')).toBeInTheDocument()
+  })
+
+  it('renders as a standalone page without top-level trust tabs', async () => {
+    listTrustProfiles.mockResolvedValue([])
+
+    renderWithRouter(<TrustProfilesPage />)
+
+    expect(await screen.findByText('No trust profiles')).toBeInTheDocument()
+    expect(screen.queryByTestId('resource-tabs')).not.toBeInTheDocument()
   })
 })

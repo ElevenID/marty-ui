@@ -17,7 +17,9 @@ Port: 8003
 from __future__ import annotations
 
 import logging
+import json
 import os
+import re
 import uuid
 
 from contextlib import asynccontextmanager
@@ -25,6 +27,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, AsyncGenerator
+from urllib.parse import parse_qs, quote, urlparse
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -266,6 +269,14 @@ class MergeStrategy(str, Enum):
     REPLACE = "REPLACE"
 
 
+class IosSameDeviceMode(str, Enum):
+    DIGITAL_CREDENTIALS = "digital_credentials"
+    UNIVERSAL_LINK = "universal_link"
+    NESTED_LINK = "nested_link"
+    PROTOCOL_ONLY = "protocol_only"
+    UNSUPPORTED = "unsupported"
+
+
 @dataclass
 class CredentialTemplate:
     """
@@ -382,11 +393,18 @@ class WalletRegistryEntry:
     specifications: list[str] = field(default_factory=list)
     logo_url: str | None = None
     deep_link_template: str = "openid-credential-offer://?credential_offer_uri={offer_uri}"
+    routing_templates: dict[str, str] = field(default_factory=dict)
+    install_urls: dict[str, str] = field(default_factory=dict)
+    ios_scheme: str | None = None
+    universal_link_template: str | None = None
+    android_package: str | None = None
     supported_formats: list[str] = field(default_factory=list)
     supported_protocols: list[str] = field(default_factory=lambda: ["OID4VCI_PRE_AUTH"])
     platforms: list[str] = field(default_factory=list)
     supports_qr: bool = True
     supports_deeplink: bool = True
+    supports_digital_credentials: bool = False
+    supports_haip: bool = False
     docs_url: str | None = None
     is_active: bool = True
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
@@ -416,6 +434,15 @@ SYSTEM_WALLET_CATALOG: tuple[WalletRegistryEntry, ...] = (
         logo_url="https://spruceid.com/favicon.ico",
         supported_formats=["spruce-vc+sd-jwt"],
         platforms=["ios", "android"],
+        routing_templates={
+            "generic": "openid-credential-offer://?{credential_offer_param}={offer_encoded}",
+            "ios": "openid-credential-offer://?{credential_offer_param}={offer_encoded}",
+            "android": "intent://?{credential_offer_param}={offer_encoded}#Intent;scheme=openid-credential-offer;package=com.spruceid.mobilesdkexample;end",
+        },
+        install_urls={
+            "ios": "https://apps.apple.com/search?term=SpruceKit",
+            "android": "https://play.google.com/store/search?q=SpruceKit&c=apps",
+        },
         docs_url="https://spruceid.com/products/sprucekit",
     ),
     WalletRegistryEntry(
@@ -426,6 +453,12 @@ SYSTEM_WALLET_CATALOG: tuple[WalletRegistryEntry, ...] = (
         specifications=["OID4VCI"],
         supported_formats=["spruce-vc+sd-jwt"],
         platforms=["ios", "android"],
+        routing_templates={
+            "generic": "marty-authenticator://open?inner={inner_uri_encoded}",
+            "ios": "marty-authenticator://open?inner={inner_uri_encoded}",
+            "android": "marty-authenticator://open?inner={inner_uri_encoded}",
+        },
+        ios_scheme="marty-authenticator",
     ),
     WalletRegistryEntry(
         id="wr-default",
@@ -489,6 +522,12 @@ SYSTEM_WALLET_CATALOG: tuple[WalletRegistryEntry, ...] = (
         supported_protocols=["CREDENTIAL_MANAGER"],
         platforms=["android"],
         deep_link_template="openid-credential-offer://?credential_offer={offer}",
+        routing_templates={
+            "generic": "openid-credential-offer://?credential_offer={offer_encoded}",
+            "android": "openid-credential-offer://?credential_offer={offer_encoded}",
+        },
+        android_package="com.google.android.gms",
+        supports_digital_credentials=True,
         docs_url="https://developer.android.com/identity/digital-credentials",
     ),
     WalletRegistryEntry(
@@ -502,6 +541,11 @@ SYSTEM_WALLET_CATALOG: tuple[WalletRegistryEntry, ...] = (
         supported_protocols=["APPLE_WALLET"],
         platforms=["ios"],
         deep_link_template="openid-credential-offer://?credential_offer={offer}",
+        routing_templates={
+            "generic": "openid-credential-offer://?credential_offer={offer_encoded}",
+            "ios": "openid-credential-offer://?credential_offer={offer_encoded}",
+        },
+        supports_digital_credentials=True,
         docs_url="https://developer.apple.com/documentation/passkit/wallet",
     ),
     WalletRegistryEntry(
@@ -782,8 +826,6 @@ class CredentialTemplateResponse(BaseModel):
     compliance_profile_id: str | None = None
     vct: str | None = None
     credential_payload_format: str | None = None
-    supported_formats: list[str] = []
-    zk_predicate_claims: list[str] = []
     application_template_id: str | None = None
     trust_profile_id: str | None = None
     revocation_profile_id: str | None = None
@@ -796,7 +838,7 @@ class CredentialTemplateResponse(BaseModel):
     issuer_did: str | None = None
     auto_generate_artifacts: bool = False
     privacy_posture: dict | None = None
-    wallet_configs: list[dict] = Field(default_factory=list)
+    wallet_configs_json: str | None = None  # JSON string of wallet configs for per-wallet offers
     created_at: str
     updated_at: str
 
@@ -857,12 +899,19 @@ class WalletRegistryEntryCreate(BaseModel):
     logo_url: str | None = None
     deep_link_template: str = "openid-credential-offer://?credential_offer_uri={offer_uri}"
     deep_link_pattern: str | None = None
+    routing_templates: dict[str, str] = Field(default_factory=dict)
+    install_urls: dict[str, str] = Field(default_factory=dict)
+    ios_scheme: str | None = None
+    universal_link_template: str | None = None
+    android_package: str | None = None
     supported_formats: list[str] = Field(default_factory=list)
     supported_protocols: list[str] = Field(default_factory=lambda: ["OID4VCI_PRE_AUTH"])
     platforms: list[str] = Field(default_factory=list)
     supported_platforms: list[str] | None = None
     supports_qr: bool = True
     supports_deeplink: bool = True
+    supports_digital_credentials: bool = False
+    supports_haip: bool = False
     docs_url: str | None = None
     override_precedence: int = 50
     merge_strategy: str = MergeStrategy.APPEND.value
@@ -880,12 +929,19 @@ class WalletRegistryEntryUpdate(BaseModel):
     logo_url: str | None = None
     deep_link_template: str | None = None
     deep_link_pattern: str | None = None
+    routing_templates: dict[str, str] | None = None
+    install_urls: dict[str, str] = Field(default_factory=dict)
+    ios_scheme: str | None = None
+    universal_link_template: str | None = None
+    android_package: str | None = None
     supported_formats: list[str] | None = None
     supported_protocols: list[str] | None = None
     platforms: list[str] | None = None
     supported_platforms: list[str] | None = None
     supports_qr: bool | None = None
     supports_deeplink: bool | None = None
+    supports_digital_credentials: bool | None = None
+    supports_haip: bool | None = None
     docs_url: str | None = None
     is_active: bool | None = None
     override_precedence: int | None = None
@@ -905,10 +961,35 @@ class WalletRegistryEntryResponse(BaseModel):
     description: str | None
     wallet_apps: list[str]
     specifications: list[str]
+    logo_url: str | None = None
     deep_link_pattern: str
+    routing_templates: dict[str, str] = Field(default_factory=dict)
+    install_urls: dict[str, str] | None = None
+    ios_scheme: str | None = None
+    universal_link_template: str | None = None
+    android_package: str | None = None
+    supported_formats: list[str] = Field(default_factory=list)
+    supported_protocols: list[str] = Field(default_factory=list)
     supported_platforms: list[str]
+    supports_qr: bool = True
+    supports_deeplink: bool = True
+    supports_digital_credentials: bool = False
+    supports_haip: bool = False
+    ios_same_device_mode: str
+    ios_same_device_single_wallet_only: bool = False
+    oid4vci_profile: dict[str, str] | None = None
+    docs_url: str | None = None
+    capabilities: dict[str, bool] = Field(default_factory=dict)
     created_at: str
     updated_at: str
+
+
+class WalletOpenLinkResponse(BaseModel):
+    wallet_id: str
+    inner_uri: str
+    open_uri: str
+    platform: str | None = None
+    transport: str = "wallet_deeplink"
 
 
 class DerivedFromResponse(BaseModel):
@@ -1314,8 +1395,6 @@ def _template_to_response(template: CredentialTemplate) -> CredentialTemplateRes
         compliance_profile_id=template.compliance_profile_id,
         vct=template.vct or None,
         credential_payload_format=canonical_payload_format,
-        supported_formats=[f.value for f in template.supported_formats],
-        zk_predicate_claims=template.zk_predicate_claims or [],
         application_template_id=template.application_template_id,
         trust_profile_id=template.trust_profile_id,
         revocation_profile_id=template.revocation_profile_id,
@@ -1355,10 +1434,14 @@ def _template_to_response(template: CredentialTemplate) -> CredentialTemplateRes
             **({"not_before_offset_seconds": template.validity_rules.not_before_offset_seconds} if template.validity_rules.not_before_offset_seconds else {}),
         },
         privacy_posture=privacy_posture,
-        wallet_configs=[
-            {k: v for k, v in {"wallet_id": wc.wallet_id, "deep_link_scheme": wc.deep_link_scheme, "format_variant": wc.format_variant}.items() if v is not None}
+        wallet_configs_json=json.dumps([
+            {
+                "wallet_id": wc.wallet_id,
+                "deep_link_scheme": wc.deep_link_scheme,
+                "format_variant": wc.format_variant,
+            }
             for wc in template.wallet_configs
-        ],
+        ]) if template.wallet_configs else "[]",
         created_at=template.created_at.isoformat(),
         updated_at=template.updated_at.isoformat(),
     )
@@ -1581,6 +1664,7 @@ def _merge_wallet_profile(
 
 
 def _wallet_to_response(w: WalletRegistryEntry) -> WalletRegistryEntryResponse:
+    ios_same_device_mode = _derive_ios_same_device_mode(w)
     return WalletRegistryEntryResponse(
         id=w.id,
         organization_id=w.organization_id,
@@ -1594,11 +1678,234 @@ def _wallet_to_response(w: WalletRegistryEntry) -> WalletRegistryEntryResponse:
         description=w.description,
         wallet_apps=w.wallet_apps or [w.name],
         specifications=w.specifications,
+        logo_url=w.logo_url,
         deep_link_pattern=w.deep_link_template,
+        routing_templates=_wallet_routing_templates(w),
+        install_urls=w.install_urls,
+        ios_scheme=w.ios_scheme,
+        universal_link_template=w.universal_link_template,
+        android_package=w.android_package,
+        supported_formats=w.supported_formats,
+        supported_protocols=w.supported_protocols,
         supported_platforms=w.platforms,
+        supports_qr=w.supports_qr,
+        supports_deeplink=w.supports_deeplink,
+        supports_digital_credentials=w.supports_digital_credentials,
+        supports_haip=w.supports_haip,
+        ios_same_device_mode=ios_same_device_mode.value,
+        ios_same_device_single_wallet_only=ios_same_device_mode == IosSameDeviceMode.PROTOCOL_ONLY,
+        oid4vci_profile=_wallet_oid4vci_profile(w),
+        docs_url=w.docs_url,
+        capabilities=_wallet_capabilities(w),
         created_at=w.created_at.isoformat(),
         updated_at=w.updated_at.isoformat(),
     )
+
+
+def _wallet_oid4vci_profile(w: WalletRegistryEntry) -> dict[str, str] | None:
+    formats = {str(fmt).strip().lower().replace("_", "-") for fmt in (w.supported_formats or [])}
+    if "spruce-vc+sd-jwt" in formats:
+        return {
+            "format_variant": "spruce-vc+sd-jwt",
+            "issuer_path": "spruce",
+            "credential_configuration_suffix": "spruce-sd-jwt",
+        }
+    return None
+
+
+def _wallet_capabilities(w: WalletRegistryEntry) -> dict[str, bool]:
+    tokens = " ".join([*w.specifications, *w.supported_protocols]).lower()
+    supports_oid4vci = "oid4vci" in tokens or "oid4vci_pre_auth" in tokens
+    supports_oid4vp = "oid4vp" in tokens
+    supports_dc_api = w.supports_digital_credentials or any(marker in tokens for marker in ("credentialmanager", "digital_credentials", "dc_api"))
+    supports_haip = w.supports_haip or "haip" in tokens
+    return {
+        "oid4vci": supports_oid4vci,
+        "oid4vp": supports_oid4vp,
+        "digital_credentials": supports_dc_api,
+        "haip": supports_haip,
+        "same_device": w.supports_deeplink or supports_dc_api,
+        "qr": w.supports_qr,
+    }
+
+
+_PROTOCOL_ONLY_WALLET_SCHEMES = {"openid-credential-offer", "openid4vp", "haip-vci", "haip-vp"}
+
+
+def _wallet_has_explicit_ios_routing(w: WalletRegistryEntry) -> bool:
+    templates = w.routing_templates or {}
+    return bool(w.universal_link_template or w.ios_scheme or templates.get("ios"))
+
+
+def _wallet_targets_ios_same_device(w: WalletRegistryEntry) -> bool:
+    platforms = {str(platform).strip().lower() for platform in (w.platforms or []) if str(platform).strip()}
+    if "ios" in platforms or "any" in platforms:
+        return True
+    if platforms:
+        return _wallet_has_explicit_ios_routing(w)
+    return bool(w.supports_digital_credentials or _wallet_has_explicit_ios_routing(w) or w.deep_link_template)
+
+
+def _is_universal_link_template(template: str | None) -> bool:
+    if not template:
+        return False
+    return urlparse(template).scheme.lower() in {"https", "http"}
+
+
+def _is_protocol_only_wallet_template(template: str | None) -> bool:
+    if not template:
+        return False
+    return urlparse(template).scheme.lower() in _PROTOCOL_ONLY_WALLET_SCHEMES
+
+
+def _derive_ios_same_device_mode(w: WalletRegistryEntry) -> IosSameDeviceMode:
+    if not _wallet_targets_ios_same_device(w):
+        return IosSameDeviceMode.UNSUPPORTED
+    if w.supports_digital_credentials:
+        return IosSameDeviceMode.DIGITAL_CREDENTIALS
+
+    route_template = _wallet_route_template_for_platform(w, "ios")
+    if _is_universal_link_template(route_template):
+        return IosSameDeviceMode.UNIVERSAL_LINK
+    if _is_wallet_routing_template(route_template):
+        return IosSameDeviceMode.NESTED_LINK
+    if _is_protocol_only_wallet_template(route_template):
+        return IosSameDeviceMode.PROTOCOL_ONLY
+    return IosSameDeviceMode.UNSUPPORTED
+
+
+def _wallet_routing_templates(w: WalletRegistryEntry) -> dict[str, str]:
+    if not w.supports_deeplink:
+        return {}
+    templates = dict(w.routing_templates or {})
+    if w.deep_link_template:
+        templates.setdefault("generic", w.deep_link_template)
+    if w.universal_link_template:
+        templates.setdefault("web", w.universal_link_template)
+        templates.setdefault("ios", w.universal_link_template)
+    if w.ios_scheme:
+        templates.setdefault("ios", f"{w.ios_scheme}://open?inner={{inner_uri_encoded}}")
+    for platform in w.platforms:
+        if platform in {"ios", "android", "web", "desktop"}:
+            if w.deep_link_template:
+                templates.setdefault(platform, w.deep_link_template)
+    return templates
+
+
+def _wallet_route_template_for_platform(w: WalletRegistryEntry, platform: str | None) -> str:
+    templates = _wallet_routing_templates(w)
+    normalized_platform = (platform or "").strip().lower()
+    if normalized_platform == "desktop":
+        normalized_platform = "web"
+    exact_template = templates.get(normalized_platform) or ""
+    if _is_wallet_routing_template(exact_template):
+        return exact_template
+    if exact_template:
+        return exact_template
+
+    generic_template = templates.get("generic") or templates.get("default") or w.deep_link_template or ""
+    if _is_wallet_routing_template(generic_template):
+        return generic_template
+    if generic_template:
+        return generic_template
+
+    if normalized_platform:
+        return ""
+
+    fallback_templates = [
+        templates.get("ios"),
+        templates.get("android"),
+        templates.get("web"),
+        templates.get("desktop"),
+        *templates.values(),
+        w.deep_link_template,
+    ]
+    nested_fallback = next((template for template in fallback_templates if _is_wallet_routing_template(template or "")), "")
+    return nested_fallback or exact_template or generic_template
+
+
+def _is_wallet_routing_template(template: str | None) -> bool:
+    if not template:
+        return False
+    scheme = urlparse(template).scheme.lower()
+    if scheme in {"openid-credential-offer", "openid4vp", "haip-vci", "haip-vp"}:
+        return False
+    return re.search(
+        r"\{(?:inner_uri|uri|offer_uri|offer|credential_offer_uri|request_uri)(?:_encoded)?\}",
+        template,
+    ) is not None
+
+
+def _query_value(uri: str, keys: tuple[str, ...]) -> str:
+    parsed = urlparse(uri)
+    query = parse_qs(parsed.query, keep_blank_values=True)
+    for key in keys:
+        values = query.get(key)
+        if values and values[0]:
+            return values[0]
+    return uri
+
+
+def _credential_offer_parts(uri: str) -> tuple[str, str]:
+    parsed = urlparse(uri)
+    query = parse_qs(parsed.query, keep_blank_values=True)
+    for key in ("credential_offer_uri", "credential_offer"):
+        values = query.get(key)
+        if values and values[0]:
+            return key, values[0]
+    return "credential_offer_uri", uri
+
+
+def _validate_wallet_inner_uri(inner_uri: str) -> str:
+    value = inner_uri.strip()
+    if not value:
+        raise HTTPException(status_code=400, detail="inner_uri is required")
+
+    parsed = urlparse(value)
+    scheme = parsed.scheme.lower()
+    allowed_schemes = {"https", "openid-credential-offer", "openid4vp", "haip-vci", "haip-vp"}
+    if os.environ.get("ENVIRONMENT", "production").lower() in {"development", "test"}:
+        allowed_schemes.add("http")
+    if scheme not in allowed_schemes:
+        raise HTTPException(status_code=400, detail="inner_uri scheme is not allowed")
+    if scheme in {"http", "https"} and not parsed.netloc:
+        raise HTTPException(status_code=400, detail="inner_uri must include a host")
+    return value
+
+
+def _render_wallet_open_uri(template: str, inner_uri: str, wallet_id: str, platform: str | None) -> str:
+    if not template:
+        return inner_uri
+    offer_param, offer_value = _credential_offer_parts(inner_uri)
+    if offer_param == "credential_offer":
+        template = re.sub(
+            r"credential_offer_uri=(\{(?:offer_uri|offer|credential_offer_uri)(?:_encoded)?\})",
+            r"credential_offer=\1",
+            template,
+        )
+    request_uri = _query_value(inner_uri, ("request_uri",))
+    replacements = {
+        "inner_uri": inner_uri,
+        "inner_uri_encoded": quote(inner_uri, safe=""),
+        "uri": inner_uri,
+        "uri_encoded": quote(inner_uri, safe=""),
+        "offer_uri": offer_value,
+        "offer_uri_encoded": quote(offer_value, safe=""),
+        "offer": offer_value,
+        "offer_encoded": quote(offer_value, safe=""),
+        "credential_offer_param": offer_param,
+        "credential_offer_uri": offer_value,
+        "credential_offer_uri_encoded": quote(offer_value, safe=""),
+        "request_uri": request_uri,
+        "request_uri_encoded": quote(request_uri, safe=""),
+        "wallet_id": wallet_id,
+        "platform": platform or "",
+    }
+
+    def replace(match: re.Match[str]) -> str:
+        return replacements.get(match.group(1), match.group(0))
+
+    return re.sub(r"\{([a-zA-Z0-9_]+)\}", replace, template)
 
 
 # =============================================================================
@@ -1616,6 +1923,31 @@ async def list_wallets(
     if organization_id is not None:
         wallets = [wallet for wallet in wallets if wallet.organization_id in {None, organization_id}]
     return [_wallet_to_response(w) for w in wallets]
+
+
+@wallet_router.get("/{wallet_id}/open-link", response_model=WalletOpenLinkResponse, summary="Build Wallet Open Link")
+async def build_wallet_open_link(
+    wallet_id: str,
+    inner_uri: str = Query(..., description="Standard OID4VP/OID4VCI/HAIP inner URI"),
+    platform: str | None = Query(None, description="Optional platform hint such as ios or android"),
+    repo: InMemoryWalletRegistryRepository | PostgresWalletRegistryRepository = Depends(get_wallet_repo),
+) -> WalletOpenLinkResponse:
+    """Build a wallet-specific outer link while preserving the standard inner URI."""
+    wallet = await repo.get(wallet_id)
+    if not wallet or not wallet.is_active:
+        raise HTTPException(status_code=404, detail="Wallet not found")
+    if not wallet.supports_deeplink:
+        raise HTTPException(status_code=400, detail="Wallet does not support deep links")
+
+    validated_inner_uri = _validate_wallet_inner_uri(inner_uri)
+    route_template = _wallet_route_template_for_platform(wallet, platform)
+    open_uri = _render_wallet_open_uri(route_template, validated_inner_uri, wallet_id, platform)
+    return WalletOpenLinkResponse(
+        wallet_id=wallet_id,
+        inner_uri=validated_inner_uri,
+        open_uri=open_uri,
+        platform=platform,
+    )
 
 
 @wallet_router.get("/{wallet_id}", response_model=WalletRegistryEntryResponse, response_model_exclude_none=True, summary="Get Wallet")
@@ -1707,11 +2039,18 @@ async def create_wallet(
         specifications=body.specifications,
         logo_url=body.logo_url,
         deep_link_template=deep_link_pattern,
+        routing_templates=body.routing_templates,
+        install_urls=body.install_urls,
+        ios_scheme=body.ios_scheme,
+        universal_link_template=body.universal_link_template,
+        android_package=body.android_package,
         supported_formats=body.supported_formats,
         supported_protocols=[_normalize_issuance_protocol(protocol) for protocol in body.supported_protocols],
         platforms=supported_platforms,
         supports_qr=body.supports_qr,
         supports_deeplink=body.supports_deeplink,
+        supports_digital_credentials=body.supports_digital_credentials,
+        supports_haip=body.supports_haip,
         docs_url=body.docs_url,
     )
     await repo.save(entry)
@@ -1753,6 +2092,16 @@ async def update_wallet(
         entry.logo_url = body.logo_url
     if body.deep_link_template is not None or body.deep_link_pattern is not None:
         entry.deep_link_template = body.deep_link_pattern or body.deep_link_template or entry.deep_link_template
+    if body.routing_templates is not None:
+        entry.routing_templates = body.routing_templates
+    if body.install_urls is not None:
+        entry.install_urls = body.install_urls
+    if body.ios_scheme is not None:
+        entry.ios_scheme = body.ios_scheme
+    if body.universal_link_template is not None:
+        entry.universal_link_template = body.universal_link_template
+    if body.android_package is not None:
+        entry.android_package = body.android_package
     if body.supported_formats is not None:
         entry.supported_formats = body.supported_formats
     if body.supported_protocols is not None:
@@ -1763,6 +2112,10 @@ async def update_wallet(
         entry.supports_qr = body.supports_qr
     if body.supports_deeplink is not None:
         entry.supports_deeplink = body.supports_deeplink
+    if body.supports_digital_credentials is not None:
+        entry.supports_digital_credentials = body.supports_digital_credentials
+    if body.supports_haip is not None:
+        entry.supports_haip = body.supports_haip
     if body.docs_url is not None:
         entry.docs_url = body.docs_url
     if body.is_active is not None:

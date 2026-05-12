@@ -3,8 +3,8 @@
 Adds two new one-click-issuable credential templates that showcase different
 verticals:
 
-  50000000-…-0040  Open Badge (Professional Certificate) — education vertical
-  50000000-…-0050  Employee Access Badge                 — enterprise vertical
+    50000000-…-0040  Verified Member Badge (Open Badge 3.0) — membership/login
+    50000000-…-0050  Employee Access Badge                  — enterprise
 
 Both are SD-JWT format with instant issuance, no approval required.
 
@@ -31,7 +31,7 @@ MARTY_ORG_ID = "00000000-0000-0000-0000-000000000001"
 NOW = "2026-03-23T00:00:00+00:00"
 
 # ==========================================================================
-# Open Badge — Professional Development Certificate
+# Open Badge — Verified Member Badge
 # ==========================================================================
 OPEN_BADGE_TEMPLATE_ID = "50000000-0000-0000-0000-000000000040"
 OPEN_BADGE_TYPE = "open_badge"
@@ -39,20 +39,10 @@ OPEN_BADGE_VCT = "https://marty.example/credentials/open_badge"
 
 OPEN_BADGE_CLAIMS = [
     {
-        "id": "marty-ob-given-name",
-        "name": "given_name",
-        "display_name": "Given Name",
-        "description": "Recipient first name",
-        "claim_type": "string",
-        "required": True,
-        "selectively_disclosable": True,
-        "derivable": False,
-    },
-    {
-        "id": "marty-ob-family-name",
-        "name": "family_name",
-        "display_name": "Family Name",
-        "description": "Recipient last name",
+        "id": "marty-ob-member-id",
+        "name": "member_id",
+        "display_name": "Member ID",
+        "description": "Opaque member identifier issued by the organization",
         "claim_type": "string",
         "required": True,
         "selectively_disclosable": True,
@@ -62,79 +52,90 @@ OPEN_BADGE_CLAIMS = [
         "id": "marty-ob-email",
         "name": "email",
         "display_name": "Email Address",
-        "description": "Recipient email",
+        "description": "Holder email address used to resolve the account during login",
         "claim_type": "string",
         "required": True,
         "selectively_disclosable": True,
         "derivable": False,
     },
     {
+        "id": "marty-ob-given-name",
+        "name": "given_name",
+        "display_name": "Given Name",
+        "description": "Holder first name",
+        "claim_type": "string",
+        "required": False,
+        "selectively_disclosable": True,
+        "derivable": False,
+    },
+    {
+        "id": "marty-ob-family-name",
+        "name": "family_name",
+        "display_name": "Family Name",
+        "description": "Holder last name",
+        "claim_type": "string",
+        "required": False,
+        "selectively_disclosable": True,
+        "derivable": False,
+    },
+    {
+        "id": "marty-ob-organization-id",
+        "name": "organization_id",
+        "display_name": "Organization ID",
+        "description": "UUID of the issuing organization",
+        "claim_type": "string",
+        "required": True,
+        "selectively_disclosable": True,
+        "derivable": False,
+    },
+    {
+        "id": "marty-ob-organization-name",
+        "name": "organization_name",
+        "display_name": "Organization Name",
+        "description": "Human-readable name of the issuing organization",
+        "claim_type": "string",
+        "required": False,
+        "selectively_disclosable": True,
+        "derivable": False,
+    },
+    {
+        "id": "marty-ob-role",
+        "name": "role",
+        "display_name": "Role",
+        "description": "Organization role conveyed during credential-based login",
+        "claim_type": "string",
+        "required": True,
+        "selectively_disclosable": True,
+        "derivable": False,
+        "enum_values": ["applicant", "vendor", "administrator"],
+    },
+    {
         "id": "marty-ob-achievement-name",
         "name": "achievement_name",
         "display_name": "Achievement Name",
-        "description": "Name of the achievement or certification",
+        "description": "Badge title describing the holder's verified membership recognition",
         "claim_type": "string",
         "required": True,
         "selectively_disclosable": False,
         "derivable": False,
     },
     {
-        "id": "marty-ob-course-name",
-        "name": "course_name",
-        "display_name": "Course Name",
-        "description": "Course or program name",
+        "id": "marty-ob-achievement-description",
+        "name": "achievement_description",
+        "display_name": "Achievement Description",
+        "description": "Description of the membership recognition represented by this badge",
         "claim_type": "string",
-        "required": True,
+        "required": False,
         "selectively_disclosable": False,
         "derivable": False,
     },
     {
-        "id": "marty-ob-completion-date",
-        "name": "completion_date",
-        "display_name": "Completion Date",
-        "description": "Date of course completion",
+        "id": "marty-ob-issued-at",
+        "name": "issued_at",
+        "display_name": "Issued At",
+        "description": "ISO-8601 timestamp when the badge was issued",
         "claim_type": "date",
         "required": True,
-        "selectively_disclosable": False,
-        "derivable": False,
-    },
-    {
-        "id": "marty-ob-institution-name",
-        "name": "institution_name",
-        "display_name": "Institution Name",
-        "description": "Name of issuing institution",
-        "claim_type": "string",
-        "required": True,
-        "selectively_disclosable": False,
-        "derivable": False,
-    },
-    {
-        "id": "marty-ob-certificate-id",
-        "name": "certificate_id",
-        "display_name": "Certificate ID",
-        "description": "Unique certificate identifier",
-        "claim_type": "string",
-        "required": False,
-        "selectively_disclosable": False,
-        "derivable": False,
-    },
-    {
-        "id": "marty-ob-grade",
-        "name": "grade",
-        "display_name": "Grade",
-        "description": "Grade or score received",
-        "claim_type": "string",
-        "required": False,
-        "selectively_disclosable": False,
-        "derivable": False,
-    },
-    {
-        "id": "marty-ob-credit-hours",
-        "name": "credit_hours",
-        "display_name": "Credit Hours",
-        "description": "Credit hours earned",
-        "claim_type": "integer",
-        "required": False,
         "selectively_disclosable": False,
         "derivable": False,
     },
@@ -360,10 +361,11 @@ ISSUER_REQUIREMENTS = {
 TEMPLATES = [
     {
         "id": OPEN_BADGE_TEMPLATE_ID,
-        "name": "Professional Certificate (Open Badge)",
+        "name": "Verified Member Badge",
         "description": (
-            "Open Badge 3.0 professional development certificate — "
-            "instantly issued, recognized by employers and institutions worldwide."
+            "Open Badge 3.0-compatible membership credential — verifiable proof "
+            "of active organization membership that can be presented for "
+            "passwordless sign-in where accepted."
         ),
         "credential_type": OPEN_BADGE_TYPE,
         "vct": OPEN_BADGE_VCT,
@@ -493,7 +495,7 @@ def upgrade() -> None:
                 "privacy_posture": "selective_disclosure",
                 "selective_disclosure_fields": json.dumps(sd_fields),
                 "derived_attributes": json.dumps([]),
-                "version": 1,
+                "version": 2,
                 "display_style": json.dumps(tmpl["display_style"]),
                 "validity_rules": json.dumps(VALIDITY_RULES_1Y),
                 "issuer_requirements": json.dumps(ISSUER_REQUIREMENTS),

@@ -126,9 +126,9 @@ function ActivityRow({ event }) {
   const CategoryIcon = EVENT_ICONS[category] || EVENT_ICONS.default;
 
   const getResourceLink = () => {
-    if (event.resource_type === 'credential') return `/console/operate/issuance/${event.resource_id}`;
-    if (event.resource_type === 'flow') return `/console/operate/flow-instances/${event.resource_id}`;
-    if (event.resource_type === 'application') return `/console/operate/applications/${event.resource_id}`;
+    if (event.resource_type === 'credential') return `/console/org/operate/issuance/${event.resource_id}`;
+    if (event.resource_type === 'flow') return `/console/org/operate/flow-instances/${event.resource_id}`;
+    if (event.resource_type === 'application') return `/console/org/operate/applications/${event.resource_id}`;
     return null;
   };
 
@@ -198,7 +198,9 @@ export function RecentActivityPanel() {
         const response = await listAuditEvents(effectiveOrgId, { limit: 5 });
         return response?.events || response || [];
       } catch (err) {
-        console.error('Failed to fetch recent activity:', err);
+        if (err?.status !== 403) {
+          console.error('Failed to fetch recent activity:', err);
+        }
         return [];
       }
     },

@@ -5,7 +5,7 @@
  * Provides flow creation, execution monitoring, approval queue, and batch revocation.
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
@@ -53,10 +53,10 @@ import credentialsApi from '../../services/credentialsApi';
 import sseService, { EVENT_TYPES } from '../../services/sseService';
 import { listTrustProfiles, listCredentialTemplates } from '../../services/presentationPolicyApi';
 import { listDeploymentProfiles } from '../../services/deploymentProfilesApi';
+import { formatOfficialReference, formatStructuredIdentifiers } from '../../utils/officialReferences';
 import {
   approveFlowManagerExecution,
   batchRevokeFlowManagerCredentials,
-  formatTruncatedId,
   getApprovalStrategyPresentation,
   getCredentialSelectionState,
   getFlowStatusPresentation,
@@ -73,7 +73,7 @@ import FlowPublishDialog from './FlowPublishDialog';
 import FlowDisableDialog from './FlowDisableDialog';
 import { EmptyState } from '../common';
 
-const FlowManager = () => {
+const FlowManager = ({ hideHeader = false }) => {
   const { t } = useTranslation(['vendor', 'common']);
   const { user } = useAuth();
   const { showSuccess, showError, showWarning } = useNotifications();
@@ -83,6 +83,16 @@ const FlowManager = () => {
   const [executions, setExecutions] = useState([]);
   const [credentials, setCredentials] = useState([]);
   const [revocationBatches, setRevocationBatches] = useState([]);
+  const [credentialsLoaded, setCredentialsLoaded] = useState(false);
+  const [revocationBatchesLoaded, setRevocationBatchesLoaded] = useState(false);
+  // Ref instead of state: these flags are only read inside callbacks (never rendered),
+  // so using state would recreate callbacks on every fetch → infinite loop.
+  const unsupportedEndpointsRef = useRef({
+    flows: false,
+    executions: false,
+    credentials: false,
+    revocationBatches: false,
+  });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [prereqStatus, setPrereqStatus] = useState({
@@ -114,48 +124,81 @@ const FlowManager = () => {
 
   // Load data
   const loadFlows = useCallback(async () => {
-    const result = await loadFlowManagerFlows({ listFlows: flowsApi.listFlows });
+    if (unsupportedEndpointsRef.current.flows) {
+      setFlows([]);
+      setError(null);
+      return;
+    }
+
+    const result = await loadFlowManagerFlows({
+      listFlows: flowsApi.listFlows,
+      organizationId: user?.organization_id,
+    });
     setFlows(result.flows);
     setError(result.error);
+    unsupportedEndpointsRef.current.flows = Boolean(result.unsupported);
     showNotification(result.notification);
-  }, [showNotification]);
+  }, [showNotification, user?.organization_id]);
 
   const loadExecutions = useCallback(async (flowId = null) => {
+    if (unsupportedEndpointsRef.current.executions) {
+      setExecutions([]);
+      return;
+    }
+
     const result = await loadFlowManagerExecutions({
       listFlowExecutions: flowsApi.listFlowExecutions,
+      organizationId: user?.organization_id,
       flows,
       flowId,
     });
     setExecutions(result.executions);
+    unsupportedEndpointsRef.current.executions = Boolean(result.unsupported);
     showNotification(result.notification);
-  }, [flows, showNotification]);
+  }, [flows, showNotification, user?.organization_id]);
 
   const loadCredentials = useCallback(async () => {
+    if (unsupportedEndpointsRef.current.credentials) {
+      setCredentials([]);
+      setCredentialsLoaded(true);
+      return;
+    }
+
     const result = await loadFlowManagerCredentials({
       listCredentials: credentialsApi.listCredentials,
+      organizationId: user?.organization_id,
     });
     setCredentials(result.credentials);
+    setCredentialsLoaded(true);
+    unsupportedEndpointsRef.current.credentials = Boolean(result.unsupported);
     showNotification(result.notification);
-  }, [showNotification]);
+  }, [showNotification, user?.organization_id]);
 
   const loadRevocationBatches = useCallback(async () => {
+    if (unsupportedEndpointsRef.current.revocationBatches) {
+      setRevocationBatches([]);
+      setRevocationBatchesLoaded(true);
+      return;
+    }
+
     const result = await loadFlowManagerRevocationBatches({
       listRevocationBatches: credentialsApi.listRevocationBatches,
+      organizationId: user?.organization_id,
     });
     setRevocationBatches(result.revocationBatches);
+    setRevocationBatchesLoaded(true);
+    unsupportedEndpointsRef.current.revocationBatches = Boolean(result.unsupported);
     showNotification(result.notification);
-  }, [showNotification]);
+  }, [showNotification, user?.organization_id]);
 
   useEffect(() => {
     const loadAllData = async () => {
       setLoading(true);
-      const [,,, trustProfilesResult, templatesResult, deploymentsResult] = await Promise.all([
+      const [, trustProfilesResult, templatesResult, deploymentsResult] = await Promise.all([
         loadFlows(),
-        loadCredentials(),
-        loadRevocationBatches(),
-        listTrustProfiles().catch(() => []),
-        listCredentialTemplates().catch(() => []),
-        listDeploymentProfiles().catch(() => []),
+        listTrustProfiles({ organization_id: user?.organization_id }).catch(() => []),
+        listCredentialTemplates({ organization_id: user?.organization_id }).catch(() => []),
+        listDeploymentProfiles({ organization_id: user?.organization_id }).catch(() => []),
       ]);
       setPrereqStatus({
         trustProfile: (trustProfilesResult?.length > 0) ? 'ready' : 'missing',
@@ -165,11 +208,27 @@ const FlowManager = () => {
       setLoading(false);
     };
     loadAllData();
-  }, [loadFlows, loadCredentials, loadRevocationBatches]);
+  }, [loadFlows, user?.organization_id]);
 
   useEffect(() => {
     loadExecutions();
   }, [flows, loadExecutions]);
+
+  useEffect(() => {
+    if ((activeTab === 3 || activeTab === 4) && !credentialsLoaded) {
+      loadCredentials();
+    }
+
+    if (activeTab === 4 && !revocationBatchesLoaded) {
+      loadRevocationBatches();
+    }
+  }, [
+    activeTab,
+    credentialsLoaded,
+    revocationBatchesLoaded,
+    loadCredentials,
+    loadRevocationBatches,
+  ]);
 
   // SSE real-time updates
   useEffect(() => {
@@ -236,6 +295,16 @@ const FlowManager = () => {
     return colors[status?.toLowerCase()] || 'default';
   };
 
+  const formatFlowExecutionReference = (value) => formatOfficialReference(value, 'flow');
+  const formatCredentialReference = (value) => formatOfficialReference(value, 'credential');
+  const formatTemplateReference = (value) => formatOfficialReference(value, 'template');
+  const formatBatchReference = (value) => formatOfficialReference(value, 'record');
+  const formatFlowContextPreview = (context) => {
+    if (!context) return '—';
+    const serialized = JSON.stringify(formatStructuredIdentifiers(context));
+    return serialized.length > 50 ? `${serialized.substring(0, 50)}...` : serialized;
+  };
+
   if (loading) {
     return (
       <Box display="flex" justifyContent="center" alignItems="center" minHeight="400px">
@@ -246,16 +315,18 @@ const FlowManager = () => {
 
   return (
     <Box>
-      <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
-        <Typography variant="h4">{t('flowManager.title')}</Typography>
-        <Button
-          variant="contained"
-          color="primary"
-          startIcon={<AddIcon />}
-        >
-          {t('flowManager.createFlow')}
-        </Button>
-      </Box>
+      {!hideHeader && (
+        <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
+          <Typography variant="h4">{t('flowManager.title')}</Typography>
+          <Button
+            variant="contained"
+            color="primary"
+            startIcon={<AddIcon />}
+          >
+            {t('flowManager.createFlow')}
+          </Button>
+        </Box>
+      )}
 
       {error && (
         <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError(null)}>
@@ -452,8 +523,8 @@ const FlowManager = () => {
               <Table>
                 <TableHead>
                   <TableRow>
-                    <TableCell>Execution ID</TableCell>
-                    <TableCell>Flow</TableCell>
+                    <TableCell>Execution Reference</TableCell>
+                    <TableCell>Flow Reference</TableCell>
                     <TableCell>Status</TableCell>
                     <TableCell>Current Step</TableCell>
                     <TableCell>Started At</TableCell>
@@ -463,7 +534,7 @@ const FlowManager = () => {
                 <TableBody>
                   {executions.map((exec) => (
                     <TableRow key={exec.id}>
-                      <TableCell>{formatTruncatedId(exec.id, 8)}</TableCell>
+                      <TableCell>{formatFlowExecutionReference(exec.id)}</TableCell>
                       <TableCell>{exec.flow_id}</TableCell>
                       <TableCell>
                         <Chip label={exec.status} color={getStatusColor(exec.status)} size="small" />
@@ -499,7 +570,7 @@ const FlowManager = () => {
               <Table>
                 <TableHead>
                   <TableRow>
-                    <TableCell>Execution ID</TableCell>
+                    <TableCell>Execution Reference</TableCell>
                     <TableCell>Flow</TableCell>
                     <TableCell>Context</TableCell>
                     <TableCell>Started At</TableCell>
@@ -509,11 +580,11 @@ const FlowManager = () => {
                 <TableBody>
                   {pendingExecutions.map((exec) => (
                     <TableRow key={exec.id}>
-                      <TableCell>{formatTruncatedId(exec.id, 8)}</TableCell>
-                      <TableCell>{exec.flow_id}</TableCell>
+                      <TableCell>{formatFlowExecutionReference(exec.id)}</TableCell>
+                      <TableCell>{formatFlowExecutionReference(exec.flow_id)}</TableCell>
                       <TableCell>
                         <Typography variant="caption">
-                          {JSON.stringify(exec.context).substring(0, 50)}...
+                          {formatFlowContextPreview(exec.context)}
                         </Typography>
                       </TableCell>
                       <TableCell>{new Date(exec.started_at).toLocaleString()}</TableCell>
@@ -587,8 +658,8 @@ const FlowManager = () => {
                         }}
                       />
                     </TableCell>
-                    <TableCell>Credential ID</TableCell>
-                    <TableCell>Template</TableCell>
+                    <TableCell>Credential Reference</TableCell>
+                    <TableCell>Template Reference</TableCell>
                     <TableCell>Status</TableCell>
                     <TableCell>Issued At</TableCell>
                     <TableCell>Expires At</TableCell>
@@ -606,8 +677,8 @@ const FlowManager = () => {
                           disabled={cred.status !== 'active'}
                         />
                       </TableCell>
-                      <TableCell>{formatTruncatedId(cred.id)}</TableCell>
-                      <TableCell>{formatTruncatedId(cred.credential_template_id)}</TableCell>
+                      <TableCell>{formatCredentialReference(cred.id)}</TableCell>
+                      <TableCell>{formatTemplateReference(cred.credential_template_id)}</TableCell>
                       <TableCell>
                         <Chip label={cred.status} color={getStatusColor(cred.status)} size="small" />
                       </TableCell>
@@ -635,7 +706,7 @@ const FlowManager = () => {
               <Table>
                 <TableHead>
                   <TableRow>
-                    <TableCell>Batch ID</TableCell>
+                    <TableCell>Batch Reference</TableCell>
                     <TableCell>Credential Count</TableCell>
                     <TableCell>Status</TableCell>
                     <TableCell>Interval</TableCell>
@@ -646,7 +717,7 @@ const FlowManager = () => {
                 <TableBody>
                   {revocationBatches.map((batch) => (
                     <TableRow key={batch.batch_id}>
-                      <TableCell>{formatTruncatedId(batch.batch_id)}</TableCell>
+                      <TableCell>{formatBatchReference(batch.batch_id)}</TableCell>
                       <TableCell>{batch.credential_count}</TableCell>
                       <TableCell>
                         <Chip label={batch.status} color={getStatusColor(batch.status)} size="small" />

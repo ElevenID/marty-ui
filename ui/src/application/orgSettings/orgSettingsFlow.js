@@ -15,7 +15,7 @@ export function parseOrgSettingsResponse(data, { organizationName = '' } = {}) {
     membershipMode: data.membership_mode || 'invite_only',
     allowedEmailDomains: data.allowed_email_domains || [],
     domainJoinPolicy: data.domain_join_policy || 'approval',
-    defaultRole: data.default_role || 'member',
+    defaultRole: data.default_role || 'applicant',
     requireDeviceRegistration: data.require_device_registration || false,
     allowPushNotifications: data.allow_push_notifications !== false,
     deviceRegistrationPrompt: data.device_registration_prompt || 'first_action',

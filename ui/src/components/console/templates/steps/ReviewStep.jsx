@@ -146,6 +146,14 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
                 placeholder={t('wizards.credentialTemplate.reviewStep.values.none')}
               />
             </Grid>
+
+            <Grid item xs={12} md={6}>
+              <ReviewField
+                label="Issuer Profile"
+                value={data.issuer_profile_id || undefined}
+                placeholder="Default (org signing key)"
+              />
+            </Grid>
           </Grid>
       </ReviewSectionCard>
 

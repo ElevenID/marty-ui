@@ -5,7 +5,6 @@
  * Embeds the existing FlowManager component with console layout.
  */
 
-import { Box } from '@mui/material';
 import { useTranslation } from 'react-i18next';
 import FlowManager from '../../vendor/FlowManager';
 import { ResourcePage } from '../../common';
@@ -30,10 +29,10 @@ function FlowDefinitionsPage() {
       description={t('flows.flowDefinitionsDescription')}
       tabs={getFlowsTabs(t)}
       breadcrumbs={getBreadcrumbs(t)}
+      buildPath="/console/org/flows/definitions/new"
+      resourceName={t('flows.flowDefinition')}
     >
-      <Box sx={{ mx: -3, mt: -2 }}>
-        <FlowManager />
-      </Box>
+      <FlowManager hideHeader />
     </ResourcePage>
   );
 }

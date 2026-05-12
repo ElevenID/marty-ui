@@ -38,6 +38,7 @@ import PersonIcon from '@mui/icons-material/Person';
 import { useAuth } from '../../hooks/useAuth';
 import { usePreview } from '../../contexts/PreviewContext';
 import { get } from '../../services/api';
+import { APPLY_LOCATION_STATE_STORAGE_KEY } from '../../application/routing';
 import {
   autoIssueApplication as autoIssueApplicationApi,
   createApplicant as createApplicantApi,
@@ -51,6 +52,7 @@ import {
 } from '../../services/applicantApi';
 import { DynamicFieldGroup } from './DynamicFieldRenderer';
 import ClaimCredentialDialog from '../console/applicant/ClaimCredentialDialog';
+import { pickOfficialReference } from '../../utils/officialReferences';
 import {
   autoApplyForCredential,
   buildApplicantProfileData,
@@ -67,6 +69,22 @@ import {
   validateApplicationStep,
 } from '../../application/applications';
 
+function readStoredApplyLocationState() {
+  try {
+    const serialized = sessionStorage.getItem(APPLY_LOCATION_STATE_STORAGE_KEY);
+
+    if (!serialized) {
+      return null;
+    }
+
+    sessionStorage.removeItem(APPLY_LOCATION_STATE_STORAGE_KEY);
+    return JSON.parse(serialized);
+  } catch {
+    sessionStorage.removeItem(APPLY_LOCATION_STATE_STORAGE_KEY);
+    return null;
+  }
+}
+
 export default function ApplicationForm() {
   const { t } = useTranslation('applicant');
   const { credentialType: credentialConfigId } = useParams();
@@ -75,14 +93,16 @@ export default function ApplicationForm() {
   const { user, organizationId } = useAuth();
   const { isPreview } = usePreview?.() || { isPreview: false };
   const fileInputRefs = useRef({});
+  const [initialApplyState] = useState(() => location.state || readStoredApplyLocationState());
 
   const [activeStep, setActiveStep] = useState(0);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
   const [submitted, setSubmitted] = useState(false);
   const [applicationId, setApplicationId] = useState(null);
+  const [applicationReference, setApplicationReference] = useState(null);
   const [credentialConfig, setCredentialConfig] = useState(
-    normalizeCredentialConfigInput(location.state?.credential) || null
+    normalizeCredentialConfigInput(initialApplyState?.credential) || null
   );
   const [configLoading, setConfigLoading] = useState(false);
 
@@ -115,6 +135,12 @@ export default function ApplicationForm() {
   const allFields = useMemo(() => {
     return steps.slice(0, -1).flatMap(step => step.fields);
   }, [steps]);
+
+  const submittedApplicationReference = useMemo(() => pickOfficialReference({
+    reference: applicationReference,
+    rawId: applicationId,
+    kind: 'application',
+  }), [applicationId, applicationReference]);
   
   const requiredFieldNames = useMemo(() => {
     return allFields.filter(f => f.required).map(f => f.name);
@@ -192,11 +218,13 @@ export default function ApplicationForm() {
         credentialConfigId,
         resolveApplicantId,
         createApplicant: createApplicantApi,
+        updateApplicantProfile: updateApplicantProfileApi,
         createApplication: createApplicationApi,
         autoIssueApplication: autoIssueApplicationApi,
         listApplications: listApplicationsApi,
       });
       setApplicationId(result.applicationId);
+      setApplicationReference(result.applicationReference || null);
       setAutoOfferData(result.offerData);
       setClaimDialogOpen(true);
     } catch (err) {
@@ -264,6 +292,7 @@ export default function ApplicationForm() {
       });
 
       setApplicationId(result.applicationId);
+      setApplicationReference(result.applicationReference || null);
       setSubmitted(result.submitted);
     } catch (err) {
       console.error('Error submitting application:', err);
@@ -403,7 +432,10 @@ export default function ApplicationForm() {
             
             {applicationId && (
               <Chip
-                label={t('applicationForm.success.applicationId', { id: applicationId })}
+                label={t('applicationForm.success.applicationReference', {
+                  id: submittedApplicationReference,
+                  defaultValue: 'Application Reference: {{id}}',
+                })}
                 color="primary"
                 variant="outlined"
                 sx={{ mb: 3 }}
@@ -594,6 +626,7 @@ export default function ApplicationForm() {
           }}
           applicationId={applicationId}
           offerData={autoOfferData}
+          autoOpenWallet={isOpenBadgeCredential}
         />
       </Container>
     );

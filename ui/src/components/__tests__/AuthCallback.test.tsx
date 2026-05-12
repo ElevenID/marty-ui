@@ -12,6 +12,11 @@ const { mockNavigate, mockSearchParams, mockRefreshUser, mockConsoleContext, moc
   mockGet: vi.fn(),
 }));
 
+vi.mock('../../application/routing/appHandoff', () => ({
+  shouldBrowserRedirect: () => false,
+  redirectBrowser: vi.fn(),
+}));
+
 vi.mock('react-router-dom', async () => {
   const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom');
   return {
@@ -88,5 +93,34 @@ describe('AuthCallback', () => {
     render(<AuthCallback />);
 
     expect(await screen.findByText('Authentication failed')).toBeInTheDocument();
+  });
+
+  it('does not reprocess the same callback when console context changes after login', async () => {
+    const encodedState = encodeURIComponent(btoa(JSON.stringify({ returnTo: '/console/org' })));
+    const consoleStates = [
+      { isLoading: false, mode: 'applicant' },
+      { isLoading: false, mode: 'org', activeOrgId: 'org-1', memberships: [{ id: 'org-1', name: 'Acme' }] },
+    ];
+    let consoleStateIndex = 0;
+
+    mockSearchParams.mockReturnValue(new URLSearchParams(`code=abc&state=${encodedState}`));
+    mockConsoleContext.mockImplementation(() => consoleStates[consoleStateIndex]);
+
+    const view = render(<AuthCallback />);
+
+    await waitFor(() => {
+      expect(mockGet).toHaveBeenCalledTimes(1);
+      expect(mockRefreshUser).toHaveBeenCalledTimes(1);
+    });
+
+    consoleStateIndex = 1;
+    view.rerender(<AuthCallback />);
+
+    await waitFor(() => {
+      expect(mockNavigate).toHaveBeenCalledWith('/console/org', { replace: true });
+    });
+
+    expect(mockGet).toHaveBeenCalledTimes(1);
+    expect(mockRefreshUser).toHaveBeenCalledTimes(1);
   });
 });

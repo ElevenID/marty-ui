@@ -6,7 +6,7 @@
  */
 
 import { Suspense, lazy, useEffect, useState } from 'react';
-import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   DISABLE_PUBLIC_PRICING_BUTTONS,
   SHOW_PUBLIC_PRICING_BUTTONS,
@@ -61,6 +61,7 @@ import {
   getLandingAuthError,
   getLandingEntryDecision,
 } from '../application/routing';
+import { redirectBrowser, shouldBrowserRedirect } from '../application/routing/appHandoff';
 import GitHubIcon from '@mui/icons-material/GitHub';
 import { 
   IDENTITY_CONCEPTS, 
@@ -400,6 +401,7 @@ function LandingPage() {
   const brandingContext = useBranding();
   const branding = brandingContext?.branding || { appName: 'ElevenID LLC' };
   const { isAuthenticated, isLoading } = useAuth();
+  const location = useLocation();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [authError, setAuthError] = useState(null);
@@ -423,9 +425,14 @@ function LandingPage() {
   useEffect(() => {
     const decision = getLandingEntryDecision({ isAuthenticated, isLoading });
     if (decision.action === 'navigate' && decision.redirectTo) {
+      if (shouldBrowserRedirect({ currentPathname: location.pathname, destination: decision.redirectTo })) {
+        redirectBrowser(decision.redirectTo);
+        return;
+      }
+
       navigate(decision.redirectTo, { replace: true });
     }
-  }, [isAuthenticated, isLoading, navigate]);
+  }, [isAuthenticated, isLoading, location.pathname, navigate]);
 
   useEffect(() => {
     setProofLabStatus('idle');

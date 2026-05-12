@@ -279,6 +279,8 @@ _PLAN_TIER_ALIASES: dict[str, PlanTier] = {
     "self-hosted-production": PlanTier.PROGRAM,
     "production": PlanTier.PROGRAM,
     "enterprise": PlanTier.SYSTEM,
+    "sovereign_plus": PlanTier.SYSTEM,
+    "sovereign+": PlanTier.SYSTEM,
 }
 
 

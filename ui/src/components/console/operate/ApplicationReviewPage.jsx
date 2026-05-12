@@ -69,6 +69,7 @@ import {
   CHECK_STATUS_COLORS,
   CHECK_STATUS_LABELS,
 } from '../../../config/checkConstants';
+import { formatOfficialReference, pickOfficialReference } from '../../../utils/officialReferences';
 
 import { listCredentialTemplates } from '../../../services/presentationPolicyApi';
 import ApproveDialog from './dialogs/ApproveDialog';
@@ -192,7 +193,7 @@ function deriveSignals(application, checks) {
   let policyColor = 'default';
   let policyValue = 'Unknown';
   const s = application?.status;
-  if (s === 'approved' || s === 'issued') { policyColor = 'success'; policyValue = 'Eligible'; }
+  if (['approved', 'offered', 'credentialed', 'issued'].includes(s)) { policyColor = 'success'; policyValue = 'Eligible'; }
   else if (s === 'rejected') { policyColor = 'error'; policyValue = 'Blocked'; }
   else if (s === 'needs_info') { policyColor = 'warning'; policyValue = 'Info Required'; }
   else if (s === 'submitted' || s === 'under_review') { policyColor = 'warning'; policyValue = 'Pending Review'; }
@@ -246,7 +247,7 @@ export default function ApplicationReviewPage() {
         getApplication(applicationId),
         getVettingChecks(applicationId).catch(() => []),
       ]);
-      setApplication(app);
+      setApplication({ ...app, status: app.status?.toLowerCase() });
       setChecks(Array.isArray(checkList) ? checkList : []);
       if (app.metadata?.review_notes) setReviewerNote(app.metadata.review_notes);
 
@@ -358,8 +359,10 @@ export default function ApplicationReviewPage() {
   // Derived state
   // ---------------------------------------------------------------------------
 
-  const isTerminal = ['issued', 'rejected'].includes(application?.status);
-  const canAct = !isTerminal && !actionLoading;
+  const reviewableStatuses = ['submitted', 'under_review', 'vetting_in_progress', 'pending_approval', 'needs_info'];
+  const isTerminal = ['credentialed', 'issued', 'rejected'].includes(application?.status);
+  const canReview = reviewableStatuses.includes(application?.status);
+  const canAct = canReview && !actionLoading;
   const isLocked = lock && !lock.locked && lock.reviewer_id !== reviewerId;
 
   const signals = deriveSignals(application, checks);
@@ -496,7 +499,7 @@ export default function ApplicationReviewPage() {
           )}
 
           {/* Primary actions */}
-          {!isTerminal && (
+          {canReview && (
             <Stack direction="row" spacing={1}>
               <Button
                 variant="outlined"
@@ -557,12 +560,18 @@ export default function ApplicationReviewPage() {
         )}
 
         {/* Already-issued state */}
-        {application.status === 'issued' && (
+        {['credentialed', 'issued'].includes(application.status) && (
           <Alert severity="success" sx={{ mb: 2 }}>
             Credential issued on {fmt(application.issued_at)}.
             {application.metadata?.credential_offer_uri && (
               <> &nbsp;<a href={application.metadata.credential_offer_uri} target="_blank" rel="noreferrer">View credential offer</a></>
             )}
+          </Alert>
+        )}
+
+        {application.status === 'offered' && (
+          <Alert severity="info" sx={{ mb: 2 }}>
+            Wallet invite generated. The application will move to issued after the wallet completes credential issuance.
           </Alert>
         )}
 
@@ -675,13 +684,20 @@ export default function ApplicationReviewPage() {
           <AccordionDetails>
             <Grid container spacing={2}>
               <Grid item xs={6} md={3}>
-                <ClaimField label="Application ID" value={application.id} />
+                <ClaimField
+                  label="Application Reference"
+                  value={pickOfficialReference({
+                    reference: application.reference_number,
+                    rawId: application.id,
+                    kind: 'application',
+                  })}
+                />
               </Grid>
               <Grid item xs={6} md={3}>
-                <ClaimField label="Applicant ID" value={application.applicant_id} />
+                <ClaimField label="Applicant Reference" value={formatOfficialReference(application.applicant_id, 'applicant')} />
               </Grid>
               <Grid item xs={6} md={3}>
-                <ClaimField label="Credential Config ID" value={application.credential_configuration_id} />
+                <ClaimField label="Credential Template Reference" value={formatOfficialReference(application.credential_configuration_id, 'template')} />
               </Grid>
               <Grid item xs={6} md={3}>
                 <ClaimField label="Vetting Level" value={application.applicant_vetting_level} />
@@ -697,7 +713,7 @@ export default function ApplicationReviewPage() {
               </Grid>
               {application.metadata?.issuance_transaction_id && (
                 <Grid item xs={6} md={3}>
-                  <ClaimField label="Issuance Transaction" value={application.metadata.issuance_transaction_id} />
+                  <ClaimField label="Issuance Transaction Reference" value={formatOfficialReference(application.metadata.issuance_transaction_id, 'record')} />
                 </Grid>
               )}
             </Grid>
@@ -709,7 +725,7 @@ export default function ApplicationReviewPage() {
       </Box>
 
       {/* ── F. BOTTOM STICKY DECISION BAR ── */}
-      {!isTerminal && (
+      {canReview && (
         <AppBar position="sticky" color="default" elevation={3} sx={{ top: 'auto', bottom: 0 }}>
           <Toolbar sx={{ justifyContent: 'center', gap: 2 }}>
             <Button

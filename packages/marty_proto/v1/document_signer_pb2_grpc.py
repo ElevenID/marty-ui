@@ -3,9 +3,9 @@
 import grpc
 import warnings
 
-from . import document_signer_pb2 as document__signer__pb2
+import document_signer_pb2 as document__signer__pb2
 
-GRPC_GENERATED_VERSION = '1.76.0'
+GRPC_GENERATED_VERSION = '1.80.0'
 GRPC_VERSION = grpc.__version__
 _version_not_supported = False
 

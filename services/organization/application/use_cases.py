@@ -6,11 +6,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from ..domain.entities import ApiKey, ConsoleContextPreference, JoinMechanism, Member, MemberRole, MemberStatus, Organization, ViewMode
+from ..domain.entities import ApiKey, ConsoleContextPreference, JoinMechanism, Member, MemberStatus, Organization, ViewMode
 from ..domain.events import (
     ApiKeyCreatedEvent,
     ApiKeyRevokedEvent,
@@ -33,12 +34,15 @@ from .ports import (
     MemberRepositoryPort,
     OrganizationRepositoryPort,
     RevokeApiKeyCommand,
-    UpdateMemberRoleCommand,
+    SetMemberRolesCommand,
     UpdateOrganizationCommand,
     UpsertConsoleContextPreferenceCommand,
 )
 
 logger = logging.getLogger(__name__)
+
+MARTY_ORG_ID = os.environ.get("MARTY_ORG_ID", "00000000-0000-0000-0000-000000000001")
+MARTY_ORG_ADMIN_EMAIL = os.environ.get("MARTY_ORG_ADMIN_EMAIL", "").strip().lower()
 
 _ORG_TYPE_ALIASES: dict[str, str] = {
     "vendor": "enterprise",
@@ -223,6 +227,89 @@ class MemberUseCase:
     member_repo: MemberRepositoryPort
     organization_repo: OrganizationRepositoryPort
     event_publisher: EventPublisherPort
+    role_use_case: Any = None  # Optional[RoleUseCase] — avoids circular import
+
+    async def _resolve_default_role_ids(self, organization_id: str) -> list[str]:
+        if self.role_use_case is None:
+            raise ValueError("RBAC role use case is not configured")
+
+        roles = await self.role_use_case.list_roles(organization_id)
+        default_roles = [role.id for role in roles if role.is_default_for_new_members]
+        if default_roles:
+            return default_roles
+
+        raise ValueError("Organization has no default role configured")
+
+    async def _set_member_roles(
+        self,
+        member_id: str,
+        organization_id: str,
+        role_ids: list[str],
+        updated_by: str,
+    ) -> list[Any]:
+        if self.role_use_case is None:
+            raise ValueError("RBAC role use case is not configured")
+
+        return await self.role_use_case.set_member_roles(
+            SetMemberRolesCommand(
+                member_id=member_id,
+                organization_id=organization_id,
+                role_ids=role_ids,
+                updated_by=updated_by,
+            )
+        )
+
+    async def _resolve_marty_admin_role_id(
+        self,
+        organization_id: str,
+        email: str | None,
+    ) -> str | None:
+        normalized_email = (email or "").strip().lower()
+        if (
+            self.role_use_case is None
+            or organization_id != MARTY_ORG_ID
+            or not MARTY_ORG_ADMIN_EMAIL
+            or normalized_email != MARTY_ORG_ADMIN_EMAIL
+        ):
+            return None
+
+        roles = await self.role_use_case.list_roles(organization_id)
+        admin_role = next((role for role in roles if role.name == "admin"), None)
+        if admin_role is None:
+            raise ValueError("Marty organization admin role is not configured")
+        return admin_role.id
+
+    async def _resolve_direct_member_role_ids(
+        self,
+        organization_id: str,
+        email: str | None,
+        requested_role_ids: list[str] | None,
+        current_roles: list[Any] | None = None,
+    ) -> list[str]:
+        if requested_role_ids:
+            resolved_role_ids = list(dict.fromkeys(requested_role_ids))
+        else:
+            resolved_role_ids = [role.id for role in (current_roles or [])]
+
+        admin_role_id = await self._resolve_marty_admin_role_id(organization_id, email)
+        current_role_names = {role.name for role in (current_roles or [])}
+
+        if admin_role_id:
+            if requested_role_ids:
+                if admin_role_id not in resolved_role_ids:
+                    resolved_role_ids.append(admin_role_id)
+            elif not resolved_role_ids:
+                resolved_role_ids = [admin_role_id]
+            elif "admin" in current_role_names:
+                pass
+            elif current_role_names <= {"applicant"}:
+                resolved_role_ids = [admin_role_id]
+            elif admin_role_id not in resolved_role_ids:
+                resolved_role_ids.append(admin_role_id)
+
+        if resolved_role_ids:
+            return list(dict.fromkeys(resolved_role_ids))
+        return await self._resolve_default_role_ids(organization_id)
     
     async def invite_member(self, command: InviteMemberCommand) -> Member:
         """Invite a new member to an organization."""
@@ -237,16 +324,24 @@ class MemberUseCase:
         )
         if existing:
             raise ValueError(f"User {command.email} already invited or is a member")
-        
+
+        if not command.role_ids:
+            raise ValueError("Invites must include at least one role")
+
         # Create invitation
         member = Member.create_invitation(
             organization_id=command.organization_id,
             email=command.email,
-            role=command.role,
             invited_by=command.invited_by,
         )
-        
         await self.member_repo.save(member)
+        assigned_roles = await self._set_member_roles(
+            member.id,
+            command.organization_id,
+            command.role_ids,
+            command.invited_by,
+        )
+        member.roles = list(assigned_roles)
         
         await self.event_publisher.publish(
             MemberInvitedEvent(
@@ -268,48 +363,63 @@ class MemberUseCase:
         
         member.accept_invitation(user_id)
         await self.member_repo.save(member)
+        member = await self.member_repo.get_by_id(member.id) or member
         
         await self.event_publisher.publish(
             MemberAddedEvent(
                 organization_id=member.organization_id,
                 member_id=member.id,
                 user_id=user_id,
-                role=member.role.value,
+                roles=sorted(member.role_names),
             )
         )
         
         return member
     
-    async def update_role(self, command: UpdateMemberRoleCommand) -> Member:
-        """Update a member's role."""
+    async def set_member_roles(self, command: SetMemberRolesCommand) -> Member:
+        """Replace a member's role assignments."""
+        if not command.role_ids:
+            raise ValueError("A member must have at least one role")
+
         member = await self.member_repo.get_by_id(command.member_id)
         if not member:
             raise ValueError(f"Member {command.member_id} not found")
-        
-        # Cannot demote the last owner
-        if member.role == MemberRole.OWNER and command.new_role != MemberRole.OWNER:
-            members = await self.member_repo.list_by_organization(member.organization_id)
-            owners = [m for m in members if m.role == MemberRole.OWNER]
-            if len(owners) <= 1:
-                raise ValueError("Cannot demote the only owner")
-        
-        member.change_role(command.new_role)
+
+        organization = await self.organization_repo.get_by_id(command.organization_id)
+        if not organization:
+            raise ValueError(f"Organization {command.organization_id} not found")
+
+        if organization.owner_id and member.user_id == organization.owner_id:
+            roles = []
+            for role_id in command.role_ids:
+                role = await self.role_use_case.get_role(role_id) if self.role_use_case is not None else None
+                if role is None:
+                    raise ValueError(f"Role {role_id} not found")
+                roles.append(role)
+            if not any(role.name == "owner" for role in roles):
+                raise ValueError("The organization owner must retain the owner role")
+
+        member.roles = list(
+            await self._set_member_roles(
+                command.member_id,
+                command.organization_id,
+                command.role_ids,
+                command.updated_by,
+            )
+        )
+        member.updated_at = datetime.now(timezone.utc)
         await self.member_repo.save(member)
-        
-        return member
+        return await self.member_repo.get_by_id(member.id) or member
     
     async def remove_member(self, member_id: str, removed_by: str) -> None:
         """Remove a member from an organization."""
         member = await self.member_repo.get_by_id(member_id)
         if not member:
             raise ValueError(f"Member {member_id} not found")
-        
-        # Cannot remove the last owner
-        if member.role == MemberRole.OWNER:
-            members = await self.member_repo.list_by_organization(member.organization_id)
-            owners = [m for m in members if m.role == MemberRole.OWNER]
-            if len(owners) <= 1:
-                raise ValueError("Cannot remove the only owner")
+
+        organization = await self.organization_repo.get_by_id(member.organization_id)
+        if organization and organization.owner_id and member.user_id == organization.owner_id:
+            raise ValueError("Cannot remove the organization owner")
         
         await self.member_repo.delete(member_id)
         
@@ -334,7 +444,7 @@ class MemberUseCase:
         organization_id: str,
         user_id: str,
         email: str | None = None,
-        role: MemberRole = MemberRole.MEMBER,
+        role_ids: list[str] | None = None,
     ) -> Member:
         """Directly add an active member to an organization (idempotent).
 
@@ -345,28 +455,60 @@ class MemberUseCase:
         Lookup order:
         1. Exact match by user_id + org (normal case — returning users).
         2. Match by email + org with blank user_id (pre-seeded admin row from
-           migration).  In this case the row's user_id is updated to link the
-           authenticated user and the pre-assigned role is preserved.
-        3. No match — create a new member with the supplied role.
+           migration). In this case the row's user_id is updated to link the
+           authenticated user and any existing assigned roles are preserved.
+        3. No match — create a new member with the supplied role IDs or the
+           organization's configured default role.
         """
         # 1. Check by user_id (covers all returning users)
         existing = await self.member_repo.get_by_user_and_org(user_id, organization_id)
         if existing:
+            assigned_role_ids = await self._resolve_direct_member_role_ids(
+                organization_id,
+                email,
+                role_ids,
+                current_roles=existing.roles,
+            )
+            if set(assigned_role_ids) != {role.id for role in existing.roles}:
+                existing.roles = list(
+                    await self._set_member_roles(
+                        existing.id,
+                        organization_id,
+                        assigned_role_ids,
+                        user_id,
+                    )
+                )
+                existing.updated_at = datetime.now(timezone.utc)
+                await self.member_repo.save(existing)
             return existing
 
         # 2. Check by email for a pre-seeded row (e.g. admin seeded by migration)
         if email:
             email_match = await self.member_repo.get_by_email_and_org(email, organization_id)
             if email_match and not email_match.user_id:
-                # Link the authenticated user to the pre-seeded record,
-                # preserving whatever role the migration assigned.
+                # Link the authenticated user to the pre-seeded record and
+                # preserve its assigned roles unless explicit role IDs were provided.
                 email_match.user_id = user_id
                 email_match.joined_at = datetime.now(timezone.utc)
                 email_match.updated_at = datetime.now(timezone.utc)
                 await self.member_repo.save(email_match)
+                assigned_role_ids = await self._resolve_direct_member_role_ids(
+                    organization_id,
+                    email,
+                    role_ids,
+                    current_roles=email_match.roles,
+                )
+                email_match.roles = list(
+                    await self._set_member_roles(
+                        email_match.id,
+                        organization_id,
+                        assigned_role_ids,
+                        user_id,
+                    )
+                )
                 logger.info(
                     f"Linked user {user_id} to pre-seeded member record for {email} "
-                    f"in org {organization_id} (role={email_match.role.value})"
+                    f"in org {organization_id}"
                 )
                 return email_match
 
@@ -375,21 +517,36 @@ class MemberUseCase:
             organization_id=organization_id,
             user_id=user_id,
             email=email,
-            role=role,
             status=MemberStatus.ACTIVE,
         )
         await self.member_repo.save(member)
+        assigned_role_ids = await self._resolve_direct_member_role_ids(
+            organization_id,
+            email,
+            role_ids,
+        )
+        member.roles = list(
+            await self._set_member_roles(
+                member.id,
+                organization_id,
+                assigned_role_ids,
+                user_id,
+            )
+        )
 
         await self.event_publisher.publish(
             MemberAddedEvent(
                 organization_id=organization_id,
                 member_id=member.id,
                 user_id=user_id,
-                role=role.value,
+                roles=sorted(member.role_names),
             )
         )
 
-        logger.info(f"Directly added user {user_id} to organization {organization_id} as {role.value}")
+        logger.info(
+            f"Directly added user {user_id} to organization {organization_id} "
+            f"with roles {sorted(member.role_names)}"
+        )
         return member
 
 
@@ -562,6 +719,16 @@ class JoinUseCase:
     organization_repo: OrganizationRepositoryPort
     member_repo: MemberRepositoryPort
     event_publisher: EventPublisherPort
+    role_use_case: Any = None
+
+    async def _resolve_default_role_ids(self, organization_id: str) -> list[str]:
+        if self.role_use_case is None:
+            raise ValueError("RBAC role use case is not configured")
+        roles = await self.role_use_case.list_roles(organization_id)
+        defaults = [role.id for role in roles if role.is_default_for_new_members]
+        if defaults:
+            return defaults
+        raise ValueError("Organization has no default role configured")
     
     async def join_by_code(self, command: JoinByCodeCommand) -> tuple[Organization, Member]:
         """Join an organization using a join code."""
@@ -597,7 +764,6 @@ class JoinUseCase:
             organization_id=org.id,
             user_id=command.user_id,
             email=command.email,
-            role=MemberRole.MEMBER,
             status=status,
         )
         
@@ -606,6 +772,17 @@ class JoinUseCase:
         
         # Save both
         await self.member_repo.save(member)
+        default_role_ids = await self._resolve_default_role_ids(org.id)
+        member.roles = list(
+            await self.role_use_case.set_member_roles(
+                SetMemberRolesCommand(
+                    member_id=member.id,
+                    organization_id=org.id,
+                    role_ids=default_role_ids,
+                    updated_by=command.user_id,
+                )
+            )
+        )
         await self.join_code_repo.save(join_code)
         
         # Publish event
@@ -614,7 +791,7 @@ class JoinUseCase:
                 organization_id=org.id,
                 member_id=member.id,
                 user_id=command.user_id,
-                role=member.role.value,
+                roles=sorted(member.role_names),
             )
         )
         
@@ -673,18 +850,28 @@ class JoinUseCase:
             organization_id=org.id,
             user_id=command.user_id,
             email=command.email,
-            role=MemberRole.MEMBER,
             status=status,
         )
 
         await self.member_repo.save(member)
+        default_role_ids = await self._resolve_default_role_ids(org.id)
+        member.roles = list(
+            await self.role_use_case.set_member_roles(
+                SetMemberRolesCommand(
+                    member_id=member.id,
+                    organization_id=org.id,
+                    role_ids=default_role_ids,
+                    updated_by=command.user_id,
+                )
+            )
+        )
 
         await self.event_publisher.publish(
             MemberAddedEvent(
                 organization_id=org.id,
                 member_id=member.id,
                 user_id=command.user_id,
-                role=member.role.value,
+                roles=sorted(member.role_names),
             )
         )
 

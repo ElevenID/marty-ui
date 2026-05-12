@@ -4,10 +4,8 @@
  * Manages team members, invites, and role assignments.
  */
 
-import { get, post, patch, del } from './api';
+import { get, post, del } from './api';
 import { buildTruthyQueryString, withQuery } from './queryUtils';
-
-const BASE_PATH = '/v1/teams';
 
 /**
  * List team members
@@ -41,52 +39,12 @@ export async function getMember(organizationId, memberId) {
  * @param {string} organizationId - Organization ID
  * @param {Object} invite - Invite data
  * @param {string} invite.email - Invitee email
- * @param {string} invite.role - Role to assign (admin, dev, operator)
+ * @param {string[]} invite.role_ids - Role IDs to assign
  * @param {string} invite.message - Optional personal message
  * @returns {Promise<Object>} Created invite
  */
 export async function inviteMember(organizationId, invite) {
-  return post(`/v1/organizations/${organizationId}/invites`, invite);
-}
-
-/**
- * List pending invites
- * @param {string} organizationId - Organization ID
- * @returns {Promise<Array>} List of pending invites
- */
-export async function listInvites(organizationId) {
-  return get(`/v1/organizations/${organizationId}/invites`);
-}
-
-/**
- * Resend invite
- * @param {string} organizationId - Organization ID
- * @param {string} inviteId - Invite ID
- * @returns {Promise<Object>} Updated invite
- */
-export async function resendInvite(organizationId, inviteId) {
-  return post(`/v1/organizations/${organizationId}/invites/${inviteId}/resend`, {});
-}
-
-/**
- * Revoke invite
- * @param {string} organizationId - Organization ID
- * @param {string} inviteId - Invite ID
- * @returns {Promise<void>}
- */
-export async function revokeInvite(organizationId, inviteId) {
-  return del(`/v1/organizations/${organizationId}/invites/${inviteId}`);
-}
-
-/**
- * Update member role
- * @param {string} organizationId - Organization ID
- * @param {string} memberId - Member ID
- * @param {string} role - New role (admin, dev, operator)
- * @returns {Promise<Object>} Updated member
- */
-export async function updateMemberRole(organizationId, memberId, role) {
-  return patch(`/v1/organizations/${organizationId}/members/${memberId}`, { role });
+  return post(`/v1/organizations/${organizationId}/members`, invite);
 }
 
 /**
@@ -124,10 +82,6 @@ export default {
   listMembers,
   getMember,
   inviteMember,
-  listInvites,
-  resendInvite,
-  revokeInvite,
-  updateMemberRole,
   removeMember,
   transferOwnership,
   getTeamSnapshot,

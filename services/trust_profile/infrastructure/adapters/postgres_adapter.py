@@ -46,6 +46,12 @@ class PostgresTrustProfileRepository:
             )
             existing = result.first()
 
+            metadata = dict(profile.metadata or {})
+            if profile.key_management is not None:
+                metadata["key_management"] = profile.key_management
+            else:
+                metadata.pop("key_management", None)
+
             profile_data = {
                 "id": profile.id,
                 "organization_id": profile.organization_id,
@@ -64,7 +70,7 @@ class PostgresTrustProfileRepository:
                 "allowed_issuers": profile.allowed_issuers,
                 "denied_issuers": profile.denied_issuers,
                 "jurisdiction_filter": profile.jurisdiction_filter,
-                "metadata": profile.metadata,
+                "metadata": metadata,
                 "updated_at": profile.updated_at,
             }
 
@@ -110,6 +116,7 @@ class PostgresTrustProfileRepository:
                 allowed_issuers=row.allowed_issuers,
                 denied_issuers=row.denied_issuers,
                 jurisdiction_filter=row.jurisdiction_filter,
+                key_management=(row.metadata or {}).get("key_management"),
                 metadata=row.metadata or {},
                 created_at=row.created_at,
                 updated_at=row.updated_at,
@@ -145,6 +152,7 @@ class PostgresTrustProfileRepository:
                 allowed_issuers=row.allowed_issuers,
                 denied_issuers=row.denied_issuers,
                 jurisdiction_filter=row.jurisdiction_filter,
+                key_management=(row.metadata or {}).get("key_management"),
                 metadata=row.metadata or {},
                 created_at=row.created_at,
                 updated_at=row.updated_at,
@@ -515,13 +523,26 @@ class PostgresTrustProfileRepository:
             
             if not row:
                 return None
+
+            validation_rules_json = row.validation_rules or {}
+            revocation_policy_json = row.revocation_policy or {}
+            time_policy_json = row.time_policy or {}
+            trust_sources_json = row.trust_sources or []
+
+            def _safe_enum(enum_cls, raw_value, default_value):
+                if raw_value in (None, ""):
+                    return default_value
+                try:
+                    return enum_cls(raw_value)
+                except Exception:
+                    return default_value
             
             # Reconstruct nested objects from JSON
             trust_sources = [
                 TrustSource(
-                    id=ts["id"],
-                    name=ts["name"],
-                    source_type=ts["source_type"],
+                    id=ts.get("id") or str(uuid.uuid4()),
+                    name=ts.get("name") or ts.get("issuer_did") or "Trust Source",
+                    source_type=ts.get("source_type") or "TRUST_LIST",
                     url=ts.get("url"),
                     certificate_pem=ts.get("certificate_pem"),
                     issuer_did=ts.get("issuer_did"),
@@ -530,52 +551,71 @@ class PostgresTrustProfileRepository:
                     refresh_interval_hours=ts.get("refresh_interval_hours", 24),
                     enabled=ts.get("enabled", True),
                 )
-                for ts in row.trust_sources
+                for ts in trust_sources_json
             ]
             
             validation_rules = ValidationRules(
-                allowed_algorithms=row.validation_rules.get("allowed_algorithms", ["ES256", "ES384", "EdDSA"]),
-                min_key_size_rsa=row.validation_rules.get("min_key_size_rsa", 2048),
-                min_key_size_ec=row.validation_rules.get("min_key_size_ec", 256),
-                require_key_usage=row.validation_rules.get("require_key_usage", True),
-                max_chain_depth=row.validation_rules.get("max_chain_depth", 5),
-                allow_self_signed=row.validation_rules.get("allow_self_signed", False),
+                allowed_algorithms=validation_rules_json.get("allowed_algorithms", ["ES256", "ES384", "EdDSA"]),
+                min_key_size_rsa=validation_rules_json.get("min_key_size_rsa", 2048),
+                min_key_size_ec=validation_rules_json.get("min_key_size_ec", 256),
+                require_key_usage=validation_rules_json.get("require_key_usage", True),
+                max_chain_depth=validation_rules_json.get("max_chain_depth", 5),
+                allow_self_signed=validation_rules_json.get("allow_self_signed", False),
             )
             
             revocation_policy = RevocationPolicy(
-                check_mode=RevocationCheckMode(row.revocation_policy.get("check_mode", "HARD_FAIL")),
-                check_ocsp=row.revocation_policy.get("check_ocsp", True),
-                check_crl=row.revocation_policy.get("check_crl", True),
-                check_status_list=row.revocation_policy.get("check_status_list", True),
-                offline_grace_period_hours=row.revocation_policy.get("offline_grace_period_hours", 24),
-                cache_duration_hours=row.revocation_policy.get("cache_duration_hours", 1),
+                check_mode=_safe_enum(
+                    RevocationCheckMode,
+                    revocation_policy_json.get("check_mode"),
+                    RevocationCheckMode.HARD_FAIL,
+                ),
+                check_ocsp=revocation_policy_json.get("check_ocsp", True),
+                check_crl=revocation_policy_json.get("check_crl", True),
+                check_status_list=revocation_policy_json.get("check_status_list", True),
+                offline_grace_period_hours=revocation_policy_json.get("offline_grace_period_hours", 24),
+                cache_duration_hours=revocation_policy_json.get("cache_duration_hours", 1),
             )
             
             time_policy = TimePolicy(
-                max_clock_skew_seconds=row.time_policy.get("max_clock_skew_seconds", 300),
-                credential_freshness_hours=row.time_policy.get("credential_freshness_hours"),
-                require_not_before=row.time_policy.get("require_not_before", True),
-                require_expiration=row.time_policy.get("require_expiration", True),
+                max_clock_skew_seconds=time_policy_json.get("max_clock_skew_seconds", 300),
+                credential_freshness_hours=time_policy_json.get("credential_freshness_hours"),
+                require_not_before=time_policy_json.get("require_not_before", True),
+                require_expiration=time_policy_json.get("require_expiration", True),
             )
             
-            supported_formats = [CredentialFormat(fmt) for fmt in row.supported_formats]
+            supported_formats = []
+            for fmt in row.supported_formats or []:
+                try:
+                    supported_formats.append(CredentialFormat(fmt))
+                except Exception:
+                    continue
+            if not supported_formats:
+                supported_formats = [CredentialFormat.MDOC]
             
             return TrustProfile(
                 id=row.id,
                 organization_id=row.organization_id,
                 name=row.name,
                 description=row.description,
-                status=TrustProfileStatus(row.status),
-                profile_type=TrustProfileType(row.validation_rules.get("profile_type", "CUSTOM")),
-                compliance_status=ComplianceStatus(row.validation_rules.get("compliance_status", "SETUP_REQUIRED")),
+                status=_safe_enum(TrustProfileStatus, row.status, TrustProfileStatus.DRAFT),
+                profile_type=_safe_enum(
+                    TrustProfileType,
+                    validation_rules_json.get("profile_type"),
+                    TrustProfileType.CUSTOM,
+                ),
+                compliance_status=_safe_enum(
+                    ComplianceStatus,
+                    validation_rules_json.get("compliance_status"),
+                    ComplianceStatus.SETUP_REQUIRED,
+                ),
                 trust_sources=trust_sources,
                 validation_rules=validation_rules,
-                allowed_issuers=row.validation_rules.get("allowed_issuers"),
-                denied_issuers=row.validation_rules.get("denied_issuers"),
-                system_issuer_overrides=row.validation_rules.get("system_issuer_overrides", {}),
-                compatible_compliance_codes=row.validation_rules.get("compatible_compliance_codes", []),
-                verification_policy_set_id=row.validation_rules.get("verification_policy_set_id"),
-                auto_generated=row.validation_rules.get("auto_generated", False),
+                allowed_issuers=validation_rules_json.get("allowed_issuers"),
+                denied_issuers=validation_rules_json.get("denied_issuers"),
+                system_issuer_overrides=validation_rules_json.get("system_issuer_overrides", {}),
+                compatible_compliance_codes=validation_rules_json.get("compatible_compliance_codes", []),
+                verification_policy_set_id=validation_rules_json.get("verification_policy_set_id"),
+                auto_generated=validation_rules_json.get("auto_generated", False),
                 revocation_policy=revocation_policy,
                 revocation_profile_id=row.revocation_profile_id,
                 time_policy=time_policy,

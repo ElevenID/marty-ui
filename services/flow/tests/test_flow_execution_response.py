@@ -14,6 +14,7 @@ from flow.main import (
     InMemoryFlowRepository,
     StartSiopFlowRequest,
     StepType,
+    _definition_to_response,
     _parse_flow_instance_status,
     _instance_to_response,
     _sync_protocol_context,
@@ -157,6 +158,19 @@ def test_parse_flow_instance_status_accepts_protocol_and_runtime_aliases() -> No
     assert _parse_flow_instance_status("awaiting_wallet") is FlowInstanceStatus.WAITING
     assert _parse_flow_instance_status("cancelled") is FlowInstanceStatus.CANCELLED
     assert _parse_flow_instance_status("CANCELED") is FlowInstanceStatus.CANCELLED
+
+
+def test_definition_response_normalizes_legacy_string_trigger() -> None:
+    flow_def = FlowDefinition(
+        organization_id="org-1",
+        name="Legacy Trigger Flow",
+        flow_type=FlowType.OID4VCI_PRE_AUTHORIZED,
+    )
+    flow_def.trigger = "credential_login"
+
+    response = _definition_to_response(flow_def)
+
+    assert response.trigger == {"event": "credential_login"}
 
 
 @pytest.mark.asyncio

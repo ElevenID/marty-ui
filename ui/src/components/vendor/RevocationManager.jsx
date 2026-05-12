@@ -61,6 +61,9 @@ import {
   batchRevokeCredentials,
   fetchRevocationHistory,
 } from '../../application/vendor';
+import { formatOfficialReference } from '../../utils/officialReferences';
+
+const formatCredentialReference = (credentialId) => formatOfficialReference(credentialId, 'credential');
 
 // Revocation reason codes (RFC 5280)
 const REVOCATION_REASONS = [
@@ -386,8 +389,9 @@ function ActiveCredentialsTab({ organizationId }) {
         <Table>
           <TableHead>
             <TableRow>
-              <TableCell>{t('revocationManager.activeTab.table.credentialId')}</TableCell>
+              <TableCell>Credential Reference</TableCell>
               <TableCell>{t('revocationManager.activeTab.table.type')}</TableCell>
+              <TableCell>Issuer DID</TableCell>
               <TableCell>{t('revocationManager.activeTab.table.holder')}</TableCell>
               <TableCell>{t('revocationManager.activeTab.table.issuedDate')}</TableCell>
               <TableCell>{t('revocationManager.activeTab.table.expiryDate')}</TableCell>
@@ -398,13 +402,13 @@ function ActiveCredentialsTab({ organizationId }) {
           <TableBody>
             {loading ? (
               <TableRow>
-                <TableCell colSpan={7} align="center" sx={{ py: 8 }}>
+                <TableCell colSpan={8} align="center" sx={{ py: 8 }}>
                   <CircularProgress />
                 </TableCell>
               </TableRow>
             ) : credentials.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={7} align="center" sx={{ py: 8 }}>
+                <TableCell colSpan={8} align="center" sx={{ py: 8 }}>
                   <Typography variant="body2" color="text.secondary">
                     {t('revocationManager.activeTab.empty')}
                   </Typography>
@@ -415,10 +419,21 @@ function ActiveCredentialsTab({ organizationId }) {
                 <TableRow key={cred.id} hover>
                   <TableCell>
                     <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: 11 }}>
-                      {cred.id}
+                      {formatCredentialReference(cred.credential_id || cred.id)}
                     </Typography>
                   </TableCell>
                   <TableCell>{cred.type}</TableCell>
+                  <TableCell>
+                    {cred.issuer_did ? (
+                      <Tooltip title={cred.issuer_did}>
+                        <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: 11, maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {cred.issuer_did}
+                        </Typography>
+                      </Tooltip>
+                    ) : (
+                      <Typography variant="body2" color="text.secondary" sx={{ fontSize: 11 }}>—</Typography>
+                    )}
+                  </TableCell>
                   <TableCell>{cred.holder_email}</TableCell>
                   <TableCell>{new Date(cred.issued_date).toLocaleDateString()}</TableCell>
                   <TableCell>{new Date(cred.expiry_date).toLocaleDateString()}</TableCell>
@@ -502,7 +517,7 @@ function RevocationHistoryTab({ organizationId }) {
         <Table>
           <TableHead>
             <TableRow>
-              <TableCell>{t('revocationManager.historyTab.table.credentialId')}</TableCell>
+              <TableCell>Credential Reference</TableCell>
               <TableCell>{t('revocationManager.historyTab.table.type')}</TableCell>
               <TableCell>{t('revocationManager.historyTab.table.revokedDate')}</TableCell>
               <TableCell>{t('revocationManager.historyTab.table.reason')}</TableCell>
@@ -522,7 +537,7 @@ function RevocationHistoryTab({ organizationId }) {
                 <TableRow key={rev.id} hover>
                   <TableCell>
                     <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: 11 }}>
-                      {rev.credential_id}
+                      {formatCredentialReference(rev.credential_id)}
                     </Typography>
                   </TableCell>
                   <TableCell>{rev.type}</TableCell>

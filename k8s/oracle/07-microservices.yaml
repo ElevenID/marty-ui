@@ -107,6 +107,11 @@ spec:
                 configMapKeyRef:
                   name: marty-config
                   key: CORS_ORIGINS
+            - name: SIGNING_KEYS_INTERNAL_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: SIGNING_KEYS_INTERNAL_API_KEY
           resources:
             requests:
               memory: "256Mi"
@@ -578,6 +583,18 @@ spec:
                 configMapKeyRef:
                   name: marty-config
                   key: PUBLIC_API_URL
+            - name: CANVAS_CREDENTIALS_SHARED_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: CANVAS_CREDENTIALS_SHARED_SECRET
+            - name: SIGNING_KEYS_INTERNAL_URL
+              value: "http://gateway:8000/internal/signing-keys"
+            - name: SIGNING_KEYS_INTERNAL_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: SIGNING_KEYS_INTERNAL_API_KEY
           resources:
             requests:
               memory: "512Mi"
@@ -611,6 +628,96 @@ spec:
       name: http
   selector:
     app: issuance
+---
+# ================================================================
+# 6a. Verification (:8012)
+# ================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: verification
+  namespace: marty-prod
+  labels:
+    app: verification
+    app.kubernetes.io/part-of: marty-platform
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: verification
+  template:
+    metadata:
+      labels:
+        app: verification
+    spec:
+      serviceAccountName: marty-app
+      imagePullSecrets:
+        - name: ocir-secret
+      containers:
+        - name: verification
+          image: ${OCIR_REGISTRY}/marty-ui/verification:${IMAGE_TAG}
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8012
+            - containerPort: 9017
+          env:
+            - name: VERIFICATION_SERVICE_PORT
+              value: "8012"
+            - name: PP_GRPC_TARGET
+              value: "presentation-policy:9009"
+            - name: VERIF_GRPC_PORT
+              value: "9017"
+            - name: VERIF_GRPC_ENABLED
+              value: "true"
+            - name: PUBLIC_BASE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: PUBLIC_API_URL
+            - name: REDIS_URL
+              value: "redis://redis:6379/3"
+            - name: SIGNING_KEYS_INTERNAL_URL
+              value: "http://gateway:8000/internal/signing-keys"
+            - name: SIGNING_KEYS_INTERNAL_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: SIGNING_KEYS_INTERNAL_API_KEY
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "300m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8012
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8012
+            initialDelaySeconds: 10
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: verification
+  namespace: marty-prod
+spec:
+  ports:
+    - port: 8012
+      targetPort: 8012
+      name: http
+    - port: 9017
+      targetPort: 9017
+      name: grpc
+  selector:
+    app: verification
 ---
 # ================================================================
 # 7. Applicant (:8006)
@@ -920,6 +1027,8 @@ spec:
           env:
             - name: PRESENTATION_POLICY_SERVICE_PORT
               value: "8009"
+            - name: DID_RESOLUTION_BASE_URL
+              value: "http://gateway:8000"
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:

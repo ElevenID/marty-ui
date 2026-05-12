@@ -117,15 +117,21 @@ export default function IssuingSection({ applicationId, applicationStatus }) {
     }
   }, [selectedProtocol, applicationId]);
 
-  // Only render for approved or issued applications
-  if (applicationStatus !== 'approved' && applicationStatus !== 'issued') return null;
+  const REISSUE_STATUSES = ['issued', 'credentialed'];
+  const isReissue = REISSUE_STATUSES.includes(applicationStatus);
+
+  // Render for first-issue (approved/offered) and re-issue (issued/credentialed).
+  if (!['approved', 'offered', 'issued', 'credentialed'].includes(applicationStatus)) return null;
 
   // ── Render ─────────────────────────────────────────────────────────────
 
   const InviteDisplay = selectedProtocol?.InviteDisplay;
 
   return (
-    <SectionCard title="Credential Issuance" icon={<SendIcon color="action" />}>
+    <SectionCard
+      title={isReissue ? 'Re-issue Credential' : 'Credential Issuance'}
+      icon={<SendIcon color="action" />}
+    >
       <Stack spacing={2}>
         {/* Protocol selector — hidden when there is only one protocol */}
         {!singleProtocol && (
@@ -162,7 +168,9 @@ export default function IssuingSection({ applicationId, applicationStatus }) {
         {/* Description line (shown when a protocol is selected) */}
         {selectedProtocol && !expanded && (
           <Typography variant="body2" color="text.secondary">
-            Generate a {selectedProtocol.label} credential invite for the applicant.
+            {isReissue
+              ? `Generate a fresh ${selectedProtocol.label} wallet invite. The previous invite will be invalidated.`
+              : `Generate a ${selectedProtocol.label} credential invite for the applicant.`}
           </Typography>
         )}
 
@@ -170,7 +178,8 @@ export default function IssuingSection({ applicationId, applicationStatus }) {
         {selectedProtocol && !expanded && (
           <Box>
             <Button
-              variant="contained"
+              variant={isReissue ? 'outlined' : 'contained'}
+              color={isReissue ? 'secondary' : 'primary'}
               startIcon={
                 loading ? (
                   <CircularProgress size={16} color="inherit" />
@@ -181,7 +190,11 @@ export default function IssuingSection({ applicationId, applicationStatus }) {
               onClick={handleGenerateOffer}
               disabled={loading}
             >
-              {loading ? 'Generating…' : `Display ${selectedProtocol.label} Invite`}
+              {loading
+                ? 'Generating…'
+                : isReissue
+                  ? 'Generate New Wallet Invite'
+                  : `Display ${selectedProtocol.label} Invite`}
             </Button>
           </Box>
         )}

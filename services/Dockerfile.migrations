@@ -59,6 +59,9 @@ COPY marty-ui/services/credential_template/manage_migrations.py /app/credential_
 COPY marty-ui/services/trust_profile/infrastructure /app/trust_profile/infrastructure/
 COPY marty-ui/services/trust_profile/manage_migrations.py /app/trust_profile/
 
+COPY marty-ui/services/revocation_profile/infrastructure /app/revocation_profile/infrastructure/
+COPY marty-ui/services/revocation_profile/manage_migrations.py /app/revocation_profile/
+
 # Note: issuance service is in marty-credentials, not marty-ui
 COPY marty-credentials/services/issuance/infrastructure /app/issuance/infrastructure/
 COPY marty-credentials/services/issuance/manage_migrations.py /app/issuance/
@@ -67,6 +70,9 @@ COPY marty-credentials/services/issuance/__init__.py /app/services/issuance/
 
 COPY marty-ui/services/presentation_policy/infrastructure /app/presentation_policy/infrastructure/
 COPY marty-ui/services/presentation_policy/manage_migrations.py /app/presentation_policy/
+
+COPY marty-ui/services/deployment_profile/infrastructure /app/deployment_profile/infrastructure/
+COPY marty-ui/services/deployment_profile/manage_migrations.py /app/deployment_profile/
 
 COPY marty-ui/services/flow/infrastructure /app/flow/infrastructure/
 COPY marty-ui/services/flow/manage_migrations.py /app/flow/

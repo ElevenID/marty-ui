@@ -21,6 +21,12 @@ class FakeMembership:
     def has_role(self, *roles: str) -> bool:
         return any(role in self._roles for role in roles)
 
+    def has_permission(self, resource: str, action: str | None = None) -> bool:
+        if {"admin", "owner"} & self._roles:
+            return True
+        permission_key = resource if action is None else f"{resource}:{action}"
+        return permission_key in set()
+
 
 def _build_client(
     repo: trust_profile.InMemoryTrustProfileRepository,
@@ -28,6 +34,7 @@ def _build_client(
 ) -> tuple[TestClient, AsyncMock]:
     app = FastAPI()
     app.include_router(trust_profile.router)
+    app.include_router(trust_profile.internal_router)
 
     trust_profile._repo = repo
     get_membership = AsyncMock(return_value=membership or FakeMembership())
@@ -36,6 +43,47 @@ def _build_client(
     trust_profile.app.state.org_client = org_client
     trust_profile.get_organization_client = AsyncMock(return_value=org_client)
     return TestClient(app), get_membership
+
+
+def test_bootstrap_updates_marty_managed_issuer_did(monkeypatch) -> None:
+    monkeypatch.setenv("PUBLIC_DOMAIN", "beta.elevenidllc.com")
+    monkeypatch.setenv("MARTY_ORG_SLUG", "marty")
+
+    repo = trust_profile.InMemoryTrustProfileRepository()
+    stale_profile = trust_profile.TrustProfile(
+        id=trust_profile.MARTY_TRUST_PROFILE_ID,
+        organization_id=trust_profile.MARTY_ORG_ID,
+        name="Marty Credential Login Trust",
+        status=trust_profile.TrustProfileStatus.ACTIVE,
+        trust_sources=[
+            trust_profile.TrustSource(
+                id="60000000-0000-0000-0000-000000000021",
+                name="Marty Managed Issuer",
+                source_type=trust_profile.TrustSourceType.PINNED_ISSUER.value,
+                issuer_did="did:web:beta.elevenidllc.com",
+            )
+        ],
+    )
+    stale_issuer = trust_profile.TrustedIssuer(
+        id=trust_profile.MARTY_TRUSTED_ISSUER_ID,
+        trust_profile_id=trust_profile.MARTY_TRUST_PROFILE_ID,
+        name="Marty Managed Issuer",
+        issuer_did="did:web:beta.elevenidllc.com",
+        issuer_url="https://beta.elevenidllc.com",
+        status=trust_profile.IssuerStatus.ACTIVE,
+    )
+    asyncio.run(repo.save_profile(stale_profile))
+    asyncio.run(repo.save_issuer(stale_issuer))
+
+    asyncio.run(trust_profile._bootstrap_marty_login_trust_profile(repo))
+
+    profile = asyncio.run(repo.get_profile(trust_profile.MARTY_TRUST_PROFILE_ID))
+    issuer = asyncio.run(repo.get_issuer(trust_profile.MARTY_TRUSTED_ISSUER_ID))
+
+    assert profile is not None
+    assert profile.trust_sources[0].issuer_did == "did:web:beta.elevenidllc.com:orgs:marty"
+    assert issuer is not None
+    assert issuer.issuer_did == "did:web:beta.elevenidllc.com:orgs:marty"
 
 
 async def _save_profile(
@@ -95,6 +143,7 @@ def test_get_trust_profile_returns_protocol_shape_only() -> None:
         "organization_id",
         "name",
         "description",
+        "status",
         "profile_type",
         "compliance_status",
         "trust_sources",
@@ -139,11 +188,23 @@ def test_get_trust_profile_returns_protocol_shape_only() -> None:
         "require_freshness": True,
         "freshness_window_seconds": 21600,
     }
-    assert "status" not in body
+    assert body["status"] == "draft"
     assert "validation_rules" not in body
     assert "revocation_check_enabled" not in body
     assert "trusted_issuers" not in body
     get_membership.assert_awaited_once_with("user-1", "org-1")
+
+
+def test_internal_get_trust_profile_skips_user_membership() -> None:
+    repo = trust_profile.InMemoryTrustProfileRepository()
+    profile = asyncio.run(_save_profile(repo))
+    client, get_membership = _build_client(repo)
+
+    response = client.get(f"/internal/v1/trust-profiles/{profile.id}")
+
+    assert response.status_code == 200
+    assert response.json()["id"] == profile.id
+    assert get_membership.await_count == 0
 
 
 def test_create_trust_profile_returns_canonical_fields() -> None:
@@ -198,8 +259,73 @@ def test_create_trust_profile_returns_canonical_fields() -> None:
     assert body["time_policy"]["require_freshness"] is True
     assert body["verification_policy_set_id"] == "policy-set-2"
     assert body["compatible_compliance_codes"] == ["EUDI_PID"]
-    assert "status" not in body
+    assert body["status"] == "draft"
     assert "min_key_size_rsa" not in body
+    get_membership.assert_awaited_once_with("user-1", "org-1")
+
+
+def test_create_empty_trust_profile_defaults_to_deny_all() -> None:
+    repo = trust_profile.InMemoryTrustProfileRepository()
+    client, get_membership = _build_client(repo)
+
+    response = client.post(
+        "/v1/trust-profiles",
+        headers={"x-user-id": "user-1"},
+        json={
+            "organization_id": "org-1",
+            "name": "Empty Trust Profile",
+            "supported_formats": ["SD_JWT_VC"],
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["trust_sources"] == []
+    assert body["allowed_issuers"] == []
+    get_membership.assert_awaited_once_with("user-1", "org-1")
+
+
+def test_create_empty_trust_profile_can_explicitly_allow_all_issuers() -> None:
+    repo = trust_profile.InMemoryTrustProfileRepository()
+    client, get_membership = _build_client(repo)
+
+    response = client.post(
+        "/v1/trust-profiles",
+        headers={"x-user-id": "user-1"},
+        json={
+            "organization_id": "org-1",
+            "name": "Open Trust Profile",
+            "supported_formats": ["SD_JWT_VC"],
+            "allowed_issuers": None,
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["trust_sources"] == []
+    assert "allowed_issuers" not in body
+    get_membership.assert_awaited_once_with("user-1", "org-1")
+
+
+def test_update_trust_profile_clears_to_deny_all_when_trust_sources_are_removed() -> None:
+    repo = trust_profile.InMemoryTrustProfileRepository()
+    profile = asyncio.run(_save_profile(repo))
+    profile.allowed_issuers = None
+    asyncio.run(repo.save_profile(profile))
+    client, get_membership = _build_client(repo)
+
+    response = client.patch(
+        f"/v1/trust-profiles/{profile.id}",
+        headers={"x-user-id": "user-1"},
+        json={
+            "trust_sources": [],
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["trust_sources"] == []
+    assert body["allowed_issuers"] == []
     get_membership.assert_awaited_once_with("user-1", "org-1")
 
 
@@ -219,7 +345,7 @@ def test_activate_trust_profile_keeps_protocol_payload_stable() -> None:
     assert body["compliance_status"] == "COMPLIANT"
     assert body["revocation_profile_id"] == "rev-prof-1"
     assert body["updated_at"] != ""
-    assert "status" not in body
+    assert body["status"] == "active"
     assert "validation_rules" not in body
     assert "trusted_issuers" not in body
     get_membership.assert_awaited_once_with("user-1", "org-1")

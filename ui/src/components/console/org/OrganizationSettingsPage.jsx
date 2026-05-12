@@ -31,12 +31,13 @@ import EditIcon from '@mui/icons-material/Edit';
 import SaveIcon from '@mui/icons-material/Save';
 import BusinessIcon from '@mui/icons-material/Business';
 import AddIcon from '@mui/icons-material/Add';
-// import { Link } from 'react-router-dom';
 
 import { ResourcePage } from '../../common';
 import { useAuth } from '../../../hooks/useAuth';
+import { useConsole } from '../../../contexts/ConsoleContext';
 import OrgDefaultsSection from './OrgDefaultsSection';
 import { loadOrgSettings, saveOrgSettings } from '../../../application/orgSettings';
+import { listRoles } from '../../../services/rbacApi';
 
 /**
  * Get organization tabs with translations
@@ -44,6 +45,7 @@ import { loadOrgSettings, saveOrgSettings } from '../../../application/orgSettin
 const getOrgTabs = (t) => [
   { label: t('org.tabs.organization'), path: '/console/org/settings' },
   { label: t('org.tabs.team'), path: '/console/org/team' },
+  { label: t('org.tabs.apiKeys', 'API Keys'), path: '/console/org/api-keys' },
   { label: t('org.tabs.webhooks'), path: '/console/org/webhooks' },
 ];
 
@@ -59,11 +61,14 @@ const getBreadcrumbs = (t) => [
 function OrganizationSettingsPage() {
   const { t } = useTranslation('console');
   const { organizationId, organizationName } = useAuth();
+  const { activeOrgId } = useConsole();
+  const effectiveOrgId = activeOrgId || organizationId;
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(false);
   const [editMode, setEditMode] = useState(false);
+  const [availableRoles, setAvailableRoles] = useState([]);
   const [org, setOrg] = useState({
     name: '',
     displayName: '',
@@ -77,7 +82,7 @@ function OrganizationSettingsPage() {
     membershipMode: 'invite_only',
     allowedEmailDomains: [],
     domainJoinPolicy: 'approval',
-    defaultRole: 'member',
+    defaultRole: 'applicant',
     // Device security settings
     requireDeviceRegistration: false,
     allowPushNotifications: true,
@@ -88,8 +93,13 @@ function OrganizationSettingsPage() {
   useEffect(() => {
     const loadOrg = async () => {
       try {
-        const { org: loaded, error: loadError } = await loadOrgSettings({ organizationName });
+        const [{ org: loaded, error: loadError }, rolesResponse] = await Promise.all([
+          loadOrgSettings({ organizationName }),
+          effectiveOrgId ? listRoles(effectiveOrgId).catch(() => []) : Promise.resolve([]),
+        ]);
         if (loadError) throw new Error(loadError);
+        const roles = (rolesResponse?.roles || rolesResponse || []).filter((role) => role.name !== 'owner');
+        setAvailableRoles(roles);
         setOrg(loaded);
       } catch (err) {
         setError(t('org.settings.errorLoading'));
@@ -99,7 +109,7 @@ function OrganizationSettingsPage() {
       }
     };
     loadOrg();
-  }, [organizationName]);
+  }, [effectiveOrgId, organizationName, t]);
 
   const handleSave = async () => {
     setSaving(true);
@@ -391,9 +401,11 @@ function OrganizationSettingsPage() {
                 label={t('org.settings.membership.defaultRole')}
                 onChange={(e) => setOrg(prev => ({ ...prev, defaultRole: e.target.value }))}
               >
-                <MenuItem value="member">{t('org.settings.membership.roles.member')}</MenuItem>
-                <MenuItem value="admin">{t('org.settings.membership.roles.admin')}</MenuItem>
-                <MenuItem value="owner">{t('org.settings.membership.roles.owner')}</MenuItem>
+                {availableRoles.map((role) => (
+                  <MenuItem key={role.id} value={role.name}>
+                    {role.display_name || role.name}
+                  </MenuItem>
+                ))}
               </Select>
               <FormHelperText>
                 {t('org.settings.membership.defaultRoleHelp')}

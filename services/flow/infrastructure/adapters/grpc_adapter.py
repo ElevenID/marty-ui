@@ -8,16 +8,51 @@ artifacts, OID4VP verification, webhook events, and real-time streaming.
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import json
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from urllib.parse import urlparse
 
 import grpc
 
 from marty_proto.v1 import flow_service_pb2, flow_service_pb2_grpc
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_grpc_callback_url(value: str | None) -> str | None:
+    """Validate callback URLs accepted through the internal gRPC API.
+
+    Public HTTP callers are held to the stricter Pydantic model in
+    ``flow.main``. gRPC calls are service-to-service, so the auth service must
+    be able to use Docker-internal HTTP callbacks such as ``http://auth:8001``.
+    """
+    if not value:
+        return None
+    if len(value) > 2048:
+        raise ValueError("callback_url must be 2048 characters or fewer")
+
+    parsed = urlparse(value)
+    if not parsed.scheme or not parsed.netloc:
+        raise ValueError("callback_url must be an absolute URL")
+
+    if parsed.scheme == "https":
+        return value
+
+    if parsed.scheme == "http":
+        hostname = parsed.hostname or ""
+        try:
+            ipaddress.ip_address(hostname)
+            is_ip_address = True
+        except ValueError:
+            is_ip_address = False
+
+        if hostname and "." not in hostname and hostname not in {"localhost", "0"} and not is_ip_address:
+            return value
+
+    raise ValueError("callback_url must be https or an internal service URL")
 
 
 # ---------------------------------------------------------------------------
@@ -165,7 +200,7 @@ class FlowServiceGrpc(flow_service_pb2_grpc.FlowServiceServicer):
             organization_id=request.organization_id,
             name=request.name,
             description=request.description or None,
-            flow_type=FlowType(request.flow_type) if request.flow_type else FlowType.ISSUANCE_OID4VCI,
+            flow_type=FlowType(request.flow_type) if request.flow_type else FlowType.OID4VCI_PRE_AUTHORIZED,
             start_step_id=request.start_step_id or "",
             preconditions=list(request.preconditions),
             credential_template_id=request.credential_template_id or None,
@@ -180,7 +215,7 @@ class FlowServiceGrpc(flow_service_pb2_grpc.FlowServiceServicer):
         for i, s in enumerate(request.steps):
             step = FlowStep(
                 name=s.name,
-                step_type=StepType(s.step_type) if s.step_type else StepType.ACTION,
+                step_type=StepType(s.step_type) if s.step_type else StepType.USER_INPUT,
                 config=dict(s.config),
             )
             if request.start_step_id == str(i):
@@ -301,7 +336,7 @@ class FlowServiceGrpc(flow_service_pb2_grpc.FlowServiceServicer):
         await repo.save_instance(instance)
 
         # Auto-create OID4VCI artifact if applicable
-        if flow_def.flow_type == FlowType.ISSUANCE_OID4VCI:
+        if flow_def.flow_type == FlowType.OID4VCI_PRE_AUTHORIZED:
             from flow.main import _create_oid4vci_artifact
             await _create_oid4vci_artifact(instance, flow_def, repo)
 
@@ -462,17 +497,22 @@ class FlowServiceGrpc(flow_service_pb2_grpc.FlowServiceServicer):
     async def StartVerification(self, request, context):
         from flow.main import StartVerificationFlowRequest
 
-        req = StartVerificationFlowRequest(
-            presentation_policy_id=request.presentation_policy_id or None,
-            organization_id=request.organization_id or None,
-            response_type=request.response_type or "vp_token",
-            trust_profile_id=request.trust_profile_id or None,
-            deployment_profile_id=request.deployment_profile_id or None,
-            callback_url=request.callback_url or None,
-            expiry_minutes=request.expiry_minutes or 15,
-        )
-
         try:
+            callback_url = _normalize_grpc_callback_url(request.callback_url or None)
+            req = StartVerificationFlowRequest(
+                presentation_policy_id=request.presentation_policy_id or None,
+                organization_id=request.organization_id or None,
+                response_type=request.response_type or "vp_token",
+                trust_profile_id=request.trust_profile_id or None,
+                deployment_profile_id=request.deployment_profile_id or None,
+                external_reference=request.external_reference or None,
+                callback_url=None,
+                expiry_minutes=request.expiry_minutes or 15,
+            )
+            # Public HTTP verification still rejects internal HTTP callbacks.
+            # The gRPC surface is internal, so assign after model validation.
+            req.callback_url = callback_url
+
             result = await self._start_verification(
                 request=req,
                 user_id=request.user_id or "grpc-service",
@@ -484,6 +524,8 @@ class FlowServiceGrpc(flow_service_pb2_grpc.FlowServiceServicer):
             if "not found" in detail.lower() or "404" in detail:
                 code = grpc.StatusCode.NOT_FOUND
             elif "invalid_request" in detail.lower() or "400" in detail:
+                code = grpc.StatusCode.INVALID_ARGUMENT
+            elif isinstance(exc, ValueError) or "validation error" in detail.lower():
                 code = grpc.StatusCode.INVALID_ARGUMENT
             context.set_code(code)
             context.set_details(detail)

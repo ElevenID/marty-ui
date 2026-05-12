@@ -1,6 +1,7 @@
 """Issuance, Issued Credentials, OID4VCI wallet endpoints, Application Templates, and Applications."""
 from __future__ import annotations
 
+import logging
 import os
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 
@@ -18,11 +19,169 @@ from gateway.models import (
 )
 from gateway.proxy import _resource_org_id, get_registry, proxy_request
 
-_ISSUANCE_API_KEY = os.environ.get("ISSUANCE_API_KEY", "")
+logger = logging.getLogger(__name__)
+
+def _read_secret_value(name: str) -> str:
+    direct = os.environ.get(name)
+    if direct:
+        return direct
+    file_path = os.environ.get(f"{name}_FILE")
+    if not file_path:
+        return ""
+    try:
+        with open(file_path, "r", encoding="utf-8") as handle:
+            return handle.read().strip()
+    except OSError:
+        return ""
+
+
+_ISSUANCE_API_KEY = _read_secret_value("ISSUANCE_API_KEY")
 
 _ISSUANCE_HEADERS: dict[str, str] | None = (
     {"X-API-Key": _ISSUANCE_API_KEY} if _ISSUANCE_API_KEY else None
 )
+
+# Credential format → key purpose mapping used for KMS service resolution.
+_FORMAT_KEY_PURPOSE: dict[str, str] = {
+    "jwt_vc_json": "vc_jwt_issuer",
+    "vc+sd-jwt": "vc_jwt_issuer",
+    "spruce-vc+sd-jwt": "vc_jwt_issuer",
+    "dc+sd-jwt": "vc_jwt_issuer",
+    "w3c_vcdm_v2_sd_jwt": "vc_jwt_issuer",
+    "sd_jwt_vc": "vc_jwt_issuer",
+    "mso_mdoc": "mdoc_dsc",
+    "mdoc": "mdoc_dsc",
+    "zk_mdoc": "mdoc_dsc",
+    "vds_nc": "vdsnc_signing",
+    "vdsnc": "vdsnc_signing",
+}
+
+
+def _normalize_credential_format(value: str | None) -> str | None:
+    normalized = (value or "").strip().lower()
+    return normalized.replace("-", "_") if normalized else None
+
+
+def _key_purpose_for_format(value: str | None) -> str | None:
+    normalized = _normalize_credential_format(value)
+    if not normalized:
+        return None
+    if normalized in {"vc+sd_jwt", "spruce_vc+sd_jwt", "dc+sd_jwt"}:
+        return "vc_jwt_issuer"
+    return _FORMAT_KEY_PURPOSE.get(normalized)
+
+
+async def _resolve_signing_service_id(
+    request: Request,
+    organization_id: str | None,
+    credential_format: str | None,
+) -> str | None:
+    """Resolve the best KMS signing service for the given org + credential format.
+
+    Returns the service ID string, or None if no service can be resolved or if
+    the signing-keys subsystem is unavailable (treated as non-fatal).
+    """
+    try:
+        from gateway.routes.signing_keys import (  # noqa: PLC0415
+            _load_registered_service_registry,
+            _normalize_registered_service,
+            _resolve_service_for_format,
+        )
+    except ImportError:
+        return None
+
+    try:
+        registry = await _load_registered_service_registry(request, organization_id)
+        key_purpose = _FORMAT_KEY_PURPOSE.get(credential_format or "", None) if credential_format else None
+        service = _resolve_service_for_format(registry, credential_format, key_purpose, algorithm=None)
+        if service and isinstance(service, dict):
+            normalized = _normalize_registered_service(service)
+            if normalized and normalized.get("id"):
+                return str(normalized["id"])
+    except Exception:  # noqa: BLE001
+        logger.debug("KMS service resolution failed (non-fatal) for format=%s", credential_format)
+    return None
+
+
+async def _resolve_issuer_identity(
+    request: Request,
+    organization_id: str | None,
+    credential_format: str | None = None,
+    key_purpose: str | None = None,
+    algorithm: str | None = None,
+) -> dict[str, str] | None:
+    """Return an active DID issuer identity scoped by format/purpose when known."""
+    try:
+        from gateway.routes.signing_keys import (  # noqa: PLC0415
+            _issuer_profiles_storage_key,
+            _load_registered_service_registry,
+            _load_json_document,
+            _normalize_registered_service,
+            _resolve_org_id,
+            _resolve_service_for_format,
+        )
+    except ImportError:
+        return None
+
+    try:
+        resolved_org_id = _resolve_org_id(request, organization_id)
+        storage_key = _issuer_profiles_storage_key(resolved_org_id)
+        doc = await _load_json_document(request, storage_key, {"profiles": []})
+        profiles: list = doc.get("profiles") or []
+        active_profiles = [
+            profile
+            for profile in profiles
+            if isinstance(profile, dict)
+            and profile.get("status") == "active"
+            and profile.get("issuer_did")
+            and profile.get("signing_service_id")
+        ]
+
+        requested_purpose = key_purpose or _key_purpose_for_format(credential_format)
+        if requested_purpose:
+            explicit = [profile for profile in active_profiles if profile.get("key_purpose") == requested_purpose]
+            unscoped = [profile for profile in active_profiles if not profile.get("key_purpose")]
+            active_profiles = explicit or unscoped
+
+        if not active_profiles:
+            return None
+
+        registry = await _load_registered_service_registry(request, resolved_org_id)
+        resolved_service = _resolve_service_for_format(registry, credential_format, requested_purpose, algorithm)
+        resolved_service_id = str(resolved_service.get("id")) if isinstance(resolved_service, dict) and resolved_service.get("id") else None
+        if resolved_service_id:
+            service_matches = [
+                profile
+                for profile in active_profiles
+                if str(profile.get("signing_service_id") or "") == resolved_service_id
+            ]
+            if service_matches:
+                active_profiles = service_matches
+
+        profile = active_profiles[0]
+        service_id = str(profile["signing_service_id"])
+        key_reference = str(profile.get("signing_key_reference") or "")
+        normalized_service = _normalize_registered_service(resolved_service) if isinstance(resolved_service, dict) else None
+        return {
+            "issuer_did": str(profile["issuer_did"]),
+            "signing_service_id": service_id,
+            "signing_key_reference": key_reference,
+            "verification_method_id": str(profile.get("verification_method_id") or ""),
+            "key_purpose": str(profile.get("key_purpose") or requested_purpose or "vc_jwt_issuer"),
+            "algorithm": str(profile.get("algorithm") or (normalized_service or {}).get("algorithm") or ""),
+        }
+    except Exception:  # noqa: BLE001
+        logger.debug("Issuer profile resolution failed (non-fatal) for org=%s", organization_id, exc_info=True)
+    return None
+
+
+async def _resolve_issuer_did(
+    request: Request,
+    organization_id: str | None,
+) -> str | None:
+    """Return the issuer DID from the org's first active IssuerProfile, or None."""
+    identity = await _resolve_issuer_identity(request, organization_id)
+    return identity.get("issuer_did") if identity else None
 
 issuance_router = APIRouter(prefix="/v1/issuance", tags=["Issuance"])
 issued_credential_router = APIRouter(prefix="/v1/issued-credentials", tags=["Issued Credentials"])
@@ -34,16 +193,48 @@ application_router = APIRouter(prefix="/v1/applications", tags=["Applications"])
 
 @issuance_router.post("", response_model=IssuanceResponse, summary="Create Issuance")
 async def create_issuance(body: IssuanceCreate, request: Request) -> Response:
-    """Initiate credential issuance for a subject (directly or via Application)."""
+    """Initiate credential issuance for a subject (directly or via Application).
+
+    The gateway forwards the active DID issuer identity and its bound KMS
+    signing service so downstream issuance signs with the key published for
+    that DID.
+    """
     if body.credential_template_id:
         owner_org = await _resource_org_id("credential-templates", f"/v1/credential-templates/{body.credential_template_id}", request)
         if owner_org is None:
             raise HTTPException(status_code=404, detail=f"Credential template not found: {body.credential_template_id}")
         if owner_org != body.organization_id:
             raise HTTPException(status_code=403, detail="Access denied: credential template belongs to another organization")
+
+    # Resolve the DID issuer identity and its bound remote signing service as a
+    # pair. A format-only KMS resolver can select a key that is not published in
+    # the DID document, which breaks BYOK issuer identity guarantees.
+    credential_format: str | None = body.claims.get("credential_format") if isinstance(body.claims, dict) else None
+    issuer_identity = await _resolve_issuer_identity(
+        request,
+        body.organization_id,
+        credential_format=credential_format,
+    )
+    signing_service_id = issuer_identity.get("signing_service_id") if issuer_identity else None
+
+    inject_headers: dict[str, str] = dict(_ISSUANCE_HEADERS or {})
+    if signing_service_id:
+        inject_headers["X-Signing-Service-Id"] = signing_service_id
+        logger.debug(
+            "Resolved signing service %s for org=%s format=%s",
+            signing_service_id,
+            body.organization_id,
+            credential_format,
+        )
+
+    issuer_did = issuer_identity.get("issuer_did") if issuer_identity else None
+    if issuer_did:
+        inject_headers["X-Issuer-Did"] = issuer_did
+        logger.debug("Resolved issuer DID %s for org=%s", issuer_did, body.organization_id)
+
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
-    return await proxy_request(request, service_url, "/v1/issuance/initiate", inject_headers=_ISSUANCE_HEADERS)
+    return await proxy_request(request, service_url, "/v1/issuance/initiate", inject_headers=inject_headers or None)
 
 
 @issuance_router.get("", response_model=list[IssuanceResponse], summary="List Issuances")

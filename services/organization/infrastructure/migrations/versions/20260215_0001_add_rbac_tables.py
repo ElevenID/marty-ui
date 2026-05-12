@@ -125,6 +125,11 @@ PERMISSIONS = [
     ("webhook", "edit", "Edit webhooks"),
     ("webhook", "delete", "Delete webhooks"),
     ("webhook", "test", "Test webhooks"),
+    # Integration connectors
+    ("integration-connector", "view", "View external protocol connectors"),
+    ("integration-connector", "create", "Create external protocol connectors"),
+    ("integration-connector", "edit", "Edit external protocol connectors"),
+    ("integration-connector", "delete", "Delete external protocol connectors"),
     # Notifications
     ("notification", "view", "View notifications"),
     ("notification", "send", "Send notifications"),
@@ -139,25 +144,109 @@ PERMISSIONS = [
 # ─────────────────────────────────────────────────────────────────────────────
 # System role templates  (copied into each organisation on creation)
 # ─────────────────────────────────────────────────────────────────────────────
-# owner  – everything
-# admin  – everything
-# member – design + deploy resources, no team/role/org mgmt
-# viewer – read‑only everywhere except team/role/org
+# owner        – everything + ownership transfer
+# admin        – everything except ownership transfer
+# access_admin – settings, team, roles, API keys, signing keys, webhooks, audit
+# catalog_admin – trust, compliance, templates, deployments, flow definitions
+# reviewer     – application review plus related read access
+# operator     – issuance, verification, and operational flow execution
+# viewer       – read-only org console access
+# applicant    – catalog/application access without org console access
 
 _ALL_PERMS = [(r, a) for r, a, _d in PERMISSIONS]
+_PERMS_BY_RESOURCE: dict[str, list[tuple[str, str]]] = {}
+for resource, action, _description in PERMISSIONS:
+    _PERMS_BY_RESOURCE.setdefault(resource, []).append((resource, action))
 
-_MEMBER_PERMS = [
-    (r, a) for r, a, _ in PERMISSIONS
-    if r not in ("team", "role", "organization", "audit")
-    or (r == "audit" and a == "view")
-    or (r == "organization" and a == "view")
-    or (r == "team" and a == "view")
-    or (r == "role" and a == "view")
-]
 
-_VIEWER_PERMS = [
-    (r, a) for r, a, _ in PERMISSIONS
-    if a == "view"
+def _perms_for(*resources: str) -> list[tuple[str, str]]:
+    perms: list[tuple[str, str]] = []
+    for resource in resources:
+        perms.extend(_PERMS_BY_RESOURCE.get(resource, []))
+    return perms
+
+
+def _view_perms_for(*resources: str) -> list[tuple[str, str]]:
+    return [
+        (resource, action)
+        for resource, action, _ in PERMISSIONS
+        if resource in resources and action == "view"
+    ]
+
+
+_ACCESS_ADMIN_PERMS = _perms_for(
+    "organization",
+    "team",
+    "role",
+    "api-key",
+    "signing-key",
+    "webhook",
+    "integration-connector",
+    "notification",
+    "audit",
+)
+
+_CATALOG_ADMIN_PERMS = _perms_for(
+    "trust-profile",
+    "trusted-issuer",
+    "credential-template",
+    "compliance-profile",
+    "presentation-policy",
+    "revocation-profile",
+    "deployment-profile",
+    "flow-definition",
+    "application-template",
+    "integration-connector",
+)
+
+_REVIEWER_PERMS = sorted(
+    set(
+        _view_perms_for(
+            "organization",
+            "trust-profile",
+            "trusted-issuer",
+            "credential-template",
+            "compliance-profile",
+            "presentation-policy",
+            "revocation-profile",
+            "deployment-profile",
+            "application-template",
+            "application",
+        )
+        + [("application", "approve"), ("application", "reject")]
+    )
+)
+
+_OPERATOR_PERMS = sorted(
+    set(
+        _view_perms_for(
+            "organization",
+            "trust-profile",
+            "credential-template",
+            "application-template",
+            "deployment-profile",
+            "flow-definition",
+            "flow-instance",
+            "issuance",
+            "verification",
+        )
+        + [
+            ("flow-instance", "start"),
+            ("flow-instance", "advance"),
+            ("flow-instance", "cancel"),
+            ("issuance", "initiate"),
+            ("verification", "execute"),
+        ]
+    )
+)
+
+_VIEWER_PERMS = [(r, a) for r, a, _ in PERMISSIONS if a == "view"]
+_APPLICANT_PERMS = [
+    ("organization", "view"),
+    ("credential-template", "view"),
+    ("application-template", "view"),
+    ("application", "view"),
+    ("issuance", "view"),
 ]
 
 SYSTEM_ROLES = [
@@ -170,20 +259,44 @@ SYSTEM_ROLES = [
     {
         "name": "admin",
         "display_name": "Administrator",
-        "description": "Full access to all resources and settings.",
+        "description": "Full access to all organization resources and settings.",
         "permissions": _ALL_PERMS,
     },
     {
-        "name": "member",
-        "display_name": "Member",
-        "description": "Can create and manage resources. No team or org management.",
-        "permissions": _MEMBER_PERMS,
+        "name": "access_admin",
+        "display_name": "Access Administrator",
+        "description": "Manages organization settings, team access, roles, keys, webhooks, notifications, and audit.",
+        "permissions": _ACCESS_ADMIN_PERMS,
+    },
+    {
+        "name": "catalog_admin",
+        "display_name": "Catalog Administrator",
+        "description": "Manages trust, compliance, templates, deployment profiles, flow definitions, and application templates.",
+        "permissions": _CATALOG_ADMIN_PERMS,
+    },
+    {
+        "name": "reviewer",
+        "display_name": "Reviewer",
+        "description": "Reviews applications and related organization artifacts.",
+        "permissions": _REVIEWER_PERMS,
+    },
+    {
+        "name": "operator",
+        "display_name": "Operator",
+        "description": "Runs issuance, verification, and operational flows.",
+        "permissions": _OPERATOR_PERMS,
     },
     {
         "name": "viewer",
         "display_name": "Viewer",
-        "description": "Read-only access to all resources.",
+        "description": "Read-only access to organization console resources.",
         "permissions": _VIEWER_PERMS,
+    },
+    {
+        "name": "applicant",
+        "display_name": "Applicant",
+        "description": "Catalog and application access without organization console access.",
+        "permissions": _APPLICANT_PERMS,
     },
 ]
 
@@ -334,7 +447,7 @@ def upgrade() -> None:
                 "display_name": tmpl["display_name"],
                 "description": tmpl["description"],
                 "is_system": True,
-                "is_default_for_new_members": tmpl["name"] == "member",
+                "is_default_for_new_members": tmpl["name"] == "applicant",
                 "created_at": now,
                 "updated_at": now,
             })
@@ -349,26 +462,8 @@ def upgrade() -> None:
         if rp_rows:
             op.bulk_insert(rp_table, rp_rows)
 
-        # ── 7. Migrate existing members: map members.role → member_roles ────
-        members = conn.execute(
-            sa.text(
-                "SELECT id, role FROM organization_service.members "
-                "WHERE organization_id = :org_id"
-            ),
-            {"org_id": org_id},
-        ).fetchall()
-
-        mr_rows = []
-        for member_id_val, role_val in members:
-            mapped_role_id = role_name_to_id.get(role_val)
-            if mapped_role_id:
-                mr_rows.append({
-                    "member_id": str(member_id_val),
-                    "role_id": mapped_role_id,
-                })
-
-        if mr_rows:
-            op.bulk_insert(member_roles_table, mr_rows)
+        # Existing fresh-reset environments do not need to migrate a legacy
+        # members.role column into member_roles.
 
 
 def downgrade() -> None:

@@ -53,9 +53,6 @@ Thumbs.db
 # Logs
 *.log
 
-# Self-host runtime state (Postgres/Redis data - never in Docker context)
-.selfhost-state/
-
 # Self-host pre-built dist (large build artifact)
 ui/dist-selfhost/
 

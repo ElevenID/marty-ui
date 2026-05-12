@@ -14,6 +14,7 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
+import { Link as RouterLink } from 'react-router-dom';
 import {
   Dialog,
   DialogTitle,
@@ -30,6 +31,8 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import AccountBalanceWalletIcon from '@mui/icons-material/AccountBalanceWallet';
 import OID4VCIInviteDisplay from '../issuance/OID4VCIInviteDisplay';
 import { generateIssuanceOffer } from '../../services/credentialsApi';
+import { useAuth } from '../../hooks/useAuth';
+import useWalletPreferences from '../../hooks/useWalletPreferences';
 import {
   createWalletOfferDialogState,
   loadWalletOfferDialog,
@@ -37,7 +40,12 @@ import {
   startWalletOfferDialogLoad,
 } from '../../application/applications';
 
+const APPLICANT_WALLET_SELECTION_SETTINGS_PATH = '/console/applicant/settings#wallet-selection';
+
 export default function WalletOfferDialog({ open, onClose, applicationId, credentialName }) {
+  const { user } = useAuth();
+  const { walletIds: preferredWallets } = useWalletPreferences(user?.user_id);
+  const hasRegisteredWallet = preferredWallets.length > 0;
   const [dialogState, setDialogState] = useState(() => createWalletOfferDialogState());
   const { offerData, loading, error } = dialogState;
 
@@ -53,13 +61,22 @@ export default function WalletOfferDialog({ open, onClose, applicationId, creden
     setDialogState(nextState);
   }, [applicationId]);
 
-  // Fetch when dialog opens
   useEffect(() => {
-    if (open) {
-      setDialogState(resetWalletOfferDialogState());
-      fetchOffer();
+    if (!open) {
+      return undefined;
     }
-  }, [open, fetchOffer]);
+
+    setDialogState(resetWalletOfferDialogState());
+    return undefined;
+  }, [open]);
+
+  useEffect(() => {
+    if (!open || !hasRegisteredWallet) {
+      return;
+    }
+
+    fetchOffer();
+  }, [open, hasRegisteredWallet, fetchOffer]);
 
   const handleClose = () => {
     setDialogState(resetWalletOfferDialogState());
@@ -96,7 +113,26 @@ export default function WalletOfferDialog({ open, onClose, applicationId, creden
       </DialogTitle>
 
       <DialogContent sx={{ pt: 1 }}>
-        {error ? (
+        {!hasRegisteredWallet ? (
+          <Box data-testid="wallet-registration-guard">
+            <Alert severity="warning" icon={<AccountBalanceWalletIcon fontSize="small" />} sx={{ mb: 2 }}>
+              Select a wallet app before you can receive this credential.
+            </Alert>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+              Choose the wallet app you use in Settings, then come back here to receive the
+              credential. Right now, wallet selection is the registration step.
+            </Typography>
+            <Button
+              component={RouterLink}
+              to={APPLICANT_WALLET_SELECTION_SETTINGS_PATH}
+              variant="contained"
+              startIcon={<AccountBalanceWalletIcon />}
+              onClick={handleClose}
+            >
+              Choose Wallet
+            </Button>
+          </Box>
+        ) : error ? (
           <Alert severity="error" sx={{ mb: 2 }}>
             {error}
           </Alert>
@@ -105,12 +141,14 @@ export default function WalletOfferDialog({ open, onClose, applicationId, creden
             offerData={offerData}
             onRegenerate={fetchOffer}
             loading={loading}
+            allowedWalletIds={hasRegisteredWallet ? preferredWallets : null}
+            showDefaultWalletTab={!hasRegisteredWallet}
             title="Scan with your wallet"
             instructions="Open your digital wallet app and scan this QR code to add the credential to your wallet."
           />
         )}
 
-        {!loading && !offerData && !error && (
+        {hasRegisteredWallet && !loading && !offerData && !error && (
           <Typography variant="body2" color="text.secondary" textAlign="center" py={2}>
             Generating your wallet offer…
           </Typography>
@@ -118,7 +156,7 @@ export default function WalletOfferDialog({ open, onClose, applicationId, creden
       </DialogContent>
 
       <DialogActions sx={{ px: 3, pb: 2, gap: 1 }}>
-        {error && (
+        {hasRegisteredWallet && error && (
           <Button
             startIcon={<RefreshIcon />}
             onClick={fetchOffer}

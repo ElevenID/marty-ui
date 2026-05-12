@@ -62,6 +62,8 @@ from gateway.proxy import get_http_client, get_registry, get_session_cache, prox
 
 # Route modules
 from gateway.routes.applicants import applicant_router
+from gateway.routes.canvas_integrations import canvas_integration_router
+from gateway.routes.credential_metadata import credential_metadata_router
 from gateway.routes.credentials import (
     compliance_profile_router,
     credential_template_router,
@@ -88,6 +90,7 @@ from gateway.routes.organizations import (
     run_hosted_pilot_auto_purge_sweep,
 )
 from gateway.routes.revocation import cascade_revocation_router, revocation_profile_router
+from gateway.routes.signing_keys import did_web_public_router, internal_signing_key_router, signing_key_router
 from gateway.routes.trust import (
     api_key_router,
     issuer_entity_router,
@@ -359,6 +362,9 @@ Verification is handled through two complementary approaches:
     app.include_router(api_key_router)
     app.include_router(revocation_profile_router)
     app.include_router(cascade_revocation_router)
+    app.include_router(signing_key_router)
+    app.include_router(internal_signing_key_router)
+    app.include_router(did_web_public_router)
     app.include_router(credential_template_router)
     app.include_router(wallet_registry_router)
     app.include_router(compliance_profile_router)
@@ -368,6 +374,7 @@ Verification is handled through two complementary approaches:
     app.include_router(flow_router)
     app.include_router(issued_credential_router)
     app.include_router(issuance_router)
+    app.include_router(canvas_integration_router)
     app.include_router(application_template_router)
     app.include_router(application_router)
     app.include_router(subscription_router)
@@ -377,6 +384,7 @@ Verification is handled through two complementary approaches:
     app.include_router(applicant_router)
     app.include_router(organization_router)
     app.include_router(preferences_router)
+    app.include_router(credential_metadata_router)
 
     # Auth service proxy - forward all /v1/auth/* requests to auth service
     @app.api_route("/v1/auth/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])

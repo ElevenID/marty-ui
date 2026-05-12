@@ -2,19 +2,20 @@
  * Developer Quick Start Panel
  * 
  * Shows org-scoped integration information for developers:
- * - Organization ID (with copy button)
+ * - Organization Reference (with copy button)
  * - Base API URL
  * - Example API request
  * - Links to API keys and docs
  */
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useAsyncData } from '../../../hooks/useAsyncData';
 import {
   Paper,
   Typography,
   Box,
   Button,
+  Collapse,
   TextField,
   IconButton,
   Tooltip,
@@ -30,6 +31,7 @@ import VpnKeyIcon from '@mui/icons-material/VpnKey';
 
 import { useAuth } from '../../../hooks/useAuth';
 import { getOrganizationIntegrationInfo } from '../../../services/dashboardApi';
+import { formatOfficialReference } from '../../../utils/officialReferences';
 
 /**
  * Developer Quick Start Panel Component
@@ -46,6 +48,7 @@ export function DeveloperQuickStartPanel() {
   );
 
   const [copied, setCopied] = useState(null);
+  const [showTechnicalId, setShowTechnicalId] = useState(false);
 
   const handleCopy = (text, label) => {
     navigator.clipboard.writeText(text);
@@ -53,11 +56,20 @@ export function DeveloperQuickStartPanel() {
     setTimeout(() => setCopied(null), 2000);
   };
 
+  const organizationReference = formatOfficialReference(integrationInfo?.orgId || organizationId, 'organization');
+
   // Generate example curl request
   const exampleRequest = integrationInfo?.exampleRequest || 
-    `curl -X GET "${integrationInfo?.baseUrl}/v1/organizations/${organizationId}" \\
+    `curl -X GET "${integrationInfo?.baseUrl}/v1/organizations/${organizationId}" \
   -H "Authorization: Bearer YOUR_API_KEY" \\
   -H "Content-Type: application/json"`;
+  const sanitizedExampleRequest = useMemo(() => {
+    const identifiers = [integrationInfo?.orgId, organizationId].filter(Boolean);
+    return identifiers.reduce(
+      (output, identifier) => output.replaceAll(identifier, '<organization-id>'),
+      exampleRequest,
+    );
+  }, [exampleRequest, integrationInfo?.orgId, organizationId]);
 
   if (loading) {
     return (
@@ -91,14 +103,14 @@ export function DeveloperQuickStartPanel() {
         {t('dashboard.developerQuickStart.description')}
       </Typography>
 
-      {/* Organization ID */}
+      {/* Organization Reference */}
       <Box sx={{ mb: 2 }}>
         <Typography variant="caption" color="text.secondary" display="block" gutterBottom>
-          {t('dashboard.developerQuickStart.organizationId')}
+          Organization Reference
         </Typography>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <TextField
-            value={integrationInfo.orgId}
+            value={organizationReference}
             fullWidth
             size="small"
             InputProps={{
@@ -106,16 +118,46 @@ export function DeveloperQuickStartPanel() {
               sx: { fontFamily: 'monospace', fontSize: '0.875rem' },
             }}
           />
-          <Tooltip title={copied === 'orgId' ? t('dashboard.developerQuickStart.copied') : t('dashboard.developerQuickStart.copyToClipboard')}>
+          <Tooltip title={copied === 'orgRef' ? t('dashboard.developerQuickStart.copied') : t('dashboard.developerQuickStart.copyToClipboard')}>
             <IconButton 
               size="small" 
-              onClick={() => handleCopy(integrationInfo.orgId, 'orgId')}
-              color={copied === 'orgId' ? 'success' : 'default'}
+              onClick={() => handleCopy(organizationReference, 'orgRef')}
+              color={copied === 'orgRef' ? 'success' : 'default'}
             >
               <ContentCopyIcon fontSize="small" />
             </IconButton>
           </Tooltip>
         </Box>
+        <Button
+          size="small"
+          sx={{ mt: 1, px: 0 }}
+          onClick={() => setShowTechnicalId((previous) => !previous)}
+        >
+          {showTechnicalId ? 'Hide technical organization ID' : 'Show technical organization ID'}
+        </Button>
+
+        <Collapse in={showTechnicalId}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1 }}>
+            <TextField
+              value={integrationInfo.orgId}
+              fullWidth
+              size="small"
+              InputProps={{
+                readOnly: true,
+                sx: { fontFamily: 'monospace', fontSize: '0.875rem' },
+              }}
+            />
+            <Tooltip title={copied === 'orgId' ? t('dashboard.developerQuickStart.copied') : t('dashboard.developerQuickStart.copyToClipboard')}>
+              <IconButton 
+                size="small" 
+                onClick={() => handleCopy(integrationInfo.orgId, 'orgId')}
+                color={copied === 'orgId' ? 'success' : 'default'}
+              >
+                <ContentCopyIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+          </Box>
+        </Collapse>
       </Box>
 
       {/* Base API URL */}
@@ -163,12 +205,12 @@ export function DeveloperQuickStartPanel() {
           }}
         >
           <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
-            {exampleRequest}
+            {sanitizedExampleRequest}
           </pre>
           <Tooltip title={copied === 'example' ? t('dashboard.developerQuickStart.copied') : t('dashboard.developerQuickStart.copyToClipboard')}>
             <IconButton
               size="small"
-              onClick={() => handleCopy(exampleRequest, 'example')}
+              onClick={() => handleCopy(sanitizedExampleRequest, 'example')}
               sx={{ 
                 position: 'absolute', 
                 top: 8, 

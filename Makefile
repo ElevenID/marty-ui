@@ -1,16 +1,24 @@
 # Marty UI Development Environment
 # =================================
 
-.PHONY: help dev up down restart logs clean status shell test infra setup-local run-api run-api-tunnel run-ui \
+.PHONY: help dev up down restart logs clean status shell test infra infra-tunnel setup-local run-api run-api-tunnel run-ui \
 	services-up services-up-tunnel services-down services-logs services-build services-restart services-migrate \
 	tunnel-start tunnel-stop tunnel-restart tunnel-status tunnel-logs tunnel-nginx-logs \
 	tunnel-refresh-upstreams \
 	tunnel-auth-restart tunnel-keycloak-restart tunnel-full-restart tunnel-use-prod tunnel-use-dev \
+	beta-config beta-up beta-down beta-restart beta-status beta-logs beta-clean beta-public-ui beta-public-ui-dev \
+	beta-public-ui-ghcr beta-public-ui-check beta-tunnel-start beta-tunnel-stop beta-tunnel-restart beta-tunnel-status \
+	beta-tunnel-logs beta-tunnel-nginx-logs beta-tunnel-refresh-upstreams beta-tunnel-auth-restart \
+	beta-tunnel-keycloak-restart beta-tunnel-full-restart beta-tunnel-use-prod beta-tunnel-use-dev beta-dev-ui-tunnel \
+	beta-env-init \
+	beta-check \
 	setup-keycloak \
 	dev-ui-tunnel prod-ui-tunnel prod-ui-tunnel-kill tunnel-prod-static tunnel-prod-restart \
-	public-ui public-ui-dev check prod-ui-docker prod-ui-docker-rebuild prod-ui-docker-stop \
+	public-ui public-ui-dev public-ui-ghcr public-ui-check check prod-ui-docker prod-ui-docker-rebuild prod-ui-docker-stop \
 	obs-up obs-down \
 	wallet-up wallet-down \
+	canvas-sandbox-up canvas-sandbox-down canvas-sandbox-build canvas-sandbox-logs canvas-sandbox-status \
+	canvas-real-up canvas-real-down canvas-real-logs canvas-real-status canvas-real-seed canvas-real-bootstrap \
 	proto-gen grpc-health \
 	package-selfhost-bundle \
 	selfhost-prod-license-init-keypair selfhost-prod-license-issue \
@@ -42,10 +50,14 @@ endif
 
 # Configuration
 COMPOSE := docker compose
-BASE_COMPOSE := $(COMPOSE) -f docker-compose.base.yml -f docker-compose.profile.dev.yml
-TUNNEL_COMPOSE := $(COMPOSE) -f docker-compose.base.yml -f docker-compose.profile.dev.yml -f docker-compose.profile.tunnel.yml
-OBS_COMPOSE := $(COMPOSE) -f docker-compose.base.yml -f docker-compose.profile.dev.yml -f docker-compose.profile.obs.yml
+BETA_ENV_FILE ?= $(if $(wildcard .env.tunnel.beta.local),.env.tunnel.beta.local,.env)
+BASE_COMPOSE := $(COMPOSE) --env-file $(BETA_ENV_FILE) -f docker-compose.base.yml -f docker-compose.profile.dev.yml
+TUNNEL_COMPOSE := $(COMPOSE) --env-file $(BETA_ENV_FILE) -f docker-compose.base.yml -f docker-compose.profile.dev.yml -f docker-compose.profile.tunnel.yml
+GHCR_TUNNEL_COMPOSE := $(COMPOSE) --env-file $(BETA_ENV_FILE) -f docker-compose.base.yml -f docker-compose.profile.dev.yml -f docker-compose.profile.ghcr.yml -f docker-compose.profile.tunnel.yml
+OBS_COMPOSE := $(COMPOSE) --env-file $(BETA_ENV_FILE) -f docker-compose.base.yml -f docker-compose.profile.dev.yml -f docker-compose.profile.obs.yml
 WALTID_COMPOSE := $(TUNNEL_COMPOSE) -f docker-compose.profile.waltid.yml
+CANVAS_SANDBOX_COMPOSE := $(TUNNEL_COMPOSE) -f docker-compose.profile.canvas-sandbox.yml
+CANVAS_REAL_COMPOSE := $(TUNNEL_COMPOSE) -f docker-compose.profile.canvas-real.yml
 WALTID_SERVICES := waltid-wallet-api waltid-web-wallet waltid-nginx
 WHEELS_SCRIPT := ./scripts/build-rust-wheels.sh
 SETUP_LOCAL_SCRIPT := ./scripts/setup-local.sh
@@ -89,6 +101,35 @@ dev: up ## Start infrastructure + microservices stack
 	@echo "  Pres-Policy:  http://localhost:8009/docs  (gRPC :9009)"
 	@echo "  Flow:         http://localhost:8011/docs  (gRPC :9011)"
 	@echo "  Keycloak:     http://localhost:8180"
+
+beta-config: ## Validate the beta dev and tunnel compose files
+	@echo "$(BLUE)Validating beta compose files...$(NC)"
+	@$(BASE_COMPOSE) config >/dev/null
+	@$(TUNNEL_COMPOSE) config >/dev/null
+	@echo "$(GREEN)âœ“ Beta compose is valid$(NC)"
+
+beta-env-init: ## Initialize the dedicated beta env file from .env when missing
+	@if [ -f ".env.tunnel.beta.local" ]; then \
+		echo "$(GREEN)âœ“ .env.tunnel.beta.local already exists$(NC)"; \
+	elif [ -f ".env" ]; then \
+		cp .env .env.tunnel.beta.local; \
+		echo "$(GREEN)âœ“ Created .env.tunnel.beta.local from .env$(NC)"; \
+	else \
+		echo "$(RED)âŒ Error: .env not found; copy deploy-config/env/tunnel-beta/.env.template to .env.tunnel.beta.local first$(NC)"; \
+		exit 1; \
+	fi
+
+beta-up: up ## Start the beta development stack
+
+beta-down: down ## Stop the beta development stack
+
+beta-restart: restart ## Restart the beta development stack
+
+beta-status: status ## Show beta development stack status
+
+beta-logs: logs ## Follow beta development stack logs
+
+beta-clean: clean ## Stop the beta development stack and remove volumes
 
 build-wheels: ## Build native Rust wheels for local Python development (optional)
 	@echo "$(BLUE)Building native Rust wheels for local development...$(NC)"
@@ -202,10 +243,16 @@ infra: ## Start only infrastructure services
 	@$(MAKE) --no-print-directory setup-keycloak
 	@echo "$(GREEN)✓ Infrastructure started$(NC)"
 
+infra-tunnel: ## Start infrastructure services with tunnel overrides
+	@echo "$(BLUE)Starting infrastructure services (tunnel mode)...$(NC)"
+	@$(TUNNEL_COMPOSE) up -d $(INFRA_SERVICES)
+	@$(MAKE) --no-print-directory setup-keycloak
+	@echo "$(GREEN)âœ“ Infrastructure started (tunnel mode)$(NC)"
+
 run-api: infra services-up ## Start infra + API microservices
 	@echo "$(GREEN)✓ Gateway API started at http://localhost:8000$(NC)"
 
-run-api-tunnel: infra services-up-tunnel ## Start infra + API microservices with tunnel env vars (sets ISSUER_BASE_URL)
+run-api-tunnel: infra-tunnel services-up-tunnel ## Start infra + API microservices with tunnel env vars (sets ISSUER_BASE_URL)
 	@echo "$(GREEN)✓ Gateway API started (tunnel mode)$(NC)"
 
 run-ui: ## Run UI natively (requires API stack)
@@ -216,9 +263,41 @@ public-ui: run-api-tunnel tunnel-keycloak-restart prod-ui-docker tunnel-start tu
 
 public-ui-dev: run-api-tunnel tunnel-keycloak-restart tunnel-start tunnel-use-dev dev-ui-tunnel ## Start all dependencies + Cloudflare tunnel/proxy + UI dev server (public tunnel mode)
 
+public-ui-ghcr: ## Start public UI using GHCR images + Cloudflare tunnel (no local backend image builds)
+	@if [ -z "$(IMAGE_TAG)" ]; then \
+		echo "$(RED)❌ Error: IMAGE_TAG is required (example: IMAGE_TAG=2026.04.14 make public-ui-ghcr)$(NC)"; \
+		exit 1; \
+	fi
+	@if [ "$(IMAGE_TAG)" = "latest" ]; then \
+		echo "$(RED)❌ Error: IMAGE_TAG=latest is not allowed for public beta startup; use a pinned tag$(NC)"; \
+		exit 1; \
+	fi
+	@echo "$(BLUE)🚀 Starting public UI via GHCR tag $(IMAGE_TAG)...$(NC)"
+	@$(GHCR_TUNNEL_COMPOSE) pull db-migrate $(APP_SERVICES)
+	@$(GHCR_TUNNEL_COMPOSE) up -d $(INFRA_SERVICES)
+	@$(MAKE) --no-print-directory setup-keycloak
+	@$(GHCR_TUNNEL_COMPOSE) up -d db-migrate
+	@$(GHCR_TUNNEL_COMPOSE) up -d $(APP_SERVICES)
+	@$(MAKE) --no-print-directory tunnel-refresh-upstreams
+	@$(MAKE) --no-print-directory prod-ui-docker
+	@$(MAKE) --no-print-directory tunnel-start
+	@$(MAKE) --no-print-directory tunnel-use-prod
+	@$(MAKE) --no-print-directory public-ui-check
+
+public-ui-check: ## Run lightweight public UI readiness checks (local UI + public login/auth)
+	@ENV_FILE="$(CURDIR)/$(BETA_ENV_FILE)" bash ./scripts/check-public-ui.sh
+
+beta-public-ui: public-ui ## Start the beta public tunnel with the production-preview UI
+
+beta-public-ui-dev: public-ui-dev ## Start the beta public tunnel with the Vite dev UI
+
+beta-public-ui-ghcr: public-ui-ghcr ## Start the beta public tunnel using GHCR backend images
+
+beta-public-ui-check: public-ui-check ## Run readiness checks for the beta public tunnel
+
 prod-ui-docker: ## Build UI and serve in Docker (persistent, survives terminal close)
 	@echo "$(BLUE)🔨 Building production UI...$(NC)"
-	@cp .env ui/.env
+	@cp "$(BETA_ENV_FILE)" ui/.env
 	@cd ui && npm run build
 	@echo "$(BLUE)🚀 Starting UI container on :3002...$(NC)"
 	@docker compose -f docker-compose.ui-prod.yml up -d --force-recreate
@@ -227,7 +306,7 @@ prod-ui-docker: ## Build UI and serve in Docker (persistent, survives terminal c
 
 prod-ui-docker-rebuild: ## Rebuild UI and restart Docker container
 	@echo "$(BLUE)🔨 Rebuilding UI...$(NC)"
-	@cp .env ui/.env
+	@cp "$(BETA_ENV_FILE)" ui/.env
 	@cd ui && npm run build
 	@docker compose -f docker-compose.ui-prod.yml restart ui-prod
 	@echo "$(GREEN)✅ UI rebuilt and restarted$(NC)"
@@ -324,14 +403,14 @@ grpc-health: ## Check gRPC health status of all gRPC-enabled services
 		fi; \
 	done
 
-tunnel-start: ## Start Cloudflare tunnel sidecars (uses .env)
-	@if ! grep -q '^CLOUDFLARE_TUNNEL_TOKEN=eyJ' .env 2>/dev/null; then \
-		echo "$(RED)❌ Error: CLOUDFLARE_TUNNEL_TOKEN missing in .env$(NC)"; \
+tunnel-start: ## Start Cloudflare tunnel sidecars for the beta stack
+	@if ! grep -q '^CLOUDFLARE_TUNNEL_TOKEN=eyJ' "$(BETA_ENV_FILE)" 2>/dev/null; then \
+		echo "$(RED)❌ Error: CLOUDFLARE_TUNNEL_TOKEN missing in $(BETA_ENV_FILE)$(NC)"; \
 		exit 1; \
 	fi
 	@echo "$(BLUE)🚀 Starting Cloudflare Tunnel...$(NC)"
-	@$(TUNNEL_COMPOSE) up -d cloudflared nginx-proxy
-	@PUBLIC_DOMAIN=$$(grep '^PUBLIC_DOMAIN=' .env | cut -d'=' -f2); \
+	@$(TUNNEL_COMPOSE) up -d --no-deps docs nginx-proxy cloudflared
+	@PUBLIC_DOMAIN=$$(grep '^PUBLIC_DOMAIN=' "$(BETA_ENV_FILE)" | cut -d'=' -f2); \
 	echo "$(GREEN)✅ Tunnel started$(NC) at https://$${PUBLIC_DOMAIN}"
 
 tunnel-stop: ## Stop Cloudflare tunnel sidecars
@@ -350,7 +429,7 @@ tunnel-nginx-logs: ## View tunnel nginx logs
 
 tunnel-status: ## Check tunnel and gateway/auth status
 	@echo "$(BLUE)🔍 Checking tunnel status...$(NC)"
-	@docker ps --filter name='cloudflared-tunnel|tunnel-nginx-proxy|marty-auth|marty-gateway|marty-organization' --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
+	@docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' | grep -E '(^NAMES|cloudflared-tunnel|tunnel-nginx-proxy|marty-auth|marty-gateway|marty-organization)'
 
 tunnel-refresh-upstreams: ## Refresh tunnel proxy upstreams after container IP changes
 	@if docker ps --format '{{.Names}}' | grep -q '^tunnel-nginx-proxy$$'; then \
@@ -363,22 +442,22 @@ tunnel-refresh-upstreams: ## Refresh tunnel proxy upstreams after container IP c
 
 tunnel-auth-restart: ## Restart auth + gateway with tunnel overrides
 	@echo "$(BLUE)🔄 Restarting auth and gateway with tunnel profile...$(NC)"
-	@$(TUNNEL_COMPOSE) up -d auth gateway
+	@$(TUNNEL_COMPOSE) up -d --no-deps auth gateway
 	@$(MAKE) --no-print-directory tunnel-refresh-upstreams
 	@echo "$(GREEN)✅ Auth and Gateway restarted$(NC)"
 
 tunnel-keycloak-restart: ## Restart Keycloak with tunnel overrides (then runs setup-keycloak)
 	@echo "$(BLUE)🔄 Restarting Keycloak with tunnel profile...$(NC)"
-	@$(TUNNEL_COMPOSE) up -d keycloak
+	@$(TUNNEL_COMPOSE) up -d --no-deps --force-recreate keycloak
 	@echo "$(GREEN)✅ Keycloak restarted$(NC)"
 	@$(MAKE) --no-print-directory setup-keycloak
 
 setup-keycloak: ## Patch Keycloak with env-var credentials (Google IdP, redirect URIs)
 	@echo "$(BLUE)⚙️  Running Keycloak configurator...$(NC)"
-	@docker run --rm \
-		--entrypoint /bin/bash \
+	@set -o pipefail; MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' docker run --rm \
+		--entrypoint bash \
 		--network marty-infra-network \
-		--env-file .env \
+		--env-file "$(BETA_ENV_FILE)" \
 		-e KC_URL=http://marty-keycloak:8080 \
 		-e KCADM_PATH=/opt/keycloak/bin/kcadm.sh \
 		-v "$(CURDIR)/scripts/setup-keycloak.sh:/scripts/setup-keycloak.sh:ro" \
@@ -391,27 +470,29 @@ tunnel-full-restart: tunnel-keycloak-restart tunnel-auth-restart ## Restart all 
 
 tunnel-use-prod: ## Route tunnel proxy to production preview UI (:3002)
 	@echo "$(BLUE)🔧 Configuring tunnel for production preview server...$(NC)"
-	@if ! grep -q '^UI_DEV_PORT=' .env 2>/dev/null; then \
-		echo "UI_DEV_PORT=3002" >> .env; \
+	@if ! grep -q '^UI_DEV_PORT=' "$(BETA_ENV_FILE)" 2>/dev/null; then \
+		echo "UI_DEV_PORT=3002" >> "$(BETA_ENV_FILE)"; \
 	else \
-		sed -i.bak 's/^UI_DEV_PORT=.*/UI_DEV_PORT=3002/' .env && rm .env.bak; \
+		sed -i.bak 's/^UI_DEV_PORT=.*/UI_DEV_PORT=3002/' "$(BETA_ENV_FILE)" && rm "$(BETA_ENV_FILE).bak"; \
 	fi
-	@$(TUNNEL_COMPOSE) up -d --force-recreate nginx-proxy
+	@docker rm -f tunnel-nginx-proxy >/dev/null 2>&1 || true
+	@$(TUNNEL_COMPOSE) up -d --no-deps nginx-proxy
 	@echo "$(GREEN)✅ Tunnel now targets port 3002$(NC)"
 
 tunnel-use-dev: ## Route tunnel proxy to Vite dev UI (:3000)
 	@echo "$(BLUE)🔧 Configuring tunnel for dev server...$(NC)"
-	@if ! grep -q '^UI_DEV_PORT=' .env 2>/dev/null; then \
-		echo "UI_DEV_PORT=3000" >> .env; \
+	@if ! grep -q '^UI_DEV_PORT=' "$(BETA_ENV_FILE)" 2>/dev/null; then \
+		echo "UI_DEV_PORT=3000" >> "$(BETA_ENV_FILE)"; \
 	else \
-		sed -i.bak 's/^UI_DEV_PORT=.*/UI_DEV_PORT=3000/' .env && rm .env.bak; \
+		sed -i.bak 's/^UI_DEV_PORT=.*/UI_DEV_PORT=3000/' "$(BETA_ENV_FILE)" && rm "$(BETA_ENV_FILE).bak"; \
 	fi
-	@$(TUNNEL_COMPOSE) up -d --force-recreate nginx-proxy
+	@docker rm -f tunnel-nginx-proxy >/dev/null 2>&1 || true
+	@$(TUNNEL_COMPOSE) up -d --no-deps nginx-proxy
 	@echo "$(GREEN)✅ Tunnel now targets port 3000$(NC)"
 
 dev-ui-tunnel: ## Start UI dev server for tunnel mode
 	@echo "$(BLUE)🚀 Starting UI dev server for tunnel mode...$(NC)"
-	@cp .env ui/.env
+	@cp "$(BETA_ENV_FILE)" ui/.env
 	@cd ui && npm run dev -- --host --mode tunnel
 
 # Legacy compatibility aliases — intentionally hidden from `make help`.
@@ -433,6 +514,32 @@ tunnel-prod-restart:
 	@echo "$(YELLOW)⚠ Deprecated: use prod-ui-docker-rebuild$(NC)"
 	@$(MAKE) --no-print-directory prod-ui-docker-rebuild
 
+beta-tunnel-start: tunnel-start ## Start the beta Cloudflare tunnel sidecars
+
+beta-tunnel-stop: tunnel-stop ## Stop the beta Cloudflare tunnel sidecars
+
+beta-tunnel-restart: tunnel-restart ## Restart the beta Cloudflare tunnel sidecars
+
+beta-tunnel-status: tunnel-status ## Show beta tunnel status
+
+beta-tunnel-logs: tunnel-logs ## Follow beta cloudflared logs
+
+beta-tunnel-nginx-logs: tunnel-nginx-logs ## Follow beta tunnel nginx logs
+
+beta-tunnel-refresh-upstreams: tunnel-refresh-upstreams ## Refresh beta tunnel proxy upstreams
+
+beta-tunnel-auth-restart: tunnel-auth-restart ## Restart beta auth and gateway with tunnel settings
+
+beta-tunnel-keycloak-restart: tunnel-keycloak-restart ## Restart beta Keycloak with tunnel settings
+
+beta-tunnel-full-restart: tunnel-full-restart ## Restart beta tunnel-sensitive services
+
+beta-tunnel-use-prod: tunnel-use-prod ## Route the beta tunnel to the production-preview UI
+
+beta-tunnel-use-dev: tunnel-use-dev ## Route the beta tunnel to the Vite dev UI
+
+beta-dev-ui-tunnel: dev-ui-tunnel ## Start the beta UI dev server in tunnel mode
+
 obs-up: ## Start observability profile
 	@$(OBS_COMPOSE) up -d elasticsearch kibana fluentd prometheus grafana jaeger
 
@@ -451,18 +558,115 @@ wallet-down: ## Stop walt.id wallet stack
 	@$(WALTID_COMPOSE) stop $(WALTID_SERVICES)
 	@echo "$(GREEN)✓ Walt.id wallet stopped$(NC)"
 
+canvas-sandbox-up: ## Start Canvas Credentials Test Sandbox (requires tunnel profile)
+	@echo "$(BLUE)Starting Canvas Credentials Test Sandbox...$(NC)"
+	@$(CANVAS_SANDBOX_COMPOSE) up -d --build canvas-sandbox
+	@echo "$(GREEN)✓ Canvas sandbox started$(NC)"
+	@echo "  Internal:   http://canvas-sandbox:8017"
+	@echo "  Tunnel:     https://canvas-sandbox.$$(grep '^PUBLIC_DOMAIN=' "$(BETA_ENV_FILE)" 2>/dev/null | cut -d'=' -f2)"
+	@echo ""
+	@echo "  Connector config:"
+	@echo "    canvas_base_url:     https://canvas-sandbox.$$(grep '^PUBLIC_DOMAIN=' "$(BETA_ENV_FILE)" 2>/dev/null | cut -d'=' -f2)"
+	@echo "    lti_client_id:       any-client-id"
+	@echo "    lti_deployment_id:   test-deployment-sandbox"
+
+canvas-sandbox-down: ## Stop Canvas sandbox
+	@echo "$(BLUE)Stopping Canvas sandbox...$(NC)"
+	@$(CANVAS_SANDBOX_COMPOSE) stop canvas-sandbox
+	@$(CANVAS_SANDBOX_COMPOSE) rm -f canvas-sandbox
+	@echo "$(GREEN)✓ Canvas sandbox stopped$(NC)"
+
+canvas-sandbox-build: ## Rebuild the Canvas sandbox image
+	@echo "$(BLUE)Rebuilding Canvas sandbox image...$(NC)"
+	@$(CANVAS_SANDBOX_COMPOSE) build --no-cache canvas-sandbox
+	@echo "$(GREEN)✓ Canvas sandbox image rebuilt$(NC)"
+
+canvas-sandbox-logs: ## Follow Canvas sandbox logs
+	@docker logs -f marty-canvas-sandbox
+
+canvas-sandbox-status: ## Show Canvas sandbox status and connector setup guide
+	@echo "$(BLUE)━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━$(NC)"
+	@echo "$(BLUE)  Canvas Sandbox Status$(NC)"
+	@echo "$(BLUE)━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━$(NC)"
+	@docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' | grep -E '(^NAMES|canvas-sandbox)' || echo "$(YELLOW)  Canvas sandbox not running$(NC)"
+	@echo ""
+	@echo "$(GREEN)To configure a connector against the sandbox:$(NC)"
+	@echo ""
+	@echo "  1. Start the sandbox:  make canvas-sandbox-up"
+	@echo "  2. Create a connector via API or UI admin panel:"
+	@echo ""
+	@echo "     POST /v1/integrations/canvas/connectors"
+	@echo "     {"
+	@echo '       "organization_id": "<your-org-id>",'
+	@echo '       "canvas_account_id": "sandbox-account-1",'
+	@echo '       "credential_template_id": "<your-template-id>",'
+	@echo '       "canvas_base_url": "http://canvas-sandbox:8017",'
+	@echo '       "lti_client_id": "any-client-id",'
+	@echo '       "lti_deployment_id": "test-deployment-sandbox"'
+	@echo "     }"
+	@echo ""
+	@echo "  3. Run sandbox probe:"
+	@echo "     POST /v1/integrations/canvas/connectors/{id}/sandbox-probe"
+	@echo ""
+	@echo "  4. Initiate LTI login:"
+	@echo "     POST /v1/integrations/canvas/lti/login/{connector_id}"
+	@echo "     { \"login_hint\": \"user@example.edu\", \"target_link_uri\": \"https://tool.example.edu/launch\" }"
+	@echo ""
+
+canvas-real-up: ## Start real Canvas LMS test environment
+	@echo "$(BLUE)Starting real Canvas LMS test environment...$(NC)"
+	@$(CANVAS_REAL_COMPOSE) up -d canvas-real
+	@echo "$(GREEN)✓ Real Canvas started$(NC)"
+	@echo "  Local:  http://localhost:$${CANVAS_REAL_HOST_PORT:-8088}"
+	@echo "  Tunnel: https://canvas-test.$$(grep '^PUBLIC_DOMAIN=' "$(BETA_ENV_FILE)" 2>/dev/null | cut -d'=' -f2)"
+	@echo "  Note: first startup can take several minutes."
+
+canvas-real-down: ## Stop real Canvas LMS test environment
+	@echo "$(BLUE)Stopping real Canvas LMS...$(NC)"
+	@$(CANVAS_REAL_COMPOSE) stop canvas-real
+	@$(CANVAS_REAL_COMPOSE) rm -f canvas-real
+	@echo "$(GREEN)✓ Real Canvas stopped$(NC)"
+
+canvas-real-logs: ## Follow real Canvas LMS logs
+	@docker logs -f marty-canvas-real
+
+canvas-real-status: ## Show real Canvas LMS status
+	@echo "$(BLUE)━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━$(NC)"
+	@echo "$(BLUE)  Real Canvas LMS Status$(NC)"
+	@echo "$(BLUE)━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━$(NC)"
+	@docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' | grep -E '(^NAMES|canvas-real)' || echo "$(YELLOW)  Canvas-real not running$(NC)"
+	@echo ""
+	@echo "$(GREEN)Connector setup tip:$(NC)"
+	@echo "  Use a real Canvas base URL for production-like flows."
+	@echo "  For local experiments this profile exposes Canvas at http://canvas-real and https://canvas-test.<PUBLIC_DOMAIN>."
+	@echo ""
+
+canvas-real-seed: ## Seed ElevenID Canvas connector (and optional Canvas test course/user)
+	@echo "$(BLUE)Seeding real Canvas LMS + ElevenID connector...$(NC)"
+	@python scripts/seed_canvas_real.py --env-file "$(BETA_ENV_FILE)"
+	@echo "$(GREEN)✓ Canvas seed completed$(NC)"
+
+canvas-real-bootstrap: canvas-real-up canvas-real-seed ## Start real Canvas and run the seed script
+	@echo "$(GREEN)✓ Canvas real bootstrap complete$(NC)"
+
 deploy-prod: ## Deploy with secrets from OCI Vault (no .env.production needed)
 	@echo "$(BLUE)Fetching production secrets from OCI Vault...$(NC)"
 	@bash -c 'source scripts/fetch-secrets.sh && $(BASE_COMPOSE) up -d'
 	@echo "$(GREEN)✓ Production deployment started with vault secrets$(NC)"
 
+beta-check: check ## Quick health check of beta public-ui components
+
 check: ## Quick health check of all public-ui components
 	@echo "$(BLUE)━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━$(NC)"
 	@echo "$(BLUE)  Public UI Health Check$(NC)"
 	@echo "$(BLUE)━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━$(NC)"
-	@UI_PORT=$$(grep '^UI_DEV_PORT=' .env 2>/dev/null | cut -d'=' -f2); \
+	@UI_PORT=$$(grep '^UI_DEV_PORT=' "$(BETA_ENV_FILE)" 2>/dev/null | cut -d'=' -f2); \
 	UI_PORT=$${UI_PORT:-3002}; \
-	DOMAIN=$$(grep '^PUBLIC_DOMAIN=' .env 2>/dev/null | cut -d'=' -f2); \
+	DOMAIN=$$(grep '^PUBLIC_DOMAIN=' "$(BETA_ENV_FILE)" 2>/dev/null | cut -d'=' -f2); \
+	CURL_TLS_ARGS=""; \
+	if curl --help all 2>/dev/null | grep -q -- '--ssl-no-revoke'; then \
+		CURL_TLS_ARGS="--ssl-no-revoke"; \
+	fi; \
 	echo ""; \
 	echo "  $(BLUE)Infrastructure$(NC)"; \
 	for svc in postgres redis keycloak openbao mailpit; do \
@@ -495,7 +699,7 @@ check: ## Quick health check of all public-ui components
 	fi; \
 	echo ""; \
 	echo "  $(BLUE)Vite Dev Server$(NC) (port $$UI_PORT)"; \
-	if curl -s -o /dev/null -w '%{http_code}' "http://localhost:$$UI_PORT/" 2>/dev/null | grep -q '200'; then \
+	if curl $$CURL_TLS_ARGS -s -o /dev/null -w '%{http_code}' "http://localhost:$$UI_PORT/" 2>/dev/null | grep -q '200'; then \
 		echo "    $(GREEN)✓$(NC) http://localhost:$$UI_PORT/"; \
 	else \
 		echo "    $(RED)✗$(NC) http://localhost:$$UI_PORT/ — not responding"; \
@@ -503,14 +707,14 @@ check: ## Quick health check of all public-ui components
 	echo ""; \
 	echo "  $(BLUE)Public URL$(NC)"; \
 	if [ -n "$$DOMAIN" ]; then \
-		HTTP_CODE=$$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "https://$$DOMAIN/" 2>/dev/null); \
+		HTTP_CODE=$$(curl $$CURL_TLS_ARGS -s -o /dev/null -w '%{http_code}' --max-time 5 "https://$$DOMAIN/" 2>/dev/null); \
 		if [ "$$HTTP_CODE" = "200" ]; then \
 			echo "    $(GREEN)✓$(NC) https://$$DOMAIN/"; \
 		else \
 			echo "    $(RED)✗$(NC) https://$$DOMAIN/ — HTTP $$HTTP_CODE"; \
 		fi; \
 	else \
-		echo "    $(YELLOW)⚠$(NC) PUBLIC_DOMAIN not set in .env"; \
+		echo "    $(YELLOW)⚠$(NC) PUBLIC_DOMAIN not set in $(BETA_ENV_FILE)"; \
 	fi; \
 	echo ""
 

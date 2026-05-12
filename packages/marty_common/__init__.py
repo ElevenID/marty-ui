@@ -31,12 +31,17 @@ from .errors import (
 )
 from .dto import ApiResponse, PaginatedResponse, ErrorResponse, DeleteResponse, CountResponse
 from .org_authorization import (
-    OrgRole,
+    OrganizationRoleSummary,
     OrganizationMembership,
     OrganizationContext,
     OrganizationClient,
+    ensure_active_membership,
+    ensure_membership_permission,
     require_org_membership,
+    require_org_admin,
+    require_org_owner,
     require_org_role,
+    require_permission,
 )
 from .cedar_engine import CedarEngine, AuthzDecision
 from .cedar_entities import build_user_entities, build_apikey_entities, build_request_context
@@ -91,12 +96,17 @@ __all__ = [
     "PaginatedResponse",
     "ErrorResponse",
     # Organization Authorization
-    "OrgRole",
+    "OrganizationRoleSummary",
     "OrganizationMembership",
     "OrganizationContext",
     "OrganizationClient",
+    "ensure_active_membership",
+    "ensure_membership_permission",
     "require_org_membership",
+    "require_org_admin",
+    "require_org_owner",
     "require_org_role",
+    "require_permission",
     # Cedar Authorization
     "CedarEngine",
     "AuthzDecision",

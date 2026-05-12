@@ -12,7 +12,6 @@ import i18n from '../i18n';
 import {
   createEnrichedUser,
   getAuthFlags,
-  parseOrganizationClaim,
   updateUserActiveOrganization,
 } from '../application/session/authSession';
 
@@ -30,6 +29,7 @@ import {
  * @property {Object|null} organization - Raw organization claim from Keycloak
  * @property {Array<{id: string, name: string|null}>} organizations - Organization memberships
  * @property {Object<string, boolean>} capabilities - Normalized capability map
+ * @property {Object|null} impersonation - Active admin impersonation context when present
  */
 
 /**
@@ -63,6 +63,8 @@ const defaultContextValue = {
   organizationName: null,
   organizations: [],
   capabilities: {},
+  impersonation: null,
+  isImpersonating: false,
   hasCapability: () => false,
   login: () => {},
   register: () => {},
@@ -89,24 +91,15 @@ export function AuthProvider({ children }) {
       const result = await getCurrentUser();
 
       if (result.authenticated && result.user) {
-        // Enrich user object with parsed organization data
         const rawUser = result.user;
-        const org = parseOrganizationClaim(rawUser.organization);
-        
-        // Fetch full list of organizations from new endpoint
         let userOrganizations = [];
+
         try {
           userOrganizations = await getMyOrganizations();
         } catch (orgError) {
           console.error('Error fetching user organizations:', orgError);
-          // Fallback to organization claim parsing
-          userOrganizations = org.organizations.length
-            ? org.organizations
-            : rawUser.organization_id
-              ? [{ id: rawUser.organization_id, name: rawUser.organization_name || null }]
-              : [];
         }
-        
+
         const storedOrgId = window.localStorage.getItem('activeOrgId');
         const enrichedUser = createEnrichedUser(rawUser, userOrganizations, storedOrgId);
 
@@ -159,8 +152,15 @@ export function AuthProvider({ children }) {
   const setActiveOrganizationId = useCallback(
     (orgId) => {
       setUser((prev) => {
-        window.localStorage.setItem('activeOrgId', orgId);
-        return updateUserActiveOrganization(prev, orgId);
+        const normalizedOrgId = orgId || null;
+
+        if (normalizedOrgId) {
+          window.localStorage.setItem('activeOrgId', normalizedOrgId);
+        } else {
+          window.localStorage.removeItem('activeOrgId');
+        }
+
+        return updateUserActiveOrganization(prev, normalizedOrgId);
       });
     },
     [setUser]
@@ -182,6 +182,8 @@ export function AuthProvider({ children }) {
       organizationName: user?.organization_name || null,
       organizations: user?.organizations || [],
       capabilities,
+      impersonation: user?.impersonation || null,
+      isImpersonating: Boolean(user?.impersonation?.active),
       hasCapability,
       // Actions
       login,

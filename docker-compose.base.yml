@@ -69,6 +69,7 @@ services:
     container_name: marty-keycloak
     command:
       - start-dev
+      - --features=organization
       - --import-realm
     ports:
       - "8180:8080"
@@ -131,6 +132,19 @@ services:
       PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:-}
       UI_BASE_URL: ${UI_BASE_URL:-}
       MARTY_API_CLIENT_SECRET: ${MARTY_API_CLIENT_SECRET:-}
+      MARTY_ORG_NAME: ${MARTY_ORG_NAME:-Marty}
+      MARTY_ORG_DOMAIN: ${MARTY_ORG_DOMAIN:-beta.elevenidllc.com}
+      MARTY_ORG_ADMIN_EMAIL: ${MARTY_ORG_ADMIN_EMAIL:-}
+      KEYCLOAK_USER_REGISTRATION_ENABLED: ${KEYCLOAK_USER_REGISTRATION_ENABLED:-true}
+      KEYCLOAK_VERIFY_EMAIL: ${KEYCLOAK_VERIFY_EMAIL:-false}
+      KEYCLOAK_RESET_PASSWORD_ENABLED: ${KEYCLOAK_RESET_PASSWORD_ENABLED:-true}
+      KEYCLOAK_SOCIAL_LOGIN_ENABLED: ${KEYCLOAK_SOCIAL_LOGIN_ENABLED:-true}
+      KEYCLOAK_SMTP_HOST: ${KEYCLOAK_SMTP_HOST:-mailpit}
+      KEYCLOAK_SMTP_PORT: ${KEYCLOAK_SMTP_PORT:-1025}
+      KEYCLOAK_SMTP_FROM: ${KEYCLOAK_SMTP_FROM:-noreply@marty.demo}
+      KEYCLOAK_SMTP_FROM_DISPLAY_NAME: ${KEYCLOAK_SMTP_FROM_DISPLAY_NAME:-Marty Trust Services}
+      KEYCLOAK_SMTP_SSL: ${KEYCLOAK_SMTP_SSL:-false}
+      KEYCLOAK_SMTP_STARTTLS: ${KEYCLOAK_SMTP_STARTTLS:-false}
     volumes:
       - ./scripts/setup-keycloak.sh:/scripts/setup-keycloak.sh:ro
     depends_on:
@@ -214,9 +228,22 @@ services:
       MARTY_DB_PASSWORD: ${MARTY_DB_PASSWORD:-marty_dev_password}
       DATABASE_URL: postgresql://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
       MARTY_ORG_ID: ${MARTY_ORG_ID:-00000000-0000-0000-0000-000000000001}
+      MARTY_ORG_SLUG: ${MARTY_ORG_SLUG:-marty}
       MARTY_ORG_ADMIN_EMAIL: ${MARTY_ORG_ADMIN_EMAIL:-}
+      PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:-}
+      PUBLIC_API_URL: ${PUBLIC_API_URL:-http://gateway:8000}
+      ISSUER_BASE_URL: ${PUBLIC_API_URL:-http://gateway:8000}
+      REDIS_URL: redis://redis:6379
+      REDIS_DB_GATEWAY: "2"
+      MARTY_KMS_BOOTSTRAP_ENABLED: ${MARTY_KMS_BOOTSTRAP_ENABLED:-true}
+      BAO_ADDR: http://openbao:8200
+      BAO_TOKEN: ${BAO_DEV_ROOT_TOKEN:-dev-only-token}
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      openbao:
         condition: service_healthy
     restart: "no"
     networks:
@@ -256,6 +283,11 @@ services:
       REDIS_DB_GATEWAY: "2"
       RATE_LIMIT_RPM: ${RATE_LIMIT_RPM:-0}
       ISSUANCE_API_KEY: ${ISSUANCE_API_KEY:-dev-issuance-api-key}
+      SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:-dev-signing-keys-internal-api-key}
+      BAO_ADDR: http://openbao:8200
+      BAO_TOKEN: ${BAO_DEV_ROOT_TOKEN:-dev-only-token}
+      HSM_PROVIDER: openbao
+      SIGNING_KEY_SOURCE: openbao-transit
     ports:
       - "${GATEWAY_HOST_PORT:-8000}:8000"
     depends_on:
@@ -263,10 +295,34 @@ services:
         condition: service_healthy
       organization:
         condition: service_healthy
+      credential-template:
+        condition: service_healthy
+      trust-profile:
+        condition: service_healthy
+      applicant:
+        condition: service_healthy
+      notification:
+        condition: service_healthy
+      compliance-profile:
+        condition: service_healthy
+      presentation-policy:
+        condition: service_healthy
+      deployment-profile:
+        condition: service_healthy
+      flow:
+        condition: service_healthy
+      verification:
+        condition: service_healthy
+      revocation-profile:
+        condition: service_healthy
+      billing:
+        condition: service_healthy
       issuance:
         condition: service_healthy
       event-stream:
         condition: service_healthy
+      openbao-init:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 10s
@@ -274,6 +330,7 @@ services:
       retries: 3
     networks:
       - marty-network
+    restart: unless-stopped
 
   auth:
     build:
@@ -298,7 +355,19 @@ services:
       MARTY_API_CLIENT_ID: ${MARTY_API_CLIENT_ID:-marty-api}
       MARTY_API_CLIENT_SECRET: ${MARTY_API_CLIENT_SECRET:-marty-api-secret-change-in-production}
       CREDENTIAL_LOGIN_POLICY_ID: ${CREDENTIAL_LOGIN_POLICY_ID:-}
+      CREDENTIAL_LOGIN_REQUIRE_EXISTING_KEYCLOAK_USER: ${CREDENTIAL_LOGIN_REQUIRE_EXISTING_KEYCLOAK_USER:-false}
+      CREDENTIAL_LOGIN_CREATE_USERS: ${CREDENTIAL_LOGIN_CREATE_USERS:-false}
       AUTH_SERVICE_INTERNAL_URL: ${AUTH_SERVICE_INTERNAL_URL:-http://auth:8001}
+      CREDENTIAL_LOGIN_LISSI_DEEP_LINK_TEMPLATE: ${CREDENTIAL_LOGIN_LISSI_DEEP_LINK_TEMPLATE:-}
+      CREDENTIAL_LOGIN_LISSI_ANDROID_DEEP_LINK_TEMPLATE: ${CREDENTIAL_LOGIN_LISSI_ANDROID_DEEP_LINK_TEMPLATE:-}
+      CREDENTIAL_LOGIN_LISSI_IOS_DEEP_LINK_TEMPLATE: ${CREDENTIAL_LOGIN_LISSI_IOS_DEEP_LINK_TEMPLATE:-}
+      CREDENTIAL_LOGIN_LISSI_IOS_UNIVERSAL_LINK_TEMPLATE: ${CREDENTIAL_LOGIN_LISSI_IOS_UNIVERSAL_LINK_TEMPLATE:-}
+      CREDENTIAL_LOGIN_LISSI_ANDROID_PACKAGE: ${CREDENTIAL_LOGIN_LISSI_ANDROID_PACKAGE:-}
+      CREDENTIAL_LOGIN_SPRUCEKIT_DEEP_LINK_TEMPLATE: ${CREDENTIAL_LOGIN_SPRUCEKIT_DEEP_LINK_TEMPLATE:-}
+      CREDENTIAL_LOGIN_SPRUCEKIT_ANDROID_DEEP_LINK_TEMPLATE: ${CREDENTIAL_LOGIN_SPRUCEKIT_ANDROID_DEEP_LINK_TEMPLATE:-}
+      CREDENTIAL_LOGIN_SPRUCEKIT_IOS_DEEP_LINK_TEMPLATE: ${CREDENTIAL_LOGIN_SPRUCEKIT_IOS_DEEP_LINK_TEMPLATE:-}
+      CREDENTIAL_LOGIN_SPRUCEKIT_IOS_UNIVERSAL_LINK_TEMPLATE: ${CREDENTIAL_LOGIN_SPRUCEKIT_IOS_UNIVERSAL_LINK_TEMPLATE:-}
+      CREDENTIAL_LOGIN_SPRUCEKIT_ANDROID_PACKAGE: ${CREDENTIAL_LOGIN_SPRUCEKIT_ANDROID_PACKAGE:-}
       MARTY_ORG_ID: ${MARTY_ORG_ID:-00000000-0000-0000-0000-000000000001}
       ORG_GRPC_TARGET: organization:9002
       FLOW_GRPC_TARGET: flow:9011
@@ -318,6 +387,7 @@ services:
       retries: 3
     networks:
       - marty-network
+    restart: unless-stopped
 
   organization:
     build:
@@ -347,6 +417,7 @@ services:
       retries: 3
     networks:
       - marty-network
+    restart: unless-stopped
 
   credential-template:
     build:
@@ -373,6 +444,7 @@ services:
       retries: 3
     networks:
       - marty-network
+    restart: unless-stopped
 
   trust-profile:
     build:
@@ -400,6 +472,7 @@ services:
       retries: 3
     networks:
       - marty-network
+    restart: unless-stopped
 
   applicant:
     build:
@@ -430,6 +503,7 @@ services:
       retries: 3
     networks:
       - marty-network
+    restart: unless-stopped
 
   notification:
     build:
@@ -459,6 +533,7 @@ services:
       retries: 3
     networks:
       - marty-network
+    restart: unless-stopped
 
   compliance-profile:
     build:
@@ -483,6 +558,7 @@ services:
       retries: 3
     networks:
       - marty-network
+    restart: unless-stopped
 
   presentation-policy:
     build:
@@ -496,6 +572,8 @@ services:
       DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@postgres:5432/marty
       ORG_GRPC_TARGET: organization:9002
       PP_GRPC_PORT: "9009"
+      DID_RESOLUTION_BASE_URL: http://gateway:8000
+      TRUST_PROFILE_SERVICE_URL: http://trust-profile:8004
     ports:
       - "8009:8009"
       - "9009:9009"
@@ -509,6 +587,7 @@ services:
       retries: 3
     networks:
       - marty-network
+    restart: unless-stopped
 
   deployment-profile:
     build:
@@ -533,6 +612,7 @@ services:
       retries: 3
     networks:
       - marty-network
+    restart: unless-stopped
 
   flow:
     build:
@@ -548,6 +628,8 @@ services:
       ORG_GRPC_TARGET: organization:9002
       PP_GRPC_TARGET: presentation-policy:9009
       CT_GRPC_TARGET: credential-template:9003
+      ISSUANCE_GRPC_TARGET: issuance:9005
+      ISSUANCE_SERVICE_URL: http://issuance:8005
       FLOW_GRPC_PORT: "9011"
     ports:
       - "8011:8011"
@@ -562,6 +644,7 @@ services:
       retries: 3
     networks:
       - marty-network
+    restart: unless-stopped
 
   issuance:
     build:
@@ -572,6 +655,8 @@ services:
       ISSUANCE_SERVICE_PORT: "8005"
       DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@postgres:5432/marty
       ISSUER_BASE_URL: ${PUBLIC_API_URL:-http://gateway:8000}
+      UI_BASE_URL: ${UI_BASE_URL:-http://localhost:3000}
+      CANVAS_LTI_EXPERIENCE_BASE_URL: ${CANVAS_LTI_EXPERIENCE_BASE_URL:-}
       ISSUANCE_OFFER_TTL_MINUTES: ${ISSUANCE_OFFER_TTL_MINUTES:-10080}
       ISSUANCE_AUTH_SESSION_TTL_MINUTES: ${ISSUANCE_AUTH_SESSION_TTL_MINUTES:-60}
       ORG_GRPC_TARGET: organization:9002
@@ -582,6 +667,14 @@ services:
       BAO_ADDR: http://openbao:8200
       BAO_TOKEN: ${BAO_DEV_ROOT_TOKEN:-dev-only-token}
       ISSUANCE_API_KEY: ${ISSUANCE_API_KEY:-dev-issuance-api-key}
+      SIGNING_KEYS_INTERNAL_URL: http://gateway:8000/internal/signing-keys
+      SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:-dev-signing-keys-internal-api-key}
+      CANVAS_CREDENTIALS_SHARED_SECRET: ${CANVAS_CREDENTIALS_SHARED_SECRET:-}
+      CANVAS_CREDENTIALS_SIGNATURE_TOLERANCE_SECONDS: ${CANVAS_CREDENTIALS_SIGNATURE_TOLERANCE_SECONDS:-300}
+      CANVAS_LTI_STATE_TTL_MINUTES: ${CANVAS_LTI_STATE_TTL_MINUTES:-10}
+      CANVAS_LTI_JWKS_TTL_MINUTES: ${CANVAS_LTI_JWKS_TTL_MINUTES:-1440}
+      CANVAS_ALLOW_PRIVATE_BASE_URLS: ${CANVAS_ALLOW_PRIVATE_BASE_URLS:-false}
+      CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS: ${CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS:-false}
       # DIDComm v2 push delivery — optional Universal Resolver for unknown DID methods
       UNIVERSAL_RESOLVER_URL: ${UNIVERSAL_RESOLVER_URL:-}
     ports:
@@ -600,6 +693,7 @@ services:
       start_period: 30s
     networks:
       - marty-network
+    restart: unless-stopped
 
   # ── Revocation Profile Service ────────────────────────────────────
   revocation-profile:
@@ -627,6 +721,7 @@ services:
       retries: 3
     networks:
       - marty-network
+    restart: unless-stopped
 
   # ── Device Registration Service ─────────────────────────────────
   device-registration:
@@ -652,6 +747,7 @@ services:
       retries: 3
     networks:
       - marty-network
+    restart: unless-stopped
 
   # ── Event Stream Service (gRPC event bus) ─────────────────────────
   event-stream:
@@ -676,6 +772,7 @@ services:
       start_period: 10s
     networks:
       - marty-network
+    restart: unless-stopped
 
   # ── Verification Service ─────────────────────────────────────────
   verification:
@@ -692,6 +789,8 @@ services:
       VERIF_GRPC_ENABLED: "true"
       PUBLIC_BASE_URL: ${PUBLIC_API_URL:-http://gateway:8000}
       REDIS_URL: redis://redis:6379/3
+      SIGNING_KEYS_INTERNAL_URL: http://gateway:8000/internal/signing-keys
+      SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:-dev-signing-keys-internal-api-key}
       OTEL_EXPORTER_OTLP_ENDPOINT: jaeger:4317
     ports:
       - "8012:8012"
@@ -708,6 +807,7 @@ services:
       retries: 3
     networks:
       - marty-network
+    restart: unless-stopped
 
   # ── Billing Service ──────────────────────────────────────────────
   billing:
@@ -743,6 +843,7 @@ services:
       retries: 3
     networks:
       - marty-network
+    restart: unless-stopped
 
   # ── Envoy gRPC Proxy ─────────────────────────────────────────────
   envoy:
@@ -788,6 +889,7 @@ services:
       start_period: 10s
     networks:
       - marty-network
+    restart: unless-stopped
 
 volumes:
   postgres_data:

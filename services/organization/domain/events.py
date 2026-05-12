@@ -35,7 +35,7 @@ class MemberAddedEvent(DomainEvent):
     organization_id: str = ""
     member_id: str = ""
     user_id: str = ""
-    role: str = ""
+    roles: list[str] = field(default_factory=list)
 
 
 @dataclass
