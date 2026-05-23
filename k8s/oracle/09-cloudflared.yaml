@@ -38,6 +38,8 @@ spec:
         app: cloudflared
     spec:
       serviceAccountName: marty-app
+      imagePullSecrets:
+        - name: ocir-secret
       # Spread replicas across nodes if >1 node available
       topologySpreadConstraints:
         - maxSkew: 1
@@ -48,7 +50,7 @@ spec:
               app: cloudflared
       containers:
         - name: cloudflared
-          image: cloudflare/cloudflared:latest
+          image: ${OCIR_REGISTRY}/marty-ui/cloudflared-wrapper:${IMAGE_TAG}
           args:
             - tunnel
             - --no-autoupdate

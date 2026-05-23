@@ -45,6 +45,7 @@ include = ["marty_common*"]
 
 [tool.setuptools.package-data]
 "marty_common.cedar" = ["*.cedarschema", "*.cedar"]
+"marty_common.license_public_keys" = ["*.pem"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]

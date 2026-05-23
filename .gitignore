@@ -122,6 +122,11 @@ eslint_output*
 full_eslint_output*
 api.log
 
+# Scratch / workspace debug files
+temp.html
+temp.txt
+docker_compose_results.txt
+
 # =============================================================================
 # OS Files
 # =============================================================================

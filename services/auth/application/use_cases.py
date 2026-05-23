@@ -86,6 +86,7 @@ class AuthenticateUseCase:
             state=state,
             code_verifier=code_verifier,
             redirect_uri=command.redirect_uri or "/",
+            oidc_redirect_uri=command.oidc_redirect_uri,
         )
         await self.pkce_repository.save(pkce_state)
         
@@ -93,7 +94,7 @@ class AuthenticateUseCase:
         auth_url = self.oidc_provider.get_authorization_url(
             state=state,
             code_challenge=code_challenge,
-            redirect_uri=None,  # Use the configured OIDC callback URL
+            redirect_uri=command.oidc_redirect_uri,  # Use request host when supplied
         )
         
         logger.info(f"Initiated OIDC login flow with state: {state[:20]}...")
@@ -120,6 +121,7 @@ class AuthenticateUseCase:
             state=state,
             code_verifier=code_verifier,
             redirect_uri=command.redirect_uri or "/",
+            oidc_redirect_uri=command.oidc_redirect_uri,
         )
         await self.pkce_repository.save(pkce_state)
         
@@ -127,7 +129,7 @@ class AuthenticateUseCase:
         reg_url = self.oidc_provider.get_registration_url(
             state=state,
             code_challenge=code_challenge,
-            redirect_uri=None,  # Use the configured OIDC callback URL
+            redirect_uri=command.oidc_redirect_uri,  # Use request host when supplied
         )
         
         logger.info(f"Initiated OIDC registration flow with state: {state[:20]}...")
@@ -160,6 +162,7 @@ class AuthenticateUseCase:
         tokens = await self.oidc_provider.exchange_code(
             code=command.code,
             code_verifier=pkce_state.code_verifier,
+            redirect_uri=pkce_state.oidc_redirect_uri,
         )
         
         access_token = tokens["access_token"]

@@ -117,7 +117,7 @@ spec:
       containers:
         - name: ui
           # nginx serving pre-built React SPA
-          image: ${OCIR_REGISTRY}/marty-ui/ui:${IMAGE_TAG}
+          image: ${OCIR_REGISTRY}/marty-ui/ui-selfhost:${IMAGE_TAG}
           imagePullPolicy: Always
           ports:
             - containerPort: 80

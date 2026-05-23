@@ -31,6 +31,13 @@ import { getApplicantByUser, createApplicant, updateApplicantProfile } from '../
 import { listWallets } from '../../../services/walletRegistryApi';
 import useWalletPreferences from '../../../hooks/useWalletPreferences';
 import { getPlatform } from '../../../utils/deviceDetection';
+import { WALLET_SELECTION_ALLOWED_WALLET_IDS } from '@ui-public-config';
+import {
+  createWalletSelectionAllowlist,
+  filterSelectableWallets,
+} from '../../../utils/walletSelectionRestrictions';
+
+const walletSelectionAllowlist = createWalletSelectionAllowlist(WALLET_SELECTION_ALLOWED_WALLET_IDS);
 
 function ApplicantSettingsPage() {
   const { t } = useTranslation('applicant');
@@ -55,9 +62,11 @@ function ApplicantSettingsPage() {
   const { walletIds: preferredWallets, addWallet, removeWallet } = useWalletPreferences(user?.user_id);
   const [registryWallets, setRegistryWallets] = useState([]);
   const [walletsLoading, setWalletsLoading] = useState(true);
+  const walletSelectionRestricted = Boolean(walletSelectionAllowlist);
+  const selectableRegistryWallets = filterSelectableWallets(registryWallets, WALLET_SELECTION_ALLOWED_WALLET_IDS);
   const platform = getPlatform();
   const iosSameDeviceLimitedWallets = platform === 'ios'
-    ? registryWallets.filter(
+    ? selectableRegistryWallets.filter(
       (wallet) => preferredWallets.includes(wallet.id) && wallet.ios_same_device_single_wallet_only,
     )
     : [];
@@ -293,6 +302,12 @@ function ApplicantSettingsPage() {
           selected wallet so you get the right handoff and QR code.
         </Typography>
 
+        {walletSelectionRestricted && (
+          <Alert severity="info" sx={{ mb: 2 }}>
+            Wallet selection is limited for this deployment. Unavailable wallets are shown disabled.
+          </Alert>
+        )}
+
         {iosSameDeviceLimitedWalletNames.length > 0 && (
           <Alert severity="warning" sx={{ mb: 2 }} data-testid="ios-same-device-wallet-warning">
             iOS same-device flows for {iosSameDeviceLimitedWalletNames.join(', ')} are effectively
@@ -312,6 +327,7 @@ function ApplicantSettingsPage() {
         ) : (
           <Stack spacing={1}>
             {registryWallets.map((w) => {
+              const enabled = !walletSelectionAllowlist || walletSelectionAllowlist.has(w.id);
               const checked = preferredWallets.includes(w.id);
               return (
                 <Box
@@ -324,12 +340,16 @@ function ApplicantSettingsPage() {
                     border: 1,
                     borderColor: checked ? 'primary.main' : 'divider',
                     bgcolor: checked ? 'action.selected' : 'transparent',
-                    cursor: 'pointer',
-                    '&:hover': { bgcolor: 'action.hover' },
+                    cursor: enabled ? 'pointer' : 'not-allowed',
+                    opacity: enabled ? 1 : 0.52,
+                    '&:hover': enabled ? { bgcolor: 'action.hover' } : undefined,
                   }}
-                  onClick={() => (checked ? removeWallet(w.id) : addWallet(w.id))}
+                  onClick={() => {
+                    if (!enabled) return;
+                    checked ? removeWallet(w.id) : addWallet(w.id);
+                  }}
                 >
-                  <Checkbox checked={checked} sx={{ mr: 1, p: 0 }} />
+                  <Checkbox checked={checked} disabled={!enabled} sx={{ mr: 1, p: 0 }} />
                   <Box sx={{ flex: 1 }}>
                     <Typography variant="subtitle2">{w.name}</Typography>
                     {w.description && (
@@ -338,6 +358,7 @@ function ApplicantSettingsPage() {
                       </Typography>
                     )}
                   </Box>
+                  {!enabled && <Chip label="Unavailable" size="small" variant="outlined" sx={{ ml: 0.5 }} />}
                   {(w.supported_platforms || w.platforms || []).map((p) => (
                     <Chip key={p} label={p} size="small" variant="outlined" sx={{ ml: 0.5 }} />
                   ))}

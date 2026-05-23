@@ -344,10 +344,24 @@ class ETagMiddleware(BaseHTTPMiddleware):
     * Returns ``304 Not Modified`` when the client sends a matching
       ``If-None-Match`` header, saving bandwidth.
     * Only applies to successful (2xx) GET responses with a body.
+    * Skips authenticated requests and responses that explicitly opt out of
+      caching via ``Cache-Control``.
     """
 
+    _AUTH_REQUEST_HEADERS = ("authorization", "cookie")
+    _DISABLE_CACHE_CONTROL_TOKENS = ("no-store", "no-cache", "private")
+
+    @classmethod
+    def _is_authenticated_request(cls, request: Request) -> bool:
+        return any(request.headers.get(header_name) for header_name in cls._AUTH_REQUEST_HEADERS)
+
+    @classmethod
+    def _cache_control_disables_etag(cls, response: Response) -> bool:
+        cache_control = (response.headers.get("Cache-Control") or "").lower()
+        return any(token in cache_control for token in cls._DISABLE_CACHE_CONTROL_TOKENS)
+
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
-        if request.method != "GET":
+        if request.method != "GET" or self._is_authenticated_request(request):
             return await call_next(request)
 
         if_none_match = request.headers.get("If-None-Match")
@@ -356,6 +370,9 @@ class ETagMiddleware(BaseHTTPMiddleware):
 
         # Only compute ETags for successful JSON-ish responses
         if not (200 <= response.status_code < 300):
+            return response
+
+        if self._cache_control_disables_etag(response):
             return response
 
         # Collect response body

@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.7
 # Marty UI web application image
 FROM oven/bun:alpine AS builder
 
@@ -12,15 +13,27 @@ ENV VITE_WALLET_API=http://localhost:8082
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
 
-# Set work directory
-WORKDIR /app
+# Set work directory to preserve package.json file:../../ dependency paths.
+WORKDIR /workspace/marty-ui/ui
 
 # Install Chromium for prerendering
 RUN apk add --no-cache chromium nss freetype harfbuzz ca-certificates ttf-freefont
 
-# Install dependencies
-COPY ui/package.json ./
-RUN bun install
+# Install dependencies. The UI package references sibling workspace packages via
+# file:../../ paths, so the build command must provide these named contexts:
+#   --build-context marty-cli=<workspace>/marty-cli
+#   --build-context marty-blog=<workspace>/marty-blog
+#   --build-context marty-subscriptions=<workspace>/marty-subscriptions
+COPY --from=marty-cli packages/api-core /workspace/marty-cli/packages/api-core
+COPY --from=marty-blog package.json /workspace/marty-blog/package.json
+COPY --from=marty-blog src /workspace/marty-blog/src
+COPY --from=marty-subscriptions package.json /workspace/marty-subscriptions/package.json
+COPY --from=marty-subscriptions src /workspace/marty-subscriptions/src
+COPY ui/package.json ui/bun.lock ./
+RUN bun install \
+    && ln -sfn /workspace/marty-ui/ui/node_modules /workspace/node_modules \
+    && cd /workspace/marty-blog && bun install --production \
+    && cd /workspace/marty-subscriptions && bun install --production
 
 # Copy application code
 COPY ui/ .
@@ -34,7 +47,7 @@ FROM nginx:alpine
 # Copy both nginx configs - use build arg to select which one
 # Default to PROD for safety - must explicitly opt-in to dev config
 ARG NGINX_CONFIG=nginx.prod.conf
-COPY --from=builder /app/dist-final /usr/share/nginx/html
+COPY --from=builder /workspace/marty-ui/ui/dist-final /usr/share/nginx/html
 COPY ui/${NGINX_CONFIG} /etc/nginx/conf.d/default.conf
 
 # Expose port

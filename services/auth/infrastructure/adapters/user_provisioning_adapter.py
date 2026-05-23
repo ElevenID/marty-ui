@@ -15,6 +15,7 @@ from uuid import uuid4
 import grpc
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from marty_common.system_ids import MARTY_DEFAULT_ORG_ID
 
 from ...infrastructure.applicant_record_model import ApplicantRecord
 from ...application.ports import UserProvisioningPort
@@ -26,7 +27,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Marty default organization ID (must match migration)
-MARTY_ORG_ID = os.environ.get("MARTY_ORG_ID", "00000000-0000-0000-0000-000000000001")
+MARTY_ORG_ID = os.environ.get("MARTY_ORG_ID", MARTY_DEFAULT_ORG_ID)
 UNKNOWN_DATE_OF_BIRTH = date(1900, 1, 1)
 UNKNOWN_NATIONALITY = "UNK"
 

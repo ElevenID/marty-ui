@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "name": "selfhost",
+  "description": "Customer-facing self-host Docker Compose bundle.",
+  "stack": "selfhost-production",
+  "artifact_profile": "selfhost-commercial",
+  "assets": [
+    "docker-compose.selfhost.prod.yml",
+    "docker-compose.selfhost.bundle.override.yml",
+    ".env.selfhost.production.example",
+    "SELFHOST_BUNDLE.md",
+    "docker/init-databases.sh",
+    "docker/nginx-selfhost.prod.conf.template",
+    "docker/tunnel-nginx-proxy.edge.conf",
+    "docker/openbao-init.sh",
+    "docker/secrets/selfhost.example",
+    "config/keycloak",
+    "scripts/bootstrap-selfhost-vault.sh",
+    "scripts/cloudflared-selfhost.sh",
+    "scripts/keycloak-selfhost-start.sh",
+    "scripts/load-openbao-token-and-start.sh",
+    "scripts/load-secrets-env.sh",
+    "scripts/nginx-entrypoint-selfhost.sh",
+    "scripts/setup-keycloak-selfhost-production.sh",
+    "scripts/setup-keycloak.sh"
+  ],
+  "render": {
+    "env_file": ".env.selfhost.production.example",
+    "compose_files": ["docker-compose.selfhost.prod.yml", "docker-compose.selfhost.bundle.override.yml"],
+    "output_file": "docker-compose.yml",
+    "strip_build_blocks": true,
+    "relativize_paths": true,
+    "no_interpolate": true
+  }
+}

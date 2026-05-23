@@ -28,6 +28,7 @@ from ..domain.entities import (
 class InitiateLoginCommand:
     """Command to initiate OIDC login flow."""
     redirect_uri: str | None = None
+    oidc_redirect_uri: str | None = None
 
 
 @dataclass
@@ -183,6 +184,7 @@ class OIDCProviderPort(ABC):
         self,
         code: str,
         code_verifier: str,
+        redirect_uri: str | None = None,
     ) -> dict[str, Any]:
         """Exchange authorization code for tokens."""
         ...

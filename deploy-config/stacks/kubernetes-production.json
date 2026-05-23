@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "name": "kubernetes-production",
+  "description": "Provider-neutral Kubernetes production deployment using licensed Marty service images and the shared secret schema.",
+  "env_file": ".env.production",
+  "manifest_dir": "k8s/oracle",
+  "namespace": "marty-prod",
+  "domains": ["elevenidllc.com"],
+  "primary_domain": "elevenidllc.com",
+  "required_service_groups": ["app"],
+  "required_services": ["ui", "cloudflared"],
+  "required_secrets": [
+    "postgres_password",
+    "keycloak_db_password",
+    "marty_db_password",
+    "keycloak_admin_password",
+    "marty_api_client_secret",
+    "rabbitmq_password",
+    "rabbitmq_erlang_cookie",
+    "session_secret_key",
+    "issuance_api_key",
+    "openbao_service_token",
+    "license_key"
+  ],
+  "license_policy": "selfhost-system",
+  "artifact_profile": "selfhost-commercial",
+  "deployment_targets": ["kubernetes"],
+  "operations": {
+    "status": ["status"],
+    "setup-secrets": ["setup-secrets"],
+    "update-images": ["update-images"],
+    "deploy": ["deploy"]
+  }
+}

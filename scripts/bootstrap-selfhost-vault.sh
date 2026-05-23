@@ -77,6 +77,9 @@ if [ -z "$service_token" ]; then
     exit 1
 fi
 
+if [ -e "$SERVICE_TOKEN_OUTPUT_FILE" ]; then
+    chmod u+w "$SERVICE_TOKEN_OUTPUT_FILE" 2>/dev/null || true
+fi
 printf "%s" "$service_token" > "$SERVICE_TOKEN_OUTPUT_FILE"
 chmod 0600 "$SERVICE_TOKEN_OUTPUT_FILE"
 '

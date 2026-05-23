@@ -115,6 +115,14 @@ def auth_app(session_cache, grpc_stub):
     async def credential_metadata():
         return JSONResponse({"name": "Marty Verified Member Badge"})
 
+    @app.get(
+        "/v1/organizations/00000000-0000-0000-0000-000000000001"
+        "/revocation-profiles/70000000-0000-0000-0000-000000000001"
+        "/status-lists/bitstring-status-list/revocation"
+    )
+    async def status_list_document():
+        return JSONResponse({"type": "BitstringStatusListCredential"})
+
     return app
 
 
@@ -230,6 +238,19 @@ class TestAuthMiddleware:
             resp = await client.get("/credentials/marty-verified-member-badge")
         assert resp.status_code == 200
         assert resp.json()["name"] == "Marty Verified Member Badge"
+
+    @patch("gateway.middleware.get_route_config", side_effect=_fake_get_route_config)
+    async def test_status_list_document_bypass(self, _mock, auth_app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=auth_app), base_url="http://test"
+        ) as client:
+            resp = await client.get(
+                "/v1/organizations/00000000-0000-0000-0000-000000000001"
+                "/revocation-profiles/70000000-0000-0000-0000-000000000001"
+                "/status-lists/bitstring-status-list/revocation"
+            )
+        assert resp.status_code == 200
+        assert resp.json()["type"] == "BitstringStatusListCredential"
 
     @patch("gateway.middleware.get_route_config", side_effect=_fake_get_route_config)
     async def test_missing_session_cookie(self, _mock, auth_app):

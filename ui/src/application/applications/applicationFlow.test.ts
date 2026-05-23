@@ -6,6 +6,7 @@ import {
   getCredentialKindFlags,
   getOneClickSummaryFields,
   groupFieldsIntoSteps,
+  normalizeApplicationTemplateToFormConfig,
   normalizeCredentialConfigInput,
   normalizeTemplateToFormConfig,
   validateApplicationStep,
@@ -50,6 +51,42 @@ describe('applicationFlow helpers', () => {
       display_name: 'Example',
       required_fields: ['first_name'],
       optional_fields: ['email'],
+    })
+  })
+
+  it('merges application template form fields into the dynamic form config', () => {
+    expect(normalizeApplicationTemplateToFormConfig({
+      id: 'app-template-1',
+      name: 'Canvas Quiz Application',
+      description: 'Complete the course quiz.',
+      credential_template_id: 'credential-template-1',
+      form_fields: [
+        { name: 'email', label: 'Email', type: 'email', required: true },
+        { name: 'course_name', label: 'Canvas course', type: 'string', required: true },
+        { name: 'score_percent', label: 'Score percent', type: 'integer', required: true },
+      ],
+      evidence_requirements: [{ evidence_type: 'canvas.quiz_score' }],
+      ui_config: { submission_instructions: 'Review your course details.' },
+    }, {
+      id: 'credential-template-1',
+      credential_type: 'open_badge',
+      name: 'Quiz Badge',
+      required_fields: ['email'],
+      optional_fields: ['family_name'],
+    })).toMatchObject({
+      id: 'credential-template-1',
+      credential_type: 'open_badge',
+      display_name: 'Canvas Quiz Application',
+      required_fields: [
+        { name: 'email', label: 'Email', type: 'email', required: true },
+        { name: 'course_name', label: 'Canvas course', type: 'text', required: true },
+        { name: 'score_percent', label: 'Score percent', type: 'number', required: true },
+      ],
+      optional_fields: [
+        { name: 'family_name', label: 'Family Name', type: 'text', required: false },
+      ],
+      submission_instructions: 'Review your course details.',
+      evidence_requirements: [{ evidence_type: 'canvas.quiz_score' }],
     })
   })
 
@@ -113,6 +150,31 @@ describe('applicationFlow helpers', () => {
         document_number: '1234',
         credential_type: 'ExampleCredential',
         credential_display_name: 'Example',
+      },
+    })
+  })
+
+  it('marks Canvas LTI applications for demo auto-approval', () => {
+    expect(buildStandardApplicationPayload({
+      applicantId: 'app-1',
+      credentialConfig: { id: 'cfg-1', credential_type: 'open_badge', display_name: 'Canvas Badge' },
+      credentialConfigId: 'cfg-fallback',
+      formData: {},
+      canvasLtiContext: {
+        state: 'state-1',
+        canvas_account_id: 'canvas-real-account-1',
+      },
+    })).toMatchObject({
+      applicant_id: 'app-1',
+      credential_configuration_id: 'cfg-1',
+      metadata: {
+        credential_type: 'open_badge',
+        credential_display_name: 'Canvas Badge',
+        canvas_lti: {
+          state: 'state-1',
+          canvas_account_id: 'canvas-real-account-1',
+        },
+        auto_approve: true,
       },
     })
   })

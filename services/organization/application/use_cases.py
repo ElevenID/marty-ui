@@ -10,6 +10,7 @@ import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
+from marty_common.system_ids import MARTY_DEFAULT_ORG_ID
 
 from ..domain.entities import ApiKey, ConsoleContextPreference, JoinMechanism, Member, MemberStatus, Organization, ViewMode
 from ..domain.events import (
@@ -41,7 +42,7 @@ from .ports import (
 
 logger = logging.getLogger(__name__)
 
-MARTY_ORG_ID = os.environ.get("MARTY_ORG_ID", "00000000-0000-0000-0000-000000000001")
+MARTY_ORG_ID = os.environ.get("MARTY_ORG_ID", MARTY_DEFAULT_ORG_ID)
 MARTY_ORG_ADMIN_EMAIL = os.environ.get("MARTY_ORG_ADMIN_EMAIL", "").strip().lower()
 
 _ORG_TYPE_ALIASES: dict[str, str] = {

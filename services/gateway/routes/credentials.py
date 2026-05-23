@@ -14,6 +14,7 @@ from gateway.proxy import _resource_exists, _resource_org_id, get_registry, prox
 
 credential_template_router = APIRouter(prefix="/v1/credential-templates", tags=["Credential Templates"])
 wallet_registry_router = APIRouter(prefix="/v1/wallet-registry", tags=["Wallet Registry"])
+delivery_destination_router = APIRouter(prefix="/v1/delivery-destinations", tags=["Delivery Destinations"])
 compliance_profile_router = APIRouter(prefix="/v1/compliance-profiles", tags=["Compliance Profiles"])
 
 
@@ -161,6 +162,48 @@ async def delete_wallet_registry_entry(wallet_id: str, request: Request) -> Resp
 
 
 # ── Compliance Profiles ──────────────────────────────────────────────
+
+# -- Delivery Destinations -----------------------------------------------------
+
+@delivery_destination_router.get("", summary="List Delivery Destinations")
+async def list_delivery_destinations(request: Request) -> Response:
+    """List system and organization delivery destinations."""
+    registry = get_registry()
+    service_url = registry.get_service_url("credential-templates")
+    return await proxy_request(request, service_url, "/v1/delivery-destinations")
+
+
+@delivery_destination_router.get("/{destination_id}", summary="Get Delivery Destination")
+async def get_delivery_destination(destination_id: str, request: Request) -> Response:
+    """Get a delivery destination by ID."""
+    registry = get_registry()
+    service_url = registry.get_service_url("credential-templates")
+    return await proxy_request(request, service_url, f"/v1/delivery-destinations/{destination_id}")
+
+
+@delivery_destination_router.post("", summary="Create Delivery Destination")
+async def create_delivery_destination(request: Request) -> Response:
+    """Create an organization delivery destination."""
+    registry = get_registry()
+    service_url = registry.get_service_url("credential-templates")
+    return await proxy_request(request, service_url, "/v1/delivery-destinations")
+
+
+@delivery_destination_router.patch("/{destination_id}", summary="Update Delivery Destination")
+async def update_delivery_destination(destination_id: str, request: Request) -> Response:
+    """Update an organization delivery destination."""
+    registry = get_registry()
+    service_url = registry.get_service_url("credential-templates")
+    return await proxy_request(request, service_url, f"/v1/delivery-destinations/{destination_id}")
+
+
+@delivery_destination_router.delete("/{destination_id}", summary="Delete Delivery Destination")
+async def delete_delivery_destination(destination_id: str, request: Request) -> Response:
+    """Delete an organization delivery destination."""
+    registry = get_registry()
+    service_url = registry.get_service_url("credential-templates")
+    return await proxy_request(request, service_url, f"/v1/delivery-destinations/{destination_id}")
+
 
 @compliance_profile_router.post("", response_model=ComplianceProfileResponse, summary="Create Compliance Profile")
 async def create_compliance_profile(body: ComplianceProfileCreate, request: Request) -> Response:

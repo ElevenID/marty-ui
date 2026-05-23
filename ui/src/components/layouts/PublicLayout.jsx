@@ -9,6 +9,7 @@
 import { Outlet } from 'react-router-dom';
 import { Container, Box } from '@mui/material';
 import Navigation from '../Navigation';
+import PublicFooter from './PublicFooter';
 
 function PublicLayout() {
   return (
@@ -21,6 +22,7 @@ function PublicLayout() {
       <Container maxWidth="lg">
         <Box sx={{ mb: 4 }}>
           <Outlet />
+          <PublicFooter />
         </Box>
       </Container>
     </Box>

@@ -163,7 +163,25 @@ class FeatureFlags:
     enable_qr_code_generation: bool = True
     enable_push_notifications: bool = False
     enable_biometric_binding: bool = False
+    enable_canvas_evidence: bool = False
+    enable_canvas_lti: bool = False
+    enable_canvas_mirror_publish: bool = False
+    enable_canvas_mirror_ops: bool = False
+    enable_canvas_deep_linking: bool = False
+    enable_canvas_ags: bool = False
+    enable_canvas_nrps: bool = False
     custom_flags: dict[str, bool] = field(default_factory=dict)
+
+
+CANVAS_FEATURE_FLAG_KEYS = (
+    "enable_canvas_evidence",
+    "enable_canvas_lti",
+    "enable_canvas_mirror_publish",
+    "enable_canvas_mirror_ops",
+    "enable_canvas_deep_linking",
+    "enable_canvas_ags",
+    "enable_canvas_nrps",
+)
 
 
 @dataclass
@@ -376,6 +394,13 @@ class FeatureFlagsModel(BaseModel):
     enable_qr_code_generation: bool = True
     enable_push_notifications: bool = False
     enable_biometric_binding: bool = False
+    enable_canvas_evidence: bool = False
+    enable_canvas_lti: bool = False
+    enable_canvas_mirror_publish: bool = False
+    enable_canvas_mirror_ops: bool = False
+    enable_canvas_deep_linking: bool = False
+    enable_canvas_ags: bool = False
+    enable_canvas_nrps: bool = False
     custom_flags: dict[str, bool] = Field(default_factory=dict)
 
 
@@ -482,6 +507,7 @@ class DeploymentProfileResponse(BaseModel):
     offline_cache_ttl_hours: int = 24
     biometric_required: bool = False
     audit_all_events: bool = True
+    canvas_feature_flags: dict[str, bool] = Field(default_factory=dict)
     lanes: list[dict[str, Any]] = Field(default_factory=list)
     created_at: str
     updated_at: str
@@ -596,6 +622,31 @@ def _sync_update_policy(
     policy.setdefault("auto_update", True)
     policy["channel"] = update_channel
     return policy
+
+
+def _feature_flags_from_model(model: FeatureFlagsModel) -> FeatureFlags:
+    return FeatureFlags(
+        enable_selective_disclosure=model.enable_selective_disclosure,
+        enable_derived_attributes=model.enable_derived_attributes,
+        enable_batch_issuance=model.enable_batch_issuance,
+        enable_deferred_issuance=model.enable_deferred_issuance,
+        enable_credential_refresh=model.enable_credential_refresh,
+        enable_qr_code_generation=model.enable_qr_code_generation,
+        enable_push_notifications=model.enable_push_notifications,
+        enable_biometric_binding=model.enable_biometric_binding,
+        enable_canvas_evidence=model.enable_canvas_evidence,
+        enable_canvas_lti=model.enable_canvas_lti,
+        enable_canvas_mirror_publish=model.enable_canvas_mirror_publish,
+        enable_canvas_mirror_ops=model.enable_canvas_mirror_ops,
+        enable_canvas_deep_linking=model.enable_canvas_deep_linking,
+        enable_canvas_ags=model.enable_canvas_ags,
+        enable_canvas_nrps=model.enable_canvas_nrps,
+        custom_flags=model.custom_flags,
+    )
+
+
+def _canvas_feature_flags(flags: FeatureFlags) -> dict[str, bool]:
+    return {key: bool(getattr(flags, key, False)) for key in CANVAS_FEATURE_FLAG_KEYS}
 
 
 # =============================================================================
@@ -717,17 +768,7 @@ async def create_deployment_profile(
     
     # Set feature flags
     if request.feature_flags:
-        profile.feature_flags = FeatureFlags(
-            enable_selective_disclosure=request.feature_flags.enable_selective_disclosure,
-            enable_derived_attributes=request.feature_flags.enable_derived_attributes,
-            enable_batch_issuance=request.feature_flags.enable_batch_issuance,
-            enable_deferred_issuance=request.feature_flags.enable_deferred_issuance,
-            enable_credential_refresh=request.feature_flags.enable_credential_refresh,
-            enable_qr_code_generation=request.feature_flags.enable_qr_code_generation,
-            enable_push_notifications=request.feature_flags.enable_push_notifications,
-            enable_biometric_binding=request.feature_flags.enable_biometric_binding,
-            custom_flags=request.feature_flags.custom_flags,
-        )
+        profile.feature_flags = _feature_flags_from_model(request.feature_flags)
     
     # Set branding
     if request.branding:
@@ -852,6 +893,8 @@ async def update_deployment_profile(
         profile.update_policy = _sync_update_policy(profile.update_channel, request.update_policy)
     elif request.update_channel is not None:
         profile.update_policy = _sync_update_policy(profile.update_channel, profile.update_policy)
+    if request.feature_flags is not None:
+        profile.feature_flags = _feature_flags_from_model(request.feature_flags)
 
     if not profile.trust_profile_id:
         raise HTTPException(status_code=422, detail="trust_profile_id is required")
@@ -999,6 +1042,7 @@ def _profile_to_response(profile: DeploymentProfile, lanes: list[Lane] | None = 
         offline_cache_ttl_hours=profile.offline_cache_ttl_hours,
         biometric_required=profile.biometric_required,
         audit_all_events=profile.audit_all_events,
+        canvas_feature_flags=_canvas_feature_flags(profile.feature_flags),
         lanes=[_lane_to_response(lane).model_dump(exclude_none=True) for lane in (lanes or [])],
         created_at=profile.created_at.isoformat(),
         updated_at=profile.updated_at.isoformat(),

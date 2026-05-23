@@ -15,13 +15,13 @@ CANVAS_URL = os.environ.get('CANVAS_API_BASE_URL', 'http://localhost:8088')
 ADMIN_EMAIL = 'admin@example.com'
 ADMIN_PASSWORD = 'readystack123'
 LTI_CLIENT_ID = os.environ.get('CANVAS_LTI_CLIENT_ID', 'canvas-real-client-id')
-CONNECTOR_ID = os.environ.get('CANVAS_CONNECTOR_ID', '67f60f26-67aa-405f-9e04-b48165d49c61')
+CANVAS_PLATFORM_ID = os.environ.get('CANVAS_PLATFORM_ID', 'replace-with-canvas-platform-id')
 LTI_BASE_URL = (
     os.environ.get('CANVAS_LTI_EXPERIENCE_BASE_URL', '').strip()
     or os.environ.get('CANVAS_LTI_TOOL_BASE_URL', '').strip()
     or 'https://beta.elevenidllc.com'
 ).rstrip('/')
-LTI_REDIRECT_URI = f'{LTI_BASE_URL}/v1/integrations/canvas/lti/experience/{CONNECTOR_ID}'
+LTI_REDIRECT_URI = f'{LTI_BASE_URL}/v1/integrations/canvas/lti/platforms/{CANVAS_PLATFORM_ID}/experience'
 ACCOUNT_ID = os.environ.get('CANVAS_ROOT_ACCOUNT_ID', '1')
 
 def login_to_canvas():

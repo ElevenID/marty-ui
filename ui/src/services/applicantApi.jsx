@@ -59,8 +59,20 @@ export async function submitApplication(applicationId) {
   return post(`${API_BASE}/applications/${applicationId}/submit`, {});
 }
 
+export async function supersedeApplication(applicationId, data = {}) {
+  return post(`${API_BASE}/applications/${applicationId}/supersede`, data);
+}
+
 export async function getApplication(applicationId) {
   return get(`${API_BASE}/applications/${applicationId}`);
+}
+
+export async function getApplicationEvidenceSummary(applicationId) {
+  return get(`${API_BASE}/applications/${applicationId}/evidence-summary`);
+}
+
+export async function runApplicationExternalEvidenceApiCheck(applicationId, checkId, payload = {}) {
+  return post(`${API_BASE}/applications/${applicationId}/evidence/api-checks/${checkId}/run`, payload);
 }
 
 export async function getApprovedApplications(limit = 50) {
@@ -80,6 +92,11 @@ export async function listOrganizationApplications(organizationId, params = {}) 
     limit: params.limit || normalized.length,
     offset: params.offset || 0,
   };
+}
+
+export async function listApplicantApplicationsForProfile(applicantId) {
+  const data = await get(`${API_BASE}/profiles/${applicantId}/applications`);
+  return Array.isArray(data) ? data : (data?.applications || []);
 }
 
 export async function reviewOrganizationApplication(applicationId, decision, payload = {}) {

@@ -274,7 +274,7 @@
         "http://host.docker.internal:3000/*",
         "http://host.docker.internal:8000/*",
         "https://*.marty.demo/*",
-        "https://beta.elevenidllc.com/*"
+        "${UI_BASE_URL}/*"
       ],
       "webOrigins": [
         "http://localhost:9080",
@@ -284,7 +284,7 @@
         "http://host.docker.internal:3000",
         "http://host.docker.internal:8000",
         "https://*.marty.demo",
-        "https://beta.elevenidllc.com"
+        "${UI_BASE_URL}"
       ],
       "protocol": "openid-connect",
       "publicClient": true,
@@ -296,7 +296,7 @@
       "fullScopeAllowed": true,
       "attributes": {
         "pkce.code.challenge.method": "S256",
-        "post.logout.redirect.uris": "http://localhost:9080/*##http://localhost:3000/*##http://host.docker.internal:9080/*##https://*.marty.demo/*##https://beta.elevenidllc.com/*"
+        "post.logout.redirect.uris": "http://localhost:9080/*##http://localhost:3000/*##http://host.docker.internal:9080/*##https://*.marty.demo/*##${UI_BASE_URL}/*"
       },
       "defaultClientScopes": [
         "openid",

@@ -7,6 +7,7 @@ from gateway.proxy import get_registry, proxy_request
 
 revocation_profile_router = APIRouter(prefix="/v1/revocation-profiles", tags=["Revocation Profiles"])
 cascade_revocation_router = APIRouter(prefix="/v1/cascade-revocations", tags=["Cascade Revocations"])
+status_list_router = APIRouter(prefix="/v1/organizations", tags=["Status Lists"])
 
 
 # ── Revocation Profiles ──────────────────────────────────────────────
@@ -49,6 +50,33 @@ async def delete_revocation_profile(profile_id: str, request: Request) -> Respon
     registry = get_registry()
     service_url = registry.get_service_url("revocation-profiles")
     return await proxy_request(request, service_url, f"/v1/revocation-profiles/{profile_id}")
+
+
+# Public Status Lists ---------------------------------------------------------
+
+@status_list_router.get(
+    "/{organization_id}/revocation-profiles/{profile_id}/status-lists/{mechanism}/{purpose}",
+    summary="Get Status List Document",
+)
+async def get_status_list_document(
+    organization_id: str,
+    profile_id: str,
+    mechanism: str,
+    purpose: str,
+    request: Request,
+) -> Response:
+    """Proxy public status-list VC documents for credentialStatus resolution."""
+    registry = get_registry()
+    service_url = registry.get_service_url("revocation-profiles")
+    return await proxy_request(
+        request,
+        service_url,
+        (
+            f"/v1/organizations/{organization_id}"
+            f"/revocation-profiles/{profile_id}"
+            f"/status-lists/{mechanism}/{purpose}"
+        ),
+    )
 
 
 # ── Cascade Revocations ─────────────────────────────────────────────

@@ -8,11 +8,13 @@ from __future__ import annotations
 
 from datetime import datetime
 import logging
+import os
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from pydantic import BaseModel, EmailStr
 from marty_common import OrganizationClient, OrganizationContext, require_org_membership, require_permission
+from marty_common.system_ids import MARTY_DEFAULT_ORG_ID
 
 from ...application.ports import (
     CreateApiKeyCommand,
@@ -30,7 +32,7 @@ from ...domain.entities import OrganizationType
 logger = logging.getLogger(__name__)
 
 # Stable ID for the default Marty organization — users cannot be removed from it
-MARTY_ORG_ID = "00000000-0000-0000-0000-000000000001"
+MARTY_ORG_ID = os.environ.get("MARTY_ORG_ID", MARTY_DEFAULT_ORG_ID)
 
 # Create router with versioned prefix
 router = APIRouter(prefix="/v1/organizations", tags=["organizations"])
@@ -42,6 +44,12 @@ _ORG_TYPE_ALIASES: dict[str, OrganizationType] = {
 
 _HOSTED_PILOT_PLAN_ALIASES = {"starter", "hosted_pilot", "pilot"}
 _SELF_HOSTED_PLAN_ALIASES = {"professional", "enterprise", "self_hosted_production"}
+_DISABLED_ENV_VALUES = {"0", "false", "no", "off", "disabled"}
+
+
+def _organization_creation_enabled() -> bool:
+    """Return whether end-user organization creation is enabled for this deployment."""
+    return os.environ.get("ORGANIZATION_CREATION_ENABLED", "true").strip().lower() not in _DISABLED_ENV_VALUES
 
 
 def _normalize_org_type(value: str) -> OrganizationType:
@@ -296,6 +304,9 @@ async def create_organization(
     use_case: OrganizationUseCase = Depends(get_org_use_case),
 ) -> OrganizationResponse:
     """Create a new organization."""
+    if not _organization_creation_enabled():
+        raise HTTPException(status_code=403, detail="Organization creation is disabled for this deployment")
+
     try:
         org = await use_case.create_organization(
             CreateOrganizationCommand(

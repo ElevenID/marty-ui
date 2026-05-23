@@ -7,31 +7,36 @@ import {
   DISABLE_PUBLIC_GET_STARTED_BUTTONS as publicGetStartedButtonsDisabled,
   DISABLE_PUBLIC_LOGIN_BUTTON as publicLoginButtonDisabled,
   DISABLE_PUBLIC_PRICING_BUTTONS as publicPricingButtonsDisabled,
+  ENABLE_ORGANIZATION_CREATION as publicOrganizationCreationEnabled,
   ENABLE_LEGACY_ADMIN_IMPERSONATION_BANNER as publicLegacyImpersonationBannerEnabled,
   SHOW_PUBLIC_GET_STARTED_BUTTONS as publicGetStartedButtons,
   SHOW_PUBLIC_LOGIN_BUTTON as publicLoginButton,
   SHOW_PUBLIC_PRICING_BUTTONS as publicPricingButtons,
+  WALLET_SELECTION_ALLOWED_WALLET_IDS as publicWalletSelectionAllowedWalletIds,
 } from '../publicConfig.public';
 import {
   PUBLIC_TABS as selfhostTabs,
   DISABLE_PUBLIC_GET_STARTED_BUTTONS as selfhostGetStartedButtonsDisabled,
   DISABLE_PUBLIC_LOGIN_BUTTON as selfhostLoginButtonDisabled,
   DISABLE_PUBLIC_PRICING_BUTTONS as selfhostPricingButtonsDisabled,
+  ENABLE_ORGANIZATION_CREATION as selfhostOrganizationCreationEnabled,
   ENABLE_LEGACY_ADMIN_IMPERSONATION_BANNER as selfhostLegacyImpersonationBannerEnabled,
   SHOW_PUBLIC_GET_STARTED_BUTTONS as selfhostGetStartedButtons,
   SHOW_PUBLIC_LOGIN_BUTTON as selfhostLoginButton,
   SHOW_PUBLIC_PRICING_BUTTONS as selfhostPricingButtons,
+  WALLET_SELECTION_ALLOWED_WALLET_IDS as selfhostWalletSelectionAllowedWalletIds,
   getSelfhostPublicTabs,
   getSelfhostPublicUiFlags,
   isSelfhostProductionPublicHost,
 } from '../publicConfig.selfhost';
 
 vi.mock('../publicSite.public', () => ({
+  getPublicLoginFallback: () => '/',
   renderPublicRoot: () => <div>Original landing page</div>,
   renderMarketingRoutes: () => null,
 }));
 
-import { renderPublicRoot } from '../publicSite.selfhost';
+import { getPublicLoginFallback, renderPublicRoot } from '../publicSite.selfhost';
 
 function renderSelfhostRoot(authState: {
   isAuthenticated: boolean;
@@ -43,16 +48,16 @@ function renderSelfhostRoot(authState: {
     <MemoryRouter initialEntries={['/']}>
       <Routes>
         <Route path="/" element={renderPublicRoot(authState)} />
-        <Route path="/console/org" element={<div>Vendor console</div>} />
-        <Route path="/console/applicant/catalog" element={<div>Applicant catalog</div>} />
       </Routes>
     </MemoryRouter>,
   );
 }
 
 describe('publicSite.selfhost', () => {
-  it('disables marketing CTAs only on the production host', () => {
+  it('keeps login enabled and disables marketing CTAs only on the production host', () => {
     const expectedPublicPaths = ['/', '/product', '/solutions', '/developers', '/standards', '/resources', '/pricing'];
+    const publicResourcesTab = publicTabs.find((tab) => tab.path === '/resources');
+    const selfhostResourcesTab = selfhostTabs.find((tab) => tab.path === '/resources');
 
     expect(publicLoginButton).toBe(true);
     expect(publicLoginButtonDisabled).toBe(false);
@@ -61,9 +66,13 @@ describe('publicSite.selfhost', () => {
     expect(publicPricingButtons).toBe(true);
     expect(publicPricingButtonsDisabled).toBe(false);
     expect(publicLegacyImpersonationBannerEnabled).toBe(false);
+    expect(publicOrganizationCreationEnabled).toBe(true);
+    expect(publicWalletSelectionAllowedWalletIds).toBeNull();
     expect(publicTabs.map((tab) => tab.path)).toEqual(expectedPublicPaths);
+    expect(publicResourcesTab?.prefixes).toEqual(expect.arrayContaining(['/privacy-policy', '/privacy', '/terms-of-service', '/terms']));
 
     expect(isSelfhostProductionPublicHost('elevenidllc.com')).toBe(true);
+    expect(isSelfhostProductionPublicHost('www.elevenidllc.com')).toBe(true);
     expect(isSelfhostProductionPublicHost('beta.elevenidllc.com')).toBe(false);
 
     expect(selfhostLoginButton).toBe(true);
@@ -73,12 +82,15 @@ describe('publicSite.selfhost', () => {
     expect(selfhostPricingButtons).toBe(true);
     expect(selfhostPricingButtonsDisabled).toBe(false);
     expect(selfhostLegacyImpersonationBannerEnabled).toBe(false);
+    expect(selfhostOrganizationCreationEnabled).toBe(false);
+    expect(selfhostWalletSelectionAllowedWalletIds).toEqual(['wr-spruce-001', 'wr-marty-001']);
     expect(selfhostTabs.map((tab) => tab.path)).toEqual(expectedPublicPaths);
     expect(selfhostTabs).toEqual(publicTabs);
+    expect(selfhostResourcesTab?.prefixes).toEqual(expect.arrayContaining(['/privacy-policy', '/privacy', '/terms-of-service', '/terms']));
 
     expect(getSelfhostPublicUiFlags('elevenidllc.com')).toEqual({
       showPublicLoginButton: true,
-      disablePublicLoginButton: true,
+      disablePublicLoginButton: false,
       showPublicGetStartedButtons: true,
       disablePublicGetStartedButtons: true,
       showPublicPricingButtons: true,
@@ -112,14 +124,43 @@ describe('publicSite.selfhost', () => {
     expect(screen.getByText('Original landing page')).toBeInTheDocument();
   });
 
-  it('redirects authenticated administrators to the console', () => {
+  it('matches the public login fallback', () => {
+    expect(getPublicLoginFallback()).toBe('/');
+  });
+
+  it.each([
+    {
+      label: 'administrator',
+      authState: {
+        isAuthenticated: true,
+        isAdministrator: true,
+        isVendor: false,
+        isApplicant: false,
+      },
+    },
+    {
+      label: 'vendor',
+      authState: {
+        isAuthenticated: true,
+        isAdministrator: false,
+        isVendor: true,
+        isApplicant: false,
+      },
+    },
+    {
+      label: 'applicant',
+      authState: {
+        isAuthenticated: true,
+        isAdministrator: false,
+        isVendor: false,
+        isApplicant: true,
+      },
+    },
+  ])('renders the original landing page for authenticated $label users', ({ authState }) => {
     renderSelfhostRoot({
-      isAuthenticated: true,
-      isAdministrator: true,
-      isVendor: false,
-      isApplicant: false,
+      ...authState,
     });
 
-    expect(screen.getByTestId('browser-redirect')).toBeInTheDocument();
+    expect(screen.getByText('Original landing page')).toBeInTheDocument();
   });
 });

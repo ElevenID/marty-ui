@@ -25,8 +25,8 @@ Use this checklist for the workstation-local production self-host setup and for 
 - [ ] `openbao_service_token` exists and came from the external Vault/OpenBao bootstrap helper or an equivalent operator flow
 - [ ] `cloudflare_tunnel_token` exists and came from Cloudflare Zero Trust
 - [ ] `license_key` exists and came from the signed license issuer flow
-- [ ] `license_public_key` exists and matches the issuer for `license_key`
-- [ ] `node ../marty-cli/bin/marty.js license install-selfhost --env-file .env.selfhost.production.local --token-file ... --public-key-file ...` passes before deployment
+- [ ] If Google sign-in is enabled, `google_client_id` and `google_client_secret` exist for this deployment and the Google OAuth client allows `https://<PUBLIC_DOMAIN>/realms/<KEYCLOAK_REALM>/broker/google/endpoint`
+- [ ] `node ../marty-cli/bin/marty.js license install-selfhost --env-file .env.selfhost.production.local --token-file ...` passes before deployment
 
 ## Non-Secret Config
 
@@ -36,6 +36,7 @@ Use this checklist for the workstation-local production self-host setup and for 
 - [ ] `.env.selfhost.production.local` points `SELFHOST_OPENBAO_STATE_DIR` at the external OpenBao state directory
 - [ ] `.env.selfhost.production.local` points `SELFHOST_OPENBAO_EXPORT_DIR` at the external OpenBao export directory
 - [ ] `PUBLIC_DOMAIN`, `PUBLIC_API_URL`, and `UI_BASE_URL` are set for the production hostname
+- [ ] `CREDENTIAL_LOGIN_POLICY_ID=50000000-0000-0000-0000-000000000004` is set for Open Badge sign-in
 - [ ] `BAO_ADDR` points at the operator-managed external Vault/OpenBao endpoint
 - [ ] `MARTY_ORG_ADMIN_EMAIL` is set to a customer-controlled address
 - [ ] License policy settings match the intended production entitlement

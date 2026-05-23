@@ -230,6 +230,8 @@ services:
       MARTY_ORG_ID: ${MARTY_ORG_ID:-00000000-0000-0000-0000-000000000001}
       MARTY_ORG_SLUG: ${MARTY_ORG_SLUG:-marty}
       MARTY_ORG_ADMIN_EMAIL: ${MARTY_ORG_ADMIN_EMAIL:-}
+      MARTY_MIGRATION_PROFILE: ${MARTY_MIGRATION_PROFILE:-dev}
+      MARTY_USE_EXPLICIT_DEMO_SEED_PACK: ${MARTY_USE_EXPLICIT_DEMO_SEED_PACK:-false}
       PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:-}
       PUBLIC_API_URL: ${PUBLIC_API_URL:-http://gateway:8000}
       ISSUER_BASE_URL: ${PUBLIC_API_URL:-http://gateway:8000}
@@ -273,6 +275,7 @@ services:
       FLOW_SERVICE_URL: http://flow:8011
       DEVICE_REGISTRATION_SERVICE_URL: http://device-registration:8014
       ISSUANCE_SERVICE_URL: http://issuance:8005
+      REVOCATION_PROFILE_SERVICE_URL: http://revocation-profile:8013
       BILLING_SERVICE_URL: http://billing:8016
       ISSUER_BASE_URL: ${PUBLIC_API_URL:-http://gateway:8000}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://localhost:5173}
@@ -358,6 +361,7 @@ services:
       CREDENTIAL_LOGIN_REQUIRE_EXISTING_KEYCLOAK_USER: ${CREDENTIAL_LOGIN_REQUIRE_EXISTING_KEYCLOAK_USER:-false}
       CREDENTIAL_LOGIN_CREATE_USERS: ${CREDENTIAL_LOGIN_CREATE_USERS:-false}
       AUTH_SERVICE_INTERNAL_URL: ${AUTH_SERVICE_INTERNAL_URL:-http://auth:8001}
+      ISSUANCE_SERVICE_URL: ${ISSUANCE_SERVICE_URL:-http://issuance:8005}
       CREDENTIAL_LOGIN_LISSI_DEEP_LINK_TEMPLATE: ${CREDENTIAL_LOGIN_LISSI_DEEP_LINK_TEMPLATE:-}
       CREDENTIAL_LOGIN_LISSI_ANDROID_DEEP_LINK_TEMPLATE: ${CREDENTIAL_LOGIN_LISSI_ANDROID_DEEP_LINK_TEMPLATE:-}
       CREDENTIAL_LOGIN_LISSI_IOS_DEEP_LINK_TEMPLATE: ${CREDENTIAL_LOGIN_LISSI_IOS_DEEP_LINK_TEMPLATE:-}
@@ -379,6 +383,8 @@ services:
       db-migrate:
         condition: service_completed_successfully
       redis:
+        condition: service_healthy
+      flow:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
@@ -630,6 +636,8 @@ services:
       CT_GRPC_TARGET: credential-template:9003
       ISSUANCE_GRPC_TARGET: issuance:9005
       ISSUANCE_SERVICE_URL: http://issuance:8005
+      REDIS_URL: redis://redis:6379
+      REDIS_DB_FLOW: "3"
       FLOW_GRPC_PORT: "9011"
     ports:
       - "8011:8011"
@@ -637,6 +645,14 @@ services:
     depends_on:
       db-migrate:
         condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      organization:
+        condition: service_healthy
+      credential-template:
+        condition: service_healthy
+      presentation-policy:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8011/health"]
       interval: 10s
@@ -662,6 +678,8 @@ services:
       ORG_GRPC_TARGET: organization:9002
       CT_GRPC_TARGET: credential-template:9003
       CREDENTIAL_TEMPLATE_SERVICE_URL: http://credential-template:8003
+      REVOCATION_PROFILE_SERVICE_URL: http://revocation-profile:8013
+      MARTY_DEFAULT_REVOCATION_PROFILE_ID: ${MARTY_DEFAULT_REVOCATION_PROFILE_ID:-70000000-0000-0000-0000-000000000001}
       ISSUANCE_GRPC_PORT: "9005"
       # OpenBao KMS for credential signing
       BAO_ADDR: http://openbao:8200
@@ -671,6 +689,17 @@ services:
       SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:-dev-signing-keys-internal-api-key}
       CANVAS_CREDENTIALS_SHARED_SECRET: ${CANVAS_CREDENTIALS_SHARED_SECRET:-}
       CANVAS_CREDENTIALS_SIGNATURE_TOLERANCE_SECONDS: ${CANVAS_CREDENTIALS_SIGNATURE_TOLERANCE_SECONDS:-300}
+      CANVAS_CREDENTIALS_PROVIDER: ${CANVAS_CREDENTIALS_PROVIDER:-bridge}
+      CANVAS_CREDENTIALS_PUBLISH_URL: ${CANVAS_CREDENTIALS_PUBLISH_URL:-}
+      CANVAS_CREDENTIALS_STATUS_SYNC_URL: ${CANVAS_CREDENTIALS_STATUS_SYNC_URL:-}
+      CANVAS_CREDENTIALS_API_BASE_URL: ${CANVAS_CREDENTIALS_API_BASE_URL:-https://api.badgr.io}
+      CANVAS_CREDENTIALS_API_TOKEN: ${CANVAS_CREDENTIALS_API_TOKEN:-}
+      CANVAS_CREDENTIALS_ISSUER_ID: ${CANVAS_CREDENTIALS_ISSUER_ID:-}
+      CANVAS_CREDENTIALS_BADGECLASS_ID: ${CANVAS_CREDENTIALS_BADGECLASS_ID:-}
+      CANVAS_CREDENTIALS_ASSERTION_SCOPE: ${CANVAS_CREDENTIALS_ASSERTION_SCOPE:-badgeclasses}
+      CANVAS_CREDENTIALS_PROVENANCE_BASE_URL: ${CANVAS_CREDENTIALS_PROVENANCE_BASE_URL:-}
+      CANVAS_CREDENTIALS_RECIPIENT_HASHED: ${CANVAS_CREDENTIALS_RECIPIENT_HASHED:-true}
+      CANVAS_CREDENTIALS_ALLOW_DUPLICATE_AWARDS: ${CANVAS_CREDENTIALS_ALLOW_DUPLICATE_AWARDS:-false}
       CANVAS_LTI_STATE_TTL_MINUTES: ${CANVAS_LTI_STATE_TTL_MINUTES:-10}
       CANVAS_LTI_JWKS_TTL_MINUTES: ${CANVAS_LTI_JWKS_TTL_MINUTES:-1440}
       CANVAS_ALLOW_PRIVATE_BASE_URLS: ${CANVAS_ALLOW_PRIVATE_BASE_URLS:-false}
@@ -706,6 +735,7 @@ services:
     environment:
       REVOCATION_PROFILE_SERVICE_PORT: "8013"
       DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@postgres:5432/marty
+      REDIS_URL: redis://redis:6379/4
       ORG_GRPC_TARGET: organization:9002
       RP_GRPC_PORT: "9013"
     ports:
@@ -714,6 +744,8 @@ services:
     depends_on:
       db-migrate:
         condition: service_completed_successfully
+      redis:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8013/health"]
       interval: 10s

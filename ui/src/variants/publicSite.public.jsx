@@ -35,9 +35,15 @@ const WhatIsCredentialVerificationPage = lazy(() => import('../components/pages/
 const WhatIsOpenBadgePage = lazy(() => import('../components/pages/WhatIsOpenBadgePage'));
 const WhatIsDigitalCredentialPage = lazy(() => import('../components/pages/WhatIsDigitalCredentialPage'));
 const WhatIsMartyProtocolPage = lazy(() => import('../components/pages/WhatIsMartyProtocolPage'));
+const PrivacyPolicyPage = lazyNamedExport(() => import('../components/pages/LegalPages'), 'PrivacyPolicyPage');
+const TermsOfServicePage = lazyNamedExport(() => import('../components/pages/LegalPages'), 'TermsOfServicePage');
 
 export function renderPublicRoot() {
   return <LandingPage />;
+}
+
+export function getPublicLoginFallback() {
+  return '/';
 }
 
 export function renderMarketingRoutes({ login }) {
@@ -67,6 +73,10 @@ export function renderMarketingRoutes({ login }) {
       <Route path="/what-is-open-badge" element={<WhatIsOpenBadgePage />} />
       <Route path="/what-is-digital-credential" element={<WhatIsDigitalCredentialPage />} />
       <Route path="/what-is-marty-protocol" element={<WhatIsMartyProtocolPage />} />
+      <Route path="/privacy-policy" element={<PrivacyPolicyPage />} />
+      <Route path="/privacy" element={<PrivacyPolicyPage />} />
+      <Route path="/terms-of-service" element={<TermsOfServicePage />} />
+      <Route path="/terms" element={<TermsOfServicePage />} />
       <Route path="/blog" element={<BlogPage />} />
       <Route path="/blog/tag/:tag" element={<BlogPage />} />
       <Route path="/blog/foundations" element={<FoundationsPage />} />

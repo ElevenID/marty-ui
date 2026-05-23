@@ -107,6 +107,11 @@ ENV SERVICE_NAME=${SERVICE_NAME}
 # Copy ALL services (needed for package structure)
 COPY marty-ui/services /app/services
 
+# The self-host registry profile runs issuance from the shared services image.
+# Keep the local image path aligned with the production/CD image path by copying
+# the issuance service from the sibling marty-credentials repository.
+COPY marty-credentials/services/issuance /app/services/issuance
+
 # Set Python path to include services parent
 ENV PYTHONPATH=/app:/app/packages:/app/services
 

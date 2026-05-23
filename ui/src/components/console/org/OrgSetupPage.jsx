@@ -37,6 +37,7 @@ import { useConsole } from '../../../contexts/ConsoleContext';
 import {
   membershipHasOrgConsoleAccess,
 } from '../../../application/session/authSession';
+import { ENABLE_ORGANIZATION_CREATION } from '@ui-public-config';
 
 /**
  * Organization Setup Page Component
@@ -73,7 +74,7 @@ export function OrgSetupPage() {
     : Array.isArray(authOrganizations)
       ? authOrganizations
       : [];
-  if (createOnlyMode) {
+  if (createOnlyMode && ENABLE_ORGANIZATION_CREATION) {
     return <Navigate to={createOrganizationPath} replace />;
   }
 
@@ -188,16 +189,20 @@ export function OrgSetupPage() {
               No Organizations Yet
             </Typography>
             <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-              Create an organization, discover a public organization, or join with a code to get started.
+              {ENABLE_ORGANIZATION_CREATION
+                ? 'Create an organization, discover a public organization, or join with a code to get started.'
+                : 'Discover a public organization or join with a code to get started.'}
             </Typography>
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} justifyContent="center">
-              <Button
-                variant="contained"
-                startIcon={<AddIcon />}
-                onClick={() => navigate(createOrganizationPath)}
-              >
-                Create Organization
-              </Button>
+              {ENABLE_ORGANIZATION_CREATION && (
+                <Button
+                  variant="contained"
+                  startIcon={<AddIcon />}
+                  onClick={() => navigate(createOrganizationPath)}
+                >
+                  Create Organization
+                </Button>
+              )}
               <Button
                 variant="outlined"
                 startIcon={<SearchIcon />}
@@ -334,13 +339,15 @@ export function OrgSetupPage() {
               Manage Organizations
             </Typography>
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} justifyContent="center" sx={{ mt: 2 }}>
-              <Button
-                variant="outlined"
-                startIcon={<AddIcon />}
-                onClick={() => navigate(createOrganizationPath)}
-              >
-                Create Organization
-              </Button>
+              {ENABLE_ORGANIZATION_CREATION && (
+                <Button
+                  variant="outlined"
+                  startIcon={<AddIcon />}
+                  onClick={() => navigate(createOrganizationPath)}
+                >
+                  Create Organization
+                </Button>
+              )}
               <Button
                 variant="outlined"
                 startIcon={<SearchIcon />}

@@ -109,8 +109,8 @@ class TestResolveAction:
         assert resolve_action("POST", "/v1/application-templates") == "application-template:create"
         assert resolve_action("GET", "/v1/application-templates/template-123") == "application-template:view"
         assert resolve_action("POST", "/v1/verification") == "verification:execute"
-        assert resolve_action("POST", "/v1/integrations/canvas/connectors") == "integration-connector:create"
-        assert resolve_action("GET", "/v1/integrations/canvas/connectors/connector-123") == "integration-connector:view"
+        assert resolve_action("POST", "/v1/integrations/canvas/platforms") == "integration-connector:create"
+        assert resolve_action("GET", "/v1/integrations/canvas/platforms/platform-123") == "integration-connector:view"
 
     def test_head_and_options_count_as_view(self):
         assert resolve_action("HEAD", ORG_PREFIX + "flows") == "flow-definition:view"
@@ -300,6 +300,34 @@ async def test_cedar_middleware_requires_owner_for_transfer():
     response = await middleware.dispatch(request, call_next)
 
     assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_cedar_middleware_skips_public_status_list_document():
+    org_client = MagicMock()
+    org_client.get_membership = AsyncMock()
+
+    app = MagicMock()
+    app.state.org_client = org_client
+    app.state.service_registry = None
+    app.state.http_client = None
+
+    request = _build_request(
+        ORG_PREFIX
+        + "revocation-profiles/70000000-0000-0000-0000-000000000001"
+        + "/status-lists/bitstring-status-list/revocation",
+        method="GET",
+        app=app,
+    )
+
+    call_next = AsyncMock(return_value=JSONResponse({"ok": True}))
+    middleware = CedarAuthMiddleware(app=MagicMock())
+
+    response = await middleware.dispatch(request, call_next)
+
+    assert response.status_code == 200
+    call_next.assert_awaited_once_with(request)
+    org_client.get_membership.assert_not_called()
 
 
 class TestBuildUserEntities:

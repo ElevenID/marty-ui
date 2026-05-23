@@ -264,6 +264,51 @@ def test_create_trust_profile_returns_canonical_fields() -> None:
     get_membership.assert_awaited_once_with("user-1", "org-1")
 
 
+def test_create_trust_profile_round_trips_canvas_issuer_aliases() -> None:
+    repo = trust_profile.InMemoryTrustProfileRepository()
+    client, get_membership = _build_client(repo)
+
+    response = client.post(
+        "/v1/trust-profiles",
+        headers={"x-user-id": "user-1"},
+        json={
+            "organization_id": "org-1",
+            "name": "Canvas Badge Trust",
+            "profile_type": "CUSTOM",
+            "supported_formats": ["SD_JWT_VC"],
+            "trust_sources": [
+                {
+                    "name": "Canvas issuer",
+                    "source_type": "PINNED_ISSUER",
+                    "url": "https://canvas.example.edu/issuers/issuer-123",
+                    "description": "Pinned Canvas Credentials issuer",
+                }
+            ],
+            "allowed_issuers": [
+                "https://canvas.example.edu/issuers/issuer-123",
+                "canvas.example.edu",
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["allowed_issuers"] == [
+        "https://canvas.example.edu/issuers/issuer-123",
+        "canvas.example.edu",
+    ]
+    assert body["trust_sources"] == [
+        {
+            "source_type": "PINNED_ISSUER",
+            "url": "https://canvas.example.edu/issuers/issuer-123",
+            "certificate_pem": None,
+            "issuer_did": None,
+            "description": "Pinned Canvas Credentials issuer",
+        }
+    ]
+    get_membership.assert_awaited_once_with("user-1", "org-1")
+
+
 def test_create_empty_trust_profile_defaults_to_deny_all() -> None:
     repo = trust_profile.InMemoryTrustProfileRepository()
     client, get_membership = _build_client(repo)

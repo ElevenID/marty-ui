@@ -9,6 +9,7 @@ import {
   loadExistingCredentialApplications,
   mapCredentialTemplateToCatalogItem,
   resolveCredentialApplicationPath,
+  scopeCredentialCatalogItemsForCanvasLaunch,
 } from './credentialCatalog';
 
 describe('credentialCatalog helpers', () => {
@@ -29,7 +30,7 @@ describe('credentialCatalog helpers', () => {
       credential_type: 'MemberCredential',
       name: 'Member Login Credential',
       claims: [{ name: 'email', required: true }],
-      status: 'active',
+      status: 'ACTIVE',
       version: '1.0.0',
     }, 'Acme')).toMatchObject({
       id: 'tpl-1',
@@ -42,21 +43,32 @@ describe('credentialCatalog helpers', () => {
   });
 
   it('maps open badge templates as identity membership credentials', () => {
-    expect(mapCredentialTemplateToCatalogItem({
+    const catalogItem = mapCredentialTemplateToCatalogItem({
       id: 'tpl-ob',
       credential_type: 'open_badge',
-      name: 'Verified Member Badge',
+      name: 'Marty Verified Member Badge',
+      description: 'Open Badge 3.0 membership badge for passwordless login/sign-in with your wallet.',
       claims: [{ name: 'email', required: true }, { name: 'role', required: true }],
-      status: 'active',
-    }, 'Acme')).toMatchObject({
+      status: 'ACTIVE',
+    }, 'Acme');
+
+    expect(catalogItem).toMatchObject({
       id: 'tpl-ob',
+      name: 'Marty Verified Member Badge',
       credentialType: 'open_badge',
       category: 'identity',
       requirements: ['email', 'role'],
       format: 'vc+sd-jwt',
       standard: '1EdTech Open Badges 3.0',
       worksWithLabel: 'Web & VC wallets',
+      available: true,
+      searchAliases: expect.arrayContaining(['open badge login', 'achievement credential']),
     });
+
+    expect(filterCredentialCatalogItems([catalogItem], {
+      searchTerm: 'open badge login',
+      categoryFilter: 'all',
+    })).toEqual([catalogItem]);
   });
 
   it('extracts existing application ids and filters credentials', () => {
@@ -77,6 +89,21 @@ describe('credentialCatalog helpers', () => {
     ]);
   });
 
+  it('scopes catalog items to Canvas launch credential templates when present', () => {
+    const credentials = [
+      { id: 'cfg-1', name: 'Canvas Credential' },
+      { id: 'cfg-2', name: 'General Credential' },
+    ];
+
+    expect(scopeCredentialCatalogItemsForCanvasLaunch(credentials, {
+      credentialTemplateIds: ['cfg-1'],
+    })).toEqual([
+      { id: 'cfg-1', name: 'Canvas Credential' },
+    ]);
+
+    expect(scopeCredentialCatalogItemsForCanvasLaunch(credentials)).toEqual(credentials);
+  });
+
   it('builds serializable navigation payloads', () => {
     const payload = buildCredentialApplicationNavigationState({
       id: 'cfg-1',
@@ -93,6 +120,35 @@ describe('credentialCatalog helpers', () => {
           name: 'Passport',
           processingFee: 0,
         },
+      },
+    });
+  });
+
+  it('preserves Canvas launch context when navigating from the scoped catalog', () => {
+    const payload = buildCredentialApplicationNavigationState({
+      id: 'cfg-1',
+      name: 'Canvas Credential',
+      icon: () => null,
+    }, {
+      currentPathname: '/console/applicant/catalog',
+      canvasLtiContext: {
+        state: 'state-1',
+        canvas_program_binding_id: 'binding-1',
+        canvas_platform_id: 'platform-1',
+        application_template_id: 'app-tpl-1',
+        credential_template_id: 'cfg-1',
+      },
+      canvasLtiSession: { state: 'state-1' },
+    });
+
+    expect(payload).toEqual({
+      path: '/console/applicant/apply/cfg-1?canvas_lti_state=state-1&canvas_program_binding_id=binding-1&canvas_platform_id=platform-1&application_template_id=app-tpl-1&credential_template_id=cfg-1',
+      state: {
+        credential: {
+          id: 'cfg-1',
+          name: 'Canvas Credential',
+        },
+        canvasLtiSession: { state: 'state-1' },
       },
     });
   });
@@ -142,5 +198,37 @@ describe('credentialCatalog helpers', () => {
       getApplicantByUser: vi.fn(),
       listApplicantApplications: vi.fn(),
     })).resolves.toEqual([]);
+  });
+
+  it('does not call the template API without a real organization id', async () => {
+    const listCredentialTemplates = vi.fn();
+
+    const result = await loadCredentialCatalogItems({
+      organizationId: '   ',
+      organizationName: 'Acme',
+      listCredentialTemplates,
+    });
+
+    expect(listCredentialTemplates).not.toHaveBeenCalled();
+    expect(result.credentials).toEqual([]);
+    expect(result.missingOrganization).toBe(true);
+    expect(result.error).toBeInstanceOf(Error);
+    expect(result.error?.message).toMatch(/organization/i);
+  });
+
+  it('preserves template API failures for callers to display', async () => {
+    const error = new Error('Gateway unavailable');
+    const listCredentialTemplates = vi.fn().mockRejectedValue(error);
+
+    const result = await loadCredentialCatalogItems({
+      organizationId: 'org-1',
+      organizationName: 'Acme',
+      listCredentialTemplates,
+    });
+
+    expect(listCredentialTemplates).toHaveBeenCalledWith('org-1');
+    expect(result.credentials).toEqual([]);
+    expect(result.missingOrganization).toBe(false);
+    expect(result.error).toBe(error);
   });
 });

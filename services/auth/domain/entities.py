@@ -389,6 +389,7 @@ class PKCEState:
     state: str
     code_verifier: str
     redirect_uri: str
+    oidc_redirect_uri: str | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     expires_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc) + timedelta(minutes=10))
     
@@ -403,6 +404,7 @@ class PKCEState:
             "state": self.state,
             "code_verifier": self.code_verifier,
             "redirect_uri": self.redirect_uri,
+            "oidc_redirect_uri": self.oidc_redirect_uri,
             "created_at": self.created_at.isoformat(),
             "expires_at": self.expires_at.isoformat(),
         }
@@ -414,6 +416,7 @@ class PKCEState:
             state=data["state"],
             code_verifier=data["code_verifier"],
             redirect_uri=data["redirect_uri"],
+            oidc_redirect_uri=data.get("oidc_redirect_uri"),
             created_at=datetime.fromisoformat(data["created_at"]),
             expires_at=datetime.fromisoformat(data["expires_at"]),
         )

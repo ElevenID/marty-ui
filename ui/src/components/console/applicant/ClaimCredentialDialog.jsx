@@ -30,12 +30,17 @@ import {
   Box,
   Stack,
   Alert,
+  Card,
+  CardContent,
   Collapse,
   Chip,
+  Checkbox,
   CircularProgress,
+  LinearProgress,
   Typography,
   useMediaQuery,
   useTheme,
+  FormControlLabel,
 } from '@mui/material';
 import EmailIcon from '@mui/icons-material/Email';
 import WalletIcon from '@mui/icons-material/AccountBalanceWallet';
@@ -45,6 +50,8 @@ import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import PhoneAndroidIcon from '@mui/icons-material/PhoneAndroid';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import LockIcon from '@mui/icons-material/Lock';
+import OpenInNewIcon from '@mui/icons-material/OpenInNew';
+import SchoolIcon from '@mui/icons-material/School';
 
 import OID4VCIInviteDisplay from '../../issuance/OID4VCIInviteDisplay';
 import { generateIssuanceOffer } from '../../../services/credentialsApi';
@@ -52,16 +59,25 @@ import { useAuth } from '../../../hooks/useAuth';
 import useWalletPreferences from '../../../hooks/useWalletPreferences';
 import { buildWalletOpenLink, listWallets } from '../../../services/walletRegistryApi';
 import { resolvePreferredCredentialOfferTransport } from '../../../services/walletTransportService';
+import { listDeliveryDestinations } from '../../../services/deliveryDestinationsApi';
 
 const APPLICANT_WALLET_SELECTION_SETTINGS_PATH = '/console/applicant/settings#wallet-selection';
+const ELEVENID_WALLET_DESTINATION_ID = 'dd-elevenid-wallet';
+const COMPATIBLE_WALLET_DESTINATION_ID = 'dd-oid4vci-compatible-wallet';
+const CANVAS_CREDENTIALS_DESTINATION_ID = 'dd-canvas-credentials-institutional';
 
-export default function ClaimCredentialDialog({ open, onClose, applicationId, offerData }) {
+export default function ClaimCredentialDialog({ open, onClose, applicationId, offerData, organizationId }) {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
   const { user } = useAuth();
   const { walletIds: preferredWallets } = useWalletPreferences(user?.user_id);
   const hasRegisteredWallet = preferredWallets.length > 0;
   const [registryWallets, setRegistryWallets] = useState([]);
+  const [deliveryDestinations, setDeliveryDestinations] = useState([]);
+  const [destinationsLoading, setDestinationsLoading] = useState(false);
+  const [destinationError, setDestinationError] = useState(null);
+  const [selectedDestinationId, setSelectedDestinationId] = useState(COMPATIBLE_WALLET_DESTINATION_ID);
+  const [canvasConsent, setCanvasConsent] = useState(true);
 
   const [liveOffer, setLiveOffer] = useState(offerData);
   const [refreshing, setRefreshing] = useState(false);
@@ -78,8 +94,10 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
       setEmailTab(false);
       setEmailSent(false);
       setEmailValue(user?.email || '');
+      setSelectedDestinationId(hasRegisteredWallet ? ELEVENID_WALLET_DESTINATION_ID : COMPATIBLE_WALLET_DESTINATION_ID);
+      setCanvasConsent(true);
     }
-  }, [open, applicationId]); // eslint-disable-line react-hooks/exhaustive-deps -- keep active QR stable while parent data refreshes
+  }, [open, applicationId, hasRegisteredWallet, user?.email]); // eslint-disable-line react-hooks/exhaustive-deps -- keep active QR stable while parent data refreshes
 
   // Load wallet registry once for label resolution
   useEffect(() => {
@@ -88,27 +106,72 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
       .catch(() => {});
   }, []);
 
+  useEffect(() => {
+    if (!open) return;
+    const orgId = organizationId || offerData?.organization_id;
+    if (!orgId) {
+      setDeliveryDestinations([]);
+      return;
+    }
+    let cancelled = false;
+    setDestinationsLoading(true);
+    setDestinationError(null);
+    listDeliveryDestinations({ activeOnly: true, organizationId: orgId })
+      .then((items) => {
+        if (!cancelled) setDeliveryDestinations(Array.isArray(items) ? items : []);
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setDeliveryDestinations([]);
+          setDestinationError(err?.message || 'Could not load delivery destinations.');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setDestinationsLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [open, organizationId, offerData?.organization_id]);
+
+  const canvasDestination = useMemo(() => (
+    deliveryDestinations.find((destination) => (
+      destination.id === CANVAS_CREDENTIALS_DESTINATION_ID
+      || (destination.provider === 'canvas_credentials' && destination.mode === 'organization_mirror')
+    )) || null
+  ), [deliveryDestinations]);
+
+  const canvasDestinationReady = Boolean(canvasDestination?.is_enabled !== false && canvasDestination);
+  const selectedIsCanvas = selectedDestinationId === CANVAS_CREDENTIALS_DESTINATION_ID;
+  const selectedRequiresRegisteredWallet = selectedDestinationId === ELEVENID_WALLET_DESTINATION_ID;
+  const canGenerateWalletOffer = !selectedIsCanvas && (!selectedRequiresRegisteredWallet || hasRegisteredWallet);
+
   const handleRegenerate = useCallback(async () => {
-    if (!applicationId) return;
+    if (!applicationId || !canGenerateWalletOffer) return;
     setRefreshing(true);
     setError(null);
     try {
-      const fresh = await generateIssuanceOffer(applicationId);
+      const selectedDestinationIds = [selectedDestinationId];
+      if (canvasConsent && canvasDestinationReady) {
+        selectedDestinationIds.push(canvasDestination.id || CANVAS_CREDENTIALS_DESTINATION_ID);
+      }
+      const fresh = await generateIssuanceOffer(applicationId, {
+        delivery_destination_ids: Array.from(new Set(selectedDestinationIds.filter(Boolean))),
+        canvas_credentials_consent: Boolean(canvasConsent && canvasDestinationReady),
+      });
       setLiveOffer(fresh);
     } catch (err) {
       setError(err?.message || 'Failed to generate wallet offer. Please try again.');
     } finally {
       setRefreshing(false);
     }
-  }, [applicationId]);
+  }, [applicationId, canGenerateWalletOffer, selectedDestinationId, canvasConsent, canvasDestinationReady, canvasDestination]);
 
   // OID4VCI pre-authorized codes are single-use. A previous wallet attempt can
   // consume a code even when its offer has not expired, so mint a fresh offer on
   // every claim dialog open instead of trusting cached application metadata.
   useEffect(() => {
-    if (!open || !applicationId || !hasRegisteredWallet) return;
+    if (!open || !applicationId || !canGenerateWalletOffer) return;
     handleRegenerate();
-  }, [open, applicationId, hasRegisteredWallet, handleRegenerate]);
+  }, [open, applicationId, canGenerateWalletOffer, handleRegenerate]);
 
   // Build per-wallet offer data.
   // When the backend already provides per-wallet URIs, use them.
@@ -184,10 +247,41 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
   const offerUrl = liveOffer?.offer_url || null;
   const primaryOfferUrl = preferredTransport.offerUri || offerUrl;
   const isExpired = liveOffer?.status === 'expired';
-  const loadingInitialOffer = hasRegisteredWallet && (refreshing || (applicationId && liveOffer === null)) && !primaryOfferUrl && !error;
-  const notGenerated = hasRegisteredWallet && !loadingInitialOffer && liveOffer != null && !primaryOfferUrl && !error;
-  const showWalletRegistrationGuard = !hasRegisteredWallet;
-  const showContent = hasRegisteredWallet && !loadingInitialOffer && !notGenerated && !!primaryOfferUrl && !isExpired && !error;
+  const loadingInitialOffer = canGenerateWalletOffer && (refreshing || (applicationId && liveOffer === null)) && !primaryOfferUrl && !error;
+  const notGenerated = canGenerateWalletOffer && !loadingInitialOffer && liveOffer != null && !primaryOfferUrl && !error;
+  const showWalletRegistrationGuard = selectedRequiresRegisteredWallet && !hasRegisteredWallet;
+  const showCanvasOnlyMessage = selectedIsCanvas;
+  const showContent = canGenerateWalletOffer && !loadingInitialOffer && !notGenerated && !!primaryOfferUrl && !isExpired && !error;
+  const destinationOptions = [
+    {
+      id: ELEVENID_WALLET_DESTINATION_ID,
+      title: 'Add to ElevenID Wallet',
+      description: hasRegisteredWallet
+        ? 'Use your selected wallet app and wallet-specific handoff.'
+        : 'Choose a wallet app in settings before using this option.',
+      icon: <WalletIcon fontSize="small" />,
+      disabled: false,
+      chip: hasRegisteredWallet ? 'Ready' : 'Setup needed',
+    },
+    {
+      id: COMPATIBLE_WALLET_DESTINATION_ID,
+      title: 'Open in compatible wallet',
+      description: 'Use a standards-based OID4VCI link or QR code with any compatible wallet.',
+      icon: <OpenInNewIcon fontSize="small" />,
+      disabled: false,
+      chip: 'OID4VCI',
+    },
+    {
+      id: CANVAS_CREDENTIALS_DESTINATION_ID,
+      title: 'Show in Canvas Credentials',
+      description: canvasDestinationReady
+        ? 'Publishes the public badge view after canonical issuance.'
+        : 'Requires your organization to enable Canvas Credentials publishing.',
+      icon: <SchoolIcon fontSize="small" />,
+      disabled: !canvasDestinationReady,
+      chip: canvasDestinationReady ? 'Org managed' : 'Not configured',
+    },
+  ];
 
   // Deep link handler for mobile
   const handleOpenInWallet = async () => {
@@ -226,7 +320,7 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
     <Dialog open={open} onClose={onClose} maxWidth="xs" fullWidth>
       <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1, pb: 1 }}>
         <WalletIcon color="primary" />
-        Add to Wallet
+        Receive Credential
         {showWalletRegistrationGuard && <Chip label="Wallet required" color="warning" size="small" sx={{ ml: 'auto' }} />}
         {isExpired && <Chip label="Expired" color="error" size="small" sx={{ ml: 'auto' }} />}
         {showContent && <Chip label="Ready" color="success" size="small" sx={{ ml: 'auto' }} />}
@@ -234,6 +328,93 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
       </DialogTitle>
 
       <DialogContent dividers>
+        <Stack spacing={1.25} sx={{ mb: 2 }} data-testid="delivery-destination-selector">
+          {destinationsLoading && <LinearProgress />}
+          {destinationError && <Alert severity="info">{destinationError}</Alert>}
+          {destinationOptions.map((option) => {
+            const selected = option.id === selectedDestinationId;
+            return (
+              <Card
+                key={option.id}
+                variant="outlined"
+                role="button"
+                tabIndex={option.disabled ? -1 : 0}
+                aria-pressed={selected}
+                data-testid={`delivery-destination-${option.id}`}
+                onClick={() => {
+                  if (!option.disabled) setSelectedDestinationId(option.id);
+                }}
+                onKeyDown={(event) => {
+                  if (!option.disabled && (event.key === 'Enter' || event.key === ' ')) {
+                    event.preventDefault();
+                    setSelectedDestinationId(option.id);
+                  }
+                }}
+                sx={{
+                  opacity: option.disabled ? 0.55 : 1,
+                  cursor: option.disabled ? 'not-allowed' : 'pointer',
+                  borderColor: selected ? 'primary.main' : 'divider',
+                  bgcolor: selected ? 'action.selected' : 'background.paper',
+                }}
+              >
+                <CardContent sx={{ py: 1.25, '&:last-child': { pb: 1.25 } }}>
+                  <Stack direction="row" spacing={1.25} alignItems="flex-start">
+                    <Box sx={{ color: selected ? 'primary.main' : 'text.secondary', mt: 0.25 }}>
+                      {option.icon}
+                    </Box>
+                    <Box sx={{ minWidth: 0, flex: 1 }}>
+                      <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+                        <Typography variant="body2" fontWeight={700}>{option.title}</Typography>
+                        <Chip size="small" label={option.chip} color={selected && !option.disabled ? 'primary' : 'default'} variant="outlined" />
+                      </Stack>
+                      <Typography variant="caption" color="text.secondary">
+                        {option.description}
+                      </Typography>
+                    </Box>
+                    {selected && <CheckCircleIcon color="primary" fontSize="small" />}
+                  </Stack>
+                </CardContent>
+              </Card>
+            );
+          })}
+        </Stack>
+
+        {!selectedIsCanvas && canvasDestinationReady && (
+          <FormControlLabel
+            sx={{ mb: 1.5, alignItems: 'flex-start' }}
+            control={
+              <Checkbox
+                checked={canvasConsent}
+                onChange={(event) => setCanvasConsent(event.target.checked)}
+                size="small"
+              />
+            }
+            label={
+              <Box>
+                <Typography variant="body2">Show a public badge in Canvas Credentials when available</Typography>
+                <Typography variant="caption" color="text.secondary">
+                  Your organization manages this destination; only the public badge verification view is published.
+                </Typography>
+              </Box>
+            }
+          />
+        )}
+
+        {showCanvasOnlyMessage && (
+          <Stack spacing={2} sx={{ py: 1 }} data-testid="canvas-credentials-destination-message">
+            <Alert severity={canvasDestinationReady ? 'info' : 'warning'}>
+              Canvas Credentials display happens after the credential is issued. Add the credential to a wallet first, then ElevenID can publish the public badge view to Canvas.
+            </Alert>
+            <Button
+              variant="contained"
+              startIcon={<OpenInNewIcon />}
+              onClick={() => setSelectedDestinationId(COMPATIBLE_WALLET_DESTINATION_ID)}
+            >
+              Use Compatible Wallet First
+            </Button>
+          </Stack>
+        )}
+
         {showWalletRegistrationGuard && (
           <Stack spacing={2} sx={{ py: 1 }} data-testid="wallet-registration-guard">
             <Alert severity="warning" icon={<WalletIcon fontSize="small" />}>
@@ -265,7 +446,7 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
           </Stack>
         )}
         {/* ── Error state with retry ── */}
-        {hasRegisteredWallet && error && (
+        {canGenerateWalletOffer && error && (
           <Stack spacing={2} alignItems="center" sx={{ py: 2 }}>
             <Alert severity="error" sx={{ width: '100%' }}>{error}</Alert>
             <Button
@@ -288,7 +469,7 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
         )}
 
         {/* ── Expired ── */}
-        {hasRegisteredWallet && isExpired && (
+        {canGenerateWalletOffer && isExpired && (
           <Alert
             severity="warning"
             action={
@@ -331,8 +512,8 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
               onRegenerate={applicationId ? handleRegenerate : undefined}
               loading={refreshing}
               showDeepLink={!isMobile}
-              allowedWalletIds={hasRegisteredWallet ? preferredWallets : null}
-              showDefaultWalletTab={!hasRegisteredWallet}
+              allowedWalletIds={selectedRequiresRegisteredWallet ? preferredWallets : null}
+              showDefaultWalletTab={!selectedRequiresRegisteredWallet}
               title={isMobile ? 'Or scan with another device' : 'Scan with your wallet app'}
               instructions={
                 isMobile

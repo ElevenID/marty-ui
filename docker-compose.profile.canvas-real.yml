@@ -29,6 +29,9 @@ services:
     image: python:3.12-alpine
     container_name: marty-issuance-canvas-localhost-bridge
     network_mode: "service:issuance"
+    environment:
+      CANVAS_LOCALHOST_BRIDGE_PUBLIC_BASE: https://${CANVAS_REAL_PUBLIC_HOST:-canvas-test.${PUBLIC_DOMAIN:-beta.elevenidllc.com}}
+      CANVAS_LOCALHOST_BRIDGE_UPSTREAM: http://host.docker.internal:${CANVAS_REAL_HOST_PORT:-8088}
     depends_on:
       issuance:
         condition: service_started
@@ -42,6 +45,10 @@ services:
   canvas-real:
     image: ${CANVAS_REAL_IMAGE:-readystack/canvas:v5.14.2-CE-ubuntu24.04-r1}
     container_name: marty-canvas-real
+    environment:
+      CANVAS_DOMAIN: ${CANVAS_REAL_PUBLIC_HOST:-canvas-test.${PUBLIC_DOMAIN:-beta.elevenidllc.com}}
+      CANVAS_REAL_LTI_ISS: https://${CANVAS_REAL_PUBLIC_HOST:-canvas-test.${PUBLIC_DOMAIN:-beta.elevenidllc.com}}
+      RAILS_HOST_WITH_PORT: ${CANVAS_REAL_PUBLIC_HOST:-canvas-test.${PUBLIC_DOMAIN:-beta.elevenidllc.com}}
     ports:
       - "${CANVAS_REAL_HOST_PORT:-8088}:3000"
     networks:
@@ -54,7 +61,7 @@ services:
       - ./config/canvas/session_store.local.yml:/usr/src/app/config/session_store.yml:ro
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://127.0.0.1:3000/ || exit 1"]
+      test: ["CMD-SHELL", "curl --fail --silent --show-error --output /dev/null http://127.0.0.1:3000/login || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 15

@@ -125,7 +125,7 @@ describe('Credential Application — end-to-end interaction', () => {
       readFileAsBase64: vi.fn(),
     });
 
-    expect(result).toEqual({ applicationId: 'appl-1', submitted: true });
+    expect(result).toEqual({ applicationId: 'appl-1', applicationReference: null, submitted: true });
   });
 
   it('auto-apply fast path returns wallet offer in one step', async () => {
@@ -134,10 +134,12 @@ describe('Credential Application — end-to-end interaction', () => {
       user: { ...USER, user_id: 'user-42' },
       credentialConfig: { id: 'tpl-mdl' },
       credentialConfigId: 'tpl-mdl',
+      hasRegisteredWallet: true,
       resolveApplicantId: vi.fn().mockResolvedValue('app-1'),
       createApplicant: vi.fn(),
       createApplication: vi.fn().mockResolvedValue({ id: 'appl-2' }),
-      autoIssueApplication: vi.fn().mockResolvedValue({
+      submitApplication: vi.fn().mockResolvedValue({ id: 'appl-2' }),
+      generateIssuanceOffer: vi.fn().mockResolvedValue({
         id: 'appl-2',
         credential_offer_uri: 'openid-credential-offer://example.com/offer?id=abc',
         credential_offer_uris: { marty: 'openid-credential-offer://marty/offer?id=abc' },
@@ -155,16 +157,18 @@ describe('Credential Application — end-to-end interaction', () => {
     });
   });
 
-  it('auto-apply returns existing application when duplicate detected', async () => {
+  it('auto-apply returns the existing application while waiting for wallet selection', async () => {
     const result = await autoApplyForCredential({
       organizationId: ORG.id,
       user: USER,
       credentialConfig: { id: 'tpl-mdl' },
       credentialConfigId: 'tpl-mdl',
+      hasRegisteredWallet: false,
       resolveApplicantId: vi.fn().mockResolvedValue('app-1'),
       createApplicant: vi.fn(),
       createApplication: vi.fn(),
-      autoIssueApplication: vi.fn(),
+      submitApplication: vi.fn(),
+      generateIssuanceOffer: vi.fn(),
       listApplications: vi.fn().mockResolvedValue({
         applications: [
           {
@@ -181,6 +185,7 @@ describe('Credential Application — end-to-end interaction', () => {
     expect(result).toMatchObject({
       applicationId: 'existing-appl',
       existingApplication: true,
+      requiresWalletSelection: true,
     });
   });
 

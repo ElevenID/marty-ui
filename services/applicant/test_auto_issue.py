@@ -108,12 +108,17 @@ def _fake_issuance_post(captured: dict | None = None):
         if captured is not None:
             captured.update((json or {}).get("claims", {}))
         resp = MagicMock()
+        resp.status_code = 200
+        resp.content = b"{}"
         resp.raise_for_status = lambda: None
         resp.json.return_value = {
-            "id": offer_id,
-            "credential_offer_uri": f"openid-credential-offer://?id={offer_id}",
-            "credential_offer_uris": {"marty": f"marty://offer/{offer_id}"},
-            "expires_at": "2026-03-08T00:00:00Z",
+            "offers": [{
+                "flow_instance_id": f"flow-{offer_id}",
+                "credential_offer_transaction_id": offer_id,
+                "credential_offer_uri": f"openid-credential-offer://?id={offer_id}",
+                "credential_offer_uris": {"marty": f"marty://offer/{offer_id}"},
+                "expires_at": "2026-03-08T00:00:00Z",
+            }],
         }
         return resp
 
@@ -181,6 +186,40 @@ class TestSubmitNormal:
 # Tests: POST …/auto-issue
 # ---------------------------------------------------------------------------
 
+class TestSupersedeApplication:
+    def test_superseding_approved_application_allows_reapplication(self, seeded):
+        repo, client, applicant = seeded
+        app_id = client.post(
+            "/v1/applicants/applications",
+            json=_make_app_payload(applicant.id, auto_approve=True),
+        ).json()["id"]
+        client.post(f"/v1/applicants/applications/{app_id}/submit")
+
+        duplicate = client.post(
+            "/v1/applicants/applications",
+            json=_make_app_payload(applicant.id, auto_approve=True),
+        )
+        assert duplicate.status_code == 409
+
+        supersede = client.post(
+            f"/v1/applicants/applications/{app_id}/supersede",
+            json={
+                "reason": "superseded_by_canvas_reapplication",
+                "replacement_credential_configuration_id": "50000000-0000-0000-0000-000000000010",
+                "source": "canvas_lti_reapplication",
+            },
+        )
+        assert supersede.status_code == 200, supersede.text
+        assert supersede.json()["status"] == ApplicationStatus.WITHDRAWN.value
+
+        replacement = client.post(
+            "/v1/applicants/applications",
+            json=_make_app_payload(applicant.id, auto_approve=True),
+        )
+        assert replacement.status_code == 200, replacement.text
+        assert replacement.json()["id"] != app_id
+
+
 class TestAutoIssueEndpoint:
     def test_full_flow_reaches_issued(self, seeded):
         repo, client, applicant = seeded
@@ -238,3 +277,33 @@ class TestAutoIssueEndpoint:
                     "review_notes", "rejection_reason", "info_requests"}
         leaked = internal & captured.keys()
         assert not leaked, f"Internal fields leaked into VC claims: {leaked}"
+
+    def test_issue_records_delivery_preferences_without_leaking_claims(self, seeded):
+        repo, client, applicant = seeded
+        app_id = client.post(
+            "/v1/applicants/applications",
+            json=_make_app_payload(applicant.id, auto_approve=True),
+        ).json()["id"]
+        client.post(f"/v1/applicants/applications/{app_id}/submit")
+
+        captured: dict = {}
+        with _fake_issuance_post(captured=captured):
+            resp = client.post(
+                f"/v1/applicants/applications/{app_id}/issue",
+                json={
+                    "delivery_destination_ids": [
+                        "dd-oid4vci-compatible-wallet",
+                        "dd-canvas-credentials-institutional",
+                    ],
+                    "canvas_credentials_consent": True,
+                },
+            )
+
+        assert resp.status_code == 200, resp.text
+        saved = _run(repo.get_application(app_id))
+        assert saved.metadata["delivery_preferences"]["canvas_credentials_consent"] is True
+        assert saved.metadata["delivery_preferences"]["delivery_destination_ids"] == [
+            "dd-oid4vci-compatible-wallet",
+            "dd-canvas-credentials-institutional",
+        ]
+        assert "delivery_preferences" not in captured

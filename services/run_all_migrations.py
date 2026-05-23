@@ -35,6 +35,8 @@ from marty_common.migration import (
     AlembicMigrationAdapter,
     MigrationError,
 )
+from marty_common.migration_profile import migration_profile, migration_profile_settings
+from marty_common.system_ids import MARTY_DEFAULT_ORG_ID, MARTY_DEFAULT_ORG_SLUG
 
 
 # Service configurations
@@ -81,9 +83,6 @@ SERVICES = [
     },
 ]
 
-
-MARTY_DEFAULT_ORG_ID = "00000000-0000-0000-0000-000000000001"
-MARTY_DEFAULT_ORG_SLUG = "marty"
 MANAGED_OPENBAO_SERVICE_ID = "managed-openbao-transit"
 
 MARTY_KMS_KEY_SPECS: list[dict[str, Any]] = [
@@ -859,6 +858,18 @@ def main():
     print("="*60)
     print(f"Database: {database_url.split('@')[1] if '@' in database_url else database_url}")
     print(f"Mode: {'Verify Only' if args.verify_only else 'Apply Migrations'}")
+    profile = migration_profile()
+    settings = migration_profile_settings()
+    print(
+        "Profile: "
+        f"{profile} "
+        f"(demo={settings.include_demo_seed_data}, "
+        f"beta={settings.include_beta_seed_data}, "
+        f"experiments={settings.include_experimental_seed_data}, "
+        f"test={settings.include_test_seed_data}, "
+        f"experimental_fixes={settings.allow_experimental_data_fixes}, "
+        f"persistent={settings.persistent})"
+    )
     
     # Ensure schemas exist first
     if not args.verify_only:

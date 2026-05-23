@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "name": "tunnel-beta-dev",
+  "description": "Reset-friendly beta development stack served through the beta Cloudflare tunnel.",
+  "env_file": ".env.tunnel.beta.local",
+  "compose_files": [
+    "docker-compose.base.yml",
+    "docker-compose.profile.dev.yml",
+    "docker-compose.profile.tunnel.yml"
+  ],
+  "compose_profiles": [],
+  "domains": ["beta.elevenidllc.com"],
+  "primary_domain": "beta.elevenidllc.com",
+  "required_service_groups": ["infra", "app"],
+  "required_services": ["tunnel-nginx-proxy", "cloudflared"],
+  "required_secrets": ["cloudflare_tunnel_token"],
+  "license_policy": "internal-dev",
+  "artifact_profile": "source-debuggable",
+  "deployment_targets": ["docker-compose"],
+  "operations": {
+    "config": ["config"],
+    "up": ["up", "-d"],
+    "down": ["down"],
+    "ps": ["ps"],
+    "logs": ["logs", "-f"]
+  }
+}

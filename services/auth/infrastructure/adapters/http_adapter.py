@@ -8,6 +8,7 @@ This is the inbound adapter that exposes the use cases via REST.
 from __future__ import annotations
 
 import base64
+import hashlib
 import html as _html
 import json
 import logging
@@ -16,9 +17,11 @@ import secrets
 from typing import Annotated, Any
 from urllib.parse import parse_qs, quote, urlencode, urlparse
 
+import httpx
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel
+from marty_common.system_ids import MARTY_OPEN_BADGE_LOGIN_POLICY_ID
 
 from ...application.ports import (
     HandleCallbackCommand,
@@ -41,7 +44,8 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
-_CREDENTIAL_LOGIN_ASSET_VERSION = "20260503-wallet-routing-v6"
+_CREDENTIAL_LOGIN_ASSET_VERSION = "20260519-credential-login-errors-v7"
+_DEFAULT_OPEN_BADGE_LOGIN_POLICY_ID = MARTY_OPEN_BADGE_LOGIN_POLICY_ID
 
 
 _CREDENTIAL_LOGIN_WALLET_CHOICES: tuple[dict[str, str], ...] = (
@@ -260,6 +264,101 @@ def _render_credential_login_page(
         wallet_help_text=_html.escape(default_wallet["description"], quote=True),
     )
 
+
+def _render_credential_login_action_link(
+    *,
+    href: str,
+    label: str,
+    primary: bool,
+) -> str:
+    css_class = "open-btn" if primary else "secondary-btn"
+    return (
+        f'<a class="{css_class}" href="{_html.escape(href, quote=True)}">'
+        f'{_html.escape(label)}</a>'
+    )
+
+
+def _render_credential_login_error_page(
+    *,
+    title: str,
+    message: str,
+    primary_action_href: str,
+    primary_action_label: str,
+    secondary_action_href: str = "",
+    secondary_action_label: str = "",
+    operator_details: str = "",
+) -> str:
+    actions = [
+        _render_credential_login_action_link(
+            href=primary_action_href,
+            label=primary_action_label,
+            primary=True,
+        )
+    ]
+    if secondary_action_href and secondary_action_label:
+        actions.append(
+            _render_credential_login_action_link(
+                href=secondary_action_href,
+                label=secondary_action_label,
+                primary=False,
+            )
+        )
+
+    operator_details_html = ""
+    if operator_details:
+        operator_details_html = (
+            '<details class="notice">'
+            '<summary>Operator details</summary>'
+            f'<p>{_html.escape(operator_details)}</p>'
+            '</details>'
+        )
+
+    return _CREDENTIAL_LOGIN_ERROR_PAGE.format(
+        title=_html.escape(title),
+        message=_html.escape(message),
+        asset_version=_html.escape(_CREDENTIAL_LOGIN_ASSET_VERSION, quote=True),
+        actions_html="\n".join(actions),
+        operator_details_html=operator_details_html,
+    )
+
+
+def _credential_login_unavailable_response(
+    request: Request,
+    *,
+    title: str,
+    message: str,
+    operator_details: str = "",
+    allow_retry: bool = False,
+) -> HTMLResponse:
+    referer = (request.headers.get("referer") or "").strip()
+    back_url = _sanitize_redirect_uri(referer, _ui_base_url) if referer else ""
+    home_url = _ui_base_url or "/"
+
+    if allow_retry:
+        primary_action_href = str(request.url.path or "/v1/auth/credential-login")
+        primary_action_label = "Try again"
+        secondary_action_href = back_url or home_url
+        secondary_action_label = "Back to sign in" if back_url else "Return to ElevenID"
+    else:
+        primary_action_href = back_url or home_url
+        primary_action_label = "Back to sign in" if back_url else "Return to ElevenID"
+        secondary_action_href = home_url if back_url else ""
+        secondary_action_label = "Return to ElevenID" if back_url else ""
+
+    return HTMLResponse(
+        content=_render_credential_login_error_page(
+            title=title,
+            message=message,
+            primary_action_href=primary_action_href,
+            primary_action_label=primary_action_label,
+            secondary_action_href=secondary_action_href,
+            secondary_action_label=secondary_action_label,
+            operator_details=operator_details,
+        ),
+        status_code=503,
+        headers={"Cache-Control": "no-store, max-age=0"},
+    )
+
 # Create router with versioned prefix
 router = APIRouter(prefix="/v1/auth", tags=["authentication"])
 
@@ -355,6 +454,13 @@ _credential_login_policy_id: str = os.environ.get("CREDENTIAL_LOGIN_POLICY_ID", 
 _auth_service_internal_url: str = os.environ.get(
     "AUTH_SERVICE_INTERNAL_URL", "http://auth:8001"
 )
+_issuance_service_url: str = os.environ.get("ISSUANCE_SERVICE_URL", "http://issuance:8005")
+_canvas_lti_session_ttl_seconds = int(
+    os.environ.get(
+        "CANVAS_LTI_SESSION_TTL_SECONDS",
+        os.environ.get("SESSION_TTL_SECONDS", "86400"),
+    )
+)
 _kc_admin_adapter: Any | None = None  # KeycloakAdminAdapter | None
 _user_provisioning: UserProvisioningPort | None = None
 _applicant_profile_provisioner: Any | None = None
@@ -371,6 +477,141 @@ _PENDING_KEY = "marty:cred_login:pending:"
 _COMPLETE_KEY = "marty:cred_login:complete:"
 _PENDING_TTL = 900   # 15 minutes
 _COMPLETE_TTL = 300  # 5 minutes (consumed once)
+
+
+def _credential_login_failure_reason_code(reason: str | None) -> str:
+    normalized_reason = (reason or "").strip()
+    lowered_reason = normalized_reason.lower()
+
+    if normalized_reason in {
+        "keycloak_user_not_found",
+        "keycloak_user_not_eligible",
+        "keycloak_admin_unavailable",
+    }:
+        return normalized_reason
+    if any(
+        marker in lowered_reason
+        for marker in (
+            "does not match any trust source issuer identifier",
+            "not in trust profile allowed_issuers",
+            "explicitly denied by trust profile",
+        )
+    ):
+        return "issuer_not_trusted"
+    if any(
+        marker in lowered_reason
+        for marker in (
+            "missing email claim",
+            "missing email",
+            "no email in verified_claims",
+        )
+    ):
+        return "missing_email_claim"
+    if "revocation status was not checked" in lowered_reason:
+        return "revocation_not_checked"
+    if "credential is revoked" in lowered_reason:
+        return "credential_revoked"
+    if any(
+        marker in lowered_reason
+        for marker in (
+            "policy service unavailable",
+            "temporarily unavailable",
+            "trust profile validation failed",
+            "could not be loaded",
+        )
+    ):
+        return "verification_service_unavailable"
+    if any(
+        marker in lowered_reason
+        for marker in (
+            "did resolution failed",
+            "unsupported credential format",
+            "malformed",
+            "invalid credential",
+            "invalid presentation",
+        )
+    ):
+        return "credential_payload_invalid"
+    return "verification_failed"
+
+
+def _credential_login_failure_message(reason_code: str) -> str:
+    return {
+        "issuer_not_trusted": (
+            "This badge was issued by an issuer that ElevenID does not trust for sign-in on this site."
+        ),
+        "missing_email_claim": "This badge is missing the email claim required for sign-in.",
+        "revocation_not_checked": "We could not confirm this badge is still active.",
+        "credential_revoked": "This badge has been revoked and can no longer be used for sign-in.",
+        "verification_service_unavailable": (
+            "Open Badge sign-in is temporarily unavailable. Please try again in a moment."
+        ),
+        "credential_payload_invalid": "We could not verify the badge that was presented.",
+        "keycloak_user_not_found": (
+            "We verified the badge, but no ElevenID account matches the email in it."
+        ),
+        "keycloak_user_not_eligible": (
+            "We verified the badge, but the matching ElevenID account is not eligible for Open Badge sign-in."
+        ),
+        "keycloak_admin_unavailable": (
+            "We verified the badge, but account lookup is temporarily unavailable."
+        ),
+    }.get(reason_code, "We could not verify this Open Badge for sign-in.")
+
+
+def _credential_login_failure_detail(reason_code: str, reason: str | None) -> str | None:
+    normalized_reason = (reason or "").strip()
+    if not normalized_reason or normalized_reason == reason_code:
+        return None
+    if reason_code in {
+        "keycloak_user_not_found",
+        "keycloak_user_not_eligible",
+        "keycloak_admin_unavailable",
+    }:
+        return None
+    return normalized_reason
+
+
+def _credential_login_failure_payload(reason: str | None) -> dict[str, Any]:
+    normalized_reason = (reason or "").strip()
+    reason_code = _credential_login_failure_reason_code(normalized_reason)
+    payload: dict[str, Any] = {
+        "status": "failed",
+        "reason_code": reason_code,
+        "message": _credential_login_failure_message(reason_code),
+    }
+    if normalized_reason:
+        payload["reason"] = normalized_reason
+    detail = _credential_login_failure_detail(reason_code, normalized_reason)
+    if detail:
+        payload["detail"] = detail
+    return payload
+
+
+def _coerce_credential_login_failure_payload(data: dict[str, Any]) -> dict[str, Any]:
+    if data.get("reason_code") and data.get("message"):
+        payload = dict(data)
+        payload.setdefault("status", "failed")
+        return payload
+
+    payload = _credential_login_failure_payload(
+        data.get("reason") or data.get("detail") or data.get("message")
+    )
+    if data.get("detail") and not payload.get("detail"):
+        payload["detail"] = str(data["detail"])
+    return payload
+
+
+def _credential_login_failure_redirect_url(data: dict[str, Any]) -> str:
+    failure_payload = _coerce_credential_login_failure_payload(data)
+    query_params = {
+        "auth_error": failure_payload.get("message") or "Verification failed",
+    }
+    if failure_payload.get("reason_code"):
+        query_params["auth_error_code"] = failure_payload["reason_code"]
+    if failure_payload.get("detail"):
+        query_params["auth_error_detail"] = failure_payload["detail"]
+    return f"{_ui_base_url}/?{urlencode(query_params)}"
 
 
 def _sanitize_redirect_uri(redirect_uri: str | None, ui_base_url: str) -> str:
@@ -402,6 +643,320 @@ def _sanitize_redirect_uri(redirect_uri: str | None, ui_base_url: str) -> str:
         return parsed.path or "/"
     except Exception:
         return "/"
+
+
+def _is_same_origin_root_url(url: str, ui_base_url: str) -> bool:
+    try:
+        parsed = urlparse(url)
+        base = urlparse(ui_base_url)
+    except Exception:
+        return False
+
+    return (
+        parsed.scheme == base.scheme
+        and parsed.netloc == base.netloc
+        and (parsed.path or "/") == "/"
+        and not parsed.query
+        and not parsed.fragment
+    )
+
+
+def _resolve_post_auth_redirect(redirect_uri: str | None, ui_base_url: str) -> str:
+    """Resolve the final post-auth path within the UI.
+
+    Successful sign-in should land in the authenticated console experience when
+    the original target was the public root. Sending users back to `/` makes the
+    session look like it failed because the marketing homepage is largely the
+    same for authenticated and unauthenticated visitors.
+    """
+    sanitized = _sanitize_redirect_uri(redirect_uri, ui_base_url)
+
+    if sanitized == "/" or _is_same_origin_root_url(sanitized, ui_base_url):
+        return "/console"
+
+    return sanitized
+
+
+def _build_ui_redirect_url(redirect_uri: str | None, ui_base_url: str) -> str:
+    resolved = _resolve_post_auth_redirect(redirect_uri, ui_base_url)
+
+    if resolved.startswith("/"):
+        return f"{ui_base_url.rstrip('/')}{resolved}"
+
+    return resolved
+
+
+def _first_non_empty_string(*values: Any) -> str | None:
+    for value in values:
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _lti_lis_claims(raw_claims: dict[str, Any]) -> dict[str, Any]:
+    for key in (
+        "https://purl.imsglobal.org/spec/lti/claim/lis",
+        "lis",
+    ):
+        value = raw_claims.get(key)
+        if isinstance(value, dict):
+            return value
+    return {}
+
+
+def _split_canvas_lti_name(name: str | None) -> tuple[str | None, str | None]:
+    normalized = (name or "").strip()
+    if not normalized:
+        return None, None
+    parts = normalized.split()
+    if len(parts) == 1:
+        return parts[0], None
+    return parts[0], " ".join(parts[1:])
+
+
+def _email_local_part(email: str | None) -> str | None:
+    normalized = (email or "").strip()
+    if "@" not in normalized:
+        return None
+    local_part = normalized.split("@", 1)[0].strip()
+    return local_part or None
+
+
+def _build_canvas_lti_user(session_payload: dict[str, Any]) -> AuthenticatedUser:
+    """Create a constrained applicant identity from a verified Canvas LTI launch."""
+    verified_launch = session_payload.get("verified_launch")
+    if not isinstance(verified_launch, dict):
+        raise ValueError("Canvas LTI session is missing verified launch data")
+
+    learner = verified_launch.get("learner_identity")
+    if not isinstance(learner, dict):
+        learner = {}
+    raw_claims = verified_launch.get("raw_claims")
+    if not isinstance(raw_claims, dict):
+        raw_claims = {}
+    lis_claims = _lti_lis_claims(raw_claims)
+
+    issuer = _first_non_empty_string(
+        verified_launch.get("issuer"),
+        raw_claims.get("iss"),
+        session_payload.get("canvas_account_id"),
+        "canvas",
+    )
+    subject = _first_non_empty_string(
+        verified_launch.get("subject"),
+        learner.get("subject"),
+        raw_claims.get("sub"),
+        learner.get("id"),
+    )
+    if not subject:
+        raise ValueError("Canvas LTI session is missing a learner subject")
+
+    digest = hashlib.sha256(f"{issuer}|{subject}".encode("utf-8")).hexdigest()
+    email = _first_non_empty_string(
+        learner.get("email"),
+        raw_claims.get("email"),
+        raw_claims.get("lis_person_contact_email_primary"),
+        lis_claims.get("person_contact_email_primary"),
+    )
+    if not email:
+        email = f"canvas-{digest[:16]}@canvas.lti.local"
+
+    display_name = _first_non_empty_string(
+        learner.get("name"),
+        raw_claims.get("name"),
+        raw_claims.get("lis_person_name_full"),
+        lis_claims.get("person_name_full"),
+    )
+    inferred_given_name, inferred_family_name = _split_canvas_lti_name(display_name)
+    given_name = _first_non_empty_string(
+        learner.get("given_name"),
+        raw_claims.get("given_name"),
+        raw_claims.get("lis_person_name_given"),
+        lis_claims.get("person_name_given"),
+        inferred_given_name,
+    )
+    family_name = _first_non_empty_string(
+        learner.get("family_name"),
+        raw_claims.get("family_name"),
+        raw_claims.get("lis_person_name_family"),
+        lis_claims.get("person_name_family"),
+        inferred_family_name,
+    )
+
+    organization_id = _first_non_empty_string(
+        session_payload.get("organization_id"),
+        verified_launch.get("organization_id"),
+    )
+    organization_name = _first_non_empty_string(
+        session_payload.get("organization_name"),
+        os.environ.get("CANVAS_LTI_ORGANIZATION_NAME"),
+        os.environ.get("MARTY_ORG_NAME"),
+        "ElevenID LLC",
+    )
+    organization = (
+        {organization_id: {"name": organization_name, "source": "canvas_lti"}}
+        if organization_id
+        else None
+    )
+
+    return AuthenticatedUser(
+        user_id=f"canvas-lti-{digest[:32]}",
+        email=email,
+        username=_first_non_empty_string(
+            learner.get("preferred_username"),
+            raw_claims.get("preferred_username"),
+            learner.get("login_id"),
+            raw_claims.get("login_id"),
+            raw_claims.get("lis_person_sourcedid"),
+            lis_claims.get("person_sourcedid"),
+            _email_local_part(email),
+            display_name,
+            subject,
+            f"canvas-{digest[:12]}",
+        ),
+        given_name=given_name,
+        family_name=family_name,
+        user_type=UserType.APPLICANT,
+        roles=["applicant", "canvas_lti_learner"],
+        organization_id=organization_id,
+        organization_name=organization_name,
+        organization=organization,
+    )
+
+
+async def _fetch_canvas_lti_experience_session(state: str) -> dict[str, Any]:
+    normalized_state = (state or "").strip()
+    if not normalized_state:
+        raise HTTPException(status_code=400, detail="Canvas LTI state is required")
+
+    url = (
+        f"{_issuance_service_url.rstrip('/')}"
+        f"/v1/integrations/canvas/lti/experience-sessions/{quote(normalized_state, safe='')}"
+    )
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
+            response = await client.get(url)
+    except httpx.TimeoutException as exc:
+        raise HTTPException(status_code=504, detail="Canvas LTI session lookup timed out") from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail="Canvas LTI session lookup failed") from exc
+
+    if response.status_code == 404:
+        raise HTTPException(status_code=404, detail="Canvas LTI session not found")
+    if response.status_code >= 500:
+        raise HTTPException(status_code=502, detail="Canvas LTI session service failed")
+    if response.status_code >= 400:
+        raise HTTPException(status_code=response.status_code, detail="Canvas LTI session is invalid")
+
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail="Canvas LTI session response was invalid") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=502, detail="Canvas LTI session response was invalid")
+    return payload
+
+
+def _normalized_origin(origin: str | None) -> str | None:
+    if not origin:
+        return None
+
+    try:
+        parsed = urlparse(origin.strip())
+    except Exception:
+        return None
+
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return None
+
+    return f"{parsed.scheme}://{parsed.netloc}".rstrip("/")
+
+
+def _split_csv(value: str | None) -> list[str]:
+    if not value:
+        return []
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _allowed_ui_base_urls() -> set[str]:
+    allowed = {_normalized_origin(_ui_base_url)}
+    for env_name in (
+        "UI_ADDITIONAL_BASE_URLS",
+        "AUTH_ADDITIONAL_UI_BASE_URLS",
+        "CORS_ORIGINS",
+    ):
+        for origin in _split_csv(os.environ.get(env_name)):
+            allowed.add(_normalized_origin(origin))
+    return {origin for origin in allowed if origin}
+
+
+def _origin_with_matching_host(origin: str | None, allowed_origins: set[str]) -> str | None:
+    if not origin:
+        return None
+
+    try:
+        request_netloc = urlparse(origin).netloc.lower()
+    except Exception:
+        return None
+
+    if not request_netloc:
+        return None
+
+    for allowed_origin in sorted(allowed_origins):
+        try:
+            allowed_parsed = urlparse(allowed_origin)
+        except Exception:
+            continue
+        if allowed_parsed.netloc.lower() == request_netloc:
+            return allowed_origin
+
+    return None
+
+
+def _request_origin(request: Request) -> str | None:
+    forwarded_host = request.headers.get("x-forwarded-host") or request.headers.get("host")
+    if not forwarded_host:
+        return None
+
+    host = forwarded_host.split(",", 1)[0].strip()
+    if not host:
+        return None
+
+    forwarded_proto = request.headers.get("x-forwarded-proto") or request.url.scheme or "https"
+    proto = forwarded_proto.split(",", 1)[0].strip().lower()
+    if proto not in {"http", "https"}:
+        proto = "https"
+
+    return _normalized_origin(f"{proto}://{host}")
+
+
+def _request_ui_base_url(request: Request) -> str:
+    request_origin = _request_origin(request)
+    allowed_origins = _allowed_ui_base_urls()
+    if request_origin:
+        if request_origin in allowed_origins:
+            return request_origin
+
+        matching_origin = _origin_with_matching_host(request_origin, allowed_origins)
+        if matching_origin:
+            logger.info(
+                "Normalizing auth request origin %s to trusted UI origin %s",
+                request_origin,
+                matching_origin,
+            )
+            return matching_origin
+
+        logger.warning(
+            "Ignoring untrusted auth request origin: %s; allowed UI origins: %s",
+            request_origin,
+            ", ".join(sorted(allowed_origins)) or "<none>",
+        )
+
+    return _ui_base_url
+
+
+def _oidc_callback_url(ui_base_url: str) -> str:
+    return f"{ui_base_url.rstrip('/')}/v1/auth/callback"
 
 
 def _decode_jwt_claims(token: str | None) -> dict[str, Any]:
@@ -516,6 +1071,7 @@ def configure_auth_router(
     session_repository: Any | None = None,
     credential_login_policy_id: str | None = None,
     auth_service_internal_url: str | None = None,
+    issuance_service_url: str | None = None,
     kc_admin_adapter: Any | None = None,
     user_provisioning: UserProvisioningPort | None = None,
     applicant_profile_provisioner: Any | None = None,
@@ -523,7 +1079,7 @@ def configure_auth_router(
     """Configure the router with use cases and config."""
     global _authenticate_use_case, _session_use_case, _cookie_config, _ui_base_url
     global _redis_client, _session_repository
-    global _credential_login_policy_id, _auth_service_internal_url, _kc_admin_adapter
+    global _credential_login_policy_id, _auth_service_internal_url, _issuance_service_url, _kc_admin_adapter
     global _user_provisioning, _applicant_profile_provisioner
     _authenticate_use_case = authenticate_use_case
     _session_use_case = session_use_case
@@ -539,6 +1095,8 @@ def configure_auth_router(
         _credential_login_policy_id = credential_login_policy_id
     if auth_service_internal_url:
         _auth_service_internal_url = auth_service_internal_url
+    if issuance_service_url:
+        _issuance_service_url = issuance_service_url
     if kc_admin_adapter is not None:
         _kc_admin_adapter = kc_admin_adapter
     if user_provisioning is not None:
@@ -596,9 +1154,13 @@ async def login(
     
     Redirects to Keycloak authorization endpoint with PKCE.
     """
-    safe_redirect = _sanitize_redirect_uri(redirect_uri, _ui_base_url)
+    request_ui_base_url = _request_ui_base_url(request)
+    safe_redirect = _sanitize_redirect_uri(redirect_uri, request_ui_base_url)
     result = await use_case.initiate_login(
-        InitiateLoginCommand(redirect_uri=safe_redirect)
+        InitiateLoginCommand(
+            redirect_uri=safe_redirect,
+            oidc_redirect_uri=_oidc_callback_url(request_ui_base_url),
+        )
     )
     
     logger.info("Redirecting to OIDC provider for login")
@@ -616,13 +1178,93 @@ async def register(
     
     Redirects to Keycloak registration page with PKCE.
     """
-    safe_redirect = _sanitize_redirect_uri(redirect_uri, _ui_base_url)
+    request_ui_base_url = _request_ui_base_url(request)
+    safe_redirect = _sanitize_redirect_uri(redirect_uri, request_ui_base_url)
     result = await use_case.initiate_registration(
-        InitiateLoginCommand(redirect_uri=safe_redirect)
+        InitiateLoginCommand(
+            redirect_uri=safe_redirect,
+            oidc_redirect_uri=_oidc_callback_url(request_ui_base_url),
+        )
     )
     
     logger.info("Redirecting to OIDC provider for registration")
     return RedirectResponse(url=result.authorization_url, status_code=302)
+
+
+@router.get("/canvas-lti/finalize")
+async def canvas_lti_finalize(
+    request: Request,
+    state: str,
+    redirect_uri: str | None = None,
+) -> RedirectResponse:
+    """
+    Create an applicant session from an already verified Canvas LTI launch.
+
+    This intentionally bypasses Keycloak. Canvas proves the learner identity for
+    this launch; ElevenID turns that proof into a constrained applicant session
+    and preserves normal session cookies for the UI.
+    """
+    if _session_repository is None:
+        raise HTTPException(status_code=503, detail="Session store not available")
+
+    request_ui_base_url = _request_ui_base_url(request)
+    safe_redirect = _sanitize_redirect_uri(redirect_uri, request_ui_base_url)
+    session_payload = await _fetch_canvas_lti_experience_session(state)
+
+    try:
+        user = _build_canvas_lti_user(session_payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    user = apply_credential_login_defaults(user)
+    if user.organization_id and not user.organization:
+        user.organization = {
+            user.organization_id: {
+                "name": user.organization_name or "ElevenID LLC",
+                "source": "canvas_lti",
+            }
+        }
+
+    if _applicant_profile_provisioner is not None:
+        try:
+            applicant_id = await _applicant_profile_provisioner(user)
+            if applicant_id:
+                user.applicant_id = applicant_id
+        except Exception as exc:
+            logger.warning(
+                "Applicant profile provisioning failed during Canvas LTI login for %s: %s",
+                user.email,
+                exc,
+            )
+
+    session = Session.create(
+        user=user,
+        ttl_seconds=_canvas_lti_session_ttl_seconds,
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent"),
+    )
+    await _session_repository.save(session)
+
+    redirect = RedirectResponse(
+        url=_build_ui_redirect_url(safe_redirect, request_ui_base_url),
+        status_code=302,
+    )
+    redirect.set_cookie(
+        key=_cookie_config["key"],
+        value=session.session_id,
+        httponly=_cookie_config["httponly"],
+        secure=_cookie_config["secure"],
+        samesite=_cookie_config["samesite"],
+        max_age=_cookie_config["max_age"],
+        path=_cookie_config["path"],
+    )
+    logger.info(
+        "Canvas LTI session finalized: org=%s user=%s session=%s...",
+        user.organization_id,
+        user.user_id,
+        session.session_id[:8],
+    )
+    return redirect
 
 
 @router.get("/callback")
@@ -641,19 +1283,20 @@ async def callback(
     and sets secure cookie.
     """
     # Handle OAuth errors from Keycloak
+    request_ui_base_url = _request_ui_base_url(request)
     if error:
         logger.warning(f"OIDC error callback: {error} - {error_description}")
         
         # If user is already authenticated as different user, suggest logout
         if error in ("different_user_authenticated", "already_logged_in"):
             return RedirectResponse(
-                url=f"{_ui_base_url}/?auth_error=already_authenticated&message=Please+logout+first+to+login+as+a+different+user",
+                url=f"{request_ui_base_url}/?auth_error=already_authenticated&message=Please+logout+first+to+login+as+a+different+user",
                 status_code=302,
             )
         
         error_msg = error_description or error
         return RedirectResponse(
-            url=f"{_ui_base_url}/?auth_error={quote(error_msg, safe='')}",
+            url=f"{request_ui_base_url}/?auth_error={quote(error_msg, safe='')}",
             status_code=302,
         )
     
@@ -661,7 +1304,7 @@ async def callback(
     if not code or not state:
         logger.warning("Callback missing code or state parameter")
         return RedirectResponse(
-            url=f"{_ui_base_url}/?auth_error=Missing+authentication+parameters",
+            url=f"{request_ui_base_url}/?auth_error=Missing+authentication+parameters",
             status_code=302,
         )
     
@@ -680,15 +1323,15 @@ async def callback(
             )
         )
         
-        # Resolve redirect_uri: sanitize (strip any cross-origin URL) then make absolute
+        # Resolve redirect_uri: send root logins to the authenticated console entry
+        # so social/OIDC sign-ins don't appear to "bounce" back to the home page.
         raw_redirect = result.redirect_uri
-        redirect_uri = _sanitize_redirect_uri(raw_redirect, _ui_base_url)
-        if redirect_uri.startswith("/"):
-            redirect_uri = f"{_ui_base_url}{redirect_uri}"
+        resolved_redirect = _resolve_post_auth_redirect(raw_redirect, request_ui_base_url)
+        redirect_uri = _build_ui_redirect_url(raw_redirect, request_ui_base_url)
         
         logger.info(
-            "Callback redirect: raw=%r sanitized=%r final=%r ui_base=%r",
-            raw_redirect, _sanitize_redirect_uri(raw_redirect, _ui_base_url), redirect_uri, _ui_base_url,
+            "Callback redirect: raw=%r resolved=%r final=%r ui_base=%r",
+            raw_redirect, resolved_redirect, redirect_uri, request_ui_base_url,
         )
         
         # Create redirect response with session cookie
@@ -722,7 +1365,7 @@ async def callback(
     except ValueError as e:
         logger.warning(f"Authentication failed: {e}")
         return RedirectResponse(
-            url=f"{_ui_base_url}/?auth_error=Session+expired.+Please+try+again.",
+            url=f"{request_ui_base_url}/?auth_error=Session+expired.+Please+try+again.",
             status_code=302,
         )
 
@@ -764,6 +1407,7 @@ async def logout(
 
 @router.get("/me", response_model=AuthStatusResponse, response_model_exclude_none=True)
 async def get_current_user(
+    response: Response,
     user: AuthenticatedUser | None = Depends(get_current_session),
 ) -> AuthStatusResponse:
     """
@@ -771,6 +1415,8 @@ async def get_current_user(
     
     Returns authentication status and user info if authenticated.
     """
+    response.headers["Cache-Control"] = "no-store, max-age=0"
+
     if not user:
         return AuthStatusResponse(authenticated=False, user=None)
     
@@ -926,6 +1572,22 @@ h1 { font-size: 1.35rem; margin: 0 0 .4rem; color: #1a1a2e }
 }
 .divider { border: none; border-top: 1px solid #eee; margin: 1.5rem 0 }
 .status { margin-top: 1.25rem; font-size: .875rem; color: #555; min-height: 1.4em }
+.status-detail {
+    margin-top: .55rem;
+    color: #64748b;
+    font-size: .82rem;
+    line-height: 1.45;
+}
+.status-detail a { color: #1a73e8 }
+.status-eyebrow {
+    display: inline-block;
+    margin: 0 0 .75rem;
+    color: #c0392b;
+    font-size: .82rem;
+    font-weight: 700;
+    letter-spacing: .02em;
+    text-transform: uppercase;
+}
 .spinner {
   display: inline-block;
   width: 14px;
@@ -940,6 +1602,48 @@ h1 { font-size: 1.35rem; margin: 0 0 .4rem; color: #1a1a2e }
 .mobile-help { font-size: .8rem; color: #999; margin: .75rem 0 0 }
 .qr-fallback { display: none; margin-top: 1rem }
 .qr-small { width: 180px !important; height: 180px !important }
+.action-group { display: grid; gap: .75rem; margin-top: 1.5rem }
+.secondary-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: .5rem;
+    width: 100%;
+    padding: .75rem 1.5rem;
+    border-radius: 10px;
+    border: 1px solid #d0d7e2;
+    background: #fff;
+    color: #1a1a2e;
+    text-decoration: none;
+    font-size: 1rem;
+    font-weight: 600;
+    transition: background .15s, border-color .15s;
+}
+.secondary-btn:hover { background: #f8fafc; border-color: #b9c4d4 }
+.notice {
+    margin-top: 1.25rem;
+    padding: .9rem 1rem;
+    border: 1px solid #dbe4f0;
+    border-radius: 12px;
+    background: #f8fafc;
+    color: #334155;
+    text-align: left;
+    font-size: .85rem;
+    line-height: 1.5;
+}
+.notice summary {
+    cursor: pointer;
+    color: #1a1a2e;
+    font-weight: 700;
+}
+.notice p { margin: .75rem 0 0 }
+code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: .85em;
+    background: #eef2ff;
+    border-radius: .35rem;
+    padding: .1rem .3rem;
+}
 @keyframes spin { to { transform: rotate(360deg) } }
 .done { color: #27ae60; font-weight: 600 }
 .err { color: #e74c3c }
@@ -993,6 +1697,26 @@ _CREDENTIAL_LOGIN_JS = """\
       status.innerHTML = html;
     }
   }
+
+    function escapeHtml(value) {
+        return String(value == null ? '' : value)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    function renderVerificationFailure(data) {
+        var message = data && data.message ? data.message : 'Verification failed.';
+        var detail = data && data.detail ? data.detail : '';
+        var html = '<span class="err">' + escapeHtml(message) + '</span>';
+        if (detail) {
+            html += '<div class="status-detail">' + escapeHtml(detail) + '</div>';
+        }
+        html += '<div class="status-detail"><a href="/v1/auth/credential-login">Try again</a></div>';
+        return html;
+    }
 
   function showMobile() {
     if (qrSection) {
@@ -1312,7 +2036,7 @@ _CREDENTIAL_LOGIN_JS = """\
           window.location.href = data.redirect_to || '/';
         } else if (data.status === 'failed') {
           clearInterval(timer);
-          setStatus('<span class="err">Verification failed. <a href="/v1/auth/credential-login">Try again</a></span>');
+                    setStatus(renderVerificationFailure(data));
         } else if (data.status === 'expired') {
           clearInterval(timer);
           setStatus('<span class="err">Login session expired. <a href="/v1/auth/credential-login">Try again</a></span>');
@@ -1458,6 +2182,37 @@ _CREDENTIAL_LOGIN_PAGE = """\
 """
 
 
+_CREDENTIAL_LOGIN_ERROR_PAGE = """\
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{title} &mdash; Marty</title>
+    <link rel="stylesheet" href="/v1/auth/credential-login/assets/styles.css?v={asset_version}">
+</head>
+<body>
+    <div class="card">
+        <svg class="logo" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <rect width="48" height="48" rx="12" fill="#f97316"/>
+            <path d="M14 20a10 10 0 0 1 20 0v2h2a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H12
+                             a2 2 0 0 1-2-2V24a2 2 0 0 1 2-2h2v-2z" fill="white" opacity=".95"/>
+            <path d="M24 26.5l3.5 3.5M27.5 26.5L24 30" stroke="#f97316" stroke-width="2.5" stroke-linecap="round"/>
+        </svg>
+
+        <div class="status-eyebrow">Open Badge sign-in unavailable</div>
+        <h1>{title}</h1>
+        <p class="subtitle">{message}</p>
+        {operator_details_html}
+        <div class="action-group">
+            {actions_html}
+        </div>
+    </div>
+</body>
+</html>
+"""
+
+
 @router.get("/credential-login/assets/styles.css", include_in_schema=False)
 async def credential_login_styles() -> Response:
     return Response(
@@ -1485,9 +2240,30 @@ async def credential_login(request: Request) -> HTMLResponse:
     Polling via /credential-login/status detects completion.
     """
     if not _credential_login_policy_id:
-        raise HTTPException(status_code=503, detail="Credential login not configured (CREDENTIAL_LOGIN_POLICY_ID missing)")
+        return _credential_login_unavailable_response(
+            request,
+            title="Open Badge sign-in is not configured yet",
+            message=(
+                "This deployment is missing the configuration required to start "
+                "Open Badge passwordless sign-in. Use another sign-in method, "
+                "or contact your ElevenID operator to finish setup."
+            ),
+            operator_details=(
+                "Set CREDENTIAL_LOGIN_POLICY_ID to "
+                f"{_DEFAULT_OPEN_BADGE_LOGIN_POLICY_ID} and restart the auth service."
+            ),
+        )
     if _redis_client is None:
-        raise HTTPException(status_code=503, detail="Session store not available")
+        return _credential_login_unavailable_response(
+            request,
+            title="Open Badge sign-in is temporarily unavailable",
+            message=(
+                "The sign-in service is still starting or unavailable right now. "
+                "Please try again in a moment, or use another sign-in method."
+            ),
+            operator_details="Redis/session storage is unavailable in the auth service.",
+            allow_retry=True,
+        )
 
     nonce = secrets.token_urlsafe(32)
     callback_url = (
@@ -1515,7 +2291,16 @@ async def credential_login(request: Request) -> HTMLResponse:
         }
     except Exception as exc:
         logger.error(f"Flow service gRPC error: {exc}")
-        raise HTTPException(status_code=503, detail="Flow service unavailable")
+        return _credential_login_unavailable_response(
+            request,
+            title="Open Badge sign-in is temporarily unavailable",
+            message=(
+                "We could not start the wallet sign-in flow right now. Please "
+                "try again in a moment, or use another sign-in method."
+            ),
+            operator_details="The auth service could not reach the flow service to start verification.",
+            allow_retry=True,
+        )
 
     instance_id: str = flow_data.get("instance_id", "")
     # request_uri is the full openid4vp://authorize?... URI
@@ -1562,6 +2347,8 @@ async def credential_login_status(nonce: str) -> dict[str, Any]:
                 "revocation_checked": data.get("revocation_checked", False),
                 "revocation_status": data.get("revocation_status", "unknown"),
             }
+        if status == "failed":
+            return _coerce_credential_login_failure_payload(data)
         return {
             "status": status,
             "redirect_to": data.get("redirect_to", "/"),
@@ -1601,7 +2388,8 @@ async def credential_login_finalize(
     data = json.loads(raw)
     if data.get("status") != "completed":
         return RedirectResponse(
-            url=f"{_ui_base_url}/?auth_error=Verification+failed", status_code=302
+            url=_credential_login_failure_redirect_url(data),
+            status_code=302,
         )
 
     session_id: str = data.get("session_id", "")
@@ -1613,7 +2401,10 @@ async def credential_login_finalize(
     # Consume the completion key so it can't be replayed
     await _redis_client.delete(f"{_COMPLETE_KEY}{nonce}")
 
-    redirect = RedirectResponse(url=f"{_ui_base_url}/", status_code=302)
+    redirect = RedirectResponse(
+        url=_build_ui_redirect_url("/", _ui_base_url),
+        status_code=302,
+    )
     redirect.set_cookie(
         key=_cookie_config["key"],
         value=session_id,
@@ -1652,7 +2443,7 @@ async def _mark_credential_login_failed(nonce: str, reason: str) -> None:
     await _redis_client.setex(
         f"{_COMPLETE_KEY}{nonce}",
         _COMPLETE_TTL,
-        json.dumps({"status": "failed", "reason": reason}),
+        json.dumps(_credential_login_failure_payload(reason)),
     )
     await _redis_client.delete(f"{_PENDING_KEY}{nonce}")
 
@@ -1682,13 +2473,16 @@ async def credential_verified(
         raise HTTPException(status_code=404, detail="Login session expired or not found")
 
     if payload.decision != "allow" or payload.result == "failed":
-        logger.info(f"Credential verification denied: {payload.decision} / {payload.result}")
-        await _redis_client.setex(
-            f"{_COMPLETE_KEY}{nonce}",
-            _COMPLETE_TTL,
-            json.dumps({"status": "failed", "reason": payload.decision_reason}),
+        logger.info(
+            "Credential verification denied: decision=%s result=%s reason=%s",
+            payload.decision,
+            payload.result,
+            payload.decision_reason or "<none>",
         )
-        await _redis_client.delete(f"{_PENDING_KEY}{nonce}")
+        await _mark_credential_login_failed(
+            nonce,
+            payload.decision_reason or "Credential verification failed",
+        )
         return {"ok": True, "status": "denied"}
 
     # Extract identity claims from the VP
@@ -1699,8 +2493,13 @@ async def credential_verified(
     role: str = claims.get("role", "applicant")
     preferred_username = claims.get("preferred_username") if isinstance(claims.get("preferred_username"), str) else email
     if not email:
-        logger.error("credential-verified: no email in verified_claims")
-        raise HTTPException(status_code=422, detail="Credential missing email claim")
+        logger.warning(
+            "credential-verified: missing email claim for flow=%s nonce=%s",
+            payload.flow_instance_id,
+            f"{nonce[:8]}...",
+        )
+        await _mark_credential_login_failed(nonce, "Credential missing email claim")
+        return {"ok": True, "status": "denied"}
 
     keycloak_user = None
     kc_tokens: dict[str, str] | None = None

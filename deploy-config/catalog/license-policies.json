@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "policies": {
+    "selfhost-system": {
+      "enforcement": "required",
+      "required_issuer": "marty-license-issuer",
+      "required_plan_tier": "system",
+      "required_products": ["ui-app"],
+      "deployment_mode": "production",
+      "allow_offline_validation": true,
+      "description": "Default customer self-host policy for licensed Docker or Kubernetes deployments."
+    },
+    "selfhost-trial": {
+      "enforcement": "required",
+      "required_issuer": "marty-license-issuer",
+      "required_plan_tier": "sandbox",
+      "required_products": ["ui-app"],
+      "deployment_mode": "trial",
+      "allow_offline_validation": true,
+      "description": "Time-limited trial policy for evaluation deployments."
+    },
+    "internal-dev": {
+      "enforcement": "optional",
+      "required_issuer": "marty-license-issuer",
+      "required_products": [],
+      "deployment_mode": "dev",
+      "allow_offline_validation": true,
+      "description": "Internal development policy; production self-host stacks must not use this policy."
+    }
+  }
+}

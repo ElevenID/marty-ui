@@ -803,7 +803,21 @@ class CallbacksModel(BaseModel):
 
 class FeatureFlagsModel(BaseModel):
     enable_selective_disclosure: bool = True
+    enable_derived_attributes: bool = True
+    enable_batch_issuance: bool = False
+    enable_deferred_issuance: bool = True
+    enable_credential_refresh: bool = True
     enable_qr_code_generation: bool = True
+    enable_push_notifications: bool = False
+    enable_biometric_binding: bool = False
+    enable_canvas_evidence: bool = False
+    enable_canvas_lti: bool = False
+    enable_canvas_mirror_publish: bool = False
+    enable_canvas_mirror_ops: bool = False
+    enable_canvas_deep_linking: bool = False
+    enable_canvas_ags: bool = False
+    enable_canvas_nrps: bool = False
+    custom_flags: dict[str, bool] = Field(default_factory=dict)
 
 
 class DeploymentProfileCreate(BaseModel):
@@ -838,6 +852,7 @@ class DeploymentProfileUpdate(BaseModel):
     default_presentation_policy_id: str | None = None
     environment_config: dict | None = None
     ux_config: dict | None = None
+    feature_flags: FeatureFlagsModel | None = None
 
 
 class DeploymentProfileResponse(BaseModel):
@@ -864,6 +879,7 @@ class DeploymentProfileResponse(BaseModel):
     offline_cache_ttl_hours: int | None = None
     biometric_required: bool | None = None
     audit_all_events: bool | None = None
+    canvas_feature_flags: dict[str, bool] = Field(default_factory=dict)
     lanes: list[dict] = Field(default_factory=list)
     api_key_prefix: str | None
     created_at: str

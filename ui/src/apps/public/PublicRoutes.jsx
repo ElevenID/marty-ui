@@ -12,8 +12,9 @@ import MyOrganizationsPage from '../../components/pages/MyOrganizationsPage';
 import DiscoverOrganizationsPage from '../../components/pages/DiscoverOrganizationsPage';
 import JoinOrganizationPage from '../../components/pages/JoinOrganizationPage';
 import CanvasLtiExperiencePage from '../../components/pages/CanvasLtiExperiencePage';
+import EmployerCanvasBadgeVerificationPage from '../../components/pages/EmployerCanvasBadgeVerificationPage';
 import BrowserRedirect from '../../components/BrowserRedirect';
-import { renderPublicRoot, renderMarketingRoutes } from '@ui-public-routes';
+import { getPublicLoginFallback, renderPublicRoot, renderMarketingRoutes } from '@ui-public-routes';
 import { PublicLayout } from '../../components/layouts';
 import {
   PreviewLayout,
@@ -33,6 +34,7 @@ function PublicRoutes() {
     isApplicant = false,
     login = () => {},
   } = auth;
+  const loginFallbackRedirect = getPublicLoginFallback({ isAuthenticated, isAdministrator, isVendor, isApplicant });
 
   return (
     <Routes>
@@ -50,9 +52,11 @@ function PublicRoutes() {
         <Route path="flows/:flowId" element={<PreviewFlowPage />} />
       </Route>
 
+      <Route path="/canvas/lti/experience" element={<CanvasLtiExperiencePage />} />
+
       <Route element={<PublicLayout />}>
         <Route path="/" element={renderPublicRoot({ isAuthenticated, isAdministrator, isVendor, isApplicant })} />
-        <Route path="/login" element={<LoginPage />} />
+        <Route path="/login" element={<LoginPage fallbackRedirectTo={loginFallbackRedirect} />} />
         <Route path="/auth/callback" element={<AuthCallback />} />
         <Route path="/apply" element={<ApplyPage />} />
         <Route path="/apply/:credentialType" element={<ApplyPage />} />
@@ -63,7 +67,7 @@ function PublicRoutes() {
         <Route path="/organizations" element={<MyOrganizationsPage />} />
         <Route path="/organizations/discover" element={<DiscoverOrganizationsPage />} />
         <Route path="/organizations/join" element={<JoinOrganizationPage />} />
-        <Route path="/canvas/lti/experience" element={<CanvasLtiExperiencePage />} />
+        <Route path="/verify/canvas-credentials" element={<EmployerCanvasBadgeVerificationPage />} />
         <Route
           path="/console-handoff/org/setup"
           element={<BrowserRedirect to="/console/org/setup" preserveSearch message="Opening console setup..." />}

@@ -13,6 +13,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from marty_common import OrganizationClient
+from marty_common.system_ids import MARTY_DEFAULT_ORG_ID
 from marty_common.service_setup import create_service_app
 import redis.asyncio as aioredis
 
@@ -73,7 +74,7 @@ logger = logging.getLogger(__name__)
 # Service configuration
 SERVICE_NAME = "organization-service"
 SERVICE_PORT = int(os.environ.get("ORGANIZATION_SERVICE_PORT", "8002"))
-MARTY_ORG_ID = os.environ.get("MARTY_ORG_ID", "00000000-0000-0000-0000-000000000001")
+MARTY_ORG_ID = os.environ.get("MARTY_ORG_ID", MARTY_DEFAULT_ORG_ID)
 MARTY_ORG_ADMIN_EMAIL = os.environ.get("MARTY_ORG_ADMIN_EMAIL", "").strip().lower()
 
 

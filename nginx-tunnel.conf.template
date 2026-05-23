@@ -35,7 +35,7 @@ server {
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Proto https;
         proxy_set_header X-Forwarded-Host $host;
         
         # CORS headers
@@ -57,7 +57,7 @@ server {
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Proto https;
     }
 
     # Health check
@@ -146,6 +146,15 @@ server {
         add_header Access-Control-Allow-Origin * always;
     }
 
+    # /org/... is a protocol metadata namespace, not a React route. If a more
+    # specific compatibility route above does not match, fail closed instead
+    # of handing the request to the UI SPA fallback as text/html.
+    location /org/ {
+        default_type application/json;
+        add_header Access-Control-Allow-Origin * always;
+        return 404 '{"error":"not_found"}';
+    }
+
     # OID4VP verifier did:web resolution - /oid4vp/did.json
     # Serves did:web:{domain}:oid4vp for wallets that cannot resolve did:key/did:jwk.
     location = /oid4vp/did.json {
@@ -157,6 +166,13 @@ server {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_set_header X-Forwarded-Host $host;
+    }
+
+    # Keep the OID4VP machine-readable namespace out of the UI SPA fallback.
+    location /oid4vp/ {
+        default_type application/json;
+        add_header Access-Control-Allow-Origin * always;
+        return 404 '{"error":"not_found"}';
     }
 
     # did:web path-scoped resolution — /orgs/{slug}/did.json
@@ -171,6 +187,29 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
         add_header Access-Control-Allow-Origin * always;
         add_header Cache-Control "public, max-age=300" always;
+    }
+
+    # /orgs/... is also a protocol namespace. Only explicit routes should
+    # return data; unknown paths must not become the app shell.
+    location /orgs/ {
+        default_type application/json;
+        add_header Access-Control-Allow-Origin * always;
+        return 404 '{"error":"not_found"}';
+    }
+
+    # SD-JWT VC type metadata and badge assets. Wallets dereference the
+    # credential vct URL (for example /credentials/marty-verified-member-badge)
+    # to find holder-facing display names; route this before the UI SPA fallback.
+    location ^~ /credentials/ {
+        set $backend_api ${GATEWAY_UPSTREAM};
+        proxy_pass http://$backend_api;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        add_header Access-Control-Allow-Origin * always;
     }
 
     # Keycloak routes - for OIDC authentication
@@ -212,6 +251,25 @@ server {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_set_header X-Forwarded-Host $host;
+    }
+
+    # Canvas LTI launches are intentionally embedded inside Canvas. Keep this
+    # exception narrow so the rest of the app remains protected by SAMEORIGIN.
+    location ^~ /v1/integrations/canvas/lti/ {
+        set $backend_api ${GATEWAY_UPSTREAM};
+        proxy_pass http://$backend_api;
+        proxy_http_version 1.1;
+        proxy_redirect off;
+        proxy_hide_header X-Frame-Options;
+        proxy_hide_header Content-Security-Policy;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-XSS-Protection "1; mode=block" always;
+        add_header Content-Security-Policy "frame-ancestors 'self' https://${CANVAS_REAL_PUBLIC_HOST} https://${CANVAS_SANDBOX_PUBLIC_HOST} http://localhost:8088" always;
     }
 
     # V1 API routes (including auth endpoints)
@@ -282,6 +340,33 @@ server {
         proxy_read_timeout 300s;
     }
 
+    # Canvas LTI embedded experience. This route is the React landing page after
+    # the verified launch callback and must render inside the Canvas iframe.
+    location = /canvas/lti/experience {
+        set $ui_upstream host.docker.internal:${UI_DEV_PORT};
+        proxy_pass http://$ui_upstream;
+        proxy_http_version 1.1;
+        proxy_hide_header X-Frame-Options;
+        proxy_hide_header Content-Security-Policy;
+
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-XSS-Protection "1; mode=block" always;
+        add_header Content-Security-Policy "frame-ancestors 'self' https://${CANVAS_REAL_PUBLIC_HOST} https://${CANVAS_SANDBOX_PUBLIC_HOST} http://localhost:8088" always;
+
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 300s;
+        proxy_read_timeout 300s;
+    }
+
     # UI routes - proxy to Vite dev server on host
     location / {
         set $ui_upstream host.docker.internal:${UI_DEV_PORT};
@@ -345,6 +430,17 @@ server {
     add_header X-Content-Type-Options "nosniff" always;
     add_header X-XSS-Protection "1; mode=block" always;
 
+    # The readystack Canvas image does not expose standards-style OIDC
+    # discovery without a registration token. Publish the LTI platform metadata
+    # expected by ElevenID using the public Canvas hostname so browser redirects
+    # never point back at localhost/private addresses.
+    location = /.well-known/openid-configuration {
+        default_type application/json;
+        add_header Access-Control-Allow-Origin * always;
+        add_header X-Content-Type-Options "nosniff" always;
+        return 200 '{"issuer":"https://${CANVAS_REAL_PUBLIC_HOST}","authorization_endpoint":"https://${CANVAS_REAL_PUBLIC_HOST}/api/lti/authorize_redirect","token_endpoint":"https://${CANVAS_REAL_PUBLIC_HOST}/login/oauth2/token","jwks_uri":"https://${CANVAS_REAL_PUBLIC_HOST}/api/lti/security/jwks","registration_endpoint":"https://${CANVAS_REAL_PUBLIC_HOST}/api/lti/registrations","scopes_supported":["openid"],"response_types_supported":["id_token"],"subject_types_supported":["public"],"id_token_signing_alg_values_supported":["RS256"],"claims_supported":["iss","sub","aud","exp","iat","nonce","https://purl.imsglobal.org/spec/lti/claim/deployment_id","https://purl.imsglobal.org/spec/lti/claim/context","https://purl.imsglobal.org/spec/lti/claim/roles","https://purl.imsglobal.org/spec/lti/claim/message_type","https://purl.imsglobal.org/spec/lti/claim/version","https://purl.imsglobal.org/spec/lti/claim/target_link_uri"]}';
+    }
+
     location / {
         set $canvas_real_upstream canvas-real:3000;
         proxy_pass http://$canvas_real_upstream;
@@ -352,7 +448,7 @@ server {
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Proto https;
         proxy_set_header X-Forwarded-Host $host;
     }
 }
@@ -379,7 +475,7 @@ server {
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Proto https;
         proxy_set_header X-Forwarded-Host $host;
     }
 }

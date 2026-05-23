@@ -49,14 +49,12 @@ def _issuer_did() -> str:
     return f"did:web:{did_web_domain}:orgs:{org_slug}"
 
 
-def _has_tables(conn) -> bool:
-    trust_profiles = conn.execute(
-        sa.text("SELECT to_regclass('trust_profile_service.trust_profiles') IS NOT NULL")
-    ).scalar()
-    trusted_issuers = conn.execute(
-        sa.text("SELECT to_regclass('trust_profile_service.trusted_issuers') IS NOT NULL")
-    ).scalar()
-    return bool(trust_profiles and trusted_issuers)
+def _has_table(conn, qualified_name: str) -> bool:
+    return bool(
+        conn.execute(
+            sa.text(f"SELECT to_regclass('{qualified_name}') IS NOT NULL")
+        ).scalar()
+    )
 
 
 def _managed_trust_source(issuer_did: str) -> dict:
@@ -74,7 +72,7 @@ def _managed_trust_source(issuer_did: str) -> dict:
 
 def upgrade() -> None:
     conn = op.get_bind()
-    if not _has_tables(conn):
+    if not _has_table(conn, "trust_profile_service.trust_profiles"):
         return
 
     issuer_did = _issuer_did()
@@ -127,24 +125,25 @@ def upgrade() -> None:
             },
         )
 
-    conn.execute(
-        sa.text(
-            """
-            UPDATE trust_profile_service.trusted_issuers
-               SET issuer_did = :issuer_did,
-                   issuer_url = :issuer_url,
-                   updated_at = NOW()
-             WHERE id = :issuer_id
-               AND trust_profile_id = :profile_id
-            """
-        ),
-        {
-            "issuer_id": MARTY_TRUSTED_ISSUER_ID,
-            "profile_id": MARTY_TRUST_PROFILE_ID,
-            "issuer_did": issuer_did,
-            "issuer_url": issuer_url,
-        },
-    )
+    if _has_table(conn, "trust_profile_service.trusted_issuers"):
+        conn.execute(
+            sa.text(
+                """
+                UPDATE trust_profile_service.trusted_issuers
+                   SET issuer_did = :issuer_did,
+                       issuer_url = :issuer_url,
+                       updated_at = NOW()
+                 WHERE id = :issuer_id
+                   AND trust_profile_id = :profile_id
+                """
+            ),
+            {
+                "issuer_id": MARTY_TRUSTED_ISSUER_ID,
+                "profile_id": MARTY_TRUST_PROFILE_ID,
+                "issuer_did": issuer_did,
+                "issuer_url": issuer_url,
+            },
+        )
 
 
 def downgrade() -> None:

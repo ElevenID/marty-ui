@@ -17,13 +17,23 @@
 
 x-selfhost-service-image: &selfhost-service-image
   build: !reset null
-  image: ${SELFHOST_IMAGE_PREFIX:-ghcr.io/elevenid/marty-ui}/services:${SELFHOST_IMAGE_TAG:-latest}
+  image: ${SELFHOST_IMAGE_PREFIX:-ghcr.io/elevenid/marty-ui}/services:${SELFHOST_IMAGE_TAG:?SELFHOST_IMAGE_TAG must be set to an immutable release tag}
   pull_policy: always
 
 services:
   db-migrate:
     build: !reset null
-    image: ${SELFHOST_IMAGE_PREFIX:-ghcr.io/elevenid/marty-ui}/db-migrate:${SELFHOST_IMAGE_TAG:-latest}
+    image: ${SELFHOST_IMAGE_PREFIX:-ghcr.io/elevenid/marty-ui}/db-migrate:${SELFHOST_IMAGE_TAG:?SELFHOST_IMAGE_TAG must be set to an immutable release tag}
+    pull_policy: always
+
+  cloudflared:
+    build: !reset null
+    image: ${SELFHOST_IMAGE_PREFIX:-ghcr.io/elevenid/marty-ui}/cloudflared-wrapper:${SELFHOST_IMAGE_TAG:?SELFHOST_IMAGE_TAG must be set to an immutable release tag}
+    pull_policy: always
+
+  cloudflared-beta:
+    build: !reset null
+    image: ${SELFHOST_IMAGE_PREFIX:-ghcr.io/elevenid/marty-ui}/cloudflared-wrapper:${SELFHOST_IMAGE_TAG:?SELFHOST_IMAGE_TAG must be set to an immutable release tag}
     pull_policy: always
 
   gateway:
@@ -81,11 +91,6 @@ services:
     environment:
       SERVICE_NAME: deployment_profile
 
-  signing-keys:
-    <<: *selfhost-service-image
-    environment:
-      SERVICE_NAME: signing_keys
-
   flow:
     <<: *selfhost-service-image
     environment:
@@ -117,6 +122,6 @@ services:
       SERVICE_NAME: billing
 
   ui:
-    image: ${SELFHOST_IMAGE_PREFIX:-ghcr.io/elevenid/marty-ui}/ui-selfhost:${SELFHOST_IMAGE_TAG:-latest}
+    image: ${SELFHOST_IMAGE_PREFIX:-ghcr.io/elevenid/marty-ui}/ui-selfhost:${SELFHOST_IMAGE_TAG:?SELFHOST_IMAGE_TAG must be set to an immutable release tag}
     pull_policy: always
     volumes: !reset []

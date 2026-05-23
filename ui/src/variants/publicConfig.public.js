@@ -7,6 +7,8 @@ export const DISABLE_PUBLIC_GET_STARTED_BUTTONS = false;
 export const SHOW_PUBLIC_PRICING_BUTTONS = true;
 export const DISABLE_PUBLIC_PRICING_BUTTONS = false;
 export const ENABLE_LEGACY_ADMIN_IMPERSONATION_BANNER = false;
+export const ENABLE_ORGANIZATION_CREATION = true;
+export const WALLET_SELECTION_ALLOWED_WALLET_IDS = null;
 
 export const I18N_NAMESPACES = ['common', 'console', 'onboarding', 'forms', 'errors', 'applicant', 'vendor', 'marketing'];
 
@@ -50,6 +52,10 @@ export const PUBLIC_TABS = [
       '/what-is-open-badge',
       '/what-is-digital-credential',
       '/what-is-marty-protocol',
+      '/privacy-policy',
+      '/privacy',
+      '/terms-of-service',
+      '/terms',
     ],
   },
   ...(SHOW_PUBLIC_PRICING_BUTTONS ? [{ labelKey: 'navigation.pricing', defaultLabel: 'Pricing', path: '/pricing', disabled: DISABLE_PUBLIC_PRICING_BUTTONS }] : []),

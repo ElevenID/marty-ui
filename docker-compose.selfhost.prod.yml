@@ -8,8 +8,8 @@ x-runtime-env: &runtime-env
   MARTY_LICENSE_REQUIRED_ISSUER: ${MARTY_LICENSE_REQUIRED_ISSUER:-marty-license-issuer}
   MARTY_LICENSE_REQUIRED_PLAN_TIER: ${MARTY_LICENSE_REQUIRED_PLAN_TIER:-system}
   MARTY_LICENSE_REQUIRED_PRODUCTS: ${MARTY_LICENSE_REQUIRED_PRODUCTS:-ui-app}
+  ORGANIZATION_CREATION_ENABLED: ${ORGANIZATION_CREATION_ENABLED:-false}
   LICENSE_KEY_FILE: /run/secrets/license_key
-  LICENSE_PUBLIC_KEY_FILE: /run/secrets/license_public_key
 
 x-database-url-template: &database-url-template postgresql+asyncpg://marty:$${MARTY_DB_PASSWORD}@postgres:5432/marty
 x-database-url-sync-template: &database-url-sync-template postgresql://marty:$${MARTY_DB_PASSWORD}@postgres:5432/marty
@@ -29,7 +29,7 @@ services:
       - marty_db_password
     volumes:
       - type: bind
-        source: ${SELFHOST_STATE_DIR}/postgres
+        source: ${SELFHOST_STATE_DIR:?SELFHOST_STATE_DIR must be set}/postgres
         target: /var/lib/postgresql/data
       - ./docker/init-databases.sh:/docker-entrypoint-initdb.d/init-databases.sh:ro
     healthcheck:
@@ -45,7 +45,7 @@ services:
     command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
     volumes:
       - type: bind
-        source: ${SELFHOST_STATE_DIR}/redis
+        source: ${SELFHOST_STATE_DIR:?SELFHOST_STATE_DIR must be set}/redis
         target: /data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -61,6 +61,9 @@ services:
       - start
       - --import-realm
       - --features=organization
+      - --spi-theme-cache-themes=false
+      - --spi-theme-cache-templates=false
+      - --spi-theme-static-max-age=-1
     ports:
       - "127.0.0.1:${SELFHOST_KEYCLOAK_HOST_PORT:-18180}:8080"
     environment:
@@ -72,14 +75,14 @@ services:
       KC_DB_PASSWORD_FILE: /run/secrets/keycloak_db_password
       KC_HEALTH_ENABLED: "true"
       KC_METRICS_ENABLED: "true"
-      KC_HOSTNAME: ${PUBLIC_DOMAIN:-prod.example.com}
+      KC_HOSTNAME: ${PUBLIC_DOMAIN:?PUBLIC_DOMAIN must be set}
       KC_HOSTNAME_STRICT: "true"
       KC_HOSTNAME_STRICT_HTTPS: "true"
       KC_HTTP_ENABLED: "true"
       KC_PROXY_HEADERS: xforwarded
       KEYCLOAK_REALM: ${KEYCLOAK_REALM:-11id}
-      PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:-prod.example.com}
-      UI_BASE_URL: ${UI_BASE_URL:-https://prod.example.com}
+      PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:?PUBLIC_DOMAIN must be set}
+      UI_BASE_URL: ${UI_BASE_URL:?UI_BASE_URL must be set}
       GOOGLE_CLIENT_ID_FILE: /run/secrets/google_client_id
       GOOGLE_CLIENT_SECRET_FILE: /run/secrets/google_client_secret
       MARTY_API_CLIENT_SECRET_FILE: /run/secrets/marty_api_client_secret
@@ -115,17 +118,20 @@ services:
       KEYCLOAK_REALM: ${KEYCLOAK_REALM:-11id}
       GOOGLE_CLIENT_ID_FILE: /run/secrets/google_client_id
       GOOGLE_CLIENT_SECRET_FILE: /run/secrets/google_client_secret
-      PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:-prod.example.com}
-      UI_BASE_URL: ${UI_BASE_URL:-https://prod.example.com}
+      PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:?PUBLIC_DOMAIN must be set}
+      UI_BASE_URL: ${UI_BASE_URL:?UI_BASE_URL must be set}
+      UI_ADDITIONAL_BASE_URLS: ${UI_ADDITIONAL_BASE_URLS:-}
       MARTY_API_CLIENT_SECRET_FILE: /run/secrets/marty_api_client_secret
       MARTY_ORG_NAME: ${MARTY_ORG_NAME:-Marty}
-      MARTY_ORG_DOMAIN: ${MARTY_ORG_DOMAIN:-prod.example.com}
+      MARTY_ORG_DOMAIN: ${MARTY_ORG_DOMAIN:?MARTY_ORG_DOMAIN must be set}
       MARTY_ORG_ADMIN_EMAIL: ${MARTY_ORG_ADMIN_EMAIL:-}
       KEYCLOAK_REMOVE_DEMO_USERS: ${KEYCLOAK_REMOVE_DEMO_USERS:-true}
+      KEYCLOAK_REPLACE_UI_ORIGINS: ${KEYCLOAK_REPLACE_UI_ORIGINS:-true}
       KEYCLOAK_USER_REGISTRATION_ENABLED: ${KEYCLOAK_USER_REGISTRATION_ENABLED:-true}
       KEYCLOAK_VERIFY_EMAIL: ${KEYCLOAK_VERIFY_EMAIL:-true}
       KEYCLOAK_RESET_PASSWORD_ENABLED: ${KEYCLOAK_RESET_PASSWORD_ENABLED:-true}
-      KEYCLOAK_SOCIAL_LOGIN_ENABLED: ${KEYCLOAK_SOCIAL_LOGIN_ENABLED:-false}
+      KEYCLOAK_SOCIAL_LOGIN_ENABLED: ${KEYCLOAK_SOCIAL_LOGIN_ENABLED:?KEYCLOAK_SOCIAL_LOGIN_ENABLED must be set}
+      KEYCLOAK_ORGANIZATION_IDENTITY_FIRST_ENABLED: ${KEYCLOAK_ORGANIZATION_IDENTITY_FIRST_ENABLED:-false}
       KEYCLOAK_SMTP_HOST: ${KEYCLOAK_SMTP_HOST:-}
       KEYCLOAK_SMTP_PORT: ${KEYCLOAK_SMTP_PORT:-587}
       KEYCLOAK_SMTP_FROM: ${KEYCLOAK_SMTP_FROM:-noreply@prod.example.com}
@@ -160,10 +166,11 @@ services:
       MARTY_ORG_ID: ${MARTY_ORG_ID:-00000000-0000-0000-0000-000000000001}
       MARTY_ORG_SLUG: ${MARTY_ORG_SLUG:-marty}
       MARTY_ORG_ADMIN_EMAIL: ${MARTY_ORG_ADMIN_EMAIL:-}
-      MARTY_MIGRATION_PROFILE: ${MARTY_MIGRATION_PROFILE:-production}
-      PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:-prod.example.com}
-      PUBLIC_API_URL: ${PUBLIC_API_URL:-https://prod.example.com}
-      ISSUER_BASE_URL: ${PUBLIC_API_URL:-https://prod.example.com}
+      MARTY_MIGRATION_PROFILE: ${MARTY_MIGRATION_PROFILE:-selfhost-production}
+      MARTY_USE_EXPLICIT_DEMO_SEED_PACK: ${MARTY_USE_EXPLICIT_DEMO_SEED_PACK:-false}
+      PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:?PUBLIC_DOMAIN must be set}
+      PUBLIC_API_URL: ${PUBLIC_API_URL:?PUBLIC_API_URL must be set}
+      ISSUER_BASE_URL: ${PUBLIC_API_URL:?PUBLIC_API_URL must be set}
       REDIS_URL: redis://redis:6379
       REDIS_DB_GATEWAY: "2"
       MARTY_KMS_BOOTSTRAP_ENABLED: ${MARTY_KMS_BOOTSTRAP_ENABLED:-true}
@@ -173,7 +180,6 @@ services:
       - marty_db_password
       - openbao_service_token
       - license_key
-      - license_public_key
     depends_on:
       postgres:
         condition: service_healthy
@@ -202,27 +208,52 @@ services:
       FLOW_SERVICE_URL: http://flow:8011
       DEVICE_REGISTRATION_SERVICE_URL: http://device-registration:8014
       ISSUANCE_SERVICE_URL: http://issuance:8005
+      REVOCATION_PROFILE_SERVICE_URL: http://revocation-profile:8013
       BILLING_SERVICE_URL: http://billing:8016
-      ISSUER_BASE_URL: ${PUBLIC_API_URL:-https://prod.example.com}
-      CORS_ORIGINS: ${CORS_ORIGINS:-https://prod.example.com}
+      ISSUER_BASE_URL: ${PUBLIC_API_URL:?PUBLIC_API_URL must be set}
+      CORS_ORIGINS: ${CORS_ORIGINS:?CORS_ORIGINS must be set}
       AUTH_GRPC_TARGET: auth:9001
       ORG_GRPC_TARGET: organization:9002
       ES_GRPC_TARGET: event-stream:9015
       REDIS_URL: redis://redis:6379
       REDIS_DB_GATEWAY: "2"
       RATE_LIMIT_RPM: ${RATE_LIMIT_RPM:-300}
+      BAO_ADDR: ${BAO_ADDR:-}
+      BAO_TOKEN_FILE: /run/secrets/openbao_service_token
       ISSUANCE_API_KEY_FILE: /run/secrets/issuance_api_key
       SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/issuance_api_key
     secrets:
       - issuance_api_key
+      - openbao_service_token
       - license_key
-      - license_public_key
     ports:
       - "127.0.0.1:${SELFHOST_GATEWAY_HOST_PORT:-18000}:8000"
     depends_on:
       auth:
         condition: service_healthy
       organization:
+        condition: service_healthy
+      credential-template:
+        condition: service_healthy
+      trust-profile:
+        condition: service_healthy
+      applicant:
+        condition: service_healthy
+      notification:
+        condition: service_healthy
+      compliance-profile:
+        condition: service_healthy
+      presentation-policy:
+        condition: service_healthy
+      deployment-profile:
+        condition: service_healthy
+      flow:
+        condition: service_healthy
+      verification:
+        condition: service_healthy
+      revocation-profile:
+        condition: service_healthy
+      billing:
         condition: service_healthy
       issuance:
         condition: service_healthy
@@ -244,14 +275,15 @@ services:
     environment:
       <<: *runtime-env
       AUTH_SERVICE_PORT: "8001"
-      UI_BASE_URL: ${UI_BASE_URL:-https://prod.example.com}
+      UI_BASE_URL: ${UI_BASE_URL:?UI_BASE_URL must be set}
+      UI_ADDITIONAL_BASE_URLS: ${UI_ADDITIONAL_BASE_URLS:-}
       REDIS_URL: redis://redis:6379/0
       KEYCLOAK_REALM: ${KEYCLOAK_REALM:-11id}
       OIDC_ISSUER_URL: http://keycloak:8080/realms/${KEYCLOAK_REALM:-11id}
-      OIDC_EXTERNAL_ISSUER_URL: ${OIDC_ISSUER_URL_EXTERNAL:-https://prod.example.com/realms/11id}
+      OIDC_EXTERNAL_ISSUER_URL: ${OIDC_ISSUER_URL_EXTERNAL:?OIDC_ISSUER_URL_EXTERNAL must be set}
       OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-marty-ui}
-      OIDC_REDIRECT_URI: ${OIDC_REDIRECT_URI:-https://prod.example.com/v1/auth/callback}
-      OIDC_POST_LOGOUT_REDIRECT_URI: ${OIDC_POST_LOGOUT_REDIRECT_URI:-https://prod.example.com/}
+      OIDC_REDIRECT_URI: ${OIDC_REDIRECT_URI:?OIDC_REDIRECT_URI must be set}
+      OIDC_POST_LOGOUT_REDIRECT_URI: ${OIDC_POST_LOGOUT_REDIRECT_URI:?OIDC_POST_LOGOUT_REDIRECT_URI must be set}
       SESSION_TTL_SECONDS: "86400"
       COOKIE_SECURE: "true"
       COOKIE_SAMESITE: ${COOKIE_SAMESITE:-lax}
@@ -262,17 +294,29 @@ services:
       CREDENTIAL_LOGIN_REQUIRE_EXISTING_KEYCLOAK_USER: ${CREDENTIAL_LOGIN_REQUIRE_EXISTING_KEYCLOAK_USER:-true}
       CREDENTIAL_LOGIN_CREATE_USERS: ${CREDENTIAL_LOGIN_CREATE_USERS:-false}
       AUTH_SERVICE_INTERNAL_URL: http://auth:8001
+      ISSUANCE_SERVICE_URL: http://issuance:8005
+      CREDENTIAL_LOGIN_LISSI_DEEP_LINK_TEMPLATE: ${CREDENTIAL_LOGIN_LISSI_DEEP_LINK_TEMPLATE:-}
+      CREDENTIAL_LOGIN_LISSI_ANDROID_DEEP_LINK_TEMPLATE: ${CREDENTIAL_LOGIN_LISSI_ANDROID_DEEP_LINK_TEMPLATE:-}
+      CREDENTIAL_LOGIN_LISSI_IOS_DEEP_LINK_TEMPLATE: ${CREDENTIAL_LOGIN_LISSI_IOS_DEEP_LINK_TEMPLATE:-}
+      CREDENTIAL_LOGIN_LISSI_IOS_UNIVERSAL_LINK_TEMPLATE: ${CREDENTIAL_LOGIN_LISSI_IOS_UNIVERSAL_LINK_TEMPLATE:-}
+      CREDENTIAL_LOGIN_LISSI_ANDROID_PACKAGE: ${CREDENTIAL_LOGIN_LISSI_ANDROID_PACKAGE:-}
+      CREDENTIAL_LOGIN_SPRUCEKIT_DEEP_LINK_TEMPLATE: ${CREDENTIAL_LOGIN_SPRUCEKIT_DEEP_LINK_TEMPLATE:-}
+      CREDENTIAL_LOGIN_SPRUCEKIT_ANDROID_DEEP_LINK_TEMPLATE: ${CREDENTIAL_LOGIN_SPRUCEKIT_ANDROID_DEEP_LINK_TEMPLATE:-}
+      CREDENTIAL_LOGIN_SPRUCEKIT_IOS_DEEP_LINK_TEMPLATE: ${CREDENTIAL_LOGIN_SPRUCEKIT_IOS_DEEP_LINK_TEMPLATE:-}
+      CREDENTIAL_LOGIN_SPRUCEKIT_IOS_UNIVERSAL_LINK_TEMPLATE: ${CREDENTIAL_LOGIN_SPRUCEKIT_IOS_UNIVERSAL_LINK_TEMPLATE:-}
+      CREDENTIAL_LOGIN_SPRUCEKIT_ANDROID_PACKAGE: ${CREDENTIAL_LOGIN_SPRUCEKIT_ANDROID_PACKAGE:-}
       ORG_GRPC_TARGET: organization:9002
       FLOW_GRPC_TARGET: flow:9011
       AUTH_GRPC_PORT: "9001"
     secrets:
       - marty_api_client_secret
       - license_key
-      - license_public_key
     depends_on:
       db-migrate:
         condition: service_completed_successfully
       redis:
+        condition: service_healthy
+      flow:
         condition: service_healthy
       keycloak-configurator:
         condition: service_completed_successfully
@@ -300,7 +344,6 @@ services:
     secrets:
       - marty_db_password
       - license_key
-      - license_public_key
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -329,7 +372,6 @@ services:
     secrets:
       - marty_db_password
       - license_key
-      - license_public_key
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -359,7 +401,6 @@ services:
       - marty_db_password
       - openbao_service_token
       - license_key
-      - license_public_key
     volumes:
       - ./scripts/load-openbao-token-and-start.sh:/app/load-openbao-token-and-start.sh:ro
     depends_on:
@@ -389,6 +430,8 @@ services:
       ORG_GRPC_TARGET: organization:9002
       CT_GRPC_TARGET: credential-template:9003
       CREDENTIAL_TEMPLATE_SERVICE_URL: http://credential-template:8003
+      REVOCATION_PROFILE_SERVICE_URL: http://revocation-profile:8013
+      MARTY_DEFAULT_REVOCATION_PROFILE_ID: ${MARTY_DEFAULT_REVOCATION_PROFILE_ID:-70000000-0000-0000-0000-000000000001}
       ISSUANCE_GRPC_PORT: "9005"
       BAO_ADDR: ${BAO_ADDR:-}
       BAO_TOKEN_FILE: /run/secrets/openbao_service_token
@@ -396,14 +439,25 @@ services:
       SIGNING_KEYS_INTERNAL_URL: http://gateway:8000/internal/signing-keys
       SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/issuance_api_key
       CANVAS_CREDENTIALS_SHARED_SECRET_FILE: /run/secrets/canvas_credentials_shared_secret
+      CANVAS_CREDENTIALS_PROVIDER: ${CANVAS_CREDENTIALS_PROVIDER:-bridge}
+      CANVAS_CREDENTIALS_PUBLISH_URL: ${CANVAS_CREDENTIALS_PUBLISH_URL:-}
+      CANVAS_CREDENTIALS_STATUS_SYNC_URL: ${CANVAS_CREDENTIALS_STATUS_SYNC_URL:-}
+      CANVAS_CREDENTIALS_API_BASE_URL: ${CANVAS_CREDENTIALS_API_BASE_URL:-https://api.badgr.io}
+      CANVAS_CREDENTIALS_API_TOKEN_FILE: /run/secrets/canvas_credentials_api_token
+      CANVAS_CREDENTIALS_ISSUER_ID: ${CANVAS_CREDENTIALS_ISSUER_ID:-}
+      CANVAS_CREDENTIALS_BADGECLASS_ID: ${CANVAS_CREDENTIALS_BADGECLASS_ID:-}
+      CANVAS_CREDENTIALS_ASSERTION_SCOPE: ${CANVAS_CREDENTIALS_ASSERTION_SCOPE:-badgeclasses}
+      CANVAS_CREDENTIALS_PROVENANCE_BASE_URL: ${CANVAS_CREDENTIALS_PROVENANCE_BASE_URL:-}
+      CANVAS_CREDENTIALS_RECIPIENT_HASHED: ${CANVAS_CREDENTIALS_RECIPIENT_HASHED:-true}
+      CANVAS_CREDENTIALS_ALLOW_DUPLICATE_AWARDS: ${CANVAS_CREDENTIALS_ALLOW_DUPLICATE_AWARDS:-false}
       UNIVERSAL_RESOLVER_URL: ${UNIVERSAL_RESOLVER_URL:-}
     secrets:
       - marty_db_password
       - openbao_service_token
       - issuance_api_key
       - canvas_credentials_shared_secret
+      - canvas_credentials_api_token
       - license_key
-      - license_public_key
     volumes:
       - ./scripts/load-openbao-token-and-start.sh:/app/load-openbao-token-and-start.sh:ro
     depends_on:
@@ -435,10 +489,9 @@ services:
     secrets:
       - marty_db_password
       - license_key
-      - license_public_key
     volumes:
       - type: bind
-        source: ${SELFHOST_STATE_DIR}/applicant
+        source: ${SELFHOST_STATE_DIR:?SELFHOST_STATE_DIR must be set}/applicant
         target: /app/data
     user: "0:0"
     depends_on:
@@ -471,7 +524,6 @@ services:
       - marty_db_password
       - smtp_password
       - license_key
-      - license_public_key
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -497,7 +549,6 @@ services:
     secrets:
       - marty_db_password
       - license_key
-      - license_public_key
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -522,10 +573,15 @@ services:
       ORG_GRPC_TARGET: organization:9002
       PP_GRPC_PORT: "9009"
       DID_RESOLUTION_BASE_URL: http://gateway:8000
+      PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:?PUBLIC_DOMAIN must be set}
+      MARTY_ORG_SLUG: ${MARTY_ORG_SLUG:-marty}
+      MIP_MANAGED_ISSUER_DIDS: ${MIP_MANAGED_ISSUER_DIDS:-}
+      MIP_CREDENTIAL_STATUS_URL_TEMPLATE: "${MIP_CREDENTIAL_STATUS_URL_TEMPLATE:-http://issuance:8005/v1/issuance/credentials/{credential_id}/status}"
+      TRUST_PROFILE_SERVICE_URL: http://trust-profile:8004
+      ISSUANCE_SERVICE_URL: http://issuance:8005
     secrets:
       - marty_db_password
       - license_key
-      - license_public_key
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -551,7 +607,6 @@ services:
     secrets:
       - marty_db_password
       - license_key
-      - license_public_key
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -573,20 +628,29 @@ services:
       FLOW_SERVICE_PORT: "8011"
       DATABASE_URL_TEMPLATE: *database-url-template
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
-      PUBLIC_BASE_URL: ${PUBLIC_API_URL:-https://prod.example.com}
+      PUBLIC_BASE_URL: ${PUBLIC_API_URL:?PUBLIC_API_URL must be set}
       ORG_GRPC_TARGET: organization:9002
       PP_GRPC_TARGET: presentation-policy:9009
       CT_GRPC_TARGET: credential-template:9003
       ISSUANCE_GRPC_TARGET: issuance:9005
       ISSUANCE_SERVICE_URL: http://issuance:8005
+      REDIS_URL: redis://redis:6379
+      REDIS_DB_FLOW: "3"
       FLOW_GRPC_PORT: "9011"
     secrets:
       - marty_db_password
       - license_key
-      - license_public_key
     depends_on:
       db-migrate:
         condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      organization:
+        condition: service_healthy
+      credential-template:
+        condition: service_healthy
+      presentation-policy:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8011/health"]
       interval: 10s
@@ -606,14 +670,13 @@ services:
       PP_GRPC_TARGET: presentation-policy:9009
       VERIF_GRPC_PORT: "9017"
       VERIF_GRPC_ENABLED: "true"
-      PUBLIC_BASE_URL: ${PUBLIC_API_URL:-https://prod.example.com}
+      PUBLIC_BASE_URL: ${PUBLIC_API_URL:?PUBLIC_API_URL must be set}
       REDIS_URL: redis://redis:6379/3
       SIGNING_KEYS_INTERNAL_URL: http://gateway:8000/internal/signing-keys
       SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/issuance_api_key
     secrets:
       - issuance_api_key
       - license_key
-      - license_public_key
     depends_on:
       presentation-policy:
         condition: service_healthy
@@ -637,15 +700,17 @@ services:
       REVOCATION_PROFILE_SERVICE_PORT: "8013"
       DATABASE_URL_TEMPLATE: *database-url-template
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
+      REDIS_URL: redis://redis:6379/4
       ORG_GRPC_TARGET: organization:9002
       RP_GRPC_PORT: "9013"
     secrets:
       - marty_db_password
       - license_key
-      - license_public_key
     depends_on:
       db-migrate:
         condition: service_completed_successfully
+      redis:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8013/health"]
       interval: 10s
@@ -668,7 +733,6 @@ services:
     secrets:
       - marty_db_password
       - license_key
-      - license_public_key
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -691,7 +755,6 @@ services:
       EVENT_STREAM_GRPC_PORT: "9015"
     secrets:
       - license_key
-      - license_public_key
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8015/health"]
       interval: 30s
@@ -719,13 +782,12 @@ services:
       SQUARE_PLAN_STARTER_ID: ${SQUARE_PLAN_STARTER_ID:-}
       SQUARE_PLAN_PROFESSIONAL_ID: ${SQUARE_PLAN_PROFESSIONAL_ID:-}
       SQUARE_PLAN_ENTERPRISE_ID: ${SQUARE_PLAN_ENTERPRISE_ID:-}
-      CORS_ORIGINS: ${CORS_ORIGINS:-https://prod.example.com}
+      CORS_ORIGINS: ${CORS_ORIGINS:?CORS_ORIGINS must be set}
     secrets:
       - marty_db_password
       - square_access_token
       - square_webhook_signature_key
       - license_key
-      - license_public_key
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -767,14 +829,17 @@ services:
       - ./docker/nginx-selfhost.prod.conf.template:/etc/nginx/conf.d/default.conf.template:ro
       - ./scripts/nginx-entrypoint-selfhost.sh:/docker-entrypoint.d/40-render-selfhost.sh:ro
     environment:
-      PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:-prod.example.com}
+      PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:?PUBLIC_DOMAIN must be set}
       UI_UPSTREAM: ui:80
       GATEWAY_UPSTREAM: gateway:8000
+      FLOW_UPSTREAM: flow:8011
       KEYCLOAK_UPSTREAM: keycloak:8080
     depends_on:
       ui:
         condition: service_healthy
       gateway:
+        condition: service_healthy
+      flow:
         condition: service_healthy
       keycloak:
         condition: service_healthy
@@ -802,40 +867,77 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  tunnel-nginx-proxy:
+    profiles: ["beta-tunnel"]
+    image: nginx:alpine
+    container_name: marty-selfhost-prod-beta-proxy
+    volumes:
+      - ./docker/tunnel-nginx-proxy.edge.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      edge:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  cloudflared-beta:
+    profiles: ["beta-tunnel"]
+    build:
+      context: .
+      dockerfile: docker/cloudflared-wrapper.Dockerfile
+    container_name: marty-selfhost-prod-beta-cloudflared
+    entrypoint: ["/bin/sh", "/scripts/cloudflared-selfhost.sh"]
+    environment:
+      CLOUDFLARE_TUNNEL_TOKEN_FILE: /run/secrets/cloudflare_beta_tunnel_token
+    secrets:
+      - cloudflare_beta_tunnel_token
+    volumes:
+      - ./scripts/cloudflared-selfhost.sh:/scripts/cloudflared-selfhost.sh:ro
+    depends_on:
+      tunnel-nginx-proxy:
+        condition: service_healthy
+    restart: unless-stopped
+
 secrets:
   postgres_password:
-    file: ${SELFHOST_SECRET_DIR:-./docker/secrets/selfhost.example}/postgres_password
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/postgres_password
   keycloak_db_password:
-    file: ${SELFHOST_SECRET_DIR:-./docker/secrets/selfhost.example}/keycloak_db_password
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/keycloak_db_password
   marty_db_password:
-    file: ${SELFHOST_SECRET_DIR:-./docker/secrets/selfhost.example}/marty_db_password
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/marty_db_password
   keycloak_admin_password:
-    file: ${SELFHOST_SECRET_DIR:-./docker/secrets/selfhost.example}/keycloak_admin_password
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/keycloak_admin_password
   marty_api_client_secret:
-    file: ${SELFHOST_SECRET_DIR:-./docker/secrets/selfhost.example}/marty_api_client_secret
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/marty_api_client_secret
   issuance_api_key:
-    file: ${SELFHOST_SECRET_DIR:-./docker/secrets/selfhost.example}/issuance_api_key
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/issuance_api_key
   canvas_credentials_shared_secret:
-    file: ${SELFHOST_SECRET_DIR:-./docker/secrets/selfhost.example}/canvas_credentials_shared_secret
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/canvas_credentials_shared_secret
+  canvas_credentials_api_token:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/canvas_credentials_api_token
   openbao_service_token:
-    file: ${SELFHOST_SECRET_DIR:-./docker/secrets/selfhost.example}/openbao_service_token
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/openbao_service_token
   cloudflare_tunnel_token:
-    file: ${SELFHOST_SECRET_DIR:-./docker/secrets/selfhost.example}/cloudflare_tunnel_token
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/cloudflare_tunnel_token
+  cloudflare_beta_tunnel_token:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/cloudflare_beta_tunnel_token
   license_key:
-    file: ${SELFHOST_SECRET_DIR:-./docker/secrets/selfhost.example}/license_key
-  license_public_key:
-    file: ${SELFHOST_SECRET_DIR:-./docker/secrets/selfhost.example}/license_public_key
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/license_key
   google_client_id:
-    file: ${SELFHOST_SECRET_DIR:-./docker/secrets/selfhost.example}/google_client_id
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/google_client_id
   google_client_secret:
-    file: ${SELFHOST_SECRET_DIR:-./docker/secrets/selfhost.example}/google_client_secret
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/google_client_secret
   google_analytics_measurement_id:
-    file: ${SELFHOST_SECRET_DIR:-./docker/secrets/selfhost.example}/google_analytics_measurement_id
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/google_analytics_measurement_id
   google_site_verification:
-    file: ${SELFHOST_SECRET_DIR:-./docker/secrets/selfhost.example}/google_site_verification
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/google_site_verification
   smtp_password:
-    file: ${SELFHOST_SECRET_DIR:-./docker/secrets/selfhost.example}/smtp_password
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/smtp_password
   square_access_token:
-    file: ${SELFHOST_SECRET_DIR:-./docker/secrets/selfhost.example}/square_access_token
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/square_access_token
   square_webhook_signature_key:
-    file: ${SELFHOST_SECRET_DIR:-./docker/secrets/selfhost.example}/square_webhook_signature_key
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/square_webhook_signature_key

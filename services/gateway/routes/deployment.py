@@ -96,6 +96,14 @@ async def update_deployment_profile(profile_id: str, body: DeploymentProfileUpda
     return await proxy_request(request, service_url, f"/v1/deployment-profiles/{profile_id}")
 
 
+@deployment_profile_router.patch("/{profile_id}", response_model=DeploymentProfileResponse, summary="Patch Deployment Profile")
+async def patch_deployment_profile(profile_id: str, body: DeploymentProfileUpdate, request: Request) -> Response:
+    """Patch a Deployment Profile."""
+    registry = get_registry()
+    service_url = registry.get_service_url("deployment-profiles")
+    return await proxy_request(request, service_url, f"/v1/deployment-profiles/{profile_id}")
+
+
 @deployment_profile_router.delete("/{profile_id}", summary="Delete Deployment Profile")
 async def delete_deployment_profile(profile_id: str, request: Request) -> Response:
     """Delete a Deployment Profile."""

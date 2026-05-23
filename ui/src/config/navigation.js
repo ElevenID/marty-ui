@@ -21,6 +21,7 @@ import SettingsIcon from '@mui/icons-material/Settings';
 import PaymentIcon from '@mui/icons-material/Payment';
 import DesignServicesIcon from '@mui/icons-material/DesignServices';
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
+import IntegrationInstructionsIcon from '@mui/icons-material/IntegrationInstructions';
 
 /**
  * Admin/Vendor Navigation (Resource-based)
@@ -100,6 +101,12 @@ export const ADMIN_VENDOR_NAV = [
         label: 'Deployment Profiles',
         path: '/console/org/deploy/profiles',
         requiredPermission: { resource: 'deployment-profile', action: 'view' },
+      },
+      {
+        id: 'canvas-integrations',
+        label: 'Canvas',
+        path: '/console/org/deploy/canvas',
+        icon: IntegrationInstructionsIcon,
       },
       { id: 'issuer-identity', label: 'Issuer Identity', path: '/console/org/deploy/issuer-identity' },
       {

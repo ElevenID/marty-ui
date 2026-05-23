@@ -85,6 +85,12 @@ export function ConsoleProvider({ children }) {
     () => getConsoleEligibleOrganizations(user?.organizations),
     [user?.organizations]
   );
+  const isCanvasApplicantOnlyUser = useMemo(
+    () => Array.isArray(user?.roles)
+      && user.roles.includes('canvas_lti_learner')
+      && !user?.capabilities?.['org:view'],
+    [user?.roles, user?.capabilities]
+  );
   const currentOrganizationId = user?.organization_id || null;
   const defaultApplicantOrgId = user?.default_organization_id || null;
 
@@ -119,7 +125,7 @@ export function ConsoleProvider({ children }) {
         getMyOrganizations().catch(() => []),
       ]);
 
-      const resolvedMemberships = Array.isArray(orgs) && orgs.length > 0
+      const resolvedMemberships = !isCanvasApplicantOnlyUser && Array.isArray(orgs) && orgs.length > 0
         ? getConsoleEligibleOrganizations(orgs)
         : fallbackMemberships;
       const applicantOrganizations = Array.isArray(orgs) && orgs.length > 0
@@ -189,6 +195,7 @@ export function ConsoleProvider({ children }) {
     defaultApplicantOrgId,
     fallbackMemberships,
     user?.organizations,
+    isCanvasApplicantOnlyUser,
     updateAuthOrg,
   ]);
 
@@ -310,7 +317,7 @@ export function ConsoleProvider({ children }) {
   const refreshMemberships = useCallback(async () => {
     try {
       const orgs = await getMyOrganizations();
-      const resolvedMemberships = Array.isArray(orgs) && orgs.length > 0
+      const resolvedMemberships = !isCanvasApplicantOnlyUser && Array.isArray(orgs) && orgs.length > 0
         ? getConsoleEligibleOrganizations(orgs)
         : fallbackMemberships;
 
@@ -324,7 +331,7 @@ export function ConsoleProvider({ children }) {
     } catch (error) {
       console.error('[ConsoleContext] Failed to refresh memberships:', error);
     }
-  }, [activeOrgId, clearActiveOrg, fallbackMemberships]);
+  }, [activeOrgId, clearActiveOrg, fallbackMemberships, isCanvasApplicantOnlyUser]);
 
   /**
    * Computed: Is org console available?

@@ -13,9 +13,11 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from marty_common.licensing import (
     LicenseClaims,
     LicenseValidationError,
+    resolve_license_public_key,
     validate_license_claims,
     validate_runtime_license_from_env,
 )
+from marty_common import licensing
 
 
 def _b64url_encode(value: bytes) -> str:
@@ -74,6 +76,7 @@ def test_validate_runtime_license_from_env_accepts_signed_system_tier_license_fr
     claims = validate_runtime_license_from_env(
         {
             "MARTY_LICENSE_ENFORCEMENT": "required",
+            "MARTY_LICENSE_ALLOW_RUNTIME_PUBLIC_KEY": "true",
             "MARTY_LICENSE_REQUIRED_PLAN_TIER": "system",
             "MARTY_LICENSE_REQUIRED_PRODUCTS": "ui-app, oid4vc-api",
             "LICENSE_KEY_FILE": str(license_key_path),
@@ -86,6 +89,60 @@ def test_validate_runtime_license_from_env_accepts_signed_system_tier_license_fr
     assert claims.has_product("oid4vc-api")
 
 
+def test_resolve_license_public_key_loads_embedded_trust_anchor() -> None:
+    public_key_pem = resolve_license_public_key({})
+
+    assert "BEGIN PUBLIC KEY" in public_key_pem
+    assert "change-me" not in public_key_pem.lower()
+
+
+def test_validate_runtime_license_from_env_accepts_embedded_public_key(monkeypatch, tmp_path) -> None:
+    private_key = Ed25519PrivateKey.generate()
+    public_key_pem = private_key.public_key().public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo,
+    ).decode("utf-8")
+    public_key_path = tmp_path / "embedded-public.pem"
+    public_key_path.write_text(public_key_pem, encoding="utf-8")
+    token = _signed_license_token(private_key, _runtime_claims())
+
+    class FakeResourceRoot:
+        def joinpath(self, _name: str) -> object:
+            return public_key_path
+
+    monkeypatch.setattr(licensing.resources, "files", lambda _package: FakeResourceRoot())
+
+    claims = validate_runtime_license_from_env(
+        {
+            "MARTY_LICENSE_ENFORCEMENT": "required",
+            "MARTY_LICENSE_REQUIRED_PLAN_TIER": "system",
+            "MARTY_LICENSE_REQUIRED_PRODUCTS": "ui-app",
+            "LICENSE_KEY": token,
+        }
+    )
+
+    assert claims is not None
+    assert claims.has_product("ui-app")
+
+
+def test_validate_runtime_license_from_env_rejects_runtime_public_key_by_default() -> None:
+    private_key = Ed25519PrivateKey.generate()
+    public_key_pem = private_key.public_key().public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo,
+    ).decode("utf-8")
+    token = _signed_license_token(private_key, _runtime_claims())
+
+    with pytest.raises(LicenseValidationError, match="public-key overrides are disabled"):
+        validate_runtime_license_from_env(
+            {
+                "MARTY_LICENSE_ENFORCEMENT": "required",
+                "LICENSE_KEY": token,
+                "LICENSE_PUBLIC_KEY": public_key_pem,
+            }
+        )
+
+
 def test_validate_runtime_license_from_env_rejects_multiple_license_sources(tmp_path) -> None:
     license_path = tmp_path / "license.jwt"
     license_path.write_text("placeholder.jwt.value", encoding="utf-8")
@@ -94,6 +151,7 @@ def test_validate_runtime_license_from_env_rejects_multiple_license_sources(tmp_
         validate_runtime_license_from_env(
             {
                 "MARTY_LICENSE_ENFORCEMENT": "required",
+                "MARTY_LICENSE_ALLOW_RUNTIME_PUBLIC_KEY": "true",
                 "LICENSE_KEY": "header.payload.signature",
                 "LICENSE_PATH": str(license_path),
                 "LICENSE_PUBLIC_KEY": "-----BEGIN PUBLIC KEY-----\nchange-me-public-key\n-----END PUBLIC KEY-----",
@@ -116,6 +174,7 @@ def test_validate_runtime_license_from_env_rejects_plan_tier_mismatch(tmp_path) 
         validate_runtime_license_from_env(
             {
                 "MARTY_LICENSE_ENFORCEMENT": "required",
+                "MARTY_LICENSE_ALLOW_RUNTIME_PUBLIC_KEY": "true",
                 "MARTY_LICENSE_REQUIRED_PLAN_TIER": "system",
                 "LICENSE_KEY": token,
                 "LICENSE_PUBLIC_KEY": public_key_pem,

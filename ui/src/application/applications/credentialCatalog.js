@@ -52,7 +52,7 @@ export const CREDENTIAL_CATALOG_TYPES = {
     requirements: ['Valid passport', 'Biometric photo'],
   },
   open_badge: {
-    description: 'Open Badge 3.0-compatible membership credential — verifiable proof of active organization membership that can be used for passwordless sign-in where accepted.',
+    description: 'Open Badge 3.0 membership badge — verified organization membership proof for passwordless login/sign-in with your wallet.',
     icon: CredentialIcon,
     category: 'identity',
     processingTime: 'Instant upon issuance',
@@ -60,6 +60,7 @@ export const CREDENTIAL_CATALOG_TYPES = {
     format: 'vc+sd-jwt',
     standard: '1EdTech Open Badges 3.0',
     worksWithLabel: 'Web & VC wallets',
+    searchAliases: ['open badge login', 'open badge login credential', 'achievement credential', 'passwordless sign-in', 'membership badge'],
   },
   MemberCredential: {
     description: 'Log in securely using your wallet — no password required. W3C Verifiable Credential in SD-JWT format, compatible with web and VC wallets.',
@@ -129,13 +130,14 @@ export function mapCredentialTemplateToCatalogItem(template, organizationName) {
     eligibilityCriteria: null,
     submissionInstructions: null,
     processingFee: 0,
-    available: template.status === 'active',
+    available: String(template.status || '').toLowerCase() === 'active',
     vendorName: organizationName || 'Issuer',
     templateVersion: template.version,
     visibility: 'organization',
     format: meta.format || null,
     standard: meta.standard || null,
     worksWithLabel: meta.worksWithLabel || null,
+    searchAliases: meta.searchAliases || [],
   };
 }
 
@@ -178,11 +180,34 @@ export function filterCredentialCatalogItems(credentials = [], { searchTerm = ''
   const normalizedSearch = searchTerm.toLowerCase();
 
   return credentials.filter((credential) => {
-    const matchesSearch = credential.name.toLowerCase().includes(normalizedSearch)
-      || credential.description.toLowerCase().includes(normalizedSearch);
+    const aliases = Array.isArray(credential.searchAliases) ? credential.searchAliases : [];
+    const searchableText = [
+      credential.name,
+      credential.description,
+      credential.credentialType,
+      credential.standard,
+      credential.format,
+      credential.worksWithLabel,
+      ...aliases,
+    ].filter(Boolean).join(' ').toLowerCase();
+    const matchesSearch = searchableText.includes(normalizedSearch);
     const matchesCategory = categoryFilter === 'all' || credential.category === categoryFilter;
     return matchesSearch && matchesCategory;
   });
+}
+
+export function scopeCredentialCatalogItemsForCanvasLaunch(credentials = [], { credentialTemplateIds = [] } = {}) {
+  const allowedTemplateIds = new Set(
+    (Array.isArray(credentialTemplateIds) ? credentialTemplateIds : [credentialTemplateIds])
+      .filter((value) => value !== null && value !== undefined && String(value).trim() !== '')
+      .map((value) => String(value))
+  );
+
+  if (allowedTemplateIds.size === 0) {
+    return credentials;
+  }
+
+  return credentials.filter((credential) => allowedTemplateIds.has(String(credential?.id)));
 }
 
 export function resolveCredentialApplicationPath({
@@ -201,34 +226,87 @@ export function resolveCredentialApplicationPath({
   return `/apply/${credentialId}`;
 }
 
+function buildCanvasLtiQuery(canvasLtiContext = null) {
+  if (!canvasLtiContext || !canvasLtiContext.state) {
+    return '';
+  }
+
+  const query = new URLSearchParams({ canvas_lti_state: String(canvasLtiContext.state) });
+  const optionalParams = {
+    canvas_program_binding_id: canvasLtiContext.canvas_program_binding_id,
+    canvas_platform_id: canvasLtiContext.canvas_platform_id,
+    application_template_id: canvasLtiContext.application_template_id,
+    credential_template_id: canvasLtiContext.credential_template_id,
+  };
+
+  for (const [key, value] of Object.entries(optionalParams)) {
+    if (value !== null && value !== undefined && String(value).trim() !== '') {
+      query.set(key, String(value));
+    }
+  }
+
+  return query.toString();
+}
+
 export function buildCredentialApplicationNavigationState(credential, options = {}) {
   const serializableCredential = { ...credential };
   delete serializableCredential.icon;
+  const basePath = resolveCredentialApplicationPath({
+    credentialId: credential.id,
+    currentPathname: options.currentPathname,
+    isPreview: options.isPreview,
+  });
+  const canvasQuery = buildCanvasLtiQuery(options.canvasLtiContext);
+  const state = {
+    credential: serializableCredential,
+  };
+  if (options.canvasLtiSession) {
+    state.canvasLtiSession = options.canvasLtiSession;
+  }
+
   return {
-    path: resolveCredentialApplicationPath({
-      credentialId: credential.id,
-      currentPathname: options.currentPathname,
-      isPreview: options.isPreview,
-    }),
-    state: {
-      credential: serializableCredential,
-    },
+    path: canvasQuery ? `${basePath}?${canvasQuery}` : basePath,
+    state,
   };
 }
 
+function normalizeOrganizationId(organizationId) {
+  if (organizationId === null || organizationId === undefined) {
+    return null;
+  }
+
+  if (typeof organizationId !== 'string' && typeof organizationId !== 'number') {
+    return null;
+  }
+
+  const normalized = String(organizationId).trim();
+  return normalized === '' ? null : normalized;
+}
+
 export async function loadCredentialCatalogItems({ organizationId, organizationName, listCredentialTemplates }) {
+  const normalizedOrganizationId = normalizeOrganizationId(organizationId);
+  if (!normalizedOrganizationId) {
+    return {
+      credentials: [],
+      error: new Error('Organization context is required to load the credential catalog.'),
+      missingOrganization: true,
+    };
+  }
+
   try {
-    const data = await listCredentialTemplates(organizationId);
+    const data = await listCredentialTemplates(normalizedOrganizationId);
     const templates = Array.isArray(data) ? data : (data?.templates || []);
 
     return {
       credentials: templates.map((template) => mapCredentialTemplateToCatalogItem(template, organizationName)),
       error: null,
+      missingOrganization: false,
     };
   } catch (error) {
     return {
       credentials: [],
-      error: null,
+      error,
+      missingOrganization: false,
     };
   }
 }

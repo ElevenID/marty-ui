@@ -92,6 +92,7 @@ def get_config() -> dict:
         },
         "credential_login_policy_id": os.environ.get("CREDENTIAL_LOGIN_POLICY_ID", ""),
         "auth_service_internal_url": os.environ.get("AUTH_SERVICE_INTERNAL_URL", "http://auth:8001"),
+        "issuance_service_url": os.environ.get("ISSUANCE_SERVICE_URL", "http://issuance:8005"),
     }
 
 
@@ -170,6 +171,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         session_repository=session_repository,
         credential_login_policy_id=config["credential_login_policy_id"],
         auth_service_internal_url=config["auth_service_internal_url"],
+        issuance_service_url=config["issuance_service_url"],
         kc_admin_adapter=kc_admin_adapter,
         user_provisioning=user_provisioning,
         applicant_profile_provisioner=applicant_profile_provisioner,

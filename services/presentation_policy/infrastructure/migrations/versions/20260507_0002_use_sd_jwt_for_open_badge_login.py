@@ -71,6 +71,11 @@ def upgrade() -> None:
                 "verifier_name": "ElevenID LLC",
             }
         )
+        protocol = display_metadata.get("protocol")
+        if not isinstance(protocol, dict):
+            protocol = {}
+        protocol["freshness"] = {"require_not_revoked": True, "max_age_seconds": 86400}
+        display_metadata["protocol"] = protocol
 
     patched_requirements = []
     for requirement in requirements if isinstance(requirements, list) else []:
@@ -96,7 +101,6 @@ def upgrade() -> None:
                    description = :description,
                    display_metadata = CAST(:display_metadata AS json),
                    credential_requirements = CAST(:credential_requirements AS json),
-                   freshness = CAST(:freshness AS json),
                    updated_at = NOW()
              WHERE id = :policy_id
                AND organization_id = :organization_id
@@ -111,7 +115,6 @@ def upgrade() -> None:
             ),
             "display_metadata": json.dumps(display_metadata),
             "credential_requirements": json.dumps(patched_requirements),
-            "freshness": json.dumps({"require_not_revoked": True, "max_age_seconds": 86400}),
         },
     )
 

@@ -295,7 +295,7 @@ def _bao_address() -> str | None:
 
 
 def _bao_token() -> str | None:
-    return os.environ.get("BAO_TOKEN") or None
+    return _read_secret_value("BAO_TOKEN") or _read_secret_value("OPENBAO_SERVICE_TOKEN") or None
 
 
 def _has_openbao_access() -> bool:

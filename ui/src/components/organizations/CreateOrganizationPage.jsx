@@ -1,10 +1,11 @@
 import { useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Box, Container, Paper, Typography } from '@mui/material';
+import { Alert, Box, Button, Container, Paper, Typography } from '@mui/material';
 
 import { createOrganization } from '../../services/organizationsApi';
 import { useConsole } from '../../contexts/ConsoleContext';
 import CreateOrganizationForm from './CreateOrganizationForm';
+import { ENABLE_ORGANIZATION_CREATION } from '@ui-public-config';
 
 function CreateOrganizationPage() {
   const navigate = useNavigate();
@@ -15,6 +16,11 @@ function CreateOrganizationPage() {
   const returnTo = searchParams.get('returnTo');
 
   const handleCreateOrganization = async (payload) => {
+    if (!ENABLE_ORGANIZATION_CREATION) {
+      setError('Organization creation is disabled for this deployment.');
+      return;
+    }
+
     setSubmitting(true);
     setError(null);
 
@@ -35,6 +41,30 @@ function CreateOrganizationPage() {
       setSubmitting(false);
     }
   };
+
+  if (!ENABLE_ORGANIZATION_CREATION) {
+    return (
+      <Container maxWidth="md" sx={{ py: 4 }}>
+        <Box sx={{ mb: 3 }}>
+          <Typography variant="h4" gutterBottom fontWeight={600}>
+            Organization creation is disabled
+          </Typography>
+          <Typography variant="body1" color="text.secondary">
+            This deployment uses managed organization membership. Join an existing organization or contact an administrator for access.
+          </Typography>
+        </Box>
+
+        <Paper sx={{ p: 3 }}>
+          <Alert severity="info" sx={{ mb: 3 }}>
+            New organizations cannot be created from this self-hosted production console.
+          </Alert>
+          <Button variant="contained" onClick={() => navigate('/console/organizations')}>
+            Back to organizations
+          </Button>
+        </Paper>
+      </Container>
+    );
+  }
 
   return (
     <Container maxWidth="md" sx={{ py: 4 }}>

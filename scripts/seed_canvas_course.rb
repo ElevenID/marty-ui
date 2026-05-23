@@ -3,8 +3,8 @@
 require 'uri'
 
 lti_base_url = ENV.fetch('CANVAS_LTI_EXPERIENCE_BASE_URL', 'https://beta.elevenidllc.com').sub(%r{/+$}, '')
-connector_id = ENV.fetch('CANVAS_CONNECTOR_ID', '67f60f26-67aa-405f-9e04-b48165d49c61')
-tool_url = "#{lti_base_url}/v1/integrations/canvas/lti/experience-login/#{connector_id}"
+platform_id = ENV.fetch('CANVAS_PLATFORM_ID', 'replace-with-canvas-platform-id')
+tool_url = "#{lti_base_url}/v1/integrations/canvas/lti/platforms/#{platform_id}/experience-login"
 tool_domain = URI.parse(lti_base_url).host
 
 begin

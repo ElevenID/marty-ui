@@ -95,8 +95,9 @@ export default function InviteAcceptPage() {
   };
 
   const handleLogin = () => {
-    sessionStorage.setItem('returnUrl', getInviteAcceptLoginReturnUrl(token));
-    login();
+    const returnUrl = getInviteAcceptLoginReturnUrl(token);
+    sessionStorage.setItem('returnUrl', returnUrl);
+    login(returnUrl);
   };
 
   const renderContent = () => {

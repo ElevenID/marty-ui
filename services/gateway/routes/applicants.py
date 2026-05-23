@@ -1,11 +1,33 @@
 """Applicant profile and application management routes."""
 from __future__ import annotations
 
+import os
+
 from fastapi import APIRouter, Query, Request, Response
 
 from gateway.proxy import get_registry, proxy_request
 
 applicant_router = APIRouter(prefix="/v1/applicants", tags=["Applicants"])
+
+
+def _read_secret_value(name: str) -> str:
+    direct = os.environ.get(name)
+    if direct:
+        return direct
+    file_path = os.environ.get(f"{name}_FILE")
+    if not file_path:
+        return ""
+    try:
+        with open(file_path, "r", encoding="utf-8") as handle:
+            return handle.read().strip()
+    except OSError:
+        return ""
+
+
+_ISSUANCE_API_KEY = _read_secret_value("ISSUANCE_API_KEY")
+_ISSUANCE_HEADERS: dict[str, str] | None = (
+    {"X-API-Key": _ISSUANCE_API_KEY} if _ISSUANCE_API_KEY else None
+)
 
 
 @applicant_router.post("", summary="Create Applicant")
@@ -75,6 +97,45 @@ async def get_applicant_application(application_id: str, request: Request) -> Re
     return await proxy_request(request, service_url, f"/v1/applicants/applications/{application_id}")
 
 
+@applicant_router.get("/applications/{application_id}/evidence-summary", summary="Get Application Evidence Summary")
+async def get_applicant_application_evidence_summary(application_id: str, request: Request) -> Response:
+    """Get MIP evidence facts and policy metadata for a Canvas-backed application."""
+    registry = get_registry()
+    service_url = registry.get_service_url("issuance")
+    return await proxy_request(
+        request,
+        service_url,
+        f"/v1/applications/{application_id}/evidence-summary",
+        inject_headers=_ISSUANCE_HEADERS,
+    )
+
+
+@applicant_router.get("/applications/{application_id}/evidence-facts", summary="List Application Evidence Facts")
+async def list_applicant_application_evidence_facts(application_id: str, request: Request) -> Response:
+    """List normalized MIP evidence facts for a Canvas-backed application."""
+    registry = get_registry()
+    service_url = registry.get_service_url("issuance")
+    return await proxy_request(
+        request,
+        service_url,
+        f"/v1/applications/{application_id}/evidence-facts",
+        inject_headers=_ISSUANCE_HEADERS,
+    )
+
+
+@applicant_router.post("/applications/{application_id}/evidence/api-checks/{check_id}/run", summary="Run Application Evidence API Check")
+async def run_applicant_application_evidence_api_check(application_id: str, check_id: str, request: Request) -> Response:
+    """Run a configured MIP external evidence API check for an application."""
+    registry = get_registry()
+    service_url = registry.get_service_url("issuance")
+    return await proxy_request(
+        request,
+        service_url,
+        f"/v1/applications/{application_id}/evidence/api-checks/{check_id}/run",
+        inject_headers=_ISSUANCE_HEADERS,
+    )
+
+
 @applicant_router.post("/applications/{application_id}/submit", summary="Submit Application")
 async def submit_applicant_application(application_id: str, request: Request) -> Response:
     """Submit an application for review."""
@@ -97,6 +158,14 @@ async def review_applicant_application(application_id: str, request: Request) ->
     registry = get_registry()
     service_url = registry.get_service_url("applicant")
     return await proxy_request(request, service_url, f"/v1/applicants/applications/{application_id}/review")
+
+
+@applicant_router.post("/applications/{application_id}/supersede", summary="Supersede Application")
+async def supersede_applicant_application(application_id: str, request: Request) -> Response:
+    """Retire an active application before creating a replacement."""
+    registry = get_registry()
+    service_url = registry.get_service_url("applicant")
+    return await proxy_request(request, service_url, f"/v1/applicants/applications/{application_id}/supersede")
 
 
 @applicant_router.post("/applications/{application_id}/issue", summary="Issue Application")

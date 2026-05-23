@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "name": "selfhost-production",
+  "description": "Licensed self-host production stack serving elevenidllc.com through the self-host edge and production Cloudflare tunnel.",
+  "env_file": ".env.selfhost.production.local",
+  "compose_files": ["docker-compose.selfhost.prod.yml"],
+  "compose_profiles": [],
+  "domains": ["elevenidllc.com"],
+  "primary_domain": "elevenidllc.com",
+  "required_service_groups": ["infra", "selfhost_core", "app"],
+  "required_services": [],
+  "optional_services": ["device-registration"],
+  "required_secrets": [
+    "postgres_password",
+    "keycloak_db_password",
+    "marty_db_password",
+    "keycloak_admin_password",
+    "marty_api_client_secret",
+    "issuance_api_key",
+    "openbao_service_token",
+    "cloudflare_tunnel_token",
+    "license_key"
+  ],
+  "license_policy": "selfhost-system",
+  "artifact_profile": "selfhost-commercial",
+  "deployment_targets": ["docker-compose", "customer-bundle"],
+  "operations": {
+    "config": ["config"],
+    "up": ["up", "-d", "--build"],
+    "down": ["down"],
+    "ps": ["ps"],
+    "logs": ["logs", "-f", "edge", "cloudflared", "gateway", "keycloak"]
+  },
+  "smoke_tests": {
+    "public_routes": ["/", "/login", "/console", "/v1/auth/me"],
+    "auth_login_callback_host": "elevenidllc.com"
+  }
+}

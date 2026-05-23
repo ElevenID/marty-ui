@@ -1,13 +1,26 @@
 import base64
 import json
+from urllib.parse import parse_qs, urlparse
 
 import pytest
+from starlette.requests import Request
+from starlette.responses import Response
 
+from services.auth.infrastructure.adapters import http_adapter
 from services.auth.domain.entities import AuthenticatedUser
 from services.auth.infrastructure.adapters.http_adapter import (
+    _build_ui_redirect_url,
+    _CREDENTIAL_LOGIN_CSS,
     _CREDENTIAL_LOGIN_JS,
+    _credential_login_failure_payload,
+    _oidc_callback_url,
+    _request_ui_base_url,
+    _resolve_post_auth_redirect,
+    _build_canvas_lti_user,
     _build_credential_login_wallet_options,
     _render_credential_login_page,
+    credential_login_finalize,
+    credential_login_status,
     get_current_user,
 )
 from services.auth.infrastructure.adapters.oidc_adapter import build_oidc_user_info
@@ -23,6 +36,48 @@ def _build_jwt(claims: dict) -> str:
         _encode_base64url(claims),
         "signature",
     ])
+
+
+def _build_request(*, referer: str = "") -> Request:
+    headers: list[tuple[bytes, bytes]] = []
+    if referer:
+        headers.append((b"referer", referer.encode("utf-8")))
+
+    return Request(
+        {
+            "type": "http",
+            "http_version": "1.1",
+            "method": "GET",
+            "scheme": "https",
+            "path": "/v1/auth/credential-login",
+            "raw_path": b"/v1/auth/credential-login",
+            "query_string": b"",
+            "headers": headers,
+            "client": ("127.0.0.1", 443),
+            "server": ("elevenidllc.com", 443),
+        }
+    )
+
+
+def _build_forwarded_request(*, host: str, proto: str = "https") -> Request:
+    return Request(
+        {
+            "type": "http",
+            "http_version": "1.1",
+            "method": "GET",
+            "scheme": "http",
+            "path": "/v1/auth/login",
+            "raw_path": b"/v1/auth/login",
+            "query_string": b"",
+            "headers": [
+                (b"host", b"edge"),
+                (b"x-forwarded-host", host.encode("utf-8")),
+                (b"x-forwarded-proto", proto.encode("utf-8")),
+            ],
+            "client": ("127.0.0.1", 443),
+            "server": ("edge", 80),
+        }
+    )
 
 
 def test_build_oidc_user_info_merges_keycloak_roles_and_org_claims():
@@ -69,11 +124,259 @@ async def test_get_current_user_includes_raw_keycloak_organization_claim():
         organization={"org-1": {"name": "Acme"}},
     )
 
-    response = await get_current_user(user)
+    response = await get_current_user(Response(), user)
 
     assert response.authenticated is True
     assert response.user is not None
     assert response.user.organization == {"org-1": {"name": "Acme"}}
+
+
+def test_root_post_auth_redirects_land_in_console_entry():
+    ui_base_url = "https://elevenidllc.com"
+
+    assert _resolve_post_auth_redirect("/", ui_base_url) == "/console"
+    assert _resolve_post_auth_redirect("https://elevenidllc.com/", ui_base_url) == "/console"
+    assert _resolve_post_auth_redirect("/console/org", ui_base_url) == "/console/org"
+    assert _build_ui_redirect_url("/", ui_base_url) == "https://elevenidllc.com/console"
+
+
+def test_request_ui_base_url_allows_configured_beta_origin(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(http_adapter, "_ui_base_url", "https://elevenidllc.com")
+    monkeypatch.setenv("UI_ADDITIONAL_BASE_URLS", "https://beta.elevenidllc.com")
+
+    request_ui_base_url = _request_ui_base_url(
+        _build_forwarded_request(host="beta.elevenidllc.com")
+    )
+
+    assert request_ui_base_url == "https://beta.elevenidllc.com"
+    assert _oidc_callback_url(request_ui_base_url) == "https://beta.elevenidllc.com/v1/auth/callback"
+
+
+def test_request_ui_base_url_normalizes_trusted_origin_proto(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(http_adapter, "_ui_base_url", "https://elevenidllc.com")
+    monkeypatch.setenv("UI_ADDITIONAL_BASE_URLS", "https://beta.elevenidllc.com")
+
+    request_ui_base_url = _request_ui_base_url(
+        _build_forwarded_request(host="beta.elevenidllc.com", proto="http")
+    )
+
+    assert request_ui_base_url == "https://beta.elevenidllc.com"
+    assert _oidc_callback_url(request_ui_base_url) == "https://beta.elevenidllc.com/v1/auth/callback"
+
+
+def test_request_ui_base_url_allows_configured_cors_origin(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(http_adapter, "_ui_base_url", "https://elevenidllc.com")
+    monkeypatch.delenv("UI_ADDITIONAL_BASE_URLS", raising=False)
+    monkeypatch.delenv("AUTH_ADDITIONAL_UI_BASE_URLS", raising=False)
+    monkeypatch.setenv("CORS_ORIGINS", "https://elevenidllc.com,https://beta.elevenidllc.com")
+
+    request_ui_base_url = _request_ui_base_url(
+        _build_forwarded_request(host="beta.elevenidllc.com")
+    )
+
+    assert request_ui_base_url == "https://beta.elevenidllc.com"
+    assert _oidc_callback_url(request_ui_base_url) == "https://beta.elevenidllc.com/v1/auth/callback"
+
+
+def test_request_ui_base_url_rejects_untrusted_forwarded_origin(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(http_adapter, "_ui_base_url", "https://elevenidllc.com")
+    monkeypatch.delenv("UI_ADDITIONAL_BASE_URLS", raising=False)
+    monkeypatch.delenv("AUTH_ADDITIONAL_UI_BASE_URLS", raising=False)
+    monkeypatch.delenv("CORS_ORIGINS", raising=False)
+
+    request_ui_base_url = _request_ui_base_url(
+        _build_forwarded_request(host="attacker.example")
+    )
+
+    assert request_ui_base_url == "https://elevenidllc.com"
+
+
+class _FakeRedis:
+    def __init__(self, payload: str | None):
+        self._payload = payload
+        self.deleted_keys: list[str] = []
+
+    async def get(self, key: str) -> str | None:
+        return self._payload
+
+    async def delete(self, key: str) -> None:
+        self.deleted_keys.append(key)
+
+
+class _FakeSessionRepository:
+    def __init__(self):
+        self.saved = []
+
+    async def save(self, session) -> None:
+        self.saved.append(session)
+
+
+def _canvas_lti_session_payload() -> dict:
+    return {
+        "state": "state-1",
+        "organization_id": "00000000-0000-0000-0000-000000000001",
+        "canvas_account_id": "canvas-account-1",
+        "verified_launch": {
+            "issuer": "https://canvas-test.elevenidllc.com",
+            "subject": "canvas-user-1",
+            "roles": [
+                "http://purl.imsglobal.org/vocab/lis/v2/membership#Learner",
+                "http://purl.imsglobal.org/vocab/lis/v2/membership#Instructor",
+            ],
+            "learner_identity": {
+                "email": "learner@example.edu",
+                "name": "Canvas Learner",
+                "subject": "canvas-user-1",
+            },
+            "raw_claims": {},
+        },
+    }
+
+
+def test_build_canvas_lti_user_creates_stable_constrained_applicant_identity(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("CANVAS_LTI_ORGANIZATION_NAME", raising=False)
+    monkeypatch.delenv("MARTY_ORG_NAME", raising=False)
+
+    user = _build_canvas_lti_user(_canvas_lti_session_payload())
+    second_user = _build_canvas_lti_user(_canvas_lti_session_payload())
+
+    assert user.user_id == second_user.user_id
+    assert user.user_id.startswith("canvas-lti-")
+    assert user.email == "learner@example.edu"
+    assert user.username == "learner"
+    assert user.given_name == "Canvas"
+    assert user.family_name == "Learner"
+    assert user.user_type.value == "applicant"
+    assert user.roles == ["applicant", "canvas_lti_learner"]
+    assert user.organization_id == "00000000-0000-0000-0000-000000000001"
+    assert user.organization == {
+        "00000000-0000-0000-0000-000000000001": {
+            "name": "ElevenID LLC",
+            "source": "canvas_lti",
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_canvas_lti_finalize_sets_canvas_user_session_cookie(monkeypatch: pytest.MonkeyPatch):
+    fake_repo = _FakeSessionRepository()
+
+    async def fake_fetch(state: str) -> dict:
+        assert state == "state-1"
+        return _canvas_lti_session_payload()
+
+    monkeypatch.setattr(http_adapter, "_fetch_canvas_lti_experience_session", fake_fetch)
+    monkeypatch.setattr(http_adapter, "_session_repository", fake_repo)
+    monkeypatch.setattr(http_adapter, "_applicant_profile_provisioner", None)
+    monkeypatch.setattr(http_adapter, "_ui_base_url", "https://elevenidllc.com")
+    monkeypatch.setattr(http_adapter, "_cookie_config", {
+        "key": "sessionId",
+        "httponly": True,
+        "secure": True,
+        "samesite": "lax",
+        "max_age": 86400,
+        "path": "/",
+    })
+    monkeypatch.setenv("UI_ADDITIONAL_BASE_URLS", "https://beta.elevenidllc.com")
+
+    response = await http_adapter.canvas_lti_finalize(
+        request=_build_forwarded_request(host="beta.elevenidllc.com"),
+        state="state-1",
+        redirect_uri="/console/applicant/apply/cfg-1?canvas_lti_state=state-1",
+    )
+
+    assert response.status_code == 302
+    assert response.headers["location"] == (
+        "https://beta.elevenidllc.com/console/applicant/apply/cfg-1?canvas_lti_state=state-1"
+    )
+    assert "sessionId=" in response.headers.get("set-cookie", "")
+    assert len(fake_repo.saved) == 1
+    assert fake_repo.saved[0].user.email == "learner@example.edu"
+    assert fake_repo.saved[0].user.roles == ["applicant", "canvas_lti_learner"]
+
+
+@pytest.mark.asyncio
+async def test_credential_login_finalize_redirects_to_console_and_sets_cookie(monkeypatch: pytest.MonkeyPatch):
+    fake_redis = _FakeRedis(json.dumps({
+        "status": "completed",
+        "session_id": "session-123",
+    }))
+
+    monkeypatch.setattr(http_adapter, "_redis_client", fake_redis)
+    monkeypatch.setattr(http_adapter, "_ui_base_url", "https://elevenidllc.com")
+    monkeypatch.setattr(http_adapter, "_cookie_config", {
+        "key": "sessionId",
+        "httponly": True,
+        "secure": True,
+        "samesite": "lax",
+        "max_age": 86400,
+        "path": "/",
+    })
+
+    response = await credential_login_finalize("nonce-123", Response())
+
+    assert response.status_code == 302
+    assert response.headers["location"] == "https://elevenidllc.com/console"
+    assert "sessionId=session-123" in response.headers.get("set-cookie", "")
+    assert fake_redis.deleted_keys == [f"{http_adapter._COMPLETE_KEY}nonce-123"]
+
+
+def test_credential_login_failure_payload_maps_trust_mismatch_to_user_friendly_message():
+    payload = _credential_login_failure_payload(
+        "Credential verification failed: Issuer did:web:elevenidllc.com:orgs:marty does not match any trust source issuer identifier in Trust Profile 60000000-0000-0000-0000-000000000001"
+    )
+
+    assert payload["reason_code"] == "issuer_not_trusted"
+    assert "does not trust" in payload["message"]
+    assert "did:web:elevenidllc.com:orgs:marty" in payload["detail"]
+
+
+def test_credential_login_failure_payload_maps_missing_revocation_check():
+    payload = _credential_login_failure_payload(
+        "Credential verification failed: Revocation status was not checked by the verifier"
+    )
+
+    assert payload["reason_code"] == "revocation_not_checked"
+    assert "still active" in payload["message"]
+
+
+@pytest.mark.asyncio
+async def test_credential_login_status_surfaces_failure_message_and_detail(monkeypatch: pytest.MonkeyPatch):
+    fake_redis = _FakeRedis(json.dumps({
+        "status": "failed",
+        "reason": "Credential verification failed: Issuer did:web:elevenidllc.com:orgs:marty does not match any trust source issuer identifier in Trust Profile 60000000-0000-0000-0000-000000000001",
+    }))
+
+    monkeypatch.setattr(http_adapter, "_redis_client", fake_redis)
+
+    response = await credential_login_status("nonce-123")
+
+    assert response["status"] == "failed"
+    assert response["reason_code"] == "issuer_not_trusted"
+    assert "does not trust" in response["message"]
+    assert "did:web:elevenidllc.com:orgs:marty" in response["detail"]
+
+
+@pytest.mark.asyncio
+async def test_credential_login_finalize_redirects_failed_login_with_reason(monkeypatch: pytest.MonkeyPatch):
+    fake_redis = _FakeRedis(json.dumps({
+        "status": "failed",
+        "reason": "Credential verification failed: Issuer did:web:elevenidllc.com:orgs:marty does not match any trust source issuer identifier in Trust Profile 60000000-0000-0000-0000-000000000001",
+    }))
+
+    monkeypatch.setattr(http_adapter, "_redis_client", fake_redis)
+    monkeypatch.setattr(http_adapter, "_ui_base_url", "https://elevenidllc.com")
+
+    response = await credential_login_finalize("nonce-123", Response())
+    redirect_url = urlparse(response.headers["location"])
+    query = parse_qs(redirect_url.query)
+
+    assert response.status_code == 302
+    assert redirect_url.scheme == "https"
+    assert redirect_url.netloc == "elevenidllc.com"
+    assert query["auth_error_code"] == ["issuer_not_trusted"]
+    assert "does not trust" in query["auth_error"][0]
+    assert "did:web:elevenidllc.com:orgs:marty" in query["auth_error_detail"][0]
 
 
 def test_build_credential_login_wallet_options_defaults_to_protocol_sprucekit_then_lissi(monkeypatch: pytest.MonkeyPatch):
@@ -213,12 +516,42 @@ def test_render_credential_login_page_includes_wallet_selector():
     assert html.index('id="wallet-select"') < html.index('id="mobile-section"')
 
 
+@pytest.mark.asyncio
+async def test_credential_login_returns_friendly_html_when_policy_is_missing(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(http_adapter, "_credential_login_policy_id", "")
+    monkeypatch.setattr(http_adapter, "_ui_base_url", "https://elevenidllc.com")
+
+    response = await http_adapter.credential_login(
+        _build_request(
+            referer=(
+                "https://elevenidllc.com/realms/11id/login-actions/authenticate"
+                "?session_code=test"
+            )
+        )
+    )
+
+    body = response.body.decode("utf-8")
+
+    assert response.status_code == 503
+    assert response.headers["Cache-Control"] == "no-store, max-age=0"
+    assert "Open Badge sign-in is not configured yet" in body
+    assert "CREDENTIAL_LOGIN_POLICY_ID" in body
+    assert "50000000-0000-0000-0000-000000000004" in body
+    assert "Back to sign in" in body
+
+
 def test_credential_login_js_persists_wallet_and_platform_preferences():
     js = _CREDENTIAL_LOGIN_JS
     assert "marty.credential_login.wallet" in js
     assert "marty.credential_login.platform" in js
     assert "restoreWalletPreference" in js
     assert "persistPlatformPreference" in js
+    assert "renderVerificationFailure" in js
+    assert "escapeHtml" in js
+
+
+def test_credential_login_css_styles_status_detail():
+    assert ".status-detail" in _CREDENTIAL_LOGIN_CSS
 
 
 def test_build_credential_login_wallet_options_uses_ios_universal_link_when_env_set(monkeypatch: pytest.MonkeyPatch):

@@ -36,6 +36,7 @@ export { default as DeploymentProfilesPage } from './deploy/DeploymentsPage';
 export { default as ApiKeysPage } from './deploy/ApiKeysPage';
 export { default as DidIdentitiesPage } from './deploy/DidIdentitiesPage';
 export { default as SigningKeysPage } from './deploy/SigningKeysPage';
+export { default as CanvasIntegrationsPage } from './deploy/CanvasIntegrationsPage';
 export { default as KeyManagementServiceWizard } from './deploy/KeyManagementServiceWizard';
 export { default as IssuerIdentityWizard } from './deploy/IssuerIdentityWizard';
 export { default as LanesDevicesPage } from './deploy/LanesDevicesPage';

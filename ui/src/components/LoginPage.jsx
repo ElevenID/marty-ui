@@ -19,7 +19,7 @@ function LoginPage({ fallbackRedirectTo = '/' }) {
   const navigate = useNavigate();
   const location = useLocation();
 
-  const redirectTo = getLoginEntryRedirect(location.state, fallbackRedirectTo);
+  const redirectTo = getLoginEntryRedirect(location.state, fallbackRedirectTo, location.search);
 
   useEffect(() => {
     const decision = getLoginEntryDecision({

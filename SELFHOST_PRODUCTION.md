@@ -11,6 +11,7 @@ This stack is for running a production-like Marty deployment on the same machine
 - Persistent host bind mounts under `SELFHOST_STATE_DIR` for Postgres, Redis, and applicant storage
 - Standalone OpenBao state and exports under `SELFHOST_OPENBAO_STATE_DIR` and `SELFHOST_OPENBAO_EXPORT_DIR`
 - Dedicated Cloudflare tunnel sidecar driven by its own env file
+- Optional same-stack beta tunnel sidecars for the rare case where `beta.elevenidllc.com` should intentionally route to this same self-host edge and Keycloak
 
 ## Config boundary map
 
@@ -21,10 +22,12 @@ To avoid cross-domain redirect and OIDC drift between environments, use the scop
 
 ## What is production-specific
 
-- `MARTY_MIGRATION_PROFILE=production` skips the demo org and demo template Alembic revisions
+- `MARTY_MIGRATION_PROFILE=selfhost-production` skips demo/beta seed data and keeps the shipped applicant catalog limited to the Open Badge login credential
 - The Marty default org migrations still run
+- Persistent self-host databases should treat released migrations as immutable; if a seeded system artifact is wrong, ship a forward repair migration instead of editing historical revisions. See [docs/MIGRATION_GOVERNANCE.md](docs/MIGRATION_GOVERNANCE.md).
 - The Marty admin seed still runs, but you must change `MARTY_ORG_ADMIN_EMAIL` to a customer-controlled address before the first migration run
 - Keycloak cleanup removes the demo human users after realm import
+- Keycloak client redirect/web origins are replaced from `UI_BASE_URL` plus `UI_ADDITIONAL_BASE_URLS` by default, which prevents stale beta/staging callbacks from lingering after a hostname is moved to another stack
 - Trust-profile and issuance use an operator-managed external Vault/OpenBao endpoint instead of an in-stack bootstrap vault
 - Docker Compose secrets mount files into `/run/secrets/*`, and the self-host wrappers load them into the exact processes that need them
 - Docker Compose bind-mounts the runtime state from `SELFHOST_STATE_DIR`, so the database, Redis append-only data, and applicant storage stay portable on the host filesystem
@@ -69,22 +72,21 @@ That writes `dist/selfhost-bundle` with the runtime assets, secret templates, Ke
 2. Create external host directories for `SELFHOST_SECRET_DIR`, `SELFHOST_STATE_DIR`, `SELFHOST_BACKUP_DIR`, `SELFHOST_OPENBAO_STATE_DIR`, and `SELFHOST_OPENBAO_EXPORT_DIR`
 3. Copy `docker/secrets/selfhost.example` to `SELFHOST_SECRET_DIR`
 4. Replace the required secret file contents in that external directory
-5. Install the signed license and issuer public key files as `license_key` and `license_public_key` inside that external directory. The CLI installs a real issuer-signed license; it does not mint one locally:
+5. Install the signed license as `license_key` inside that external directory. The CLI validates the license against the Marty issuer public key embedded in the runtime package; it does not mint a license locally:
 
 ```bash
 cat /path/to/customer-license.jwt | node ../marty-cli/bin/marty.js license install-selfhost \
 	--env-file .env.selfhost.production.local \
-	--token-stdin \
-	--public-key-file /path/to/license-public-key.pem
+	--token-stdin
 ```
 
 On PowerShell, the same flow is:
 
 ```powershell
-Get-Content C:\path\to\customer-license.jwt -Raw | node ..\marty-cli\bin\marty.js license install-selfhost --env-file .env.selfhost.production.local --token-stdin --public-key-file C:\path\to\license-public-key.pem
+Get-Content C:\path\to\customer-license.jwt -Raw | node ..\marty-cli\bin\marty.js license install-selfhost --env-file .env.selfhost.production.local --token-stdin
 ```
 
-If you are operating as the issuer yourself, use the internal issuer tool in [tools/selfhost-license-issuer/README.md](../tools/selfhost-license-issuer/README.md) to generate the Ed25519 signing keypair outside the repo and write a signed license directly into `SELFHOST_SECRET_DIR` without printing the JWT. On Windows, keep that private key under `%LOCALAPPDATA%\MartyLicenseIssuer\keys` or another operator-controlled store, not under `marty-selfhost-prod`.
+If you are operating as the issuer yourself, use the internal issuer tool in [tools/selfhost-license-issuer/README.md](../tools/selfhost-license-issuer/README.md) to generate the Ed25519 signing keypair outside the repo and write a signed license directly into `SELFHOST_SECRET_DIR` without printing the JWT. On this workstation, keep the private key under `../marty-selfhost-prod/license-issuer/keys`, adjacent to but not inside `SELFHOST_SECRET_DIR`. The runtime public key remains build-time trusted material; `--public-key-file` is only a dev/test override for validating alternate issuer keys before they are embedded in a release image.
 
 6. Start the standalone OpenBao stack described in [SELFHOST_OPENBAO.md](SELFHOST_OPENBAO.md), or set `BAO_ADDR` to another container-reachable external Vault/OpenBao address if you already run one elsewhere
 7. If you are not using the standalone OpenBao compose project, use `scripts/bootstrap-selfhost-vault.sh` with a bootstrap token to configure the external vault and write `openbao_service_token` into `SELFHOST_SECRET_DIR`, or place an equivalent least-privilege token there yourself:
@@ -97,7 +99,8 @@ SELFHOST_SECRET_DIR=/path/to/selfhost-secrets \
 ```
 
 8. Set the non-secret production settings such as hostname, ports, host state directories, optional integrations, `MARTY_ORG_ADMIN_EMAIL`, and any license policy overrides
-9. Build the UI bundle on the host:
+9. Set `CREDENTIAL_LOGIN_POLICY_ID=50000000-0000-0000-0000-000000000004` so the Keycloak **Present Open Badge Credential** flow points at the seeded OpenBadgeLogin policy
+10. Build the UI bundle on the host:
 
 ```bash
 cd ui
@@ -106,7 +109,7 @@ npm run build:selfhost
 cd ..
 ```
 
-10. Start the stack:
+11. Start the stack:
 
 ```bash
 docker compose --env-file .env.selfhost.production.local -f docker-compose.selfhost.prod.yml up -d --build
@@ -148,8 +151,8 @@ Create these files under `SELFHOST_SECRET_DIR`:
 - `issuance_api_key`
 - `openbao_service_token`
 - `cloudflare_tunnel_token`
+- `cloudflare_beta_tunnel_token` when you enable the optional `beta-tunnel` compose profile
 - `license_key`
-- `license_public_key`
 
 The stack will refuse to start if any required secret file still contains a placeholder value such as `change-me-postgres`.
 
@@ -159,8 +162,11 @@ The default self-host policy is controlled with non-secret env vars in `.env.sel
 - `MARTY_LICENSE_REQUIRED_ISSUER=marty-license-issuer`
 - `MARTY_LICENSE_REQUIRED_PLAN_TIER=system`
 - `MARTY_LICENSE_REQUIRED_PRODUCTS=ui-app`
+- `CREDENTIAL_LOGIN_POLICY_ID=50000000-0000-0000-0000-000000000004`
 
-`license_key` is not a locally generated password. It is a signed license token issued by the licensing authority. `license_public_key` is the issuer's PEM-encoded Ed25519 public key used to verify that token. The CLI command above validates the pair against the configured issuer, required plan tier, and required product set before writing them into `SELFHOST_SECRET_DIR`.
+`CREDENTIAL_LOGIN_POLICY_ID` is the seeded OpenBadgeLogin presentation policy used by the Keycloak **Present Open Badge Credential** button. If it is blank, the auth service now shows a friendly HTML error page, and `scripts/check-selfhost-production.py` will flag the deployment as incomplete.
+
+`license_key` is not a locally generated password. It is a signed license token issued by the licensing authority. The issuer's PEM-encoded Ed25519 public key is embedded in the self-host runtime image, and the CLI command above validates the token against the configured issuer, required plan tier, and required product set before writing it into `SELFHOST_SECRET_DIR`.
 
 These can be blank if you are not using the integration:
 
@@ -172,7 +178,17 @@ These can be blank if you are not using the integration:
 - `square_access_token`
 - `square_webhook_signature_key`
 
-`google_client_id` and `google_client_secret` are the OAuth web client credentials used by Keycloak's Google identity provider.
+`google_client_id` and `google_client_secret` are the OAuth web client credentials used by Keycloak's Google identity provider. When `KEYCLOAK_SOCIAL_LOGIN_ENABLED=true`, both files must contain real values and the Google Cloud OAuth web client must allow this redirect URI:
+
+```text
+https://<PUBLIC_DOMAIN>/realms/<KEYCLOAK_REALM>/broker/google/endpoint
+```
+
+For the ElevenID self-host deployment, that callback is:
+
+```text
+https://elevenidllc.com/realms/11id/broker/google/endpoint
+```
 
 `google_analytics_measurement_id` is the GA4 `G-...` measurement ID. It is public by nature, but the self-host UI startup wrapper can read it from `SELFHOST_SECRET_DIR` and expose it to the SPA at container start.
 
@@ -200,7 +216,23 @@ See [SELFHOST_OPENBAO.md](SELFHOST_OPENBAO.md) for the compose file and recovery
 
 ## Cloudflare tunnel routing
 
-Configure the production Cloudflare tunnel hostname to target `http://edge:80` inside this compose project. Keep the existing beta/dev hostname pointed at the dev tunnel stack.
+Configure the production Cloudflare tunnel hostname to target `http://edge:80` inside this compose project. Keep the existing beta/dev hostname pointed at the beta/dev tunnel stack when beta has its own Keycloak.
+
+If `beta.elevenidllc.com` should point at the same self-host production edge, keep the primary tunnel on `http://edge:80` and start the optional beta tunnel profile. The beta Cloudflare tunnel should target `http://tunnel-nginx-proxy:80`; the proxy preserves the incoming `Host` header and forwards traffic to the self-host `edge` service.
+
+Do **not** start the optional self-host beta tunnel profile when beta is a separate environment with its own Keycloak. In that case, beta traffic must use the normal beta tunnel stack, and production `UI_ADDITIONAL_BASE_URLS`/`CORS_ORIGINS` must not include the beta origin.
+
+1. Put the beta Cloudflare tunnel token in `SELFHOST_SECRET_DIR/cloudflare_beta_tunnel_token`.
+2. Set `UI_ADDITIONAL_BASE_URLS=https://beta.elevenidllc.com` and include beta in `CORS_ORIGINS`.
+3. Start the sidecars:
+
+```bash
+make selfhost-prod-beta-tunnel-up
+```
+
+The default `selfhost-prod-up` target does not start the beta profile automatically, so customer deployments that only serve one hostname keep the simpler single-tunnel shape.
+
+The auth service intentionally trusts only configured UI origins when it builds the OIDC callback URL. If beta is omitted from both `UI_ADDITIONAL_BASE_URLS` and `CORS_ORIGINS`, `/v1/auth/login` will fall back to `UI_BASE_URL` and Google sign-in will return users to the primary production hostname.
 
 The host-published edge, gateway, and Keycloak ports in this reference stack are loopback-only by default. Keep them that way unless you have a separate reason to expose them directly and have already put host firewall and TLS controls in place.
 

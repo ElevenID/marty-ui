@@ -24,12 +24,6 @@
     />
 
     <title>ElevenID LLC — Verifiable Identity Infrastructure</title>
-    <script>
-      // Ensure loading state is enforced before first paint, even on prerendered HTML
-      document.documentElement.classList.remove('app-ready');
-      document.documentElement.classList.add('app-loading');
-    </script>
-
     <style>
       html,
       body,
@@ -40,18 +34,9 @@
       body {
         margin: 0;
       }
-
-      /* Prevent first-paint FOUC until app styles/fonts are ready */
-      html.app-loading #root {
-        visibility: hidden;
-      }
-
-      html.app-ready #root {
-        visibility: visible;
-      }
     </style>
   </head>
-  <body class="app-loading">
+  <body>
     <noscript>You need to enable JavaScript to run this app.</noscript>
     <div id="root"></div>
     <script type="module" src="/src/index.jsx"></script>

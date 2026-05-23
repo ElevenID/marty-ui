@@ -3793,7 +3793,11 @@ async def _submit_verification_response_internal(
                 decision_reason = eval_resp.decision_reason
                 verified_claims = _json.loads(eval_resp.verified_claims_json) if eval_resp.verified_claims_json else {}
                 logger.info(
-                    f"Policy evaluation for {instance_id}: {evaluation_result} / {evaluation_decision}"
+                    "Policy evaluation for %s: result=%s decision=%s reason=%s",
+                    instance_id,
+                    evaluation_result,
+                    evaluation_decision,
+                    decision_reason or "<none>",
                 )
             else:
                 logger.warning(
@@ -3852,7 +3856,13 @@ async def _submit_verification_response_internal(
     instance.updated_at = datetime.now(timezone.utc)
 
     await repo.save_instance(instance)
-    logger.info(f"Completed verification flow: {instance_id} with result: {evaluation_result}")
+    logger.info(
+        "Completed verification flow: %s result=%s decision=%s reason=%s",
+        instance_id,
+        evaluation_result,
+        evaluation_decision,
+        decision_reason or "<none>",
+    )
 
     # -----------------------------------------------------------------------
     # Fire callback to notify requesting service (e.g., auth service)
