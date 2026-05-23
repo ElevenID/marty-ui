@@ -19,15 +19,15 @@ export function isSelfhostProductionPublicHost(hostname = getCurrentHostname()) 
 }
 
 export function getSelfhostPublicUiFlags(hostname = getCurrentHostname()) {
-  const disableMarketingCtas = isSelfhostProductionPublicHost(hostname);
+  const disableProductionMarketingCtas = isSelfhostProductionPublicHost(hostname);
 
   return {
     showPublicLoginButton: true,
-    disablePublicLoginButton: disableMarketingCtas,
+    disablePublicLoginButton: false,
     showPublicGetStartedButtons: true,
-    disablePublicGetStartedButtons: disableMarketingCtas,
+    disablePublicGetStartedButtons: disableProductionMarketingCtas,
     showPublicPricingButtons: true,
-    disablePublicPricingButtons: disableMarketingCtas,
+    disablePublicPricingButtons: disableProductionMarketingCtas,
     enableLegacyAdminImpersonationBanner: false,
   };
 }
@@ -75,6 +75,10 @@ export function getSelfhostPublicTabs(hostname = getCurrentHostname()) {
         '/what-is-open-badge',
         '/what-is-digital-credential',
         '/what-is-marty-protocol',
+        '/privacy-policy',
+        '/privacy',
+        '/terms-of-service',
+        '/terms',
       ],
     },
     ...(showPublicPricingButtons ? [{ labelKey: 'navigation.pricing', defaultLabel: 'Pricing', path: '/pricing', disabled: disablePublicPricingButtons }] : []),
@@ -90,6 +94,8 @@ export const DISABLE_PUBLIC_GET_STARTED_BUTTONS = selfhostPublicUiFlags.disableP
 export const SHOW_PUBLIC_PRICING_BUTTONS = selfhostPublicUiFlags.showPublicPricingButtons;
 export const DISABLE_PUBLIC_PRICING_BUTTONS = selfhostPublicUiFlags.disablePublicPricingButtons;
 export const ENABLE_LEGACY_ADMIN_IMPERSONATION_BANNER = selfhostPublicUiFlags.enableLegacyAdminImpersonationBanner;
+export const ENABLE_ORGANIZATION_CREATION = false;
+export const WALLET_SELECTION_ALLOWED_WALLET_IDS = ['wr-spruce-001', 'wr-marty-001'];
 
 export const I18N_NAMESPACES = ['common', 'console', 'onboarding', 'forms', 'errors', 'applicant', 'vendor', 'marketing'];
 

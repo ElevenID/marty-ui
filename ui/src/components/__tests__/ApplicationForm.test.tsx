@@ -6,40 +6,39 @@ import ApplicationForm from '../applicant/ApplicationForm';
 const {
   mockNavigate,
   mockGet,
+  mockPost,
   mockGetApplicant,
   mockGetApplicantByUser,
   mockCreateApplicant,
   mockCreateApplication,
-  mockAutoIssueApplication,
+  mockGenerateIssuanceOffer,
   mockSubmitApplication,
   mockUpdateApplicantProfile,
   mockEnrollBiometric,
   mockListApplications,
+  mockListApplicantApplicationsForProfile,
+  mockSupersedeApplication,
+  mockWalletPreferenceState,
+  mockLocationState,
 } = vi.hoisted(() => ({
   mockNavigate: vi.fn(),
   mockGet: vi.fn(),
+  mockPost: vi.fn(),
   mockGetApplicant: vi.fn(),
   mockGetApplicantByUser: vi.fn(),
   mockCreateApplicant: vi.fn(),
   mockCreateApplication: vi.fn(),
-  mockAutoIssueApplication: vi.fn(),
+  mockGenerateIssuanceOffer: vi.fn(),
   mockSubmitApplication: vi.fn(),
   mockUpdateApplicantProfile: vi.fn(),
   mockEnrollBiometric: vi.fn(),
   mockListApplications: vi.fn(),
-}));
-
-vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
-}));
-
-vi.mock('react-router-dom', async () => {
-  const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom');
-  return {
-    ...actual,
-    useParams: () => ({ credentialType: undefined }),
-    useNavigate: () => mockNavigate,
-    useLocation: () => ({
+  mockListApplicantApplicationsForProfile: vi.fn(),
+  mockSupersedeApplication: vi.fn(),
+  mockWalletPreferenceState: { walletIds: ['wallet-1'] as string[] },
+  mockLocationState: {
+    params: { credentialType: undefined as string | undefined },
+    location: {
       state: {
         credential: {
           id: 'cfg-1',
@@ -53,7 +52,22 @@ vi.mock('react-router-dom', async () => {
           field_validation_rules: {},
         },
       },
-    }),
+      search: '',
+    } as any,
+  },
+}));
+
+vi.mock('react-i18next', () => ({
+  useTranslation: () => ({ t: (key: string) => key }),
+}));
+
+vi.mock('react-router-dom', async () => {
+  const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom');
+  return {
+    ...actual,
+    useParams: () => mockLocationState.params,
+    useNavigate: () => mockNavigate,
+    useLocation: () => mockLocationState.location,
   };
 });
 
@@ -78,6 +92,7 @@ vi.mock('../../contexts/PreviewContext', () => ({
 
 vi.mock('../../services/api', () => ({
   get: mockGet,
+  post: mockPost,
 }));
 
 vi.mock('../../services/applicantApi', () => ({
@@ -85,11 +100,22 @@ vi.mock('../../services/applicantApi', () => ({
   getApplicantByUser: mockGetApplicantByUser,
   createApplicant: mockCreateApplicant,
   createApplication: mockCreateApplication,
-  autoIssueApplication: mockAutoIssueApplication,
+  listApplicantApplicationsForProfile: mockListApplicantApplicationsForProfile,
   listApplications: mockListApplications,
   submitApplication: mockSubmitApplication,
+  supersedeApplication: mockSupersedeApplication,
   updateApplicantProfile: mockUpdateApplicantProfile,
   enrollBiometric: mockEnrollBiometric,
+}));
+
+vi.mock('../../services/credentialsApi', () => ({
+  generateIssuanceOffer: mockGenerateIssuanceOffer,
+}));
+
+vi.mock('../../hooks/useWalletPreferences', () => ({
+  default: () => ({
+    walletIds: mockWalletPreferenceState.walletIds,
+  }),
 }));
 
 vi.mock('../console/applicant/ClaimCredentialDialog', () => ({
@@ -101,17 +127,111 @@ vi.mock('../console/applicant/ClaimCredentialDialog', () => ({
 describe('ApplicationForm', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockLocationState.params = { credentialType: undefined };
+    mockLocationState.location = {
+      state: {
+        credential: {
+          id: 'cfg-1',
+          credential_type: 'MemberCredential',
+          display_name: 'ElevenID Login Credential',
+          name: 'ElevenID Login Credential',
+          description: 'A free, instant credential.',
+          required_fields: [],
+          optional_fields: [],
+          custom_fields: [],
+          field_validation_rules: {},
+        },
+      },
+      search: '',
+    };
     mockGetApplicant.mockResolvedValue({ id: 'app-1' });
     mockGetApplicantByUser.mockResolvedValue(null);
     mockCreateApplicant.mockResolvedValue({ id: 'app-created' });
     mockCreateApplication.mockResolvedValue({ id: 'application-1' });
     mockListApplications.mockResolvedValue({ applications: [] });
-    mockAutoIssueApplication.mockResolvedValue({
+    mockListApplicantApplicationsForProfile.mockResolvedValue([]);
+    mockSupersedeApplication.mockResolvedValue({ id: 'application-existing', status: 'WITHDRAWN' });
+    mockSubmitApplication.mockResolvedValue({
+      id: 'application-1',
+      reference_number: 'APP-20260317-SUBMITTED',
+    });
+    mockGenerateIssuanceOffer.mockResolvedValue({
       id: 'issued-1',
       credential_offer_uri: 'openid-credential-offer://offer',
       credential_offer_uris: { apple: 'apple://offer' },
       offer_expires_at: '2026-03-17T00:00:00.000Z',
     });
+    mockWalletPreferenceState.walletIds = ['wallet-1'];
+  });
+
+  it('explains Canvas-only credential applications with launch context and completion checks', () => {
+    mockLocationState.location = {
+      search: '?canvas_lti_state=state-1',
+      state: {
+        credential: {
+          id: 'cfg-canvas',
+          credential_type: 'canvas_course_badge',
+          display_name: 'Canvas Quiz Badge',
+          name: 'Canvas Quiz Badge',
+          description: 'Issued after the Canvas completion check passes.',
+          required_fields: [],
+          optional_fields: [],
+          custom_fields: [],
+          field_validation_rules: {},
+        },
+        applicationTemplate: {
+          id: 'app-template-1',
+          evidence_requirements: [
+            {
+              evidence_type: 'canvas.quiz_score',
+              pass_rule: { min_score_percent: 80 },
+              scope: { course_id: '1', quiz_id: 'quiz-1' },
+            },
+          ],
+        },
+        canvasLtiSession: {
+          state: 'state-1',
+          canvas_account_id: 'canvas-account-1',
+          application_template_id: 'app-template-1',
+          credential_template_id: 'cfg-canvas',
+          verified_launch: {
+            subject: 'canvas-user-1',
+            learner_identity: {
+              email: 'learner@example.edu',
+              name: 'ElevenID Test',
+            },
+            context: {
+              id: '1',
+              title: 'ElevenID LTI Test Course',
+            },
+            raw_claims: {
+              'https://purl.imsglobal.org/spec/lti/claim/resource_link': {
+                id: 'quiz-1',
+                title: 'Final Quiz',
+              },
+            },
+            roles: ['http://purl.imsglobal.org/vocab/lis/v2/membership#Learner'],
+          },
+        },
+        canvasLtiBootstrap: {
+          application_id: 'application-1',
+          application_status: 'draft',
+          created: true,
+        },
+      },
+    };
+
+    render(<ApplicationForm />);
+
+    expect(screen.getByText('Canvas Quiz Badge')).toBeInTheDocument();
+    expect(screen.getByTestId('canvas-application-context')).toBeInTheDocument();
+    expect(screen.getByText('Canvas course completion')).toBeInTheDocument();
+    expect(screen.getByText('No additional form fields are required. Review the Canvas details below, then submit the application so the credential can be checked and issued.')).toBeInTheDocument();
+    expect(screen.getByText('ElevenID LTI Test Course')).toBeInTheDocument();
+    expect(screen.getByText('Final Quiz')).toBeInTheDocument();
+    expect(screen.getByText('Quiz Score')).toBeInTheDocument();
+    expect(screen.getByText('minimum score 80% - course 1 - quiz quiz-1')).toBeInTheDocument();
+    expect(screen.queryByText('applicationForm.steps.review')).not.toBeInTheDocument();
   });
 
   it('runs the one-click credential issuance flow for member credentials', async () => {
@@ -127,8 +247,27 @@ describe('ApplicationForm', () => {
         credential_configuration_id: 'cfg-1',
         issuing_authority: 'ElevenID LLC',
       }));
-      expect(mockAutoIssueApplication).toHaveBeenCalledWith('application-1');
+      expect(mockSubmitApplication).toHaveBeenCalledWith('application-1');
+      expect(mockGenerateIssuanceOffer).toHaveBeenCalledWith('application-1');
       expect(screen.getByTestId('claim-credential-dialog')).toHaveTextContent('issued-1:openid-credential-offer://offer');
+    });
+  });
+
+  it('submits the application but waits for wallet selection before generating an offer', async () => {
+    mockWalletPreferenceState.walletIds = [];
+
+    const { user } = render(<ApplicationForm />);
+
+    await user.click(screen.getByRole('button', { name: 'Add to Wallet' }));
+
+    await waitFor(() => {
+      expect(mockCreateApplication).toHaveBeenCalledWith(expect.objectContaining({
+        applicant_id: 'app-1',
+        credential_configuration_id: 'cfg-1',
+      }));
+      expect(mockSubmitApplication).toHaveBeenCalledWith('application-1');
+      expect(mockGenerateIssuanceOffer).not.toHaveBeenCalled();
+      expect(screen.getByTestId('claim-credential-dialog')).toHaveTextContent('application-1:');
     });
   });
 });

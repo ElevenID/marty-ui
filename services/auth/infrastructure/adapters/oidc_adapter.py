@@ -149,12 +149,13 @@ class KeycloakOIDCAdapter(OIDCProviderPort):
         self,
         code: str,
         code_verifier: str,
+        redirect_uri: str | None = None,
     ) -> dict[str, Any]:
         """Exchange authorization code for tokens."""
         token_data = {
             "grant_type": "authorization_code",
             "code": code,
-            "redirect_uri": self.config.redirect_uri,
+            "redirect_uri": redirect_uri or self.config.redirect_uri,
             "client_id": self.config.client_id,
             "code_verifier": code_verifier,
         }

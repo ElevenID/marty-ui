@@ -79,6 +79,86 @@ function getCompactLabel(label, fallback = '', maxChars = 3) {
     .toUpperCase();
 }
 
+function isCanvasLtiUser(user) {
+  return Boolean(
+    user?.user_id?.startsWith?.('canvas-lti-')
+    || (Array.isArray(user?.roles) && user.roles.includes('canvas_lti_learner'))
+  );
+}
+
+function shortenIdentifier(value, maxChars = 28) {
+  const normalized = String(value || '').trim();
+  if (!normalized) {
+    return '';
+  }
+
+  const localPart = normalized.includes('@') ? normalized.split('@')[0] : normalized;
+  if (localPart.length <= maxChars) {
+    return localPart;
+  }
+
+  const visibleChars = Math.max(2, maxChars - 3);
+  const headChars = Math.ceil(visibleChars / 2);
+  const tailChars = Math.floor(visibleChars / 2);
+  return `${localPart.slice(0, headChars)}...${localPart.slice(-tailChars)}`;
+}
+
+function isOpaqueCanvasIdentifier(value) {
+  const normalized = String(value || '').trim();
+  if (!normalized) {
+    return false;
+  }
+
+  return (
+    normalized.startsWith('canvas-lti-')
+    || /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(normalized)
+    || /^[0-9a-f]{24,}$/i.test(normalized)
+  );
+}
+
+function getFullName(user) {
+  return [user?.given_name, user?.family_name]
+    .map((value) => (typeof value === 'string' ? value.trim() : ''))
+    .filter(Boolean)
+    .join(' ');
+}
+
+function getFriendlyCanvasIdentifier(user) {
+  for (const value of [user?.preferred_username, user?.username]) {
+    const normalized = String(value || '').trim();
+    if (normalized && !isOpaqueCanvasIdentifier(normalized)) {
+      return shortenIdentifier(normalized);
+    }
+  }
+
+  return '';
+}
+
+export function getAccountMenuDisplayName(user) {
+  if (!user) {
+    return 'User';
+  }
+
+  const identifier = shortenIdentifier(user.username || user.preferred_username || user.email || user.user_id);
+  const fullName = getFullName(user);
+  if (isCanvasLtiUser(user)) {
+    return (
+      getFriendlyCanvasIdentifier(user)
+      || fullName
+      || shortenIdentifier(user.email)
+      || identifier
+      || 'Canvas learner'
+    );
+  }
+
+  return fullName || identifier || 'User';
+}
+
+export function getAccountAvatarInitial(user) {
+  const displayName = getAccountMenuDisplayName(user);
+  return displayName?.[0]?.toUpperCase() || 'U';
+}
+
 /**
  * Console Header Bar Component
  */
@@ -119,6 +199,8 @@ export function ConsoleHeaderBar({ onMobileMenuToggle }) {
   const userRole = isAdministrator ? 'Administrator' : isVendor ? 'Vendor' : isApplicant ? 'Person' : 'User';
   const profilePath = isApplicant ? '/console/applicant/profile' : '/console/org/profile';
   const settingsPath = mode === 'org' ? '/console/org/settings' : '/console/applicant/settings';
+  const accountDisplayName = getAccountMenuDisplayName(user);
+  const userInitials = getAccountAvatarInitial(user);
 
   const handleUserMenuOpen = (event) => {
     setAnchorEl(event.currentTarget);
@@ -149,8 +231,6 @@ export function ConsoleHeaderBar({ onMobileMenuToggle }) {
       console.error('[ConsoleHeaderBar] Failed to switch organization:', error);
     }
   };
-
-  const userInitials = user?.given_name?.[0] || user?.email?.[0]?.toUpperCase() || 'U';
 
   return (
     <AppBar
@@ -417,6 +497,7 @@ export function ConsoleHeaderBar({ onMobileMenuToggle }) {
             onClick={handleUserMenuOpen}
             size="small"
             data-testid="console-account-menu-button"
+            aria-label={`Account menu for ${accountDisplayName}`}
             sx={{
               ml: isMobile ? 0 : 2,
               bgcolor: 'common.white',
@@ -461,7 +542,7 @@ export function ConsoleHeaderBar({ onMobileMenuToggle }) {
         >
           <Box sx={{ px: 2, py: 1 }}>
             <Typography variant="subtitle2" fontWeight={600}>
-              {user?.given_name || user?.email || 'User'}
+              {accountDisplayName}
             </Typography>
             <Chip
               label={userRole}

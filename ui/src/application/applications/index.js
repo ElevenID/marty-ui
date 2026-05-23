@@ -5,6 +5,7 @@ export {
   getCredentialKindFlags,
   getOneClickSummaryFields,
   groupFieldsIntoSteps,
+  normalizeApplicationTemplateToFormConfig,
   normalizeCredentialConfigInput,
   normalizeTemplateToFormConfig,
   validateApplicationStep,
@@ -41,6 +42,7 @@ export {
   loadCredentialCatalogItems,
   loadExistingCredentialApplications,
   mapCredentialTemplateToCatalogItem,
+  scopeCredentialCatalogItemsForCanvasLaunch,
 } from './credentialCatalog';
 
 export {

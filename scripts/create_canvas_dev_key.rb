@@ -2,8 +2,8 @@
 # Run with: docker exec -i marty-canvas-real bash -c "cd /usr/src/app && cat > /tmp/create_dev_key.rb && bin/rails runner /tmp/create_dev_key.rb -e production"
 
 lti_base_url = ENV.fetch('CANVAS_LTI_EXPERIENCE_BASE_URL', 'https://beta.elevenidllc.com').sub(%r{/+$}, '')
-connector_id = ENV.fetch('CANVAS_CONNECTOR_ID', '67f60f26-67aa-405f-9e04-b48165d49c61')
-redirect_uri = "#{lti_base_url}/v1/integrations/canvas/lti/experience/#{connector_id}"
+platform_id = ENV.fetch('CANVAS_PLATFORM_ID', 'replace-with-canvas-platform-id')
+redirect_uri = "#{lti_base_url}/v1/integrations/canvas/lti/platforms/#{platform_id}/experience"
 
 # Create the developer key
 key = DeveloperKey.create!(

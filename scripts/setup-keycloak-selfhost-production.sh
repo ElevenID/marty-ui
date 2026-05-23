@@ -6,7 +6,13 @@ set -euo pipefail
 require_secret_var KEYCLOAK_ADMIN_PASSWORD
 require_secret_var MARTY_API_CLIENT_SECRET
 
-/scripts/setup-keycloak.sh
+if ! /scripts/setup-keycloak.sh; then
+    if [[ "${KEYCLOAK_SETUP_STRICT:-false}" == "true" ]]; then
+        echo "[ERROR] Keycloak setup failed and KEYCLOAK_SETUP_STRICT=true" >&2
+        exit 1
+    fi
+    echo "[WARN] Keycloak setup returned non-zero; continuing self-host startup because KEYCLOAK_SETUP_STRICT is not true" >&2
+fi
 
 remove_demo_users="${KEYCLOAK_REMOVE_DEMO_USERS:-true}"
 if [[ "${remove_demo_users,,}" != "true" ]]; then

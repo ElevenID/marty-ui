@@ -11,6 +11,9 @@
 
 import { useState, useCallback, useEffect } from 'react';
 
+import { WALLET_SELECTION_ALLOWED_WALLET_IDS } from '@ui-public-config';
+import { filterAllowedWalletIds } from '../utils/walletSelectionRestrictions';
+
 const STORAGE_KEY_PREFIX = 'elevenid_wallets_';
 
 function storageKey(userId) {
@@ -22,14 +25,14 @@ function readFromStorage(userId) {
     const raw = localStorage.getItem(storageKey(userId));
     if (!raw) return [];
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
+    return filterAllowedWalletIds(parsed, WALLET_SELECTION_ALLOWED_WALLET_IDS);
   } catch {
     return [];
   }
 }
 
 function writeToStorage(userId, ids) {
-  localStorage.setItem(storageKey(userId), JSON.stringify(ids));
+  localStorage.setItem(storageKey(userId), JSON.stringify(filterAllowedWalletIds(ids, WALLET_SELECTION_ALLOWED_WALLET_IDS)));
 }
 
 /**
@@ -45,7 +48,7 @@ export default function useWalletPreferences(userId) {
 
   const setWalletIds = useCallback(
     (ids) => {
-      const list = Array.isArray(ids) ? ids : [];
+      const list = filterAllowedWalletIds(ids, WALLET_SELECTION_ALLOWED_WALLET_IDS);
       writeToStorage(userId, list);
       setWalletIdsState(list);
     },

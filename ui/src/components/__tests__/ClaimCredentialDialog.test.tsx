@@ -7,11 +7,13 @@ const {
   mockGenerateIssuanceOffer,
   mockBuildWalletOpenLink,
   mockListWallets,
+  mockListDeliveryDestinations,
   mockWalletPreferenceState,
 } = vi.hoisted(() => ({
   mockGenerateIssuanceOffer: vi.fn(),
   mockBuildWalletOpenLink: vi.fn(),
   mockListWallets: vi.fn(),
+  mockListDeliveryDestinations: vi.fn(),
   mockWalletPreferenceState: { walletIds: [] as string[] },
 }));
 
@@ -28,6 +30,10 @@ vi.mock('../../services/credentialsApi', () => ({
 vi.mock('../../services/walletRegistryApi', () => ({
   buildWalletOpenLink: (...args: unknown[]) => mockBuildWalletOpenLink(...args),
   listWallets: (...args: unknown[]) => mockListWallets(...args),
+}));
+
+vi.mock('../../services/deliveryDestinationsApi', () => ({
+  listDeliveryDestinations: (...args: unknown[]) => mockListDeliveryDestinations(...args),
 }));
 
 vi.mock('../../hooks/useAuth', () => ({
@@ -64,23 +70,81 @@ describe('ClaimCredentialDialog', () => {
       { id: 'wallet-1', name: 'Test Wallet' },
       { id: 'wr-spruce-001', name: 'SpruceKit' },
     ]);
+    mockListDeliveryDestinations.mockResolvedValue([
+      {
+        id: 'dd-elevenid-wallet',
+        name: 'ElevenID Wallet',
+        provider: 'elevenid_wallet',
+        mode: 'holder_wallet',
+        delivery_target: 'wallet',
+        is_enabled: true,
+      },
+      {
+        id: 'dd-oid4vci-compatible-wallet',
+        name: 'Compatible Wallet',
+        provider: 'oid4vci_wallet',
+        mode: 'holder_wallet',
+        delivery_target: 'wallet',
+        is_enabled: true,
+      },
+      {
+        id: 'dd-canvas-credentials-institutional',
+        name: 'Canvas Credentials',
+        provider: 'canvas_credentials',
+        mode: 'organization_mirror',
+        delivery_target: 'canvas_credentials',
+        is_enabled: true,
+      },
+    ]);
     mockGenerateIssuanceOffer.mockResolvedValue({
       offer_url: 'openid://wallet-offer',
       status: 'active',
     });
   });
 
-  it('blocks claiming until the applicant selects a wallet app', async () => {
+  it('uses the compatible wallet destination when no wallet app is selected', async () => {
+    render(
+      <ClaimCredentialDialog
+        open
+        onClose={vi.fn()}
+        applicationId="app-1"
+        organizationId="org-1"
+        offerData={undefined}
+      />,
+    );
+
+    expect(await screen.findByTestId('delivery-destination-selector')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(mockListDeliveryDestinations).toHaveBeenCalledWith({
+        activeOnly: true,
+        organizationId: 'org-1',
+      });
+      expect(mockGenerateIssuanceOffer).toHaveBeenCalledWith(
+        'app-1',
+        expect.objectContaining({
+          delivery_destination_ids: expect.arrayContaining([
+            'dd-oid4vci-compatible-wallet',
+            'dd-canvas-credentials-institutional',
+          ]),
+          canvas_credentials_consent: true,
+        }),
+      );
+    });
+    expect(await screen.findByTestId('claim-invite-display')).toBeInTheDocument();
+    expect(screen.queryByTestId('wallet-registration-guard')).not.toBeInTheDocument();
+  });
+
+  it('blocks the ElevenID wallet option until the applicant selects a wallet app', async () => {
     const onClose = vi.fn();
     const { user } = render(
-      <ClaimCredentialDialog open onClose={onClose} applicationId="app-1" offerData={undefined} />,
+      <ClaimCredentialDialog open onClose={onClose} applicationId="app-1" organizationId="org-1" offerData={undefined} />,
     );
+
+    await user.click(await screen.findByTestId('delivery-destination-dd-elevenid-wallet'));
 
     expect(await screen.findByTestId('wallet-registration-guard')).toHaveTextContent(
       'Select a wallet app before you can receive this credential.',
     );
-    expect(screen.queryByTestId('claim-invite-display')).not.toBeInTheDocument();
-    expect(mockGenerateIssuanceOffer).not.toHaveBeenCalled();
 
     const setupLink = screen.getByRole('link', { name: 'Choose Wallet' });
     expect(setupLink).toHaveAttribute('href', '/console/applicant/settings#wallet-selection');
@@ -92,10 +156,15 @@ describe('ClaimCredentialDialog', () => {
   it('loads a fresh wallet offer once a wallet app is selected', async () => {
     mockWalletPreferenceState.walletIds = ['wallet-1'];
 
-    render(<ClaimCredentialDialog open onClose={vi.fn()} applicationId="app-1" offerData={undefined} />);
+    render(<ClaimCredentialDialog open onClose={vi.fn()} applicationId="app-1" organizationId="org-1" offerData={undefined} />);
 
     await waitFor(() => {
-      expect(mockGenerateIssuanceOffer).toHaveBeenCalledWith('app-1');
+      expect(mockGenerateIssuanceOffer).toHaveBeenCalledWith(
+        'app-1',
+        expect.objectContaining({
+          delivery_destination_ids: expect.arrayContaining(['dd-elevenid-wallet']),
+        }),
+      );
     });
 
     expect(await screen.findByTestId('claim-invite-display')).toBeInTheDocument();
@@ -134,10 +203,15 @@ describe('ClaimCredentialDialog', () => {
       status: 'active',
     });
 
-    render(<ClaimCredentialDialog open onClose={vi.fn()} applicationId="app-1" offerData={undefined} />);
+    render(<ClaimCredentialDialog open onClose={vi.fn()} applicationId="app-1" organizationId="org-1" offerData={undefined} />);
 
     await waitFor(() => {
-      expect(mockGenerateIssuanceOffer).toHaveBeenCalledWith('app-1');
+      expect(mockGenerateIssuanceOffer).toHaveBeenCalledWith(
+        'app-1',
+        expect.objectContaining({
+          delivery_destination_ids: expect.arrayContaining(['dd-elevenid-wallet']),
+        }),
+      );
     });
 
     await waitFor(() => {
@@ -164,5 +238,17 @@ describe('ClaimCredentialDialog', () => {
       writable: true,
       value: originalMatchMedia,
     });
+  });
+
+  it('explains that Canvas Credentials display runs after wallet issuance', async () => {
+    const { user } = render(
+      <ClaimCredentialDialog open onClose={vi.fn()} applicationId="app-1" organizationId="org-1" offerData={undefined} />,
+    );
+
+    await user.click(await screen.findByTestId('delivery-destination-dd-canvas-credentials-institutional'));
+
+    expect(await screen.findByTestId('canvas-credentials-destination-message')).toHaveTextContent(
+      'Canvas Credentials display happens after the credential is issued.',
+    );
   });
 });

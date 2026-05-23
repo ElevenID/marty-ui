@@ -38,6 +38,7 @@ import {
   DeploymentProfilesPage,
   ApiKeysPage,
   DidIdentitiesPage,
+  CanvasIntegrationsPage,
   LanesDevicesPage,
   DeploymentProfileWizard,
   KeyManagementServiceWizard,
@@ -150,6 +151,7 @@ function ConsoleRoutes() {
         <Route path="deploy/profiles/new" element={<DeploymentProfileWizard />} />
         <Route path="deploy/api-keys" element={<Navigate to="/console/org/api-keys" replace />} />
         <Route path="deploy/issuer-identity" element={<DidIdentitiesPage />} />
+        <Route path="deploy/canvas" element={<CanvasIntegrationsPage />} />
         <Route path="deploy/issuer-identity/new" element={<IssuerIdentityWizard />} />
         <Route path="deploy/key-management" element={<SigningKeysPage />} />
         <Route path="deploy/key-management/services" element={<Navigate to="/console/org/deploy/key-management" replace />} />

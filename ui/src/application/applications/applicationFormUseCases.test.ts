@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   autoApplyForCredential,
   ensureApplicantProfileForApplication,
+  findActiveApplicationForCredential,
   loadCredentialApplicationConfig,
   resolveApplicantIdForApplication,
   submitCredentialApplication,
@@ -37,7 +38,48 @@ describe('applicationForm use cases', () => {
       getCredentialTemplate: vi.fn(),
     })).resolves.toEqual({
       credentialConfig: null,
+      applicationTemplate: null,
       error: 'Organization context missing for credential configuration.',
+    });
+  });
+
+  it('loads an application template and reuses the dynamic form model', async () => {
+    await expect(loadCredentialApplicationConfig({
+      credentialConfigId: 'credential-template-1',
+      credentialConfig: null,
+      organizationId: 'org-1',
+      getCredentialTemplate: vi.fn().mockResolvedValue({
+        id: 'credential-template-1',
+        credential_type: 'open_badge',
+        name: 'Canvas Quiz Badge',
+        claims: [{ name: 'email', required: true }],
+      }),
+      applicationTemplateId: 'application-template-1',
+      getApplicationTemplate: vi.fn().mockResolvedValue({
+        id: 'application-template-1',
+        name: 'Canvas Quiz Application',
+        credential_template_id: 'credential-template-1',
+        form_fields: [
+          { name: 'email', label: 'Email', type: 'email', required: true },
+          { name: 'course_name', label: 'Canvas course', type: 'text', required: true },
+        ],
+        evidence_requirements: [{ evidence_type: 'canvas.quiz_score' }],
+      }),
+    })).resolves.toMatchObject({
+      credentialConfig: {
+        id: 'credential-template-1',
+        credential_type: 'open_badge',
+        display_name: 'Canvas Quiz Application',
+        required_fields: [
+          { name: 'email', label: 'Email', type: 'email', required: true },
+          { name: 'course_name', label: 'Canvas course', type: 'text', required: true },
+        ],
+        evidence_requirements: [{ evidence_type: 'canvas.quiz_score' }],
+      },
+      applicationTemplate: {
+        id: 'application-template-1',
+      },
+      error: null,
     });
   });
 
@@ -82,10 +124,15 @@ describe('applicationForm use cases', () => {
       user: { user_id: 'user-1', email: 'user@example.com', roles: ['applicant'] },
       credentialConfig: { id: 'cfg-1', credential_type: 'MemberCredential', name: 'Member Login Credential' },
       credentialConfigId: 'cfg-fallback',
+      hasRegisteredWallet: true,
       resolveApplicantId: vi.fn().mockResolvedValue('app-1'),
       createApplicant: vi.fn(),
       createApplication: vi.fn().mockResolvedValue({ id: 'application-1' }),
-      autoIssueApplication: vi.fn().mockResolvedValue({
+      submitApplication: vi.fn().mockResolvedValue({
+        id: 'application-1',
+        reference_number: 'APP-20260317-SUBMITTED',
+      }),
+      generateIssuanceOffer: vi.fn().mockResolvedValue({
         id: 'issued-1',
         reference_number: 'APP-20260317-ISSUED',
         credential_offer_uri: 'openid-credential-offer://offer',
@@ -101,6 +148,82 @@ describe('applicationForm use cases', () => {
         expires_at: '2026-03-17T00:00:00.000Z',
       },
     });
+  });
+
+  it('submits the application but waits for wallet selection before minting an offer', async () => {
+    const submitApplication = vi.fn().mockResolvedValue({
+      id: 'application-1',
+      reference_number: 'APP-20260317-SUBMITTED',
+    });
+    const generateIssuanceOffer = vi.fn();
+
+    await expect(autoApplyForCredential({
+      organizationId: 'org-1',
+      user: { user_id: 'user-1', email: 'user@example.com', roles: ['applicant'] },
+      credentialConfig: { id: 'cfg-1', credential_type: 'open_badge', name: 'Verified Member Badge' },
+      credentialConfigId: 'cfg-fallback',
+      hasRegisteredWallet: false,
+      resolveApplicantId: vi.fn().mockResolvedValue('app-1'),
+      createApplicant: vi.fn(),
+      createApplication: vi.fn().mockResolvedValue({ id: 'application-1' }),
+      submitApplication,
+      generateIssuanceOffer,
+      listApplications: vi.fn().mockResolvedValue({ applications: [] }),
+    })).resolves.toEqual({
+      applicationId: 'application-1',
+      applicationReference: 'APP-20260317-SUBMITTED',
+      offerData: {
+        offer_url: null,
+        credential_offer_uris: {},
+        expires_at: null,
+      },
+      requiresWalletSelection: true,
+    });
+
+    expect(submitApplication).toHaveBeenCalledWith('application-1');
+    expect(generateIssuanceOffer).not.toHaveBeenCalled();
+  });
+
+  it('reissues a fresh offer for an existing issued login badge', async () => {
+    const generateIssuanceOffer = vi.fn().mockResolvedValue({
+      id: 'existing-1',
+      credential_offer_uri: 'openid-credential-offer://fresh-offer',
+      credential_offer_uris: { spruce: 'spruce://fresh-offer' },
+      offer_expires_at: '2026-03-18T00:00:00.000Z',
+    });
+
+    await expect(autoApplyForCredential({
+      organizationId: 'org-1',
+      user: { user_id: 'user-1', email: 'user@example.com', roles: ['applicant'] },
+      credentialConfig: { id: 'cfg-1', credential_type: 'open_badge', name: 'Verified Member Badge' },
+      credentialConfigId: 'cfg-fallback',
+      hasRegisteredWallet: true,
+      resolveApplicantId: vi.fn().mockResolvedValue('app-1'),
+      createApplicant: vi.fn(),
+      createApplication: vi.fn(),
+      generateIssuanceOffer,
+      listApplications: vi.fn().mockResolvedValue({
+        applications: [
+          {
+            id: 'existing-1',
+            credential_configuration_id: 'cfg-1',
+            status: 'CREDENTIALED',
+            reference_number: 'APP-EXISTING',
+          },
+        ],
+      }),
+    })).resolves.toEqual({
+      applicationId: 'existing-1',
+      applicationReference: 'APP-EXISTING',
+      offerData: {
+        offer_url: 'openid-credential-offer://fresh-offer',
+        credential_offer_uris: { spruce: 'spruce://fresh-offer' },
+        expires_at: '2026-03-18T00:00:00.000Z',
+      },
+      existingApplication: true,
+    });
+
+    expect(generateIssuanceOffer).toHaveBeenCalledWith('existing-1');
   });
 
   it('submits applications and uploads biometrics when a portrait is provided', async () => {
@@ -140,5 +263,88 @@ describe('applicationForm use cases', () => {
       image_data_base64: 'image-base64',
       template_data_base64: 'image-base64',
     }));
+  });
+
+  it('detects active duplicate applications for the same credential', () => {
+    expect(findActiveApplicationForCredential([
+      { id: 'old-rejected', credential_configuration_id: 'cfg-1', status: 'REJECTED', updated_at: '2026-01-01T00:00:00.000Z' },
+      { id: 'active', credential_configuration_id: 'cfg-1', status: 'APPROVED', updated_at: '2026-01-02T00:00:00.000Z' },
+      { id: 'other', credential_configuration_id: 'cfg-2', status: 'SUBMITTED', updated_at: '2026-01-03T00:00:00.000Z' },
+    ], 'cfg-1')).toMatchObject({ id: 'active' });
+  });
+
+  it('returns a duplicate conflict before creating another application', async () => {
+    const createApplication = vi.fn();
+
+    await expect(submitCredentialApplication({
+      organizationId: 'org-1',
+      user: { user_id: 'user-1', email: 'user@example.com' },
+      formData: { first_name: 'Ada' },
+      credentialConfig: { id: 'cfg-1', credential_type: 'open_badge', display_name: 'Canvas Badge' },
+      credentialConfigId: 'cfg-fallback',
+      allFields: [],
+      resolveApplicantId: vi.fn().mockResolvedValue('app-1'),
+      createApplicant: vi.fn(),
+      updateApplicantProfile: vi.fn().mockResolvedValue({ id: 'app-1' }),
+      getApplicantByUser: vi.fn(),
+      listApplicantApplications: vi.fn().mockResolvedValue([
+        { id: 'application-existing', credential_configuration_id: 'cfg-1', status: 'APPROVED', reference_number: 'APP-EXISTING' },
+      ]),
+      createApplication,
+      submitApplication: vi.fn(),
+      enrollBiometric: vi.fn(),
+      readFileAsBase64: vi.fn(),
+    })).resolves.toMatchObject({
+      duplicateApplicationConflict: {
+        existingApplication: {
+          id: 'application-existing',
+          reference_number: 'APP-EXISTING',
+        },
+        credentialConfigId: 'cfg-1',
+      },
+      submitted: false,
+    });
+
+    expect(createApplication).not.toHaveBeenCalled();
+  });
+
+  it('supersedes an existing application before replacing it', async () => {
+    const supersedeApplication = vi.fn().mockResolvedValue({ id: 'application-existing', status: 'WITHDRAWN' });
+    const createApplication = vi.fn().mockResolvedValue({ id: 'application-new', reference_number: 'APP-NEW' });
+    const submitApplication = vi.fn().mockResolvedValue({ id: 'application-new', reference_number: 'APP-NEW-SUBMITTED' });
+
+    await expect(submitCredentialApplication({
+      organizationId: 'org-1',
+      user: { user_id: 'user-1', email: 'user@example.com' },
+      formData: { first_name: 'Ada' },
+      credentialConfig: { id: 'cfg-1', credential_type: 'open_badge', display_name: 'Canvas Badge' },
+      credentialConfigId: 'cfg-fallback',
+      canvasLtiContext: { state: 'state-1' },
+      allFields: [],
+      resolveApplicantId: vi.fn().mockResolvedValue('app-1'),
+      createApplicant: vi.fn(),
+      updateApplicantProfile: vi.fn().mockResolvedValue({ id: 'app-1' }),
+      getApplicantByUser: vi.fn(),
+      listApplicantApplications: vi.fn().mockResolvedValue([
+        { id: 'application-existing', credential_configuration_id: 'cfg-1', status: 'APPROVED', reference_number: 'APP-EXISTING' },
+      ]),
+      supersedeApplication,
+      duplicateApplicationAction: 'replace',
+      createApplication,
+      submitApplication,
+      enrollBiometric: vi.fn(),
+      readFileAsBase64: vi.fn(),
+    })).resolves.toEqual({
+      applicationId: 'application-new',
+      applicationReference: 'APP-NEW-SUBMITTED',
+      submitted: true,
+    });
+
+    expect(supersedeApplication).toHaveBeenCalledWith('application-existing', expect.objectContaining({
+      replacement_credential_configuration_id: 'cfg-1',
+      source: 'canvas_lti_reapplication',
+    }));
+    expect(createApplication).toHaveBeenCalled();
+    expect(submitApplication).toHaveBeenCalledWith('application-new');
   });
 });

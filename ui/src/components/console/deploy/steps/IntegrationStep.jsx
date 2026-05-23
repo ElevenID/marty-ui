@@ -24,10 +24,33 @@ import {
 import InfoIcon from '@mui/icons-material/Info';
 import { useTranslation } from 'react-i18next';
 
+const DEFAULT_FEATURE_FLAGS = {
+  qr_code: true,
+  nfc: false,
+  ble: false,
+  enable_canvas_evidence: false,
+  enable_canvas_lti: false,
+  enable_canvas_mirror_publish: false,
+  enable_canvas_mirror_ops: false,
+  enable_canvas_deep_linking: false,
+  enable_canvas_ags: false,
+  enable_canvas_nrps: false,
+};
+
+const CANVAS_FEATURE_FLAGS = [
+  ['enable_canvas_evidence', 'Canvas evidence'],
+  ['enable_canvas_lti', 'Canvas LTI'],
+  ['enable_canvas_mirror_publish', 'Canvas mirror publish'],
+  ['enable_canvas_mirror_ops', 'Canvas mirror ops'],
+  ['enable_canvas_deep_linking', 'LTI Deep Linking'],
+  ['enable_canvas_ags', 'AGS evidence'],
+  ['enable_canvas_nrps', 'NRPS eligibility'],
+];
+
 const IntegrationStep = ({ data, onChange }) => {
   const { t } = useTranslation('console');
   const webhooks = data.webhooks || { url: '', events: [] };
-  const featureFlags = data.feature_flags || { qr_code: true, nfc: false, ble: false };
+  const featureFlags = { ...DEFAULT_FEATURE_FLAGS, ...(data.feature_flags || {}) };
   const uxConfig = data.ux_config || { theme: 'default', language: 'en' };
 
   const handleWebhookChange = (key, value) => {
@@ -155,6 +178,28 @@ const IntegrationStep = ({ data, onChange }) => {
         <FormHelperText sx={{ ml: 4, mt: -1 }}>
           {t('wizards.deploymentProfile.integrationStep.helpers.ble')}
         </FormHelperText>
+      </FormGroup>
+
+      <Typography variant="subtitle2" gutterBottom>
+        Canvas integration gates
+      </Typography>
+      <Typography variant="body2" color="text.secondary" paragraph>
+        Bindings that use this deployment profile only enable the selected Canvas modes.
+      </Typography>
+
+      <FormGroup sx={{ mb: 3 }}>
+        {CANVAS_FEATURE_FLAGS.map(([key, label]) => (
+          <FormControlLabel
+            key={key}
+            control={
+              <Checkbox
+                checked={Boolean(featureFlags[key])}
+                onChange={(e) => handleFeatureFlagChange(key, e.target.checked)}
+              />
+            }
+            label={label}
+          />
+        ))}
       </FormGroup>
 
       <Divider sx={{ my: 3 }} />

@@ -20,6 +20,7 @@ def test_issue_selfhost_license_validates_against_runtime_policy() -> None:
     claims = validate_runtime_license_from_env(
         {
             "MARTY_LICENSE_ENFORCEMENT": "required",
+            "MARTY_LICENSE_ALLOW_RUNTIME_PUBLIC_KEY": "true",
             "MARTY_LICENSE_REQUIRED_ISSUER": "marty-license-issuer",
             "MARTY_LICENSE_REQUIRED_PLAN_TIER": "system",
             "MARTY_LICENSE_REQUIRED_PRODUCTS": "ui-app,oid4vc-api",

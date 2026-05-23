@@ -2,33 +2,82 @@ import {
   buildApplicantProfileData,
   buildAutoApplyContext,
   buildStandardApplicationPayload,
+  normalizeApplicationTemplateToFormConfig,
+  normalizeCredentialConfigInput,
   normalizeTemplateToFormConfig,
 } from './applicationFlow';
+
+const DUPLICATE_ACTIVE_APPLICATION_STATUSES = new Set([
+  'DRAFT',
+  'SUBMITTED',
+  'UNDER_REVIEW',
+  'PENDING_INFORMATION',
+  'APPROVED',
+  'OFFERED',
+  'CREDENTIALED',
+  'ISSUED',
+]);
+
+function normalizeApplicationsResponse(data) {
+  if (Array.isArray(data)) {
+    return data;
+  }
+
+  return Array.isArray(data?.applications) ? data.applications : [];
+}
+
+function applicationStatus(application) {
+  return String(application?.status || '').trim().toUpperCase();
+}
+
+export function findActiveApplicationForCredential(applications = [], credentialConfigId) {
+  if (!credentialConfigId) {
+    return null;
+  }
+
+  return normalizeApplicationsResponse(applications)
+    .filter((application) => application?.credential_configuration_id === credentialConfigId)
+    .filter((application) => DUPLICATE_ACTIVE_APPLICATION_STATUSES.has(applicationStatus(application)))
+    .sort((a, b) => new Date(b?.updated_at || b?.updatedAt || b?.created_at || 0) - new Date(a?.updated_at || a?.updatedAt || a?.created_at || 0))[0] || null;
+}
 
 export async function loadCredentialApplicationConfig({
   credentialConfigId,
   credentialConfig,
   organizationId,
   getCredentialTemplate,
+  applicationTemplateId = null,
+  getApplicationTemplate = null,
 }) {
-  if (!credentialConfigId || credentialConfig) {
+  if ((!credentialConfigId || credentialConfig) && (!applicationTemplateId || !getApplicationTemplate)) {
     return {
       credentialConfig,
+      applicationTemplate: null,
       error: null,
     };
   }
 
-  if (!organizationId) {
+  if (!organizationId && credentialConfigId && !credentialConfig && !applicationTemplateId) {
     return {
       credentialConfig: null,
+      applicationTemplate: null,
       error: 'Organization context missing for credential configuration.',
     };
   }
 
-  const template = await getCredentialTemplate(credentialConfigId);
+  const template = credentialConfig || (credentialConfigId ? await getCredentialTemplate(credentialConfigId) : null);
+  const normalizedCredentialConfig = credentialConfig
+    ? normalizeCredentialConfigInput(credentialConfig)
+    : (template ? normalizeTemplateToFormConfig(template) : null);
+  const applicationTemplate = applicationTemplateId && getApplicationTemplate
+    ? await getApplicationTemplate(applicationTemplateId)
+    : null;
 
   return {
-    credentialConfig: normalizeTemplateToFormConfig(template),
+    credentialConfig: applicationTemplate
+      ? normalizeApplicationTemplateToFormConfig(applicationTemplate, normalizedCredentialConfig)
+      : normalizedCredentialConfig,
+    applicationTemplate,
     error: null,
   };
 }
@@ -116,13 +165,22 @@ export async function autoApplyForCredential({
   user,
   credentialConfig,
   credentialConfigId,
+  hasRegisteredWallet = true,
   resolveApplicantId,
   createApplicant,
   updateApplicantProfile,
   createApplication,
+  submitApplication,
   autoIssueApplication,
+  generateIssuanceOffer,
   listApplications,
 }) {
+  const buildOfferData = (record) => ({
+    offer_url: record?.credential_offer_uri || record?.offer_url || null,
+    credential_offer_uris: record?.credential_offer_uris || {},
+    expires_at: record?.offer_expires_at || record?.expires_at || null,
+  });
+
   let applicantId = await resolveApplicantId();
   let applicantCreated = false;
 
@@ -166,28 +224,31 @@ export async function autoApplyForCredential({
       });
       if (existing) {
         const status = existing.status?.toLowerCase();
-        if (['approved', 'offered'].includes(status) && autoIssueApplication) {
+        if (hasRegisteredWallet && generateIssuanceOffer) {
+          const refreshedApplication = await generateIssuanceOffer(existing.id);
+          return {
+            applicationId: refreshedApplication.id || existing.id,
+            applicationReference: refreshedApplication.reference_number || refreshedApplication.referenceNumber || existing.reference_number || existing.referenceNumber || null,
+            offerData: buildOfferData(refreshedApplication),
+            existingApplication: true,
+          };
+        }
+
+        if (hasRegisteredWallet && ['approved', 'offered'].includes(status) && autoIssueApplication) {
           const refreshedApplication = await autoIssueApplication(existing.id);
           return {
             applicationId: refreshedApplication.id,
             applicationReference: refreshedApplication.reference_number || refreshedApplication.referenceNumber || existing.reference_number || existing.referenceNumber || null,
-            offerData: {
-              offer_url: refreshedApplication.credential_offer_uri || null,
-              credential_offer_uris: refreshedApplication.credential_offer_uris || {},
-              expires_at: refreshedApplication.offer_expires_at || null,
-            },
+            offerData: buildOfferData(refreshedApplication),
             existingApplication: true,
           };
         }
         return {
           applicationId: existing.id,
           applicationReference: existing.reference_number || existing.referenceNumber || null,
-          offerData: {
-            offer_url: existing.credential_offer_uri || null,
-            credential_offer_uris: existing.credential_offer_uris || {},
-            expires_at: existing.offer_expires_at || null,
-          },
+          offerData: buildOfferData(existing),
           existingApplication: true,
+          requiresWalletSelection: !hasRegisteredWallet,
         };
       }
     } catch {
@@ -209,16 +270,27 @@ export async function autoApplyForCredential({
     metadata: autoApplyContext.metadata,
   });
 
-  const issuedApplication = await autoIssueApplication(createdApplication.id);
+  const submittedApplication = submitApplication
+    ? await submitApplication(createdApplication.id)
+    : createdApplication;
+
+  if (!hasRegisteredWallet) {
+    return {
+      applicationId: submittedApplication.id,
+      applicationReference: submittedApplication.reference_number || submittedApplication.referenceNumber || createdApplication.reference_number || createdApplication.referenceNumber || null,
+      offerData: buildOfferData(submittedApplication),
+      requiresWalletSelection: true,
+    };
+  }
+
+  const issuedApplication = generateIssuanceOffer
+    ? await generateIssuanceOffer(submittedApplication.id)
+    : (autoIssueApplication ? await autoIssueApplication(submittedApplication.id) : submittedApplication);
 
   return {
     applicationId: issuedApplication.id,
-    applicationReference: issuedApplication.reference_number || issuedApplication.referenceNumber || createdApplication.reference_number || createdApplication.referenceNumber || null,
-    offerData: {
-      offer_url: issuedApplication.credential_offer_uri,
-      credential_offer_uris: issuedApplication.credential_offer_uris || {},
-      expires_at: issuedApplication.offer_expires_at,
-    },
+    applicationReference: issuedApplication.reference_number || issuedApplication.referenceNumber || submittedApplication.reference_number || submittedApplication.referenceNumber || createdApplication.reference_number || createdApplication.referenceNumber || null,
+    offerData: buildOfferData(issuedApplication),
   };
 }
 
@@ -228,6 +300,7 @@ export async function submitCredentialApplication({
   formData,
   credentialConfig,
   credentialConfigId,
+  canvasLtiContext = null,
   allFields,
   resolveApplicantId,
   createApplicant,
@@ -235,6 +308,9 @@ export async function submitCredentialApplication({
   getApplicantByUser,
   createApplication,
   submitApplication,
+  listApplicantApplications = null,
+  supersedeApplication = null,
+  duplicateApplicationAction = null,
   enrollBiometric,
   readFileAsBase64,
   createFallbackBiometricTemplate = () => btoa('test-biometric-template'),
@@ -253,12 +329,48 @@ export async function submitCredentialApplication({
     getApplicantByUser,
   });
 
+  const effectiveCredentialConfigId = credentialConfig?.id || credentialConfigId;
+  if (listApplicantApplications) {
+    const existingApplications = await listApplicantApplications(applicantId);
+    const duplicate = findActiveApplicationForCredential(existingApplications, effectiveCredentialConfigId);
+    if (duplicate) {
+      if (duplicateApplicationAction === 'continue') {
+        return {
+          applicationId: duplicate.id,
+          applicationReference: duplicate.reference_number || duplicate.referenceNumber || null,
+          existingApplication: true,
+          submitted: true,
+        };
+      }
+
+      if (duplicateApplicationAction === 'replace') {
+        if (!supersedeApplication) {
+          throw new Error('Unable to replace the previous application.');
+        }
+        await supersedeApplication(duplicate.id, {
+          reason: 'superseded_by_reapplication',
+          replacement_credential_configuration_id: effectiveCredentialConfigId,
+          source: canvasLtiContext ? 'canvas_lti_reapplication' : 'applicant_reapplication',
+        });
+      } else {
+        return {
+          duplicateApplicationConflict: {
+            existingApplication: duplicate,
+            credentialConfigId: effectiveCredentialConfigId,
+          },
+          submitted: false,
+        };
+      }
+    }
+  }
+
   const createdApplication = await createApplication(
     buildStandardApplicationPayload({
       applicantId,
       credentialConfig,
       credentialConfigId,
       formData,
+      canvasLtiContext,
     })
   );
 
@@ -284,3 +396,4 @@ export async function submitCredentialApplication({
     submitted: true,
   };
 }
+

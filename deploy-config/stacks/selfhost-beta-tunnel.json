@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "name": "selfhost-beta-tunnel",
+  "description": "Optional beta.elevenidllc.com Cloudflare tunnel profile for the rare case where beta intentionally routes into the same licensed self-host production edge and Keycloak.",
+  "parent_stack": "selfhost-production",
+  "env_file": ".env.selfhost.production.local",
+  "compose_files": ["docker-compose.selfhost.prod.yml"],
+  "compose_profiles": ["beta-tunnel"],
+  "domains": ["beta.elevenidllc.com"],
+  "primary_domain": "beta.elevenidllc.com",
+  "required_service_groups": ["selfhost_beta_tunnel"],
+  "required_services": ["tunnel-nginx-proxy", "cloudflared-beta"],
+  "required_secrets": ["cloudflare_beta_tunnel_token", "license_key"],
+  "license_policy": "selfhost-system",
+  "artifact_profile": "selfhost-commercial",
+  "deployment_targets": ["docker-compose"],
+  "tunnel": {
+    "remote_origin": "http://tunnel-nginx-proxy:80",
+    "upstream": "http://edge:80",
+    "preserve_host": true,
+    "forwarded_proto": "https"
+  },
+  "operations": {
+    "config": ["config"],
+    "up": ["up", "-d", "--no-deps", "tunnel-nginx-proxy", "cloudflared-beta"],
+    "stop": ["stop", "tunnel-nginx-proxy", "cloudflared-beta"],
+    "ps": ["ps", "tunnel-nginx-proxy", "cloudflared-beta"],
+    "logs": ["logs", "-f", "tunnel-nginx-proxy", "cloudflared-beta"]
+  },
+  "smoke_tests": {
+    "public_routes": ["/", "/login", "/console", "/v1/auth/me"],
+    "auth_login_callback_host": "beta.elevenidllc.com"
+  }
+}

@@ -3,6 +3,8 @@
 
 .PHONY: help dev up down restart logs clean status shell test infra infra-tunnel setup-local run-api run-api-tunnel run-ui \
 	services-up services-up-tunnel services-down services-logs services-build services-restart services-migrate \
+	services-migrate-profile services-migrate-dev services-migrate-beta services-migrate-experiments services-migrate-test services-migrate-production \
+	seed-demo-vendor-fixtures dev-db-reset beta-db-reset beta-experiments-db-reset test-db-reset \
 	tunnel-start tunnel-stop tunnel-restart tunnel-status tunnel-logs tunnel-nginx-logs \
 	tunnel-refresh-upstreams \
 	tunnel-auth-restart tunnel-keycloak-restart tunnel-full-restart tunnel-use-prod tunnel-use-dev \
@@ -10,7 +12,8 @@
 	beta-public-ui-ghcr beta-public-ui-check beta-tunnel-start beta-tunnel-stop beta-tunnel-restart beta-tunnel-status \
 	beta-tunnel-logs beta-tunnel-nginx-logs beta-tunnel-refresh-upstreams beta-tunnel-auth-restart \
 	beta-tunnel-keycloak-restart beta-tunnel-full-restart beta-tunnel-use-prod beta-tunnel-use-dev beta-dev-ui-tunnel \
-	beta-env-init \
+	beta-env-init beta-experiments-plan beta-experiments-config beta-experiments-up beta-experiments-down \
+	beta-experiments-logs beta-canvas-experiments-bootstrap \
 	beta-check \
 	setup-keycloak \
 	dev-ui-tunnel prod-ui-tunnel prod-ui-tunnel-kill tunnel-prod-static tunnel-prod-restart \
@@ -21,11 +24,16 @@
 	canvas-real-up canvas-real-down canvas-real-logs canvas-real-status canvas-real-seed canvas-real-bootstrap \
 	proto-gen grpc-health \
 	package-selfhost-bundle \
+	selfhost-images-ghcr-setup selfhost-images-build-dry-run selfhost-images-build selfhost-images-build-push \
+	selfhost-images-artifacts-dry-run selfhost-images-release-artifacts selfhost-images-sbom selfhost-images-scan \
+	selfhost-images-sign selfhost-images-verify-signatures \
 	selfhost-prod-license-init-keypair selfhost-prod-license-issue \
 	selfhost-prod-openbao-up selfhost-prod-openbao-down selfhost-prod-openbao-ps selfhost-prod-openbao-logs \
 	selfhost-prod-openbao-bootstrap selfhost-prod-openbao-export \
 	selfhost-prod-ui-build selfhost-prod-config selfhost-prod-check selfhost-prod-bootstrap selfhost-prod-up \
 	selfhost-prod-down selfhost-prod-restart selfhost-prod-ps selfhost-prod-logs \
+	selfhost-prod-beta-tunnel-up selfhost-prod-beta-tunnel-stop selfhost-prod-beta-tunnel-ps selfhost-prod-beta-tunnel-logs \
+	deploy-catalog-validate deploy-stack-plan selfhost-prod-plan selfhost-prod-beta-tunnel-plan \
 	deploy-prod
 
 # Colors
@@ -58,16 +66,28 @@ OBS_COMPOSE := $(COMPOSE) --env-file $(BETA_ENV_FILE) -f docker-compose.base.yml
 WALTID_COMPOSE := $(TUNNEL_COMPOSE) -f docker-compose.profile.waltid.yml
 CANVAS_SANDBOX_COMPOSE := $(TUNNEL_COMPOSE) -f docker-compose.profile.canvas-sandbox.yml
 CANVAS_REAL_COMPOSE := $(TUNNEL_COMPOSE) -f docker-compose.profile.canvas-real.yml
+CANVAS_EXPERIMENTS_COMPOSE := $(TUNNEL_COMPOSE) -f docker-compose.profile.canvas-real.yml -f docker-compose.profile.canvas-sandbox.yml
 WALTID_SERVICES := waltid-wallet-api waltid-web-wallet waltid-nginx
 WHEELS_SCRIPT := ./scripts/build-rust-wheels.sh
 SETUP_LOCAL_SCRIPT := ./scripts/setup-local.sh
 SELFHOST_ENV_FILE ?= .env.selfhost.production.local
 -include $(SELFHOST_ENV_FILE)
 SELFHOST_PROD_COMPOSE := $(COMPOSE) --env-file $(SELFHOST_ENV_FILE) -f docker-compose.selfhost.prod.yml
+SELFHOST_PROD_BETA_COMPOSE := $(SELFHOST_PROD_COMPOSE) --profile beta-tunnel
 SELFHOST_OPENBAO_COMPOSE := $(COMPOSE) --env-file $(SELFHOST_ENV_FILE) -f docker-compose.selfhost.openbao.yml
 SELFHOST_OPENBAO_LOG_SERVICES := openbao openbao-bootstrap
 SELFHOST_PROD_LOG_SERVICES := edge cloudflared gateway keycloak
+SELFHOST_PROD_BETA_TUNNEL_SERVICES := tunnel-nginx-proxy cloudflared-beta
 SELFHOST_ISSUER_TOOL := ../tools/selfhost-license-issuer/selfhost_license_issuer.py
+SELFHOST_IMAGE_RELEASE_SCRIPT := ./scripts/build-selfhost-images-local.sh
+SELFHOST_IMAGE_ARTIFACTS_SCRIPT := ./scripts/prepare-selfhost-release-artifacts.py
+SELFHOST_GHCR_SETUP_SCRIPT := ./scripts/ghcr-setup.sh
+SELFHOST_VERSION_FILE ?= VERSION
+SELFHOST_DEFAULT_RELEASE_TAG := $(strip $(shell if [ -f "$(SELFHOST_VERSION_FILE)" ]; then tr -d '\r\n' < "$(SELFHOST_VERSION_FILE)"; fi))
+SELFHOST_RELEASE_TAG ?= $(if $(TAG),$(TAG),$(SELFHOST_DEFAULT_RELEASE_TAG))
+SELFHOST_RELEASE_SCAN_TOOL ?= auto
+COSIGN_KEY ?=
+COSIGN_PUBLIC_KEY ?=
 ifeq ($(OS),Windows_NT)
 SELFHOST_ISSUER_KEY_DIR ?= $(subst \\,/,$(LOCALAPPDATA))/MartyLicenseIssuer/keys
 else
@@ -119,6 +139,30 @@ beta-env-init: ## Initialize the dedicated beta env file from .env when missing
 		exit 1; \
 	fi
 
+beta-experiments-plan: ## Render the beta Canvas experiments deployment plan
+	@python scripts/marty-deploy.py plan tunnel-beta-experiments
+
+beta-experiments-config: ## Validate beta experiments compose files
+	@echo "$(BLUE)Validating beta experiments compose files...$(NC)"
+	@$(CANVAS_EXPERIMENTS_COMPOSE) config >/dev/null
+	@echo "$(GREEN)Beta experiments compose is valid$(NC)"
+
+beta-experiments-up: ## Start the beta experiments stack with real Canvas enabled
+	@echo "$(BLUE)Starting beta experiments stack...$(NC)"
+	@MARTY_MIGRATION_PROFILE=experiments $(CANVAS_EXPERIMENTS_COMPOSE) up -d --build
+	@echo "$(GREEN)Beta experiments stack started$(NC)"
+
+beta-experiments-down: ## Stop the beta experiments stack
+	@echo "$(BLUE)Stopping beta experiments stack...$(NC)"
+	@$(CANVAS_EXPERIMENTS_COMPOSE) down
+	@echo "$(GREEN)Beta experiments stack stopped$(NC)"
+
+beta-experiments-logs: ## Follow beta experiments logs
+	@$(CANVAS_EXPERIMENTS_COMPOSE) logs -f
+
+beta-canvas-experiments-bootstrap: beta-experiments-up canvas-real-seed ## Start beta experiments and seed Canvas platform/binding
+	@echo "$(GREEN)Beta Canvas experiments bootstrap complete$(NC)"
+
 beta-up: up ## Start the beta development stack
 
 beta-down: down ## Stop the beta development stack
@@ -140,6 +184,96 @@ package-selfhost-bundle: ## Stage the image-based self-host customer bundle in d
 	@echo "$(BLUE)Staging self-host customer bundle...$(NC)"
 	@python scripts/package-selfhost-bundle.py
 	@echo "$(GREEN)✓ Self-host customer bundle staged$(NC)"
+
+selfhost-images-ghcr-setup: ## Authenticate Docker to GHCR for local self-host image publishing
+	@bash $(SELFHOST_GHCR_SETUP_SCRIPT)
+
+selfhost-images-build-dry-run: ## Print the local self-host image build plan (TAG=<version>, defaults to VERSION)
+	@if [ -z "$(SELFHOST_RELEASE_TAG)" ]; then \
+		echo "$(RED)❌ Error: set TAG/SELFHOST_RELEASE_TAG or create VERSION (example: echo 2026.05.0 > VERSION)$(NC)"; \
+		exit 1; \
+	fi
+	@SELFHOST_IMAGE_PREFIX="$(SELFHOST_IMAGE_PREFIX)" bash $(SELFHOST_IMAGE_RELEASE_SCRIPT) --tag "$(SELFHOST_RELEASE_TAG)" --dry-run
+
+selfhost-images-build: ## Build self-host production images locally only (TAG=<version>, defaults to VERSION)
+	@if [ -z "$(SELFHOST_RELEASE_TAG)" ]; then \
+		echo "$(RED)❌ Error: set TAG/SELFHOST_RELEASE_TAG or create VERSION (example: echo 2026.05.0 > VERSION)$(NC)"; \
+		exit 1; \
+	fi
+	@SELFHOST_IMAGE_PREFIX="$(SELFHOST_IMAGE_PREFIX)" bash $(SELFHOST_IMAGE_RELEASE_SCRIPT) --tag "$(SELFHOST_RELEASE_TAG)" --skip-push
+
+selfhost-images-build-push: ## Build self-host production images locally and push to GHCR (TAG=<version>, defaults to VERSION)
+	@if [ -z "$(SELFHOST_RELEASE_TAG)" ]; then \
+		echo "$(RED)❌ Error: set TAG/SELFHOST_RELEASE_TAG or create VERSION (example: echo 2026.05.0 > VERSION)$(NC)"; \
+		exit 1; \
+	fi
+	@SELFHOST_IMAGE_PREFIX="$(SELFHOST_IMAGE_PREFIX)" bash $(SELFHOST_IMAGE_RELEASE_SCRIPT) --tag "$(SELFHOST_RELEASE_TAG)" --push
+
+selfhost-images-artifacts-dry-run: ## Print SBOM/scan/signing artifact commands (TAG=<version>, defaults to VERSION)
+	@if [ -z "$(SELFHOST_RELEASE_TAG)" ]; then \
+		echo "$(RED)❌ Error: set TAG/SELFHOST_RELEASE_TAG or create VERSION (example: echo 2026.05.0 > VERSION)$(NC)"; \
+		exit 1; \
+	fi
+	@SELFHOST_IMAGE_PREFIX="$(SELFHOST_IMAGE_PREFIX)" python $(SELFHOST_IMAGE_ARTIFACTS_SCRIPT) --tag "$(SELFHOST_RELEASE_TAG)" --sbom --scan --inspect-digests --sign --verify-signatures --cosign-key "$(if $(COSIGN_KEY),$(COSIGN_KEY),dry-run-cosign.key)" --cosign-public-key "$(if $(COSIGN_PUBLIC_KEY),$(COSIGN_PUBLIC_KEY),dry-run-cosign.pub)" --dry-run
+
+selfhost-images-release-artifacts: ## Generate SBOMs, scans, manifest, and checksums for built images (TAG=<version>, defaults to VERSION)
+	@if [ -z "$(SELFHOST_RELEASE_TAG)" ]; then \
+		echo "$(RED)❌ Error: set TAG/SELFHOST_RELEASE_TAG or create VERSION (example: echo 2026.05.0 > VERSION)$(NC)"; \
+		exit 1; \
+	fi
+	@SELFHOST_IMAGE_PREFIX="$(SELFHOST_IMAGE_PREFIX)" python $(SELFHOST_IMAGE_ARTIFACTS_SCRIPT) --tag "$(SELFHOST_RELEASE_TAG)" --sbom --scan --scan-tool "$(SELFHOST_RELEASE_SCAN_TOOL)" --inspect-digests
+
+selfhost-images-sbom: ## Generate Syft SBOMs for built self-host images (TAG=<version>, defaults to VERSION)
+	@if [ -z "$(SELFHOST_RELEASE_TAG)" ]; then \
+		echo "$(RED)❌ Error: set TAG/SELFHOST_RELEASE_TAG or create VERSION (example: echo 2026.05.0 > VERSION)$(NC)"; \
+		exit 1; \
+	fi
+	@SELFHOST_IMAGE_PREFIX="$(SELFHOST_IMAGE_PREFIX)" python $(SELFHOST_IMAGE_ARTIFACTS_SCRIPT) --tag "$(SELFHOST_RELEASE_TAG)" --sbom
+
+selfhost-images-scan: ## Run local Trivy/Grype scans for built self-host images (TAG=<version>, defaults to VERSION)
+	@if [ -z "$(SELFHOST_RELEASE_TAG)" ]; then \
+		echo "$(RED)❌ Error: set TAG/SELFHOST_RELEASE_TAG or create VERSION (example: echo 2026.05.0 > VERSION)$(NC)"; \
+		exit 1; \
+	fi
+	@SELFHOST_IMAGE_PREFIX="$(SELFHOST_IMAGE_PREFIX)" python $(SELFHOST_IMAGE_ARTIFACTS_SCRIPT) --tag "$(SELFHOST_RELEASE_TAG)" --scan --scan-tool "$(SELFHOST_RELEASE_SCAN_TOOL)"
+
+selfhost-images-sign: ## Sign pushed self-host image digests with Cosign (TAG=<version> COSIGN_KEY=<path>, defaults to VERSION)
+	@if [ -z "$(SELFHOST_RELEASE_TAG)" ]; then \
+		echo "$(RED)❌ Error: set TAG/SELFHOST_RELEASE_TAG or create VERSION (example: echo 2026.05.0 > VERSION)$(NC)"; \
+		exit 1; \
+	fi
+	@if [ -z "$(COSIGN_KEY)" ]; then \
+		echo "$(RED)❌ Error: COSIGN_KEY is required for signing$(NC)"; \
+		exit 1; \
+	fi
+	@SELFHOST_IMAGE_PREFIX="$(SELFHOST_IMAGE_PREFIX)" python $(SELFHOST_IMAGE_ARTIFACTS_SCRIPT) --tag "$(SELFHOST_RELEASE_TAG)" --sign --cosign-key "$(COSIGN_KEY)"
+
+selfhost-images-verify-signatures: ## Verify pushed self-host image digest signatures (TAG=<version> COSIGN_PUBLIC_KEY=<path>, defaults to VERSION)
+	@if [ -z "$(SELFHOST_RELEASE_TAG)" ]; then \
+		echo "$(RED)❌ Error: set TAG/SELFHOST_RELEASE_TAG or create VERSION (example: echo 2026.05.0 > VERSION)$(NC)"; \
+		exit 1; \
+	fi
+	@if [ -z "$(COSIGN_PUBLIC_KEY)" ]; then \
+		echo "$(RED)❌ Error: COSIGN_PUBLIC_KEY is required for verification$(NC)"; \
+		exit 1; \
+	fi
+	@SELFHOST_IMAGE_PREFIX="$(SELFHOST_IMAGE_PREFIX)" python $(SELFHOST_IMAGE_ARTIFACTS_SCRIPT) --tag "$(SELFHOST_RELEASE_TAG)" --verify-signatures --cosign-public-key "$(COSIGN_PUBLIC_KEY)"
+
+deploy-catalog-validate: ## Validate deployment metadata catalogs, stacks, and bundles
+	@python scripts/marty-deploy.py validate
+
+deploy-stack-plan: ## Render a redacted deployment plan (STACK=<name>)
+	@if [ -z "$(STACK)" ]; then \
+		echo "$(RED)❌ Error: STACK is required (example: make deploy-stack-plan STACK=selfhost-production)$(NC)"; \
+		exit 1; \
+	fi
+	@python scripts/marty-deploy.py plan "$(STACK)"
+
+selfhost-prod-plan: ## Render the self-host production deployment plan
+	@python scripts/marty-deploy.py plan selfhost-production
+
+selfhost-prod-beta-tunnel-plan: ## Render the self-host beta tunnel deployment plan
+	@python scripts/marty-deploy.py plan selfhost-beta-tunnel
 
 selfhost-prod-license-init-keypair: ## Generate the operator-side self-host issuer keypair
 	@echo "$(BLUE)Generating self-host issuer keypair...$(NC)"
@@ -199,7 +333,7 @@ selfhost-prod-openbao-export: ## Export the standalone OpenBao state archive
 
 selfhost-prod-ui-build: ## Build the self-host UI bundle
 	@echo "$(BLUE)Building self-host UI bundle...$(NC)"
-	@cd ui && npm run build:selfhost
+	@cd ui && SELFHOST_ENV_FILE="$(SELFHOST_ENV_FILE)" npm run build:selfhost
 	@echo "$(GREEN)✓ Self-host UI bundle built$(NC)"
 
 selfhost-prod-config: ## Validate the self-host production compose files
@@ -232,6 +366,39 @@ selfhost-prod-ps: ## Show the self-host production stack status
 
 selfhost-prod-logs: ## Follow logs for the self-host production stack core services
 	@$(SELFHOST_PROD_COMPOSE) logs -f $(SELFHOST_PROD_LOG_SERVICES)
+
+selfhost-prod-beta-tunnel-up: selfhost-prod-config ## Start the optional beta.elevenidllc.com tunnel against the self-host edge
+	@if [ -z "$(SELFHOST_SECRET_DIR)" ]; then \
+		echo "$(RED)❌ Error: SELFHOST_SECRET_DIR missing from $(SELFHOST_ENV_FILE)$(NC)"; \
+		exit 1; \
+	fi
+	@if ! printf '%s' "$(UI_ADDITIONAL_BASE_URLS)" | tr ',' '\n' | grep -qx 'https://beta.elevenidllc.com'; then \
+		echo "$(RED)❌ Error: beta.elevenidllc.com is not configured as a same-stack UI alias$(NC)"; \
+		echo "Only run this target when beta should intentionally use the self-host production Keycloak."; \
+		echo "For a separate beta stack/Keycloak, use the beta-tunnel targets instead."; \
+		exit 1; \
+	fi
+	@if ! printf '%s' "$(CORS_ORIGINS)" | tr ',' '\n' | grep -qx 'https://beta.elevenidllc.com'; then \
+		echo "$(RED)❌ Error: CORS_ORIGINS must include https://beta.elevenidllc.com for same-stack beta tunneling$(NC)"; \
+		exit 1; \
+	fi
+	@if [ ! -s "$(SELFHOST_SECRET_DIR)/cloudflare_beta_tunnel_token" ]; then \
+		echo "$(RED)❌ Error: cloudflare_beta_tunnel_token missing from SELFHOST_SECRET_DIR$(NC)"; \
+		exit 1; \
+	fi
+	@echo "$(BLUE)Starting self-host beta tunnel sidecars...$(NC)"
+	@$(SELFHOST_PROD_BETA_COMPOSE) up -d --no-deps $(SELFHOST_PROD_BETA_TUNNEL_SERVICES)
+	@echo "$(GREEN)✓ Self-host beta tunnel started$(NC)"
+
+selfhost-prod-beta-tunnel-stop: ## Stop the optional beta tunnel sidecars
+	@$(SELFHOST_PROD_BETA_COMPOSE) stop $(SELFHOST_PROD_BETA_TUNNEL_SERVICES)
+	@echo "$(GREEN)✓ Self-host beta tunnel stopped$(NC)"
+
+selfhost-prod-beta-tunnel-ps: ## Show optional beta tunnel sidecar status
+	@$(SELFHOST_PROD_BETA_COMPOSE) ps $(SELFHOST_PROD_BETA_TUNNEL_SERVICES)
+
+selfhost-prod-beta-tunnel-logs: ## Follow optional beta tunnel sidecar logs
+	@$(SELFHOST_PROD_BETA_COMPOSE) logs -f $(SELFHOST_PROD_BETA_TUNNEL_SERVICES)
 
 setup-local: ## Setup native local development environment (venv + dependencies)
 	@echo "$(BLUE)Setting up native local development environment...$(NC)"
@@ -317,8 +484,68 @@ prod-ui-docker-stop: ## Stop the Docker UI container
 
 services-migrate: ## Run Alembic migrations using the migration runner
 	@echo "$(BLUE)Running database migrations...$(NC)"
-	@$(BASE_COMPOSE) up --build db-migrate
+	@$(BASE_COMPOSE) run --build --rm db-migrate
 	@echo "$(GREEN)✓ Database migrations completed$(NC)"
+
+services-migrate-profile: ## Run db-migrate with MIGRATION_PROFILE=<profile>
+	@if [ -z "$(MIGRATION_PROFILE)" ]; then \
+		echo "$(RED)❌ Error: MIGRATION_PROFILE is required (example: make services-migrate-profile MIGRATION_PROFILE=beta)$(NC)"; \
+		exit 1; \
+	fi
+	@echo "$(BLUE)Running database migrations with profile $(MIGRATION_PROFILE)...$(NC)"
+	@MARTY_MIGRATION_PROFILE=$(MIGRATION_PROFILE) $(BASE_COMPOSE) run --build --rm db-migrate
+	@echo "$(GREEN)✓ Database migrations completed for profile $(MIGRATION_PROFILE)$(NC)"
+
+services-migrate-dev: ## Run db-migrate with the dev profile
+	@$(MAKE) --no-print-directory services-migrate-profile MIGRATION_PROFILE=dev
+
+services-migrate-beta: ## Run db-migrate with the beta profile
+	@$(MAKE) --no-print-directory services-migrate-profile MIGRATION_PROFILE=beta
+
+services-migrate-experiments: ## Run db-migrate with the experiments profile
+	@$(MAKE) --no-print-directory services-migrate-profile MIGRATION_PROFILE=experiments
+
+services-migrate-test: ## Run db-migrate with the test profile
+	@$(MAKE) --no-print-directory services-migrate-profile MIGRATION_PROFILE=test
+
+services-migrate-production: ## Run db-migrate with the production profile
+	@$(MAKE) --no-print-directory services-migrate-profile MIGRATION_PROFILE=production
+
+seed-demo-vendor-fixtures: ## Explicitly seed demo vendor org/catalog/template fixtures
+	@echo "$(BLUE)Seeding demo vendor fixtures...$(NC)"
+	@PYTHONIOENCODING=utf-8 MARTY_MIGRATION_PROFILE=$(if $(MARTY_MIGRATION_PROFILE),$(MARTY_MIGRATION_PROFILE),beta) python scripts/seed_demo_vendor_fixtures.py --env-file "$(BETA_ENV_FILE)"
+	@echo "$(GREEN)✓ Demo vendor fixtures seeded$(NC)"
+
+dev-db-reset: ## Drop local state volumes, rebuild infra, skip historical demo migrations, then apply explicit demo fixture seeds
+	@echo "$(BLUE)Resetting development database and seed state...$(NC)"
+	@$(MAKE) --no-print-directory clean
+	@$(MAKE) --no-print-directory infra
+	@MARTY_USE_EXPLICIT_DEMO_SEED_PACK=1 $(MAKE) --no-print-directory services-migrate-dev
+	@$(MAKE) --no-print-directory seed-demo-vendor-fixtures MARTY_MIGRATION_PROFILE=dev
+	@echo "$(GREEN)✓ Development database reset complete$(NC)"
+
+beta-db-reset: ## Drop beta/dev state volumes, rebuild infra, skip historical demo migrations, then apply explicit demo fixture seeds
+	@echo "$(BLUE)Resetting beta database and seed state...$(NC)"
+	@$(MAKE) --no-print-directory clean
+	@$(MAKE) --no-print-directory infra
+	@MARTY_USE_EXPLICIT_DEMO_SEED_PACK=1 $(MAKE) --no-print-directory services-migrate-beta
+	@$(MAKE) --no-print-directory seed-demo-vendor-fixtures MARTY_MIGRATION_PROFILE=beta
+	@echo "$(GREEN)✓ Beta database reset complete$(NC)"
+
+beta-experiments-db-reset: ## Reset beta using the experiments migration profile and explicit demo fixtures
+	@echo "$(BLUE)Resetting beta experiments database and seed state...$(NC)"
+	@$(MAKE) --no-print-directory clean
+	@$(MAKE) --no-print-directory infra
+	@MARTY_USE_EXPLICIT_DEMO_SEED_PACK=1 $(MAKE) --no-print-directory services-migrate-experiments
+	@$(MAKE) --no-print-directory seed-demo-vendor-fixtures MARTY_MIGRATION_PROFILE=experiments
+	@echo "$(GREEN)✓ Beta experiments database reset complete$(NC)"
+
+test-db-reset: ## Drop local state volumes, rebuild infra, and apply test-profile migrations
+	@echo "$(BLUE)Resetting test database and seed state...$(NC)"
+	@$(MAKE) --no-print-directory clean
+	@$(MAKE) --no-print-directory infra
+	@$(MAKE) --no-print-directory services-migrate-test
+	@echo "$(GREEN)✓ Test database reset complete$(NC)"
 
 services-up: ## Start all microservices (requires infra)
 	@echo "$(BLUE)Starting Marty microservices stack...$(NC)"
@@ -584,32 +811,31 @@ canvas-sandbox-build: ## Rebuild the Canvas sandbox image
 canvas-sandbox-logs: ## Follow Canvas sandbox logs
 	@docker logs -f marty-canvas-sandbox
 
-canvas-sandbox-status: ## Show Canvas sandbox status and connector setup guide
+canvas-sandbox-status: ## Show Canvas sandbox status and platform setup guide
 	@echo "$(BLUE)━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━$(NC)"
 	@echo "$(BLUE)  Canvas Sandbox Status$(NC)"
 	@echo "$(BLUE)━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━$(NC)"
 	@docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' | grep -E '(^NAMES|canvas-sandbox)' || echo "$(YELLOW)  Canvas sandbox not running$(NC)"
 	@echo ""
-	@echo "$(GREEN)To configure a connector against the sandbox:$(NC)"
+	@echo "$(GREEN)To configure a Canvas platform against the sandbox:$(NC)"
 	@echo ""
 	@echo "  1. Start the sandbox:  make canvas-sandbox-up"
-	@echo "  2. Create a connector via API or UI admin panel:"
+	@echo "  2. Create a Canvas platform via API or UI admin panel:"
 	@echo ""
-	@echo "     POST /v1/integrations/canvas/connectors"
+	@echo "     POST /v1/integrations/canvas/platforms"
 	@echo "     {"
 	@echo '       "organization_id": "<your-org-id>",'
 	@echo '       "canvas_account_id": "sandbox-account-1",'
-	@echo '       "credential_template_id": "<your-template-id>",'
 	@echo '       "canvas_base_url": "http://canvas-sandbox:8017",'
 	@echo '       "lti_client_id": "any-client-id",'
 	@echo '       "lti_deployment_id": "test-deployment-sandbox"'
 	@echo "     }"
 	@echo ""
 	@echo "  3. Run sandbox probe:"
-	@echo "     POST /v1/integrations/canvas/connectors/{id}/sandbox-probe"
+	@echo "     POST /v1/integrations/canvas/platforms/{platform_id}/sandbox-probe"
 	@echo ""
 	@echo "  4. Initiate LTI login:"
-	@echo "     POST /v1/integrations/canvas/lti/login/{connector_id}"
+	@echo "     POST /v1/integrations/canvas/lti/platforms/{platform_id}/login"
 	@echo "     { \"login_hint\": \"user@example.edu\", \"target_link_uri\": \"https://tool.example.edu/launch\" }"
 	@echo ""
 
@@ -618,7 +844,10 @@ canvas-real-up: ## Start real Canvas LMS test environment
 	@$(CANVAS_REAL_COMPOSE) up -d canvas-real
 	@echo "$(GREEN)✓ Real Canvas started$(NC)"
 	@echo "  Local:  http://localhost:$${CANVAS_REAL_HOST_PORT:-8088}"
-	@echo "  Tunnel: https://canvas-test.$$(grep '^PUBLIC_DOMAIN=' "$(BETA_ENV_FILE)" 2>/dev/null | cut -d'=' -f2)"
+	@CANVAS_HOST=$$(grep '^CANVAS_REAL_PUBLIC_HOST=' "$(BETA_ENV_FILE)" 2>/dev/null | cut -d'=' -f2); \
+	DOMAIN=$$(grep '^PUBLIC_DOMAIN=' "$(BETA_ENV_FILE)" 2>/dev/null | cut -d'=' -f2); \
+	CANVAS_HOST=$${CANVAS_HOST:-canvas-test.$$DOMAIN}; \
+	echo "  Tunnel: https://$$CANVAS_HOST"
 	@echo "  Note: first startup can take several minutes."
 
 canvas-real-down: ## Stop real Canvas LMS test environment
@@ -636,14 +865,14 @@ canvas-real-status: ## Show real Canvas LMS status
 	@echo "$(BLUE)━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━$(NC)"
 	@docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' | grep -E '(^NAMES|canvas-real)' || echo "$(YELLOW)  Canvas-real not running$(NC)"
 	@echo ""
-	@echo "$(GREEN)Connector setup tip:$(NC)"
+	@echo "$(GREEN)Platform setup tip:$(NC)"
 	@echo "  Use a real Canvas base URL for production-like flows."
-	@echo "  For local experiments this profile exposes Canvas at http://canvas-real and https://canvas-test.<PUBLIC_DOMAIN>."
+	@echo "  For beta experiments this profile exposes Canvas at http://canvas-real and CANVAS_REAL_PUBLIC_HOST."
 	@echo ""
 
-canvas-real-seed: ## Seed ElevenID Canvas connector (and optional Canvas test course/user)
-	@echo "$(BLUE)Seeding real Canvas LMS + ElevenID connector...$(NC)"
-	@python scripts/seed_canvas_real.py --env-file "$(BETA_ENV_FILE)"
+canvas-real-seed: ## Seed ElevenID Canvas platform/binding (and optional Canvas test course/user)
+	@echo "$(BLUE)Seeding real Canvas LMS + ElevenID platform/binding...$(NC)"
+	@PYTHONIOENCODING=utf-8 python scripts/seed_canvas_real.py --env-file "$(BETA_ENV_FILE)"
 	@echo "$(GREEN)✓ Canvas seed completed$(NC)"
 
 canvas-real-bootstrap: canvas-real-up canvas-real-seed ## Start real Canvas and run the seed script

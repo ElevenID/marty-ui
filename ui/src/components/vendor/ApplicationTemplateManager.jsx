@@ -119,6 +119,135 @@ const DOCUMENT_TYPES = [
   'other',
 ];
 
+const EVIDENCE_TYPE_OPTIONS = [
+  { value: 'DOCUMENT_SCAN', label: 'Document scan' },
+  { value: 'BIOMETRIC', label: 'Biometric' },
+  { value: 'SELFIE', label: 'Selfie' },
+  { value: 'THIRD_PARTY_VERIFICATION', label: 'Third-party verification' },
+  { value: 'EXTERNAL_FACT', label: 'External fact' },
+  { value: 'EXTERNAL_API', label: 'External API check' },
+  { value: 'document', label: 'Document (legacy)' },
+  { value: 'biometric', label: 'Biometric (legacy)' },
+  { value: 'electronic', label: 'Electronic record (legacy)' },
+  { value: 'vouch', label: 'Vouch/reference (legacy)' },
+];
+
+const EXTERNAL_API_METHODS = ['GET', 'POST', 'PUT', 'PATCH'];
+
+const jsonFormat = (value, fallback = {}) => JSON.stringify(value ?? fallback, null, 2);
+
+export function createEvidenceRequirement(type = 'EXTERNAL_API', ordinal = 1) {
+  const normalizedType = type || 'EXTERNAL_API';
+  const evidenceId = `${normalizedType.toLowerCase().replace(/_/g, '-')}-${ordinal}`;
+  const common = {
+    evidence_id: evidenceId,
+    evidence_type: normalizedType,
+    description: '',
+    required: true,
+  };
+
+  if (normalizedType === 'EXTERNAL_API') {
+    return {
+      ...common,
+      provider: '',
+      fact_type: '',
+      scope: {},
+      pass_rule: {},
+      verification_method: 'EXTERNAL_API_RESPONSE',
+      auto_issue_on_permit: false,
+      api: {
+        method: 'POST',
+        url: '',
+        timeout_seconds: 10,
+        headers: {
+          'content-type': 'application/json',
+        },
+        secret_headers: {},
+        params: {},
+        body: {},
+      },
+      expected_response: {
+        status_codes: [200],
+        json: {
+          all: [
+            { path: '$.status', op: 'eq', value: 'verified' },
+          ],
+        },
+      },
+      response_mapping: {
+        provider_event_id_path: '$.id',
+        verification_status_path: '$.status',
+        verification_verified_values: ['verified'],
+        scope: {},
+        assertion: {},
+      },
+    };
+  }
+
+  if (normalizedType === 'EXTERNAL_FACT') {
+    return {
+      ...common,
+      provider: '',
+      fact_type: '',
+      scope: {},
+      pass_rule: {},
+      verification_method: '',
+      auto_issue_on_permit: false,
+    };
+  }
+
+  return {
+    ...common,
+    accepted_formats: normalizedType === 'DOCUMENT_SCAN' ? ['jpg', 'png', 'pdf'] : [],
+    max_file_size_bytes: normalizedType === 'DOCUMENT_SCAN' ? 10485760 : undefined,
+    provider_config: {},
+    auto_validate: false,
+  };
+}
+
+export function applyEvidenceTypeDefaults(evidence, type, ordinal = 1) {
+  const defaults = createEvidenceRequirement(type, ordinal);
+  const preserved = {
+    evidence_id: evidence.evidence_id || defaults.evidence_id,
+    description: evidence.description || defaults.description,
+    required: evidence.required ?? defaults.required,
+  };
+
+  if (type === 'EXTERNAL_API') {
+    return {
+      ...defaults,
+      ...evidence,
+      ...preserved,
+      evidence_type: type,
+      scope: evidence.scope || defaults.scope,
+      pass_rule: evidence.pass_rule || defaults.pass_rule,
+      api: { ...defaults.api, ...(evidence.api || {}) },
+      expected_response: evidence.expected_response || defaults.expected_response,
+      response_mapping: {
+        ...defaults.response_mapping,
+        ...(evidence.response_mapping || {}),
+      },
+    };
+  }
+
+  if (type === 'EXTERNAL_FACT') {
+    return {
+      ...defaults,
+      ...evidence,
+      ...preserved,
+      evidence_type: type,
+      scope: evidence.scope || defaults.scope,
+      pass_rule: evidence.pass_rule || defaults.pass_rule,
+    };
+  }
+
+  return {
+    ...defaults,
+    ...preserved,
+    evidence_type: type,
+  };
+}
+
 /**
  * Get credential type label
  */
@@ -131,7 +260,7 @@ function getCredentialTypeLabel(typeId, framework) {
 /**
  * Application Template Form Dialog
  */
-function TemplateFormDialog({ open, onClose, onSave, template, trustProfiles }) {
+export function TemplateFormDialog({ open, onClose, onSave, template, trustProfiles }) {
   const { t } = useTranslation('vendor');
   const [formData, setFormData] = useState({
     name: '',
@@ -164,9 +293,13 @@ function TemplateFormDialog({ open, onClose, onSave, template, trustProfiles }) 
   const [complianceProfiles, setComplianceProfiles] = useState([]);
   const [certificateFile, setCertificateFile] = useState(null);
   const [validationStatus, setValidationStatus] = useState(null);
+  const [jsonDrafts, setJsonDrafts] = useState({});
+  const [jsonErrors, setJsonErrors] = useState({});
 
   // Initialize form when template changes
   useEffect(() => {
+    setJsonDrafts({});
+    setJsonErrors({});
     if (template) {
       setFormData({
         name: template.name || '',
@@ -312,11 +445,7 @@ function TemplateFormDialog({ open, onClose, onSave, template, trustProfiles }) 
   };
 
   const handleAddEvidence = () => {
-    const newEvidence = {
-      evidence_type: 'document',
-      provider_config: {},
-      auto_validate: false,
-    };
+    const newEvidence = createEvidenceRequirement('EXTERNAL_API', formData.evidence_requirements.length + 1);
     handleChange('evidence_requirements', [...formData.evidence_requirements, newEvidence]);
   };
 
@@ -332,6 +461,53 @@ function TemplateFormDialog({ open, onClose, onSave, template, trustProfiles }) 
     updated[index] = { ...updated[index], [field]: value };
     handleChange('evidence_requirements', updated);
   };
+
+  const handleChangeEvidenceType = (index, value) => {
+    const updated = [...formData.evidence_requirements];
+    updated[index] = applyEvidenceTypeDefaults(updated[index] || {}, value, index + 1);
+    handleChange('evidence_requirements', updated);
+  };
+
+  const handleUpdateEvidenceApi = (index, field, value) => {
+    const updated = [...formData.evidence_requirements];
+    const current = updated[index] || {};
+    updated[index] = {
+      ...current,
+      api: {
+        ...(current.api || {}),
+        [field]: value,
+      },
+    };
+    handleChange('evidence_requirements', updated);
+  };
+
+  const handleUpdateEvidenceJson = (index, field, rawValue, updater) => {
+    const key = `${index}:${field}`;
+    setJsonDrafts((prev) => ({ ...prev, [key]: rawValue }));
+    try {
+      const parsed = rawValue.trim() ? JSON.parse(rawValue) : {};
+      updater(parsed);
+      setJsonErrors((prev) => {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
+    } catch (err) {
+      setJsonErrors((prev) => ({ ...prev, [key]: 'Invalid JSON' }));
+    }
+  };
+
+  const jsonFieldValue = (index, field, value, fallback = {}) => {
+    const key = `${index}:${field}`;
+    return jsonDrafts[key] ?? jsonFormat(value, fallback);
+  };
+
+  const jsonFieldError = (index, field) => jsonErrors[`${index}:${field}`] || '';
+
+  const hasExternalEvidenceErrors = formData.evidence_requirements.some((evidence) => (
+    evidence.evidence_type === 'EXTERNAL_API' &&
+    (!evidence.evidence_id || !evidence.provider || !evidence.fact_type || !evidence.api?.url)
+  ));
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth>
@@ -449,43 +625,341 @@ function TemplateFormDialog({ open, onClose, onSave, template, trustProfiles }) 
                 </AccordionSummary>
                 <AccordionDetails>
                   <Stack spacing={2}>
-                    <FormControl fullWidth>
-                      <InputLabel>Evidence Type</InputLabel>
-                      <Select
-                        value={evidence.evidence_type}
-                        onChange={(e) => handleUpdateEvidence(index, 'evidence_type', e.target.value)}
-                        label="Evidence Type"
-                      >
-                        <MenuItem value="document">Document</MenuItem>
-                        <MenuItem value="biometric">Biometric</MenuItem>
-                        <MenuItem value="electronic">Electronic Record</MenuItem>
-                        <MenuItem value="vouch">Vouch/Reference</MenuItem>
-                      </Select>
-                    </FormControl>
+                    <Grid container spacing={2}>
+                      <Grid item xs={12} sm={6}>
+                        <TextField
+                          fullWidth
+                          label="Evidence ID"
+                          value={evidence.evidence_id || ''}
+                          onChange={(e) => handleUpdateEvidence(index, 'evidence_id', e.target.value)}
+                        />
+                      </Grid>
+                      <Grid item xs={12} sm={6}>
+                        <FormControl fullWidth>
+                          <InputLabel>Evidence Type</InputLabel>
+                          <Select
+                            value={evidence.evidence_type}
+                            onChange={(e) => handleChangeEvidenceType(index, e.target.value)}
+                            label="Evidence Type"
+                          >
+                            {EVIDENCE_TYPE_OPTIONS.map((option) => (
+                              <MenuItem key={option.value} value={option.value}>
+                                {option.label}
+                              </MenuItem>
+                            ))}
+                          </Select>
+                        </FormControl>
+                      </Grid>
+                    </Grid>
+
                     <TextField
                       fullWidth
-                      label="Provider Configuration (JSON)"
-                      multiline
-                      rows={2}
-                      value={JSON.stringify(evidence.provider_config, null, 2)}
-                      onChange={(e) => {
-                        try {
-                          const config = JSON.parse(e.target.value);
-                          handleUpdateEvidence(index, 'provider_config', config);
-                        } catch (err) {
-                          // Invalid JSON, ignore
-                        }
-                      }}
+                      label="Description"
+                      value={evidence.description || ''}
+                      onChange={(e) => handleUpdateEvidence(index, 'description', e.target.value)}
                     />
+
                     <FormControlLabel
                       control={
                         <Checkbox
-                          checked={evidence.auto_validate || false}
-                          onChange={(e) => handleUpdateEvidence(index, 'auto_validate', e.target.checked)}
+                          checked={evidence.required !== false}
+                          onChange={(e) => handleUpdateEvidence(index, 'required', e.target.checked)}
                         />
                       }
-                      label="Auto-validate when possible"
+                      label="Required"
                     />
+
+                    {(evidence.evidence_type === 'EXTERNAL_API' || evidence.evidence_type === 'EXTERNAL_FACT') && (
+                      <>
+                        <Grid container spacing={2}>
+                          <Grid item xs={12} sm={4}>
+                            <TextField
+                              fullWidth
+                              label="Provider"
+                              value={evidence.provider || ''}
+                              onChange={(e) => handleUpdateEvidence(index, 'provider', e.target.value)}
+                              placeholder="passport_verifier"
+                            />
+                          </Grid>
+                          <Grid item xs={12} sm={4}>
+                            <TextField
+                              fullWidth
+                              label="Fact Type"
+                              value={evidence.fact_type || ''}
+                              onChange={(e) => handleUpdateEvidence(index, 'fact_type', e.target.value)}
+                              placeholder="passport.document_verified"
+                            />
+                          </Grid>
+                          <Grid item xs={12} sm={4}>
+                            <TextField
+                              fullWidth
+                              label="Verification Method"
+                              value={evidence.verification_method || ''}
+                              onChange={(e) => handleUpdateEvidence(index, 'verification_method', e.target.value)}
+                              placeholder="EXTERNAL_API_RESPONSE"
+                            />
+                          </Grid>
+                        </Grid>
+
+                        <Grid container spacing={2}>
+                          <Grid item xs={12} md={6}>
+                            <TextField
+                              fullWidth
+                              multiline
+                              rows={4}
+                              label="Scope JSON"
+                              value={jsonFieldValue(index, 'scope', evidence.scope)}
+                              onChange={(e) => handleUpdateEvidenceJson(
+                                index,
+                                'scope',
+                                e.target.value,
+                                (parsed) => handleUpdateEvidence(index, 'scope', parsed)
+                              )}
+                              error={Boolean(jsonFieldError(index, 'scope'))}
+                              helperText={jsonFieldError(index, 'scope') || 'Required fact scope values.'}
+                            />
+                          </Grid>
+                          <Grid item xs={12} md={6}>
+                            <TextField
+                              fullWidth
+                              multiline
+                              rows={4}
+                              label="Pass Rule JSON"
+                              value={jsonFieldValue(index, 'pass_rule', evidence.pass_rule)}
+                              onChange={(e) => handleUpdateEvidenceJson(
+                                index,
+                                'pass_rule',
+                                e.target.value,
+                                (parsed) => handleUpdateEvidence(index, 'pass_rule', parsed)
+                              )}
+                              error={Boolean(jsonFieldError(index, 'pass_rule'))}
+                              helperText={jsonFieldError(index, 'pass_rule') || 'Rules over assertion.*, scope.*, verification.*, or source.* paths.'}
+                            />
+                          </Grid>
+                        </Grid>
+
+                        <FormControlLabel
+                          control={
+                            <Checkbox
+                              checked={Boolean(evidence.auto_issue_on_permit || evidence.auto_approve_on_evidence)}
+                              onChange={(e) => handleUpdateEvidence(index, 'auto_issue_on_permit', e.target.checked)}
+                            />
+                          }
+                          label="Auto-issue when policy permits"
+                        />
+                      </>
+                    )}
+
+                    {evidence.evidence_type === 'EXTERNAL_API' && (
+                      <>
+                        {(!evidence.provider || !evidence.fact_type || !evidence.api?.url) && (
+                          <Alert severity="warning">
+                            External API evidence requires a provider, fact type, and API URL.
+                          </Alert>
+                        )}
+
+                        <Grid container spacing={2}>
+                          <Grid item xs={12} sm={3}>
+                            <FormControl fullWidth>
+                              <InputLabel>Method</InputLabel>
+                              <Select
+                                value={evidence.api?.method || 'POST'}
+                                onChange={(e) => handleUpdateEvidenceApi(index, 'method', e.target.value)}
+                                label="Method"
+                              >
+                                {EXTERNAL_API_METHODS.map((method) => (
+                                  <MenuItem key={method} value={method}>
+                                    {method}
+                                  </MenuItem>
+                                ))}
+                              </Select>
+                            </FormControl>
+                          </Grid>
+                          <Grid item xs={12} sm={7}>
+                            <TextField
+                              fullWidth
+                              label="API URL"
+                              value={evidence.api?.url || ''}
+                              onChange={(e) => handleUpdateEvidenceApi(index, 'url', e.target.value)}
+                              placeholder="https://verify.example.test/passports"
+                            />
+                          </Grid>
+                          <Grid item xs={12} sm={2}>
+                            <TextField
+                              fullWidth
+                              type="number"
+                              label="Timeout"
+                              value={evidence.api?.timeout_seconds || 10}
+                              onChange={(e) => handleUpdateEvidenceApi(index, 'timeout_seconds', Number(e.target.value))}
+                              inputProps={{ min: 1, max: 20 }}
+                            />
+                          </Grid>
+                        </Grid>
+
+                        <Grid container spacing={2}>
+                          <Grid item xs={12} md={6}>
+                            <TextField
+                              fullWidth
+                              multiline
+                              rows={4}
+                              label="Headers JSON"
+                              value={jsonFieldValue(index, 'api.headers', evidence.api?.headers)}
+                              onChange={(e) => handleUpdateEvidenceJson(
+                                index,
+                                'api.headers',
+                                e.target.value,
+                                (parsed) => handleUpdateEvidenceApi(index, 'headers', parsed)
+                              )}
+                              error={Boolean(jsonFieldError(index, 'api.headers'))}
+                              helperText={jsonFieldError(index, 'api.headers') || 'Non-secret headers only.'}
+                            />
+                          </Grid>
+                          <Grid item xs={12} md={6}>
+                            <TextField
+                              fullWidth
+                              multiline
+                              rows={4}
+                              label="Secret Headers JSON"
+                              value={jsonFieldValue(index, 'api.secret_headers', evidence.api?.secret_headers)}
+                              onChange={(e) => handleUpdateEvidenceJson(
+                                index,
+                                'api.secret_headers',
+                                e.target.value,
+                                (parsed) => handleUpdateEvidenceApi(index, 'secret_headers', parsed)
+                              )}
+                              error={Boolean(jsonFieldError(index, 'api.secret_headers'))}
+                              helperText={jsonFieldError(index, 'api.secret_headers') || 'Map header names to deployment secret names.'}
+                            />
+                          </Grid>
+                          <Grid item xs={12} md={6}>
+                            <TextField
+                              fullWidth
+                              multiline
+                              rows={4}
+                              label="Query Params JSON"
+                              value={jsonFieldValue(index, 'api.params', evidence.api?.params)}
+                              onChange={(e) => handleUpdateEvidenceJson(
+                                index,
+                                'api.params',
+                                e.target.value,
+                                (parsed) => handleUpdateEvidenceApi(index, 'params', parsed)
+                              )}
+                              error={Boolean(jsonFieldError(index, 'api.params'))}
+                              helperText={jsonFieldError(index, 'api.params') || 'Optional query parameters.'}
+                            />
+                          </Grid>
+                          <Grid item xs={12} md={6}>
+                            <TextField
+                              fullWidth
+                              multiline
+                              rows={4}
+                              label="Body JSON"
+                              value={jsonFieldValue(index, 'api.body', evidence.api?.body)}
+                              onChange={(e) => handleUpdateEvidenceJson(
+                                index,
+                                'api.body',
+                                e.target.value,
+                                (parsed) => handleUpdateEvidenceApi(index, 'body', parsed)
+                              )}
+                              error={Boolean(jsonFieldError(index, 'api.body'))}
+                              helperText={jsonFieldError(index, 'api.body') || 'Supports {{application.form_data.field_id}} templates.'}
+                            />
+                          </Grid>
+                        </Grid>
+
+                        <Grid container spacing={2}>
+                          <Grid item xs={12} md={6}>
+                            <TextField
+                              fullWidth
+                              multiline
+                              rows={6}
+                              label="Expected Response JSON"
+                              value={jsonFieldValue(index, 'expected_response', evidence.expected_response)}
+                              onChange={(e) => handleUpdateEvidenceJson(
+                                index,
+                                'expected_response',
+                                e.target.value,
+                                (parsed) => handleUpdateEvidence(index, 'expected_response', parsed)
+                              )}
+                              error={Boolean(jsonFieldError(index, 'expected_response'))}
+                              helperText={jsonFieldError(index, 'expected_response') || 'Status codes and response path predicates.'}
+                            />
+                          </Grid>
+                          <Grid item xs={12} md={6}>
+                            <TextField
+                              fullWidth
+                              multiline
+                              rows={6}
+                              label="Response Mapping JSON"
+                              value={jsonFieldValue(index, 'response_mapping', evidence.response_mapping)}
+                              onChange={(e) => handleUpdateEvidenceJson(
+                                index,
+                                'response_mapping',
+                                e.target.value,
+                                (parsed) => handleUpdateEvidence(index, 'response_mapping', parsed)
+                              )}
+                              error={Boolean(jsonFieldError(index, 'response_mapping'))}
+                              helperText={jsonFieldError(index, 'response_mapping') || 'Maps response fields to EvidenceFact fields.'}
+                            />
+                          </Grid>
+                        </Grid>
+                      </>
+                    )}
+
+                    {!['EXTERNAL_API', 'EXTERNAL_FACT'].includes(evidence.evidence_type) && (
+                      <>
+                        {evidence.evidence_type === 'DOCUMENT_SCAN' && (
+                          <Grid container spacing={2}>
+                            <Grid item xs={12} md={6}>
+                              <TextField
+                                fullWidth
+                                label="Accepted Formats"
+                                value={(evidence.accepted_formats || []).join(', ')}
+                                onChange={(e) => handleUpdateEvidence(
+                                  index,
+                                  'accepted_formats',
+                                  e.target.value.split(',').map((item) => item.trim()).filter(Boolean)
+                                )}
+                              />
+                            </Grid>
+                            <Grid item xs={12} md={6}>
+                              <TextField
+                                fullWidth
+                                type="number"
+                                label="Max File Size"
+                                value={evidence.max_file_size_bytes || ''}
+                                onChange={(e) => handleUpdateEvidence(index, 'max_file_size_bytes', Number(e.target.value))}
+                              />
+                            </Grid>
+                          </Grid>
+                        )}
+                        <TextField
+                          fullWidth
+                          label="Provider Configuration JSON"
+                          multiline
+                          rows={3}
+                          value={jsonFieldValue(index, 'provider_config', evidence.provider_config)}
+                          onChange={(e) => handleUpdateEvidenceJson(
+                            index,
+                            'provider_config',
+                            e.target.value,
+                            (parsed) => handleUpdateEvidence(index, 'provider_config', parsed)
+                          )}
+                          error={Boolean(jsonFieldError(index, 'provider_config'))}
+                          helperText={jsonFieldError(index, 'provider_config') || 'Optional provider-specific configuration.'}
+                        />
+                        <FormControlLabel
+                          control={
+                            <Checkbox
+                              checked={evidence.auto_validate || false}
+                              onChange={(e) => handleUpdateEvidence(index, 'auto_validate', e.target.checked)}
+                            />
+                          }
+                          label="Auto-validate when possible"
+                        />
+                      </>
+                    )}
+
                     <Button
                       size="small"
                       color="error"
@@ -748,6 +1222,8 @@ function TemplateFormDialog({ open, onClose, onSave, template, trustProfiles }) 
             !formData.name ||
             !formData.trust_profile_id ||
             formData.credential_types.length === 0
+            || hasExternalEvidenceErrors
+            || Object.keys(jsonErrors).length > 0
           }
         >
           {template ? 'Save Changes' : 'Create Template'}

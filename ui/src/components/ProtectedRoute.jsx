@@ -187,7 +187,7 @@ export function OrgConsoleRoute({ children, ...props }) {
 
   // Otherwise, apply standard protected route check with org:view capability
   return (
-    <ProtectedRoute requiredCapabilities={['org:view']} {...props}>
+    <ProtectedRoute requiredCapabilities={['org:view']} unauthorizedRedirect="/console/applicant/catalog" {...props}>
       {children}
     </ProtectedRoute>
   );

@@ -24,7 +24,6 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, AsyncGenerator
-from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -41,6 +40,16 @@ from marty_common import (
 from marty_common.org_authorization import get_organization_client
 from marty_common.middleware import RequestIdMiddleware, RequestLoggingMiddleware
 from marty_common.service_setup import create_service_app
+from marty_common.system_ids import (
+    MARTY_DEFAULT_ORG_ID,
+    MARTY_DEFAULT_REVOCATION_PROFILE_ID,
+    MARTY_LOGIN_TRUST_PROFILE_ID,
+    MARTY_LOGIN_TRUSTED_ISSUER_ID,
+    MARTY_MEMBER_MDOC_TEMPLATE_ID,
+    MARTY_MEMBER_SD_JWT_TEMPLATE_ID,
+    MARTY_TRUST_BUNDLE_SOURCE_ID,
+)
+from marty_common.system_urls import resolve_marty_issuer_base_url, resolve_marty_issuer_did
 from trust_profile.infrastructure.adapters import PostgresTrustProfileRepository
 from trust_profile.infrastructure.models import mapper_registry
 from trust_profile.routes.registry_imports import registry_router as registry_imports_router
@@ -1270,33 +1279,18 @@ issuer_router = APIRouter(prefix="/v1/issuer-entities", tags=["issuer-entities"]
 
 _repo: InMemoryTrustProfileRepository | PostgresTrustProfileRepository | None = None
 
-MARTY_ORG_ID = "00000000-0000-0000-0000-000000000001"
-MARTY_TRUST_PROFILE_ID = "60000000-0000-0000-0000-000000000001"
-MARTY_TRUSTED_ISSUER_ID = "60000000-0000-0000-0000-000000000011"
-MARTY_REVOCATION_PROFILE_ID = "70000000-0000-0000-0000-000000000001"
-MARTY_DEFAULT_ORG_SLUG = "marty"
+MARTY_ORG_ID = os.environ.get("MARTY_ORG_ID", MARTY_DEFAULT_ORG_ID)
+MARTY_TRUST_PROFILE_ID = MARTY_LOGIN_TRUST_PROFILE_ID
+MARTY_TRUSTED_ISSUER_ID = MARTY_LOGIN_TRUSTED_ISSUER_ID
+MARTY_REVOCATION_PROFILE_ID = MARTY_DEFAULT_REVOCATION_PROFILE_ID
 
 
 def _marty_issuer_base_url() -> str:
-    return (
-        os.environ.get("MARTY_ISSUER_BASE_URL")
-        or os.environ.get("ISSUER_BASE_URL")
-        or os.environ.get("PUBLIC_API_URL")
-        or "https://beta.elevenidllc.com"
-    ).rstrip("/")
+    return resolve_marty_issuer_base_url()
 
 
 def _marty_issuer_did() -> str:
-    configured = os.environ.get("MARTY_ISSUER_DID", "").strip()
-    if configured:
-        return configured
-    public_domain = os.environ.get("PUBLIC_DOMAIN")
-    if not public_domain:
-        public_domain = urlparse(_marty_issuer_base_url()).netloc or "beta.elevenidllc.com"
-    did_web_domain = public_domain.strip().strip("/").replace(":", "%3A").replace("/", ":")
-    org_slug = os.environ.get("MARTY_ORG_SLUG", MARTY_DEFAULT_ORG_SLUG).strip().lower()
-    org_slug = "".join(ch for ch in org_slug if ch.isalnum() or ch in "._-") or MARTY_DEFAULT_ORG_SLUG
-    return f"did:web:{did_web_domain}:orgs:{org_slug}"
+    return resolve_marty_issuer_did()
 
 
 def get_repo() -> InMemoryTrustProfileRepository | PostgresTrustProfileRepository:
@@ -1320,7 +1314,7 @@ async def _bootstrap_marty_login_trust_profile(
     issuer_did = _marty_issuer_did()
     issuer_url = _marty_issuer_base_url()
     managed_trust_source = TrustSource(
-        id="60000000-0000-0000-0000-000000000021",
+        id=MARTY_TRUST_BUNDLE_SOURCE_ID,
         name="Marty Managed Issuer",
         source_type=TrustSourceType.PINNED_ISSUER.value,
         issuer_did=issuer_did,
@@ -1399,8 +1393,8 @@ async def _bootstrap_marty_login_trust_profile(
                 issuer_url=issuer_url,
                 status=IssuerStatus.ACTIVE,
                 credential_template_ids=[
-                    "50000000-0000-0000-0000-000000000010",
-                    "50000000-0000-0000-0000-000000000030",
+                    MARTY_MEMBER_SD_JWT_TEMPLATE_ID,
+                    MARTY_MEMBER_MDOC_TEMPLATE_ID,
                 ],
                 verification_keys=[],
                 valid_from=datetime.now(timezone.utc),

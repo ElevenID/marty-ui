@@ -30,7 +30,7 @@ vi.mock('../../hooks/useAuth', () => ({
 describe('LoginPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockLocation.mockReturnValue({ state: null });
+    mockLocation.mockReturnValue({ state: null, search: '' });
     mockUseAuth.mockReturnValue({
       isAuthenticated: false,
       isLoading: false,
@@ -55,7 +55,7 @@ describe('LoginPage', () => {
   });
 
   it('redirects authenticated users to the location state destination', async () => {
-    mockLocation.mockReturnValue({ state: { from: { pathname: '/console/org' } } });
+    mockLocation.mockReturnValue({ state: { from: { pathname: '/console/org' } }, search: '' });
     mockUseAuth.mockReturnValue({
       isAuthenticated: true,
       isLoading: false,
@@ -66,6 +66,25 @@ describe('LoginPage', () => {
 
     await waitFor(() => {
       expect(mockNavigate).toHaveBeenCalledWith('/console/org', { replace: true });
+    });
+  });
+
+  it('uses the next query param as the login redirect target', async () => {
+    const login = vi.fn();
+    mockLocation.mockReturnValue({
+      state: null,
+      search: '?next=%2Fconsole%2Fapplicant%2Fcatalog%3Fcanvas_lti_state%3Dstate-1',
+    });
+    mockUseAuth.mockReturnValue({
+      isAuthenticated: false,
+      isLoading: false,
+      login,
+    });
+
+    render(<LoginPage />);
+
+    await waitFor(() => {
+      expect(login).toHaveBeenCalledWith('/console/applicant/catalog?canvas_lti_state=state-1');
     });
   });
 

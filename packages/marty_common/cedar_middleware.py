@@ -27,6 +27,7 @@ class CedarAuthMiddleware(BaseHTTPMiddleware):
         r"^/v1/organizations/join/",
         r"^/v1/organizations/[^/]+/join$",
         r"^/v1/organizations/invitations/",
+        r"^/v1/organizations/[^/]+/revocation-profiles/[^/]+/status-lists/[^/]+/[^/]+$",
         r"^/health",
         r"^/.well-known/",
     ]

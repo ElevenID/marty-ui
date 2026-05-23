@@ -7,6 +7,7 @@ import json
 import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from importlib import resources
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -26,6 +27,9 @@ PLACEHOLDER_PREFIXES = (
     "replace_me",
 )
 VERIFIER_PRODUCT = "verifier"
+EMBEDDED_PUBLIC_KEY_PACKAGE = "marty_common.license_public_keys"
+EMBEDDED_PUBLIC_KEY_NAME = "selfhost-production.pem"
+RUNTIME_PUBLIC_KEY_OVERRIDE_VALUES = {"1", "true", "yes", "on"}
 
 
 class LicenseValidationError(RuntimeError):
@@ -203,12 +207,39 @@ def resolve_license_token(env: Mapping[str, str] | None = None) -> str:
 
 def resolve_license_public_key(env: Mapping[str, str] | None = None) -> str:
     runtime_env = os.environ if env is None else env
-    return _resolve_env_file_value(
-        runtime_env,
-        direct_key="LICENSE_PUBLIC_KEY",
-        file_key="LICENSE_PUBLIC_KEY_FILE",
-        label="License public key",
-    )
+    runtime_sources = [
+        key
+        for key in ("LICENSE_PUBLIC_KEY", "LICENSE_PUBLIC_KEY_FILE")
+        if str(runtime_env.get(key, "")).strip()
+    ]
+
+    if runtime_sources:
+        allow_runtime_key = str(
+            runtime_env.get("MARTY_LICENSE_ALLOW_RUNTIME_PUBLIC_KEY", "")
+        ).strip().lower() in RUNTIME_PUBLIC_KEY_OVERRIDE_VALUES
+        if not allow_runtime_key:
+            joined_sources = ", ".join(runtime_sources)
+            raise LicenseValidationError(
+                "Runtime license public-key overrides are disabled for commercial self-host validation; "
+                f"remove {joined_sources} or set MARTY_LICENSE_ALLOW_RUNTIME_PUBLIC_KEY=true only for dev/test."
+            )
+
+        return _resolve_env_file_value(
+            runtime_env,
+            direct_key="LICENSE_PUBLIC_KEY",
+            file_key="LICENSE_PUBLIC_KEY_FILE",
+            label="License public key",
+        )
+
+    try:
+        public_key_pem = resources.files(EMBEDDED_PUBLIC_KEY_PACKAGE).joinpath(EMBEDDED_PUBLIC_KEY_NAME).read_text(encoding="utf-8").strip()
+    except (FileNotFoundError, ModuleNotFoundError, OSError) as exc:
+        raise LicenseValidationError("Embedded Marty license public key is missing from the runtime image.") from exc
+
+    if not public_key_pem or is_placeholder_value(public_key_pem):
+        raise LicenseValidationError("Embedded Marty license public key is empty or still a placeholder.")
+
+    return public_key_pem
 
 
 def _normalize_required_plan_tier(value: str | None) -> str | None:

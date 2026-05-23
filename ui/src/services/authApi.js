@@ -17,6 +17,7 @@ export async function getCurrentUser() {
     const response = await fetch(`${AUTH_BASE_URL}/me`, {
       method: 'GET',
       credentials: 'include', // Include cookies
+      cache: 'no-store',
       headers: {
         'Accept': 'application/json',
       },
@@ -118,6 +119,7 @@ export async function getUserOrganizations() {
     const response = await fetch(`${AUTH_BASE_URL}/me/organizations`, {
       method: 'GET',
       credentials: 'include', // Include cookies
+      cache: 'no-store',
       headers: {
         'Accept': 'application/json',
       },

@@ -26,6 +26,11 @@ load_secret_var() {
     fi
 
     if [ -n "${file_path}" ]; then
+        if [ ! -f "${file_path}" ]; then
+            echo "Secret file for ${var_name} is not a regular file: ${file_path}" >&2
+            exit 1
+        fi
+
         if [ ! -r "${file_path}" ]; then
             echo "Secret file for ${var_name} is not readable: ${file_path}" >&2
             exit 1
@@ -74,6 +79,7 @@ load_secret_env() {
     load_secret_var MARTY_API_CLIENT_SECRET
     load_secret_var ISSUANCE_API_KEY
     load_secret_var CANVAS_CREDENTIALS_SHARED_SECRET
+    load_secret_var CANVAS_CREDENTIALS_API_TOKEN
     load_secret_var BAO_TOKEN
     load_secret_var OPENBAO_SERVICE_TOKEN
     load_secret_var SMTP_PASSWORD
@@ -81,7 +87,6 @@ load_secret_env() {
     load_secret_var SQUARE_WEBHOOK_SIGNATURE_KEY
     load_secret_var CLOUDFLARE_TUNNEL_TOKEN
     load_secret_var LICENSE_KEY
-    load_secret_var LICENSE_PUBLIC_KEY
 
     expand_template_var DATABASE_URL
 }

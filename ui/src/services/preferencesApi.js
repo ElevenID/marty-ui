@@ -45,6 +45,7 @@ export async function getPreferences() {
     const response = await fetch(PREFS_BASE_URL, {
       method: 'GET',
       credentials: 'include', // Include cookies
+      cache: 'no-store',
       headers: {
         'Accept': 'application/json',
       },

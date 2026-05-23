@@ -128,6 +128,9 @@ class AuthMiddleware(BaseHTTPMiddleware):
         _WALLET_PUBLIC = _re.compile(
             r"^/v1/flows/instances/[^/]+/(request|submit)$"
         )
+        _STATUS_LIST_PUBLIC = _re.compile(
+            r"^/v1/organizations/[^/]+/revocation-profiles/[^/]+/status-lists/[^/]+/[^/]+$"
+        )
 
         # Skip auth for unauthenticated routes or health checks
         if (
@@ -139,6 +142,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
             or request.url.path.startswith("/credentials/")
             or request.url.path.endswith("/did.json")
             or _WALLET_PUBLIC.match(request.url.path)
+            or _STATUS_LIST_PUBLIC.match(request.url.path)
         ):
             return await call_next(request)
 

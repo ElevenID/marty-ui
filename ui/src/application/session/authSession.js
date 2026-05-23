@@ -4,6 +4,22 @@
  * These helpers intentionally avoid React and browser framework dependencies.
  */
 
+export const DEFAULT_LOGIN_REDIRECT = '/console';
+
+/**
+ * Resolve the destination for user-initiated login actions.
+ *
+ * Route guards and deep-link flows pass explicit strings and keep their target.
+ * Plain marketing/header login clicks pass no string (or a click event), so they
+ * should land in the authenticated console instead of returning to a marketing page.
+ *
+ * @param {string|unknown} redirectUri
+ * @returns {string}
+ */
+export function resolveInteractiveLoginRedirect(redirectUri) {
+  return typeof redirectUri === 'string' ? redirectUri : DEFAULT_LOGIN_REDIRECT;
+}
+
 /**
  * Parse organization claim from Keycloak token.
  * Keycloak Organizations feature returns: { "org-id": { "name": "Org Name", ... } }
@@ -75,7 +91,8 @@ export function normalizeCapabilities(rawCapabilities) {
 export function deriveCapabilities(rawUser, organizations = []) {
   const roles = rawUser?.roles || [];
   const fromApi = normalizeCapabilities(rawUser?.capabilities);
-  const hasOrganizations = organizations.length > 0;
+  const isCanvasLearnerOnly = isCanvasLtiLearnerOnly(rawUser);
+  const hasOrganizations = !isCanvasLearnerOnly && getConsoleEligibleOrganizations(organizations).length > 0;
   const hasAdminRole = roles.includes('admin') || roles.includes('administrator');
   const hasOrgRole = roles.some((role) => ['vendor', 'org_admin', 'organization-admin'].includes(role));
   const roleDerivedCapabilities = {
@@ -88,9 +105,9 @@ export function deriveCapabilities(rawUser, organizations = []) {
   return {
     apply: fromApi.apply !== undefined ? Boolean(fromApi.apply) : true,
     ...fromApi,
-    'org:view': Boolean(fromApi['org:view']) || roleDerivedCapabilities['org:view'],
-    'org:manage': Boolean(fromApi['org:manage']) || roleDerivedCapabilities['org:manage'],
-    'org:issue': Boolean(fromApi['org:issue']) || roleDerivedCapabilities['org:issue'],
+    'org:view': !isCanvasLearnerOnly && (Boolean(fromApi['org:view']) || roleDerivedCapabilities['org:view']),
+    'org:manage': !isCanvasLearnerOnly && (Boolean(fromApi['org:manage']) || roleDerivedCapabilities['org:manage']),
+    'org:issue': !isCanvasLearnerOnly && (Boolean(fromApi['org:issue']) || roleDerivedCapabilities['org:issue']),
     'admin:platform': Boolean(fromApi['admin:platform']) || roleDerivedCapabilities['admin:platform'],
   };
 }
@@ -146,6 +163,29 @@ const ORG_CONSOLE_ROLES = new Set([
 function rawUserHasOrgAuthority(rawUser) {
   const roles = rawUser?.roles || [];
   return roles.some((role) => ORG_CONSOLE_ROLES.has(role)) || ['administrator', 'vendor'].includes(rawUser?.user_type);
+}
+
+function isCanvasLtiLearnerOnly(rawUser) {
+  const roles = rawUser?.roles || [];
+  return roles.includes('canvas_lti_learner') && !rawUserHasOrgAuthority(rawUser);
+}
+
+function applicantOnlyMembership() {
+  return {
+    roles: [{ name: 'applicant' }],
+    permissions: ['organization:view', 'credential-template:view', 'application-template:view', 'application:view', 'issuance:view'],
+    has_org_console_access: false,
+  };
+}
+
+function restrictOrganizationsToApplicantAccess(organizations = []) {
+  return organizations.map((organization) => ({
+    ...organization,
+    membership: {
+      ...(organization.membership || applicantOnlyMembership()),
+      has_org_console_access: false,
+    },
+  }));
 }
 
 function isClaimedKeycloakOrganization(rawUser, orgId) {
@@ -229,7 +269,10 @@ function mergeFetchedAndClaimOrganizations(rawUser, fetchedOrganizations = []) {
  * @returns {Array<{id: string, name: string|null}>}
  */
 export function resolveUserOrganizations(rawUser, fetchedOrganizations) {
-  return mergeFetchedAndClaimOrganizations(rawUser, fetchedOrganizations);
+  const organizations = mergeFetchedAndClaimOrganizations(rawUser, fetchedOrganizations);
+  return isCanvasLtiLearnerOnly(rawUser)
+    ? restrictOrganizationsToApplicantAccess(organizations)
+    : organizations;
 }
 
 /**
@@ -349,10 +392,10 @@ export function updateUserActiveOrganization(previousUser, orgId) {
       ? [...memberships, resolvedOrganization]
       : memberships;
 
-  const nextCapabilities = {
-    ...(previousUser.capabilities || {}),
-    ...(orgId ? { 'org:view': true } : {}),
-  };
+  const nextCapabilities = { ...(previousUser.capabilities || {}) };
+  if (orgId) {
+    nextCapabilities['org:view'] = Boolean(selected && membershipHasOrgConsoleAccess(selected));
+  }
 
   const nextOrganizationId = resolvedOrganization?.id || null;
   const nextOrganizationName = resolvedOrganization

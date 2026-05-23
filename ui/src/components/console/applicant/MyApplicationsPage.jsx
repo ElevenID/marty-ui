@@ -111,6 +111,7 @@ function MyApplicationsPage() {
           
           return {
             id: app.id,
+            organizationId: app.organization_id || app.organizationId || null,
             reference: app.reference_number,
             credentialType: app.credential_display_name || app.credential_type || app.document_type,
             submittedAt: app.submitted_at,
@@ -323,11 +324,13 @@ function MyApplicationsPage() {
         onClose={() => setClaimApp(null)}
         applicationId={claimApp?.id}
         offerData={claimApp ? {
+          organization_id: claimApp.organizationId,
           offer_url: claimApp.offerUrl,
           credential_offer_uris: claimApp.offerUris,
           credential_offer_labels: claimApp.offerLabels,
           expires_at: claimApp.offerExpiresAt,
         } : undefined}
+        organizationId={claimApp?.organizationId}
       />
 
       {/* Application Details Dialog */}

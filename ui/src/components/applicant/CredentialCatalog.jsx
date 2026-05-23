@@ -62,7 +62,92 @@ import {
   getCredentialCatalogCategories,
   loadCredentialCatalogItems,
   loadExistingCredentialApplications,
+  scopeCredentialCatalogItemsForCanvasLaunch,
 } from '../../application/applications';
+
+function getLtiSessionValue(session, key) {
+  return (
+    session?.[key]
+    || session?.mip_primitives?.context?.[key]
+    || session?.verified_launch?.[key]
+    || null
+  );
+}
+
+function normalizeOrganizationIdCandidate(value) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  if (typeof value !== 'string' && typeof value !== 'number') {
+    return null;
+  }
+
+  const normalized = String(value).trim();
+  return normalized === '' ? null : normalized;
+}
+
+function getFirstOrganizationMembershipId(user) {
+  const membershipCollections = [
+    user?.organizations,
+    user?.organization_memberships,
+    user?.organizationMemberships,
+    user?.memberships,
+  ];
+
+  for (const collection of membershipCollections) {
+    const entries = Array.isArray(collection) ? collection : [];
+    for (const entry of entries) {
+      const directId = normalizeOrganizationIdCandidate(entry);
+      if (directId) {
+        return directId;
+      }
+
+      const candidates = [
+        entry?.organization_id,
+        entry?.organizationId,
+        entry?.organization?.id,
+        entry?.id,
+      ];
+      for (const candidate of candidates) {
+        const normalized = normalizeOrganizationIdCandidate(candidate);
+        if (normalized) {
+          return normalized;
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
+function resolveEffectiveOrganizationId(organizationId, user) {
+  const candidates = [
+    organizationId,
+    user?.current_organization_id,
+    user?.currentOrganizationId,
+    user?.default_organization_id,
+    user?.defaultOrganizationId,
+    user?.organization_id,
+    user?.organizationId,
+  ];
+
+  for (const candidate of candidates) {
+    const normalized = normalizeOrganizationIdCandidate(candidate);
+    if (normalized) {
+      return normalized;
+    }
+  }
+
+  return getFirstOrganizationMembershipId(user);
+}
+
+function createEmptyApplicationStatusInfo() {
+  return {
+    statusByCredentialId: {},
+    counts: { pending: 0, approved: 0, offered: 0, rejected: 0, credentialed: 0 },
+  };
+}
 
 const CredentialCatalog = () => {
   const { t } = useTranslation('applicant');
@@ -80,14 +165,69 @@ const CredentialCatalog = () => {
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [selectedCredential, setSelectedCredential] = useState(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [catalogLoadError, setCatalogLoadError] = useState(null);
+  const [catalogMissingOrganization, setCatalogMissingOrganization] = useState(false);
   const [existingApplications, setExistingApplications] = useState([]);
-  const [appStatusInfo, setAppStatusInfo] = useState({
-    statusByCredentialId: {},
-    counts: { pending: 0, approved: 0, offered: 0, rejected: 0, credentialed: 0 },
-  });
+  const [appStatusInfo, setAppStatusInfo] = useState(createEmptyApplicationStatusInfo);
+  const [canvasLtiSession, setCanvasLtiSession] = useState(() => location.state?.canvasLtiSession || null);
+  const [canvasLtiLoading, setCanvasLtiLoading] = useState(false);
+
+  const canvasLtiState = useMemo(
+    () => new URLSearchParams(location.search || '').get('canvas_lti_state') || '',
+    [location.search]
+  );
+  const canvasLtiSessionState = getLtiSessionValue(canvasLtiSession, 'state');
+  const canvasLtiOrganizationId = useMemo(
+    () => getLtiSessionValue(canvasLtiSession, 'organization_id'),
+    [canvasLtiSession]
+  );
+  const effectiveOrganizationId = useMemo(
+    () => canvasLtiOrganizationId || resolveEffectiveOrganizationId(organizationId, user),
+    [canvasLtiOrganizationId, organizationId, user]
+  );
+
+  useEffect(() => {
+    if (location.state?.canvasLtiSession) {
+      setCanvasLtiSession(location.state.canvasLtiSession);
+    }
+  }, [location.state]);
+
+  useEffect(() => {
+    let alive = true;
+
+    async function loadCanvasLtiSession() {
+      if (!canvasLtiState || canvasLtiSessionState === canvasLtiState) {
+        return;
+      }
+
+      setCanvasLtiLoading(true);
+      try {
+        const data = await get(`/v1/integrations/canvas/lti/experience-sessions/${encodeURIComponent(canvasLtiState)}`);
+        if (alive) {
+          setCanvasLtiSession(data);
+        }
+      } catch (error) {
+        console.error('Failed to resolve Canvas LTI catalog context:', error);
+      } finally {
+        if (alive) {
+          setCanvasLtiLoading(false);
+        }
+      }
+    }
+
+    loadCanvasLtiSession();
+    return () => {
+      alive = false;
+    };
+  }, [canvasLtiState, canvasLtiSessionState]);
 
   const listCredentialTemplates = useCallback((currentOrganizationId) => {
-    return get(`/v1/credential-templates?organization_id=${currentOrganizationId}&status=active`);
+    const normalizedOrganizationId = normalizeOrganizationIdCandidate(currentOrganizationId);
+    if (!normalizedOrganizationId) {
+      return Promise.resolve([]);
+    }
+
+    return get(`/v1/credential-templates?organization_id=${encodeURIComponent(normalizedOrganizationId)}&status=active`);
   }, []);
 
   const listApplicantApplications = useCallback((applicantId) => {
@@ -101,26 +241,39 @@ const CredentialCatalog = () => {
     setLoading(true);
     try {
       const result = await loadCredentialCatalogItems({
-        organizationId,
+        organizationId: effectiveOrganizationId,
         organizationName,
         listCredentialTemplates,
       });
       setCredentials(result.credentials);
+      setCatalogLoadError(result.error || null);
+      setCatalogMissingOrganization(Boolean(result.missingOrganization));
+      if (result.error && !result.missingOrganization) {
+        console.error('Failed to fetch credentials:', result.error);
+      }
     } catch (error) {
       console.error('Failed to fetch credentials:', error);
       setCredentials([]);
+      setCatalogLoadError(error);
+      setCatalogMissingOrganization(false);
     } finally {
       setLoading(false);
     }
-  }, [organizationId, organizationName, listCredentialTemplates]);
+  }, [effectiveOrganizationId, organizationName, listCredentialTemplates]);
 
   /**
    * Fetch applicant's existing applications (with status data)
    */
   const fetchExistingApplications = useCallback(async () => {
+    if (!effectiveOrganizationId || !user?.user_id) {
+      setExistingApplications([]);
+      setAppStatusInfo(createEmptyApplicationStatusInfo());
+      return;
+    }
+
     try {
       const applicationIds = await loadExistingCredentialApplications({
-        organizationId,
+        organizationId: effectiveOrganizationId,
         userId: user?.user_id,
         getApplicantByUser,
         listApplicantApplications,
@@ -136,8 +289,10 @@ const CredentialCatalog = () => {
       }
     } catch (error) {
       console.error('Failed to fetch applications:', error);
+      setExistingApplications([]);
+      setAppStatusInfo(createEmptyApplicationStatusInfo());
     }
-  }, [organizationId, user?.user_id, listApplicantApplications]);
+  }, [effectiveOrganizationId, user?.user_id, listApplicantApplications]);
 
   // Fetch data when component mounts or organizationId changes
   useEffect(() => {
@@ -148,9 +303,35 @@ const CredentialCatalog = () => {
   /**
    * Filter credentials based on search and category
    */
+  const canvasLtiCredentialTemplateId = useMemo(
+    () => getLtiSessionValue(canvasLtiSession, 'credential_template_id'),
+    [canvasLtiSession]
+  );
+  const canvasLtiApplicationTemplateId = useMemo(
+    () => getLtiSessionValue(canvasLtiSession, 'application_template_id'),
+    [canvasLtiSession]
+  );
+  const canvasScopedCredentials = useMemo(() => {
+    return scopeCredentialCatalogItemsForCanvasLaunch(credentials, {
+      credentialTemplateIds: canvasLtiCredentialTemplateId ? [canvasLtiCredentialTemplateId] : [],
+    });
+  }, [credentials, canvasLtiCredentialTemplateId]);
   const filteredCredentials = useMemo(() => {
-    return filterCredentialCatalogItems(credentials, { searchTerm, categoryFilter });
-  }, [credentials, searchTerm, categoryFilter]);
+    return filterCredentialCatalogItems(canvasScopedCredentials, { searchTerm, categoryFilter });
+  }, [canvasScopedCredentials, searchTerm, categoryFilter]);
+
+  const canvasLtiNavigationContext = useMemo(() => {
+    if (!canvasLtiState) {
+      return null;
+    }
+    return {
+      state: canvasLtiState,
+      canvas_program_binding_id: getLtiSessionValue(canvasLtiSession, 'canvas_program_binding_id'),
+      canvas_platform_id: getLtiSessionValue(canvasLtiSession, 'canvas_platform_id'),
+      application_template_id: canvasLtiApplicationTemplateId,
+      credential_template_id: canvasLtiCredentialTemplateId,
+    };
+  }, [canvasLtiApplicationTemplateId, canvasLtiCredentialTemplateId, canvasLtiSession, canvasLtiState]);
 
   /**
    * Handle credential application
@@ -159,6 +340,8 @@ const CredentialCatalog = () => {
     const navigation = buildCredentialApplicationNavigationState(credential, {
       currentPathname: location.pathname,
       isPreview,
+      canvasLtiContext: canvasLtiNavigationContext,
+      canvasLtiSession,
     });
     navigate(navigation.path, { state: navigation.state });
   };
@@ -203,6 +386,11 @@ const CredentialCatalog = () => {
 
   const { counts } = appStatusInfo;
   const hasAnyApplications = counts.pending + counts.approved + counts.offered + counts.rejected + counts.credentialed > 0;
+  const catalogLoadAlertMessage = catalogLoadError
+    ? catalogMissingOrganization
+      ? 'We could not determine your organization yet. Refresh after sign-in, or choose or join an organization before browsing credentials.'
+      : 'We could not load credential templates. Refresh the page, then contact support if the catalog still does not appear.'
+    : null;
 
   return (
     <Container maxWidth="lg" data-testid="credential-catalog-page">
@@ -346,7 +534,7 @@ const CredentialCatalog = () => {
 
       {/* Credential Grid */}
       <Grid container spacing={3}>
-        {loading ? (
+        {loading || canvasLtiLoading ? (
           // Loading skeletons
           [...Array(6)].map((_, index) => (
             <Grid item xs={12} sm={6} md={4} key={index}>
@@ -360,6 +548,12 @@ const CredentialCatalog = () => {
               </Card>
             </Grid>
           ))
+        ) : catalogLoadAlertMessage ? (
+          <Grid item xs={12}>
+            <Alert severity={catalogMissingOrganization ? 'warning' : 'error'} data-testid="catalog-load-alert">
+              {catalogLoadAlertMessage}
+            </Alert>
+          </Grid>
         ) : filteredCredentials.length === 0 ? (
           <Grid item xs={12}>
             <Alert severity="info">

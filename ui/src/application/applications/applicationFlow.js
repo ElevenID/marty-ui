@@ -67,6 +67,138 @@ export function normalizeTemplateToFormConfig(template) {
   };
 }
 
+function parseListField(value) {
+  if (Array.isArray(value)) {
+    return value;
+  }
+
+  if (typeof value === 'string' && value.trim()) {
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+
+  return [];
+}
+
+function humanizeFieldName(fieldName) {
+  return String(fieldName || '')
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function normalizeApplicationInputType(type) {
+  const normalized = String(type || 'text').toLowerCase();
+  if (['string', 'str'].includes(normalized)) return 'text';
+  if (['integer', 'int', 'float', 'decimal'].includes(normalized)) return 'number';
+  if (['bool'].includes(normalized)) return 'boolean';
+  if (['datetime-local', 'datetime'].includes(normalized)) return 'datetime';
+  if (['email', 'phone', 'url', 'date', 'select', 'file', 'address', 'boolean', 'number', 'text'].includes(normalized)) {
+    return normalized;
+  }
+  return 'text';
+}
+
+function normalizeApplicationFormField(field, defaultRequired = false) {
+  if (typeof field === 'string') {
+    return {
+      name: field,
+      label: humanizeFieldName(field),
+      type: 'text',
+      required: defaultRequired,
+    };
+  }
+
+  if (!field || typeof field !== 'object') {
+    return null;
+  }
+
+  const name = field.name || field.field_name || field.claim_name || field.id;
+  if (!name) {
+    return null;
+  }
+
+  return {
+    ...field,
+    name,
+    label: field.label || field.display_name || field.title || humanizeFieldName(name),
+    type: normalizeApplicationInputType(field.type || field.input_type || field.field_type || field.claim_type),
+    required: field.required !== undefined ? Boolean(field.required) : defaultRequired,
+  };
+}
+
+function normalizeFieldList(fields = [], defaultRequired = false) {
+  return parseListField(fields)
+    .map((field) => normalizeApplicationFormField(field, defaultRequired))
+    .filter(Boolean);
+}
+
+function mergeFieldsByName(...fieldGroups) {
+  const fieldsByName = new Map();
+
+  fieldGroups.flat().filter(Boolean).forEach((field) => {
+    const normalized = normalizeApplicationFormField(field, Boolean(field?.required));
+    if (!normalized?.name) {
+      return;
+    }
+
+    const existing = fieldsByName.get(normalized.name);
+    fieldsByName.set(normalized.name, {
+      ...(existing || {}),
+      ...normalized,
+      required: Boolean(existing?.required || normalized.required),
+    });
+  });
+
+  return Array.from(fieldsByName.values());
+}
+
+export function normalizeApplicationTemplateToFormConfig(applicationTemplate, credentialConfig = null) {
+  const baseConfig = normalizeCredentialConfigInput(credentialConfig) || {};
+  const templateFormFields = normalizeFieldList(applicationTemplate?.form_fields, true);
+  const requiredTemplateFields = templateFormFields.filter((field) => field.required);
+  const optionalTemplateFields = templateFormFields.filter((field) => !field.required);
+  const baseRequiredFields = normalizeFieldList(baseConfig.required_fields, true);
+  const baseOptionalFields = normalizeFieldList(baseConfig.optional_fields, false);
+  const baseCustomFields = normalizeFieldList(baseConfig.custom_fields, false);
+  const requiredFields = mergeFieldsByName(baseRequiredFields, requiredTemplateFields);
+  const requiredFieldNames = new Set(requiredFields.map((field) => field.name));
+  const optionalFields = mergeFieldsByName(baseOptionalFields, optionalTemplateFields)
+    .filter((field) => !requiredFieldNames.has(field.name));
+  const evidenceRequirements = parseListField(applicationTemplate?.evidence_requirements);
+  const uiConfig = applicationTemplate?.ui_config && typeof applicationTemplate.ui_config === 'object'
+    ? applicationTemplate.ui_config
+    : {};
+
+  return {
+    ...baseConfig,
+    id: baseConfig.id || applicationTemplate?.credential_template_id,
+    credentialType: baseConfig.credentialType || baseConfig.credential_type,
+    credential_type: baseConfig.credential_type || baseConfig.credentialType,
+    name: applicationTemplate?.name || baseConfig.name,
+    display_name: uiConfig.display_name || applicationTemplate?.name || baseConfig.display_name || baseConfig.name,
+    description: applicationTemplate?.description || baseConfig.description,
+    required_fields: requiredFields,
+    optional_fields: optionalFields,
+    custom_fields: baseCustomFields,
+    field_validation_rules: {
+      ...(baseConfig.field_validation_rules || {}),
+      ...(uiConfig.field_validation_rules || {}),
+    },
+    submission_instructions: uiConfig.submission_instructions || applicationTemplate?.description || baseConfig.submission_instructions,
+    application_template_id: applicationTemplate?.id || baseConfig.application_template_id,
+    application_template: applicationTemplate ? {
+      ...applicationTemplate,
+      form_fields: templateFormFields,
+      evidence_requirements: evidenceRequirements,
+    } : baseConfig.application_template,
+    evidence_requirements: evidenceRequirements,
+  };
+}
+
 function normalizeField(field, required) {
   if (typeof field === 'string') {
     return { name: field, required };
@@ -148,7 +280,7 @@ export function buildApplicantProfileData({ organizationId, user, formData }) {
   return applicantData;
 }
 
-export function buildStandardApplicationPayload({ applicantId, credentialConfig, credentialConfigId, formData }) {
+export function buildStandardApplicationPayload({ applicantId, credentialConfig, credentialConfigId, formData, canvasLtiContext = null }) {
   return {
     applicant_id: applicantId,
     credential_configuration_id: credentialConfig?.id || credentialConfigId,
@@ -160,6 +292,10 @@ export function buildStandardApplicationPayload({ applicantId, credentialConfig,
       credential_display_name: credentialConfig?.name || credentialConfig?.display_name,
       license_class: formData.licenseClass,
       restrictions: formData.restrictions,
+      ...(canvasLtiContext ? {
+        canvas_lti: canvasLtiContext,
+        auto_approve: true,
+      } : {}),
     },
   };
 }

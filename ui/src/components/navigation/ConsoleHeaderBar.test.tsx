@@ -1,7 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { MemoryRouter } from 'react-router-dom'
 import { renderWithoutRouter, screen } from '../../test/utils'
-import { ConsoleHeaderBar } from './ConsoleHeaderBar'
+import {
+  ConsoleHeaderBar,
+  getAccountAvatarInitial,
+  getAccountMenuDisplayName,
+} from './ConsoleHeaderBar'
 
 const {
   mockNavigate,
@@ -162,6 +166,64 @@ describe('ConsoleHeaderBar', () => {
     expect(screen.getByText('Maree')).toBeInTheDocument()
     expect(screen.queryByText('Marty Org')).not.toBeInTheDocument()
     expect(screen.getByRole('menuitem', { name: 'Settings' })).toHaveAttribute('href', '/console/org/settings')
+  })
+
+  it('uses the Canvas learner name when the LTI username is opaque', () => {
+    Object.assign(mockAuthState, {
+      user: {
+        user_id: 'canvas-lti-abc123',
+        username: '06e74e0c-1858-4642-a834-ffa0b03acfcd',
+        given_name: 'ElevenID Test',
+        family_name: '',
+        email: 'learner@example.edu',
+        picture: null,
+        roles: ['applicant', 'canvas_lti_learner'],
+        organizations: [{ id: 'org-123', display_name: 'Marty Org', membership: { roles: [] } }],
+      },
+      isVendor: false,
+      isApplicant: true,
+    })
+
+    renderWithoutRouter(
+      <MemoryRouter>
+        <ConsoleHeaderBar onMobileMenuToggle={vi.fn()} />
+      </MemoryRouter>
+    )
+
+    const expectedDisplayName = 'ElevenID Test'
+    expect(screen.getByLabelText(`Account menu for ${expectedDisplayName}`)).toBeInTheDocument()
+    expect(getAccountMenuDisplayName(mockAuthState.user)).toBe(expectedDisplayName)
+  })
+
+  it('derives account menu labels for normal and Canvas sessions', () => {
+    expect(getAccountMenuDisplayName({
+      given_name: 'Maree',
+      family_name: 'Smith',
+      username: 'maree',
+    })).toBe('Maree Smith')
+
+    expect(getAccountMenuDisplayName({
+      user_id: 'canvas-lti-abc123',
+      username: 'canvas-user-1',
+      given_name: 'ElevenID Test',
+      roles: ['canvas_lti_learner'],
+    })).toBe('canvas-user-1')
+
+    expect(getAccountMenuDisplayName({
+      user_id: 'canvas-lti-abc123',
+      username: '06e74e0c-1858-4642-a834-ffa0b03acfcd',
+      given_name: 'ElevenID',
+      family_name: 'Test',
+      email: 'learner@example.edu',
+      roles: ['canvas_lti_learner'],
+    })).toBe('ElevenID Test')
+
+    expect(getAccountAvatarInitial({
+      user_id: 'canvas-lti-abc123',
+      username: '06e74e0c-1858-4642-a834-ffa0b03acfcd',
+      given_name: 'ElevenID Test',
+      roles: ['canvas_lti_learner'],
+    })).toBe('E')
   })
 
   it('keeps the organization selector enabled from auth organizations when console memberships are empty', async () => {

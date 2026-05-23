@@ -12,6 +12,7 @@ import i18n from '../i18n';
 import {
   createEnrichedUser,
   getAuthFlags,
+  resolveInteractiveLoginRedirect,
   updateUserActiveOrganization,
 } from '../application/session/authSession';
 
@@ -122,7 +123,7 @@ export function AuthProvider({ children }) {
   // Login handler - accepts optional redirect URI string
   // Note: When used as onClick handler, first arg is Event object - we ignore non-string args
   const login = useCallback((redirectUri) => {
-    const redirect = typeof redirectUri === 'string' ? redirectUri : window.location.pathname;
+    const redirect = resolveInteractiveLoginRedirect(redirectUri);
     const currentLanguage = i18n.language;
     initiateLogin(redirect, currentLanguage);
   }, []);

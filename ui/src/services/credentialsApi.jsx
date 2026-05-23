@@ -228,9 +228,9 @@ export const getIssuanceSessionStatus = async (transactionId) => {
  * @param {string} applicationId
  * @returns {Promise<{offer_url: string, expires_at: string|null, status: string}>}
  */
-export const generateIssuanceOffer = async (applicationId) => {
+export const generateIssuanceOffer = async (applicationId, options = {}) => {
   try {
-    const response = await apiClient.post(`/v1/applicants/applications/${applicationId}/issue`);
+    const response = await apiClient.post(`/v1/applicants/applications/${applicationId}/issue`, options || {});
     const data = response.data;
     // Normalise to the shape OID4VCIInviteDisplay / IssuingSection expect
     return {

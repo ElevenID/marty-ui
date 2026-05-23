@@ -40,6 +40,7 @@ from marty_common.service_setup import create_service_app
 
 from credential_template.infrastructure.adapters import (
     PostgresCredentialTemplateRepository,
+    PostgresDeliveryDestinationRepository,
     PostgresWalletRegistryRepository,
 )
 
@@ -411,6 +412,35 @@ class WalletRegistryEntry:
     updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
+@dataclass
+class DeliveryDestinationEntry:
+    """Registry entry for places issued credentials can be delivered or published."""
+
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    organization_id: str | None = None
+    is_system: bool = False
+    name: str = ""
+    description: str | None = None
+    provider: str = "custom"
+    mode: str = "holder_wallet"
+    setup_actor: str = "learner"
+    delivery_target: str = "wallet"
+    wallet_profile_id: str | None = None
+    credential_format: str | None = None
+    issuance_protocol: str | None = None
+    compliance_profile_code: str | None = None
+    connector_type: str | None = None
+    connector_id: str | None = None
+    requires_consent: bool = False
+    claim_projection_policy: dict[str, Any] = field(default_factory=dict)
+    setup_requirements: list[str] = field(default_factory=list)
+    capabilities: dict[str, bool] = field(default_factory=dict)
+    docs_url: str | None = None
+    is_enabled: bool = True
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+
 @dataclass(frozen=True)
 class DerivedWalletProfile:
     credential_format: str
@@ -565,6 +595,117 @@ SYSTEM_WALLET_CATALOG: tuple[WalletRegistryEntry, ...] = (
 )
 
 
+SYSTEM_DELIVERY_DESTINATION_CATALOG: tuple[DeliveryDestinationEntry, ...] = (
+    DeliveryDestinationEntry(
+        id="dd-elevenid-wallet",
+        is_system=True,
+        name="ElevenID Wallet",
+        description="Add the credential to the holder's ElevenID-compatible wallet using OID4VCI.",
+        provider="elevenid_wallet",
+        mode="holder_wallet",
+        setup_actor="learner",
+        delivery_target="wallet",
+        wallet_profile_id="wr-marty-001",
+        issuance_protocol="OID4VCI_PRE_AUTH",
+        requires_consent=False,
+        claim_projection_policy={"mode": "full_credential_reference"},
+        capabilities={
+            "holder_wallet": True,
+            "oid4vci": True,
+            "post_issuance_publish": False,
+        },
+    ),
+    DeliveryDestinationEntry(
+        id="dd-oid4vci-compatible-wallet",
+        is_system=True,
+        name="Compatible Wallet",
+        description="Open the standards-based credential offer in any compatible OID4VCI wallet.",
+        provider="oid4vci_wallet",
+        mode="holder_wallet",
+        setup_actor="learner",
+        delivery_target="wallet",
+        wallet_profile_id="wr-default",
+        issuance_protocol="OID4VCI_PRE_AUTH",
+        requires_consent=False,
+        claim_projection_policy={"mode": "full_credential_reference"},
+        capabilities={
+            "holder_wallet": True,
+            "oid4vci": True,
+            "post_issuance_publish": False,
+        },
+    ),
+    DeliveryDestinationEntry(
+        id="dd-canvas-credentials-institutional",
+        is_system=True,
+        name="Canvas Credentials",
+        description=(
+            "Publish a public Open Badge view to Canvas Credentials after canonical "
+            "ElevenID issuance. Requires organization-managed Canvas Credentials setup."
+        ),
+        provider="canvas_credentials",
+        mode="organization_mirror",
+        setup_actor="org_admin",
+        delivery_target="canvas_credentials",
+        credential_format="VC_JWT",
+        issuance_protocol="DIRECT",
+        compliance_profile_code="OB3_JWT",
+        connector_type="canvas_platform",
+        requires_consent=True,
+        claim_projection_policy={
+            "mode": "public_badge",
+            "allowed_claims": [
+                "achievement",
+                "result",
+                "learning_context",
+                "issuer",
+                "credentialSubject",
+                "credentialStatus",
+                "provenance",
+            ],
+        },
+        setup_requirements=[
+            "Canvas Credentials issuer/API access configured by an organization admin",
+            "Canvas Credentials API token referenced from an org-scoped secret or issuance secret layer",
+            "Canvas Credentials badgeclass/entity ID mapped to the credential template, program binding, or delivery destination",
+            "Canvas program binding enabled for Canvas mirror delivery",
+        ],
+        capabilities={
+            "holder_wallet": False,
+            "org_managed": True,
+            "post_issuance_publish": True,
+            "status_sync": True,
+            "provenance": True,
+            "badgr_api": True,
+        },
+        docs_url="https://developerdocs.instructure.com/services/credentials",
+    ),
+    DeliveryDestinationEntry(
+        id="dd-canvas-credentials-backpack",
+        is_system=True,
+        name="Canvas Credentials Backpack",
+        description="Let a learner connect a personal Canvas/Parchment backpack when OAuth setup is available.",
+        provider="canvas_credentials_backpack",
+        mode="learner_backpack",
+        setup_actor="learner",
+        delivery_target="external_api",
+        connector_type="canvas_credentials_oauth",
+        requires_consent=True,
+        claim_projection_policy={"mode": "public_badge"},
+        setup_requirements=[
+            "Learner authorizes their own backpack account",
+            "Organization enables backpack import as an allowed destination",
+        ],
+        capabilities={
+            "holder_wallet": False,
+            "learner_owned": True,
+            "oauth_required": True,
+            "post_issuance_publish": True,
+        },
+        docs_url="https://developerdocs.instructure.com/services/credentials",
+    ),
+)
+
+
 DERIVED_WALLET_PROFILES: dict[tuple[str, str, str | None], DerivedWalletProfile] = {
     ("MDOC", "OID4VCI_PRE_AUTH", "AAMVA_MDL"): DerivedWalletProfile(
         credential_format="MDOC",
@@ -714,6 +855,48 @@ class InMemoryWalletRegistryRepository:
 
     async def delete(self, wallet_id: str) -> None:
         self._wallets.pop(wallet_id, None)
+
+
+class InMemoryDeliveryDestinationRepository:
+    """In-memory delivery destination registry seeded with system destinations."""
+
+    def __init__(self) -> None:
+        self._destinations: dict[str, DeliveryDestinationEntry] = {
+            entry.id: DeliveryDestinationEntry(**entry.__dict__)
+            for entry in SYSTEM_DELIVERY_DESTINATION_CATALOG
+        }
+
+    async def save(self, entry: DeliveryDestinationEntry) -> None:
+        entry.updated_at = datetime.now(timezone.utc)
+        self._destinations[entry.id] = entry
+
+    async def get(self, destination_id: str) -> DeliveryDestinationEntry | None:
+        return self._destinations.get(destination_id)
+
+    async def list(
+        self,
+        *,
+        active_only: bool = True,
+        organization_id: str | None = None,
+        provider: str | None = None,
+        mode: str | None = None,
+    ) -> list[DeliveryDestinationEntry]:
+        destinations = list(self._destinations.values())
+        if active_only:
+            destinations = [entry for entry in destinations if entry.is_enabled]
+        if organization_id is not None:
+            destinations = [
+                entry for entry in destinations
+                if entry.is_system or entry.organization_id == organization_id
+            ]
+        if provider:
+            destinations = [entry for entry in destinations if entry.provider == provider]
+        if mode:
+            destinations = [entry for entry in destinations if entry.mode == mode]
+        return sorted(destinations, key=lambda entry: (0 if entry.is_system else 1, entry.name.lower()))
+
+    async def delete(self, destination_id: str) -> None:
+        self._destinations.pop(destination_id, None)
 
 
 # =============================================================================
@@ -1020,15 +1203,88 @@ class WalletCompatibilityResponse(BaseModel):
     updated_at: str
 
 
+class DeliveryDestinationCreate(BaseModel):
+    organization_id: str
+    id: str | None = None
+    name: str
+    description: str | None = None
+    provider: str = "custom"
+    mode: str = "holder_wallet"
+    setup_actor: str = "learner"
+    delivery_target: str = "wallet"
+    wallet_profile_id: str | None = None
+    credential_format: str | None = None
+    issuance_protocol: str | None = None
+    compliance_profile_code: str | None = None
+    connector_type: str | None = None
+    connector_id: str | None = None
+    requires_consent: bool = False
+    claim_projection_policy: dict[str, Any] = Field(default_factory=dict)
+    setup_requirements: list[str] = Field(default_factory=list)
+    capabilities: dict[str, bool] = Field(default_factory=dict)
+    docs_url: str | None = None
+    is_enabled: bool = True
+
+
+class DeliveryDestinationUpdate(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    provider: str | None = None
+    mode: str | None = None
+    setup_actor: str | None = None
+    delivery_target: str | None = None
+    wallet_profile_id: str | None = None
+    credential_format: str | None = None
+    issuance_protocol: str | None = None
+    compliance_profile_code: str | None = None
+    connector_type: str | None = None
+    connector_id: str | None = None
+    requires_consent: bool | None = None
+    claim_projection_policy: dict[str, Any] | None = None
+    setup_requirements: list[str] | None = None
+    capabilities: dict[str, bool] | None = None
+    docs_url: str | None = None
+    is_enabled: bool | None = None
+
+
+class DeliveryDestinationResponse(BaseModel):
+    id: str
+    organization_id: str | None = None
+    is_system: bool
+    name: str
+    description: str | None = None
+    provider: str
+    mode: str
+    setup_actor: str
+    delivery_target: str
+    wallet_profile_id: str | None = None
+    credential_format: str | None = None
+    issuance_protocol: str | None = None
+    compliance_profile_code: str | None = None
+    connector_type: str | None = None
+    connector_id: str | None = None
+    requires_consent: bool
+    claim_projection_policy: dict[str, Any] = Field(default_factory=dict)
+    setup_requirements: list[str] = Field(default_factory=list)
+    capabilities: dict[str, bool] = Field(default_factory=dict)
+    docs_url: str | None = None
+    is_enabled: bool
+    created_at: str
+    updated_at: str
+
+
 # =============================================================================
 # HTTP Adapter - Router
 # =============================================================================
 
 router = APIRouter(prefix="/v1/credential-templates", tags=["credential-templates"])
 wallet_router = APIRouter(prefix="/v1/wallet-registry", tags=["wallet-registry"])
+delivery_destination_router = APIRouter(prefix="/v1/delivery-destinations", tags=["delivery-destinations"])
 
 _repo: InMemoryCredentialTemplateRepository | None = None
 _wallet_repo: InMemoryWalletRegistryRepository | PostgresWalletRegistryRepository | None = None
+DeliveryDestinationRepository = InMemoryDeliveryDestinationRepository | PostgresDeliveryDestinationRepository
+_delivery_destination_repo: DeliveryDestinationRepository | None = None
 
 
 def get_repo() -> InMemoryCredentialTemplateRepository:
@@ -1041,6 +1297,12 @@ def get_wallet_repo() -> InMemoryWalletRegistryRepository | PostgresWalletRegist
     if _wallet_repo is None:
         raise RuntimeError("Wallet registry not configured")
     return _wallet_repo
+
+
+def get_delivery_destination_repo() -> DeliveryDestinationRepository:
+    if _delivery_destination_repo is None:
+        raise RuntimeError("Delivery destination registry not configured")
+    return _delivery_destination_repo
 
 
 # Helper to get current user ID from gateway-injected header
@@ -1702,6 +1964,79 @@ def _wallet_to_response(w: WalletRegistryEntry) -> WalletRegistryEntryResponse:
     )
 
 
+_DELIVERY_PROVIDERS = {
+    "elevenid_wallet",
+    "oid4vci_wallet",
+    "didcomm_v2",
+    "canvas_credentials",
+    "canvas_credentials_backpack",
+    "open_badges_backpack",
+    "custom",
+}
+_DELIVERY_MODES = {"holder_wallet", "learner_backpack", "organization_mirror", "direct_delivery"}
+_DELIVERY_SETUP_ACTORS = {"learner", "org_admin", "system"}
+_DELIVERY_TARGETS = {"wallet", "didcomm_v2", "canvas_credentials", "external_api", "webhook"}
+
+
+def _normalize_optional_upper(value: str | None) -> str | None:
+    return value.strip().upper() if isinstance(value, str) and value.strip() else None
+
+
+def _validate_delivery_destination(entry: DeliveryDestinationEntry) -> None:
+    if entry.provider not in _DELIVERY_PROVIDERS:
+        raise HTTPException(status_code=422, detail=f"Unsupported delivery destination provider: {entry.provider}")
+    if entry.mode not in _DELIVERY_MODES:
+        raise HTTPException(status_code=422, detail=f"Unsupported delivery destination mode: {entry.mode}")
+    if entry.setup_actor not in _DELIVERY_SETUP_ACTORS:
+        raise HTTPException(status_code=422, detail=f"Unsupported delivery destination setup_actor: {entry.setup_actor}")
+    if entry.delivery_target not in _DELIVERY_TARGETS:
+        raise HTTPException(status_code=422, detail=f"Unsupported delivery target: {entry.delivery_target}")
+    if entry.mode == "organization_mirror" and entry.setup_actor != "org_admin":
+        raise HTTPException(status_code=422, detail="organization_mirror destinations must use setup_actor=org_admin")
+    if not entry.is_system and not entry.organization_id:
+        raise HTTPException(status_code=422, detail="organization_id is required for organization delivery destinations")
+
+
+async def _require_destination_admin(organization_id: str, request: Request, user_id: str) -> OrganizationContext:
+    context = await require_org_membership(organization_id, request, user_id)
+    if (
+        context.is_owner
+        or context.has_org_console_access
+        or context.has_permission("delivery_destinations", "write")
+        or context.has_permission("integrations", "write")
+    ):
+        return context
+    raise HTTPException(status_code=403, detail="Organization destination management requires org console access")
+
+
+def _delivery_destination_to_response(entry: DeliveryDestinationEntry) -> DeliveryDestinationResponse:
+    return DeliveryDestinationResponse(
+        id=entry.id,
+        organization_id=entry.organization_id,
+        is_system=entry.is_system,
+        name=entry.name,
+        description=entry.description,
+        provider=entry.provider,
+        mode=entry.mode,
+        setup_actor=entry.setup_actor,
+        delivery_target=entry.delivery_target,
+        wallet_profile_id=entry.wallet_profile_id,
+        credential_format=entry.credential_format,
+        issuance_protocol=entry.issuance_protocol,
+        compliance_profile_code=entry.compliance_profile_code,
+        connector_type=entry.connector_type,
+        connector_id=entry.connector_id,
+        requires_consent=entry.requires_consent,
+        claim_projection_policy=entry.claim_projection_policy,
+        setup_requirements=entry.setup_requirements,
+        capabilities=entry.capabilities,
+        docs_url=entry.docs_url,
+        is_enabled=entry.is_enabled,
+        created_at=entry.created_at.isoformat(),
+        updated_at=entry.updated_at.isoformat(),
+    )
+
+
 def _wallet_oid4vci_profile(w: WalletRegistryEntry) -> dict[str, str] | None:
     formats = {str(fmt).strip().lower().replace("_", "-") for fmt in (w.supported_formats or [])}
     if "spruce-vc+sd-jwt" in formats:
@@ -2150,6 +2485,176 @@ async def delete_wallet(
 # Internal API (no authentication — cluster-internal only)
 # =============================================================================
 
+# =============================================================================
+# Delivery Destination Registry Router
+# =============================================================================
+
+@delivery_destination_router.get(
+    "",
+    response_model=list[DeliveryDestinationResponse],
+    response_model_exclude_none=True,
+    summary="List Delivery Destinations",
+)
+async def list_delivery_destinations(
+    active_only: bool = Query(True, description="Return only enabled destinations"),
+    organization_id: str | None = Query(None, description="Optional organization scope"),
+    provider: str | None = Query(None, description="Optional provider filter"),
+    mode: str | None = Query(None, description="Optional destination mode filter"),
+    request: Request = None,
+    user_id: str = Depends(get_current_user_id),
+    repo: DeliveryDestinationRepository = Depends(get_delivery_destination_repo),
+) -> list[DeliveryDestinationResponse]:
+    """List system and organization delivery destinations."""
+    if organization_id:
+        await require_org_membership(organization_id, request, user_id)
+    entries = await repo.list(
+        active_only=active_only,
+        organization_id=organization_id,
+        provider=provider,
+        mode=mode,
+    )
+    return [_delivery_destination_to_response(entry) for entry in entries]
+
+
+@delivery_destination_router.get(
+    "/{destination_id}",
+    response_model=DeliveryDestinationResponse,
+    response_model_exclude_none=True,
+    summary="Get Delivery Destination",
+)
+async def get_delivery_destination(
+    destination_id: str,
+    request: Request,
+    user_id: str = Depends(get_current_user_id),
+    repo: DeliveryDestinationRepository = Depends(get_delivery_destination_repo),
+) -> DeliveryDestinationResponse:
+    """Get a delivery destination by id."""
+    entry = await repo.get(destination_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Delivery destination not found")
+    if entry.organization_id:
+        await require_org_membership(entry.organization_id, request, user_id)
+    return _delivery_destination_to_response(entry)
+
+
+@delivery_destination_router.post(
+    "",
+    response_model=DeliveryDestinationResponse,
+    response_model_exclude_none=True,
+    summary="Create Delivery Destination",
+    status_code=201,
+)
+async def create_delivery_destination(
+    body: DeliveryDestinationCreate,
+    request: Request,
+    user_id: str = Depends(get_current_user_id),
+    repo: DeliveryDestinationRepository = Depends(get_delivery_destination_repo),
+) -> DeliveryDestinationResponse:
+    """Create an organization delivery destination. System destinations are read-only."""
+    await _require_destination_admin(body.organization_id, request, user_id)
+    entry = DeliveryDestinationEntry(
+        id=body.id or str(uuid.uuid4()),
+        organization_id=body.organization_id,
+        is_system=False,
+        name=body.name,
+        description=body.description,
+        provider=body.provider,
+        mode=body.mode,
+        setup_actor=body.setup_actor,
+        delivery_target=body.delivery_target,
+        wallet_profile_id=body.wallet_profile_id,
+        credential_format=_normalize_optional_upper(body.credential_format),
+        issuance_protocol=_normalize_issuance_protocol(body.issuance_protocol) if body.issuance_protocol else None,
+        compliance_profile_code=_normalize_optional_upper(body.compliance_profile_code),
+        connector_type=body.connector_type,
+        connector_id=body.connector_id,
+        requires_consent=body.requires_consent,
+        claim_projection_policy=body.claim_projection_policy,
+        setup_requirements=body.setup_requirements,
+        capabilities=body.capabilities,
+        docs_url=body.docs_url,
+        is_enabled=body.is_enabled,
+    )
+    _validate_delivery_destination(entry)
+    if await repo.get(entry.id):
+        raise HTTPException(status_code=409, detail="Delivery destination already exists")
+    await repo.save(entry)
+    logger.info("Created delivery destination: %s (%s)", entry.id, entry.name)
+    return _delivery_destination_to_response(entry)
+
+
+@delivery_destination_router.patch(
+    "/{destination_id}",
+    response_model=DeliveryDestinationResponse,
+    response_model_exclude_none=True,
+    summary="Update Delivery Destination",
+)
+async def update_delivery_destination(
+    destination_id: str,
+    body: DeliveryDestinationUpdate,
+    request: Request,
+    user_id: str = Depends(get_current_user_id),
+    repo: DeliveryDestinationRepository = Depends(get_delivery_destination_repo),
+) -> DeliveryDestinationResponse:
+    """Update an organization delivery destination. System destinations are read-only."""
+    entry = await repo.get(destination_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Delivery destination not found")
+    if entry.is_system:
+        raise HTTPException(status_code=403, detail="System delivery destinations are read-only")
+    await _require_destination_admin(entry.organization_id or "", request, user_id)
+
+    for field_name in (
+        "name",
+        "description",
+        "provider",
+        "mode",
+        "setup_actor",
+        "delivery_target",
+        "wallet_profile_id",
+        "connector_type",
+        "connector_id",
+        "requires_consent",
+        "claim_projection_policy",
+        "setup_requirements",
+        "capabilities",
+        "docs_url",
+        "is_enabled",
+    ):
+        value = getattr(body, field_name)
+        if value is not None:
+            setattr(entry, field_name, value)
+    if body.credential_format is not None:
+        entry.credential_format = _normalize_optional_upper(body.credential_format)
+    if body.issuance_protocol is not None:
+        entry.issuance_protocol = _normalize_issuance_protocol(body.issuance_protocol) if body.issuance_protocol else None
+    if body.compliance_profile_code is not None:
+        entry.compliance_profile_code = _normalize_optional_upper(body.compliance_profile_code)
+
+    _validate_delivery_destination(entry)
+    await repo.save(entry)
+    logger.info("Updated delivery destination: %s", entry.id)
+    return _delivery_destination_to_response(entry)
+
+
+@delivery_destination_router.delete("/{destination_id}", summary="Delete Delivery Destination")
+async def delete_delivery_destination(
+    destination_id: str,
+    request: Request,
+    user_id: str = Depends(get_current_user_id),
+    repo: DeliveryDestinationRepository = Depends(get_delivery_destination_repo),
+) -> dict:
+    """Delete an organization delivery destination. System destinations are read-only."""
+    entry = await repo.get(destination_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Delivery destination not found")
+    if entry.is_system:
+        raise HTTPException(status_code=403, detail="System delivery destinations are read-only")
+    await _require_destination_admin(entry.organization_id or "", request, user_id)
+    await repo.delete(destination_id)
+    return {"success": True}
+
+
 internal_router = APIRouter(prefix="/internal", tags=["internal"])
 
 
@@ -2241,7 +2746,7 @@ async def get_credential_configurations(request: Request) -> dict:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    global _repo, _wallet_repo
+    global _repo, _wallet_repo, _delivery_destination_repo
     logger.info(f"Starting {SERVICE_NAME}...")
     
     config = get_config()
@@ -2260,6 +2765,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         existing = await _wallet_repo.get(entry.id)
         if existing is None:
             await _wallet_repo.save(WalletRegistryEntry(**entry.__dict__))
+
+    _delivery_destination_repo = PostgresDeliveryDestinationRepository(session_factory)
+    for entry in SYSTEM_DELIVERY_DESTINATION_CATALOG:
+        existing = await _delivery_destination_repo.get(entry.id)
+        if existing is None:
+            await _delivery_destination_repo.save(DeliveryDestinationEntry(**entry.__dict__))
     
     # Initialize gRPC channel to organization service
     from common.di import setup_org_client, teardown_org_client
@@ -2305,7 +2816,7 @@ def create_app() -> FastAPI:
         description="Manages Credential Templates - blueprints for credential issuance",
         service_name=SERVICE_NAME,
         lifespan=lifespan,
-        routers=[router, wallet_router, internal_router],
+        routers=[router, wallet_router, delivery_destination_router, internal_router],
     )
 
 

@@ -258,6 +258,52 @@ def test_trust_profile_lookup_url_uses_internal_service_endpoint(monkeypatch) ->
     assert pp._trust_profile_lookup_url("profile-1") == "http://trust-profile:8004/internal/v1/trust-profiles/profile-1"
 
 
+def test_trust_profile_cache_ttl_defaults_to_five_minutes(monkeypatch) -> None:
+    monkeypatch.delenv("TRUST_PROFILE_CACHE_TTL_SECONDS", raising=False)
+
+    ttl = pp._trust_profile_cache_ttl_seconds(
+        {"time_policy": {"freshness_window_seconds": 86400}}
+    )
+
+    assert ttl == 300
+
+
+def test_trust_profile_cache_ttl_honors_smaller_freshness_window(monkeypatch) -> None:
+    monkeypatch.setenv("TRUST_PROFILE_CACHE_TTL_SECONDS", "300")
+
+    ttl = pp._trust_profile_cache_ttl_seconds(
+        {"time_policy": {"freshness_window_seconds": 60}}
+    )
+
+    assert ttl == 60
+
+
+def test_credential_status_lookup_url_honors_mip_template(monkeypatch) -> None:
+    monkeypatch.setenv(
+        "MIP_CREDENTIAL_STATUS_URL_TEMPLATE",
+        "http://status-resolver.internal/credentials/{credential_id}/status",
+    )
+
+    assert pp._credential_status_lookup_url("credential 123") == (
+        "http://status-resolver.internal/credentials/credential%20123/status"
+    )
+
+
+def test_credential_status_identifier_candidates_use_explicit_ids_only() -> None:
+    candidates = pp._credential_status_identifier_candidates(
+        {
+            "id": "did:example:holder",
+            "credential_id": "credential-123",
+        },
+        {
+            "credential": {"id": "credential-456"},
+            "vc": {"id": "credential-789"},
+        },
+    )
+
+    assert candidates == ["credential-123", "credential-789", "credential-456"]
+
+
 def test_verify_sd_jwt_reports_did_resolution_failure(monkeypatch) -> None:
     token = ".".join(
         [
@@ -376,12 +422,20 @@ async def _save_open_badge_login_policy(
     return policy
 
 
-def _install_marty_trust_profile(monkeypatch, *, allowed_issuers: list[str] | None = None) -> None:
+def _install_marty_trust_profile(
+    monkeypatch,
+    *,
+    allowed_issuers: list[str] | None = None,
+    denied_issuers: list[str] | None = None,
+    trust_sources: list[dict[str, object]] | None = None,
+) -> None:
     cache = pp.TrustProfileCache()
     cache.set(
         "60000000-0000-0000-0000-000000000001",
         {
-            "allowed_issuers": allowed_issuers or ["did:web:beta.elevenidllc.com:orgs:marty"],
+            "allowed_issuers": ["did:web:beta.elevenidllc.com:orgs:marty"] if allowed_issuers is None else allowed_issuers,
+            "denied_issuers": denied_issuers or [],
+            "trust_sources": trust_sources or [],
             "time_policy": {"freshness_window_seconds": 3600},
         },
         3600,
@@ -456,6 +510,144 @@ def test_open_badge_login_policy_denies_untrusted_issuer(monkeypatch) -> None:
     assert response.decision == "deny"
     assert response.credential_results[0].trust_check_passed is False
     assert "not in Trust Profile allowed_issuers" in response.decision_reason
+
+
+def test_open_badge_login_policy_allows_issuer_url_alias(monkeypatch) -> None:
+    repo = pp.InMemoryPresentationPolicyRepository()
+    policy = asyncio.run(_save_open_badge_login_policy(repo))
+    _install_marty_trust_profile(
+        monkeypatch,
+        allowed_issuers=["https://canvas.example.edu/issuers/issuer-123"],
+    )
+
+    monkeypatch.setattr(pp, "_detect_credential_format", lambda _token: "sd-jwt")
+    monkeypatch.setattr(
+        pp,
+        "_verify_credential_by_format",
+        lambda *_args, **_kwargs: {
+            "verified": True,
+            "claims": {"email": "member@example.com"},
+            "issuer_did": "https://canvas.example.edu/issuers/issuer-123",
+            "format": "sd-jwt",
+            "error": None,
+        },
+    )
+
+    response = asyncio.run(
+        pp.evaluate_presentation(
+            policy.id,
+            pp.EvaluatePresentationRequest(vp_token="{}", nonce="nonce-1"),
+            repo=repo,
+        )
+    )
+
+    assert response.result == "passed"
+    assert response.decision == "allow"
+
+
+def test_open_badge_login_policy_allows_did_web_issuer_by_domain_alias(monkeypatch) -> None:
+    repo = pp.InMemoryPresentationPolicyRepository()
+    policy = asyncio.run(_save_open_badge_login_policy(repo))
+    _install_marty_trust_profile(monkeypatch, allowed_issuers=["beta.elevenidllc.com"])
+
+    monkeypatch.setattr(pp, "_detect_credential_format", lambda _token: "sd-jwt")
+    monkeypatch.setattr(
+        pp,
+        "_verify_credential_by_format",
+        lambda *_args, **_kwargs: {
+            "verified": True,
+            "claims": {"email": "member@example.com"},
+            "issuer_did": "did:web:beta.elevenidllc.com:orgs:marty",
+            "format": "sd-jwt",
+            "error": None,
+        },
+    )
+
+    response = asyncio.run(
+        pp.evaluate_presentation(
+            policy.id,
+            pp.EvaluatePresentationRequest(vp_token="{}", nonce="nonce-1"),
+            repo=repo,
+        )
+    )
+
+    assert response.result == "passed"
+    assert response.decision == "allow"
+
+
+def test_open_badge_login_policy_denies_issuer_by_domain_alias(monkeypatch) -> None:
+    repo = pp.InMemoryPresentationPolicyRepository()
+    policy = asyncio.run(_save_open_badge_login_policy(repo))
+    _install_marty_trust_profile(
+        monkeypatch,
+        allowed_issuers=None,
+        denied_issuers=["canvas.example.edu"],
+    )
+
+    monkeypatch.setattr(pp, "_detect_credential_format", lambda _token: "sd-jwt")
+    monkeypatch.setattr(
+        pp,
+        "_verify_credential_by_format",
+        lambda *_args, **_kwargs: {
+            "verified": True,
+            "claims": {"email": "member@example.com"},
+            "issuer_did": "https://canvas.example.edu/issuers/issuer-123",
+            "format": "sd-jwt",
+            "error": None,
+        },
+    )
+
+    response = asyncio.run(
+        pp.evaluate_presentation(
+            policy.id,
+            pp.EvaluatePresentationRequest(vp_token="{}", nonce="nonce-1"),
+            repo=repo,
+        )
+    )
+
+    assert response.result == "failed"
+    assert response.decision == "deny"
+    assert response.credential_results[0].trust_check_passed is False
+    assert "explicitly denied" in response.decision_reason
+
+
+def test_open_badge_login_policy_allows_pinned_issuer_url_trust_source(monkeypatch) -> None:
+    repo = pp.InMemoryPresentationPolicyRepository()
+    policy = asyncio.run(_save_open_badge_login_policy(repo))
+    _install_marty_trust_profile(
+        monkeypatch,
+        allowed_issuers=[],
+        trust_sources=[
+            {
+                "source_type": "PINNED_ISSUER",
+                "url": "https://canvas.example.edu/issuers/issuer-123",
+            }
+        ],
+    )
+
+    monkeypatch.setattr(pp, "_detect_credential_format", lambda _token: "sd-jwt")
+    monkeypatch.setattr(
+        pp,
+        "_verify_credential_by_format",
+        lambda *_args, **_kwargs: {
+            "verified": True,
+            "claims": {"email": "member@example.com"},
+            "issuer_did": "https://canvas.example.edu/issuers/issuer-123",
+            "format": "sd-jwt",
+            "error": None,
+        },
+    )
+
+    response = asyncio.run(
+        pp.evaluate_presentation(
+            policy.id,
+            pp.EvaluatePresentationRequest(vp_token="{}", nonce="nonce-1"),
+            repo=repo,
+        )
+    )
+
+    assert response.result == "passed"
+    assert response.decision == "allow"
 
 
 def test_open_badge_login_policy_uses_marty_trust_profile() -> None:
@@ -554,6 +746,87 @@ def test_policy_freshness_denies_revoked_credential(monkeypatch) -> None:
             "not_revoked": False,
             "is_revoked": True,
         },
+    )
+
+    response = asyncio.run(
+        pp.evaluate_presentation(
+            policy.id,
+            pp.EvaluatePresentationRequest(vp_token="{}", nonce="nonce-1"),
+            repo=repo,
+        )
+    )
+
+    assert response.result == "failed"
+    assert response.decision == "deny"
+    assert response.credential_results[0].freshness_check_passed is False
+
+
+def test_policy_freshness_accepts_managed_issuer_active_credential_status(monkeypatch) -> None:
+    repo = pp.InMemoryPresentationPolicyRepository()
+    policy = asyncio.run(_save_open_badge_login_policy(repo))
+    issuer_did = "did:web:issuer.example:orgs:demo"
+    _install_marty_trust_profile(monkeypatch, allowed_issuers=[issuer_did])
+    policy.freshness = pp.FreshnessPolicy(require_not_revoked=True)
+    policy.credential_requirements[0].credential_payload_format = "jwt_vc"
+    asyncio.run(repo.save(policy))
+
+    monkeypatch.setenv("MIP_MANAGED_ISSUER_DIDS", issuer_did)
+    monkeypatch.setattr(pp, "_detect_credential_format", lambda _token: "w3c-vc")
+    monkeypatch.setattr(
+        pp,
+        "_verify_credential_by_format",
+        lambda *_args, **_kwargs: {
+            "verified": True,
+            "claims": {"email": "member@example.com", "credential_id": "credential-123"},
+            "issuer_did": issuer_did,
+            "format": "w3c-vc",
+            "error": None,
+        },
+    )
+    monkeypatch.setattr(
+        pp,
+        "_get_issued_credential_status",
+        lambda credential_id: {"id": credential_id, "status": "active"},
+    )
+
+    response = asyncio.run(
+        pp.evaluate_presentation(
+            policy.id,
+            pp.EvaluatePresentationRequest(vp_token="{}", nonce="nonce-1"),
+            repo=repo,
+        )
+    )
+
+    assert response.result == "passed"
+    assert response.decision == "allow"
+    assert response.verified_claims["email"] == "member@example.com"
+
+
+def test_policy_freshness_denies_managed_issuer_revoked_credential_status(monkeypatch) -> None:
+    repo = pp.InMemoryPresentationPolicyRepository()
+    policy = asyncio.run(_save_open_badge_login_policy(repo))
+    issuer_did = "did:web:issuer.example:orgs:demo"
+    _install_marty_trust_profile(monkeypatch, allowed_issuers=[issuer_did])
+    policy.freshness = pp.FreshnessPolicy(require_not_revoked=True)
+    asyncio.run(repo.save(policy))
+
+    monkeypatch.setenv("MIP_MANAGED_ISSUER_DIDS", issuer_did)
+    monkeypatch.setattr(pp, "_detect_credential_format", lambda _token: "sd-jwt")
+    monkeypatch.setattr(
+        pp,
+        "_verify_credential_by_format",
+        lambda *_args, **_kwargs: {
+            "verified": True,
+            "claims": {"email": "member@example.com", "jti": "credential-123"},
+            "issuer_did": issuer_did,
+            "format": "sd-jwt",
+            "error": None,
+        },
+    )
+    monkeypatch.setattr(
+        pp,
+        "_get_issued_credential_status",
+        lambda credential_id: {"id": credential_id, "status": "revoked"},
     )
 
     response = asyncio.run(

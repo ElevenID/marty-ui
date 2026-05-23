@@ -120,6 +120,8 @@ function getActionLabel(row) {
   switch (row.status) {
     case 'approved':
     case 'offered':      return 'Claim';
+    case 'credentialed':
+    case 'issued':       return 'Receive Again';
     case 'needs_info':   return 'Continue';
     default:             return null;
   }
@@ -166,6 +168,7 @@ function normaliseApplication(app) {
   return {
     id: app.id,
     kind: 'application',
+    organizationId: app.organization_id || app.organizationId || null,
     type: app.credential_display_name || app.credential_type || app.document_type,
     credentialConfigId: app.credential_configuration_id || app.credential_type,
     issuer: null,
@@ -658,7 +661,7 @@ function MyIdentityPage() {
   // --- Row action handler ---
   const handlePrimaryAction = useCallback((row) => {
     const label = getActionLabel(row);
-    if (label === 'Claim') {
+    if (label === 'Claim' || label === 'Receive Again') {
       setClaimApp(row);
     } else if (label === 'Continue' || label === 'Present') {
       setSelectedApp(row);
@@ -732,7 +735,7 @@ function MyIdentityPage() {
                 <Button
                   size="small"
                   variant="contained"
-                  color={getActionLabel(row) === 'Claim' ? 'primary' : 'warning'}
+                  color={getActionLabel(row) === 'Continue' ? 'warning' : 'primary'}
                   onClick={() => handlePrimaryAction(row)}
                 >
                   {getActionLabel(row)}
@@ -817,7 +820,7 @@ function MyIdentityPage() {
               <Button
                 size="small"
                 variant="contained"
-                color={getActionLabel(row) === 'Claim' ? 'primary' : 'warning'}
+                color={getActionLabel(row) === 'Continue' ? 'warning' : 'primary'}
                 onClick={() => handlePrimaryAction(row)}
               >
                 {getActionLabel(row)}
@@ -986,6 +989,7 @@ function MyIdentityPage() {
         offerData={
           claimApp
             ? {
+                organization_id: claimApp.organizationId,
                 offer_url: claimApp.offerUrl,
                 credential_offer_uris: claimApp.offerUris,
                 credential_offer_labels: claimApp.offerLabels,
@@ -993,6 +997,7 @@ function MyIdentityPage() {
               }
             : undefined
         }
+        organizationId={claimApp?.organizationId}
       />
 
       {/* Application Details Dialog */}

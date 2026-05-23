@@ -26,7 +26,11 @@ def build_parser(repo_root: Path) -> argparse.ArgumentParser:
     parser.add_argument("--env-file", default=str(repo_root / ".env.selfhost.production.local"))
     parser.add_argument("--secret-dir", default="")
     parser.add_argument("--license-token-file", required=True)
-    parser.add_argument("--public-key-file", required=True)
+    parser.add_argument(
+        "--public-key-file",
+        default="",
+        help="Deprecated dev/test override. Commercial validation uses the embedded Marty public key.",
+    )
     return parser
 
 
@@ -50,21 +54,21 @@ def main() -> int:
     secret_dir.mkdir(parents=True, exist_ok=True)
 
     license_token = Path(args.license_token_file).expanduser().resolve().read_text(encoding="utf-8").strip()
-    public_key = Path(args.public_key_file).expanduser().resolve().read_text(encoding="utf-8").strip()
+    validation_env = {
+        "MARTY_LICENSE_ENFORCEMENT": env_values.get("MARTY_LICENSE_ENFORCEMENT", "required"),
+        "MARTY_LICENSE_REQUIRED_ISSUER": env_values.get("MARTY_LICENSE_REQUIRED_ISSUER", "marty-license-issuer"),
+        "MARTY_LICENSE_REQUIRED_PLAN_TIER": env_values.get("MARTY_LICENSE_REQUIRED_PLAN_TIER", "system"),
+        "MARTY_LICENSE_REQUIRED_PRODUCTS": env_values.get("MARTY_LICENSE_REQUIRED_PRODUCTS", "ui-app"),
+        "LICENSE_KEY": license_token,
+    }
+    if args.public_key_file:
+        public_key = Path(args.public_key_file).expanduser().resolve().read_text(encoding="utf-8").strip()
+        validation_env["MARTY_LICENSE_ALLOW_RUNTIME_PUBLIC_KEY"] = "true"
+        validation_env["LICENSE_PUBLIC_KEY"] = public_key
 
-    claims = validate_runtime_license_from_env(
-        {
-            "MARTY_LICENSE_ENFORCEMENT": env_values.get("MARTY_LICENSE_ENFORCEMENT", "required"),
-            "MARTY_LICENSE_REQUIRED_ISSUER": env_values.get("MARTY_LICENSE_REQUIRED_ISSUER", "marty-license-issuer"),
-            "MARTY_LICENSE_REQUIRED_PLAN_TIER": env_values.get("MARTY_LICENSE_REQUIRED_PLAN_TIER", "system"),
-            "MARTY_LICENSE_REQUIRED_PRODUCTS": env_values.get("MARTY_LICENSE_REQUIRED_PRODUCTS", "ui-app"),
-            "LICENSE_KEY": license_token,
-            "LICENSE_PUBLIC_KEY": public_key,
-        }
-    )
+    claims = validate_runtime_license_from_env(validation_env)
 
     (secret_dir / "license_key").write_text(license_token + "\n", encoding="utf-8")
-    (secret_dir / "license_public_key").write_text(public_key + "\n", encoding="utf-8")
 
     org_label = claims.org_name or claims.sub if claims else "unknown"
     plan_tier = claims.plan_tier if claims else "unknown"

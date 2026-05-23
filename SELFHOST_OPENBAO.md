@@ -25,7 +25,7 @@ make selfhost-prod-openbao-up
 This stack does two things:
 
 - `openbao` runs the standalone server on `127.0.0.1:${SELFHOST_OPENBAO_HOST_PORT}`
-- `openbao-bootstrap` initializes, unseals, configures the transit/PKI/KV/policy layout, and writes a fresh `openbao_service_token` into `SELFHOST_SECRET_DIR` if the current file is missing or still a placeholder
+- `openbao-bootstrap` initializes, unseals, configures the transit/PKI/KV/policy layout, and writes a fresh `openbao_service_token` into `SELFHOST_SECRET_DIR` if the current file is missing, still a placeholder, rejected by OpenBao, or unable to sign the credential issuer key
 
 For the main self-host application stack on the same machine, `BAO_ADDR` should stay set to `http://host.docker.internal:${SELFHOST_OPENBAO_HOST_PORT}` so the app containers can reach the external OpenBao service through the host-published port.
 

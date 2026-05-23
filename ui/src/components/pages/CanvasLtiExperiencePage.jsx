@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Link as RouterLink, useSearchParams } from 'react-router-dom';
+import { useSearchParams } from 'react-router-dom';
 import {
   Alert,
   Box,
@@ -24,9 +24,44 @@ function compactRoles(roles = []) {
     .slice(0, 3);
 }
 
+function sessionValue(session, key) {
+  return (
+    session?.[key]
+    || session?.mip_primitives?.context?.[key]
+    || session?.verified_launch?.[key]
+    || null
+  );
+}
+
+function buildCanvasContinuePath(session, state) {
+  const query = new URLSearchParams({ canvas_lti_state: state });
+  const canvasProgramBindingId = sessionValue(session, 'canvas_program_binding_id');
+  const canvasPlatformId = sessionValue(session, 'canvas_platform_id');
+  const applicationTemplateId = sessionValue(session, 'application_template_id');
+  const credentialTemplateId = sessionValue(session, 'credential_template_id');
+
+  if (canvasProgramBindingId) query.set('canvas_program_binding_id', canvasProgramBindingId);
+  if (canvasPlatformId) query.set('canvas_platform_id', canvasPlatformId);
+  if (applicationTemplateId) query.set('application_template_id', applicationTemplateId);
+
+  if (credentialTemplateId) {
+    return `/console/applicant/apply/${encodeURIComponent(credentialTemplateId)}?${query.toString()}`;
+  }
+
+  return `/console/applicant/catalog?${query.toString()}`;
+}
+
+function buildCanvasLtiSessionPath(state, nextPath) {
+  const query = new URLSearchParams({
+    state,
+    redirect_uri: nextPath,
+  });
+  return `/v1/auth/canvas-lti/finalize?${query.toString()}`;
+}
+
 function CanvasLtiExperiencePage() {
   const [searchParams] = useSearchParams();
-  const { isAuthenticated = false } = useAuth() || {};
+  const { isLoading: authLoading = false } = useAuth() || {};
   const state = searchParams.get('state') || '';
   const [session, setSession] = useState(null);
   const [error, setError] = useState('');
@@ -66,12 +101,30 @@ function CanvasLtiExperiencePage() {
   const context = verifiedLaunch.context || {};
   const learner = verifiedLaunch.learner_identity || {};
   const roles = useMemo(() => compactRoles(verifiedLaunch.roles), [verifiedLaunch.roles]);
-  const nextPath = `/console/applicant/catalog?canvas_lti_state=${encodeURIComponent(state)}`;
-  const continuePath = isAuthenticated ? nextPath : `/login?next=${encodeURIComponent(nextPath)}`;
+  const nextPath = buildCanvasContinuePath(session, state);
+  const canvasSessionPath = buildCanvasLtiSessionPath(state, nextPath);
+  const canvasProgramBindingId = sessionValue(session, 'canvas_program_binding_id');
+  const credentialTemplateId = sessionValue(session, 'credential_template_id');
+  const continueButtonProps = {
+    component: 'a',
+    href: canvasSessionPath,
+    target: '_top',
+    rel: 'noreferrer',
+  };
 
   return (
-    <Box sx={{ bgcolor: 'background.default', minHeight: 'calc(100vh - 72px)', py: { xs: 4, md: 8 } }}>
-      <Container maxWidth="md">
+    <Box
+      component="main"
+      data-testid="canvas-lti-login-page"
+      sx={{
+        bgcolor: 'background.default',
+        minHeight: '100vh',
+        display: 'flex',
+        alignItems: 'center',
+        py: { xs: 3, md: 6 },
+      }}
+    >
+      <Container maxWidth="sm">
         <Paper
           elevation={0}
           sx={{
@@ -79,34 +132,71 @@ function CanvasLtiExperiencePage() {
             borderColor: 'divider',
             borderRadius: 2,
             p: { xs: 3, md: 4 },
+            boxShadow: '0 18px 48px rgba(15, 23, 42, 0.08)',
           }}
         >
           {loading ? (
             <Stack alignItems="center" spacing={2} sx={{ py: 6 }}>
               <CircularProgress size={42} />
-              <Typography color="text.secondary">Opening Canvas launch...</Typography>
+              <Typography color="text.secondary">Opening Canvas sign-in...</Typography>
             </Stack>
           ) : error ? (
-            <Stack spacing={3}>
+            <Stack spacing={3} alignItems="stretch">
+              <Stack spacing={0.75}>
+                <Typography variant="overline" color="primary" sx={{ fontWeight: 700 }}>
+                  ElevenID LLC
+                </Typography>
+                <Typography variant="h5">Canvas sign-in unavailable</Typography>
+              </Stack>
               <Alert severity="error">{error}</Alert>
-              <Button component={RouterLink} to="/" variant="outlined">
-                Return Home
+              <Button component="a" href="/" target="_top" variant="outlined">
+                Return to ElevenID
               </Button>
             </Stack>
           ) : (
-            <Stack spacing={3}>
-              <Stack direction="row" spacing={1.5} alignItems="center">
-                <SchoolIcon color="primary" />
-                <Typography variant="h4" sx={{ fontSize: { xs: '1.6rem', md: '2rem' } }}>
-                  Canvas Launch Verified
+            <Stack spacing={3} alignItems="stretch">
+              <Stack spacing={2} alignItems="center" textAlign="center">
+                <Typography variant="overline" color="primary" sx={{ fontWeight: 700 }}>
+                  ElevenID LLC
                 </Typography>
+                <Box
+                  sx={{
+                    width: 52,
+                    height: 52,
+                    borderRadius: '50%',
+                    bgcolor: 'primary.main',
+                    color: 'primary.contrastText',
+                    display: 'grid',
+                    placeItems: 'center',
+                  }}
+                >
+                  <SchoolIcon />
+                </Box>
+                <Stack spacing={0.75}>
+                  <Typography variant="h4" sx={{ fontSize: { xs: '1.65rem', md: '2rem' } }}>
+                    Continue with Canvas
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    Canvas launch verified
+                  </Typography>
+                </Stack>
               </Stack>
 
-              <Stack spacing={1}>
-                <Typography variant="subtitle2" color="text.secondary">
+              <Stack
+                spacing={1}
+                sx={{
+                  py: 2,
+                  borderTop: '1px solid',
+                  borderBottom: '1px solid',
+                  borderColor: 'divider',
+                }}
+              >
+                <Typography variant="caption" color="text.secondary" sx={{ textTransform: 'uppercase', fontWeight: 700 }}>
                   Course
                 </Typography>
-                <Typography variant="h6">{context.title || context.label || context.id || 'Canvas Course'}</Typography>
+                <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>
+                  {context.title || context.label || context.id || 'Canvas Course'}
+                </Typography>
               </Stack>
 
               <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap">
@@ -114,17 +204,20 @@ function CanvasLtiExperiencePage() {
                   <Chip label={`Canvas user ${learner.subject || verifiedLaunch.subject}`} />
                 ) : null}
                 {session?.organization_id ? <Chip label={`Org ${session.organization_id}`} /> : null}
+                {canvasProgramBindingId ? <Chip label="Bound Canvas program" color="primary" variant="outlined" /> : null}
+                {credentialTemplateId ? <Chip label="Application selected" color="success" variant="outlined" /> : null}
                 {roles.map((role) => (
                   <Chip key={role} label={role} />
                 ))}
               </Stack>
 
               <Button
-                component={RouterLink}
-                to={continuePath}
+                {...continueButtonProps}
                 variant="contained"
+                size="large"
                 endIcon={<ArrowForwardIcon />}
-                sx={{ alignSelf: { xs: 'stretch', sm: 'flex-start' } }}
+                disabled={authLoading}
+                fullWidth
               >
                 Continue in ElevenID
               </Button>

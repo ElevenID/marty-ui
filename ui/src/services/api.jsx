@@ -20,7 +20,7 @@ import {
 
 const client = createApiClient({
   baseUrl: import.meta.env.VITE_API_URL || '',
-  requestOptions: () => ({ credentials: 'include' }),
+  requestOptions: () => ({ credentials: 'include', cache: 'no-store' }),
 });
 
 export const {

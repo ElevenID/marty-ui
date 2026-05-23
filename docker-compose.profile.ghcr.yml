@@ -1,7 +1,7 @@
 # Deploy from pre-built GHCR images instead of building locally
 #
 # Usage:
-#   export IMAGE_TAG=1.0.0  # or 'latest'
+#   export IMAGE_TAG=2026.05.0
 #   docker compose -f docker-compose.base.yml -f docker-compose.profile.ghcr.yml pull
 #   docker compose -f docker-compose.base.yml -f docker-compose.profile.ghcr.yml up -d
 #
@@ -9,12 +9,12 @@
 # docker-compose.base.yml unchanged. Only application services are overridden.
 
 x-service-image: &service-image
-  image: ghcr.io/elevenid/marty-ui/services:${IMAGE_TAG:-latest}
+  image: ghcr.io/elevenid/marty-ui/services:${IMAGE_TAG:?IMAGE_TAG must be set to an immutable release tag}
   pull_policy: always
 
 services:
   db-migrate:
-    image: ghcr.io/elevenid/marty-ui/db-migrate:${IMAGE_TAG:-latest}
+    image: ghcr.io/elevenid/marty-ui/db-migrate:${IMAGE_TAG:?IMAGE_TAG must be set to an immutable release tag}
     pull_policy: always
 
   gateway:

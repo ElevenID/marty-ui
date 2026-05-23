@@ -56,6 +56,7 @@ from gateway.routes.applicants import applicant_router
 from gateway.routes.credentials import (
     compliance_profile_router,
     credential_template_router,
+    delivery_destination_router,
     wallet_registry_router,
 )
 from gateway.routes.deployment import deployment_profile_router
@@ -74,7 +75,7 @@ from gateway.routes.notifications import (
     webhook_router,
 )
 from gateway.routes.organizations import organization_router, preferences_router
-from gateway.routes.revocation import cascade_revocation_router, revocation_profile_router
+from gateway.routes.revocation import cascade_revocation_router, revocation_profile_router, status_list_router
 from gateway.routes.signing_keys import signing_key_router
 from gateway.routes.trust import (
     api_key_router,
@@ -273,8 +274,10 @@ Verification is handled through two complementary approaches:
     app.include_router(signing_key_router)
     app.include_router(revocation_profile_router)
     app.include_router(cascade_revocation_router)
+    app.include_router(status_list_router)
     app.include_router(credential_template_router)
     app.include_router(wallet_registry_router)
+    app.include_router(delivery_destination_router)
     app.include_router(compliance_profile_router)
     app.include_router(device_router)
     app.include_router(presentation_policy_router)

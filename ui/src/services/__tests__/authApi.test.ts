@@ -63,10 +63,12 @@ describe('authApi', () => {
 
     it('should include credentials in request', async () => {
       let requestCredentials: RequestCredentials | undefined
+      let requestCache: RequestCache | undefined
 
       server.use(
         http.get('/v1/auth/me', ({ request }) => {
           requestCredentials = request.credentials
+          requestCache = request.cache
           return HttpResponse.json(mockUsers.admin)
         })
       )
@@ -75,6 +77,7 @@ describe('authApi', () => {
 
       // Credentials should be 'include' for cookie-based auth
       expect(requestCredentials).toBe('include')
+      expect(requestCache).toBe('no-store')
     })
   })
 
@@ -112,8 +115,11 @@ describe('authApi', () => {
 
   describe('getUserOrganizations', () => {
     it('should fetch user organizations', async () => {
+      let requestCache: RequestCache | undefined
+
       server.use(
-        http.get('/v1/auth/me/organizations', () => {
+        http.get('/v1/auth/me/organizations', ({ request }) => {
+          requestCache = request.cache
           return HttpResponse.json({
             organizations: [mockOrganization],
           })
@@ -125,6 +131,7 @@ describe('authApi', () => {
       expect(orgs).toHaveLength(1)
       expect(orgs[0].id).toBe(mockOrganization.id)
       expect(orgs[0].name).toBe(mockOrganization.name)
+      expect(requestCache).toBe('no-store')
     })
 
     it('should return empty array on error', async () => {

@@ -131,3 +131,38 @@ wallet_registry_table = Table(
 
     schema=SCHEMA,
 )
+
+
+# =============================================================================
+# Delivery Destination Registry Table
+# =============================================================================
+
+delivery_destinations_table = Table(
+    "delivery_destinations",
+    metadata,
+    Column("id", String(128), primary_key=True),
+    Column("organization_id", String(64), nullable=True, index=True),
+    Column("is_system", Boolean, nullable=False, server_default="false"),
+    Column("name", String(255), nullable=False),
+    Column("description", Text, nullable=True),
+    Column("provider", String(64), nullable=False, index=True),
+    Column("mode", String(40), nullable=False, index=True),
+    Column("setup_actor", String(40), nullable=False),
+    Column("delivery_target", String(64), nullable=False, index=True),
+    Column("wallet_profile_id", String(128), nullable=True),
+    Column("credential_format", String(64), nullable=True, index=True),
+    Column("issuance_protocol", String(64), nullable=True, index=True),
+    Column("compliance_profile_code", String(128), nullable=True, index=True),
+    Column("connector_type", String(64), nullable=True),
+    Column("connector_id", String(128), nullable=True),
+    Column("requires_consent", Boolean, nullable=False, server_default="false"),
+    Column("claim_projection_policy", JSON, nullable=False, server_default="{}"),
+    Column("setup_requirements", JSON, nullable=False, server_default="[]"),
+    Column("capabilities", JSON, nullable=False, server_default="{}"),
+    Column("docs_url", Text, nullable=True),
+    Column("is_enabled", Boolean, nullable=False, server_default="true"),
+    Column("created_at", DateTime(timezone=True), nullable=False, default=datetime.utcnow),
+    Column("updated_at", DateTime(timezone=True), nullable=False, default=datetime.utcnow,
+           onupdate=datetime.utcnow),
+    schema=SCHEMA,
+)

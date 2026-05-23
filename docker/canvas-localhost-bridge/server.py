@@ -5,7 +5,7 @@ Why this exists:
 - The issuance service allows plain HTTP Canvas base URLs only for localhost.
 - The real Canvas container is reachable from issuance via host.docker.internal:8088,
   not issuance-localhost:8088.
-- ElevenID's Canvas connector expects a standards-style
+- ElevenID's Canvas platform trust layer expects a standards-style
   /.well-known/openid-configuration document, while real Canvas exposes a
   different LTI metadata route.
 

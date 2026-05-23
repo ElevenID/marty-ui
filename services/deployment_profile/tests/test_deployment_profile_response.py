@@ -117,7 +117,11 @@ def test_get_deployment_profile_exposes_protocol_aligned_shape_only() -> None:
         auth_method=deployment_profile.AuthMethod.JWT,
     )
     profile.rate_limits = deployment_profile.RateLimitConfiguration(requests_per_minute=42)
-    profile.feature_flags = deployment_profile.FeatureFlags(enable_batch_issuance=True)
+    profile.feature_flags = deployment_profile.FeatureFlags(
+        enable_batch_issuance=True,
+        enable_canvas_evidence=True,
+        enable_canvas_lti=True,
+    )
     profile.branding = deployment_profile.BrandingConfiguration(organization_name="Example Org")
     profile.default_compliance_profile_id = "compliance-1"
     profile.api_key = "mk_live_secret"
@@ -152,6 +156,7 @@ def test_get_deployment_profile_exposes_protocol_aligned_shape_only() -> None:
         "offline_cache_ttl_hours",
         "biometric_required",
         "audit_all_events",
+        "canvas_feature_flags",
         "lanes",
         "created_at",
         "updated_at",
@@ -172,6 +177,15 @@ def test_get_deployment_profile_exposes_protocol_aligned_shape_only() -> None:
         "api_key_prefix",
     }:
         assert removed_key not in body
+    assert body["canvas_feature_flags"] == {
+        "enable_canvas_evidence": True,
+        "enable_canvas_lti": True,
+        "enable_canvas_mirror_publish": False,
+        "enable_canvas_mirror_ops": False,
+        "enable_canvas_deep_linking": False,
+        "enable_canvas_ags": False,
+        "enable_canvas_nrps": False,
+    }
 
 
 def test_update_channel_keeps_update_policy_channel_in_sync() -> None:

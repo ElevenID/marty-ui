@@ -3,12 +3,11 @@
 # =============================================================================
 # setup-keycloak.sh — Keycloak post-startup configurator
 # =============================================================================
-# Patches Keycloak via kcadm after realm import so that runtime env vars
-# (GOOGLE_CLIENT_ID, PUBLIC_DOMAIN, etc.) are applied correctly.
+# Patches Keycloak via kcadm after realm import so that runtime secrets,
+# CSV/list settings, and deployment-specific hostnames are applied correctly.
 #
-# The realm JSON cannot rely on ${env.VAR} substitution for data fields —
-# Keycloak only resolves those for SPI/startup config, not for realm JSON
-# identity provider or client data stored in the database.
+# Realm imports can resolve env placeholders, but the post-import patch remains
+# necessary for secret-bearing values and comma-separated additional UI origins.
 #
 # Usage:
 #   Inside container (KC_URL=http://keycloak:8080): called by keycloak-configurator
@@ -25,6 +24,8 @@ GOOGLE_CID="${GOOGLE_CLIENT_ID:-}"
 GOOGLE_SEC="${GOOGLE_CLIENT_SECRET:-}"
 PUBLIC_DOMAIN="${PUBLIC_DOMAIN:-}"
 UI_BASE_URL="${UI_BASE_URL:-}"
+UI_ADDITIONAL_BASE_URLS="${UI_ADDITIONAL_BASE_URLS:-${AUTH_ADDITIONAL_UI_BASE_URLS:-}}"
+KEYCLOAK_REPLACE_UI_ORIGINS="${KEYCLOAK_REPLACE_UI_ORIGINS:-false}"
 MARTY_API_SECRET="${MARTY_API_CLIENT_SECRET:-}"
 MARTY_ORG_NAME="${MARTY_ORG_NAME:-Marty}"
 MARTY_ORG_DOMAIN="${MARTY_ORG_DOMAIN:-${PUBLIC_DOMAIN:-marty.local}}"
@@ -35,6 +36,7 @@ KEYCLOAK_USER_REGISTRATION_ENABLED="${KEYCLOAK_USER_REGISTRATION_ENABLED:-true}"
 KEYCLOAK_VERIFY_EMAIL="${KEYCLOAK_VERIFY_EMAIL:-false}"
 KEYCLOAK_RESET_PASSWORD_ENABLED="${KEYCLOAK_RESET_PASSWORD_ENABLED:-true}"
 KEYCLOAK_SOCIAL_LOGIN_ENABLED="${KEYCLOAK_SOCIAL_LOGIN_ENABLED:-true}"
+KEYCLOAK_ORGANIZATION_IDENTITY_FIRST_ENABLED="${KEYCLOAK_ORGANIZATION_IDENTITY_FIRST_ENABLED:-false}"
 KEYCLOAK_SMTP_HOST="${KEYCLOAK_SMTP_HOST:-${SMTP_HOST:-}}"
 KEYCLOAK_SMTP_PORT="${KEYCLOAK_SMTP_PORT:-${SMTP_PORT:-1025}}"
 KEYCLOAK_SMTP_FROM="${KEYCLOAK_SMTP_FROM:-${SMTP_FROM:-noreply@marty.demo}}"
@@ -127,6 +129,52 @@ normalize_bool() {
     esac
 }
 
+json_array_from_csv() {
+    local csv="$1"
+    local output="["
+    local first="true"
+    local item escaped
+
+    IFS=',' read -r -a items <<< "$csv"
+    for item in "${items[@]}"; do
+        item="$(echo "$item" | xargs)"
+        if [ -z "$item" ]; then
+            continue
+        fi
+        escaped="$(printf '%s' "$item" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+        if [ "$first" = "true" ]; then
+            output="${output}\"${escaped}\""
+            first="false"
+        else
+            output="${output}, \"${escaped}\""
+        fi
+    done
+
+    output="${output}]"
+    printf '%s' "$output"
+}
+
+post_logout_from_csv() {
+    local csv="$1"
+    local output=""
+    local item
+
+    IFS=',' read -r -a items <<< "$csv"
+    for item in "${items[@]}"; do
+        item="$(echo "$item" | xargs)"
+        if [ -z "$item" ]; then
+            continue
+        fi
+        if [ -z "$output" ]; then
+            output="$item"
+        else
+            output="${output}##${item}"
+        fi
+    done
+
+    printf '%s' "$output"
+}
+
 kcadm_secret_safe() {
     local output
     local exit_code
@@ -152,6 +200,7 @@ main() {
     
     authenticate_keycloak
     configure_realm_login_settings
+    configure_browser_flow_alignment
     configure_realm_smtp_settings
     configure_google_idp
     configure_google_picture_mapper
@@ -258,6 +307,73 @@ EOF
     fi
 }
 
+get_browser_execution_id_by_display_name() {
+    local display_name="$1"
+    local executions current_id current_name
+
+    executions=$(kcadm_safe get "authentication/flows/browser/executions" -r "$REALM" 2>/dev/null || echo "")
+    if [ -z "$executions" ]; then
+        return 0
+    fi
+
+    current_id=""
+    current_name=""
+    while IFS= read -r line; do
+        case "$line" in
+            *'"id"'*)
+                current_id="$(printf '%s' "$line" | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+                ;;
+            *'"displayName"'*)
+                current_name="$(printf '%s' "$line" | sed -n 's/.*"displayName"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+                if [ "$current_name" = "$display_name" ] && [ -n "$current_id" ]; then
+                    printf '%s\n' "$current_id"
+                    return 0
+                fi
+                ;;
+        esac
+    done <<EOF
+$executions
+EOF
+}
+
+configure_browser_flow_alignment() {
+    local identity_first_enabled desired_requirement execution_id current_execution current_requirement
+    identity_first_enabled="$(normalize_bool "$KEYCLOAK_ORGANIZATION_IDENTITY_FIRST_ENABLED" false)"
+
+    if [ "$identity_first_enabled" = "true" ]; then
+        desired_requirement="ALTERNATIVE"
+    else
+        desired_requirement="DISABLED"
+    fi
+
+    log_info "Patching browser flow alignment (organizationIdentityFirst=${identity_first_enabled})"
+
+    execution_id="$(get_browser_execution_id_by_display_name "Organization")"
+    if [ -z "$execution_id" ]; then
+        log_warning "Could not locate the browser flow Organization execution; leaving browser flow unchanged"
+        return 0
+    fi
+
+    current_execution="$(kcadm_safe get "authentication/executions/${execution_id}" -r "$REALM" 2>/dev/null || echo "")"
+    current_requirement="$(printf '%s' "$current_execution" | tr -d '\n[:space:]' | sed -n 's/.*"requirement":"\([^"]*\)".*/\1/p')"
+    if [ "$current_requirement" = "$desired_requirement" ]; then
+        log_success "Browser flow alignment already configured"
+        return 0
+    fi
+
+    if kcadm_safe update "authentication/flows/browser/executions" \
+        -r "$REALM" \
+        -n \
+        -s "id=${execution_id}" \
+        -s "requirement=${desired_requirement}" \
+        -s "priority=26" > /dev/null; then
+        log_success "Browser flow alignment configured"
+    else
+        log_error "Failed to configure browser flow alignment"
+        return 1
+    fi
+}
+
 # ─── Authentication ──────────────────────────────────────────────────────────
 authenticate_keycloak() {
     log_info "Waiting for Keycloak to be ready..."
@@ -294,6 +410,26 @@ configure_realm_login_settings() {
         -s "resetPasswordAllowed=${reset_password_enabled}"; then
         log_success "Realm login settings configured"
     else
+        local realm_config flattened current_registration current_verify_email current_reset_password
+        realm_config=$(kcadm_safe get "realms/${REALM}" --fields registrationAllowed,verifyEmail,resetPasswordAllowed 2>/dev/null || echo "")
+        if [ -z "$realm_config" ]; then
+            log_warning "Realm login settings update failed and Keycloak could not return the realm representation; continuing because Keycloak ${REALM} admin endpoint is unavailable"
+            return 0
+        fi
+
+        flattened="$(printf '%s' "$realm_config" | tr -d '\n[:space:]')"
+        current_registration="$(printf '%s' "$flattened" | sed -n 's/.*"registrationAllowed":\(true\|false\).*/\1/p')"
+        current_verify_email="$(printf '%s' "$flattened" | sed -n 's/.*"verifyEmail":\(true\|false\).*/\1/p')"
+        current_reset_password="$(printf '%s' "$flattened" | sed -n 's/.*"resetPasswordAllowed":\(true\|false\).*/\1/p')"
+
+        if [ "$current_registration" = "$registration_enabled" ] \
+            && [ "$current_verify_email" = "$verify_email" ] \
+            && [ "$current_reset_password" = "$reset_password_enabled" ]; then
+            log_warning "Realm login settings update failed, but current settings already match desired values; continuing"
+            log_success "Realm login settings configured"
+            return 0
+        fi
+
         log_error "Failed to configure realm login settings"
         return 1
     fi
@@ -355,9 +491,9 @@ configure_google_idp() {
         return 0
     fi
 
-    if [ -z "$GOOGLE_CID" ]; then
-        log_warning "GOOGLE_CLIENT_ID not set — skipping Google IdP configuration"
-        return 0
+    if [ -z "$GOOGLE_CID" ] || [ -z "$GOOGLE_SEC" ]; then
+        log_error "KEYCLOAK_SOCIAL_LOGIN_ENABLED=true but GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET are not both set"
+        return 1
     fi
     
     log_info "Patching Google Identity Provider..."
@@ -481,83 +617,157 @@ configure_marty_ui_redirect_uris() {
         log_warning "marty-ui client not found in realm $REALM — skipping"
         return 0
     fi
-    
-    local public_redirect="https://${PUBLIC_DOMAIN}/*"
-    local public_origin="https://${PUBLIC_DOMAIN}"
-    local public_post_logout="https://${PUBLIC_DOMAIN}/*"
-    
-    # Get current configuration
-    local current_config
-    current_config=$(kcadm_safe get "clients/$client_uuid" -r "$REALM" \
-        --fields redirectUris,webOrigins,attributes 2>/dev/null)
-    local flattened_config
-    flattened_config=$(echo "$current_config" | tr -d '\n')
-    
-    # Update redirect URIs
-    if ! array_contains "$public_redirect" "$current_config"; then
-        local current_redirects
-        current_redirects=$(echo "$flattened_config" \
-            | sed -n 's/.*"redirectUris"[[:space:]]*:[[:space:]]*\[\([^]]*\)\].*/\1/p')
-        local new_redirects
-        if [ -n "$current_redirects" ]; then
-            new_redirects="${current_redirects}, \"${public_redirect}\""
-        else
-            new_redirects="\"${public_redirect}\""
-        fi
-        if kcadm_safe update "clients/$client_uuid" -r "$REALM" \
-            -s "redirectUris=[${new_redirects}]"; then
-            log_success "Added redirect URI: $public_redirect"
-        else
-            log_error "Failed to add redirect URI"
-        fi
+
+    local origins_csv
+    if [ -n "$UI_BASE_URL" ]; then
+        origins_csv="${UI_BASE_URL%/}"
     else
-        log_success "Redirect URI already present: $public_redirect"
+        origins_csv="https://${PUBLIC_DOMAIN}"
     fi
-    
-    # Update web origins
-    if ! array_contains "\"$public_origin\"" "$current_config"; then
-        local current_origins
-        current_origins=$(echo "$flattened_config" \
-            | sed -n 's/.*"webOrigins"[[:space:]]*:[[:space:]]*\[\([^]]*\)\].*/\1/p')
-        local new_origins
-        if [ -n "$current_origins" ]; then
-            new_origins="${current_origins}, \"${public_origin}\""
-        else
-            new_origins="\"${public_origin}\""
+    if [ -n "$UI_ADDITIONAL_BASE_URLS" ]; then
+        origins_csv="${origins_csv},${UI_ADDITIONAL_BASE_URLS}"
+    fi
+
+    local replace_origins
+    replace_origins="$(normalize_bool "$KEYCLOAK_REPLACE_UI_ORIGINS" false)"
+    if [ "$replace_origins" = "true" ]; then
+        local desired_redirects_csv desired_web_origins_csv desired_logout_csv
+        desired_redirects_csv=""
+        desired_web_origins_csv=""
+        desired_logout_csv=""
+
+        IFS=',' read -r -a ui_origins <<< "$origins_csv"
+        for ui_origin in "${ui_origins[@]}"; do
+            ui_origin="$(echo "$ui_origin" | xargs)"
+            if [ -z "$ui_origin" ]; then
+                continue
+            fi
+
+            ui_origin="${ui_origin%/}"
+            if [ -z "$desired_redirects_csv" ]; then
+                desired_redirects_csv="${ui_origin}/*"
+                desired_web_origins_csv="${ui_origin}"
+                desired_logout_csv="${ui_origin}/*"
+            else
+                desired_redirects_csv="${desired_redirects_csv},${ui_origin}/*"
+                desired_web_origins_csv="${desired_web_origins_csv},${ui_origin}"
+                desired_logout_csv="${desired_logout_csv},${ui_origin}/*"
+            fi
+        done
+
+        if [ -z "$desired_redirects_csv" ]; then
+            log_error "No UI origins available to configure marty-ui client"
+            return 1
         fi
+
+        local desired_redirects desired_web_origins desired_logout
+        desired_redirects="$(json_array_from_csv "$desired_redirects_csv")"
+        desired_web_origins="$(json_array_from_csv "$desired_web_origins_csv")"
+        desired_logout="$(post_logout_from_csv "$desired_logout_csv")"
+
         if kcadm_safe update "clients/$client_uuid" -r "$REALM" \
-            -s "webOrigins=[${new_origins}]"; then
-            log_success "Added web origin: $public_origin"
+            -s "redirectUris=${desired_redirects}" \
+            -s "webOrigins=${desired_web_origins}" \
+            -s "attributes.\"post.logout.redirect.uris\"=${desired_logout}" > /dev/null; then
+            log_success "Replaced marty-ui redirect/web/post-logout origins with configured UI origins: ${desired_web_origins_csv}"
         else
-            log_error "Failed to add web origin"
+            log_error "Failed to replace marty-ui redirect/web/post-logout origins"
+            return 1
         fi
-    else
-        log_success "Web origin already present: $public_origin"
+        return 0
     fi
-    
-    # Update post-logout redirect URIs
-    if ! array_contains "$public_post_logout" "$current_config"; then
-        local current_logout
-        current_logout=$(echo "$current_config" \
-            | grep -o '"post\.logout\.redirect\.uris" : "[^"]*"' \
-            | sed 's/"post\.logout\.redirect\.uris" : "//;s/"$//' || echo "")
-        
-        local new_logout
-        if [ -n "$current_logout" ]; then
-            new_logout="${current_logout}##${public_post_logout}"
-        else
-            new_logout="$public_post_logout"
+
+    IFS=',' read -r -a ui_origins <<< "$origins_csv"
+    for ui_origin in "${ui_origins[@]}"; do
+        ui_origin="$(echo "$ui_origin" | xargs)"
+        if [ -z "$ui_origin" ]; then
+            continue
         fi
-        
-        if kcadm_safe update "clients/$client_uuid" -r "$REALM" \
-            -s "attributes.\"post.logout.redirect.uris\"=${new_logout}"; then
-            log_success "Added post-logout redirect URI: $public_post_logout"
+
+        ui_origin="${ui_origin%/}"
+        local origin_redirect="${ui_origin}/*"
+        local origin_post_logout="${ui_origin}/*"
+
+        # Refresh config after each update so multiple origins append cleanly.
+        local current_config
+        current_config=$(kcadm_safe get "clients/$client_uuid" -r "$REALM" \
+            --fields redirectUris,webOrigins,attributes 2>/dev/null)
+        local flattened_config
+        flattened_config=$(echo "$current_config" | tr -d '\n')
+
+        # Update redirect URIs
+        if ! array_contains "$origin_redirect" "$current_config"; then
+            local current_redirects
+            current_redirects=$(echo "$flattened_config" \
+                | sed -n 's/.*"redirectUris"[[:space:]]*:[[:space:]]*\[\([^]]*\)\].*/\1/p')
+            local new_redirects
+            if [ -n "$current_redirects" ]; then
+                new_redirects="${current_redirects}, \"${origin_redirect}\""
+            else
+                new_redirects="\"${origin_redirect}\""
+            fi
+            if kcadm_safe update "clients/$client_uuid" -r "$REALM" \
+                -s "redirectUris=[${new_redirects}]"; then
+                log_success "Added redirect URI: $origin_redirect"
+            else
+                log_error "Failed to add redirect URI: $origin_redirect"
+            fi
         else
-            log_error "Failed to add post-logout redirect URI"
+            log_success "Redirect URI already present: $origin_redirect"
         fi
-    else
-        log_success "Post-logout URI already present: $public_post_logout"
-    fi
+
+        current_config=$(kcadm_safe get "clients/$client_uuid" -r "$REALM" \
+            --fields redirectUris,webOrigins,attributes 2>/dev/null)
+        flattened_config=$(echo "$current_config" | tr -d '\n')
+
+        # Update web origins
+        if ! array_contains "\"$ui_origin\"" "$current_config"; then
+            local current_origins
+            current_origins=$(echo "$flattened_config" \
+                | sed -n 's/.*"webOrigins"[[:space:]]*:[[:space:]]*\[\([^]]*\)\].*/\1/p')
+            local new_origins
+            if [ -n "$current_origins" ]; then
+                new_origins="${current_origins}, \"${ui_origin}\""
+            else
+                new_origins="\"${ui_origin}\""
+            fi
+            if kcadm_safe update "clients/$client_uuid" -r "$REALM" \
+                -s "webOrigins=[${new_origins}]"; then
+                log_success "Added web origin: $ui_origin"
+            else
+                log_error "Failed to add web origin: $ui_origin"
+            fi
+        else
+            log_success "Web origin already present: $ui_origin"
+        fi
+
+        current_config=$(kcadm_safe get "clients/$client_uuid" -r "$REALM" \
+            --fields redirectUris,webOrigins,attributes 2>/dev/null)
+
+        # Update post-logout redirect URIs
+        if ! array_contains "$origin_post_logout" "$current_config"; then
+            local current_logout
+            current_logout=$(echo "$current_config" \
+                | grep -o '"post\.logout\.redirect\.uris" : "[^"]*"' \
+                | sed 's/"post\.logout\.redirect\.uris" : "//;s/"$//' || echo "")
+
+            local new_logout
+            if [ -n "$current_logout" ]; then
+                new_logout="${current_logout}##${origin_post_logout}"
+            else
+                new_logout="$origin_post_logout"
+            fi
+
+            if kcadm_safe update "clients/$client_uuid" -r "$REALM" \
+                -s "attributes.\"post.logout.redirect.uris\"=${new_logout}"; then
+                log_success "Added post-logout redirect URI: $origin_post_logout"
+            else
+                log_error "Failed to add post-logout redirect URI: $origin_post_logout"
+            fi
+        else
+            log_success "Post-logout URI already present: $origin_post_logout"
+        fi
+    done
 }
 
 # ─── Marty API Client Secret ─────────────────────────────────────────────────

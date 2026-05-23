@@ -41,6 +41,23 @@ json_first_array_entry() {
     json_compact "$1" | sed -n "s/.*\"$2\":\[\"\([^\"]*\)\".*\].*/\1/p"
 }
 
+write_secret_file() {
+    file_path="$1"
+    file_value="$2"
+    file_mode="$3"
+
+    if [ -s "${file_path}" ] && [ "$(tr -d '\r' < "${file_path}")" = "${file_value}" ]; then
+        chmod "${file_mode}" "${file_path}" 2>/dev/null || true
+        return 0
+    fi
+
+    if [ -e "${file_path}" ]; then
+        chmod u+w "${file_path}" 2>/dev/null || true
+    fi
+    printf '%s' "${file_value}" > "${file_path}"
+    chmod "${file_mode}" "${file_path}"
+}
+
 echo "=== OpenBao Self-Host Bootstrap ==="
 echo "Waiting for OpenBao at ${BAO_ADDR}..."
 
@@ -73,10 +90,8 @@ if [ -z "${unseal_key}" ] || [ -z "${root_token}" ]; then
     exit 1
 fi
 
-printf '%s' "${unseal_key}" > "${BAO_UNSEAL_KEY_FILE}"
-chmod 0400 "${BAO_UNSEAL_KEY_FILE}"
-printf '%s' "${root_token}" > "${BAO_ROOT_TOKEN_FILE}"
-chmod 0400 "${BAO_ROOT_TOKEN_FILE}"
+write_secret_file "${BAO_UNSEAL_KEY_FILE}" "${unseal_key}" 0400
+write_secret_file "${BAO_ROOT_TOKEN_FILE}" "${root_token}" 0400
 
 current_status="$(status_json)"
 sealed="$(json_bool "${current_status}" sealed)"
@@ -97,6 +112,17 @@ elif is_placeholder_secret_value "$(tr -d '\r' < "${BAO_SERVICE_TOKEN_FILE}")"; 
     service_token_missing=1
 fi
 
+if [ "${service_token_missing}" != "1" ]; then
+    existing_service_token="$(tr -d '\r' < "${BAO_SERVICE_TOKEN_FILE}")"
+    if ! BAO_TOKEN="${existing_service_token}" bao token lookup -address="${BAO_ADDR}" >/dev/null 2>&1; then
+        echo "Existing credential-service token is not accepted by OpenBao; minting a replacement..."
+        service_token_missing=1
+    elif ! BAO_TOKEN="${existing_service_token}" bao write -address="${BAO_ADDR}" transit/sign/cred-issuer-marty-es256 input=dGVzdA >/dev/null 2>&1; then
+        echo "Existing credential-service token cannot sign credential keys; minting a replacement..."
+        service_token_missing=1
+    fi
+fi
+
 if [ "${service_token_missing}" = "1" ]; then
     echo "Minting credential-service token..."
     token_json="$(bao token create -address="${BAO_ADDR}" -policy=credential-service -orphan -format=json)"
@@ -105,8 +131,7 @@ if [ "${service_token_missing}" = "1" ]; then
         echo "Failed to mint credential-service token."
         exit 1
     fi
-    printf '%s' "${service_token}" > "${BAO_SERVICE_TOKEN_FILE}"
-    chmod 0444 "${BAO_SERVICE_TOKEN_FILE}"
+    write_secret_file "${BAO_SERVICE_TOKEN_FILE}" "${service_token}" 0444
 else
     echo "Reusing credential-service token at ${BAO_SERVICE_TOKEN_FILE}"
 fi

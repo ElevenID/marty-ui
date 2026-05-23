@@ -18,8 +18,19 @@ import SettingsIcon from '@mui/icons-material/Settings';
 import { useTranslation } from 'react-i18next';
 import { ReviewSectionCard, ReviewToggleOption, ReviewField } from '../../../common';
 
+const CANVAS_FEATURE_FLAGS = [
+  ['enable_canvas_evidence', 'Canvas evidence'],
+  ['enable_canvas_lti', 'Canvas LTI'],
+  ['enable_canvas_mirror_publish', 'Canvas mirror publish'],
+  ['enable_canvas_mirror_ops', 'Canvas mirror ops'],
+  ['enable_canvas_deep_linking', 'LTI Deep Linking'],
+  ['enable_canvas_ags', 'AGS evidence'],
+  ['enable_canvas_nrps', 'NRPS eligibility'],
+];
+
 const ReviewStep = ({ data, onChange, onEdit }) => {
   const { t } = useTranslation('console');
+  const enabledCanvasFlags = CANVAS_FEATURE_FLAGS.filter(([key]) => data.feature_flags?.[key]);
 
   const ENV_TYPE_LABELS = {
     api: t('wizards.deploymentProfile.reviewStep.environmentTypeLabels.api'),
@@ -166,7 +177,10 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
                 {data.feature_flags?.qr_code && <Chip label={t('wizards.deploymentProfile.reviewStep.featureChips.qrCode')} size="small" />}
                 {data.feature_flags?.nfc && <Chip label={t('wizards.deploymentProfile.reviewStep.featureChips.nfc')} size="small" />}
                 {data.feature_flags?.ble && <Chip label={t('wizards.deploymentProfile.reviewStep.featureChips.ble')} size="small" />}
-                {!data.feature_flags?.qr_code && !data.feature_flags?.nfc && !data.feature_flags?.ble && (
+                {enabledCanvasFlags.map(([key, label]) => (
+                  <Chip key={key} label={label} size="small" variant="outlined" />
+                ))}
+                {!data.feature_flags?.qr_code && !data.feature_flags?.nfc && !data.feature_flags?.ble && enabledCanvasFlags.length === 0 && (
                   <Typography variant="body2" color="text.secondary">
                     {t('wizards.deploymentProfile.reviewStep.values.noFeaturesEnabled')}
                   </Typography>

@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Annotated, Any, AsyncGenerator
 
 import httpx
-from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi import APIRouter, Body, Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr, Field
 from marty_common.service_setup import create_service_app
@@ -1071,6 +1071,20 @@ class ApplicationReviewRequest(BaseModel):
     reason: str | None = None
 
 
+class SupersedeApplicationRequest(BaseModel):
+    reason: str | None = None
+    replacement_application_id: str | None = None
+    replacement_credential_configuration_id: str | None = None
+    source: str | None = None
+
+
+class ApplicationIssueRequest(BaseModel):
+    """Learner delivery preferences captured when generating an issuance offer."""
+
+    delivery_destination_ids: list[str] = Field(default_factory=list)
+    canvas_credentials_consent: bool = False
+
+
 class BiometricResponse(BaseModel):
     id: str
     applicant_id: str
@@ -1503,6 +1517,7 @@ async def auto_issue_application(
         "issuance_fallback", "credential_type", "credential_display_name",
         "rejection_reason", "review_notes", "info_requests", "auto_approve",
         "flow_instance_id", "flow_definition_id", "issuance_source",
+        "delivery_preferences",
     }
     claims = {k: v for k, v in application.metadata.items() if k not in _AUTO_INTERNAL_FIELDS}
     claims.update({
@@ -1639,9 +1654,54 @@ async def review_application(
     return _application_to_response(application)
 
 
+@router.post("/applications/{application_id}/supersede", response_model=ApplicationResponse, response_model_exclude_none=True)
+async def supersede_application(
+    application_id: str,
+    request: SupersedeApplicationRequest,
+    repo: InMemoryApplicantRepository = Depends(get_repo),
+) -> ApplicationResponse:
+    """Retire an active application so a replacement request can be created."""
+    application = await repo.get_application(application_id)
+    if not application:
+        raise HTTPException(status_code=404, detail="Application not found")
+    await _sync_application_issuance_state(application, repo)
+
+    if application.status in {ApplicationStatus.CREDENTIALED}:
+        raise HTTPException(
+            status_code=400,
+            detail="Issued applications cannot be superseded from the applicant flow",
+        )
+
+    if application.status not in {
+        ApplicationStatus.REJECTED,
+        ApplicationStatus.WITHDRAWN,
+        ApplicationStatus.SUSPENDED,
+    }:
+        # Superseding is an explicit replacement decision, so use a terminal
+        # inactive state even when the normal user journey has already advanced
+        # beyond states that allow withdrawal through ordinary transitions.
+        _force_application_status(application, ApplicationStatus.WITHDRAWN)
+
+    now = datetime.now(timezone.utc)
+    application.metadata = {
+        **(application.metadata or {}),
+        "superseded": True,
+        "superseded_at": now.isoformat(),
+        "superseded_reason": request.reason or "superseded_by_reapplication",
+        "superseded_source": request.source or "applicant_reapplication",
+    }
+    if request.replacement_application_id:
+        application.metadata["superseded_by_application_id"] = request.replacement_application_id
+    if request.replacement_credential_configuration_id:
+        application.metadata["superseded_by_credential_configuration_id"] = request.replacement_credential_configuration_id
+    await repo.save_application(application)
+    return _application_to_response(application)
+
+
 @router.post("/applications/{application_id}/issue", response_model=ApplicationResponse, response_model_exclude_none=True)
 async def issue_application(
     application_id: str,
+    request: ApplicationIssueRequest | None = Body(default=None),
     repo: InMemoryApplicantRepository = Depends(get_repo),
 ) -> ApplicationResponse:
     """Issue a credential for an approved application."""
@@ -1669,6 +1729,13 @@ async def issue_application(
     if not applicant:
         raise HTTPException(status_code=404, detail="Applicant not found")
 
+    if request is not None:
+        application.metadata["delivery_preferences"] = {
+            "delivery_destination_ids": list(dict.fromkeys(request.delivery_destination_ids or [])),
+            "canvas_credentials_consent": bool(request.canvas_credentials_consent),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+
     # Internal metadata written by the issuance workflow — must never become
     # credential subject attributes.  Strip them before forwarding to the
     # issuance service so they don't end up inside the signed JWT.
@@ -1686,6 +1753,7 @@ async def issue_application(
         "flow_instance_id",
         "flow_definition_id",
         "issuance_source",
+        "delivery_preferences",
     }
     claims = {
         k: v

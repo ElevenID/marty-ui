@@ -86,7 +86,7 @@ describe('InviteAcceptPage', () => {
     await user.click(screen.getByTestId('login-to-accept-btn'));
 
     expect(sessionStorage.getItem('returnUrl')).toBe('/organizations/join?inviteToken=token-1');
-    expect(login).toHaveBeenCalledTimes(1);
+    expect(login).toHaveBeenCalledWith('/organizations/join?inviteToken=token-1');
   });
 
   it('shows an invalid state when no invitation token is provided', async () => {

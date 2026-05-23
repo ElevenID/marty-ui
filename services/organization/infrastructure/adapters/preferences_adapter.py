@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Response
 from pydantic import BaseModel, Field
 
 from ...application.ports import UpsertConsoleContextPreferenceCommand
@@ -83,6 +83,7 @@ class UpdatePreferencesRequest(BaseModel):
 
 @router.get("/preferences", response_model=PreferencesResponse, response_model_exclude_none=True)
 async def get_preferences(
+    response: Response,
     user_id: str = Depends(get_current_user_id),
     use_case: ConsoleContextPreferenceUseCase = Depends(get_preference_use_case),
 ) -> PreferencesResponse:
@@ -93,6 +94,8 @@ async def get_preferences(
     - last_view_mode: 'applicant' (default)
     - last_active_org_id: null (default)
     """
+    response.headers["Cache-Control"] = "no-store, max-age=0"
+
     try:
         preference = await use_case.get_preferences(user_id)
         return PreferencesResponse(

@@ -85,6 +85,23 @@ class CedarEngine:
         engine.append_policies(verification_policies)
         return engine
 
+    @classmethod
+    def with_approval_rules(cls) -> "CedarEngine":
+        """Create engine with only MIP approval-rule policies.
+
+        Approval flows evaluate provider-neutral facts and should not inherit
+        broad gateway RBAC permits such as organization API-key full access.
+        """
+        schema = (_CEDAR_DIR / "mip.cedarschema").read_text()
+        policies = (_CEDAR_DIR / "approval_rules.cedar").read_text()
+        return cls(schema=schema, policies=policies)
+
+    @classmethod
+    def with_approval_policy_text(cls, policies: str) -> "CedarEngine":
+        """Create engine with caller-provided approval-rule policies only."""
+        schema = (_CEDAR_DIR / "mip.cedarschema").read_text()
+        return cls(schema=schema, policies=policies)
+
     @property
     def policies(self) -> str:
         return self._policies

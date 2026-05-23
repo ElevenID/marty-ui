@@ -8,6 +8,7 @@
 #   - JWKS endpoint (/api/lti/security/jwks)
 #   - OIDC Authorization endpoint (/login/oauth2/auth)
 #   - Credential webhook sender (/api/lti/credentials/webhook)
+#   - Canvas Credentials mirror publish/status endpoints for beta demos
 #
 # To configure a connector against this sandbox:
 #   canvas_base_url: http://canvas-sandbox:8017   (internal docker)
@@ -23,17 +24,21 @@ services:
     container_name: marty-canvas-sandbox
     environment:
       CANVAS_SANDBOX_HOST: ${CANVAS_SANDBOX_HOST:-canvas-sandbox.${PUBLIC_DOMAIN:-beta.elevenidllc.com}}
+      CANVAS_SANDBOX_PUBLIC_HOST: ${CANVAS_SANDBOX_PUBLIC_HOST:-}
       CANVAS_SANDBOX_PORT: ${CANVAS_SANDBOX_PORT:-8017}
       CANVAS_SANDBOX_SCHEME: ${CANVAS_SANDBOX_SCHEME:-https}
       ISSUER_BASE_URL: ${PUBLIC_API_URL:-http://gateway:8000}
+      CANVAS_CREDENTIALS_PUBLIC_BASE_URL: ${CANVAS_CREDENTIALS_PUBLIC_BASE_URL:-}
       CANVAS_CREDENTIALS_SHARED_SECRET: ${CANVAS_CREDENTIALS_SHARED_SECRET:-}
+      CANVAS_CREDENTIALS_API_TOKEN: ${CANVAS_CREDENTIALS_API_TOKEN:-}
+      CANVAS_CREDENTIALS_ISSUER_ID: ${CANVAS_CREDENTIALS_ISSUER_ID:-canvas-credentials-test-sandbox-issuer}
     ports:
       - "${CANVAS_SANDBOX_HOST_PORT:-8017}:8017"
     networks:
       - marty-network
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8017/health"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8017/health')"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -44,6 +49,11 @@ services:
     environment:
       CANVAS_ALLOW_PRIVATE_BASE_URLS: "true"
       CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS: "true"
+      CANVAS_CREDENTIALS_PROVIDER: bridge
+      CANVAS_CREDENTIALS_PUBLISH_URL: ${CANVAS_CREDENTIALS_PUBLISH_URL:-http://canvas-sandbox:8017/api/credentials/mirror/publish}
+      CANVAS_CREDENTIALS_STATUS_SYNC_URL: ${CANVAS_CREDENTIALS_STATUS_SYNC_URL:-http://canvas-sandbox:8017/api/credentials/mirror/status}
+      CANVAS_CREDENTIALS_API_TOKEN: ${CANVAS_CREDENTIALS_API_TOKEN:-}
+      CANVAS_CREDENTIALS_ISSUER_ID: ${CANVAS_CREDENTIALS_ISSUER_ID:-canvas-credentials-test-sandbox-issuer}
 
   # Add canvas-sandbox as an optional dependency of nginx-proxy so the
   # canvas-sandbox subdomain routes work when both profiles are active.

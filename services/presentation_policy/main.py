@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any, AsyncGenerator
-from urllib.parse import unquote
+from urllib.parse import quote, unquote, urlparse
 
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
@@ -58,6 +58,8 @@ logger = logging.getLogger(__name__)
 
 SERVICE_NAME = "presentation-policy-service"
 SERVICE_PORT = int(os.environ.get("PRESENTATION_POLICY_SERVICE_PORT", "8009"))
+_TRUST_PROFILE_CACHE_TTL_DEFAULT_SECONDS = 300
+_TRUST_PROFILE_CACHE_TTL_MAX_SECONDS = 3600
 
 
 def get_config() -> dict[str, Any]:
@@ -311,7 +313,7 @@ class TrustProfileCache:
     """
     In-memory cache for Trust Profiles.
     
-    Caches Trust Profile data with TTL based on time_policy.freshness_window_seconds.
+    Caches Trust Profile data with a bounded TTL derived from trust-profile freshness.
     Reduces load on trust-profiles service during verification.
     """
     
@@ -1302,6 +1304,104 @@ def _issuer_from_open_badge(credential: dict[str, Any], claims: dict[str, Any]) 
     return str(issuer or "unknown")
 
 
+def _normalize_issuer_url(value: str | None) -> str | None:
+    if not value:
+        return None
+    raw = value.strip()
+    if not raw:
+        return None
+    parsed = urlparse(raw)
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
+        return None
+    normalized = parsed._replace(
+        scheme=parsed.scheme.lower(),
+        netloc=parsed.netloc.lower(),
+        query="",
+        fragment="",
+    )
+    return normalized.geturl().rstrip("/")
+
+
+def _issuer_domain(value: str | None) -> str | None:
+    if not value:
+        return None
+    raw = value.strip()
+    if not raw:
+        return None
+
+    if raw.lower().startswith("did:web:"):
+        remainder = raw[len("did:web:") :]
+        host = remainder.split(":", 1)[0].strip().lower()
+        return host or None
+
+    normalized_url = _normalize_issuer_url(raw)
+    if normalized_url:
+        parsed = urlparse(normalized_url)
+        return parsed.hostname.lower() if parsed.hostname else None
+
+    candidate = raw.rstrip("/").lower()
+    if (
+        candidate
+        and "://" not in candidate
+        and "/" not in candidate
+        and ":" not in candidate
+        and " " not in candidate
+        and "." in candidate
+    ):
+        return candidate
+    return None
+
+
+def _issuer_identifier_candidates(value: str | None) -> set[str]:
+    if not value:
+        return set()
+    raw = value.strip()
+    if not raw or raw == "unknown":
+        return set()
+
+    candidates = {raw}
+    if raw.endswith("/") and len(raw) > 1:
+        candidates.add(raw.rstrip("/"))
+
+    normalized_url = _normalize_issuer_url(raw)
+    if normalized_url:
+        candidates.add(normalized_url)
+
+    domain = _issuer_domain(raw)
+    if domain:
+        candidates.add(domain)
+
+    return candidates
+
+
+def _matches_configured_issuer_identifiers(
+    issuer_candidates: set[str],
+    configured_values: list[str],
+) -> bool:
+    if not issuer_candidates or not configured_values:
+        return False
+
+    configured_candidates: set[str] = set()
+    for value in configured_values:
+        configured_candidates.update(_issuer_identifier_candidates(value))
+    return not issuer_candidates.isdisjoint(configured_candidates)
+
+
+def _trust_source_issuer_candidates(source: dict[str, Any]) -> set[str]:
+    candidates: set[str] = set()
+
+    issuer_did = source.get("issuer_did")
+    if isinstance(issuer_did, str):
+        candidates.update(_issuer_identifier_candidates(issuer_did))
+
+    source_type = str(source.get("source_type") or "").upper()
+    source_url = source.get("url")
+    if source_type == "PINNED_ISSUER" and isinstance(source_url, str):
+        candidates.update(_issuer_identifier_candidates(source_url))
+
+    return candidates
+
+
 def _verify_open_badge(vp_token: str, version: str) -> dict:
     request_key = "assertion" if version == "v2" else "credential"
     credential, document_store = _extract_open_badge_payload(vp_token, request_key)
@@ -1381,6 +1481,33 @@ def get_trust_cache() -> TrustProfileCache:
     return _trust_profile_cache
 
 
+def _bounded_cache_ttl_seconds(value: Any, fallback: int) -> int:
+    try:
+        ttl_seconds = int(value)
+    except (TypeError, ValueError):
+        ttl_seconds = fallback
+
+    return max(1, min(ttl_seconds, _TRUST_PROFILE_CACHE_TTL_MAX_SECONDS))
+
+
+def _trust_profile_cache_ttl_seconds(trust_profile_data: dict[str, Any]) -> int:
+    configured_ttl = _bounded_cache_ttl_seconds(
+        os.environ.get(
+            "TRUST_PROFILE_CACHE_TTL_SECONDS",
+            str(_TRUST_PROFILE_CACHE_TTL_DEFAULT_SECONDS),
+        ),
+        _TRUST_PROFILE_CACHE_TTL_DEFAULT_SECONDS,
+    )
+    freshness_window = (trust_profile_data.get("time_policy") or {}).get(
+        "freshness_window_seconds"
+    )
+    if freshness_window is None:
+        return configured_ttl
+
+    freshness_ttl = _bounded_cache_ttl_seconds(freshness_window, configured_ttl)
+    return min(configured_ttl, freshness_ttl)
+
+
 def _trust_profile_service_url() -> str:
     """Return the internal Trust Profile service base URL."""
     return os.environ.get("TRUST_PROFILE_SERVICE_URL", "http://trust-profile:8004")
@@ -1389,6 +1516,190 @@ def _trust_profile_service_url() -> str:
 def _trust_profile_lookup_url(profile_id: str) -> str:
     """Return the service-to-service Trust Profile lookup URL."""
     return f"{_trust_profile_service_url()}/internal/v1/trust-profiles/{profile_id}"
+
+
+def _issuance_service_url() -> str:
+    """Return the internal Issuance service base URL."""
+    return os.environ.get("ISSUANCE_SERVICE_URL", "http://issuance:8005")
+
+
+def _credential_status_lookup_url(credential_id: str) -> str:
+    """Return the configured managed-issuer credential-status lookup URL.
+
+    MIP freshness policies require revocation evidence but do not mandate a
+    single transport. The default endpoint is Marty's issuance service, while
+    MIP_CREDENTIAL_STATUS_URL_TEMPLATE lets deployments point the verifier at a
+    different issuer-managed status resolver. The template may contain
+    ``{credential_id}``; values are URL-escaped before interpolation.
+    """
+    escaped_id = quote(credential_id, safe="")
+    template = os.environ.get("MIP_CREDENTIAL_STATUS_URL_TEMPLATE", "").strip()
+    if template:
+        return template.replace("{credential_id}", escaped_id)
+    return f"{_issuance_service_url()}/v1/issuance/credentials/{escaped_id}/status"
+
+
+def _split_configured_values(value: str | None) -> list[str]:
+    if not value:
+        return []
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _managed_issuer_identifier_candidates() -> set[str]:
+    """Return issuer identifiers allowed to use issuer-managed status lookup.
+
+    This is the MIP abstraction boundary: the verifier may use an issuer-state
+    status endpoint only for issuers explicitly managed by this deployment (or
+    derived from its self-host public issuer identity). It is intentionally not
+    tied to a credential format or the OpenBadgeLogin policy.
+    """
+    candidates = {
+        value
+        for env_name in (
+            "MIP_MANAGED_ISSUER_IDENTIFIERS",
+            "MIP_MANAGED_ISSUER_DIDS",
+            # Backwards-compatible deployment env names.
+            "MARTY_ISSUER_DID",
+            "CREDENTIAL_LOGIN_ISSUER_DID",
+            "ISSUER_DID",
+        )
+        for value in _split_configured_values(os.environ.get(env_name))
+    }
+    org_slug = os.environ.get("MARTY_ORG_SLUG", "marty").strip() or "marty"
+    public_domain = os.environ.get("PUBLIC_DOMAIN", "").strip()
+    if public_domain:
+        candidates.add(f"did:web:{public_domain}:orgs:{org_slug}")
+
+    for env_name in ("PUBLIC_BASE_URL", "ISSUER_BASE_URL", "PUBLIC_API_URL"):
+        base_url = os.environ.get(env_name, "").strip()
+        if not base_url:
+            continue
+        parsed = urlparse(base_url)
+        host = (parsed.hostname or parsed.netloc or parsed.path).strip()
+        if host and host not in {"localhost", "127.0.0.1", "gateway", "marty-gateway"}:
+            candidates.add(f"did:web:{host}:orgs:{org_slug}")
+
+    return candidates
+
+
+def _is_managed_issuer_identifier(issuer_did: str | None) -> bool:
+    if not issuer_did:
+        return False
+    configured = list(_managed_issuer_identifier_candidates())
+    return _matches_configured_issuer_identifiers(
+        _issuer_identifier_candidates(issuer_did),
+        configured,
+    )
+
+
+def _credential_status_identifier_candidates(
+    claims: dict[str, Any],
+    verification_result: dict[str, Any],
+) -> list[str]:
+    """Return stable credential identifiers usable with issuer-managed status.
+
+    MIP credentials may expose IDs through different format-specific names.
+    This keeps the status resolver format-neutral while avoiding claim values
+    that are not intended to identify the issued credential.
+    """
+    candidates: list[str] = []
+
+    def _append(value: Any) -> None:
+        if isinstance(value, str):
+            normalized = value.strip()
+            if normalized and normalized not in candidates:
+                candidates.append(normalized)
+
+    for payload in (claims, verification_result):
+        for key in (
+            "credential_id",
+            "credentialId",
+            "credentialID",
+            "jti",
+        ):
+            _append(payload.get(key))
+
+        vc = payload.get("vc")
+        if isinstance(vc, dict):
+            _append(vc.get("id"))
+
+        credential = payload.get("credential")
+        if isinstance(credential, dict):
+            _append(credential.get("id"))
+
+    return candidates
+
+
+def _status_indicates_not_revoked(status: str) -> bool:
+    return status in {"active", "valid", "current", "good"}
+
+
+def _get_issued_credential_status(credential_id: str) -> dict[str, Any] | None:
+    """Fetch current issuer-managed status for a credential id."""
+    import httpx as _httpx
+
+    response = _httpx.get(
+        _credential_status_lookup_url(credential_id),
+        headers={"Accept": "application/json"},
+        timeout=5.0,
+    )
+    if response.status_code == 404:
+        return None
+    response.raise_for_status()
+    payload = response.json()
+    return payload if isinstance(payload, dict) else None
+
+
+def _lookup_managed_issuer_credential_status_revocation_state(
+    *,
+    issuer_did: str | None,
+    credential_ids: list[str],
+) -> tuple[bool | None, bool | None, str | None]:
+    """Use issuer-managed status as revocation evidence when configured.
+
+    Some MIP credential formats carry a stable credential identifier but no
+    embedded StatusList/OCSP/CRL evidence in the presentation. For issuers
+    managed by this deployment, an authoritative issuer-status endpoint is a
+    valid revocation source. This resolver is deliberately format-agnostic:
+    caller supplies candidate credential IDs extracted from the verified
+    presentation, and this function tries the configured status endpoint.
+    """
+    if not _is_managed_issuer_identifier(issuer_did):
+        return None, None, None
+    if not credential_ids:
+        return None, None, None
+
+    for credential_id in credential_ids:
+        try:
+            status_payload = _get_issued_credential_status(credential_id)
+        except Exception as exc:
+            logger.warning(
+                "Credential status lookup failed for managed issuer %s credential=%s: %s",
+                issuer_did,
+                credential_id[:8] + "..." if len(credential_id) > 8 else credential_id,
+                exc,
+            )
+            continue
+
+        if not status_payload:
+            logger.debug(
+                "Credential status lookup found no managed issuer record for %s credential=%s",
+                issuer_did,
+                credential_id[:8] + "..." if len(credential_id) > 8 else credential_id,
+            )
+            continue
+
+        status = str(status_payload.get("status") or "").strip().lower()
+        if not status:
+            return True, False, "unknown"
+        return True, _status_indicates_not_revoked(status), status
+
+    logger.warning(
+        "Credential status lookup found no managed issuer record for %s across %d candidate IDs",
+        issuer_did,
+        len(credential_ids),
+    )
+    return None, None, None
 
 
 def _build_credential_requirement(model: CredentialRequirementModel) -> CredentialRequirement:
@@ -1989,7 +2300,7 @@ async def evaluate_presentation(
                 )
                 if resp.status_code == 200:
                     trust_profile_data = resp.json()
-                    ttl = int(trust_profile_data.get("time_policy", {}).get("freshness_window_seconds", 3600))
+                    ttl = _trust_profile_cache_ttl_seconds(trust_profile_data)
                     trust_cache.set(trust_profile_id, trust_profile_data, ttl)
                 else:
                     trust_check_passed = False
@@ -2000,34 +2311,34 @@ async def evaluate_presentation(
                     logger.warning(trust_check_error)
 
             if trust_profile_data:
+                issuer_identifiers = _issuer_identifier_candidates(issuer_did)
                 allowed_issuers: list[str] = trust_profile_data.get("allowed_issuers") or []
                 denied_issuers: list[str] = trust_profile_data.get("denied_issuers") or []
                 trust_sources: list[dict] = trust_profile_data.get("trust_sources") or []
                 # Check denied list first (fail-closed)
-                if denied_issuers and issuer_did in denied_issuers:
+                if denied_issuers and _matches_configured_issuer_identifiers(issuer_identifiers, denied_issuers):
                     trust_check_passed = False
                     trust_check_error = f"Issuer {issuer_did} is explicitly denied by Trust Profile"
                 elif allowed_issuers:
                     # If allowed list is specified, issuer MUST be in it
-                    if issuer_did not in allowed_issuers:
+                    if not _matches_configured_issuer_identifiers(issuer_identifiers, allowed_issuers):
                         trust_check_passed = False
                         trust_check_error = f"Issuer {issuer_did} is not in Trust Profile allowed_issuers"
                 elif trust_sources:
-                    # Check if issuer DID matches any trust source's issuer_did
-                    source_dids = [
-                        source.get("issuer_did") or ""
-                        for source in trust_sources
-                        if isinstance(source, dict)
-                    ]
-                    if source_dids and issuer_did not in source_dids:
+                    source_identifiers: set[str] = set()
+                    for source in trust_sources:
+                        if isinstance(source, dict):
+                            source_identifiers.update(_trust_source_issuer_candidates(source))
+
+                    if source_identifiers and issuer_identifiers.isdisjoint(source_identifiers):
                         trust_check_passed = False
                         trust_check_error = (
-                            f"Issuer {issuer_did} does not match any trust source "
+                            f"Issuer {issuer_did} does not match any trust source issuer identifier "
                             f"in Trust Profile {trust_profile_id}"
                         )
-                    elif not source_dids:
+                    elif not source_identifiers:
                         logger.debug(
-                            "Trust Profile %s has no trust_source issuer_dids — skipping issuer match",
+                            "Trust Profile %s has no trust_source issuer identifiers — skipping issuer match",
                             trust_profile_id,
                         )
             elif trust_check_passed:
@@ -2067,6 +2378,24 @@ async def evaluate_presentation(
             evaluation_timestamp=datetime.now(timezone.utc).isoformat(),
             nonce=request.nonce,
         )
+
+    if revocation_checked is not True:
+        (
+            status_revocation_checked,
+            status_not_revoked,
+            revocation_status,
+        ) = _lookup_managed_issuer_credential_status_revocation_state(
+            issuer_did=issuer_did,
+            credential_ids=_credential_status_identifier_candidates(
+                extracted_claims,
+                verification_result,
+            ),
+        )
+        if status_revocation_checked is not None:
+            verification_result["revocation_checked"] = status_revocation_checked
+            verification_result["not_revoked"] = status_not_revoked
+            verification_result["revocation_status"] = revocation_status or "unknown"
+            revocation_checked, not_revoked = _derive_revocation_state(verification_result)
 
     # Apply freshness/revocation requirements from MIP policy abstractions.
     # This must remain format-agnostic and not tied to a specific login flow.

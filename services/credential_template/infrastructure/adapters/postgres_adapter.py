@@ -5,13 +5,18 @@ Implements the repository pattern for credential template persistence.
 """
 
 import json
+import uuid
 from typing import Any, TYPE_CHECKING
 from datetime import datetime, timezone
 
 from sqlalchemy import select, delete, and_
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from credential_template.infrastructure.models import credential_templates_table, wallet_registry_table
+from credential_template.infrastructure.models import (
+    credential_templates_table,
+    delivery_destinations_table,
+    wallet_registry_table,
+)
 
 if TYPE_CHECKING:
     from credential_template.main import (
@@ -26,6 +31,25 @@ class PostgresCredentialTemplateRepository:
 
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]):
         self._session_factory = session_factory
+
+    @staticmethod
+    def _legacy_claim_id(template_id: str, index: int, claim: dict[str, Any]) -> str:
+        """Build a stable ID for older seeded claims that predate claim IDs."""
+        name = str(claim.get("name") or f"claim_{index + 1}")
+        return str(uuid.uuid5(uuid.NAMESPACE_URL, f"credential-template:{template_id}:claim:{name}:{index}"))
+
+    @staticmethod
+    def _claim_type_value(raw_value: Any) -> str:
+        value = str(raw_value or "string").strip().lower()
+        legacy_aliases = {
+            "number": "integer",
+            "float": "integer",
+            "decimal": "integer",
+            "text": "string",
+            "str": "string",
+            "bool": "boolean",
+        }
+        return legacy_aliases.get(value, value)
     
     async def save(self, template: "CredentialTemplate") -> None:
         """Save or update a credential template."""
@@ -153,25 +177,29 @@ class PostgresCredentialTemplateRepository:
             if not row:
                 return None
         # Convert JSON data back to domain objects
-        claims = [
-            ClaimDefinition(
-                id=c["id"],
-                name=c["name"],
-                display_name=c["display_name"],
-                description=c.get("description"),
-                claim_type=ClaimType(c["claim_type"]),
-                required=c["required"],
-                selectively_disclosable=c.get("selectively_disclosable", True),
-                derivable=c.get("derivable", False),
-                pattern=c.get("pattern"),
-                enum_values=c.get("enum_values"),
-                min_value=c.get("min_value"),
-                max_value=c.get("max_value"),
-                mdoc_namespace=c.get("mdoc_namespace"),
-                mdoc_element_identifier=c.get("mdoc_element_identifier"),
+        claims = []
+        for index, c in enumerate(row.claims or []):
+            if not isinstance(c, dict):
+                continue
+            name = str(c.get("name") or f"claim_{index + 1}")
+            claims.append(
+                ClaimDefinition(
+                    id=c.get("id") or self._legacy_claim_id(template_id, index, c),
+                    name=name,
+                    display_name=c.get("display_name") or name.replace("_", " ").title(),
+                    description=c.get("description"),
+                    claim_type=ClaimType(self._claim_type_value(c.get("claim_type") or c.get("type"))),
+                    required=bool(c.get("required", True)),
+                    selectively_disclosable=c.get("selectively_disclosable", True),
+                    derivable=c.get("derivable", False),
+                    pattern=c.get("pattern"),
+                    enum_values=c.get("enum_values"),
+                    min_value=c.get("min_value"),
+                    max_value=c.get("max_value"),
+                    mdoc_namespace=c.get("mdoc_namespace"),
+                    mdoc_element_identifier=c.get("mdoc_element_identifier"),
+                )
             )
-            for c in row.claims
-        ]
         
         display_style_data = row.display_style
         display_style = DisplayStyle(
@@ -412,6 +440,127 @@ class PostgresWalletRegistryRepository:
             supports_haip=bool(row.supports_haip),
             docs_url=row.docs_url,
             is_active=row.is_active,
+            created_at=row.created_at,
+            updated_at=row.updated_at,
+        )
+
+
+class PostgresDeliveryDestinationRepository:
+    """PostgreSQL implementation of the delivery destination registry."""
+
+    def __init__(self, session_factory: async_sessionmaker[AsyncSession]):
+        self._session_factory = session_factory
+
+    async def save(self, entry: "DeliveryDestinationEntry") -> None:
+        entry.updated_at = datetime.now(timezone.utc)
+        async with self._session_factory() as session:
+            row = {
+                "id": entry.id,
+                "organization_id": entry.organization_id,
+                "is_system": entry.is_system,
+                "name": entry.name,
+                "description": entry.description,
+                "provider": entry.provider,
+                "mode": entry.mode,
+                "setup_actor": entry.setup_actor,
+                "delivery_target": entry.delivery_target,
+                "wallet_profile_id": entry.wallet_profile_id,
+                "credential_format": entry.credential_format,
+                "issuance_protocol": entry.issuance_protocol,
+                "compliance_profile_code": entry.compliance_profile_code,
+                "connector_type": entry.connector_type,
+                "connector_id": entry.connector_id,
+                "requires_consent": entry.requires_consent,
+                "claim_projection_policy": entry.claim_projection_policy,
+                "setup_requirements": entry.setup_requirements,
+                "capabilities": entry.capabilities,
+                "docs_url": entry.docs_url,
+                "is_enabled": entry.is_enabled,
+                "created_at": entry.created_at,
+                "updated_at": entry.updated_at,
+            }
+            existing = await session.execute(
+                select(delivery_destinations_table).where(delivery_destinations_table.c.id == entry.id)
+            )
+            if existing.first() is not None:
+                await session.execute(
+                    delivery_destinations_table.update()
+                    .where(delivery_destinations_table.c.id == entry.id)
+                    .values(**{k: v for k, v in row.items() if k != "id"})
+                )
+            else:
+                await session.execute(delivery_destinations_table.insert().values(**row))
+            await session.commit()
+
+    async def get(self, destination_id: str) -> "DeliveryDestinationEntry | None":
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(delivery_destinations_table).where(delivery_destinations_table.c.id == destination_id)
+            )
+            row = result.first()
+            return self._row_to_entry(row) if row else None
+
+    async def list(
+        self,
+        *,
+        active_only: bool = True,
+        organization_id: str | None = None,
+        provider: str | None = None,
+        mode: str | None = None,
+    ) -> "list[DeliveryDestinationEntry]":
+        async with self._session_factory() as session:
+            conditions = []
+            if active_only:
+                conditions.append(delivery_destinations_table.c.is_enabled == True)
+            if organization_id is not None:
+                conditions.append(
+                    (delivery_destinations_table.c.organization_id == organization_id)
+                    | (delivery_destinations_table.c.is_system == True)
+                )
+            if provider:
+                conditions.append(delivery_destinations_table.c.provider == provider)
+            if mode:
+                conditions.append(delivery_destinations_table.c.mode == mode)
+            stmt = select(delivery_destinations_table)
+            if conditions:
+                stmt = stmt.where(and_(*conditions))
+            result = await session.execute(stmt)
+            entries = [self._row_to_entry(row) for row in result.all()]
+            return sorted(entries, key=lambda entry: (0 if entry.is_system else 1, entry.name.lower()))
+
+    async def delete(self, destination_id: str) -> None:
+        async with self._session_factory() as session:
+            await session.execute(
+                delete(delivery_destinations_table).where(delivery_destinations_table.c.id == destination_id)
+            )
+            await session.commit()
+
+    @staticmethod
+    def _row_to_entry(row) -> "DeliveryDestinationEntry":
+        from credential_template.main import DeliveryDestinationEntry
+
+        return DeliveryDestinationEntry(
+            id=row.id,
+            organization_id=row.organization_id,
+            is_system=bool(row.is_system),
+            name=row.name,
+            description=row.description,
+            provider=row.provider,
+            mode=row.mode,
+            setup_actor=row.setup_actor,
+            delivery_target=row.delivery_target,
+            wallet_profile_id=row.wallet_profile_id,
+            credential_format=row.credential_format,
+            issuance_protocol=row.issuance_protocol,
+            compliance_profile_code=row.compliance_profile_code,
+            connector_type=row.connector_type,
+            connector_id=row.connector_id,
+            requires_consent=bool(row.requires_consent),
+            claim_projection_policy=dict(row.claim_projection_policy or {}),
+            setup_requirements=list(row.setup_requirements or []),
+            capabilities=dict(row.capabilities or {}),
+            docs_url=row.docs_url,
+            is_enabled=bool(row.is_enabled),
             created_at=row.created_at,
             updated_at=row.updated_at,
         )

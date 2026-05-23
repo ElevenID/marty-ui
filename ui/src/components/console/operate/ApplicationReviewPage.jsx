@@ -51,13 +51,16 @@ import AssignmentIcon from '@mui/icons-material/Assignment';
 import VerifiedIcon from '@mui/icons-material/Verified';
 import NoteAddIcon from '@mui/icons-material/NoteAdd';
 import RefreshIcon from '@mui/icons-material/Refresh';
+import PolicyIcon from '@mui/icons-material/Policy';
 
 import { useAuth } from '../../../hooks/useAuth';
 import { StatusChip } from '../../common';
 import IssuingSection from './IssuingSection';
 import {
   getApplication,
+  getApplicationEvidenceSummary,
   getVettingChecks,
+  runApplicationExternalEvidenceApiCheck,
   reviewOrganizationApplication,
   requestApplicationInfo,
   acquireReviewerLock,
@@ -172,6 +175,128 @@ function CheckRow({ check }) {
   );
 }
 
+function compactObjectEntries(value) {
+  if (!value || typeof value !== 'object') return [];
+  return Object.entries(value).filter(([, item]) => item !== null && item !== undefined && item !== '');
+}
+
+function EvidenceFactRow({ fact }) {
+  const scopeEntries = compactObjectEntries(fact.scope);
+  const verificationStatus = fact.verification?.status || 'unknown';
+  const verificationColor = String(verificationStatus).toLowerCase() === 'verified' ? 'success' : 'default';
+
+  return (
+    <Accordion disableGutters elevation={0} sx={{ border: '1px solid', borderColor: 'divider', mb: 1, borderRadius: 1, '&:before': { display: 'none' } }}>
+      <AccordionSummary expandIcon={<ExpandMoreIcon />} sx={{ minHeight: 48 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, width: '100%', minWidth: 0 }}>
+          <VerifiedIcon fontSize="small" color="action" />
+          <Typography variant="body2" sx={{ flexGrow: 1, minWidth: 0, overflowWrap: 'anywhere' }}>
+            {fact.fact_type}
+          </Typography>
+          <Chip label={fact.provider || 'provider'} size="small" variant="outlined" />
+          <Chip label={verificationStatus} size="small" color={verificationColor} />
+        </Box>
+      </AccordionSummary>
+      <AccordionDetails sx={{ bgcolor: 'action.hover', pt: 1 }}>
+        <Grid container spacing={2}>
+          <Grid item xs={12} sm={6} md={3}>
+            <ClaimField label="Subject" value={fact.subject_id} />
+          </Grid>
+          <Grid item xs={12} sm={6} md={3}>
+            <ClaimField label="Created" value={fmt(fact.created_at)} />
+          </Grid>
+          <Grid item xs={12} sm={6} md={3}>
+            <ClaimField label="Source Event" value={fact.source?.provider_event_id || fact.source?.event_id} />
+          </Grid>
+          <Grid item xs={12} sm={6} md={3}>
+            <ClaimField label="Verification Method" value={fact.verification?.method} />
+          </Grid>
+        </Grid>
+        {scopeEntries.length > 0 && (
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75, mt: 1 }}>
+            {scopeEntries.map(([key, value]) => (
+              <Chip
+                key={key}
+                label={`${key}: ${value}`}
+                size="small"
+                variant="outlined"
+                sx={{ maxWidth: '100%', '& .MuiChip-label': { overflowWrap: 'anywhere', whiteSpace: 'normal' } }}
+              />
+            ))}
+          </Box>
+        )}
+        <Box component="pre" sx={{ fontSize: '0.7rem', overflow: 'auto', mt: 1, p: 1, bgcolor: 'background.paper', borderRadius: 1 }}>
+          {JSON.stringify({ assertion: fact.assertion, verification: fact.verification, source: fact.source }, null, 2)}
+        </Box>
+      </AccordionDetails>
+    </Accordion>
+  );
+}
+
+function EvidencePolicySection({ summary, onRunCheck, runningCheckId, disabled }) {
+  const facts = Array.isArray(summary?.evidence_facts) ? summary.evidence_facts : [];
+  const availableChecks = Array.isArray(summary?.available_api_checks) ? summary.available_api_checks : [];
+  const policy = summary?.policy_decision;
+  const allowed = policy?.allowed;
+  const decisionLabel = allowed === true ? 'Permit' : allowed === false ? 'Deny' : 'No Decision';
+  const decisionColor = allowed === true ? 'success' : allowed === false ? 'warning' : 'default';
+
+  return (
+    <SectionCard title="Evidence & Policy" icon={<PolicyIcon color="action" />}>
+      <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap" sx={{ mb: facts.length || availableChecks.length ? 2 : 0 }}>
+        <Chip label={`Policy: ${decisionLabel}`} color={decisionColor} size="small" />
+        {summary?.policy_source && <Chip label={`Source: ${summary.policy_source}`} size="small" variant="outlined" />}
+        {summary?.policy_set_id && <Chip label={`Policy Set: ${summary.policy_set_id}`} size="small" variant="outlined" />}
+        {summary?.issuance_transaction_id && (
+          <Chip label={`Issuance: ${summary.issuance_transaction_id}`} size="small" variant="outlined" />
+        )}
+        {summary?.canvas?.canvas_platform_id && (
+          <Chip label={`Canvas platform: ${summary.canvas.canvas_platform_id}`} size="small" variant="outlined" />
+        )}
+      </Stack>
+      {Array.isArray(policy?.errors) && policy.errors.length > 0 && (
+        <Alert severity="warning" variant="outlined" sx={{ mb: 2 }}>
+          {policy.errors.join('; ')}
+        </Alert>
+      )}
+      {availableChecks.length > 0 && (
+        <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap" sx={{ mb: 2 }}>
+          {availableChecks.map(check => {
+            const isRunning = runningCheckId === check.check_id;
+            return (
+              <Button
+                key={check.check_id}
+                size="small"
+                variant="outlined"
+                startIcon={isRunning ? <CircularProgress size={14} /> : <RefreshIcon />}
+                onClick={() => onRunCheck?.(check.check_id)}
+                disabled={disabled || isRunning}
+                sx={{ textTransform: 'none', maxWidth: '100%', whiteSpace: 'normal', textAlign: 'left' }}
+              >
+                {isRunning ? 'Running' : `Run ${check.description || check.check_id}`}
+              </Button>
+            );
+          })}
+        </Stack>
+      )}
+      {availableChecks.length > 0 && (
+        <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap" sx={{ mb: 2 }}>
+          {availableChecks.map(check => (
+            <Chip
+              key={`${check.check_id}-meta`}
+              size="small"
+              variant="outlined"
+              label={`${check.provider || 'external_api'}${check.fact_type ? `: ${check.fact_type}` : ''}${check.auto_issue_on_permit ? ' | auto-issue' : ''}`}
+              sx={{ maxWidth: '100%', '& .MuiChip-label': { overflowWrap: 'anywhere', whiteSpace: 'normal' } }}
+            />
+          ))}
+        </Stack>
+      )}
+      {facts.map(fact => <EvidenceFactRow key={fact.id} fact={fact} />)}
+    </SectionCard>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Derive summary signal from checks and status
 // ---------------------------------------------------------------------------
@@ -212,12 +337,14 @@ export default function ApplicationReviewPage() {
 
   const [application, setApplication] = useState(null);
   const [checks, setChecks] = useState([]);
+  const [evidenceSummary, setEvidenceSummary] = useState(null);
   const [credentialTemplate, setCredentialTemplate] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [actionLoading, setActionLoading] = useState(false);
   const [actionError, setActionError] = useState(null);
   const [actionSuccess, setActionSuccess] = useState(null);
+  const [runningEvidenceCheckId, setRunningEvidenceCheckId] = useState(null);
 
   // Reviewer lock
   const [lock, setLock] = useState(null); // { locked, reviewer_name, reviewer_id }
@@ -243,12 +370,14 @@ export default function ApplicationReviewPage() {
     setLoading(true);
     setError(null);
     try {
-      const [app, checkList] = await Promise.all([
+      const [app, checkList, evidence] = await Promise.all([
         getApplication(applicationId),
         getVettingChecks(applicationId).catch(() => []),
+        getApplicationEvidenceSummary(applicationId).catch(() => null),
       ]);
       setApplication({ ...app, status: app.status?.toLowerCase() });
       setChecks(Array.isArray(checkList) ? checkList : []);
+      setEvidenceSummary(evidence);
       if (app.metadata?.review_notes) setReviewerNote(app.metadata.review_notes);
 
       // Fetch the credential template to drive the claims display dynamically
@@ -265,6 +394,7 @@ export default function ApplicationReviewPage() {
         }
       }
     } catch (err) {
+      setEvidenceSummary(null);
       setError(err.message || 'Failed to load application');
     } finally {
       setLoading(false);
@@ -355,6 +485,30 @@ export default function ApplicationReviewPage() {
     }
   };
 
+  const handleRunEvidenceCheck = async (checkId) => {
+    setActionLoading(true);
+    setRunningEvidenceCheckId(checkId);
+    setActionError(null);
+    setActionSuccess(null);
+    try {
+      const result = await runApplicationExternalEvidenceApiCheck(applicationId, checkId, {
+        issue_on_permit: true,
+      });
+      const allowed = result?.policy_decision?.allowed;
+      setActionSuccess(
+        allowed === true
+          ? 'Evidence check completed and policy permitted approval.'
+          : 'Evidence check completed and policy metadata was recorded.',
+      );
+      await loadData();
+    } catch (err) {
+      setActionError(err.message || 'Failed to run evidence check');
+    } finally {
+      setRunningEvidenceCheckId(null);
+      setActionLoading(false);
+    }
+  };
+
   // ---------------------------------------------------------------------------
   // Derived state
   // ---------------------------------------------------------------------------
@@ -366,6 +520,18 @@ export default function ApplicationReviewPage() {
   const isLocked = lock && !lock.locked && lock.reviewer_id !== reviewerId;
 
   const signals = deriveSignals(application, checks);
+  const policyDecision = evidenceSummary?.policy_decision;
+  const policySignal = policyDecision
+    ? {
+        value: policyDecision.allowed === true ? 'Permitted' : policyDecision.allowed === false ? 'Denied' : 'Unknown',
+        color: policyDecision.allowed === true ? 'success' : policyDecision.allowed === false ? 'warning' : 'default',
+      }
+    : { value: signals.policyValue, color: signals.policyColor };
+  const hasEvidencePolicy =
+    Boolean(policyDecision) ||
+    Boolean(evidenceSummary?.canvas) ||
+    ((evidenceSummary?.available_api_checks || []).length > 0) ||
+    ((evidenceSummary?.evidence_facts || []).length > 0);
 
   const allChecksPass =
     checks.length > 0 &&
@@ -608,8 +774,8 @@ export default function ApplicationReviewPage() {
                 <Divider orientation="vertical" flexItem />
                 <VerificationSignal
                   label="Policy Outcome"
-                  value={signals.policyValue}
-                  color={signals.policyColor}
+                  value={policySignal.value}
+                  color={policySignal.color}
                 />
               </Box>
             </Grid>
@@ -617,6 +783,15 @@ export default function ApplicationReviewPage() {
         </SectionCard>
 
         {/* ── C. CREDENTIAL CLAIMS ── */}
+        {hasEvidencePolicy && (
+          <EvidencePolicySection
+            summary={evidenceSummary}
+            onRunCheck={handleRunEvidenceCheck}
+            runningCheckId={runningEvidenceCheckId}
+            disabled={actionLoading || isLocked || isTerminal}
+          />
+        )}
+
         <SectionCard title="Credential Claims" icon={<PersonIcon color="action" />}>
           {claims.length === 0 ? (
             <Typography variant="body2" color="text.secondary">No claim data available.</Typography>

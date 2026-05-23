@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  DEFAULT_LOGIN_REDIRECT,
   createEnrichedUser,
   deriveCapabilities,
   getFallbackOrganizations,
@@ -9,11 +10,22 @@ import {
   normalizeCapabilities,
   parseOrganizationClaim,
   resolveActiveOrganization,
+  resolveInteractiveLoginRedirect,
   resolveUserOrganizations,
   updateUserActiveOrganization,
 } from './authSession'
 
 describe('authSession helpers', () => {
+  it('sends plain login button clicks to the console by default', () => {
+    expect(resolveInteractiveLoginRedirect(undefined)).toBe(DEFAULT_LOGIN_REDIRECT)
+    expect(resolveInteractiveLoginRedirect({ type: 'click' })).toBe(DEFAULT_LOGIN_REDIRECT)
+  })
+
+  it('preserves explicit login redirects for protected and deep-link flows', () => {
+    expect(resolveInteractiveLoginRedirect('/developers')).toBe('/developers')
+    expect(resolveInteractiveLoginRedirect('/organizations/join?inviteToken=token-1')).toBe('/organizations/join?inviteToken=token-1')
+  })
+
   it('parses organization claims into memberships', () => {
     expect(parseOrganizationClaim({
       'org-1': { name: 'Acme' },
@@ -257,6 +269,26 @@ describe('authSession helpers', () => {
         has_org_console_access: false,
       },
     })).toBe(false)
+  })
+
+  it('keeps Canvas LTI learners in applicant-only access even when they have an issuer org for catalog scope', () => {
+    const rawUser = {
+      user_id: 'canvas-learner-1',
+      roles: ['applicant', 'canvas_lti_learner'],
+      organization_id: 'marty-org',
+      organization_name: 'Marty',
+    }
+
+    const enriched = createEnrichedUser(rawUser, [{ id: 'marty-org', name: 'Marty' }], 'marty-org')
+
+    expect(enriched.capabilities).toMatchObject({
+      apply: true,
+      'org:view': false,
+      'org:manage': false,
+      'org:issue': false,
+    })
+    expect(getConsoleEligibleOrganizations(enriched.organizations)).toEqual([])
+    expect(enriched.default_organization_id).toBe('marty-org')
   })
 
   it('updates active organization in auth state', () => {

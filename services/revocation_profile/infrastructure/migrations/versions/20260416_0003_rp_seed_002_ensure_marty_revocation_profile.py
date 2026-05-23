@@ -8,9 +8,15 @@ Create Date: 2026-04-16 00:30:00.000000+00:00
 from __future__ import annotations
 
 import json
+import os
 
 from alembic import op
 import sqlalchemy as sa
+from marty_common.system_ids import (
+    MARTY_DEFAULT_ORG_ID,
+    MARTY_DEFAULT_REVOCATION_PROFILE_ID,
+)
+from marty_common.system_urls import build_marty_status_list_base_url
 
 
 revision = "rp_seed_002"
@@ -18,8 +24,8 @@ down_revision = "rp_seed_001"
 branch_labels = None
 depends_on = None
 
-MARTY_ORG_ID = "00000000-0000-0000-0000-000000000001"
-MARTY_REVOCATION_PROFILE_ID = "70000000-0000-0000-0000-000000000001"
+MARTY_ORG_ID = os.environ.get("MARTY_ORG_ID", MARTY_DEFAULT_ORG_ID)
+MARTY_REVOCATION_PROFILE_ID = MARTY_DEFAULT_REVOCATION_PROFILE_ID
 NOW = "2026-04-16T00:30:00+00:00"
 
 
@@ -27,7 +33,10 @@ def _issuer_config() -> str:
     return json.dumps(
         {
             "status_list_strategy": "auto",
-            "status_list_base_url": "https://api.beta.elevenidllc.com/v1/organizations/00000000-0000-0000-0000-000000000001/revocation-profiles/70000000-0000-0000-0000-000000000001/status-lists/{mechanism}/{purpose}",
+            "status_list_base_url": build_marty_status_list_base_url(
+                organization_id=MARTY_ORG_ID,
+                revocation_profile_id=MARTY_REVOCATION_PROFILE_ID,
+            ),
             "status_list_size": 131072,
             "update_mode": "sync",
             "batch_interval_seconds": 300,

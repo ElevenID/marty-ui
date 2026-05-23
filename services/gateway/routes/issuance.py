@@ -345,6 +345,72 @@ async def reinstate_issued_credential(credential_id: str, request: Request) -> R
     return await proxy_request(request, service_url, f"/v1/issued-credentials/{credential_id}/reinstate", inject_headers=_ISSUANCE_HEADERS)
 
 
+@issuance_router.get("/delivery-records/canvas-credentials/provenance", summary="Resolve Canvas Mirror Provenance")
+async def get_canvas_mirror_provenance(request: Request) -> Response:
+    """Resolve a Canvas mirror record to its canonical ElevenID issuance context."""
+    registry = get_registry()
+    service_url = registry.get_service_url("issuance")
+    return await proxy_request(request, service_url, "/v1/issuance/delivery-records/canvas-credentials/provenance")
+
+
+@issuance_router.post("/delivery-records/canvas-credentials/process-pending", summary="Process Pending Canvas Mirror Deliveries")
+async def process_pending_canvas_mirror_deliveries(request: Request) -> Response:
+    """Process pending Canvas mirror delivery records through issuance."""
+    registry = get_registry()
+    service_url = registry.get_service_url("issuance")
+    return await proxy_request(
+        request,
+        service_url,
+        "/v1/issuance/delivery-records/canvas-credentials/process-pending",
+        inject_headers=_ISSUANCE_HEADERS,
+    )
+
+
+@issuance_router.post(
+    "/delivery-records/canvas-credentials/process-status-sync-failures",
+    summary="Process Canvas Mirror Status Sync Failures",
+)
+async def process_canvas_mirror_status_sync_failures(request: Request) -> Response:
+    """Retry failed Canvas mirror lifecycle status syncs through issuance."""
+    registry = get_registry()
+    service_url = registry.get_service_url("issuance")
+    return await proxy_request(
+        request,
+        service_url,
+        "/v1/issuance/delivery-records/canvas-credentials/process-status-sync-failures",
+        inject_headers=_ISSUANCE_HEADERS,
+    )
+
+
+@issuance_router.post(
+    "/delivery-records/canvas-credentials/run-automation-cycle",
+    summary="Run Canvas Mirror Automation Cycle",
+)
+async def run_canvas_mirror_automation_cycle(request: Request) -> Response:
+    """Run one Canvas mirror automation cycle through issuance."""
+    registry = get_registry()
+    service_url = registry.get_service_url("issuance")
+    return await proxy_request(
+        request,
+        service_url,
+        "/v1/issuance/delivery-records/canvas-credentials/run-automation-cycle",
+        inject_headers=_ISSUANCE_HEADERS,
+    )
+
+
+@issuance_router.get("/organizations/{organization_id}/canvas-mirror-health", summary="Get Canvas Mirror Health")
+async def get_canvas_mirror_health(organization_id: str, request: Request) -> Response:
+    """Return Canvas mirror publish and lifecycle sync health for an organization."""
+    registry = get_registry()
+    service_url = registry.get_service_url("issuance")
+    return await proxy_request(
+        request,
+        service_url,
+        f"/v1/issuance/organizations/{organization_id}/canvas-mirror-health",
+        inject_headers=_ISSUANCE_HEADERS,
+    )
+
+
 # ── OID4VCI Wallet-facing Endpoints ─────────────────────────────────
 
 @issuance_router.get("/offers/{tx_id}", summary="Get Credential Offer")
@@ -543,6 +609,71 @@ async def get_application(application_id: str, request: Request) -> Response:
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
     return await proxy_request(request, service_url, f"/v1/applications/{application_id}", inject_headers=_ISSUANCE_HEADERS)
+
+
+@application_router.get("/{application_id}/evidence-facts", summary="List Application Evidence Facts")
+async def list_application_evidence_facts(application_id: str, request: Request) -> Response:
+    """List normalized MIP evidence facts for an application."""
+    registry = get_registry()
+    service_url = registry.get_service_url("issuance")
+    return await proxy_request(
+        request,
+        service_url,
+        f"/v1/applications/{application_id}/evidence-facts",
+        inject_headers=_ISSUANCE_HEADERS,
+    )
+
+
+@application_router.get("/{application_id}/evidence-summary", summary="Get Application Evidence Summary")
+async def get_application_evidence_summary(application_id: str, request: Request) -> Response:
+    """Get evidence facts, policy decision, and issuance transition metadata."""
+    registry = get_registry()
+    service_url = registry.get_service_url("issuance")
+    return await proxy_request(
+        request,
+        service_url,
+        f"/v1/applications/{application_id}/evidence-summary",
+        inject_headers=_ISSUANCE_HEADERS,
+    )
+
+
+@application_router.post("/{application_id}/evidence/api-checks/{check_id}/run", summary="Run External Evidence API Check")
+async def run_external_evidence_api_check(application_id: str, check_id: str, request: Request) -> Response:
+    """Run a configured external evidence API check for an application."""
+    registry = get_registry()
+    service_url = registry.get_service_url("issuance")
+    return await proxy_request(
+        request,
+        service_url,
+        f"/v1/applications/{application_id}/evidence/api-checks/{check_id}/run",
+        inject_headers=_ISSUANCE_HEADERS,
+    )
+
+
+@application_router.post("/evidence/reconcile", summary="Reconcile Canvas Evidence")
+async def reconcile_application_evidence(request: Request) -> Response:
+    """Recover Canvas evidence policy and approval-to-issuance transitions."""
+    registry = get_registry()
+    service_url = registry.get_service_url("issuance")
+    return await proxy_request(
+        request,
+        service_url,
+        "/v1/applications/evidence/reconcile",
+        inject_headers=_ISSUANCE_HEADERS,
+    )
+
+
+@application_router.get("/evidence/reconciliation-report", summary="Canvas Evidence Reconciliation Report")
+async def get_application_evidence_reconciliation_report(request: Request) -> Response:
+    """Return a dry-run Canvas evidence reconciliation report."""
+    registry = get_registry()
+    service_url = registry.get_service_url("issuance")
+    return await proxy_request(
+        request,
+        service_url,
+        "/v1/applications/evidence/reconciliation-report",
+        inject_headers=_ISSUANCE_HEADERS,
+    )
 
 
 @application_router.post("/{application_id}/submit-evidence", response_model=ApplicationResponse, summary="Submit Evidence")

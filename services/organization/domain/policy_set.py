@@ -15,6 +15,10 @@ class PolicySetStatus(str, Enum):
 
 
 class PolicySetType(str, Enum):
+    ACCESS_CONTROL = "ACCESS_CONTROL"
+    CREDENTIAL_VERIFICATION = "CREDENTIAL_VERIFICATION"
+    APPROVAL_RULES = "APPROVAL_RULES"
+    # Backward-compatible aliases used by early organization-service policy sets.
     RBAC = "RBAC"
     ABAC = "ABAC"
     CUSTOM = "CUSTOM"

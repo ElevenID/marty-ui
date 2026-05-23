@@ -37,9 +37,17 @@ spec:
         - name: gateway
           image: ${OCIR_REGISTRY}/marty-ui/gateway:${IMAGE_TAG}
           imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: marty-config
           ports:
             - containerPort: 8000
           env:
+            - name: LICENSE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: LICENSE_KEY
             - name: GATEWAY_PORT
               value: "8000"
             - name: AUTH_SERVICE_URL
@@ -182,9 +190,17 @@ spec:
         - name: auth
           image: ${OCIR_REGISTRY}/marty-ui/auth:${IMAGE_TAG}
           imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: marty-config
           ports:
             - containerPort: 8001
           env:
+            - name: LICENSE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: LICENSE_KEY
             - name: AUTH_SERVICE_PORT
               value: "8001"
             - name: UI_BASE_URL
@@ -192,6 +208,11 @@ spec:
                 configMapKeyRef:
                   name: marty-config
                   key: UI_BASE_URL
+            - name: UI_ADDITIONAL_BASE_URLS
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: UI_ADDITIONAL_BASE_URLS
             - name: REDIS_URL
               valueFrom:
                 configMapKeyRef:
@@ -325,9 +346,17 @@ spec:
         - name: organization
           image: ${OCIR_REGISTRY}/marty-ui/organization:${IMAGE_TAG}
           imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: marty-config
           ports:
             - containerPort: 8002
           env:
+            - name: LICENSE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: LICENSE_KEY
             - name: ORGANIZATION_SERVICE_PORT
               value: "8002"
             - name: DATABASE_URL
@@ -350,6 +379,11 @@ spec:
                 configMapKeyRef:
                   name: marty-config
                   key: REDIS_DB_GATEWAY
+            - name: ORGANIZATION_CREATION_ENABLED
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: ORGANIZATION_CREATION_ENABLED
           resources:
             requests:
               memory: "256Mi"
@@ -411,9 +445,17 @@ spec:
         - name: credential-template
           image: ${OCIR_REGISTRY}/marty-ui/credential-template:${IMAGE_TAG}
           imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: marty-config
           ports:
             - containerPort: 8003
           env:
+            - name: LICENSE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: LICENSE_KEY
             - name: CREDENTIAL_TEMPLATE_SERVICE_PORT
               value: "8003"
             - name: DATABASE_URL
@@ -487,9 +529,17 @@ spec:
         - name: trust-profile
           image: ${OCIR_REGISTRY}/marty-ui/trust-profile:${IMAGE_TAG}
           imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: marty-config
           ports:
             - containerPort: 8004
           env:
+            - name: LICENSE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: LICENSE_KEY
             - name: TRUST_PROFILE_SERVICE_PORT
               value: "8004"
             - name: DATABASE_URL
@@ -563,9 +613,17 @@ spec:
         - name: issuance
           image: ${OCIR_REGISTRY}/marty-ui/issuance:${IMAGE_TAG}
           imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: marty-config
           ports:
             - containerPort: 8005
           env:
+            - name: LICENSE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: LICENSE_KEY
             - name: ISSUANCE_SERVICE_PORT
               value: "8005"
             - name: DATABASE_URL
@@ -588,6 +646,60 @@ spec:
                 secretKeyRef:
                   name: marty-secrets
                   key: CANVAS_CREDENTIALS_SHARED_SECRET
+            - name: CANVAS_CREDENTIALS_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: CANVAS_CREDENTIALS_API_TOKEN
+                  optional: true
+            - name: CANVAS_CREDENTIALS_PROVIDER
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: CANVAS_CREDENTIALS_PROVIDER
+                  optional: true
+            - name: CANVAS_CREDENTIALS_API_BASE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: CANVAS_CREDENTIALS_API_BASE_URL
+                  optional: true
+            - name: CANVAS_CREDENTIALS_ISSUER_ID
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: CANVAS_CREDENTIALS_ISSUER_ID
+                  optional: true
+            - name: CANVAS_CREDENTIALS_BADGECLASS_ID
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: CANVAS_CREDENTIALS_BADGECLASS_ID
+                  optional: true
+            - name: CANVAS_CREDENTIALS_ASSERTION_SCOPE
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: CANVAS_CREDENTIALS_ASSERTION_SCOPE
+                  optional: true
+            - name: CANVAS_CREDENTIALS_PROVENANCE_BASE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: CANVAS_CREDENTIALS_PROVENANCE_BASE_URL
+                  optional: true
+            - name: CANVAS_CREDENTIALS_RECIPIENT_HASHED
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: CANVAS_CREDENTIALS_RECIPIENT_HASHED
+                  optional: true
+            - name: CANVAS_CREDENTIALS_ALLOW_DUPLICATE_AWARDS
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: CANVAS_CREDENTIALS_ALLOW_DUPLICATE_AWARDS
+                  optional: true
             - name: SIGNING_KEYS_INTERNAL_URL
               value: "http://gateway:8000/internal/signing-keys"
             - name: SIGNING_KEYS_INTERNAL_API_KEY
@@ -657,10 +769,18 @@ spec:
         - name: verification
           image: ${OCIR_REGISTRY}/marty-ui/verification:${IMAGE_TAG}
           imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: marty-config
           ports:
             - containerPort: 8012
             - containerPort: 9017
           env:
+            - name: LICENSE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: LICENSE_KEY
             - name: VERIFICATION_SERVICE_PORT
               value: "8012"
             - name: PP_GRPC_TARGET
@@ -749,9 +869,17 @@ spec:
         - name: applicant
           image: ${OCIR_REGISTRY}/marty-ui/applicant:${IMAGE_TAG}
           imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: marty-config
           ports:
             - containerPort: 8006
           env:
+            - name: LICENSE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: LICENSE_KEY
             - name: APPLICANT_SERVICE_PORT
               value: "8006"
             - name: DATABASE_URL
@@ -850,9 +978,17 @@ spec:
         - name: notification
           image: ${OCIR_REGISTRY}/marty-ui/notification:${IMAGE_TAG}
           imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: marty-config
           ports:
             - containerPort: 8007
           env:
+            - name: LICENSE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: LICENSE_KEY
             - name: NOTIFICATION_SERVICE_PORT
               value: "8007"
             - name: DATABASE_URL
@@ -946,9 +1082,17 @@ spec:
         - name: compliance-profile
           image: ${OCIR_REGISTRY}/marty-ui/compliance-profile:${IMAGE_TAG}
           imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: marty-config
           ports:
             - containerPort: 8008
           env:
+            - name: LICENSE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: LICENSE_KEY
             - name: COMPLIANCE_PROFILE_SERVICE_PORT
               value: "8008"
             - name: DATABASE_URL
@@ -1022,9 +1166,17 @@ spec:
         - name: presentation-policy
           image: ${OCIR_REGISTRY}/marty-ui/presentation-policy:${IMAGE_TAG}
           imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: marty-config
           ports:
             - containerPort: 8009
           env:
+            - name: LICENSE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: LICENSE_KEY
             - name: PRESENTATION_POLICY_SERVICE_PORT
               value: "8009"
             - name: DID_RESOLUTION_BASE_URL
@@ -1100,9 +1252,17 @@ spec:
         - name: deployment-profile
           image: ${OCIR_REGISTRY}/marty-ui/deployment-profile:${IMAGE_TAG}
           imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: marty-config
           ports:
             - containerPort: 8010
           env:
+            - name: LICENSE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: LICENSE_KEY
             - name: DEPLOYMENT_PROFILE_SERVICE_PORT
               value: "8010"
             - name: DATABASE_URL
@@ -1176,9 +1336,17 @@ spec:
         - name: flow
           image: ${OCIR_REGISTRY}/marty-ui/flow:${IMAGE_TAG}
           imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: marty-config
           ports:
             - containerPort: 8011
           env:
+            - name: LICENSE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: LICENSE_KEY
             - name: FLOW_SERVICE_PORT
               value: "8011"
             - name: DATABASE_URL
