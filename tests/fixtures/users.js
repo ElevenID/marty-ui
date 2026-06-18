@@ -16,6 +16,16 @@ const SEEDED_USERS = {
     fullName: function() { return `${this.firstName} ${this.lastName}`; },
   },
 
+  // Canvas integration demo org admin
+  canvasAdmin: {
+    email: process.env.TEST_CANVAS_ADMIN_EMAIL || process.env.CANVAS_DEMO_ADMIN_EMAIL || 'canvas.admin@marty.demo',
+    password: process.env.TEST_CANVAS_ADMIN_PASSWORD || process.env.CANVAS_DEMO_ADMIN_PASSWORD || 'CanvasAdmin123!',
+    firstName: process.env.TEST_CANVAS_ADMIN_FIRST_NAME || 'Canvas',
+    lastName: process.env.TEST_CANVAS_ADMIN_LAST_NAME || 'Demo Admin',
+    role: 'administrator',
+    fullName: function() { return `${this.firstName} ${this.lastName}`; },
+  },
+
   // Vendor organization admin
   vendor: {
     email: process.env.TEST_VENDOR_EMAIL || 'vendor@marty.demo',

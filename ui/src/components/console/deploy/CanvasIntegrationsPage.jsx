@@ -17,6 +17,9 @@ import {
   Paper,
   Select,
   Stack,
+  Step,
+  StepLabel,
+  Stepper,
   Switch,
   Table,
   TableBody,
@@ -43,26 +46,27 @@ import { useAsyncData } from '../../../hooks/useAsyncData';
 import { useAuth } from '../../../hooks/useAuth';
 import {
   createCanvasPlatform,
+  createCanvasIntegrationSecret,
   createCanvasProgramBinding,
   deleteCanvasPlatform,
   deleteCanvasProgramBinding,
+  discoverCanvasScope,
   getCanvasMirrorHealth,
+  listCanvasIntegrationSecrets,
   listCanvasPlatforms,
   listCanvasProgramBindings,
   processCanvasMirrorStatusSyncFailures,
   processPendingCanvasMirrorDeliveries,
   runCanvasMirrorAutomationCycle,
+  updateCanvasIntegrationSecret,
   updateCanvasPlatform,
   updateCanvasProgramBinding,
+  validateCanvasCredentialsProvider,
 } from '../../../services/canvasIntegrationsApi';
 import { listApplicationTemplates } from '../../../services/applicationTemplatesApi';
 import { listCredentialTemplates } from '../../../services/presentationPolicyApi';
 import { listDeploymentProfiles } from '../../../services/deploymentProfilesApi';
-import {
-  createDeliveryDestination,
-  listDeliveryDestinations,
-  updateDeliveryDestination,
-} from '../../../services/deliveryDestinationsApi';
+import { listDeliveryDestinations } from '../../../services/deliveryDestinationsApi';
 import CanvasMirrorProvenanceLookup from '../../canvas/CanvasMirrorProvenanceLookup';
 import { ResourcePage, EmptyState, StatusChip } from '../../common';
 
@@ -110,6 +114,8 @@ const BREADCRUMBS = [
   { label: 'Canvas', path: '/console/org/deploy/canvas' },
 ];
 
+const BINDING_WIZARD_STEPS = ['Program', 'Canvas activity', 'Delivery'];
+
 const CANVAS_CREDENTIALS_DESTINATION_ID = 'dd-canvas-credentials-institutional';
 
 const CANVAS_CREDENTIALS_PROJECTION_POLICY = {
@@ -122,33 +128,6 @@ const CANVAS_CREDENTIALS_PROJECTION_POLICY = {
     'provenance',
   ],
 };
-
-function canvasCredentialsDestinationPayload(organizationId) {
-  return {
-    organization_id: organizationId,
-    name: 'Canvas Credentials',
-    description: 'Publish a public Open Badge view to Canvas Credentials after ElevenID issuance.',
-    provider: 'canvas_credentials',
-    mode: 'organization_mirror',
-    setup_actor: 'org_admin',
-    delivery_target: 'canvas_credentials',
-    connector_type: 'canvas_platform',
-    requires_consent: true,
-    claim_projection_policy: CANVAS_CREDENTIALS_PROJECTION_POLICY,
-    setup_requirements: [
-      'Canvas Credentials issuer/API access configured by an organization admin',
-      'Canvas program binding enabled for Canvas mirror delivery',
-    ],
-    capabilities: {
-      holder_wallet: false,
-      org_managed: true,
-      post_issuance_publish: true,
-      status_sync: true,
-      provenance: true,
-    },
-    is_enabled: true,
-  };
-}
 
 function platformFormFrom(platform = {}) {
   return {
@@ -197,8 +176,11 @@ function bindingFormFrom(binding = {}, platformId = '') {
     canvas_credentials_issuer_id: canvasCredentials.issuer_id || canvasCredentials.canvas_credentials_issuer_id || '',
     canvas_credentials_badgeclass_id: canvasCredentials.badgeclass_id || canvasCredentials.canvas_credentials_badgeclass_id || '',
     canvas_credentials_assertion_scope: canvasCredentials.assertion_scope || 'badgeclasses',
+    canvas_credentials_api_token_secret_id: canvasCredentials.api_token_secret_id || canvasCredentials.api_token_secret_ref || '',
     canvas_credentials_api_token_env: canvasCredentials.api_token_env || '',
     canvas_credentials_api_token_file: canvasCredentials.api_token_file || '',
+    canvas_admin_api_token_env: '',
+    canvas_admin_api_token_file: '',
     enabled: binding.enabled !== false,
   };
 }
@@ -239,6 +221,7 @@ function buildCanvasCredentialsConfig(form) {
       ['issuer_id', form.canvas_credentials_issuer_id],
       ['badgeclass_id', form.canvas_credentials_badgeclass_id],
       ['assertion_scope', form.canvas_credentials_assertion_scope || 'badgeclasses'],
+      ['api_token_secret_id', form.canvas_credentials_api_token_secret_id],
       ['api_token_env', form.canvas_credentials_api_token_env],
       ['api_token_file', form.canvas_credentials_api_token_file],
     ].filter(([, value]) => String(value || '').trim())
@@ -294,6 +277,21 @@ function mirrorActionSummary(result) {
   ].filter(Boolean).join(', ');
 }
 
+function canvasCredentialsValidationSummary(result) {
+  if (!result) return '';
+  if (result.ok) {
+    const target = result.badgeclass_id || result.issuer_id || result.validation_url || result.provider;
+    return `Provider validated${target ? `: ${target}` : ''}.`;
+  }
+  return result.error || 'Canvas Credentials provider validation failed.';
+}
+
+function canvasDiscoveryItemLabel(item) {
+  if (!item) return '';
+  const suffix = item.points_possible != null ? ` (${item.points_possible} pts)` : '';
+  return `${item.name || item.id}${suffix}`;
+}
+
 function alertSeverityColor(severity) {
   if (severity === 'critical') return 'error';
   if (severity === 'warning') return 'warning';
@@ -309,13 +307,20 @@ function CanvasIntegrationsPage() {
   const [editingBinding, setEditingBinding] = useState(null);
   const [platformForm, setPlatformForm] = useState(platformFormFrom());
   const [bindingForm, setBindingForm] = useState(bindingFormFrom());
+  const [bindingWizardStep, setBindingWizardStep] = useState(0);
   const [saveError, setSaveError] = useState(null);
   const [saving, setSaving] = useState(false);
   const [opsBusy, setOpsBusy] = useState('');
   const [opsError, setOpsError] = useState(null);
   const [opsResult, setOpsResult] = useState(null);
-  const [destinationBusy, setDestinationBusy] = useState('');
-  const [destinationError, setDestinationError] = useState(null);
+  const [canvasCredentialsValidation, setCanvasCredentialsValidation] = useState(null);
+  const [canvasCredentialsValidationBusy, setCanvasCredentialsValidationBusy] = useState(false);
+  const [canvasCredentialsSecretValue, setCanvasCredentialsSecretValue] = useState('');
+  const [canvasCredentialsSecretBusy, setCanvasCredentialsSecretBusy] = useState(false);
+  const [canvasCredentialsSecretError, setCanvasCredentialsSecretError] = useState(null);
+  const [canvasScopeDiscovery, setCanvasScopeDiscovery] = useState(null);
+  const [canvasScopeDiscoveryBusy, setCanvasScopeDiscoveryBusy] = useState(false);
+  const [canvasScopeDiscoveryError, setCanvasScopeDiscoveryError] = useState(null);
 
   const {
     data: platformsData,
@@ -377,12 +382,28 @@ function CanvasIntegrationsPage() {
     });
   }, [organizationId]);
 
+  const {
+    data: integrationSecretsData,
+    reload: reloadIntegrationSecrets,
+  } = useAsyncData(async () => {
+    if (!organizationId) return [];
+    return listCanvasIntegrationSecrets({
+      organizationId,
+      provider: 'canvas_credentials',
+    });
+  }, [organizationId]);
+
   const platforms = Array.isArray(platformsData) ? platformsData : [];
   const bindings = Array.isArray(bindingsData) ? bindingsData : [];
   const applicationTemplates = Array.isArray(applicationTemplatesData) ? applicationTemplatesData : [];
   const credentialTemplates = Array.isArray(credentialTemplatesData) ? credentialTemplatesData : [];
   const deploymentProfiles = Array.isArray(deploymentProfilesData) ? deploymentProfilesData : [];
   const deliveryDestinations = Array.isArray(deliveryDestinationsData) ? deliveryDestinationsData : [];
+  const integrationSecrets = Array.isArray(integrationSecretsData) ? integrationSecretsData : [];
+  const selectedIntegrationSecretMissing = Boolean(
+    bindingForm.canvas_credentials_api_token_secret_id
+    && !integrationSecrets.some((secret) => secret.id === bindingForm.canvas_credentials_api_token_secret_id)
+  );
 
   useEffect(() => {
     if (!selectedPlatformId && platforms.length > 0) {
@@ -427,7 +448,13 @@ function CanvasIntegrationsPage() {
   );
 
   const refreshAll = async () => {
-    await Promise.all([reloadPlatforms(), reloadBindings(), reloadMirrorHealth(), reloadDeliveryDestinations()]);
+    await Promise.all([
+      reloadPlatforms(),
+      reloadBindings(),
+      reloadMirrorHealth(),
+      reloadDeliveryDestinations(),
+      reloadIntegrationSecrets(),
+    ]);
   };
 
   const openCreatePlatform = () => {
@@ -447,14 +474,26 @@ function CanvasIntegrationsPage() {
   const openCreateBinding = () => {
     setEditingBinding(null);
     setBindingForm(bindingFormFrom({}, selectedPlatformId));
+    setBindingWizardStep(0);
     setSaveError(null);
+    setCanvasCredentialsValidation(null);
+    setCanvasCredentialsSecretValue('');
+    setCanvasCredentialsSecretError(null);
+    setCanvasScopeDiscovery(null);
+    setCanvasScopeDiscoveryError(null);
     setBindingDialogOpen(true);
   };
 
   const openEditBinding = (binding) => {
     setEditingBinding(binding);
     setBindingForm(bindingFormFrom(binding, binding.platform_id));
+    setBindingWizardStep(0);
     setSaveError(null);
+    setCanvasCredentialsValidation(null);
+    setCanvasCredentialsSecretValue('');
+    setCanvasCredentialsSecretError(null);
+    setCanvasScopeDiscovery(null);
+    setCanvasScopeDiscoveryError(null);
     setBindingDialogOpen(true);
   };
 
@@ -518,6 +557,85 @@ function CanvasIntegrationsPage() {
     }
   };
 
+  const validateCanvasCredentialsSettings = async () => {
+    setCanvasCredentialsValidationBusy(true);
+    setCanvasCredentialsValidation(null);
+    try {
+      const result = await validateCanvasCredentialsProvider(
+        buildCanvasCredentialsConfig(bindingForm),
+        { organizationId },
+      );
+      setCanvasCredentialsValidation(result);
+    } catch (error) {
+      setCanvasCredentialsValidation({
+        ok: false,
+        error: error?.message || String(error),
+      });
+    } finally {
+      setCanvasCredentialsValidationBusy(false);
+    }
+  };
+
+  const saveCanvasCredentialsManagedSecret = async () => {
+    if (!organizationId || !canvasCredentialsSecretValue.trim()) return;
+    setCanvasCredentialsSecretBusy(true);
+    setCanvasCredentialsSecretError(null);
+    try {
+      const secretId = bindingForm.canvas_credentials_api_token_secret_id;
+      const selectedSecret = integrationSecrets.find((secret) => secret.id === secretId);
+      const name = selectedSecret?.name
+        || bindingForm.display_name
+        || selectedPlatform?.display_name
+        || 'Canvas Credentials API token';
+      const saved = selectedSecret
+        ? await updateCanvasIntegrationSecret(selectedSecret.id, {
+          secret_value: canvasCredentialsSecretValue,
+        })
+        : await createCanvasIntegrationSecret({
+          organization_id: organizationId,
+          name,
+          provider: 'canvas_credentials',
+          purpose: 'api_token',
+          secret_value: canvasCredentialsSecretValue,
+          metadata: {
+            canvas_platform_id: bindingForm.platform_id || selectedPlatformId,
+            canvas_account_id: selectedPlatform?.canvas_account_id,
+          },
+        });
+      setBindingForm({
+        ...bindingForm,
+        canvas_credentials_api_token_secret_id: saved.id,
+        canvas_credentials_api_token_env: '',
+        canvas_credentials_api_token_file: '',
+      });
+      setCanvasCredentialsSecretValue('');
+      await reloadIntegrationSecrets();
+    } catch (error) {
+      setCanvasCredentialsSecretError(error);
+    } finally {
+      setCanvasCredentialsSecretBusy(false);
+    }
+  };
+
+  const discoverCanvasActivities = async () => {
+    const platformId = bindingForm.platform_id || selectedPlatformId;
+    if (!platformId) return;
+    setCanvasScopeDiscoveryBusy(true);
+    setCanvasScopeDiscoveryError(null);
+    try {
+      const result = await discoverCanvasScope(platformId, {
+        courseId: bindingForm.course_id,
+        apiTokenEnv: bindingForm.canvas_admin_api_token_env,
+        apiTokenFile: bindingForm.canvas_admin_api_token_file,
+      });
+      setCanvasScopeDiscovery(result);
+    } catch (error) {
+      setCanvasScopeDiscoveryError(error);
+    } finally {
+      setCanvasScopeDiscoveryBusy(false);
+    }
+  };
+
   const removePlatform = async (platform) => {
     if (!window.confirm(`Delete ${platform.display_name || platform.canvas_account_id}?`)) return;
     await deleteCanvasPlatform(platform.id);
@@ -554,36 +672,6 @@ function CanvasIntegrationsPage() {
     }
   };
 
-  const createCanvasCredentialsDestination = async () => {
-    if (!organizationId) return;
-    setDestinationBusy('create');
-    setDestinationError(null);
-    try {
-      await createDeliveryDestination(canvasCredentialsDestinationPayload(organizationId));
-      await reloadDeliveryDestinations();
-    } catch (error) {
-      setDestinationError(error);
-    } finally {
-      setDestinationBusy('');
-    }
-  };
-
-  const toggleCanvasCredentialsDestination = async () => {
-    if (!orgCanvasDestination) return;
-    setDestinationBusy('toggle');
-    setDestinationError(null);
-    try {
-      await updateDeliveryDestination(orgCanvasDestination.id, {
-        is_enabled: orgCanvasDestination.is_enabled === false,
-      });
-      await reloadDeliveryDestinations();
-    } catch (error) {
-      setDestinationError(error);
-    } finally {
-      setDestinationBusy('');
-    }
-  };
-
   const loading = platformsLoading || bindingsLoading;
   const error = platformsError || bindingsError;
   const opsDisabled = !organizationId || Boolean(opsBusy);
@@ -592,6 +680,20 @@ function CanvasIntegrationsPage() {
   const bindingCanvasFlags = normalizeCanvasFeatureFlags(bindingForm.feature_flags);
   const bindingCanvasEvidenceEnabled = !bindingProfileGated || bindingCanvasFlags.enable_canvas_evidence;
   const bindingCanvasMirrorPublishEnabled = !bindingProfileGated || bindingCanvasFlags.enable_canvas_mirror_publish;
+  const bindingWizardLastStep = bindingWizardStep === BINDING_WIZARD_STEPS.length - 1;
+  const discoveredCourses = Array.isArray(canvasScopeDiscovery?.courses) ? canvasScopeDiscovery.courses : [];
+  const discoveredAssignments = Array.isArray(canvasScopeDiscovery?.assignments) ? canvasScopeDiscovery.assignments : [];
+  const discoveredQuizzes = Array.isArray(canvasScopeDiscovery?.quizzes) ? canvasScopeDiscovery.quizzes : [];
+  const discoveredModules = Array.isArray(canvasScopeDiscovery?.modules) ? canvasScopeDiscovery.modules : [];
+  const bindingWizardNextDisabled = (
+    saving
+    || (bindingWizardStep === 0 && (
+      !(bindingForm.platform_id || selectedPlatformId)
+      || !bindingForm.application_template_id
+      || !bindingCanvasEvidenceEnabled
+    ))
+    || (bindingWizardStep === 1 && !bindingForm.evidence_type)
+  );
   const bindingSaveDisabled = (
     saving
     || !bindingForm.platform_id
@@ -807,9 +909,9 @@ function CanvasIntegrationsPage() {
               </Stack>
 
               {deliveryDestinationsLoading && <LinearProgress />}
-              {(deliveryDestinationsError || destinationError) && (
+              {deliveryDestinationsError && (
                 <Alert severity="error">
-                  {(deliveryDestinationsError || destinationError)?.message || String(deliveryDestinationsError || destinationError)}
+                  {deliveryDestinationsError?.message || String(deliveryDestinationsError)}
                 </Alert>
               )}
 
@@ -832,35 +934,13 @@ function CanvasIntegrationsPage() {
               </Stack>
 
               <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
-                {!orgCanvasDestination && (
-                  <Button
-                    size="small"
-                    variant="outlined"
-                    startIcon={<AddIcon />}
-                    disabled={Boolean(destinationBusy)}
-                    onClick={createCanvasCredentialsDestination}
-                  >
-                    Add org destination
-                  </Button>
-                )}
-                {orgCanvasDestination && (
-                  <Button
-                    size="small"
-                    variant="outlined"
-                    disabled={Boolean(destinationBusy)}
-                    onClick={toggleCanvasCredentialsDestination}
-                  >
-                    {orgCanvasDestination.is_enabled === false ? 'Enable destination' : 'Disable destination'}
-                  </Button>
-                )}
                 <Button
                   size="small"
-                  variant="text"
-                  startIcon={<RefreshIcon />}
-                  disabled={Boolean(destinationBusy)}
-                  onClick={reloadDeliveryDestinations}
+                  variant="outlined"
+                  href="/console/org/templates/credentials"
+                  startIcon={<LinkIcon />}
                 >
-                  Refresh destination
+                  Manage per badge template
                 </Button>
               </Stack>
             </Stack>
@@ -996,12 +1076,20 @@ function CanvasIntegrationsPage() {
                       </TableCell>
                       <TableCell align="right">
                         <Tooltip title="Edit">
-                          <IconButton size="small" onClick={() => openEditBinding(binding)}>
+                          <IconButton
+                            size="small"
+                            aria-label={`Edit ${binding.display_name || binding.canvas_scope?.course_id || binding.id}`}
+                            onClick={() => openEditBinding(binding)}
+                          >
                             <EditIcon fontSize="small" />
                           </IconButton>
                         </Tooltip>
                         <Tooltip title="Delete">
-                          <IconButton size="small" onClick={() => removeBinding(binding)}>
+                          <IconButton
+                            size="small"
+                            aria-label={`Delete ${binding.display_name || binding.canvas_scope?.course_id || binding.id}`}
+                            onClick={() => removeBinding(binding)}
+                          >
                             <DeleteIcon fontSize="small" />
                           </IconButton>
                         </Tooltip>
@@ -1048,240 +1136,479 @@ function CanvasIntegrationsPage() {
         <DialogContent>
           {saveError && <Alert severity="error" sx={{ mb: 2 }}>{saveError?.message || String(saveError)}</Alert>}
           <Stack spacing={2} sx={{ mt: 1 }}>
-            <FormControl fullWidth>
-              <InputLabel>Platform</InputLabel>
-              <Select
-                label="Platform"
-                value={bindingForm.platform_id || selectedPlatformId || ''}
-                onChange={(event) => setBindingForm({ ...bindingForm, platform_id: event.target.value })}
-                disabled={Boolean(editingBinding)}
-              >
-                {platforms.map((platform) => (
-                  <MenuItem key={platform.id} value={platform.id}>
-                    {platform.display_name || platform.canvas_account_id}
-                  </MenuItem>
-                ))}
-              </Select>
-            </FormControl>
-            <FormControl fullWidth>
-              <InputLabel>Deployment profile</InputLabel>
-              <Select
-                label="Deployment profile"
-                value={bindingForm.deployment_profile_id || ''}
-                onChange={(event) => {
-                  const deploymentProfile = deploymentProfiles.find((profile) => profile.id === event.target.value);
-                  const featureFlags = event.target.value ? canvasFeatureFlagsFromProfile(deploymentProfile) : {};
-                  setBindingForm({
-                    ...bindingForm,
-                    deployment_profile_id: event.target.value,
-                    feature_flags: featureFlags,
-                    delivery_mode: featureFlags.enable_canvas_mirror_publish === false
-                      ? 'wallet_only'
-                      : bindingForm.delivery_mode,
-                  });
-                }}
-              >
-                <MenuItem value="">No deployment profile gate</MenuItem>
-                {deploymentProfiles.map((profile) => (
-                  <MenuItem key={profile.id} value={profile.id}>
-                    {profile.name || profile.id}
-                  </MenuItem>
-                ))}
-              </Select>
-            </FormControl>
-            {bindingForm.deployment_profile_id && (
-              <Alert severity={bindingForm.feature_flags?.enable_canvas_evidence ? 'info' : 'warning'}>
-                Canvas gates from this deployment profile: {enabledCanvasFeatureLabels(bindingForm.feature_flags).join(', ') || 'none enabled'}
-              </Alert>
+            <Stepper activeStep={bindingWizardStep} alternativeLabel>
+              {BINDING_WIZARD_STEPS.map((label) => (
+                <Step key={label}>
+                  <StepLabel>{label}</StepLabel>
+                </Step>
+              ))}
+            </Stepper>
+            {bindingWizardStep === 0 && (
+              <Stack spacing={2}>
+                <FormControl fullWidth>
+                  <InputLabel>Platform</InputLabel>
+                  <Select
+                    label="Platform"
+                    value={bindingForm.platform_id || selectedPlatformId || ''}
+                    onChange={(event) => setBindingForm({ ...bindingForm, platform_id: event.target.value })}
+                    disabled={Boolean(editingBinding)}
+                  >
+                    {platforms.map((platform) => (
+                      <MenuItem key={platform.id} value={platform.id}>
+                        {platform.display_name || platform.canvas_account_id}
+                      </MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+                <FormControl fullWidth>
+                  <InputLabel>Deployment profile</InputLabel>
+                  <Select
+                    label="Deployment profile"
+                    value={bindingForm.deployment_profile_id || ''}
+                    onChange={(event) => {
+                      const deploymentProfile = deploymentProfiles.find((profile) => profile.id === event.target.value);
+                      const featureFlags = event.target.value ? canvasFeatureFlagsFromProfile(deploymentProfile) : {};
+                      setBindingForm({
+                        ...bindingForm,
+                        deployment_profile_id: event.target.value,
+                        feature_flags: featureFlags,
+                        delivery_mode: featureFlags.enable_canvas_mirror_publish === false
+                          ? 'wallet_only'
+                          : bindingForm.delivery_mode,
+                      });
+                    }}
+                  >
+                    <MenuItem value="">No deployment profile gate</MenuItem>
+                    {deploymentProfiles.map((profile) => (
+                      <MenuItem key={profile.id} value={profile.id}>
+                        {profile.name || profile.id}
+                      </MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+                {bindingForm.deployment_profile_id && (
+                  <Alert severity={bindingForm.feature_flags?.enable_canvas_evidence ? 'info' : 'warning'}>
+                    Canvas gates from this deployment profile: {enabledCanvasFeatureLabels(bindingForm.feature_flags).join(', ') || 'none enabled'}
+                  </Alert>
+                )}
+                <TextField label="Display name" value={bindingForm.display_name} onChange={(event) => setBindingForm({ ...bindingForm, display_name: event.target.value })} />
+                <FormControl fullWidth>
+                  <InputLabel>Application template</InputLabel>
+                  <Select
+                    label="Application template"
+                    value={bindingForm.application_template_id}
+                    onChange={(event) => {
+                      const applicationTemplate = applicationTemplates.find((template) => template.id === event.target.value);
+                      setBindingForm({
+                        ...bindingForm,
+                        application_template_id: event.target.value,
+                        credential_template_id: applicationTemplate?.credential_template_id || bindingForm.credential_template_id,
+                      });
+                    }}
+                  >
+                    {applicationTemplates.map((template) => (
+                      <MenuItem key={template.id} value={template.id}>
+                        {template.name || template.id}
+                      </MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+                <FormControl fullWidth>
+                  <InputLabel>Credential template</InputLabel>
+                  <Select
+                    label="Credential template"
+                    value={bindingForm.credential_template_id}
+                    onChange={(event) => setBindingForm({ ...bindingForm, credential_template_id: event.target.value })}
+                  >
+                    {credentialTemplates.map((template) => (
+                      <MenuItem key={template.id} value={template.id}>
+                        {template.name || template.id}
+                      </MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+              </Stack>
             )}
-            <TextField label="Display name" value={bindingForm.display_name} onChange={(event) => setBindingForm({ ...bindingForm, display_name: event.target.value })} />
-            <FormControl fullWidth>
-              <InputLabel>Application template</InputLabel>
-              <Select
-                label="Application template"
-                value={bindingForm.application_template_id}
-                onChange={(event) => {
-                  const applicationTemplate = applicationTemplates.find((template) => template.id === event.target.value);
-                  setBindingForm({
-                    ...bindingForm,
-                    application_template_id: event.target.value,
-                    credential_template_id: applicationTemplate?.credential_template_id || bindingForm.credential_template_id,
-                  });
-                }}
-              >
-                {applicationTemplates.map((template) => (
-                  <MenuItem key={template.id} value={template.id}>
-                    {template.name || template.id}
-                  </MenuItem>
-                ))}
-              </Select>
-            </FormControl>
-            <FormControl fullWidth>
-              <InputLabel>Credential template</InputLabel>
-              <Select
-                label="Credential template"
-                value={bindingForm.credential_template_id}
-                onChange={(event) => setBindingForm({ ...bindingForm, credential_template_id: event.target.value })}
-              >
-                {credentialTemplates.map((template) => (
-                  <MenuItem key={template.id} value={template.id}>
-                    {template.name || template.id}
-                  </MenuItem>
-                ))}
-              </Select>
-            </FormControl>
-            <FormControl fullWidth>
-              <InputLabel>Evidence</InputLabel>
-              <Select
-                label="Evidence"
-                value={bindingForm.evidence_type}
-                onChange={(event) => setBindingForm({ ...bindingForm, evidence_type: event.target.value })}
-              >
-                {EVIDENCE_TYPES.map((type) => (
-                  <MenuItem key={type.value} value={type.value}>{type.label}</MenuItem>
-                ))}
-              </Select>
-            </FormControl>
-            <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}>
-              <TextField fullWidth label="Course ID" value={bindingForm.course_id} onChange={(event) => setBindingForm({ ...bindingForm, course_id: event.target.value })} />
-              <TextField fullWidth label="Assignment ID" value={bindingForm.assignment_id} onChange={(event) => setBindingForm({ ...bindingForm, assignment_id: event.target.value })} />
-            </Stack>
-            <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}>
-              <TextField fullWidth label="Module ID" value={bindingForm.module_id} onChange={(event) => setBindingForm({ ...bindingForm, module_id: event.target.value })} />
-              <TextField fullWidth label="Quiz ID" value={bindingForm.quiz_id} onChange={(event) => setBindingForm({ ...bindingForm, quiz_id: event.target.value })} />
-            </Stack>
-            {bindingForm.evidence_type.endsWith('_score') && (
-              <TextField
-                label="Minimum score percent"
-                type="number"
-                inputProps={{ min: 0, max: 100 }}
-                value={bindingForm.min_score_percent}
-                onChange={(event) => setBindingForm({ ...bindingForm, min_score_percent: event.target.value })}
-              />
-            )}
-            <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}>
-              <FormControl fullWidth>
-                <InputLabel>Delivery</InputLabel>
-                <Select
-                  label="Delivery"
-                  value={bindingForm.delivery_mode}
-                  onChange={(event) => setBindingForm({ ...bindingForm, delivery_mode: event.target.value })}
-                >
-                  <MenuItem value="wallet_only">Wallet only</MenuItem>
-                  <MenuItem value="wallet_plus_canvas_mirror" disabled={!bindingCanvasMirrorPublishEnabled}>Wallet + Canvas mirror</MenuItem>
-                </Select>
-              </FormControl>
-              <FormControl fullWidth>
-                <InputLabel>Issuer mode</InputLabel>
-                <Select
-                  label="Issuer mode"
-                  value={bindingForm.issuer_mode}
-                  onChange={(event) => setBindingForm({ ...bindingForm, issuer_mode: event.target.value })}
-                >
-                  <MenuItem value="org_managed">Org managed</MenuItem>
-                  <MenuItem value="canvas_alias">Canvas alias</MenuItem>
-                </Select>
-              </FormControl>
-            </Stack>
-            {bindingForm.delivery_mode === 'wallet_plus_canvas_mirror' && (
-              <Paper variant="outlined" sx={{ p: 2 }}>
-                <Stack spacing={2}>
-                  <Box>
-                    <Typography variant="subtitle2">Canvas Credentials provider</Typography>
-                    <Typography variant="caption" color="text.secondary">
-                      Store secret material outside ElevenID and reference it here by environment variable or mounted secret file.
-                    </Typography>
-                  </Box>
-                  <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}>
-                    <FormControl fullWidth>
-                      <InputLabel>Provider</InputLabel>
-                      <Select
-                        label="Provider"
-                        value={bindingForm.canvas_credentials_provider}
-                        onChange={(event) => setBindingForm({ ...bindingForm, canvas_credentials_provider: event.target.value })}
+            {bindingWizardStep === 1 && (
+              <Stack spacing={2}>
+                <Alert severity="info">
+                  Use Canvas IDs from the institution admin/API setup for the course, assignment, module, or quiz this credential should follow. Leave activity IDs blank only when the binding should match any Canvas launch for this platform.
+                </Alert>
+                <Paper variant="outlined" sx={{ p: 2 }}>
+                  <Stack spacing={2}>
+                    <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} justifyContent="space-between" alignItems={{ xs: 'stretch', md: 'center' }}>
+                      <Box>
+                        <Typography variant="subtitle2">Import Canvas activity</Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          Use an admin API token reference to discover real Canvas courses, assignments, quizzes, and modules.
+                        </Typography>
+                      </Box>
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        startIcon={<RefreshIcon />}
+                        disabled={canvasScopeDiscoveryBusy || !(bindingForm.platform_id || selectedPlatformId)}
+                        onClick={discoverCanvasActivities}
                       >
-                        <MenuItem value="badgr_api">Canvas Credentials API</MenuItem>
-                        <MenuItem value="bridge">Bridge endpoint</MenuItem>
-                      </Select>
-                    </FormControl>
-                    <FormControl fullWidth>
-                      <InputLabel>Assertion scope</InputLabel>
-                      <Select
-                        label="Assertion scope"
-                        value={bindingForm.canvas_credentials_assertion_scope}
-                        onChange={(event) => setBindingForm({ ...bindingForm, canvas_credentials_assertion_scope: event.target.value })}
-                      >
-                        <MenuItem value="badgeclasses">Badge class</MenuItem>
-                        <MenuItem value="issuers">Issuer</MenuItem>
-                      </Select>
-                    </FormControl>
+                        Discover
+                      </Button>
+                    </Stack>
+                    <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}>
+                      <TextField
+                        fullWidth
+                        label="Canvas API token env var"
+                        value={bindingForm.canvas_admin_api_token_env}
+                        onChange={(event) => setBindingForm({ ...bindingForm, canvas_admin_api_token_env: event.target.value })}
+                        helperText="Example: CANVAS_ADMIN_API_TOKEN"
+                      />
+                      <TextField
+                        fullWidth
+                        label="Canvas API token file"
+                        value={bindingForm.canvas_admin_api_token_file}
+                        onChange={(event) => setBindingForm({ ...bindingForm, canvas_admin_api_token_file: event.target.value })}
+                        helperText="Example: /run/secrets/canvas_admin_api_token"
+                      />
+                    </Stack>
+                    {canvasScopeDiscoveryBusy && <LinearProgress />}
+                    {canvasScopeDiscoveryError && (
+                      <Alert severity="warning">
+                        {canvasScopeDiscoveryError?.message || String(canvasScopeDiscoveryError)}
+                      </Alert>
+                    )}
+                    {Array.isArray(canvasScopeDiscovery?.warnings) && canvasScopeDiscovery.warnings.map((warning) => (
+                      <Alert key={warning} severity="info">{warning}</Alert>
+                    ))}
+                    {(discoveredCourses.length > 0 || discoveredAssignments.length > 0 || discoveredQuizzes.length > 0 || discoveredModules.length > 0) && (
+                      <Stack spacing={2}>
+                        {discoveredCourses.length > 0 && (
+                          <FormControl fullWidth>
+                            <InputLabel>Imported course</InputLabel>
+                            <Select
+                              label="Imported course"
+                              value={discoveredCourses.some((item) => item.id === bindingForm.course_id) ? bindingForm.course_id : ''}
+                              onChange={(event) => setBindingForm({
+                                ...bindingForm,
+                                course_id: event.target.value,
+                                assignment_id: '',
+                                module_id: '',
+                                quiz_id: '',
+                              })}
+                            >
+                              {discoveredCourses.map((item) => (
+                                <MenuItem key={item.id} value={item.id}>{canvasDiscoveryItemLabel(item)}</MenuItem>
+                              ))}
+                            </Select>
+                          </FormControl>
+                        )}
+                        <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}>
+                          {discoveredAssignments.length > 0 && (
+                            <FormControl fullWidth>
+                              <InputLabel>Imported assignment</InputLabel>
+                              <Select
+                                label="Imported assignment"
+                                value={discoveredAssignments.some((item) => item.id === bindingForm.assignment_id) ? bindingForm.assignment_id : ''}
+                                onChange={(event) => setBindingForm({ ...bindingForm, assignment_id: event.target.value })}
+                              >
+                                {discoveredAssignments.map((item) => (
+                                  <MenuItem key={item.id} value={item.id}>{canvasDiscoveryItemLabel(item)}</MenuItem>
+                                ))}
+                              </Select>
+                            </FormControl>
+                          )}
+                          {discoveredQuizzes.length > 0 && (
+                            <FormControl fullWidth>
+                              <InputLabel>Imported quiz</InputLabel>
+                              <Select
+                                label="Imported quiz"
+                                value={discoveredQuizzes.some((item) => item.id === bindingForm.quiz_id) ? bindingForm.quiz_id : ''}
+                                onChange={(event) => setBindingForm({ ...bindingForm, quiz_id: event.target.value })}
+                              >
+                                {discoveredQuizzes.map((item) => (
+                                  <MenuItem key={item.id} value={item.id}>{canvasDiscoveryItemLabel(item)}</MenuItem>
+                                ))}
+                              </Select>
+                            </FormControl>
+                          )}
+                          {discoveredModules.length > 0 && (
+                            <FormControl fullWidth>
+                              <InputLabel>Imported module</InputLabel>
+                              <Select
+                                label="Imported module"
+                                value={discoveredModules.some((item) => item.id === bindingForm.module_id) ? bindingForm.module_id : ''}
+                                onChange={(event) => setBindingForm({ ...bindingForm, module_id: event.target.value })}
+                              >
+                                {discoveredModules.map((item) => (
+                                  <MenuItem key={item.id} value={item.id}>{canvasDiscoveryItemLabel(item)}</MenuItem>
+                                ))}
+                              </Select>
+                            </FormControl>
+                          )}
+                        </Stack>
+                      </Stack>
+                    )}
                   </Stack>
-                  <TextField
-                    label="API base URL"
-                    value={bindingForm.canvas_credentials_api_base_url}
-                    onChange={(event) => setBindingForm({ ...bindingForm, canvas_credentials_api_base_url: event.target.value })}
-                    helperText="Leave blank to use the service default for Canvas Credentials."
-                  />
-                  <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}>
-                    <TextField
-                      fullWidth
-                      label="Issuer/entity ID"
-                      value={bindingForm.canvas_credentials_issuer_id}
-                      onChange={(event) => setBindingForm({ ...bindingForm, canvas_credentials_issuer_id: event.target.value })}
-                    />
-                    <TextField
-                      fullWidth
-                      label="Badge class/entity ID"
-                      value={bindingForm.canvas_credentials_badgeclass_id}
-                      onChange={(event) => setBindingForm({ ...bindingForm, canvas_credentials_badgeclass_id: event.target.value })}
-                    />
-                  </Stack>
-                  <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}>
-                    <TextField
-                      fullWidth
-                      label="API token env var"
-                      value={bindingForm.canvas_credentials_api_token_env}
-                      onChange={(event) => setBindingForm({ ...bindingForm, canvas_credentials_api_token_env: event.target.value })}
-                      helperText="Example: MARTY_CANVAS_CREDENTIALS_TOKEN"
-                    />
-                    <TextField
-                      fullWidth
-                      label="API token file"
-                      value={bindingForm.canvas_credentials_api_token_file}
-                      onChange={(event) => setBindingForm({ ...bindingForm, canvas_credentials_api_token_file: event.target.value })}
-                      helperText="Example: /run/secrets/canvas_credentials_api_token"
-                    />
-                  </Stack>
+                </Paper>
+                <FormControl fullWidth>
+                  <InputLabel>Canvas activity</InputLabel>
+                  <Select
+                    label="Canvas activity"
+                    value={bindingForm.evidence_type}
+                    onChange={(event) => setBindingForm({ ...bindingForm, evidence_type: event.target.value })}
+                  >
+                    {EVIDENCE_TYPES.map((type) => (
+                      <MenuItem key={type.value} value={type.value}>{type.label}</MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+                <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}>
+                  <TextField fullWidth label="Course ID" value={bindingForm.course_id} onChange={(event) => setBindingForm({ ...bindingForm, course_id: event.target.value })} />
+                  <TextField fullWidth label="Assignment ID" value={bindingForm.assignment_id} onChange={(event) => setBindingForm({ ...bindingForm, assignment_id: event.target.value })} />
                 </Stack>
-              </Paper>
+                <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}>
+                  <TextField fullWidth label="Module ID" value={bindingForm.module_id} onChange={(event) => setBindingForm({ ...bindingForm, module_id: event.target.value })} />
+                  <TextField fullWidth label="Quiz ID" value={bindingForm.quiz_id} onChange={(event) => setBindingForm({ ...bindingForm, quiz_id: event.target.value })} />
+                </Stack>
+                {bindingForm.evidence_type.endsWith('_score') && (
+                  <TextField
+                    label="Minimum score percent"
+                    type="number"
+                    inputProps={{ min: 0, max: 100 }}
+                    value={bindingForm.min_score_percent}
+                    onChange={(event) => setBindingForm({ ...bindingForm, min_score_percent: event.target.value })}
+                  />
+                )}
+              </Stack>
             )}
-            <TextField label="Approval PolicySet ID" value={bindingForm.approval_policy_set_id} onChange={(event) => setBindingForm({ ...bindingForm, approval_policy_set_id: event.target.value })} />
-            <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}>
-              <FormControlLabel
-                control={<Switch checked={bindingForm.auto_approve_on_evidence} disabled={!bindingCanvasEvidenceEnabled} onChange={(event) => setBindingForm({ ...bindingForm, auto_approve_on_evidence: event.target.checked })} />}
-                label="Auto approve"
-              />
-              <FormControlLabel
-                control={<Switch checked={bindingForm.direct_issue_enabled} onChange={(event) => setBindingForm({ ...bindingForm, direct_issue_enabled: event.target.checked })} />}
-                label="Direct issue"
-              />
-              <FormControlLabel
-                control={<Switch checked={bindingForm.enabled} onChange={(event) => setBindingForm({ ...bindingForm, enabled: event.target.checked })} />}
-                label="Enabled"
-              />
-            </Stack>
+            {bindingWizardStep === 2 && (
+              <Stack spacing={2}>
+                <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}>
+                  <FormControl fullWidth>
+                    <InputLabel>Delivery</InputLabel>
+                    <Select
+                      label="Delivery"
+                      value={bindingForm.delivery_mode}
+                      onChange={(event) => setBindingForm({ ...bindingForm, delivery_mode: event.target.value })}
+                    >
+                      <MenuItem value="wallet_only">Wallet only</MenuItem>
+                      <MenuItem value="wallet_plus_canvas_mirror" disabled={!bindingCanvasMirrorPublishEnabled}>Wallet + Canvas mirror</MenuItem>
+                    </Select>
+                  </FormControl>
+                  <FormControl fullWidth>
+                    <InputLabel>Issuer mode</InputLabel>
+                    <Select
+                      label="Issuer mode"
+                      value={bindingForm.issuer_mode}
+                      onChange={(event) => setBindingForm({ ...bindingForm, issuer_mode: event.target.value })}
+                    >
+                      <MenuItem value="org_managed">Org managed</MenuItem>
+                      <MenuItem value="canvas_alias">Canvas alias</MenuItem>
+                    </Select>
+                  </FormControl>
+                </Stack>
+                {bindingForm.delivery_mode === 'wallet_plus_canvas_mirror' && (
+                  <Paper variant="outlined" sx={{ p: 2 }}>
+                    <Stack spacing={2}>
+                      <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} justifyContent="space-between" alignItems={{ xs: 'stretch', md: 'center' }}>
+                        <Box>
+                          <Typography variant="subtitle2">Canvas Credentials provider</Typography>
+                          <Typography variant="caption" color="text.secondary">
+                            Configure this organization binding with Canvas Credentials IDs and a secret locator. Do not store token values in the binding.
+                          </Typography>
+                        </Box>
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          startIcon={<TaskAltIcon />}
+                          disabled={canvasCredentialsValidationBusy}
+                          onClick={validateCanvasCredentialsSettings}
+                        >
+                          Validate provider
+                        </Button>
+                      </Stack>
+                      {canvasCredentialsValidationBusy && <LinearProgress />}
+                      {canvasCredentialsValidation && (
+                        <Alert severity={canvasCredentialsValidation.ok ? 'success' : 'warning'}>
+                          <Stack spacing={0.5}>
+                            <Typography variant="body2">
+                              {canvasCredentialsValidationSummary(canvasCredentialsValidation)}
+                            </Typography>
+                            {canvasCredentialsValidation.validation_url && (
+                              <Typography variant="caption" color="text.secondary">
+                                {canvasCredentialsValidation.validation_url}
+                              </Typography>
+                            )}
+                          </Stack>
+                        </Alert>
+                      )}
+                      <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}>
+                        <FormControl fullWidth>
+                          <InputLabel>Provider</InputLabel>
+                          <Select
+                            label="Provider"
+                            value={bindingForm.canvas_credentials_provider}
+                            onChange={(event) => setBindingForm({ ...bindingForm, canvas_credentials_provider: event.target.value })}
+                          >
+                            <MenuItem value="badgr_api">Canvas Credentials API</MenuItem>
+                            <MenuItem value="bridge">Bridge endpoint</MenuItem>
+                          </Select>
+                        </FormControl>
+                        <FormControl fullWidth>
+                          <InputLabel>Assertion scope</InputLabel>
+                          <Select
+                            label="Assertion scope"
+                            value={bindingForm.canvas_credentials_assertion_scope}
+                            onChange={(event) => setBindingForm({ ...bindingForm, canvas_credentials_assertion_scope: event.target.value })}
+                          >
+                            <MenuItem value="badgeclasses">Badge class</MenuItem>
+                            <MenuItem value="issuers">Issuer</MenuItem>
+                          </Select>
+                        </FormControl>
+                      </Stack>
+                      <TextField
+                        label="API base URL"
+                        value={bindingForm.canvas_credentials_api_base_url}
+                        onChange={(event) => setBindingForm({ ...bindingForm, canvas_credentials_api_base_url: event.target.value })}
+                        helperText="Canvas Credentials API base URL for this organization binding."
+                      />
+                      <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}>
+                        <TextField
+                          fullWidth
+                          label="Issuer/entity ID"
+                          value={bindingForm.canvas_credentials_issuer_id}
+                          onChange={(event) => setBindingForm({ ...bindingForm, canvas_credentials_issuer_id: event.target.value })}
+                        />
+                        <TextField
+                          fullWidth
+                          label="Badge class/entity ID"
+                          value={bindingForm.canvas_credentials_badgeclass_id}
+                          onChange={(event) => setBindingForm({ ...bindingForm, canvas_credentials_badgeclass_id: event.target.value })}
+                        />
+                      </Stack>
+                      <Paper variant="outlined" sx={{ p: 2 }}>
+                        <Stack spacing={2}>
+                          <Box>
+                            <Typography variant="subtitle2">Managed API token secret</Typography>
+                            <Typography variant="caption" color="text.secondary">
+                              Save or rotate the Canvas Credentials token as an encrypted organization secret, then reference it from this binding.
+                            </Typography>
+                          </Box>
+                          {canvasCredentialsSecretError && (
+                            <Alert severity="error">
+                              {canvasCredentialsSecretError.message || 'Failed to save managed secret.'}
+                            </Alert>
+                          )}
+                          <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}>
+                            <FormControl fullWidth>
+                              <InputLabel>Managed secret</InputLabel>
+                              <Select
+                                label="Managed secret"
+                                value={bindingForm.canvas_credentials_api_token_secret_id}
+                                onChange={(event) => setBindingForm({
+                                  ...bindingForm,
+                                  canvas_credentials_api_token_secret_id: event.target.value,
+                                  canvas_credentials_api_token_env: event.target.value ? '' : bindingForm.canvas_credentials_api_token_env,
+                                  canvas_credentials_api_token_file: event.target.value ? '' : bindingForm.canvas_credentials_api_token_file,
+                                })}
+                              >
+                                <MenuItem value="">None selected</MenuItem>
+                                {integrationSecrets.map((secret) => (
+                                  <MenuItem key={secret.id} value={secret.id}>
+                                    {secret.name}{secret.secret_hint ? ` (${secret.secret_hint})` : ''}
+                                  </MenuItem>
+                                ))}
+                                {selectedIntegrationSecretMissing && (
+                                  <MenuItem value={bindingForm.canvas_credentials_api_token_secret_id}>
+                                    Saved managed secret
+                                  </MenuItem>
+                                )}
+                              </Select>
+                            </FormControl>
+                            <TextField
+                              fullWidth
+                              type="password"
+                              label={bindingForm.canvas_credentials_api_token_secret_id ? 'Rotate token value' : 'New token value'}
+                              value={canvasCredentialsSecretValue}
+                              onChange={(event) => setCanvasCredentialsSecretValue(event.target.value)}
+                              helperText="Token value is encrypted server-side and never stored in the binding."
+                            />
+                            <Button
+                              variant="outlined"
+                              startIcon={<SaveIcon />}
+                              disabled={canvasCredentialsSecretBusy || !canvasCredentialsSecretValue.trim()}
+                              onClick={saveCanvasCredentialsManagedSecret}
+                              sx={{ minWidth: 150 }}
+                            >
+                              Save secret
+                            </Button>
+                          </Stack>
+                        </Stack>
+                      </Paper>
+                      <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}>
+                        <TextField
+                          fullWidth
+                          label="API token secret env"
+                          value={bindingForm.canvas_credentials_api_token_env}
+                          disabled={Boolean(bindingForm.canvas_credentials_api_token_secret_id)}
+                          onChange={(event) => setBindingForm({ ...bindingForm, canvas_credentials_api_token_env: event.target.value })}
+                          helperText="Deployment-managed secret name, not the token value."
+                        />
+                        <TextField
+                          fullWidth
+                          label="API token secret file"
+                          value={bindingForm.canvas_credentials_api_token_file}
+                          disabled={Boolean(bindingForm.canvas_credentials_api_token_secret_id)}
+                          onChange={(event) => setBindingForm({ ...bindingForm, canvas_credentials_api_token_file: event.target.value })}
+                          helperText="Mounted secret file path available to issuance."
+                        />
+                      </Stack>
+                    </Stack>
+                  </Paper>
+                )}
+                <TextField label="Approval PolicySet ID" value={bindingForm.approval_policy_set_id} onChange={(event) => setBindingForm({ ...bindingForm, approval_policy_set_id: event.target.value })} />
+                <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}>
+                  <FormControlLabel
+                    control={<Switch checked={bindingForm.auto_approve_on_evidence} disabled={!bindingCanvasEvidenceEnabled} onChange={(event) => setBindingForm({ ...bindingForm, auto_approve_on_evidence: event.target.checked })} />}
+                    label="Auto approve"
+                  />
+                  <FormControlLabel
+                    control={<Switch checked={bindingForm.direct_issue_enabled} onChange={(event) => setBindingForm({ ...bindingForm, direct_issue_enabled: event.target.checked })} />}
+                    label="Direct issue"
+                  />
+                  <FormControlLabel
+                    control={<Switch checked={bindingForm.enabled} onChange={(event) => setBindingForm({ ...bindingForm, enabled: event.target.checked })} />}
+                    label="Enabled"
+                  />
+                </Stack>
+              </Stack>
+            )}
           </Stack>
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setBindingDialogOpen(false)}>Cancel</Button>
           <Button
-            startIcon={<SaveIcon />}
-            variant="contained"
-            disabled={bindingSaveDisabled}
-            onClick={saveBinding}
+            disabled={saving || bindingWizardStep === 0}
+            onClick={() => setBindingWizardStep((step) => Math.max(0, step - 1))}
           >
-            Save
+            Back
           </Button>
+          {bindingWizardLastStep ? (
+            <Button
+              startIcon={<SaveIcon />}
+              variant="contained"
+              disabled={bindingSaveDisabled}
+              onClick={saveBinding}
+            >
+              Save
+            </Button>
+          ) : (
+            <Button
+              variant="contained"
+              disabled={bindingWizardNextDisabled}
+              onClick={() => setBindingWizardStep((step) => Math.min(BINDING_WIZARD_STEPS.length - 1, step + 1))}
+            >
+              Next
+            </Button>
+          )}
         </DialogActions>
       </Dialog>
     </>

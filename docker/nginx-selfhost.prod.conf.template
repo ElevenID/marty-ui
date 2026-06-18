@@ -216,7 +216,7 @@ server {
         proxy_set_header X-Forwarded-Host $host;
         add_header X-Content-Type-Options "nosniff" always;
         add_header X-XSS-Protection "1; mode=block" always;
-        add_header Content-Security-Policy "frame-ancestors 'self' https://${CANVAS_REAL_PUBLIC_HOST} https://${CANVAS_SANDBOX_PUBLIC_HOST} http://localhost:8088" always;
+        add_header Content-Security-Policy "frame-ancestors 'self' https://${CANVAS_REAL_PUBLIC_HOST} https://${CANVAS_SANDBOX_PUBLIC_HOST}" always;
     }
 
     location /v1/ {
@@ -279,7 +279,7 @@ server {
         proxy_set_header X-Forwarded-Host $host;
         add_header X-Content-Type-Options "nosniff" always;
         add_header X-XSS-Protection "1; mode=block" always;
-        add_header Content-Security-Policy "frame-ancestors 'self' https://${CANVAS_REAL_PUBLIC_HOST} https://${CANVAS_SANDBOX_PUBLIC_HOST} http://localhost:8088" always;
+        add_header Content-Security-Policy "frame-ancestors 'self' https://${CANVAS_REAL_PUBLIC_HOST} https://${CANVAS_SANDBOX_PUBLIC_HOST}" always;
     }
 
     location / {

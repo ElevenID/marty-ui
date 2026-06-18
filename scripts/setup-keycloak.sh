@@ -30,6 +30,11 @@ MARTY_API_SECRET="${MARTY_API_CLIENT_SECRET:-}"
 MARTY_ORG_NAME="${MARTY_ORG_NAME:-Marty}"
 MARTY_ORG_DOMAIN="${MARTY_ORG_DOMAIN:-${PUBLIC_DOMAIN:-marty.local}}"
 MARTY_ORG_ADMIN_EMAIL="$(printf '%s' "${MARTY_ORG_ADMIN_EMAIL:-}" | tr '[:upper:]' '[:lower:]' | tr -d '\r')"
+CANVAS_DEMO_ADMIN_ENABLED="${CANVAS_DEMO_ADMIN_ENABLED:-true}"
+CANVAS_DEMO_ADMIN_EMAIL="$(printf '%s' "${CANVAS_DEMO_ADMIN_EMAIL:-canvas.admin@marty.demo}" | tr '[:upper:]' '[:lower:]' | tr -d '\r')"
+CANVAS_DEMO_ADMIN_PASSWORD="${CANVAS_DEMO_ADMIN_PASSWORD:-CanvasAdmin123!}"
+CANVAS_DEMO_ADMIN_FIRST_NAME="${CANVAS_DEMO_ADMIN_FIRST_NAME:-Canvas}"
+CANVAS_DEMO_ADMIN_LAST_NAME="${CANVAS_DEMO_ADMIN_LAST_NAME:-Demo Admin}"
 KCADM="${KCADM_PATH:-/opt/keycloak/bin/kcadm.sh}"
 
 KEYCLOAK_USER_REGISTRATION_ENABLED="${KEYCLOAK_USER_REGISTRATION_ENABLED:-true}"
@@ -175,6 +180,10 @@ post_logout_from_csv() {
     printf '%s' "$output"
 }
 
+json_escape() {
+    printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
 kcadm_secret_safe() {
     local output
     local exit_code
@@ -208,6 +217,7 @@ main() {
     configure_marty_ui_redirect_uris
     configure_marty_api_secret
     ensure_marty_org_exists
+    ensure_canvas_demo_admin_user
     ensure_marty_org_admin_role
     
     log_success "=== Keycloak Setup Complete ==="
@@ -225,6 +235,44 @@ get_realm_role_id() {
     local payload
     payload=$(kcadm_safe get "roles/${role_name}" -r "$REALM" 2>/dev/null || echo "")
     echo "$payload" | tr -d '\n' | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
+}
+
+grant_realm_role_to_user() {
+    local user_id="$1"
+    local user_label="$2"
+    local role_name="$3"
+
+    local role_id
+    role_id=$(get_realm_role_id "$role_name")
+    if [ -z "$role_id" ]; then
+        log_error "Realm role '${role_name}' not found in realm ${REALM}"
+        return 1
+    fi
+
+    local current_roles
+    current_roles=$(kcadm_safe get "users/${user_id}/role-mappings/realm" -r "$REALM" 2>/dev/null || echo "[]")
+    if echo "$current_roles" | tr -d '\n' | grep -q "\"name\"[[:space:]]*:[[:space:]]*\"${role_name}\""; then
+        log_success "Keycloak user already has ${role_name} role: ${user_label}"
+        return 0
+    fi
+
+    local role_payload
+    role_payload=$(create_temp_file)
+    cat > "$role_payload" <<EOF
+[
+  {
+    "id": "${role_id}",
+    "name": "${role_name}"
+  }
+]
+EOF
+
+    if kcadm_safe create "users/${user_id}/role-mappings/realm" -r "$REALM" -f "$role_payload" > /dev/null; then
+        log_success "Granted Keycloak ${role_name} role to ${user_label}"
+    else
+        log_error "Failed to grant Keycloak ${role_name} role to ${user_label}"
+        return 1
+    fi
 }
 
 ensure_marty_org_exists() {
@@ -259,6 +307,83 @@ EOF
     fi
 }
 
+ensure_canvas_demo_admin_user() {
+    local enabled
+    enabled="$(normalize_bool "$CANVAS_DEMO_ADMIN_ENABLED" true)"
+    if [ "$enabled" != "true" ]; then
+        log_info "CANVAS_DEMO_ADMIN_ENABLED=false - skipping Canvas demo admin bootstrap"
+        return 0
+    fi
+
+    if [ -z "$CANVAS_DEMO_ADMIN_EMAIL" ]; then
+        log_info "CANVAS_DEMO_ADMIN_EMAIL not set - skipping Canvas demo admin bootstrap"
+        return 0
+    fi
+
+    log_info "Ensuring Canvas demo admin user exists: ${CANVAS_DEMO_ADMIN_EMAIL}"
+
+    local user_id
+    user_id=$(find_user_id_by_email "$CANVAS_DEMO_ADMIN_EMAIL")
+    if [ -z "$user_id" ]; then
+        local payload first_name last_name email
+        payload=$(create_temp_file)
+        email="$(json_escape "$CANVAS_DEMO_ADMIN_EMAIL")"
+        first_name="$(json_escape "$CANVAS_DEMO_ADMIN_FIRST_NAME")"
+        last_name="$(json_escape "$CANVAS_DEMO_ADMIN_LAST_NAME")"
+        cat > "$payload" <<EOF
+{
+    "username": "${email}",
+    "email": "${email}",
+    "emailVerified": true,
+    "enabled": true,
+    "firstName": "${first_name}",
+    "lastName": "${last_name}",
+    "attributes": {
+        "user_type": ["administrator"],
+        "demo_context": ["canvas"],
+        "onboarding_completed": ["true"]
+    }
+}
+EOF
+
+        if kcadm_safe create users -r "$REALM" -f "$payload" > /dev/null; then
+            log_success "Created Canvas demo admin user: ${CANVAS_DEMO_ADMIN_EMAIL}"
+        else
+            log_error "Failed to create Canvas demo admin user: ${CANVAS_DEMO_ADMIN_EMAIL}"
+            return 1
+        fi
+        user_id=$(find_user_id_by_email "$CANVAS_DEMO_ADMIN_EMAIL")
+    else
+        log_success "Canvas demo admin user already present: ${CANVAS_DEMO_ADMIN_EMAIL}"
+    fi
+
+    if [ -z "$user_id" ]; then
+        log_error "Canvas demo admin user lookup failed after create: ${CANVAS_DEMO_ADMIN_EMAIL}"
+        return 1
+    fi
+
+    if [ -n "$CANVAS_DEMO_ADMIN_PASSWORD" ]; then
+        local password_payload password_value
+        password_payload=$(create_temp_file)
+        password_value="$(json_escape "$CANVAS_DEMO_ADMIN_PASSWORD")"
+        cat > "$password_payload" <<EOF
+{
+    "type": "password",
+    "value": "${password_value}",
+    "temporary": false
+}
+EOF
+        if kcadm_secret_safe update "users/${user_id}/reset-password" -r "$REALM" -f "$password_payload" -n > /dev/null; then
+            log_success "Canvas demo admin password configured"
+        else
+            log_error "Failed to configure Canvas demo admin password"
+            return 1
+        fi
+    fi
+
+    grant_realm_role_to_user "$user_id" "$CANVAS_DEMO_ADMIN_EMAIL" "administrator"
+}
+
 ensure_marty_org_admin_role() {
     if [ -z "$MARTY_ORG_ADMIN_EMAIL" ]; then
         log_info "MARTY_ORG_ADMIN_EMAIL not set — skipping Keycloak admin role bootstrap"
@@ -274,37 +399,7 @@ ensure_marty_org_admin_role() {
         return 0
     fi
 
-    local role_id
-    role_id=$(get_realm_role_id "administrator")
-    if [ -z "$role_id" ]; then
-        log_error "Realm role 'administrator' not found in realm ${REALM}"
-        return 1
-    fi
-
-    local current_roles
-    current_roles=$(kcadm_safe get "users/${user_id}/role-mappings/realm" -r "$REALM" 2>/dev/null || echo "[]")
-    if echo "$current_roles" | tr -d '\n' | grep -q '"name"[[:space:]]*:[[:space:]]*"administrator"'; then
-        log_success "Keycloak user already has administrator role: ${MARTY_ORG_ADMIN_EMAIL}"
-        return 0
-    fi
-
-    local role_payload
-    role_payload=$(create_temp_file)
-    cat > "$role_payload" <<EOF
-[
-  {
-    "id": "${role_id}",
-    "name": "administrator"
-  }
-]
-EOF
-
-    if kcadm_safe create "users/${user_id}/role-mappings/realm" -r "$REALM" -f "$role_payload" > /dev/null; then
-        log_success "Granted Keycloak administrator role to ${MARTY_ORG_ADMIN_EMAIL}"
-    else
-        log_error "Failed to grant Keycloak administrator role to ${MARTY_ORG_ADMIN_EMAIL}"
-        return 1
-    fi
+    grant_realm_role_to_user "$user_id" "$MARTY_ORG_ADMIN_EMAIL" "administrator"
 }
 
 get_browser_execution_id_by_display_name() {

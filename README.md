@@ -503,7 +503,7 @@ To contribute to this project:
 
 ## License
 
-This demo is released under the MIT License. See LICENSE file for details.
+This project is released under the GNU Affero General Public License v3.0 (AGPL-3.0-only). See the [LICENSE](LICENSE) file for details.
 
 ## Resources
 

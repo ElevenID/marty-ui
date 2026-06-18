@@ -380,6 +380,25 @@ def _canvas_demo_scope(
     return scope
 
 
+def _env_optional(name: str) -> str | None:
+    value = os.environ.get(name, "").strip()
+    return value or None
+
+
+def _canvas_scope_from_admin_env() -> dict[str, Any]:
+    """Read Canvas scope IDs supplied by an institution/admin import process."""
+
+    return _canvas_demo_scope(
+        course_id=_env_optional("CANVAS_PROGRAM_BINDING_COURSE_ID") or _env_optional("CANVAS_COURSE_ID"),
+        quiz_id=_env_optional("CANVAS_PROGRAM_BINDING_QUIZ_ID") or _env_optional("CANVAS_QUIZ_ID"),
+        assignment_id=(
+            _env_optional("CANVAS_PROGRAM_BINDING_ASSIGNMENT_ID")
+            or _env_optional("CANVAS_ASSIGNMENT_ID")
+        ),
+        module_id=_env_optional("CANVAS_PROGRAM_BINDING_MODULE_ID") or _env_optional("CANVAS_MODULE_ID"),
+    )
+
+
 def _canvas_open_badge_claims() -> list[dict[str, Any]]:
     return [
         {"name": "email", "display_name": "Learner email", "claim_type": "string", "required": True, "selectively_disclosable": True},
@@ -2345,7 +2364,7 @@ def _canvas_credentials_display_url(external_credential_id: str) -> str:
     return f"{_canvas_credentials_demo_base_url()}/credentials/{quote(external_credential_id)}"
 
 
-def _employer_verification_demo_url(connector_cfg: ConnectorSeedConfig, external_credential_id: str) -> str:
+def _console_provenance_demo_url(connector_cfg: ConnectorSeedConfig, external_credential_id: str) -> str:
     public_base = os.environ.get("PUBLIC_API_URL", "").strip() or connector_cfg.issuance_base_url
     query = urlencode(
         {
@@ -2354,7 +2373,7 @@ def _employer_verification_demo_url(connector_cfg: ConnectorSeedConfig, external
             "organization_id": connector_cfg.organization_id,
         }
     )
-    return f"{public_base.rstrip('/')}/verify/canvas-credentials?{query}"
+    return f"{public_base.rstrip('/')}/console/org/operate/verify?{query}"
 
 
 def _print_canvas_demo_transition_summary(
@@ -2421,20 +2440,26 @@ def _print_canvas_demo_transition_summary(
                 else {}
             )
             external_id = str(record.get("external_credential_id"))
+            provider = str(metadata.get("provider") or publish_response.get("provider") or "").strip().lower()
+            real_provider = provider in {"badgr_api", "canvas_credentials_api"}
             canvas_url = (
                 metadata.get("credential_url")
                 or metadata.get("open_badge_id")
                 or publish_response.get("credential_url")
                 or publish_response.get("openBadgeId")
-                or _canvas_credentials_display_url(external_id)
             )
-            employer_url = (
-                metadata.get("employer_verification_url")
-                or publish_response.get("employer_verification_url")
-                or _employer_verification_demo_url(connector_cfg, external_id)
+            if not canvas_url and not real_provider:
+                canvas_url = _canvas_credentials_display_url(external_id)
+            console_provenance_url = (
+                metadata.get("console_provenance_url")
+                or publish_response.get("console_provenance_url")
+                or _console_provenance_demo_url(connector_cfg, external_id)
             )
-            print(f"      canvas_display:   {canvas_url}")
-            print(f"      employer_verify:  {employer_url}")
+            if canvas_url:
+                print(f"      canvas_display:   {canvas_url}")
+            else:
+                print("      canvas_display:   not returned by Canvas Credentials provider")
+            print(f"      console_provenance: {console_provenance_url}")
         if record.get("last_error"):
             print(f"      last_error:        {record.get('last_error')}")
     if tx_id:
@@ -2740,7 +2765,7 @@ def main() -> int:
     print(f"    lti_jwks_url:       {platform.get('lti_jwks_url')}")
     print(f"    jwks_key_count:     {len(jwks_keys)}")
 
-    canvas_scope = _canvas_demo_scope(
+    seeded_canvas_scope = _canvas_demo_scope(
         course_id=((canvas_seed or {}).get("course") or {}).get("id"),
         quiz_id=(
             ((canvas_seed or {}).get("quiz") or {}).get("id")
@@ -2748,6 +2773,13 @@ def main() -> int:
             else None
         ),
     )
+    admin_canvas_scope = _canvas_scope_from_admin_env()
+    canvas_scope = {**seeded_canvas_scope, **admin_canvas_scope}
+    if admin_canvas_scope:
+        print("==> Canvas scope supplied by admin/import environment...")
+        print(f"  OK Canvas scope: {canvas_scope}")
+    elif not canvas_scope:
+        print("INFO: Canvas program binding scope is empty; it will match any Canvas launch/evidence for this platform.")
     if connector_cfg.open_badge_scenario_enabled:
         print("==> Updating Canvas MIP Open Badge evidence scope...")
         try:

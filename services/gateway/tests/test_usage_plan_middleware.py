@@ -11,7 +11,7 @@ from starlette.responses import Response
 from gateway.plan_middleware import UsageTrackingMiddleware
 
 
-def _build_request(*, tracker, plan: str, path: str = "/v1/verify", method: str = "POST") -> Request:
+def _build_request(*, tracker, plan: str, path: str = "/v1/issuance", method: str = "POST") -> Request:
     app = SimpleNamespace(state=SimpleNamespace(usage_tracker=tracker))
     scope = {
         "type": "http",

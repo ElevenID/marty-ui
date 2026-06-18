@@ -19,6 +19,7 @@ Required files:
 - `keycloak_admin_password`
 - `marty_api_client_secret`
 - `issuance_api_key`
+- `integration_secret_master_key`
 - `openbao_service_token`
 - `cloudflare_tunnel_token`
 - `license_key`
@@ -27,10 +28,15 @@ Required files:
 
 `license_key` is a signed commercial entitlement token. The issuer public verification key is embedded in the Marty self-host runtime image; customer deployments must not provide a replacement public key.
 
+`integration_secret_master_key` is a base64-encoded 32-byte AES key used by issuance to encrypt organization-managed integration secrets, such as Canvas Credentials API tokens. Generate it with:
+
+```bash
+python -c "import os, base64; print(base64.b64encode(os.urandom(32)).decode())"
+```
+
 Optional files may be left empty when the related integration is disabled:
 
 - `canvas_credentials_shared_secret`
-- `canvas_credentials_api_token`
 - `cloudflare_beta_tunnel_token`
 - `google_client_id`
 - `google_client_secret`
@@ -42,7 +48,9 @@ Optional files may be left empty when the related integration is disabled:
 
 `canvas_credentials_shared_secret` signs Canvas credential-sync callbacks between the Canvas integration surface and issuance service. Leave it empty when Canvas integration is disabled.
 
-`canvas_credentials_api_token` is the organization-managed Canvas Credentials API bearer token used when `CANVAS_CREDENTIALS_PROVIDER=badgr_api`. It is not issuer signing key material; ElevenID still signs canonical credentials through the configured remote key store.
+Canvas Credentials API tokens are configured by organization administrators from the Canvas integration wizard. Issuance stores them as encrypted integration secrets using `integration_secret_master_key`; do not put institution-specific Canvas Credentials bearer tokens in self-host deployment secret files.
+
+The standalone read-only Canvas Credentials contract checker can still read `CANVAS_CREDENTIALS_API_TOKEN` or `CANVAS_CREDENTIALS_API_TOKEN_FILE` from an operator shell for one-off vendor sandbox validation.
 
 `cloudflare_beta_tunnel_token` is only required when the optional self-host `beta-tunnel` compose profile is enabled to route a second Cloudflare tunnel, such as `beta.elevenidllc.com`, into the same self-host edge.
 

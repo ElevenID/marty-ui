@@ -89,26 +89,40 @@ Optional program binding env vars:
 - `CANVAS_DEMO_MIRROR_PUBLISH_ENABLED` (default: `true`; after demo wallet claim, run one Canvas mirror automation cycle)
 - `CANVAS_CREDENTIALS_SHARED_SECRET` signs demo Canvas evidence events; keep the value in the beta env/secret layer and do not place issuer signing keys in Canvas
 - `CANVAS_CREDENTIALS_PUBLISH_URL` and `CANVAS_CREDENTIALS_STATUS_SYNC_URL` point the issuance service at the Canvas Credentials mirror API. In beta experiments, the Canvas sandbox profile supplies a guarded receiver for this contract.
-- `CANVAS_CREDENTIALS_API_TOKEN` is an optional bearer token shared by issuance and the beta Canvas Credentials receiver. It protects the publish/status endpoints but is not issuer key material.
+- `CANVAS_CREDENTIALS_API_TOKEN` is only used by the beta sandbox receiver and the standalone read-only contract checker. Real institution Canvas Credentials API tokens are saved by organization admins as managed integration secrets.
 - `CANVAS_CREDENTIALS_PUBLIC_BASE_URL` optionally overrides the public Canvas Credentials demo display base URL printed by the seeder and returned by the sandbox mirror receiver.
 
 ### Real Canvas Credentials API mode
 
-The mirror path now supports two provider modes:
+The mirror path now supports two provider modes on each organization-managed Canvas Program Binding:
 
-- `CANVAS_CREDENTIALS_PROVIDER=bridge` posts the existing ElevenID bridge payload to the sandbox/beta receiver.
-- `CANVAS_CREDENTIALS_PROVIDER=badgr_api` publishes a real Canvas Credentials assertion through the Canvas Credentials API.
+- `bridge` posts the existing ElevenID bridge payload to the sandbox/beta receiver.
+- `badgr_api` publishes a real Canvas Credentials assertion through the Canvas Credentials API.
 
-For real API mode, configure issuance with:
+For real API mode, an organization administrator should configure the Canvas Credentials provider in the Canvas integration wizard. The binding stores non-secret provider settings such as:
 
-- `CANVAS_CREDENTIALS_API_BASE_URL` (default: `https://api.badgr.io`)
-- `CANVAS_CREDENTIALS_API_TOKEN`
-- `CANVAS_CREDENTIALS_ISSUER_ID`
-- `CANVAS_CREDENTIALS_BADGECLASS_ID`
-- `CANVAS_CREDENTIALS_ASSERTION_SCOPE` (default: `badgeclasses`)
-- `CANVAS_CREDENTIALS_PROVENANCE_BASE_URL` (for example, `https://beta.elevenidllc.com`)
+- provider (`badgr_api`)
+- API base URL
+- issuer ID
+- badgeclass ID
+- assertion scope
+- API token secret reference
+
+The API token itself should live in the managed integration secret store. Issuance copies the binding's `api_token_secret_id` into each Canvas mirror delivery record, so publish/revoke/status sync use the organization-specific provider settings rather than a global Canvas Credentials environment.
+
+For self-service setup, organization admins can save the Canvas Credentials API token as a managed integration secret from the Canvas binding wizard. Issuance encrypts that value with `INTEGRATION_SECRET_MASTER_KEY` and stores only an `org_secret://...` reference on the binding. The binding then carries `api_token_secret_id` instead of a raw token, env var, or file path.
+
+`CANVAS_CREDENTIALS_*` environment values are only an ops fallback for local/smoke tests and legacy bridge deployments. They should not be treated as the production source of truth for multi-organization Canvas Credentials setup.
 
 Real API mode issues the Canvas Credentials assertion only after the canonical ElevenID credential exists. The assertion includes a public ElevenID provenance URL so verifiers can resolve the canonical issuer DID, status-list metadata, delivery record, and revocation state. Revocation sync uses the Canvas Credentials assertion revoke endpoint; suspend/reinstate are not first-class Canvas Credentials operations and remain represented by the ElevenID canonical status/provenance layer.
+
+Before enabling publish in a shared sandbox, prefer the Canvas integration wizard's **Validate provider** action. It validates the provider configuration saved on the organization binding without publishing a credential. For operator-only secret smoke tests, the read-only CLI check can still be pointed at an env file:
+
+```powershell
+python scripts/check-canvas-credentials-contract.py --env-file .env --list-assertions
+```
+
+The CLI check validates a token, base URL, assertion scope, and issuer or badgeclass ID without creating or revoking an assertion. Use it only when validating deployment-level secret wiring outside the admin UI.
 
 Optional Canvas LMS seeding env vars:
 
@@ -142,13 +156,63 @@ The badge type metadata and image are public at `https://beta.elevenidllc.com/cr
 
 The Marty issuer DID is `did:web:beta.elevenidllc.com:orgs:marty`. The issuer private key stays outside Canvas and outside the beta web host; issuance resolves the active issuer context through the gateway signing-key registry and signs via the remote OpenBao transit service.
 
-When `CANVAS_DEMO_EVIDENCE_EVENT_ENABLED=true`, the seeder prints a verification summary showing the evidence fact type, verification method, policy result, issuance transaction, resolved issuer DID, remote signing service, delivery mode, issued credential, wallet delivery record, Canvas mirror delivery record, external Canvas mirror ID, Canvas Credentials display URL, and employer verification URL when publish succeeds.
+When `CANVAS_DEMO_EVIDENCE_EVENT_ENABLED=true`, the seeder prints a verification summary showing the evidence fact type, verification method, policy result, issuance transaction, resolved issuer DID, remote signing service, delivery mode, issued credential, wallet delivery record, Canvas mirror delivery record, external Canvas mirror ID, Canvas Credentials display URL, and Canvas mirror provenance lookup URL when publish succeeds.
 
-The employer demo route is:
+The expanded console-native demo path is:
 
-- `https://beta.elevenidllc.com/verify/canvas-credentials?external_credential_id=...`
+1. Launch the credential activity from Canvas.
+2. Continue from the LTI launch into the normal ElevenID credential application surface, with the Canvas course/activity context already bound.
+3. Explain the MIP transition: Canvas AGS score event -> `EvidenceFact` -> Cedar policy permit -> issuance transaction -> OID4VCI claim -> Canvas mirror publish.
+4. Open **My Identity** and review the issued Interoperable Credentials Foundations Badge, including its badge artwork, claim state, Canvas course source, and Canvas Credentials mirror delivery metadata.
+5. As an issuer admin, open the credential template **Destinations** tab to review Canvas Credentials readiness, badgeclass mapping, mirror health, projection policy, and per-template destination controls.
+6. As an issuer admin, open **Canvas** setup to review Canvas platforms, program bindings, LTI launch binding, feature gates, AGS/NRPS/Deep Linking coverage, Canvas Credentials provider settings, managed token references, and provider validation.
+7. Show the Canvas Credentials sandbox display as an external destination appendix only.
+8. In the organization console, open **Credential Verification** with the Canvas mirror lookup params to resolve the mirror to the canonical ElevenID issuance, issuer DID, delivery record, and revocation status.
+9. As a verifier organization, start a saved verification flow or presentation policy, generate the OID4VP request, and review the Open Badge verification result. The result view shows badge name/image/issuer, trust result, revocation/status result, selected claims, and Canvas mirror provenance when present.
 
-That page resolves the Canvas mirror through the public provenance endpoint and shows why the badge has value outside Canvas: an employer can verify the canonical issuer DID, issuance record, Canvas distribution channel, active status, and subject hash without trusting a Canvas-only database lookup.
+The org-console portions of the recording use a dedicated demo administrator:
+
+- Email: `canvas.admin@marty.demo`
+- Password: `CanvasAdmin123!`
+
+Fresh dev realm imports include this user. For an existing dev/beta realm, rerun the Keycloak setup step so `scripts/setup-keycloak.sh` creates the user and grants the `administrator` role. Self-host production startup removes this demo account by default.
+
+The Canvas mirror provenance route is now console-native:
+
+- `https://beta.elevenidllc.com/console/org/operate/verify?external_credential_id=...`
+
+Legacy public Canvas verification routes are not supported. Canvas mirror resolution is a support/admin workflow inside the organization console, while employer-facing verification should use the normal OID4VP console flow whenever the holder can present from a wallet.
+
+UX alignment note: the Canvas Credentials display page in the beta sandbox is a handcrafted external-destination simulator, not a real Canvas Credentials product page. Treat the sandbox display page as an appendix to the product demo.
+
+To record the browser demo after seeding:
+
+```powershell
+cd ..\marty-demo-recorder
+npm install
+npm run record:canvas
+```
+
+The shared demo recorder lives in `marty-demo-recorder/`. The Canvas demo story and overlay notes are configured in `marty-demo-recorder/demos/canvas-employer-demo.json`; Canvas-specific Playwright helpers live in `marty-demo-recorder/demos/hooks/canvasEmployerHooks.js`.
+
+The recorder reads the latest `canvas_display` and `console_provenance` URLs from `canvas-seed-latest.log` or from `CANVAS_DEMO_CANVAS_DISPLAY_URL` and `CANVAS_DEMO_CONSOLE_PROVENANCE_URL`. It attempts the full expanded path: Canvas LTI, normal application bootstrap, learner **My Identity**, credential template **Destinations**, Canvas admin setup, sandbox destination appendix, Canvas provenance inside **Credential Verification**, and OID4VP verification. After the learner checkpoint, it switches to `canvas.admin@marty.demo` for organization-console screens.
+
+Useful recorder overrides:
+
+- `CANVAS_DEMO_APPLICANT_IDENTITY_URL` (default: `https://beta.elevenidllc.com/console/applicant/identity`)
+- `CANVAS_DEMO_CREDENTIAL_TEMPLATE_URL` (default: Interoperable Credentials Foundations Badge template detail)
+- `CANVAS_DEMO_CANVAS_ADMIN_URL` (default: `https://beta.elevenidllc.com/console/org/deploy/canvas`)
+- `CANVAS_DEMO_CONSOLE_PROVENANCE_URL` (default: seeded `/console/org/operate/verify?...` Canvas provenance lookup)
+- `CANVAS_DEMO_CONSOLE_VERIFY_URL` (default: `https://beta.elevenidllc.com/console/org/operate/verify`)
+- `CANVAS_DEMO_ADMIN_EMAIL` (default: `canvas.admin@marty.demo`)
+- `CANVAS_DEMO_ADMIN_PASSWORD` (default: `CanvasAdmin123!`)
+
+It writes:
+
+- `marty-demo-recorder/artifacts/canvas-employer-demo/canvas-employer-demo.webm`
+- `marty-demo-recorder/artifacts/canvas-employer-demo/canvas-employer-demo-steps.json`
+
+If you intentionally want a placeholder recording with built-in sandbox URLs, set `CANVAS_DEMO_ALLOW_FALLBACK_URLS=1`.
 
 ## Compose wiring
 

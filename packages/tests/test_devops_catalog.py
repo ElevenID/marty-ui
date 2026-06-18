@@ -211,6 +211,7 @@ def test_kubernetes_required_secret_schema_matches_setup_requirements():
         "RABBITMQ_ERLANG_COOKIE",
         "SESSION_SECRET_KEY",
         "ISSUANCE_API_KEY",
+        "INTEGRATION_SECRET_MASTER_KEY",
         "OPENBAO_SERVICE_TOKEN",
         "LICENSE_KEY",
     ]

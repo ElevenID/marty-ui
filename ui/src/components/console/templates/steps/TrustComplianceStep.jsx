@@ -30,6 +30,61 @@ import { useTranslation } from 'react-i18next';
 import { listTrustProfiles } from '../../../../services/presentationPolicyApi';
 import signingKeysApi from '../../../../services/signingKeysApi';
 
+const firstNonEmpty = (...values) => values
+  .map((value) => (typeof value === 'string' ? value.trim() : value))
+  .find((value) => value);
+
+const pruneEmpty = (value) => Object.fromEntries(
+  Object.entries(value).filter(([, entryValue]) => entryValue !== undefined && entryValue !== null && entryValue !== '')
+);
+
+const buildIssuerProfilePatch = (profile, currentAlgorithm = 'ES256') => {
+  if (!profile) {
+    return {
+      issuer_profile_id: null,
+      issuer_did: null,
+      issuer_key_id: null,
+      issuer_algorithm: currentAlgorithm || null,
+      key_access_mode: null,
+      remote_signing_config: null,
+    };
+  }
+
+  const signingKeyReference = firstNonEmpty(
+    profile.signing_key_reference,
+    profile.key_reference,
+    profile.metadata?.signing_key_reference
+  );
+  const signingServiceId = firstNonEmpty(
+    profile.signing_service_id,
+    profile.service_id,
+    profile.metadata?.signing_service_id
+  );
+  const verificationMethodId = firstNonEmpty(
+    profile.verification_method_id,
+    profile.metadata?.verification_method_id
+  );
+  const algorithm = firstNonEmpty(profile.algorithm, currentAlgorithm, 'ES256');
+
+  return {
+    issuer_profile_id: profile.id || null,
+    issuer_did: firstNonEmpty(profile.issuer_did, profile.did) || null,
+    issuer_key_id: signingKeyReference || signingServiceId || null,
+    issuer_algorithm: algorithm || null,
+    signing_algorithm: algorithm || currentAlgorithm || null,
+    key_access_mode: signingKeyReference || signingServiceId ? 'REMOTE_SIGNING' : null,
+    remote_signing_config: signingKeyReference || signingServiceId || verificationMethodId
+      ? pruneEmpty({
+          provider: 'managed-signing-service',
+          signing_service_id: signingServiceId,
+          signing_key_reference: signingKeyReference,
+          verification_method_id: verificationMethodId,
+          key_purpose: firstNonEmpty(profile.key_purpose, profile.metadata?.key_purpose),
+        })
+      : null,
+  };
+};
+
 const TrustComplianceStep = ({ data, onChange }) => {
   const { t } = useTranslation('console');
   const navigate = useNavigate();
@@ -174,7 +229,10 @@ const TrustComplianceStep = ({ data, onChange }) => {
         <InputLabel>Issuer Profile</InputLabel>
         <Select
           value={data.issuer_profile_id || ''}
-          onChange={(e) => onChange({ issuer_profile_id: e.target.value || null })}
+          onChange={(e) => {
+            const selectedProfile = issuerProfiles.find((profile) => profile.id === e.target.value);
+            onChange(buildIssuerProfilePatch(selectedProfile, data.signing_algorithm));
+          }}
           label="Issuer Profile"
           disabled={issuerProfilesLoading}
         >

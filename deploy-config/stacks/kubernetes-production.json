@@ -19,6 +19,7 @@
     "rabbitmq_erlang_cookie",
     "session_secret_key",
     "issuance_api_key",
+    "integration_secret_master_key",
     "openbao_service_token",
     "license_key"
   ],

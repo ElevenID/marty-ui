@@ -43,6 +43,47 @@ export async function deleteCanvasProgramBinding(bindingId) {
   return del(`${API_BASE}/program-bindings/${encodeURIComponent(bindingId)}`);
 }
 
+export async function validateCanvasCredentialsProvider(canvasCredentials = {}, params = {}) {
+  return post(`${API_BASE}/canvas-credentials/validate`, {
+    organization_id: params.organizationId,
+    canvas_credentials: canvasCredentials,
+  });
+}
+
+export async function listCanvasIntegrationSecrets(params = {}) {
+  const queryString = buildDefinedQueryString({
+    organization_id: params.organizationId,
+    provider: params.provider || 'canvas_credentials',
+  });
+  const data = await get(withQuery(`${API_BASE}/integration-secrets`, queryString));
+  return Array.isArray(data) ? data : [];
+}
+
+export async function createCanvasIntegrationSecret(data) {
+  return post(`${API_BASE}/integration-secrets`, data);
+}
+
+export async function updateCanvasIntegrationSecret(secretId, data) {
+  return put(`${API_BASE}/integration-secrets/${encodeURIComponent(secretId)}`, data);
+}
+
+export async function deleteCanvasIntegrationSecret(secretId) {
+  return del(`${API_BASE}/integration-secrets/${encodeURIComponent(secretId)}`);
+}
+
+export async function discoverCanvasScope(platformId, params = {}) {
+  return post(`${API_BASE}/platforms/${encodeURIComponent(platformId)}/scope-discovery`, {
+    course_id: params.courseId,
+    api_token_env: params.apiTokenEnv,
+    api_token_file: params.apiTokenFile,
+    include_courses: params.includeCourses !== false,
+    include_assignments: params.includeAssignments !== false,
+    include_quizzes: params.includeQuizzes !== false,
+    include_modules: params.includeModules !== false,
+    limit: params.limit || 50,
+  });
+}
+
 export async function getCanvasMirrorProvenance(params = {}) {
   const queryString = buildDefinedQueryString({
     delivery_record_id: params.deliveryRecordId,

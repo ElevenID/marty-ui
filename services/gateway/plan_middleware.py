@@ -41,8 +41,7 @@ logger = logging.getLogger(__name__)
 # ── Route → metric mapping ──────────────────────────────────────────────
 # Analytics counters: tracked but never enforced on paid plans.
 ANALYTICS_METRIC_MAP: dict[str, str] = {
-    "/v1/verify": "verifications",
-    "/v1/verify/zkp": "verifications",
+    "/v1/flows/verify": "verifications",
     "/v1/flows/siop/submit": "verifications",
     "/v1/issuance": "issued_credentials",
 }

@@ -783,22 +783,6 @@ def _build_canvas_lti_user(session_payload: dict[str, Any]) -> AuthenticatedUser
         inferred_family_name,
     )
 
-    organization_id = _first_non_empty_string(
-        session_payload.get("organization_id"),
-        verified_launch.get("organization_id"),
-    )
-    organization_name = _first_non_empty_string(
-        session_payload.get("organization_name"),
-        os.environ.get("CANVAS_LTI_ORGANIZATION_NAME"),
-        os.environ.get("MARTY_ORG_NAME"),
-        "ElevenID LLC",
-    )
-    organization = (
-        {organization_id: {"name": organization_name, "source": "canvas_lti"}}
-        if organization_id
-        else None
-    )
-
     return AuthenticatedUser(
         user_id=f"canvas-lti-{digest[:32]}",
         email=email,
@@ -818,9 +802,9 @@ def _build_canvas_lti_user(session_payload: dict[str, Any]) -> AuthenticatedUser
         family_name=family_name,
         user_type=UserType.APPLICANT,
         roles=["applicant", "canvas_lti_learner"],
-        organization_id=organization_id,
-        organization_name=organization_name,
-        organization=organization,
+        organization_id=None,
+        organization_name=None,
+        organization=None,
     )
 
 

@@ -182,13 +182,6 @@ static_resources:
                             cluster: event_stream_grpc
                             timeout: 30s
 
-                        # Verification Service REST → verification:9017
-                        - match:
-                            prefix: "/v1/verify"
-                          route:
-                            cluster: verification_grpc
-                            timeout: 60s
-
                         # ── gRPC Native Routes ───────────────────────────
 
                         # gRPC Health (wildcard — route to auth as default)

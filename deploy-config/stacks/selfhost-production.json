@@ -17,6 +17,7 @@
     "keycloak_admin_password",
     "marty_api_client_secret",
     "issuance_api_key",
+    "integration_secret_master_key",
     "openbao_service_token",
     "cloudflare_tunnel_token",
     "license_key"

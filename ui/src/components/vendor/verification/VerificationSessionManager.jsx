@@ -34,15 +34,12 @@ import ErrorIcon from '@mui/icons-material/Error';
 import HourglassTopIcon from '@mui/icons-material/HourglassTop';
 import { useAuth } from '../../../hooks/useAuth';
 import { useNotifications } from '../../../hooks/useNotifications';
-import {
-  startVerificationSession,
-  listVerificationSessions,
-  getInspectionResult,
-} from '../../../services/verificationApi';
 import { startVerificationFlow } from '../../../services/zkVerificationApi';
+import { listFlowExecutions } from '../../../services/flowsApi';
 import PolicySelectStep from './steps/PolicySelectStep';
 import SessionConfigStep from './steps/SessionConfigStep';
 import QRDisplayStep from './steps/QRDisplayStep';
+import VerificationResultSummary from './VerificationResultSummary';
 import { formatOfficialReference } from '../../../utils/officialReferences';
 
 const WIZARD_STEPS = ['Select Policy', 'Configure Session', 'Scan & Verify'];
@@ -57,21 +54,55 @@ const STATUS_CHIP = {
 const ACTIVE_STATUSES   = ['pending'];
 const HISTORY_STATUSES  = ['completed', 'failed', 'expired'];
 
+function normalizeSessionStatus(status) {
+  const value = String(status || '').toLowerCase();
+  if (['passed', 'completed', 'verified'].includes(value)) return 'completed';
+  if (['failed', 'denied'].includes(value)) return 'failed';
+  if (value === 'expired') return 'expired';
+  return 'pending';
+}
+
 function normalizeFlowSession(session) {
-  if (!session?.instance_id) return session;
+  const sessionId = session?.instance_id || session?.id || session?.session_id;
+  if (!sessionId) return session;
+  const context = session.context_data || session.context || {};
   return {
     ...session,
-    session_id: session.instance_id,
-    status: session.status === 'awaiting_wallet' ? 'pending' : session.status,
-    dc_api_request_url: `/v1/flows/instances/${encodeURIComponent(session.instance_id)}/request?transport=dc_api`,
-    dc_api_submit_url: `/v1/flows/instances/${encodeURIComponent(session.instance_id)}/submit/dc-api`,
+    session_id: sessionId,
+    status: normalizeSessionStatus(session.status === 'awaiting_wallet' ? 'pending' : session.status),
+    purpose: session.purpose || session.external_reference || context.purpose || context.external_reference || 'Credential verification',
+    qr_code_data: session.qr_code_data || context.qr_code_data,
+    request_uri: session.request_uri || context.request_uri,
+    dc_api_request_url: session.dc_api_request_url || `/v1/flows/instances/${encodeURIComponent(sessionId)}/request?transport=dc_api`,
+    dc_api_submit_url: session.dc_api_submit_url || `/v1/flows/instances/${encodeURIComponent(sessionId)}/submit/dc-api`,
   };
+}
+
+function isVerificationFlowInstance(session = {}) {
+  const metadata = session.metadata || {};
+  const context = session.context_data || session.context || {};
+  const values = [
+    session.flow_type,
+    metadata.flow_type,
+    metadata.flow_definition_reference,
+    context.flow_type,
+    context.protocol_flow_type,
+    context.flow_definition_reference,
+  ].map((value) => String(value || '').toLowerCase());
+
+  return values.some((value) => (
+    value.includes('verification')
+    || value.includes('oid4vp')
+    || value.includes('presentation')
+    || value === '__verification__'
+  ));
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function StatusChip({ status }) {
-  const cfg = STATUS_CHIP[status] || { label: status, color: 'default' };
+  const normalized = normalizeSessionStatus(status);
+  const cfg = STATUS_CHIP[normalized] || { label: status, color: 'default' };
   return (
     <Chip
       size="small"
@@ -118,19 +149,25 @@ function VerificationSessionManager() {
   // Detail drawer state
   const [detailSession, setDetailSession] = useState(null);
   const [detailOpen, setDetailOpen] = useState(false);
-  const [inspectionResult, setInspectionResult] = useState(null);
-  const [inspectionLoading, setInspectionLoading] = useState(false);
 
   // ── Data fetching ─────────────────────────────────────────────────────────
 
   const fetchSessions = useCallback(async () => {
-    if (!user?.organization_id) return;
+    if (!user?.organization_id) {
+      setSessions([]);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
-      const data = await listVerificationSessions(user.organization_id);
-      setSessions(data?.sessions || []);
+      const flowData = await listFlowExecutions(null, { organization_id: user.organization_id });
+      const flowSessions = (Array.isArray(flowData) ? flowData : flowData?.items || flowData?.instances || [])
+        .filter(isVerificationFlowInstance)
+        .map(normalizeFlowSession);
+      setSessions(flowSessions);
     } catch (err) {
+      setSessions([]);
       setError(err.message || 'Failed to load verification sessions');
     } finally {
       setLoading(false);
@@ -143,8 +180,8 @@ function VerificationSessionManager() {
 
   // ── Filtered session lists ────────────────────────────────────────────────
 
-  const activeSessions  = sessions.filter((s) => ACTIVE_STATUSES.includes(s.status));
-  const historySessions = sessions.filter((s) => HISTORY_STATUSES.includes(s.status));
+  const activeSessions  = sessions.filter((s) => ACTIVE_STATUSES.includes(normalizeSessionStatus(s.status)));
+  const historySessions = sessions.filter((s) => HISTORY_STATUSES.includes(normalizeSessionStatus(s.status)));
 
   // ── Wizard handlers ───────────────────────────────────────────────────────
 
@@ -167,23 +204,14 @@ function VerificationSessionManager() {
       setWizardLoading(true);
       setWizardError(null);
       try {
-        let session;
-        try {
-          session = await startVerificationFlow({
-            organization_id: user.organization_id,
-            presentation_policy_id: wizardData.policy_id || undefined,
-            external_reference: wizardData.purpose || undefined,
-          });
-          session = normalizeFlowSession(session);
-        } catch {
-          session = await startVerificationSession({
-            organization_id: user.organization_id,
-            policy_id: wizardData.policy_id || undefined,
-            inline_policy: wizardData.inline_policy || undefined,
-            purpose: wizardData.purpose || undefined,
-            request_inspection: wizardData.request_inspection || false,
-          });
-        }
+        let session = await startVerificationFlow({
+          organization_id: user.organization_id,
+          presentation_policy_id: wizardData.policy_id || undefined,
+          trust_profile_id: wizardData.trust_profile_id || undefined,
+          deployment_profile_id: wizardData.deployment_profile_id || undefined,
+          external_reference: wizardData.purpose || wizardData.flow_name || undefined,
+        });
+        session = normalizeFlowSession(session);
         setPendingSession(session);
         setWizardStep(2);
       } catch (err) {
@@ -207,20 +235,8 @@ function VerificationSessionManager() {
 
   const openDetail = async (session) => {
     setDetailSession(session);
-    setInspectionResult(null);
     setDetailOpen(true);
 
-    if (session.inspection_performed) {
-      setInspectionLoading(true);
-      try {
-        const ir = await getInspectionResult(session.session_id);
-        setInspectionResult(ir);
-      } catch {
-        // inspection result not available — non-fatal
-      } finally {
-        setInspectionLoading(false);
-      }
-    }
   };
 
   const closeDetail = () => {
@@ -267,14 +283,14 @@ function VerificationSessionManager() {
                 <TableCell>{formatDate(session.created_at)}</TableCell>
                 <TableCell>{formatDate(session.updated_at)}</TableCell>
                 <TableCell align="right">
-                  {session.status === 'pending' && session.qr_code_data && (
+                  {normalizeSessionStatus(session.status) === 'pending' && session.qr_code_data && (
                     <Tooltip title="Show QR code">
                       <IconButton size="small" onClick={() => openDetail(session)}>
                         <QrCode2Icon fontSize="small" />
                       </IconButton>
                     </Tooltip>
                   )}
-                  {session.status !== 'pending' && (
+                  {normalizeSessionStatus(session.status) !== 'pending' && (
                     <Tooltip title="View details">
                       <IconButton size="small" onClick={() => openDetail(session)}>
                         <VisibilityIcon fontSize="small" />
@@ -297,9 +313,11 @@ function VerificationSessionManager() {
         <Typography variant="h5">Verification Sessions</Typography>
         <Box sx={{ display: 'flex', gap: 1 }}>
           <Tooltip title="Refresh">
-            <IconButton onClick={fetchSessions} disabled={loading}>
-              <RefreshIcon />
-            </IconButton>
+            <span>
+              <IconButton onClick={fetchSessions} disabled={loading}>
+                <RefreshIcon />
+              </IconButton>
+            </span>
           </Tooltip>
           <Button
             variant="contained"
@@ -446,7 +464,7 @@ function VerificationSessionManager() {
                 )}
               </Box>
 
-              {detailSession.status === 'pending' && detailSession.qr_code_data && (
+              {normalizeSessionStatus(detailSession.status) === 'pending' && detailSession.qr_code_data && (
                 <Box sx={{ display: 'flex', justifyContent: 'center' }}>
                   <Paper variant="outlined" sx={{ p: 2, background: '#fff', display: 'inline-block' }}>
                     <img
@@ -458,52 +476,8 @@ function VerificationSessionManager() {
                 </Box>
               )}
 
-              {detailSession.verified_claims &&
-                Object.keys(detailSession.verified_claims).length > 0 && (
-                  <Box>
-                    <Typography variant="subtitle2" sx={{ mb: 1 }}>
-                      Verified Claims
-                    </Typography>
-                    <Paper variant="outlined" sx={{ p: 1.5 }}>
-                      {Object.entries(detailSession.verified_claims).map(([k, v]) => (
-                        <Box
-                          key={k}
-                          sx={{ display: 'flex', gap: 1.5, py: 0.5 }}
-                        >
-                          <Typography
-                            variant="body2"
-                            sx={{ fontWeight: 600, minWidth: 140 }}
-                          >
-                            {k}
-                          </Typography>
-                          <Typography variant="body2" color="text.secondary">
-                            {String(v)}
-                          </Typography>
-                        </Box>
-                      ))}
-                    </Paper>
-                  </Box>
-                )}
-
-              {detailSession.inspection_performed && (
-                <Box>
-                  <Typography variant="subtitle2" sx={{ mb: 1 }}>
-                    Document Inspection
-                  </Typography>
-                  {inspectionLoading ? (
-                    <CircularProgress size={18} />
-                  ) : inspectionResult ? (
-                    <Paper variant="outlined" sx={{ p: 1.5 }}>
-                      <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>
-                        {inspectionResult.inspection_result}
-                      </Typography>
-                    </Paper>
-                  ) : (
-                    <Alert severity="info" sx={{ mt: 0.5 }}>
-                      Inspection result not available yet.
-                    </Alert>
-                  )}
-                </Box>
+              {normalizeSessionStatus(detailSession.status) !== 'pending' && (
+                <VerificationResultSummary session={detailSession} />
               )}
 
               <Box>

@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "OpenWallet Foundation mDoc/mDL Demo UI with Enhanced Features",
   "private": true,
+  "license": "AGPL-3.0-only",
   "type": "module",
   "scripts": {
     "dev": "vite",

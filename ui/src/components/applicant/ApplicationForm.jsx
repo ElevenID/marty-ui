@@ -213,8 +213,8 @@ function formatEvidenceRequirement(requirement) {
   }
 
   return {
-    label: humanizeCanvasLabel(evidenceType || 'Canvas completion check'),
-    details: details.length > 0 ? details.join(' - ') : 'Canvas completion will be checked automatically',
+    label: humanizeCanvasLabel(evidenceType || 'Course completion check'),
+    details: details.length > 0 ? details.join(' - ') : 'Completion will be checked automatically',
   };
 }
 
@@ -294,6 +294,14 @@ export default function ApplicationForm() {
     () => canvasApplicationTemplateIdFromUrl || getLtiSessionValue(canvasLtiSession, 'application_template_id') || '',
     [canvasApplicationTemplateIdFromUrl, canvasLtiSession]
   );
+  const isCanvasLtiApplication = Boolean(canvasLtiState || canvasLtiSession);
+  const canvasIssuerOrganizationId = useMemo(
+    () => canvasLtiBootstrap?.organization_id || getLtiSessionValue(canvasLtiSession, 'organization_id') || '',
+    [canvasLtiBootstrap, canvasLtiSession]
+  );
+  const applicationOrganizationId = isCanvasLtiApplication
+    ? (canvasIssuerOrganizationId || organizationId)
+    : organizationId;
 
   const getCredentialTemplate = async (templateId) => get(`/v1/credential-templates/${templateId}`);
   const getApplicationTemplate = async (templateId) => get(`/v1/application-templates/${templateId}`);
@@ -322,6 +330,25 @@ export default function ApplicationForm() {
 
   useEffect(() => {
     const fetchCredentialConfig = async () => {
+      if (isCanvasLtiApplication) {
+        const canvasCredentialTemplateId = credentialConfigId
+          || getLtiSessionValue(canvasLtiSession, 'credential_template_id')
+          || canvasLtiBootstrap?.credential_template_id;
+        if (!credentialConfig && canvasCredentialTemplateId) {
+          setCredentialConfig(normalizeCredentialConfigInput({
+            id: canvasCredentialTemplateId,
+            credential_type: 'open_badge',
+            name: 'Credential Application',
+            display_name: 'Credential Application',
+            required_fields: [],
+            optional_fields: [],
+            custom_fields: [],
+            field_validation_rules: {},
+          }));
+        }
+        return;
+      }
+
       const needsCredentialTemplate = credentialConfigId && !credentialConfig;
       const needsApplicationTemplate = canvasApplicationTemplateId && applicationTemplate?.id !== canvasApplicationTemplateId;
       if (!needsCredentialTemplate && !needsApplicationTemplate) {
@@ -332,7 +359,7 @@ export default function ApplicationForm() {
         const result = await loadCredentialApplicationConfig({
           credentialConfigId,
           credentialConfig,
-          organizationId,
+          organizationId: applicationOrganizationId,
           getCredentialTemplate,
           applicationTemplateId: canvasApplicationTemplateId || null,
           getApplicationTemplate,
@@ -350,7 +377,16 @@ export default function ApplicationForm() {
     };
 
     fetchCredentialConfig();
-  }, [credentialConfigId, credentialConfig, organizationId, canvasApplicationTemplateId, applicationTemplate?.id]);
+  }, [
+    credentialConfigId,
+    credentialConfig,
+    applicationOrganizationId,
+    canvasApplicationTemplateId,
+    applicationTemplate?.id,
+    isCanvasLtiApplication,
+    canvasLtiSession,
+    canvasLtiBootstrap,
+  ]);
 
   useEffect(() => {
     let alive = true;
@@ -459,7 +495,6 @@ export default function ApplicationForm() {
     () => buildCanvasLtiApplicationContext(canvasLtiSession, canvasLtiState, canvasLtiBootstrap),
     [canvasLtiSession, canvasLtiState, canvasLtiBootstrap]
   );
-  const isCanvasLtiApplication = Boolean(canvasLtiState || canvasLtiSession);
   const canvasDerivedFields = useMemo(
     () => canvasLtiDerivedApplicationFields(canvasLtiSession, canvasLtiBootstrap),
     [canvasLtiSession, canvasLtiBootstrap]
@@ -508,11 +543,9 @@ export default function ApplicationForm() {
   // MemberCredential / mDL: derived flags & one-click auto-apply handler
   // ===========================================================================
   const { isMemberCredential, isMdlCredential, isMdocMemberCredential, isOpenBadgeCredential, isAccessBadgeCredential, isOneClickCredential } = getCredentialKindFlags(credentialConfig);
-  const applicationDisplayName = credentialConfig?.display_name || applicationTemplate?.name || (
-    isCanvasLtiApplication ? 'Canvas Credential Application' : t('applicationForm.title.default')
-  );
+  const applicationDisplayName = credentialConfig?.display_name || applicationTemplate?.name || t('applicationForm.title.default');
   const applicationDescription = isCanvasLtiApplication
-    ? 'Review your Canvas course details and request the credential. ElevenID will check the configured Canvas completion rule after you submit.'
+    ? 'Review the course details from Canvas and request the credential. ElevenID will check the issuer requirements after you submit.'
     : t('applicationForm.description');
   const shouldShowStepper = !(isCanvasLtiApplication && steps.length === 1);
 
@@ -521,7 +554,7 @@ export default function ApplicationForm() {
     setError(null);
     try {
       const result = await autoApplyForCredential({
-        organizationId,
+        organizationId: applicationOrganizationId,
         user,
         credentialConfig,
         credentialConfigId,
@@ -584,7 +617,7 @@ export default function ApplicationForm() {
 
     try {
       const result = await submitCredentialApplication({
-        organizationId,
+        organizationId: applicationOrganizationId,
         user,
         formData,
         credentialConfig,
@@ -662,7 +695,7 @@ export default function ApplicationForm() {
       >
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', mb: 1 }}>
           <Typography variant={compact ? 'subtitle1' : 'h6'} fontWeight={700}>
-            Canvas course completion
+            Course completion requirement
           </Typography>
           <Chip size="small" color="success" variant="outlined" label="Launch verified" />
           {canvasLtiBootstrap?.application_status && (
@@ -671,12 +704,12 @@ export default function ApplicationForm() {
         </Box>
 
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          This application is connected to your Canvas launch. ElevenID will use the course context and completion rule configured by the issuer to evaluate the credential request.
+          This request started from Canvas. ElevenID will use the course and activity details below, plus the issuer requirements, to evaluate the credential request.
         </Typography>
 
         {hasNoAdditionalFields && (
           <Alert severity="info" sx={{ mb: 2 }}>
-            No additional form fields are required. Review the Canvas details below, then submit the application so the credential can be checked and issued.
+            No additional form fields are required. Review the course details below, then submit the application so the credential can be checked and issued.
           </Alert>
         )}
 
@@ -909,7 +942,7 @@ export default function ApplicationForm() {
       <DialogTitle>Credential request already exists</DialogTitle>
       <DialogContent>
         <DialogContentText sx={{ mb: 2 }}>
-          You already have an active request for this credential. Continue with the existing request, or retire the previous request and submit this Canvas request again.
+          You already have an active request for this credential. Continue with the existing request, or retire the previous request and submit again.
         </DialogContentText>
         {duplicateExistingApplication && (
           <Box sx={{ p: 2, border: '1px solid', borderColor: 'divider', borderRadius: 1, bgcolor: 'action.hover' }}>
@@ -985,7 +1018,7 @@ export default function ApplicationForm() {
   // ===========================================================================
   // One-click issuance UI (MemberCredential & mDL)
   // ===========================================================================
-  if (isOneClickCredential) {
+  if (isOneClickCredential && !isCanvasLtiApplication) {
     const displayRole = (user?.roles || []).find(r => ['applicant', 'vendor', 'administrator'].includes(r)) || 'applicant';
 
     const HeroIcon = isMdlCredential ? DirectionsCarIcon : LoginIcon;
@@ -998,7 +1031,7 @@ export default function ApplicationForm() {
     const ctaLabel = isMdlCredential ? 'Get Membership ID' : 'Add to Wallet';
     const ctaSubtext = isMdlCredential ? 'Free · Instant · mDoc (ISO 18013-5)' : 'Free · Instant · Open Badge (W3C)';
 
-    const summaryFields = getOneClickSummaryFields({ credentialConfig, user, organizationId });
+    const summaryFields = getOneClickSummaryFields({ credentialConfig, user, organizationId: applicationOrganizationId });
 
     const gradientBg = isMdlCredential
       ? 'linear-gradient(145deg, #0f4c8108, #0f4c8114)'

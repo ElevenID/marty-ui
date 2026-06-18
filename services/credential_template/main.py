@@ -324,12 +324,14 @@ class CredentialTemplate:
     compliance_profile_id: str | None = None
 
     # Protocol schema fields
+    issuer_profile_id: str | None = None
     application_template_id: str | None = None
     trust_profile_id: str | None = None
     revocation_profile_id: str | None = None
     issuer_key_id: str | None = None
     issuer_algorithm: str | None = None
     key_access_mode: str | None = None
+    remote_signing_config: dict[str, Any] | None = None
     issuer_certificate_chain_pem: str | None = None
     issuer_did: str | None = None
     auto_generate_artifacts: bool = False
@@ -365,9 +367,26 @@ class CredentialTemplate:
             doctype=self.doctype,
             claims=self.claims.copy(),
             privacy_posture=self.privacy_posture,
+            selective_disclosure_fields=self.selective_disclosure_fields.copy(),
+            zk_predicate_claims=self.zk_predicate_claims.copy(),
+            derived_attributes=self.derived_attributes.copy(),
             display_style=self.display_style,
             validity_rules=self.validity_rules,
+            issuer_requirements=self.issuer_requirements,
             supported_formats=self.supported_formats.copy(),
+            compliance_profile=self.compliance_profile.copy() if isinstance(self.compliance_profile, dict) else self.compliance_profile,
+            compliance_profile_id=self.compliance_profile_id,
+            issuer_profile_id=self.issuer_profile_id,
+            application_template_id=self.application_template_id,
+            trust_profile_id=self.trust_profile_id,
+            revocation_profile_id=self.revocation_profile_id,
+            issuer_key_id=self.issuer_key_id,
+            issuer_algorithm=self.issuer_algorithm,
+            key_access_mode=self.key_access_mode,
+            remote_signing_config=self.remote_signing_config.copy() if isinstance(self.remote_signing_config, dict) else self.remote_signing_config,
+            issuer_certificate_chain_pem=self.issuer_certificate_chain_pem,
+            issuer_did=self.issuer_did,
+            auto_generate_artifacts=self.auto_generate_artifacts,
             wallet_configs=[WalletConfig(wallet_id=wc.wallet_id, deep_link_scheme=wc.deep_link_scheme, format_variant=wc.format_variant) for wc in self.wallet_configs],
             issuance_protocol=self.issuance_protocol,
             credential_payload_format=self.credential_payload_format,
@@ -971,9 +990,22 @@ class CreateCredentialTemplateRequest(BaseModel):
     validity_rules: ValidityRulesModel | None = None
     issuer_requirements: IssuerRequirementsModel | None = None
     supported_formats: list[str] = ["SD_JWT_VC"]
+    application_template_id: str | None = None
+    trust_profile_id: str | None = None
+    revocation_profile_id: str | None = None
     # Compliance
     compliance_profile: dict | None = None
     compliance_profile_id: str | None = None
+    issuer_key_id: str | None = None
+    issuer_algorithm: str | None = None
+    signing_algorithm: str | None = None
+    key_access_mode: str | None = None
+    remote_signing_config: dict[str, Any] | None = None
+    issuer_certificate_chain_pem: str | None = None
+    issuer_did: str | None = None
+    issuer_profile_id: str | None = None
+    auto_generate_artifacts: bool = False
+    artifacts_auto_generate: bool | None = None
     # Wallet compatibility
     wallet_configs: list[dict] = []
     issuance_protocol: str = "oid4vci"
@@ -993,6 +1025,19 @@ class UpdateCredentialTemplateRequest(BaseModel):
     validity_rules: ValidityRulesModel | None = None
     issuer_requirements: IssuerRequirementsModel | None = None
     supported_formats: list[str] | None = None
+    application_template_id: str | None = None
+    trust_profile_id: str | None = None
+    revocation_profile_id: str | None = None
+    issuer_key_id: str | None = None
+    issuer_algorithm: str | None = None
+    signing_algorithm: str | None = None
+    key_access_mode: str | None = None
+    remote_signing_config: dict[str, Any] | None = None
+    issuer_certificate_chain_pem: str | None = None
+    issuer_did: str | None = None
+    issuer_profile_id: str | None = None
+    auto_generate_artifacts: bool | None = None
+    artifacts_auto_generate: bool | None = None
     # Wallet compatibility
     wallet_configs: list[dict] | None = None
     issuance_protocol: str | None = None
@@ -1009,6 +1054,7 @@ class CredentialTemplateResponse(BaseModel):
     compliance_profile_id: str | None = None
     vct: str | None = None
     credential_payload_format: str | None = None
+    issuer_profile_id: str | None = None
     application_template_id: str | None = None
     trust_profile_id: str | None = None
     revocation_profile_id: str | None = None
@@ -1020,6 +1066,11 @@ class CredentialTemplateResponse(BaseModel):
     issuer_certificate_chain_pem: str | None = None
     issuer_did: str | None = None
     auto_generate_artifacts: bool = False
+    issuer_certificate_chain_configured: bool = False
+    artifacts_status: str = "missing"
+    hasArtifacts: bool = False
+    artifactsValidated: bool = False
+    usedByFlowsCount: int = 0
     privacy_posture: dict | None = None
     wallet_configs_json: str | None = None  # JSON string of wallet configs for per-wallet offers
     created_at: str
@@ -1028,6 +1079,38 @@ class CredentialTemplateResponse(BaseModel):
 
 def _days_from_seconds(seconds: int) -> int:
     return max(1, (int(seconds) + SECONDS_PER_DAY - 1) // SECONDS_PER_DAY)
+
+
+def _resolve_auto_generate_artifacts(
+    auto_generate_artifacts: bool | None,
+    artifacts_auto_generate: bool | None,
+) -> bool:
+    """Resolve canonical auto-generate flag from legacy/current UI names."""
+
+    if artifacts_auto_generate is not None:
+        return bool(artifacts_auto_generate)
+    return bool(auto_generate_artifacts)
+
+
+def _artifact_material_count(template: CredentialTemplate) -> int:
+    return sum(
+        1
+        for value in (
+            template.issuer_key_id,
+            template.issuer_certificate_chain_pem,
+            template.remote_signing_config,
+        )
+        if value
+    )
+
+
+def _artifacts_status(template: CredentialTemplate) -> str:
+    material_count = _artifact_material_count(template)
+    if template.auto_generate_artifacts or material_count > 0:
+        return "valid"
+    if template.issuer_did:
+        return "invalid"
+    return "missing"
 
 
 def _resolve_validity_rules(
@@ -1375,6 +1458,9 @@ async def create_credential_template(
         credential_type=body.credential_type,
         vct=resolved_vct,
         doctype=body.doctype or "",
+        application_template_id=body.application_template_id,
+        trust_profile_id=body.trust_profile_id,
+        revocation_profile_id=body.revocation_profile_id,
         privacy_posture=PrivacyPosture(body.privacy_posture),
         selective_disclosure_fields=body.selective_disclosure_fields,
         zk_predicate_claims=body.zk_predicate_claims,
@@ -1384,6 +1470,17 @@ async def create_credential_template(
         credential_payload_format=credential_payload_format,
         compliance_profile=body.compliance_profile,
         compliance_profile_id=body.compliance_profile_id,
+        issuer_profile_id=body.issuer_profile_id,
+        issuer_key_id=body.issuer_key_id,
+        issuer_algorithm=body.issuer_algorithm or body.signing_algorithm,
+        key_access_mode=body.key_access_mode,
+        remote_signing_config=body.remote_signing_config,
+        issuer_certificate_chain_pem=body.issuer_certificate_chain_pem,
+        issuer_did=body.issuer_did,
+        auto_generate_artifacts=_resolve_auto_generate_artifacts(
+            body.auto_generate_artifacts,
+            body.artifacts_auto_generate,
+        ),
     )
     
     # Set claims
@@ -1502,6 +1599,31 @@ async def update_credential_template(
         template.selective_disclosure_fields = request.selective_disclosure_fields
     if request.zk_predicate_claims is not None:
         template.zk_predicate_claims = request.zk_predicate_claims
+    if request.application_template_id is not None:
+        template.application_template_id = request.application_template_id
+    if request.trust_profile_id is not None:
+        template.trust_profile_id = request.trust_profile_id
+    if request.revocation_profile_id is not None:
+        template.revocation_profile_id = request.revocation_profile_id
+    if request.issuer_profile_id is not None:
+        template.issuer_profile_id = request.issuer_profile_id
+    if request.issuer_key_id is not None:
+        template.issuer_key_id = request.issuer_key_id
+    if request.issuer_algorithm is not None or request.signing_algorithm is not None:
+        template.issuer_algorithm = request.issuer_algorithm or request.signing_algorithm
+    if request.key_access_mode is not None:
+        template.key_access_mode = request.key_access_mode
+    if request.remote_signing_config is not None:
+        template.remote_signing_config = request.remote_signing_config
+    if request.issuer_certificate_chain_pem is not None:
+        template.issuer_certificate_chain_pem = request.issuer_certificate_chain_pem
+    if request.issuer_did is not None:
+        template.issuer_did = request.issuer_did
+    if request.auto_generate_artifacts is not None or request.artifacts_auto_generate is not None:
+        template.auto_generate_artifacts = _resolve_auto_generate_artifacts(
+            request.auto_generate_artifacts,
+            request.artifacts_auto_generate,
+        )
     supported_formats = template.supported_formats
     if request.supported_formats is not None:
         supported_formats = [normalize_credential_format(f) for f in request.supported_formats]
@@ -1646,6 +1768,8 @@ def _template_to_response(template: CredentialTemplate) -> CredentialTemplateRes
         "prefer_predicates": bool(template.zk_predicate_claims) or template.privacy_posture == PrivacyPosture.ZERO_KNOWLEDGE,
         "sd_alg": "sha-256",
     }
+    artifacts_status = _artifacts_status(template)
+    has_artifacts = artifacts_status != "missing"
 
     return CredentialTemplateResponse(
         id=template.id,
@@ -1657,6 +1781,7 @@ def _template_to_response(template: CredentialTemplate) -> CredentialTemplateRes
         compliance_profile_id=template.compliance_profile_id,
         vct=template.vct or None,
         credential_payload_format=canonical_payload_format,
+        issuer_profile_id=template.issuer_profile_id,
         application_template_id=template.application_template_id,
         trust_profile_id=template.trust_profile_id,
         revocation_profile_id=template.revocation_profile_id,
@@ -1666,6 +1791,11 @@ def _template_to_response(template: CredentialTemplate) -> CredentialTemplateRes
         issuer_certificate_chain_pem=template.issuer_certificate_chain_pem,
         issuer_did=template.issuer_did,
         auto_generate_artifacts=template.auto_generate_artifacts,
+        issuer_certificate_chain_configured=bool(template.issuer_certificate_chain_pem),
+        artifacts_status=artifacts_status,
+        hasArtifacts=has_artifacts,
+        artifactsValidated=artifacts_status == "valid",
+        usedByFlowsCount=0,
         claims=[
             {
                 "name": c.name,
@@ -1703,7 +1833,7 @@ def _template_to_response(template: CredentialTemplate) -> CredentialTemplateRes
                 "format_variant": wc.format_variant,
             }
             for wc in template.wallet_configs
-        ]) if template.wallet_configs else "[]",
+        ]) if template.wallet_configs else None,
         created_at=template.created_at.isoformat(),
         updated_at=template.updated_at.isoformat(),
     )

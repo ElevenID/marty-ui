@@ -1,4 +1,4 @@
-"""Presentation Policy and policy evaluation routes."""
+"""Presentation Policy routes."""
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response

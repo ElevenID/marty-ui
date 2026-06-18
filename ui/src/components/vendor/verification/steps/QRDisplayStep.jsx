@@ -15,7 +15,6 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ErrorIcon from '@mui/icons-material/Error';
 import HourglassTopIcon from '@mui/icons-material/HourglassTop';
 import PhoneAndroidIcon from '@mui/icons-material/PhoneAndroid';
-import { getVerificationSession } from '../../../../services/verificationApi';
 import { getVerificationFlowInstance } from '../../../../services/zkVerificationApi';
 import {
   DEFAULT_DC_API_PROTOCOL,
@@ -25,6 +24,7 @@ import {
 } from '../../../../services/digitalCredentialsApi';
 import { createPresentationTransport } from '../../../../services/walletTransportService';
 import { openDeepLink } from '../../../../utils/deviceDetection';
+import VerificationResultSummary from '../VerificationResultSummary';
 
 const POLL_INTERVAL_MS = 3000;
 const TERMINAL_STATUSES = ['completed', 'failed', 'expired'];
@@ -36,26 +36,31 @@ const STATUS_CONFIG = {
   expired: { label: 'Expired', color: 'default', icon: <ErrorIcon fontSize="small" /> },
 };
 
+function normalizeSessionStatus(status) {
+  const value = String(status || '').toLowerCase();
+  if (['passed', 'completed', 'verified'].includes(value)) return 'completed';
+  if (['failed', 'denied'].includes(value)) return 'failed';
+  if (value === 'expired') return 'expired';
+  return 'pending';
+}
+
 function QRDisplayStep({ session, onComplete }) {
-  const [status, setStatus] = useState(session?.status || 'pending');
+  const [status, setStatus] = useState(normalizeSessionStatus(session?.status));
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
   const [walletBusy, setWalletBusy] = useState(false);
   const [dcApiAvailable, setDcApiAvailable] = useState(false);
   const pollRef = useRef(null);
-  const instanceId = session?.instance_id || session?.flow_instance_id || null;
+  const instanceId = session?.instance_id || session?.flow_instance_id || session?.id || null;
 
   useEffect(() => {
-    const pollId = instanceId || session?.session_id;
-    if (!pollId) return;
+    if (!instanceId) return;
     if (TERMINAL_STATUSES.includes(status)) return;
 
     pollRef.current = setInterval(async () => {
       try {
-        const updated = instanceId
-          ? await getVerificationFlowInstance(instanceId)
-          : await getVerificationSession(session.session_id);
-        const updatedStatus = updated.status || updated.state;
+        const updated = await getVerificationFlowInstance(instanceId);
+        const updatedStatus = normalizeSessionStatus(updated.status || updated.state);
         setStatus(updatedStatus);
         if (TERMINAL_STATUSES.includes(updatedStatus)) {
           clearInterval(pollRef.current);
@@ -69,7 +74,7 @@ function QRDisplayStep({ session, onComplete }) {
     }, POLL_INTERVAL_MS);
 
     return () => clearInterval(pollRef.current);
-  }, [instanceId, session?.session_id, status, onComplete]);
+  }, [instanceId, status, onComplete]);
 
   useEffect(() => {
     let mounted = true;
@@ -95,7 +100,7 @@ function QRDisplayStep({ session, onComplete }) {
           requestUrl: dcApiRequestUrl,
           submitUrl: dcApiSubmitUrl,
         });
-        setStatus(completed.status || 'completed');
+        setStatus(normalizeSessionStatus(completed.status || completed.result || 'completed'));
         setResult(completed);
         if (onComplete) onComplete(completed);
         return;
@@ -199,20 +204,12 @@ function QRDisplayStep({ session, onComplete }) {
       )}
 
       {status === 'completed' && result && (
-        <Alert severity="success" icon={<CheckCircleIcon />}>
-          Verification successful.
-          {result.verified_claims && Object.keys(result.verified_claims).length > 0 && (
-            <Box component="ul" sx={{ mt: 1, mb: 0, pl: 2 }}>
-              {Object.entries(result.verified_claims).map(([k, v]) => (
-                <li key={k}>
-                  <Typography variant="caption">
-                    <strong>{k}:</strong> {String(v)}
-                  </Typography>
-                </li>
-              ))}
-            </Box>
-          )}
-        </Alert>
+        <Stack spacing={1.5}>
+          <Alert severity="success" icon={<CheckCircleIcon />}>
+            Verification successful.
+          </Alert>
+          <VerificationResultSummary session={{ ...result, status: 'completed', result }} />
+        </Stack>
       )}
 
       {(status === 'failed' || status === 'expired') && (

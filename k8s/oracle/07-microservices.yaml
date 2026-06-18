@@ -641,17 +641,16 @@ spec:
                 configMapKeyRef:
                   name: marty-config
                   key: PUBLIC_API_URL
+            - name: INTEGRATION_SECRET_MASTER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: INTEGRATION_SECRET_MASTER_KEY
             - name: CANVAS_CREDENTIALS_SHARED_SECRET
               valueFrom:
                 secretKeyRef:
                   name: marty-secrets
                   key: CANVAS_CREDENTIALS_SHARED_SECRET
-            - name: CANVAS_CREDENTIALS_API_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: marty-secrets
-                  key: CANVAS_CREDENTIALS_API_TOKEN
-                  optional: true
             - name: CANVAS_CREDENTIALS_PROVIDER
               valueFrom:
                 configMapKeyRef:

@@ -17,6 +17,7 @@ import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   Box,
+  Avatar,
   Paper,
   Typography,
   Chip,
@@ -49,6 +50,9 @@ import CloseIcon from '@mui/icons-material/Close';
 import FiberManualRecordIcon from '@mui/icons-material/FiberManualRecord';
 import MoveToInboxIcon from '@mui/icons-material/MoveToInbox';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
+import SchoolIcon from '@mui/icons-material/School';
+import SyncAltIcon from '@mui/icons-material/SyncAlt';
+import WorkspacePremiumIcon from '@mui/icons-material/WorkspacePremium';
 
 import { getMyCredentials, getMyApplications } from '../../../services/applicantApi';
 import ClaimCredentialDialog from './ClaimCredentialDialog';
@@ -149,29 +153,39 @@ function timeAgo(dateStr) {
 // ---------------------------------------------------------------------------
 
 function normaliseCredential(doc) {
+  const imageUrl = credentialImageFromData(doc, doc.metadata || {});
   return {
     id: doc.id,
     kind: 'credential',
-    type: doc.document_type || doc.credential_type || 'Credential',
-    credentialConfigId: doc.credential_configuration_id || doc.credential_type,
+    type: doc.credential_display_name || doc.name || doc.document_type || doc.credential_type || 'Credential',
+    credentialConfigId: doc.credential_configuration_id || doc.credential_template_id || doc.credential_type,
     issuer: doc.issuing_authority || doc.issuer || 'Issuer',
+    issuerDid: doc.issuer_did || doc.issuerDid || null,
     date: doc.issued_at || doc.created_at,
     updatedAt: doc.updated_at || doc.issued_at || doc.created_at,
     expiresAt: doc.expiry_date || doc.valid_until,
     status: doc.status?.toLowerCase() || 'active',
     step: null,
+    deliveries: Array.isArray(doc.deliveries) ? doc.deliveries : [],
+    canvasContext: doc.canvas_context || doc.metadata?.canvas || null,
+    subjectClaimsHash: doc.subject_claims_hash || null,
+    imageUrl,
   };
 }
 
 function normaliseApplication(app) {
   const status = app.status?.toLowerCase() || 'submitted';
+  const integrationContext = app.integration_context || app.integrationContext || {};
+  const formData = app.form_data || app.formData || {};
+  const imageUrl = credentialImageFromData(formData, integrationContext);
   return {
     id: app.id,
     kind: 'application',
     organizationId: app.organization_id || app.organizationId || null,
-    type: app.credential_display_name || app.credential_type || app.document_type,
+    type: app.credential_display_name || app.credential_type || app.document_type || 'Credential',
     credentialConfigId: app.credential_configuration_id || app.credential_type,
     issuer: null,
+    issuerDid: integrationContext.issuer_did || integrationContext.issuerDid || null,
     date: app.submitted_at || app.created_at,
     updatedAt: app.updated_at || app.submitted_at || app.created_at,
     expiresAt: null,
@@ -182,7 +196,103 @@ function normaliseApplication(app) {
     offerUris: app.credential_offer_uris || {},
     offerLabels: app.credential_offer_labels || {},
     offerExpiresAt: app.offer_expires_at || null,
+    formData,
+    integrationContext,
+    canvasContext: integrationContext.canvas || formData.canvas_context || null,
+    evidenceSubmissions: Array.isArray(app.evidence_submissions) ? app.evidence_submissions : [],
+    issuanceTransactionId: app.issuance_transaction_id || null,
+    deliveryMode: integrationContext.delivery_mode || integrationContext.delivery?.mode || null,
+    imageUrl,
   };
+}
+
+function firstPresent(...values) {
+  return values.find((value) => value !== undefined && value !== null && String(value).trim() !== '');
+}
+
+function credentialImageFromData(data = {}, context = {}) {
+  return firstPresent(
+    data.badge_image_url,
+    data.image_url,
+    data.logo_url,
+    data.display_style?.logo_url,
+    data.display?.logo?.uri,
+    data.claims?.badge_image_url,
+    data.claims?.achievement?.image?.id,
+    data.claims?.achievement?.image,
+    data.credential?.credentialSubject?.achievement?.image?.id,
+    data.credential?.credentialSubject?.achievement?.image,
+    data.credential_subject?.achievement?.image?.id,
+    data.credential_subject?.achievement?.image,
+    context.badge_image_url,
+    context.credential_metadata?.badge_image_url,
+    context.credential_metadata?.image_url,
+    context.open_badge?.image?.id,
+    context.open_badge?.image,
+  );
+}
+
+function claimStatusForRow(row = {}) {
+  if (row.kind === 'credential') {
+    if (row.status === 'active') return 'Claimed';
+    if (row.status === 'revoked') return 'No longer valid';
+    if (row.status === 'expired') return 'Expired';
+    return getStatusLabel(row);
+  }
+  if (['approved', 'offered'].includes(row.status)) return 'Ready to claim';
+  if (['credentialed', 'issued'].includes(row.status)) return 'Claimed';
+  if (row.status === 'rejected') return 'Not claimable';
+  return 'Not ready to claim';
+}
+
+function canvasDetailsForRow(row = {}) {
+  const canvas = row.canvasContext || {};
+  const formData = row.formData || {};
+  const nestedContext = canvas.canvas_context || {};
+  return [
+    {
+      label: 'Course',
+      value: firstPresent(
+        canvas.canvas_course_name,
+        canvas.course_name,
+        canvas.title,
+        nestedContext.title,
+        formData.canvas_course_name,
+        formData.course_name,
+      ),
+    },
+    {
+      label: 'Canvas activity',
+      value: firstPresent(
+        canvas.canvas_assignment_name,
+        canvas.assignment_name,
+        canvas.resource_link_title,
+        nestedContext.resource_link_title,
+        formData.canvas_assignment_name,
+        formData.quiz_name,
+      ),
+    },
+    {
+      label: 'Canvas account',
+      value: firstPresent(canvas.canvas_account_id, row.integrationContext?.canvas_account_id, formData.canvas_account_id),
+    },
+    {
+      label: 'Program binding',
+      value: firstPresent(canvas.canvas_program_binding_id, row.integrationContext?.canvas_program_binding_id),
+    },
+  ].filter((item) => item.value);
+}
+
+function canvasDeliveriesForRow(row = {}) {
+  return (row.deliveries || []).filter((delivery) => (
+    delivery.delivery_target === 'canvas_credentials'
+    || delivery.provider === 'canvas_credentials'
+  ));
+}
+
+function formatDeliveryStatus(status) {
+  if (!status) return 'Unknown';
+  return String(status).replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
 // ---------------------------------------------------------------------------
@@ -685,9 +795,22 @@ function MyIdentityPage() {
       <CardContent sx={{ pb: '12px !important' }}>
         {/* Header: type + status */}
         <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 0.75 }}>
-          <Box sx={{ flex: 1, minWidth: 0 }}>
-            <Typography fontWeight={600} noWrap>{row.type}</Typography>
-          </Box>
+          <Stack direction="row" spacing={1} alignItems="center" sx={{ flex: 1, minWidth: 0 }}>
+            <Avatar
+              src={row.imageUrl || undefined}
+              alt={row.type}
+              variant="rounded"
+              sx={{ width: 34, height: 34, bgcolor: 'action.hover', color: 'primary.main', flexShrink: 0 }}
+            >
+              <WorkspacePremiumIcon fontSize="small" />
+            </Avatar>
+            <Box sx={{ minWidth: 0 }}>
+              <Typography fontWeight={600} noWrap>{row.type}</Typography>
+              <Typography variant="caption" color="text.secondary" noWrap>
+                {claimStatusForRow(row)}
+              </Typography>
+            </Box>
+          </Stack>
           <Box sx={{ ml: 1.5, flexShrink: 0 }}>
             <StatusCircle status={row.status} size="md" showLabel />
           </Box>
@@ -719,7 +842,9 @@ function MyIdentityPage() {
           {row.kind === 'credential' && (
             <>
               <Tooltip title={t('credentials.actions.viewDetails')}>
-                <IconButton size="small"><VisibilityIcon fontSize="small" /></IconButton>
+                <IconButton size="small" aria-label={`View ${row.type} details`} onClick={() => setSelectedApp(row)}>
+                  <VisibilityIcon fontSize="small" />
+                </IconButton>
               </Tooltip>
               <Tooltip title={t('credentials.actions.showQRCode')}>
                 <IconButton size="small" color="primary"><QrCodeIcon fontSize="small" /></IconButton>
@@ -771,10 +896,22 @@ function MyIdentityPage() {
     >
       {/* Credential name */}
       <Box sx={{ flex: '0 0 200px', minWidth: 0 }}>
-        <Typography fontWeight={500} noWrap>{row.type}</Typography>
-        <Typography variant="caption" color="text.secondary">
-          {row.kind === 'credential' ? (row.issuer || 'Credential') : 'Application'}
-        </Typography>
+        <Stack direction="row" spacing={1} alignItems="center">
+          <Avatar
+            src={row.imageUrl || undefined}
+            alt={row.type}
+            variant="rounded"
+            sx={{ width: 34, height: 34, bgcolor: 'action.hover', color: 'primary.main', flexShrink: 0 }}
+          >
+            <WorkspacePremiumIcon fontSize="small" />
+          </Avatar>
+          <Box sx={{ minWidth: 0 }}>
+            <Typography fontWeight={500} noWrap>{row.type}</Typography>
+            <Typography variant="caption" color="text.secondary" noWrap>
+              {row.kind === 'credential' ? (row.issuer || 'Credential') : 'Application'} - {claimStatusForRow(row)}
+            </Typography>
+          </Box>
+        </Stack>
       </Box>
 
       {/* Status — StatusCircle + label + optional message */}
@@ -804,7 +941,9 @@ function MyIdentityPage() {
         {row.kind === 'credential' && (
           <>
             <Tooltip title={t('credentials.actions.viewDetails')}>
-              <IconButton size="small"><VisibilityIcon fontSize="small" /></IconButton>
+              <IconButton size="small" aria-label={`View ${row.type} details`} onClick={() => setSelectedApp(row)}>
+                <VisibilityIcon fontSize="small" />
+              </IconButton>
             </Tooltip>
             <Tooltip title={t('credentials.actions.showQRCode')}>
               <IconButton size="small" color="primary"><QrCodeIcon fontSize="small" /></IconButton>
@@ -1002,34 +1141,128 @@ function MyIdentityPage() {
 
       {/* Application Details Dialog */}
       <Dialog open={!!selectedApp} onClose={() => setSelectedApp(null)} maxWidth="sm" fullWidth>
-        <DialogTitle>Application Details</DialogTitle>
+        <DialogTitle>{selectedApp?.kind === 'credential' ? 'Credential Details' : 'Application Details'}</DialogTitle>
         <DialogContent>
           {selectedApp && (
             <Box sx={{ pt: 1 }}>
-              <Typography variant="subtitle2" color="text.secondary">Credential</Typography>
-              <Typography paragraph>{selectedApp.type}</Typography>
+              <Stack direction="row" spacing={2} alignItems="center" sx={{ mb: 2 }}>
+                <Avatar
+                  src={selectedApp.imageUrl || undefined}
+                  alt={selectedApp.type}
+                  variant="rounded"
+                  sx={{ width: 64, height: 64, bgcolor: 'action.hover', color: 'primary.main' }}
+                >
+                  <WorkspacePremiumIcon />
+                </Avatar>
+                <Box sx={{ minWidth: 0 }}>
+                  <Typography variant="subtitle2" color="text.secondary">Credential</Typography>
+                  <Typography variant="h6" sx={{ overflowWrap: 'anywhere' }}>{selectedApp.type}</Typography>
+                </Box>
+              </Stack>
 
-              <Typography variant="subtitle2" color="text.secondary">Submitted</Typography>
-              <Typography paragraph>{new Date(selectedApp.date).toLocaleString()}</Typography>
+              {selectedApp.issuerDid && (
+                <>
+                  <Typography variant="subtitle2" color="text.secondary">Issuer DID</Typography>
+                  <Typography paragraph sx={{ fontFamily: 'monospace', overflowWrap: 'anywhere' }}>
+                    {selectedApp.issuerDid}
+                  </Typography>
+                </>
+              )}
+
+              <Typography variant="subtitle2" color="text.secondary">
+                {selectedApp.kind === 'credential' ? 'Issued' : 'Submitted'}
+              </Typography>
+              <Typography paragraph>
+                {selectedApp.date ? new Date(selectedApp.date).toLocaleString() : 'Not recorded'}
+              </Typography>
 
               <Typography variant="subtitle2" color="text.secondary">Last Updated</Typography>
               <Typography paragraph>
-                {new Date(selectedApp.updatedAt || selectedApp.date).toLocaleString()}{' '}
+                {selectedApp.updatedAt || selectedApp.date
+                  ? new Date(selectedApp.updatedAt || selectedApp.date).toLocaleString()
+                  : 'Not recorded'}{' '}
                 ({timeAgo(selectedApp.updatedAt || selectedApp.date)})
               </Typography>
 
               <Typography variant="subtitle2" color="text.secondary">Status</Typography>
               <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1 }}>
                 <Chip label={getStatusLabel(selectedApp)} color={getStatusColor(selectedApp)} size="small" />
+                <Chip label={`Claim: ${claimStatusForRow(selectedApp)}`} size="small" variant="outlined" />
+                {selectedApp.deliveryMode && (
+                  <Chip label={`Delivery: ${selectedApp.deliveryMode.replace(/_/g, ' ')}`} size="small" variant="outlined" />
+                )}
               </Stack>
               <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
                 {getStatusMessage(selectedApp.status)}
               </Typography>
 
+              {canvasDetailsForRow(selectedApp).length > 0 && (
+                <Paper variant="outlined" sx={{ p: 2, mb: 2, borderRadius: 1 }} data-testid="identity-canvas-source">
+                  <Stack spacing={1.25}>
+                    <Stack direction="row" spacing={1} alignItems="center">
+                      <SchoolIcon color="primary" fontSize="small" />
+                      <Typography variant="subtitle2" sx={{ fontWeight: 800 }}>
+                        Canvas course source
+                      </Typography>
+                    </Stack>
+                    <Box sx={{ display: 'grid', gap: 1, gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))' } }}>
+                      {canvasDetailsForRow(selectedApp).map((item) => (
+                        <Box key={item.label}>
+                          <Typography variant="caption" color="text.secondary">{item.label}</Typography>
+                          <Typography variant="body2" sx={{ overflowWrap: 'anywhere' }}>{item.value}</Typography>
+                        </Box>
+                      ))}
+                    </Box>
+                  </Stack>
+                </Paper>
+              )}
+
+              {canvasDeliveriesForRow(selectedApp).length > 0 && (
+                <Paper variant="outlined" sx={{ p: 2, mb: 2, borderRadius: 1 }} data-testid="identity-canvas-delivery">
+                  <Stack spacing={1.25}>
+                    <Stack direction="row" spacing={1} alignItems="center">
+                      <SyncAltIcon color="primary" fontSize="small" />
+                      <Typography variant="subtitle2" sx={{ fontWeight: 800 }}>
+                        Canvas Credentials display
+                      </Typography>
+                    </Stack>
+                    {canvasDeliveriesForRow(selectedApp).map((delivery) => (
+                      <Box key={delivery.id || delivery.external_credential_id || delivery.delivery_target}>
+                        <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+                          <Chip
+                            label={formatDeliveryStatus(delivery.status)}
+                            size="small"
+                            color={delivery.status === 'delivered' ? 'success' : delivery.status === 'failed' ? 'error' : 'default'}
+                            variant="outlined"
+                          />
+                          {delivery.external_credential_id && (
+                            <Chip label="Mirror linked" size="small" color="success" variant="outlined" />
+                          )}
+                        </Stack>
+                        {delivery.external_credential_id && (
+                          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5, overflowWrap: 'anywhere' }}>
+                            Canvas credential ID: {delivery.external_credential_id}
+                          </Typography>
+                        )}
+                        {delivery.last_error && (
+                          <Typography variant="caption" color="error" sx={{ display: 'block', mt: 0.5 }}>
+                            {delivery.last_error}
+                          </Typography>
+                        )}
+                      </Box>
+                    ))}
+                  </Stack>
+                </Paper>
+              )}
+
               {/* Timeline */}
-              <Divider sx={{ my: 2 }} />
-              <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1 }}>Progress Timeline</Typography>
-              <StepIndicator step={selectedApp.step ?? 0} status={selectedApp.status} />
+              {selectedApp.kind === 'application' && (
+                <>
+                  <Divider sx={{ my: 2 }} />
+                  <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1 }}>Progress Timeline</Typography>
+                  <StepIndicator step={selectedApp.step ?? 0} status={selectedApp.status} />
+                </>
+              )}
 
               {/* Action prompt */}
               {getActionLabel(selectedApp) && (

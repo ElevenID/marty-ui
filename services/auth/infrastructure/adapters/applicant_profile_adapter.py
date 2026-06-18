@@ -15,6 +15,8 @@ _DEFAULT_APPLICANT_SERVICE_URL = "http://applicant:8006"
 
 def apply_credential_login_defaults(user: AuthenticatedUser) -> AuthenticatedUser:
     """Ensure credential-login users land with the default Marty org context."""
+    if "canvas_lti_learner" in (user.roles or []):
+        return user
     if not user.organization_id:
         user.organization_id = os.environ.get("MARTY_ORG_ID", MARTY_ORG_ID)
     return user

@@ -44,6 +44,19 @@ logger = logging.getLogger(__name__)
 
 MARTY_ORG_ID = os.environ.get("MARTY_ORG_ID", MARTY_DEFAULT_ORG_ID)
 MARTY_ORG_ADMIN_EMAIL = os.environ.get("MARTY_ORG_ADMIN_EMAIL", "").strip().lower()
+CANVAS_DEMO_ADMIN_ENABLED = os.environ.get("CANVAS_DEMO_ADMIN_ENABLED", "true").strip().lower()
+CANVAS_DEMO_ADMIN_EMAIL = os.environ.get("CANVAS_DEMO_ADMIN_EMAIL", "canvas.admin@marty.demo").strip().lower()
+
+
+def _is_enabled(value: str) -> bool:
+    return value in {"1", "true", "yes", "y", "on"}
+
+
+def _marty_org_admin_emails() -> set[str]:
+    emails = {MARTY_ORG_ADMIN_EMAIL} if MARTY_ORG_ADMIN_EMAIL else set()
+    if _is_enabled(CANVAS_DEMO_ADMIN_ENABLED) and CANVAS_DEMO_ADMIN_EMAIL:
+        emails.add(CANVAS_DEMO_ADMIN_EMAIL)
+    return emails
 
 _ORG_TYPE_ALIASES: dict[str, str] = {
     "vendor": "enterprise",
@@ -269,8 +282,7 @@ class MemberUseCase:
         if (
             self.role_use_case is None
             or organization_id != MARTY_ORG_ID
-            or not MARTY_ORG_ADMIN_EMAIL
-            or normalized_email != MARTY_ORG_ADMIN_EMAIL
+            or normalized_email not in _marty_org_admin_emails()
         ):
             return None
 
