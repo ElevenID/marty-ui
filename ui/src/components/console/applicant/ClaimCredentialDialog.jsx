@@ -391,7 +391,7 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
             }
             label={
               <Box>
-                <Typography variant="body2">Show a public badge in Canvas Credentials when available</Typography>
+                <Typography variant="body2">Also show this badge in Canvas Credentials</Typography>
                 <Typography variant="caption" color="text.secondary">
                   Your organization manages this destination; only the public badge verification view is published.
                 </Typography>

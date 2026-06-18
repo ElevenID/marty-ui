@@ -97,6 +97,11 @@ def test_get_credential_template_returns_protocol_shape_only() -> None:
 		"credential_payload_format",
 		"claims",
 		"validity_rules",
+		"issuer_certificate_chain_configured",
+		"artifacts_status",
+		"hasArtifacts",
+		"artifactsValidated",
+		"usedByFlowsCount",
 		"privacy_posture",
 		"auto_generate_artifacts",
 		"created_at",
@@ -132,6 +137,9 @@ def test_get_credential_template_returns_protocol_shape_only() -> None:
 		"prefer_predicates": True,
 		"sd_alg": "sha-256",
 	}
+	assert body["artifacts_status"] == "missing"
+	assert body["hasArtifacts"] is False
+	assert body["artifactsValidated"] is False
 	assert "doctype" not in body
 	assert "supported_formats" not in body
 	assert "wallet_configs" not in body
@@ -187,6 +195,56 @@ def test_create_credential_template_returns_canonical_protocol_fields() -> None:
 		}
 	]
 	get_membership.assert_awaited_once_with("user-1", "org-1")
+
+
+def test_create_credential_template_persists_artifact_pipeline_fields() -> None:
+	repo = credential_template.InMemoryCredentialTemplateRepository()
+	client, _ = _build_client(repo)
+
+	response = client.post(
+		"/v1/credential-templates",
+		headers={"x-user-id": "user-1"},
+		json={
+			"organization_id": "org-1",
+			"name": "Issuer-bound template",
+			"credential_type": "IssuerBoundCredential",
+			"compliance_profile_id": "123e4567-e89b-12d3-a456-426614174000",
+			"claims": [
+				{
+					"name": "subject_id",
+					"display_name": "Subject ID",
+					"claim_type": "string",
+					"required": True,
+				}
+			],
+			"supported_formats": ["sd_jwt_vc"],
+			"trust_profile_id": "trust-profile-1",
+			"revocation_profile_id": "revocation-profile-1",
+			"issuer_profile_id": "issuer-profile-1",
+			"issuer_key_id": "cred-issuer-test-es256",
+			"issuer_did": "did:web:beta.elevenidllc.com:orgs:test",
+			"signing_algorithm": "ES256",
+			"key_access_mode": "REMOTE_SIGNING",
+			"remote_signing_config": {
+				"signing_service_id": "managed-openbao-transit",
+				"signing_key_reference": "cred-issuer-test-es256",
+			},
+			"artifacts_auto_generate": False,
+		},
+	)
+
+	assert response.status_code == 200
+	body = response.json()
+	assert body["trust_profile_id"] == "trust-profile-1"
+	assert body["revocation_profile_id"] == "revocation-profile-1"
+	assert body["issuer_profile_id"] == "issuer-profile-1"
+	assert body["issuer_key_id"] == "cred-issuer-test-es256"
+	assert body["issuer_did"] == "did:web:beta.elevenidllc.com:orgs:test"
+	assert body["issuer_algorithm"] == "ES256"
+	assert body["key_access_mode"] == "REMOTE_SIGNING"
+	assert body["artifacts_status"] == "valid"
+	assert body["hasArtifacts"] is True
+	assert body["artifactsValidated"] is True
 
 
 def test_create_credential_template_accepts_canonical_validity_rule_fields() -> None:

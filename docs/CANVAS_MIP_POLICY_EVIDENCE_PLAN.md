@@ -300,10 +300,10 @@ Implemented so far:
 - Delivery-record persistence now supports direct lookup by record ID and indexed lookup by Canvas external credential ID.
 - Gateway proxy `/v1/issuance/delivery-records/canvas-credentials/provenance` exposes the provenance endpoint without management-only headers.
 - Targeted tests cover repository lookups, provenance payload shape, subject privacy, canonical issuer/trust context, and gateway proxying.
-- The standalone `/canvas/provenance` UI has been removed; public Canvas mirror links go directly to `/verify/canvas-credentials`.
-- The provenance lookup component is embedded in the Canvas org console for internal operator lookup by Canvas external credential ID, delivery record ID, or canonical credential ID.
+- The standalone `/canvas/provenance` UI and custom public employer provenance page have been removed from the product path; Canvas mirror links are emitted directly as `/console/org/operate/verify` URLs with lookup params preserved.
+- The provenance lookup component is embedded in the organization console for operator lookup by Canvas external credential ID, delivery record ID, or canonical credential ID.
 - Console lookup surfaces canonical issuer DID, issuer profile, mirrored Canvas distribution channel, canonical credential status, delivery status, subject hash, and trust-basis checks.
-- UI tests cover public-route redirect, console lookup URL/prop-driven lookups, manual delivery-record lookups, and rendered trust context.
+- UI tests cover legacy public-route removal, console lookup URL/prop-driven lookups, manual delivery-record lookups, and rendered trust context.
 
 ### Slice 10 - Canvas Mirror Automation and Reconciliation
 
@@ -558,13 +558,14 @@ Gate: Canvas evidence, LTI, and mirror operations use the MIP platform/binding/f
 
 Goal: make the Canvas mirror demo show portability value, not only delivery plumbing.
 
-- [x] Add a public employer verification route at `/verify/canvas-credentials`.
+- [x] Retired the temporary public employer verification route.
 - [x] Reuse Canvas mirror provenance so employers resolve Canvas mirror IDs to canonical ElevenID issuance records.
 - [x] Show canonical issuer DID, issuer profile, active credential status, Canvas distribution channel, subject hash, and mirror delivery state.
 - [x] Add a public Canvas Credentials sandbox display page for mirrored credentials.
 - [x] Return Canvas credential display and employer verification URLs from the sandbox mirror receiver.
 - [x] Print Canvas display and employer verification links from the Canvas demo seeder after mirror publish.
 - [x] Update Canvas demo docs so the story ends with employer verification outside Canvas.
+- [x] Remove the temporary public page and emit organization-console verification/provenance links directly.
 
 Gate: a learner can earn a badge from Canvas activity, see it mirrored in Canvas Credentials, and share an employer verification page that proves the badge is backed by external ElevenID issuance infrastructure.
 
@@ -572,16 +573,156 @@ Gate: a learner can earn a badge from Canvas activity, see it mirrored in Canvas
 
 Goal: remove demo-only runtime assumptions from Canvas Credentials verification and mirror publishing.
 
-- [x] Promote the employer verification entry point from `/demo/employer/verify` to `/verify/canvas-credentials`.
+- [x] Remove legacy public employer verification entry points once the console-native `/console/org/operate/verify` flow is available.
 - [x] Stop generating Canvas sandbox display URLs in the public verification page when the provider response did not include a real display URL.
 - [x] Require an explicit public ElevenID base URL for Canvas Credentials verification links instead of silently defaulting to beta.
 - [x] Allow Canvas Credentials provider settings to come from delivery-record metadata before service-wide environment variables.
 - [x] Support org/template-scoped Canvas Credentials API token references through metadata keys such as `canvas_credentials.api_token_env` or `canvas_credentials.api_token_file`.
 - [x] Add org-admin Canvas binding controls for Canvas Credentials provider, issuer, badgeclass, API base URL, and external token references.
 - [x] Copy Canvas Credentials provider config from Canvas program bindings into mirror delivery records for publishing.
-- [ ] Convert the binding controls into a guided setup wizard with provider connection validation.
-- [ ] Remove local Canvas LMS bridge/private URL allowances from production deployment bundles.
-- [ ] Replace seeder-owned course/user/quiz assumptions with import/admin setup for real institution Canvas deployments.
-- [ ] Finalize production lifecycle mapping for revoke, suspend, and reinstate semantics.
+- [x] Add provider connection validation for Canvas Credentials settings before publish.
+- [x] Clarify that Canvas Credentials real-provider settings are organization binding configuration; `CANVAS_CREDENTIALS_*` env values are ops fallbacks/smoke-test inputs, not the production source of truth.
+- [x] Add managed organization integration secrets so admins can save/rotate a Canvas Credentials API token and bindings store only `api_token_secret_id`.
+- [x] Convert the binding controls into a guided setup wizard.
+- [x] Remove local Canvas LMS bridge/private URL allowances from production deployment bundles.
+- [x] Replace seeder-owned course/user/quiz assumptions with import/admin setup for real institution Canvas deployments.
+- [x] Finalize production lifecycle mapping for revoke, suspend, and reinstate semantics.
 
 Gate: production Canvas mirror links and provider configuration do not depend on demo routes, sandbox URLs, beta defaults, or global-only credentials.
+
+## Slice 20 - Protocol Alignment and Real Canvas Admin Discovery
+
+Goal: close the remaining gap between the Canvas product workflow and MIP protocol documentation/conformance.
+
+- [x] Add a realistic MIP example package for the complete Canvas Open Badge flow:
+  - Canvas fact requirement
+  - Cedar approval PolicySet
+  - remote DID issuer credential template
+  - status-list revocation profile
+  - Canvas Credentials delivery destination
+  - employer verification presentation policy
+- [x] Add self-host production checks that reject local/private Canvas public URLs and sandbox/bridge Canvas Credentials providers.
+- [x] Add Canvas admin API discovery for courses, assignments, quizzes, and modules using secret references instead of pasted tokens.
+- [x] Expose Canvas scope discovery through gateway routes.
+- [x] Add binding-wizard controls to import Canvas activity IDs from the institution Canvas API.
+- [x] Add targeted backend and UI tests for discovery.
+- [x] Add a read-only Canvas Credentials contract checker for real provider sandbox validation.
+- [x] Update the browser demo recorder to produce a step log and avoid accidental fallback mirror URLs.
+
+Remaining outside code-only alignment:
+
+- [ ] Validate the real Canvas Credentials assertion/badgeclass contract against an institution or vendor sandbox.
+- [x] Run the browser-level end-to-end demo against the real seeded beta scenario and attach the video/step log artifact.
+  - Recorded artifacts:
+    - `tests/artifacts/canvas-employer-demo/canvas-employer-demo.webm`
+    - `tests/artifacts/canvas-employer-demo/canvas-employer-demo-steps.json`
+
+Gate: the protocol examples, admin setup path, and production checks all reinforce the same model: Canvas is a provider/delivery integration, while MIP owns evidence facts, policy, issuer identity, revocation status, and verification.
+
+## Slice 21 - Console-Native Canvas UX Alignment
+
+Goal: replace the demo-shaped Canvas/verification story with the normal ElevenID console model:
+
+```text
+Credential template -> destinations -> issuance/claim -> learner My Identity -> verifier org OID4VP flow
+```
+
+The beta demo proved the backend path, but the current UX still has two custom surfaces that should not be treated as product architecture:
+
+- The Canvas Credentials sandbox page at `/credentials/{external_credential_id}` is handcrafted HTML in the sandbox receiver. It is useful as a fake external destination, but it is not a real Canvas Credentials page and should remain demo-only.
+- The employer badge verification page is a public provenance lookup page. It is useful for explaining value, but employer verification should be performed through the verifier organization's normal verification console and OID4VP/presentation-policy flow.
+
+### Target Product Model
+
+- Learners see the Interoperable Credentials Foundations Badge in **My Identity** like any other issued credential.
+  - Canvas evidence and Canvas mirror status appear as delivery/source metadata, not as a separate learner experience.
+  - The claim flow still lets the learner consent to Canvas Credentials display when the issuer organization enabled that destination.
+- Issuer admins configure Canvas Credentials under **organization destinations/integrations** and at the credential-template level.
+  - The badge template should have a **Destinations** area showing Canvas Credentials publishing, projection policy, badgeclass mapping, and readiness.
+  - Canvas Credentials is an organization-managed destination, not a holder wallet.
+- Verifier organizations verify the badge through **Credential Verification** in the org console.
+  - The verifier selects a saved verification flow or presentation policy.
+  - ElevenID generates an OID4VP request/QR/deep link.
+  - Verification results show canonical issuer DID, trust profile decision, revocation/status-list result, credential claims, and any Canvas mirror provenance.
+- Canvas mirror/provenance links are organization-console links. Canvas mirror lookup is an authenticated support/admin workflow; employer verification should use the normal OID4VP flow whenever the holder can present from a wallet.
+
+### Phase 21A - Route and Information Architecture Cleanup
+
+- [x] Inventory demo-only routes and label them explicitly:
+  - Canvas sandbox `/credentials/{external_credential_id}`
+  - removed public Canvas credential verification route
+  - removed legacy employer demo verification route
+- [x] Update docs and recorder overlays so the Canvas sandbox page is described as an external destination simulator, not a Canvas product screen.
+- [x] Stop describing the public employer provenance lookup as the canonical employer verification flow.
+- [x] Remove the public Canvas credential verification route; Canvas mirror/provenance links now target `/console/org/operate/verify` directly.
+
+Gate: demo-only pages are visibly marked as demo/support surfaces and no longer define the product UX.
+
+### Phase 21B - Credential Template Destinations
+
+- [x] Add or repair credential template detail routing for `/console/org/templates/credentials/:id`.
+- [x] Add a **Destinations** tab/section to credential template details.
+- [x] Reuse the delivery destination registry to show supported destinations:
+  - ElevenID wallet
+  - generic OID4VCI wallets
+  - Canvas Credentials institutional mirror
+  - Canvas/Parchment learner backpack when supported
+- [x] For Canvas Credentials, show organization destination readiness, projection policy, and active Canvas program bindings using the template.
+- [x] Add Canvas badgeclass/entity mapping to credential-template destination detail.
+- [x] Add last mirror health / drift summary to credential-template destination detail.
+- [x] Move destination-specific setup affordances out of the broad Canvas integration page where they belong to a specific credential template.
+
+Gate: an issuer admin can open the Interoperable Credentials Foundations Badge template and see exactly where that badge can be delivered or mirrored.
+
+### Phase 21C - Learner My Identity Alignment
+
+- [x] Ensure the Canvas-earned badge appears in My Identity as a normal issued credential/application row.
+- [x] Improve application/credential details to show credential name, issuer DID when present, issuance/application status, Canvas course/source context, and Canvas Credentials mirror delivery status when present.
+- [x] Add credential image rendering in My Identity details and rows when badge artwork is available.
+- [x] Add explicit claim status/detail rendering separate from application status.
+- [x] Remove Canvas-special wording from the primary learner flow except where it explains source/delivery metadata.
+- [x] Keep Canvas Credentials consent in the claim dialog, but phrase it as "Also show this badge in Canvas Credentials" rather than a wallet choice.
+
+Gate: a learner does not experience Canvas issuance as a special one-off application; it behaves like any other credential with Canvas as the source/destination context.
+
+### Phase 21D - Verifier Console Flow for Employers
+
+- [x] Extend `/console/org/operate/verify` so a verifier can start from a saved verification flow, not only a raw presentation policy.
+- [x] Add a clear "New verification" path:
+  - select verification flow / presentation policy
+  - configure purpose/reference
+  - generate OID4VP QR/deep link/request URI
+  - show polling/status/result
+- [x] Add result rendering for Open Badge credentials:
+  - badge name/image/issuer
+  - trust profile result
+  - revocation/status result
+  - selected claims
+  - Canvas mirror provenance when the credential or presentation references a Canvas mirror
+- [x] Support optional provenance lookup by Canvas mirror ID inside the console as a secondary lookup tool.
+- [x] Update the demo recording to end in org console verification instead of the public employer page.
+
+Gate: an employer/verifier demonstrates value by using the normal ElevenID verification console and OID4VP request flow.
+
+### Phase 21E - Sandbox and Real Canvas Credentials Boundaries
+
+- [x] Keep the sandbox Canvas Credentials display page only as a fake external destination for beta/local testing.
+- [x] Rename visual copy from "Canvas Credentials" to "Canvas Credentials Sandbox" unless running against a real provider response.
+- [x] For real Canvas Credentials provider mode, use the provider-returned credential URL/display URL only.
+- [x] Remove sandbox-only "Verify with Employer View" calls to action from the product demo narrative.
+
+Gate: the demo makes it obvious what is real Canvas/LTI/MIP/issuance and what is only a local stand-in for an external Canvas Credentials display.
+
+### Phase 21F - Demo and Documentation Refresh
+
+- [ ] Re-record the Canvas demo after UX alignment:
+  - Canvas LTI launch
+  - learner My Identity badge
+  - credential template destination setup
+  - org console verification flow/OID4VP request
+  - verification result with Canvas provenance metadata
+- [x] Update `canvas-real-test-environment.md` so the demo story follows the console-native flow.
+- [x] Update the Playwright recorder to include the org console verification surface when an authenticated verifier storage state is supplied.
+- [x] Keep a short appendix for the sandbox display/provenance lookup, clearly labeled as non-product/demo support.
+
+Gate: the video, docs, and UI all tell the same story: Canvas supplies learning context and can receive a mirror, while ElevenID owns issuance, wallet claim, destinations, verification flows, trust, and status.

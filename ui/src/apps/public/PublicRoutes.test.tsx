@@ -72,12 +72,12 @@ vi.mock('../../components/pages/CanvasLtiExperiencePage', () => ({
   default: () => <div data-testid="canvas-lti-experience">Canvas LTI experience</div>,
 }));
 
-vi.mock('../../components/pages/EmployerCanvasBadgeVerificationPage', () => ({
-  default: () => <div data-testid="employer-canvas-verify">Employer Canvas verify</div>,
-}));
-
 vi.mock('../../components/BrowserRedirect', () => ({
-  default: ({ to }: { to: string }) => <div data-testid="browser-redirect">{to}</div>,
+  default: ({ to, preserveSearch }: { to: string; preserveSearch?: boolean }) => (
+    <div data-testid="browser-redirect" data-preserve-search={String(Boolean(preserveSearch))}>
+      {to}
+    </div>
+  ),
 }));
 
 vi.mock('../../components/layouts', async () => {
@@ -149,7 +149,7 @@ describe('PublicRoutes', () => {
     expect(screen.queryByTestId('public-layout')).not.toBeInTheDocument();
   });
 
-  it('renders the employer Canvas badge verification page inside the public layout', () => {
+  it('falls through for unsupported public routes instead of redirecting', () => {
     mockUseAuth.mockReturnValue({
       isAuthenticated: false,
       isAdministrator: false,
@@ -160,12 +160,12 @@ describe('PublicRoutes', () => {
     mockGetPublicLoginFallback.mockReturnValue('/');
 
     renderWithoutRouter(
-      <MemoryRouter initialEntries={['/verify/canvas-credentials?external_credential_id=canvas-cred-1']}>
+      <MemoryRouter initialEntries={['/unsupported-public-route?external_credential_id=canvas-cred-1']}>
         <PublicRoutes />
       </MemoryRouter>,
     );
 
-    expect(screen.getByTestId('public-layout')).toBeInTheDocument();
-    expect(screen.getByTestId('employer-canvas-verify')).toBeInTheDocument();
+    expect(screen.queryByTestId('browser-redirect')).not.toBeInTheDocument();
+    expect(screen.getByTestId('public-root')).toBeInTheDocument();
   });
 });

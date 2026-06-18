@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import re
 import subprocess
@@ -470,6 +471,83 @@ def validate_selfhost_ui_bundle_origins(env_values: dict[str, str]) -> str:
         f"checked_files={checked_files} allowed_origins={','.join(sorted(allowed_origins))} "
         f"forbidden_origins={','.join(sorted(forbidden_origins))}"
     )
+
+
+def validate_selfhost_canvas_frame_ancestors() -> str:
+    template_path = REPO_ROOT / "docker" / "nginx-selfhost.prod.conf.template"
+    content = template_path.read_text(encoding="utf-8")
+    forbidden = {
+        "http://localhost:8088",
+        "http://127.0.0.1:8088",
+    }
+    hits = sorted(origin for origin in forbidden if origin in content)
+    if hits:
+        raise CheckError(
+            "Self-host production nginx template must not allow local Canvas LMS frame ancestors: "
+            + ", ".join(hits)
+        )
+    if "https://${CANVAS_REAL_PUBLIC_HOST}" not in content:
+        raise CheckError("Self-host production nginx template is missing the Canvas LMS HTTPS frame ancestor.")
+    return "no-local-canvas-frame-ancestors"
+
+
+def _public_dns_host(host: str, *, label: str) -> str:
+    normalized = host.strip().lower()
+    if not normalized:
+        return ""
+    if normalized in {"localhost", "127.0.0.1", "::1", "0.0.0.0"} or normalized.endswith(".local"):
+        raise CheckError(f"{label} must not use a local/private host: {host}")
+    try:
+        ip = ipaddress.ip_address(normalized)
+    except ValueError:
+        if "." not in normalized:
+            raise CheckError(f"{label} must be a public DNS host, not an internal service name: {host}")
+        return normalized
+    if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+        raise CheckError(f"{label} must not use a local/private address: {host}")
+    return normalized
+
+
+def _validate_public_https_url(value: str, *, label: str) -> str:
+    if not value.strip():
+        return ""
+    parsed = urlparse(value.strip())
+    if parsed.scheme != "https" or not parsed.hostname:
+        raise CheckError(f"{label} must be an https URL with a public host.")
+    return _public_dns_host(parsed.hostname, label=label)
+
+
+def validate_selfhost_canvas_public_config(env_values: dict[str, str]) -> str:
+    checked: list[str] = []
+    for key in (
+        "PUBLIC_API_URL",
+        "ISSUER_BASE_URL",
+        "CANVAS_LTI_EXPERIENCE_BASE_URL",
+        "CANVAS_CREDENTIALS_PUBLIC_BASE_URL",
+        "CANVAS_API_BASE_URL",
+    ):
+        value = env_values.get(key, "").strip()
+        if value:
+            _validate_public_https_url(value, label=key)
+            checked.append(key)
+
+    for key in ("CANVAS_REAL_PUBLIC_HOST", "CANVAS_SANDBOX_PUBLIC_HOST"):
+        value = env_values.get(key, "").strip()
+        if value:
+            parsed = urlparse(value if "://" in value else f"https://{value}")
+            _public_dns_host(parsed.hostname or value, label=key)
+            checked.append(key)
+
+    provider = env_values.get("CANVAS_CREDENTIALS_PROVIDER", "").strip().lower()
+    if provider in {"bridge", "sandbox", "proxy", "bridge_api"}:
+        raise CheckError(
+            "CANVAS_CREDENTIALS_PROVIDER must use the real Canvas Credentials API in self-host production, "
+            f"not {provider!r}."
+        )
+    if provider:
+        checked.append("CANVAS_CREDENTIALS_PROVIDER")
+
+    return f"checked={','.join(checked) if checked else 'none-configured'}"
 
 
 def validate_auth_login_redirect_hosts(env_values: dict[str, str]) -> str:
@@ -943,6 +1021,8 @@ def main() -> int:
         run_check("managed-openbao-signing", lambda: validate_managed_openbao_signing(env_file, prod_compose_file)),
         run_check("ui-origin-config", lambda: validate_ui_origin_config(env_values)),
         run_check("selfhost-ui-bundle-origins", lambda: validate_selfhost_ui_bundle_origins(env_values)),
+        run_check("selfhost-canvas-frame-ancestors", validate_selfhost_canvas_frame_ancestors),
+        run_check("selfhost-canvas-public-config", lambda: validate_selfhost_canvas_public_config(env_values)),
         run_check("auth-login-redirects", lambda: validate_auth_login_redirect_hosts(env_values)),
         run_check("keycloak-open-badge-option", lambda: validate_keycloak_open_badge_option(env_values)),
         run_check("credential-login-page", lambda: validate_credential_login_page(env_values)),

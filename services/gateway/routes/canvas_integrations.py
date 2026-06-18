@@ -91,6 +91,18 @@ async def refresh_canvas_platform_jwks(platform_id: str, request: Request) -> Re
     )
 
 
+@canvas_integration_router.post("/platforms/{platform_id}/scope-discovery", summary="Discover Canvas courses and activities")
+async def discover_canvas_scope(platform_id: str, request: Request) -> Response:
+    registry = get_registry()
+    service_url = registry.get_service_url("issuance")
+    return await proxy_request(
+        request,
+        service_url,
+        f"/v1/integrations/canvas/platforms/{platform_id}/scope-discovery",
+        inject_headers=_ISSUANCE_HEADERS,
+    )
+
+
 @canvas_integration_router.post("/platforms/{platform_id}/program-bindings", summary="Create Canvas program binding")
 async def create_canvas_program_binding(platform_id: str, request: Request) -> Response:
     registry = get_registry()
@@ -129,6 +141,66 @@ async def delete_canvas_program_binding(binding_id: str, request: Request) -> Re
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
     return await proxy_request(request, service_url, f"/v1/integrations/canvas/program-bindings/{binding_id}", inject_headers=_ISSUANCE_HEADERS)
+
+
+@canvas_integration_router.post("/canvas-credentials/validate", summary="Validate Canvas Credentials provider configuration")
+async def validate_canvas_credentials_provider(request: Request) -> Response:
+    registry = get_registry()
+    service_url = registry.get_service_url("issuance")
+    return await proxy_request(
+        request,
+        service_url,
+        "/v1/integrations/canvas/canvas-credentials/validate",
+        inject_headers=_ISSUANCE_HEADERS,
+    )
+
+
+@canvas_integration_router.post("/integration-secrets", summary="Create Canvas integration secret")
+async def create_canvas_integration_secret(request: Request) -> Response:
+    registry = get_registry()
+    service_url = registry.get_service_url("issuance")
+    return await proxy_request(
+        request,
+        service_url,
+        "/v1/integrations/canvas/integration-secrets",
+        inject_headers=_ISSUANCE_HEADERS,
+    )
+
+
+@canvas_integration_router.get("/integration-secrets", summary="List Canvas integration secrets")
+async def list_canvas_integration_secrets(request: Request) -> Response:
+    registry = get_registry()
+    service_url = registry.get_service_url("issuance")
+    return await proxy_request(
+        request,
+        service_url,
+        "/v1/integrations/canvas/integration-secrets",
+        inject_headers=_ISSUANCE_HEADERS,
+    )
+
+
+@canvas_integration_router.put("/integration-secrets/{secret_id}", summary="Update Canvas integration secret")
+async def update_canvas_integration_secret(secret_id: str, request: Request) -> Response:
+    registry = get_registry()
+    service_url = registry.get_service_url("issuance")
+    return await proxy_request(
+        request,
+        service_url,
+        f"/v1/integrations/canvas/integration-secrets/{secret_id}",
+        inject_headers=_ISSUANCE_HEADERS,
+    )
+
+
+@canvas_integration_router.delete("/integration-secrets/{secret_id}", summary="Delete Canvas integration secret")
+async def delete_canvas_integration_secret(secret_id: str, request: Request) -> Response:
+    registry = get_registry()
+    service_url = registry.get_service_url("issuance")
+    return await proxy_request(
+        request,
+        service_url,
+        f"/v1/integrations/canvas/integration-secrets/{secret_id}",
+        inject_headers=_ISSUANCE_HEADERS,
+    )
 
 
 @canvas_integration_router.post("/evidence-events", summary="Process Canvas evidence event")

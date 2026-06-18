@@ -104,10 +104,6 @@ ROUTE_CONFIG = {
     "/v1/flows/siop": {"service": "flows", "requires_auth": True},  # SIOPv2 session creation
     "/v1/flows": {"service": "flows", "requires_auth": True},
 
-    # Verification & ZK Proof routes
-    "/v1/verify": {"service": "verification", "requires_auth": True},
-    "/v1/verify/zkp": {"service": "verification", "requires_auth": True},
-
     # Utility routes
     "/v1/notifications": {"service": "notifications", "requires_auth": True},
     "/v1/subscriptions": {"service": "notifications", "requires_auth": True},

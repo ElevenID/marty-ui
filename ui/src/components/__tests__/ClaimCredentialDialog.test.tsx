@@ -131,6 +131,7 @@ describe('ClaimCredentialDialog', () => {
       );
     });
     expect(await screen.findByTestId('claim-invite-display')).toBeInTheDocument();
+    expect(screen.getByText('Also show this badge in Canvas Credentials')).toBeInTheDocument();
     expect(screen.queryByTestId('wallet-registration-guard')).not.toBeInTheDocument();
   });
 

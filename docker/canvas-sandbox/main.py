@@ -162,13 +162,13 @@ def _credential_display_url(external_credential_id: str) -> str:
     return f"{_public_canvas_credentials_base_url()}/credentials/{quote(external_credential_id)}"
 
 
-def _employer_verification_url(record: dict) -> str:
+def _console_provenance_url(record: dict) -> str:
     query = {
         "external_credential_id": record.get("id") or "",
         "canvas_account_id": record.get("canvas_account_id") or "",
         "organization_id": record.get("organization_id") or "",
     }
-    return f"{ISSUER_BASE_URL.rstrip()}/verify/canvas-credentials?{urlencode({k: v for k, v in query.items() if v})}"
+    return f"{ISSUER_BASE_URL.rstrip()}/console/org/operate/verify?{urlencode({k: v for k, v in query.items() if v})}"
 
 
 def _html(value: object) -> str:
@@ -388,7 +388,7 @@ async def publish_canvas_credentials_mirror(
         "updated_at": now,
     }
     record["credential_url"] = _credential_display_url(external_credential_id)
-    record["employer_verification_url"] = _employer_verification_url(record)
+    record["console_provenance_url"] = _console_provenance_url(record)
     _MIRRORED_CREDENTIALS[external_credential_id] = record
 
     return JSONResponse(
@@ -399,7 +399,7 @@ async def publish_canvas_credentials_mirror(
             "issuer_id": payload.get("issuer_id") or CANVAS_CREDENTIALS_ISSUER_ID,
             "status": "active",
             "credential_url": record["credential_url"],
-            "employer_verification_url": record["employer_verification_url"],
+            "console_provenance_url": record["console_provenance_url"],
             "credential": {
                 "id": external_credential_id,
                 "canonical_id": credential_id,
@@ -476,7 +476,7 @@ async def display_canvas_credentials_mirror(external_credential_id: str):
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Canvas Credentials Mirror</title>
+<title>Canvas Credentials Sandbox Mirror</title>
 <style>
 body {{ font-family: Arial, sans-serif; margin: 0; background: #f6f8fb; color: #1f2937; }}
 main {{ max-width: 760px; margin: 72px auto; background: white; border: 1px solid #d9dee8; border-radius: 12px; padding: 32px; }}
@@ -487,14 +487,14 @@ h1 {{ margin-top: 0; }}
 </html>""",
         )
 
-    employer_url = record.get("employer_verification_url") or _employer_verification_url(record)
+    console_provenance_url = record.get("console_provenance_url") or _console_provenance_url(record)
     status = str(record.get("status") or "unknown").upper()
     html_body = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{_html(CANVAS_CREDENTIALS_BADGE_NAME)} - Canvas Credentials</title>
+<title>{_html(CANVAS_CREDENTIALS_BADGE_NAME)} - Canvas Credentials Sandbox</title>
 <style>
 body {{ font-family: Arial, sans-serif; margin: 0; background: #f4f7fb; color: #172033; }}
 .bar {{ background: #1f76d2; color: white; padding: 18px 28px; font-size: 20px; font-weight: 700; }}
@@ -514,14 +514,14 @@ a.secondary {{ color: #1f76d2; padding: 12px 0; font-weight: 700; }}
 </style>
 </head>
 <body>
-<div class="bar">Canvas Credentials</div>
+<div class="bar">Canvas Credentials Sandbox</div>
 <main>
   <section class="panel">
     <div class="head">
       <div class="badge">IC</div>
       <div>
         <h1>{_html(CANVAS_CREDENTIALS_BADGE_NAME)}</h1>
-        <p>This badge is displayed in Canvas Credentials and backed by an external ElevenID issuance record.</p>
+        <p>This beta sandbox simulates a Canvas Credentials display. The canonical credential, issuer DID, and status remain in ElevenID.</p>
         <span class="status">{_html(status)}</span>
       </div>
     </div>
@@ -534,7 +534,7 @@ a.secondary {{ color: #1f76d2; padding: 12px 0; font-weight: 700; }}
       <div><div class="label">Mirrored</div><div class="value">{_html(record.get("created_at"))}</div></div>
     </div>
     <div class="actions">
-      <a class="button" href="{_html(employer_url)}">Verify with Employer View</a>
+      <a class="button" href="{_html(console_provenance_url)}">Open Console Provenance</a>
       <a class="secondary" href="{_html(ISSUER_BASE_URL.rstrip())}/credentials/canvas-interoperability-foundations-badge">Open Badge Metadata</a>
     </div>
   </section>

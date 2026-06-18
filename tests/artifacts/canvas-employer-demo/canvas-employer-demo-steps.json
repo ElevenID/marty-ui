@@ -1,0 +1,169 @@
+{
+  "started_at": "2026-05-27T02:59:16.658Z",
+  "completed_at": "2026-05-27T03:01:08.644Z",
+  "video": "C:\\Users\\maree\\OneDrive\\Glthub\\marty-workspace\\marty-ui\\tests\\artifacts\\canvas-employer-demo\\canvas-employer-demo.webm",
+  "urls": {
+    "canvas_login": "https://canvas-test.elevenidllc.com/login/canvas",
+    "canvas_assignment": "https://canvas-test.elevenidllc.com/courses/1/assignments/1",
+    "applicant_identity": "https://beta.elevenidllc.com/console/applicant/identity",
+    "credential_template": "https://beta.elevenidllc.com/console/org/templates/credentials/50000000-0000-0000-0000-000000000041",
+    "canvas_admin": "https://beta.elevenidllc.com/console/org/deploy/canvas",
+    "canvas_display": "https://canvas-sandbox.elevenidllc.com/credentials/canvas-sandbox-urn%3Auuid%3A6e5444b7-86fd-4752-9fef-7ffeecd72957",
+    "canvas_display_source": "canvas-seed-latest.log",
+    "console_canvas_provenance": "https://beta.elevenidllc.com/console/org/operate/verify?external_credential_id=canvas-sandbox-urn%3Auuid%3A6e5444b7-86fd-4752-9fef-7ffeecd72957&canvas_account_id=canvas-real-account-1&organization_id=00000000-0000-0000-0000-000000000001",
+    "console_canvas_provenance_source": "canvas-seed-latest.log",
+    "console_verify": "https://beta.elevenidllc.com/console/org/operate/verify",
+    "console_auth": "canvas_demo_admin",
+    "console_admin_email": "canvas.admin@marty.demo",
+    "console_storage_state": null
+  },
+  "steps": [
+    {
+      "index": 1,
+      "title": "Learner starts in Canvas",
+      "detail": "The demo begins as the enrolled student in the real Canvas LMS course, not on an ElevenID marketing page.",
+      "url": "https://canvas-test.elevenidllc.com/login/canvas",
+      "timestamp": "2026-05-27T02:59:19.674Z"
+    },
+    {
+      "index": 2,
+      "title": "Canvas course context is active",
+      "detail": "The learner is enrolled in ElevenID LTI Test Course, which contains the launch assignment and quiz-backed badge scenario.",
+      "url": "https://canvas-test.elevenidllc.com/?login_success=1",
+      "timestamp": "2026-05-27T02:59:27.468Z"
+    },
+    {
+      "index": 3,
+      "title": "Canvas launches ElevenID through LTI",
+      "detail": "The assignment is an external tool placement, so Canvas sends a signed LTI launch instead of a hand-built link.",
+      "url": "https://canvas-test.elevenidllc.com/courses/1/assignments/1",
+      "timestamp": "2026-05-27T02:59:32.018Z"
+    },
+    {
+      "index": 4,
+      "title": "LTI launch is verified and bound",
+      "detail": "ElevenID validates the Canvas launch, resolves the Canvas Platform and Program Binding, and selects the correct credential application.",
+      "url": "https://canvas-test.elevenidllc.com/courses/1/assignments/1",
+      "timestamp": "2026-05-27T02:59:34.443Z"
+    },
+    {
+      "index": 5,
+      "title": "Normal credential application is preselected",
+      "detail": "The Canvas launch opens the regular credential application surface with the correct template, course, learner, and activity already bound.",
+      "url": "https://beta.elevenidllc.com/console/applicant/apply/50000000-0000-0000-0000-000000000040?canvas_lti_state=gnSb3QEx_rS7zoxL7sVKoTYNaYyAGgqFLeSDa7kFm1A&canvas_program_binding_id=1bb1c63e-d013-4e61-9dfd-94f8e084302a&canvas_platform_id=efdb29ff-142e-466f-b483-d109ebe95052&application_template_id=0ab66d45-0d84-5fbd-837f-25788d32279e",
+      "timestamp": "2026-05-27T02:59:40.849Z"
+    },
+    {
+      "index": 6,
+      "title": "Canvas is source context, not a custom form",
+      "detail": "The learner reviews course details from Canvas while ElevenID keeps the normal application flow and issuer-controlled requirements.",
+      "url": "https://beta.elevenidllc.com/console/applicant/apply/50000000-0000-0000-0000-000000000040?canvas_lti_state=gnSb3QEx_rS7zoxL7sVKoTYNaYyAGgqFLeSDa7kFm1A&canvas_program_binding_id=1bb1c63e-d013-4e61-9dfd-94f8e084302a&canvas_platform_id=efdb29ff-142e-466f-b483-d109ebe95052&application_template_id=0ab66d45-0d84-5fbd-837f-25788d32279e",
+      "timestamp": "2026-05-27T02:59:43.262Z"
+    },
+    {
+      "index": 7,
+      "title": "AGS quiz score becomes policy input",
+      "detail": "The seeded demo submits a signed Canvas AGS score event. MIP normalizes it into an EvidenceFact and Cedar permits approval.",
+      "url": "https://beta.elevenidllc.com/console/applicant/apply/50000000-0000-0000-0000-000000000040?canvas_lti_state=gnSb3QEx_rS7zoxL7sVKoTYNaYyAGgqFLeSDa7kFm1A&canvas_program_binding_id=1bb1c63e-d013-4e61-9dfd-94f8e084302a&canvas_platform_id=efdb29ff-142e-466f-b483-d109ebe95052&application_template_id=0ab66d45-0d84-5fbd-837f-25788d32279e",
+      "timestamp": "2026-05-27T02:59:45.672Z"
+    },
+    {
+      "index": 8,
+      "title": "Learner sees the badge in My Identity",
+      "detail": "The Canvas-earned badge appears as a normal learner credential/application, with badge artwork, claim state, source context, and mirror delivery metadata.",
+      "url": "https://beta.elevenidllc.com/console/applicant/identity",
+      "timestamp": "2026-05-27T02:59:48.625Z"
+    },
+    {
+      "index": 9,
+      "title": "Credential details include Canvas source and delivery",
+      "detail": "The details modal separates application status from claim status and shows Canvas course source plus Canvas Credentials mirror delivery when present.",
+      "url": "https://beta.elevenidllc.com/console/applicant/identity",
+      "timestamp": "2026-05-27T03:00:21.224Z"
+    },
+    {
+      "index": 10,
+      "title": "Switching to issuer admin",
+      "detail": "The learner flow stays separate from organization administration. The recorder now signs in as Canvas Demo Admin for setup, destination, and verification screens.",
+      "url": "https://beta.elevenidllc.com/console/applicant/identity",
+      "timestamp": "2026-05-27T03:00:23.789Z"
+    },
+    {
+      "index": 11,
+      "title": "Issuer admin session is active",
+      "detail": "Signed in as Canvas Demo Admin with Marty organization access.",
+      "url": "https://beta.elevenidllc.com/console/org/templates/credentials/50000000-0000-0000-0000-000000000041",
+      "timestamp": "2026-05-27T03:00:28.781Z"
+    },
+    {
+      "index": 12,
+      "title": "Credential template owns destinations",
+      "detail": "Canvas Credentials is shown as an organization-managed destination for this badge, not a student wallet. Projection policy limits Canvas to the public badge view.",
+      "url": "https://beta.elevenidllc.com/console/org/templates/credentials/50000000-0000-0000-0000-000000000041",
+      "timestamp": "2026-05-27T03:00:34.096Z"
+    },
+    {
+      "index": 13,
+      "title": "Canvas platform and program bindings are managed",
+      "detail": "Admins configure Canvas trust, LTI launch binding, course/activity scope, feature gates, evidence requirements, and Canvas Credentials provider settings from the console.",
+      "url": "https://beta.elevenidllc.com/console/org/deploy/canvas",
+      "timestamp": "2026-05-27T03:00:42.083Z"
+    },
+    {
+      "index": 14,
+      "title": "Provider secrets stay outside Canvas",
+      "detail": "Canvas Credentials API tokens are saved as managed organization secrets; bindings keep only a secret reference plus issuer and badgeclass IDs.",
+      "url": "https://beta.elevenidllc.com/console/org/deploy/canvas",
+      "timestamp": "2026-05-27T03:00:44.667Z"
+    },
+    {
+      "index": 15,
+      "title": "Canvas standards breadth is surfaced",
+      "detail": "The integration now tracks LTI Deep Linking, AGS score evidence, NRPS roster/role context, and feature gates per Canvas program binding.",
+      "url": "https://beta.elevenidllc.com/console/org/deploy/canvas",
+      "timestamp": "2026-05-27T03:00:47.081Z"
+    },
+    {
+      "index": 16,
+      "title": "Canvas destination sandbox shows the badge",
+      "detail": "This beta page simulates the external Canvas Credentials destination while the canonical credential stays in ElevenID.",
+      "url": "https://canvas-sandbox.elevenidllc.com/credentials/canvas-sandbox-urn%3Auuid%3A6e5444b7-86fd-4752-9fef-7ffeecd72957",
+      "timestamp": "2026-05-27T03:00:50.396Z"
+    },
+    {
+      "index": 17,
+      "title": "Mirror is delivery metadata",
+      "detail": "The mirrored record carries the canonical credential ID, issuer DID, subject DID, and Canvas account context.",
+      "url": "https://canvas-sandbox.elevenidllc.com/credentials/canvas-sandbox-urn%3Auuid%3A6e5444b7-86fd-4752-9fef-7ffeecd72957",
+      "timestamp": "2026-05-27T03:00:52.806Z"
+    },
+    {
+      "index": 18,
+      "title": "Canvas mirror provenance is in the console",
+      "detail": "The support lookup now lives in the organization verification console, so Canvas mirror resolution is part of the normal admin workflow.",
+      "url": "https://beta.elevenidllc.com/console/org/operate/verify?external_credential_id=canvas-sandbox-urn%3Auuid%3A6e5444b7-86fd-4752-9fef-7ffeecd72957&canvas_account_id=canvas-real-account-1&organization_id=00000000-0000-0000-0000-000000000001",
+      "timestamp": "2026-05-27T03:00:56.291Z"
+    },
+    {
+      "index": 19,
+      "title": "Issuer identity stays external",
+      "detail": "The issuer DID and remote-key-backed Marty identity remain outside Canvas while Canvas receives a useful badge mirror.",
+      "url": "https://beta.elevenidllc.com/console/org/operate/verify?external_credential_id=canvas-sandbox-urn%3Auuid%3A6e5444b7-86fd-4752-9fef-7ffeecd72957&canvas_account_id=canvas-real-account-1&organization_id=00000000-0000-0000-0000-000000000001",
+      "timestamp": "2026-05-27T03:00:58.876Z"
+    },
+    {
+      "index": 20,
+      "title": "Employer uses Credential Verification",
+      "detail": "The product verification path is the organization console: select a saved verification flow or presentation policy, then generate an OID4VP request.",
+      "url": "https://beta.elevenidllc.com/console/org/operate/verify",
+      "timestamp": "2026-05-27T03:01:01.749Z"
+    },
+    {
+      "index": 21,
+      "title": "OID4VP request starts from policy",
+      "detail": "The verifier can start from a saved verification flow, generate a wallet request, and see Open Badge trust, status, claims, and Canvas mirror metadata in the result.",
+      "url": "https://beta.elevenidllc.com/console/org/operate/verify",
+      "timestamp": "2026-05-27T03:01:04.328Z"
+    }
+  ]
+}

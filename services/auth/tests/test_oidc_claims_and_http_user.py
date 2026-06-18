@@ -248,13 +248,9 @@ def test_build_canvas_lti_user_creates_stable_constrained_applicant_identity(mon
     assert user.family_name == "Learner"
     assert user.user_type.value == "applicant"
     assert user.roles == ["applicant", "canvas_lti_learner"]
-    assert user.organization_id == "00000000-0000-0000-0000-000000000001"
-    assert user.organization == {
-        "00000000-0000-0000-0000-000000000001": {
-            "name": "ElevenID LLC",
-            "source": "canvas_lti",
-        },
-    }
+    assert user.organization_id is None
+    assert user.organization_name is None
+    assert user.organization is None
 
 
 @pytest.mark.asyncio
@@ -293,6 +289,7 @@ async def test_canvas_lti_finalize_sets_canvas_user_session_cookie(monkeypatch: 
     assert len(fake_repo.saved) == 1
     assert fake_repo.saved[0].user.email == "learner@example.edu"
     assert fake_repo.saved[0].user.roles == ["applicant", "canvas_lti_learner"]
+    assert fake_repo.saved[0].user.organization_id is None
 
 
 @pytest.mark.asyncio

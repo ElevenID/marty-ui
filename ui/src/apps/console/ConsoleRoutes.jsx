@@ -28,6 +28,7 @@ import {
   TrustProfileEditPage,
   TemplatesPage,
   CredentialTemplatesPage,
+  CredentialTemplateDetailPage,
   ApplicationTemplatesPage,
   CredentialTemplateWizard,
   PoliciesPage,
@@ -141,6 +142,7 @@ function ConsoleRoutes() {
         <Route path="templates" element={<TemplatesPage />} />
         <Route path="templates/credentials" element={<CredentialTemplatesPage />} />
         <Route path="templates/credentials/new" element={<CredentialTemplateWizard />} />
+        <Route path="templates/credentials/:templateId" element={<CredentialTemplateDetailPage />} />
         <Route path="templates/applications" element={<ApplicationTemplatesPage />} />
         <Route path="policies" element={<PoliciesPage />} />
         <Route path="policies/presentation" element={<PresentationPoliciesPage />} />

@@ -107,6 +107,35 @@
       }
     },
     {
+      "username": "canvas.admin@marty.demo",
+      "email": "canvas.admin@marty.demo",
+      "emailVerified": true,
+      "enabled": true,
+      "firstName": "Canvas",
+      "lastName": "Demo Admin",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "CanvasAdmin123!",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "administrator"
+      ],
+      "attributes": {
+        "user_type": [
+          "administrator"
+        ],
+        "demo_context": [
+          "canvas"
+        ],
+        "onboarding_completed": [
+          "true"
+        ]
+      }
+    },
+    {
       "username": "vendor@marty.demo",
       "email": "vendor@marty.demo",
       "emailVerified": true,

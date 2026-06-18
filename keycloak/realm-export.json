@@ -103,6 +103,26 @@
       "realmRoles": ["admin"]
     },
     {
+      "username": "canvas-demo-admin",
+      "email": "canvas.admin@marty.demo",
+      "firstName": "Canvas",
+      "lastName": "Demo Admin",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "CanvasAdmin123!",
+          "temporary": false
+        }
+      ],
+      "realmRoles": ["admin", "org_admin"],
+      "attributes": {
+        "demo_context": ["canvas"],
+        "onboarding_completed": ["true"]
+      }
+    },
+    {
       "username": "testuser",
       "email": "test@marty.local",
       "firstName": "Test",

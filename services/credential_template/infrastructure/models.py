@@ -62,12 +62,21 @@ credential_templates_table = Table(
     
     # Per-wallet configuration: [{wallet_id, deep_link_scheme}, ...]
     Column("wallet_configs", JSON, nullable=True, server_default="[]"),
+
+    # Protocol profile references
+    Column("application_template_id", String(36), nullable=True),
+    Column("trust_profile_id", String(36), nullable=True),
+    Column("revocation_profile_id", String(36), nullable=True),
+    Column("issuer_profile_id", String(128), nullable=True),
     
     # Key management (BYOK support)
     Column("key_access_mode", String(20), nullable=True),  # KEY_VAULT | HSM | LOCAL | REMOTE_SIGNING
     Column("issuer_key_id", String(255), nullable=True),
     Column("issuer_algorithm", String(20), nullable=True),  # ES256 | EdDSA | RS256 | ES384
     Column("remote_signing_config", JSON, nullable=True),   # {provider, key_name, key_version, ...}
+    Column("issuer_certificate_chain_pem", Text, nullable=True),
+    Column("issuer_did", Text, nullable=True),
+    Column("auto_generate_artifacts", Boolean, nullable=False, server_default="false"),
     
     # Version control
     Column("version", Integer, nullable=False, default=1),

@@ -12,7 +12,6 @@ import MyOrganizationsPage from '../../components/pages/MyOrganizationsPage';
 import DiscoverOrganizationsPage from '../../components/pages/DiscoverOrganizationsPage';
 import JoinOrganizationPage from '../../components/pages/JoinOrganizationPage';
 import CanvasLtiExperiencePage from '../../components/pages/CanvasLtiExperiencePage';
-import EmployerCanvasBadgeVerificationPage from '../../components/pages/EmployerCanvasBadgeVerificationPage';
 import BrowserRedirect from '../../components/BrowserRedirect';
 import { getPublicLoginFallback, renderPublicRoot, renderMarketingRoutes } from '@ui-public-routes';
 import { PublicLayout } from '../../components/layouts';
@@ -67,7 +66,6 @@ function PublicRoutes() {
         <Route path="/organizations" element={<MyOrganizationsPage />} />
         <Route path="/organizations/discover" element={<DiscoverOrganizationsPage />} />
         <Route path="/organizations/join" element={<JoinOrganizationPage />} />
-        <Route path="/verify/canvas-credentials" element={<EmployerCanvasBadgeVerificationPage />} />
         <Route
           path="/console-handoff/org/setup"
           element={<BrowserRedirect to="/console/org/setup" preserveSearch message="Opening console setup..." />}

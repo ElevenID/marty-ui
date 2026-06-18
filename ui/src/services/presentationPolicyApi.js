@@ -248,10 +248,23 @@ export function normalizeCredentialTemplate(data = {}) {
         display_name: claim.display_name || claim.display?.label || claim.name,
       }))
     : [];
+  const artifactsStatus = data.artifacts_status
+    || data.artifact_status
+    || (data.hasArtifacts === false
+      ? 'missing'
+      : (data.issuer_key_id || data.issuer_certificate_chain_pem || data.remote_signing_config || data.auto_generate_artifacts)
+        ? 'valid'
+        : (data.issuer_did ? 'invalid' : 'missing'));
+  const hasArtifacts = data.hasArtifacts ?? artifactsStatus !== 'missing';
+  const artifactsValidated = data.artifactsValidated ?? artifactsStatus === 'valid';
 
   return {
     ...data,
     status: data.status ? String(data.status).toLowerCase() : data.status,
+    artifacts_status: artifactsStatus,
+    hasArtifacts,
+    artifactsValidated,
+    usedByFlowsCount: data.usedByFlowsCount ?? data.used_by_flows_count ?? 0,
     claims,
     validity_rules: normalizeCredentialTemplateValidityRules(data.validity_rules || {}),
     createdAt: data.created_at || data.createdAt,

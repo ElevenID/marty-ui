@@ -21,6 +21,7 @@ export { default as RevocationProfileWizard } from './trust/RevocationProfileWiz
 // Templates
 export { default as TemplatesPage } from './templates/TemplatesPage';
 export { default as CredentialTemplatesPage } from './templates/CredentialTemplatesPage';
+export { default as CredentialTemplateDetailPage } from './templates/CredentialTemplateDetailPage';
 export { default as ApplicationTemplatesPage } from './templates/ApplicationTemplatesPage';
 export { default as CredentialTemplateWizard } from './templates/CredentialTemplateWizard';
 

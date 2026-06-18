@@ -113,13 +113,13 @@ function WhatIsCredentialVerificationPage() {
       <Paper elevation={0} sx={{ p: 3, mb: 2, bgcolor: 'grey.50', borderRadius: 2, border: '1px solid', borderColor: 'divider' }}>
         <Typography variant="subtitle2" color="text.secondary" gutterBottom>Request</Typography>
         <Box component="pre" sx={{ fontFamily: 'monospace', fontSize: '0.875rem', overflow: 'auto', m: 0 }}>
-{`POST /api/v1/verify
+{`POST /api/v1/flows/verify
 Content-Type: application/json
 
 {
-  "credential": { ... },
-  "format": "vc",
-  "policies": ["signature", "expiration", "revocation", "issuer_trust"]
+  "organization_id": "org_123",
+  "presentation_policy_id": "policy_123",
+  "external_reference": "Employment eligibility check"
 }`}
         </Box>
       </Paper>
@@ -127,13 +127,10 @@ Content-Type: application/json
         <Typography variant="subtitle2" color="text.secondary" gutterBottom>Response</Typography>
         <Box component="pre" sx={{ fontFamily: 'monospace', fontSize: '0.875rem', overflow: 'auto', m: 0 }}>
 {`{
-  "verified": true,
-  "checks": [
-    { "name": "signature", "passed": true },
-    { "name": "expiration", "passed": true },
-    { "name": "revocation", "passed": true },
-    { "name": "issuer_trust", "passed": true }
-  ]
+  "instance_id": "flow_123",
+  "status": "AWAITING_WALLET",
+  "request_uri": "openid4vp://...",
+  "qr_code_data": "..."
 }`}
         </Box>
       </Paper>

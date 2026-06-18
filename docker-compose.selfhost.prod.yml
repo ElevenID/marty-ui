@@ -341,6 +341,7 @@ services:
       REDIS_URL: redis://redis:6379
       REDIS_DB_GATEWAY: "2"
       ORG_GRPC_PORT: "9002"
+      MARTY_ORG_ADMIN_EMAIL: ${MARTY_ORG_ADMIN_EMAIL:-}
     secrets:
       - marty_db_password
       - license_key
@@ -436,6 +437,7 @@ services:
       BAO_ADDR: ${BAO_ADDR:-}
       BAO_TOKEN_FILE: /run/secrets/openbao_service_token
       ISSUANCE_API_KEY_FILE: /run/secrets/issuance_api_key
+      INTEGRATION_SECRET_MASTER_KEY_FILE: /run/secrets/integration_secret_master_key
       SIGNING_KEYS_INTERNAL_URL: http://gateway:8000/internal/signing-keys
       SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/issuance_api_key
       CANVAS_CREDENTIALS_SHARED_SECRET_FILE: /run/secrets/canvas_credentials_shared_secret
@@ -443,7 +445,6 @@ services:
       CANVAS_CREDENTIALS_PUBLISH_URL: ${CANVAS_CREDENTIALS_PUBLISH_URL:-}
       CANVAS_CREDENTIALS_STATUS_SYNC_URL: ${CANVAS_CREDENTIALS_STATUS_SYNC_URL:-}
       CANVAS_CREDENTIALS_API_BASE_URL: ${CANVAS_CREDENTIALS_API_BASE_URL:-https://api.badgr.io}
-      CANVAS_CREDENTIALS_API_TOKEN_FILE: /run/secrets/canvas_credentials_api_token
       CANVAS_CREDENTIALS_ISSUER_ID: ${CANVAS_CREDENTIALS_ISSUER_ID:-}
       CANVAS_CREDENTIALS_BADGECLASS_ID: ${CANVAS_CREDENTIALS_BADGECLASS_ID:-}
       CANVAS_CREDENTIALS_ASSERTION_SCOPE: ${CANVAS_CREDENTIALS_ASSERTION_SCOPE:-badgeclasses}
@@ -455,8 +456,8 @@ services:
       - marty_db_password
       - openbao_service_token
       - issuance_api_key
+      - integration_secret_master_key
       - canvas_credentials_shared_secret
-      - canvas_credentials_api_token
       - license_key
     volumes:
       - ./scripts/load-openbao-token-and-start.sh:/app/load-openbao-token-and-start.sh:ro
@@ -915,10 +916,10 @@ secrets:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/marty_api_client_secret
   issuance_api_key:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/issuance_api_key
+  integration_secret_master_key:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/integration_secret_master_key
   canvas_credentials_shared_secret:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/canvas_credentials_shared_secret
-  canvas_credentials_api_token:
-    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/canvas_credentials_api_token
   openbao_service_token:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/openbao_service_token
   cloudflare_tunnel_token:

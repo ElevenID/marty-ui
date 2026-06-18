@@ -225,13 +225,63 @@ describe('ApplicationForm', () => {
 
     expect(screen.getByText('Canvas Quiz Badge')).toBeInTheDocument();
     expect(screen.getByTestId('canvas-application-context')).toBeInTheDocument();
-    expect(screen.getByText('Canvas course completion')).toBeInTheDocument();
-    expect(screen.getByText('No additional form fields are required. Review the Canvas details below, then submit the application so the credential can be checked and issued.')).toBeInTheDocument();
+    expect(screen.getByText('Course completion requirement')).toBeInTheDocument();
+    expect(screen.getByText('No additional form fields are required. Review the course details below, then submit the application so the credential can be checked and issued.')).toBeInTheDocument();
     expect(screen.getByText('ElevenID LTI Test Course')).toBeInTheDocument();
     expect(screen.getByText('Final Quiz')).toBeInTheDocument();
     expect(screen.getByText('Quiz Score')).toBeInTheDocument();
     expect(screen.getByText('minimum score 80% - course 1 - quiz quiz-1')).toBeInTheDocument();
     expect(screen.queryByText('applicationForm.steps.review')).not.toBeInTheDocument();
+  });
+
+  it('does not load org-scoped templates for Canvas LTI learners', async () => {
+    mockLocationState.params = { credentialType: 'cfg-canvas' };
+    mockLocationState.location = {
+      search: '?canvas_lti_state=state-1',
+      state: null,
+    };
+    mockGet.mockImplementation(async (url: string) => {
+      if (url.includes('/v1/integrations/canvas/lti/experience-sessions/state-1')) {
+        return {
+          state: 'state-1',
+          organization_id: 'org-issuer',
+          canvas_account_id: 'canvas-account-1',
+          application_template_id: 'app-template-1',
+          credential_template_id: 'cfg-canvas',
+          verified_launch: {
+            subject: 'canvas-user-1',
+            learner_identity: {
+              email: 'learner@example.edu',
+              name: 'ElevenID Test Learner',
+            },
+            context: {
+              title: 'ElevenID LTI Test Course',
+            },
+            raw_claims: {},
+            roles: ['http://purl.imsglobal.org/vocab/lis/v2/membership#Learner'],
+          },
+        };
+      }
+      throw new Error('Not a member of this organization');
+    });
+    mockPost.mockResolvedValue({
+      application_id: 'application-1',
+      application_status: 'draft',
+      created: true,
+      organization_id: 'org-issuer',
+      credential_template_id: 'cfg-canvas',
+    });
+
+    render(<ApplicationForm />);
+
+    await waitFor(() => {
+      expect(mockGet).toHaveBeenCalledWith('/v1/integrations/canvas/lti/experience-sessions/state-1');
+      expect(screen.getByTestId('canvas-application-context')).toBeInTheDocument();
+    });
+
+    expect(mockGet).not.toHaveBeenCalledWith(expect.stringContaining('/v1/credential-templates/'));
+    expect(mockGet).not.toHaveBeenCalledWith(expect.stringContaining('/v1/application-templates/'));
+    expect(screen.queryByText('Not a member of this organization')).not.toBeInTheDocument();
   });
 
   it('runs the one-click credential issuance flow for member credentials', async () => {
