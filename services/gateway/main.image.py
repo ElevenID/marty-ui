@@ -96,6 +96,25 @@ logger = logging.getLogger(__name__)
 SERVICE_NAME = "api-gateway"
 SERVICE_PORT = int(os.environ.get("GATEWAY_PORT", "8000"))
 
+_DEFAULT_READY_SERVICES = (
+    "auth",
+    "organizations",
+    "credential-templates",
+    "trust-profiles",
+    "presentation-policies",
+    "deployment-profiles",
+    "signing-keys",
+    "flows",
+    "issuance",
+)
+
+
+def _required_ready_services() -> tuple[str, ...]:
+    configured = os.environ.get("GATEWAY_REQUIRED_READY_SERVICES")
+    if configured is None:
+        return _DEFAULT_READY_SERVICES
+    return tuple(service.strip() for service in configured.split(",") if service.strip())
+
 
 # =============================================================================
 # Application Lifecycle
@@ -251,13 +270,13 @@ Verification is handled through two complementary approaches:
 
     session_cache = _proxy_mod._session_cache
 
-    # Add Cedar auth middleware first, then billing, then auth middleware, then
-    # rate limiter, then MIP version.  Starlette executes middleware in reverse
-    # registration order, so this makes MIPVersionMiddleware run outermost.
+    # Starlette executes middleware in reverse registration order, so keep
+    # idempotency inside current authz checks. A replay should still pass
+    # current Cedar/billing authorization before a cached response is returned.
     app.add_middleware(UsageTrackingMiddleware)
+    app.add_middleware(IdempotencyMiddleware)
     app.add_middleware(BillingAuthMiddleware)
     app.add_middleware(CedarAuthMiddleware)
-    app.add_middleware(IdempotencyMiddleware)
     app.add_middleware(ETagMiddleware)
     app.add_middleware(ContentTypeEnforcementMiddleware)
     app.add_middleware(AuthMiddleware, session_cache=session_cache)
@@ -368,6 +387,83 @@ Verification is handled through two complementary approaches:
     @app.get("/health")
     async def health_check() -> dict:
         return {"status": "healthy", "service": SERVICE_NAME}
+
+    async def signing_keys_local_readiness(client: httpx.AsyncClient) -> dict:
+        details = {"status": "healthy", "mode": "gateway-local"}
+        redis_client = getattr(app.state, "redis_client", None)
+        if redis_client is None:
+            return {"status": "unhealthy", "mode": "gateway-local", "error": "redis storage is not configured"}
+        try:
+            await redis_client.ping()
+        except Exception as exc:
+            return {"status": "unreachable", "mode": "gateway-local", "error": str(exc)}
+
+        bao_addr = os.environ.get("BAO_ADDR")
+        if bao_addr:
+            headers = {}
+            bao_token = os.environ.get("BAO_TOKEN")
+            bao_token_file = os.environ.get("BAO_TOKEN_FILE")
+            if not bao_token and bao_token_file:
+                try:
+                    with open(bao_token_file, encoding="utf-8") as handle:
+                        bao_token = handle.read().strip()
+                except OSError:
+                    bao_token = None
+            if bao_token:
+                headers["X-Vault-Token"] = bao_token
+            try:
+                response = await client.get(f"{bao_addr.rstrip('/')}/v1/sys/health", headers=headers, timeout=3.0)
+                details["openbao_status_code"] = response.status_code
+                if response.status_code not in {200, 429, 472, 473}:
+                    details["status"] = "unhealthy"
+            except Exception as exc:
+                return {"status": "unreachable", "mode": "gateway-local", "error": f"openbao: {exc}"}
+        return details
+
+    async def readiness_check():
+        registry = get_registry()
+        client = get_http_client()
+        services = {}
+
+        for service in _required_ready_services():
+            if service == "signing-keys":
+                services[service] = await signing_keys_local_readiness(client)
+                continue
+            url = registry.get_service_url(service)
+            if not url:
+                services[service] = {"status": "missing", "url": None}
+                continue
+
+            try:
+                response = await client.get(f"{url}/health", timeout=3.0)
+                services[service] = {
+                    "status": "healthy" if response.status_code == 200 else "unhealthy",
+                    "url": url,
+                    "status_code": response.status_code,
+                }
+            except Exception as exc:
+                services[service] = {
+                    "status": "unreachable",
+                    "url": url,
+                    "error": str(exc),
+                }
+
+        unhealthy = {
+            service: details
+            for service, details in services.items()
+            if details["status"] != "healthy"
+        }
+        payload = {
+            "status": "ready" if not unhealthy else "not_ready",
+            "service": SERVICE_NAME,
+            "services": services,
+        }
+        if unhealthy:
+            return JSONResponse(status_code=503, content=payload)
+        return payload
+
+    app.add_api_route("/ready", readiness_check, methods=["GET"])
+    app.add_api_route("/health/ready", readiness_check, methods=["GET"])
 
     # \u2500\u2500 Usage & billing analytics \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 

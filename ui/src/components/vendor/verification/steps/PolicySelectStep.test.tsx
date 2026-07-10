@@ -76,4 +76,13 @@ describe('PolicySelectStep', () => {
       deployment_profile_id: 'deploy-1',
     }));
   });
+
+  it('surfaces verification flow load failures', async () => {
+    mockListFlows.mockRejectedValue(new Error('flow service unavailable'));
+
+    render(<PolicySelectStep value={{}} onChange={mockOnChange} />);
+
+    expect(await screen.findByText(/flow service unavailable/i)).toBeInTheDocument();
+    expect(screen.queryByRole('combobox', { name: /verification flow/i })).not.toBeInTheDocument();
+  });
 });

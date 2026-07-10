@@ -42,9 +42,19 @@ function PolicySelectStep({ value, onChange }) {
   useEffect(() => {
     let mounted = true;
     setLoading(true);
+    setError(null);
+
+    if (!user?.organization_id) {
+      setPolicies([]);
+      setFlows([]);
+      setError('An active organization is required before loading presentation policies.');
+      setLoading(false);
+      return () => { mounted = false; };
+    }
+
     Promise.all([
       listPresentationPolicies({ organization_id: user?.organization_id }),
-      listFlows({ organization_id: user?.organization_id }).catch(() => []),
+      listFlows({ organization_id: user?.organization_id }),
     ])
       .then(([policyData, flowData]) => {
         if (mounted) {
@@ -107,7 +117,7 @@ function PolicySelectStep({ value, onChange }) {
         <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
           <CircularProgress />
         </Box>
-      ) : (
+      ) : error ? null : (
         <>
           <FormControlLabel
             control={<Switch checked={useInline} onChange={handleInlineToggle} />}

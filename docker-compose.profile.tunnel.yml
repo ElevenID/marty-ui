@@ -71,7 +71,7 @@ services:
       docs:
         condition: service_started
     healthcheck:
-      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://127.0.0.1/health || exit 1"]
+      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://127.0.0.1/ready || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 12

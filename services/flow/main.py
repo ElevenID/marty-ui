@@ -394,6 +394,78 @@ def _validate_flow_request(request: "CreateFlowDefinitionRequest", flow_type: Fl
         raise HTTPException(status_code=400, detail="presentation_policy_id is required for this flow_type")
 
 
+def _replace_flow_definition_content(
+    flow: "FlowDefinition",
+    request: "CreateFlowDefinitionRequest",
+    flow_type: FlowType,
+) -> None:
+    """Apply a full flow-definition payload to a new or existing flow."""
+    deployment_profile_ids = _normalize_deployment_profile_ids(
+        request.deployment_profile_ids,
+        request.deployment_profile_id,
+    )
+
+    flow.organization_id = request.organization_id
+    flow.name = request.name
+    flow.description = request.description
+    flow.flow_type = flow_type
+    flow.start_step_id = request.start_step_id
+    flow.preconditions = request.preconditions
+    flow.approval_strategy = request.approval_strategy
+    flow.enabled = request.enabled
+    flow.hooks = request.hooks
+    flow.trigger = request.trigger
+    flow.credential_template_id = request.credential_template_id
+    flow.application_template_id = request.application_template_id
+    flow.presentation_policy_id = request.presentation_policy_id
+    flow.deployment_profile_id = deployment_profile_ids[0] if deployment_profile_ids else None
+    flow.deployment_profile_ids = deployment_profile_ids
+    flow.trust_profile_id = request.trust_profile_id
+    flow.default_timeout_seconds = request.default_timeout_seconds
+    flow.max_retries = request.max_retries
+    flow.retry_cooldown_minutes = getattr(request, "retry_cooldown_minutes", 5)
+    flow.enable_resume = request.enable_resume
+    flow.steps = []
+    flow.transitions = []
+
+    step_id_map: dict[str, str] = {}
+    if not request.steps:
+        default_steps, default_transitions, default_start_step_id = _build_default_steps(flow_type)
+        flow.steps.extend(default_steps)
+        flow.transitions.extend(default_transitions)
+        flow.start_step_id = flow.start_step_id or default_start_step_id
+
+    for index, step_model in enumerate(request.steps):
+        step_type = step_model.type or step_model.step_type
+        step = FlowStep(
+            name=step_model.name,
+            description=step_model.description,
+            step_type=StepType(step_type),
+            config=step_model.config,
+            timeout_seconds=step_model.timeout_seconds,
+            conditions=step_model.conditions,
+            approval_strategy=step_model.approval_strategy,
+        )
+        if request.start_step_id == str(index):
+            flow.start_step_id = step.id
+        step_id_map[str(index)] = step.id
+        flow.steps.append(step)
+
+    for transition_model in request.transitions:
+        from_id = step_id_map.get(transition_model.from_step_id, transition_model.from_step_id)
+        to_id = step_id_map.get(transition_model.to_step_id, transition_model.to_step_id)
+        transition = FlowTransition(
+            from_step_id=from_id,
+            to_step_id=to_id,
+            condition=TransitionCondition(transition_model.condition),
+            condition_expression=transition_model.condition_expression,
+        )
+        flow.transitions.append(transition)
+
+    if not flow.start_step_id and flow.steps:
+        flow.start_step_id = flow.steps[0].id
+
+
 def _is_reference_not_found(exc: Exception) -> bool:
     code_fn = getattr(exc, "code", None)
     code = code_fn() if callable(code_fn) else None
@@ -415,6 +487,19 @@ def _require_reference_active(kind: str, reference_id: str, status: str, require
         raise HTTPException(
             status_code=400,
             detail=f"{kind} {reference_id} must be active before activating a flow",
+        )
+
+
+def _require_template_kms_backed_issuer(template_id: str, template: Any) -> None:
+    issuer_profile_id = str(getattr(template, "issuer_profile_id", "") or "").strip()
+    key_access_mode = str(getattr(template, "key_access_mode", "") or "").strip().upper()
+    if not issuer_profile_id or key_access_mode != "REMOTE_SIGNING":
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Credential template {template_id} must reference an active KMS-backed "
+                "issuer profile before it can be bound to a flow"
+            ),
         )
 
 
@@ -472,6 +557,7 @@ async def _validate_credential_layer_references(
             template_cache[template_id] = template
         _require_reference_org("Credential template", template_id, getattr(template, "organization_id", ""), organization_id)
         _require_reference_active("Credential template", template_id, getattr(template, "status", ""), require_active)
+        _require_template_kms_backed_issuer(template_id, template)
 
     if credential_template_id:
         await _validate_template(credential_template_id)
@@ -1086,15 +1172,24 @@ class FlowDefinitionResponse(BaseModel):
     description: str | None = None
     flow_type: str
     flow_category: str
+    steps: list[dict[str, Any]] = Field(default_factory=list)
+    transitions: list[dict[str, Any]] = Field(default_factory=list)
+    start_step_id: str | None = None
+    preconditions: list[str] = Field(default_factory=list)
     trust_profile_id: str | None = None
     credential_template_id: str | None = None
     application_template_id: str | None = None
     presentation_policy_id: str | None = None
+    deployment_profile_id: str | None = None
     deployment_profile_ids: list[str] = Field(default_factory=list)
     approval_strategy: str
     enabled: bool
     hooks: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
     trigger: dict[str, Any] | str | None = None
+    default_timeout_seconds: int
+    max_retries: int
+    enable_resume: bool
+    version: int
     status: str
     created_at: str
     updated_at: str
@@ -1303,6 +1398,31 @@ def _definition_to_response(flow: FlowDefinition) -> FlowDefinitionResponse:
         # Normalize legacy trigger format persisted by older migrations.
         trigger_value = {"event": trigger_value}
 
+    steps = [
+        {
+            "id": step.id,
+            "name": step.name,
+            "description": step.description,
+            "step_type": step.step_type.value,
+            "type": step.step_type.value,
+            "config": step.config,
+            "timeout_seconds": step.timeout_seconds,
+            "conditions": step.conditions,
+            "approval_strategy": step.approval_strategy,
+        }
+        for step in flow.steps
+    ]
+    transitions = [
+        {
+            "id": transition.id,
+            "from_step_id": transition.from_step_id,
+            "to_step_id": transition.to_step_id,
+            "condition": transition.condition.value,
+            "condition_expression": transition.condition_expression,
+        }
+        for transition in flow.transitions
+    ]
+
     return FlowDefinitionResponse(
         id=flow.id,
         organization_id=flow.organization_id,
@@ -1311,15 +1431,24 @@ def _definition_to_response(flow: FlowDefinition) -> FlowDefinitionResponse:
         status=flow.status.value,
         flow_type=flow.flow_type.value,
         flow_category=flow.flow_category,
+        steps=steps,
+        transitions=transitions,
+        start_step_id=flow.start_step_id,
+        preconditions=flow.preconditions,
         trust_profile_id=flow.trust_profile_id,
         credential_template_id=flow.credential_template_id,
         application_template_id=flow.application_template_id,
         presentation_policy_id=flow.presentation_policy_id,
+        deployment_profile_id=flow.deployment_profile_id,
         deployment_profile_ids=flow.deployment_profile_ids,
         approval_strategy=flow.approval_strategy,
         enabled=flow.enabled,
         hooks=flow.hooks,
         trigger=trigger_value,
+        default_timeout_seconds=flow.default_timeout_seconds,
+        max_retries=flow.max_retries,
+        enable_resume=flow.enable_resume,
+        version=flow.version,
         created_at=flow.created_at.isoformat(),
         updated_at=flow.updated_at.isoformat(),
     )
@@ -1735,74 +1864,10 @@ async def create_flow_definition(
         presentation_policy_id=request.presentation_policy_id,
         require_active=request.enabled,
     )
-    deployment_profile_ids = _normalize_deployment_profile_ids(
-        request.deployment_profile_ids,
-        request.deployment_profile_id,
-    )
-
     flow = FlowDefinition(
         organization_id=request.organization_id,
-        name=request.name,
-        description=request.description,
-        flow_type=flow_type,
-        start_step_id=request.start_step_id,
-        preconditions=request.preconditions,
-        approval_strategy=request.approval_strategy,
-        enabled=request.enabled,
-        hooks=request.hooks,
-        trigger=request.trigger,
-        credential_template_id=request.credential_template_id,
-        application_template_id=request.application_template_id,
-        presentation_policy_id=request.presentation_policy_id,
-        deployment_profile_id=deployment_profile_ids[0] if deployment_profile_ids else None,
-        deployment_profile_ids=deployment_profile_ids,
-        trust_profile_id=request.trust_profile_id,
-        default_timeout_seconds=request.default_timeout_seconds,
-        max_retries=request.max_retries,
-        retry_cooldown_minutes=getattr(request, 'retry_cooldown_minutes', 5),
-        enable_resume=request.enable_resume,
     )
-    
-    # Add steps
-    step_id_map: dict[str, str] = {}  # Old ID -> New ID mapping
-    if not request.steps:
-        default_steps, default_transitions, default_start_step_id = _build_default_steps(flow_type)
-        flow.steps.extend(default_steps)
-        flow.transitions.extend(default_transitions)
-        flow.start_step_id = flow.start_step_id or default_start_step_id
-
-    for i, step_model in enumerate(request.steps):
-        st = step_model.type or step_model.step_type
-        step = FlowStep(
-            name=step_model.name,
-            description=step_model.description,
-            step_type=StepType(st),
-            config=step_model.config,
-            timeout_seconds=step_model.timeout_seconds,
-            conditions=step_model.conditions,
-            approval_strategy=step_model.approval_strategy,
-        )
-        # If start_step_id references this step by index, map it
-        if request.start_step_id == str(i):
-            flow.start_step_id = step.id
-        step_id_map[str(i)] = step.id
-        flow.steps.append(step)
-    
-    # Add transitions (map step IDs)
-    for trans_model in request.transitions:
-        from_id = step_id_map.get(trans_model.from_step_id, trans_model.from_step_id)
-        to_id = step_id_map.get(trans_model.to_step_id, trans_model.to_step_id)
-        transition = FlowTransition(
-            from_step_id=from_id,
-            to_step_id=to_id,
-            condition=TransitionCondition(trans_model.condition),
-            condition_expression=trans_model.condition_expression,
-        )
-        flow.transitions.append(transition)
-    
-    # Set start step if not set
-    if not flow.start_step_id and flow.steps:
-        flow.start_step_id = flow.steps[0].id
+    _replace_flow_definition_content(flow, request, flow_type)
     
     # Auto-activate enabled flow definition on creation
     if request.enabled:
@@ -1840,6 +1905,50 @@ async def get_flow_definition(
         raise HTTPException(status_code=404, detail="Flow Definition not found")
     membership = await app.state.org_client.get_membership(user_id, flow.organization_id)
     ensure_membership_permission(membership, "flow-definition", "view")
+    return _definition_to_response(flow)
+
+
+@router.put("/definitions/{flow_id}", response_model=FlowDefinitionResponse, response_model_exclude_none=True)
+async def update_flow_definition(
+    flow_id: str,
+    request: CreateFlowDefinitionRequest,
+    fastapi_request: Request,
+    user_id: str = Depends(get_current_user_id),
+    repo: InMemoryFlowRepository = Depends(get_repo),
+) -> FlowDefinitionResponse:
+    """Replace a Flow Definition with a validated full definition payload."""
+    flow = await repo.get_definition(flow_id)
+    if not flow:
+        raise HTTPException(status_code=404, detail="Flow Definition not found")
+    if flow.status == FlowStatus.ARCHIVED:
+        raise HTTPException(status_code=400, detail="Archived flow definitions cannot be updated")
+
+    org_client = await get_organization_client(fastapi_request)
+    membership = await org_client.get_membership(user_id, flow.organization_id)
+    ensure_membership_permission(membership, "flow-definition", "edit")
+
+    if request.organization_id != flow.organization_id:
+        raise HTTPException(status_code=400, detail="organization_id cannot be changed for an existing flow definition")
+
+    flow_type = _parse_flow_type(request.flow_type)
+    _validate_flow_request(request, flow_type)
+    await _validate_credential_layer_references(
+        organization_id=request.organization_id,
+        credential_template_id=request.credential_template_id,
+        presentation_policy_id=request.presentation_policy_id,
+        require_active=request.enabled,
+    )
+
+    flow.version += 1
+    _replace_flow_definition_content(flow, request, flow_type)
+    if request.enabled:
+        flow.activate()
+    else:
+        flow.enabled = False
+        flow.status = FlowStatus.PAUSED if flow.status in {FlowStatus.ACTIVE, FlowStatus.PAUSED} else FlowStatus.DRAFT
+        flow.updated_at = datetime.now(timezone.utc)
+
+    await repo.save_definition(flow)
     return _definition_to_response(flow)
 
 
@@ -4258,80 +4367,36 @@ async def handle_application_approved(
     requested_template_id = str(event.data.get("credential_template_id") or "").strip() or None
     triggered_by_event = str(event.data.get("triggered_by_event") or "").strip()
 
-    # Find active OID4VCI flows eligible for application-approved issuance.
-    # If the caller provides credential_template_id, only matching flows are
-    # eligible so manual issuance can target the correct template pipeline.
+    # Find active OID4VCI flows explicitly configured for application-approved
+    # issuance. If the caller provides credential_template_id, only matching
+    # flows are eligible so manual issuance can target the correct template
+    # pipeline.
     all_flows = await repo.list_definitions(event.organization_id)
-    eligible_flows = [
+    matching_flows = [
         f for f in all_flows
         if f.status == FlowStatus.ACTIVE
         and f.enabled
         and f.flow_type == FlowType.OID4VCI_PRE_AUTHORIZED
+        and "application_approved" in f.preconditions
         and (
             not requested_template_id
             or str(f.credential_template_id or "").strip() == requested_template_id
         )
     ]
-
-    matching_flows = [
-        f for f in eligible_flows
-        if "application_approved" in f.preconditions
-    ]
-
-    # Compatibility path for manual re-issue flows: if no flow explicitly
-    # declares application_approved, allow active eligible OID4VCI flows.
-    # This remains flow-orchestrated and does not call issuance directly.
-    if not matching_flows and eligible_flows:
-        logger.warning(
-            "No OID4VCI flow with application_approved precondition found for org %s; "
-            "falling back to active eligible OID4VCI flows (%s)",
-            event.organization_id,
-            len(eligible_flows),
-        )
-        matching_flows = eligible_flows
-
-    # Manual re-issue compatibility path: if no active eligible flow exists for
-    # this org/template, synthesize a default OID4VCI flow definition and persist
-    # it so subsequent protocol callbacks can resolve the flow metadata.
-    if (
-        not matching_flows
-        and triggered_by_event == "application.manual_issue"
-        and requested_template_id
-    ):
-        default_steps, default_transitions, default_start_step_id = _build_default_steps(
-            FlowType.OID4VCI_PRE_AUTHORIZED
-        )
-        synthesized_flow = FlowDefinition(
-            organization_id=event.organization_id,
-            name=f"Auto-generated issuance flow ({requested_template_id})",
-            description=(
-                "Auto-generated by flow webhook during manual issuance because no "
-                "active OID4VCI flow matched the requested credential template."
-            ),
-            status=FlowStatus.ACTIVE,
-            flow_type=FlowType.OID4VCI_PRE_AUTHORIZED,
-            steps=default_steps,
-            transitions=default_transitions,
-            start_step_id=default_start_step_id,
-            preconditions=["application_approved"],
-            credential_template_id=requested_template_id,
-            enabled=True,
-        )
-        await repo.save_definition(synthesized_flow)
-        matching_flows = [synthesized_flow]
-        logger.warning(
-            "Auto-generated OID4VCI flow %s for org %s template %s (manual issue)",
-            synthesized_flow.id,
-            event.organization_id,
-            requested_template_id,
-        )
     
     if not matching_flows:
-        logger.info(
-            f"No active OID4VCI flows with application_approved precondition "
-            f"found for org {event.organization_id}"
+        detail = (
+            "No active OID4VCI flow with application_approved precondition "
+            f"matched org {event.organization_id}"
         )
-        return {"success": True, "flows_triggered": 0}
+        if requested_template_id:
+            detail = f"{detail} and credential template {requested_template_id}"
+        logger.info(detail)
+        return {
+            "success": triggered_by_event != "application.manual_issue",
+            "flows_triggered": 0,
+            "reason": detail,
+        }
     
     triggered_instances = []
     offers: list[dict[str, Any]] = []

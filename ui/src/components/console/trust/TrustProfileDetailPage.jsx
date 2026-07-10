@@ -332,8 +332,8 @@ function TrustedIssuersSection({ profileId }) {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [extraIssuers, setExtraIssuers] = useState([]);
 
-  const { data: loadedIssuers = [], loading } = useAsyncData(
-    () => (profileId ? listTrustProfileIssuers(profileId).catch(() => []) : Promise.resolve([])),
+  const { data: loadedIssuers = [], loading, error } = useAsyncData(
+    () => (profileId ? listTrustProfileIssuers(profileId) : Promise.resolve([])),
     [profileId]
   );
 
@@ -366,6 +366,10 @@ function TrustedIssuersSection({ profileId }) {
 
       {loading ? (
         <Skeleton variant="rectangular" height={80} />
+      ) : error ? (
+        <Alert severity="error">
+          {error.message || t('trust.trustedIssuersPage.loadFailed', 'Trusted issuers could not be loaded.')}
+        </Alert>
       ) : safeIssuers.length === 0 ? (
         <Typography variant="body2" color="text.secondary">
           {t('trust.noIssuersConfigured', 'No trusted issuers configured for this profile.')}

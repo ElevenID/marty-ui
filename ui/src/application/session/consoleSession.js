@@ -33,12 +33,15 @@ export function resolveConsoleBootstrap({ preferences, memberships, localStoredO
   const normalizedPreferences = normalizeConsolePreferences(preferences);
   const safeMemberships = memberships || [];
   const hasMemberships = safeMemberships.length > 0;
-  const restoredOrgId = normalizedPreferences.last_active_org_id || localStoredOrgId || null;
+  const restoredOrgCandidates = [
+    localStoredOrgId || null,
+    normalizedPreferences.last_active_org_id || null,
+  ].filter(Boolean);
 
   // Prefer stored org ID if it exists in memberships
-  let activeOrgId = safeMemberships.find((entry) => entry.id === restoredOrgId)
-    ? restoredOrgId
-    : null;
+  let activeOrgId = restoredOrgCandidates.find((candidateOrgId) => (
+    safeMemberships.find((entry) => entry.id === candidateOrgId)
+  )) || null;
 
   const effectiveMode = hasMemberships ? normalizedPreferences.last_view_mode : APPLICANT_MODE;
 

@@ -63,12 +63,17 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
   const { t } = useTranslation('console');
   const allowAllIssuers = data.allow_all_issuers === true;
   const hasTrustSourcesConfigured = (data.trusted_issuers?.length || 0) > 0 || (data.trust_sources?.length || 0) > 0;
+  const activeProfileMissingTrustSources = data.activate_immediately && !allowAllIssuers && !hasTrustSourcesConfigured;
   const emptyTrustSummaryKey = allowAllIssuers
     ? 'wizards.trustProfile.reviewStep.trustSourcesSummary.noneConfiguredAllowAll'
-    : 'wizards.trustProfile.reviewStep.trustSourcesSummary.noneConfigured';
+    : activeProfileMissingTrustSources
+      ? 'wizards.trustProfile.reviewStep.trustSourcesSummary.noneConfiguredActive'
+      : 'wizards.trustProfile.reviewStep.trustSourcesSummary.noneConfigured';
   const emptyTrustSummaryDefault = allowAllIssuers
     ? 'No trust sources are configured. This profile is explicitly set to trust any issuer that passes cryptographic validation.'
-    : 'No trust sources are configured. This profile will trust no issuers until trust sources are added.';
+    : activeProfileMissingTrustSources
+      ? 'This profile is set to activate immediately, but no trust sources are configured. Add a trusted issuer or explicitly allow any issuer before activating.'
+      : 'No trust sources are configured. This profile will trust no issuers until trust sources are added.';
   const timePolicy = {
     clock_skew_seconds: 300,
     require_freshness: false,
@@ -87,7 +92,7 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
       </Typography>
 
       {!hasTrustSourcesConfigured && (
-        <Alert severity={allowAllIssuers ? 'warning' : 'info'} sx={{ mb: 2 }}>
+        <Alert severity={activeProfileMissingTrustSources ? 'error' : allowAllIssuers ? 'warning' : 'info'} sx={{ mb: 2 }}>
           <Typography variant="body2">
             {t(emptyTrustSummaryKey, { defaultValue: emptyTrustSummaryDefault })}
           </Typography>

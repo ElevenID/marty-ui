@@ -341,6 +341,7 @@ export default function ApplicationReviewPage() {
   const [credentialTemplate, setCredentialTemplate] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [sideLoadErrors, setSideLoadErrors] = useState([]);
   const [actionLoading, setActionLoading] = useState(false);
   const [actionError, setActionError] = useState(null);
   const [actionSuccess, setActionSuccess] = useState(null);
@@ -369,15 +370,30 @@ export default function ApplicationReviewPage() {
     if (!applicationId) return;
     setLoading(true);
     setError(null);
+    setSideLoadErrors([]);
     try {
-      const [app, checkList, evidence] = await Promise.all([
+      const [app, checkResult, evidenceResult] = await Promise.all([
         getApplication(applicationId),
-        getVettingChecks(applicationId).catch(() => []),
-        getApplicationEvidenceSummary(applicationId).catch(() => null),
+        getVettingChecks(applicationId).then(
+          (value) => ({ status: 'fulfilled', value }),
+          (reason) => ({ status: 'rejected', reason }),
+        ),
+        getApplicationEvidenceSummary(applicationId).then(
+          (value) => ({ status: 'fulfilled', value }),
+          (reason) => ({ status: 'rejected', reason }),
+        ),
       ]);
+      const nextSideLoadErrors = [];
+      if (checkResult.status === 'rejected') {
+        nextSideLoadErrors.push(`Vetting checks: ${checkResult.reason?.message || String(checkResult.reason)}`);
+      }
+      if (evidenceResult.status === 'rejected') {
+        nextSideLoadErrors.push(`Evidence policy: ${evidenceResult.reason?.message || String(evidenceResult.reason)}`);
+      }
       setApplication({ ...app, status: app.status?.toLowerCase() });
-      setChecks(Array.isArray(checkList) ? checkList : []);
-      setEvidenceSummary(evidence);
+      setChecks(checkResult.status === 'fulfilled' && Array.isArray(checkResult.value) ? checkResult.value : []);
+      setEvidenceSummary(evidenceResult.status === 'fulfilled' ? evidenceResult.value : null);
+      setSideLoadErrors(nextSideLoadErrors);
       if (app.metadata?.review_notes) setReviewerNote(app.metadata.review_notes);
 
       // Fetch the credential template to drive the claims display dynamically
@@ -722,6 +738,16 @@ export default function ApplicationReviewPage() {
         {actionError && (
           <Alert severity="error" onClose={() => setActionError(null)} sx={{ mb: 2 }}>
             {actionError}
+          </Alert>
+        )}
+        {sideLoadErrors.length > 0 && (
+          <Alert severity="warning" sx={{ mb: 2 }}>
+            Some review signals could not be loaded. Retry before treating this review as fully evaluated.
+            <Box component="ul" sx={{ mt: 1, mb: 0, pl: 3 }}>
+              {sideLoadErrors.map((item) => (
+                <li key={item}>{item}</li>
+              ))}
+            </Box>
           </Alert>
         )}
 

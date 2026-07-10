@@ -24,7 +24,7 @@ export function startFlowManagerRealtimeUpdates({
   }
 
   const subscriptions = getFlowManagerRealtimeSubscriptions(eventTypes);
-  const activeLogger = logger ?? console;
+  const activeLogger = logger;
 
   sseService.connect({
     organizationId,
@@ -33,31 +33,31 @@ export function startFlowManagerRealtimeUpdates({
 
   const eventHandlers = [
     [eventTypes.FLOW_EXECUTION_STARTED, (data) => {
-      activeLogger.log?.('Flow execution started:', data);
+      activeLogger?.log?.('Flow execution started:', data);
       loadExecutions();
       showSuccess(`Flow execution started: ${data.flow_id}`);
     }],
     [eventTypes.FLOW_EXECUTION_COMPLETED, (data) => {
-      activeLogger.log?.('Flow execution completed:', data);
+      activeLogger?.log?.('Flow execution completed:', data);
       loadExecutions();
       showSuccess(`Flow execution completed: ${data.execution_id}`);
     }],
     [eventTypes.APPLICATION_APPROVED, (data) => {
-      activeLogger.log?.('Application approved:', data);
+      activeLogger?.log?.('Application approved:', data);
       loadExecutions();
     }],
     [eventTypes.CREDENTIAL_ISSUED, (data) => {
-      activeLogger.log?.('Credential issued:', data);
+      activeLogger?.log?.('Credential issued:', data);
       loadCredentials();
       showSuccess(`Credential issued: ${data.credential_id}`);
     }],
     [eventTypes.CREDENTIAL_REVOKED, (data) => {
-      activeLogger.log?.('Credential revoked:', data);
+      activeLogger?.log?.('Credential revoked:', data);
       loadCredentials();
       loadRevocationBatches();
     }],
     [eventTypes.REVOCATION_BATCH_COMPLETED, (data) => {
-      activeLogger.log?.('Revocation batch completed:', data);
+      activeLogger?.log?.('Revocation batch completed:', data);
       loadRevocationBatches();
       loadCredentials();
       showSuccess(`Revocation batch completed: ${data.credential_count} credentials`);

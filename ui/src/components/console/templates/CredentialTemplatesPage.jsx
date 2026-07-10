@@ -33,6 +33,7 @@ import { Link } from 'react-router-dom';
 
 import { ResourcePage, EmptyState, EmptyStates, StatusChip } from '../../common';
 import { useAuth } from '../../../hooks/useAuth';
+import { useConsole } from '../../../contexts/ConsoleContext';
 import { listCredentialTemplates, listTrustProfiles } from '../../../services/presentationPolicyApi';
 
 const getTemplatesTabs = (t) => [
@@ -87,17 +88,30 @@ function ArtifactsStatus({ hasArtifacts, validated }) {
 
 function CredentialTemplatesPage() {
   const { t } = useTranslation('console');
-  const { organizationId } = useAuth();
+  const { organizationId: authOrganizationId } = useAuth();
+  const { activeOrgId } = useConsole();
+  const organizationId = activeOrgId || authOrganizationId;
   const { data: templatesData, loading, error } = useAsyncData(
-    () => (organizationId ? listCredentialTemplates({ organization_id: organizationId }) : Promise.resolve([])),
+    () => {
+      if (!organizationId) {
+        throw new Error('Select an organization before loading credential templates.');
+      }
+      return listCredentialTemplates({ organization_id: organizationId });
+    },
     [organizationId]
   );
 
-  const { data: trustProfiles = [] } = useAsyncData(
-    () =>
-      organizationId
-        ? listTrustProfiles({ organization_id: organizationId, limit: 1 }).catch(() => [])
-        : Promise.resolve([]),
+  const {
+    data: trustProfiles = [],
+    loading: trustProfilesLoading,
+    error: trustProfilesError,
+  } = useAsyncData(
+    () => {
+      if (!organizationId) {
+        throw new Error('Select an organization before loading trust profile prerequisites.');
+      }
+      return listTrustProfiles({ organization_id: organizationId, limit: 1 });
+    },
     [organizationId]
   );
   const safeTrustProfiles = Array.isArray(trustProfiles) ? trustProfiles : [];
@@ -105,7 +119,7 @@ function CredentialTemplatesPage() {
   const templatePrerequisites = [
     {
       label: t('templates.prerequisites.trustProfile', { defaultValue: 'Trust Profile' }),
-      status: safeTrustProfiles.length > 0 ? 'ready' : 'missing',
+      status: trustProfilesError ? 'error' : trustProfilesLoading ? 'pending' : safeTrustProfiles.length > 0 ? 'ready' : 'missing',
       path: '/console/org/trust/profiles',
     },
   ];
@@ -196,6 +210,12 @@ function CredentialTemplatesPage() {
       {error && (
         <Alert severity="error" sx={{ mb: 3 }}>
           {error?.message || String(error)}
+        </Alert>
+      )}
+
+      {trustProfilesError && (
+        <Alert severity="error" sx={{ mb: 3 }}>
+          {trustProfilesError?.message || t('templates.prerequisites.loadFailed', { defaultValue: 'Unable to load trust profile prerequisites.' })}
         </Alert>
       )}
 

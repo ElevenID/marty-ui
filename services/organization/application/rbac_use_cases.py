@@ -389,6 +389,7 @@ _ACCESS_ADMIN_PERMISSION_KEYS = _keys_for(
     "organization",
     "team",
     "role",
+    "policy-set",
     "api-key",
     "signing-key",
     "webhook",
@@ -399,6 +400,7 @@ _ACCESS_ADMIN_PERMISSION_KEYS = _keys_for(
 
 _CATALOG_ADMIN_PERMISSION_KEYS = _keys_for(
     "trust-profile",
+    "policy-set",
     "trusted-issuer",
     "credential-template",
     "compliance-profile",

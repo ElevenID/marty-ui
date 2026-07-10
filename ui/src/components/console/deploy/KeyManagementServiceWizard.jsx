@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Alert,
@@ -38,6 +38,7 @@ import signingKeysApi from '../../../services/signingKeysApi';
 import { useWizard } from '../../../hooks/useWizard';
 import { useAsyncData } from '../../../hooks/useAsyncData';
 import { useNotifications } from '../../../hooks/useNotifications';
+import { useConsole } from '../../../contexts/ConsoleContext';
 import {
   DEFAULT_KEY_MANAGEMENT_CONFIG,
   KEY_MANAGEMENT_ALGORITHM_OPTIONS,
@@ -49,6 +50,8 @@ import {
   isAlgorithmAllowedForPurpose,
   normalizeKeyManagementConfig,
 } from './keyManagementServiceCatalog';
+
+const MANAGED_OPENBAO_SERVICE_ID = 'managed-openbao-transit';
 
 const STEPS = [
   'Choose Service',
@@ -64,6 +67,12 @@ const CONNECTION_LABELS = {
   namespace: 'Namespace',
 };
 
+function logKeyManagementWizardError(message, error) {
+  if (import.meta.env?.DEV && import.meta.env?.MODE !== 'test') {
+    console.error(message, error);
+  }
+}
+
 const getProviderRunbook = (data, definition) => {
   const keyReference = data.key_reference?.trim() || '<key-reference>';
   const region = data.region?.trim() || '<region>';
@@ -76,9 +85,9 @@ const getProviderRunbook = (data, definition) => {
         docsLabel: 'AWS KMS key creation guide',
         docsUrl: 'https://docs.aws.amazon.com/kms/latest/developerguide/create-keys.html',
         command: [
-          'aws kms create-key \\\n+  --region ' + region + ' \\\n+  --key-spec ECC_NIST_P256 \\\n+  --key-usage SIGN_VERIFY',
+          'aws kms create-key \\\n  --region ' + region + ' \\\n  --key-spec ECC_NIST_P256 \\\n  --key-usage SIGN_VERIFY',
           '# Optional alias for readability',
-          'aws kms create-alias \\\n+  --alias-name alias/marty-issuer-signing \\\n+  --target-key-id <kms-key-id>',
+          'aws kms create-alias \\\n  --alias-name alias/marty-issuer-signing \\\n  --target-key-id <kms-key-id>',
           '# Use resulting key ARN as key reference in Marty',
         ].join('\n'),
       };
@@ -87,7 +96,7 @@ const getProviderRunbook = (data, definition) => {
         docsLabel: 'Azure Key Vault key creation guide',
         docsUrl: 'https://learn.microsoft.com/en-us/azure/key-vault/keys/quick-create-portal',
         command: [
-          'az keyvault key create \\\n+  --vault-name <vault-name> \\\n+  --name <marty-signing-key> \\\n+  --kty EC \\\n+  --curve P-256',
+          'az keyvault key create \\\n  --vault-name <vault-name> \\\n  --name <marty-signing-key> \\\n  --kty EC \\\n  --curve P-256',
           '# Use key identifier URI as key reference in Marty',
         ].join('\n'),
       };
@@ -96,7 +105,7 @@ const getProviderRunbook = (data, definition) => {
         docsLabel: 'Google Cloud KMS key creation guide',
         docsUrl: 'https://docs.cloud.google.com/kms/docs/create-key',
         command: [
-          'gcloud kms keys create <marty-signing-key> \\\n+  --location=' + region + ' \\\n+  --keyring=<key-ring> \\\n+  --purpose=asymmetric-signing \\\n+  --default-algorithm=ec-sign-p256-sha256',
+          'gcloud kms keys create <marty-signing-key> \\\n  --location=' + region + ' \\\n  --keyring=<key-ring> \\\n  --purpose=asymmetric-signing \\\n  --default-algorithm=ec-sign-p256-sha256',
           '# Use crypto key resource path as key reference in Marty',
         ].join('\n'),
       };
@@ -107,8 +116,9 @@ const getProviderRunbook = (data, definition) => {
         docsLabel: 'Vault/OpenBao transit key guide',
         docsUrl: 'https://developer.hashicorp.com/vault/docs/secrets/transit',
         command: [
-          'vault secrets enable transit',
-          'vault write -f transit/keys/' + keyReference + ' type=ecdsa-p256',
+          mount === 'transit' ? 'vault secrets enable transit' : 'vault secrets enable -path=' + mount + ' transit',
+          'vault write -f ' + mount + '/keys/' + keyReference + ' type=ecdsa-p256',
+          'vault read ' + mount + '/keys/' + keyReference,
           '# Ensure Marty can reach ' + endpoint + ' and mount ' + mount,
         ].join('\n'),
       };
@@ -155,15 +165,32 @@ const authModeLabel = (value) => {
 };
 
 function ServiceTypeCard({ definition, selected, onSelect }) {
+  const handleKeyDown = (event) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      onSelect(definition);
+    }
+  };
+
   return (
     <Paper
       variant="outlined"
+      role="button"
+      tabIndex={0}
+      aria-pressed={selected}
+      aria-label={`${definition.label} key management service`}
       onClick={() => onSelect(definition)}
+      onKeyDown={handleKeyDown}
       sx={{
         p: 2.5,
         cursor: 'pointer',
         borderColor: selected ? 'primary.main' : 'divider',
         bgcolor: selected ? 'action.selected' : 'background.paper',
+        outline: 'none',
+        '&:focus-visible': {
+          borderColor: 'primary.main',
+          boxShadow: (theme) => `0 0 0 3px ${theme.palette.primary.main}33`,
+        },
       }}
     >
       <Typography variant="h6" sx={{ mb: 0.5 }}>
@@ -185,17 +212,30 @@ function ServiceTypeCard({ definition, selected, onSelect }) {
 const KeyManagementServiceWizard = () => {
   const navigate = useNavigate();
   const { showNotification } = useNotifications();
+  const { activeOrgId } = useConsole();
+  const orgRequestParams = useMemo(
+    () => (activeOrgId ? { organization_id: activeOrgId } : {}),
+    [activeOrgId],
+  );
   const [preflightLoading, setPreflightLoading] = useState(false);
   const [preflightChecks, setPreflightChecks] = useState([]);
+  const [registeredService, setRegisteredService] = useState(null);
+  const [defaultSelectionSynced, setDefaultSelectionSynced] = useState(false);
 
   const {
     data: configData,
     loading: configLoading,
     error: configError,
-  } = useAsyncData(async () => normalizeKeyManagementConfig(await signingKeysApi.getKeyManagementConfig()), []);
+  } = useAsyncData(
+    async () => normalizeKeyManagementConfig(
+      await signingKeysApi.getKeyManagementConfig(orgRequestParams)
+    ),
+    [activeOrgId]
+  );
 
   const currentConfig = normalizeKeyManagementConfig(configData || DEFAULT_KEY_MANAGEMENT_CONFIG);
   const serviceCatalog = currentConfig.service_type_catalog;
+  const currentDefaultService = currentConfig.services.find((service) => service.id === currentConfig.default_service_id) || null;
 
   const validateStep = useCallback((stepIndex, data) => {
     const definition = getServiceTypeDefinition(serviceCatalog, data.service_type);
@@ -246,13 +286,15 @@ const KeyManagementServiceWizard = () => {
       : (currentConfig.default_service_id || newService.id);
 
     await signingKeysApi.updateKeyManagementConfig({
+      ...orgRequestParams,
       services: [...currentConfig.services, newService],
       default_service_id: nextDefaultServiceId,
     });
 
+    setRegisteredService(newService);
     showNotification?.('Registered key management service.', 'success');
     return newService;
-  }, [currentConfig.default_service_id, currentConfig.services, serviceCatalog, showNotification]);
+  }, [currentConfig.default_service_id, currentConfig.services, orgRequestParams, serviceCatalog, showNotification]);
 
   const wizard = useWizard({
     steps: STEPS,
@@ -280,26 +322,42 @@ const KeyManagementServiceWizard = () => {
     },
     validateStep,
     onSubmit: handleSubmit,
-    onComplete: () => {
-      navigate('/console/org/deploy/key-management/services');
-    },
     onCancel: () => {
       navigate('/console/org/deploy/key-management/services');
     },
   });
+
+  useEffect(() => {
+    if (configLoading || defaultSelectionSynced) {
+      return;
+    }
+
+    wizard.updateData({ make_default: !currentConfig.default_service_id });
+    setDefaultSelectionSynced(true);
+  }, [configLoading, currentConfig.default_service_id, defaultSelectionSynced, wizard.updateData]);
 
   const selectedDefinition = getServiceTypeDefinition(serviceCatalog, wizard.data.service_type);
   const providerRunbook = useMemo(
     () => getProviderRunbook(wizard.data, selectedDefinition),
     [selectedDefinition, wizard.data]
   );
+  const postRegistrationDefaultService = wizard.data.make_default
+    ? registeredService
+    : (currentDefaultService || registeredService);
+  const registeredServiceIsManagedOpenBao = registeredService?.id === MANAGED_OPENBAO_SERVICE_ID;
+  const currentDefaultIsManagedOpenBao = currentDefaultService?.id === MANAGED_OPENBAO_SERVICE_ID;
+  const suggestedIssuerKeyName = wizard.data.key_reference?.trim()
+    || wizard.data.name?.trim()
+    || 'issuer signing key';
+  const issuerIdentityCreateUrl = `/console/org/deploy/issuer-identity/new?key_source=create&signing_service_id=${encodeURIComponent(registeredServiceIsManagedOpenBao ? MANAGED_OPENBAO_SERVICE_ID : (postRegistrationDefaultService?.id || MANAGED_OPENBAO_SERVICE_ID))}&key_name=${encodeURIComponent(suggestedIssuerKeyName)}`;
+  const managedIssuerIdentityCreateUrl = `/console/org/deploy/issuer-identity/new?key_source=create&signing_service_id=${encodeURIComponent(MANAGED_OPENBAO_SERVICE_ID)}&key_name=${encodeURIComponent(suggestedIssuerKeyName)}`;
 
   const copyText = useCallback(async (text) => {
     try {
       await navigator.clipboard.writeText(text);
       showNotification?.('Copied to clipboard.', 'success');
     } catch (error) {
-      console.error('Failed to copy command:', error);
+      logKeyManagementWizardError('Failed to copy command:', error);
       showNotification?.('Unable to copy to clipboard.', 'error');
     }
   }, [showNotification]);
@@ -308,6 +366,7 @@ const KeyManagementServiceWizard = () => {
     setPreflightLoading(true);
     try {
       const response = await signingKeysApi.validateKeyManagementService({
+        ...orgRequestParams,
         service_type: wizard.data.service_type,
         name: wizard.data.name,
         endpoint: wizard.data.endpoint,
@@ -337,7 +396,7 @@ const KeyManagementServiceWizard = () => {
         setPreflightChecks(checks);
       }
     } catch (error) {
-      console.error('Failed to run preflight checks:', error);
+      logKeyManagementWizardError('Failed to run preflight checks:', error);
       setPreflightChecks([
         {
           name: 'Validation status',
@@ -348,7 +407,7 @@ const KeyManagementServiceWizard = () => {
     } finally {
       setPreflightLoading(false);
     }
-  }, [wizard.data.algorithms, wizard.data.auth_mode, wizard.data.auth_reference, wizard.data.endpoint, wizard.data.key_aliases, wizard.data.key_reference, wizard.data.mount, wizard.data.name, wizard.data.namespace, wizard.data.region, wizard.data.service_type]);
+  }, [orgRequestParams, wizard.data.algorithms, wizard.data.auth_mode, wizard.data.auth_reference, wizard.data.endpoint, wizard.data.key_aliases, wizard.data.key_reference, wizard.data.mount, wizard.data.name, wizard.data.namespace, wizard.data.region, wizard.data.service_type]);
 
   const handleSelectServiceType = (definition) => {
     setPreflightChecks([]);
@@ -796,6 +855,12 @@ const KeyManagementServiceWizard = () => {
         >
           {providerRunbook.command}
         </Box>
+
+        <Alert severity="info" sx={{ mt: 2 }}>
+          Registering a service does not create a signing key. The issuer identity wizard can create keys only with the
+          Marty managed OpenBao service. For registered external KMS services, create the key in the provider first,
+          validate the key reference, then choose "Use existing key from KMS" in the issuer identity wizard.
+        </Alert>
       </Paper>
     </Box>
   );
@@ -839,17 +904,61 @@ const KeyManagementServiceWizard = () => {
   if (wizard.success) {
     return (
       <Container maxWidth="md" sx={{ py: 4 }}>
-        <Paper elevation={3} sx={{ p: 4, textAlign: 'center' }}>
-          <CheckCircleIcon color="success" sx={{ fontSize: 64, mb: 2 }} />
-          <Typography variant="h5" gutterBottom>
-            Signing service registered
-          </Typography>
-          <Typography color="text.secondary" paragraph>
-            {wizard.data.name || selectedDefinition.label} has been added to the signing service registry.
-          </Typography>
-          <Typography color="text.secondary" variant="body2">
-            Redirecting to the services view...
-          </Typography>
+        <Paper elevation={3} sx={{ p: 4 }}>
+          <Stack spacing={3} alignItems="center" textAlign="center">
+            <CheckCircleIcon color="success" sx={{ fontSize: 64 }} />
+            <Box>
+              <Typography variant="h5" gutterBottom>
+                Signing service registered
+              </Typography>
+              <Typography color="text.secondary">
+                {wizard.data.name || selectedDefinition.label} has been added to the signing service registry.
+              </Typography>
+            </Box>
+          </Stack>
+
+          <Alert severity={registeredServiceIsManagedOpenBao ? 'success' : 'info'} sx={{ mt: 3 }}>
+            {registeredServiceIsManagedOpenBao
+              ? 'Next, create an issuer identity and choose "Create new key in KMS". The wizard will call the signing-key create endpoint, refresh the discovered key inventory, and bind the new key to the DID identity.'
+              : 'Next, create or verify the signing key in the KMS provider you just registered, then create an issuer identity and choose "Use existing key from KMS". Console key creation is available only for the Marty managed OpenBao transit service.'}
+          </Alert>
+
+          {!registeredServiceIsManagedOpenBao && (
+            <Paper variant="outlined" sx={{ p: 2, mt: 2 }}>
+              <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} justifyContent="space-between" alignItems={{ sm: 'center' }}>
+                <Box textAlign="left">
+                  <Typography variant="subtitle2">Provider key setup</Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    Create or verify {wizard.data.key_reference || 'the configured key reference'} before issuer identity setup.
+                  </Typography>
+                </Box>
+                <Button
+                  variant="outlined"
+                  startIcon={<ContentCopyIcon />}
+                  onClick={() => copyText(providerRunbook.command)}
+                >
+                  Copy command
+                </Button>
+              </Stack>
+            </Paper>
+          )}
+
+          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} justifyContent="center" sx={{ mt: 3 }}>
+            <Button
+              variant="contained"
+              onClick={() => navigate(registeredServiceIsManagedOpenBao ? issuerIdentityCreateUrl : '/console/org/deploy/issuer-identity/new')}
+            >
+              Create issuer identity
+            </Button>
+            {!registeredServiceIsManagedOpenBao && currentDefaultIsManagedOpenBao && (
+              <Button variant="outlined" onClick={() => navigate(managedIssuerIdentityCreateUrl)}>
+                Use managed OpenBao key creation
+              </Button>
+            )}
+            <Button variant="outlined" onClick={() => navigate('/console/org/deploy/key-management/services')}>
+              View key management
+            </Button>
+          </Stack>
         </Paper>
       </Container>
     );

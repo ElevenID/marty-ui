@@ -5,14 +5,31 @@
  * the required_checks configuration that defines pluggable vetting checks.
  */
 
-import { get, post, put, del } from './api';
+import { get, put, del } from './api';
+import { postWithIdempotency } from './idempotency';
 
 const API_BASE = '/v1/application-templates';
+
+function requireOrganizationId(value) {
+  const organizationId = String(value || '').trim();
+  if (
+    !organizationId
+    || organizationId.toLowerCase() === 'null'
+    || organizationId.toLowerCase() === 'undefined'
+  ) {
+    const error = new Error('organization_id is required');
+    error.code = 'ORG_REQUIRED';
+    error.status = 400;
+    throw error;
+  }
+  return organizationId;
+}
 
 // ── Listing ──────────────────────────────────────────────────────────────────
 
 export async function listApplicationTemplates(organizationId) {
-  return get(`${API_BASE}?organization_id=${encodeURIComponent(organizationId)}`);
+  const orgId = requireOrganizationId(organizationId);
+  return get(`${API_BASE}?organization_id=${encodeURIComponent(orgId)}`);
 }
 
 // ── Single template ───────────────────────────────────────────────────────────
@@ -23,7 +40,11 @@ async function getApplicationTemplate(templateId) {
 }
 
 export async function createApplicationTemplate(data) {
-  return post(API_BASE, data);
+  const organizationId = requireOrganizationId(data?.organization_id || data?.organizationId);
+  return postWithIdempotency(API_BASE, {
+    ...data,
+    organization_id: organizationId,
+  });
 }
 
 /**

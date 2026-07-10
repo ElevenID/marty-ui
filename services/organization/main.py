@@ -26,7 +26,11 @@ from .application.use_cases import (
 )
 from .application.rbac_use_cases import RoleUseCase
 from .application.policy_set_use_cases import PolicySetUseCase
-from .infrastructure.adapters.audit_adapter import router as audit_router
+from .infrastructure.adapters.audit_adapter import (
+    configure_audit_router,
+    router as audit_router,
+)
+from .infrastructure.adapters.audit_publisher import AuditEventPublisher
 from .infrastructure.adapters.grpc_adapter import OrganizationServiceGrpc
 from .infrastructure.adapters.http_adapter import (
     configure_org_router,
@@ -48,6 +52,7 @@ from .infrastructure.adapters.scim_http_adapter import (
 )
 from .infrastructure.adapters.postgres_adapter import (
     PostgresApiKeyRepository,
+    PostgresAuditEventRepository,
     PostgresConsoleContextPreferenceRepository,
     PostgresJoinCodeRepository,
     PostgresMemberRepository,
@@ -183,9 +188,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     role_repo = PostgresRoleRepository(session_factory)
     permission_repo = PostgresPermissionRepository(session_factory)
     policy_set_repo = PostgresPolicySetRepository(session_factory)
+    audit_event_repo = PostgresAuditEventRepository(session_factory)
     
-    # Initialize event publisher (gRPC event bus)
-    event_publisher = GrpcEventBusPublisher()
+    # Persist audit events, then fan out live events over the gRPC event bus.
+    event_publisher = AuditEventPublisher(
+        audit_repo=audit_event_repo,
+        delegate=GrpcEventBusPublisher(),
+    )
     
     # Initialize use cases
     org_use_case = OrganizationUseCase(
@@ -245,6 +254,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     
     configure_rbac_router(
         role_use_case=role_use_case,
+    )
+    configure_audit_router(
+        audit_repo=audit_event_repo,
     )
     configure_scim_router(
         organization_use_case=org_use_case,

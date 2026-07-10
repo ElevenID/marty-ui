@@ -29,6 +29,7 @@ import RuleIcon from '@mui/icons-material/Rule';
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../../../hooks/useAuth';
+import { useConsole } from '../../../contexts/ConsoleContext';
 import { listApplicationTemplates } from '../../../services/applicationTemplatesApi';
 import { listCredentialTemplates } from '../../../services/presentationPolicyApi';
 import { ResourcePage, EmptyState, EmptyStates, StatusChip } from '../../common';
@@ -36,15 +37,15 @@ import CheckConfigurationDialog from './CheckConfigurationDialog';
 
 function ApplicationTemplatesPage() {
   const { t } = useTranslation('console');
-  const { organizationId } = useAuth();
+  const { organizationId: authOrganizationId } = useAuth();
+  const { activeOrgId } = useConsole();
+  const organizationId = activeOrgId || authOrganizationId;
   const { data: templates = [], loading, error, reload } = useAsyncData(async () => {
-    if (!organizationId) return [];
     const data = await listApplicationTemplates(organizationId);
     return data || [];
   }, [organizationId]);
 
   const { data: credentialTemplates = [] } = useAsyncData(async () => {
-    if (!organizationId) return [];
     const result = await listCredentialTemplates({ organization_id: organizationId });
     const items = Array.isArray(result) ? result : (result?.items || []);
     return items;

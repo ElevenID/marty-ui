@@ -9,24 +9,27 @@
 import { get } from './api';
 import { buildDefinedQueryString, withQuery } from './queryUtils';
 
-const API_BASE = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
 const SAVED_VIEWS_STORAGE_PREFIX = 'marty.audit.savedViews';
 const fallbackSavedViewsStore = new Map();
 
 function requireOrganizationId(organizationId) {
-  if (!organizationId) {
-    throw new Error('Organization ID is required for audit operations');
+  const normalized = String(organizationId ?? '').trim();
+  if (
+    normalized === ''
+    || normalized.toLowerCase() === 'null'
+    || normalized.toLowerCase() === 'undefined'
+  ) {
+    const error = new Error('Organization ID is required for audit operations');
+    error.code = 'ORG_REQUIRED';
+    error.status = 400;
+    throw error;
   }
 
-  return organizationId;
+  return normalized;
 }
 
 function getBasePath(organizationId) {
   return `/v1/organizations/${encodeURIComponent(requireOrganizationId(organizationId))}/audit-events`;
-}
-
-function withApiBase(path) {
-  return API_BASE ? `${API_BASE}${path}` : path;
 }
 
 function inferSeverity(action = '', metadata = {}) {
@@ -188,6 +191,29 @@ function normalizeAuditResponse(data) {
   return data;
 }
 
+function normalizeAuditExport(data) {
+  if (!data?.content) {
+    return data;
+  }
+
+  if (
+    typeof Blob === 'undefined' ||
+    typeof URL === 'undefined' ||
+    typeof URL.createObjectURL !== 'function'
+  ) {
+    return data;
+  }
+
+  const blob = new Blob([data.content], {
+    type: data.content_type || 'text/plain',
+  });
+
+  return {
+    ...data,
+    download_url: URL.createObjectURL(blob),
+  };
+}
+
 function getSavedViewsStorageKey(organizationId) {
   return `${SAVED_VIEWS_STORAGE_PREFIX}:${requireOrganizationId(organizationId)}`;
 }
@@ -298,9 +324,8 @@ export async function exportAuditEvents(organizationId, filters = {}, format = '
     end_date: filters.end_date,
   });
 
-  return {
-    download_url: withApiBase(withQuery(`${getBasePath(organizationId)}/export`, queryString)),
-  };
+  const data = await get(withQuery(`${getBasePath(organizationId)}/export`, queryString));
+  return normalizeAuditExport(data);
 }
 
 /**

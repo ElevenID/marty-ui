@@ -39,6 +39,7 @@ import { Link } from 'react-router-dom';
 
 import { ResourcePage, EmptyState, EmptyStates, StatusChip } from '../../common';
 import { useAuth } from '../../../hooks/useAuth';
+import { useConsole } from '../../../contexts/ConsoleContext';
 import { listFlows, listFlowExecutions } from '../../../services/flowsApi';
 
 const getFlowsTabs = (t) => [
@@ -54,8 +55,14 @@ const getBreadcrumbs = (t) => [
 
 function FlowInstancesPage() {
   const { t } = useTranslation('console');
-  const { organizationId } = useAuth();
+  const { organizationId: authOrganizationId } = useAuth();
+  const { activeOrgId } = useConsole();
+  const organizationId = activeOrgId || authOrganizationId;
   const { data: instances = [], loading, error, reload: loadInstances } = useAsyncData(async () => {
+    if (!organizationId) {
+      throw new Error('Select an organization before loading flow instances.');
+    }
+
     const flowsResponse = await listFlows({ organization_id: organizationId });
     const flows = Array.isArray(flowsResponse) ? flowsResponse : [];
     const allInstances = [];
@@ -157,7 +164,7 @@ function FlowInstancesPage() {
 
       {loading ? (
         <LinearProgress />
-      ) : safeInstances.length === 0 ? (
+      ) : error ? null : safeInstances.length === 0 ? (
         <EmptyState {...EmptyStates.flowInstances} />
       ) : (
         <TableContainer component={Paper}>

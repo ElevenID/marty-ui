@@ -34,10 +34,17 @@ import { useNavigate, Navigate, useSearchParams } from 'react-router-dom';
 import { getMyOrganizations } from '../../../services/organizationsApi';
 import { useAuth } from '../../../hooks/useAuth';
 import { useConsole } from '../../../contexts/ConsoleContext';
+import OrgConsoleUnavailable from '../OrgConsoleUnavailable';
 import {
   membershipHasOrgConsoleAccess,
 } from '../../../application/session/authSession';
 import { ENABLE_ORGANIZATION_CREATION } from '@ui-public-config';
+
+function logOrgSetupError(message, error) {
+  if (import.meta.env?.DEV && import.meta.env?.MODE !== 'test') {
+    console.error(message, error);
+  }
+}
 
 /**
  * Organization Setup Page Component
@@ -50,6 +57,9 @@ export function OrgSetupPage() {
     setActiveOrgId,
     setMode,
     membershipsLoaded,
+    membershipLoadError,
+    isOrgBootstrapRequired,
+    reloadConsoleState,
   } = useConsole();
   const {
     organizationId: currentOrganizationId,
@@ -74,6 +84,10 @@ export function OrgSetupPage() {
     : Array.isArray(authOrganizations)
       ? authOrganizations
       : [];
+  if (membershipLoadError && isOrgBootstrapRequired) {
+    return <OrgConsoleUnavailable error={membershipLoadError} onRetry={reloadConsoleState} />;
+  }
+
   if (createOnlyMode && ENABLE_ORGANIZATION_CREATION) {
     return <Navigate to={createOrganizationPath} replace />;
   }
@@ -97,7 +111,7 @@ export function OrgSetupPage() {
       setActiveOrganizationId(org.id);
       navigate('/console/applicant/catalog');
     } catch (err) {
-      console.error('[OrgSetupPage] Failed to switch organization:', err);
+      logOrgSetupError('[OrgSetupPage] Failed to switch organization:', err);
     }
   };
 

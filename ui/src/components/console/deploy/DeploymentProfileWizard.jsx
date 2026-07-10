@@ -25,6 +25,7 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 
 import { useWizard } from '../../../hooks/useWizard';
 import { createDeploymentProfile } from '../../../services/deploymentProfilesApi';
+import { useConsole } from '../../../contexts/ConsoleContext';
 import EnvironmentStep from './steps/EnvironmentStep';
 import RuntimeSettingsStep from './steps/RuntimeSettingsStep';
 import IntegrationStep from './steps/IntegrationStep';
@@ -33,6 +34,7 @@ import ReviewStep from './steps/ReviewStep';
 const DeploymentProfileWizard = () => {
   const navigate = useNavigate();
   const { t } = useTranslation('console');
+  const { activeOrgId } = useConsole();
 
   const STEPS = [
     t('wizards.deploymentProfile.steps.environment'),
@@ -57,31 +59,31 @@ const DeploymentProfileWizard = () => {
   }, []);
 
   const handleSubmit = useCallback(async (data) => {
+    if (!activeOrgId) {
+      throw new Error('Select an organization before creating a deployment profile.');
+    }
+
     // Set status based on activate_immediately flag
     const payload = {
       name: data.name,
       description: data.description,
       environment_type: data.environment_type,
       network_mode: data.network_mode,
+      trust_profile_id: data.trust_profile_id || null,
+      default_policy_id: data.default_policy_id || null,
       presentation_policy_ids: data.default_policy_id ? [data.default_policy_id] : [],
       enabled_flows: data.enabled_flows,
       webhook_url: data.webhooks.url || null,
       webhook_events: data.webhooks.events,
       feature_flags: data.feature_flags,
       environment_config: data.ux_config,
+      organization_id: activeOrgId,
       status: data.activate_immediately ? 'active' : 'draft',
+      activate_immediately: data.activate_immediately !== false,
     };
     
-    const result = await createDeploymentProfile(payload);
-    
-    // Generate API key if requested
-    if (data.generate_api_key && result.id) {
-      // TODO: Call API key creation endpoint
-      console.log('API key generation would happen here for profile:', result.id);
-    }
-    
-    return result;
-  }, []);
+    return createDeploymentProfile(payload);
+  }, [activeOrgId]);
 
   const wizard = useWizard({
     steps: STEPS,
@@ -91,6 +93,7 @@ const DeploymentProfileWizard = () => {
       environment_type: 'api',
       network_mode: 'ONLINE',
       default_policy_id: null,
+      trust_profile_id: null,
       enabled_flows: [],
       webhooks: {
         url: '',
@@ -113,7 +116,6 @@ const DeploymentProfileWizard = () => {
         language: 'en',
       },
       status: 'active',
-      generate_api_key: true,
       activate_immediately: true,
     },
     validateStep,
@@ -176,11 +178,6 @@ const DeploymentProfileWizard = () => {
               ? t('wizards.deploymentProfile.success.messageActive', { name: wizard.data.name })
               : t('wizards.deploymentProfile.success.messageDraft', { name: wizard.data.name })}
           </Typography>
-          {wizard.data.generate_api_key && (
-            <Typography color="text.secondary" variant="body2">
-              {t('wizards.deploymentProfile.success.apiKeyGenerated')}
-            </Typography>
-          )}
           <Typography color="text.secondary" variant="body2" sx={{ mt: 1 }}>
             {t('wizards.deploymentProfile.success.redirecting')}
           </Typography>

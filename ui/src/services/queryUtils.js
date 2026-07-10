@@ -51,3 +51,26 @@ export function buildDefinedQueryString(params = {}) {
 export function withQuery(path, queryString) {
   return queryString ? `${path}?${queryString}` : path;
 }
+
+/**
+ * Require a real organization id before constructing org-scoped requests.
+ *
+ * @param {string} organizationId
+ * @param {string} action
+ * @returns {string}
+ */
+export function requireOrganizationId(organizationId, action = 'using organization-scoped API') {
+  if (
+    organizationId === undefined
+    || organizationId === null
+    || String(organizationId).trim() === ''
+    || String(organizationId).trim().toLowerCase() === 'null'
+    || String(organizationId).trim().toLowerCase() === 'undefined'
+  ) {
+    const error = new Error(`Organization is required for ${action}.`);
+    error.code = 'ORG_REQUIRED';
+    error.status = 400;
+    throw error;
+  }
+  return String(organizationId).trim();
+}

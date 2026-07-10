@@ -343,6 +343,7 @@ const FlowStepsConfigStep = ({
                   <DragIndicatorIcon sx={{ mr: 1, color: 'text.secondary', cursor: 'grab' }} />
                   
                   <ListItemText
+                    secondaryTypographyProps={{ component: 'div' }}
                     primary={
                       <TextField
                         fullWidth

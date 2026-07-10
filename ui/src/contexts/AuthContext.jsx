@@ -76,6 +76,12 @@ const defaultContextValue = {
 
 const AuthContext = createContext(defaultContextValue);
 
+function logAuthContextError(message, error) {
+  if (import.meta.env?.DEV && import.meta.env?.MODE !== 'test') {
+    console.error(message, error);
+  }
+}
+
 /**
  * Authentication Provider Component
  *
@@ -98,7 +104,7 @@ export function AuthProvider({ children }) {
         try {
           userOrganizations = await getMyOrganizations();
         } catch (orgError) {
-          console.error('Error fetching user organizations:', orgError);
+          logAuthContextError('Error fetching user organizations:', orgError);
         }
 
         const storedOrgId = window.localStorage.getItem('activeOrgId');
@@ -109,7 +115,7 @@ export function AuthProvider({ children }) {
         setUser(null);
       }
     } catch (error) {
-      console.error('Error fetching user:', error);
+      logAuthContextError('Error fetching user:', error);
       setUser(null);
     } finally {
       setIsLoading(false);
@@ -151,7 +157,7 @@ export function AuthProvider({ children }) {
 
   // Computed values - derive role booleans and organization info
   const setActiveOrganizationId = useCallback(
-    (orgId) => {
+    (orgId, selectedOrganization = null) => {
       setUser((prev) => {
         const normalizedOrgId = orgId || null;
 
@@ -161,7 +167,7 @@ export function AuthProvider({ children }) {
           window.localStorage.removeItem('activeOrgId');
         }
 
-        return updateUserActiveOrganization(prev, normalizedOrgId);
+        return updateUserActiveOrganization(prev, normalizedOrgId, selectedOrganization);
       });
     },
     [setUser]

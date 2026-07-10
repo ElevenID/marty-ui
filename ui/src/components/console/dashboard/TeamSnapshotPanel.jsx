@@ -32,6 +32,7 @@ import SettingsIcon from '@mui/icons-material/Settings';
 import PeopleIcon from '@mui/icons-material/People';
 import EmailIcon from '@mui/icons-material/Email';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
+import DashboardErrorAlert from './DashboardErrorAlert';
 
 /**
  * Role badge configuration factory
@@ -83,7 +84,7 @@ function RoleCard({ role, count }) {
 /**
  * Team Snapshot Panel Component
  */
-export function TeamSnapshotPanel({ teamData }) {
+export function TeamSnapshotPanel({ teamData, error = null, onRetry }) {
   const { t } = useTranslation('console');
   
   const {
@@ -138,6 +139,16 @@ export function TeamSnapshotPanel({ teamData }) {
         </Box>
       </Box>
 
+      {error ? (
+        <DashboardErrorAlert
+          title="Team snapshot unavailable"
+          error={error}
+          onRetry={onRetry}
+          fallback="Team membership data could not be loaded from the organization service."
+        />
+      ) : null}
+
+      {!error && (
       <Grid container spacing={2} sx={{ mb: 3 }}>
         <Grid item xs={12} sm={4}>
           <RoleCard role="admin" count={adminCount} />
@@ -149,8 +160,9 @@ export function TeamSnapshotPanel({ teamData }) {
           <RoleCard role="operator" count={operatorCount} />
         </Grid>
       </Grid>
+      )}
 
-      {totalMembers > 0 && (
+      {!error && totalMembers > 0 && (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
           <AvatarGroup max={5}>
             {memberAvatars.map((member, idx) => (
@@ -173,7 +185,7 @@ export function TeamSnapshotPanel({ teamData }) {
         </Box>
       )}
 
-      {pendingInvites.length > 0 && (
+      {!error && pendingInvites.length > 0 && (
         <Box sx={{ mt: 2, p: 2, bgcolor: 'info.light', borderRadius: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
           <EmailIcon fontSize="small" color="info" />
           <Typography variant="body2" color="text.secondary">
@@ -190,7 +202,7 @@ export function TeamSnapshotPanel({ teamData }) {
         </Box>
       )}
 
-      {totalMembers === 0 && (
+      {!error && totalMembers === 0 && (
         <Box sx={{ textAlign: 'center', py: 3 }}>
           <Typography variant="body2" color="text.secondary" paragraph>
             {t('dashboard.team.noMembersYet')}

@@ -6,14 +6,15 @@
  */
 
 import { get, post, patch, del } from './api';
-import { buildTruthyQueryString, withQuery } from './queryUtils';
+import { buildTruthyQueryString, requireOrganizationId, withQuery } from './queryUtils';
 
 const API_BASE = '/v1/applicants';
 
 // ── Applicant Profile ─────────────────────────────────────────────────────────
 
 export async function listApplicants(organizationId) {
-  const queryString = buildTruthyQueryString({ organization_id: organizationId });
+  const orgId = requireOrganizationId(organizationId, 'loading applicants');
+  const queryString = buildTruthyQueryString({ organization_id: orgId });
   const data = await get(withQuery(API_BASE, queryString));
   return Array.isArray(data) ? data : [];
 }
@@ -80,8 +81,9 @@ export async function getApprovedApplications(limit = 50) {
 }
 
 export async function listOrganizationApplications(organizationId, params = {}) {
+  const orgId = requireOrganizationId(organizationId, 'loading organization applications');
   const queryString = buildTruthyQueryString({
-    organization_id: organizationId,
+    organization_id: orgId,
     status: params.status && params.status !== 'all' ? params.status : undefined,
   });
   const data = await get(withQuery(`${API_BASE}/org-applications`, queryString));

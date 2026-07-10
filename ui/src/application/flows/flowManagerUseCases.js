@@ -1,17 +1,36 @@
 import {
   getBatchRevocationFeedback,
-  getFlowManagerMockFlows,
 } from './flowManager';
 
 function isUnsupportedEndpointError(error) {
   return error?.status === 404 || error?.status === 422;
 }
 
-function shouldUseMockFlowData() {
-  return Boolean(import.meta?.env?.DEV);
+function isMissingOrganizationId(organizationId) {
+  return (
+    organizationId == null
+    || String(organizationId).trim() === ''
+    || String(organizationId).trim().toLowerCase() === 'null'
+    || String(organizationId).trim().toLowerCase() === 'undefined'
+  );
+}
+
+function getErrorMessage(error, fallback) {
+  const message = error?.message || fallback;
+  const messageId = error?.message_id || error?.messageId;
+  return messageId ? `${message} (message id: ${messageId})` : message;
 }
 
 export async function loadFlowManagerFlows({ listFlows, organizationId }) {
+  if (isMissingOrganizationId(organizationId)) {
+    return {
+      flows: [],
+      error: 'An active organization is required before loading flows.',
+      notification: null,
+      unsupported: false,
+    };
+  }
+
   try {
     const flows = await listFlows({ organization_id: organizationId, limit: 100 });
     return {
@@ -21,28 +40,17 @@ export async function loadFlowManagerFlows({ listFlows, organizationId }) {
       unsupported: false,
     };
   } catch (error) {
-    if (!shouldUseMockFlowData()) {
-      return {
-        flows: [],
-        error: null,
-        notification: {
-          type: 'warning',
-          message: 'Flow services are unavailable for this environment',
-          options: { autoHideDuration: 8000 },
-        },
-        unsupported: isUnsupportedEndpointError(error),
-      };
-    }
-
     return {
-      flows: getFlowManagerMockFlows(),
-      error: null,
+      flows: [],
+      error: getErrorMessage(error, 'Unable to load flow definitions.'),
       notification: {
-        type: 'warning',
-        message: 'Backend service unavailable - showing sample data for testing',
+        type: 'error',
+        message: isUnsupportedEndpointError(error)
+          ? 'Flow services are unavailable for this environment'
+          : 'Unable to load flow definitions',
         options: { autoHideDuration: 8000 },
       },
-      unsupported: false,
+      unsupported: isUnsupportedEndpointError(error),
     };
   }
 }
@@ -53,6 +61,14 @@ export async function loadFlowManagerExecutions({
   flows = [],
   flowId = null,
 }) {
+  if (isMissingOrganizationId(organizationId)) {
+    return {
+      executions: [],
+      notification: null,
+      unsupported: false,
+    };
+  }
+
   if (flowId) {
     try {
       return {
@@ -125,6 +141,14 @@ export async function loadFlowManagerExecutions({
 }
 
 export async function loadFlowManagerCredentials({ listCredentials, organizationId }) {
+  if (isMissingOrganizationId(organizationId)) {
+    return {
+      credentials: [],
+      notification: null,
+      unsupported: false,
+    };
+  }
+
   try {
     return {
       credentials: await listCredentials({ organization_id: organizationId, limit: 100 }),
@@ -155,6 +179,14 @@ export async function loadFlowManagerCredentials({ listCredentials, organization
 }
 
 export async function loadFlowManagerRevocationBatches({ listRevocationBatches, organizationId }) {
+  if (isMissingOrganizationId(organizationId)) {
+    return {
+      revocationBatches: [],
+      notification: null,
+      unsupported: false,
+    };
+  }
+
   try {
     return {
       revocationBatches: await listRevocationBatches({ organization_id: organizationId }),

@@ -119,7 +119,8 @@ def upgrade() -> None:
     )
 
     vc_config = _remote_signing_config(VC_ISSUER_KEY_ID, "vc_jwt_issuer")
-    document_config = _remote_signing_config(DOCUMENT_SIGNER_KEY_ID, "document_signing")
+    mdoc_config = _remote_signing_config(DOCUMENT_SIGNER_KEY_ID, "mdoc_dsc")
+    vdsnc_config = _remote_signing_config(DOCUMENT_SIGNER_KEY_ID, "vdsnc_signing")
 
     conn.execute(
         sa.text(
@@ -154,7 +155,8 @@ def upgrade() -> None:
                    remote_signing_config = COALESCE(
                        remote_signing_config,
                        CASE
-                                                 WHEN credential_payload_format IN ('mso_mdoc', 'vds_nc') THEN CAST(:document_config AS json)
+                                                 WHEN credential_payload_format = 'mso_mdoc' THEN CAST(:mdoc_config AS json)
+                                                 WHEN credential_payload_format = 'vds_nc' THEN CAST(:vdsnc_config AS json)
                          ELSE CAST(:vc_config AS json)
                        END
                    ),
@@ -175,7 +177,8 @@ def upgrade() -> None:
             "vc_issuer_key_id": VC_ISSUER_KEY_ID,
             "document_signer_key_id": DOCUMENT_SIGNER_KEY_ID,
             "vc_config": vc_config,
-            "document_config": document_config,
+            "mdoc_config": mdoc_config,
+            "vdsnc_config": vdsnc_config,
         },
     )
 

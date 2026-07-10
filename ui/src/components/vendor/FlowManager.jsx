@@ -73,6 +73,31 @@ import FlowPublishDialog from './FlowPublishDialog';
 import FlowDisableDialog from './FlowDisableDialog';
 import { EmptyState } from '../common';
 
+const isMissingOrganizationId = (organizationId) => (
+  organizationId == null
+  || String(organizationId).trim() === ''
+  || String(organizationId).trim().toLowerCase() === 'null'
+  || String(organizationId).trim().toLowerCase() === 'undefined'
+);
+
+const getPrerequisiteStatus = (result) => {
+  if (result.status === 'rejected') {
+    return 'error';
+  }
+
+  return result.value?.length > 0 ? 'ready' : 'missing';
+};
+
+const getPrerequisiteErrorMessage = (label, result) => {
+  if (result.status !== 'rejected') {
+    return null;
+  }
+
+  const message = result.reason?.message || 'unavailable';
+  const messageId = result.reason?.message_id || result.reason?.messageId;
+  return messageId ? `${label}: ${message} (message id: ${messageId})` : `${label}: ${message}`;
+};
+
 const FlowManager = ({ hideHeader = false }) => {
   const { t } = useTranslation(['vendor', 'common']);
   const { user } = useAuth();
@@ -100,6 +125,7 @@ const FlowManager = ({ hideHeader = false }) => {
     template: 'loading',
     deployment: 'loading',
   });
+  const [prereqError, setPrereqError] = useState(null);
   
   // Dialog states
   const [revocationDialog, setRevocationDialog] = useState(false);
@@ -126,8 +152,8 @@ const FlowManager = ({ hideHeader = false }) => {
   const loadFlows = useCallback(async () => {
     if (unsupportedEndpointsRef.current.flows) {
       setFlows([]);
-      setError(null);
-      return;
+      setError('Flow services are unavailable for this environment.');
+      return null;
     }
 
     const result = await loadFlowManagerFlows({
@@ -138,6 +164,7 @@ const FlowManager = ({ hideHeader = false }) => {
     setError(result.error);
     unsupportedEndpointsRef.current.flows = Boolean(result.unsupported);
     showNotification(result.notification);
+    return result;
   }, [showNotification, user?.organization_id]);
 
   const loadExecutions = useCallback(async (flowId = null) => {
@@ -194,17 +221,37 @@ const FlowManager = ({ hideHeader = false }) => {
   useEffect(() => {
     const loadAllData = async () => {
       setLoading(true);
-      const [, trustProfilesResult, templatesResult, deploymentsResult] = await Promise.all([
+      setPrereqError(null);
+
+      if (isMissingOrganizationId(user?.organization_id)) {
+        setFlows([]);
+        setError('An active organization is required before loading flows.');
+        setPrereqStatus({
+          trustProfile: 'blocked',
+          template: 'blocked',
+          deployment: 'blocked',
+        });
+        setLoading(false);
+        return;
+      }
+
+      const [, trustProfilesResult, templatesResult, deploymentsResult] = await Promise.allSettled([
         loadFlows(),
-        listTrustProfiles({ organization_id: user?.organization_id }).catch(() => []),
-        listCredentialTemplates({ organization_id: user?.organization_id }).catch(() => []),
-        listDeploymentProfiles({ organization_id: user?.organization_id }).catch(() => []),
+        listTrustProfiles({ organization_id: user.organization_id }),
+        listCredentialTemplates({ organization_id: user.organization_id }),
+        listDeploymentProfiles({ organization_id: user.organization_id }),
       ]);
       setPrereqStatus({
-        trustProfile: (trustProfilesResult?.length > 0) ? 'ready' : 'missing',
-        template: (templatesResult?.length > 0) ? 'ready' : 'missing',
-        deployment: (deploymentsResult?.length > 0) ? 'ready' : 'missing',
+        trustProfile: getPrerequisiteStatus(trustProfilesResult),
+        template: getPrerequisiteStatus(templatesResult),
+        deployment: getPrerequisiteStatus(deploymentsResult),
       });
+      const prereqErrors = [
+        getPrerequisiteErrorMessage('Trust profiles', trustProfilesResult),
+        getPrerequisiteErrorMessage('Credential templates', templatesResult),
+        getPrerequisiteErrorMessage('Deployment profiles', deploymentsResult),
+      ].filter(Boolean);
+      setPrereqError(prereqErrors.length > 0 ? prereqErrors.join('; ') : null);
       setLoading(false);
     };
     loadAllData();
@@ -331,6 +378,12 @@ const FlowManager = ({ hideHeader = false }) => {
       {error && (
         <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError(null)}>
           {error}
+        </Alert>
+      )}
+
+      {prereqError && (
+        <Alert severity="error" sx={{ mb: 2 }} onClose={() => setPrereqError(null)}>
+          Unable to load flow prerequisites. {prereqError}
         </Alert>
       )}
 

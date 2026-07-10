@@ -26,6 +26,7 @@ import { Link } from 'react-router-dom';
 import { ResourcePage, StatusChip, EmptyState, EmptyStates } from '../../common';
 import { useAsyncData } from '../../../hooks/useAsyncData';
 import { useAuth } from '../../../hooks/useAuth';
+import { useConsole } from '../../../contexts/ConsoleContext';
 import { listRevocationProfiles } from '../../../services/presentationPolicyApi';
 
 const getBreadcrumbs = (t) => [
@@ -34,28 +35,22 @@ const getBreadcrumbs = (t) => [
   { label: t('trust.breadcrumbs.revocationProfiles'), path: '/console/org/trust/revocation' },
 ];
 
-const isRevocationServiceUnavailable = (error) => {
-  const status = Number(error?.status);
-  return status === 502 || status === 503 || status === 504;
-};
-
 function RevocationProfilesPage() {
   const { t } = useTranslation('console');
-  const { organizationId } = useAuth();
+  const { organizationId: authOrganizationId } = useAuth();
+  const { activeOrgId } = useConsole();
+  const organizationId = activeOrgId || authOrganizationId;
 
   const { data: profiles = [], loading, error } = useAsyncData(
-    () =>
-      organizationId
-        ? listRevocationProfiles(
-            { organization_id: organizationId },
-            { retryConfig: { maxRetries: 0 } },
-          ).catch((requestError) => {
-            if (isRevocationServiceUnavailable(requestError)) {
-              return [];
-            }
-            throw requestError;
-          })
-        : Promise.resolve([]),
+    () => {
+      if (!organizationId) {
+        throw new Error('Select an organization before loading revocation profiles.');
+      }
+      return listRevocationProfiles(
+        { organization_id: organizationId },
+        { retryConfig: { maxRetries: 0 } },
+      );
+    },
     [organizationId],
   );
 
@@ -74,15 +69,15 @@ function RevocationProfilesPage() {
 
       {error && (
         <Typography color="error" sx={{ mb: 2 }}>
-          {t('common.errorLoading', 'Failed to load revocation profiles.')}
+          {error?.message || t('common.errorLoading', 'Failed to load revocation profiles.')}
         </Typography>
       )}
 
-      {!loading && safeProfiles.length === 0 && (
+      {!loading && !error && safeProfiles.length === 0 && (
         <EmptyState {...(EmptyStates.revocationProfiles ?? { title: t('trust.noRevocationProfiles', 'No revocation profiles configured.') })} />
       )}
 
-      {safeProfiles.length > 0 && (
+      {!error && safeProfiles.length > 0 && (
         <TableContainer component={Paper}>
           <Table>
             <TableHead>

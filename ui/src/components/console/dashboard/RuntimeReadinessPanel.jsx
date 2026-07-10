@@ -30,6 +30,7 @@ import VerifiedUserIcon from '@mui/icons-material/VerifiedUser';
 import VpnKeyIcon from '@mui/icons-material/VpnKey';
 import AccessTimeIcon from '@mui/icons-material/AccessTime';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
+import DashboardErrorAlert from './DashboardErrorAlert';
 
 /**
  * Format relative time for last activity
@@ -161,7 +162,7 @@ function StatusCard({
 /**
  * Runtime Readiness Panel Component
  */
-export function RuntimeReadinessPanel({ runtimeStatus }) {
+export function RuntimeReadinessPanel({ runtimeStatus, error = null, onRetry }) {
   const { t } = useTranslation('console');
   
   // Extract runtime status data
@@ -239,6 +240,14 @@ export function RuntimeReadinessPanel({ runtimeStatus }) {
         {t('dashboard.runtimeReadiness.description')}
       </Typography>
 
+      {error ? (
+        <DashboardErrorAlert
+          title="Runtime readiness unavailable"
+          error={error}
+          onRetry={onRetry}
+          fallback="Runtime readiness could not be loaded from a live backing source."
+        />
+      ) : (
       <Grid container spacing={2}>
         <Grid item xs={12} md={4}>
           <StatusCard
@@ -279,6 +288,7 @@ export function RuntimeReadinessPanel({ runtimeStatus }) {
           />
         </Grid>
       </Grid>
+      )}
     </Paper>
   );
 }

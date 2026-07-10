@@ -38,6 +38,7 @@ import SendIcon from '@mui/icons-material/Send';
 import { Link, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../../../hooks/useAuth';
+import { useConsole } from '../../../contexts/ConsoleContext';
 import { useAsyncData } from '../../../hooks/useAsyncData';
 import { useNotifications } from '../../../hooks/useNotifications';
 import {
@@ -69,11 +70,12 @@ const PENDING_STATUSES = new Set([
 
 function ApplicationsPage() {
   const { t } = useTranslation('console');
-  const { organizationId } = useAuth();
+  const { organizationId: authOrganizationId } = useAuth();
+  const { activeOrgId } = useConsole();
+  const organizationId = activeOrgId || authOrganizationId;
   const navigate = useNavigate();
   const { showError, showSuccess } = useNotifications();
   const { data: _applicationsData, loading, error, reload } = useAsyncData(async () => {
-    if (!organizationId) return [];
     return loadOrganizationApplications({ organizationId });
   }, [organizationId]);
   const applications = _applicationsData ?? [];

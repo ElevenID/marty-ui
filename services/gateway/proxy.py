@@ -18,6 +18,11 @@ from gateway.registry import ServiceRegistry
 
 logger = logging.getLogger(__name__)
 
+_RETRYABLE_TRANSPORT_ERRORS = (
+    httpx.TransportError,
+    httpx.TimeoutException,
+)
+
 
 # =============================================================================
 # Module-level globals (set by lifespan in main.py)
@@ -61,6 +66,12 @@ def _forward_headers(request: Request | None) -> dict[str, str]:
         headers["X-User-Email"] = request.state.user_email
     if hasattr(request.state, "user_domain") and request.state.user_domain:
         headers["X-User-Domain"] = request.state.user_domain
+    if hasattr(request.state, "organization_id") and request.state.organization_id:
+        headers["X-Organization-ID"] = request.state.organization_id
+    if hasattr(request.state, "api_key_id") and request.state.api_key_id:
+        headers["X-Api-Key-Id"] = request.state.api_key_id
+    if hasattr(request.state, "api_key_scopes") and request.state.api_key_scopes:
+        headers["X-Api-Key-Scopes"] = ",".join(str(scope) for scope in request.state.api_key_scopes)
     if hasattr(request.state, "org_plan") and request.state.org_plan:
         headers["X-Org-Plan"] = request.state.org_plan
     # Forward auth header if present
@@ -73,7 +84,7 @@ def _forward_headers(request: Request | None) -> dict[str, str]:
 @retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=0.5, min=0.5, max=4),
-    retry=retry_if_exception_type((httpx.ConnectError, httpx.TimeoutException)),
+    retry=retry_if_exception_type(_RETRYABLE_TRANSPORT_ERRORS),
     reraise=True,
 )
 async def _request_with_retry(
@@ -149,6 +160,15 @@ async def proxy_request(
     if hasattr(request.state, "user_domain") and request.state.user_domain:
         headers["X-User-Domain"] = request.state.user_domain
 
+    if hasattr(request.state, "organization_id") and request.state.organization_id:
+        headers["X-Organization-ID"] = request.state.organization_id
+
+    if hasattr(request.state, "api_key_id") and request.state.api_key_id:
+        headers["X-Api-Key-Id"] = request.state.api_key_id
+
+    if hasattr(request.state, "api_key_scopes") and request.state.api_key_scopes:
+        headers["X-Api-Key-Scopes"] = ",".join(str(scope) for scope in request.state.api_key_scopes)
+
     if hasattr(request.state, "org_plan") and request.state.org_plan:
         headers["X-Org-Plan"] = request.state.org_plan
 
@@ -210,10 +230,12 @@ async def proxy_request(
             },
             media_type=response.headers.get("content-type"),
         )
-    except httpx.ConnectError:
-        return mip_error_response(status_code=503, error="service_unavailable", message="Service unavailable")
     except httpx.TimeoutException:
+        logger.warning("Timed out proxying request to %s", url, exc_info=True)
         return mip_error_response(status_code=504, error="service_timeout", message="Service timeout")
+    except httpx.TransportError:
+        logger.warning("Transport error proxying request to %s", url, exc_info=True)
+        return mip_error_response(status_code=503, error="service_unavailable", message="Service unavailable")
 
 
 async def _resource_exists(service_name: str, path: str, request: Request | None = None) -> bool:
@@ -225,7 +247,7 @@ async def _resource_exists(service_name: str, path: str, request: Request | None
     try:
         resp = await client.get(url, timeout=10.0, headers=headers)
         return resp.status_code < 400
-    except (httpx.ConnectError, httpx.TimeoutException):
+    except _RETRYABLE_TRANSPORT_ERRORS:
         return False
 
 

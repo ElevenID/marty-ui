@@ -6,6 +6,7 @@
  */
 
 import { get, getWithRetryConfig, post, patch, del } from './api';
+import { isNetworkAbortLikeError, postWithIdempotency } from './idempotency';
 
 // Each resource type has its own service
 const PRESENTATION_POLICY_BASE = '/v1/presentation-policies';
@@ -34,6 +35,13 @@ const TRUST_SOURCE_TYPE_ALIASES = {
 
 const SECONDS_PER_DAY = 86400;
 
+const HOLDER_BINDING_PAYLOADS = {
+  none: { required: false, binding_methods: [], nonce_required: false },
+  device_key: { required: true, binding_methods: ['DEVICE_KEY'], nonce_required: false },
+  session_nonce: { required: true, binding_methods: ['NONCE'], nonce_required: true },
+  biometric: { required: true, binding_methods: ['BIOMETRIC'], nonce_required: false },
+};
+
 function resolveOrganizationId(params = {}) {
   if (typeof params === 'string') {
     return params;
@@ -43,11 +51,25 @@ function resolveOrganizationId(params = {}) {
     return params.organization_id;
   }
 
-  try {
-    return window.localStorage.getItem('activeOrgId') || null;
-  } catch {
-    return null;
+  return null;
+}
+
+function isMissingOrganizationId(organizationId) {
+  return organizationId == null
+    || String(organizationId).trim() === ''
+    || String(organizationId).trim().toLowerCase() === 'null'
+    || String(organizationId).trim().toLowerCase() === 'undefined';
+}
+
+export function requireOrganizationId(params = {}) {
+  const organizationId = resolveOrganizationId(params);
+  if (isMissingOrganizationId(organizationId)) {
+    const error = new Error('An active organization is required before loading org-scoped credential setup artifacts.');
+    error.code = 'ORG_REQUIRED';
+    error.status = 400;
+    throw error;
   }
+  return String(organizationId).trim();
 }
 
 function normalizeTrustProfileFormat(format) {
@@ -272,13 +294,201 @@ export function normalizeCredentialTemplate(data = {}) {
   };
 }
 
+function humanizeClaimName(name) {
+  return String(name || '')
+    .split(/[_\s-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ') || 'Claim';
+}
+
+function normalizeCredentialTemplateClaimType(claimType) {
+  const normalized = String(claimType || 'string').trim().toLowerCase();
+  if (normalized === 'number') {
+    return 'integer';
+  }
+  return normalized || 'string';
+}
+
+function normalizeCredentialTemplateClaim(claim = {}) {
+  const { type, display, ...rest } = claim;
+  const claimType = normalizeCredentialTemplateClaimType(claim.claim_type || type);
+
+  return {
+    ...rest,
+    display_name: claim.display_name || display?.label || humanizeClaimName(claim.name),
+    claim_type: claimType,
+    required: claim.required !== false,
+    selectively_disclosable: claim.selectively_disclosable !== false,
+  };
+}
+
+function normalizeHolderBindingPayload(value) {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return {
+      required: Boolean(value.required),
+      binding_methods: Array.isArray(value.binding_methods)
+        ? value.binding_methods.filter((method) => typeof method === 'string' && method.trim())
+        : [],
+      nonce_required: Boolean(value.nonce_required),
+    };
+  }
+
+  const normalized = String(value || 'none').trim().toLowerCase();
+  return HOLDER_BINDING_PAYLOADS[normalized] || HOLDER_BINDING_PAYLOADS.device_key;
+}
+
+function normalizeFreshnessPayload(data = {}) {
+  const source = data.freshness && typeof data.freshness === 'object'
+    ? data.freshness
+    : (data.freshness_requirements && typeof data.freshness_requirements === 'object'
+      ? data.freshness_requirements
+      : null);
+
+  if (!source) {
+    return undefined;
+  }
+
+  const maxAgeSeconds = source.max_age_seconds ?? source.max_credential_age_seconds;
+  const revocationGraceSeconds = source.revocation_grace_seconds ?? source.revocation_grace_period_seconds;
+  const freshness = {
+    require_not_revoked: Boolean(source.require_not_revoked ?? source.require_revocation_check),
+  };
+
+  if (Number.isFinite(Number(maxAgeSeconds))) {
+    freshness.max_age_seconds = Number(maxAgeSeconds);
+  }
+
+  if (Number.isFinite(Number(revocationGraceSeconds))) {
+    freshness.revocation_grace_seconds = Number(revocationGraceSeconds);
+  }
+
+  return freshness;
+}
+
+function normalizePresentationPolicyClaim(claim = {}) {
+  const valueConstraint = claim.value_constraint ?? claim.required_value;
+  return {
+    claim_name: claim.claim_name || claim.name || '',
+    credential_type: claim.credential_type || null,
+    value_constraint: valueConstraint === '' ? null : valueConstraint,
+    predicate_spec: claim.predicate_spec || null,
+  };
+}
+
+function normalizePresentationPolicy(data = {}) {
+  return {
+    ...data,
+    status: data.status ? String(data.status).toLowerCase() : data.status,
+    createdAt: data.created_at || data.createdAt,
+    updatedAt: data.updated_at || data.updatedAt,
+  };
+}
+
+export function buildPresentationPolicyPayload(data = {}) {
+  const organizationId = requireOrganizationId(data);
+  const {
+    activate_immediately,
+    status,
+    holder_binding,
+    freshness_requirements,
+    single_presentation,
+    template_id,
+    metadata,
+    ...rest
+  } = data;
+  const displayMetadata = rest.display_metadata
+    || (metadata && typeof metadata === 'object'
+      ? {
+          title: rest.name || '',
+          description: rest.description || '',
+          purpose: 'identity_verification',
+          purpose_description: rest.purpose || '',
+        }
+      : undefined);
+
+  return {
+    ...rest,
+    organization_id: organizationId,
+    required_claims: Array.isArray(rest.required_claims)
+      ? rest.required_claims
+          .map((claim) => normalizePresentationPolicyClaim(claim))
+          .filter((claim) => claim.claim_name)
+      : [],
+    accepted_credential_types: Array.isArray(rest.accepted_credential_types)
+      ? rest.accepted_credential_types.filter((type) => typeof type === 'string' && type.trim())
+      : [],
+    holder_binding: normalizeHolderBindingPayload(holder_binding),
+    freshness: normalizeFreshnessPayload({ ...data, freshness_requirements }),
+    ...(displayMetadata ? { display_metadata: displayMetadata } : {}),
+  };
+}
+
+function inferCredentialFormat(data = {}) {
+  const explicitFormat = data.credential_payload_format
+    || (Array.isArray(data.supported_formats) && data.supported_formats.length > 0 ? data.supported_formats[0] : null)
+    || 'sd_jwt_vc';
+  const normalized = String(explicitFormat).trim().toLowerCase();
+
+  if (normalized.includes('mdoc')) {
+    return 'mdoc';
+  }
+  if (normalized.includes('sd_jwt') || normalized.includes('sd-jwt') || normalized.includes('vc+sd-jwt')) {
+    return 'sd_jwt_vc';
+  }
+  if (normalized.includes('jwt_vc') || normalized.includes('jwt-vc')) {
+    return 'jwt_vc';
+  }
+  return 'sd_jwt_vc';
+}
+
+function normalizeCredentialTemplateVct(data = {}) {
+  const vct = String(data.vct || '').trim();
+  if (!vct || vct.includes('://') || inferCredentialFormat(data) === 'mdoc') {
+    return vct;
+  }
+
+  return `https://credentials.elevenidllc.com/vct/${vct}`;
+}
+
+function normalizeCredentialTemplateComplianceProfile(data = {}) {
+  if (data.compliance_profile_id || data.compliance_profile?.compliance_code || data.compliance_profile?.code) {
+    return data.compliance_profile;
+  }
+
+  return {
+    ...(data.compliance_profile || {}),
+    compliance_code: 'CUSTOM',
+    credential_format: inferCredentialFormat(data),
+  };
+}
+
+function isActiveResource(resource) {
+  return String(resource?.status || '').toLowerCase() === 'active';
+}
+
 export function buildCredentialTemplatePayload(data = {}) {
+  const issuerProfileId = String(data.issuer_profile_id || '').trim();
+  if (!issuerProfileId) {
+    const error = new Error('An active issuer profile is required before creating a credential template.');
+    error.code = 'ISSUER_PROFILE_REQUIRED';
+    error.status = 400;
+    throw error;
+  }
+
   const validityRules = data.validity_rules
     ? normalizeCredentialTemplateValidityRules(data.validity_rules)
     : undefined;
+  const claims = Array.isArray(data.claims)
+    ? data.claims.map((claim) => normalizeCredentialTemplateClaim(claim))
+    : [];
 
   return {
     ...data,
+    issuer_profile_id: issuerProfileId,
+    vct: normalizeCredentialTemplateVct(data),
+    claims,
+    compliance_profile: normalizeCredentialTemplateComplianceProfile(data),
     ...(validityRules
       ? {
           validity_rules: {
@@ -297,7 +507,15 @@ export function buildCredentialTemplatePayload(data = {}) {
  * Create a new presentation policy
  */
 export async function createPresentationPolicy(data) {
-  return post(PRESENTATION_POLICY_BASE, data);
+  const payload = buildPresentationPolicyPayload(data);
+  const shouldActivate = data?.activate_immediately === true || String(data?.status || '').toLowerCase() === 'active';
+  let result = await postWithIdempotency(PRESENTATION_POLICY_BASE, payload);
+
+  if (shouldActivate && result?.id) {
+    result = await activatePresentationPolicy(result.id);
+  }
+
+  return normalizePresentationPolicy(result);
 }
 
 /**
@@ -305,21 +523,32 @@ export async function createPresentationPolicy(data) {
  * @param {Object} params - Query parameters (organization_id, etc.)
  */
 export async function listPresentationPolicies(params = {}) {
-  return get(PRESENTATION_POLICY_BASE, { params });
+  const normalizedParams = typeof params === 'string'
+    ? { organization_id: params }
+    : (params || {});
+  const organizationId = requireOrganizationId(normalizedParams);
+  return get(PRESENTATION_POLICY_BASE, {
+    params: {
+      ...normalizedParams,
+      organization_id: organizationId,
+    },
+  });
 }
 
 /**
  * Get a specific presentation policy by ID
  */
 export async function getPresentationPolicy(id) {
-  return get(`${PRESENTATION_POLICY_BASE}/${id}`);
+  const result = await get(`${PRESENTATION_POLICY_BASE}/${id}`);
+  return normalizePresentationPolicy(result);
 }
 
 /**
  * Update a presentation policy
  */
 export async function updatePresentationPolicy(id, data) {
-  return patch(`${PRESENTATION_POLICY_BASE}/${id}`, data);
+  const result = await patch(`${PRESENTATION_POLICY_BASE}/${id}`, buildPresentationPolicyPayload(data));
+  return normalizePresentationPolicy(result);
 }
 
 /**
@@ -330,11 +559,60 @@ export async function deletePresentationPolicy(id) {
 }
 
 /**
+ * Activate a presentation policy.
+ */
+export async function activatePresentationPolicy(id) {
+  try {
+    const result = await post(`${PRESENTATION_POLICY_BASE}/${id}/activate`, {});
+    return normalizePresentationPolicy(result);
+  } catch (error) {
+    if (!isNetworkAbortLikeError(error)) {
+      throw error;
+    }
+
+    const current = await getPresentationPolicy(id);
+    if (isActiveResource(current)) {
+      return current;
+    }
+    throw error;
+  }
+}
+
+/**
  * Create a new credential template
  */
 export async function createCredentialTemplate(data) {
-  const result = await post(CREDENTIAL_TEMPLATE_BASE, buildCredentialTemplatePayload(data));
+  const organizationId = requireOrganizationId(data);
+  const shouldActivate = data?.activate_immediately === true || String(data?.status || '').toLowerCase() === 'active';
+  const payload = buildCredentialTemplatePayload({
+    ...data,
+    organization_id: organizationId,
+  });
+  let result = await postWithIdempotency(CREDENTIAL_TEMPLATE_BASE, payload);
+  if (shouldActivate && result?.id) {
+    result = await activateCredentialTemplate(result.id);
+  }
   return normalizeCredentialTemplate(result);
+}
+
+/**
+ * Activate a credential template.
+ */
+export async function activateCredentialTemplate(id) {
+  try {
+    const result = await post(`${CREDENTIAL_TEMPLATE_BASE}/${id}/activate`, {});
+    return normalizeCredentialTemplate(result);
+  } catch (error) {
+    if (!isNetworkAbortLikeError(error)) {
+      throw error;
+    }
+
+    const current = await getCredentialTemplate(id);
+    if (isActiveResource(current)) {
+      return current;
+    }
+    throw error;
+  }
 }
 
 /**
@@ -344,10 +622,11 @@ export async function listCredentialTemplates(params = {}) {
   const normalizedParams = typeof params === 'string'
     ? { organization_id: params }
     : (params || {});
+  const organizationId = requireOrganizationId(normalizedParams);
   const result = await get(CREDENTIAL_TEMPLATE_BASE, {
     params: {
       ...normalizedParams,
-      organization_id: resolveOrganizationId(normalizedParams),
+      organization_id: organizationId,
     },
   });
   return Array.isArray(result) ? result.map((template) => normalizeCredentialTemplate(template)) : result;
@@ -380,8 +659,33 @@ export async function deleteCredentialTemplate(id) {
  * Create a new trust profile
  */
 export async function createTrustProfile(data) {
-  const result = await post(TRUST_PROFILE_BASE, buildTrustProfilePayload(data));
+  const organizationId = requireOrganizationId(data);
+  const payload = buildTrustProfilePayload({
+    ...data,
+    organization_id: organizationId,
+  });
+  const result = await postWithIdempotency(TRUST_PROFILE_BASE, payload);
   return normalizeTrustProfile(result);
+}
+
+/**
+ * Activate a trust profile.
+ */
+export async function activateTrustProfile(id) {
+  try {
+    const result = await post(`${TRUST_PROFILE_BASE}/${id}/activate`, {});
+    return normalizeTrustProfile(result);
+  } catch (error) {
+    if (!isNetworkAbortLikeError(error)) {
+      throw error;
+    }
+
+    const current = await getTrustProfile(id);
+    if (isActiveResource(current)) {
+      return current;
+    }
+    throw error;
+  }
 }
 
 /**
@@ -391,10 +695,11 @@ export async function listTrustProfiles(params = {}) {
   const normalizedParams = typeof params === 'string'
     ? { organization_id: params }
     : (params || {});
+  const organizationId = requireOrganizationId(normalizedParams);
   const result = await get(TRUST_PROFILE_BASE, {
     params: {
       ...normalizedParams,
-      organization_id: resolveOrganizationId(normalizedParams),
+      organization_id: organizationId,
     },
   });
   return Array.isArray(result) ? result.map((profile) => normalizeTrustProfile(profile)) : result;
@@ -458,7 +763,11 @@ const REVOCATION_PROFILE_BASE = '/v1/revocation-profiles';
  * @returns {Promise<Object>}
  */
 export async function createRevocationProfile(data) {
-  return post(REVOCATION_PROFILE_BASE, data);
+  const organizationId = requireOrganizationId(data);
+  return postWithIdempotency(REVOCATION_PROFILE_BASE, {
+    ...data,
+    organization_id: organizationId,
+  });
 }
 
 /**
@@ -467,10 +776,24 @@ export async function createRevocationProfile(data) {
  * @returns {Promise<Array>}
  */
 export async function listRevocationProfiles(params = {}, options = {}) {
+  const normalizedParams = typeof params === 'string'
+    ? { organization_id: params }
+    : (params || {});
+  const organizationId = requireOrganizationId(normalizedParams);
   const retryConfig = options.retryConfig;
   const request = retryConfig
-    ? getWithRetryConfig(REVOCATION_PROFILE_BASE, { params }, retryConfig)
-    : get(REVOCATION_PROFILE_BASE, { params });
+    ? getWithRetryConfig(REVOCATION_PROFILE_BASE, {
+        params: {
+          ...normalizedParams,
+          organization_id: organizationId,
+        },
+      }, retryConfig)
+    : get(REVOCATION_PROFILE_BASE, {
+        params: {
+          ...normalizedParams,
+          organization_id: organizationId,
+        },
+      });
   const result = await request;
   return Array.isArray(result) ? result : (result?.items ?? []);
 }

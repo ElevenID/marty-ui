@@ -18,6 +18,13 @@ import CloseIcon from '@mui/icons-material/Close';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+import { operationStatusUnknownMessage } from '../../services/idempotency';
+
+function logResourceCreateError(message, error) {
+  if (import.meta.env?.DEV && import.meta.env?.MODE !== 'test') {
+    console.error(message, error);
+  }
+}
 
 /**
  * ResourceCreateDrawer - Generic drawer for quick resource creation
@@ -61,8 +68,8 @@ function ResourceCreateDrawer({
       setFormData(initialData); // Reset form
       onClose();
     } catch (err) {
-      console.error(`Failed to create ${resourceType}:`, err);
-      setError(err.message || t('resourceDrawer.failedToCreate'));
+      logResourceCreateError(`Failed to create ${resourceType}:`, err);
+      setError(operationStatusUnknownMessage(err, t('resourceDrawer.operationStatusUnknown', 'Operation status unknown')));
     } finally {
       setLoading(false);
     }

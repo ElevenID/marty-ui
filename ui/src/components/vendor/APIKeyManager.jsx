@@ -74,6 +74,12 @@ const API_SCOPES = [
   { id: 'verify:presentations', label: 'Verify Presentations', description: 'Verify credential presentations' },
 ];
 
+function logApiKeyManagerError(message, error) {
+  if (import.meta.env?.DEV && import.meta.env?.MODE !== 'test') {
+    console.error(message, error);
+  }
+}
+
 /**
  * Format date for display
  */
@@ -147,7 +153,7 @@ export default function APIKeyManager() {
       });
       setApiKeys(keys);
     } catch (error) {
-      console.error('Failed to fetch API keys:', error);
+      logApiKeyManagerError('Failed to fetch API keys:', error);
       showError(getErrorMessage(error) || 'Failed to load API keys');
     } finally {
       setLoading(false);
@@ -188,7 +194,7 @@ export default function APIKeyManager() {
       resetForm();
       showSuccess(t('apiKeyManager.snackbars.createSuccess'));
     } catch (error) {
-      console.error('Failed to create API key:', error);
+      logApiKeyManagerError('Failed to create API key:', error);
       showError(getErrorMessage(error) || t('apiKeyManager.snackbars.createFailed'));
     }
   };
@@ -204,7 +210,7 @@ export default function APIKeyManager() {
       deleteDialog.close();
       showSuccess(t('apiKeyManager.snackbars.deleteSuccess'));
     } catch (error) {
-      console.error('Failed to delete API key:', error);
+      logApiKeyManagerError('Failed to delete API key:', error);
       showError(getErrorMessage(error) || t('apiKeyManager.snackbars.deleteFailed'));
     }
   };
@@ -233,7 +239,7 @@ export default function APIKeyManager() {
       }));
       showSuccess(t('apiKeyManager.snackbars.revokeSuccess'));
     } catch (error) {
-      console.error('Failed to revoke API key:', error);
+      logApiKeyManagerError('Failed to revoke API key:', error);
       showError(getErrorMessage(error) || t('apiKeyManager.snackbars.revokeFailed'));
     }
   };
@@ -263,7 +269,7 @@ export default function APIKeyManager() {
       setNewKeyVisible(newKey);
       showSuccess(t('apiKeyManager.snackbars.regenerateSuccess'));
     } catch (error) {
-      console.error('Failed to regenerate API key:', error);
+      logApiKeyManagerError('Failed to regenerate API key:', error);
       showError(getErrorMessage(error) || t('apiKeyManager.snackbars.regenerateFailed'));
     }
   };
@@ -293,7 +299,7 @@ export default function APIKeyManager() {
         showWarning(t('apiKeyManager.snackbars.copyNotSupported'));
       }
     } catch (error) {
-      console.error('Failed to copy API key:', error);
+      logApiKeyManagerError('Failed to copy API key:', error);
       showError(t('apiKeyManager.snackbars.copyFailed'));
     }
   };

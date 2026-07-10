@@ -121,7 +121,7 @@ export function evaluateOrgConsolePolicy({
     return { kind: 'loading' };
   }
 
-  if (mode === 'org' && !activeOrgId) {
+  if (!activeOrgId) {
     return {
       kind: 'redirect',
       destination: setupRedirect,

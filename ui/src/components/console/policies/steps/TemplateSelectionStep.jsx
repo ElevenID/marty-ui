@@ -20,9 +20,97 @@ import BuildIcon from '@mui/icons-material/Build';
 import { useTranslation } from 'react-i18next';
 
 import { POLICY_TEMPLATES, getTemplatesByFramework } from '../../../../data/policyTemplates';
+import { useAsyncData } from '../../../../hooks/useAsyncData';
+import { useConsole } from '../../../../contexts/ConsoleContext';
+import { listCredentialTemplates } from '../../../../services/presentationPolicyApi';
+
+const credentialTypeForTemplate = (template) => (
+  template?.vct
+  || template?.credential_type
+  || template?.type
+  || template?.id
+  || ''
+);
+
+const claimNameForTemplateClaim = (claim) => claim?.name || claim?.claim_name || '';
+
+const policyOptionForCredentialTemplate = (template) => {
+  const credentialType = credentialTypeForTemplate(template);
+  const templateClaims = (template.claims || []).filter((claim) => claim && claimNameForTemplateClaim(claim));
+  const requiredClaims = templateClaims.map((claim) => ({
+    claim_name: claimNameForTemplateClaim(claim),
+    credential_type: credentialType,
+    accept_predicate: false,
+    required_value: null,
+  }));
+  return {
+    id: `credential-template:${template.id}`,
+    name: template.name || credentialType || 'Credential template',
+    description: template.description || 'Verify credentials issued from this organization credential template.',
+    trustFramework: 'custom',
+    standardReference: template.credential_payload_format || template.format || null,
+    icon: 'C',
+    category: 'Credential Template',
+    credentialTemplate: template,
+    config: {
+      name: `${template.name || 'Credential'} Verification Policy`,
+      description: template.description || '',
+      purpose: `Verify ${template.name || credentialType || 'credential'}`,
+      accepted_credential_types: credentialType ? [credentialType] : [],
+      required_claims: requiredClaims,
+      credential_requirements: [
+        {
+          credential_template_id: template.id,
+          display_name: template.name || credentialType || 'Credential',
+          description: template.description || '',
+          required: true,
+          credential_payload_format: template.credential_payload_format || 'w3c_vcdm_v2_sd_jwt',
+          requested_claims: templateClaims.map((claim) => ({
+            claim_name: claimNameForTemplateClaim(claim),
+            display_name: claim.display_name || claim.display?.label || claimNameForTemplateClaim(claim),
+            required: claim.required !== false,
+            selective_disclosure: claim.selectively_disclosable !== false,
+          })),
+        },
+      ],
+      holder_binding: 'device_key',
+      freshness_requirements: {
+        max_credential_age_seconds: 31536000,
+        max_proof_age_seconds: 300,
+        require_revocation_check: true,
+      },
+      prefer_predicates: false,
+      single_presentation: true,
+      metadata: {
+        credential_template_id: template.id,
+        credential_template_vct: template.vct || null,
+        credential_payload_format: template.credential_payload_format || null,
+      },
+    },
+  };
+};
 
 const TemplateSelectionStep = ({ trustProfile, selectedTemplate, onSelectTemplate }) => {
   const { t } = useTranslation('console');
+  const { activeOrgId } = useConsole();
+
+  const { data: credentialTemplateData = [] } = useAsyncData(async () => {
+    if (!activeOrgId) {
+      return [];
+    }
+    const response = await listCredentialTemplates({ organization_id: activeOrgId });
+    return Array.isArray(response?.data) ? response.data : (Array.isArray(response) ? response : []);
+  }, [activeOrgId]);
+
+  const credentialTemplateOptions = useMemo(
+    () => (Array.isArray(credentialTemplateData) ? credentialTemplateData : [])
+      .filter((template) => {
+        const status = String(template?.status || '').toLowerCase();
+        return template?.id && (!status || status === 'active');
+      })
+      .map((template) => policyOptionForCredentialTemplate(template)),
+    [credentialTemplateData],
+  );
 
   // Filter templates by trust framework
   const availableTemplates = useMemo(() => {
@@ -45,6 +133,7 @@ const TemplateSelectionStep = ({ trustProfile, selectedTemplate, onSelectTemplat
   };
 
   const allTemplates = [...availableTemplates, customTemplate];
+  const allSelectableTemplates = [...credentialTemplateOptions, ...allTemplates];
 
   const handleSelectTemplate = (template) => {
     onSelectTemplate(template);
@@ -76,8 +165,14 @@ const TemplateSelectionStep = ({ trustProfile, selectedTemplate, onSelectTemplat
         </Alert>
       )}
 
+      {credentialTemplateOptions.length > 0 && (
+        <Alert severity="info" sx={{ mb: 3 }}>
+          Select an organization credential template to prefill accepted credential type and claims from the actual template used by issuance flows.
+        </Alert>
+      )}
+
       <Grid container spacing={2}>
-        {allTemplates.map((template) => (
+        {allSelectableTemplates.map((template) => (
           <Grid item xs={12} sm={6} md={4} key={template.id}>
             <Card
               sx={{
@@ -93,6 +188,8 @@ const TemplateSelectionStep = ({ trustProfile, selectedTemplate, onSelectTemplat
             >
               <CardActionArea
                 onClick={() => handleSelectTemplate(template)}
+                aria-label={`Select ${template.name} presentation policy template`}
+                aria-pressed={selectedTemplate?.id === template.id}
                 sx={{ height: '100%', alignItems: 'stretch' }}
               >
                 <CardContent sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>

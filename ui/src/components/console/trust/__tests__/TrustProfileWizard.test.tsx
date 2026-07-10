@@ -122,6 +122,7 @@ const TRANSLATIONS = {
   'wizards.trustProfile.reviewStep.trustSourcesSummary.trustedIssuersConfigured': '{{count}} trusted issuers configured',
   'wizards.trustProfile.reviewStep.trustSourcesSummary.andMore': 'and {{count}} more',
   'wizards.trustProfile.reviewStep.trustSourcesSummary.noneConfigured': 'No trust sources are configured. This profile will trust no issuers until trust sources are added.',
+  'wizards.trustProfile.reviewStep.trustSourcesSummary.noneConfiguredActive': 'This profile is set to activate immediately, but no trust sources are configured. Add a trusted issuer or explicitly allow any issuer before activating.',
   'wizards.trustProfile.reviewStep.trustSourcesSummary.noneConfiguredAllowAll': 'No trust sources are configured. This profile is explicitly set to trust any issuer that passes cryptographic validation.',
   'wizards.trustProfile.reviewStep.fields.revocationStrategy': 'Revocation Strategy',
   'wizards.trustProfile.reviewStep.fields.clockSkew': 'Clock Skew Tolerance',
@@ -150,6 +151,10 @@ vi.mock('../../../../hooks/useAuth', () => ({
   }),
 }))
 
+vi.mock('../../../../contexts/ConsoleContext', () => ({
+  useConsole: () => ({ activeOrgId: 'org-1' }),
+}))
+
 vi.mock('../../../../services/walletRegistryApi', () => ({
   listWallets: (...args) => mockListWallets(...args),
 }))
@@ -176,6 +181,7 @@ vi.mock('react-router-dom', async () => {
 describe('TrustProfileWizard', () => {
   const MSW_BASE = 'http://localhost:8000'
   let lastTrustProfileRequestBody: any = null
+  let activatedTrustProfileId: string | null = null
 
   beforeEach(() => {
     vi.clearAllMocks()
@@ -241,6 +247,7 @@ describe('TrustProfileWizard', () => {
       status: 'active',
     })
     lastTrustProfileRequestBody = null
+    activatedTrustProfileId = null
     server.use(
       http.post(`${MSW_BASE}/v1/trust-profiles`, async ({ request }) => {
         const body = await request.json() as any
@@ -252,6 +259,15 @@ describe('TrustProfileWizard', () => {
           updated_at: '2024-01-01T00:00:00Z',
           ...body,
         }, { status: 201 })
+      }),
+      http.post(`${MSW_BASE}/v1/trust-profiles/:id/activate`, ({ params }) => {
+        activatedTrustProfileId = params.id as string
+        return HttpResponse.json({
+          id: params.id,
+          status: 'active',
+          created_at: '2024-01-01T00:00:00Z',
+          updated_at: '2024-01-01T00:00:00Z',
+        })
       }),
       http.post(`${MSW_BASE}/v1/trust-profiles/:id/issuers`, async ({ request, params }) => {
         const body = await request.json() as any
@@ -629,7 +645,12 @@ describe('TrustProfileWizard', () => {
 
       await user.type(screen.getByTestId('wizard.trustProfile.name'), 'Submitted AAMVA Trust Profile')
       await selectFramework(user, 'AAMVA')
-      await goToValidationRulesStep(user)
+      await user.click(screen.getByTestId('wizard.trustProfile.next'))
+      await waitFor(() => {
+        expect(screen.getByTestId('wizard.trustProfile.issuerDid')).toBeInTheDocument()
+      })
+      await addTrustedIssuer(user)
+      await user.click(screen.getByTestId('wizard.trustProfile.next'))
 
       expect(screen.getByTestId('wizard.trustProfile.algorithm.ES256')).toBeChecked()
       expect(screen.getByTestId('wizard.trustProfile.algorithm.ES384')).toBeChecked()
@@ -824,7 +845,7 @@ describe('TrustProfileWizard', () => {
       )
     })
 
-    it('should submit an empty trust profile as deny-all by default', async () => {
+    it('should require trust sources before activating an empty trust profile', async () => {
       const { user } = render(<TrustProfileWizard />)
 
       await user.type(screen.getByTestId('wizard.trustProfile.name'), 'Closed Trust Profile')
@@ -844,6 +865,15 @@ describe('TrustProfileWizard', () => {
 
       await waitFor(() => {
         expect(screen.getByTestId('wizard.trustProfile.submit')).toBeInTheDocument()
+        expect(screen.getAllByText(/set to activate immediately/i).length).toBeGreaterThan(0)
+      })
+
+      expect(screen.getByTestId('wizard.trustProfile.submit')).toBeDisabled()
+      expect(lastTrustProfileRequestBody).toBeNull()
+
+      await user.click(screen.getByRole('checkbox', { name: /activate immediately/i }))
+      await waitFor(() => {
+        expect(screen.getByTestId('wizard.trustProfile.submit')).not.toBeDisabled()
         expect(screen.getAllByText(/trust no issuers/i).length).toBeGreaterThan(0)
       })
 
@@ -855,6 +885,7 @@ describe('TrustProfileWizard', () => {
 
       expect(lastTrustProfileRequestBody.trust_sources).toEqual([])
       expect(lastTrustProfileRequestBody.allowed_issuers).toEqual([])
+      expect(activatedTrustProfileId).toBeNull()
     })
 
     it('should allow opting into an empty trust profile that trusts any issuer', async () => {
@@ -978,6 +1009,7 @@ describe('TrustProfileWizard', () => {
       const successScreen = screen.getByTestId('wizard.trustProfile.success')
       expect(within(successScreen).getByText('Trust Profile Created!')).toBeInTheDocument()
       expect(within(successScreen).getByText(new RegExp(profileName, 'i'))).toBeInTheDocument()
+      expect(activatedTrustProfileId).toBe('trust-profile-1')
 
       // Should redirect after delay
       await waitFor(

@@ -9,6 +9,14 @@ import { getGoogleAnalyticsMeasurementId } from './runtimeConfig';
 let analyticsInitialized = false;
 let webVitalsTrackingStarted = false;
 
+const SHOULD_LOG_ANALYTICS = import.meta.env.DEV && import.meta.env.MODE !== 'test';
+
+function logAnalytics(...args) {
+  if (SHOULD_LOG_ANALYTICS) {
+    console.debug(...args);
+  }
+}
+
 /**
  * Initialize Google Analytics
  * Call this once in App.jsx after router is ready
@@ -17,7 +25,7 @@ export const initAnalytics = () => {
   const GA_ID = getGoogleAnalyticsMeasurementId();
   
   if (!GA_ID || typeof window === 'undefined') {
-    console.log('Analytics: GA_MEASUREMENT_ID not configured or SSR mode');
+    logAnalytics('Analytics: GA_MEASUREMENT_ID not configured or SSR mode');
     return;
   }
 
@@ -48,7 +56,7 @@ export const initAnalytics = () => {
 
   analyticsInitialized = true;
 
-  console.log('Analytics: Google Analytics initialized');
+  logAnalytics('Analytics: Google Analytics initialized');
 };
 
 /**
@@ -100,7 +108,7 @@ export const trackWebVitals = () => {
         non_interaction: true,
       });
 
-      console.log(`Web Vital: ${metric.name}`, metric.value);
+      logAnalytics(`Web Vital: ${metric.name}`, metric.value);
     };
 
     onCLS(sendToGA);
@@ -110,7 +118,7 @@ export const trackWebVitals = () => {
     onTTFB(sendToGA);
     onINP(sendToGA);
   }).catch(() => {
-    console.log('web-vitals library not available');
+    logAnalytics('web-vitals library not available');
   });
 };
 

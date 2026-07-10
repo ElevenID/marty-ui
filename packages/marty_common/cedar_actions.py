@@ -50,7 +50,7 @@ RESOURCE_LOOKUP_MAP: dict[str, tuple[str, str, set[str]]] = {
     "flows": (
         "flows",
         "/v1/flows/{resource_id}",
-        set(),
+        {"definitions", "instances", "verify", "siop"},
     ),
     "application-templates": (
         "issuance",
@@ -84,10 +84,46 @@ RESOURCE_LOOKUP_MAP: dict[str, tuple[str, str, set[str]]] = {
             "transactions",
         },
     ),
+    "policy-sets": (
+        "organizations",
+        "/v1/policy-sets/{resource_id}",
+        {"validate"},
+    ),
 }
 
 
 SPECIAL_ROUTE_RULES: list[tuple[re.Pattern[str], dict[str, str], str]] = [
+    (
+        re.compile(r"^/v1/flows/verify$"),
+        {"POST": "verification:execute"},
+        "verification",
+    ),
+    (
+        re.compile(r"^/v1/flows/definitions/[^/]+/activate$"),
+        {"POST": "flow-definition:activate"},
+        "flow-definition",
+    ),
+    (
+        re.compile(r"^/v1/flows/instances(?:/[^/]+)?(?:/advance)?$"),
+        {
+            "GET": "flow-instance:view",
+            "POST": "flow-instance:start",
+            "HEAD": "flow-instance:view",
+            "OPTIONS": "flow-instance:view",
+        },
+        "flow-instance",
+    ),
+    (
+        re.compile(r"^/v1/flows/definitions(?:/[^/]+)?(?:/activate)?$"),
+        {
+            "GET": "flow-definition:view",
+            "POST": "flow-definition:create",
+            "PUT": "flow-definition:edit",
+            "PATCH": "flow-definition:edit",
+            "DELETE": "flow-definition:delete",
+        },
+        "flow-definition",
+    ),
     (
         re.compile(rf"^/v1/organizations/{_UUID_RE}/transfer-ownership$"),
         {"POST": "organization:transfer-ownership"},
@@ -142,6 +178,26 @@ SPECIAL_ROUTE_RULES: list[tuple[re.Pattern[str], dict[str, str], str]] = [
         "api-key",
     ),
     (
+        re.compile(rf"^/v1(?:/organizations/{_UUID_RE})?/policy-sets/[^/]+/activate$"),
+        {"POST": "policy-set:activate"},
+        "policy-set",
+    ),
+    (
+        re.compile(rf"^/v1(?:/organizations/{_UUID_RE})?/policy-sets/[^/]+/archive$"),
+        {"POST": "policy-set:archive"},
+        "policy-set",
+    ),
+    (
+        re.compile(rf"^/v1(?:/organizations/{_UUID_RE})?/policy-sets/validate$"),
+        {"POST": "policy-set:validate"},
+        "policy-set",
+    ),
+    (
+        re.compile(rf"^/v1(?:/organizations/{_UUID_RE})?/policy-sets/[^/]+/validate$"),
+        {"POST": "policy-set:validate"},
+        "policy-set",
+    ),
+    (
         re.compile(rf"^/v1/organizations/{_UUID_RE}/lifecycle$"),
         {"GET": "organization:view"},
         "organization",
@@ -189,7 +245,7 @@ GENERIC_RESOURCE_MAP: dict[str, tuple[str, str]] = {
     "applications": ("application", "application"),
     "verification": ("verification", "verification"),
     "integrations": ("integration-connector", "integration-connector"),
-    "policy-sets": ("trust-profile", "trust-profile"),
+    "policy-sets": ("policy-set", "policy-set"),
 }
 
 

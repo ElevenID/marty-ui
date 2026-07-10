@@ -25,6 +25,8 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import AccountTreeIcon from '@mui/icons-material/AccountTree';
 
 import { useWizard } from '../../../hooks/useWizard';
+import { useAuth } from '../../../hooks/useAuth';
+import { useConsole } from '../../../contexts/ConsoleContext';
 import { createCredentialTemplate } from '../../../services/presentationPolicyApi';
 import BasicsStep from './steps/BasicsStep';
 import ClaimsStep from './steps/ClaimsStep';
@@ -45,6 +47,9 @@ const getSteps = (t) => [
 const CredentialTemplateWizard = () => {
   const navigate = useNavigate();
   const { t } = useTranslation('console');
+  const { organizationId: authOrganizationId } = useAuth();
+  const { activeOrgId } = useConsole();
+  const effectiveOrganizationId = activeOrgId || authOrganizationId;
 
   const validateStep = useCallback((stepIndex, data) => {
     switch (stepIndex) {
@@ -57,7 +62,7 @@ const CredentialTemplateWizard = () => {
       case 1: // Claims
         return data.claims && data.claims.length > 0;
       case 2: // Trust & Compliance
-        return data.trust_profile_id !== null;
+        return Boolean(data.trust_profile_id && data.issuer_profile_id);
       case 3: // Crypto & Validity (optional)
         return true;
       case 4: // Wallet Compatibility (optional)
@@ -70,9 +75,16 @@ const CredentialTemplateWizard = () => {
   }, []);
 
   const handleSubmit = useCallback(async (data) => {
+    if (!effectiveOrganizationId) {
+      throw new Error(t('wizards.credentialTemplate.errors.organizationRequired', {
+        defaultValue: 'An active organization is required before creating a credential template.',
+      }));
+    }
+
     // Set status based on activate_immediately flag
     const payload = {
       ...data,
+      organization_id: effectiveOrganizationId,
       status: data.activate_immediately ? 'active' : 'draft',
       artifacts_auto_generate: data.generate_artifacts_automatically,
     };
@@ -81,7 +93,7 @@ const CredentialTemplateWizard = () => {
     
     const result = await createCredentialTemplate(payload);
     return result;
-  }, []);
+  }, [effectiveOrganizationId, t]);
 
   const wizard = useWizard({
     steps: getSteps(t),

@@ -42,4 +42,18 @@ describe('orgApplicationsUseCases', () => {
     expect(getApplications).toHaveBeenCalledWith('org-1');
     expect(getApplicants).toHaveBeenCalledWith('org-1');
   });
+
+  it('fails before loading applications or applicants without an organization id', async () => {
+    const getApplications = vi.fn();
+    const getApplicants = vi.fn();
+
+    await expect(loadOrganizationApplications({
+      organizationId: '',
+      getApplications,
+      getApplicants,
+    })).rejects.toMatchObject({ code: 'ORG_REQUIRED' });
+
+    expect(getApplications).not.toHaveBeenCalled();
+    expect(getApplicants).not.toHaveBeenCalled();
+  });
 });

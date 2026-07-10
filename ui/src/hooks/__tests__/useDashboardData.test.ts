@@ -18,6 +18,7 @@ const {
   mockGetOrganizationEnvironment,
   mockGetOrganizationLifecycle,
   mockUseAuth,
+  mockUseConsole,
 } = vi.hoisted(() => ({
   mockListTrustProfiles: vi.fn(),
   mockListCredentialTemplates: vi.fn(),
@@ -34,6 +35,7 @@ const {
   mockGetOrganizationEnvironment: vi.fn(),
   mockGetOrganizationLifecycle: vi.fn(),
   mockUseAuth: vi.fn(),
+  mockUseConsole: vi.fn(),
 }))
 
 vi.mock('../../services/presentationPolicyApi', () => ({
@@ -72,19 +74,30 @@ vi.mock('../useAuth', () => ({
   useAuth: () => mockUseAuth(),
 }))
 
+vi.mock('../../contexts/ConsoleContext', () => ({
+  useConsole: () => mockUseConsole(),
+}))
+
 describe('useDashboardData', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.useFakeTimers()
 
-    mockUseAuth.mockReturnValue({ organizationId: 'org_live' })
+    mockUseAuth.mockReturnValue({ organizationId: 'auth_org' })
+    mockUseConsole.mockReturnValue({ activeOrgId: 'org_live' })
     mockListTrustProfiles.mockResolvedValue([])
     mockListCredentialTemplates.mockResolvedValue([])
     mockListPresentationPolicies.mockResolvedValue([])
     mockListDeploymentProfiles.mockResolvedValue([])
     mockListFlows.mockResolvedValue([])
     mockListSigningKeys.mockResolvedValue({ keys: [{ id: 'key_1', name: 'Issuer Key' }] })
-    mockListIssuerProfiles.mockResolvedValue({ profiles: [{ id: 'issuer_1', issuer_did: 'did:web:issuer.example.com' }] })
+    mockListIssuerProfiles.mockResolvedValue({
+      profiles: [{
+        id: 'issuer_1',
+        issuer_did: 'did:web:issuer.example.com',
+        signing_service_id: 'managed-openbao-transit',
+      }],
+    })
     mockGetKeyManagementConfig.mockResolvedValue({
       default_service_id: 'managed-openbao-transit',
       services: [{ id: 'managed-openbao-transit', name: 'Managed OpenBao', status: 'configured' }],
@@ -146,7 +159,7 @@ describe('useDashboardData', () => {
 
     expect(mockFetch).toHaveBeenCalledTimes(2)
     expect(result.current.data.systemHealth).toEqual({ status: 'healthy' })
-    expect(consoleErrorSpy).toHaveBeenCalledWith('Health check failed:', expect.any(Error))
+    expect(consoleErrorSpy).not.toHaveBeenCalled()
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(60000)
@@ -174,11 +187,35 @@ describe('useDashboardData', () => {
     })
 
     expect(result.current.loading).toBe(false)
-    expect(mockListSigningKeys).toHaveBeenCalledWith({ limit: 1 })
-    expect(mockListIssuerProfiles).toHaveBeenCalledTimes(1)
-    expect(mockGetKeyManagementConfig).toHaveBeenCalledTimes(1)
+    expect(mockListSigningKeys).toHaveBeenCalledWith({ organization_id: 'org_live', limit: 1 })
+    expect(mockListIssuerProfiles).toHaveBeenCalledWith({ organization_id: 'org_live' })
+    expect(mockGetKeyManagementConfig).toHaveBeenCalledWith({ organization_id: 'org_live' })
     expect(result.current.data.signingKeys).toEqual([{ id: 'key_1', name: 'Issuer Key' }])
-    expect(result.current.data.issuerProfiles).toEqual([{ id: 'issuer_1', issuer_did: 'did:web:issuer.example.com' }])
+    expect(result.current.data.issuerProfiles).toEqual([{
+      id: 'issuer_1',
+      issuer_did: 'did:web:issuer.example.com',
+      signing_service_id: 'managed-openbao-transit',
+    }])
     expect(result.current.data.keyManagementConfig.default_service_id).toBe('managed-openbao-transit')
+  })
+
+  it('clears dashboard data and does not fetch org-scoped resources without organization context', async () => {
+    mockUseAuth.mockReturnValue({ organizationId: null })
+    mockUseConsole.mockReturnValue({ activeOrgId: null })
+
+    const { result } = renderHook(() => useDashboardData())
+
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    expect(result.current.loading).toBe(false)
+    expect(result.current.error).toBe('organization_id is required')
+    expect(result.current.data.trustProfiles).toEqual([])
+    expect(result.current.data.signingKeys).toEqual([])
+    expect(result.current.data.teamData).toBeNull()
+    expect(mockListTrustProfiles).not.toHaveBeenCalled()
+    expect(mockListApiKeys).not.toHaveBeenCalled()
+    expect(mockGetTeamSnapshot).not.toHaveBeenCalled()
   })
 })

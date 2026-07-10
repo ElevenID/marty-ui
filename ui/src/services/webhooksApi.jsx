@@ -5,7 +5,8 @@
  * Uses the centralized api.js service for consistent error handling and retry logic.
  */
 import { get, post, patch, del, getErrorMessage } from './api';
-import { buildDefinedQueryString, withQuery } from './queryUtils';
+import { postWithIdempotency } from './idempotency';
+import { buildDefinedQueryString, requireOrganizationId, withQuery } from './queryUtils';
 
 const BASE_PATH = '/v1/webhooks';
 
@@ -15,7 +16,9 @@ const BASE_PATH = '/v1/webhooks';
  * @returns {Promise<Array>} - Array of webhook objects
  */
 export async function listWebhooks(organizationId) {
-  const queryString = buildDefinedQueryString({ organization_id: organizationId });
+  const queryString = buildDefinedQueryString({
+    organization_id: requireOrganizationId(organizationId, 'loading webhooks'),
+  });
   const response = await get(withQuery(BASE_PATH, queryString));
   return Array.isArray(response) ? response : (response?.webhooks || []);
 }
@@ -30,8 +33,9 @@ export async function listWebhooks(organizationId) {
  * @returns {Promise<Object>} - Created webhook with secret for HMAC verification
  */
 export async function createWebhook(organizationId, { url, eventTypes, description }) {
-  return post(BASE_PATH, {
-    organization_id: organizationId,
+  const orgId = requireOrganizationId(organizationId, 'creating webhooks');
+  return postWithIdempotency(BASE_PATH, {
+    organization_id: orgId,
     url,
     event_types: eventTypes,
     description: description || '',

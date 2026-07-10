@@ -21,6 +21,8 @@ import json
 import os
 import re
 import uuid
+import httpx
+import copy
 
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -1401,6 +1403,168 @@ async def get_current_user_id(
     return x_user_id
 
 
+def _read_secret_value(name: str) -> str:
+    value = os.environ.get(name)
+    if value:
+        return value.strip()
+    file_path = os.environ.get(f"{name}_FILE")
+    if file_path:
+        try:
+            with open(file_path, encoding="utf-8") as handle:
+                return handle.read().strip()
+        except OSError:
+            logger.warning("Unable to read %s_FILE at %s", name, file_path, exc_info=True)
+    return ""
+
+
+def _key_purpose_for_credential_format(value: str | None) -> str:
+    normalized = (value or "").strip().lower().replace("-", "_")
+    if normalized in {"mso_mdoc", "mdoc", "zk_mdoc"}:
+        return "mdoc_dsc"
+    if normalized in {"vds_nc", "vdsnc"}:
+        return "vdsnc_signing"
+    return "vc_jwt_issuer"
+
+
+def _first_non_empty(*values: Any) -> str | None:
+    for value in values:
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return None
+
+
+def _compact_dict(value: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: entry
+        for key, entry in value.items()
+        if entry is not None and entry != ""
+    }
+
+
+def _canonical_issuer_fields(
+    issuer_context: dict[str, Any],
+    *,
+    requested_algorithm: str | None = None,
+) -> dict[str, Any]:
+    profile = issuer_context.get("issuer_profile")
+    if not isinstance(profile, dict):
+        profile = {}
+    service = issuer_context.get("service")
+    if not isinstance(service, dict):
+        service = {}
+
+    signing_service_id = _first_non_empty(
+        issuer_context.get("signing_service_id"),
+        profile.get("signing_service_id"),
+        service.get("id"),
+    )
+    signing_key_reference = _first_non_empty(
+        issuer_context.get("signing_key_reference"),
+        profile.get("signing_key_reference"),
+        service.get("key_reference"),
+    )
+    verification_method_id = _first_non_empty(
+        issuer_context.get("verification_method_id"),
+        profile.get("verification_method_id"),
+    )
+    key_purpose = _first_non_empty(
+        issuer_context.get("key_purpose"),
+        profile.get("key_purpose"),
+    )
+    algorithm = _first_non_empty(
+        requested_algorithm,
+        issuer_context.get("algorithm"),
+        profile.get("algorithm"),
+        service.get("algorithm"),
+    )
+
+    return {
+        "issuer_profile_id": _first_non_empty(
+            issuer_context.get("issuer_profile_id"),
+            profile.get("id"),
+        ),
+        "issuer_key_id": signing_key_reference or verification_method_id or signing_service_id,
+        "issuer_algorithm": algorithm,
+        "key_access_mode": "REMOTE_SIGNING",
+        "remote_signing_config": _compact_dict({
+            "provider": "managed-signing-service",
+            "signing_service_id": signing_service_id,
+            "signing_key_reference": signing_key_reference,
+            "verification_method_id": verification_method_id,
+            "key_purpose": key_purpose,
+        }),
+        "issuer_did": _first_non_empty(
+            issuer_context.get("issuer_did"),
+            profile.get("issuer_did"),
+        ),
+    }
+
+
+async def _require_active_issuer_profile(
+    request: Request,
+    *,
+    organization_id: str,
+    issuer_profile_id: str | None,
+    credential_format: str | None = None,
+    algorithm: str | None = None,
+) -> dict[str, Any]:
+    if not issuer_profile_id or not str(issuer_profile_id).strip():
+        raise HTTPException(
+            status_code=422,
+            detail="issuer_profile_id is required. Credential templates must use an active KMS-backed issuer profile.",
+        )
+
+    base_url = os.environ.get("SIGNING_KEYS_INTERNAL_URL", "http://gateway:8000/internal/signing-keys").rstrip("/")
+    api_key = _read_secret_value("SIGNING_KEYS_INTERNAL_API_KEY") or _read_secret_value("ISSUANCE_API_KEY")
+    headers = {"X-API-Key": api_key} if api_key else {}
+    request_id = getattr(request.state, "request_id", None)
+    if request_id:
+        headers["X-Request-ID"] = request_id
+
+    params = {
+        "organization_id": organization_id,
+        "issuer_profile_id": issuer_profile_id,
+        "key_purpose": _key_purpose_for_credential_format(credential_format),
+    }
+    if credential_format:
+        params["credential_format"] = credential_format
+    if algorithm:
+        params["algorithm"] = algorithm
+
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            response = await client.get(f"{base_url}/issuer-context", params=params, headers=headers)
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Unable to validate issuer profile through signing-keys service: {exc}",
+        ) from exc
+
+    if response.status_code == 404:
+        raise HTTPException(
+            status_code=422,
+            detail="issuer_profile_id must reference an active issuer profile for this organization.",
+        )
+    if response.status_code == 409:
+        raise HTTPException(status_code=422, detail=response.text)
+    if response.status_code >= 400:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Signing-keys issuer profile validation failed with status {response.status_code}.",
+        )
+
+    payload = response.json()
+    if not payload.get("ok") or not payload.get("signing_service_id") or not payload.get("issuer_did"):
+        raise HTTPException(
+            status_code=422,
+            detail="issuer_profile_id did not resolve to a KMS-backed issuer profile.",
+        )
+    return payload
+
+
 @router.post("", response_model=CredentialTemplateResponse, response_model_exclude_none=True)
 async def create_credential_template(
     body: CreateCredentialTemplateRequest,
@@ -1443,6 +1607,18 @@ async def create_credential_template(
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
 
+    issuer_context = await _require_active_issuer_profile(
+        request,
+        organization_id=body.organization_id,
+        issuer_profile_id=body.issuer_profile_id,
+        credential_format=format_to_wire(CredentialFormat(credential_payload_format)),
+        algorithm=body.issuer_algorithm or body.signing_algorithm,
+    )
+    issuer_fields = _canonical_issuer_fields(
+        issuer_context,
+        requested_algorithm=body.issuer_algorithm or body.signing_algorithm,
+    )
+
     resolved_vct = body.vct or f"https://credentials.example.com/{body.credential_type}"
     _validate_template_protocol_requirements(
         compliance_profile=body.compliance_profile,
@@ -1470,13 +1646,13 @@ async def create_credential_template(
         credential_payload_format=credential_payload_format,
         compliance_profile=body.compliance_profile,
         compliance_profile_id=body.compliance_profile_id,
-        issuer_profile_id=body.issuer_profile_id,
-        issuer_key_id=body.issuer_key_id,
-        issuer_algorithm=body.issuer_algorithm or body.signing_algorithm,
-        key_access_mode=body.key_access_mode,
-        remote_signing_config=body.remote_signing_config,
+        issuer_profile_id=issuer_fields["issuer_profile_id"],
+        issuer_key_id=issuer_fields["issuer_key_id"],
+        issuer_algorithm=issuer_fields["issuer_algorithm"],
+        key_access_mode=issuer_fields["key_access_mode"],
+        remote_signing_config=issuer_fields["remote_signing_config"],
         issuer_certificate_chain_pem=body.issuer_certificate_chain_pem,
-        issuer_did=body.issuer_did,
+        issuer_did=issuer_fields["issuer_did"],
         auto_generate_artifacts=_resolve_auto_generate_artifacts(
             body.auto_generate_artifacts,
             body.artifacts_auto_generate,
@@ -1572,6 +1748,7 @@ async def get_credential_template(
 async def update_credential_template(
     template_id: str,
     request: UpdateCredentialTemplateRequest,
+    fastapi_request: Request,
     user_id: str = Depends(get_current_user_id),
     repo: InMemoryCredentialTemplateRepository = Depends(get_repo),
 ) -> CredentialTemplateResponse:
@@ -1582,85 +1759,100 @@ async def update_credential_template(
     template = await repo.get(template_id)
     if not template:
         raise HTTPException(status_code=404, detail="Credential Template not found")
+
+    await require_org_membership(template.organization_id, fastapi_request, user_id)
     
     if template.status != TemplateStatus.DRAFT:
         raise HTTPException(
             status_code=400, 
             detail="Only draft templates can be modified. Create a new version instead."
         )
+
+    candidate = copy.deepcopy(template)
     
     if request.name is not None:
-        template.name = request.name
+        candidate.name = request.name
     if request.description is not None:
-        template.description = request.description
+        candidate.description = request.description
     if request.privacy_posture is not None:
-        template.privacy_posture = PrivacyPosture(request.privacy_posture)
+        candidate.privacy_posture = PrivacyPosture(request.privacy_posture)
     if request.selective_disclosure_fields is not None:
-        template.selective_disclosure_fields = request.selective_disclosure_fields
+        candidate.selective_disclosure_fields = request.selective_disclosure_fields
     if request.zk_predicate_claims is not None:
-        template.zk_predicate_claims = request.zk_predicate_claims
+        candidate.zk_predicate_claims = request.zk_predicate_claims
     if request.application_template_id is not None:
-        template.application_template_id = request.application_template_id
+        candidate.application_template_id = request.application_template_id
     if request.trust_profile_id is not None:
-        template.trust_profile_id = request.trust_profile_id
+        candidate.trust_profile_id = request.trust_profile_id
     if request.revocation_profile_id is not None:
-        template.revocation_profile_id = request.revocation_profile_id
+        candidate.revocation_profile_id = request.revocation_profile_id
     if request.issuer_profile_id is not None:
-        template.issuer_profile_id = request.issuer_profile_id
-    if request.issuer_key_id is not None:
-        template.issuer_key_id = request.issuer_key_id
+        candidate.issuer_profile_id = request.issuer_profile_id
     if request.issuer_algorithm is not None or request.signing_algorithm is not None:
-        template.issuer_algorithm = request.issuer_algorithm or request.signing_algorithm
-    if request.key_access_mode is not None:
-        template.key_access_mode = request.key_access_mode
-    if request.remote_signing_config is not None:
-        template.remote_signing_config = request.remote_signing_config
+        candidate.issuer_algorithm = request.issuer_algorithm or request.signing_algorithm
     if request.issuer_certificate_chain_pem is not None:
-        template.issuer_certificate_chain_pem = request.issuer_certificate_chain_pem
-    if request.issuer_did is not None:
-        template.issuer_did = request.issuer_did
+        candidate.issuer_certificate_chain_pem = request.issuer_certificate_chain_pem
     if request.auto_generate_artifacts is not None or request.artifacts_auto_generate is not None:
-        template.auto_generate_artifacts = _resolve_auto_generate_artifacts(
+        candidate.auto_generate_artifacts = _resolve_auto_generate_artifacts(
             request.auto_generate_artifacts,
             request.artifacts_auto_generate,
         )
-    supported_formats = template.supported_formats
+    supported_formats = candidate.supported_formats
     if request.supported_formats is not None:
         supported_formats = [normalize_credential_format(f) for f in request.supported_formats]
-        template.supported_formats = supported_formats
+        candidate.supported_formats = supported_formats
     if request.wallet_configs is not None:
-        template.wallet_configs = [WalletConfig(wallet_id=wc.get("wallet_id", ""), deep_link_scheme=wc.get("deep_link_scheme", "openid-credential-offer://"), format_variant=wc.get("format_variant")) for wc in request.wallet_configs]
+        candidate.wallet_configs = [WalletConfig(wallet_id=wc.get("wallet_id", ""), deep_link_scheme=wc.get("deep_link_scheme", "openid-credential-offer://"), format_variant=wc.get("format_variant")) for wc in request.wallet_configs]
     if request.issuance_protocol is not None:
-        template.issuance_protocol = request.issuance_protocol
+        candidate.issuance_protocol = request.issuance_protocol
     if request.credential_payload_format is not None:
         try:
-            template.credential_payload_format = normalize_credential_payload_format(
+            candidate.credential_payload_format = normalize_credential_payload_format(
                 request.credential_payload_format,
                 supported_formats,
             )
         except ValueError as e:
             raise HTTPException(status_code=422, detail=str(e))
     if request.validity_rules is not None:
-        template.validity_rules = _resolve_validity_rules(request.validity_rules, template.validity_rules)
+        candidate.validity_rules = _resolve_validity_rules(request.validity_rules, candidate.validity_rules)
 
     _validate_template_protocol_requirements(
-        compliance_profile=template.compliance_profile,
-        compliance_profile_id=template.compliance_profile_id,
+        compliance_profile=candidate.compliance_profile,
+        compliance_profile_id=candidate.compliance_profile_id,
         credential_payload_format=normalize_credential_payload_format(
-            template.credential_payload_format,
-            template.supported_formats,
+            candidate.credential_payload_format,
+            candidate.supported_formats,
         ),
-        vct=template.vct,
+        vct=candidate.vct,
     )
+
+    issuer_context = await _require_active_issuer_profile(
+        fastapi_request,
+        organization_id=candidate.organization_id,
+        issuer_profile_id=candidate.issuer_profile_id,
+        credential_format=payload_format_to_wire(candidate.credential_payload_format),
+        algorithm=candidate.issuer_algorithm,
+    )
+    issuer_fields = _canonical_issuer_fields(
+        issuer_context,
+        requested_algorithm=candidate.issuer_algorithm,
+    )
+    candidate.issuer_profile_id = issuer_fields["issuer_profile_id"]
+    candidate.issuer_key_id = issuer_fields["issuer_key_id"]
+    candidate.issuer_algorithm = issuer_fields["issuer_algorithm"]
+    candidate.key_access_mode = issuer_fields["key_access_mode"]
+    candidate.remote_signing_config = issuer_fields["remote_signing_config"]
+    candidate.issuer_did = issuer_fields["issuer_did"]
     
-    template.updated_at = datetime.now(timezone.utc)
-    await repo.save(template)
-    return _template_to_response(template)
+    candidate.updated_at = datetime.now(timezone.utc)
+    await repo.save(candidate)
+    return _template_to_response(candidate)
 
 
 @router.post("/{template_id}/activate", response_model=CredentialTemplateResponse, response_model_exclude_none=True)
 async def activate_credential_template(
     template_id: str,
+    fastapi_request: Request,
     user_id: str = Depends(get_current_user_id),
     repo: InMemoryCredentialTemplateRepository = Depends(get_repo),
 ) -> CredentialTemplateResponse:
@@ -1668,9 +1860,19 @@ async def activate_credential_template(
     template = await repo.get(template_id)
     if not template:
         raise HTTPException(status_code=404, detail="Credential Template not found")
+
+    await require_org_membership(template.organization_id, fastapi_request, user_id)
     
     if not template.claims:
         raise HTTPException(status_code=400, detail="Template must have at least one claim")
+
+    await _require_active_issuer_profile(
+        fastapi_request,
+        organization_id=template.organization_id,
+        issuer_profile_id=template.issuer_profile_id,
+        credential_format=payload_format_to_wire(template.credential_payload_format),
+        algorithm=template.issuer_algorithm,
+    )
     
     template.activate()
     await repo.save(template)
@@ -1680,6 +1882,7 @@ async def activate_credential_template(
 @router.post("/{template_id}/deprecate", response_model=CredentialTemplateResponse, response_model_exclude_none=True)
 async def deprecate_credential_template(
     template_id: str,
+    fastapi_request: Request,
     user_id: str = Depends(get_current_user_id),
     repo: InMemoryCredentialTemplateRepository = Depends(get_repo),
 ) -> CredentialTemplateResponse:
@@ -1687,6 +1890,9 @@ async def deprecate_credential_template(
     template = await repo.get(template_id)
     if not template:
         raise HTTPException(status_code=404, detail="Credential Template not found")
+
+    await require_org_membership(template.organization_id, fastapi_request, user_id)
+
     template.deprecate()
     await repo.save(template)
     return _template_to_response(template)
@@ -1695,6 +1901,7 @@ async def deprecate_credential_template(
 @router.post("/{template_id}/new-version", response_model=CredentialTemplateResponse, response_model_exclude_none=True)
 async def create_new_version(
     template_id: str,
+    fastapi_request: Request,
     user_id: str = Depends(get_current_user_id),
     repo: InMemoryCredentialTemplateRepository = Depends(get_repo),
 ) -> CredentialTemplateResponse:
@@ -1702,6 +1909,8 @@ async def create_new_version(
     template = await repo.get(template_id)
     if not template:
         raise HTTPException(status_code=404, detail="Credential Template not found")
+
+    await require_org_membership(template.organization_id, fastapi_request, user_id)
     
     new_template = template.new_version()
     await repo.save(new_template)
@@ -1711,12 +1920,16 @@ async def create_new_version(
 @router.delete("/{template_id}")
 async def delete_credential_template(
     template_id: str,
+    fastapi_request: Request,
     user_id: str = Depends(get_current_user_id),
     repo: InMemoryCredentialTemplateRepository = Depends(get_repo),
 ) -> dict:
     """Delete a Credential Template (soft delete). Requires authentication."""
     """Delete a Credential Template (only allowed for drafts)."""
     template = await repo.get(template_id)
+    if template:
+        await require_org_membership(template.organization_id, fastapi_request, user_id)
+
     if template and template.status != TemplateStatus.DRAFT:
         raise HTTPException(
             status_code=400, 
@@ -1731,6 +1944,7 @@ async def delete_credential_template(
 async def add_claim(
     template_id: str,
     claim: ClaimDefinitionModel,
+    fastapi_request: Request,
     user_id: str = Depends(get_current_user_id),
     repo: InMemoryCredentialTemplateRepository = Depends(get_repo),
 ) -> CredentialTemplateResponse:
@@ -1738,6 +1952,8 @@ async def add_claim(
     template = await repo.get(template_id)
     if not template:
         raise HTTPException(status_code=404, detail="Credential Template not found")
+
+    await require_org_membership(template.organization_id, fastapi_request, user_id)
     
     if template.status != TemplateStatus.DRAFT:
         raise HTTPException(status_code=400, detail="Only draft templates can be modified")
@@ -2788,6 +3004,12 @@ async def delete_delivery_destination(
 internal_router = APIRouter(prefix="/internal", tags=["internal"])
 
 
+def _has_kms_backed_issuer(template: Any) -> bool:
+    issuer_profile_id = str(getattr(template, "issuer_profile_id", "") or "").strip()
+    key_access_mode = str(getattr(template, "key_access_mode", "") or "").strip().upper()
+    return bool(issuer_profile_id and key_access_mode == "REMOTE_SIGNING")
+
+
 @internal_router.get("/credential-configurations")
 async def get_credential_configurations(request: Request) -> dict:
     """
@@ -2805,29 +3027,31 @@ async def get_credential_configurations(request: Request) -> dict:
     _binding = ["did:key"]
     _signing_algs = ["ES256", "EdDSA"]
 
-    # Always include the generic "default" fallback entry.
-    configs: dict = {
-        "default": {
-            "format": "jwt_vc_json",
-            "scope": "credential",
-            "cryptographic_binding_methods_supported": _binding,
-            "credential_signing_alg_values_supported": _signing_algs,
-            "proof_types_supported": _proof_types,
-            "credential_definition": {"type": ["VerifiableCredential"]},
-            "display": [{"name": "Verifiable Credential", "locale": "en-US"}],
-        }
-    }
+    configs: dict = {}
 
     if _repo is None:
-        return configs
+        return {
+            "credential_configurations_supported": configs,
+            "issuer_display_name": None,
+        }
 
     try:
         templates = await _repo.list_all(status=TemplateStatus.ACTIVE)
     except Exception as exc:  # pragma: no cover
         logger.warning("Failed to load credential templates for well-known: %s", exc)
-        return configs
+        return {
+            "credential_configurations_supported": configs,
+            "issuer_display_name": None,
+        }
 
+    advertised_templates: list[CredentialTemplate] = []
     for t in templates:
+        if not _has_kms_backed_issuer(t):
+            logger.warning(
+                "Skipping active credential template %s in issuer metadata because it lacks a KMS-backed issuer profile",
+                getattr(t, "id", None) or getattr(t, "name", None) or "unknown",
+            )
+            continue
         cred_type = (t.credential_type or "").strip()
         if not cred_type:
             continue
@@ -2847,12 +3071,13 @@ async def get_credential_configurations(request: Request) -> dict:
             },
             "display": [{"name": t.name or cred_type, "locale": "en-US"}],
         }
+        advertised_templates.append(t)
 
     # Try to look up the issuer display name from the org service using the
-    # organization_id of the first active template we found.
+    # organization_id of the first active template we can actually advertise.
     issuer_display_name: str | None = None
-    if templates:
-        org_id = getattr(templates[0], "organization_id", None)
+    if advertised_templates:
+        org_id = getattr(advertised_templates[0], "organization_id", None)
         if org_id:
             try:
                 from marty_proto.v1 import organization_service_pb2 as org_pb2

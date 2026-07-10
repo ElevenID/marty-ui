@@ -30,6 +30,35 @@ export const ReadinessState = {
 const TRUST_KEY_MANAGEMENT_PATH = '/console/org/deploy/key-management';
 const TRUST_ISSUER_IDENTITY_PATH = '/console/org/deploy/issuer-identity';
 
+function getMessageId(error) {
+  return error?.message_id || error?.messageId || error?.data?.message_id || error?.response?.data?.message_id || null;
+}
+
+function buildLoadErrorReadiness(label, error) {
+  const messageId = getMessageId(error);
+  const suffix = messageId ? ` Message ID: ${messageId}` : '';
+  return {
+    state: ReadinessState.BLOCKED,
+    message: `${label} could not be loaded.${suffix}`,
+    action: null,
+    path: null,
+    blockReason: `${label} is unavailable, so setup readiness cannot be trusted.${suffix}`,
+    serviceError: true,
+  };
+}
+
+function firstResourceError(resourceErrors, keys) {
+  if (!resourceErrors) {
+    return null;
+  }
+  for (const key of keys) {
+    if (resourceErrors[key]) {
+      return { key, error: resourceErrors[key] };
+    }
+  }
+  return null;
+}
+
 function getDefaultKeyManagementService(config) {
   const services = Array.isArray(config?.services)
     ? config.services.filter((service) => service && typeof service === 'object')
@@ -52,12 +81,51 @@ function hasManagedIssuerInput(signingKeys, issuerProfiles) {
   return safeSigningKeys.length > 0 || safeIssuerProfiles.length > 0;
 }
 
+function hasActiveKmsBackedIssuerProfile(template, issuerProfiles) {
+  const issuerProfileId = String(template?.issuer_profile_id || '').trim();
+  if (!issuerProfileId) {
+    return false;
+  }
+
+  const keyAccessMode = String(template?.key_access_mode || '').trim().toUpperCase();
+  if (keyAccessMode && keyAccessMode !== 'REMOTE_SIGNING') {
+    return false;
+  }
+
+  if (!Array.isArray(issuerProfiles)) {
+    return false;
+  }
+
+  return issuerProfiles.some((profile) => (
+    String(profile?.id || '').trim() === issuerProfileId
+    && String(profile?.status || '').trim().toLowerCase() === 'active'
+    && String(profile?.issuer_did || profile?.did || '').trim().startsWith('did:')
+    && String(profile?.signing_service_id || profile?.service_id || profile?.metadata?.signing_service_id || '').trim()
+  ));
+}
+
 /**
  * Compute Trust Profile readiness
  */
 function evaluateTrustReadiness(trustProfiles, dependencies = {}) {
   const safeTrustProfiles = Array.isArray(trustProfiles) ? trustProfiles : [];
-  const { signingKeys = [], issuerProfiles = [], keyManagementConfig = null } = dependencies || {};
+  const { signingKeys = [], issuerProfiles = [], keyManagementConfig = null, resourceErrors = {} } = dependencies || {};
+  const loadError = firstResourceError(resourceErrors, [
+    'trustProfiles',
+    'keyManagementConfig',
+    'signingKeys',
+    'issuerProfiles',
+  ]);
+
+  if (loadError) {
+    const labels = {
+      trustProfiles: 'Trust profiles',
+      keyManagementConfig: 'Key management configuration',
+      signingKeys: 'Signing keys',
+      issuerProfiles: 'Issuer profiles',
+    };
+    return buildLoadErrorReadiness(labels[loadError.key] || 'Setup data', loadError.error);
+  }
 
   if (safeTrustProfiles.length === 0) {
     if (!getDefaultKeyManagementService(keyManagementConfig)) {
@@ -84,7 +152,7 @@ function evaluateTrustReadiness(trustProfiles, dependencies = {}) {
       state: ReadinessState.MISSING,
       message: 'No Trust Profiles configured',
       action: 'Create',
-      path: '/console/trust/profiles/new',
+      path: '/console/org/trust/profiles/new',
       blockReason: null,
     };
   }
@@ -95,7 +163,7 @@ function evaluateTrustReadiness(trustProfiles, dependencies = {}) {
       state: ReadinessState.BLOCKED,
       message: `${safeTrustProfiles.length} Trust Profile(s) configured but none active`,
       action: 'Activate',
-      path: '/console/trust/profiles',
+      path: '/console/org/trust/profiles',
       blockReason: 'Trust Profile exists but status is not active',
     };
   }
@@ -126,22 +194,29 @@ function evaluateTemplateReadiness(templates, trustProfiles, trustDependencies =
     };
   }
 
+  const loadError = firstResourceError(trustDependencies.resourceErrors, ['templates']);
+  if (loadError) {
+    return buildLoadErrorReadiness('Credential templates', loadError.error);
+  }
+
   if (templates.length === 0) {
     return {
       state: ReadinessState.MISSING,
       message: 'No Credential Templates configured',
       action: 'Create',
-      path: '/console/templates/credentials/new',
+      path: '/console/org/templates/credentials/new',
       blockReason: null,
     };
   }
 
   // Check for artifacts issues
+  const issuerProfiles = trustDependencies.issuerProfiles;
   const blocked = templates.filter((t) => 
     t.status !== 'active' || 
     t.artifacts_status === 'missing' || 
     t.artifacts_status === 'invalid' ||
-    !t.trust_profile_id
+    !t.trust_profile_id ||
+    !hasActiveKmsBackedIssuerProfile(t, issuerProfiles)
   );
 
   if (blocked.length > 0) {
@@ -152,6 +227,9 @@ function evaluateTemplateReadiness(templates, trustProfiles, trustDependencies =
     if (blocked.some((t) => !t.trust_profile_id)) {
       reasons.push('missing trust profile');
     }
+    if (blocked.some((t) => !hasActiveKmsBackedIssuerProfile(t, issuerProfiles))) {
+      reasons.push('missing active KMS-backed issuer profile');
+    }
     if (blocked.some((t) => t.status !== 'active')) {
       reasons.push('inactive status');
     }
@@ -160,7 +238,7 @@ function evaluateTemplateReadiness(templates, trustProfiles, trustDependencies =
       state: ReadinessState.BLOCKED,
       message: `${blocked.length} of ${templates.length} template(s) with issues: ${reasons.join(', ')}`,
       action: 'Fix',
-      path: '/console/templates/credentials',
+      path: '/console/org/templates/credentials',
       blockReason: `Credential Template(s) have issues: ${reasons.join(', ')}`,
     };
   }
@@ -191,12 +269,17 @@ function evaluatePolicyReadiness(policies, templates, trustProfiles, trustDepend
     };
   }
 
+  const loadError = firstResourceError(trustDependencies.resourceErrors, ['policies']);
+  if (loadError) {
+    return buildLoadErrorReadiness('Presentation policies', loadError.error);
+  }
+
   if (policies.length === 0) {
     return {
       state: ReadinessState.MISSING,
       message: 'No Presentation Policies configured',
       action: 'Create',
-      path: '/console/policies/presentation/new',
+      path: '/console/org/policies/presentation/new',
       blockReason: null,
     };
   }
@@ -211,7 +294,7 @@ function evaluatePolicyReadiness(policies, templates, trustProfiles, trustDepend
       state: ReadinessState.BLOCKED,
       message: `${blocked.length} of ${policies.length} policy(ies) missing required claims`,
       action: 'Fix',
-      path: '/console/policies/presentation',
+      path: '/console/org/policies/presentation',
       blockReason: 'Presentation Policy exists but has no required claims',
     };
   }
@@ -241,12 +324,18 @@ function evaluateDeploymentReadiness(deployments, apiKeys, policies, templates, 
     };
   }
 
+  const loadError = firstResourceError(trustDependencies.resourceErrors, ['deployments', 'apiKeys']);
+  if (loadError) {
+    const label = loadError.key === 'apiKeys' ? 'API keys' : 'Deployment profiles';
+    return buildLoadErrorReadiness(label, loadError.error);
+  }
+
   if (deployments.length === 0) {
     return {
       state: ReadinessState.MISSING,
       message: 'No Deployment Profiles configured',
       action: 'Create',
-      path: '/console/deploy/profiles/new',
+      path: '/console/org/deploy/profiles/new',
       blockReason: null,
     };
   }
@@ -257,7 +346,7 @@ function evaluateDeploymentReadiness(deployments, apiKeys, policies, templates, 
       state: ReadinessState.BLOCKED,
       message: `${deployments.length} Deployment Profile(s) configured but none active`,
       action: 'Activate',
-      path: '/console/deploy/profiles',
+      path: '/console/org/deploy/profiles',
       blockReason: 'Deployment Profile exists but is not active',
     };
   }
@@ -298,12 +387,17 @@ function evaluateFlowReadiness(flows, deployments, apiKeys, policies, templates,
     };
   }
 
+  const loadError = firstResourceError(trustDependencies.resourceErrors, ['flows']);
+  if (loadError) {
+    return buildLoadErrorReadiness('Flows', loadError.error);
+  }
+
   if (flows.length === 0) {
     return {
       state: ReadinessState.MISSING,
       message: 'No Flows configured',
       action: 'Create',
-      path: '/console/flows/definitions/new',
+      path: '/console/org/flows/definitions/new',
       blockReason: null,
     };
   }
@@ -319,7 +413,7 @@ function evaluateFlowReadiness(flows, deployments, apiKeys, policies, templates,
       state: ReadinessState.BLOCKED,
       message: `${blocked.length} of ${flows.length} flow(s) inactive or missing references`,
       action: 'Fix',
-      path: '/console/flows/definitions',
+      path: '/console/org/flows/definitions',
       blockReason: 'Flow exists but missing references or inactive',
     };
   }
@@ -350,12 +444,14 @@ export function computeSetupReadiness(data) {
     deployments,
     flows,
     apiKeys,
+    resourceErrors,
   } = data;
 
   const trustDependencies = {
     signingKeys,
     issuerProfiles,
     keyManagementConfig,
+    resourceErrors,
   };
 
   const trust = evaluateTrustReadiness(trustProfiles, trustDependencies);
@@ -417,14 +513,20 @@ export function computeBlockers(readiness) {
 export function computeQuickActionVisibility(readiness) {
   const { trust, template, policy, deployment, flow } = readiness;
 
-  const showRegisterSigningService = trust.state === ReadinessState.BLOCKED && trust.path === TRUST_KEY_MANAGEMENT_PATH;
-  const showCreateIssuerIdentity = trust.state === ReadinessState.BLOCKED && trust.path === TRUST_ISSUER_IDENTITY_PATH;
+  const trustActionable = !trust.serviceError;
+  const templateActionable = !template.serviceError;
+  const policyActionable = !policy.serviceError;
+  const deploymentActionable = !deployment.serviceError;
+  const flowActionable = !flow.serviceError;
+
+  const showRegisterSigningService = trustActionable && trust.state === ReadinessState.BLOCKED && trust.path === TRUST_KEY_MANAGEMENT_PATH;
+  const showCreateIssuerIdentity = trustActionable && trust.state === ReadinessState.BLOCKED && trust.path === TRUST_ISSUER_IDENTITY_PATH;
   // Determine which single action to show based on progression
-  const showCreateTrust = !showRegisterSigningService && !showCreateIssuerIdentity && trust.state !== ReadinessState.READY;
-  const showCreateTemplate = trust.state === ReadinessState.READY && template.state !== ReadinessState.READY;
-  const showCreatePolicy = template.state === ReadinessState.READY && policy.state !== ReadinessState.READY;
-  const showGenerateApiKey = policy.state === ReadinessState.READY && deployment.state !== ReadinessState.READY;
-  const showCreateFlow = deployment.state === ReadinessState.READY && flow.state !== ReadinessState.READY;
+  const showCreateTrust = trustActionable && !showRegisterSigningService && !showCreateIssuerIdentity && trust.state !== ReadinessState.READY;
+  const showCreateTemplate = templateActionable && trust.state === ReadinessState.READY && template.state !== ReadinessState.READY;
+  const showCreatePolicy = policyActionable && template.state === ReadinessState.READY && policy.state !== ReadinessState.READY;
+  const showGenerateApiKey = deploymentActionable && policy.state === ReadinessState.READY && deployment.state !== ReadinessState.READY;
+  const showCreateFlow = flowActionable && deployment.state === ReadinessState.READY && flow.state !== ReadinessState.READY;
 
   return {
     'register-signing-service': {

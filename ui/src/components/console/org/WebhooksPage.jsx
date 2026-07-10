@@ -47,6 +47,7 @@ import { ResourcePage } from '../../common';
 import ConfirmDeleteDialog from '../../common/ConfirmDeleteDialog';
 import { useAsyncData } from '../../../hooks/useAsyncData';
 import { useAuth } from '../../../hooks/useAuth';
+import { useConsole } from '../../../contexts/ConsoleContext';
 import {
   createWebhook,
   deleteWebhook,
@@ -142,7 +143,9 @@ async function copyToClipboard(text) {
 
 function WebhooksPage() {
   const { t } = useTranslation('console');
-  const { organizationId } = useAuth();
+  const { organizationId: authOrganizationId } = useAuth();
+  const { activeOrgId } = useConsole();
+  const organizationId = activeOrgId || authOrganizationId;
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingWebhook, setEditingWebhook] = useState(null);
   const [pendingDelete, setPendingDelete] = useState(null);

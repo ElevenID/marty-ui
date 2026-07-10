@@ -41,6 +41,10 @@ vi.mock('../../../../hooks/useAuth', () => ({
   useAuth: () => authState,
 }))
 
+vi.mock('../../../../contexts/ConsoleContext', () => ({
+  useConsole: () => ({ activeOrgId: authState.organizationId }),
+}))
+
 vi.mock('../../../../services/presentationPolicyApi', () => ({
   listTrustProfiles: (...args: unknown[]) => listTrustProfiles(...args),
   listRevocationProfiles: (...args: unknown[]) => listRevocationProfiles(...args),
@@ -112,9 +116,9 @@ describe('TrustProfilesPage', () => {
     })
 
     await waitFor(() => {
-      expect(listSigningKeys).toHaveBeenCalledWith({ limit: 1 })
-      expect(listIssuerProfiles).toHaveBeenCalledTimes(1)
-      expect(getKeyManagementConfig).toHaveBeenCalledTimes(1)
+      expect(listSigningKeys).toHaveBeenCalledWith({ organization_id: 'org-1', limit: 1 })
+      expect(listIssuerProfiles).toHaveBeenCalledWith({ organization_id: 'org-1' })
+      expect(getKeyManagementConfig).toHaveBeenCalledWith({ organization_id: 'org-1' })
       expect(listRevocationProfiles).toHaveBeenCalledWith({ organization_id: 'org-1', limit: 1 })
     })
 
@@ -156,6 +160,26 @@ describe('TrustProfilesPage', () => {
     expect(screen.getByText('Key Management Service:missing')).toBeInTheDocument()
     expect(screen.getByText('Issuer Identity or Signing Key:missing')).toBeInTheDocument()
     expect(screen.getByText('Revocation Profile:missing')).toBeInTheDocument()
+  })
+
+  it('surfaces trust prerequisite load failures as errors instead of missing setup', async () => {
+    listTrustProfiles.mockResolvedValue([])
+    listSigningKeys.mockRejectedValue(new Error('KMS unavailable'))
+    listIssuerProfiles.mockResolvedValue({ profiles: [] })
+    getKeyManagementConfig.mockResolvedValue({
+      supports_native_key_management: false,
+      default_service_id: null,
+      services: [],
+    })
+    listRevocationProfiles.mockRejectedValue(new Error('Revocation service unavailable'))
+
+    renderWithRouter(<TrustProfilesPage />)
+
+    expect(await screen.findByText('No trust profiles')).toBeInTheDocument()
+    expect(screen.getByText('Key Management Service:error')).toBeInTheDocument()
+    expect(screen.getByText('Revocation Profile:error')).toBeInTheDocument()
+    expect(screen.getByText(/KMS unavailable/)).toBeInTheDocument()
+    expect(screen.getByText(/Revocation service unavailable/)).toBeInTheDocument()
   })
 
   it('treats managed issuer prerequisites as ready when KMS and issuer input exist', async () => {

@@ -69,6 +69,7 @@ function OrganizationSettingsPage() {
   const [success, setSuccess] = useState(false);
   const [editMode, setEditMode] = useState(false);
   const [availableRoles, setAvailableRoles] = useState([]);
+  const [roleLoadError, setRoleLoadError] = useState(null);
   const [org, setOrg] = useState({
     name: '',
     displayName: '',
@@ -93,13 +94,23 @@ function OrganizationSettingsPage() {
   useEffect(() => {
     const loadOrg = async () => {
       try {
-        const [{ org: loaded, error: loadError }, rolesResponse] = await Promise.all([
+        setRoleLoadError(null);
+        const [{ org: loaded, error: loadError }, rolesResult] = await Promise.all([
           loadOrgSettings({ organizationName }),
-          effectiveOrgId ? listRoles(effectiveOrgId).catch(() => []) : Promise.resolve([]),
+          effectiveOrgId
+            ? listRoles(effectiveOrgId).then(
+                (rolesResponse) => ({ status: 'fulfilled', value: rolesResponse }),
+                (rolesError) => ({ status: 'rejected', reason: rolesError }),
+              )
+            : Promise.resolve({ status: 'fulfilled', value: [] }),
         ]);
         if (loadError) throw new Error(loadError);
+        const rolesResponse = rolesResult.status === 'fulfilled' ? rolesResult.value : [];
         const roles = (rolesResponse?.roles || rolesResponse || []).filter((role) => role.name !== 'owner');
         setAvailableRoles(roles);
+        if (rolesResult.status === 'rejected') {
+          setRoleLoadError(rolesResult.reason);
+        }
         setOrg(loaded);
       } catch (err) {
         setError(t('org.settings.errorLoading'));
@@ -202,6 +213,11 @@ function OrganizationSettingsPage() {
       {success && (
         <Alert severity="success" sx={{ mb: 3 }}>
           {t('org.settings.successMessage')}
+        </Alert>
+      )}
+      {roleLoadError && (
+        <Alert severity="warning" sx={{ mb: 3 }}>
+          {roleLoadError?.message || t('org.settings.membership.rolesLoadFailed', 'Organization roles could not be loaded. Default role settings are unavailable until this is retried.')}
         </Alert>
       )}
 
@@ -394,7 +410,7 @@ function OrganizationSettingsPage() {
           </Grid>
           
           <Grid item xs={12} sm={6}>
-            <FormControl fullWidth disabled={!editMode}>
+            <FormControl fullWidth disabled={!editMode || Boolean(roleLoadError)}>
               <InputLabel>{t('org.settings.membership.defaultRole')}</InputLabel>
               <Select
                 value={org.defaultRole}

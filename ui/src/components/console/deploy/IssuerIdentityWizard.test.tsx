@@ -6,6 +6,7 @@ import IssuerIdentityWizard from './IssuerIdentityWizard'
 const {
   mockListSigningKeys,
   mockGetKeyManagementConfig,
+  mockUpdateKeyManagementConfig,
   mockCreateSigningKey,
   mockCreateIssuerProfile,
   mockPublishServiceToJwks,
@@ -15,6 +16,7 @@ const {
 } = vi.hoisted(() => ({
   mockListSigningKeys: vi.fn(),
   mockGetKeyManagementConfig: vi.fn(),
+  mockUpdateKeyManagementConfig: vi.fn(),
   mockCreateSigningKey: vi.fn(),
   mockCreateIssuerProfile: vi.fn(),
   mockPublishServiceToJwks: vi.fn(),
@@ -24,6 +26,10 @@ const {
 }))
 
 vi.mock('react-i18next', () => ({
+  initReactI18next: {
+    type: '3rdParty',
+    init: vi.fn(),
+  },
   useTranslation: () => ({ t: (key: string) => key }),
 }))
 
@@ -31,6 +37,7 @@ vi.mock('../../../services/signingKeysApi', () => ({
   default: {
     listSigningKeys: (...args: unknown[]) => mockListSigningKeys(...args),
     getKeyManagementConfig: (...args: unknown[]) => mockGetKeyManagementConfig(...args),
+    updateKeyManagementConfig: (...args: unknown[]) => mockUpdateKeyManagementConfig(...args),
     createSigningKey: (...args: unknown[]) => mockCreateSigningKey(...args),
     createIssuerProfile: (...args: unknown[]) => mockCreateIssuerProfile(...args),
     publishServiceToJwks: (...args: unknown[]) => mockPublishServiceToJwks(...args),
@@ -93,12 +100,28 @@ const KEY_MANAGEMENT_CONFIG_WITH_SERVICE = {
   service_type_catalog: [],
 }
 
+const KEY_MANAGEMENT_CONFIG_WITH_EXTERNAL_SERVICE = {
+  ...KEY_MANAGEMENT_CONFIG_WITH_SERVICE,
+  default_service_id: 'svc-external',
+  services: [
+    {
+      id: 'svc-external',
+      name: 'External Vault transit',
+      service_type: 'hashicorp-vault-transit',
+      provider: 'hashicorp-vault',
+      status: 'registered',
+      managed: false,
+    },
+  ],
+}
+
 describe('IssuerIdentityWizard', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockListSigningKeys.mockResolvedValue(SIGNING_KEYS_WITH_JWK)
     mockGetKeyManagementConfig.mockResolvedValue(KEY_MANAGEMENT_CONFIG_WITH_SERVICE)
     mockGetOrganizationLifecycle.mockResolvedValue({ planTier: 'community' })
+    mockUpdateKeyManagementConfig.mockResolvedValue({ ok: true })
     mockCreateIssuerProfile.mockResolvedValue({ id: 'profile-new' })
     mockPublishServiceToJwks.mockResolvedValue({})
     mockPublishServiceToDidVm.mockResolvedValue({})
@@ -219,6 +242,46 @@ describe('IssuerIdentityWizard', () => {
       )
     })
     expect(mockCreateSigningKey).not.toHaveBeenCalled()
+    expect(mockPublishServiceToJwks).toHaveBeenCalledWith(
+      'managed-openbao-transit',
+      'org-test-1',
+      expect.objectContaining({
+        key_reference: 'cred-issuer-test-es256',
+      }),
+    )
+  })
+
+  it('blocks completion when issuer profile creation fails', async () => {
+    mockCreateIssuerProfile.mockRejectedValueOnce(new Error('issuer registry unavailable'))
+
+    const { user } = renderWithRouter(<IssuerIdentityWizard />, {
+      initialEntries: ['/console/org/deploy/issuer-identity/new'],
+    })
+
+    await waitFor(() => expect(screen.getByText('Choose a DID method')).toBeInTheDocument())
+
+    await user.click(screen.getByText('did:jwk'))
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+
+    await waitFor(() => expect(screen.getByText('Key source')).toBeInTheDocument())
+    await user.click(screen.getByText('Use existing key from KMS'))
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+
+    await waitFor(() => expect(screen.getByText('Test issuer key')).toBeInTheDocument())
+    await user.click(screen.getByText('Test issuer key'))
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+
+    await waitFor(() => expect(screen.getByText('did:jwk configuration')).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Create identity' })).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: 'Create identity' }))
+
+    await waitFor(() => {
+      expect(screen.getByText(/Issuer profile could not be saved: issuer registry unavailable/i)).toBeInTheDocument()
+    })
+    expect(screen.queryByText('Issuer identity created')).not.toBeInTheDocument()
+    expect(mockPublishServiceToJwks).not.toHaveBeenCalled()
   })
 
   it('creates a new key in KMS, refreshes inventory, then saves did:jwk issuer profile', async () => {
@@ -283,6 +346,220 @@ describe('IssuerIdentityWizard', () => {
           issuer_did: expect.stringMatching(/^did:jwk:/),
         }),
       )
+      expect(mockPublishServiceToJwks).toHaveBeenCalledWith(
+        'managed-openbao-transit',
+        'org-test-1',
+        expect.objectContaining({
+          key_reference: 'cred-issuer-new-key',
+        }),
+      )
+    })
+  })
+
+  it('preselects managed key creation from the KMS handoff query', async () => {
+    const { user } = renderWithRouter(<IssuerIdentityWizard />, {
+      initialEntries: ['/console/org/deploy/issuer-identity/new?key_source=create&signing_service_id=managed-openbao-transit&key_name=Audit%20Issuer%20Key'],
+    })
+
+    await waitFor(() => expect(screen.getByText('Choose a DID method')).toBeInTheDocument())
+
+    await user.click(screen.getByText('did:jwk'))
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+
+    await waitFor(() => expect(screen.getByText('Key source')).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+
+    await waitFor(() => expect(screen.getByRole('textbox', { name: /key name/i })).toHaveValue('Audit Issuer Key'))
+  })
+
+  it('explains that managed OpenBao can create missing issuer keys in the wizard', async () => {
+    mockListSigningKeys.mockResolvedValue({
+      keys: [],
+      domain_config: SIGNING_KEYS_WITH_JWK.domain_config,
+    })
+
+    const { user } = renderWithRouter(<IssuerIdentityWizard />, {
+      initialEntries: ['/console/org/deploy/issuer-identity/new'],
+    })
+
+    await waitFor(() => expect(screen.getByText('No signing keys discovered')).toBeInTheDocument())
+    expect(screen.getByText(/create a managed OpenBao key for this issuer identity/i)).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Use managed key creation' }))
+
+    await waitFor(() => expect(screen.getByText('Choose a DID method')).toBeInTheDocument())
+    await user.click(screen.getByText('did:jwk'))
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+
+    await waitFor(() => expect(screen.getByText('Key source')).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+
+    await waitFor(() => expect(screen.getByRole('textbox', { name: /key name/i })).toBeInTheDocument())
+  })
+
+  it('disables console key creation when the default service is external-only', async () => {
+    mockGetKeyManagementConfig.mockResolvedValue(KEY_MANAGEMENT_CONFIG_WITH_EXTERNAL_SERVICE)
+
+    const { user } = renderWithRouter(<IssuerIdentityWizard />, {
+      initialEntries: ['/console/org/deploy/issuer-identity/new'],
+    })
+
+    await waitFor(() => expect(screen.getByText('Choose a DID method')).toBeInTheDocument())
+
+    await user.click(screen.getByText('did:jwk'))
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+
+    await waitFor(() => expect(screen.getByText('Key source')).toBeInTheDocument())
+    expect(screen.getByText(/Console key creation currently requires the Marty managed OpenBao transit service/i)).toBeInTheDocument()
+
+    await user.click(screen.getByText('Create new key in KMS'))
+
+    expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled()
+    expect(mockCreateSigningKey).not.toHaveBeenCalled()
+  })
+
+  it('uses managed OpenBao for this issuer identity without changing the org default signer', async () => {
+    const newKey = {
+      id: 'key-managed-new',
+      provider_key_name: 'cred-issuer-managed-new',
+      name: 'Managed issuer key',
+      status: 'active',
+      public_jwk: EC_JWK,
+      service_id: 'managed-openbao-transit',
+    }
+    mockCreateSigningKey.mockResolvedValue({ service_id: 'managed-openbao-transit', key: newKey })
+    mockListSigningKeys.mockResolvedValue({
+      keys: [],
+      domain_config: SIGNING_KEYS_WITH_JWK.domain_config,
+    })
+    mockListSigningKeys
+      .mockResolvedValueOnce({
+        keys: [],
+        domain_config: SIGNING_KEYS_WITH_JWK.domain_config,
+      })
+      .mockResolvedValue({
+        keys: [newKey],
+        domain_config: SIGNING_KEYS_WITH_JWK.domain_config,
+      })
+    mockGetKeyManagementConfig.mockResolvedValue({
+      ...KEY_MANAGEMENT_CONFIG_WITH_SERVICE,
+      default_service_id: 'svc-external',
+      services: [
+        KEY_MANAGEMENT_CONFIG_WITH_SERVICE.services[0],
+        {
+          id: 'svc-external',
+          name: 'Audit Transit Service',
+          service_type: 'openbao-transit',
+          provider: 'openbao',
+          status: 'registered',
+          managed: false,
+        },
+      ],
+    })
+
+    const { user } = renderWithRouter(<IssuerIdentityWizard />, {
+      initialEntries: ['/console/org/deploy/issuer-identity/new'],
+    })
+
+    await waitFor(() => expect(screen.getByText('No signing keys discovered')).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: 'Use managed key creation' }))
+
+    await waitFor(() => expect(screen.getByText('Choose a DID method')).toBeInTheDocument())
+    await user.click(screen.getByText('did:jwk'))
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+
+    await waitFor(() => expect(screen.getByText('Key source')).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+
+    await waitFor(() => expect(screen.getByRole('textbox', { name: /key name/i })).toBeInTheDocument())
+    const keyNameField = screen.getByRole('textbox', { name: /key name/i })
+    await user.clear(keyNameField)
+    await user.type(keyNameField, 'Managed issuer key')
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+
+    await waitFor(() => expect(screen.getByText('did:jwk configuration')).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Create identity' })).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: 'Create identity' }))
+
+    await waitFor(() => {
+      expect(mockCreateSigningKey).toHaveBeenCalledWith(
+        expect.objectContaining({
+          service_id: 'managed-openbao-transit',
+          name: 'Managed issuer key',
+        }),
+      )
+      expect(mockCreateIssuerProfile).toHaveBeenCalledWith(
+        expect.objectContaining({
+          signing_service_id: 'managed-openbao-transit',
+          signing_key_reference: 'cred-issuer-managed-new',
+        }),
+      )
+      expect(mockPublishServiceToJwks).toHaveBeenCalledWith(
+        'managed-openbao-transit',
+        'org-test-1',
+        expect.objectContaining({
+          key_reference: 'cred-issuer-managed-new',
+        }),
+      )
+    })
+    expect(mockUpdateKeyManagementConfig).not.toHaveBeenCalled()
+  })
+
+  it('derives a self-contained DID from the created key when the refreshed key inventory is stale', async () => {
+    const newKey = {
+      id: 'key-managed-stale',
+      provider_key_name: 'cred-issuer-managed-stale',
+      name: 'Stale inventory key',
+      status: 'active',
+      public_jwk: EC_JWK,
+      service_id: 'managed-openbao-transit',
+    }
+    mockCreateSigningKey.mockResolvedValue({ service_id: 'managed-openbao-transit', key: newKey })
+    mockListSigningKeys.mockResolvedValue({
+      keys: [],
+      domain_config: SIGNING_KEYS_WITH_JWK.domain_config,
+    })
+
+    const { user } = renderWithRouter(<IssuerIdentityWizard />, {
+      initialEntries: ['/console/org/deploy/issuer-identity/new?key_source=create&signing_service_id=managed-openbao-transit&key_name=Stale%20inventory%20key'],
+    })
+
+    await waitFor(() => expect(screen.getByText('Recommendations')).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: 'Continue anyway' }))
+
+    await waitFor(() => expect(screen.getByText('Choose a DID method')).toBeInTheDocument())
+    await user.click(screen.getByText('did:jwk'))
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+
+    await waitFor(() => expect(screen.getByText('Key source')).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+
+    await waitFor(() => expect(screen.getByRole('textbox', { name: /key name/i })).toHaveValue('Stale inventory key'))
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+
+    await waitFor(() => expect(screen.getByText('did:jwk configuration')).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Create identity' })).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: 'Create identity' }))
+
+    await waitFor(() => {
+      expect(mockCreateIssuerProfile).toHaveBeenCalledWith(
+        expect.objectContaining({
+          issuer_did: expect.stringMatching(/^did:jwk:/),
+          signing_service_id: 'managed-openbao-transit',
+          signing_key_reference: 'cred-issuer-managed-stale',
+        }),
+      )
+      expect(mockPublishServiceToJwks).toHaveBeenCalledWith(
+        'managed-openbao-transit',
+        'org-test-1',
+        expect.objectContaining({
+          key_reference: 'cred-issuer-managed-stale',
+        }),
+      )
     })
   })
 
@@ -308,7 +585,6 @@ describe('IssuerIdentityWizard', () => {
     })
 
     await waitFor(() => expect(screen.getByText('Choose a DID method')).toBeInTheDocument())
-    await waitFor(() => expect(screen.getByText(/Recommended for this key and compliance target: did:web/i)).toBeInTheDocument())
 
     await user.click(screen.getByText('did:jwk'))
     await user.click(screen.getByRole('button', { name: 'Next' }))
@@ -367,9 +643,17 @@ describe('IssuerIdentityWizard', () => {
     await waitFor(() => {
       expect(mockPublishServiceToDidVm).toHaveBeenCalledWith(
         'managed-openbao-transit',
-        undefined,
+        'org-test-1',
         expect.objectContaining({
           did_id: expect.stringMatching(/^did:web:/),
+          key_reference: 'cred-issuer-test-es256',
+        }),
+      )
+      expect(mockPublishServiceToJwks).toHaveBeenCalledWith(
+        'managed-openbao-transit',
+        'org-test-1',
+        expect.objectContaining({
+          key_reference: 'cred-issuer-test-es256',
         }),
       )
       expect(mockCreateIssuerProfile).toHaveBeenCalledWith(

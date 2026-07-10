@@ -98,6 +98,18 @@ class TestResolveAction:
         assert resolve_action("POST", ORG_PREFIX + "flow-instances") == "flow-instance:start"
         assert resolve_action("PATCH", ORG_PREFIX + "trust-profiles/profile-1") == "trust-profile:edit"
         assert resolve_action("DELETE", ORG_PREFIX + "deployment-profiles/profile-1") == "deployment-profile:delete"
+        assert resolve_action("GET", ORG_PREFIX + "policy-sets") == "policy-set:view"
+        assert resolve_action("POST", ORG_PREFIX + "policy-sets") == "policy-set:create"
+        assert resolve_action("PATCH", ORG_PREFIX + "policy-sets/policy-1") == "policy-set:edit"
+        assert resolve_action("DELETE", ORG_PREFIX + "policy-sets/policy-1") == "policy-set:delete"
+
+    def test_policy_set_lifecycle_routes_map_to_specific_permissions(self):
+        assert resolve_action("POST", ORG_PREFIX + "policy-sets/policy-1/activate") == "policy-set:activate"
+        assert resolve_action("POST", ORG_PREFIX + "policy-sets/policy-1/archive") == "policy-set:archive"
+        assert resolve_action("POST", ORG_PREFIX + "policy-sets/validate") == "policy-set:validate"
+        assert resolve_action("POST", ORG_PREFIX + "policy-sets/policy-1/validate") == "policy-set:validate"
+        assert resolve_action("POST", "/v1/policy-sets/validate") == "policy-set:validate"
+        assert resolve_action("POST", "/v1/policy-sets/policy-1/activate") == "policy-set:activate"
 
     def test_special_routes_take_precedence(self):
         assert resolve_action("GET", ORG_PREFIX + "members") == "team:view"
@@ -111,6 +123,11 @@ class TestResolveAction:
         assert resolve_action("POST", "/v1/verification") == "verification:execute"
         assert resolve_action("POST", "/v1/integrations/canvas/platforms") == "integration-connector:create"
         assert resolve_action("GET", "/v1/integrations/canvas/platforms/platform-123") == "integration-connector:view"
+        assert resolve_action("POST", "/v1/flows/instances") == "flow-instance:start"
+        assert resolve_action("GET", "/v1/flows/instances") == "flow-instance:view"
+        assert resolve_action("POST", "/v1/flows/definitions") == "flow-definition:create"
+        assert resolve_action("POST", "/v1/flows/definitions/flow-1/activate") == "flow-definition:activate"
+        assert resolve_action("POST", "/v1/flows/verify") == "verification:execute"
 
     def test_head_and_options_count_as_view(self):
         assert resolve_action("HEAD", ORG_PREFIX + "flows") == "flow-definition:view"
@@ -167,6 +184,12 @@ class TestResolveResourceLookup:
             "/v1/application-templates/template-123",
         )
 
+    def test_policy_set_lookup(self):
+        assert resolve_resource_lookup("/v1/policy-sets/policy-123") == (
+            "organizations",
+            "/v1/policy-sets/policy-123",
+        )
+
     def test_deployment_lane_lookup_uses_parent_profile(self):
         assert resolve_resource_lookup("/v1/deployment-profiles/profile-123/lanes") == (
             "deployment-profiles",
@@ -175,6 +198,9 @@ class TestResolveResourceLookup:
 
     def test_reserved_subresource_has_no_lookup(self):
         assert resolve_resource_lookup("/v1/issuance/offers/tx-123") is None
+        assert resolve_resource_lookup("/v1/flows/definitions/flow-123") is None
+        assert resolve_resource_lookup("/v1/flows/instances/instance-123") is None
+        assert resolve_resource_lookup("/v1/flows/verify") is None
 
     def test_all_lookup_templates_have_paths(self):
         for service_name, lookup_template, _reserved_segments in RESOURCE_LOOKUP_MAP.values():
@@ -281,6 +307,80 @@ async def test_cedar_middleware_denies_missing_permission():
 
 
 @pytest.mark.asyncio
+async def test_cedar_middleware_allows_scoped_api_key_flow_execution():
+    org_client = MagicMock()
+    org_client.get_membership = AsyncMock()
+
+    app = MagicMock()
+    app.state.org_client = org_client
+    app.state.service_registry = None
+    app.state.http_client = None
+
+    request = _build_request("/v1/flows/instances", method="POST", app=app)
+    request.state.auth_source = "api_key"
+    request.state.api_key_id = "key-1"
+    request.state.api_key_organization_id = ORG_ID
+    request.state.organization_id = ORG_ID
+    request.state.api_key_scopes = ["flows:execute"]
+
+    call_next = AsyncMock(return_value=JSONResponse({"ok": True}))
+    middleware = CedarAuthMiddleware(app=MagicMock())
+
+    response = await middleware.dispatch(request, call_next)
+
+    assert response.status_code == 200
+    assert request.state.required_permission == "flow-instance:start"
+    assert request.state.org_permissions == ["flows:execute"]
+    org_client.get_membership.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_cedar_middleware_denies_api_key_missing_required_scope():
+    app = MagicMock()
+    app.state.org_client = MagicMock()
+    app.state.service_registry = None
+    app.state.http_client = None
+
+    request = _build_request("/v1/flows/instances", method="POST", app=app)
+    request.state.auth_source = "api_key"
+    request.state.api_key_id = "key-1"
+    request.state.api_key_organization_id = ORG_ID
+    request.state.organization_id = ORG_ID
+    request.state.api_key_scopes = ["flows:read"]
+
+    call_next = AsyncMock(return_value=JSONResponse({"ok": True}))
+    middleware = CedarAuthMiddleware(app=MagicMock())
+
+    response = await middleware.dispatch(request, call_next)
+
+    assert response.status_code == 403
+    assert "API key missing required permission" in json.loads(response.body)["detail"]
+
+
+@pytest.mark.asyncio
+async def test_cedar_middleware_denies_api_key_org_mismatch():
+    app = MagicMock()
+    app.state.org_client = MagicMock()
+    app.state.service_registry = None
+    app.state.http_client = None
+
+    request = _build_request(ORG_PREFIX + "flows", method="GET", app=app)
+    request.state.auth_source = "api_key"
+    request.state.api_key_id = "key-1"
+    request.state.api_key_organization_id = "00000000-0000-0000-0000-000000000999"
+    request.state.organization_id = "00000000-0000-0000-0000-000000000999"
+    request.state.api_key_scopes = ["flows:read"]
+
+    call_next = AsyncMock(return_value=JSONResponse({"ok": True}))
+    middleware = CedarAuthMiddleware(app=MagicMock())
+
+    response = await middleware.dispatch(request, call_next)
+
+    assert response.status_code == 403
+    assert json.loads(response.body)["detail"] == "API key does not have access to this organization"
+
+
+@pytest.mark.asyncio
 async def test_cedar_middleware_requires_owner_for_transfer():
     membership = FakeMembership(is_owner=False, permissions={"organization:view"})
     org_client = MagicMock()
@@ -338,6 +438,7 @@ class TestBuildUserEntities:
         user = next(e for e in entities if e["uid"]["type"] == "MIP::User")
         assert user["uid"]["id"] == "u-1"
         assert user["attrs"]["email"] == "alice@test.com"
+        assert user["attrs"]["user_id"] == "u-1"
         assert {"type": "MIP::Organization", "id": "org-1"} in user["parents"]
         assert {"type": "MIP::Role", "id": "member"} in user["parents"]
 

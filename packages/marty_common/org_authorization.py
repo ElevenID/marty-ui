@@ -201,6 +201,7 @@ class OrganizationClient:
 
     async def validate_api_key(self, api_key: str) -> Optional[ApiKeyContext]:
         from marty_proto.v1 import organization_service_pb2
+        import grpc
 
         try:
             resp = await self._grpc_stub.ValidateApiKey(
@@ -214,9 +215,12 @@ class OrganizationClient:
                 key_prefix=resp.key_prefix,
                 scopes=list(resp.scopes),
             )
-        except Exception as exc:
+        except grpc.aio.AioRpcError as exc:
             logger.error("gRPC error validating API key: %s", exc)
-            return None
+            raise HTTPException(status_code=503, detail="Organization service unavailable")
+        except Exception as exc:
+            logger.error("Unexpected error validating API key: %s", exc)
+            raise HTTPException(status_code=503, detail="Organization service unavailable")
 
 
 async def get_organization_client(request: Request) -> OrganizationClient:

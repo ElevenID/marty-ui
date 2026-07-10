@@ -15,6 +15,9 @@ const {
   mockListCredentials,
   mockListRevocationBatches,
   mockBatchRevokeCredentials,
+  mockListTrustProfiles,
+  mockListCredentialTemplates,
+  mockListDeploymentProfiles,
   mockSseConnect,
   mockSseDisconnect,
   mockSseOn,
@@ -29,6 +32,9 @@ const {
   mockListCredentials: vi.fn(),
   mockListRevocationBatches: vi.fn(),
   mockBatchRevokeCredentials: vi.fn(),
+  mockListTrustProfiles: vi.fn(),
+  mockListCredentialTemplates: vi.fn(),
+  mockListDeploymentProfiles: vi.fn(),
   mockSseConnect: vi.fn(),
   mockSseDisconnect: vi.fn(),
   mockSseOn: vi.fn(() => vi.fn()),
@@ -83,6 +89,15 @@ vi.mock('../../services/credentialsApi', () => ({
   },
 }))
 
+vi.mock('../../services/presentationPolicyApi', () => ({
+  listTrustProfiles: mockListTrustProfiles,
+  listCredentialTemplates: mockListCredentialTemplates,
+}))
+
+vi.mock('../../services/deploymentProfilesApi', () => ({
+  listDeploymentProfiles: mockListDeploymentProfiles,
+}))
+
 vi.mock('../../services/sseService', () => ({
   EVENT_TYPES: {
     FLOW_EXECUTION_STARTED: 'flow.execution.started',
@@ -118,17 +133,21 @@ describe('FlowManager', () => {
     mockListRevocationBatches.mockResolvedValue([])
     mockBatchRevokeCredentials.mockResolvedValue(undefined)
     mockListFlowExecutions.mockResolvedValue([])
+    mockListTrustProfiles.mockResolvedValue([])
+    mockListCredentialTemplates.mockResolvedValue([])
+    mockListDeploymentProfiles.mockResolvedValue([])
   })
 
-  it('falls back to sample flows when the backend is unavailable', async () => {
+  it('surfaces flow loading failures without sample data fallback', async () => {
     mockListFlows.mockRejectedValue(new Error('offline'))
 
     render(<FlowManager />)
 
     await waitFor(() => {
-      expect(screen.getByText('EU Digital Identity – Employee Issuance')).toBeInTheDocument()
-      expect(mockShowWarning).toHaveBeenCalledWith(
-        'Backend service unavailable - showing sample data for testing',
+      expect(screen.getByText('offline')).toBeInTheDocument()
+      expect(screen.queryByText(/EU Digital Identity/i)).not.toBeInTheDocument()
+      expect(mockShowError).toHaveBeenCalledWith(
+        'Unable to load flow definitions',
         { autoHideDuration: 8000 }
       )
     })

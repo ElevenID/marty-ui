@@ -27,6 +27,7 @@ import PolicyIcon from '@mui/icons-material/Policy';
 import { useTranslation } from 'react-i18next';
 
 import { listPresentationPolicies } from '../../../../services/presentationPolicyApi';
+import { useConsole } from '../../../../contexts/ConsoleContext';
 
 const getFlowTypes = (t) => [
   {
@@ -49,20 +50,27 @@ const getFlowTypes = (t) => [
 const RuntimeSettingsStep = ({ data, onChange }) => {
   const { t } = useTranslation('console');
   const navigate = useNavigate();
-  const { data: rawPolicies, loading, error } = useAsyncData(
+  const { activeOrgId } = useConsole();
+  const { data: rawPolicies, loading, error, reload } = useAsyncData(
     async () => {
-      const response = await listPresentationPolicies();
+      if (!activeOrgId) {
+        throw new Error('Select an organization before loading presentation policies.');
+      }
+      const response = await listPresentationPolicies({ organization_id: activeOrgId });
       const items = response.data || response || [];
       return items.filter((p) => p.status === 'active');
     },
-    []
+    [activeOrgId]
   );
   const policies = rawPolicies || [];
 
   // Auto-select if only one policy and none already selected (mirrors original mount-only behavior)
   useEffect(() => {
     if (policies.length === 1 && !data.default_policy_id) {
-      onChange({ default_policy_id: policies[0].id });
+      onChange({
+        default_policy_id: policies[0].id,
+        trust_profile_id: policies[0].trust_profile_id || null,
+      });
     }
   }, [policies]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -82,6 +90,22 @@ const RuntimeSettingsStep = ({ data, onChange }) => {
     return (
       <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
         <CircularProgress />
+      </Box>
+    );
+  }
+
+  if (error) {
+    return (
+      <Box sx={{ py: 4 }}>
+        <Alert severity="error" sx={{ mb: 3 }}>
+          {error?.message || t('wizards.deploymentProfile.runtimeSettingsStep.errors.failedToLoadPolicies')}
+        </Alert>
+        <Button
+          variant="outlined"
+          onClick={reload}
+        >
+          {t('wizards.deploymentProfile.runtimeSettingsStep.blocked.refreshButton')}
+        </Button>
       </Box>
     );
   }
@@ -134,19 +158,20 @@ const RuntimeSettingsStep = ({ data, onChange }) => {
         {t('wizards.deploymentProfile.runtimeSettingsStep.description')}
       </Typography>
 
-      {error && (
-        <Alert severity="error" sx={{ mb: 3 }}>
-          {error?.message || t('wizards.deploymentProfile.runtimeSettingsStep.errors.failedToLoadPolicies')}
-        </Alert>
-      )}
-
       {/* Default Presentation Policy */}
       <FormControl fullWidth required sx={{ mb: 4 }}>
         <InputLabel>{t('wizards.deploymentProfile.runtimeSettingsStep.fields.defaultPolicy')}</InputLabel>
         <Select
           value={data.default_policy_id || ''}
-          onChange={(e) => onChange({ default_policy_id: e.target.value })}
+          onChange={(e) => {
+            const selectedPolicy = policies.find((policy) => policy.id === e.target.value);
+            onChange({
+              default_policy_id: e.target.value,
+              trust_profile_id: selectedPolicy?.trust_profile_id || null,
+            });
+          }}
           label={t('wizards.deploymentProfile.runtimeSettingsStep.fields.defaultPolicy')}
+          SelectDisplayProps={{ 'data-testid': 'deployment-default-policy-select' }}
         >
           {policies.map((policy) => (
             <MenuItem key={policy.id} value={policy.id}>

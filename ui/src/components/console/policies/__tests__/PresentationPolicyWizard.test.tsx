@@ -19,6 +19,10 @@ vi.mock('react-router-dom', async () => {
   }
 })
 
+vi.mock('../../../../contexts/ConsoleContext', () => ({
+  useConsole: () => ({ activeOrgId: 'org-1' }),
+}))
+
 describe('PresentationPolicyWizard', () => {
   beforeEach(() => {
     vi.clearAllMocks()

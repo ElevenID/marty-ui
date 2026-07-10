@@ -5,7 +5,7 @@
  * Shows status, alerts, and next step guidance.
  */
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   AlertTitle,
@@ -24,9 +24,9 @@ import {
 import { useTranslation } from 'react-i18next';
 import { Link, useNavigate } from 'react-router-dom';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
-import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 
 import { useAuth } from '../../hooks/useAuth';
+import { useConsole } from '../../contexts/ConsoleContext';
 import { useDashboardData } from '../../hooks/useDashboardData';
 import { useSSE } from '../../hooks/useSSE';
 import { DASHBOARD_QUICK_ACTIONS } from '../../config/navigation';
@@ -43,11 +43,8 @@ import { ApplicantStatsCard } from './dashboard/ApplicantStatsCard';
 import { DeveloperQuickStartPanel } from './dashboard/DeveloperQuickStartPanel';
 import { EnvironmentWarningBanner, EnvironmentContext } from './dashboard/EnvironmentBadge';
 import GuidedSetupBanner from './dashboard/GuidedSetupBanner';
+import DashboardErrorAlert from './dashboard/DashboardErrorAlert';
 import { runHostedPilotPurge, updateOrganizationEnvironment } from '../../services/dashboardApi';
-import CreateTemplateDrawer from './templates/CreateTemplateDrawer';
-import CreatePolicyDrawer from './policies/CreatePolicyDrawer';
-import CreateDeploymentDrawer from './deployments/CreateDeploymentDrawer';
-import CreateFlowDrawer from './flows/CreateFlowDrawer';
 import IssuanceDashboardWidget from './dashboard/IssuanceDashboardWidget';
 
 const EMPTY_RETENTION_COUNTS = {
@@ -58,6 +55,14 @@ const EMPTY_RETENTION_COUNTS = {
   issuedCredentials: 0,
   total: 0,
 };
+
+const SHOULD_LOG_DASHBOARD_DIAGNOSTICS = import.meta.env.DEV && import.meta.env.MODE !== 'test';
+
+function logDashboardError(message, error) {
+  if (SHOULD_LOG_DASHBOARD_DIAGNOSTICS) {
+    console.error(message, error);
+  }
+}
 
 function formatRelativeCountdown(targetIso) {
   if (!targetIso) {
@@ -218,11 +223,25 @@ function QuickActionCard({ action, disabled, tooltip, onClick }) {
 function ConsoleDashboard() {
   const { t } = useTranslation('console');
   const navigate = useNavigate();
-  const { user, organizationName, organizationId, isAdministrator, isVendor } = useAuth();
+  const {
+    user,
+    organizationName: authOrganizationName,
+    organizationId: authOrganizationId,
+    isAdministrator,
+    isVendor,
+  } = useAuth();
+  const { activeOrgId, memberships } = useConsole();
+  const organizationId = activeOrgId || authOrganizationId;
+  const organizationName = useMemo(() => {
+    const activeMembership = (memberships || []).find((organization) => organization.id === organizationId);
+    return activeMembership?.display_name
+      || activeMembership?.name
+      || authOrganizationName
+      || t('dashboard.organizationFallbackName', { defaultValue: 'Organization' });
+  }, [authOrganizationName, memberships, organizationId, t]);
   const { data, loading, error, refetch } = useDashboardData();
   useSSE(organizationId);
-  const [environment, setEnvironment] = useState(data.environment || 'development');
-  const [activeDrawer, setActiveDrawer] = useState(null);
+  const [environment, setEnvironment] = useState(data.environment || null);
   const [purgingPilotData, setPurgingPilotData] = useState(false);
   const [purgeFeedback, setPurgeFeedback] = useState(null);
 
@@ -230,6 +249,16 @@ function ConsoleDashboard() {
   const readiness = useMemo(() => computeSetupReadiness(data), [data]);
   const blockers = useMemo(() => computeBlockers(readiness), [readiness]);
   const quickActionVisibility = useMemo(() => computeQuickActionVisibility(readiness), [readiness]);
+  const dashboardErrors = data.dashboardErrors || {};
+  const environmentUnavailable = Boolean(dashboardErrors.environment);
+  const displayEnvironment = environmentUnavailable || !environment ? 'unknown' : environment;
+  const canSwitchEnvironment = Boolean(environment && !environmentUnavailable);
+
+  useEffect(() => {
+    if (data.environment) {
+      setEnvironment(data.environment);
+    }
+  }, [data.environment]);
 
   // Filter visible quick actions
   const visibleQuickActions = useMemo(() => {
@@ -240,11 +269,15 @@ function ConsoleDashboard() {
 
   // Handle environment change
   const handleEnvironmentChange = async (newEnv) => {
+    if (!organizationId) {
+      return;
+    }
+
     try {
       await updateOrganizationEnvironment(organizationId, newEnv);
       setEnvironment(newEnv);
     } catch (error) {
-      console.error('Failed to update environment:', error);
+      logDashboardError('Failed to update environment:', error);
     }
   };
 
@@ -255,40 +288,37 @@ function ConsoleDashboard() {
         navigate('/console/org/deploy/key-management/services/new');
         break;
       case 'create-issuer-identity':
-        navigate('/console/org/deploy/issuer-identity');
+        navigate('/console/org/deploy/issuer-identity/new');
         break;
       case 'create-trust-profile':
         navigate('/console/org/trust/profiles/new');
         break;
       case 'create-template':
-        setActiveDrawer('template');
+        navigate('/console/org/templates/credentials/new');
         break;
       case 'create-policy':
-        setActiveDrawer('policy');
+        navigate('/console/org/policies/presentation/new');
         break;
       case 'generate-api-key':
         navigate('/console/org/api-keys');
         break;
       case 'create-flow':
-        setActiveDrawer('flow');
+        navigate('/console/org/flows/definitions/new');
         break;
       default:
         break;
     }
   };
 
-  const handleDrawerClose = () => {
-    setActiveDrawer(null);
-  };
-
-  const handleDrawerSuccess = () => {
-    // Refresh dashboard data after successful creation
-    if (refetch) {
-      refetch();
-    }
-  };
-
   const handleHostedPilotPurge = async () => {
+    if (!organizationId) {
+      setPurgeFeedback({
+        severity: 'error',
+        message: 'Select an organization before purging Hosted Pilot data.',
+      });
+      return;
+    }
+
     setPurgingPilotData(true);
     setPurgeFeedback(null);
 
@@ -359,15 +389,25 @@ function ConsoleDashboard() {
       </Box>
 
       {/* Environment Context & Warning */}
+      {dashboardErrors.environment ? (
+        <Box sx={{ mb: 2 }}>
+          <DashboardErrorAlert
+            title="Environment unavailable"
+            error={dashboardErrors.environment}
+            onRetry={refetch}
+            fallback="Organization environment could not be loaded from the organization service."
+          />
+        </Box>
+      ) : null}
       <EnvironmentContext
         organizationName={organizationName}
-        environment={environment}
+        environment={displayEnvironment}
         organizationId={organizationId}
         onEnvironmentChange={handleEnvironmentChange}
-        showSwitcher={true}
+        showSwitcher={canSwitchEnvironment}
       />
       <Box sx={{ mt: 2 }}>
-        <EnvironmentWarningBanner environment={environment} />
+        <EnvironmentWarningBanner environment={displayEnvironment} />
       </Box>
       <HostedPilotRetentionBanner
         lifecycle={data.lifecycle}
@@ -393,10 +433,19 @@ function ConsoleDashboard() {
       <SystemStatusBar systemHealth={data.systemHealth} />
 
       {/* Critical Events */}
-      <CriticalEventsPanel events={data.criticalEvents} loading={loading} />
+      <CriticalEventsPanel
+        events={data.criticalEvents}
+        loading={loading}
+        error={dashboardErrors.criticalEvents}
+        onRetry={refetch}
+      />
 
       {/* Runtime Readiness */}
-      <RuntimeReadinessPanel runtimeStatus={data.runtimeStatus} />
+      <RuntimeReadinessPanel
+        runtimeStatus={data.runtimeStatus}
+        error={dashboardErrors.runtimeStatus}
+        onRetry={refetch}
+      />
 
       {/* Credential Issuance Widget */}
       {isOperational && (
@@ -406,7 +455,11 @@ function ConsoleDashboard() {
       )}
 
       {/* Team Snapshot */}
-      <TeamSnapshotPanel teamData={data.teamData} />
+      <TeamSnapshotPanel
+        teamData={data.teamData}
+        error={dashboardErrors.teamData}
+        onRetry={refetch}
+      />
 
       {/* Blocking Issues */}
       <BlockingIssuesPanel blockers={blockers} />
@@ -474,28 +527,6 @@ function ConsoleDashboard() {
 
       {/* Developer Quick Start */}
       <DeveloperQuickStartPanel />
-
-      {/* Resource Creation Drawers */}
-      <CreateTemplateDrawer
-        open={activeDrawer === 'template'}
-        onClose={handleDrawerClose}
-        onSuccess={handleDrawerSuccess}
-      />
-      <CreatePolicyDrawer
-        open={activeDrawer === 'policy'}
-        onClose={handleDrawerClose}
-        onSuccess={handleDrawerSuccess}
-      />
-      <CreateDeploymentDrawer
-        open={activeDrawer === 'deployment'}
-        onClose={handleDrawerClose}
-        onSuccess={handleDrawerSuccess}
-      />
-      <CreateFlowDrawer
-        open={activeDrawer === 'flow'}
-        onClose={handleDrawerClose}
-        onSuccess={handleDrawerSuccess}
-      />
     </Box>
   );
 }

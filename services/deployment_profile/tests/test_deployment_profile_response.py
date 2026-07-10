@@ -141,6 +141,7 @@ def test_get_deployment_profile_exposes_protocol_aligned_shape_only() -> None:
         "id",
         "organization_id",
         "name",
+        "status",
         "trust_profile_id",
         "presentation_policy_ids",
         "credential_template_ids",
@@ -164,8 +165,8 @@ def test_get_deployment_profile_exposes_protocol_aligned_shape_only() -> None:
     # description and site_id are None for this fixture → excluded by exclude_none
     assert "description" not in body
     assert "site_id" not in body
+    assert body["status"] == "draft"
     for removed_key in {
-        "status",
         "environment",
         "callbacks",
         "api_auth",
@@ -186,6 +187,33 @@ def test_get_deployment_profile_exposes_protocol_aligned_shape_only() -> None:
         "enable_canvas_ags": False,
         "enable_canvas_nrps": False,
     }
+
+
+def test_create_deployment_profile_honors_active_status() -> None:
+    repo = deployment_profile.InMemoryDeploymentProfileRepository()
+    client, _ = _build_client(repo)
+
+    response = client.post(
+        "/v1/deployment-profiles",
+        headers={"x-user-id": "user-1"},
+        json={
+            "organization_id": "org-1",
+            "name": "Production API",
+            "status": "active",
+            "environment": "production",
+            "trust_profile_id": "trust-1",
+            "presentation_policy_ids": ["policy-1"],
+            "default_policy_id": "policy-1",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "active"
+
+    saved = asyncio.run(repo.get(body["id"]))
+    assert saved is not None
+    assert saved.status == deployment_profile.ProfileStatus.ACTIVE
 
 
 def test_update_channel_keeps_update_policy_channel_in_sync() -> None:

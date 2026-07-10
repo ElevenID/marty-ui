@@ -24,6 +24,7 @@ import { useMemo, useState } from 'react';
 import { ResourcePage } from '../../common';
 import { useAsyncData } from '../../../hooks/useAsyncData';
 import { useAuth } from '../../../hooks/useAuth';
+import { useConsole } from '../../../contexts/ConsoleContext';
 import { getCredentialTemplate } from '../../../services/presentationPolicyApi';
 import {
   createDeliveryDestination,
@@ -324,7 +325,9 @@ function DestinationCard({
 
 function CredentialTemplateDetailPage() {
   const { templateId } = useParams();
-  const { organizationId } = useAuth();
+  const { organizationId: authOrganizationId } = useAuth();
+  const { activeOrgId } = useConsole();
+  const organizationId = activeOrgId || authOrganizationId;
   const [activeTab, setActiveTab] = useState('overview');
   const [destinationBusy, setDestinationBusy] = useState(false);
   const [destinationError, setDestinationError] = useState(null);
@@ -335,18 +338,37 @@ function CredentialTemplateDetailPage() {
     error: templateError,
   } = useAsyncData(() => (templateId ? getCredentialTemplate(templateId) : Promise.resolve(null)), [templateId]);
 
-  const { data: destinationsData = [], reload: reloadDestinations } = useAsyncData(
-    () => listDeliveryDestinations({ organizationId, activeOnly: false }).catch(() => []),
+  const {
+    data: destinationsData = [],
+    error: destinationsError,
+    reload: reloadDestinations,
+  } = useAsyncData(
+    () => {
+      if (!organizationId) {
+        throw new Error('Select an organization before loading delivery destinations.');
+      }
+      return listDeliveryDestinations({ organizationId, activeOnly: false });
+    },
     [organizationId],
   );
 
-  const { data: bindingsData = [] } = useAsyncData(
-    () => (organizationId ? listCanvasProgramBindings({ organizationId }).catch(() => []) : Promise.resolve([])),
+  const { data: bindingsData = [], error: bindingsError } = useAsyncData(
+    () => {
+      if (!organizationId) {
+        throw new Error('Select an organization before loading Canvas program bindings.');
+      }
+      return listCanvasProgramBindings({ organizationId });
+    },
     [organizationId],
   );
 
-  const { data: mirrorHealth = null } = useAsyncData(
-    () => (organizationId ? getCanvasMirrorHealth(organizationId).catch(() => null) : Promise.resolve(null)),
+  const { data: mirrorHealth = null, error: mirrorHealthError } = useAsyncData(
+    () => {
+      if (!organizationId) {
+        throw new Error('Select an organization before loading Canvas mirror health.');
+      }
+      return getCanvasMirrorHealth(organizationId);
+    },
     [organizationId],
   );
 
@@ -372,7 +394,6 @@ function CredentialTemplateDetailPage() {
   ];
 
   const createCanvasDestination = async () => {
-    if (!organizationId) return;
     setDestinationBusy(true);
     setDestinationError(null);
     try {
@@ -473,6 +494,21 @@ function CredentialTemplateDetailPage() {
               {destinationError?.message || String(destinationError)}
             </Alert>
           ) : null}
+          {destinationsError ? (
+            <Alert severity="error">
+              {destinationsError?.message || 'Delivery destinations could not be loaded.'}
+            </Alert>
+          ) : null}
+          {bindingsError ? (
+            <Alert severity="warning">
+              {bindingsError?.message || 'Canvas program bindings could not be loaded.'}
+            </Alert>
+          ) : null}
+          {mirrorHealthError ? (
+            <Alert severity="warning">
+              {mirrorHealthError?.message || 'Canvas mirror health could not be loaded.'}
+            </Alert>
+          ) : null}
           <Stack spacing={2} data-testid="credential-template-destinations">
             {orderedDestinations.map((destination) => (
               <DestinationCard
@@ -486,7 +522,7 @@ function CredentialTemplateDetailPage() {
                 onToggleCanvasDestination={toggleCanvasDestination}
               />
             ))}
-            {!orderedDestinations.length ? (
+            {!orderedDestinations.length && !destinationsError ? (
               <Paper variant="outlined" sx={{ p: 3, borderRadius: 1, textAlign: 'center' }}>
                 <AccountTreeIcon color="disabled" />
                 <Typography variant="body2" color="text.secondary">

@@ -50,37 +50,38 @@ import { ResourcePage } from '../../common';
 import ConfirmDeleteDialog from '../../common/ConfirmDeleteDialog';
 import { useAsyncData } from '../../../hooks/useAsyncData';
 import { useAuth } from '../../../hooks/useAuth';
+import { useConsole } from '../../../contexts/ConsoleContext';
 import { createApiKey, listApiKeys, revokeApiKey } from '../../../services/apiKeysApi';
 import { createWebhook, listWebhooks } from '../../../services/webhooksApi';
 
 const API_KEY_SCOPES = [
   {
-    id: 'read:credentials',
+    id: 'credentials:read',
     label: 'Read credentials',
     description: 'Read issued credential and verification result data.',
   },
   {
-    id: 'write:credentials',
+    id: 'credentials:issue',
     label: 'Issue credentials',
     description: 'Trigger issuance and manage credential lifecycle operations.',
   },
   {
-    id: 'verify:presentations',
-    label: 'Verify presentations',
-    description: 'Submit and monitor verification requests.',
+    id: 'flows:execute',
+    label: 'Execute flows',
+    description: 'Start issuance and verification flows for external integrations.',
   },
   {
-    id: 'read:trust_registry',
+    id: 'trust:read',
     label: 'Read trust registry',
     description: 'Query trust registries, issuers, and trust anchors.',
   },
   {
-    id: 'write:revocation',
+    id: 'credentials:revoke',
     label: 'Manage revocation',
     description: 'Revoke or update credential status from external systems.',
   },
   {
-    id: 'manage:webhooks',
+    id: 'webhooks:write',
     label: 'Manage webhooks',
     description: 'Provision and maintain callback endpoints programmatically.',
   },
@@ -208,7 +209,9 @@ async function copyToClipboard(text) {
 
 function ApiKeysPage() {
   const { t } = useTranslation('console');
-  const { organizationId } = useAuth();
+  const { organizationId: authOrganizationId } = useAuth();
+  const { activeOrgId } = useConsole();
+  const organizationId = activeOrgId || authOrganizationId;
   const [dialogOpen, setDialogOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState('');
@@ -217,7 +220,7 @@ function ApiKeysPage() {
   const [keyPendingRevoke, setKeyPendingRevoke] = useState(null);
   const [formState, setFormState] = useState({
     name: '',
-    scopes: ['verify:presentations'],
+    scopes: ['flows:execute'],
     expiresAt: '',
     createCallback: true,
     callbackUrl: '',
@@ -227,20 +230,30 @@ function ApiKeysPage() {
 
   const { data, loading, error, reload } = useAsyncData(
     async () => {
-      const [keys, webhooks] = await Promise.all([
+      const [keysResult, webhooksResult] = await Promise.allSettled([
         listApiKeys(organizationId),
-        listWebhooks(organizationId).catch(() => []),
+        listWebhooks(organizationId),
       ]);
 
+      if (keysResult.status === 'rejected') {
+        throw keysResult.reason;
+      }
+
       return {
-        keys: (keys || []).map(normalizeApiKey),
-        webhooks: (webhooks || []).map(normalizeWebhook),
+        keys: (keysResult.value || []).map(normalizeApiKey),
+        webhooks: webhooksResult.status === 'fulfilled'
+          ? (webhooksResult.value || []).map(normalizeWebhook)
+          : [],
+        webhookError: webhooksResult.status === 'rejected'
+          ? webhooksResult.reason?.message || 'Webhook callback status could not be loaded.'
+          : null,
       };
     },
     [organizationId],
   );
 
   const apiKeys = data?.keys || [];
+  const webhookLoadError = data?.webhookError || null;
   const callbackMap = useMemo(() => {
     const map = new Map();
     (data?.webhooks || []).forEach((webhook) => {
@@ -277,7 +290,7 @@ function ApiKeysPage() {
     setCreatedResult(null);
     setFormState({
       name: '',
-      scopes: ['verify:presentations'],
+      scopes: ['flows:execute'],
       expiresAt: '',
       createCallback: true,
       callbackUrl: '',
@@ -349,6 +362,7 @@ function ApiKeysPage() {
       setCreatedResult({
         apiKey: createdKey,
         webhook: createdWebhook,
+        callbackRequested: formState.createCallback,
         callbackError,
       });
 
@@ -426,7 +440,7 @@ function ApiKeysPage() {
                     <NotificationsActiveIcon color="primary" fontSize="small" />
                     <Typography variant="subtitle2">Associated callbacks</Typography>
                   </Stack>
-                  <Typography variant="h4">{callbackMap.size}</Typography>
+                  <Typography variant="h4">{webhookLoadError ? 'Unavailable' : callbackMap.size}</Typography>
                   <Typography variant="body2" color="text.secondary">
                     Webhook endpoints linked to API-key provisioning flows.
                   </Typography>
@@ -441,7 +455,9 @@ function ApiKeysPage() {
                     <Typography variant="subtitle2">Audit-capable callbacks</Typography>
                   </Stack>
                   <Typography variant="h4">
-                    {Array.from(callbackMap.values()).filter((webhook) => webhook.eventTypes.some((eventType) => eventType.startsWith('audit.'))).length}
+                    {webhookLoadError
+                      ? 'Unavailable'
+                      : Array.from(callbackMap.values()).filter((webhook) => webhook.eventTypes.some((eventType) => eventType.startsWith('audit.'))).length}
                   </Typography>
                   <Typography variant="body2" color="text.secondary">
                     Callbacks prepared to forward audit or compliance activity.
@@ -454,6 +470,12 @@ function ApiKeysPage() {
           {error && (
             <Alert severity="error">
               {error?.message || String(error)}
+            </Alert>
+          )}
+
+          {webhookLoadError && (
+            <Alert severity="warning">
+              Callback status could not be loaded: {webhookLoadError}
             </Alert>
           )}
 
@@ -581,7 +603,11 @@ function ApiKeysPage() {
                 API key created successfully.
                 {createdResult.callbackError
                   ? ` Callback creation failed: ${createdResult.callbackError}`
-                  : ' Callback endpoint provisioned for asynchronous events.'}
+                  : createdResult.webhook
+                    ? ' Callback endpoint provisioned for asynchronous events.'
+                    : createdResult.callbackRequested
+                      ? ' Callback endpoint was not provisioned. You can add one later from Webhooks.'
+                      : ' No callback endpoint was provisioned.'}
               </Alert>
 
               <TextField

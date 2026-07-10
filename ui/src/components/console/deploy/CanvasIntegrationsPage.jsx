@@ -44,6 +44,7 @@ import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 
 import { useAsyncData } from '../../../hooks/useAsyncData';
 import { useAuth } from '../../../hooks/useAuth';
+import { useConsole } from '../../../contexts/ConsoleContext';
 import {
   createCanvasPlatform,
   createCanvasIntegrationSecret,
@@ -299,7 +300,9 @@ function alertSeverityColor(severity) {
 }
 
 function CanvasIntegrationsPage() {
-  const { organizationId } = useAuth();
+  const { organizationId: authOrganizationId } = useAuth();
+  const { activeOrgId } = useConsole();
+  const organizationId = activeOrgId || authOrganizationId;
   const [selectedPlatformId, setSelectedPlatformId] = useState('');
   const [platformDialogOpen, setPlatformDialogOpen] = useState(false);
   const [bindingDialogOpen, setBindingDialogOpen] = useState(false);
@@ -328,7 +331,6 @@ function CanvasIntegrationsPage() {
     error: platformsError,
     reload: reloadPlatforms,
   } = useAsyncData(async () => {
-    if (!organizationId) return [];
     return listCanvasPlatforms(organizationId);
   }, [organizationId]);
 
@@ -338,22 +340,18 @@ function CanvasIntegrationsPage() {
     error: bindingsError,
     reload: reloadBindings,
   } = useAsyncData(async () => {
-    if (!organizationId) return [];
     return listCanvasProgramBindings({ organizationId });
   }, [organizationId]);
 
   const { data: applicationTemplatesData } = useAsyncData(async () => {
-    if (!organizationId) return [];
     return listApplicationTemplates(organizationId);
   }, [organizationId]);
 
   const { data: credentialTemplatesData } = useAsyncData(async () => {
-    if (!organizationId) return [];
     return normalizeCredentialTemplates(await listCredentialTemplates({ organization_id: organizationId }));
   }, [organizationId]);
 
   const { data: deploymentProfilesData } = useAsyncData(async () => {
-    if (!organizationId) return [];
     const profiles = await listDeploymentProfiles({ organization_id: organizationId });
     return Array.isArray(profiles) ? profiles : [];
   }, [organizationId]);
@@ -364,7 +362,6 @@ function CanvasIntegrationsPage() {
     error: mirrorHealthError,
     reload: reloadMirrorHealth,
   } = useAsyncData(async () => {
-    if (!organizationId) return null;
     return getCanvasMirrorHealth(organizationId);
   }, [organizationId]);
 
@@ -374,7 +371,6 @@ function CanvasIntegrationsPage() {
     error: deliveryDestinationsError,
     reload: reloadDeliveryDestinations,
   } = useAsyncData(async () => {
-    if (!organizationId) return [];
     return listDeliveryDestinations({
       organizationId,
       provider: 'canvas_credentials',
@@ -386,7 +382,6 @@ function CanvasIntegrationsPage() {
     data: integrationSecretsData,
     reload: reloadIntegrationSecrets,
   } = useAsyncData(async () => {
-    if (!organizationId) return [];
     return listCanvasIntegrationSecrets({
       organizationId,
       provider: 'canvas_credentials',

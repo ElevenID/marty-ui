@@ -7,6 +7,7 @@
 
 import { useTranslation } from 'react-i18next';
 import {
+  Box,
   Paper,
   Typography,
   Table,
@@ -29,6 +30,7 @@ import { ResourcePage, StatusChip, EmptyState, EmptyStates } from '../../common'
 import { TrustProvider } from '../../trust';
 import { useAsyncData } from '../../../hooks/useAsyncData';
 import { useAuth } from '../../../hooks/useAuth';
+import { useConsole } from '../../../contexts/ConsoleContext';
 import { listRevocationProfiles, listTrustProfiles } from '../../../services/presentationPolicyApi';
 import { getKeyManagementConfig, listIssuerProfiles, listSigningKeys } from '../../../services/signingKeysApi';
 import {
@@ -46,71 +48,107 @@ const getBreadcrumbs = (t) => [
 function TrustProfilesPage() {
   const { t } = useTranslation('console');
   const { organizationId } = useAuth();
+  const { activeOrgId } = useConsole();
+  const effectiveOrganizationId = activeOrgId || organizationId;
 
   // Fetch trust profiles from API
   const { data: profiles = [], loading, error } = useAsyncData(
-    () => (organizationId ? listTrustProfiles({ organization_id: organizationId }) : Promise.resolve([])),
-    [organizationId]
+    () => {
+      if (!effectiveOrganizationId) {
+        throw new Error('Select an organization before loading trust profiles.');
+      }
+      return listTrustProfiles({ organization_id: effectiveOrganizationId });
+    },
+    [effectiveOrganizationId]
   );
 
   const safeProfiles = Array.isArray(profiles) ? profiles : [];
-  const { data: dependencies = { signingKeys: [], issuerProfiles: [], revocationProfiles: [], keyManagementConfig: DEFAULT_KEY_MANAGEMENT_CONFIG } } = useAsyncData(
+  const { data: dependencies = {
+    signingKeys: [],
+    issuerProfiles: [],
+    revocationProfiles: [],
+    keyManagementConfig: DEFAULT_KEY_MANAGEMENT_CONFIG,
+    errors: [],
+  } } = useAsyncData(
     async () => {
-      if (!organizationId) {
+      if (!effectiveOrganizationId) {
         return {
           signingKeys: [],
           issuerProfiles: [],
           revocationProfiles: [],
           keyManagementConfig: DEFAULT_KEY_MANAGEMENT_CONFIG,
+          errors: ['Organization: Select an organization before loading trust profile prerequisites.'],
         };
       }
 
-      const [signingKeysResult, issuerProfilesResult, keyManagementConfigResult, revocationProfilesResult] = await Promise.all([
-        listSigningKeys({ limit: 1 }).catch(() => ({ keys: [] })),
-        listIssuerProfiles().catch(() => ({ profiles: [] })),
-        getKeyManagementConfig().catch(() => DEFAULT_KEY_MANAGEMENT_CONFIG),
-        listRevocationProfiles({ organization_id: organizationId, limit: 1 }).catch(() => []),
+      const [signingKeysResult, issuerProfilesResult, keyManagementConfigResult, revocationProfilesResult] = await Promise.allSettled([
+        listSigningKeys({ organization_id: effectiveOrganizationId, limit: 1 }),
+        listIssuerProfiles({ organization_id: effectiveOrganizationId }),
+        getKeyManagementConfig({ organization_id: effectiveOrganizationId }),
+        listRevocationProfiles({ organization_id: effectiveOrganizationId, limit: 1 }),
       ]);
 
-      const signingKeys = Array.isArray(signingKeysResult)
-        ? signingKeysResult
-        : (Array.isArray(signingKeysResult?.keys) ? signingKeysResult.keys : []);
-      const issuerProfiles = Array.isArray(issuerProfilesResult?.profiles)
-        ? issuerProfilesResult.profiles
+      const dependencyErrors = [
+        ['Key Management signing keys', signingKeysResult],
+        ['Issuer profiles', issuerProfilesResult],
+        ['Key Management configuration', keyManagementConfigResult],
+        ['Revocation profiles', revocationProfilesResult],
+      ]
+        .filter(([, result]) => result.status === 'rejected')
+        .map(([label, result]) => `${label}: ${result.reason?.message || String(result.reason)}`);
+
+      const signingKeysValue = signingKeysResult.status === 'fulfilled' ? signingKeysResult.value : { keys: [] };
+      const issuerProfilesValue = issuerProfilesResult.status === 'fulfilled' ? issuerProfilesResult.value : { profiles: [] };
+      const keyManagementConfigValue = keyManagementConfigResult.status === 'fulfilled'
+        ? keyManagementConfigResult.value
+        : DEFAULT_KEY_MANAGEMENT_CONFIG;
+      const revocationProfilesValue = revocationProfilesResult.status === 'fulfilled' ? revocationProfilesResult.value : [];
+
+      const signingKeys = Array.isArray(signingKeysValue)
+        ? signingKeysValue
+        : (Array.isArray(signingKeysValue?.keys) ? signingKeysValue.keys : []);
+      const issuerProfiles = Array.isArray(issuerProfilesValue?.profiles)
+        ? issuerProfilesValue.profiles
         : [];
 
       return {
         signingKeys,
         issuerProfiles,
-        revocationProfiles: Array.isArray(revocationProfilesResult) ? revocationProfilesResult : [],
-        keyManagementConfig: normalizeKeyManagementConfig(keyManagementConfigResult || DEFAULT_KEY_MANAGEMENT_CONFIG),
+        revocationProfiles: Array.isArray(revocationProfilesValue) ? revocationProfilesValue : [],
+        keyManagementConfig: normalizeKeyManagementConfig(keyManagementConfigValue || DEFAULT_KEY_MANAGEMENT_CONFIG),
+        errors: dependencyErrors,
       };
     },
-    [organizationId]
+    [effectiveOrganizationId]
   );
   const safeDependencies = dependencies ?? {
     signingKeys: [],
     issuerProfiles: [],
     revocationProfiles: [],
     keyManagementConfig: DEFAULT_KEY_MANAGEMENT_CONFIG,
+    errors: [],
   };
+  const dependencyErrors = Array.isArray(safeDependencies.errors) ? safeDependencies.errors : [];
   const defaultSigningService = getDefaultKeyManagementService(safeDependencies.keyManagementConfig);
   const hasManagedIssuerInput = safeDependencies.issuerProfiles.length > 0 || safeDependencies.signingKeys.length > 0;
+  const signingDependencyFailed = dependencyErrors.some((item) => item.startsWith('Key Management'));
+  const issuerDependencyFailed = dependencyErrors.some((item) => item.startsWith('Issuer profiles'));
+  const revocationDependencyFailed = dependencyErrors.some((item) => item.startsWith('Revocation profiles'));
 
   const trustProfilePrerequisites = [
     {
       label: t('trust.trustProfilesPage.prerequisites.keyManagement', { defaultValue: 'Key Management Service' }),
-      status: defaultSigningService ? 'ready' : 'missing',
+      status: signingDependencyFailed ? 'error' : (defaultSigningService ? 'ready' : 'missing'),
       path: '/console/org/deploy/key-management',
     },
     {
       label: t('trust.trustProfilesPage.prerequisites.issuerIdentity', { defaultValue: 'Issuer Identity or Signing Key' }),
-      status: hasManagedIssuerInput ? 'ready' : 'missing',
+      status: issuerDependencyFailed ? 'error' : (hasManagedIssuerInput ? 'ready' : 'missing'),
       path: '/console/org/deploy/issuer-identity',
     },
     {
       label: t('trust.trustProfilesPage.prerequisites.revocationProfile', { defaultValue: 'Revocation Profile' }),
-      status: safeDependencies.revocationProfiles.length > 0 ? 'ready' : 'missing',
+      status: revocationDependencyFailed ? 'error' : (safeDependencies.revocationProfiles.length > 0 ? 'ready' : 'missing'),
       path: '/console/org/trust/revocation',
     },
   ];
@@ -137,6 +175,18 @@ function TrustProfilesPage() {
         {error && (
           <Alert severity="error" sx={{ mb: 3 }}>
             {error.message ?? t('trust.failedToLoad')}
+          </Alert>
+        )}
+        {dependencyErrors.length > 0 && (
+          <Alert severity="warning" sx={{ mb: 3 }}>
+            {t('trust.trustProfilesPage.prerequisites.loadError', {
+              defaultValue: 'Some trust setup prerequisites could not be loaded. Retry before treating this as missing configuration.',
+            })}
+            <Box component="ul" sx={{ mt: 1, mb: 0, pl: 3 }}>
+              {dependencyErrors.map((item) => (
+                <li key={item}>{item}</li>
+              ))}
+            </Box>
           </Alert>
         )}
 

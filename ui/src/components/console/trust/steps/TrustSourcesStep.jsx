@@ -233,7 +233,7 @@ const isUsableIssuerProfileStatus = (status) => {
 
 const isValidDid = (value) => /^did:[a-z0-9]+:.+/.test(String(value || '').trim());
 
-const TrustSourcesStep = ({ data, onChange }) => {
+const TrustSourcesStep = ({ data, onChange, organizationId }) => {
   const { t } = useTranslation(['console', 'common']);
   const [newIssuerDid, setNewIssuerDid] = useState('');
   const [tabValue, setTabValue] = useState(0);
@@ -263,27 +263,37 @@ const TrustSourcesStep = ({ data, onChange }) => {
   const allowAllIssuers = data.allow_all_issuers === true;
   const hasConfiguredPinnedIssuers = trustedIssuers.length > 0;
 
-  const { data: signingKeysData } = useAsyncData(async () => {
-    const response = await signingKeysApi.listSigningKeys();
+  const { data: signingKeysData, error: signingKeysError } = useAsyncData(async () => {
+    if (!organizationId) {
+      throw new Error('Select an organization before loading signing keys.');
+    }
+    const response = await signingKeysApi.listSigningKeys({ organization_id: organizationId });
     if (Array.isArray(response)) {
       return { keys: response, domain_config: null };
     }
     return response || { keys: [], domain_config: null };
-  }, []);
+  }, [organizationId]);
 
-  const { data: keyManagementData } = useAsyncData(async () => {
-    const response = await signingKeysApi.getKeyManagementConfig();
+  const { data: keyManagementData, error: keyManagementError } = useAsyncData(async () => {
+    if (!organizationId) {
+      throw new Error('Select an organization before loading key management configuration.');
+    }
+    const response = await signingKeysApi.getKeyManagementConfig({ organization_id: organizationId });
     return normalizeKeyManagementConfig(response || DEFAULT_KEY_MANAGEMENT_CONFIG);
-  }, []);
+  }, [organizationId]);
 
   const {
     data: issuerProfilesData,
     loading: issuerProfilesLoading,
+    error: issuerProfilesError,
     reload: reloadIssuerProfiles,
   } = useAsyncData(async () => {
-    const response = await signingKeysApi.listIssuerProfiles();
+    if (!organizationId) {
+      throw new Error('Select an organization before loading issuer profiles.');
+    }
+    const response = await signingKeysApi.listIssuerProfiles({ organization_id: organizationId });
     return Array.isArray(response?.profiles) ? response.profiles : [];
-  }, []);
+  }, [organizationId]);
 
   const safeKeys = Array.isArray(signingKeysData?.keys)
     ? signingKeysData.keys.filter((key) => key && typeof key === 'object')
@@ -293,6 +303,11 @@ const TrustSourcesStep = ({ data, onChange }) => {
   const domainSummary = keyManagementConfig.domain_config || signingKeysData?.domain_config || null;
   const defaultSigningService = getDefaultKeyManagementService(keyManagementConfig);
   const issuerProfiles = Array.isArray(issuerProfilesData) ? issuerProfilesData : [];
+  const managedDependencyErrors = [
+    signingKeysError ? `Signing keys: ${signingKeysError.message || String(signingKeysError)}` : null,
+    keyManagementError ? `Key management: ${keyManagementError.message || String(keyManagementError)}` : null,
+    issuerProfilesError ? `Issuer profiles: ${issuerProfilesError.message || String(issuerProfilesError)}` : null,
+  ].filter(Boolean);
   const usableIssuerProfiles = issuerProfiles.filter(
     (profile) => isUsableIssuerProfileStatus(profile?.status) && String(profile?.issuer_did || '').trim(),
   );
@@ -464,7 +479,7 @@ const TrustSourcesStep = ({ data, onChange }) => {
   };
 
   const handleCreateManagedIdentity = async () => {
-    if (!defaultSigningService || !selectedManagedKey || !selectedManagedIdentity) {
+    if (!organizationId || !defaultSigningService || !selectedManagedKey || !selectedManagedIdentity) {
       return;
     }
 
@@ -473,6 +488,7 @@ const TrustSourcesStep = ({ data, onChange }) => {
 
     try {
       const response = await signingKeysApi.createIssuerProfile({
+        organization_id: organizationId,
         name: `${selectedManagedKey.name || getSigningKeyReference(selectedManagedKey) || 'Managed key'} ${selectedManagedIdentity.method.replace('did:', '').toUpperCase()} issuer`,
         issuer_did: selectedManagedIdentity.did,
         signing_service_id: defaultSigningService.id,
@@ -518,7 +534,7 @@ const TrustSourcesStep = ({ data, onChange }) => {
   };
 
   const handleImportManagedDid = async () => {
-    if (!defaultSigningService || !selectedManagedKey) {
+    if (!organizationId || !defaultSigningService || !selectedManagedKey) {
       return;
     }
 
@@ -538,6 +554,7 @@ const TrustSourcesStep = ({ data, onChange }) => {
 
     try {
       const response = await signingKeysApi.createIssuerProfile({
+        organization_id: organizationId,
         name: importManagedDidLabel.trim() || `${selectedManagedKey.name || getSigningKeyReference(selectedManagedKey) || 'Managed key'} imported DID`,
         issuer_did: trimmedDid,
         signing_service_id: defaultSigningService.id,
@@ -783,6 +800,19 @@ const TrustSourcesStep = ({ data, onChange }) => {
           {t('wizards.trustProfile.trustSourcesStep.infoAlert.skippingDescription')}
         </Typography>
       </Alert>
+
+      {managedDependencyErrors.length > 0 && (
+        <Alert severity="warning" sx={{ mb: 3 }}>
+          {t('wizards.trustProfile.trustSourcesStep.managedIdentity.loadError', {
+            defaultValue: 'Managed issuer prerequisites could not be loaded. Retry before treating key management or issuer identity setup as missing.',
+          })}
+          <Box component="ul" sx={{ mt: 1, mb: 0, pl: 3 }}>
+            {managedDependencyErrors.map((message) => (
+              <li key={message}>{message}</li>
+            ))}
+          </Box>
+        </Alert>
+      )}
 
       <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
         <FormControlLabel

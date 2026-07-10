@@ -8,13 +8,16 @@ Uses the organization_service schema.
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import String, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ...application.ports import (
     ApiKeyRepositoryPort,
+    AuditEventQuery,
+    AuditEventRepositoryPort,
     ConsoleContextPreferenceRepositoryPort,
     JoinCodeRepositoryPort,
     MemberRepositoryPort,
@@ -23,6 +26,7 @@ from ...application.ports import (
 from ...domain.entities import (
     ApiKey,
     ApiKeyStatus,
+    AuditEvent,
     ConsoleContextPreference,
     JoinCode,
     JoinMechanism,
@@ -37,6 +41,7 @@ from ...domain.entities import (
 )
 from ..models import (
     api_keys_table,
+    audit_events_table,
     console_context_preferences_table,
     join_codes_table,
     member_roles_table,
@@ -515,6 +520,147 @@ class PostgresApiKeyRepository(ApiKeyRepositoryPort):
             last_used_ip=row.last_used_ip,
             expires_at=row.expires_at,
             created_at=row.created_at,
+        )
+
+
+class PostgresAuditEventRepository(AuditEventRepositoryPort):
+    """PostgreSQL audit event repository."""
+
+    def __init__(self, session_factory: async_sessionmaker[AsyncSession]):
+        self.session_factory = session_factory
+
+    async def save(self, event: AuditEvent) -> None:
+        """Save an immutable audit event."""
+        async with self.session_factory() as session:
+            await session.execute(
+                audit_events_table.insert().values(
+                    id=event.id,
+                    organization_id=event.organization_id,
+                    event_type=event.event_type,
+                    action=event.action,
+                    category=event.category,
+                    resource_type=event.resource_type,
+                    resource_id=event.resource_id,
+                    resource_name=event.resource_name,
+                    actor_id=event.actor_id,
+                    actor_type=event.actor_type,
+                    severity=event.severity,
+                    message=event.message,
+                    changes=event.changes,
+                    metadata=event.metadata,
+                    created_at=event.timestamp,
+                )
+            )
+            await session.commit()
+
+    async def get(self, organization_id: str, event_id: str) -> AuditEvent | None:
+        """Get an audit event scoped to an organization."""
+        async with self.session_factory() as session:
+            result = await session.execute(
+                select(audit_events_table).where(
+                    audit_events_table.c.organization_id == organization_id,
+                    audit_events_table.c.id == event_id,
+                )
+            )
+            row = result.first()
+            return self._row_to_entity(row) if row else None
+
+    async def list(self, query: AuditEventQuery) -> tuple[list[AuditEvent], int]:
+        """List audit events scoped to an organization."""
+        conditions = self._conditions_for_query(query)
+
+        page = max(1, query.page)
+        per_page = min(max(1, query.per_page), 1000)
+        offset = (page - 1) * per_page
+
+        async with self.session_factory() as session:
+            total_result = await session.execute(
+                select(func.count()).select_from(audit_events_table).where(*conditions)
+            )
+            total = int(total_result.scalar_one() or 0)
+
+            result = await session.execute(
+                select(audit_events_table)
+                .where(*conditions)
+                .order_by(audit_events_table.c.created_at.desc())
+                .limit(per_page)
+                .offset(offset)
+            )
+            events = [self._row_to_entity(row) for row in result.fetchall()]
+
+        return events, total
+
+    @classmethod
+    def _conditions_for_query(cls, query: AuditEventQuery) -> list[Any]:
+        conditions = [audit_events_table.c.organization_id == query.organization_id]
+
+        if query.category:
+            conditions.append(audit_events_table.c.category == query.category)
+        if query.resource_type:
+            conditions.append(audit_events_table.c.resource_type == query.resource_type)
+        if query.resource_id:
+            conditions.append(audit_events_table.c.resource_id == query.resource_id)
+        if query.action:
+            conditions.append(audit_events_table.c.action == query.action)
+        if query.actor:
+            actor_pattern = f"%{query.actor}%"
+            conditions.append(audit_events_table.c.actor_id.ilike(actor_pattern))
+        if query.severity:
+            conditions.append(audit_events_table.c.severity == query.severity)
+        if query.ip_address:
+            conditions.append(audit_events_table.c.metadata.cast(String).ilike(f"%{query.ip_address}%"))
+
+        start_at = cls._parse_datetime(query.start_date)
+        end_at = cls._parse_datetime(query.end_date)
+        if start_at:
+            conditions.append(audit_events_table.c.created_at >= start_at)
+        if end_at:
+            conditions.append(audit_events_table.c.created_at <= end_at)
+
+        if query.search:
+            pattern = f"%{query.search}%"
+            conditions.append(
+                or_(
+                    audit_events_table.c.event_type.ilike(pattern),
+                    audit_events_table.c.action.ilike(pattern),
+                    audit_events_table.c.message.ilike(pattern),
+                    audit_events_table.c.resource_type.ilike(pattern),
+                    audit_events_table.c.resource_id.ilike(pattern),
+                    audit_events_table.c.resource_name.ilike(pattern),
+                    audit_events_table.c.actor_id.ilike(pattern),
+                    audit_events_table.c.metadata.cast(String).ilike(pattern),
+                )
+            )
+
+        return conditions
+
+    @staticmethod
+    def _parse_datetime(value: str | None) -> datetime | None:
+        if not value:
+            return None
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+
+    def _row_to_entity(self, row: Any) -> AuditEvent:
+        mapping = row._mapping if hasattr(row, "_mapping") else row
+        return AuditEvent(
+            id=str(mapping["id"]),
+            organization_id=str(mapping["organization_id"]),
+            event_type=mapping["event_type"],
+            action=mapping["action"],
+            category=mapping["category"],
+            resource_type=mapping["resource_type"],
+            resource_id=mapping["resource_id"],
+            resource_name=mapping["resource_name"],
+            actor_id=mapping["actor_id"],
+            actor_type=mapping["actor_type"],
+            severity=mapping["severity"],
+            message=mapping["message"],
+            changes=mapping["changes"],
+            metadata=mapping["metadata"] or {},
+            timestamp=mapping["created_at"],
         )
 
 

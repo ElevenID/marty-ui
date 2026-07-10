@@ -7,11 +7,13 @@ const {
   mockUpdateKeyManagementConfig,
   mockValidateKeyManagementService,
   mockShowNotification,
+  mockUseConsole,
 } = vi.hoisted(() => ({
   mockGetKeyManagementConfig: vi.fn(),
   mockUpdateKeyManagementConfig: vi.fn(),
   mockValidateKeyManagementService: vi.fn(),
   mockShowNotification: vi.fn(),
+  mockUseConsole: vi.fn(),
 }))
 
 vi.mock('../../../services/signingKeysApi', () => ({
@@ -28,9 +30,16 @@ vi.mock('../../../hooks/useNotifications', () => ({
   }),
 }))
 
+vi.mock('../../../contexts/ConsoleContext', () => ({
+  useConsole: () => mockUseConsole(),
+}))
+
 describe('KeyManagementServiceWizard', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockUseConsole.mockReturnValue({
+      activeOrgId: 'org-123',
+    })
     mockGetKeyManagementConfig.mockResolvedValue({
       supports_native_key_management: false,
       default_service_id: 'managed-openbao-transit',
@@ -101,6 +110,7 @@ describe('KeyManagementServiceWizard', () => {
     await waitFor(() => {
       expect(screen.getByText('Choose a key management service')).toBeInTheDocument()
     })
+    expect(mockGetKeyManagementConfig).toHaveBeenCalledWith({ organization_id: 'org-123' })
 
     await user.click(screen.getByText('AWS KMS'))
     await user.click(screen.getByRole('button', { name: 'Next' }))
@@ -124,6 +134,7 @@ describe('KeyManagementServiceWizard', () => {
     })
 
     const payload = mockUpdateKeyManagementConfig.mock.calls[0][0]
+    expect(payload.organization_id).toBe('org-123')
     expect(payload.default_service_id).toBeTruthy()
     expect(payload.services).toHaveLength(2)
     expect(payload.services[1]).toMatchObject({
@@ -134,6 +145,11 @@ describe('KeyManagementServiceWizard', () => {
       region: 'us-west-2',
       key_reference: 'arn:aws:kms:us-west-2:123456789012:key/abc',
     })
+
+    expect(screen.getByText('Signing service registered')).toBeInTheDocument()
+    expect(screen.getByText(/create or verify the signing key in the KMS provider you just registered/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Create issuer identity' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Use managed OpenBao key creation' })).toBeInTheDocument()
   })
 
   it('runs backend validation checks in the review step', async () => {
@@ -152,7 +168,7 @@ describe('KeyManagementServiceWizard', () => {
     await user.type(screen.getByRole('textbox', { name: /service url/i }), 'https://signer.example.com')
     const mountInput = screen.getByRole('textbox', { name: /transit mount/i })
     await user.clear(mountInput)
-    await user.type(mountInput, 'transit')
+    await user.type(mountInput, 'marty-transit')
     await user.type(screen.getByRole('textbox', { name: /credential reference/i }), 'vault-token')
     await user.click(screen.getByRole('button', { name: 'Next' }))
 
@@ -162,6 +178,8 @@ describe('KeyManagementServiceWizard', () => {
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: 'Review' })).toBeInTheDocument()
     })
+    expect(screen.getByText((content) => content.includes('vault secrets enable -path=marty-transit transit'))).toBeInTheDocument()
+    expect(screen.getByText((content) => content.includes('vault write -f marty-transit/keys/cred-issuer-prod type=ecdsa-p256'))).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: 'Validate connection' }))
 
@@ -170,9 +188,10 @@ describe('KeyManagementServiceWizard', () => {
     })
 
     expect(mockValidateKeyManagementService).toHaveBeenCalledWith(expect.objectContaining({
+      organization_id: 'org-123',
       service_type: 'custom-transit-compatible',
       endpoint: 'https://signer.example.com',
-      mount: 'transit',
+      mount: 'marty-transit',
       auth_reference: 'vault-token',
       key_reference: 'cred-issuer-prod',
     }))

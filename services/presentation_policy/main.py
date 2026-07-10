@@ -479,6 +479,7 @@ class PresentationPolicyResponse(BaseModel):
     id: str
     organization_id: str
     name: str
+    status: str = "draft"
     description: str | None = None
     purpose: str | None = None
     required_claims: list[dict] = Field(default_factory=list)
@@ -2676,6 +2677,7 @@ def _policy_to_response(policy: PresentationPolicy) -> PresentationPolicyRespons
         id=policy.id,
         organization_id=policy.organization_id,
         name=policy.name,
+        status=policy.status.value if hasattr(policy.status, "value") else str(policy.status),
         description=policy.description,
         purpose=policy.purpose or policy.display_metadata.purpose_description,
         required_claims=policy.protocol_required_claims,

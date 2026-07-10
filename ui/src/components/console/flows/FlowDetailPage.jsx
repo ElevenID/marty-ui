@@ -49,12 +49,9 @@ import DescriptionIcon from '@mui/icons-material/Description';
 import PolicyIcon from '@mui/icons-material/Policy';
 import VerifiedUserIcon from '@mui/icons-material/VerifiedUser';
 import AccountTreeIcon from '@mui/icons-material/AccountTree';
-import PauseCircleIcon from '@mui/icons-material/PauseCircle';
-import RefreshIcon from '@mui/icons-material/Refresh';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 
-import { ResourcePage, StatusChip } from '../../common';
-import flowsApi from '../../../services/flowsApi';
+import { ResourcePage } from '../../common';
 
 const getBreadcrumbs = (t) => [
   { label: t('flows.breadcrumbs.console'), path: '/console' },
@@ -115,7 +112,7 @@ function ApplicantJourney() {
  * Live Entry Points - Share Block
  * Reinforces that THIS is what gets shared
  */
-function EntryPoints({ flow, publicUrl, onCopy, onDownloadQR }) {
+function EntryPoints({ flow, publicUrl, onCopy }) {
   const { t } = useTranslation('console');
   return (
     <Card>
@@ -178,8 +175,9 @@ function EntryPoints({ flow, publicUrl, onCopy, onDownloadQR }) {
             <Button
               variant="outlined"
               startIcon={<QrCode2Icon />}
-              onClick={onDownloadQR}
               size="small"
+              disabled
+              title={t('flows.flowDetail.entryPoints.qrDownloadUnavailable')}
             >
               {t('flows.flowDetail.entryPoints.downloadQrButton')}
             </Button>
@@ -200,28 +198,37 @@ function EntryPoints({ flow, publicUrl, onCopy, onDownloadQR }) {
  */
 function ConfigurationSummary({ flow }) {
   const { t } = useTranslation('console');
+  const notAvailable = t('flows.flowDetail.configuration.notAvailable');
+  const optionalPath = (basePath, id) => (id ? `${basePath}/${id}` : null);
+  const approvalMode = flow?.approval_mode
+    ? (
+        flow.approval_mode === 'auto'
+          ? t('flows.flowDetail.configuration.approvalModeAuto')
+          : t('flows.flowDetail.configuration.approvalModeManual')
+      )
+    : notAvailable;
   const config = [
     {
       label: t('flows.flowDetail.configuration.credentialTemplateLabel'),
-      value: flow?.credential_template_name || 'EU Digital Identity Credential',
-      path: `/console/org/templates/credentials/${flow?.credential_template_id}`,
+      value: flow?.credential_template_name || flow?.credential_template_id || notAvailable,
+      path: optionalPath('/console/org/templates/credentials', flow?.credential_template_id),
       icon: DescriptionIcon,
     },
     {
       label: t('flows.flowDetail.configuration.applicationRulesLabel'),
-      value: flow?.application_rules || 'Employee email required (domain: example.com)',
-      path: `/console/org/templates/applications/${flow?.application_template_id}`,
+      value: flow?.application_rules || flow?.application_template_id || notAvailable,
+      path: optionalPath('/console/org/templates/applications', flow?.application_template_id),
       icon: PolicyIcon,
     },
     {
       label: t('flows.flowDetail.configuration.complianceProfileLabel'),
-      value: flow?.compliance_profile || 'Open Badge 2.0, EUDI-ready',
-      path: `/console/org/policies/compliance/${flow?.compliance_profile_id}`,
+      value: flow?.compliance_profile || flow?.compliance_profile_id || notAvailable,
+      path: optionalPath('/console/org/policies/compliance', flow?.compliance_profile_id),
       icon: VerifiedUserIcon,
     },
     {
       label: t('flows.flowDetail.configuration.approvalModeLabel'),
-      value: flow?.approval_mode === 'auto' ? t('flows.flowDetail.configuration.approvalModeAuto') : t('flows.flowDetail.configuration.approvalModeManual'),
+      value: approvalMode,
       icon: CheckCircleIcon,
     },
   ];
@@ -264,6 +271,7 @@ function ConfigurationSummary({ flow }) {
                       )}
                     </Box>
                   }
+                  secondaryTypographyProps={{ component: 'div' }}
                 />
               </ListItem>
               {index < config.length - 1 && <Divider />}
@@ -281,11 +289,16 @@ function ConfigurationSummary({ flow }) {
  */
 function RuntimeOverview({ flow }) {
   const { t } = useTranslation('console');
+  const formatMetric = (value) => (
+    typeof value === 'number' && Number.isFinite(value)
+      ? value.toLocaleString()
+      : t('flows.flowDetail.runtime.notAvailable')
+  );
   const stats = [
-    { label: t('flows.flowDetail.runtime.applicationsSubmittedLabel'), value: flow?.stats?.applications_submitted || 142, color: 'primary' },
-    { label: t('flows.flowDetail.runtime.pendingApprovalLabel'), value: flow?.stats?.pending_approval || 12, color: 'warning' },
-    { label: t('flows.flowDetail.runtime.credentialsIssuedLabel'), value: flow?.stats?.credentials_issued || 130, color: 'success' },
-    { label: t('flows.flowDetail.runtime.failures24hLabel'), value: flow?.stats?.failures_24h || 0, color: 'error' },
+    { label: t('flows.flowDetail.runtime.applicationsSubmittedLabel'), value: formatMetric(flow?.stats?.applications_submitted), color: 'primary' },
+    { label: t('flows.flowDetail.runtime.pendingApprovalLabel'), value: formatMetric(flow?.stats?.pending_approval), color: 'warning' },
+    { label: t('flows.flowDetail.runtime.credentialsIssuedLabel'), value: formatMetric(flow?.stats?.credentials_issued), color: 'success' },
+    { label: t('flows.flowDetail.runtime.failures24hLabel'), value: formatMetric(flow?.stats?.failures_24h), color: 'error' },
   ];
 
   return (
@@ -357,11 +370,6 @@ function FlowDetailPage() {
       setCopySuccess(true);
       setTimeout(() => setCopySuccess(false), 2000);
     }
-  };
-
-  const handleDownloadQR = () => {
-    // TODO: Implement QR code download
-    console.log('Download QR code');
   };
 
   const handlePreview = () => {
@@ -446,7 +454,8 @@ function FlowDetailPage() {
                 <Button
                   variant="outlined"
                   startIcon={<QrCode2Icon />}
-                  onClick={handleDownloadQR}
+                  disabled
+                  title={t('flows.flowDetail.entryPoints.qrDownloadUnavailable')}
                 >
                   {t('flows.flowDetail.actions.downloadQr')}
                 </Button>
@@ -495,34 +504,7 @@ function FlowDetailPage() {
               flow={flow}
               publicUrl={isPublished ? flow.public_url : null}
               onCopy={handleCopyUrl}
-              onDownloadQR={handleDownloadQR}
             />
-            
-            {isPublished && (
-              <Card>
-                <CardContent>
-                  <Typography variant="h6" gutterBottom fontWeight={600}>
-                    {t('flows.flowDetail.operationalControls.title')}
-                  </Typography>
-                  <Stack spacing={1}>
-                    <Button
-                      variant="outlined"
-                      startIcon={<PauseCircleIcon />}
-                      fullWidth
-                    >
-                      {t('flows.flowDetail.operationalControls.pauseFlowButton')}
-                    </Button>
-                    <Button
-                      variant="outlined"
-                      startIcon={<RefreshIcon />}
-                      fullWidth
-                    >
-                      {t('flows.flowDetail.operationalControls.rotateQrButton')}
-                    </Button>
-                  </Stack>
-                </CardContent>
-              </Card>
-            )}
           </Stack>
         </Grid>
 

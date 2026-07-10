@@ -42,6 +42,15 @@ import { get, post, put, del } from '../../services/api';
 describe('vendorApi', () => {
   beforeEach(() => vi.clearAllMocks());
 
+  it('org-scoped helpers fail fast without organization context', async () => {
+    await expect(fetchIssuanceTemplates({ organizationId: '' })).rejects.toMatchObject({ code: 'ORG_REQUIRED' });
+    await expect(fetchTrustProfiles({ organizationId: ' ' })).rejects.toMatchObject({ code: 'ORG_REQUIRED' });
+    await expect(saveIssuanceTemplate({ templateData: { name: 'T' }, organizationId: '' })).rejects.toMatchObject({ code: 'ORG_REQUIRED' });
+
+    expect(get).not.toHaveBeenCalled();
+    expect(post).not.toHaveBeenCalled();
+  });
+
   // ── Credential Configuration ─────────────────────────────────
 
   it('fetchCredentialConfigs calls GET', async () => {

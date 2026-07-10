@@ -10,10 +10,21 @@ import { get, post, put, del } from '../../services/api';
 
 const API_URL = import.meta.env.VITE_API_URL || '';
 
+function requireOrganizationId(value) {
+  const organizationId = String(value || '').trim();
+  if (!organizationId) {
+    const error = new Error('organization_id is required');
+    error.code = 'ORG_REQUIRED';
+    throw error;
+  }
+  return organizationId;
+}
+
 // ── Credential Configuration ──────────────────────────────────────
 
 export async function fetchCredentialConfigs({ organizationId }) {
-  return get(`${API_URL}/api/organizations/${organizationId}/credential-types`);
+  const orgId = requireOrganizationId(organizationId);
+  return get(`${API_URL}/api/organizations/${encodeURIComponent(orgId)}/credential-types`);
 }
 
 export async function fetchCredentialTypeDefaults({ credentialType }) {
@@ -21,45 +32,53 @@ export async function fetchCredentialTypeDefaults({ credentialType }) {
 }
 
 export async function saveCredentialConfig({ organizationId, id, body }) {
+  const orgId = requireOrganizationId(organizationId);
   return id
-    ? put(`${API_URL}/api/organizations/${organizationId}/credential-types/${id}`, body)
-    : post(`${API_URL}/api/organizations/${organizationId}/credential-types`, body);
+    ? put(`${API_URL}/api/organizations/${encodeURIComponent(orgId)}/credential-types/${id}`, body)
+    : post(`${API_URL}/api/organizations/${encodeURIComponent(orgId)}/credential-types`, body);
 }
 
 export async function deleteCredentialConfig({ organizationId, id }) {
-  return del(`${API_URL}/api/organizations/${organizationId}/credential-types/${id}`);
+  const orgId = requireOrganizationId(organizationId);
+  return del(`${API_URL}/api/organizations/${encodeURIComponent(orgId)}/credential-types/${id}`);
 }
 
 export async function toggleCredentialConfigActive({ organizationId, id, isActive }) {
-  return put(`${API_URL}/api/organizations/${organizationId}/credential-types/${id}`, { is_active: isActive });
+  const orgId = requireOrganizationId(organizationId);
+  return put(`${API_URL}/api/organizations/${encodeURIComponent(orgId)}/credential-types/${id}`, { is_active: isActive });
 }
 
 // ── Credential Type Actions (publish/preview/versions/unpublish) ──
 
 export async function publishCredentialType({ orgId, typeId, visibility, changeDescription }) {
+  const organizationId = requireOrganizationId(orgId);
   return post(
-    `${API_URL}/api/organizations/${orgId}/credential-types/${typeId}/publish?visibility=${encodeURIComponent(visibility)}`,
+    `${API_URL}/api/organizations/${encodeURIComponent(organizationId)}/credential-types/${typeId}/publish?visibility=${encodeURIComponent(visibility)}`,
     { change_description: changeDescription },
   );
 }
 
 export async function previewCredentialType({ orgId, typeId, testData }) {
-  return post(`${API_URL}/api/organizations/${orgId}/credential-types/${typeId}/preview`, testData);
+  const organizationId = requireOrganizationId(orgId);
+  return post(`${API_URL}/api/organizations/${encodeURIComponent(organizationId)}/credential-types/${typeId}/preview`, testData);
 }
 
 export async function fetchCredentialTypeVersions({ orgId, typeId }) {
-  return get(`${API_URL}/api/organizations/${orgId}/credential-types/${typeId}/versions`);
+  const organizationId = requireOrganizationId(orgId);
+  return get(`${API_URL}/api/organizations/${encodeURIComponent(organizationId)}/credential-types/${typeId}/versions`);
 }
 
 export async function unpublishCredentialType({ orgId, typeId }) {
-  return post(`${API_URL}/api/organizations/${orgId}/credential-types/${typeId}/unpublish`);
+  const organizationId = requireOrganizationId(orgId);
+  return post(`${API_URL}/api/organizations/${encodeURIComponent(organizationId)}/credential-types/${typeId}/unpublish`);
 }
 
 // ── Offers ────────────────────────────────────────────────────────
 
 export async function fetchOffers({ organizationId, page, pageSize, statusFilter, activeFilter }) {
+  const orgId = requireOrganizationId(organizationId);
   const params = new URLSearchParams({
-    organization_id: organizationId,
+    organization_id: orgId,
     page: String(page),
     page_size: String(pageSize),
   });
@@ -75,13 +94,15 @@ export async function regenerateOffer({ offerId }) {
 // ── Offer Analytics ───────────────────────────────────────────────
 
 export async function fetchAnalyticsSummary({ organizationId, days = 30 }) {
-  const params = new URLSearchParams({ organization_id: organizationId, days: String(days) });
+  const orgId = requireOrganizationId(organizationId);
+  const params = new URLSearchParams({ organization_id: orgId, days: String(days) });
   return get(`${API_URL}/api/issuance/analytics/summary?${params.toString()}`);
 }
 
 export async function fetchAnalyticsScans({ organizationId, page, pageSize, accessTypeFilter, outcomeFilter, walletTypeFilter }) {
+  const orgId = requireOrganizationId(organizationId);
   const params = new URLSearchParams({
-    organization_id: organizationId,
+    organization_id: orgId,
     page: String(page),
     page_size: String(pageSize),
   });
@@ -94,8 +115,9 @@ export async function fetchAnalyticsScans({ organizationId, page, pageSize, acce
 // ── Revocation ────────────────────────────────────────────────────
 
 export async function fetchIssuedCredentials({ organizationId, page, perPage, searchQuery }) {
+  const orgId = requireOrganizationId(organizationId);
   const params = new URLSearchParams({
-    organization_id: organizationId,
+    organization_id: orgId,
   });
 
   const data = await get(`${API_URL}/v1/issued-credentials?${params.toString()}`);
@@ -162,8 +184,9 @@ export async function batchRevokeCredentials({ file, reason }) {
 }
 
 export async function fetchRevocationHistory({ organizationId, limit, offset }) {
+  const orgId = requireOrganizationId(organizationId);
   const params = new URLSearchParams({
-    organization_id: organizationId,
+    organization_id: orgId,
     limit: String(limit),
     offset: String(offset),
   });
@@ -173,11 +196,13 @@ export async function fetchRevocationHistory({ organizationId, limit, offset }) 
 // ── mDoc Configuration ────────────────────────────────────────────
 
 export async function fetchMDocConfig({ organizationId }) {
-  return get(`${API_URL}/api/organizations/${organizationId}/mdoc-config`);
+  const orgId = requireOrganizationId(organizationId);
+  return get(`${API_URL}/api/organizations/${encodeURIComponent(orgId)}/mdoc-config`);
 }
 
 export async function saveMDocConfig({ organizationId, enabledTypes, typeConfigs }) {
-  return put(`${API_URL}/api/organizations/${organizationId}/mdoc-config`, {
+  const orgId = requireOrganizationId(organizationId);
+  return put(`${API_URL}/api/organizations/${encodeURIComponent(orgId)}/mdoc-config`, {
     enabled_types: enabledTypes,
     type_configs: typeConfigs,
   });
@@ -186,19 +211,24 @@ export async function saveMDocConfig({ organizationId, enabledTypes, typeConfigs
 // ── Issuance Templates ───────────────────────────────────────────
 
 export async function fetchIssuanceTemplates({ organizationId }) {
-  return get(`${API_URL}/v1/issuance/templates?organization_id=${organizationId}`);
+  const orgId = requireOrganizationId(organizationId);
+  const params = new URLSearchParams({ organization_id: orgId });
+  return get(`${API_URL}/v1/issuance/templates?${params.toString()}`);
 }
 
 export async function fetchTrustProfiles({ organizationId }) {
-  return get(`${API_URL}/v1/trust-profiles?organization_id=${organizationId}`);
+  const orgId = requireOrganizationId(organizationId);
+  const params = new URLSearchParams({ organization_id: orgId });
+  return get(`${API_URL}/v1/trust-profiles?${params.toString()}`);
 }
 
 export async function saveIssuanceTemplate({ templateData, organizationId }) {
+  const orgId = requireOrganizationId(organizationId);
   const method = templateData.id ? 'PUT' : 'POST';
   const url = templateData.id
     ? `${API_URL}/v1/issuance/templates/${templateData.id}`
     : `${API_URL}/v1/issuance/templates`;
-  const body = { ...templateData, organization_id: organizationId };
+  const body = { ...templateData, organization_id: orgId };
   return method === 'PUT' ? put(url, body) : post(url, body);
 }
 
@@ -209,8 +239,9 @@ export async function deleteIssuanceTemplate({ templateId }) {
 // ── Audit Logs ────────────────────────────────────────────────────
 
 export async function fetchAuditEvents({ organizationId, page, perPage, timeRange, categoryFilter, severityFilter, searchQuery }) {
+  const orgId = requireOrganizationId(organizationId);
   const params = new URLSearchParams({
-    organization_id: organizationId,
+    organization_id: orgId,
     page: String(page),
     per_page: String(perPage),
     time_range: timeRange,
@@ -222,8 +253,9 @@ export async function fetchAuditEvents({ organizationId, page, perPage, timeRang
 }
 
 export async function exportAuditEvents({ organizationId, format, timeRange, categoryFilter, severityFilter }) {
+  const orgId = requireOrganizationId(organizationId);
   const params = new URLSearchParams({
-    organization_id: organizationId,
+    organization_id: orgId,
     format,
     time_range: timeRange,
   });

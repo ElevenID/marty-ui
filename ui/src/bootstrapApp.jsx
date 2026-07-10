@@ -18,7 +18,7 @@ export function mountApp(RootComponent) {
   const rootElement = document.getElementById('root');
 
   if (!rootElement) {
-    console.error('[DEBUG] Root element not found!');
+    console.error('Root element not found.');
     return;
   }
 

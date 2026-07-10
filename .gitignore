@@ -99,6 +99,7 @@ playwright/.cache/
 coverage/
 storybook-static/
 .vitest/
+tests/artifacts/
 
 # =============================================================================
 # Debug / Development Scripts

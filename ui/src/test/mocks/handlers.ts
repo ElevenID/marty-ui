@@ -10,6 +10,7 @@ import {
   mockUsers,
   mockOrganization,
   mockTrustProfiles,
+  mockComplianceProfiles,
   mockTemplates,
   mockPolicies,
   mockDeploymentProfiles,
@@ -203,6 +204,14 @@ export const handlers = [
     })
   }),
 
+  http.post(`${API_BASE}/v1/trust-profiles/:id/activate`, ({ params }) => {
+    return HttpResponse.json({
+      ...mockTrustProfiles.active,
+      id: params.id,
+      status: 'active',
+    })
+  }),
+
   http.post(`${API_BASE}/v1/trust-profiles/:id/issuers`, async ({ request }) => {
     const body = await request.json() as any
     return HttpResponse.json({
@@ -297,6 +306,25 @@ export const handlers = [
   }),
 
   // Flow Definitions
+  http.get(`${API_BASE}/v1/flows/definitions`, () => {
+    return HttpResponse.json([mockFlows.valid])
+  }),
+
+  http.get(`${API_BASE}/v1/flows/definitions/:id`, ({ params }) => {
+    return HttpResponse.json({ ...mockFlows.valid, id: params.id })
+  }),
+
+  http.post(`${API_BASE}/v1/flows/definitions`, async ({ request }) => {
+    const body = await request.json() as any
+    return HttpResponse.json({
+      ...mockFlows.valid,
+      ...body,
+      id: Math.floor(Math.random() * 1000),
+      flow_type: body.flow_type || body.type || mockFlows.valid.flow_type,
+      status: body.enabled === false ? 'DRAFT' : 'ACTIVE',
+    }, { status: 201 })
+  }),
+
   http.get(`${API_BASE}/v1/flows`, () => {
     return HttpResponse.json([mockFlows.valid])
   }),
@@ -418,7 +446,7 @@ export const handlers = [
         id: 'key_1',
         name: 'Production API',
         masked_key: 'pk_live_••••••••1234',
-        scopes: ['read:credentials', 'write:credentials'],
+        scopes: ['credentials:read', 'credentials:issue'],
         created_at: new Date().toISOString(),
         status: 'active',
       },
@@ -527,6 +555,20 @@ export const handlers = [
   }),
 
   // Dashboard service endpoints
+  http.get(`${API_BASE}/v1/organizations/:id/integration-info`, ({ params }) => {
+    return HttpResponse.json({
+      org_id: params.id,
+      base_url: `${API_BASE}/v1`,
+      example_request: [
+        `curl -sS -X POST "${API_BASE}/v1/flows/instances"`,
+        '  -H "Content-Type: application/json"',
+        '  -H "X-API-Key: <api-key>"',
+        `  -H "X-Organization-ID: ${params.id}"`,
+        '  -d \'{"flow_definition_id":"<flow-definition-id>","subject_id":"<subject-id>","initial_context":{}}\'',
+      ].join(' \\\n'),
+    })
+  }),
+
   http.get(`${API_BASE}/v1/organizations/:id/team/snapshot`, () => {
     return HttpResponse.json({
       members: [
@@ -589,6 +631,14 @@ export const handlers = [
         total: 0,
       },
     })
+  }),
+
+  http.get(`${API_BASE}/v1/compliance-profiles`, ({ request }) => {
+    const organizationId = new URL(request.url).searchParams.get('organization_id')
+    if (!organizationId) {
+      return errorResponses.validationError('organization_id', 'organization_id is required')
+    }
+    return HttpResponse.json([mockComplianceProfiles.active, mockComplianceProfiles.hidden])
   }),
 
   // Fallback handlers for relative URLs (without base)
@@ -664,6 +714,22 @@ export const handlers = [
     })
   }),
 
+  http.get('/v1/compliance-profiles', ({ request }) => {
+    const organizationId = new URL(request.url).searchParams.get('organization_id')
+    if (!organizationId) {
+      return errorResponses.validationError('organization_id', 'organization_id is required')
+    }
+    return HttpResponse.json([mockComplianceProfiles.active, mockComplianceProfiles.hidden])
+  }),
+
+  http.post('/v1/trust-profiles/:id/activate', ({ params }) => {
+    return HttpResponse.json({
+      ...mockTrustProfiles.active,
+      id: params.id,
+      status: 'active',
+    })
+  }),
+
   http.post('/v1/trust-profiles/:id/issuers', async ({ request }) => {
     const body = await request.json() as any
     return HttpResponse.json({
@@ -735,7 +801,7 @@ export const handlers = [
         id: 'key_1',
         name: 'Production API',
         masked_key: 'pk_live_\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u20221234',
-        scopes: ['read:credentials', 'write:credentials'],
+        scopes: ['credentials:read', 'credentials:issue'],
         created_at: new Date().toISOString(),
         status: 'active',
       },

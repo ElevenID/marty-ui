@@ -26,32 +26,66 @@ import ApiIcon from '@mui/icons-material/Api';
 import { useTranslation } from 'react-i18next';
 
 import { listDeploymentProfiles } from '../../../../services/deploymentProfilesApi';
-import { listPresentationPolicies } from '../../../../services/presentationPolicyApi';
+import { listCredentialTemplates, listPresentationPolicies } from '../../../../services/presentationPolicyApi';
 import { useAuth } from '../../../../hooks/useAuth';
+import { useConsole } from '../../../../contexts/ConsoleContext';
 
-const DeploymentBindingStep = ({ selectedDeployment, defaultPolicyId, onUpdate }) => {
+const ISSUANCE_FLOW_TYPES = new Set(['issuance', 'issuance_oid4vci', 'combined']);
+const PRESENTATION_FLOW_TYPES = new Set(['verification', 'combined']);
+
+function logDeploymentBindingError(message, error) {
+  if (import.meta.env?.DEV && import.meta.env?.MODE !== 'test') {
+    console.error(message, error);
+  }
+}
+
+function isActiveResource(resource) {
+  return String(resource?.status || resource?.state || '').toLowerCase() === 'active'
+    || resource?.is_active === true
+    || resource?.enabled === true;
+}
+
+const DeploymentBindingStep = ({
+  selectedDeployment,
+  defaultPolicyId,
+  credentialTemplateId,
+  flowType,
+  onUpdate,
+}) => {
   const { t } = useTranslation('console');
-  const { organizationId } = useAuth();
+  const { organizationId: authOrganizationId } = useAuth();
+  const { activeOrgId } = useConsole();
+  const organizationId = activeOrgId || authOrganizationId;
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [deploymentProfiles, setDeploymentProfiles] = useState([]);
   const [policies, setPolicies] = useState([]);
+  const [credentialTemplates, setCredentialTemplates] = useState([]);
+
+  const requiresCredentialTemplate = ISSUANCE_FLOW_TYPES.has(flowType);
+  const requiresPresentationPolicy = PRESENTATION_FLOW_TYPES.has(flowType);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
     setError(null);
 
     try {
-      const [deploymentsResponse, policiesResponse] = await Promise.all([
+      if (!organizationId) {
+        throw new Error('Select an organization before loading flow prerequisites.');
+      }
+
+      const [deploymentsResponse, policiesResponse, templatesResponse] = await Promise.all([
         listDeploymentProfiles({ organization_id: organizationId }),
-        listPresentationPolicies(),
+        listPresentationPolicies({ organization_id: organizationId }),
+        listCredentialTemplates({ organization_id: organizationId }),
       ]);
 
-      setDeploymentProfiles(deploymentsResponse.data || deploymentsResponse || []);
-      setPolicies(policiesResponse.data || policiesResponse || []);
+      setDeploymentProfiles((deploymentsResponse.data || deploymentsResponse || []).filter(isActiveResource));
+      setPolicies((policiesResponse.data || policiesResponse || []).filter(isActiveResource));
+      setCredentialTemplates((templatesResponse.data || templatesResponse || []).filter(isActiveResource));
     } catch (err) {
-      console.error('Failed to fetch data:', err);
-      setError(t('wizards.flowDefinition.deploymentBindingStep.errors.failedToLoad'));
+      logDeploymentBindingError('Failed to fetch data:', err);
+      setError(err?.message || t('wizards.flowDefinition.deploymentBindingStep.errors.failedToLoad'));
     } finally {
       setLoading(false);
     }
@@ -61,12 +95,54 @@ const DeploymentBindingStep = ({ selectedDeployment, defaultPolicyId, onUpdate }
     fetchData();
   }, [fetchData]);
 
+  useEffect(() => {
+    const updates = {};
+    if (!selectedDeployment && deploymentProfiles.length === 1) {
+      updates.selectedDeployment = deploymentProfiles[0];
+    }
+    if (!defaultPolicyId && policies.length === 1) {
+      updates.defaultPolicyId = policies[0].id;
+      updates.trustProfileId = policies[0].trust_profile_id || updates.trustProfileId || null;
+    }
+    if (!credentialTemplateId && credentialTemplates.length === 1) {
+      updates.credentialTemplateId = credentialTemplates[0].id;
+      updates.trustProfileId = credentialTemplates[0].trust_profile_id || updates.trustProfileId || null;
+    }
+    if (Object.keys(updates).length > 0) {
+      onUpdate(updates);
+    }
+  }, [
+    credentialTemplateId,
+    credentialTemplates,
+    defaultPolicyId,
+    deploymentProfiles,
+    onUpdate,
+    policies,
+    selectedDeployment,
+  ]);
+
   const handleSelectDeployment = (profile) => {
-    onUpdate({ selectedDeployment: profile });
+    onUpdate({
+      selectedDeployment: profile,
+      defaultPolicyId: profile?.default_policy_id || profile?.default_presentation_policy_id || defaultPolicyId || null,
+      trustProfileId: profile?.trust_profile_id || null,
+    });
   };
 
   const handleSelectPolicy = (policyId) => {
-    onUpdate({ defaultPolicyId: policyId });
+    const policy = policies.find((candidate) => candidate.id === policyId);
+    onUpdate({
+      defaultPolicyId: policyId,
+      trustProfileId: policy?.trust_profile_id || null,
+    });
+  };
+
+  const handleSelectTemplate = (templateId) => {
+    const template = credentialTemplates.find((candidate) => candidate.id === templateId);
+    onUpdate({
+      credentialTemplateId: templateId,
+      trustProfileId: template?.trust_profile_id || null,
+    });
   };
 
   if (loading) {
@@ -102,7 +178,7 @@ const DeploymentBindingStep = ({ selectedDeployment, defaultPolicyId, onUpdate }
           </Typography>
 
           {deploymentProfiles.length === 0 ? (
-            <Alert severity="info">
+            <Alert severity="warning">
               {t('wizards.flowDefinition.deploymentBindingStep.deployment.empty')}
             </Alert>
           ) : (
@@ -162,7 +238,7 @@ const DeploymentBindingStep = ({ selectedDeployment, defaultPolicyId, onUpdate }
                               variant="outlined"
                               sx={{ mr: 0.5 }}
                             />
-                            {profile.is_active && (
+                            {isActiveResource(profile) && (
                               <Chip
                                 label={t('wizards.flowDefinition.deploymentBindingStep.deployment.activeChip')}
                                 size="small"
@@ -182,7 +258,41 @@ const DeploymentBindingStep = ({ selectedDeployment, defaultPolicyId, onUpdate }
         </CardContent>
       </Card>
 
+      {/* Credential Template Selection */}
+      {requiresCredentialTemplate && (
+        <Card sx={{ mb: 3 }}>
+          <CardContent>
+            <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 600 }}>
+              {t('wizards.credentialTemplate.title', 'Credential Template')}
+            </Typography>
+
+            {credentialTemplates.length === 0 ? (
+              <Alert severity="warning">
+                No active credential templates are available for this organization.
+              </Alert>
+            ) : (
+              <FormControl fullWidth required>
+                <InputLabel>Credential Template</InputLabel>
+                <Select
+                  value={credentialTemplateId || ''}
+                  onChange={(e) => handleSelectTemplate(e.target.value)}
+                  label="Credential Template"
+                  SelectDisplayProps={{ 'data-testid': 'flow-binding-template-select' }}
+                >
+                  {credentialTemplates.map((template) => (
+                    <MenuItem key={template.id} value={template.id}>
+                      {template.name}
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
       {/* Default Policy Selection */}
+      {requiresPresentationPolicy && (
       <Card>
         <CardContent>
           <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 600 }}>
@@ -191,7 +301,7 @@ const DeploymentBindingStep = ({ selectedDeployment, defaultPolicyId, onUpdate }
           </Typography>
 
           {policies.length === 0 ? (
-            <Alert severity="info">
+            <Alert severity="warning">
               {t('wizards.flowDefinition.deploymentBindingStep.policy.empty')}
             </Alert>
           ) : (
@@ -206,6 +316,7 @@ const DeploymentBindingStep = ({ selectedDeployment, defaultPolicyId, onUpdate }
                   value={defaultPolicyId || ''}
                   onChange={(e) => handleSelectPolicy(e.target.value)}
                   label={t('wizards.flowDefinition.deploymentBindingStep.policy.label')}
+                  SelectDisplayProps={{ 'data-testid': 'flow-binding-policy-select' }}
                 >
                   <MenuItem value="">
                     <em>{t('wizards.flowDefinition.deploymentBindingStep.policy.none')}</em>
@@ -230,6 +341,7 @@ const DeploymentBindingStep = ({ selectedDeployment, defaultPolicyId, onUpdate }
           )}
         </CardContent>
       </Card>
+      )}
     </Box>
   );
 };
