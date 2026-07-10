@@ -73,19 +73,43 @@ def fix_grpc_imports(out_dir: Path) -> None:
 
 
 def create_init_file(out_dir: Path) -> None:
-    """Generate __init__.py that re-exports all generated modules."""
+    """Generate a lazy __init__.py that re-exports all generated modules."""
     modules = sorted(
         f.stem
         for f in out_dir.glob("*_pb2*.py")
     )
-
+    module_items = "\n".join(f'    "{mod}",' for mod in modules)
     lines = [
-        '"""Auto-generated protobuf and gRPC stubs for marty-ui services."""',
+        '"""Auto-generated protobuf and gRPC stubs for marty-ui services.',
+        "",
+        "The generated modules are imported lazily to avoid circular-import traps during",
+        "service startup when a service requests one stub but the package would otherwise",
+        "eagerly import every other stub.",
+        '"""',
+        "",
+        "from __future__ import annotations",
+        "",
+        "from importlib import import_module",
+        "",
+        "_SUBMODULES = {",
+        module_items,
+        "}",
+        "",
+        "__all__ = sorted(_SUBMODULES)",
+        "",
+        "",
+        "def __getattr__(name: str):",
+        "    if name in _SUBMODULES:",
+        "        module = import_module(f\"{__name__}.{name}\")",
+        "        globals()[name] = module",
+        "        return module",
+        "    raise AttributeError(f\"module {__name__!r} has no attribute {name!r}\")",
+        "",
+        "",
+        "def __dir__() -> list[str]:",
+        "    return sorted(list(globals().keys()) + list(_SUBMODULES))",
         "",
     ]
-    for mod in modules:
-        lines.append(f"from . import {mod}")
-    lines.append("")
 
     init_file = out_dir / "__init__.py"
     init_file.write_text("\n".join(lines))

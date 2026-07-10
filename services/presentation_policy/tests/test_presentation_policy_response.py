@@ -19,6 +19,7 @@ PROTOCOL_KEYS = {
     "id",
     "organization_id",
     "name",
+    "status",
     "description",
     "purpose",
     "required_claims",
@@ -127,6 +128,7 @@ def test_get_presentation_policy_returns_protocol_shape_only() -> None:
     assert body["id"] == policy.id
     assert body["organization_id"] == "org-1"
     assert body["name"] == "Age Gate"
+    assert body["status"] == "draft"
     assert body["description"] == "Verify age for access"
     assert body["purpose"] == "Age verification for entry"
 
@@ -148,7 +150,7 @@ def test_get_presentation_policy_returns_protocol_shape_only() -> None:
     assert "ligero_age_over_21" in body["supported_circuits"]
 
     # Legacy fields must NOT be present
-    for legacy_key in ("status", "display_metadata", "credential_requirements",
+    for legacy_key in ("display_metadata", "credential_requirements",
                        "alternative_requirements", "compliance_profile_id", "version"):
         assert legacy_key not in body, f"Legacy key {legacy_key!r} must not appear in protocol response"
 
@@ -207,7 +209,7 @@ def test_activate_keeps_protocol_shape_stable() -> None:
     assert response.status_code == 200
     body = response.json()
     assert set(body.keys()) <= PROTOCOL_KEYS
-    assert "status" not in body
+    assert body["status"] == "active"
     assert "credential_requirements" not in body
 
 

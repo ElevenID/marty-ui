@@ -60,8 +60,22 @@ server {
         proxy_set_header X-Forwarded-Proto https;
     }
 
-    # Health check
-    location /health {
+    # Readiness and health checks. Keep readiness out of the UI SPA fallback.
+    location = /ready {
+        set $backend_api ${GATEWAY_UPSTREAM};
+        proxy_pass http://$backend_api/ready;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+    }
+
+    location = /health/ready {
+        set $backend_api ${GATEWAY_UPSTREAM};
+        proxy_pass http://$backend_api/health/ready;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+    }
+
+    location = /health {
         set $backend_api ${GATEWAY_UPSTREAM};
         proxy_pass http://$backend_api/health;
         proxy_http_version 1.1;

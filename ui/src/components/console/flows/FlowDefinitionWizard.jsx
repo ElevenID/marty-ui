@@ -8,7 +8,7 @@
  * - Review and activation
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
@@ -28,6 +28,9 @@ import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 
 import { useWizard } from '../../../hooks/useWizard';
+import { useAuth } from '../../../hooks/useAuth';
+import { useConsole } from '../../../contexts/ConsoleContext';
+import { createFlow } from '../../../services/flowsApi';
 import {
   FlowTypeStep,
   FlowStepsConfigStep,
@@ -40,7 +43,7 @@ const getSteps = (t) => [
   { label: t('wizards.flowDefinition.steps.flowType'), optional: false },
   { label: t('wizards.flowDefinition.steps.configureSteps'), optional: false },
   { label: t('wizards.flowDefinition.steps.preconditions'), optional: true },
-  { label: t('wizards.flowDefinition.steps.bindDeployment'), optional: true },
+  { label: t('wizards.flowDefinition.steps.bindDeployment'), optional: false },
   { label: t('wizards.flowDefinition.steps.review'), optional: false },
 ];
 
@@ -52,58 +55,111 @@ const INITIAL_DATA = {
   preconditions: [],
   selectedDeployment: null,
   defaultPolicyId: null,
+  credentialTemplateId: null,
   activateImmediately: true,
 };
+
+const ISSUANCE_FLOW_TYPES = new Set(['issuance', 'issuance_oid4vci', 'combined']);
+const PRESENTATION_FLOW_TYPES = new Set(['verification', 'combined']);
+
+const STEP_TYPE_ALIASES = {
+  add_step: 'user_input',
+  collect_data: 'data_collection',
+  create_offer: 'issuance',
+  custom: 'user_input',
+  deliver_credential: 'issuance',
+  display_qr: 'user_input',
+  generate_code: 'issuance',
+  grant_access: 'end',
+  issue_credential: 'issuance',
+  request_presentation: 'verification',
+  send_invitation: 'callback',
+  show_result: 'end',
+  validate_age: 'validation',
+  validate_credentials: 'validation',
+  verify_identity: 'verification',
+};
+
+function normalizeFlowStepType(type) {
+  const normalized = String(type || 'user_input').trim().toLowerCase();
+  return STEP_TYPE_ALIASES[normalized] || normalized;
+}
+
+function buildFlowPayload(formData, organizationId) {
+  const selectedDeployment = formData.selectedDeployment || null;
+  const selectedPolicyId = formData.defaultPolicyId || selectedDeployment?.default_policy_id || selectedDeployment?.default_presentation_policy_id || null;
+  const selectedTemplateId = formData.credentialTemplateId || null;
+
+  return {
+    organization_id: organizationId,
+    name: formData.name,
+    description: formData.description,
+    flow_type: formData.flowType,
+    steps: (formData.flowSteps || []).map((step) => ({
+      name: step.name,
+      description: step.description || null,
+      step_type: normalizeFlowStepType(step.type || step.step_type),
+      config: step.config || {},
+      timeout_seconds: step.timeout_seconds || null,
+      conditions: step.conditions || [],
+    })),
+    transitions: [],
+    preconditions: formData.preconditions || [],
+    deployment_profile_id: selectedDeployment?.id || null,
+    deployment_profile_ids: selectedDeployment?.id ? [selectedDeployment.id] : [],
+    credential_template_id: ISSUANCE_FLOW_TYPES.has(formData.flowType) ? selectedTemplateId : null,
+    presentation_policy_id: PRESENTATION_FLOW_TYPES.has(formData.flowType) ? selectedPolicyId : null,
+    trust_profile_id: selectedDeployment?.trust_profile_id || formData.trustProfileId || null,
+    approval_strategy: 'AUTO',
+    enabled: formData.activateImmediately !== false,
+  };
+}
 
 const FlowDefinitionWizard = () => {
   const navigate = useNavigate();
   const { t } = useTranslation('console');
-  const [apiError, setApiError] = useState(null);
+  const { organizationId: authOrganizationId } = useAuth();
+  const { activeOrgId } = useConsole();
+  const organizationId = activeOrgId || authOrganizationId;
 
   // Validation function for each step
   const validateStep = useCallback((stepIndex, stepData) => {
-    const valid = (() => {
-      switch (stepIndex) {
-        case 0: // Flow Type
-          return stepData.flowType !== null;
-        case 1: // Configure Steps
-          return (
-            stepData.name.trim() !== '' &&
-            stepData.flowSteps.length > 0
-          );
-        case 2: // Preconditions (optional)
-          return true;
-        case 3: // Bind Deployment (optional)
-          return true;
-        case 4: // Review
-          return true;
-        default:
+    switch (stepIndex) {
+      case 0: // Flow Type
+        return stepData.flowType !== null;
+      case 1: // Configure Steps
+        return (
+          stepData.name.trim() !== '' &&
+          stepData.flowSteps.length > 0
+        );
+      case 2: // Preconditions (optional)
+        return true;
+      case 3: { // Bind Deployment and required flow references
+        if (!stepData.selectedDeployment?.id) {
           return false;
+        }
+        if (ISSUANCE_FLOW_TYPES.has(stepData.flowType) && !stepData.credentialTemplateId) {
+          return false;
+        }
+        if (PRESENTATION_FLOW_TYPES.has(stepData.flowType) && !stepData.defaultPolicyId) {
+          return false;
+        }
+        return true;
       }
-    })();
-    console.log('[FlowWizard] validateStep called:', { stepIndex, flowType: stepData.flowType, valid });
-    return valid;
+      case 4: // Review
+        return true;
+      default:
+        return false;
+    }
   }, []);
 
   // Handle submission
   const handleSubmit = useCallback(async (formData) => {
-    const payload = {
-      name: formData.name,
-      description: formData.description,
-      type: formData.flowType,
-      steps: formData.flowSteps,
-      preconditions: formData.preconditions || [],
-      deployment_profile_id: formData.selectedDeployment?.id || null,
-      default_policy_id: formData.defaultPolicyId || null,
-      is_active: formData.activateImmediately,
-    };
-    
-    // Return the created flow (this would be returned by the API)
-    return {
-      id: 'flow_' + Date.now(),
-      ...payload,
-    };
-  }, []);
+    if (!organizationId) {
+      throw new Error('Select an organization before creating a flow.');
+    }
+    return createFlow(buildFlowPayload(formData, organizationId));
+  }, [organizationId]);
 
   const wizard = useWizard({
     steps: getSteps(t),
@@ -118,13 +174,6 @@ const FlowDefinitionWizard = () => {
     },
     onCancel: () => navigate('/console/org/flows'),
   });
-
-  // Debug logging
-  useEffect(() => {
-    console.log('[FlowWizard] Data changed:', { flowType: wizard.data.flowType, activeStep: wizard.activeStep });
-    console.log('[FlowWizard] validateStep called:', { stepIndex: wizard.activeStep, flowType: wizard.data.flowType, valid: validateStep(wizard.activeStep, wizard.data) });
-    console.log('[FlowWizard] isStepValid():', wizard.isStepValid());
-  }, [wizard.data, wizard.activeStep, wizard, validateStep]);
 
   // Render current step content
   const renderStepContent = () => {
@@ -159,6 +208,8 @@ const FlowDefinitionWizard = () => {
           <DeploymentBindingStep
             selectedDeployment={wizard.data.selectedDeployment}
             defaultPolicyId={wizard.data.defaultPolicyId}
+            credentialTemplateId={wizard.data.credentialTemplateId}
+            flowType={wizard.data.flowType}
             onUpdate={(updates) => wizard.updateData(updates)}
           />
         );
@@ -222,9 +273,9 @@ const FlowDefinitionWizard = () => {
         </Stepper>
 
         {/* Error Alert */}
-        {(wizard.error || apiError) && (
-          <Alert severity="error" sx={{ mb: 3 }} onClose={() => { setApiError(null); }}>
-            {wizard.error || apiError}
+        {wizard.error && (
+          <Alert severity="error" sx={{ mb: 3 }}>
+            {wizard.error}
           </Alert>
         )}
 

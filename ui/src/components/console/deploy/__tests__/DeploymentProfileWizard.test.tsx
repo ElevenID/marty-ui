@@ -23,6 +23,10 @@ vi.mock('react-router-dom', async () => {
   }
 })
 
+vi.mock('../../../../contexts/ConsoleContext', () => ({
+  useConsole: () => ({ activeOrgId: 'org-1' }),
+}))
+
 describe('DeploymentProfileWizard', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -178,16 +182,23 @@ describe('DeploymentProfileWizard', () => {
 
     // Step 4: Review & Submit
     await waitFor(() => screen.getByRole('heading', { name: /Review & Activate/i }))
+    expect(screen.queryByText(/Generate API key automatically/i)).not.toBeInTheDocument()
     await user.click(screen.getByTestId('wizard.deployment.submit'))
 
     // Verify success state
     await waitFor(() => {
       expect(screen.getByText(/Deployment Profile Created Successfully/i)).toBeInTheDocument()
     })
+    expect(screen.queryByText(/API key has been generated/i)).not.toBeInTheDocument()
 
     // Verify submitted data
     expect(submittedData.name).toBe('Production')
     expect(submittedData.environment_type).toBe('api')
+    expect(submittedData.default_policy_id).toBe(1)
+    expect(submittedData.presentation_policy_ids).toEqual([1])
+    expect(submittedData.trust_profile_id).toBe('trust-1')
+    expect(submittedData.status).toBe('active')
+    expect(submittedData.activate_immediately).toBe(true)
   })
 
   it('should handle API errors', async () => {
@@ -272,6 +283,7 @@ describe('DeploymentProfileWizard', () => {
 
     await waitFor(() => {
       expect(submittedData.status).toBe('draft')
+      expect(submittedData.activate_immediately).toBe(false)
     })
   })
 })

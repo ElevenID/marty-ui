@@ -5,6 +5,7 @@ import RocketLaunchIcon from '@mui/icons-material/RocketLaunch';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import CloseIcon from '@mui/icons-material/Close';
 import { useTranslation } from 'react-i18next';
+import { ReadinessState, SETUP_ORDER } from '../../../config/dashboardRules';
 
 /**
  * GuidedSetupBanner - Shows a persistent banner prompting users to complete setup
@@ -23,14 +24,15 @@ function GuidedSetupBanner({ readiness, onDismiss }) {
   }, []);
 
   // Calculate setup progress
-  const totalSteps = 5; // trust, template, policy, deployment, flow
-  const completedSteps = [
-    readiness.trust?.state === 'READY',
-    readiness.template?.state === 'READY',
-    readiness.policy?.state === 'READY',
-    readiness.deployment?.state === 'READY',
-    readiness.flow?.state === 'READY',
-  ].filter(Boolean).length;
+  const totalSteps = SETUP_ORDER.length;
+  const completedSteps = SETUP_ORDER.filter(
+    (step) => readiness?.[step]?.state === ReadinessState.READY
+  ).length;
+  const hasServiceError = SETUP_ORDER.some((step) => readiness?.[step]?.serviceError);
+  const nextSetupPath = SETUP_ORDER
+    .map((step) => readiness?.[step])
+    .find((step) => step?.state !== ReadinessState.READY && step?.path && !step?.dependencyBlocked)
+    ?.path;
 
   const progress = (completedSteps / totalSteps) * 100;
   const isComplete = completedSteps === totalSteps;
@@ -45,7 +47,7 @@ function GuidedSetupBanner({ readiness, onDismiss }) {
   };
 
   // Don't show if complete or dismissed
-  if (isComplete || dismissed) return null;
+  if (isComplete || dismissed || hasServiceError || !nextSetupPath) return null;
 
   return (
     <Alert
@@ -82,7 +84,7 @@ function GuidedSetupBanner({ readiness, onDismiss }) {
         </Box>
         <Button
           component={Link}
-          to="/console/org/setup-wizard"
+          to={nextSetupPath}
           variant="contained"
           size="small"
           startIcon={isStarted ? <PlayArrowIcon /> : <RocketLaunchIcon />}

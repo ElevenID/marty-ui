@@ -122,6 +122,9 @@ async def test_get_current_user_includes_raw_keycloak_organization_claim():
         organization_id="org-1",
         organization_name="Acme",
         organization={"org-1": {"name": "Acme"}},
+        default_organization_id="org-1",
+        default_organization_name="Acme",
+        organizations=[{"id": "org-1", "name": "Acme", "display_name": "Acme"}],
     )
 
     response = await get_current_user(Response(), user)
@@ -129,6 +132,8 @@ async def test_get_current_user_includes_raw_keycloak_organization_claim():
     assert response.authenticated is True
     assert response.user is not None
     assert response.user.organization == {"org-1": {"name": "Acme"}}
+    assert response.user.default_organization_id == "org-1"
+    assert response.user.organizations == [{"id": "org-1", "name": "Acme", "display_name": "Acme"}]
 
 
 def test_root_post_auth_redirects_land_in_console_entry():
@@ -195,9 +200,13 @@ class _FakeRedis:
     def __init__(self, payload: str | None):
         self._payload = payload
         self.deleted_keys: list[str] = []
+        self.completed_payloads: list[dict] = []
 
     async def get(self, key: str) -> str | None:
         return self._payload
+
+    async def setex(self, key: str, ttl: int, value: str) -> None:
+        self.completed_payloads.append(json.loads(value))
 
     async def delete(self, key: str) -> None:
         self.deleted_keys.append(key)
@@ -316,6 +325,65 @@ async def test_credential_login_finalize_redirects_to_console_and_sets_cookie(mo
     assert response.headers["location"] == "https://elevenidllc.com/console"
     assert "sessionId=session-123" in response.headers.get("set-cookie", "")
     assert fake_redis.deleted_keys == [f"{http_adapter._COMPLETE_KEY}nonce-123"]
+
+
+@pytest.mark.asyncio
+async def test_credential_verified_allows_claim_only_login_without_keycloak_admin(monkeypatch: pytest.MonkeyPatch):
+    fake_redis = _FakeRedis(json.dumps({"state": "pending"}))
+    fake_repo = _FakeSessionRepository()
+
+    monkeypatch.setattr(http_adapter, "_redis_client", fake_redis)
+    monkeypatch.setattr(http_adapter, "_session_repository", fake_repo)
+    monkeypatch.setattr(http_adapter, "_kc_admin_adapter", None)
+    monkeypatch.setattr(http_adapter, "_user_provisioning", None)
+    monkeypatch.setattr(http_adapter, "_applicant_profile_provisioner", None)
+    monkeypatch.setattr(http_adapter, "_credential_login_require_existing_keycloak_user", False)
+    monkeypatch.setattr(http_adapter, "_credential_login_create_users", False)
+
+    result = await http_adapter.credential_verified(
+        payload=http_adapter.CredentialVerifiedPayload(
+            flow_instance_id="flow-1",
+            result="success",
+            decision="allow",
+            verified_claims={"email": "alice@example.com", "given_name": "Alice"},
+        ),
+        nonce="nonce-claim-only",
+        request=_build_forwarded_request(host="elevenidllc.com"),
+    )
+
+    assert result["status"] == "completed"
+    assert len(fake_repo.saved) == 1
+    assert fake_repo.saved[0].user.email == "alice@example.com"
+    assert fake_redis.completed_payloads[0]["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_credential_verified_denies_without_keycloak_admin_when_existing_user_required(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    fake_redis = _FakeRedis(json.dumps({"state": "pending"}))
+    fake_repo = _FakeSessionRepository()
+
+    monkeypatch.setattr(http_adapter, "_redis_client", fake_redis)
+    monkeypatch.setattr(http_adapter, "_session_repository", fake_repo)
+    monkeypatch.setattr(http_adapter, "_kc_admin_adapter", None)
+    monkeypatch.setattr(http_adapter, "_credential_login_require_existing_keycloak_user", True)
+    monkeypatch.setattr(http_adapter, "_credential_login_create_users", False)
+
+    result = await http_adapter.credential_verified(
+        payload=http_adapter.CredentialVerifiedPayload(
+            flow_instance_id="flow-1",
+            result="success",
+            decision="allow",
+            verified_claims={"email": "alice@example.com"},
+        ),
+        nonce="nonce-existing-required",
+        request=_build_forwarded_request(host="elevenidllc.com"),
+    )
+
+    assert result["status"] == "denied"
+    assert fake_repo.saved == []
+    assert fake_redis.completed_payloads[0]["reason_code"] == "keycloak_admin_unavailable"
 
 
 def test_credential_login_failure_payload_maps_trust_mismatch_to_user_friendly_message():

@@ -18,6 +18,14 @@ PERMISSION_CATALOG: list[tuple[str, str, str]] = [
     ("trust-profile", "delete", "Delete trust profiles"),
     ("trust-profile", "activate", "Activate trust profiles"),
     ("trust-profile", "suspend", "Suspend trust profiles"),
+    # Cedar policy sets
+    ("policy-set", "view", "View Cedar policy sets"),
+    ("policy-set", "create", "Create Cedar policy sets"),
+    ("policy-set", "edit", "Edit Cedar policy sets"),
+    ("policy-set", "delete", "Delete Cedar policy sets"),
+    ("policy-set", "activate", "Activate Cedar policy sets"),
+    ("policy-set", "archive", "Archive Cedar policy sets"),
+    ("policy-set", "validate", "Validate Cedar policy sets"),
     # Trusted issuers
     ("trusted-issuer", "view", "View trusted issuers"),
     ("trusted-issuer", "create", "Create trusted issuers"),

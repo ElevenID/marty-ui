@@ -6,6 +6,7 @@
  */
 
 import { get, post, patch, del } from './api';
+import { postWithIdempotency } from './idempotency';
 import { buildDefinedQueryString, withQuery } from './queryUtils';
 
 const BASE_PATH = '/v1/deployment-profiles';
@@ -15,11 +16,23 @@ const resolveOrganizationId = (filters = {}) => {
     return filters.organization_id;
   }
 
-  try {
-    return window.localStorage.getItem('activeOrgId') || null;
-  } catch {
-    return null;
+  return null;
+};
+
+const requireOrganizationId = (filters = {}) => {
+  const organizationId = resolveOrganizationId(filters);
+  const normalized = String(organizationId ?? '').trim();
+  if (
+    normalized === ''
+    || normalized.toLowerCase() === 'null'
+    || normalized.toLowerCase() === 'undefined'
+  ) {
+    const error = new Error('An active organization is required before loading deployment profiles.');
+    error.code = 'ORG_REQUIRED';
+    error.status = 400;
+    throw error;
   }
+  return normalized;
 };
 
 /**
@@ -35,9 +48,9 @@ const resolveOrganizationId = (filters = {}) => {
  * @returns {Promise<Object>} Created deployment profile
  */
 export const createDeploymentProfile = async (profileData) => {
-  return post(BASE_PATH, {
+  return postWithIdempotency(BASE_PATH, {
     ...profileData,
-    organization_id: profileData?.organization_id || resolveOrganizationId(),
+    organization_id: requireOrganizationId(profileData),
   });
 };
 
@@ -50,7 +63,7 @@ export const createDeploymentProfile = async (profileData) => {
  */
 export const listDeploymentProfiles = async (filters = {}) => {
   const queryString = buildDefinedQueryString({
-    organization_id: resolveOrganizationId(filters),
+    organization_id: requireOrganizationId(filters),
     limit: filters.limit,
     offset: filters.offset,
   });
@@ -95,7 +108,7 @@ export const deleteDeploymentProfile = async (profileId) => {
  * @returns {Promise<Object>} Created lane
  */
 export const createLane = async (profileId, laneData) => {
-  return post(`${BASE_PATH}/${profileId}/lanes`, laneData);
+  return postWithIdempotency(`${BASE_PATH}/${profileId}/lanes`, laneData);
 };
 
 /**

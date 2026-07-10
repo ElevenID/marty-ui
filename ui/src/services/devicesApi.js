@@ -5,7 +5,7 @@
  */
 
 import { get, post, del } from './api';
-import { buildTruthyQueryString, withQuery } from './queryUtils';
+import { buildTruthyQueryString, requireOrganizationId, withQuery } from './queryUtils';
 
 const BASE = '/v1/devices';
 
@@ -16,6 +16,17 @@ const BASE = '/v1/devices';
  */
 export const listDevices = async (organizationId = null) => {
   const queryString = buildTruthyQueryString({ organization_id: organizationId });
+  return get(withQuery(BASE, queryString));
+};
+
+/**
+ * List devices for an organization-scoped console surface.
+ * @param {string} organizationId - Required organization ID
+ * @returns {Promise<Array>}
+ */
+export const listOrganizationDevices = async (organizationId) => {
+  const orgId = requireOrganizationId(organizationId, 'loading organization devices');
+  const queryString = buildTruthyQueryString({ organization_id: orgId });
   return get(withQuery(BASE, queryString));
 };
 

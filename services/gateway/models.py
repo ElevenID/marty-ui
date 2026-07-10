@@ -8,7 +8,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 # =============================================================================
@@ -426,16 +426,41 @@ class TrustRegistryStatusResponse(BaseModel):
 
 class ClaimDefinitionModel(BaseModel):
     name: str
-    display_name: str
+    display_name: str | None = None
     claim_type: str = "string"
+    type: str | None = Field(None, exclude=True)
     required: bool = True
     selectively_disclosable: bool = True
+
+    @model_validator(mode="after")
+    def normalize_claim(self) -> "ClaimDefinitionModel":
+        if not self.display_name:
+            self.display_name = " ".join(
+                part.capitalize()
+                for part in self.name.replace("-", "_").split("_")
+                if part
+            ) or self.name
+        if self.type:
+            normalized_type = self.type.lower()
+            self.claim_type = "integer" if normalized_type == "number" else normalized_type
+        return self
 
 
 class TemplateValidityRules(BaseModel):
     ttl_days: int = 365
     expiration_mode: str = "hard"
     reissue_window_days: int = 30
+    default_validity_days: int | None = None
+    max_validity_days: int | None = None
+    renewable: bool | None = None
+    renewal_window_days: int | None = None
+    ttl_seconds: int | None = None
+    reissue_within_seconds: int | None = None
+    not_before_offset_seconds: int | None = None
+    not_before_offset: int | None = None
+    max_validity_seconds: int | None = None
+    require_revalidation: bool | None = None
+    revalidation_interval_days: int | None = None
 
 
 class TemplateIssuerRequirements(BaseModel):
@@ -460,8 +485,10 @@ class CredentialTemplateCreate(BaseModel):
     # Schema & Claims
     credential_type: str = Field(min_length=1, max_length=500)
     vct: str = Field(min_length=1, max_length=2048)
+    doctype: str | None = Field(None, max_length=2048)
     claims: list[ClaimDefinitionModel] = []
     privacy_posture: str = Field(default="selective_disclosure", max_length=50)
+    selective_disclosure_fields: list[str] = []
     supported_formats: list[str] = ["sd_jwt_vc"]
 
     # INVERTED RELATIONSHIP: Credential Template references Application Template
@@ -479,13 +506,20 @@ class CredentialTemplateCreate(BaseModel):
     # Cryptographic configuration
     issuer_key_id: str | None = Field(None, max_length=255)
     issuer_key_algorithm: str | None = Field(None, max_length=50)
+    issuer_algorithm: str | None = Field(None, max_length=50)
+    signing_algorithm: str | None = Field(None, max_length=50)
     key_access_mode: str = Field(default="key_vault", max_length=50)
+    remote_signing_config: dict[str, Any] | None = None
     issuer_certificate_chain_pem: str | None = Field(None, max_length=65536)
     issuer_did: str | None = Field(None, max_length=2048)
+    issuer_profile_id: str | None = Field(None, max_length=255)
     auto_generate_artifacts: bool = True
+    artifacts_auto_generate: bool | None = None
 
     # Legacy field for backward compatibility during migration
     issuer_requirements: TemplateIssuerRequirements | None = None
+    derived_attributes: list[dict] = []
+    display_style: dict | None = None
     # ZK-specific fields
     zk_predicate_claims: list[str] = []
     schema_uri: dict | None = None
@@ -824,6 +858,8 @@ class DeploymentProfileCreate(BaseModel):
     organization_id: str = Field(min_length=1, max_length=255)
     name: str = Field(min_length=1, max_length=255)
     description: str | None = Field(None, max_length=2000)
+    status: str | None = Field(None, max_length=50)
+    activate_immediately: bool | None = None
     environment: str = Field(default="development", max_length=50)
     callbacks: CallbacksModel | None = None
     feature_flags: FeatureFlagsModel | None = None
@@ -842,6 +878,7 @@ class DeploymentProfileCreate(BaseModel):
 class DeploymentProfileUpdate(BaseModel):
     name: str | None = None
     description: str | None = None
+    status: str | None = None
     trust_profile_id: str | None = None
     presentation_policy_ids: list[str] | None = None
     credential_template_ids: list[str] | None = None
@@ -859,29 +896,29 @@ class DeploymentProfileResponse(BaseModel):
     id: str
     organization_id: str
     name: str
-    description: str | None
-    status: str
-    environment: str
-    callbacks: dict
-    feature_flags: dict
+    description: str | None = None
+    status: str | None = None
+    environment: str | None = None
+    callbacks: dict | None = None
+    feature_flags: dict | None = None
     trust_profile_id: str | None = None
     presentation_policy_ids: list[str] = Field(default_factory=list)
     credential_template_ids: list[str] = Field(default_factory=list)
     enabled_flow_ids: list[str] = Field(default_factory=list)
     default_policy_id: str | None
-    network_mode: str
+    network_mode: str | None = None
     key_access_mode: str | None = None
     default_presentation_policy_id: str | None = None
     environment_config: dict | None = None
-    ux_config: dict | None
-    update_channel: str
+    ux_config: dict | None = None
+    update_channel: str | None = None
     update_policy: dict | None = None
     offline_cache_ttl_hours: int | None = None
     biometric_required: bool | None = None
     audit_all_events: bool | None = None
     canvas_feature_flags: dict[str, bool] = Field(default_factory=dict)
     lanes: list[dict] = Field(default_factory=list)
-    api_key_prefix: str | None
+    api_key_prefix: str | None = None
     created_at: str
     updated_at: str
 
@@ -1213,6 +1250,7 @@ class IssuanceCreate(BaseModel):
     """Create an issuance request."""
     organization_id: str
     credential_template_id: str | None = None
+    issuer_profile_id: str | None = None
     subject_did: str | None = None
     holder_did: str | None = None  # DIDComm v2: holder's DID for push delivery
     application_id: str | None = None

@@ -27,7 +27,7 @@ from ...application.ports import (
     UpdateOrganizationCommand,
 )
 from ...application.use_cases import ApiKeyUseCase, JoinUseCase, MemberUseCase, OrganizationUseCase
-from ...domain.entities import OrganizationType
+from ...domain.entities import MemberStatus, OrganizationType
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +45,7 @@ _ORG_TYPE_ALIASES: dict[str, OrganizationType] = {
 _HOSTED_PILOT_PLAN_ALIASES = {"starter", "hosted_pilot", "pilot"}
 _SELF_HOSTED_PLAN_ALIASES = {"professional", "enterprise", "self_hosted_production"}
 _DISABLED_ENV_VALUES = {"0", "false", "no", "off", "disabled"}
+_DASHBOARD_ENVIRONMENTS = {"development", "staging", "production"}
 
 
 def _organization_creation_enabled() -> bool:
@@ -100,6 +101,7 @@ class OrganizationResponse(BaseModel):
     status: str
     created_at: str
     updated_at: str | None = None
+    membership: dict[str, Any] | None = None
 
 
 class InviteMemberRequest(BaseModel):
@@ -231,6 +233,24 @@ class OrganizationLifecycleResponse(BaseModel):
     pilot_retention: PilotRetentionResponse | None = None
 
 
+class TeamSnapshotResponse(BaseModel):
+    """Dashboard team snapshot sourced from organization memberships."""
+    members: list[dict[str, Any]]
+    pending_invites: list[dict[str, Any]]
+    role_distribution: dict[str, int]
+
+
+class OrganizationEnvironmentResponse(BaseModel):
+    """Dashboard environment setting stored on the organization."""
+    organization_id: str
+    environment: str | None = None
+
+
+class UpdateOrganizationEnvironmentRequest(BaseModel):
+    """Request to update an organization's dashboard environment label."""
+    environment: str
+
+
 # =============================================================================
 # Dependencies
 # =============================================================================
@@ -318,7 +338,11 @@ async def create_organization(
                 contact_email=request.contact_email,
             )
         )
-        return _org_to_response(org)
+        owner_membership = None
+        member_repo = getattr(use_case, "member_repo", None)
+        if member_repo is not None and hasattr(member_repo, "get_by_user_and_org"):
+            owner_membership = await member_repo.get_by_user_and_org(user_id, str(org.id))
+        return _org_to_response(org, membership=owner_membership)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -536,6 +560,72 @@ async def join_organization(
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+# =============================================================================
+# Dashboard Organization Endpoints
+# =============================================================================
+
+@router.get("/{org_id}/team/snapshot", response_model=TeamSnapshotResponse, response_model_exclude_none=True)
+async def get_team_snapshot(
+    org_id: str,
+    org_ctx: OrganizationContext = Depends(require_permission("team", "view")),
+    use_case: MemberUseCase = Depends(get_member_use_case),
+) -> TeamSnapshotResponse:
+    """Return a dashboard team snapshot from real organization memberships."""
+    members = await use_case.list_members(org_id)
+    active_members = [member for member in members if member.status == MemberStatus.ACTIVE]
+    pending_members = [
+        member for member in members
+        if member.status in {MemberStatus.INVITED, MemberStatus.PENDING}
+    ]
+
+    return TeamSnapshotResponse(
+        members=[_member_dashboard_summary(member) for member in active_members],
+        pending_invites=[_member_dashboard_summary(member) for member in pending_members],
+        role_distribution=_role_distribution(active_members),
+    )
+
+
+@router.get("/{org_id}/environment", response_model=OrganizationEnvironmentResponse)
+async def get_organization_environment(
+    org_id: str,
+    org_ctx: OrganizationContext = Depends(require_org_membership),
+    use_case: OrganizationUseCase = Depends(get_org_use_case),
+) -> OrganizationEnvironmentResponse:
+    """Return the stored dashboard environment label without inventing a default."""
+    org = await use_case.get_organization(org_id)
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found")
+
+    return OrganizationEnvironmentResponse(
+        organization_id=org_id,
+        environment=_normalize_dashboard_environment((org.settings or {}).get("environment")),
+    )
+
+
+@router.patch("/{org_id}/environment", response_model=OrganizationEnvironmentResponse, response_model_exclude_none=True)
+async def update_organization_environment(
+    org_id: str,
+    body: UpdateOrganizationEnvironmentRequest,
+    org_ctx: OrganizationContext = Depends(require_permission("organization", "edit")),
+    use_case: OrganizationUseCase = Depends(get_org_use_case),
+) -> OrganizationEnvironmentResponse:
+    """Update the dashboard environment label stored on the organization."""
+    environment = _normalize_dashboard_environment(body.environment)
+    if environment is None:
+        raise HTTPException(
+            status_code=400,
+            detail="environment must be one of: development, staging, production",
+        )
+
+    await use_case.update_organization(
+        UpdateOrganizationCommand(
+            organization_id=org_id,
+            settings={"environment": environment},
+        )
+    )
+    return OrganizationEnvironmentResponse(organization_id=org_id, environment=environment)
 
 
 # =============================================================================
@@ -778,7 +868,88 @@ async def update_organization_plan(
 # Response Helpers
 # =============================================================================
 
-def _org_to_response(org) -> OrganizationResponse:
+def _normalize_dashboard_environment(value: Any) -> str | None:
+    normalized = str(value or "").strip().lower()
+    return normalized if normalized in _DASHBOARD_ENVIRONMENTS else None
+
+
+def _member_dashboard_summary(member) -> dict[str, Any]:
+    return {
+        "id": str(member.id),
+        "user_id": str(member.user_id) if member.user_id else None,
+        "email": member.email,
+        "roles": [
+            {
+                "id": role.id,
+                "name": role.name,
+                "display_name": role.display_name,
+            }
+            for role in member.roles
+        ],
+        "status": member.status.value,
+        "is_owner": member.is_owner,
+        "has_org_console_access": member.has_org_console_access,
+        "joined_at": member.joined_at.isoformat() if member.joined_at else None,
+        "invited_at": member.invited_at.isoformat() if member.invited_at else None,
+    }
+
+
+def _role_distribution(members: list[Any]) -> dict[str, int]:
+    counts: dict[str, int] = {
+        "admin": 0,
+        "developer": 0,
+        "operator": 0,
+    }
+    role_aliases = {
+        "owner": "admin",
+        "admin": "admin",
+        "access_admin": "admin",
+        "developer": "developer",
+        "access_developer": "developer",
+        "operator": "operator",
+        "access_operator": "operator",
+    }
+
+    for member in members:
+        seen_buckets: set[str] = set()
+        for role in member.roles:
+            role_name = str(role.name or "").strip().lower()
+            bucket = role_aliases.get(role_name, role_name)
+            if not bucket:
+                continue
+            if bucket in seen_buckets:
+                continue
+            counts[bucket] = counts.get(bucket, 0) + 1
+            seen_buckets.add(bucket)
+    return counts
+
+
+def _membership_to_summary(member) -> dict[str, Any] | None:
+    if member is None:
+        return None
+
+    return {
+        "id": str(member.id),
+        "organization_id": str(member.organization_id),
+        "user_id": str(member.user_id) if member.user_id else None,
+        "email": member.email,
+        "roles": [
+            {
+                "id": role.id,
+                "name": role.name,
+                "display_name": role.display_name,
+            }
+            for role in member.roles
+        ],
+        "status": member.status.value,
+        "permissions": sorted(member.effective_permissions),
+        "has_org_console_access": member.has_org_console_access,
+        "is_owner": member.is_owner,
+        "joined_at": member.joined_at.isoformat() if member.joined_at else None,
+    }
+
+
+def _org_to_response(org, membership=None) -> OrganizationResponse:
     return OrganizationResponse(
         id=str(org.id),
         name=org.name,
@@ -790,6 +961,7 @@ def _org_to_response(org) -> OrganizationResponse:
         status=org.status.value,
         created_at=org.created_at.isoformat(),
         updated_at=org.updated_at.isoformat() if org.updated_at else None,
+        membership=_membership_to_summary(membership),
     )
 
 
@@ -899,13 +1071,13 @@ def _member_to_response(member) -> MemberResponse:
 
 def _api_key_to_response(api_key) -> ApiKeyResponse:
     return ApiKeyResponse(
-        id=api_key.id,
-        organization_id=api_key.organization_id,
+        id=str(api_key.id),
+        organization_id=str(api_key.organization_id),
         name=api_key.name,
         description=api_key.description,
         key_prefix=api_key.key_prefix,
         scope_type=api_key.scope_type,
-        deployment_profile_id=api_key.deployment_profile_id,
+        deployment_profile_id=str(api_key.deployment_profile_id) if api_key.deployment_profile_id else None,
         scopes=api_key.scopes,
         enabled=api_key.enabled,
         last_used_at=api_key.last_used_at.isoformat() if api_key.last_used_at else None,

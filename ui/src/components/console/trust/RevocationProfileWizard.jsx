@@ -33,6 +33,7 @@ import SaveIcon from '@mui/icons-material/Save';
 import { useTranslation } from 'react-i18next';
 
 import { useAuth } from '../../../hooks/useAuth';
+import { useConsole } from '../../../contexts/ConsoleContext';
 import { createRevocationProfile } from '../../../services/presentationPolicyApi';
 
 const CHECK_MODES = [
@@ -78,7 +79,9 @@ const INITIAL_FORM = {
 function RevocationProfileWizard() {
   const { t } = useTranslation('console');
   const navigate = useNavigate();
-  const { organizationId } = useAuth();
+  const { organizationId: authOrganizationId } = useAuth();
+  const { activeOrgId } = useConsole();
+  const organizationId = activeOrgId || authOrganizationId;
 
   const [form, setForm] = useState(INITIAL_FORM);
   const [submitting, setSubmitting] = useState(false);

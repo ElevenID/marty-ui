@@ -432,6 +432,8 @@ class CreateDeploymentProfileRequest(BaseModel):
     organization_id: str = Field(min_length=1, max_length=255)
     name: str = Field(min_length=1, max_length=255)
     description: str | None = Field(None, max_length=2000)
+    status: str | None = None
+    activate_immediately: bool | None = None
     environment: str = "development"
     trust_profile_id: str | None = None
     presentation_policy_ids: list[str] = Field(default_factory=list)
@@ -461,6 +463,7 @@ class CreateDeploymentProfileRequest(BaseModel):
 class UpdateDeploymentProfileRequest(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=255)
     description: str | None = Field(None, max_length=2000)
+    status: str | None = None
     trust_profile_id: str | None = None
     presentation_policy_ids: list[str] | None = None
     credential_template_ids: list[str] | None = None
@@ -573,6 +576,21 @@ def _normalize_network_mode(value: str) -> str:
 
 def _normalize_key_access_mode(value: str) -> str:
     return KEY_ACCESS_MODE_ALIASES.get(value.lower(), value.upper())
+
+
+def _parse_profile_status(value: str) -> ProfileStatus:
+    try:
+        return ProfileStatus(value.strip().lower())
+    except Exception:
+        raise HTTPException(status_code=422, detail=f"Unsupported deployment profile status: {value}")
+
+
+def _resolve_requested_status(status: str | None, activate_immediately: bool | None) -> ProfileStatus:
+    if status:
+        return _parse_profile_status(status)
+    if activate_immediately is True:
+        return ProfileStatus.ACTIVE
+    return ProfileStatus.DRAFT
 
 
 def _resolve_default_policy_id(default_policy_id: str | None, legacy_default_policy_id: str | None) -> str | None:
@@ -708,6 +726,7 @@ async def create_deployment_profile(
         organization_id=request.organization_id,
         name=request.name,
         description=request.description,
+        status=_resolve_requested_status(request.status, request.activate_immediately),
         environment=Environment(request.environment),
         trust_profile_id=trust_profile_id,
         presentation_policy_ids=presentation_policy_ids,
@@ -842,6 +861,8 @@ async def update_deployment_profile(
         profile.name = request.name
     if request.description is not None:
         profile.description = request.description
+    if request.status is not None:
+        profile.status = _parse_profile_status(request.status)
     if request.trust_profile_id is not None:
         profile.trust_profile_id = request.trust_profile_id
         profile.default_trust_profile_id = request.trust_profile_id
@@ -1025,7 +1046,7 @@ def _profile_to_response(profile: DeploymentProfile, lanes: list[Lane] | None = 
         organization_id=profile.organization_id,
         name=profile.name,
         description=profile.description,
-        status=None,
+        status=profile.status.value if hasattr(profile.status, "value") else str(profile.status),
         site_id=profile.site_id,
         trust_profile_id=profile.trust_profile_id,
         presentation_policy_ids=profile.presentation_policy_ids,

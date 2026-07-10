@@ -42,7 +42,12 @@ async def create_credential_template(body: CredentialTemplateCreate, request: Re
             raise HTTPException(status_code=403, detail="Access denied: compliance profile belongs to another organization")
     registry = get_registry()
     service_url = registry.get_service_url("credential-templates")
-    return await proxy_request(request, service_url, "/v1/credential-templates", body_override=body.model_dump_json().encode())
+    return await proxy_request(
+        request,
+        service_url,
+        "/v1/credential-templates",
+        body_override=body.model_dump_json(exclude_none=True).encode(),
+    )
 
 
 @credential_template_router.get("", response_model=list[CredentialTemplateResponse], summary="List Credential Templates")
@@ -61,7 +66,11 @@ async def get_credential_template(template_id: str, request: Request) -> Respons
     """Get a Credential Template by ID."""
     registry = get_registry()
     service_url = registry.get_service_url("credential-templates")
-    return await proxy_request(request, service_url, f"/v1/credential-templates/{template_id}")
+    return await proxy_request(
+        request,
+        service_url,
+        f"/v1/credential-templates/{template_id}",
+    )
 
 
 @credential_template_router.get("/{template_id}/wallet-compatibility", summary="Get Wallet Compatibility")
@@ -101,6 +110,14 @@ async def validate_credential_template_artifacts(template_id: str, request: Requ
     registry = get_registry()
     service_url = registry.get_service_url("credential-templates")
     return await proxy_request(request, service_url, f"/v1/credential-templates/{template_id}/validate-artifacts")
+
+
+@credential_template_router.post("/{template_id}/activate", response_model=CredentialTemplateResponse, summary="Activate Credential Template")
+async def activate_credential_template(template_id: str, request: Request) -> Response:
+    """Activate a Credential Template."""
+    registry = get_registry()
+    service_url = registry.get_service_url("credential-templates")
+    return await proxy_request(request, service_url, f"/v1/credential-templates/{template_id}/activate")
 
 
 @credential_template_router.get("/{template_id}/application-template", summary="Get Linked Application Template")

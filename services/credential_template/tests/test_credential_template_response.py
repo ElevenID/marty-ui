@@ -4,6 +4,7 @@ import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from marty_common.org_authorization import OrganizationMembership, OrganizationRoleSummary
@@ -18,6 +19,7 @@ def _build_client(
 	app = FastAPI()
 	app.include_router(credential_template.router)
 	app.include_router(credential_template.wallet_router)
+	app.include_router(credential_template.internal_router)
 
 	credential_template._repo = repo
 	credential_template._wallet_repo = wallet_repo or credential_template.InMemoryWalletRegistryRepository()
@@ -33,6 +35,39 @@ def _build_client(
 	)
 	org_client = SimpleNamespace(get_membership=get_membership)
 	app.state.org_client = org_client
+
+	async def fake_require_active_issuer_profile(
+		request,
+		*,
+		organization_id: str,
+		issuer_profile_id: str | None,
+		credential_format: str | None = None,
+		algorithm: str | None = None,
+	) -> dict:
+		if not issuer_profile_id:
+			raise credential_template.HTTPException(
+				status_code=422,
+				detail="issuer_profile_id is required.",
+			)
+		return {
+			"ok": True,
+			"organization_id": organization_id,
+			"issuer_profile_id": issuer_profile_id,
+			"issuer_did": "did:web:beta.elevenidllc.com:orgs:test",
+			"signing_service_id": "managed-openbao-transit",
+			"signing_key_reference": "cred-issuer-test-es256",
+			"verification_method_id": "did:web:beta.elevenidllc.com:orgs:test#cred-issuer-test-es256",
+			"key_purpose": "vc_jwt_issuer",
+			"service": {
+				"id": "managed-openbao-transit",
+				"algorithm": "ES256",
+				"key_reference": "cred-issuer-test-es256",
+			},
+		}
+
+	credential_template._require_active_issuer_profile = AsyncMock(
+		side_effect=fake_require_active_issuer_profile
+	)
 	return TestClient(app), get_membership
 
 
@@ -46,6 +81,7 @@ async def _save_template(
 		credential_type="EmployeeBadge",
 		vct="https://credentials.example.com/EmployeeBadge",
 		compliance_profile_id="123e4567-e89b-12d3-a456-426614174000",
+		issuer_profile_id="issuer-profile-1",
 		supported_formats=[credential_template.CredentialFormat.SD_JWT_VC],
 		privacy_posture=credential_template.PrivacyPosture.SELECTIVE_DISCLOSURE,
 		zk_predicate_claims=["age_over_18"],
@@ -95,6 +131,7 @@ def test_get_credential_template_returns_protocol_shape_only() -> None:
 		"compliance_profile_id",
 		"vct",
 		"credential_payload_format",
+		"issuer_profile_id",
 		"claims",
 		"validity_rules",
 		"issuer_certificate_chain_configured",
@@ -145,6 +182,12 @@ def test_get_credential_template_returns_protocol_shape_only() -> None:
 	assert "wallet_configs" not in body
 
 
+def test_issuer_profile_validation_uses_format_specific_key_purpose() -> None:
+	assert credential_template._key_purpose_for_credential_format("SD_JWT_VC") == "vc_jwt_issuer"
+	assert credential_template._key_purpose_for_credential_format("mso_mdoc") == "mdoc_dsc"
+	assert credential_template._key_purpose_for_credential_format("vds_nc") == "vdsnc_signing"
+
+
 def test_create_credential_template_returns_canonical_protocol_fields() -> None:
 	repo = credential_template.InMemoryCredentialTemplateRepository()
 	client, get_membership = _build_client(repo)
@@ -158,6 +201,7 @@ def test_create_credential_template_returns_canonical_protocol_fields() -> None:
 			"description": "Canonical response contract",
 			"credential_type": "PersonIdentificationData",
 			"compliance_profile_id": "123e4567-e89b-12d3-a456-426614174000",
+			"issuer_profile_id": "issuer-profile-1",
 			"claims": [
 				{
 					"name": "given_name",
@@ -197,6 +241,34 @@ def test_create_credential_template_returns_canonical_protocol_fields() -> None:
 	get_membership.assert_awaited_once_with("user-1", "org-1")
 
 
+def test_create_credential_template_rejects_missing_issuer_profile() -> None:
+	repo = credential_template.InMemoryCredentialTemplateRepository()
+	client, _ = _build_client(repo)
+
+	response = client.post(
+		"/v1/credential-templates",
+		headers={"x-user-id": "user-1"},
+		json={
+			"organization_id": "org-1",
+			"name": "Missing issuer",
+			"credential_type": "PersonIdentificationData",
+			"compliance_profile_id": "123e4567-e89b-12d3-a456-426614174000",
+			"claims": [
+				{
+					"name": "given_name",
+					"display_name": "Given Name",
+					"claim_type": "string",
+					"required": True,
+				}
+			],
+			"supported_formats": ["sd_jwt_vc"],
+		},
+	)
+
+	assert response.status_code == 422
+	assert "issuer_profile_id is required" in response.json()["detail"]
+
+
 def test_create_credential_template_persists_artifact_pipeline_fields() -> None:
 	repo = credential_template.InMemoryCredentialTemplateRepository()
 	client, _ = _build_client(repo)
@@ -221,13 +293,13 @@ def test_create_credential_template_persists_artifact_pipeline_fields() -> None:
 			"trust_profile_id": "trust-profile-1",
 			"revocation_profile_id": "revocation-profile-1",
 			"issuer_profile_id": "issuer-profile-1",
-			"issuer_key_id": "cred-issuer-test-es256",
-			"issuer_did": "did:web:beta.elevenidllc.com:orgs:test",
+			"issuer_key_id": "stale-client-key",
+			"issuer_did": "did:web:attacker.example:orgs:evil",
 			"signing_algorithm": "ES256",
-			"key_access_mode": "REMOTE_SIGNING",
+			"key_access_mode": "LOCAL",
 			"remote_signing_config": {
-				"signing_service_id": "managed-openbao-transit",
-				"signing_key_reference": "cred-issuer-test-es256",
+				"signing_service_id": "stale-client-service",
+				"signing_key_reference": "stale-client-key",
 			},
 			"artifacts_auto_generate": False,
 		},
@@ -245,6 +317,14 @@ def test_create_credential_template_persists_artifact_pipeline_fields() -> None:
 	assert body["artifacts_status"] == "valid"
 	assert body["hasArtifacts"] is True
 	assert body["artifactsValidated"] is True
+	stored = asyncio.run(repo.get(body["id"]))
+	assert stored.remote_signing_config == {
+		"provider": "managed-signing-service",
+		"signing_service_id": "managed-openbao-transit",
+		"signing_key_reference": "cred-issuer-test-es256",
+		"verification_method_id": "did:web:beta.elevenidllc.com:orgs:test#cred-issuer-test-es256",
+		"key_purpose": "vc_jwt_issuer",
+	}
 
 
 def test_create_credential_template_accepts_canonical_validity_rule_fields() -> None:
@@ -259,6 +339,7 @@ def test_create_credential_template_accepts_canonical_validity_rule_fields() -> 
 			"name": "Canonical validity template",
 			"credential_type": "PersonIdentificationData",
 			"compliance_profile_id": "123e4567-e89b-12d3-a456-426614174000",
+			"issuer_profile_id": "issuer-profile-1",
 			"claims": [
 				{
 					"name": "given_name",
@@ -313,6 +394,107 @@ def test_update_credential_template_applies_canonical_validity_rule_changes() ->
 	}
 
 
+def test_update_credential_template_canonicalizes_issuer_metadata() -> None:
+	repo = credential_template.InMemoryCredentialTemplateRepository()
+	template = asyncio.run(_save_template(repo))
+	client, _ = _build_client(repo)
+
+	response = client.patch(
+		f"/v1/credential-templates/{template.id}",
+		headers={"x-user-id": "user-1"},
+		json={
+			"issuer_profile_id": "issuer-profile-2",
+			"issuer_key_id": "stale-client-key",
+			"issuer_did": "did:web:attacker.example:orgs:evil",
+			"key_access_mode": "LOCAL",
+			"remote_signing_config": {
+				"signing_service_id": "stale-client-service",
+				"signing_key_reference": "stale-client-key",
+			},
+		},
+	)
+
+	assert response.status_code == 200
+	body = response.json()
+	assert body["issuer_profile_id"] == "issuer-profile-2"
+	assert body["issuer_key_id"] == "cred-issuer-test-es256"
+	assert body["issuer_did"] == "did:web:beta.elevenidllc.com:orgs:test"
+	assert body["key_access_mode"] == "REMOTE_SIGNING"
+	stored = asyncio.run(repo.get(template.id))
+	assert stored.remote_signing_config["signing_service_id"] == "managed-openbao-transit"
+	assert stored.remote_signing_config["signing_key_reference"] == "cred-issuer-test-es256"
+
+
+def test_update_credential_template_validation_failure_does_not_dirty_stored_template() -> None:
+	repo = credential_template.InMemoryCredentialTemplateRepository()
+	template = asyncio.run(_save_template(repo))
+	client, _ = _build_client(repo)
+
+	async def reject_profile(*args, **kwargs):
+		raise credential_template.HTTPException(
+			status_code=422,
+			detail="issuer_profile_id must reference an active issuer profile.",
+		)
+
+	credential_template._require_active_issuer_profile = AsyncMock(side_effect=reject_profile)
+
+	response = client.patch(
+		f"/v1/credential-templates/{template.id}",
+		headers={"x-user-id": "user-1"},
+		json={
+			"name": "Should Not Persist",
+			"issuer_profile_id": "missing-profile",
+			"issuer_key_id": "stale-client-key",
+			"issuer_did": "did:web:attacker.example:orgs:evil",
+		},
+	)
+
+	assert response.status_code == 422
+	stored = asyncio.run(repo.get(template.id))
+	assert stored.name == "Employee Badge"
+	assert stored.issuer_profile_id == "issuer-profile-1"
+	assert stored.issuer_key_id is None
+	assert stored.issuer_did is None
+
+
+@pytest.mark.parametrize(
+	("method", "suffix", "payload"),
+	[
+		("patch", "", {"name": "Blocked update"}),
+		("post", "/activate", None),
+		("post", "/deprecate", None),
+		("post", "/new-version", None),
+		("delete", "", None),
+		(
+			"post",
+			"/claims",
+			{
+				"name": "family_name",
+				"display_name": "Family Name",
+				"claim_type": "string",
+				"required": False,
+			},
+		),
+	],
+)
+def test_credential_template_mutations_require_org_membership(method: str, suffix: str, payload: dict | None) -> None:
+	repo = credential_template.InMemoryCredentialTemplateRepository()
+	template = asyncio.run(_save_template(repo))
+	client, get_membership = _build_client(repo)
+	get_membership.return_value = None
+
+	request = getattr(client, method)
+	kwargs = {"headers": {"x-user-id": "user-1"}}
+	if payload is not None:
+		kwargs["json"] = payload
+
+	response = request(f"/v1/credential-templates/{template.id}{suffix}", **kwargs)
+
+	assert response.status_code == 403
+	assert response.json()["detail"] == "Not a member of this organization"
+	get_membership.assert_awaited_with("user-1", "org-1")
+
+
 def test_activate_credential_template_keeps_protocol_shape_stable() -> None:
 	repo = credential_template.InMemoryCredentialTemplateRepository()
 	template = asyncio.run(_save_template(repo))
@@ -330,3 +512,80 @@ def test_activate_credential_template_keeps_protocol_shape_stable() -> None:
 	assert body["updated_at"] != ""
 	assert "issuer_requirements" not in body
 	assert "version" not in body
+
+
+def test_internal_credential_configurations_do_not_emit_default_fallback() -> None:
+	repo = credential_template.InMemoryCredentialTemplateRepository()
+	client, _ = _build_client(repo)
+
+	response = client.get("/internal/credential-configurations")
+
+	assert response.status_code == 200
+	body = response.json()
+	assert body["credential_configurations_supported"] == {}
+	assert "default" not in body["credential_configurations_supported"]
+
+
+def test_internal_credential_configurations_preserves_envelope_without_repo() -> None:
+	app = FastAPI()
+	app.include_router(credential_template.internal_router)
+	previous_repo = credential_template._repo
+	credential_template._repo = None
+	try:
+		response = TestClient(app).get("/internal/credential-configurations")
+	finally:
+		credential_template._repo = previous_repo
+
+	assert response.status_code == 200
+	assert response.json() == {
+		"credential_configurations_supported": {},
+		"issuer_display_name": None,
+	}
+
+
+def test_internal_credential_configurations_only_advertise_kms_backed_templates() -> None:
+	repo = credential_template.InMemoryCredentialTemplateRepository()
+
+	valid = credential_template.CredentialTemplate(
+		organization_id="org-1",
+		name="Employee Badge",
+		credential_type="EmployeeBadge",
+		issuer_profile_id="issuer-profile-1",
+		key_access_mode="REMOTE_SIGNING",
+	)
+	valid.claims.append(
+		credential_template.ClaimDefinition(
+			name="given_name",
+			claim_type=credential_template.ClaimType.STRING,
+			required=True,
+		)
+	)
+	valid.activate()
+
+	legacy = credential_template.CredentialTemplate(
+		organization_id="org-1",
+		name="Legacy Badge",
+		credential_type="LegacyBadge",
+		issuer_profile_id=None,
+		key_access_mode="LOCAL",
+	)
+	legacy.claims.append(
+		credential_template.ClaimDefinition(
+			name="given_name",
+			claim_type=credential_template.ClaimType.STRING,
+			required=True,
+		)
+	)
+	legacy.activate()
+
+	asyncio.run(repo.save(valid))
+	asyncio.run(repo.save(legacy))
+	client, _ = _build_client(repo)
+
+	response = client.get("/internal/credential-configurations")
+
+	assert response.status_code == 200
+	configs = response.json()["credential_configurations_supported"]
+	assert "EmployeeBadge" in configs
+	assert "LegacyBadge" not in configs
+	assert "default" not in configs

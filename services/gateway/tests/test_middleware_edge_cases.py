@@ -1,6 +1,6 @@
 """Tests exposing gateway middleware edge cases.
 
-Issue 7.1: X-API-Key header auth path not tested (gateway only checks cookies)
+Issue 7.1: X-API-Key header auth path authenticates machine clients
 Issue 7.2: SessionCache eviction under concurrent async access
 Issue 7.3: Empty-string email produces empty X-User-Email header
 
@@ -33,12 +33,13 @@ def _fake_route_config(path: str):
     return None
 
 
-def _make_app(session_cache: SessionCache):
+def _make_app(session_cache: SessionCache, org_client=None):
     """Create a FastAPI app with AuthMiddleware and a user-inspection endpoint."""
     app = FastAPI()
     app.add_middleware(AuthMiddleware, session_cache=session_cache)
     # Dummy stub — won't be called since we pre-populate the cache
     app.state.auth_grpc_stub = AsyncMock()
+    app.state.org_client = org_client or SimpleNamespace(validate_api_key=AsyncMock(return_value=None))
 
     @app.get("/v1/organizations")
     async def orgs(request: Request):
@@ -46,6 +47,10 @@ def _make_app(session_cache: SessionCache):
             "user_id": getattr(request.state, "user_id", None),
             "email": getattr(request.state, "user_email", None),
             "domain": getattr(request.state, "user_domain", None),
+            "auth_source": getattr(request.state, "auth_source", None),
+            "api_key_id": getattr(request.state, "api_key_id", None),
+            "organization_id": getattr(request.state, "organization_id", None),
+            "api_key_scopes": getattr(request.state, "api_key_scopes", None),
         })
 
     return app
@@ -55,27 +60,53 @@ def _make_app(session_cache: SessionCache):
 
 @pytest.mark.asyncio
 class TestApiKeyAuthGap:
-    """The gateway AuthMiddleware only checks session cookies.
-    Requests with X-API-Key header but no session cookie are rejected."""
+    """API keys authenticate machine requests without a session cookie."""
 
     @patch("gateway.middleware.get_route_config", side_effect=_fake_route_config)
-    async def test_api_key_header_without_cookie_is_rejected(self, _mock):
+    async def test_api_key_header_without_cookie_authenticates(self, _mock):
         cache = SessionCache(ttl_seconds=60)
-        app = _make_app(cache)
+        org_client = SimpleNamespace(validate_api_key=AsyncMock(return_value=SimpleNamespace(
+            api_key_id="key-1",
+            organization_id="org-1",
+            key_prefix="mk_live_",
+            scopes=["flows:execute"],
+        )))
+        app = _make_app(cache, org_client=org_client)
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app), base_url="http://test"
         ) as client:
             resp = await client.get(
                 "/v1/organizations",
-                headers={"X-API-Key": "valid-api-key-12345"},
+                headers={"X-API-Key": "mk_live_valid"},
             )
-        # BUG: Gateway returns 401 because it only checks cookies, ignoring the API key
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["auth_source"] == "api_key"
+        assert body["api_key_id"] == "key-1"
+        assert body["organization_id"] == "org-1"
+        assert body["api_key_scopes"] == ["flows:execute"]
+        org_client.validate_api_key.assert_awaited_once_with("mk_live_valid")
+
+    @patch("gateway.middleware.get_route_config", side_effect=_fake_route_config)
+    async def test_invalid_api_key_header_is_rejected(self, _mock):
+        cache = SessionCache(ttl_seconds=60)
+        org_client = SimpleNamespace(validate_api_key=AsyncMock(return_value=None))
+        app = _make_app(cache, org_client=org_client)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.get(
+                "/v1/organizations",
+                headers={"X-API-Key": "mk_live_invalid"},
+            )
+
         assert resp.status_code == 401
         assert resp.json()["error"] == "unauthorized"
 
     @patch("gateway.middleware.get_route_config", side_effect=_fake_route_config)
     async def test_bearer_token_without_cookie_is_rejected(self, _mock):
-        """Same issue: Bearer tokens are also not checked by the middleware."""
+        """Non-Marty bearer tokens are not treated as API keys."""
         cache = SessionCache(ttl_seconds=60)
         app = _make_app(cache)
         async with httpx.AsyncClient(
@@ -88,21 +119,28 @@ class TestApiKeyAuthGap:
         assert resp.status_code == 401
 
     @patch("gateway.middleware.get_route_config", side_effect=_fake_route_config)
-    async def test_both_api_key_and_cookie_uses_cookie_only(self, _mock):
-        """When both X-API-Key and Cookie are present, only the cookie is checked."""
+    async def test_both_api_key_and_cookie_uses_explicit_api_key(self, _mock):
+        """When both are present, the explicit machine credential is authoritative."""
         cache = SessionCache(ttl_seconds=60)
         cache.set("valid-sess", {"user_id": "u-100", "email": "user@test.com"})
-        app = _make_app(cache)
+        org_client = SimpleNamespace(validate_api_key=AsyncMock(return_value=SimpleNamespace(
+            api_key_id="key-1",
+            organization_id="org-1",
+            key_prefix="mk_live_",
+            scopes=["flows:execute"],
+        )))
+        app = _make_app(cache, org_client=org_client)
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app), base_url="http://test"
         ) as client:
             resp = await client.get(
                 "/v1/organizations",
-                headers={"X-API-Key": "valid-api-key-12345"},
+                headers={"X-API-Key": "mk_live_valid"},
                 cookies={"sessionId": "valid-sess"},
             )
-        # The cookie makes it work; the API key is entirely ignored
+
         assert resp.status_code == 200
+        assert resp.json()["auth_source"] == "api_key"
 
 
 # ── Issue 7.3: Empty email edge cases ────────────────────────────────

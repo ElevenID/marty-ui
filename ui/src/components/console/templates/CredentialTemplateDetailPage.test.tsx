@@ -175,4 +175,25 @@ describe('CredentialTemplateDetailPage', () => {
       claim_projection_policy: expect.objectContaining({ mode: 'public_badge' }),
     }));
   });
+
+  it('surfaces destination dependency failures instead of showing an empty destination state', async () => {
+    mockListDeliveryDestinations.mockRejectedValue(new Error('Delivery service unavailable'));
+    mockListCanvasProgramBindings.mockRejectedValue(new Error('Canvas bindings unavailable'));
+
+    const { user } = renderWithRouter(
+      <Routes>
+        <Route path="/console/org/templates/credentials/:templateId" element={<CredentialTemplateDetailPage />} />
+      </Routes>,
+      {
+        initialEntries: ['/console/org/templates/credentials/template-1'],
+      },
+    );
+
+    await screen.findByRole('heading', { name: 'Interoperable Credentials Foundations Badge' });
+    await user.click(screen.getByRole('tab', { name: /destinations/i }));
+
+    expect(await screen.findByText('Delivery service unavailable')).toBeInTheDocument();
+    expect(screen.getByText('Canvas bindings unavailable')).toBeInTheDocument();
+    expect(screen.queryByText(/No delivery destinations are available/i)).not.toBeInTheDocument();
+  });
 });

@@ -10,7 +10,7 @@ The table definitions are separated from repository implementations to:
 3. Enable schema autogeneration without importing business logic
 """
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Table, Text
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Index, Integer, String, Table, Text
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID as PostgresUUID
 from sqlalchemy.orm import registry
 
@@ -207,6 +207,35 @@ policy_sets_table = Table(
 )
 
 
+audit_events_table = Table(
+    "audit_events",
+    mapper_registry.metadata,
+    Column("id", PostgresUUID(as_uuid=True), primary_key=True),
+    Column("organization_id", PostgresUUID(as_uuid=True),
+           ForeignKey(f"{SCHEMA}.organizations.id", ondelete="CASCADE"), nullable=False),
+    Column("event_type", String(120), nullable=False),
+    Column("action", String(120), nullable=False),
+    Column("category", String(100), nullable=False, default="settings"),
+    Column("resource_type", String(100), nullable=False, default="settings"),
+    Column("resource_id", String(255)),
+    Column("resource_name", String(255)),
+    Column("actor_id", String(255)),
+    Column("actor_type", String(50), nullable=False, default="system"),
+    Column("severity", String(50), nullable=False, default="info"),
+    Column("message", Text, nullable=False, default=""),
+    Column("changes", JSONB),
+    Column("metadata", JSONB, nullable=False, default=dict),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    schema=SCHEMA,
+)
+
+Index("ix_audit_events_org_created_at", audit_events_table.c.organization_id, audit_events_table.c.created_at.desc())
+Index("ix_audit_events_org_category", audit_events_table.c.organization_id, audit_events_table.c.category)
+Index("ix_audit_events_org_resource", audit_events_table.c.organization_id, audit_events_table.c.resource_type, audit_events_table.c.resource_id)
+Index("ix_audit_events_org_actor", audit_events_table.c.organization_id, audit_events_table.c.actor_id)
+Index("ix_audit_events_org_severity", audit_events_table.c.organization_id, audit_events_table.c.severity)
+
+
 # Export metadata for Alembic migrations
 __all__ = [
     "mapper_registry",
@@ -220,5 +249,6 @@ __all__ = [
     "role_permissions_table",
     "member_roles_table",
     "policy_sets_table",
+    "audit_events_table",
     "SCHEMA",
 ]

@@ -245,11 +245,11 @@ export const PUBLIC_NAV = [
 export const DASHBOARD_QUICK_ACTIONS = {
   adminVendor: [
     { id: 'register-signing-service', label: 'Register Signing Service', path: '/console/org/deploy/key-management/services/new', icon: CloudUploadIcon },
-    { id: 'create-issuer-identity', label: 'Set Up Issuer Identity', path: '/console/org/deploy/issuer-identity', icon: BadgeIcon },
+    { id: 'create-issuer-identity', label: 'Set Up Issuer Identity', path: '/console/org/deploy/issuer-identity/new', icon: BadgeIcon },
     { id: 'create-trust-profile', label: 'Create Trust Profile', path: '/console/org/trust/profiles/new', icon: VerifiedUserIcon },
     { id: 'create-template', label: 'Create Credential Template', path: '/console/org/templates/credentials/new', icon: DescriptionIcon },
-    { id: 'create-policy', label: 'Create Compliance Profile', path: '/console/org/policies/compliance/new', icon: PolicyIcon },
-    { id: 'generate-api-key', label: 'Generate API Key', path: '/console/org/api-keys', icon: CloudUploadIcon },
+    { id: 'create-policy', label: 'Create Presentation Policy', path: '/console/org/policies/presentation/new', icon: PolicyIcon },
+    { id: 'generate-api-key', label: 'Create API Key', path: '/console/org/api-keys', icon: CloudUploadIcon },
     { id: 'create-flow', label: 'Create Issuance Flow', path: '/console/org/flows/definitions/new', icon: AccountTreeIcon, primary: true },
   ],
   applicant: [

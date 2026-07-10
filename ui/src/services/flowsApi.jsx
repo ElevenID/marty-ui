@@ -7,6 +7,7 @@
  */
 
 import { apiClient, handleApiError } from './api';
+import { postWithIdempotency } from './idempotency';
 import { buildDefinedQueryString, withQuery } from './queryUtils';
 
 const FLOW_DEFINITIONS_PATH = '/v1/flows/definitions';
@@ -18,16 +19,24 @@ function createUnsupportedFlowActionError(message) {
   return error;
 }
 
-function getStoredOrganizationId() {
-  try {
-    return window.localStorage.getItem('activeOrgId') || null;
-  } catch {
-    return null;
-  }
+function resolveOrganizationId(organizationId) {
+  return organizationId || null;
 }
 
-function resolveOrganizationId(organizationId) {
-  return organizationId || getStoredOrganizationId();
+function requireOrganizationId(organizationId) {
+  const resolved = resolveOrganizationId(organizationId);
+  const normalized = String(resolved ?? '').trim();
+  if (
+    normalized === ''
+    || normalized.toLowerCase() === 'null'
+    || normalized.toLowerCase() === 'undefined'
+  ) {
+    const error = new Error('An active organization is required before loading flows.');
+    error.code = 'ORG_REQUIRED';
+    error.status = 400;
+    throw error;
+  }
+  return normalized;
 }
 
 /**
@@ -72,13 +81,16 @@ export const APPROVAL_STRATEGIES = {
  */
 export const createFlow = async (flowData) => {
   try {
-    const organizationId = resolveOrganizationId(flowData?.organization_id);
-    const response = await apiClient.post(FLOW_DEFINITIONS_PATH, {
+    const organizationId = requireOrganizationId(flowData?.organization_id);
+    const payload = {
       ...flowData,
-      ...(organizationId ? { organization_id: organizationId } : {}),
-    });
-    return response.data;
+      organization_id: organizationId,
+    };
+    return await postWithIdempotency(FLOW_DEFINITIONS_PATH, payload);
   } catch (error) {
+    if (error?.operationStatusUnknown) {
+      throw error;
+    }
     throw handleApiError(error);
   }
 };
@@ -94,7 +106,7 @@ export const createFlow = async (flowData) => {
 export const listFlows = async (filters = {}) => {
   try {
     const queryString = buildDefinedQueryString({
-      organization_id: resolveOrganizationId(filters.organization_id),
+      organization_id: requireOrganizationId(filters.organization_id),
       flow_type: filters.flow_type,
       limit: filters.limit,
       offset: filters.offset,
@@ -179,7 +191,7 @@ export const startFlowExecution = async (flowId, context = {}) => {
 export const listFlowExecutions = async (flowId, filters = {}) => {
   try {
     const queryString = buildDefinedQueryString({
-      organization_id: resolveOrganizationId(filters.organization_id),
+      organization_id: requireOrganizationId(filters.organization_id),
       flow_definition_id: flowId,
       status: filters.status,
       limit: filters.limit,

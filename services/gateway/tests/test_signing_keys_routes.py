@@ -815,11 +815,13 @@ async def test_store_service_certificate_saves_and_extracts_expiry(monkeypatch: 
     }
     
     async def fake_load_registry(request, org_id):
+        assert org_id == "org_123"
         return {"services": [test_service], "default_service_id": None}
     
     saved_registry = {}
     
     async def fake_save_registry(request, org_id, registry):
+        assert org_id == "org_123"
         saved_registry["data"] = registry
     
     monkeypatch.setattr(signing_keys, "_load_registered_service_registry", fake_load_registry)
@@ -934,6 +936,7 @@ async def test_list_certificate_expiry_alerts_filters_by_threshold(monkeypatch: 
     ]
     
     async def fake_load_registry(request, org_id):
+        assert org_id == "org_123"
         return {"services": test_services, "default_service_id": None}
     
     monkeypatch.setattr(signing_keys, "_load_registered_service_registry", fake_load_registry)
@@ -1105,8 +1108,8 @@ async def test_generate_csr_returns_404_when_service_not_found(monkeypatch: pyte
 
 
 @pytest.mark.asyncio
-async def test_generate_csr_returns_ok_false_when_adapter_unavailable(monkeypatch: pytest.MonkeyPatch):
-    """generate_csr should return ok=False when no adapter is registered for the service."""
+async def test_generate_csr_returns_501_when_generation_unavailable(monkeypatch: pytest.MonkeyPatch):
+    """generate_csr should fail explicitly until remote-KMS CSR signing is implemented."""
     test_service = {
         "id": "svc-1",
         "service_type": "custom-transit-compatible",
@@ -1122,12 +1125,15 @@ async def test_generate_csr_returns_ok_false_when_adapter_unavailable(monkeypatc
     monkeypatch.setattr(signing_keys, "_get_adapter", lambda cfg: None)
 
     request = _build_request("org_123")
-    response = await signing_keys.generate_csr(request=request, service_id="svc-1", organization_id=None)
 
-    assert response.status_code == 200
-    data = json.loads(response.body)
-    assert data["ok"] is False
-    assert data["service_id"] == "svc-1"
+    from fastapi import HTTPException as FastAPIHTTPException
+
+    with pytest.raises(FastAPIHTTPException) as exc_info:
+        await signing_keys.generate_csr(request=request, service_id="svc-1", organization_id=None)
+
+    assert exc_info.value.status_code == 501
+    assert exc_info.value.detail["error"] == "kms_csr_generation_unavailable"
+    assert exc_info.value.detail["service_id"] == "svc-1"
 
 
 # =============================================================================
@@ -1311,6 +1317,49 @@ async def test_publish_service_to_jwks_returns_jwk_on_success(monkeypatch: pytes
     assert data["service_id"] == "svc-bao"
     assert data["jwk"]["key_reference"] == "cred-issuer-es256"
     assert "published_at" in data
+
+
+@pytest.mark.asyncio
+async def test_publish_service_to_jwks_uses_key_reference_override(monkeypatch: pytest.MonkeyPatch):
+    """JWKS publication must publish the selected issuer key, not the service default."""
+    observed_configs: list[dict] = []
+    test_service = {
+        "id": "svc-bao",
+        "service_type": "openbao-transit",
+        "key_reference": "cred-issuer-old-default",
+        "algorithms": ["ES256"],
+    }
+
+    async def fake_load_registry(request, org_id):
+        return {"services": [test_service], "default_service_id": None}
+
+    monkeypatch.setattr(signing_keys, "_load_registered_service_registry", fake_load_registry)
+
+    class FakeAdapter:
+        async def get_public_key_jwk(self, config: dict):
+            observed_configs.append(config)
+            return {
+                "kty": "EC",
+                "crv": "P-256",
+                "x": "abc",
+                "y": "def",
+            }
+
+    monkeypatch.setattr(signing_keys, "_get_adapter", lambda cfg: FakeAdapter())
+
+    request = _build_request("org_123")
+    response = await signing_keys.publish_service_to_jwks(
+        request=request,
+        service_id="svc-bao",
+        body={"key_reference": "cred-issuer-new-selected"},
+        organization_id=None,
+    )
+
+    assert response.status_code == 200
+    data = json.loads(response.body)
+    assert observed_configs[0]["key_reference"] == "cred-issuer-new-selected"
+    assert data["jwk"]["kid"] == "cred-issuer-new-selected"
+    assert data["jwk"]["key_reference"] == "cred-issuer-new-selected"
 
 
 @pytest.mark.asyncio
@@ -1726,8 +1775,8 @@ async def test_get_key_audit_log_returns_404_when_service_not_found(monkeypatch:
 
 
 @pytest.mark.asyncio
-async def test_get_key_audit_log_returns_paginated_events(monkeypatch: pytest.MonkeyPatch):
-    """get_key_audit_log should return events with pagination metadata."""
+async def test_get_key_audit_log_returns_unavailable_when_storage_is_not_implemented(monkeypatch: pytest.MonkeyPatch):
+    """get_key_audit_log should not return fabricated audit events."""
     test_service = {
         "id": "svc-bao",
         "service_type": "openbao-transit",
@@ -1745,111 +1794,60 @@ async def test_get_key_audit_log_returns_paginated_events(monkeypatch: pytest.Mo
         request=request, service_id="svc-bao", limit=10, offset=0, organization_id=None
     )
 
-    assert response.status_code == 200
+    assert response.status_code == 501
     data = json.loads(response.body)
-    assert "events" in data
-    assert "pagination" in data
-    assert data["pagination"]["limit"] == 10
-    assert data["pagination"]["offset"] == 0
-    assert "queried_at" in data
-    assert isinstance(data["events"], list)
+    assert data["error"] == "key_audit_log_unavailable"
+    assert data["organization_id"] == "org_123"
+    assert data["service_id"] == "svc-bao"
+    assert "message_id" in data
 
 
 @pytest.mark.asyncio
-async def test_get_key_audit_log_applies_pagination_offset(monkeypatch: pytest.MonkeyPatch):
-    """get_key_audit_log should respect offset and limit parameters."""
-    test_service = {
-        "id": "svc-bao",
-        "service_type": "openbao-transit",
-        "key_reference": "cred-issuer-es256",
-        "algorithms": ["ES256"],
-    }
+async def test_get_key_audit_log_requires_org_id(monkeypatch: pytest.MonkeyPatch):
+    """get_key_audit_log should fail fast instead of loading a global registry."""
+    load_registry = AsyncMock()
+    monkeypatch.setattr(signing_keys, "_load_registered_service_registry", load_registry)
 
-    async def fake_load_registry(request, org_id):
-        return {"services": [test_service], "default_service_id": None}
+    from fastapi import HTTPException as FastAPIHTTPException
 
-    monkeypatch.setattr(signing_keys, "_load_registered_service_registry", fake_load_registry)
+    request = _build_request(None)
+    with pytest.raises(FastAPIHTTPException) as exc_info:
+        await signing_keys.get_key_audit_log(
+            request=request, service_id="svc-bao", limit=10, offset=0, organization_id=None
+        )
 
-    request = _build_request("org_123")
-    # Offset beyond all events should return empty
-    response = await signing_keys.get_key_audit_log(
-        request=request, service_id="svc-bao", limit=10, offset=9999, organization_id=None
-    )
-
-    assert response.status_code == 200
-    data = json.loads(response.body)
-    assert data["events"] == []
-    assert data["pagination"]["offset"] == 9999
+    assert exc_info.value.status_code == 422
+    load_registry.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_get_key_audit_log_events_have_required_fields(monkeypatch: pytest.MonkeyPatch):
-    """Each audit event should contain timestamp, event_type, service_id, and status."""
-    test_service = {
-        "id": "svc-bao",
-        "service_type": "openbao-transit",
-        "key_reference": "cred-issuer-es256",
-        "algorithms": ["ES256"],
-    }
-
-    async def fake_load_registry(request, org_id):
-        return {"services": [test_service], "default_service_id": None}
-
-    monkeypatch.setattr(signing_keys, "_load_registered_service_registry", fake_load_registry)
-
-    request = _build_request("org_123")
-    response = await signing_keys.get_key_audit_log(
-        request=request, service_id="svc-bao", limit=5, offset=0, organization_id=None
-    )
-
-    data = json.loads(response.body)
-    for event in data["events"]:
-        assert "timestamp" in event
-        assert "event_type" in event
-        assert "service_id" in event
-        assert event["service_id"] == "svc-bao"
-        assert "status" in event
-
-
-@pytest.mark.asyncio
-async def test_get_keys_compliance_summary_returns_aggregate_metrics(monkeypatch: pytest.MonkeyPatch):
-    """get_keys_compliance_summary should return aggregate metrics for all services."""
-    test_services = [
-        {"id": "svc-1", "service_type": "openbao-transit", "key_reference": "k1", "algorithms": ["ES256"]},
-        {"id": "svc-2", "service_type": "aws-kms", "key_reference": "arn:aws:kms:us-east-1:000:key/a", "algorithms": ["ES256"]},
-    ]
-
-    async def fake_load_registry(request, org_id):
-        return {"services": test_services, "default_service_id": None}
-
-    monkeypatch.setattr(signing_keys, "_load_registered_service_registry", fake_load_registry)
+async def test_get_keys_compliance_summary_returns_unavailable_without_live_source():
+    """get_keys_compliance_summary should not return synthetic perfect-compliance metrics."""
 
     request = _build_request("org_123")
     response = await signing_keys.get_keys_compliance_summary(request=request, organization_id=None)
 
-    assert response.status_code == 200
+    assert response.status_code == 501
     data = json.loads(response.body)
-    assert "summary" in data
-    assert data["summary"]["total_services"] == 2
-    assert "generated_at" in data
-    assert "recommendations" in data
-    assert isinstance(data["recommendations"], list)
+    assert data["error"] == "key_compliance_summary_unavailable"
+    assert data["organization_id"] == "org_123"
+    assert "message_id" in data
 
 
 @pytest.mark.asyncio
-async def test_get_keys_compliance_summary_empty_registry(monkeypatch: pytest.MonkeyPatch):
-    """get_keys_compliance_summary should return zero counts when no services exist."""
-    async def fake_load_registry(request, org_id):
-        return {"services": [], "default_service_id": None}
+async def test_get_keys_compliance_summary_requires_org_id(monkeypatch: pytest.MonkeyPatch):
+    """get_keys_compliance_summary should fail fast without an organization context."""
+    load_registry = AsyncMock()
+    monkeypatch.setattr(signing_keys, "_load_registered_service_registry", load_registry)
 
-    monkeypatch.setattr(signing_keys, "_load_registered_service_registry", fake_load_registry)
+    from fastapi import HTTPException as FastAPIHTTPException
 
-    request = _build_request("org_123")
-    response = await signing_keys.get_keys_compliance_summary(request=request, organization_id=None)
+    request = _build_request(None)
+    with pytest.raises(FastAPIHTTPException) as exc_info:
+        await signing_keys.get_keys_compliance_summary(request=request, organization_id=None)
 
-    assert response.status_code == 200
-    data = json.loads(response.body)
-    assert data["summary"]["total_services"] == 0
+    assert exc_info.value.status_code == 422
+    load_registry.assert_not_called()
 
 
 # =============================================================================
@@ -2529,6 +2527,173 @@ async def test_create_issuer_profile_stores_profile(monkeypatch: pytest.MonkeyPa
 
 
 @pytest.mark.asyncio
+async def test_create_issuer_profile_duplicate_tuple_returns_existing_without_republishing(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Duplicate DID/service/key/purpose creates should be idempotent."""
+    monkeypatch.setenv("PUBLIC_DOMAIN", "beta.elevenidllc.com")
+    monkeypatch.setenv("ISSUER_BASE_URL", "https://beta.elevenidllc.com")
+
+    stored: dict[str, str] = {}
+    redis_mock = AsyncMock()
+    redis_mock.get = AsyncMock(side_effect=lambda key: stored.get(key))
+
+    async def fake_set(key, value):
+        stored[key] = value
+
+    redis_mock.set = AsyncMock(side_effect=fake_set)
+
+    async def fake_resolve_effective_service(*args, **kwargs):
+        return (
+            {"services": []},
+            {"id": "svc-bao"},
+            {"id": "svc-bao", "key_reference": "cred-issuer-test-es256"},
+            True,
+        )
+
+    publish_count = 0
+
+    async def fake_publish_service_to_did(*args, **kwargs):
+        nonlocal publish_count
+        publish_count += 1
+        from fastapi.responses import JSONResponse
+
+        return JSONResponse(
+            content={
+                "ok": True,
+                "verification_method": {
+                    "id": "did:web:beta.elevenidllc.com:orgs:acme#cred-issuer-test-es256",
+                },
+            }
+        )
+
+    monkeypatch.setattr(signing_keys, "_resolve_effective_service", fake_resolve_effective_service)
+    monkeypatch.setattr(signing_keys, "publish_service_to_did", fake_publish_service_to_did)
+
+    request = _build_request("org_issuer", redis_client=redis_mock)
+    body = {
+        "name": "My Issuer",
+        "issuer_did": "did:web:beta.elevenidllc.com:orgs:acme",
+        "signing_service_id": "svc-bao",
+        "key_purpose": "vc_jwt_issuer",
+        "status": "active",
+    }
+
+    first = await signing_keys.create_issuer_profile(request=request, body=body, organization_id=None)
+    second = await signing_keys.create_issuer_profile(
+        request=request,
+        body={**body, "name": "Same Key, New Label"},
+        organization_id=None,
+    )
+
+    first_body = json.loads(first.body)
+    second_body = json.loads(second.body)
+    assert first_body["created"] is True
+    assert second_body["created"] is False
+    assert second_body["profile"]["id"] == first_body["profile"]["id"]
+    assert second_body["profile"]["name"] == "My Issuer"
+    assert publish_count == 1
+    saved_profiles = json.loads(stored["org:org_issuer:issuer-profiles"])["profiles"]
+    assert len(saved_profiles) == 1
+
+
+@pytest.mark.asyncio
+async def test_create_issuer_profile_duplicate_repairs_stale_draft(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Duplicate active creates should repair a stale draft tuple instead of adding another profile."""
+    monkeypatch.setenv("PUBLIC_DOMAIN", "beta.elevenidllc.com")
+    monkeypatch.setenv("ISSUER_BASE_URL", "https://beta.elevenidllc.com")
+
+    storage_key = "org:org_issuer:issuer-profiles"
+    stored: dict[str, str] = {
+        storage_key: json.dumps(
+            {
+                "profiles": [
+                    {
+                        "id": "ip-stale",
+                        "organization_id": "org_issuer",
+                        "name": "Stale Draft",
+                        "issuer_mode": "org_managed",
+                        "issuer_did": "did:web:beta.elevenidllc.com:orgs:acme",
+                        "signing_service_id": "svc-bao",
+                        "signing_key_reference": "",
+                        "verification_method_id": "",
+                        "algorithm": "",
+                        "status": "draft",
+                        "created_at": "2026-01-01T00:00:00Z",
+                        "updated_at": "2026-01-01T00:00:00Z",
+                    }
+                ]
+            }
+        )
+    }
+    redis_mock = AsyncMock()
+    redis_mock.get = AsyncMock(side_effect=lambda key: stored.get(key))
+
+    async def fake_set(key, value):
+        stored[key] = value
+
+    redis_mock.set = AsyncMock(side_effect=fake_set)
+
+    async def fake_resolve_effective_service(*args, **kwargs):
+        return (
+            {"services": []},
+            {"id": "svc-bao"},
+            {"id": "svc-bao", "key_reference": "cred-issuer-test-es256"},
+            True,
+        )
+
+    publish_count = 0
+
+    async def fake_publish_service_to_did(*args, **kwargs):
+        nonlocal publish_count
+        publish_count += 1
+        from fastapi.responses import JSONResponse
+
+        return JSONResponse(
+            content={
+                "ok": True,
+                "verification_method": {
+                    "id": "did:web:beta.elevenidllc.com:orgs:acme#cred-issuer-test-es256",
+                },
+            }
+        )
+
+    monkeypatch.setattr(signing_keys, "_resolve_effective_service", fake_resolve_effective_service)
+    monkeypatch.setattr(signing_keys, "publish_service_to_did", fake_publish_service_to_did)
+
+    request = _build_request("org_issuer", redis_client=redis_mock)
+    response = await signing_keys.create_issuer_profile(
+        request=request,
+        body={
+            "name": "Activated Issuer",
+            "issuer_did": "did:web:beta.elevenidllc.com:orgs:acme",
+            "signing_service_id": "svc-bao",
+            "key_purpose": "vc_jwt_issuer",
+            "status": "active",
+        },
+        organization_id=None,
+    )
+
+    response_body = json.loads(response.body)
+    assert response_body["created"] is False
+    assert response_body["profile"]["id"] == "ip-stale"
+    assert response_body["profile"]["status"] == "active"
+    assert response_body["profile"]["signing_key_reference"] == "cred-issuer-test-es256"
+    assert response_body["profile"]["key_purpose"] == "vc_jwt_issuer"
+    assert response_body["profile"]["verification_method_id"] == "did:web:beta.elevenidllc.com:orgs:acme#cred-issuer-test-es256"
+    assert publish_count == 1
+
+    saved_profiles = json.loads(stored[storage_key])["profiles"]
+    assert len(saved_profiles) == 1
+    assert saved_profiles[0]["id"] == "ip-stale"
+    assert saved_profiles[0]["status"] == "active"
+    assert saved_profiles[0]["key_purpose"] == "vc_jwt_issuer"
+    assert saved_profiles[0]["verification_method_id"] == "did:web:beta.elevenidllc.com:orgs:acme#cred-issuer-test-es256"
+
+
+@pytest.mark.asyncio
 async def test_create_issuer_profile_rejects_missing_did(monkeypatch: pytest.MonkeyPatch):
     """create_issuer_profile should 422 when issuer_did is absent."""
     monkeypatch.setenv("PUBLIC_DOMAIN", "beta.elevenidllc.com")
@@ -2905,6 +3070,62 @@ async def test_internal_resolve_issuer_context_rejects_unknown_explicit_profile(
 
 
 @pytest.mark.asyncio
+async def test_internal_resolve_issuer_context_rejects_profile_without_requested_key_purpose(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("SIGNING_KEYS_INTERNAL_API_KEY", "test-internal-key")
+    docs = {
+        "org:org_issuer:issuer-profiles": {
+            "profiles": [
+                {
+                    "id": "ip-unscoped",
+                    "organization_id": "org_issuer",
+                    "issuer_mode": "org_managed",
+                    "issuer_did": "did:web:beta.elevenidllc.com:orgs:acme",
+                    "signing_service_id": "svc-org",
+                    "status": "active",
+                },
+            ]
+        },
+        "org:org_issuer:signing-key-services": {
+            "services": [
+                {
+                    "id": "svc-org",
+                    "service_type": "custom-transit-compatible",
+                    "key_reference": "cred-issuer-acme-es256",
+                    "key_purposes": ["vc_jwt_issuer"],
+                    "credential_formats": ["dc+sd-jwt"],
+                    "algorithms": ["ES256"],
+                },
+            ],
+            "default_service_id": "svc-org",
+        },
+    }
+    redis_mock = AsyncMock()
+
+    async def fake_get(key):
+        value = docs.get(key)
+        return json.dumps(value) if value is not None else None
+
+    redis_mock.get = AsyncMock(side_effect=fake_get)
+    request = _build_request("org_issuer", redis_client=redis_mock)
+
+    from fastapi import HTTPException as FastAPIHTTPException
+
+    with pytest.raises(FastAPIHTTPException) as exc_info:
+        await signing_keys.internal_resolve_issuer_context(
+            request=request,
+            organization_id="org_issuer",
+            issuer_profile_id="ip-unscoped",
+            issuer_mode="org_managed",
+            credential_format="dc+sd-jwt",
+            key_purpose="vc_jwt_issuer",
+            algorithm="ES256",
+            x_api_key="test-internal-key",
+        )
+
+    assert exc_info.value.status_code == 409
+
+
+@pytest.mark.asyncio
 async def test_internal_resolve_issuer_did_returns_org_scoped_public_key(monkeypatch: pytest.MonkeyPatch):
     """Internal DID resolver should use the org issuer profile and DID document."""
     monkeypatch.setenv("SIGNING_KEYS_INTERNAL_API_KEY", "test-internal-key")
@@ -2987,6 +3208,52 @@ async def test_internal_resolve_issuer_did_returns_org_scoped_public_key(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_internal_resolve_issuer_did_rejects_unscoped_profile_for_requested_key_purpose(monkeypatch: pytest.MonkeyPatch):
+    """Internal DID resolver should not use an unscoped issuer profile for a purpose-specific path."""
+    monkeypatch.setenv("SIGNING_KEYS_INTERNAL_API_KEY", "test-internal-key")
+    issuer_did = "did:web:beta.elevenidllc.com:orgs:acme"
+    docs = {
+        "org:org_issuer:issuer-profiles": {
+            "profiles": [
+                {
+                    "id": "ip-unscoped",
+                    "organization_id": "org_issuer",
+                    "issuer_did": issuer_did,
+                    "signing_service_id": "svc-bao",
+                    "signing_key_reference": "cred-issuer-acme-es256",
+                    "status": "active",
+                }
+            ]
+        },
+    }
+
+    redis_mock = AsyncMock()
+
+    async def fake_get(key):
+        value = docs.get(key)
+        return json.dumps(value) if value is not None else None
+
+    redis_mock.get = AsyncMock(side_effect=fake_get)
+    request = _build_request("org_issuer", redis_client=redis_mock)
+
+    from fastapi import HTTPException as FastAPIHTTPException
+
+    with pytest.raises(FastAPIHTTPException) as exc_info:
+        await signing_keys.internal_resolve_issuer_did(
+            request=request,
+            organization_id="org_issuer",
+            issuer_did=issuer_did,
+            verification_method_id=None,
+            credential_format="dc+sd-jwt",
+            key_purpose="vc_jwt_issuer",
+            algorithm="ES256",
+            x_api_key="test-internal-key",
+        )
+
+    assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_internal_resolve_issuer_did_rejects_unknown_org_issuer(monkeypatch: pytest.MonkeyPatch):
     """Internal DID resolver should fail closed when issuer DID is not active for org."""
     monkeypatch.setenv("SIGNING_KEYS_INTERNAL_API_KEY", "test-internal-key")
@@ -3009,3 +3276,41 @@ async def test_internal_resolve_issuer_did_rejects_unknown_org_issuer(monkeypatc
         )
 
     assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("route_name", "kwargs"),
+    [
+        ("list_signing_keys", {}),
+        ("create_signing_key", {"body": {"name": "issuer", "algorithm": "ES256"}}),
+        ("get_signing_key_config", {}),
+        ("update_signing_key_config", {"body": {"services": []}}),
+        ("generate_csr", {"service_id": "svc-1"}),
+        ("store_service_certificate", {"service_id": "svc-1", "body": {"cert_pem": "cert"}}),
+        ("get_service_certificate", {"service_id": "svc-1"}),
+        ("list_certificate_expiry_alerts", {"days_until_expiry": 30}),
+        ("publish_service_to_jwks", {"service_id": "svc-1", "body": {}}),
+        ("publish_service_to_did", {"service_id": "svc-1", "body": {}}),
+        ("sign_payload_with_service", {"service_id": "svc-1", "body": {"payload_b64": "dGVzdA"}}),
+        ("rotate_service_key", {"service_id": "svc-1", "body": {}}),
+        ("verify_service_public_key", {"service_id": "svc-1"}),
+        ("get_key_audit_log", {"service_id": "svc-1"}),
+        ("get_keys_compliance_summary", {}),
+        ("get_signing_key", {"key_id": "key-1"}),
+        ("update_signing_key", {"key_id": "key-1", "body": {"name": "Issuer"}}),
+        ("delete_signing_key", {"key_id": "key-1"}),
+    ],
+)
+async def test_org_scoped_signing_key_routes_require_org_context(route_name: str, kwargs: dict):
+    """Org-scoped signing-key routes must fail before touching default/global storage."""
+    from fastapi import HTTPException as FastAPIHTTPException
+
+    request = _build_request(session_org_id=None)
+    route = getattr(signing_keys, route_name)
+
+    with pytest.raises(FastAPIHTTPException) as exc_info:
+        await route(request=request, organization_id=None, **kwargs)
+
+    assert exc_info.value.status_code == 422
+    assert "organization_id is required" in str(exc_info.value.detail)

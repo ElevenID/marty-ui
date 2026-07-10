@@ -33,6 +33,7 @@ import LockIcon from '@mui/icons-material/Lock';
 import AccountTreeIcon from '@mui/icons-material/AccountTree';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import DashboardErrorAlert from './DashboardErrorAlert';
 
 /**
  * Event type configuration factory
@@ -138,7 +139,7 @@ function CriticalEventItem({ event }) {
 /**
  * Critical Events Panel Component
  */
-export function CriticalEventsPanel({ events, loading = false }) {
+export function CriticalEventsPanel({ events, loading = false, error = null, onRetry }) {
   const { t } = useTranslation('console');
   
   // Filter to critical events only (last 24h)
@@ -197,7 +198,14 @@ export function CriticalEventsPanel({ events, loading = false }) {
         </Button>
       </Box>
 
-      {criticalEvents.length === 0 ? (
+      {error ? (
+        <DashboardErrorAlert
+          title="Critical events unavailable"
+          error={error}
+          onRetry={onRetry}
+          fallback="Critical event data could not be loaded from the audit service."
+        />
+      ) : criticalEvents.length === 0 ? (
         <Alert severity="success" icon={<CheckCircleIcon />}>
           <Typography variant="body2">
             {t('dashboard.criticalEvents.noCriticalEvents')}

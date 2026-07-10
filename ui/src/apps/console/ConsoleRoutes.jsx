@@ -4,20 +4,20 @@ import { Box, CircularProgress, Typography } from '@mui/material';
 import { get } from '../../services/api';
 import ProtectedRoute, { ApplicantConsoleRoute, OrgConsoleRoute } from '../../components/ProtectedRoute';
 import AuthCallback from '../../components/AuthCallback';
+import LoginPage from '../../components/LoginPage';
 import ProfilePage from '../../components/ProfilePage';
 import { ApplicationForm } from '../../components/applicant';
 import CredentialCatalog from '../../components/applicant/CredentialCatalog';
 import { AuthenticatedLayout } from '../../components/layouts';
-import BrowserRedirect from '../../components/BrowserRedirect';
 import MyOrganizationsPage from '../../components/pages/MyOrganizationsPage';
 import DiscoverOrganizationsPage from '../../components/pages/DiscoverOrganizationsPage';
 import JoinOrganizationPage from '../../components/pages/JoinOrganizationPage';
 import CreateOrganizationPage from '../../components/organizations/CreateOrganizationPage';
+import OrgConsoleUnavailable from '../../components/console/OrgConsoleUnavailable';
 import { useAuth } from '../../hooks/useAuth';
 import { useConsole, getDefaultLandingPath } from '../../contexts/ConsoleContext';
 import {
   ConsoleDashboard,
-  GuidedSetupWizard,
   TrustPage,
   TrustProfilesPage,
   RevocationProfilesPage,
@@ -88,7 +88,11 @@ function GuardLoadingState({ message }) {
   );
 }
 
-function resolveConsoleHomePath({ mode, activeOrgId, memberships }) {
+function resolveConsoleHomePath({ mode, activeOrgId, memberships, isOrgBootstrapRequired }) {
+  if (isOrgBootstrapRequired && (!Array.isArray(memberships) || memberships.length === 0)) {
+    return '/console/org/setup';
+  }
+
   if (mode === 'org' && !activeOrgId) {
     return '/console/org/setup';
   }
@@ -98,7 +102,15 @@ function resolveConsoleHomePath({ mode, activeOrgId, memberships }) {
 
 function ConsoleEntryRoute() {
   const { isAuthenticated, isLoading: authLoading } = useAuth();
-  const { mode, activeOrgId, memberships, isLoading: consoleLoading } = useConsole();
+  const {
+    mode,
+    activeOrgId,
+    memberships,
+    isLoading: consoleLoading,
+    membershipLoadError,
+    isOrgBootstrapRequired,
+    reloadConsoleState,
+  } = useConsole();
 
   if (authLoading || consoleLoading) {
     return <GuardLoadingState message="Loading console..." />;
@@ -108,15 +120,19 @@ function ConsoleEntryRoute() {
     return <Navigate to="/login" state={{ from: { pathname: '/console' } }} replace />;
   }
 
-  return <Navigate to={resolveConsoleHomePath({ mode, activeOrgId, memberships })} replace />;
+  if (membershipLoadError && isOrgBootstrapRequired) {
+    return <OrgConsoleUnavailable error={membershipLoadError} onRetry={reloadConsoleState} />;
+  }
+
+  return <Navigate to={resolveConsoleHomePath({ mode, activeOrgId, memberships, isOrgBootstrapRequired })} replace />;
 }
 
 function ConsoleRoutes() {
   return (
     <Routes>
       <Route path="/console" element={<ConsoleEntryRoute />} />
-      <Route path="/console/login" element={<BrowserRedirect to="/login" message="Opening login..." />} />
-      <Route path="/login" element={<BrowserRedirect to="/login" message="Opening login..." />} />
+      <Route path="/console/login" element={<LoginPage fallbackRedirectTo="/console" />} />
+      <Route path="/login" element={<LoginPage fallbackRedirectTo="/console" />} />
       <Route path="/console/auth/callback" element={<AuthCallback />} />
 
       <Route
@@ -128,7 +144,7 @@ function ConsoleRoutes() {
         }
       >
         <Route index element={<ConsoleDashboard />} />
-        <Route path="setup-wizard" element={<GuidedSetupWizard />} />
+        <Route path="setup-wizard" element={<Navigate to="/console/org" replace />} />
         <Route path="profile" element={<ProfilePage />} />
         <Route path="trust" element={<TrustPage />} />
         <Route path="trust/profiles" element={<TrustProfilesPage />} />

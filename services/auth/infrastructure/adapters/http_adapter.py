@@ -20,7 +20,7 @@ from urllib.parse import parse_qs, quote, urlencode, urlparse
 import httpx
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from marty_common.system_ids import MARTY_OPEN_BADGE_LOGIN_POLICY_ID
 
 from ...application.ports import (
@@ -397,6 +397,11 @@ class UserInfoResponse(BaseModel):
     organization_id: str | None = None
     organization_name: str | None = None
     organization: dict[str, Any] | None = None
+    default_organization_id: str | None = None
+    default_organization_name: str | None = None
+    organizations: list[dict[str, Any]] = Field(default_factory=list)
+    organization_context_unavailable: bool = False
+    organization_context_error: str | None = None
     onboarding_completed: str | None = None
     picture: str | None = None
     impersonation: ImpersonationInfoResponse | None = None
@@ -408,6 +413,31 @@ class AuthStatusResponse(BaseModel):
     
     authenticated: bool
     user: UserInfoResponse | None = None
+
+
+def _user_info_response(user: AuthenticatedUser) -> UserInfoResponse:
+    return UserInfoResponse(
+        user_id=user.user_id,
+        email=user.email,
+        username=user.username,
+        given_name=user.given_name,
+        family_name=user.family_name,
+        user_type=user.user_type.value,
+        applicant_id=user.applicant_id,
+        roles=user.roles,
+        organization_id=user.organization_id,
+        organization_name=user.organization_name,
+        organization=user.organization,
+        default_organization_id=user.default_organization_id,
+        default_organization_name=user.default_organization_name,
+        organizations=user.organizations,
+        organization_context_unavailable=user.organization_context_unavailable,
+        organization_context_error=user.organization_context_error,
+        onboarding_completed=user.onboarding_completed.isoformat() if user.onboarding_completed else None,
+        picture=user.picture,
+        impersonation=ImpersonationInfoResponse(**user.impersonation.to_dict()) if user.impersonation else None,
+        did_subject=user.did_subject,
+    )
 
 
 class ApiResponseMeta(BaseModel):
@@ -1406,23 +1436,7 @@ async def get_current_user(
     
     return AuthStatusResponse(
         authenticated=True,
-        user=UserInfoResponse(
-            user_id=user.user_id,
-            email=user.email,
-            username=user.username,
-            given_name=user.given_name,
-            family_name=user.family_name,
-            user_type=user.user_type.value,
-            applicant_id=user.applicant_id,
-            roles=user.roles,
-            organization_id=user.organization_id,
-            organization_name=user.organization_name,
-            organization=user.organization,
-            onboarding_completed=user.onboarding_completed.isoformat() if user.onboarding_completed else None,
-            picture=user.picture,
-            impersonation=ImpersonationInfoResponse(**user.impersonation.to_dict()) if user.impersonation else None,
-            did_subject=user.did_subject,
-        ),
+        user=_user_info_response(user),
     )
 
 
@@ -1455,23 +1469,7 @@ async def update_current_user(
 
     return AuthStatusResponse(
         authenticated=True,
-        user=UserInfoResponse(
-            user_id=session.user.user_id,
-            email=session.user.email,
-            username=session.user.username,
-            given_name=session.user.given_name,
-            family_name=session.user.family_name,
-            user_type=session.user.user_type.value,
-            applicant_id=session.user.applicant_id,
-            roles=session.user.roles,
-            organization_id=session.user.organization_id,
-            organization_name=session.user.organization_name,
-            organization=session.user.organization,
-            onboarding_completed=session.user.onboarding_completed.isoformat() if session.user.onboarding_completed else None,
-            picture=session.user.picture,
-            impersonation=ImpersonationInfoResponse(**session.user.impersonation.to_dict()) if session.user.impersonation else None,
-            did_subject=session.user.did_subject,
-        ),
+        user=_user_info_response(session.user),
     )
 
 
@@ -2538,7 +2536,7 @@ async def credential_verified(
             if require_existing_kc_user:
                 await _mark_credential_login_failed(nonce, "keycloak_user_not_eligible")
                 return {"ok": True, "status": "denied"}
-    elif _credential_login_require_existing_keycloak_user or not _credential_login_create_users:
+    elif _credential_login_require_existing_keycloak_user:
         await _mark_credential_login_failed(nonce, "keycloak_admin_unavailable")
         return {"ok": True, "status": "denied"}
 

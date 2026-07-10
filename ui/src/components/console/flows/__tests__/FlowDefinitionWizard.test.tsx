@@ -25,6 +25,10 @@ vi.mock('react-router-dom', async () => {
   }
 })
 
+vi.mock('../../../../hooks/useAuth', () => ({
+  useAuth: () => ({ organizationId: 'org-1' }),
+}))
+
 describe('FlowDefinitionWizard', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -92,7 +96,7 @@ describe('FlowDefinitionWizard', () => {
     render(<FlowDefinitionWizard />)
 
     // Step 1: Select flow type
-    await user.click(screen.getByTestId('flow-type-verification')!)
+    await user.click(screen.getByTestId('flow-type-issuance_oid4vci')!)
     await user.click(screen.getByTestId('wizard.flow.next'))
 
     await waitFor(() => screen.getByText('Configure Steps'))
@@ -140,7 +144,7 @@ describe('FlowDefinitionWizard', () => {
     expect(stepInputs).toHaveLength(2)
   })
 
-  it('should allow optional deployment binding', async () => {
+  it('should require and auto-fill available deployment binding prerequisites', async () => {
     const user = userEvent.setup()
     render(<FlowDefinitionWizard />)
 
@@ -159,15 +163,16 @@ describe('FlowDefinitionWizard', () => {
     })
     await user.click(screen.getByTestId('wizard.flow.next'))
 
-    // Deployment binding step (optional)
+    // Deployment binding step
     await waitFor(() => {
       expect(screen.getByText('Bind Deployment')).toBeInTheDocument()
     })
 
-    // Should show optional indicator
-    expect(screen.getAllByText(/optional/i).length).toBeGreaterThan(0)
+    await waitFor(() => {
+      expect(screen.getByText('Production Deployment')).toBeInTheDocument()
+      expect(screen.getByTestId('wizard.flow.next')).not.toBeDisabled()
+    })
 
-    // Can skip this step
     await user.click(screen.getByTestId('wizard.flow.next'))
 
     await waitFor(() => {
@@ -175,12 +180,34 @@ describe('FlowDefinitionWizard', () => {
     })
   })
 
-  it('should complete full flow creation', async () => {
+  it('should submit a persisted flow definition with required references', async () => {
     const user = userEvent.setup()
+    let submittedPayload: any = null
+    server.use(
+      http.post('http://localhost:8000/v1/flows/definitions', async ({ request }) => {
+        submittedPayload = await request.json()
+        return HttpResponse.json({
+          id: 'flow-created',
+          organization_id: submittedPayload.organization_id,
+          name: submittedPayload.name,
+          description: submittedPayload.description,
+          flow_type: 'oid4vci_pre_authorized',
+          flow_category: 'ISSUANCE',
+          trust_profile_id: submittedPayload.trust_profile_id,
+          credential_template_id: submittedPayload.credential_template_id,
+          deployment_profile_ids: submittedPayload.deployment_profile_ids,
+          approval_strategy: submittedPayload.approval_strategy,
+          enabled: submittedPayload.enabled,
+          status: 'ACTIVE',
+          created_at: '2024-01-01T00:00:00Z',
+          updated_at: '2024-01-01T00:00:00Z',
+        })
+      })
+    )
     render(<FlowDefinitionWizard />)
 
     // Step 1: Flow Type
-    await user.click(screen.getByTestId('flow-type-verification')!)
+    await user.click(screen.getByTestId('flow-type-issuance_oid4vci')!)
     await user.click(screen.getByTestId('wizard.flow.next'))
 
     // Step 2: Configure Steps
@@ -196,8 +223,9 @@ describe('FlowDefinitionWizard', () => {
     await waitFor(() => screen.getByText('Preconditions'))
     await user.click(screen.getByTestId('wizard.flow.next'))
 
-    // Step 4: Bind Deployment (skip)
+    // Step 4: Bind Deployment
     await waitFor(() => screen.getByText('Bind Deployment'))
+    await waitFor(() => expect(screen.getByTestId('wizard.flow.next')).not.toBeDisabled())
     await user.click(screen.getByTestId('wizard.flow.next'))
 
     // Step 5: Review and Submit
@@ -206,9 +234,25 @@ describe('FlowDefinitionWizard', () => {
     const submitButton = screen.getByTestId('wizard.flow.submit')
     await user.click(submitButton)
 
-    // Success state (component uses synthetic submission — no HTTP call)
+    // Success state after the API confirms flow creation.
     await waitFor(() => {
       expect(screen.getByText(/Flow Created/i)).toBeInTheDocument()
+    })
+
+    expect(submittedPayload).toMatchObject({
+      organization_id: 'org-1',
+      name: 'Complete Flow',
+      description: 'Full test flow',
+      flow_type: 'issuance_oid4vci',
+      credential_template_id: 1,
+      deployment_profile_id: 1,
+      deployment_profile_ids: [1],
+      approval_strategy: 'AUTO',
+      enabled: true,
+    })
+    expect(submittedPayload.steps[0]).toMatchObject({
+      name: 'Step 1',
+      step_type: 'user_input',
     })
 
     // Should redirect after delay (1500ms useWizard + 2000ms component)
@@ -252,10 +296,18 @@ describe('FlowDefinitionWizard', () => {
 
   it('should handle API errors', async () => {
     const user = userEvent.setup()
+    server.use(
+      http.post('http://localhost:8000/v1/flows/definitions', () => {
+        return HttpResponse.json(
+          { error: 'validation_error', error_description: 'credential_template_id is required' },
+          { status: 400 }
+        )
+      })
+    )
     render(<FlowDefinitionWizard />)
 
-    // Complete wizard (FlowDefinitionWizard uses synthetic submission — no HTTP call)
-    await user.click(screen.getByTestId('flow-type-verification')!)
+    // Complete wizard and let the API validation error surface.
+    await user.click(screen.getByTestId('flow-type-issuance_oid4vci')!)
     await user.click(screen.getByTestId('wizard.flow.next'))
     
     await waitFor(() => screen.getByText('Configure Steps'))
@@ -268,15 +320,16 @@ describe('FlowDefinitionWizard', () => {
     await user.click(screen.getByTestId('wizard.flow.next'))
     
     await waitFor(() => screen.getByText('Bind Deployment'))
+    await waitFor(() => expect(screen.getByTestId('wizard.flow.next')).not.toBeDisabled())
     await user.click(screen.getByTestId('wizard.flow.next'))
     
     await waitFor(() => screen.getByText('Review'))
     await user.click(screen.getByTestId('wizard.flow.submit'))
 
-    // Synthetic submission always succeeds — verify success state
     await waitFor(() => {
-      expect(screen.getByText(/Flow Created/i)).toBeInTheDocument()
+      expect(screen.getByText(/credential_template_id is required/i)).toBeInTheDocument()
     })
+    expect(screen.queryByText(/Flow Created/i)).not.toBeInTheDocument()
   })
 
   it('should support combined flow type', async () => {

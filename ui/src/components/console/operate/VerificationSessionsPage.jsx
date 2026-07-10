@@ -6,6 +6,7 @@ import VerificationSessionManager from '../../vendor/verification/VerificationSe
 import CanvasMirrorProvenanceLookup from '../../canvas/CanvasMirrorProvenanceLookup';
 import { ResourcePage } from '../../common';
 import { useAuth } from '../../../hooks/useAuth';
+import { useConsole } from '../../../contexts/ConsoleContext';
 
 const getOperateTabs = (t) => [
   { label: t('operate.tabs.issuance'),    path: '/console/org/operate/issuance' },
@@ -35,7 +36,9 @@ function hasCanvasLookupParams(params) {
 
 function VerificationSessionsPage() {
   const { t } = useTranslation('console');
-  const { organizationId } = useAuth();
+  const { organizationId: authOrganizationId } = useAuth();
+  const { activeOrgId } = useConsole();
+  const organizationId = activeOrgId || authOrganizationId;
   const [searchParams] = useSearchParams();
   const canvasLookupParams = useMemo(() => canvasLookupParamsFromSearch(searchParams), [searchParams]);
   const hasCanvasLookup = hasCanvasLookupParams(canvasLookupParams);

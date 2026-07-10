@@ -33,6 +33,39 @@ def _build_client(
 		)
 	)
 	app.state.org_client = SimpleNamespace(get_membership=get_membership)
+
+	async def fake_require_active_issuer_profile(
+		request,
+		*,
+		organization_id: str,
+		issuer_profile_id: str | None,
+		credential_format: str | None = None,
+		algorithm: str | None = None,
+	) -> dict:
+		if not issuer_profile_id:
+			raise credential_template.HTTPException(
+				status_code=422,
+				detail="issuer_profile_id is required.",
+			)
+		return {
+			"ok": True,
+			"organization_id": organization_id,
+			"issuer_profile_id": issuer_profile_id,
+			"issuer_did": "did:web:beta.elevenidllc.com:orgs:test",
+			"signing_service_id": "managed-openbao-transit",
+			"signing_key_reference": "cred-issuer-test-es256",
+			"verification_method_id": "did:web:beta.elevenidllc.com:orgs:test#cred-issuer-test-es256",
+			"key_purpose": "vc_jwt_issuer",
+			"service": {
+				"id": "managed-openbao-transit",
+				"algorithm": "ES256",
+				"key_reference": "cred-issuer-test-es256",
+			},
+		}
+
+	credential_template._require_active_issuer_profile = AsyncMock(
+		side_effect=fake_require_active_issuer_profile
+	)
 	return TestClient(app), get_membership
 
 
@@ -551,6 +584,7 @@ def test_create_template_requires_compliance_binding_even_in_compatibility_mode(
 			"organization_id": "org-1",
 			"name": "Missing compliance binding",
 			"credential_type": "PersonIdentificationData",
+			"issuer_profile_id": "issuer-profile-1",
 			"claims": [{"name": "given_name", "display_name": "Given Name", "claim_type": "string", "required": True}],
 			"supported_formats": ["sd_jwt_vc"],
 		},
@@ -571,6 +605,7 @@ def test_create_template_normalizes_legacy_payload_format_aliases():
 			"organization_id": "org-1",
 			"name": "Legacy payload format template",
 			"credential_type": "PersonIdentificationData",
+			"issuer_profile_id": "issuer-profile-1",
 			"claims": [{"name": "given_name", "display_name": "Given Name", "claim_type": "string", "required": True}],
 			"supported_formats": ["sd_jwt_vc"],
 			"credential_payload_format": "w3c_vcdm_v2_sd_jwt",

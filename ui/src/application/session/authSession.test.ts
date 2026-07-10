@@ -306,6 +306,42 @@ describe('authSession helpers', () => {
     })
   })
 
+  it('adds supplied selected organization details when auth memberships are stale', () => {
+    const previousUser = {
+      organization_id: null,
+      organizations: [{ id: 'marty-org', name: 'Marty' }],
+      capabilities: { apply: true, 'org:view': true },
+    }
+
+    const updated = updateUserActiveOrganization(previousUser, 'org-new', {
+      id: 'org-new',
+      name: 'acme',
+      display_name: 'Acme',
+      membership: {
+        roles: [{ name: 'owner' }],
+        has_org_console_access: true,
+      },
+    })
+
+    expect(updated).toMatchObject({
+      organization_id: 'org-new',
+      organization_name: 'Acme',
+      capabilities: { apply: true, 'org:view': true },
+      organizations: [
+        { id: 'marty-org', name: 'Marty' },
+        {
+          id: 'org-new',
+          name: 'acme',
+          display_name: 'Acme',
+          membership: {
+            roles: [{ name: 'owner' }],
+            has_org_console_access: true,
+          },
+        },
+      ],
+    })
+  })
+
   it('returns the previous auth user when the same active organization is written again', () => {
     const previousUser = {
       organization_id: 'org-1',

@@ -13,9 +13,20 @@ import {
   ReadinessState,
 } from '../dashboardRules'
 
+const activeIssuerProfile = {
+  id: 'issuer-profile-1',
+  status: 'active',
+  issuer_did: 'did:web:issuer.example.com',
+  signing_service_id: 'managed-openbao-transit',
+}
+const templateIssuerFields = {
+  issuer_profile_id: activeIssuerProfile.id,
+  key_access_mode: 'REMOTE_SIGNING',
+}
+
 const readyTrustDependencies = {
   signingKeys: [{ id: 'key_1', name: 'Issuer Key' }],
-  issuerProfiles: [],
+  issuerProfiles: [activeIssuerProfile],
   keyManagementConfig: {
     default_service_id: 'managed-openbao-transit',
     services: [{ id: 'managed-openbao-transit', name: 'Managed OpenBao', status: 'configured' }],
@@ -40,7 +51,7 @@ describe('dashboardRules', () => {
       expect(result.trust.state).toBe(ReadinessState.MISSING)
       expect(result.trust.message).toBe('No Trust Profiles configured')
       expect(result.trust.action).toBe('Create')
-      expect(result.trust.path).toBe('/console/trust/profiles/new')
+      expect(result.trust.path).toBe('/console/org/trust/profiles/new')
 
       expect(result.template.state).toBe(ReadinessState.MISSING)
       expect(result.template.dependencyBlocked).toBe(true)
@@ -53,6 +64,37 @@ describe('dashboardRules', () => {
 
       expect(result.flow.state).toBe(ReadinessState.MISSING)
       expect(result.flow.dependencyBlocked).toBe(true)
+    })
+
+    it('should mark setup data unavailable instead of treating failed artifact loads as empty setup', () => {
+      const data = {
+        ...readyTrustDependencies,
+        trustProfiles: [],
+        templates: [],
+        policies: [],
+        deployments: [],
+        flows: [],
+        apiKeys: [],
+        resourceErrors: {
+          trustProfiles: {
+            message: 'service unavailable',
+            message_id: 'msg-trust-503',
+          },
+        },
+      }
+
+      const result = computeSetupReadiness(data)
+      const blockers = computeBlockers(result)
+
+      expect(result.trust.state).toBe(ReadinessState.BLOCKED)
+      expect(result.trust.serviceError).toBe(true)
+      expect(result.trust.message).toContain('msg-trust-503')
+      expect(result.trust.message).not.toContain('No Trust Profiles configured')
+      expect(result.template.dependencyBlocked).toBe(true)
+      expect(blockers[0]).toMatchObject({
+        id: 'trust',
+        reason: expect.stringContaining('setup readiness cannot be trusted'),
+      })
     })
 
     it('should block trust when key management is missing and no trust profile exists', () => {
@@ -152,12 +194,14 @@ describe('dashboardRules', () => {
     it('should mark template as BLOCKED when artifacts are missing', () => {
       const data = {
         trustProfiles: [{ id: 1, status: 'active' }],
+        issuerProfiles: [activeIssuerProfile],
         templates: [
           {
             id: 1,
             status: 'active',
             artifacts_status: 'missing',
             trust_profile_id: 1,
+            ...templateIssuerFields,
           },
         ],
         policies: [],
@@ -176,6 +220,32 @@ describe('dashboardRules', () => {
     it('should mark template as READY when active with valid artifacts', () => {
       const data = {
         trustProfiles: [{ id: 1, status: 'active' }],
+        issuerProfiles: [activeIssuerProfile],
+        templates: [
+          {
+            id: 1,
+            status: 'active',
+            artifacts_status: 'valid',
+            trust_profile_id: 1,
+            ...templateIssuerFields,
+          },
+        ],
+        policies: [],
+        deployments: [],
+        flows: [],
+        apiKeys: [],
+      }
+
+      const result = computeSetupReadiness(data)
+
+      expect(result.template.state).toBe(ReadinessState.READY)
+      expect(result.template.message).toContain('1 active template')
+    })
+
+    it('should mark template as BLOCKED when no active KMS-backed issuer profile is bound', () => {
+      const data = {
+        trustProfiles: [{ id: 1, status: 'active' }],
+        issuerProfiles: [activeIssuerProfile],
         templates: [
           {
             id: 1,
@@ -192,19 +262,79 @@ describe('dashboardRules', () => {
 
       const result = computeSetupReadiness(data)
 
-      expect(result.template.state).toBe(ReadinessState.READY)
-      expect(result.template.message).toContain('1 active template')
+      expect(result.template.state).toBe(ReadinessState.BLOCKED)
+      expect(result.template.message).toContain('missing active KMS-backed issuer profile')
+      expect(result.template.blockReason).toContain('missing active KMS-backed issuer profile')
+      expect(result.policy.dependencyBlocked).toBe(true)
     })
 
-    it('should mark policy as BLOCKED when missing required claims', () => {
+    it('should mark template as BLOCKED when the referenced issuer profile is inactive', () => {
       const data = {
         trustProfiles: [{ id: 1, status: 'active' }],
+        issuerProfiles: [{ ...activeIssuerProfile, status: 'inactive' }],
         templates: [
           {
             id: 1,
             status: 'active',
             artifacts_status: 'valid',
             trust_profile_id: 1,
+            ...templateIssuerFields,
+          },
+        ],
+        policies: [],
+        deployments: [],
+        flows: [],
+        apiKeys: [],
+      }
+
+      const result = computeSetupReadiness(data)
+
+      expect(result.template.state).toBe(ReadinessState.BLOCKED)
+      expect(result.template.message).toContain('missing active KMS-backed issuer profile')
+      expect(result.policy.dependencyBlocked).toBe(true)
+    })
+
+    it('should mark template as BLOCKED when the referenced issuer profile has no KMS signing service', () => {
+      const data = {
+        trustProfiles: [{ id: 1, status: 'active' }],
+        issuerProfiles: [{
+          id: activeIssuerProfile.id,
+          status: 'active',
+          issuer_did: 'did:web:issuer.example.com',
+        }],
+        templates: [
+          {
+            id: 1,
+            status: 'active',
+            artifacts_status: 'valid',
+            trust_profile_id: 1,
+            ...templateIssuerFields,
+          },
+        ],
+        policies: [],
+        deployments: [],
+        flows: [],
+        apiKeys: [],
+      }
+
+      const result = computeSetupReadiness(data)
+
+      expect(result.template.state).toBe(ReadinessState.BLOCKED)
+      expect(result.template.message).toContain('missing active KMS-backed issuer profile')
+      expect(result.policy.dependencyBlocked).toBe(true)
+    })
+
+    it('should mark policy as BLOCKED when missing required claims', () => {
+      const data = {
+        trustProfiles: [{ id: 1, status: 'active' }],
+        issuerProfiles: [activeIssuerProfile],
+        templates: [
+          {
+            id: 1,
+            status: 'active',
+            artifacts_status: 'valid',
+            trust_profile_id: 1,
+            ...templateIssuerFields,
           },
         ],
         policies: [
@@ -228,12 +358,14 @@ describe('dashboardRules', () => {
     it('should mark policy as READY when configured with required claims', () => {
       const data = {
         trustProfiles: [{ id: 1, status: 'active' }],
+        issuerProfiles: [activeIssuerProfile],
         templates: [
           {
             id: 1,
             status: 'active',
             artifacts_status: 'valid',
             trust_profile_id: 1,
+            ...templateIssuerFields,
           },
         ],
         policies: [
@@ -256,12 +388,14 @@ describe('dashboardRules', () => {
     it('should mark deployment as BLOCKED when no API keys exist', () => {
       const data = {
         trustProfiles: [{ id: 1, status: 'active' }],
+        issuerProfiles: [activeIssuerProfile],
         templates: [
           {
             id: 1,
             status: 'active',
             artifacts_status: 'valid',
             trust_profile_id: 1,
+            ...templateIssuerFields,
           },
         ],
         policies: [
@@ -285,12 +419,14 @@ describe('dashboardRules', () => {
     it('should mark deployment as READY when active with API keys', () => {
       const data = {
         trustProfiles: [{ id: 1, status: 'active' }],
+        issuerProfiles: [activeIssuerProfile],
         templates: [
           {
             id: 1,
             status: 'active',
             artifacts_status: 'valid',
             trust_profile_id: 1,
+            ...templateIssuerFields,
           },
         ],
         policies: [
@@ -314,12 +450,14 @@ describe('dashboardRules', () => {
     it('should mark flow as BLOCKED when missing references', () => {
       const data = {
         trustProfiles: [{ id: 1, status: 'active' }],
+        issuerProfiles: [activeIssuerProfile],
         templates: [
           {
             id: 1,
             status: 'active',
             artifacts_status: 'valid',
             trust_profile_id: 1,
+            ...templateIssuerFields,
           },
         ],
         policies: [
@@ -351,12 +489,14 @@ describe('dashboardRules', () => {
     it('should mark all as READY in fully configured org', () => {
       const data = {
         trustProfiles: [{ id: 1, status: 'active' }],
+        issuerProfiles: [activeIssuerProfile],
         templates: [
           {
             id: 1,
             status: 'active',
             artifacts_status: 'valid',
             trust_profile_id: 1,
+            ...templateIssuerFields,
           },
         ],
         policies: [
@@ -587,6 +727,63 @@ describe('dashboardRules', () => {
       expect(actions['create-policy'].visible).toBe(false)
       expect(actions['generate-api-key'].visible).toBe(false)
       expect(actions['create-flow'].visible).toBe(false)
+    })
+
+    it.each([
+      [
+        'trust profile load fails',
+        {
+          trust: { state: ReadinessState.BLOCKED, serviceError: true },
+          template: { state: ReadinessState.MISSING, dependencyBlocked: true },
+          policy: { state: ReadinessState.MISSING, dependencyBlocked: true },
+          deployment: { state: ReadinessState.MISSING, dependencyBlocked: true },
+          flow: { state: ReadinessState.MISSING, dependencyBlocked: true },
+        },
+      ],
+      [
+        'template load fails',
+        {
+          trust: { state: ReadinessState.READY },
+          template: { state: ReadinessState.BLOCKED, serviceError: true },
+          policy: { state: ReadinessState.MISSING, dependencyBlocked: true },
+          deployment: { state: ReadinessState.MISSING, dependencyBlocked: true },
+          flow: { state: ReadinessState.MISSING, dependencyBlocked: true },
+        },
+      ],
+      [
+        'policy load fails',
+        {
+          trust: { state: ReadinessState.READY },
+          template: { state: ReadinessState.READY },
+          policy: { state: ReadinessState.BLOCKED, serviceError: true },
+          deployment: { state: ReadinessState.MISSING, dependencyBlocked: true },
+          flow: { state: ReadinessState.MISSING, dependencyBlocked: true },
+        },
+      ],
+      [
+        'deployment or API key load fails',
+        {
+          trust: { state: ReadinessState.READY },
+          template: { state: ReadinessState.READY },
+          policy: { state: ReadinessState.READY },
+          deployment: { state: ReadinessState.BLOCKED, serviceError: true },
+          flow: { state: ReadinessState.MISSING, dependencyBlocked: true },
+        },
+      ],
+      [
+        'flow load fails',
+        {
+          trust: { state: ReadinessState.READY },
+          template: { state: ReadinessState.READY },
+          policy: { state: ReadinessState.READY },
+          deployment: { state: ReadinessState.READY },
+          flow: { state: ReadinessState.BLOCKED, serviceError: true },
+        },
+      ],
+    ])('should hide quick actions when %s', (_name, readiness) => {
+      const actions = computeQuickActionVisibility(readiness)
+
+      expect(Object.values(actions).every((action) => action.visible === false)).toBe(true)
     })
   })
 })

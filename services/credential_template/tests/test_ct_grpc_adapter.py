@@ -56,6 +56,11 @@ def _make_template_response(**overrides):
         version=1,
         created_at="2026-01-01T00:00:00Z",
         updated_at="2026-01-02T00:00:00Z",
+        issuer_profile_id="issuer-profile-1",
+        key_access_mode="REMOTE_SIGNING",
+        issuer_key_id="issuer-key-1",
+        issuer_algorithm="ES256",
+        remote_signing_config={"signing_service_id": "managed-openbao-transit"},
     )
     defaults.update(overrides)
     return SimpleNamespace(**defaults)
@@ -96,6 +101,9 @@ class TestGetTemplate:
         assert resp.claims[1].selectively_disclosable is True
         assert resp.display_style.background_color == "#003366"
         assert resp.validity_rules.default_validity_days == 365
+        assert resp.issuer_profile_id == "issuer-profile-1"
+        assert resp.key_access_mode == "REMOTE_SIGNING"
+        assert json.loads(resp.remote_signing_config_json)["signing_service_id"] == "managed-openbao-transit"
         assert ctx.code is None
 
     async def test_not_found(self, ctx):
@@ -146,8 +154,18 @@ class TestListTemplates:
 
 class TestGetCredentialConfigurations:
     async def test_active_templates_produce_configs(self, ctx):
-        t1 = SimpleNamespace(credential_type="EmployeeCredential", name="Employee Badge")
-        t2 = SimpleNamespace(credential_type="MemberCredential", name="Member Badge")
+        t1 = SimpleNamespace(
+            credential_type="EmployeeCredential",
+            name="Employee Badge",
+            issuer_profile_id="issuer-profile-1",
+            key_access_mode="REMOTE_SIGNING",
+        )
+        t2 = SimpleNamespace(
+            credential_type="MemberCredential",
+            name="Member Badge",
+            issuer_profile_id="issuer-profile-2",
+            key_access_mode="REMOTE_SIGNING",
+        )
         repo = MagicMock()
         repo.list_all = AsyncMock(return_value=[t1, t2])
         servicer = _build_servicer(repo=repo)
@@ -160,8 +178,37 @@ class TestGetCredentialConfigurations:
         assert "MemberCredential" in configs
         assert configs["EmployeeCredential"]["name"] == "Employee Badge"
 
+    async def test_active_template_without_kms_issuer_is_not_advertised(self, ctx):
+        valid = SimpleNamespace(
+            credential_type="EmployeeCredential",
+            name="Employee Badge",
+            issuer_profile_id="issuer-profile-1",
+            key_access_mode="REMOTE_SIGNING",
+        )
+        legacy = SimpleNamespace(
+            credential_type="LegacyCredential",
+            name="Legacy Badge",
+            issuer_profile_id="",
+            key_access_mode="LOCAL",
+        )
+        repo = MagicMock()
+        repo.list_all = AsyncMock(return_value=[valid, legacy])
+        servicer = _build_servicer(repo=repo)
+
+        req = ct_pb2.GetCredentialConfigurationsRequest()
+        resp = await servicer.GetCredentialConfigurations(req, ctx)
+
+        configs = json.loads(resp.configurations_json)
+        assert "EmployeeCredential" in configs
+        assert "LegacyCredential" not in configs
+
     async def test_empty_credential_type_skipped(self, ctx):
-        t = SimpleNamespace(credential_type="", name="No Type")
+        t = SimpleNamespace(
+            credential_type="",
+            name="No Type",
+            issuer_profile_id="issuer-profile-1",
+            key_access_mode="REMOTE_SIGNING",
+        )
         repo = MagicMock()
         repo.list_all = AsyncMock(return_value=[t])
         servicer = _build_servicer(repo=repo)

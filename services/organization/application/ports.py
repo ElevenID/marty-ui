@@ -8,7 +8,18 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
 
-from ..domain.entities import ApiKey, ConsoleContextPreference, JoinCode, Member, Organization, OrganizationType, Permission, Role, ViewMode
+from ..domain.entities import (
+    ApiKey,
+    AuditEvent,
+    ConsoleContextPreference,
+    JoinCode,
+    Member,
+    Organization,
+    OrganizationType,
+    Permission,
+    Role,
+    ViewMode,
+)
 
 
 # =============================================================================
@@ -99,6 +110,25 @@ class JoinOrganizationCommand:
 
 
 # ── RBAC Commands ────────────────────────────────────────────────────────────
+
+@dataclass
+class AuditEventQuery:
+    """Query parameters for organization audit events."""
+
+    organization_id: str
+    page: int = 1
+    per_page: int = 50
+    category: str | None = None
+    resource_type: str | None = None
+    resource_id: str | None = None
+    action: str | None = None
+    actor: str | None = None
+    severity: str | None = None
+    search: str | None = None
+    ip_address: str | None = None
+    start_date: str | None = None
+    end_date: str | None = None
+
 
 @dataclass
 class CreateRoleCommand:
@@ -384,6 +414,25 @@ class PermissionRepositoryPort(ABC):
     @abstractmethod
     async def get_by_key(self, resource: str, action: str) -> Permission | None:
         """Get a permission by its resource + action key."""
+        ...
+
+
+class AuditEventRepositoryPort(ABC):
+    """Port for organization audit-event persistence."""
+
+    @abstractmethod
+    async def save(self, event: AuditEvent) -> None:
+        """Persist an audit event."""
+        ...
+
+    @abstractmethod
+    async def get(self, organization_id: str, event_id: str) -> AuditEvent | None:
+        """Get an audit event by ID inside an organization."""
+        ...
+
+    @abstractmethod
+    async def list(self, query: AuditEventQuery) -> tuple[list[AuditEvent], int]:
+        """List audit events and return events plus total count."""
         ...
 
 

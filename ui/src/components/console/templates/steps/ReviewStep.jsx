@@ -151,7 +151,7 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
               <ReviewField
                 label="Issuer Profile"
                 value={data.issuer_profile_id || undefined}
-                placeholder="Default (org signing key)"
+                placeholder="Required before activation"
               />
             </Grid>
           </Grid>

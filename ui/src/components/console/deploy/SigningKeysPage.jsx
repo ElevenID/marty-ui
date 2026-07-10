@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -38,6 +38,7 @@ import { usePermissions } from '../../../hooks/usePermissions';
 import { useNotifications } from '../../../hooks/useNotifications';
 import { useAsyncData } from '../../../hooks/useAsyncData';
 import { useDialog } from '../../../hooks/useDialog';
+import { useConsole } from '../../../contexts/ConsoleContext';
 import {
   DEFAULT_KEY_MANAGEMENT_CONFIG,
   PURPOSES_REQUIRING_CERTIFICATE,
@@ -57,6 +58,12 @@ const statusSeverityMap = {
   metadata_only: 'info',
   registered: 'info',
 };
+
+function logSigningKeysPageError(message, error) {
+  if (import.meta.env?.DEV && import.meta.env?.MODE !== 'test') {
+    console.error(message, error);
+  }
+}
 
 const formatListValue = (value) => {
   if (!Array.isArray(value) || value.length === 0) {
@@ -125,6 +132,7 @@ const getServiceConnectionSummary = (service) => {
 };
 
 const BRAND_PATTERN = /\bmarty\b/gi;
+const MANAGED_OPENBAO_SERVICE_ID = 'managed-openbao-transit';
 
 const toBrandDisplay = (value) => (
   typeof value === 'string' ? value.replace(BRAND_PATTERN, 'Elevenidllc') : value
@@ -341,9 +349,14 @@ function ServiceCard({
 export default function SigningKeysPage() {
   const { t } = useTranslation('console');
   const navigate = useNavigate();
+  const { activeOrgId } = useConsole();
+  const orgRequestParams = useMemo(
+    () => (activeOrgId ? { organization_id: activeOrgId } : {}),
+    [activeOrgId],
+  );
 
   const { data: signingKeysData, loading, error, reload: reloadKeys } = useAsyncData(async () => {
-    const data = await signingKeysApi.listSigningKeys();
+    const data = await signingKeysApi.listSigningKeys(orgRequestParams);
     const rawKeys = Array.isArray(data) ? data : data?.keys || [];
     const normalizedKeys = Array.isArray(rawKeys)
       ? rawKeys
@@ -367,13 +380,18 @@ export default function SigningKeysPage() {
       domainConfig: data?.domain_config || null,
       message: typeof data?.message === 'string' ? data.message : null,
     };
-  }, []);
+  }, [orgRequestParams]);
 
   const {
     data: keyManagementData,
     error: keyManagementError,
     reload: reloadConfig,
-  } = useAsyncData(async () => normalizeKeyManagementConfig(await signingKeysApi.getKeyManagementConfig()), []);
+  } = useAsyncData(
+    async () => normalizeKeyManagementConfig(
+      await signingKeysApi.getKeyManagementConfig(orgRequestParams)
+    ),
+    [orgRequestParams]
+  );
 
   const keys = Array.isArray(signingKeysData?.keys) ? signingKeysData.keys : [];
   const providerMetadata = signingKeysData?.providerMetadata || null;
@@ -381,6 +399,7 @@ export default function SigningKeysPage() {
   const keyManagementConfig = normalizeKeyManagementConfig(keyManagementData || DEFAULT_KEY_MANAGEMENT_CONFIG);
   const services = keyManagementConfig.services;
   const defaultService = getDefaultKeyManagementService(keyManagementConfig);
+  const canCreateKeysThroughIssuerWizard = defaultService?.id === MANAGED_OPENBAO_SERVICE_ID;
   const providerSummary = keyManagementConfig.provider_metadata || providerMetadata;
   const domainSummary = keyManagementConfig.domain_config || domainConfig;
   const signingKeyMessage = signingKeysData?.message || null;
@@ -410,7 +429,7 @@ export default function SigningKeysPage() {
       return;
     }
     try {
-      const result = await signingKeysApi.rotateServiceKey(serviceId);
+      const result = await signingKeysApi.rotateServiceKey(serviceId, orgRequestParams);
       if (result?.ok) {
         showNotification?.('Key rotation completed successfully.', 'success');
       } else {
@@ -424,7 +443,7 @@ export default function SigningKeysPage() {
       }
       await reloadAll();
     } catch (err) {
-      console.error('Failed to rotate service key:', err);
+      logSigningKeysPageError('Failed to rotate service key:', err);
       showNotification?.('Key rotation failed.', 'error');
     }
   };
@@ -435,7 +454,7 @@ export default function SigningKeysPage() {
     certDialog.open(service);
     // Try to load existing cert
     try {
-      const existing = await signingKeysApi.getServiceCertificate(service.id);
+      const existing = await signingKeysApi.getServiceCertificate(service.id, orgRequestParams);
       if (existing?.cert_pem) {
         setCertData((prev) => ({
           ...prev,
@@ -453,13 +472,14 @@ export default function SigningKeysPage() {
     if (!service) return;
     try {
       const result = await signingKeysApi.generateServiceCsr(service.id, {
+        ...orgRequestParams,
         common_name: certData.common_name || service.name,
       });
       showNotification?.('CSR generated. Download or copy it to submit to your CA.', 'success');
       setCertData((prev) => ({ ...prev, csr_pem: result?.csr_pem || '' }));
       setCertAction('csr');
     } catch (err) {
-      console.error('Failed to generate CSR:', err);
+      logSigningKeysPageError('Failed to generate CSR:', err);
       showNotification?.('CSR generation failed.', 'error');
     }
   };
@@ -469,6 +489,7 @@ export default function SigningKeysPage() {
     if (!service || !certData.cert_pem) return;
     try {
       await signingKeysApi.setServiceCertificate(service.id, {
+        ...orgRequestParams,
         cert_pem: certData.cert_pem,
         cert_chain_pem: certData.cert_chain_pem || undefined,
       });
@@ -476,7 +497,7 @@ export default function SigningKeysPage() {
       certDialog.close();
       await reloadAll();
     } catch (err) {
-      console.error('Failed to store certificate:', err);
+      logSigningKeysPageError('Failed to store certificate:', err);
       showNotification?.('Failed to store certificate.', 'error');
     }
   };
@@ -484,13 +505,14 @@ export default function SigningKeysPage() {
   const handleMakeDefault = async (serviceId) => {
     try {
       await signingKeysApi.updateKeyManagementConfig({
+        ...orgRequestParams,
         services,
         default_service_id: serviceId,
       });
       await reloadConfig();
       showNotification?.('Updated the default signing service.', 'success');
     } catch (err) {
-      console.error('Failed to update default signing service:', err);
+      logSigningKeysPageError('Failed to update default signing service:', err);
       showNotification?.('Unable to update the default signing service.', 'error');
     }
   };
@@ -507,13 +529,14 @@ export default function SigningKeysPage() {
         : keyManagementConfig.default_service_id;
 
       await signingKeysApi.updateKeyManagementConfig({
+        ...orgRequestParams,
         services: remainingServices,
         default_service_id: nextDefaultServiceId,
       });
       await reloadConfig();
       showNotification?.('Removed the key management service registration.', 'success');
     } catch (err) {
-      console.error('Failed to remove key management service:', err);
+      logSigningKeysPageError('Failed to remove key management service:', err);
       showNotification?.('Unable to remove the key management service.', 'error');
     }
   };
@@ -573,11 +596,26 @@ export default function SigningKeysPage() {
           icon={VpnKeyIcon}
           title={services.length > 0 ? 'No signing keys discovered yet' : 'No signing services configured'}
           description={
-            services.length > 0
-              ? 'The registered signing service has not surfaced any usable keys yet. Check the service connection and key reference above.'
+            services.length > 0 && canCreateKeysThroughIssuerWizard
+              ? 'The managed OpenBao signer is configured, but no active issuer keys have been created yet. Create an issuer identity and choose "Create new key in KMS"; the wizard will create the key before publishing the DID.'
+              : services.length > 0
+                ? 'The registered signing service has not surfaced any usable keys yet. Create or verify the key in the KMS provider, check the service key reference above, then refresh discovered keys.'
               : 'Register a key management service in the section above to expose signing keys for issuance and verification.'
           }
           whyItMatters="Signing keys are required to issue and verify credentials."
+          actionLabel={
+            services.length > 0 && canCreateKeysThroughIssuerWizard
+              ? 'Create issuer identity'
+              : services.length > 0
+                ? 'Refresh discovered keys'
+                : undefined
+          }
+          actionPath={
+            services.length > 0 && canCreateKeysThroughIssuerWizard
+              ? '/console/org/deploy/issuer-identity/new?key_source=create'
+              : undefined
+          }
+          onAction={services.length > 0 && !canCreateKeysThroughIssuerWizard ? reloadAll : undefined}
           docsUrl="https://docs.example.com/signing-keys"
         />
       );

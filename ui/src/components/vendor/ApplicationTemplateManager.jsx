@@ -260,7 +260,7 @@ function getCredentialTypeLabel(typeId, framework) {
 /**
  * Application Template Form Dialog
  */
-export function TemplateFormDialog({ open, onClose, onSave, template, trustProfiles }) {
+export function TemplateFormDialog({ open, onClose, onSave, template, trustProfiles, organizationId }) {
   const { t } = useTranslation('vendor');
   const [formData, setFormData] = useState({
     name: '',
@@ -360,8 +360,12 @@ export function TemplateFormDialog({ open, onClose, onSave, template, trustProfi
   // Load compliance profiles
   useEffect(() => {
     const loadComplianceProfiles = async () => {
+      if (!organizationId) {
+        setComplianceProfiles([]);
+        return;
+      }
       try {
-        const profiles = await complianceProfilesApi.listComplianceProfiles();
+        const profiles = await complianceProfilesApi.listComplianceProfiles({ organization_id: organizationId });
         setComplianceProfiles(profiles);
       } catch (err) {
         console.error('Failed to load compliance profiles:', err);
@@ -370,7 +374,7 @@ export function TemplateFormDialog({ open, onClose, onSave, template, trustProfi
     if (open) {
       loadComplianceProfiles();
     }
-  }, [open]);
+  }, [open, organizationId]);
 
   // Update available credential types when trust profile changes
   useEffect(() => {
@@ -1232,13 +1236,13 @@ export function TemplateFormDialog({ open, onClose, onSave, template, trustProfi
     </Dialog>
   );
 }
-
 /**
  * Main Application Template Manager Component
  */
 export default function ApplicationTemplateManager() {
+  const { t } = useTranslation('vendor');
   const { organizationId } = useAuth();
-  const { showSuccess, showError, showWarning } = useNotifications();
+  const { showSuccess, showError } = useNotifications();
   const [templates, setTemplates] = useState([]);
   const [trustProfiles, setTrustProfiles] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -1253,12 +1257,18 @@ export default function ApplicationTemplateManager() {
    * Load templates from API
    */
   const loadTemplates = useCallback(async () => {
-    if (!organizationId) return;
-
     setLoading(true);
+    if (!organizationId) {
+      setTemplates([]);
+      setError('An active organization is required before loading application templates.');
+      setLoading(false);
+      return;
+    }
+
     try {
       const data = await fetchIssuanceTemplates({ organizationId });
       setTemplates(data.templates || []);
+      setError(null);
     } catch (err) {
       console.error('Error loading templates:', err);
       setError(err.message);
@@ -1271,7 +1281,10 @@ export default function ApplicationTemplateManager() {
    * Load trust profiles
    */
   const loadTrustProfiles = useCallback(async () => {
-    if (!organizationId) return;
+    if (!organizationId) {
+      setTrustProfiles([]);
+      return;
+    }
 
     try {
       const data = await fetchTrustProfiles({ organizationId });
@@ -1369,7 +1382,18 @@ export default function ApplicationTemplateManager() {
       {/* Error Alert */}
       {error && (
         <Alert severity="warning" sx={{ mb: 3 }} onClose={() => setError(null)}>
-          {error} (Showing mock data for development)
+          {error}
+          <Button
+            color="inherit"
+            size="small"
+            onClick={() => {
+              loadTemplates();
+              loadTrustProfiles();
+            }}
+            sx={{ ml: 2 }}
+          >
+            Retry
+          </Button>
         </Alert>
       )}
 
@@ -1484,6 +1508,7 @@ export default function ApplicationTemplateManager() {
         onSave={handleSave}
         template={editingTemplate}
         trustProfiles={trustProfiles}
+        organizationId={organizationId}
       />
 
       <ConfirmDeleteDialog
@@ -1496,50 +1521,4 @@ export default function ApplicationTemplateManager() {
 
     </Box>
   );
-}
-
-/**
- * Generate mock templates for development
- */
-function generateMockTemplates() {
-  return [
-    {
-      id: 'tpl_1',
-      name: 'Travel Visa Application',
-      description: 'Standard travel visa for international travel',
-      trust_profile_id: 'tp_icao',
-      credential_types: ['travel_visa'],
-      required_documents: ['passport', 'photo', 'proof_of_address'],
-      requires_approval: true,
-      auto_issue_on_approval: true,
-      validity_days: 90,
-      max_applications_per_user: 1,
-      is_active: true,
-    },
-    {
-      id: 'tpl_2',
-      name: 'Employee Badge Request',
-      description: 'Internal employee access badge',
-      trust_profile_id: 'tp_custom',
-      credential_types: ['access_badge'],
-      required_documents: ['government_id', 'photo', 'employment_verification'],
-      requires_approval: true,
-      auto_issue_on_approval: false,
-      validity_days: 365,
-      max_applications_per_user: 1,
-      is_active: true,
-    },
-  ];
-}
-
-/**
- * Generate mock trust profiles for development
- */
-function generateMockTrustProfiles() {
-  return [
-    { id: 'tp_icao', name: 'ICAO Travel Trust', framework: 'icao' },
-    { id: 'tp_aamva', name: 'AAMVA Driver License', framework: 'aamva' },
-    { id: 'tp_custom', name: 'Company PKI', framework: 'custom' },
-    { id: 'tp_open_badges', name: 'Educational Credentials', framework: 'open_badges' },
-  ];
 }

@@ -38,6 +38,24 @@ export const EVENT_TYPES = {
   VERIFICATION_FAILED: 'verification.failed',
 };
 
+function logSseDebug(...args) {
+  if (import.meta.env.DEV && import.meta.env.MODE !== 'test') {
+    console.debug(...args);
+  }
+}
+
+function logSseWarning(...args) {
+  if (import.meta.env.DEV && import.meta.env.MODE !== 'test') {
+    console.warn(...args);
+  }
+}
+
+function logSseError(...args) {
+  if (import.meta.env.DEV && import.meta.env.MODE !== 'test') {
+    console.error(...args);
+  }
+}
+
 /**
  * SSE Service for managing real-time event subscriptions
  */
@@ -60,7 +78,7 @@ class SSEService {
    */
   connect(options = {}) {
     if (this.eventSource) {
-      console.warn('SSE already connected. Disconnect first to reconnect.');
+      logSseWarning('SSE already connected. Disconnect first to reconnect.');
       return;
     }
 
@@ -82,7 +100,7 @@ class SSEService {
       this.eventSource = new EventSource(sseUrl);
 
       this.eventSource.onopen = () => {
-        console.log('SSE connection established');
+        logSseDebug('SSE connection established');
         this.isConnected = true;
         this.reconnectAttempts = 0;
         this.reconnectDelay = 1000;
@@ -92,7 +110,7 @@ class SSEService {
       };
 
       this.eventSource.onerror = (error) => {
-        console.error('SSE connection error:', error);
+        logSseWarning('SSE connection error:', error);
         this.isConnected = false;
         
         // Emit error event
@@ -103,14 +121,14 @@ class SSEService {
           this.reconnectAttempts++;
           const delay = this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1);
           
-          console.log(`Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
+          logSseDebug(`Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
           
           setTimeout(() => {
             this.disconnect();
             this.connect(options);
           }, delay);
         } else {
-          console.error('Max reconnection attempts reached. Manual reconnection required.');
+          logSseWarning('Max reconnection attempts reached. Manual reconnection required.');
           this.disconnect();
         }
       };
@@ -120,10 +138,10 @@ class SSEService {
         this.eventSource.addEventListener(eventType, (event) => {
           try {
             const data = JSON.parse(event.data);
-            console.log(`SSE event received: ${eventType}`, data);
+            logSseDebug(`SSE event received: ${eventType}`, data);
             this._emit(eventType, data);
           } catch (error) {
-            console.error(`Failed to parse SSE event data for ${eventType}:`, error);
+            logSseError(`Failed to parse SSE event data for ${eventType}:`, error);
           }
         });
       });
@@ -132,7 +150,7 @@ class SSEService {
       this.eventSource.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
-          console.log('SSE generic message received:', data);
+          logSseDebug('SSE generic message received:', data);
           
           // Emit generic message event
           this._emit('message', data);
@@ -142,12 +160,12 @@ class SSEService {
             this._emit(data.type, data);
           }
         } catch (error) {
-          console.error('Failed to parse SSE message:', error);
+          logSseError('Failed to parse SSE message:', error);
         }
       };
 
     } catch (error) {
-      console.error('Failed to create SSE connection:', error);
+      logSseError('Failed to create SSE connection:', error);
       throw error;
     }
   }
@@ -162,7 +180,7 @@ class SSEService {
       this.isConnected = false;
       this.reconnectAttempts = 0;
       
-      console.log('SSE connection closed');
+      logSseDebug('SSE connection closed');
       
       // Emit disconnection event
       this._emit('connection', { status: 'disconnected' });
@@ -214,7 +232,7 @@ class SSEService {
         try {
           callback(data);
         } catch (error) {
-          console.error(`Error in SSE event listener for ${eventType}:`, error);
+          logSseError(`Error in SSE event listener for ${eventType}:`, error);
         }
       });
     }

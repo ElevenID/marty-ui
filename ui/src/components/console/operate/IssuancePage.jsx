@@ -37,6 +37,7 @@ import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../../../hooks/useAuth';
+import { useConsole } from '../../../contexts/ConsoleContext';
 import { useAsyncData } from '../../../hooks/useAsyncData';
 import { useNotifications } from '../../../hooks/useNotifications';
 import { fetchIssuedCredentials } from '../../../application/vendor';
@@ -60,7 +61,9 @@ function IssuancePage() {
   const { t } = useTranslation('console');
   const navigate = useNavigate();
   const { credentialId } = useParams();
-  const { organizationId } = useAuth();
+  const { organizationId: authOrganizationId } = useAuth();
+  const { activeOrgId } = useConsole();
+  const organizationId = activeOrgId || authOrganizationId;
   const { showError, showSuccess } = useNotifications();
   const [searchQuery, setSearchQuery] = useState('');
   const [reissuingCredentialId, setReissuingCredentialId] = useState(null);
@@ -72,10 +75,6 @@ function IssuancePage() {
     error,
     reload,
   } = useAsyncData(async () => {
-    if (!organizationId) {
-      return { credentials: [], total: 0 };
-    }
-
     return fetchIssuedCredentials({
       organizationId,
       searchQuery,
@@ -87,7 +86,6 @@ function IssuancePage() {
   const {
     data: credentialTemplatesData,
   } = useAsyncData(async () => {
-    if (!organizationId) return [];
     const result = await listCredentialTemplates({ organization_id: organizationId });
     return Array.isArray(result) ? result : [];
   }, [organizationId]);

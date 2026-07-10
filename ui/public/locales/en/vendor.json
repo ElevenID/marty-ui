@@ -731,7 +731,7 @@
     "refreshButton": "Refresh",
     "exportButton": "Export",
     "viewDetailsTooltip": "View Details",
-    "loadFailed": "{{error}} (Showing mock data for development)",
+    "loadFailed": "{{error}}",
     "empty": "No events found for the selected filters.",
     "categories": {
       "all": "All Events",
@@ -905,7 +905,7 @@
       "refreshButton": "Refresh",
       "batchRevokeButton": "Batch Revoke",
       "revokeTooltip": "Revoke",
-      "loadFailed": "{{error}} (Showing mock data)",
+      "loadFailed": "{{error}}",
       "empty": "No active credentials found",
       "table": {
         "credentialId": "Credential ID",

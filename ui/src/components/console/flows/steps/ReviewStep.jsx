@@ -41,6 +41,7 @@ const ReviewStep = ({ data, onEdit, onToggleActivation }) => {
     preconditions = [],
     selectedDeployment, 
     defaultPolicyId, 
+    credentialTemplateId,
     activateImmediately 
   } = data;
 
@@ -214,6 +215,14 @@ const ReviewStep = ({ data, onEdit, onToggleActivation }) => {
               <ReviewField
                 label={t('wizards.flowDefinition.reviewStep.fields.defaultPolicy')}
                 value={defaultPolicyId ? t('wizards.flowDefinition.reviewStep.fields.policyId', { id: defaultPolicyId }) : undefined}
+                placeholder={t('wizards.flowDefinition.reviewStep.values.noneConfigureLater')}
+              />
+            </Grid>
+
+            <Grid item xs={12}>
+              <ReviewField
+                label="Credential Template"
+                value={credentialTemplateId || undefined}
                 placeholder={t('wizards.flowDefinition.reviewStep.values.noneConfigureLater')}
               />
             </Grid>

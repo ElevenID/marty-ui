@@ -161,16 +161,49 @@ def test_parse_flow_instance_status_accepts_protocol_and_runtime_aliases() -> No
 
 
 def test_definition_response_normalizes_legacy_string_trigger() -> None:
+    step = FlowStep(
+        name="Create Offer",
+        description="Create the OID4VCI offer",
+        step_type=StepType.ISSUANCE,
+        config={"protocol_step": "create_offer"},
+        timeout_seconds=60,
+    )
     flow_def = FlowDefinition(
         organization_id="org-1",
         name="Legacy Trigger Flow",
         flow_type=FlowType.OID4VCI_PRE_AUTHORIZED,
+        steps=[step],
+        start_step_id=step.id,
+        preconditions=["application_approved"],
+        deployment_profile_id="deploy-1",
+        deployment_profile_ids=["deploy-1"],
+        credential_template_id="template-1",
     )
     flow_def.trigger = "credential_login"
+    flow_def.version = 3
 
     response = _definition_to_response(flow_def)
 
     assert response.trigger == {"event": "credential_login"}
+    assert response.version == 3
+    assert response.start_step_id == step.id
+    assert response.preconditions == ["application_approved"]
+    assert response.deployment_profile_id == "deploy-1"
+    assert response.deployment_profile_ids == ["deploy-1"]
+    assert response.credential_template_id == "template-1"
+    assert response.steps == [
+        {
+            "id": step.id,
+            "name": "Create Offer",
+            "description": "Create the OID4VCI offer",
+            "step_type": StepType.ISSUANCE.value,
+            "type": StepType.ISSUANCE.value,
+            "config": {"protocol_step": "create_offer"},
+            "timeout_seconds": 60,
+            "conditions": [],
+            "approval_strategy": None,
+        }
+    ]
 
 
 @pytest.mark.asyncio

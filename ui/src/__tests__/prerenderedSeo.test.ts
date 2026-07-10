@@ -30,7 +30,9 @@ describeIfBuilt('prerendered blog SEO output', () => {
     const articleHtml = readPrerenderedHtml('blog', 'why-identity-needs-a-protocol')
     expect(articleHtml).toContain('meta property="article:published_time" content="2025-01-06"')
     expect(articleHtml).toContain('meta property="article:author" content="Daniel Ortega"')
-    expect(articleHtml).toContain('"dateModified":"2026-04-05"')
+    expect(articleHtml).toContain('meta property="og:image" content="https://elevenidllc.com/images/social/why-identity-needs-a-protocol.png"')
+    expect(articleHtml).toContain('meta property="og:image:width" content="1200"')
+    expect(articleHtml).toContain('"dateModified":"2026-06-28"')
   })
 
   it('emits collection and author metadata for archive surfaces', () => {

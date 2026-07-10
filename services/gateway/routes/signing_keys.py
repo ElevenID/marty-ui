@@ -30,6 +30,8 @@ import httpx
 from fastapi import APIRouter, Body, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
+from gateway.middleware import mip_error_response
+
 signing_key_router = APIRouter(prefix="/v1/signing-keys", tags=["Signing Keys"])
 internal_signing_key_router = APIRouter(prefix="/internal/signing-keys", tags=["Internal Signing Keys"])
 
@@ -2370,10 +2372,7 @@ async def list_signing_keys(
     organization_id: str | None = Query(None, description="Optional organization scope"),
 ):
     """Return signing-key metadata and inventory from the configured OpenBao transit service."""
-    try:
-        resolved_org_id = _resolve_org_id(request, organization_id)
-    except Exception:
-        resolved_org_id = None
+    resolved_org_id = _resolve_org_id(request, organization_id)
 
     snapshot = await _load_signing_key_snapshot(resolved_org_id)
     keys = [key for key in (snapshot.get("keys") or []) if isinstance(key, dict)]
@@ -2551,10 +2550,7 @@ async def get_signing_key_config(
     organization_id: str | None = Query(None, description="Optional organization scope"),
 ):
     """Return the signing-key service registry and the managed OpenBao connection if present."""
-    try:
-        resolved_org_id = _resolve_org_id(request, organization_id)
-    except Exception:
-        resolved_org_id = None
+    resolved_org_id = _resolve_org_id(request, organization_id)
 
     snapshot = await _load_signing_key_snapshot(resolved_org_id)
     config = await _build_key_management_config(request, resolved_org_id, snapshot)
@@ -2568,10 +2564,7 @@ async def update_signing_key_config(
     organization_id: str | None = Query(None, description="Optional organization scope"),
 ):
     """Persist the external signing-key service registry for the active organization."""
-    try:
-        resolved_org_id = _resolve_org_id(request, organization_id)
-    except Exception:
-        resolved_org_id = None
+    resolved_org_id = _resolve_org_id(request, organization_id)
 
     registry_override = _normalize_requested_registry(body) or {"services": [], "default_service_id": None}
     await _save_registered_service_registry(request, resolved_org_id, registry_override)
@@ -2755,16 +2748,13 @@ async def _generate_csr_from_service(
             x509.NameAttribute(NameOID.ORGANIZATION_NAME, "Marty Credential Platform"),
         ])
 
-        # Create CSR builder and sign it (but we can't sign without the private key, so return unsigned for now)
-        # For KMS-backed keys, the CSR builder approach won't work directly.
-        # Instead, return a CSR template that needs to be signed externally.
+        # Build enough context to prove the key is reachable. CSR signing for
+        # remote KMS keys requires a provider-specific Sign operation and DER
+        # CSR assembly, which is not implemented for this route yet.
         builder = x509.CertificateSigningRequestBuilder()
         builder = builder.subject_name(subject)
         builder = builder.add_extension(x509.SubjectAlternativeName([x509.UniformResourceIdentifier("urn:marty:kms")]), critical=False)
-
-        # Note: We'd need the private key to actually sign. For KMS keys, this needs external signing.
-        # For now, return the CSR in text form that can be signed separately.
-        return None  # Placeholder for now; real implementation requires KMS signing
+        return None
     except Exception:  # noqa: BLE001
         return None
 
@@ -2780,10 +2770,7 @@ async def generate_csr(
     For KMS-backed services, the CSR will be generated but requires external signing
     with the KMS provider before the certificate can be stored.
     """
-    try:
-        resolved_org_id = _resolve_org_id(request, organization_id)
-    except Exception:
-        resolved_org_id = None
+    resolved_org_id = _resolve_org_id(request, organization_id)
 
     registry = await _load_registered_service_registry(request, resolved_org_id)
     services = registry.get("services") if isinstance(registry, dict) else []
@@ -2797,12 +2784,13 @@ async def generate_csr(
 
     csr_pem = await _generate_csr_from_service(normalized)
     if not csr_pem:
-        return JSONResponse(
-            content={
-                "ok": False,
-                "message": "CSR could not be generated. Check that the service is properly configured and has a public key available.",
+        raise HTTPException(
+            status_code=501,
+            detail={
+                "error": "kms_csr_generation_unavailable",
+                "message": "CSR generation for remote KMS-backed signing services is not implemented for this deployment.",
                 "service_id": service_id,
-            }
+            },
         )
 
     return JSONResponse(
@@ -2823,10 +2811,7 @@ async def store_service_certificate(
     organization_id: str | None = Query(None),
 ):
     """Store a certificate and optional certificate chain for a registered signing service."""
-    try:
-        resolved_org_id = _resolve_org_id(request, organization_id)
-    except Exception:
-        resolved_org_id = None
+    resolved_org_id = _resolve_org_id(request, organization_id)
 
     cert_pem = body.get("cert_pem") if isinstance(body.get("cert_pem"), str) else None
     cert_chain_pem = body.get("cert_chain_pem") if isinstance(body.get("cert_chain_pem"), str) else None
@@ -2875,10 +2860,7 @@ async def get_service_certificate(
     organization_id: str | None = Query(None),
 ):
     """Retrieve the stored certificate and chain for a registered signing service."""
-    try:
-        resolved_org_id = _resolve_org_id(request, organization_id)
-    except Exception:
-        resolved_org_id = None
+    resolved_org_id = _resolve_org_id(request, organization_id)
 
     registry = await _load_registered_service_registry(request, resolved_org_id)
     services = registry.get("services") if isinstance(registry, dict) else []
@@ -2907,10 +2889,7 @@ async def list_certificate_expiry_alerts(
     organization_id: str | None = Query(None),
 ):
     """Return services whose certificates expire within the specified days threshold."""
-    try:
-        resolved_org_id = _resolve_org_id(request, organization_id)
-    except Exception:
-        resolved_org_id = None
+    resolved_org_id = _resolve_org_id(request, organization_id)
 
     registry = await _load_registered_service_registry(request, resolved_org_id)
     services = registry.get("services") if isinstance(registry, dict) else []
@@ -2956,6 +2935,7 @@ async def list_certificate_expiry_alerts(
 async def publish_service_to_jwks(
     request: Request,
     service_id: str,
+    body: dict | None = Body(default_factory=dict),
     organization_id: str | None = Query(None),
 ):
     """Fetch public key from KMS service and publish to organization's JWKS endpoint.
@@ -2963,12 +2943,16 @@ async def publish_service_to_jwks(
     This endpoint retrieves the public key via the service's KMS adapter and upser ts
     it into the organization's JWKS storage, making it available for credential verification.
     """
-    try:
-        resolved_org_id = _resolve_org_id(request, organization_id)
-    except Exception:
-        resolved_org_id = None
+    resolved_org_id = _resolve_org_id(request, organization_id)
 
-    registry, _, normalized, from_registry = await _resolve_effective_service(request, resolved_org_id, service_id)
+    safe_body = body if isinstance(body, dict) else {}
+    key_reference_override = safe_body.get("key_reference") if isinstance(safe_body.get("key_reference"), str) else None
+    registry, _, normalized, from_registry = await _resolve_effective_service(
+        request,
+        resolved_org_id,
+        service_id,
+        key_reference_override=key_reference_override,
+    )
 
     # Fetch public key via adapter
     adapter = _get_adapter(normalized)
@@ -3071,10 +3055,7 @@ async def publish_service_to_did(
         the public ``/orgs/{slug}/did.json`` endpoint can resolve the document without auth.
       - ``fragment``: Verification-method fragment override (default: ``{service_id}-vm``).
     """
-    try:
-        resolved_org_id = _resolve_org_id(request, organization_id)
-    except Exception:
-        resolved_org_id = None
+    resolved_org_id = _resolve_org_id(request, organization_id)
 
     key_reference_override = body.get("key_reference") if isinstance(body.get("key_reference"), str) else None
     registry, _, normalized, from_registry = await _resolve_effective_service(
@@ -3289,10 +3270,7 @@ async def sign_payload_with_service(
     - `algorithm`: Algorithm used
     - `service_id`: The service that performed the signing
     """
-    try:
-        resolved_org_id = _resolve_org_id(request, organization_id)
-    except Exception:
-        resolved_org_id = None
+    resolved_org_id = _resolve_org_id(request, organization_id)
 
     # Parse payload from request
     payload_b64 = body.get("payload_b64")
@@ -3450,7 +3428,7 @@ async def internal_resolve_issuer_context(
                 status_code=404,
                 detail="Requested issuer profile is not active for this organization.",
             )
-        if key_purpose and selected.get("key_purpose") not in {key_purpose, None, ""}:
+        if key_purpose and selected.get("key_purpose") != key_purpose:
             raise HTTPException(
                 status_code=409,
                 detail=(
@@ -3470,10 +3448,9 @@ async def internal_resolve_issuer_context(
         preferred = [
             profile
             for profile in active_profiles
-            if profile.get("key_purpose") in {key_purpose, None, ""}
+            if profile.get("key_purpose") == key_purpose
         ]
-        if preferred:
-            active_profiles = preferred
+        active_profiles = preferred
 
     if not active_profiles:
         raise HTTPException(
@@ -3865,10 +3842,7 @@ async def verify_service_public_key(
     - Validating key properties (algorithm, curve, etc.)
     - Checking key status and lifecycle
     """
-    try:
-        resolved_org_id = _resolve_org_id(request, organization_id)
-    except Exception:
-        resolved_org_id = None
+    resolved_org_id = _resolve_org_id(request, organization_id)
 
     registry = await _load_registered_service_registry(request, resolved_org_id)
     services = registry.get("services") if isinstance(registry, dict) else []
@@ -3943,10 +3917,7 @@ async def get_key_audit_log(
     This endpoint returns a paginated list of audit events for the service's signing keys,
     including rotations, JWKS publications, DID updates, and access attempts.
     """
-    try:
-        resolved_org_id = _resolve_org_id(request, organization_id)
-    except Exception:
-        resolved_org_id = None
+    resolved_org_id = _resolve_org_id(request, organization_id)
 
     registry = await _load_registered_service_registry(request, resolved_org_id)
     services = registry.get("services") if isinstance(registry, dict) else []
@@ -3954,49 +3925,14 @@ async def get_key_audit_log(
     if service is None:
         raise HTTPException(status_code=404, detail=f"Service '{service_id}' not found.")
 
-    # TODO: Implement actual audit log storage and retrieval
-    # For now, return placeholder audit events
-    sample_events = [
-        {
-            "timestamp": _utcnow_iso(),
-            "event_type": "KEY_ROTATION",
+    return mip_error_response(
+        status_code=501,
+        error="key_audit_log_unavailable",
+        message=f"Key audit log storage is not available for service '{service_id}'.",
+        extra={
+            "organization_id": resolved_org_id,
             "service_id": service_id,
-            "actor": "system",
-            "details": "Automatic key rotation triggered",
-            "status": "completed",
         },
-        {
-            "timestamp": _utcnow_iso(),
-            "event_type": "JWKS_PUBLISHED",
-            "service_id": service_id,
-            "actor": "system",
-            "details": "Public key published to JWKS endpoint",
-            "status": "completed",
-        },
-        {
-            "timestamp": _utcnow_iso(),
-            "event_type": "VERIFICATION_SUCCESS",
-            "service_id": service_id,
-            "actor": "verifier",
-            "details": "Credential signature verified",
-            "status": "success",
-        },
-    ]
-
-    # Apply pagination
-    total = len(sample_events)
-    paginated = sample_events[offset : offset + limit]
-
-    return JSONResponse(
-        content={
-            "events": paginated,
-            "pagination": {
-                "offset": offset,
-                "limit": limit,
-                "total": total,
-            },
-            "queried_at": _utcnow_iso(),
-        }
     )
 
 
@@ -4013,33 +3949,13 @@ async def get_keys_compliance_summary(
     - Key rotation compliance
     - Published vs unpublished keys
     """
-    try:
-        resolved_org_id = _resolve_org_id(request, organization_id)
-    except Exception:
-        resolved_org_id = None
+    resolved_org_id = _resolve_org_id(request, organization_id)
 
-    registry = await _load_registered_service_registry(request, resolved_org_id)
-    services = registry.get("services") if isinstance(registry, dict) else []
-
-    # TODO: Implement actual compliance metrics collection
-    # For now, return placeholder summary
-    return JSONResponse(
-        content={
-            "organization_id": resolved_org_id,
-            "summary": {
-                "total_services": len(services),
-                "services_with_valid_keys": len(services),
-                "services_with_expiring_keys": 0,
-                "services_with_published_keys": 0,
-                "rotation_compliance_percentage": 100,
-            },
-            "recommendations": [
-                "Review key rotation frequency",
-                "Ensure all keys are published to JWKS",
-                "Set up automatic expiry alerts",
-            ],
-            "generated_at": _utcnow_iso(),
-        }
+    return mip_error_response(
+        status_code=501,
+        error="key_compliance_summary_unavailable",
+        message="Key compliance summary metrics are not available from a live backing data source.",
+        extra={"organization_id": resolved_org_id},
     )
 
 
@@ -4162,7 +4078,7 @@ async def _resolve_org_scoped_issuer_identity(
         active_profiles = [
             profile
             for profile in active_profiles
-            if profile.get("key_purpose") in {key_purpose, None, ""}
+            if profile.get("key_purpose") == key_purpose
         ]
     if algorithm:
         active_profiles = [
@@ -4303,18 +4219,22 @@ async def create_issuer_profile(
     if not profile.get("signing_key_reference") and normalized_service.get("key_reference"):
         profile["signing_key_reference"] = normalized_service["key_reference"]
 
-    issuer_did = str(profile.get("issuer_did") or "")
-    if issuer_did.startswith("did:web:"):
-        # Make DID identity creation an invariant of the profile, not a UI-only
-        # convention. If the KMS key cannot publish a DID verification method,
-        # the issuer profile should not be created.
+    storage_key = _issuer_profiles_storage_key(resolved_org_id)
+    doc = await _load_json_document(request, storage_key, {"profiles": []})
+    profiles: list = doc.get("profiles") or []
+
+    async def ensure_did_web_verification_method(target_profile: dict[str, Any]) -> dict[str, Any]:
+        issuer_did = str(target_profile.get("issuer_did") or "")
+        if not issuer_did.startswith("did:web:") or target_profile.get("verification_method_id"):
+            return target_profile
+
         publication_response = await publish_service_to_did(
             request=request,
             service_id=service_id,
             body={
                 "did_id": issuer_did,
-                "fragment": _did_fragment_for_key_reference(service_id, profile.get("signing_key_reference") or None),
-                "key_reference": profile.get("signing_key_reference") or None,
+                "fragment": _did_fragment_for_key_reference(service_id, target_profile.get("signing_key_reference") or None),
+                "key_reference": target_profile.get("signing_key_reference") or None,
             },
             organization_id=resolved_org_id,
         )
@@ -4324,26 +4244,54 @@ async def create_issuer_profile(
             publication_body = {}
         verification_method = publication_body.get("verification_method") if isinstance(publication_body, dict) else None
         if isinstance(verification_method, dict) and isinstance(verification_method.get("id"), str):
-            profile["verification_method_id"] = verification_method["id"]
+            next_profile = dict(target_profile)
+            next_profile["verification_method_id"] = verification_method["id"]
+            return next_profile
+        return target_profile
 
-    storage_key = _issuer_profiles_storage_key(resolved_org_id)
-    doc = await _load_json_document(request, storage_key, {"profiles": []})
-    profiles: list = doc.get("profiles") or []
-    existing_profile = next(
+    existing_profile_index = next(
         (
-            candidate
-            for candidate in profiles
+            index
+            for index, candidate in enumerate(profiles)
             if isinstance(candidate, dict)
             and candidate.get("status") != "revoked"
             and candidate.get("issuer_did") == profile.get("issuer_did")
             and candidate.get("signing_service_id") == profile.get("signing_service_id")
-            and (candidate.get("signing_key_reference") or "") == (profile.get("signing_key_reference") or "")
+            and (
+                candidate.get("signing_key_reference")
+                or normalized_service.get("key_reference")
+                or ""
+            ) == (profile.get("signing_key_reference") or "")
             and (candidate.get("key_purpose") or "vc_jwt_issuer") == (profile.get("key_purpose") or "vc_jwt_issuer")
         ),
         None,
     )
-    if existing_profile is not None:
-        return JSONResponse(content={"ok": True, "profile": existing_profile, "created": False})
+    if existing_profile_index is not None:
+        existing_profile = profiles[existing_profile_index]
+        repaired_profile = dict(existing_profile)
+        if profile.get("status") == "active" and repaired_profile.get("status") != "active":
+            repaired_profile["status"] = "active"
+        if not repaired_profile.get("signing_key_reference") and profile.get("signing_key_reference"):
+            repaired_profile["signing_key_reference"] = profile["signing_key_reference"]
+        if not repaired_profile.get("key_purpose") and profile.get("key_purpose"):
+            repaired_profile["key_purpose"] = profile["key_purpose"]
+        if not repaired_profile.get("name") and profile.get("name"):
+            repaired_profile["name"] = profile["name"]
+
+        repaired_profile = await ensure_did_web_verification_method(repaired_profile)
+        if repaired_profile != existing_profile:
+            repaired_profile["updated_at"] = _utcnow_iso()
+            profiles[existing_profile_index] = repaired_profile
+            doc["profiles"] = profiles
+            await _save_json_document(request, storage_key, doc)
+
+        return JSONResponse(content={"ok": True, "profile": repaired_profile, "created": False})
+
+    if str(profile.get("issuer_did") or "").startswith("did:web:"):
+        # Make DID identity creation an invariant of the profile, not a UI-only
+        # convention. If the KMS key cannot publish a DID verification method,
+        # the issuer profile should not be created.
+        profile = await ensure_did_web_verification_method(profile)
 
     profiles.append(profile)
     doc["profiles"] = profiles
@@ -4459,10 +4407,7 @@ async def get_signing_key(
     organization_id: str | None = Query(None),
 ):
     """Return metadata for a single signing key by ID or provider key name."""
-    try:
-        resolved_org_id = _resolve_org_id(request, organization_id)
-    except Exception:
-        resolved_org_id = None
+    resolved_org_id = _resolve_org_id(request, organization_id)
 
     snapshot = await _load_signing_key_snapshot(resolved_org_id)
     keys: list[dict[str, Any]] = snapshot.get("keys") or []
@@ -4487,13 +4432,10 @@ async def update_signing_key(
     This updates the key's metadata in the org's JWKS storage layer only.
     Mutations to the underlying key material must be performed in the external KMS.
     """
-    try:
-        resolved_org_id = _resolve_org_id(request, organization_id)
-    except Exception:
-        resolved_org_id = None
+    resolved_org_id = _resolve_org_id(request, organization_id)
 
     # Load current JWKS document and patch the matching key entry
-    storage_key = _jwks_storage_key(resolved_org_id or "")
+    storage_key = _jwks_storage_key(resolved_org_id)
     jwks_doc = await _load_json_document(request, storage_key, {"keys": []})
     jwks_keys: list[dict[str, Any]] = jwks_doc.get("keys") or []
     idx = next(
@@ -4524,12 +4466,9 @@ async def delete_signing_key(
     This deregisters the key from Marty's published JWKS document only.
     The key material itself is not deleted from the external KMS.
     """
-    try:
-        resolved_org_id = _resolve_org_id(request, organization_id)
-    except Exception:
-        resolved_org_id = None
+    resolved_org_id = _resolve_org_id(request, organization_id)
 
-    storage_key = _jwks_storage_key(resolved_org_id or "")
+    storage_key = _jwks_storage_key(resolved_org_id)
     jwks_doc = await _load_json_document(request, storage_key, {"keys": []})
     jwks_keys: list[dict[str, Any]] = jwks_doc.get("keys") or []
     filtered = [k for k in jwks_keys if k.get("kid") != key_id and k.get("provider_key_name") != key_id]

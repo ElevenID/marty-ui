@@ -36,8 +36,9 @@ import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
 import { ResourcePage, AddButton } from '../../common';
-import { listDevices } from '../../../services/devicesApi';
+import { listOrganizationDevices } from '../../../services/devicesApi';
 import { useAuth } from '../../../hooks/useAuth';
+import { useConsole } from '../../../contexts/ConsoleContext';
 
 const getDeployTabs = (t) => [
   { label: t('deploy.deploymentProfiles'), path: '/console/org/deploy/profiles' },
@@ -54,9 +55,11 @@ const getBreadcrumbs = (t) => [
 
 function LanesDevicesPage() {
   const { t } = useTranslation('console');
-  const { organizationId } = useAuth();
+  const { organizationId: authOrganizationId } = useAuth();
+  const { activeOrgId } = useConsole();
+  const organizationId = activeOrgId || authOrganizationId;
   const { data: lanes = [], loading, error } = useAsyncData(
-    () => listDevices(organizationId),
+    () => listOrganizationDevices(organizationId),
     [organizationId]
   );
   const [searchQuery, setSearchQuery] = useState('');

@@ -2,10 +2,19 @@ import { describe, expect, it, vi } from 'vitest';
 import { renderWithRouter, screen } from '@test/utils';
 
 import {
+  default as ApplicationTemplateManager,
   TemplateFormDialog,
   applyEvidenceTypeDefaults,
   createEvidenceRequirement,
 } from './ApplicationTemplateManager';
+
+const authState = vi.hoisted(() => ({
+  organizationId: 'org-123',
+}));
+
+vi.mock('../../hooks/useAuth', () => ({
+  useAuth: () => authState,
+}));
 
 vi.mock('../../services/complianceProfilesApi', () => ({
   default: {
@@ -15,6 +24,18 @@ vi.mock('../../services/complianceProfilesApi', () => ({
 }));
 
 describe('ApplicationTemplateManager evidence authoring', () => {
+  it('shows a real missing-organization error instead of an indefinite loader or mock fallback', async () => {
+    authState.organizationId = '';
+
+    renderWithRouter(<ApplicationTemplateManager />);
+
+    expect(await screen.findByText(/active organization is required/i)).toBeInTheDocument();
+    expect(screen.queryByText(/showing mock data/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
+
+    authState.organizationId = 'org-123';
+  });
+
   it('builds protocol-shaped external API evidence requirements', () => {
     const requirement = createEvidenceRequirement('EXTERNAL_API', 2);
 

@@ -7,14 +7,46 @@
  * - Critical events
  * - Environment settings
  */
-import { get, getErrorMessage } from './api';
-import { post } from './api';
+import { getErrorMessage, getWithRetryConfig, patch, post } from './api';
 import { getCriticalEvents as getAuditCriticalEvents } from './auditApi';
+import { requireOrganizationId } from './queryUtils';
 
 const BASE_PATH = '/v1/organizations';
+const DASHBOARD_RETRY_CONFIG = { maxRetries: 0 };
+const SHOULD_LOG_DASHBOARD_DIAGNOSTICS = import.meta.env.DEV && import.meta.env.MODE !== 'test';
 
-function shouldLogDashboardError(error) {
-  return error?.status !== 403;
+function getDashboard(endpoint) {
+  return getWithRetryConfig(endpoint, {}, DASHBOARD_RETRY_CONFIG);
+}
+
+function logDashboardError(message, error) {
+  if (SHOULD_LOG_DASHBOARD_DIAGNOSTICS) {
+    console.error(message, getErrorMessage(error));
+  }
+}
+
+function createIncompleteDashboardPayloadError(sourceName, missingFields) {
+  const fieldList = missingFields.length ? ` Missing fields: ${missingFields.join(', ')}.` : '';
+  const error = new Error(`${sourceName} returned an incomplete response.${fieldList}`);
+  error.code = 'DASHBOARD_PAYLOAD_INCOMPLETE';
+  error.status = 502;
+  error.messageId = null;
+  return error;
+}
+
+function requireDashboardFields(response, sourceName, requiredFields) {
+  if (!response || typeof response !== 'object' || Array.isArray(response)) {
+    throw createIncompleteDashboardPayloadError(sourceName, requiredFields);
+  }
+
+  const missingFields = requiredFields.filter(
+    (field) => !Object.prototype.hasOwnProperty.call(response, field)
+  );
+  if (missingFields.length > 0) {
+    throw createIncompleteDashboardPayloadError(sourceName, missingFields);
+  }
+
+  return response;
 }
 
 /**
@@ -23,28 +55,19 @@ function shouldLogDashboardError(error) {
  * @returns {Promise<Object>} Team data with members, roles, and invites
  */
 export async function getTeamSnapshot(organizationId) {
-  try {
-    const response = await get(`${BASE_PATH}/${organizationId}/team/snapshot`);
-    return {
-      members: response?.members || [],
-      pendingInvites: response?.pending_invites || [],
-      roleDistribution: response?.role_distribution || {
-        admin: 0,
-        developer: 0,
-        operator: 0,
-      },
-    };
-  } catch (error) {
-    if (shouldLogDashboardError(error)) {
-      console.error('Failed to fetch team snapshot:', getErrorMessage(error));
-    }
-    // Return empty data on failure
-    return {
-      members: [],
-      pendingInvites: [],
-      roleDistribution: { admin: 0, developer: 0, operator: 0 },
-    };
-  }
+  const orgId = requireOrganizationId(organizationId, 'loading team snapshot');
+  const response = requireDashboardFields(
+    await getDashboard(`${BASE_PATH}/${encodeURIComponent(orgId)}/team/snapshot`),
+    'Team snapshot',
+    ['members', 'pending_invites', 'role_distribution']
+  );
+  return {
+    members: Array.isArray(response.members) ? response.members : [],
+    pendingInvites: Array.isArray(response.pending_invites) ? response.pending_invites : [],
+    roleDistribution: response.role_distribution && typeof response.role_distribution === 'object'
+      ? response.role_distribution
+      : {},
+  };
 }
 
 /**
@@ -53,34 +76,29 @@ export async function getTeamSnapshot(organizationId) {
  * @returns {Promise<Object>} Runtime status with operational readiness
  */
 export async function getRuntimeStatus(organizationId) {
-  try {
-    const response = await get(`${BASE_PATH}/${organizationId}/runtime/status`);
-    return {
-      canIssue: response?.can_issue || false,
-      canVerify: response?.can_verify || false,
-      issuerKeysValid: response?.issuer_keys_valid || false,
-      issuerActive: response?.issuer_active || false,
-      deploymentActive: response?.deployment_active || false,
-      policyReachable: response?.policy_reachable || false,
-      lastIssuance: response?.last_issuance_timestamp || null,
-      lastVerification: response?.last_verification_timestamp || null,
-    };
-  } catch (error) {
-    if (shouldLogDashboardError(error)) {
-      console.error('Failed to fetch runtime status:', getErrorMessage(error));
-    }
-    // Return safe defaults on failure
-    return {
-      canIssue: false,
-      canVerify: false,
-      issuerKeysValid: false,
-      issuerActive: false,
-      deploymentActive: false,
-      policyReachable: false,
-      lastIssuance: null,
-      lastVerification: null,
-    };
-  }
+  const orgId = requireOrganizationId(organizationId, 'loading runtime status');
+  const response = requireDashboardFields(
+    await getDashboard(`${BASE_PATH}/${encodeURIComponent(orgId)}/runtime/status`),
+    'Runtime status',
+    [
+      'can_issue',
+      'can_verify',
+      'issuer_keys_valid',
+      'issuer_active',
+      'deployment_active',
+      'policy_reachable',
+    ]
+  );
+  return {
+    canIssue: Boolean(response.can_issue),
+    canVerify: Boolean(response.can_verify),
+    issuerKeysValid: Boolean(response.issuer_keys_valid),
+    issuerActive: Boolean(response.issuer_active),
+    deploymentActive: Boolean(response.deployment_active),
+    policyReachable: Boolean(response.policy_reachable),
+    lastIssuance: response.last_issuance_timestamp || null,
+    lastVerification: response.last_verification_timestamp || null,
+  };
 }
 
 /**
@@ -89,14 +107,7 @@ export async function getRuntimeStatus(organizationId) {
  * @returns {Promise<Array>} Critical events array
  */
 export async function getCriticalEvents(organizationId) {
-  try {
-    return await getAuditCriticalEvents(organizationId);
-  } catch (error) {
-    if (shouldLogDashboardError(error)) {
-      console.error('Failed to fetch critical events:', getErrorMessage(error));
-    }
-    return [];
-  }
+  return await getAuditCriticalEvents(requireOrganizationId(organizationId, 'loading critical events'));
 }
 
 /**
@@ -105,15 +116,13 @@ export async function getCriticalEvents(organizationId) {
  * @returns {Promise<string>} Environment ('development', 'staging', 'production')
  */
 export async function getOrganizationEnvironment(organizationId) {
-  try {
-    const response = await get(`${BASE_PATH}/${organizationId}/environment`);
-    return response?.environment || 'development';
-  } catch (error) {
-    if (shouldLogDashboardError(error)) {
-      console.error('Failed to fetch organization environment:', getErrorMessage(error));
-    }
-    return 'development';
-  }
+  const orgId = requireOrganizationId(organizationId, 'loading organization environment');
+  const response = requireDashboardFields(
+    await getDashboard(`${BASE_PATH}/${encodeURIComponent(orgId)}/environment`),
+    'Organization environment',
+    ['environment']
+  );
+  return response.environment || null;
 }
 
 /**
@@ -123,52 +132,12 @@ export async function getOrganizationEnvironment(organizationId) {
  * @returns {Promise<Object>} Updated environment setting
  */
 export async function updateOrganizationEnvironment(organizationId, environment) {
+  const orgId = requireOrganizationId(organizationId, 'updating organization environment');
   try {
-    const response = await fetch(`/api${BASE_PATH}/${organizationId}/environment`, {
-      method: 'PATCH',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      credentials: 'include',
-      body: JSON.stringify({ environment }),
-    });
-
-    if (!response.ok) {
-      throw new Error(`Failed to update environment: ${response.statusText}`);
-    }
-
-    return response.json();
+    return await patch(`${BASE_PATH}/${encodeURIComponent(orgId)}/environment`, { environment });
   } catch (error) {
-    console.error('Failed to update organization environment:', getErrorMessage(error));
+    logDashboardError('Failed to update organization environment:', error);
     throw error;
-  }
-}
-
-/**
- * Get API integration status
- * @param {string} organizationId - Organization ID
- * @returns {Promise<Object>} API integration status
- */
-export async function getApiIntegrationStatus(organizationId) {
-  try {
-    const response = await get(`${BASE_PATH}/${organizationId}/api/status`);
-    return {
-      activeApiKeys: response?.active_api_keys || 0,
-      lastApiCall: response?.last_api_call_timestamp || null,
-      webhookDeliveryHealth: response?.webhook_delivery_health || {
-        success: 0,
-        failed: 0,
-      },
-    };
-  } catch (error) {
-    if (shouldLogDashboardError(error)) {
-      console.error('Failed to fetch API integration status:', getErrorMessage(error));
-    }
-    return {
-      activeApiKeys: 0,
-      lastApiCall: null,
-      webhookDeliveryHealth: { success: 0, failed: 0 },
-    };
   }
 }
 
@@ -178,52 +147,37 @@ export async function getApiIntegrationStatus(organizationId) {
  * @returns {Promise<Object>} Lifecycle metadata
  */
 export async function getOrganizationLifecycle(organizationId) {
-  try {
-    const response = await get(`${BASE_PATH}/${organizationId}/lifecycle`);
-    return {
-      createdAt: response?.created_at || null,
-      complianceProfiles: response?.compliance_profiles || [],
-      planTier: response?.plan_tier || 'free',
-      planExpiresAt: response?.plan_expires_at || null,
-      commercialOffer: response?.commercial_offer || 'Developer Sandbox',
-      dataRetentionMode: response?.data_retention_mode || 'standard',
-      auditRetentionDays: response?.audit_retention_days || 90,
-      pilotRetention: response?.pilot_retention ? {
-        enabled: Boolean(response?.pilot_retention?.enabled),
-        windowDays: response?.pilot_retention?.window_days || 30,
-        scopeSummary: response?.pilot_retention?.scope_summary || '',
-        scopeItems: response?.pilot_retention?.scope_items || [],
-        accessBehavior: response?.pilot_retention?.access_behavior || '',
-        lastPurgedAt: response?.pilot_retention?.last_purged_at || null,
-        cutoffAt: response?.pilot_retention?.cutoff_at || null,
-        nextExpiryAt: response?.pilot_retention?.next_expiry_at || null,
-        oldestRetainedRecordAt: response?.pilot_retention?.oldest_retained_record_at || null,
-        trackedScope: response?.pilot_retention?.tracked_scope || [],
-        eligibleForPurge: {
-          issuanceTransactions: response?.pilot_retention?.eligible_for_purge?.issuance_transactions || 0,
-          applications: response?.pilot_retention?.eligible_for_purge?.applications || 0,
-          authorizationSessions: response?.pilot_retention?.eligible_for_purge?.authorization_sessions || 0,
-          issuanceEvents: response?.pilot_retention?.eligible_for_purge?.issuance_events || 0,
-          issuedCredentials: response?.pilot_retention?.eligible_for_purge?.issued_credentials || 0,
-          total: response?.pilot_retention?.eligible_for_purge?.total || 0,
-        },
-      } : null,
-    };
-  } catch (error) {
-    if (shouldLogDashboardError(error)) {
-      console.error('Failed to fetch organization lifecycle:', getErrorMessage(error));
-    }
-    return {
-      createdAt: null,
-      complianceProfiles: [],
-      planTier: 'free',
-      planExpiresAt: null,
-      commercialOffer: 'Developer Sandbox',
-      dataRetentionMode: 'standard',
-      auditRetentionDays: 90,
-      pilotRetention: null,
-    };
-  }
+  const orgId = requireOrganizationId(organizationId, 'loading organization lifecycle');
+  const response = await getDashboard(`${BASE_PATH}/${encodeURIComponent(orgId)}/lifecycle`);
+  return {
+    createdAt: response?.created_at || null,
+    complianceProfiles: response?.compliance_profiles || [],
+    planTier: response?.plan_tier || null,
+    planExpiresAt: response?.plan_expires_at || null,
+    commercialOffer: response?.commercial_offer || null,
+    dataRetentionMode: response?.data_retention_mode || null,
+    auditRetentionDays: response?.audit_retention_days ?? null,
+    pilotRetention: response?.pilot_retention ? {
+      enabled: Boolean(response?.pilot_retention?.enabled),
+      windowDays: response?.pilot_retention?.window_days || 30,
+      scopeSummary: response?.pilot_retention?.scope_summary || '',
+      scopeItems: response?.pilot_retention?.scope_items || [],
+      accessBehavior: response?.pilot_retention?.access_behavior || '',
+      lastPurgedAt: response?.pilot_retention?.last_purged_at || null,
+      cutoffAt: response?.pilot_retention?.cutoff_at || null,
+      nextExpiryAt: response?.pilot_retention?.next_expiry_at || null,
+      oldestRetainedRecordAt: response?.pilot_retention?.oldest_retained_record_at || null,
+      trackedScope: response?.pilot_retention?.tracked_scope || [],
+      eligibleForPurge: {
+        issuanceTransactions: response?.pilot_retention?.eligible_for_purge?.issuance_transactions || 0,
+        applications: response?.pilot_retention?.eligible_for_purge?.applications || 0,
+        authorizationSessions: response?.pilot_retention?.eligible_for_purge?.authorization_sessions || 0,
+        issuanceEvents: response?.pilot_retention?.eligible_for_purge?.issuance_events || 0,
+        issuedCredentials: response?.pilot_retention?.eligible_for_purge?.issued_credentials || 0,
+        total: response?.pilot_retention?.eligible_for_purge?.total || 0,
+      },
+    } : null,
+  };
 }
 
 /**
@@ -232,26 +186,32 @@ export async function getOrganizationLifecycle(organizationId) {
  * @returns {Promise<Object>} Purge result
  */
 export async function runHostedPilotPurge(organizationId) {
+  const orgId = requireOrganizationId(organizationId, 'running Hosted Pilot purge');
   try {
-    const response = await post(`${BASE_PATH}/${organizationId}/lifecycle/purge`);
+    const response = await post(`${BASE_PATH}/${encodeURIComponent(orgId)}/lifecycle/purge`);
+    const normalizedResponse = requireDashboardFields(
+      response,
+      'Hosted Pilot purge',
+      ['purged_records']
+    );
     return {
-      organizationId: response?.organization_id || organizationId,
-      retentionDays: response?.retention_days || 30,
-      purgedAt: response?.purged_at || null,
-      nextExpiryAt: response?.next_expiry_at || null,
-      oldestRetainedRecordAt: response?.oldest_retained_record_at || null,
-      trackedScope: response?.tracked_scope || [],
+      organizationId: normalizedResponse.organization_id || orgId,
+      retentionDays: normalizedResponse.retention_days ?? 30,
+      purgedAt: normalizedResponse.purged_at || null,
+      nextExpiryAt: normalizedResponse.next_expiry_at || null,
+      oldestRetainedRecordAt: normalizedResponse.oldest_retained_record_at || null,
+      trackedScope: normalizedResponse.tracked_scope || [],
       purgedRecords: {
-        issuanceTransactions: response?.purged_records?.issuance_transactions || 0,
-        applications: response?.purged_records?.applications || 0,
-        authorizationSessions: response?.purged_records?.authorization_sessions || 0,
-        issuanceEvents: response?.purged_records?.issuance_events || 0,
-        issuedCredentials: response?.purged_records?.issued_credentials || 0,
-        total: response?.purged_records?.total || 0,
+        issuanceTransactions: normalizedResponse.purged_records?.issuance_transactions ?? 0,
+        applications: normalizedResponse.purged_records?.applications ?? 0,
+        authorizationSessions: normalizedResponse.purged_records?.authorization_sessions ?? 0,
+        issuanceEvents: normalizedResponse.purged_records?.issuance_events ?? 0,
+        issuedCredentials: normalizedResponse.purged_records?.issued_credentials ?? 0,
+        total: normalizedResponse.purged_records?.total ?? 0,
       },
     };
   } catch (error) {
-    console.error('Failed to run Hosted Pilot purge:', getErrorMessage(error));
+    logDashboardError('Failed to run Hosted Pilot purge:', error);
     throw error;
   }
 }
@@ -262,25 +222,18 @@ export async function runHostedPilotPurge(organizationId) {
  * @returns {Promise<Object>} Applicant stats (pending, approved, issuable)
  */
 export async function getApplicantStats(organizationId) {
-  try {
-    const response = await get(`${BASE_PATH}/${organizationId}/dashboard/applicant-stats`);
-    return {
-      pending: response?.pending || 0,
-      approved: response?.approved || 0,
-      issuable: response?.issuable || 0,
-      total: response?.total || 0,
-    };
-  } catch (error) {
-    if (error?.status !== 403) {
-      console.error('Failed to fetch applicant stats:', getErrorMessage(error));
-    }
-    return {
-      pending: 0,
-      approved: 0,
-      issuable: 0,
-      total: 0,
-    };
-  }
+  const orgId = requireOrganizationId(organizationId, 'loading applicant stats');
+  const response = requireDashboardFields(
+    await getDashboard(`${BASE_PATH}/${encodeURIComponent(orgId)}/dashboard/applicant-stats`),
+    'Applicant stats',
+    ['pending', 'approved', 'issuable', 'total']
+  );
+  return {
+    pending: response.pending ?? 0,
+    approved: response.approved ?? 0,
+    issuable: response.issuable ?? 0,
+    total: response.total ?? 0,
+  };
 }
 
 /**
@@ -289,22 +242,15 @@ export async function getApplicantStats(organizationId) {
  * @returns {Promise<Object>} Integration info (org_id, base_url, example_request)
  */
 export async function getOrganizationIntegrationInfo(organizationId) {
-  try {
-    const response = await get(`${BASE_PATH}/${organizationId}/integration-info`);
-    return {
-      orgId: response?.org_id || organizationId,
-      baseUrl: response?.base_url || window.location.origin + '/api',
-      exampleRequest: response?.example_request || null,
-    };
-  } catch (error) {
-    if (shouldLogDashboardError(error)) {
-      console.error('Failed to fetch integration info:', getErrorMessage(error));
-    }
-    return {
-      orgId: organizationId,
-      baseUrl: window.location.origin + '/api',
-      exampleRequest: null,
-    };
-  }
+  const orgId = requireOrganizationId(organizationId, 'loading integration metadata');
+  const response = requireDashboardFields(
+    await getDashboard(`${BASE_PATH}/${encodeURIComponent(orgId)}/integration-info`),
+    'Integration metadata',
+    ['org_id', 'base_url', 'example_request']
+  );
+  return {
+    orgId: response.org_id,
+    baseUrl: response.base_url,
+    exampleRequest: response.example_request,
+  };
 }
-

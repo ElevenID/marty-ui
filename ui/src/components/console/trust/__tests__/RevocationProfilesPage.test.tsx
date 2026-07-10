@@ -33,6 +33,10 @@ vi.mock('../../../../hooks/useAuth', () => ({
   useAuth: () => authState,
 }))
 
+vi.mock('../../../../contexts/ConsoleContext', () => ({
+  useConsole: () => ({ activeOrgId: authState.organizationId }),
+}))
+
 vi.mock('../../../../services/presentationPolicyApi', () => ({
   listRevocationProfiles: (...args: unknown[]) => listRevocationProfiles(...args),
 }))
@@ -83,14 +87,14 @@ describe('RevocationProfilesPage', () => {
     expect(screen.getByText('HARD_FAIL')).toBeInTheDocument()
   })
 
-  it('shows empty state instead of an error when the revocation service returns 503', async () => {
+  it('shows an error instead of an empty success state when the revocation service returns 503', async () => {
     const unavailableError = Object.assign(new Error('Service unavailable'), { status: 503 })
     listRevocationProfiles.mockRejectedValue(unavailableError)
 
     renderWithRouter(<RevocationProfilesPage />)
 
-    expect(await screen.findByText('No revocation profiles configured.')).toBeInTheDocument()
-    expect(screen.queryByText('Failed to load revocation profiles.')).not.toBeInTheDocument()
+    expect(await screen.findByText('Service unavailable')).toBeInTheDocument()
+    expect(screen.queryByText('No revocation profiles configured.')).not.toBeInTheDocument()
   })
 
   it('renders as a standalone page without top-level trust tabs', async () => {

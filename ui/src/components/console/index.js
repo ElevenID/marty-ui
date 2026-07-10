@@ -6,7 +6,6 @@
 
 // Dashboard
 export { default as ConsoleDashboard } from './ConsoleDashboard';
-export { default as GuidedSetupWizard } from './dashboard/GuidedSetupWizard';
 
 // Trust
 export { default as TrustPage } from './trust/TrustPage';
