@@ -6,6 +6,7 @@ package-lock.json
 test-results/
 test-results.json
 playwright-report/
+playwright-report-applicant-wallet/
 test-results.xml
 
 # Screenshots and videos

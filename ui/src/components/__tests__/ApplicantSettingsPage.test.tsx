@@ -25,7 +25,10 @@ vi.mock('../../hooks/useAuth', () => ({
       user_id: 'user-1',
       email: 'applicant@example.com',
       name: 'Ada Lovelace',
+      given_name: 'Ada',
+      family_name: 'Lovelace',
     },
+    organizationId: 'org-1',
   }),
 }));
 
@@ -78,6 +81,28 @@ describe('ApplicantSettingsPage', () => {
     expect(screen.queryByRole('link', { name: 'Manage Wallet Setup' })).not.toBeInTheDocument();
     expect(screen.queryByTestId('organization-membership-section')).not.toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'View My Organizations' })).not.toBeInTheDocument();
+  });
+
+  it('creates a missing applicant profile with active organization context', async () => {
+    mockGetApplicantByUser.mockResolvedValue(null);
+    mockCreateApplicant.mockResolvedValue({
+      id: 'app-created',
+      given_name: 'Ada',
+      family_name: 'Lovelace',
+      email: 'applicant@example.com',
+      phone_number: '',
+    });
+
+    render(<ApplicantSettingsPage />);
+
+    expect(await screen.findByDisplayValue('Ada Lovelace')).toBeInTheDocument();
+    expect(mockCreateApplicant).toHaveBeenCalledWith({
+      organization_id: 'org-1',
+      user_id: 'user-1',
+      email: 'applicant@example.com',
+      given_name: 'Ada',
+      family_name: 'Lovelace',
+    });
   });
 
   it('warns iOS users when a preferred wallet only supports protocol deep links', async () => {

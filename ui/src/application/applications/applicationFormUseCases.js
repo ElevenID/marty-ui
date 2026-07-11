@@ -83,9 +83,12 @@ export async function loadCredentialApplicationConfig({
 }
 
 export async function resolveApplicantIdForApplication({ user, getApplicant, getApplicantByUser }) {
-  if (user?.applicant_id) {
+  const userId = user?.user_id;
+  const applicantIdFromAuth = user?.applicant_id;
+
+  if (applicantIdFromAuth && applicantIdFromAuth !== userId) {
     try {
-      const applicant = await getApplicant(user.applicant_id);
+      const applicant = await getApplicant(applicantIdFromAuth);
       if (applicant?.id) {
         return applicant.id;
       }
@@ -94,11 +97,11 @@ export async function resolveApplicantIdForApplication({ user, getApplicant, get
     }
   }
 
-  if (!user?.user_id) {
+  if (!userId) {
     return null;
   }
 
-  const applicant = await getApplicantByUser(user.user_id);
+  const applicant = await getApplicantByUser(userId);
   return applicant?.id || null;
 }
 

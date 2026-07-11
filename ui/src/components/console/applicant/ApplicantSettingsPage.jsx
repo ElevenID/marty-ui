@@ -39,16 +39,23 @@ import {
 
 const walletSelectionAllowlist = createWalletSelectionAllowlist(WALLET_SELECTION_ALLOWED_WALLET_IDS);
 
+function userDisplayName(user) {
+  return user?.name
+    || [user?.given_name, user?.family_name].filter(Boolean).join(' ')
+    || '';
+}
+
 function ApplicantSettingsPage() {
   const { t } = useTranslation('applicant');
   const location = useLocation();
-  const { user } = useAuth();
+  const { user, organizationId } = useAuth();
+  const activeOrganizationId = organizationId || user?.organization_id || user?.default_organization_id || '';
   const [saving, setSaving] = useState(false);
   const [success, setSuccess] = useState(false);
   const [error, setError] = useState(null);
   const [applicantId, setApplicantId] = useState(null);
   const [profile, setProfile] = useState({
-    name: user?.name || '',
+    name: userDisplayName(user),
     email: user?.email || '',
     phone: '',
   });
@@ -83,12 +90,13 @@ function ApplicantSettingsPage() {
 
           // If no profile exists, create one
           if (!applicant) {
-            const nameParts = (user.name || '').trim().split(' ');
+            const nameParts = userDisplayName(user).trim().split(/\s+/).filter(Boolean);
             const created = await createApplicant({
+              organization_id: activeOrganizationId,
               user_id: user.user_id,
               email: user.email || '',
-              given_name: nameParts[0] || '',
-              family_name: nameParts.slice(1).join(' ') || '',
+              given_name: user.given_name || nameParts[0] || '',
+              family_name: user.family_name || nameParts.slice(1).join(' ') || '',
             });
             applicant = created;
           }
@@ -96,9 +104,9 @@ function ApplicantSettingsPage() {
           if (applicant) {
             setApplicantId(applicant.id);
             setProfile({
-              name: applicant.full_name || applicant.given_name
-                ? `${applicant.given_name} ${applicant.family_name || ''}`.trim()
-                : user.name || '',
+              name: applicant.full_name
+                || [applicant.given_name, applicant.family_name].filter(Boolean).join(' ')
+                || userDisplayName(user),
               email: applicant.email || user.email || '',
               phone: applicant.phone_number || '',
             });
@@ -111,7 +119,7 @@ function ApplicantSettingsPage() {
     };
 
     loadProfile();
-  }, [user, t]);
+  }, [user, activeOrganizationId, t]);
 
   // Load wallet registry
   useEffect(() => {

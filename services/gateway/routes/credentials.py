@@ -146,6 +146,14 @@ async def get_wallet_registry_entry(wallet_id: str, request: Request) -> Respons
     return await proxy_request(request, service_url, f"/v1/wallet-registry/{wallet_id}")
 
 
+@wallet_registry_router.get("/{wallet_id}/open-link", summary="Build Wallet Open Link")
+async def build_wallet_registry_open_link(wallet_id: str, request: Request) -> Response:
+    """Build a wallet-specific open link for a standard OID4VC inner URI."""
+    registry = get_registry()
+    service_url = registry.get_service_url("credential-templates")
+    return await proxy_request(request, service_url, f"/v1/wallet-registry/{wallet_id}/open-link")
+
+
 @wallet_registry_router.get("/resolve/profile", summary="Resolve Wallet Compatibility")
 async def resolve_wallet_registry_profile(request: Request) -> Response:
     """Resolve a derived wallet compatibility profile with organization-specific overrides."""

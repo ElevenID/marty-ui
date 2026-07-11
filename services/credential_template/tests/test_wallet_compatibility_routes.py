@@ -474,6 +474,27 @@ def test_wallet_open_link_prefers_platform_routing_template():
 	)
 
 
+def test_wallet_open_link_uses_waltid_web_wallet_route():
+	repo = credential_template.InMemoryCredentialTemplateRepository()
+	wallet_repo = credential_template.InMemoryWalletRegistryRepository()
+	client, _ = _build_client(repo, wallet_repo)
+	inner_uri = "openid-credential-offer://?credential_offer_uri=https%3A%2F%2Fissuer.example%2Foffers%2F123"
+
+	response = client.get(
+		"/v1/wallet-registry/wr-waltid-001/open-link",
+		params={"inner_uri": inner_uri, "platform": "desktop"},
+	)
+
+	assert response.status_code == 200
+	body = response.json()
+	assert body["wallet_id"] == "wr-waltid-001"
+	assert body["inner_uri"] == inner_uri
+	assert body["open_uri"] == (
+		"https://wallet.demo.walt.id/api/siop/initiateIssuance?"
+		"credential_offer_uri=https%3A%2F%2Fissuer.example%2Foffers%2F123"
+	)
+
+
 def test_wallet_open_link_uses_spruce_android_intent_without_wrapping_inner_uri():
 	repo = credential_template.InMemoryCredentialTemplateRepository()
 	wallet_repo = credential_template.InMemoryWalletRegistryRepository()

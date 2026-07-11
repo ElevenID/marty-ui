@@ -97,6 +97,20 @@ describe('applicationForm use cases', () => {
     })).resolves.toBe('app-2');
   });
 
+  it('skips direct profile lookup when auth exposes the user id as applicant id', async () => {
+    const getApplicant = vi.fn();
+    const getApplicantByUser = vi.fn().mockResolvedValue({ id: 'real-applicant-id' });
+
+    await expect(resolveApplicantIdForApplication({
+      user: { applicant_id: 'user-1', user_id: 'user-1' },
+      getApplicant,
+      getApplicantByUser,
+    })).resolves.toBe('real-applicant-id');
+
+    expect(getApplicant).not.toHaveBeenCalled();
+    expect(getApplicantByUser).toHaveBeenCalledWith('user-1');
+  });
+
   it('ensures applicant profile and recovers from update 404s', async () => {
     const createApplicant = vi.fn().mockResolvedValue({ id: 'app-2' });
 

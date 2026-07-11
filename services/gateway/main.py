@@ -22,6 +22,7 @@ Port: 8000
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 from typing import Any, AsyncGenerator
@@ -158,6 +159,182 @@ HOSTED_PILOT_AUTO_PURGE_BATCH_SIZE = _read_positive_int_env(
     "HOSTED_PILOT_AUTO_PURGE_BATCH_SIZE",
     100,
 )
+WALTID_SUPPORTED_CREDENTIAL_FORMATS = {
+    "jwt_vc_json",
+    "jwt_vc_json-ld",
+    "ldp_vc",
+    "mso_mdoc",
+    "jwt_vc",
+}
+
+
+def _unique_strings(values: list[Any]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if not isinstance(value, str) or not value:
+            continue
+        if value in seen:
+            continue
+        result.append(value)
+        seen.add(value)
+    return result
+
+
+def _issuer_url_with_variant(issuer_url: Any, variant: str) -> str | None:
+    if not isinstance(issuer_url, str):
+        return None
+    issuer = issuer_url.rstrip("/")
+    if not issuer:
+        return None
+    if issuer.endswith(f"/{variant}"):
+        return issuer
+    return f"{issuer}/{variant}"
+
+
+def _waltid_credentials_supported_entries(configs: dict[str, Any]) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for config_id, raw_config in configs.items():
+        if not isinstance(raw_config, dict):
+            continue
+        credential_format = raw_config.get("format") or "jwt_vc_json"
+        if credential_format not in WALTID_SUPPORTED_CREDENTIAL_FORMATS:
+            continue
+
+        credential_definition = raw_config.get("credential_definition")
+        types = (
+            credential_definition.get("type")
+            if isinstance(credential_definition, dict)
+            else None
+        )
+        if isinstance(types, str):
+            types = [types]
+
+        supported_ids = [config_id]
+        if isinstance(config_id, str) and "#" not in config_id:
+            supported_ids.append(f"{config_id}#sd-jwt")
+
+        for supported_id in _unique_strings(supported_ids):
+            if supported_id in seen_ids:
+                continue
+            seen_ids.add(supported_id)
+            entry: dict[str, Any] = {
+                "id": supported_id,
+                "format": credential_format,
+            }
+            if isinstance(types, list) and types:
+                entry["types"] = types
+            if isinstance(raw_config.get("display"), list):
+                entry["display"] = raw_config["display"]
+            if isinstance(raw_config.get("cryptographic_binding_methods_supported"), list):
+                entry["cryptographic_binding_methods_supported"] = raw_config[
+                    "cryptographic_binding_methods_supported"
+                ]
+            suites = (
+                raw_config.get("cryptographic_suites_supported")
+                or raw_config.get("credential_signing_alg_values_supported")
+            )
+            if isinstance(suites, list):
+                entry["cryptographic_suites_supported"] = suites
+            entries.append(entry)
+    return entries
+
+
+def _normalize_waltid_oid4vci_issuer_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    configs = metadata.get("credential_configurations_supported")
+    if not isinstance(configs, dict):
+        return metadata
+
+    normalized = {
+        key: value
+        for key, value in metadata.items()
+        if key != "credential_configurations_supported"
+    }
+    credential_issuer = _issuer_url_with_variant(metadata.get("credential_issuer"), "waltid")
+    if credential_issuer:
+        normalized["credential_issuer"] = credential_issuer
+    entries = _waltid_credentials_supported_entries(configs)
+    normalized["credentials_supported"] = entries
+    normalized["credential_configurations_supported"] = {
+        entry["id"]: entry
+        for entry in entries
+        if isinstance(entry.get("id"), str) and entry["id"]
+    }
+    return normalized
+
+
+def _normalize_oid4vci_issuer_metadata(
+    metadata: dict[str, Any],
+    wallet_variant: str | None = None,
+) -> dict[str, Any]:
+    if wallet_variant == "waltid":
+        return _normalize_waltid_oid4vci_issuer_metadata(metadata)
+
+    configs = metadata.get("credential_configurations_supported")
+    if not isinstance(configs, dict):
+        return metadata
+
+    normalized = dict(metadata)
+    normalized_configs: dict[str, Any] = {}
+    changed = False
+
+    for config_id, raw_config in configs.items():
+        if not isinstance(raw_config, dict):
+            normalized_configs[config_id] = raw_config
+            continue
+
+        config = dict(raw_config)
+        credential_definition = config.get("credential_definition")
+        credential_subject = (
+            credential_definition.get("credentialSubject")
+            if isinstance(credential_definition, dict)
+            else None
+        )
+
+        if isinstance(credential_subject, dict) and credential_subject:
+            config["credential_definition"] = {
+                key: value
+                for key, value in credential_definition.items()
+                if key != "credentialSubject"
+            }
+            metadata_block = dict(config.get("credential_metadata") or {})
+            # walt.id wallet-api 0.22.0 still expects claim metadata as a
+            # namespaced object, while our upstream issuer emits legacy VCDM
+            # claim descriptors. Claim descriptors are optional for issuance,
+            # so omit them from wallet-facing metadata instead of serving a
+            # shape some wallets cannot parse.
+            metadata_block.pop("claims", None)
+            if config.get("display") and "display" not in metadata_block:
+                metadata_block["display"] = config["display"]
+            config["credential_metadata"] = metadata_block
+            changed = True
+
+        normalized_configs[config_id] = config
+
+    if changed:
+        normalized["credential_configurations_supported"] = normalized_configs
+    return normalized
+
+
+def _normalize_oid4vci_issuer_metadata_content(
+    content: bytes,
+    content_type: str | None,
+    wallet_variant: str | None = None,
+) -> bytes:
+    if "json" not in (content_type or "").lower():
+        return content
+    try:
+        body = json.loads(content)
+    except Exception:
+        return content
+    if not isinstance(body, dict):
+        return content
+
+    normalized = _normalize_oid4vci_issuer_metadata(body, wallet_variant=wallet_variant)
+    if normalized == body:
+        return content
+    return json.dumps(normalized, separators=(",", ":")).encode("utf-8")
 
 
 async def _hosted_pilot_auto_purge_loop(app: FastAPI, stop_event: asyncio.Event) -> None:
@@ -666,7 +843,7 @@ Verification is handled through two complementary approaches:
             )
         return await proxy_request(request, service_url, f"/v1/billing/{path}")
 
-    async def _proxy_to_issuance_well_known(path: str) -> Response:
+    async def _proxy_to_issuance_well_known(path: str, wallet_variant: str | None = None) -> Response:
         """Proxy a well-known request to the issuance service.
 
         The issuance service is the source of truth for OID4VCI metadata.
@@ -687,14 +864,23 @@ Verification is handled through two complementary approaches:
             logger.error("Error proxying well-known to issuance (%s): %s", path, exc)
             raise HTTPException(status_code=502, detail="Issuance service error")
 
+        content_type = upstream.headers.get("content-type")
+        content = upstream.content
+        if "/openid-credential-issuer" in path:
+            content = _normalize_oid4vci_issuer_metadata_content(
+                content,
+                content_type,
+                wallet_variant=wallet_variant,
+            )
+
         return Response(
-            content=upstream.content,
+            content=content,
             status_code=upstream.status_code,
-            media_type=upstream.headers.get("content-type"),
+            media_type=content_type,
             headers={
                 k: v
                 for k, v in upstream.headers.items()
-                if k.lower() not in ("content-encoding", "transfer-encoding")
+                if k.lower() not in ("content-encoding", "content-length", "transfer-encoding")
             },
         )
 
@@ -706,6 +892,30 @@ Verification is handled through two complementary approaches:
 
     @app.get("/.well-known/oauth-authorization-server/org/{org_id}")
     async def get_org_oauth_authorization_server_metadata(org_id: str) -> Response:
+        return await _proxy_to_issuance_well_known(f"/.well-known/oauth-authorization-server/org/{org_id}")
+
+    # walt.id browser wallet compatibility variants
+
+    @app.get("/.well-known/openid-credential-issuer/org/{org_id}/waltid")
+    async def get_org_waltid_issuer_metadata(org_id: str) -> Response:
+        return await _proxy_to_issuance_well_known(
+            f"/.well-known/openid-credential-issuer/org/{org_id}",
+            wallet_variant="waltid",
+        )
+
+    @app.get("/org/{org_id}/waltid/.well-known/openid-credential-issuer")
+    async def get_org_waltid_issuer_metadata_appended(org_id: str) -> Response:
+        return await _proxy_to_issuance_well_known(
+            f"/.well-known/openid-credential-issuer/org/{org_id}",
+            wallet_variant="waltid",
+        )
+
+    @app.get("/.well-known/oauth-authorization-server/org/{org_id}/waltid")
+    async def get_org_waltid_as_metadata(org_id: str) -> Response:
+        return await _proxy_to_issuance_well_known(f"/.well-known/oauth-authorization-server/org/{org_id}")
+
+    @app.get("/org/{org_id}/waltid/.well-known/oauth-authorization-server")
+    async def get_org_waltid_as_metadata_appended(org_id: str) -> Response:
         return await _proxy_to_issuance_well_known(f"/.well-known/oauth-authorization-server/org/{org_id}")
 
     # SpruceID / SpruceKit wallet variants
