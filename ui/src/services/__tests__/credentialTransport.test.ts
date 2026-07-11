@@ -93,6 +93,24 @@ describe('credential link utilities', () => {
 
     expect(adaptCredentialOfferForWallet(offerUri, { id: 'wr-spruce-001' })).toBe(offerUri)
   })
+
+  it('adapts walt.id inline offers from the selected browser wallet id', () => {
+    const offerJson = JSON.stringify({
+      credential_issuer: 'https://beta.elevenidllc.com/org/00000000-0000-0000-0000-000000000001',
+      credential_configuration_ids: ['MemberCredential#sd-jwt'],
+      grants: {},
+    })
+
+    const adapted = adaptCredentialOfferForWallet(
+      `openid-credential-offer://?credential_offer=${encodeURIComponent(offerJson)}`,
+      { id: 'wr-waltid-001', name: 'walt.id Wallet' },
+    )
+
+    expect(decodeURIComponent(adapted)).toContain(
+      'https://beta.elevenidllc.com/org/00000000-0000-0000-0000-000000000001/waltid',
+    )
+    expect(decodeURIComponent(adapted)).toContain('MemberCredential#sd-jwt')
+  })
 })
 
 describe('wallet transport service', () => {
@@ -150,6 +168,46 @@ describe('wallet transport service', () => {
     expect(transport.openUri).toBe(
       'intent://?credential_offer_uri=https%3A%2F%2Fissuer.example%2Foffers%2F123#Intent;scheme=openid-credential-offer;package=com.spruceid.mobilesdkexample;end',
     )
+  })
+
+  it('uses the known walt.id web wallet route when registry routing metadata is stale', () => {
+    const transport = createCredentialOfferTransport({
+      offerUri: 'https://issuer.example/offers/123',
+      platform: 'desktop',
+      wallet: {
+        id: 'wr-waltid-001',
+        name: 'walt.id Wallet',
+      },
+    })
+
+    expect(transport.innerUri).toBe(
+      'openid-credential-offer://?credential_offer_uri=https%3A%2F%2Fissuer.example%2Foffers%2F123',
+    )
+    expect(transport.openUri).toBe(
+      'https://wallet.demo.walt.id/api/siop/initiateIssuance?credential_offer_uri=https%3A%2F%2Fissuer.example%2Foffers%2F123',
+    )
+  })
+
+  it('hands selected walt.id browser wallets an adapted inline offer', () => {
+    const offerJson = JSON.stringify({
+      credential_issuer: 'https://beta.elevenidllc.com/org/00000000-0000-0000-0000-000000000001',
+      credential_configuration_ids: ['MemberCredential#sd-jwt'],
+      grants: {},
+    })
+
+    const transport = createCredentialOfferTransport({
+      offerUri: `openid-credential-offer://?credential_offer=${encodeURIComponent(offerJson)}`,
+      platform: 'desktop',
+      wallet: {
+        id: 'wr-waltid-001',
+        name: 'walt.id Wallet',
+      },
+    })
+
+    expect(decodeURIComponent(transport.innerUri)).toContain('/waltid')
+    expect(decodeURIComponent(transport.innerUri)).toContain('MemberCredential#sd-jwt')
+    expect(transport.openUri).toContain('https://wallet.demo.walt.id/api/siop/initiateIssuance?credential_offer=')
+    expect(transport.openUri).not.toContain('credential_offer_uri=')
   })
 
   it('falls back to the SpruceID nested protocol route on iOS without a universal link', () => {

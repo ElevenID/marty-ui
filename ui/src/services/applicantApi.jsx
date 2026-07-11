@@ -219,10 +219,11 @@ export async function listApplications(params = {}) {
     if (!applicantId) applicantId = applicantIdFromAuth;
     if (!applicantId) return empty;
 
-    // Step 3: fetch applications (with legacy-route fallback)
-    let data = await get(`${API_BASE}/${applicantId}/applications`).catch(() => null);
+    // Step 3: fetch applications. Prefer the profile-scoped route used by the
+    // current API, but keep the legacy route as a fallback for older stacks.
+    let data = await get(`${API_BASE}/profiles/${applicantId}/applications`).catch(() => null);
     if (!data) {
-      data = await get(`${API_BASE}/profiles/${applicantId}/applications`).catch(() => null);
+      data = await get(`${API_BASE}/${applicantId}/applications`).catch(() => null);
     }
     if (!data) return empty;
 

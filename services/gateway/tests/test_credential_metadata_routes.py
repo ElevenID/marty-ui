@@ -18,9 +18,12 @@ def test_marty_badge_type_metadata_is_official_and_image_backed(monkeypatch) -> 
     client = _client()
 
     response = client.get("/credentials/marty-verified-member-badge")
+    well_known_response = client.get("/.well-known/vct/credentials/marty-verified-member-badge")
 
     assert response.status_code == 200
     body = response.json()
+    assert well_known_response.status_code == 200
+    assert well_known_response.json()["vct"] == body["vct"]
     assert body["vct"] == "https://beta.elevenidllc.com/credentials/marty-verified-member-badge"
     assert body["name"] == "Marty Verified Member Badge"
     assert "example" not in body["vct"].lower()
@@ -47,9 +50,12 @@ def test_canvas_interoperability_badge_metadata_is_pack_friendly(monkeypatch) ->
     client = _client()
 
     response = client.get("/credentials/canvas-interoperability-foundations-badge")
+    well_known_response = client.get("/.well-known/vct/credentials/canvas-interoperability-foundations-badge")
 
     assert response.status_code == 200
     body = response.json()
+    assert well_known_response.status_code == 200
+    assert well_known_response.json()["vct"] == body["vct"]
     assert body["vct"] == "https://beta.elevenidllc.com/credentials/canvas-interoperability-foundations-badge"
     assert body["name"] == "Interoperable Credentials Foundations Badge"
     assert body["display"][0]["logo"]["uri"].endswith("/canvas-interoperability-foundations-badge/image.svg")

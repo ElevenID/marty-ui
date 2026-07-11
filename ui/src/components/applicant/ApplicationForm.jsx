@@ -67,6 +67,7 @@ import {
   resolveApplicantIdForApplication,
   submitCredentialApplication,
   getCredentialKindFlags,
+  getWalletOfferDialogError,
   getOneClickSummaryFields,
   groupFieldsIntoSteps,
   normalizeCredentialConfigInput,
@@ -573,7 +574,7 @@ export default function ApplicationForm() {
       setClaimDialogOpen(true);
     } catch (err) {
       console.error('Auto-apply error:', err);
-      setError(err.message);
+      setError(getWalletOfferDialogError(err));
     } finally {
       setAutoApplying(false);
     }

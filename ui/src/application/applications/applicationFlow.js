@@ -454,7 +454,7 @@ export function getOneClickSummaryFields({ credentialConfig, user, organizationI
     { label: 'Name', value: [user?.given_name, user?.family_name].filter(Boolean).join(' ') || '—' },
     { label: 'Email', value: user?.email || '—' },
     { label: 'Role', value: roleLabel },
-    { label: 'Organization', value: 'ElevenID LLC' },
+    { label: 'Organization', value: user?.organization_name || user?.default_organization_name || organizationId || 'ElevenID LLC' },
   ];
 }
 

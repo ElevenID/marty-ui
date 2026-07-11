@@ -1,6 +1,14 @@
-import { describe, expect, it } from 'vitest'
-import { renderWithoutRouter, screen } from '../../test/utils'
+import { describe, expect, it, vi } from 'vitest'
+import { renderWithoutRouter, screen, waitFor } from '../../test/utils'
 import OID4VCIInviteDisplay from './OID4VCIInviteDisplay'
+
+const { mockBuildWalletOpenLink } = vi.hoisted(() => ({
+  mockBuildWalletOpenLink: vi.fn(),
+}))
+
+vi.mock('../../services/walletRegistryApi', () => ({
+  buildWalletOpenLink: (...args: unknown[]) => mockBuildWalletOpenLink(...args),
+}))
 
 const offerData = {
   offer_url: 'openid-credential-offer://generic',
@@ -39,5 +47,54 @@ describe('OID4VCIInviteDisplay', () => {
     expect(screen.getByRole('tab', { name: 'Marty Authenticator' })).toBeInTheDocument()
     expect(screen.getByRole('tab', { name: 'Google Wallet' })).toBeInTheDocument()
     expect(screen.getByRole('tab', { name: 'Other Wallets' })).toBeInTheDocument()
+  })
+
+  it('uses a browser wallet fallback when stale registry metadata returns a raw protocol link', async () => {
+    const originalLocation = window.location
+    Object.defineProperty(window, 'location', {
+      configurable: true,
+      value: { href: '' },
+    })
+    mockBuildWalletOpenLink.mockResolvedValue({
+      open_uri: 'openid-credential-offer://?credential_offer_uri=https%3A%2F%2Fissuer.example%2Foffers%2F123',
+    })
+
+    const { user } = renderWithoutRouter(
+      <OID4VCIInviteDisplay
+        offerData={{
+          offer_url: 'openid-credential-offer://?credential_offer_uri=https%3A%2F%2Fissuer.example%2Foffers%2F123',
+          credential_offer_uris: {
+            'wr-waltid-001': 'openid-credential-offer://?credential_offer_uri=https%3A%2F%2Fissuer.example%2Foffers%2F123',
+          },
+          credential_offer_labels: {
+            'wr-waltid-001': 'walt.id Wallet',
+          },
+          wallet_registry: {
+            'wr-waltid-001': {
+              id: 'wr-waltid-001',
+              name: 'walt.id Wallet',
+              routing_templates: {
+                web: 'https://wallet.demo.walt.id/api/siop/initiateIssuance?{credential_offer_param}={offer_encoded}',
+              },
+            },
+          },
+        }}
+        allowedWalletIds={['wr-waltid-001']}
+        showDefaultWalletTab={false}
+        showDeepLink
+      />,
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Open in mobile wallet app' }))
+
+    await waitFor(() => {
+      expect(window.location.href).toBe(
+        'https://wallet.demo.walt.id/api/siop/initiateIssuance?credential_offer_uri=https%3A%2F%2Fissuer.example%2Foffers%2F123',
+      )
+    })
+    Object.defineProperty(window, 'location', {
+      configurable: true,
+      value: originalLocation,
+    })
   })
 })

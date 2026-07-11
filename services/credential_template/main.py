@@ -538,6 +538,12 @@ SYSTEM_WALLET_CATALOG: tuple[WalletRegistryEntry, ...] = (
         wallet_apps=["walt.id Wallet"],
         specifications=["OID4VCI", "OID4VP"],
         logo_url="https://walt.id/favicon.ico",
+        deep_link_template="openid-credential-offer://?{credential_offer_param}={offer_encoded}",
+        routing_templates={
+            "generic": "openid-credential-offer://?{credential_offer_param}={offer_encoded}",
+            "web": "https://wallet.demo.walt.id/api/siop/initiateIssuance?{credential_offer_param}={offer_encoded}",
+            "desktop": "https://wallet.demo.walt.id/api/siop/initiateIssuance?{credential_offer_param}={offer_encoded}",
+        },
         supported_formats=["sd_jwt_vc", "jwt_vc", "mdoc"],
         platforms=["ios", "android", "web"],
         docs_url="https://docs.walt.id",

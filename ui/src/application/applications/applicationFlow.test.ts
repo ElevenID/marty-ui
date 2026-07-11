@@ -233,7 +233,7 @@ describe('applicationFlow helpers', () => {
       { label: 'Name', value: 'Jane Doe' },
       { label: 'Email', value: 'jane@example.com' },
       { label: 'Role', value: 'Vendor' },
-      { label: 'Organization', value: 'ElevenID LLC' },
+      { label: 'Organization', value: 'Acme' },
     ])
   })
 

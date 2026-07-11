@@ -1,15 +1,23 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
+  ANY_OID4VCI_WALLET_ID,
+  MARTY_AUTHENTICATOR_WALLET_ID,
   DEFAULT_WALLET_OFFER_ERROR,
+  MISSING_ISSUANCE_FLOW_ERROR,
   MISSING_WALLET_OFFER_ERROR,
+  buildClaimWalletOptions,
   createWalletOfferDialogState,
   getWalletOfferDialogError,
   loadWalletOfferDialog,
   resetWalletOfferDialogState,
   enrichWalletOfferForRouting,
+  resolveClaimWalletDeliveryDestinationId,
+  resolveClaimWalletSelection,
   resolveWalletOfferDialogLoad,
   resolveWalletOfferRoutingWalletIds,
+  selectedClaimWalletIds,
   startWalletOfferDialogLoad,
+  walletSupportsBrowserLaunch,
 } from './walletOfferDialogUseCases'
 
 describe('walletOfferDialogUseCases', () => {
@@ -50,6 +58,14 @@ describe('walletOfferDialogUseCases', () => {
   it('normalizes thrown errors', () => {
     expect(getWalletOfferDialogError(new Error('Boom'))).toBe('Boom')
     expect(getWalletOfferDialogError(null)).toBe(DEFAULT_WALLET_OFFER_ERROR)
+  })
+
+  it('turns missing issuer flow setup into applicant-friendly guidance', () => {
+    expect(getWalletOfferDialogError({
+      response: {
+        error_description: 'No active issuance flow produced an offer for this application. Configure and activate an OID4VCI flow for the credential template.',
+      },
+    })).toBe(MISSING_ISSUANCE_FLOW_ERROR)
   })
 
   it('loads wallet offers through the injected service', async () => {
@@ -211,5 +227,53 @@ describe('walletOfferDialogUseCases', () => {
         },
       },
     })
+  })
+
+  it('builds applicant claim wallet options with browser-compatible wallets first', () => {
+    const options = buildClaimWalletOptions({
+      registryWallets: [
+        {
+          id: 'wr-spruce-001',
+          name: 'SpruceKit',
+          specifications: ['OID4VCI'],
+          supported_platforms: ['ios', 'android'],
+        },
+        {
+          id: 'wr-didcomm-001',
+          name: 'DIDComm Agent',
+          specifications: ['DIDComm v2'],
+          supports_qr: false,
+          supports_deeplink: false,
+        },
+        {
+          id: 'wr-waltid-001',
+          name: 'walt.id Wallet',
+          specifications: ['OID4VCI'],
+          supported_platforms: ['web', 'ios', 'android'],
+        },
+      ],
+    })
+
+    expect(options.map((wallet) => wallet.id)).toEqual([
+      ANY_OID4VCI_WALLET_ID,
+      'wr-waltid-001',
+      'wr-spruce-001',
+    ])
+    expect(walletSupportsBrowserLaunch(options[1])).toBe(true)
+  })
+
+  it('resolves selected claim wallet ids and delivery channels', () => {
+    expect(resolveClaimWalletSelection({
+      preferredWallets: ['wr-spruce-001'],
+      walletOptions: [
+        { id: ANY_OID4VCI_WALLET_ID },
+        { id: 'wr-spruce-001' },
+      ],
+    })).toBe('wr-spruce-001')
+
+    expect(selectedClaimWalletIds(ANY_OID4VCI_WALLET_ID)).toEqual([])
+    expect(selectedClaimWalletIds('wr-spruce-001')).toEqual(['wr-spruce-001'])
+    expect(resolveClaimWalletDeliveryDestinationId(MARTY_AUTHENTICATOR_WALLET_ID)).toBe('dd-elevenid-wallet')
+    expect(resolveClaimWalletDeliveryDestinationId('wr-spruce-001')).toBe('dd-oid4vci-compatible-wallet')
   })
 })
