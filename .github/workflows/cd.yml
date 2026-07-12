@@ -167,8 +167,8 @@ jobs:
             --arg ui_image "${IMAGE_PREFIX}/ui:${RELEASE_VERSION}" \
             --arg ui_selfhost_image "${IMAGE_PREFIX}/ui-selfhost:${RELEASE_VERSION}" \
             --arg migrations_image "${IMAGE_PREFIX}/db-migrate:${RELEASE_VERSION}" \
-            --arg waltid_wallet_api "docker.io/waltid/wallet-api:0.5.0@sha256:2a1af81c38bb11f38a03efbf3e86dd926b568cff0548f0ac77874565277a99bf" \
-            --arg waltid_web_wallet "docker.io/waltid/waltid-web-wallet:0.5.0@sha256:a69c51cb38c559abf8541314318055d5588832488b835a15bfff24b95539e649" \
+            --arg waltid_wallet_api "docker.io/waltid/wallet-api:stable@sha256:08f0314c2059b34b6df315052596e8ef3a15b837d7f83e68a8016240ac7a917a" \
+            --arg waltid_web_wallet "docker.io/waltid/waltid-demo-wallet:stable@sha256:789c00b9ab65132fb0197b6f210f2ecbeb96cd5541c31cdf12149b0fd657e76e" \
             '{
               release_version: $release_version,
               mip_version: $mip_version,
