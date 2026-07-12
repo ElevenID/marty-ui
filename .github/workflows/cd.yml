@@ -14,6 +14,9 @@ env:
   IMAGE_PREFIX: ghcr.io/elevenid/marty-ui
   MARTY_CREDENTIALS_REF: ${{ vars.MARTY_CREDENTIALS_REF }}
   MARTY_PROTOCOL_REF: ${{ vars.MARTY_PROTOCOL_REF }}
+  MARTY_CLI_REF: ${{ vars.MARTY_CLI_REF }}
+  MARTY_BLOG_REF: ${{ vars.MARTY_BLOG_REF }}
+  MARTY_SUBSCRIPTIONS_REF: ${{ vars.MARTY_SUBSCRIPTIONS_REF }}
 
 jobs:
   validate-release-manifest:
@@ -31,6 +34,12 @@ jobs:
             echo "MARTY_PROTOCOL_REF must be an exact 40-character commit SHA." >&2
             exit 1
           fi
+          for ref_name in MARTY_CLI_REF MARTY_BLOG_REF MARTY_SUBSCRIPTIONS_REF; do
+            if [[ ! "${!ref_name}" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "$ref_name must be an exact 40-character commit SHA." >&2
+              exit 1
+            fi
+          done
 
   verify-protocol-bindings:
     name: Verify Pinned MIP Protocol And Bindings
@@ -154,6 +163,9 @@ jobs:
             --arg marty_ui_sha "$GITHUB_SHA" \
             --arg marty_protocol_sha "$MARTY_PROTOCOL_REF" \
             --arg marty_credentials_sha "$MARTY_CREDENTIALS_REF" \
+            --arg marty_cli_sha "$MARTY_CLI_REF" \
+            --arg marty_blog_sha "$MARTY_BLOG_REF" \
+            --arg marty_subscriptions_sha "$MARTY_SUBSCRIPTIONS_REF" \
             --arg mip_version "0.3.0" \
             --arg services_image "${IMAGE_PREFIX}/services:${RELEASE_VERSION}" \
             --arg ui_image "${IMAGE_PREFIX}/ui:${RELEASE_VERSION}" \
@@ -167,7 +179,10 @@ jobs:
               repositories: {
                 marty_ui: $marty_ui_sha,
                 marty_protocol: $marty_protocol_sha,
-                marty_credentials: $marty_credentials_sha
+                marty_credentials: $marty_credentials_sha,
+                marty_cli: $marty_cli_sha,
+                marty_blog: $marty_blog_sha,
+                marty_subscriptions: $marty_subscriptions_sha
               },
               images: {
                 services: $services_image,
@@ -246,6 +261,29 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          repository: ElevenID/marty-cli
+          token: ${{ secrets.REPO_ACCESS_TOKEN }}
+          ref: ${{ env.MARTY_CLI_REF }}
+          path: _marty-cli
+          sparse-checkout: packages/api-core
+
+      - uses: actions/checkout@v4
+        with:
+          repository: ElevenID/marty-blog
+          token: ${{ secrets.REPO_ACCESS_TOKEN }}
+          ref: ${{ env.MARTY_BLOG_REF }}
+          path: _marty-blog
+
+      - uses: actions/checkout@v4
+        with:
+          repository: ElevenID/marty-subscriptions
+          token: ${{ secrets.REPO_ACCESS_TOKEN }}
+          ref: ${{ env.MARTY_SUBSCRIPTIONS_REF }}
+          path: _marty-subscriptions
+
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
@@ -259,6 +297,10 @@ jobs:
         with:
           context: .
           file: docker/ui.Dockerfile
+          build-contexts: |
+            marty-cli=./_marty-cli
+            marty-blog=./_marty-blog
+            marty-subscriptions=./_marty-subscriptions
           push: true
           tags: |
             ${{ env.IMAGE_PREFIX }}/ui:${{ needs.determine-tag.outputs.version }}
@@ -272,6 +314,10 @@ jobs:
         with:
           context: .
           file: docker/ui.Dockerfile
+          build-contexts: |
+            marty-cli=./_marty-cli
+            marty-blog=./_marty-blog
+            marty-subscriptions=./_marty-subscriptions
           push: true
           build-args: |
             UI_VARIANT=selfhost
