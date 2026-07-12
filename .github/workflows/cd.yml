@@ -371,18 +371,39 @@ jobs:
           cache-to: type=gha,mode=max,scope=migrations
 
   rehearse-migrations:
-    name: Rehearse One-Way Migration Against Beta Copy
+    name: Rehearse One-Way Migration
     needs: [build-migrations, determine-tag, release-manifest]
     runs-on: ubuntu-latest
     environment: beta-migration-rehearsal
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: mip_rehearsal
+          POSTGRES_USER: marty_rehearsal
+          POSTGRES_PASSWORD: marty_rehearsal
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U marty_rehearsal -d mip_rehearsal"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     permissions:
       contents: read
       packages: read
+    outputs:
+      mode: ${{ steps.rehearsal-mode.outputs.mode }}
     env:
-      DATABASE_URL: ${{ secrets.MIGRATION_REHEARSAL_DATABASE_URL }}
-      DATABASE_MARKER: ${{ secrets.MIGRATION_REHEARSAL_DATABASE_MARKER }}
+      DATABASE_URL: ${{ secrets.MIGRATION_REHEARSAL_DATABASE_URL || 'postgresql://marty_rehearsal:marty_rehearsal@127.0.0.1:5432/mip_rehearsal' }}
+      DATABASE_MARKER: ${{ secrets.MIGRATION_REHEARSAL_DATABASE_MARKER || 'mip_rehearsal' }}
+      REHEARSAL_MODE: ${{ secrets.MIGRATION_REHEARSAL_DATABASE_URL != '' && 'beta-copy' || 'ephemeral-schema' }}
       RELEASE_VERSION: ${{ needs.determine-tag.outputs.version }}
     steps:
+      - name: Record rehearsal mode
+        id: rehearsal-mode
+        run: echo "mode=$REHEARSAL_MODE" >> "$GITHUB_OUTPUT"
+
       - name: Require an explicitly marked rehearsal database
         shell: bash
         run: |
@@ -401,9 +422,10 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.REPO_ACCESS_TOKEN }}
 
-      - name: Apply migration to the beta database copy
+      - name: Apply relational migrations
         run: |
           docker run --rm \
+            --network host \
             --entrypoint python \
             -e DATABASE_URL \
             -e MARTY_MIGRATION_PROFILE=beta \
@@ -411,15 +433,55 @@ jobs:
             "${IMAGE_PREFIX}/db-migrate:${RELEASE_VERSION}" \
             /app/run_all_migrations.py
 
-      - name: Verify the migrated beta database copy
+      - name: Verify relational migration heads
         run: |
           docker run --rm \
+            --network host \
             --entrypoint python \
             -e DATABASE_URL \
             -e MARTY_MIGRATION_PROFILE=beta \
             -e MARTY_KMS_BOOTSTRAP_ENABLED=false \
             "${IMAGE_PREFIX}/db-migrate:${RELEASE_VERSION}" \
             /app/run_all_migrations.py --verify-only
+
+      - name: Rehearse legacy applicant-store migration
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/applicant-rehearsal"
+          cat > "$RUNNER_TEMP/applicant-rehearsal/applicant_store.json" <<'JSON'
+          {
+            "applications": [{
+              "id": "application-rehearsal",
+              "applicant_id": "applicant-rehearsal",
+              "organization_id": "organization-rehearsal",
+              "credential_configuration_id": "credential-template-rehearsal",
+              "status": "approved",
+              "metadata": {
+                "given_name": "Rehearsal",
+                "canvas_lti": {"state": "synthetic"},
+                "credential_offer_uri": "openid-credential-offer://synthetic",
+                "auto_approve": true
+              }
+            }]
+          }
+          JSON
+          docker run --rm \
+            -v "$RUNNER_TEMP/applicant-rehearsal:/rehearsal" \
+            -e APPLICANT_DATA_FILE=/rehearsal/applicant_store.json \
+            -e 'APPLICATION_TEMPLATE_MIGRATION_MAP={"credential-template-rehearsal":"application-template-rehearsal"}' \
+            --entrypoint python \
+            "${IMAGE_PREFIX}/db-migrate:${RELEASE_VERSION}" \
+            /app/applicant/migrate_store_v03.py
+          jq -e '
+            .schema_version == "MIP/0.3.0" and
+            .applications[0].credential_template_id == "credential-template-rehearsal" and
+            .applications[0].application_template_id == "application-template-rehearsal" and
+            .applications[0].form_data.given_name == "Rehearsal" and
+            .applications[0].integration_context.canvas_lti.state == "synthetic" and
+            .applications[0].claim_state == "OFFER_READY" and
+            (.applications[0] | has("metadata") | not)
+          ' "$RUNNER_TEMP/applicant-rehearsal/applicant_store.json"
+          test -f "$RUNNER_TEMP/applicant-rehearsal/applicant_store.json.mip-0.2.bak"
 
   release-ready-manifest:
     name: Publish Rehearsed Release Manifest
@@ -443,12 +505,14 @@ jobs:
           UI_DIGEST: ${{ needs.build-ui.outputs.public_digest }}
           UI_SELFHOST_DIGEST: ${{ needs.build-ui.outputs.selfhost_digest }}
           MIGRATIONS_DIGEST: ${{ needs.build-migrations.outputs.digest }}
+          MIGRATION_REHEARSAL_MODE: ${{ needs.rehearse-migrations.outputs.mode }}
         run: |
           jq \
             --arg services "$SERVICES_DIGEST" \
             --arg ui "$UI_DIGEST" \
             --arg ui_selfhost "$UI_SELFHOST_DIGEST" \
             --arg migrations "$MIGRATIONS_DIGEST" \
+            --arg migration_rehearsal_mode "$MIGRATION_REHEARSAL_MODE" \
             '. + {
               image_digests: {
                 services: $services,
@@ -456,7 +520,10 @@ jobs:
                 ui_selfhost: $ui_selfhost,
                 migrations: $migrations
               },
-              migration_rehearsal: "passed",
+              migration_rehearsal: {
+                status: "passed",
+                mode: $migration_rehearsal_mode
+              },
               release_ready: true
             }' release-manifest.json > release-ready-manifest.json
 
