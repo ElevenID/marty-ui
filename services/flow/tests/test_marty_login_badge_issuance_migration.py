@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 
 def _load_migration():
-    sys.modules.setdefault("alembic", SimpleNamespace(op=SimpleNamespace()))
+    sys.modules.setdefault("alembic", SimpleNamespace(op=SimpleNamespace(get_bind=lambda: None)))
     path = (
         pathlib.Path(__file__).parents[1]
         / "infrastructure"

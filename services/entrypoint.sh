@@ -27,4 +27,7 @@ echo "Python version: $(python --version)"
 # Change to services directory and run service module with -m flag
 # This ensures the service is treated as a package with proper relative imports
 cd /app/services
+if [ "$MODULE_NAME" = "applicant" ]; then
+	python -m applicant.migrate_store_v03
+fi
 exec python -m ${MODULE_NAME}.main

@@ -57,7 +57,7 @@ import { useAuth } from '../../../hooks/useAuth';
 import { StatusChip } from '../../common';
 import IssuingSection from './IssuingSection';
 import {
-  getApplication,
+  getOrganizationApplication,
   getApplicationEvidenceSummary,
   getVettingChecks,
   runApplicationExternalEvidenceApiCheck,
@@ -333,7 +333,7 @@ function deriveSignals(application, checks) {
 export default function ApplicationReviewPage() {
   const { applicationId } = useParams();
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, organizationId } = useAuth();
 
   const [application, setApplication] = useState(null);
   const [checks, setChecks] = useState([]);
@@ -373,12 +373,12 @@ export default function ApplicationReviewPage() {
     setSideLoadErrors([]);
     try {
       const [app, checkResult, evidenceResult] = await Promise.all([
-        getApplication(applicationId),
-        getVettingChecks(applicationId).then(
+        getOrganizationApplication(organizationId, applicationId),
+        getVettingChecks(organizationId, applicationId).then(
           (value) => ({ status: 'fulfilled', value }),
           (reason) => ({ status: 'rejected', reason }),
         ),
-        getApplicationEvidenceSummary(applicationId).then(
+        getApplicationEvidenceSummary(organizationId, applicationId).then(
           (value) => ({ status: 'fulfilled', value }),
           (reason) => ({ status: 'rejected', reason }),
         ),
@@ -397,11 +397,11 @@ export default function ApplicationReviewPage() {
       if (app.metadata?.review_notes) setReviewerNote(app.metadata.review_notes);
 
       // Fetch the credential template to drive the claims display dynamically
-      if (app.organization_id && app.credential_configuration_id) {
+      if (app.organization_id && app.credential_template_id) {
         try {
           const templates = await listCredentialTemplates({ organization_id: app.organization_id });
           const matched = Array.isArray(templates)
-            ? templates.find(t => t.credential_type === app.credential_configuration_id)
+            ? templates.find(t => t.id === app.credential_template_id)
             : null;
           setCredentialTemplate(matched || null);
         } catch {
@@ -415,7 +415,7 @@ export default function ApplicationReviewPage() {
     } finally {
       setLoading(false);
     }
-  }, [applicationId]);
+  }, [applicationId, organizationId]);
 
   useEffect(() => { loadData(); }, [loadData]);
 
@@ -428,7 +428,7 @@ export default function ApplicationReviewPage() {
 
     const acquire = async () => {
       try {
-        const result = await acquireReviewerLock(applicationId, reviewerId, reviewerName);
+        const result = await acquireReviewerLock(organizationId, applicationId);
         setLock(result);
       } catch {
         // Non-critical; don't block the review
@@ -438,15 +438,15 @@ export default function ApplicationReviewPage() {
     acquire();
     lockIntervalRef.current = setInterval(acquire, 90_000);
 
-    const handleUnload = () => releaseReviewerLock(applicationId, reviewerId);
+    const handleUnload = () => { releaseReviewerLock(organizationId, applicationId).catch(() => {}); };
     window.addEventListener('beforeunload', handleUnload);
 
     return () => {
       clearInterval(lockIntervalRef.current);
       window.removeEventListener('beforeunload', handleUnload);
-      releaseReviewerLock(applicationId, reviewerId).catch(() => {});
+      releaseReviewerLock(organizationId, applicationId).catch(() => {});
     };
-  }, [applicationId, reviewerId, reviewerName]);
+  }, [applicationId, organizationId, reviewerId]);
 
   // ---------------------------------------------------------------------------
   // Decision handlers
@@ -456,7 +456,7 @@ export default function ApplicationReviewPage() {
     setActionLoading(true);
     setActionError(null);
     try {
-      await reviewOrganizationApplication(applicationId, 'approve', { notes: notes || reviewerNote || undefined });
+      await reviewOrganizationApplication(organizationId, applicationId, 'approve', { notes: notes || reviewerNote || undefined });
       setActionSuccess('Application approved. Click "Generate Wallet Invite" to send the credential to the applicant.');
       await loadData();
       setApproveOpen(false);
@@ -471,7 +471,7 @@ export default function ApplicationReviewPage() {
     setActionLoading(true);
     setActionError(null);
     try {
-      await reviewOrganizationApplication(applicationId, 'reject', { reason, notes: notes || undefined });
+      await reviewOrganizationApplication(organizationId, applicationId, 'reject', { reason, notes: notes || undefined });
       setActionSuccess('Application rejected.');
       await loadData();
       setRejectOpen(false);
@@ -486,7 +486,7 @@ export default function ApplicationReviewPage() {
     setActionLoading(true);
     setActionError(null);
     try {
-      await requestApplicationInfo(applicationId, {
+      await requestApplicationInfo(organizationId, applicationId, {
         missing_items: missingItems,
         message,
         deadline: deadline || null,
@@ -507,7 +507,7 @@ export default function ApplicationReviewPage() {
     setActionError(null);
     setActionSuccess(null);
     try {
-      const result = await runApplicationExternalEvidenceApiCheck(applicationId, checkId, {
+      const result = await runApplicationExternalEvidenceApiCheck(organizationId, applicationId, checkId, {
         issue_on_permit: true,
       });
       const allowed = result?.policy_decision?.allowed;
@@ -629,7 +629,7 @@ export default function ApplicationReviewPage() {
     .filter(Boolean)
     .join(' ') || application.applicant_email || application.applicant_id;
 
-  const credentialDisplay = application.credential_display_name || application.credential_configuration_id;
+  const credentialDisplay = application.credential_display_name || application.credential_template_id;
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100vh', bgcolor: 'background.default' }}>
@@ -898,7 +898,7 @@ export default function ApplicationReviewPage() {
                 <ClaimField label="Applicant Reference" value={formatOfficialReference(application.applicant_id, 'applicant')} />
               </Grid>
               <Grid item xs={6} md={3}>
-                <ClaimField label="Credential Template Reference" value={formatOfficialReference(application.credential_configuration_id, 'template')} />
+                <ClaimField label="Credential Template Reference" value={formatOfficialReference(application.credential_template_id, 'template')} />
               </Grid>
               <Grid item xs={6} md={3}>
                 <ClaimField label="Vetting Level" value={application.applicant_vetting_level} />

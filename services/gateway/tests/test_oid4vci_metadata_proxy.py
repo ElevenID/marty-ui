@@ -104,3 +104,20 @@ def test_oid4vci_metadata_normalizer_leaves_non_json_content_untouched() -> None
     content = b"not-json"
 
     assert _normalize_oid4vci_issuer_metadata_content(content, "text/plain") is content
+
+
+def test_oid4vci_metadata_publishes_standard_issuer_display() -> None:
+    metadata = {
+        "credential_issuer": "https://issuer.example/org/org-1",
+        "issuer_display_name": "Example Issuer",
+        "credential_configurations_supported": {},
+    }
+
+    normalized = json.loads(_normalize_oid4vci_issuer_metadata_content(
+        json.dumps(metadata).encode("utf-8"),
+        "application/json",
+    ))
+
+    assert normalized["credential_issuer"] == "https://issuer.example/org/org-1"
+    assert normalized["display"] == [{"name": "Example Issuer", "locale": "en-US"}]
+    assert "issuer_display_name" not in normalized

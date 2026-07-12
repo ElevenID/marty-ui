@@ -190,7 +190,7 @@ export function CriticalEventsPanel({ events, loading = false, error = null, onR
         </Box>
         <Button
           component={Link}
-          to="/console/audit"
+          to="/console/org/audit"
           size="small"
           endIcon={<ArrowForwardIcon />}
         >

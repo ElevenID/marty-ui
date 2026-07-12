@@ -256,6 +256,22 @@ export const handlers = [
     return HttpResponse.json({ message: 'Deleted successfully' })
   }),
 
+  http.get(`${API_BASE}/v1/application-templates`, () => {
+    return HttpResponse.json([{ id: 1, name: 'Default Application', status: 'ACTIVE' }])
+  }),
+
+  http.get(`${API_BASE}/v1/delivery-destinations`, () => {
+    return HttpResponse.json([{ id: 1, name: 'Default Production Bureau', status: 'ACTIVE' }])
+  }),
+
+  http.get(`${API_BASE}/v1/policy-sets`, () => {
+    return HttpResponse.json([])
+  }),
+
+  http.get(`${API_BASE}/v1/passport/capabilities`, () => {
+    return HttpResponse.json({ supported: false, blockers: ['Signer unavailable'] })
+  }),
+
   // Presentation Policies
   http.get(`${API_BASE}/v1/presentation-policies`, () => {
     return HttpResponse.json([mockPolicies.valid])
@@ -306,6 +322,29 @@ export const handlers = [
   }),
 
   // Flow Definitions
+  http.get(`${API_BASE}/v1/flows/capabilities`, () => {
+    return HttpResponse.json({
+      protocol_version: '0.3.0',
+      standard_flow_types: [
+        'oid4vci_pre_authorized', 'oid4vci_authorization_code', 'mdl_issuance',
+        'oid4vp_presentation', 'mdl_presentation', 'siopv2',
+        'application_approval_issuance', 'credential_renewal', 'credential_revocation',
+        'physical_document_issuance', 'combined',
+      ],
+      sequences: {
+        oid4vci_pre_authorized: ['create_offer', 'token_exchange', 'credential_request', 'issue_credential'],
+        oid4vci_authorization_code: ['create_offer', 'authorization', 'token_exchange', 'credential_request', 'issue_credential'],
+        oid4vp_presentation: ['create_request', 'wallet_selection', 'presentation_submission', 'verify_presentation'],
+        combined: ['accept_application', 'approval_decision', 'issue_credential', 'create_request', 'presentation_submission', 'verify_presentation'],
+      },
+      extensible_steps: {
+        application_approval_issuance: ['approval_decision', 'deliver_credential'],
+        physical_document_issuance: ['approval_decision', 'submit_to_personalization', 'quality_verify'],
+      },
+      physical_document_issuance: { supported: false, blockers: ['Signer unavailable'] },
+    })
+  }),
+
   http.get(`${API_BASE}/v1/flows/definitions`, () => {
     return HttpResponse.json([mockFlows.valid])
   }),
@@ -321,7 +360,7 @@ export const handlers = [
       ...body,
       id: Math.floor(Math.random() * 1000),
       flow_type: body.flow_type || body.type || mockFlows.valid.flow_type,
-      status: body.enabled === false ? 'DRAFT' : 'ACTIVE',
+      status: 'DRAFT',
     }, { status: 201 })
   }),
 
@@ -421,7 +460,7 @@ export const handlers = [
     ])
   }),
 
-  http.post(`${API_BASE}/v1/applicants/applications/:applicationId/issue`, ({ params }) => {
+  http.post(`${API_BASE}/v1/me/applications/:applicationId/claim`, ({ params }) => {
     return HttpResponse.json({
       id: params.applicationId,
       credential_offer_uri: 'openid-credential-offer://offer/test',
@@ -885,7 +924,7 @@ export const handlers = [
     ])
   }),
 
-  http.post('/v1/applicants/applications/:applicationId/issue', ({ params }) => {
+  http.post('/v1/me/applications/:applicationId/claim', ({ params }) => {
     return HttpResponse.json({
       id: params.applicationId,
       credential_offer_uri: 'openid-credential-offer://offer/test',

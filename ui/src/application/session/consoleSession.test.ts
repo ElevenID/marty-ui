@@ -111,7 +111,6 @@ describe('consoleSession helpers', () => {
       mode: 'org',
       activeOrgId: 'org-1',
       destination: '/console/org',
-      authOrgId: 'org-1',
       persistence: {
         last_view_mode: 'org',
         last_active_org_id: 'org-1',

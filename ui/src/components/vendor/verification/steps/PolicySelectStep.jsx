@@ -10,6 +10,7 @@ import {
   Switch,
   CircularProgress,
   Alert,
+  Button,
   Divider,
   Stack,
   Chip,
@@ -17,7 +18,6 @@ import {
 import PolicyIcon from '@mui/icons-material/Policy';
 import { listPresentationPolicies } from '../../../../services/presentationPolicyApi';
 import { listFlows } from '../../../../services/flowsApi';
-import { useAuth } from '../../../../hooks/useAuth';
 
 function isVerificationFlow(flow = {}) {
   const type = String(flow.flow_type || flow.type || '').toLowerCase();
@@ -31,20 +31,20 @@ function isVerificationFlow(flow = {}) {
   );
 }
 
-function PolicySelectStep({ value, onChange }) {
-  const { user } = useAuth();
+function PolicySelectStep({ value, onChange, organizationId }) {
   const [policies, setPolicies] = useState([]);
   const [flows, setFlows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [useInline, setUseInline] = useState(false);
+  const [retryCount, setRetryCount] = useState(0);
 
   useEffect(() => {
     let mounted = true;
     setLoading(true);
     setError(null);
 
-    if (!user?.organization_id) {
+    if (!organizationId) {
       setPolicies([]);
       setFlows([]);
       setError('An active organization is required before loading presentation policies.');
@@ -53,13 +53,13 @@ function PolicySelectStep({ value, onChange }) {
     }
 
     Promise.all([
-      listPresentationPolicies({ organization_id: user?.organization_id }),
-      listFlows({ organization_id: user?.organization_id }),
+      listPresentationPolicies({ organization_id: organizationId }),
+      listFlows({ organization_id: organizationId }),
     ])
       .then(([policyData, flowData]) => {
         if (mounted) {
-          setPolicies(policyData?.items || policyData?.policies || []);
-          setFlows((Array.isArray(flowData) ? flowData : flowData?.items || flowData?.flows || []).filter(isVerificationFlow));
+          setPolicies(policyData);
+          setFlows(flowData.filter(isVerificationFlow));
           setLoading(false);
         }
       })
@@ -70,7 +70,7 @@ function PolicySelectStep({ value, onChange }) {
         }
       });
     return () => { mounted = false; };
-  }, [user?.organization_id]);
+  }, [organizationId, retryCount]);
 
   const handlePolicyChange = (e) => {
     onChange({ ...value, flow_id: null, flow_name: null, policy_id: e.target.value, inline_policy: null });
@@ -111,7 +111,7 @@ function PolicySelectStep({ value, onChange }) {
         claims the wallet holder must present.
       </Typography>
 
-      {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
+      {error && <Alert severity="error" sx={{ mb: 2 }} action={<Button color="inherit" size="small" onClick={() => setRetryCount((count) => count + 1)}>Retry</Button>}>{error}</Alert>}
 
       {loading ? (
         <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>

@@ -49,7 +49,7 @@ export function DeveloperQuickStartPanel() {
   const { t } = useTranslation('console');
   const { organizationId: authOrganizationId } = useAuth();
   const { activeOrgId } = useConsole();
-  const organizationId = activeOrgId || authOrganizationId;
+  const organizationId = activeOrgId;
 
   const [integrationInfo, setIntegrationInfo] = useState(null);
   const [loading, setLoading] = useState(false);

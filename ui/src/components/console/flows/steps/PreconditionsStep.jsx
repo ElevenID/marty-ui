@@ -63,6 +63,8 @@ const getPreconditionTypes = (t) => [
   },
 ];
 
+const PREAUTHORIZED_OID4VCI_FLOW_TYPES = new Set(['oid4vci_pre_authorized', 'issuance_oid4vci']);
+
 const PreconditionsStep = ({ flowType, preconditions = [], onUpdate }) => {
   const { t } = useTranslation('console');
   const [selectedPreconditions, setSelectedPreconditions] = useState(preconditions);
@@ -70,7 +72,7 @@ const PreconditionsStep = ({ flowType, preconditions = [], onUpdate }) => {
 
   // Initialize with defaults for OID4VCI flows
   useEffect(() => {
-    if (flowType === 'issuance_oid4vci' && preconditions.length === 0) {
+    if (PREAUTHORIZED_OID4VCI_FLOW_TYPES.has(flowType) && preconditions.length === 0) {
       // Default to application_approved for OID4VCI flows
       setSelectedPreconditions(['application_approved']);
       onUpdate({ preconditions: ['application_approved'] });
@@ -86,7 +88,7 @@ const PreconditionsStep = ({ flowType, preconditions = [], onUpdate }) => {
     onUpdate({ preconditions: newPreconditions });
   };
 
-  const isOID4VCIFlow = flowType === 'issuance_oid4vci';
+  const isOID4VCIFlow = PREAUTHORIZED_OID4VCI_FLOW_TYPES.has(flowType);
   const isPreconditionSelected = (id) => selectedPreconditions.includes(id);
 
   return (

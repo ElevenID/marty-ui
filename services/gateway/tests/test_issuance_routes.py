@@ -62,6 +62,47 @@ class _NamedRegistry:
 
 
 @pytest.mark.asyncio
+async def test_application_template_activation_delegates_authoritative_validation(monkeypatch: pytest.MonkeyPatch):
+    request = _build_request()
+    captured = {}
+
+    async def _proxy(request, service_url, path, inject_headers=None):
+        captured.update(service_url=service_url, path=path, inject_headers=inject_headers)
+        return JSONResponse({"id": "template-1", "status": "ACTIVE"})
+
+    monkeypatch.setattr(issuance, "get_registry", lambda: _Registry())
+    monkeypatch.setattr(issuance, "proxy_request", _proxy)
+    monkeypatch.setattr(issuance, "_ISSUANCE_HEADERS", {"X-API-Key": "secret"})
+
+    response = await issuance.activate_application_template("template-1", request)
+
+    assert response.status_code == 200
+    assert captured == {
+        "service_url": "http://issuance-service",
+        "path": "/v1/application-templates/template-1/activate",
+        "inject_headers": {"X-API-Key": "secret"},
+    }
+
+
+@pytest.mark.asyncio
+async def test_application_template_validation_delegates_to_issuance(monkeypatch: pytest.MonkeyPatch):
+    request = _build_request()
+    captured = {}
+
+    async def _proxy(request, service_url, path, inject_headers=None):
+        captured.update(service_url=service_url, path=path, inject_headers=inject_headers)
+        return JSONResponse({"valid": False, "errors": [{"section": "form_fields"}]})
+
+    monkeypatch.setattr(issuance, "get_registry", lambda: _Registry())
+    monkeypatch.setattr(issuance, "proxy_request", _proxy)
+
+    response = await issuance.validate_application_template("template-1", request)
+
+    assert response.status_code == 200
+    assert captured["path"] == "/v1/application-templates/template-1/validate"
+
+
+@pytest.mark.asyncio
 async def test_application_evidence_summary_proxy_preserves_metadata(monkeypatch: pytest.MonkeyPatch):
     captured: dict = {}
 
@@ -635,7 +676,7 @@ async def test_applicant_evidence_summary_route_reads_from_issuance(monkeypatch:
     monkeypatch.setattr(applicants, "proxy_request", _proxy)
     monkeypatch.setattr(applicants, "_ISSUANCE_HEADERS", {"X-API-Key": "secret"})
 
-    response = await applicants.get_applicant_application_evidence_summary("app-1", _build_request())
+    response = await applicants.get_organization_applicant_evidence_summary("org-1", "app-1", _build_request())
     body = json.loads(response.body)
 
     assert captured["path"] == "/v1/applications/app-1/evidence-summary"
@@ -664,7 +705,8 @@ async def test_applicant_external_evidence_api_check_route_reads_from_issuance(m
     monkeypatch.setattr(applicants, "proxy_request", _proxy)
     monkeypatch.setattr(applicants, "_ISSUANCE_HEADERS", {"X-API-Key": "secret"})
 
-    response = await applicants.run_applicant_application_evidence_api_check(
+    response = await applicants.run_organization_applicant_evidence_check(
+        "org-1",
         "app-1",
         "passport-document-check",
         _build_request(),
@@ -677,7 +719,7 @@ async def test_applicant_external_evidence_api_check_route_reads_from_issuance(m
 
 
 @pytest.mark.asyncio
-async def test_applicant_supersede_route_reads_from_applicant_service(monkeypatch: pytest.MonkeyPatch):
+async def test_organization_applicant_withdraw_route_reads_from_applicant_service(monkeypatch: pytest.MonkeyPatch):
     captured: dict = {}
 
     async def _proxy(request, service_url, path, inject_headers=None):
@@ -695,11 +737,11 @@ async def test_applicant_supersede_route_reads_from_applicant_service(monkeypatc
     )
     monkeypatch.setattr(applicants, "proxy_request", _proxy)
 
-    response = await applicants.supersede_applicant_application("app-1", _build_request())
+    response = await applicants.withdraw_organization_applicant("org-1", "app-1", _build_request())
     body = json.loads(response.body)
 
     assert captured["service_url"] == "http://applicant-service"
-    assert captured["path"] == "/v1/applicants/applications/app-1/supersede"
+    assert captured["path"] == "/v1/organizations/org-1/applicants/app-1/withdraw"
     assert captured["inject_headers"] is None
     assert body["status"] == "WITHDRAWN"
 

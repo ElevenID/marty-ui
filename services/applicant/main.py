@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import os
 import json
+import re
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -23,7 +24,7 @@ from typing import Annotated, Any, AsyncGenerator
 import httpx
 from fastapi import APIRouter, Body, Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 from marty_common.service_setup import create_service_app
 
 try:
@@ -44,6 +45,140 @@ SERVICE_PORT = int(os.environ.get("APPLICANT_SERVICE_PORT", "8006"))
 # Internal issuance orchestration is delegated to flow-service.
 ISSUANCE_SERVICE_URL = os.environ.get("ISSUANCE_SERVICE_URL", "http://issuance:8005")
 FLOW_SERVICE_URL = os.environ.get("FLOW_SERVICE_URL", "http://flow:8011")
+
+
+def _service_secret(name: str) -> str:
+    value = os.environ.get(name, "")
+    if value:
+        return value
+    path = os.environ.get(f"{name}_FILE", "")
+    if not path:
+        return ""
+    try:
+        return Path(path).read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def _identity_headers(
+    x_user_id: str | None,
+    x_user_email: str | None = None,
+    x_organization_id: str | None = None,
+    x_org_permissions: str | None = None,
+) -> tuple[str, str, set[str]]:
+    user_id = str(x_user_id or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    organization_id = str(x_organization_id or "").strip()
+    permissions = {
+        value.strip()
+        for value in str(x_org_permissions or "").split(",")
+        if value.strip()
+    }
+    return user_id, organization_id, permissions
+
+
+async def _load_application_template(template_id: str) -> dict[str, Any]:
+    headers: dict[str, str] = {}
+    api_key = _service_secret("ISSUANCE_API_KEY")
+    if api_key:
+        headers["X-API-Key"] = api_key
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        response = await client.get(
+            f"{ISSUANCE_SERVICE_URL}/v1/application-templates/{template_id}",
+            headers=headers,
+        )
+    if response.status_code == 404:
+        raise HTTPException(status_code=422, detail="Application Template not found")
+    if response.status_code >= 400:
+        raise HTTPException(status_code=503, detail="Application Template service unavailable")
+    body = response.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=503, detail="Application Template response is malformed")
+    return body
+
+
+def _field_error(field: str, code: str, message: str) -> dict[str, str]:
+    return {"field": field, "code": code, "message": message}
+
+
+def _validate_form_data(form_data: dict[str, Any], fields: list[dict[str, Any]]) -> None:
+    errors: list[dict[str, str]] = []
+    for definition in fields:
+        if not isinstance(definition, dict):
+            continue
+        name = str(
+            definition.get("name")
+            or definition.get("field_name")
+            or definition.get("claim_name")
+            or definition.get("claim_mapping")
+            or ""
+        ).strip()
+        if not name:
+            continue
+        value = form_data.get(name)
+        if definition.get("required") and value in (None, "", []):
+            errors.append(_field_error(name, "REQUIRED", "This field is required."))
+            continue
+        if value in (None, ""):
+            continue
+
+        field_type = str(
+            definition.get("type")
+            or definition.get("input_type")
+            or definition.get("field_type")
+            or definition.get("claim_type")
+            or "string"
+        ).strip().lower()
+        if field_type == "date":
+            try:
+                datetime.strptime(str(value), "%Y-%m-%d")
+            except ValueError:
+                errors.append(_field_error(name, "INVALID_DATE", "Use an ISO date in YYYY-MM-DD format."))
+        elif field_type in {"datetime", "datetime-local"}:
+            if _parse_iso_datetime(str(value)) is None:
+                errors.append(_field_error(name, "INVALID_DATETIME", "Use a valid ISO 8601 date-time."))
+        elif field_type in {"integer", "int"}:
+            if isinstance(value, bool) or not isinstance(value, int):
+                errors.append(_field_error(name, "INVALID_INTEGER", "Enter a whole number."))
+        elif field_type in {"number", "float", "decimal"}:
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                errors.append(_field_error(name, "INVALID_NUMBER", "Enter a number."))
+        elif field_type in {"boolean", "bool"} and not isinstance(value, bool):
+            errors.append(_field_error(name, "INVALID_BOOLEAN", "Choose true or false."))
+
+        allowed = definition.get("enum") or definition.get("options")
+        if isinstance(allowed, list):
+            normalized_allowed = [
+                item.get("value") if isinstance(item, dict) else item
+                for item in allowed
+            ]
+            if value not in normalized_allowed:
+                errors.append(_field_error(name, "INVALID_CHOICE", "Choose one of the allowed values."))
+        pattern = definition.get("pattern")
+        if pattern and isinstance(value, str):
+            try:
+                if re.fullmatch(str(pattern), value) is None:
+                    errors.append(_field_error(name, "PATTERN_MISMATCH", "Value does not match the required format."))
+            except re.error:
+                logger.warning("Ignoring invalid template regex for field %s", name)
+        minimum = definition.get("minimum", definition.get("min"))
+        maximum = definition.get("maximum", definition.get("max"))
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            if isinstance(minimum, (int, float)) and value < minimum:
+                errors.append(_field_error(name, "BELOW_MINIMUM", f"Value must be at least {minimum}."))
+            if isinstance(maximum, (int, float)) and value > maximum:
+                errors.append(_field_error(name, "ABOVE_MAXIMUM", f"Value must be at most {maximum}."))
+
+    if errors:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "FIELD_VALIDATION_FAILED",
+                "message": "Application data failed validation.",
+                "field_errors": errors,
+            },
+        )
 
 
 def _generate_reference_number() -> str:
@@ -74,7 +209,7 @@ async def _initiate_issuance_via_flow(
         "data": {
             "applicant_id": applicant.id,
             "application_id": application.id,
-            "credential_template_id": application.credential_configuration_id,
+            "credential_template_id": application.credential_template_id,
             "email": applicant.email,
             "given_name": applicant.given_name,
             "family_name": applicant.family_name,
@@ -175,6 +310,14 @@ class ApplicationStatus(str, Enum):
     WITHDRAWN = "WITHDRAWN"
     CREDENTIALED = "CREDENTIALED"
     SUSPENDED = "SUSPENDED"
+
+
+class ClaimState(str, Enum):
+    NOT_READY = "NOT_READY"
+    BLOCKED = "BLOCKED"
+    OFFER_READY = "OFFER_READY"
+    CLAIMED = "CLAIMED"
+    EXPIRED = "EXPIRED"
 
 
 LEGACY_APPLICANT_STATUS_MAP = {
@@ -298,7 +441,7 @@ def _parse_iso_datetime(value: str | datetime | None) -> datetime | None:
 def _credential_claim_value(application: "ApplicantApplication", applicant: "Applicant", key: str) -> Any:
     if key == "email" and applicant.email:
         return applicant.email
-    value = application.metadata.get(key)
+    value = application.form_data.get(key)
     if value not in (None, ""):
         return value
     return getattr(applicant, key, None)
@@ -347,13 +490,29 @@ async def _sync_application_issuance_state(
     save: bool = True,
 ) -> bool:
     """Reconcile application status with the real OID4VCI transaction state."""
-    transaction_id = application.metadata.get("issuance_transaction_id")
+    changed = False
+    offer_expires_at = _parse_iso_datetime(application.system_data.get("offer_expires_at"))
+    if (
+        application.claim_state == ClaimState.OFFER_READY
+        and offer_expires_at
+        and offer_expires_at <= datetime.now(timezone.utc)
+    ):
+        application.claim_state = ClaimState.EXPIRED
+        application.claim_blocker = {
+            "code": "OFFER_EXPIRED",
+            "owner": "APPLICANT",
+            "message": "This credential offer has expired. Request a new offer.",
+        }
+        changed = True
+
+    transaction_id = application.system_data.get("issuance_transaction_id")
     tx = await _get_issuance_transaction_context(transaction_id)
     if not tx:
-        return False
+        if changed and save:
+            await repo.save_application(application)
+        return changed
 
     status = str(tx.get("status") or "").lower()
-    changed = False
 
     if status == "issued":
         issued_at = _parse_iso_datetime(tx.get("issued_at")) or datetime.now(timezone.utc)
@@ -367,8 +526,11 @@ async def _sync_application_issuance_state(
             application.issued_at = issued_at
             application.updated_at = datetime.now(timezone.utc)
             changed = True
-        if application.metadata.get("issuance_status") != status:
-            application.metadata["issuance_status"] = status
+        if application.system_data.get("issuance_status") != status:
+            application.system_data["issuance_status"] = status
+        if application.claim_state != ClaimState.CLAIMED:
+            application.claim_state = ClaimState.CLAIMED
+            application.claim_blocker = None
             changed = True
 
         applicant = await repo.get_by_id(application.applicant_id)
@@ -380,8 +542,8 @@ async def _sync_application_issuance_state(
             if save:
                 await repo.save(applicant)
     elif status in {"pending", "authorized"}:
-        if application.metadata.get("issuance_status") != status:
-            application.metadata["issuance_status"] = status
+        if application.system_data.get("issuance_status") != status:
+            application.system_data["issuance_status"] = status
             changed = True
         if application.status == ApplicationStatus.CREDENTIALED:
             # Older builds marked a generated offer as CREDENTIALED. If the
@@ -511,14 +673,15 @@ class ApplicantApplication:
     applicant_id: str = ""
     organization_id: str = ""
     reference_number: str | None = None
-    credential_configuration_id: str = ""
-    issuing_authority: str | None = None
-    requested_validity_years: int | None = None
+    application_template_id: str = ""
+    credential_template_id: str = ""
     status: ApplicationStatus = ApplicationStatus.DRAFT
-    metadata: dict[str, Any] = field(default_factory=dict)
-    # Snapshot of vetting checks required for this application (from template at creation time).
-    # Each entry: { check_type, custom_name, is_required, order, config, external_provider, webhook_url }
+    form_data: dict[str, Any] = field(default_factory=dict)
+    integration_context: dict[str, Any] = field(default_factory=dict)
+    system_data: dict[str, Any] = field(default_factory=dict)
     required_checks: list[dict[str, Any]] = field(default_factory=list)
+    claim_state: ClaimState = ClaimState.NOT_READY
+    claim_blocker: dict[str, Any] | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     submitted_at: datetime | None = None
     reviewed_at: datetime | None = None
@@ -675,12 +838,15 @@ class InMemoryApplicantRepository:
             "applicant_id": application.applicant_id,
             "organization_id": application.organization_id,
             "reference_number": application.reference_number,
-            "credential_configuration_id": application.credential_configuration_id,
-            "issuing_authority": application.issuing_authority,
-            "requested_validity_years": application.requested_validity_years,
+            "application_template_id": application.application_template_id,
+            "credential_template_id": application.credential_template_id,
             "status": application.status.value,
-            "metadata": application.metadata,
+            "form_data": application.form_data,
+            "integration_context": application.integration_context,
+            "system_data": application.system_data,
             "required_checks": application.required_checks,
+            "claim_state": application.claim_state.value,
+            "claim_blocker": application.claim_blocker,
             "created_at": self._dt_to_str(application.created_at),
             "submitted_at": self._dt_to_str(application.submitted_at),
             "reviewed_at": self._dt_to_str(application.reviewed_at),
@@ -689,17 +855,24 @@ class InMemoryApplicantRepository:
         }
 
     def _deserialize_application(self, payload: dict[str, Any]) -> ApplicantApplication:
+        if "credential_configuration_id" in payload or "metadata" in payload:
+            raise RuntimeError(
+                "Legacy applicant store detected. Run the MIP 0.3 applicant-store migration before startup."
+            )
         return ApplicantApplication(
             id=payload.get("id", str(uuid.uuid4())),
             applicant_id=payload.get("applicant_id", ""),
             organization_id=payload.get("organization_id", ""),
             reference_number=payload.get("reference_number"),
-            credential_configuration_id=payload.get("credential_configuration_id", ""),
-            issuing_authority=payload.get("issuing_authority"),
-            requested_validity_years=payload.get("requested_validity_years"),
+            application_template_id=payload.get("application_template_id", ""),
+            credential_template_id=payload.get("credential_template_id", ""),
             status=_parse_application_status(payload.get("status", ApplicationStatus.DRAFT.value)),
-            metadata=payload.get("metadata", {}),
+            form_data=payload.get("form_data", {}),
+            integration_context=payload.get("integration_context", {}),
+            system_data=payload.get("system_data", {}),
             required_checks=payload.get("required_checks", []),
+            claim_state=ClaimState(payload.get("claim_state", ClaimState.NOT_READY.value)),
+            claim_blocker=payload.get("claim_blocker"),
             created_at=self._str_to_dt(payload.get("created_at")) or datetime.now(timezone.utc),
             submitted_at=self._str_to_dt(payload.get("submitted_at")),
             reviewed_at=self._str_to_dt(payload.get("reviewed_at")),
@@ -827,11 +1000,21 @@ class InMemoryApplicantRepository:
                 return a
         return None
 
-    async def get_by_user_id(self, user_id: str) -> Applicant | None:
+    async def get_by_user_id(self, user_id: str, organization_id: str | None = None) -> Applicant | None:
         for a in self._applicants.values():
-            if a.oidc_subject == user_id:
+            if (
+                (a.oidc_subject == user_id or a.user_id == user_id)
+                and (organization_id is None or a.organization_id == organization_id)
+            ):
                 return a
         return None
+
+    async def list_by_user_id(self, user_id: str) -> list[Applicant]:
+        return [
+            applicant
+            for applicant in self._applicants.values()
+            if applicant.oidc_subject == user_id or applicant.user_id == user_id
+        ]
     
     async def list_by_organization(
         self,
@@ -952,8 +1135,6 @@ class InMemoryApplicantRepository:
 # HTTP Adapter
 # =============================================================================
 
-router = APIRouter(prefix="/v1/applicants", tags=["applicants"])
-
 _repo: InMemoryApplicantRepository | None = None
 
 
@@ -974,6 +1155,7 @@ class CreateApplicantRequest(BaseModel):
 
 
 class UpdateApplicantRequest(BaseModel):
+    organization_id: str | None = Field(None, min_length=1, max_length=255)
     email: EmailStr | None = None
     given_name: str | None = Field(None, max_length=255)
     family_name: str | None = Field(None, max_length=255)
@@ -1016,14 +1198,12 @@ class ApplicantResponse(BaseModel):
 
 
 class CreateApplicationRequest(BaseModel):
-    applicant_id: str = Field(min_length=1, max_length=255)
-    credential_configuration_id: str = Field(min_length=1, max_length=255)
-    issuing_authority: str | None = None
-    requested_validity_years: int | None = None
-    metadata: dict[str, Any] = Field(default_factory=dict)
-    # Required checks snapshot from the application template (if known at creation time).
-    # Each entry: { check_type, custom_name, is_required, order, config, external_provider, webhook_url }
-    required_checks: list[dict[str, Any]] = Field(default_factory=list)
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: str = Field(min_length=1, max_length=255)
+    application_template_id: str = Field(min_length=1, max_length=255)
+    form_data: dict[str, Any] = Field(default_factory=dict)
+    integration_context: dict[str, Any] = Field(default_factory=dict)
 
 
 class ApplicationResponse(BaseModel):
@@ -1031,8 +1211,13 @@ class ApplicationResponse(BaseModel):
     applicant_id: str
     organization_id: str | None = None
     reference_number: str | None = None
-    credential_configuration_id: str
+    application_template_id: str
+    credential_template_id: str
+    form_data: dict[str, Any] = Field(default_factory=dict)
+    integration_context: dict[str, Any] = Field(default_factory=dict)
     status: str
+    claim_state: str
+    claim_blocker: dict[str, Any] | None = None
     created_at: str
     submitted_at: str | None = None
     reviewed_at: str | None = None
@@ -1074,12 +1259,14 @@ class ApplicationReviewRequest(BaseModel):
 class SupersedeApplicationRequest(BaseModel):
     reason: str | None = None
     replacement_application_id: str | None = None
-    replacement_credential_configuration_id: str | None = None
+    replacement_credential_template_id: str | None = None
     source: str | None = None
 
 
 class ApplicationIssueRequest(BaseModel):
     """Learner delivery preferences captured when generating an issuance offer."""
+
+    model_config = ConfigDict(extra="forbid")
 
     delivery_destination_ids: list[str] = Field(default_factory=list)
     canvas_credentials_consent: bool = False
@@ -1124,6 +1311,8 @@ class VettingCheckResponse(BaseModel):
 
 
 class CompleteCheckRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     passed: bool
     notes: str | None = None
     performed_by: str | None = None
@@ -1131,12 +1320,16 @@ class CompleteCheckRequest(BaseModel):
 
 
 class RequestInfoRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     missing_items: list[str] = Field(default_factory=list)
     message: str = ""
     deadline: str | None = None
 
 
 class AcquireLockRequest(BaseModel):
+    """Unreachable legacy adapter model; canonical locks derive identity from headers."""
+
     reviewer_id: str
     reviewer_name: str
 
@@ -1158,15 +1351,19 @@ class EnrichedApplicationResponse(BaseModel):
     applicant_id: str
     organization_id: str | None = None
     reference_number: str | None = None
-    credential_configuration_id: str
+    application_template_id: str
+    credential_template_id: str
+    form_data: dict[str, Any] = Field(default_factory=dict)
+    integration_context: dict[str, Any] = Field(default_factory=dict)
     status: str
+    claim_state: str
+    claim_blocker: dict[str, Any] | None = None
     created_at: str
     submitted_at: str | None = None
     reviewed_at: str | None = None
     issued_at: str | None = None
     updated_at: str
     credential_display_name: str | None = None
-    metadata: dict[str, Any] = Field(default_factory=dict)
     # Enriched applicant info
     applicant_email: str | None = None
     applicant_given_name: str | None = None
@@ -1177,7 +1374,6 @@ class EnrichedApplicationResponse(BaseModel):
     verification_results: list[dict[str, Any]] = Field(default_factory=list)
 
 
-@router.post("", response_model=ApplicantResponse, response_model_exclude_none=True)
 async def create_applicant(
     request: CreateApplicantRequest,
     repo: InMemoryApplicantRepository = Depends(get_repo),
@@ -1219,7 +1415,6 @@ async def create_applicant(
     return _to_response(applicant)
 
 
-@router.get("/by-user/{user_id}", response_model=ApplicantResponse, response_model_exclude_none=True)
 async def get_applicant_by_user(
     user_id: str,
     repo: InMemoryApplicantRepository = Depends(get_repo),
@@ -1231,7 +1426,6 @@ async def get_applicant_by_user(
     return _to_response(applicant)
 
 
-@router.get("", response_model=list[ApplicantResponse], response_model_exclude_none=True)
 async def list_applicants(
     organization_id: str = Query(...),
     status: str | None = None,
@@ -1245,7 +1439,6 @@ async def list_applicants(
     return [_to_response(a) for a in applicants[offset:offset + limit]]
 
 
-@router.get("/profiles/{applicant_id}", response_model=ApplicantResponse, response_model_exclude_none=True)
 async def get_applicant(
     applicant_id: str,
     repo: InMemoryApplicantRepository = Depends(get_repo),
@@ -1257,7 +1450,6 @@ async def get_applicant(
     return _to_response(applicant)
 
 
-@router.post("/profiles/{applicant_id}/biometrics", response_model=BiometricResponse, response_model_exclude_none=True)
 async def enroll_biometric(
     applicant_id: str,
     request: EnrollBiometricRequest,
@@ -1283,7 +1475,6 @@ async def enroll_biometric(
     return _biometric_to_response(biometric)
 
 
-@router.get("/profiles/{applicant_id}/biometrics", response_model=list[BiometricResponse], response_model_exclude_none=True)
 async def list_biometrics(
     applicant_id: str,
     limit: int = Query(default=100, le=500, description="Max items to return"),
@@ -1298,18 +1489,32 @@ async def list_biometrics(
     return [_biometric_to_response(b) for b in biometrics[offset:offset + limit]]
 
 
-@router.post("/applications", response_model=ApplicationResponse, response_model_exclude_none=True)
 async def create_application(
     request: CreateApplicationRequest,
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
     repo: InMemoryApplicantRepository = Depends(get_repo),
 ) -> ApplicationResponse:
-    """Create an application for a credential configuration."""
-    applicant = await repo.get_by_id(request.applicant_id)
+    """Create a holder-owned application from an active Application Template."""
+    user_id, _, _ = _identity_headers(x_user_id)
+    template = await _load_application_template(request.application_template_id)
+    template_org_id = str(template.get("organization_id") or "")
+    if template_org_id != request.organization_id:
+        raise HTTPException(status_code=422, detail="Application Template belongs to another organization")
+    if str(template.get("status") or "").strip().upper() != "ACTIVE":
+        raise HTTPException(status_code=422, detail="Application Template must be active")
+    credential_template_id = str(template.get("credential_template_id") or "").strip()
+    if not credential_template_id:
+        raise HTTPException(status_code=422, detail="Application Template has no Credential Template")
+
+    form_fields = template.get("form_fields") if isinstance(template.get("form_fields"), list) else []
+    _validate_form_data(request.form_data, form_fields)
+
+    applicant = await repo.get_by_user_id(user_id, request.organization_id)
     if not applicant:
-        raise HTTPException(status_code=404, detail="Applicant not found")
+        raise HTTPException(status_code=409, detail="Create your applicant profile before applying")
 
     # Prevent duplicate active applications for the same credential type
-    existing = await repo.list_applications_for_applicant(request.applicant_id)
+    existing = await repo.list_applications_for_applicant(applicant.id)
     _active_statuses = {
         ApplicationStatus.DRAFT, ApplicationStatus.SUBMITTED,
         ApplicationStatus.UNDER_REVIEW, ApplicationStatus.PENDING_INFORMATION,
@@ -1318,7 +1523,7 @@ async def create_application(
     }
     duplicate = next(
         (a for a in existing
-         if a.credential_configuration_id == request.credential_configuration_id
+         if a.credential_template_id == credential_template_id
          and a.status in _active_statuses),
         None,
     )
@@ -1329,20 +1534,28 @@ async def create_application(
         )
 
     application = ApplicantApplication(
-        applicant_id=request.applicant_id,
+        applicant_id=applicant.id,
         organization_id=applicant.organization_id,
         reference_number=_generate_reference_number(),
-        credential_configuration_id=request.credential_configuration_id,
-        issuing_authority=request.issuing_authority,
-        requested_validity_years=request.requested_validity_years,
-        metadata=request.metadata or {},
-        required_checks=request.required_checks or [],
+        application_template_id=request.application_template_id,
+        credential_template_id=credential_template_id,
+        form_data=request.form_data,
+        integration_context=request.integration_context,
+        system_data={
+            "credential_display_name": template.get("name"),
+            "approval_strategy": template.get("approval_strategy"),
+            "application_validity_days": template.get("application_validity_days"),
+        },
+        required_checks=[
+            check
+            for check in (template.get("required_checks") or [])
+            if isinstance(check, dict)
+        ],
     )
     await repo.save_application(application)
     return _application_to_response(application)
 
 
-@router.get("/profiles/{applicant_id}/applications", response_model=list[ApplicationResponse], response_model_exclude_none=True)
 async def list_applications_for_applicant(
     applicant_id: str,
     limit: int = Query(default=100, le=500, description="Max items to return"),
@@ -1357,7 +1570,6 @@ async def list_applications_for_applicant(
     return [_application_to_response(a) for a in applications[offset:offset + limit]]
 
 
-@router.get("/org-applications", response_model=list[ApplicationResponse], response_model_exclude_none=True)
 async def list_applications_for_organization(
     organization_id: str = Query(...),
     status: str | None = Query(None),
@@ -1374,11 +1586,9 @@ async def list_applications_for_organization(
     return [_application_to_response(a) for a in applications[offset:offset + limit]]
 
 
-@router.post("/applications/{application_id}/submit", response_model=ApplicationResponse, response_model_exclude_none=True)
 async def submit_application(
     application_id: str,
     repo: InMemoryApplicantRepository = Depends(get_repo),
-    x_organization_id: str | None = Header(default=None, alias="X-Organization-Id"),
 ) -> ApplicationResponse:
     """Submit an existing application into review."""
     application = await repo.get_application(application_id)
@@ -1386,10 +1596,7 @@ async def submit_application(
         raise HTTPException(status_code=404, detail="Application not found")
     await _sync_application_issuance_state(application, repo)
 
-    # Verify organization ownership
     applicant = await repo.get_by_id(application.applicant_id)
-    if x_organization_id and applicant and applicant.organization_id and applicant.organization_id != x_organization_id:
-        raise HTTPException(status_code=403, detail="Not authorized for this application")
 
     if application.status == ApplicationStatus.SUBMITTED:
         if not application.reference_number:
@@ -1406,7 +1613,13 @@ async def submit_application(
         )
 
     is_first_submission = application.status == ApplicationStatus.DRAFT
-    auto_approve = bool(application.metadata.get("auto_approve"))
+    template = await _load_application_template(application.application_template_id)
+    form_fields = template.get("form_fields") if isinstance(template.get("form_fields"), list) else []
+    _validate_form_data(application.form_data, form_fields)
+    auto_approve = str(application.system_data.get("approval_strategy") or "").upper() in {
+        "AUTO",
+        "AUTO_APPROVE",
+    }
 
     _set_application_status(application, ApplicationStatus.SUBMITTED)
     if not application.reference_number:
@@ -1462,7 +1675,6 @@ async def submit_application(
     return _application_to_response(application)
 
 
-@router.post("/applications/{application_id}/auto-issue", response_model=ApplicationResponse, response_model_exclude_none=True)
 async def auto_issue_application(
     application_id: str,
     repo: InMemoryApplicantRepository = Depends(get_repo),
@@ -1480,10 +1692,10 @@ async def auto_issue_application(
         raise HTTPException(status_code=404, detail="Application not found")
     await _sync_application_issuance_state(application, repo)
 
-    if not application.metadata.get("auto_approve"):
+    if str(application.system_data.get("approval_strategy") or "").upper() not in {"AUTO", "AUTO_APPROVE"}:
         raise HTTPException(
             status_code=400,
-            detail="Application does not have auto_approve set in metadata",
+            detail="Application Template does not allow automatic approval",
         )
 
     now = datetime.now(timezone.utc)
@@ -1519,7 +1731,7 @@ async def auto_issue_application(
         "flow_instance_id", "flow_definition_id", "issuance_source",
         "delivery_preferences",
     }
-    claims = {k: v for k, v in application.metadata.items() if k not in _AUTO_INTERNAL_FIELDS}
+    claims = dict(application.form_data)
     claims.update({
         "applicant_id": str(applicant.id),
         "email": _credential_claim_value(application, applicant, "email"),
@@ -1527,30 +1739,53 @@ async def auto_issue_application(
         "family_name": _credential_claim_value(application, applicant, "family_name"),
     })
 
-    issuance = await _initiate_issuance_via_flow(
-        application=application,
-        applicant=applicant,
-        claims=claims,
-    )
+    try:
+        issuance = await _initiate_issuance_via_flow(
+            application=application,
+            applicant=applicant,
+            claims=claims,
+        )
+    except HTTPException as exc:
+        if exc.status_code == 409:
+            application.claim_state = ClaimState.BLOCKED
+            application.claim_blocker = {
+                "code": "NO_ACTIVE_ISSUANCE_FLOW",
+                "owner": "ISSUER",
+                "message": "The issuer is still preparing this credential.",
+            }
+            application.updated_at = datetime.now(timezone.utc)
+            await repo.save_application(application)
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "NO_ACTIVE_ISSUANCE_FLOW",
+                    "message": "No active issuance flow is available for this application.",
+                    "claim_state": application.claim_state.value,
+                    "claim_blocker": application.claim_blocker,
+                },
+            ) from exc
+        raise
 
     has_offer = bool(issuance.get("credential_offer_uri") or issuance.get("credential_offer_uris"))
     if has_offer:
         if application.status == ApplicationStatus.APPROVED:
             _set_application_status(application, ApplicationStatus.OFFERED)
         application.issued_at = None
-    application.metadata["issuance_transaction_id"] = issuance.get("id")
-    application.metadata["credential_offer_uri"] = issuance.get("credential_offer_uri")
-    application.metadata["offer_expires_at"] = issuance.get("expires_at")
-    application.metadata["credential_offer_uris"] = issuance.get("credential_offer_uris") or {}
-    application.metadata["credential_offer_labels"] = issuance.get("credential_offer_labels") or {}
-    application.metadata["offer_generated_at"] = datetime.now(timezone.utc).isoformat()
-    application.metadata["issuance_status"] = issuance.get("status") or "pending"
+    application.system_data["issuance_transaction_id"] = issuance.get("id")
+    application.system_data["credential_offer_uri"] = issuance.get("credential_offer_uri")
+    application.system_data["offer_expires_at"] = issuance.get("expires_at")
+    application.system_data["credential_offer_uris"] = issuance.get("credential_offer_uris") or {}
+    application.system_data["credential_offer_labels"] = issuance.get("credential_offer_labels") or {}
+    application.system_data["offer_generated_at"] = datetime.now(timezone.utc).isoformat()
+    application.system_data["issuance_status"] = issuance.get("status") or "pending"
+    application.claim_state = ClaimState.OFFER_READY
+    application.claim_blocker = None
     if issuance.get("flow_instance_id"):
-        application.metadata["flow_instance_id"] = issuance.get("flow_instance_id")
+        application.system_data["flow_instance_id"] = issuance.get("flow_instance_id")
     if issuance.get("flow_definition_id"):
-        application.metadata["flow_definition_id"] = issuance.get("flow_definition_id")
+        application.system_data["flow_definition_id"] = issuance.get("flow_definition_id")
     if issuance.get("source"):
-        application.metadata["issuance_source"] = issuance.get("source")
+        application.system_data["issuance_source"] = issuance.get("source")
     application.updated_at = datetime.now(timezone.utc)
     await repo.save_application(application)
 
@@ -1562,7 +1797,6 @@ async def auto_issue_application(
     return _application_to_response(application)
 
 
-@router.post("/applications/{application_id}/review", response_model=ApplicationResponse, response_model_exclude_none=True)
 async def review_application(
     application_id: str,
     request: ApplicationReviewRequest,
@@ -1584,7 +1818,7 @@ async def review_application(
     # Cedar policy evaluation for approval decisions
     if decision == "approve" and http_request and hasattr(http_request.app.state, "cedar_engine"):
         cedar_engine = http_request.app.state.cedar_engine
-        meta = application.metadata or {}
+        meta = {**application.form_data, **application.integration_context}
         cedar_context = {
             "risk_score": int(meta.get("risk_score", 0)),
             "document_verification_passed": bool(meta.get("document_verification_passed", True)),
@@ -1630,9 +1864,9 @@ async def review_application(
         _set_application_status(application, ApplicationStatus.APPROVED)
         application.reviewed_at = datetime.now(timezone.utc)
         if request.notes:
-            application.metadata["review_notes"] = request.notes
+            application.system_data["review_notes"] = request.notes
         applicant = await repo.get_by_id(application.applicant_id)
-        if applicant:
+        if applicant and applicant.status != ApplicantStatus.APPROVED:
             _set_applicant_status(applicant, ApplicantStatus.APPROVED)
             await repo.save(applicant)
     elif decision == "reject":
@@ -1640,9 +1874,9 @@ async def review_application(
             raise HTTPException(status_code=400, detail="Rejection reason required")
         _set_application_status(application, ApplicationStatus.REJECTED)
         application.reviewed_at = datetime.now(timezone.utc)
-        application.metadata["rejection_reason"] = request.reason
+        application.system_data["rejection_reason"] = request.reason
         if request.notes:
-            application.metadata["review_notes"] = request.notes
+            application.system_data["review_notes"] = request.notes
         applicant = await repo.get_by_id(application.applicant_id)
         if applicant:
             _set_applicant_status(applicant, ApplicantStatus.REJECTED)
@@ -1654,7 +1888,6 @@ async def review_application(
     return _application_to_response(application)
 
 
-@router.post("/applications/{application_id}/supersede", response_model=ApplicationResponse, response_model_exclude_none=True)
 async def supersede_application(
     application_id: str,
     request: SupersedeApplicationRequest,
@@ -1683,22 +1916,21 @@ async def supersede_application(
         _force_application_status(application, ApplicationStatus.WITHDRAWN)
 
     now = datetime.now(timezone.utc)
-    application.metadata = {
-        **(application.metadata or {}),
+    application.system_data = {
+        **(application.system_data or {}),
         "superseded": True,
         "superseded_at": now.isoformat(),
         "superseded_reason": request.reason or "superseded_by_reapplication",
         "superseded_source": request.source or "applicant_reapplication",
     }
     if request.replacement_application_id:
-        application.metadata["superseded_by_application_id"] = request.replacement_application_id
-    if request.replacement_credential_configuration_id:
-        application.metadata["superseded_by_credential_configuration_id"] = request.replacement_credential_configuration_id
+        application.system_data["superseded_by_application_id"] = request.replacement_application_id
+    if request.replacement_credential_template_id:
+        application.system_data["superseded_by_credential_template_id"] = request.replacement_credential_template_id
     await repo.save_application(application)
     return _application_to_response(application)
 
 
-@router.post("/applications/{application_id}/issue", response_model=ApplicationResponse, response_model_exclude_none=True)
 async def issue_application(
     application_id: str,
     request: ApplicationIssueRequest | None = Body(default=None),
@@ -1730,7 +1962,7 @@ async def issue_application(
         raise HTTPException(status_code=404, detail="Applicant not found")
 
     if request is not None:
-        application.metadata["delivery_preferences"] = {
+        application.system_data["delivery_preferences"] = {
             "delivery_destination_ids": list(dict.fromkeys(request.delivery_destination_ids or [])),
             "canvas_credentials_consent": bool(request.canvas_credentials_consent),
             "updated_at": datetime.now(timezone.utc).isoformat(),
@@ -1755,11 +1987,7 @@ async def issue_application(
         "issuance_source",
         "delivery_preferences",
     }
-    claims = {
-        k: v
-        for k, v in application.metadata.items()
-        if k not in _INTERNAL_METADATA_FIELDS
-    }
+    claims = dict(application.form_data)
     claims.update(
         {
             "applicant_id": str(applicant.id),
@@ -1769,30 +1997,53 @@ async def issue_application(
         }
     )
 
-    issuance = await _initiate_issuance_via_flow(
-        application=application,
-        applicant=applicant,
-        claims=claims,
-    )
+    try:
+        issuance = await _initiate_issuance_via_flow(
+            application=application,
+            applicant=applicant,
+            claims=claims,
+        )
+    except HTTPException as exc:
+        if exc.status_code == 409:
+            application.claim_state = ClaimState.BLOCKED
+            application.claim_blocker = {
+                "code": "NO_ACTIVE_ISSUANCE_FLOW",
+                "owner": "ISSUER",
+                "message": "The issuer is still preparing this credential.",
+            }
+            application.updated_at = datetime.now(timezone.utc)
+            await repo.save_application(application)
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "NO_ACTIVE_ISSUANCE_FLOW",
+                    "message": "No active issuance flow is available for this application.",
+                    "claim_state": application.claim_state.value,
+                    "claim_blocker": application.claim_blocker,
+                },
+            ) from exc
+        raise
 
     has_offer = bool(issuance.get("credential_offer_uri") or issuance.get("credential_offer_uris"))
     if has_offer:
         if application.status == ApplicationStatus.APPROVED:
             _set_application_status(application, ApplicationStatus.OFFERED)
         application.issued_at = None
-    application.metadata["issuance_transaction_id"] = issuance.get("id")
-    application.metadata["credential_offer_uri"] = issuance.get("credential_offer_uri")
-    application.metadata["offer_expires_at"] = issuance.get("expires_at")
-    application.metadata["credential_offer_uris"] = issuance.get("credential_offer_uris") or {}
-    application.metadata["credential_offer_labels"] = issuance.get("credential_offer_labels") or {}
-    application.metadata["offer_generated_at"] = datetime.now(timezone.utc).isoformat()
-    application.metadata["issuance_status"] = issuance.get("status") or "pending"
+    application.system_data["issuance_transaction_id"] = issuance.get("id")
+    application.system_data["credential_offer_uri"] = issuance.get("credential_offer_uri")
+    application.system_data["offer_expires_at"] = issuance.get("expires_at")
+    application.system_data["credential_offer_uris"] = issuance.get("credential_offer_uris") or {}
+    application.system_data["credential_offer_labels"] = issuance.get("credential_offer_labels") or {}
+    application.system_data["offer_generated_at"] = datetime.now(timezone.utc).isoformat()
+    application.system_data["issuance_status"] = issuance.get("status") or "pending"
+    application.claim_state = ClaimState.OFFER_READY
+    application.claim_blocker = None
     if issuance.get("flow_instance_id"):
-        application.metadata["flow_instance_id"] = issuance.get("flow_instance_id")
+        application.system_data["flow_instance_id"] = issuance.get("flow_instance_id")
     if issuance.get("flow_definition_id"):
-        application.metadata["flow_definition_id"] = issuance.get("flow_definition_id")
+        application.system_data["flow_definition_id"] = issuance.get("flow_definition_id")
     if issuance.get("source"):
-        application.metadata["issuance_source"] = issuance.get("source")
+        application.system_data["issuance_source"] = issuance.get("source")
     application.updated_at = datetime.now(timezone.utc)
     await repo.save_application(application)
 
@@ -1804,7 +2055,6 @@ async def issue_application(
     return _application_to_response(application)
 
 
-@router.patch("/applications/{application_id}", response_model=ApplicationResponse, response_model_exclude_none=True)
 async def update_application(
     application_id: str,
     organization_id: str | None = Query(None),
@@ -1826,7 +2076,6 @@ async def update_application(
     return _application_to_response(application)
 
 
-@router.get("/applications/{application_id}", response_model=EnrichedApplicationResponse, response_model_exclude_none=True)
 async def get_application(
     application_id: str,
     repo: InMemoryApplicantRepository = Depends(get_repo),
@@ -1842,7 +2091,6 @@ async def get_application(
 
 # --- Vetting Checks Endpoints ---
 
-@router.get("/applications/{application_id}/checks", response_model=list[VettingCheckResponse], response_model_exclude_none=True)
 async def list_checks(
     application_id: str,
     limit: int = Query(default=100, le=500, description="Max items to return"),
@@ -1857,7 +2105,6 @@ async def list_checks(
     return [_check_to_response(c) for c in checks[offset:offset + limit]]
 
 
-@router.post("/checks/{check_id}/start", response_model=VettingCheckResponse, response_model_exclude_none=True)
 async def start_check(
     check_id: str,
     repo: InMemoryApplicantRepository = Depends(get_repo),
@@ -1873,7 +2120,6 @@ async def start_check(
     return _check_to_response(check)
 
 
-@router.post("/checks/{check_id}/complete", response_model=VettingCheckResponse, response_model_exclude_none=True)
 async def complete_check(
     check_id: str,
     request: CompleteCheckRequest,
@@ -1893,7 +2139,6 @@ async def complete_check(
     return _check_to_response(check)
 
 
-@router.get("/checks/pending", response_model=list[VettingCheckResponse], response_model_exclude_none=True)
 async def get_pending_checks(
     check_type: str | None = Query(None),
     limit: int = Query(default=100, le=500, description="Max items to return"),
@@ -1907,7 +2152,6 @@ async def get_pending_checks(
 
 # --- Request Info Endpoint ---
 
-@router.post("/applications/{application_id}/request-info", response_model=ApplicationResponse, response_model_exclude_none=True)
 async def request_info(
     application_id: str,
     request: RequestInfoRequest,
@@ -1930,14 +2174,14 @@ async def request_info(
         )
 
     _set_application_status(application, ApplicationStatus.PENDING_INFORMATION)
-    info_requests = application.metadata.get("info_requests", [])
+    info_requests = application.system_data.get("info_requests", [])
     info_requests.append({
         "requested_at": datetime.now(timezone.utc).isoformat(),
         "missing_items": request.missing_items,
         "message": request.message,
         "deadline": request.deadline,
     })
-    application.metadata["info_requests"] = info_requests
+    application.system_data["info_requests"] = info_requests
     await repo.save_application(application)
     applicant = await repo.get_by_id(application.applicant_id)
     if applicant:
@@ -1948,7 +2192,6 @@ async def request_info(
 
 # --- Reviewer Lock Endpoints ---
 
-@router.post("/applications/{application_id}/lock", response_model=LockResponse, response_model_exclude_none=True)
 async def acquire_lock(
     application_id: str,
     request: AcquireLockRequest,
@@ -1976,7 +2219,6 @@ async def acquire_lock(
     )
 
 
-@router.delete("/applications/{application_id}/lock")
 async def release_lock(
     application_id: str,
     reviewer_id: str = Query(...),
@@ -1987,7 +2229,6 @@ async def release_lock(
     return {"released": released}
 
 
-@router.get("/applications/{application_id}/lock", response_model=LockResponse, response_model_exclude_none=True)
 async def get_lock_status(
     application_id: str,
     repo: InMemoryApplicantRepository = Depends(get_repo),
@@ -2005,7 +2246,6 @@ async def get_lock_status(
     )
 
 
-@router.patch("/profiles/{applicant_id}", response_model=ApplicantResponse, response_model_exclude_none=True)
 async def update_applicant(
     applicant_id: str,
     request: UpdateApplicantRequest,
@@ -2032,7 +2272,6 @@ async def update_applicant(
     return _to_response(applicant)
 
 
-@router.post("/profiles/{applicant_id}/review", response_model=ApplicantResponse, response_model_exclude_none=True)
 async def review_applicant(
     applicant_id: str,
     request: ReviewRequest,
@@ -2087,7 +2326,6 @@ async def review_applicant(
     return _to_response(applicant)
 
 
-@router.post("/profiles/{applicant_id}/revoke")
 async def revoke_applicant(
     applicant_id: str,
     reason: str = Query(...),
@@ -2138,18 +2376,23 @@ def _application_to_response(application: ApplicantApplication) -> ApplicationRe
         applicant_id=application.applicant_id,
         organization_id=application.organization_id or None,
         reference_number=application.reference_number,
-        credential_configuration_id=application.credential_configuration_id,
+        application_template_id=application.application_template_id,
+        credential_template_id=application.credential_template_id,
+        form_data=application.form_data,
+        integration_context=application.integration_context,
         status=application.status.value,
+        claim_state=application.claim_state.value,
+        claim_blocker=application.claim_blocker,
         created_at=application.created_at.isoformat(),
         submitted_at=application.submitted_at.isoformat() if application.submitted_at else None,
         reviewed_at=application.reviewed_at.isoformat() if application.reviewed_at else None,
         issued_at=application.issued_at.isoformat() if application.issued_at else None,
         updated_at=application.updated_at.isoformat(),
-        credential_display_name=application.metadata.get("credential_display_name"),
-        credential_offer_uri=application.metadata.get("credential_offer_uri"),
-        offer_expires_at=application.metadata.get("offer_expires_at"),
-        credential_offer_uris=application.metadata.get("credential_offer_uris") or {},
-        credential_offer_labels=application.metadata.get("credential_offer_labels") or {},
+        credential_display_name=application.system_data.get("credential_display_name"),
+        credential_offer_uri=application.system_data.get("credential_offer_uri"),
+        offer_expires_at=application.system_data.get("offer_expires_at"),
+        credential_offer_uris=application.system_data.get("credential_offer_uris") or {},
+        credential_offer_labels=application.system_data.get("credential_offer_labels") or {},
     )
 
 
@@ -2187,15 +2430,19 @@ def _enriched_application_to_response(
         applicant_id=application.applicant_id,
         organization_id=application.organization_id or None,
         reference_number=application.reference_number,
-        credential_configuration_id=application.credential_configuration_id,
+        application_template_id=application.application_template_id,
+        credential_template_id=application.credential_template_id,
+        form_data=application.form_data,
+        integration_context=application.integration_context,
         status=application.status.value,
+        claim_state=application.claim_state.value,
+        claim_blocker=application.claim_blocker,
         created_at=application.created_at.isoformat(),
         submitted_at=application.submitted_at.isoformat() if application.submitted_at else None,
         reviewed_at=application.reviewed_at.isoformat() if application.reviewed_at else None,
         issued_at=application.issued_at.isoformat() if application.issued_at else None,
         updated_at=application.updated_at.isoformat(),
-        credential_display_name=application.metadata.get("credential_display_name"),
-        metadata=application.metadata,
+        credential_display_name=application.system_data.get("credential_display_name"),
         applicant_email=applicant.email if applicant else None,
         applicant_given_name=applicant.given_name if applicant else None,
         applicant_family_name=applicant.family_name if applicant else None,
@@ -2204,6 +2451,652 @@ def _enriched_application_to_response(
         applicant_vetting_level=applicant.vetting_level.value if applicant else None,
         verification_results=applicant.verification_results if applicant else [],
     )
+
+
+# =============================================================================
+# MIP 0.3 HTTP Adapter
+# =============================================================================
+
+canonical_router = APIRouter(tags=["applicants"])
+
+
+class ApproveApplicationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    notes: str | None = Field(None, max_length=4000)
+
+
+class RejectApplicationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str = Field(min_length=1, max_length=2000)
+    notes: str | None = Field(None, max_length=4000)
+
+
+class WithdrawApplicationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str | None = Field(None, max_length=2000)
+
+
+async def _self_application(
+    application_id: str,
+    user_id: str,
+    repo: InMemoryApplicantRepository,
+) -> tuple[ApplicantApplication, Applicant]:
+    application = await repo.get_application(application_id)
+    if not application:
+        raise HTTPException(status_code=404, detail="Application not found")
+    applicant = await repo.get_by_id(application.applicant_id)
+    if not applicant:
+        raise HTTPException(status_code=404, detail="Applicant profile not found")
+    if applicant.user_id != user_id and applicant.oidc_subject != user_id:
+        logger.warning(
+            "Applicant authorization denied user=%s application=%s org=%s",
+            user_id,
+            application_id,
+            application.organization_id,
+        )
+        raise HTTPException(status_code=403, detail="Not authorized for this application")
+    return application, applicant
+
+
+async def _organization_application(
+    organization_id: str,
+    application_id: str,
+    required_permission: str,
+    x_user_id: str | None,
+    x_organization_id: str | None,
+    x_org_permissions: str | None,
+    repo: InMemoryApplicantRepository,
+) -> ApplicantApplication:
+    user_id, header_org_id, permissions = _identity_headers(
+        x_user_id,
+        x_organization_id=x_organization_id,
+        x_org_permissions=x_org_permissions,
+    )
+    application = await repo.get_application(application_id)
+    if not application:
+        raise HTTPException(status_code=404, detail="Application not found")
+    if application.organization_id != organization_id or header_org_id != organization_id:
+        logger.warning(
+            "Cross-organization applicant access denied user=%s application=%s requested_org=%s actual_org=%s",
+            user_id,
+            application_id,
+            organization_id,
+            application.organization_id,
+        )
+        raise HTTPException(status_code=403, detail="Not authorized for this organization")
+    if required_permission not in permissions:
+        logger.warning(
+            "Applicant permission denied user=%s application=%s org=%s permission=%s",
+            user_id,
+            application_id,
+            organization_id,
+            required_permission,
+        )
+        raise HTTPException(status_code=403, detail="Action not authorized")
+    return application
+
+
+async def _require_reviewer_lock(
+    application_id: str,
+    user_id: str,
+    repo: InMemoryApplicantRepository,
+) -> ReviewerLock:
+    lock = await repo.get_lock(application_id)
+    if not lock or lock.reviewer_id != user_id:
+        raise HTTPException(status_code=409, detail="An active reviewer lock held by the caller is required")
+    return lock
+
+
+@canonical_router.get("/v1/me/applicant-profile", response_model=ApplicantResponse, response_model_exclude_none=True)
+async def get_my_profile(
+    organization_id: str = Query(...),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+    repo: InMemoryApplicantRepository = Depends(get_repo),
+) -> ApplicantResponse:
+    user_id, _, _ = _identity_headers(x_user_id)
+    applicant = await repo.get_by_user_id(user_id, organization_id)
+    if not applicant:
+        raise HTTPException(status_code=404, detail="Applicant profile not found")
+    return _to_response(applicant)
+
+
+@canonical_router.patch("/v1/me/applicant-profile", response_model=ApplicantResponse, response_model_exclude_none=True)
+async def upsert_my_profile(
+    body: UpdateApplicantRequest,
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+    x_user_email: str | None = Header(default=None, alias="X-User-Email"),
+    repo: InMemoryApplicantRepository = Depends(get_repo),
+) -> ApplicantResponse:
+    user_id, _, _ = _identity_headers(x_user_id, x_user_email)
+    organization_id = str(body.organization_id or "").strip()
+    if not organization_id:
+        raise HTTPException(status_code=422, detail="organization_id is required")
+    applicant = await repo.get_by_user_id(user_id, organization_id)
+    if not applicant and (body.email or x_user_email):
+        applicant = await repo.get_by_email(str(body.email or x_user_email), organization_id)
+        if applicant:
+            applicant.user_id = user_id
+            applicant.oidc_subject = user_id
+    if not applicant:
+        email = str(body.email or x_user_email or "").strip()
+        if not email:
+            raise HTTPException(status_code=422, detail="email is required when creating a profile")
+        applicant = Applicant(
+            organization_id=organization_id,
+            user_id=user_id,
+            oidc_subject=user_id,
+            email=email,
+        )
+    if body.email is not None:
+        applicant.email = str(body.email)
+    if body.given_name is not None:
+        applicant.given_name = body.given_name
+    if body.family_name is not None:
+        applicant.family_name = body.family_name
+    if body.phone is not None:
+        applicant.phone = body.phone
+    if body.vetting_data is not None:
+        applicant.vetting_data = body.vetting_data
+    applicant.updated_at = datetime.now(timezone.utc)
+    await repo.save(applicant)
+    return _to_response(applicant)
+
+
+@canonical_router.post("/v1/me/applicant-profile/biometrics", response_model=BiometricResponse, response_model_exclude_none=True)
+async def enroll_my_profile_biometric(
+    body: EnrollBiometricRequest,
+    organization_id: str = Query(...),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+    repo: InMemoryApplicantRepository = Depends(get_repo),
+) -> BiometricResponse:
+    user_id, _, _ = _identity_headers(x_user_id)
+    applicant = await repo.get_by_user_id(user_id, organization_id)
+    if not applicant:
+        raise HTTPException(status_code=404, detail="Applicant profile not found")
+    biometric = ApplicantBiometric(
+        applicant_id=applicant.id,
+        biometric_type=body.biometric_type,
+        template_data_base64=body.template_data_base64,
+        image_data_base64=body.image_data_base64,
+        is_live_capture=body.is_live_capture,
+        capture_device_id=body.capture_device_id,
+    )
+    await repo.save_biometric(biometric)
+    return _biometric_to_response(biometric)
+
+
+@canonical_router.get("/v1/me/applications")
+async def get_my_applications(
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+    repo: InMemoryApplicantRepository = Depends(get_repo),
+) -> dict[str, Any]:
+    user_id, _, _ = _identity_headers(x_user_id)
+    profiles = await repo.list_by_user_id(user_id)
+    applications: list[ApplicantApplication] = []
+    for profile in profiles:
+        applications.extend(await repo.list_applications_for_applicant(profile.id))
+    for application in applications:
+        await _sync_application_issuance_state(application, repo)
+    applications.sort(key=lambda item: item.updated_at, reverse=True)
+    return {
+        "items": [_application_to_response(item).model_dump(exclude_none=True) for item in applications[offset:offset + limit]],
+        "total": len(applications),
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+@canonical_router.get("/v1/issued-credentials/mine")
+async def get_my_issued_credentials(
+    status: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+    repo: InMemoryApplicantRepository = Depends(get_repo),
+) -> dict[str, Any]:
+    user_id, _, _ = _identity_headers(x_user_id)
+    profiles = await repo.list_by_user_id(user_id)
+    records: list[dict[str, Any]] = []
+    headers: dict[str, str] = {}
+    api_key = _service_secret("ISSUANCE_API_KEY")
+    if api_key:
+        headers["X-API-Key"] = api_key
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        for profile in profiles:
+            response = await client.get(
+                f"{ISSUANCE_SERVICE_URL}/v1/issued-credentials",
+                params={
+                    "organization_id": profile.organization_id,
+                    "subject_id": profile.id,
+                    "limit": 500,
+                },
+                headers=headers,
+            )
+            if response.status_code >= 500:
+                raise HTTPException(status_code=503, detail="Credential inventory is temporarily unavailable")
+            if response.status_code >= 400:
+                continue
+            payload = response.json()
+            items = payload if isinstance(payload, list) else payload.get("items", payload.get("credentials", []))
+            for item in items if isinstance(items, list) else []:
+                if not isinstance(item, dict) or str(item.get("subject_id") or "") != profile.id:
+                    continue
+                records.append({
+                    "id": item.get("id"),
+                    "organization_id": item.get("organization_id"),
+                    "application_id": item.get("application_id"),
+                    "credential_template_id": item.get("credential_template_id"),
+                    "credential_display_name": item.get("credential_display_name") or item.get("display_name"),
+                    "credential_format": item.get("credential_format"),
+                    "issuer_did": item.get("issuer_did"),
+                    "issuer_name": item.get("issuer_name"),
+                    "status": item.get("status"),
+                    "issued_at": item.get("issued_at"),
+                    "valid_until": item.get("valid_until"),
+                    "image_url": item.get("image_url"),
+                })
+    if status:
+        records = [item for item in records if str(item.get("status") or "").lower() == status.lower()]
+    records.sort(key=lambda item: str(item.get("issued_at") or ""), reverse=True)
+    return {"items": records[offset:offset + limit], "total": len(records), "limit": limit, "offset": offset}
+
+
+@canonical_router.post("/v1/me/applications", response_model=ApplicationResponse, response_model_exclude_none=True)
+async def post_my_application(
+    body: CreateApplicationRequest,
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+    repo: InMemoryApplicantRepository = Depends(get_repo),
+) -> ApplicationResponse:
+    return await create_application(body, x_user_id=x_user_id, repo=repo)
+
+
+@canonical_router.get("/v1/me/applications/{application_id}", response_model=EnrichedApplicationResponse, response_model_exclude_none=True)
+async def get_my_application_detail(
+    application_id: str,
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+    repo: InMemoryApplicantRepository = Depends(get_repo),
+) -> EnrichedApplicationResponse:
+    user_id, _, _ = _identity_headers(x_user_id)
+    application, applicant = await _self_application(application_id, user_id, repo)
+    await _sync_application_issuance_state(application, repo)
+    return _enriched_application_to_response(application, applicant)
+
+
+@canonical_router.post("/v1/me/applications/{application_id}/submit", response_model=ApplicationResponse, response_model_exclude_none=True)
+async def post_my_application_submit(
+    application_id: str,
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+    repo: InMemoryApplicantRepository = Depends(get_repo),
+) -> ApplicationResponse:
+    user_id, _, _ = _identity_headers(x_user_id)
+    application, _ = await _self_application(application_id, user_id, repo)
+    return await submit_application(application.id, repo=repo)
+
+
+@canonical_router.post("/v1/me/applications/{application_id}/withdraw", response_model=ApplicationResponse, response_model_exclude_none=True)
+async def post_my_application_withdraw(
+    application_id: str,
+    body: WithdrawApplicationRequest | None = Body(default=None),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+    repo: InMemoryApplicantRepository = Depends(get_repo),
+) -> ApplicationResponse:
+    user_id, _, _ = _identity_headers(x_user_id)
+    application, _ = await _self_application(application_id, user_id, repo)
+    _set_application_status(application, ApplicationStatus.WITHDRAWN)
+    application.system_data["withdrawal_reason"] = body.reason if body else None
+    await repo.save_application(application)
+    return _application_to_response(application)
+
+
+@canonical_router.post("/v1/me/applications/{application_id}/claim", response_model=ApplicationResponse, response_model_exclude_none=True)
+async def post_my_application_claim(
+    application_id: str,
+    body: ApplicationIssueRequest | None = Body(default=None),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+    repo: InMemoryApplicantRepository = Depends(get_repo),
+) -> ApplicationResponse:
+    user_id, _, _ = _identity_headers(x_user_id)
+    application, _ = await _self_application(application_id, user_id, repo)
+    return await issue_application(application.id, request=body, repo=repo)
+
+
+@canonical_router.get("/v1/organizations/{organization_id}/applicants")
+async def get_organization_applicant_queue(
+    organization_id: str,
+    status: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+    x_organization_id: str | None = Header(default=None, alias="X-Organization-Id"),
+    x_org_permissions: str | None = Header(default=None, alias="X-Org-Permissions"),
+    repo: InMemoryApplicantRepository = Depends(get_repo),
+) -> dict[str, Any]:
+    _, header_org_id, permissions = _identity_headers(
+        x_user_id,
+        x_organization_id=x_organization_id,
+        x_org_permissions=x_org_permissions,
+    )
+    if header_org_id != organization_id or "application:review" not in permissions:
+        raise HTTPException(status_code=403, detail="Action not authorized")
+    status_filter = _parse_application_status(status) if status else None
+    applications = await repo.list_applications_for_organization(organization_id, status_filter)
+    applications.sort(key=lambda item: item.updated_at, reverse=True)
+    return {
+        "items": [_application_to_response(item).model_dump(exclude_none=True) for item in applications[offset:offset + limit]],
+        "total": len(applications),
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+async def _review_context(
+    organization_id: str,
+    application_id: str,
+    permission: str,
+    x_user_id: str | None,
+    x_user_email: str | None,
+    x_organization_id: str | None,
+    x_org_permissions: str | None,
+    repo: InMemoryApplicantRepository,
+) -> tuple[ApplicantApplication, str, str]:
+    application = await _organization_application(
+        organization_id,
+        application_id,
+        permission,
+        x_user_id,
+        x_organization_id,
+        x_org_permissions,
+        repo,
+    )
+    user_id, _, _ = _identity_headers(x_user_id)
+    return application, user_id, str(x_user_email or user_id)
+
+
+@canonical_router.get("/v1/organizations/{organization_id}/applicants/{application_id}", response_model=EnrichedApplicationResponse, response_model_exclude_none=True)
+async def get_organization_applicant_detail(
+    organization_id: str,
+    application_id: str,
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+    x_organization_id: str | None = Header(default=None, alias="X-Organization-Id"),
+    x_org_permissions: str | None = Header(default=None, alias="X-Org-Permissions"),
+    repo: InMemoryApplicantRepository = Depends(get_repo),
+) -> EnrichedApplicationResponse:
+    application = await _organization_application(
+        organization_id, application_id, "application:review",
+        x_user_id, x_organization_id, x_org_permissions, repo,
+    )
+    applicant = await repo.get_by_id(application.applicant_id)
+    return _enriched_application_to_response(application, applicant)
+
+
+@canonical_router.post("/v1/organizations/{organization_id}/applicants/{application_id}/lock", response_model=LockResponse, response_model_exclude_none=True)
+async def post_organization_applicant_lock(
+    organization_id: str,
+    application_id: str,
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+    x_user_email: str | None = Header(default=None, alias="X-User-Email"),
+    x_organization_id: str | None = Header(default=None, alias="X-Organization-Id"),
+    x_org_permissions: str | None = Header(default=None, alias="X-Org-Permissions"),
+    repo: InMemoryApplicantRepository = Depends(get_repo),
+) -> LockResponse:
+    _, user_id, reviewer_name = await _review_context(
+        organization_id, application_id, "application:review", x_user_id,
+        x_user_email, x_organization_id, x_org_permissions, repo,
+    )
+    acquired, lock = await repo.acquire_lock(application_id, user_id, reviewer_name)
+    if not acquired:
+        raise HTTPException(status_code=409, detail="APPLICANT_LOCKED")
+    logger.info("Reviewer lock acquired user=%s application=%s org=%s", user_id, application_id, organization_id)
+    return LockResponse(
+        id=lock.lock_id if lock else None,
+        applicant_id=application_id,
+        organization_id=organization_id,
+        holder_user_id=user_id,
+        expires_at=lock.expires_at.isoformat() if lock else None,
+        status="ACTIVE",
+        created_at=lock.acquired_at.isoformat() if lock else None,
+    )
+
+
+@canonical_router.get("/v1/organizations/{organization_id}/applicants/{application_id}/lock", response_model=LockResponse, response_model_exclude_none=True)
+async def get_organization_applicant_lock_status(
+    organization_id: str,
+    application_id: str,
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+    x_organization_id: str | None = Header(default=None, alias="X-Organization-Id"),
+    x_org_permissions: str | None = Header(default=None, alias="X-Org-Permissions"),
+    repo: InMemoryApplicantRepository = Depends(get_repo),
+) -> LockResponse:
+    await _organization_application(
+        organization_id, application_id, "application:review",
+        x_user_id, x_organization_id, x_org_permissions, repo,
+    )
+    lock = await repo.get_lock(application_id)
+    return LockResponse(
+        id=lock.lock_id if lock else None,
+        applicant_id=application_id,
+        organization_id=organization_id,
+        holder_user_id=lock.reviewer_id if lock else None,
+        expires_at=lock.expires_at.isoformat() if lock else None,
+        status="ACTIVE" if lock else "AVAILABLE",
+        created_at=lock.acquired_at.isoformat() if lock else None,
+    )
+
+
+@canonical_router.delete("/v1/organizations/{organization_id}/applicants/{application_id}/lock")
+async def delete_organization_applicant_lock(
+    organization_id: str,
+    application_id: str,
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+    x_organization_id: str | None = Header(default=None, alias="X-Organization-Id"),
+    x_org_permissions: str | None = Header(default=None, alias="X-Org-Permissions"),
+    repo: InMemoryApplicantRepository = Depends(get_repo),
+) -> dict[str, bool]:
+    _, user_id, _ = await _review_context(
+        organization_id, application_id, "application:review", x_user_id,
+        None, x_organization_id, x_org_permissions, repo,
+    )
+    released = await repo.release_lock(application_id, user_id)
+    if not released:
+        raise HTTPException(status_code=403, detail="Only the lock holder may release this lock")
+    return {"released": True}
+
+
+async def _canonical_review_decision(
+    organization_id: str,
+    application_id: str,
+    decision: str,
+    notes: str | None,
+    reason: str | None,
+    http_request: Request,
+    x_user_id: str | None,
+    x_organization_id: str | None,
+    x_org_permissions: str | None,
+    repo: InMemoryApplicantRepository,
+) -> ApplicationResponse:
+    application = await _organization_application(
+        organization_id, application_id, f"application:{decision}",
+        x_user_id, x_organization_id, x_org_permissions, repo,
+    )
+    user_id, _, _ = _identity_headers(x_user_id)
+    await _require_reviewer_lock(application_id, user_id, repo)
+    response = await review_application(
+        application.id,
+        ApplicationReviewRequest(decision=decision, notes=notes, reason=reason),
+        http_request=http_request,
+        repo=repo,
+    )
+    logger.info("Application decision user=%s application=%s org=%s decision=%s", user_id, application_id, organization_id, decision)
+    return response
+
+
+@canonical_router.post("/v1/organizations/{organization_id}/applicants/{application_id}/approve", response_model=ApplicationResponse, response_model_exclude_none=True)
+async def post_organization_applicant_approve(
+    organization_id: str,
+    application_id: str,
+    body: ApproveApplicationRequest,
+    http_request: Request,
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+    x_organization_id: str | None = Header(default=None, alias="X-Organization-Id"),
+    x_org_permissions: str | None = Header(default=None, alias="X-Org-Permissions"),
+    repo: InMemoryApplicantRepository = Depends(get_repo),
+) -> ApplicationResponse:
+    return await _canonical_review_decision(
+        organization_id, application_id, "approve", body.notes, None,
+        http_request, x_user_id, x_organization_id, x_org_permissions, repo,
+    )
+
+
+@canonical_router.post("/v1/organizations/{organization_id}/applicants/{application_id}/reject", response_model=ApplicationResponse, response_model_exclude_none=True)
+async def post_organization_applicant_reject(
+    organization_id: str,
+    application_id: str,
+    body: RejectApplicationRequest,
+    http_request: Request,
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+    x_organization_id: str | None = Header(default=None, alias="X-Organization-Id"),
+    x_org_permissions: str | None = Header(default=None, alias="X-Org-Permissions"),
+    repo: InMemoryApplicantRepository = Depends(get_repo),
+) -> ApplicationResponse:
+    return await _canonical_review_decision(
+        organization_id, application_id, "reject", body.notes, body.reason,
+        http_request, x_user_id, x_organization_id, x_org_permissions, repo,
+    )
+
+
+@canonical_router.post("/v1/organizations/{organization_id}/applicants/{application_id}/request-information", response_model=ApplicationResponse, response_model_exclude_none=True)
+async def post_organization_applicant_request_information(
+    organization_id: str,
+    application_id: str,
+    body: RequestInfoRequest,
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+    x_organization_id: str | None = Header(default=None, alias="X-Organization-Id"),
+    x_org_permissions: str | None = Header(default=None, alias="X-Org-Permissions"),
+    repo: InMemoryApplicantRepository = Depends(get_repo),
+) -> ApplicationResponse:
+    application = await _organization_application(
+        organization_id, application_id, "application:review",
+        x_user_id, x_organization_id, x_org_permissions, repo,
+    )
+    user_id, _, _ = _identity_headers(x_user_id)
+    await _require_reviewer_lock(application_id, user_id, repo)
+    return await request_info(application.id, body, repo=repo)
+
+
+@canonical_router.get("/v1/organizations/{organization_id}/applicants/{application_id}/checks", response_model=list[VettingCheckResponse], response_model_exclude_none=True)
+async def get_organization_applicant_checks(
+    organization_id: str,
+    application_id: str,
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+    x_organization_id: str | None = Header(default=None, alias="X-Organization-Id"),
+    x_org_permissions: str | None = Header(default=None, alias="X-Org-Permissions"),
+    repo: InMemoryApplicantRepository = Depends(get_repo),
+) -> list[VettingCheckResponse]:
+    await _organization_application(
+        organization_id, application_id, "application:review",
+        x_user_id, x_organization_id, x_org_permissions, repo,
+    )
+    return await list_checks(application_id, repo=repo)
+
+
+async def _canonical_check_action(
+    organization_id: str,
+    application_id: str,
+    check_id: str,
+    body: CompleteCheckRequest | None,
+    x_user_id: str | None,
+    x_organization_id: str | None,
+    x_org_permissions: str | None,
+    repo: InMemoryApplicantRepository,
+) -> VettingCheckResponse:
+    await _organization_application(
+        organization_id, application_id, "application:review",
+        x_user_id, x_organization_id, x_org_permissions, repo,
+    )
+    user_id, _, _ = _identity_headers(x_user_id)
+    await _require_reviewer_lock(application_id, user_id, repo)
+    check = await repo.get_check(check_id)
+    if not check or check.application_id != application_id:
+        raise HTTPException(status_code=404, detail="Vetting check not found")
+    if body is None:
+        return await start_check(check_id, repo=repo)
+    body.performed_by = user_id
+    return await complete_check(check_id, body, repo=repo)
+
+
+@canonical_router.post("/v1/organizations/{organization_id}/applicants/{application_id}/checks/{check_id}/start", response_model=VettingCheckResponse, response_model_exclude_none=True)
+async def post_organization_applicant_check_start(
+    organization_id: str,
+    application_id: str,
+    check_id: str,
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+    x_organization_id: str | None = Header(default=None, alias="X-Organization-Id"),
+    x_org_permissions: str | None = Header(default=None, alias="X-Org-Permissions"),
+    repo: InMemoryApplicantRepository = Depends(get_repo),
+) -> VettingCheckResponse:
+    return await _canonical_check_action(
+        organization_id, application_id, check_id, None,
+        x_user_id, x_organization_id, x_org_permissions, repo,
+    )
+
+
+@canonical_router.post("/v1/organizations/{organization_id}/applicants/{application_id}/checks/{check_id}/complete", response_model=VettingCheckResponse, response_model_exclude_none=True)
+async def post_organization_applicant_check_complete(
+    organization_id: str,
+    application_id: str,
+    check_id: str,
+    body: CompleteCheckRequest,
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+    x_organization_id: str | None = Header(default=None, alias="X-Organization-Id"),
+    x_org_permissions: str | None = Header(default=None, alias="X-Org-Permissions"),
+    repo: InMemoryApplicantRepository = Depends(get_repo),
+) -> VettingCheckResponse:
+    return await _canonical_check_action(
+        organization_id, application_id, check_id, body,
+        x_user_id, x_organization_id, x_org_permissions, repo,
+    )
+
+
+@canonical_router.post("/v1/organizations/{organization_id}/applicants/{application_id}/issue", response_model=ApplicationResponse, response_model_exclude_none=True)
+async def post_organization_applicant_issue(
+    organization_id: str,
+    application_id: str,
+    body: ApplicationIssueRequest | None = Body(default=None),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+    x_organization_id: str | None = Header(default=None, alias="X-Organization-Id"),
+    x_org_permissions: str | None = Header(default=None, alias="X-Org-Permissions"),
+    repo: InMemoryApplicantRepository = Depends(get_repo),
+) -> ApplicationResponse:
+    application = await _organization_application(
+        organization_id, application_id, "issuance:initiate",
+        x_user_id, x_organization_id, x_org_permissions, repo,
+    )
+    return await issue_application(application.id, request=body, repo=repo)
+
+
+@canonical_router.post("/v1/organizations/{organization_id}/applicants/{application_id}/withdraw", response_model=ApplicationResponse, response_model_exclude_none=True)
+async def post_organization_applicant_withdraw(
+    organization_id: str,
+    application_id: str,
+    body: WithdrawApplicationRequest | None = Body(default=None),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+    x_organization_id: str | None = Header(default=None, alias="X-Organization-Id"),
+    x_org_permissions: str | None = Header(default=None, alias="X-Org-Permissions"),
+    repo: InMemoryApplicantRepository = Depends(get_repo),
+) -> ApplicationResponse:
+    application = await _organization_application(
+        organization_id, application_id, "application:review",
+        x_user_id, x_organization_id, x_org_permissions, repo,
+    )
+    _force_application_status(application, ApplicationStatus.WITHDRAWN)
+    application.system_data["withdrawal_reason"] = body.reason if body else None
+    await repo.save_application(application)
+    return _application_to_response(application)
 
 
 # =============================================================================
@@ -2231,7 +3124,7 @@ def create_app() -> FastAPI:
         description="Applicant vetting and management service",
         service_name=SERVICE_NAME,
         lifespan=lifespan,
-        routers=[router],
+        routers=[canonical_router],
     )
 
 

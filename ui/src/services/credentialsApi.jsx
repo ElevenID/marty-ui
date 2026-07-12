@@ -230,7 +230,7 @@ export const getIssuanceSessionStatus = async (transactionId) => {
  */
 export const generateIssuanceOffer = async (applicationId, options = {}) => {
   try {
-    const response = await apiClient.post(`/v1/applicants/applications/${applicationId}/issue`, options || {});
+    const response = await apiClient.post(`/v1/me/applications/${applicationId}/claim`, options || {});
     const data = response.data;
     // Normalise to the shape OID4VCIInviteDisplay / IssuingSection expect
     return {

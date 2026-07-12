@@ -760,8 +760,8 @@ Verification is handled through two complementary approaches:
                 logger.warning("Failed to fetch compliance profiles for MIP config: %s", exc)
 
         return {
-            "mip_version": "0.1",
-            "supported_versions": ["0.1"],
+            "mip_version": "0.3.0",
+            "supported_versions": ["0.3.0"],
             "issuer": issuer_url,
             "api_base_url": f"{issuer_url}/v1",
             "active_compliance_profiles": active_profiles,

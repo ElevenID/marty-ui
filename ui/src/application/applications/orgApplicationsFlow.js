@@ -12,7 +12,7 @@ export function mergeApplicantsIntoApplications(applications, applicants) {
       id: app.id,
       reference: app.reference_number,
       applicant: applicant?.email || app.applicant_id,
-      credentialType: app.credential_display_name || metadata.credential_display_name || app.credential_configuration_id,
+      credentialType: app.credential_display_name || app.credential_template_id,
       submittedAt: app.submitted_at || app.created_at,
       documentsUploaded: true,
       verificationPassed: true,

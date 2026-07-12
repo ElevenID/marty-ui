@@ -1,64 +1,123 @@
-name: E2E Tests
+name: MIP 0.3 Beta Credential Lifecycle
 
-# TEMPORARILY DISABLED - CI checks turned off while fixing tests
-# To re-enable, uncomment the push/pull_request triggers below
 on:
   workflow_dispatch:
-  # push:
-  #   branches: [ main, develop ]
-  # pull_request:
-  #   branches: [ main ]
+    inputs:
+      beta_origin:
+        description: Beta origin under test
+        required: true
+        default: https://beta.elevenidllc.com
+      audit_org_id:
+        description: Organization with the seeded lifecycle fixtures
+        required: true
+  repository_dispatch:
+    types: [beta-deployed]
+
+concurrency:
+  group: mip-03-beta-credential-lifecycle
+  cancel-in-progress: false
+
+permissions:
+  contents: read
 
 jobs:
-  e2e-tests:
+  full-stack-credential-lifecycle:
+    name: Real Beta Issuance, Verification, And Contract Gate
     runs-on: ubuntu-latest
-
+    environment: beta-lifecycle
+    timeout-minutes: 45
+    env:
+      BETA_ORIGIN: ${{ inputs.beta_origin || vars.BETA_ORIGIN || 'https://beta.elevenidllc.com' }}
+      BETA_AUDIT_ORG_ID: ${{ inputs.audit_org_id || vars.BETA_AUDIT_ORG_ID }}
+      TEST_APPLICANT_EMAIL: ${{ secrets.TEST_APPLICANT_EMAIL }}
+      TEST_APPLICANT_PASSWORD: ${{ secrets.TEST_APPLICANT_PASSWORD }}
+      TEST_VENDOR_EMAIL: ${{ secrets.TEST_VENDOR_EMAIL }}
+      TEST_VENDOR_PASSWORD: ${{ secrets.TEST_VENDOR_PASSWORD }}
+      WALTID_WALLET_ORIGIN: http://127.0.0.1:7101
+      CI: "true"
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Checkout marty-authenticator
-      uses: actions/checkout@v4
-      with:
-        repository: anthropic/marty-authenticator
-        path: marty-authenticator
-        token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
 
-    - name: Setup Docker
-      uses: docker/setup-buildx-action@v3
+      - name: Require the full-stack fixture manifest
+        shell: bash
+        run: |
+          for name in BETA_ORIGIN BETA_AUDIT_ORG_ID TEST_APPLICANT_EMAIL TEST_APPLICANT_PASSWORD TEST_VENDOR_EMAIL TEST_VENDOR_PASSWORD; do
+            if [[ -z "${!name}" ]]; then
+              echo "$name is required by the beta-lifecycle environment." >&2
+              exit 1
+            fi
+          done
 
-    - name: Build wallet-simulator image
-      run: make build-wallet
+      - name: Install browser test dependencies
+        working-directory: tests
+        run: npm ci
 
-    - name: Run E2E tests
-      run: make test
+      - name: Install Chromium
+        working-directory: tests
+        run: npx playwright install --with-deps chromium
 
-    - name: Upload test results
-      uses: actions/upload-artifact@v4
-      if: always()
-      with:
-        name: test-results
-        path: |
-          marty-ui/tests/test-results/
-          marty-ui/tests/playwright-report/
-        retention-days: 7
+      - name: Start pinned walt.id browser wallet
+        run: |
+          docker compose \
+            -f docker-compose.base.yml \
+            -f docker-compose.profile.waltid.yml \
+            up -d waltid-nginx
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent --show-error http://127.0.0.1:7101/ >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Pinned walt.id wallet did not become ready." >&2
+          exit 1
 
-    - name: Upload screenshots
-      uses: actions/upload-artifact@v4
-      if: failure()
-      with:
-        name: screenshots
-        path: marty-ui/tests/test-results/screenshots/
-        retention-days: 7
+      - name: Require deployed MIP 0.3 contract
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          const origin = process.env.BETA_ORIGIN.replace(/\/$/, '');
+          const response = await fetch(`${origin}/.well-known/mip-configuration`);
+          const body = await response.json().catch(() => null);
+          const header = response.headers.get('x-mip-version');
+          if (!response.ok || body?.mip_version !== '0.3.0' || header !== '0.3.0') {
+            throw new Error(`Expected deployed MIP 0.3.0; status=${response.status}, body=${body?.mip_version}, header=${header}`);
+          }
+          NODE
 
-    - name: Collect logs
-      if: failure()
-      run: |
-        echo "=== Docker containers ==="
-        docker ps -a
-        echo "=== Container logs ==="
-        docker compose --profile test logs --tail=100
+      - name: Probe canonical and removed applicant contracts
+        run: node tests/scripts/probe-beta-membership-badge.js
 
-    - name: Cleanup
-      if: always()
-      run: make clean
+      - name: Accept membership badge in walt.id
+        run: node tests/scripts/verify-beta-waltid-acceptance.js
+
+      - name: Create template and verify credential with walt.id
+        run: node tests/scripts/audit-beta-org-credential-paths.js
+
+      - name: Upload lifecycle evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mip-03-beta-credential-lifecycle
+          path: tests/artifacts/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Collect wallet logs
+        if: failure()
+        run: |
+          docker compose \
+            -f docker-compose.base.yml \
+            -f docker-compose.profile.waltid.yml \
+            logs --no-color --tail=250 waltid-wallet-api waltid-web-wallet waltid-nginx
+
+      - name: Stop browser wallet
+        if: always()
+        run: |
+          docker compose \
+            -f docker-compose.base.yml \
+            -f docker-compose.profile.waltid.yml \
+            down --volumes --remove-orphans

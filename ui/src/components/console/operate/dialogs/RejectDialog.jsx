@@ -42,7 +42,7 @@ export default function RejectDialog({ open, application, loading, onConfirm, on
 
   if (!application) return null;
 
-  const credentialDisplay = application.credential_display_name || application.credential_configuration_id;
+  const credentialDisplay = application.credential_display_name || application.credential_template_id;
 
   const handleConfirm = () => {
     if (!reason) return;

@@ -27,7 +27,7 @@ import AccountBalanceWalletIcon from '@mui/icons-material/AccountBalanceWallet';
 import { useTranslation } from 'react-i18next';
 
 import { useAuth } from '../../../hooks/useAuth';
-import { getApplicantByUser, createApplicant, updateApplicantProfile } from '../../../services/applicantApi';
+import { getMyApplicantProfile, upsertMyApplicantProfile } from '../../../services/applicantApi';
 import { listWallets } from '../../../services/walletRegistryApi';
 import useWalletPreferences from '../../../hooks/useWalletPreferences';
 import { getPlatform } from '../../../utils/deviceDetection';
@@ -86,14 +86,13 @@ function ApplicantSettingsPage() {
     const loadProfile = async () => {
       if (user?.user_id) {
         try {
-          let applicant = await getApplicantByUser(user.user_id);
+          let applicant = await getMyApplicantProfile(activeOrganizationId);
 
           // If no profile exists, create one
           if (!applicant) {
             const nameParts = userDisplayName(user).trim().split(/\s+/).filter(Boolean);
-            const created = await createApplicant({
+            const created = await upsertMyApplicantProfile({
               organization_id: activeOrganizationId,
-              user_id: user.user_id,
               email: user.email || '',
               given_name: user.given_name || nameParts[0] || '',
               family_name: user.family_name || nameParts.slice(1).join(' ') || '',
@@ -108,7 +107,7 @@ function ApplicantSettingsPage() {
                 || [applicant.given_name, applicant.family_name].filter(Boolean).join(' ')
                 || userDisplayName(user),
               email: applicant.email || user.email || '',
-              phone: applicant.phone_number || '',
+              phone: applicant.phone || '',
             });
           }
         } catch (err) {
@@ -166,10 +165,11 @@ function ApplicantSettingsPage() {
       const given_name = nameParts[0] || '';
       const family_name = nameParts.slice(1).join(' ') || '';
 
-      await updateApplicantProfile(applicantId, {
+      await upsertMyApplicantProfile({
+        organization_id: activeOrganizationId,
         given_name,
         family_name,
-        phone_number: profile.phone,
+        phone: profile.phone,
       });
 
       setSuccess(true);

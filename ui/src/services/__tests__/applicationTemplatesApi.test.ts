@@ -1,11 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { createApplicationTemplate, listApplicationTemplates } from '../applicationTemplatesApi';
-import { get, post } from '../api';
+import { createApplicationTemplate, listApplicationTemplates, updateApplicationTemplate } from '../applicationTemplatesApi';
+import { get, patch, post } from '../api';
 
 vi.mock('../api', () => ({
   get: vi.fn(),
   post: vi.fn(),
-  put: vi.fn(),
+  patch: vi.fn(),
   del: vi.fn(),
 }));
 
@@ -46,5 +46,13 @@ describe('applicationTemplatesApi', () => {
         }),
       })
     );
+  });
+
+  it('patches draft templates without a full-resource PUT', async () => {
+    vi.mocked(patch).mockResolvedValue({ id: 'template-1', status: 'DRAFT' });
+
+    await updateApplicationTemplate('template-1', { name: 'Updated' });
+
+    expect(patch).toHaveBeenCalledWith('/v1/application-templates/template-1', { name: 'Updated' });
   });
 });

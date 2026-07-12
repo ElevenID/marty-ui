@@ -44,6 +44,10 @@ vi.mock('../../../hooks/useAuth', () => ({
   }),
 }))
 
+vi.mock('../../../contexts/ConsoleContext', () => ({
+  useConsole: () => ({ activeOrgId: 'org-test-1' }),
+}))
+
 vi.mock('../../../services/dashboardApi', () => ({
   getOrganizationLifecycle: (...args) => mockGetOrganizationLifecycle(...args),
 }))

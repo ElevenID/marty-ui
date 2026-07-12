@@ -12,10 +12,56 @@ on:
 env:
   REGISTRY: ghcr.io
   IMAGE_PREFIX: ghcr.io/elevenid/marty-ui
+  MARTY_CREDENTIALS_REF: ${{ vars.MARTY_CREDENTIALS_REF }}
+  MARTY_PROTOCOL_REF: ${{ vars.MARTY_PROTOCOL_REF }}
 
 jobs:
+  validate-release-manifest:
+    name: Validate Pinned Revisions
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require exact marty-credentials revision
+        shell: bash
+        run: |
+          if [[ ! "$MARTY_CREDENTIALS_REF" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "MARTY_CREDENTIALS_REF must be an exact 40-character commit SHA." >&2
+            exit 1
+          fi
+          if [[ ! "$MARTY_PROTOCOL_REF" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "MARTY_PROTOCOL_REF must be an exact 40-character commit SHA." >&2
+            exit 1
+          fi
+
+  verify-protocol-bindings:
+    name: Verify Pinned MIP Protocol And Bindings
+    needs: [validate-release-manifest]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: Marty-Protocol/Marty-Protocol
+          ref: ${{ env.MARTY_PROTOCOL_REF }}
+          path: marty-protocol
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install protocol dependencies
+        working-directory: marty-protocol
+        run: pip install uv && uv sync
+
+      - name: Run protocol conformance suite
+        working-directory: marty-protocol
+        run: uv run pytest tests/ -v
+
+      - name: Verify generated bindings
+        working-directory: marty-protocol
+        run: uv run python scripts/codegen.py --check
+
   build-wheel:
     name: Build Rust Wheel
+    needs: [validate-release-manifest]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -40,6 +86,7 @@ jobs:
         with:
           repository: ElevenID/marty-credentials
           token: ${{ secrets.REPO_ACCESS_TOKEN }}
+          ref: ${{ env.MARTY_CREDENTIALS_REF }}
           path: marty-credentials
 
       - uses: dtolnay/rust-toolchain@nightly
@@ -90,10 +137,61 @@ jobs:
             echo "VERSION=${GITHUB_SHA::8}" >> "$GITHUB_OUTPUT"
           fi
 
+  release-manifest:
+    name: Build Atomic Release Manifest
+    needs: [validate-release-manifest, verify-protocol-bindings, determine-tag]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Write pinned release manifest
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.determine-tag.outputs.version }}
+        run: |
+          jq -n \
+            --arg release_version "$RELEASE_VERSION" \
+            --arg marty_ui_sha "$GITHUB_SHA" \
+            --arg marty_protocol_sha "$MARTY_PROTOCOL_REF" \
+            --arg marty_credentials_sha "$MARTY_CREDENTIALS_REF" \
+            --arg mip_version "0.3.0" \
+            --arg services_image "${IMAGE_PREFIX}/services:${RELEASE_VERSION}" \
+            --arg ui_image "${IMAGE_PREFIX}/ui:${RELEASE_VERSION}" \
+            --arg ui_selfhost_image "${IMAGE_PREFIX}/ui-selfhost:${RELEASE_VERSION}" \
+            --arg migrations_image "${IMAGE_PREFIX}/db-migrate:${RELEASE_VERSION}" \
+            --arg waltid_wallet_api "docker.io/waltid/wallet-api:0.5.0@sha256:2a1af81c38bb11f38a03efbf3e86dd926b568cff0548f0ac77874565277a99bf" \
+            --arg waltid_web_wallet "docker.io/waltid/waltid-web-wallet:0.5.0@sha256:a69c51cb38c559abf8541314318055d5588832488b835a15bfff24b95539e649" \
+            '{
+              release_version: $release_version,
+              mip_version: $mip_version,
+              repositories: {
+                marty_ui: $marty_ui_sha,
+                marty_protocol: $marty_protocol_sha,
+                marty_credentials: $marty_credentials_sha
+              },
+              images: {
+                services: $services_image,
+                ui: $ui_image,
+                ui_selfhost: $ui_selfhost_image,
+                migrations: $migrations_image,
+                waltid_wallet_api: $waltid_wallet_api,
+                waltid_web_wallet: $waltid_web_wallet
+              },
+              mixed_versions_supported: false
+            }' > release-manifest.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-manifest-${{ needs.determine-tag.outputs.version }}
+          path: release-manifest.json
+          retention-days: 90
+
   build-services:
     name: Build & Push Services Image
-    needs: [build-wheel, determine-tag]
+    needs: [build-wheel, determine-tag, release-manifest]
     runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.services-image.outputs.digest }}
     permissions:
       contents: read
       packages: write
@@ -104,6 +202,7 @@ jobs:
         with:
           repository: ElevenID/marty-credentials
           token: ${{ secrets.REPO_ACCESS_TOKEN }}
+          ref: ${{ env.MARTY_CREDENTIALS_REF }}
           path: _marty-credentials
           sparse-checkout: services/issuance
 
@@ -123,6 +222,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push
+        id: services-image
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -136,8 +236,11 @@ jobs:
 
   build-ui:
     name: Build & Push UI Images
-    needs: [determine-tag]
+    needs: [determine-tag, release-manifest]
     runs-on: ubuntu-latest
+    outputs:
+      public_digest: ${{ steps.public-ui-image.outputs.digest }}
+      selfhost_digest: ${{ steps.selfhost-ui-image.outputs.digest }}
     permissions:
       contents: read
       packages: write
@@ -151,6 +254,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push public UI image
+        id: public-ui-image
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -163,6 +267,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=ui
 
       - name: Build and push self-host UI image
+        id: selfhost-ui-image
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -178,8 +283,10 @@ jobs:
 
   build-migrations:
     name: Build & Push Migrations Image
-    needs: [determine-tag]
+    needs: [determine-tag, release-manifest]
     runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.migrations-image.outputs.digest }}
     permissions:
       contents: read
       packages: write
@@ -190,6 +297,7 @@ jobs:
         with:
           repository: ElevenID/marty-credentials
           token: ${{ secrets.REPO_ACCESS_TOKEN }}
+          ref: ${{ env.MARTY_CREDENTIALS_REF }}
           path: _marty-credentials
           sparse-checkout: services/issuance
 
@@ -205,6 +313,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push
+        id: migrations-image
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -217,3 +326,99 @@ jobs:
             ${{ env.IMAGE_PREFIX }}/db-migrate:latest
           cache-from: type=gha,scope=migrations
           cache-to: type=gha,mode=max,scope=migrations
+
+  rehearse-migrations:
+    name: Rehearse One-Way Migration Against Beta Copy
+    needs: [build-migrations, determine-tag, release-manifest]
+    runs-on: ubuntu-latest
+    environment: beta-migration-rehearsal
+    permissions:
+      contents: read
+      packages: read
+    env:
+      DATABASE_URL: ${{ secrets.MIGRATION_REHEARSAL_DATABASE_URL }}
+      DATABASE_MARKER: ${{ secrets.MIGRATION_REHEARSAL_DATABASE_MARKER }}
+      RELEASE_VERSION: ${{ needs.determine-tag.outputs.version }}
+    steps:
+      - name: Require an explicitly marked rehearsal database
+        shell: bash
+        run: |
+          if [[ -z "$DATABASE_URL" || -z "$DATABASE_MARKER" || ${#DATABASE_MARKER} -lt 6 ]]; then
+            echo "A rehearsal database URL and marker of at least six characters are required." >&2
+            exit 1
+          fi
+          if [[ "$DATABASE_URL" != *"$DATABASE_MARKER"* ]]; then
+            echo "The rehearsal database URL does not contain the required safety marker." >&2
+            exit 1
+          fi
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Apply migration to the beta database copy
+        run: |
+          docker run --rm \
+            --entrypoint python \
+            -e DATABASE_URL \
+            -e MARTY_MIGRATION_PROFILE=beta \
+            -e MARTY_KMS_BOOTSTRAP_ENABLED=false \
+            "${IMAGE_PREFIX}/db-migrate:${RELEASE_VERSION}" \
+            /app/run_all_migrations.py
+
+      - name: Verify the migrated beta database copy
+        run: |
+          docker run --rm \
+            --entrypoint python \
+            -e DATABASE_URL \
+            -e MARTY_MIGRATION_PROFILE=beta \
+            -e MARTY_KMS_BOOTSTRAP_ENABLED=false \
+            "${IMAGE_PREFIX}/db-migrate:${RELEASE_VERSION}" \
+            /app/run_all_migrations.py --verify-only
+
+  release-ready-manifest:
+    name: Publish Rehearsed Release Manifest
+    needs:
+      - build-services
+      - build-ui
+      - build-migrations
+      - rehearse-migrations
+      - release-manifest
+      - determine-tag
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-manifest-${{ needs.determine-tag.outputs.version }}
+
+      - name: Attach registry digests and rehearsal result
+        shell: bash
+        env:
+          SERVICES_DIGEST: ${{ needs.build-services.outputs.digest }}
+          UI_DIGEST: ${{ needs.build-ui.outputs.public_digest }}
+          UI_SELFHOST_DIGEST: ${{ needs.build-ui.outputs.selfhost_digest }}
+          MIGRATIONS_DIGEST: ${{ needs.build-migrations.outputs.digest }}
+        run: |
+          jq \
+            --arg services "$SERVICES_DIGEST" \
+            --arg ui "$UI_DIGEST" \
+            --arg ui_selfhost "$UI_SELFHOST_DIGEST" \
+            --arg migrations "$MIGRATIONS_DIGEST" \
+            '. + {
+              image_digests: {
+                services: $services,
+                ui: $ui,
+                ui_selfhost: $ui_selfhost,
+                migrations: $migrations
+              },
+              migration_rehearsal: "passed",
+              release_ready: true
+            }' release-manifest.json > release-ready-manifest.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-ready-manifest-${{ needs.determine-tag.outputs.version }}
+          path: release-ready-manifest.json
+          retention-days: 90

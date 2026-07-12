@@ -1,336 +1,215 @@
-/**
- * Flow Definition Wizard
- * 
- * Multi-step wizard for creating flow definitions with:
- * - Flow type selection (Verification/Issuance/Combined)
- * - Flow steps configuration with drag-drop ordering
- * - Deployment profile binding
- * - Review and activation
- */
-
-import { useCallback } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useTranslation } from 'react-i18next';
 import {
+  Alert,
   Box,
+  Button,
+  CircularProgress,
   Container,
   Paper,
-  Stepper,
   Step,
   StepLabel,
-  Button,
+  Stepper,
   Typography,
-  Alert,
-  CircularProgress,
 } from '@mui/material';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
-import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import CheckIcon from '@mui/icons-material/Check';
+import RefreshIcon from '@mui/icons-material/Refresh';
 
 import { useWizard } from '../../../hooks/useWizard';
-import { useAuth } from '../../../hooks/useAuth';
 import { useConsole } from '../../../contexts/ConsoleContext';
-import { createFlow } from '../../../services/flowsApi';
-import {
-  FlowTypeStep,
-  FlowStepsConfigStep,
-  PreconditionsStep,
-  DeploymentBindingStep,
-  ReviewStep,
-} from './steps';
+import { createFlow, getFlowCapabilities } from '../../../services/flowsApi';
+import { DeploymentBindingStep, FlowStepsConfigStep, FlowTypeStep, ReviewStep } from './steps';
 
-const getSteps = (t) => [
-  { label: t('wizards.flowDefinition.steps.flowType'), optional: false },
-  { label: t('wizards.flowDefinition.steps.configureSteps'), optional: false },
-  { label: t('wizards.flowDefinition.steps.preconditions'), optional: true },
-  { label: t('wizards.flowDefinition.steps.bindDeployment'), optional: false },
-  { label: t('wizards.flowDefinition.steps.review'), optional: false },
-];
+const STEPS = ['Flow type', 'Definition', 'Dependencies', 'Review'];
 
 const INITIAL_DATA = {
-  flowType: null, // 'verification', 'issuance', 'combined', 'issuance_oid4vci'
-  name: '',
-  description: '',
-  flowSteps: [],
-  preconditions: [],
-  selectedDeployment: null,
-  defaultPolicyId: null,
+  applicationTemplateId: null,
+  approvalStrategy: 'AUTO',
   credentialTemplateId: null,
-  activateImmediately: true,
+  defaultPolicyId: null,
+  deliveryDestinationProfileId: null,
+  description: '',
+  flowType: null,
+  hooks: {},
+  name: '',
+  selectedDeployment: null,
+  triggerType: 'API_CALL',
+  trustProfileId: null,
 };
 
-const ISSUANCE_FLOW_TYPES = new Set(['issuance', 'issuance_oid4vci', 'combined']);
-const PRESENTATION_FLOW_TYPES = new Set(['verification', 'combined']);
+const CREDENTIAL_TYPES = new Set([
+  'oid4vci_authorization_code', 'oid4vci_pre_authorized', 'mdl_issuance',
+  'credential_renewal', 'credential_revocation', 'physical_document_issuance', 'combined',
+]);
+const APPLICATION_TYPES = new Set(['application_approval_issuance', 'physical_document_issuance']);
+const PRESENTATION_TYPES = new Set(['oid4vp_presentation', 'mdl_presentation', 'siopv2', 'combined']);
 
-const STEP_TYPE_ALIASES = {
-  add_step: 'user_input',
-  collect_data: 'data_collection',
-  create_offer: 'issuance',
-  custom: 'user_input',
-  deliver_credential: 'issuance',
-  display_qr: 'user_input',
-  generate_code: 'issuance',
-  grant_access: 'end',
-  issue_credential: 'issuance',
-  request_presentation: 'verification',
-  send_invitation: 'callback',
-  show_result: 'end',
-  validate_age: 'validation',
-  validate_credentials: 'validation',
-  verify_identity: 'verification',
-};
-
-function normalizeFlowStepType(type) {
-  const normalized = String(type || 'user_input').trim().toLowerCase();
-  return STEP_TYPE_ALIASES[normalized] || normalized;
-}
-
-function buildFlowPayload(formData, organizationId) {
-  const selectedDeployment = formData.selectedDeployment || null;
-  const selectedPolicyId = formData.defaultPolicyId || selectedDeployment?.default_policy_id || selectedDeployment?.default_presentation_policy_id || null;
-  const selectedTemplateId = formData.credentialTemplateId || null;
-
+export function buildFlowPayload(data, organizationId) {
   return {
     organization_id: organizationId,
-    name: formData.name,
-    description: formData.description,
-    flow_type: formData.flowType,
-    steps: (formData.flowSteps || []).map((step) => ({
-      name: step.name,
-      description: step.description || null,
-      step_type: normalizeFlowStepType(step.type || step.step_type),
-      config: step.config || {},
-      timeout_seconds: step.timeout_seconds || null,
-      conditions: step.conditions || [],
-    })),
-    transitions: [],
-    preconditions: formData.preconditions || [],
-    deployment_profile_id: selectedDeployment?.id || null,
-    deployment_profile_ids: selectedDeployment?.id ? [selectedDeployment.id] : [],
-    credential_template_id: ISSUANCE_FLOW_TYPES.has(formData.flowType) ? selectedTemplateId : null,
-    presentation_policy_id: PRESENTATION_FLOW_TYPES.has(formData.flowType) ? selectedPolicyId : null,
-    trust_profile_id: selectedDeployment?.trust_profile_id || formData.trustProfileId || null,
-    approval_strategy: 'AUTO',
-    enabled: formData.activateImmediately !== false,
+    name: data.name.trim(),
+    description: data.description.trim() || null,
+    flow_type: data.flowType,
+    approval_strategy: data.approvalStrategy,
+    hooks: data.hooks,
+    trigger: { trigger_type: data.triggerType, config: {} },
+    trust_profile_id: data.selectedDeployment?.trust_profile_id || data.trustProfileId || null,
+    credential_template_id: CREDENTIAL_TYPES.has(data.flowType) ? data.credentialTemplateId : null,
+    application_template_id: APPLICATION_TYPES.has(data.flowType) ? data.applicationTemplateId : null,
+    presentation_policy_id: PRESENTATION_TYPES.has(data.flowType) ? data.defaultPolicyId : null,
+    delivery_destination_profile_id: data.flowType === 'physical_document_issuance'
+      ? data.deliveryDestinationProfileId
+      : null,
+    deployment_profile_ids: data.selectedDeployment?.id ? [data.selectedDeployment.id] : [],
   };
 }
 
 const FlowDefinitionWizard = () => {
   const navigate = useNavigate();
-  const { t } = useTranslation('console');
-  const { organizationId: authOrganizationId } = useAuth();
-  const { activeOrgId } = useConsole();
-  const organizationId = activeOrgId || authOrganizationId;
+  const { activeOrgId: organizationId } = useConsole();
+  const [capabilities, setCapabilities] = useState(null);
+  const [capabilityError, setCapabilityError] = useState('');
+  const [capabilitiesLoading, setCapabilitiesLoading] = useState(true);
 
-  // Validation function for each step
-  const validateStep = useCallback((stepIndex, stepData) => {
-    switch (stepIndex) {
-      case 0: // Flow Type
-        return stepData.flowType !== null;
-      case 1: // Configure Steps
-        return (
-          stepData.name.trim() !== '' &&
-          stepData.flowSteps.length > 0
-        );
-      case 2: // Preconditions (optional)
-        return true;
-      case 3: { // Bind Deployment and required flow references
-        if (!stepData.selectedDeployment?.id) {
-          return false;
-        }
-        if (ISSUANCE_FLOW_TYPES.has(stepData.flowType) && !stepData.credentialTemplateId) {
-          return false;
-        }
-        if (PRESENTATION_FLOW_TYPES.has(stepData.flowType) && !stepData.defaultPolicyId) {
-          return false;
-        }
-        return true;
+  const loadCapabilities = useCallback(async () => {
+    setCapabilitiesLoading(true);
+    setCapabilityError('');
+    try {
+      const result = await getFlowCapabilities();
+      if (!result || typeof result !== 'object' || !result.sequences || typeof result.sequences !== 'object') {
+        throw new Error('Flow capability contract is malformed.');
       }
-      case 4: // Review
-        return true;
-      default:
-        return false;
+      setCapabilities(result);
+    } catch (error) {
+      setCapabilities(null);
+      setCapabilityError(error.message || 'Flow capabilities are unavailable.');
+    } finally {
+      setCapabilitiesLoading(false);
     }
   }, []);
 
-  // Handle submission
-  const handleSubmit = useCallback(async (formData) => {
-    if (!organizationId) {
-      throw new Error('Select an organization before creating a flow.');
+  useEffect(() => { loadCapabilities(); }, [loadCapabilities]);
+
+  const validateStep = useCallback((stepIndex, data) => {
+    if (stepIndex === 0) return Boolean(data.flowType);
+    if (stepIndex === 1) return Boolean(data.name.trim() && capabilities?.sequences?.[data.flowType]?.length);
+    if (stepIndex === 2) {
+      if (CREDENTIAL_TYPES.has(data.flowType) && !data.credentialTemplateId) return false;
+      if (APPLICATION_TYPES.has(data.flowType) && !data.applicationTemplateId) return false;
+      if (PRESENTATION_TYPES.has(data.flowType) && !data.defaultPolicyId) return false;
+      if (data.flowType === 'physical_document_issuance' && !data.deliveryDestinationProfileId) return false;
     }
-    return createFlow(buildFlowPayload(formData, organizationId));
-  }, [organizationId]);
+    return true;
+  }, [capabilities]);
 
   const wizard = useWizard({
-    steps: getSteps(t),
+    steps: STEPS,
     initialData: INITIAL_DATA,
     validateStep,
-    onSubmit: handleSubmit,
-    onComplete: () => {
-      // Redirect to operate page after 2 seconds
-      setTimeout(() => {
-        navigate('/console/org/operate');
-      }, 2000);
+    onSubmit: async (data) => {
+      if (!organizationId) throw new Error('Select an organization before creating a flow.');
+      return createFlow(buildFlowPayload(data, organizationId));
     },
-    onCancel: () => navigate('/console/org/flows'),
+    onComplete: (flow) => navigate(`/console/org/flows/definitions/${flow.id}`),
+    onCancel: () => navigate('/console/org/flows/definitions'),
   });
 
-  // Render current step content
-  const renderStepContent = () => {
-    switch (wizard.activeStep) {
-      case 0:
-        return (
-          <FlowTypeStep
-            selectedType={wizard.data.flowType}
-            onSelectType={(type) => wizard.updateData({ flowType: type })}
-          />
-        );
-      case 1:
-        return (
-          <FlowStepsConfigStep
-            flowType={wizard.data.flowType}
-            name={wizard.data.name}
-            description={wizard.data.description}
-            flowSteps={wizard.data.flowSteps}
-            onUpdate={(updates) => wizard.updateData(updates)}
-          />
-        );
-      case 2:
-        return (
-          <PreconditionsStep
-            flowType={wizard.data.flowType}
-            preconditions={wizard.data.preconditions}
-            onUpdate={(updates) => wizard.updateData(updates)}
-          />
-        );
-      case 3:
-        return (
-          <DeploymentBindingStep
-            selectedDeployment={wizard.data.selectedDeployment}
-            defaultPolicyId={wizard.data.defaultPolicyId}
-            credentialTemplateId={wizard.data.credentialTemplateId}
-            flowType={wizard.data.flowType}
-            onUpdate={(updates) => wizard.updateData(updates)}
-          />
-        );
-      case 4:
-        return (
-          <ReviewStep
-            data={wizard.data}
-            onEdit={(step) => wizard.goToStep(step)}
-            onToggleActivation={(value) => wizard.updateData({ activateImmediately: value })}
-          />
-        );
-      default:
-        return <Typography>{t('wizards.flowDefinition.unknownStep')}</Typography>;
-    }
-  };
+  const content = [
+    <FlowTypeStep
+      key="type"
+      capabilities={capabilities}
+      selectedType={wizard.data.flowType}
+      onSelectType={(flowType) => wizard.updateData({ ...INITIAL_DATA, flowType })}
+      onOpenCustomBuilder={() => navigate('/console/org/flows/definitions/new/custom')}
+    />,
+    <FlowStepsConfigStep
+      key="definition"
+      {...wizard.data}
+      capabilities={capabilities}
+      onUpdate={wizard.updateData}
+    />,
+    <DeploymentBindingStep
+      key="dependencies"
+      {...wizard.data}
+      onUpdate={wizard.updateData}
+    />,
+    <ReviewStep key="review" capabilities={capabilities} data={wizard.data} />,
+  ];
 
-  // Show success message
-  if (wizard.success) {
-    return (
-      <Container maxWidth="md" sx={{ py: 4 }}>
-        <Paper elevation={3} sx={{ p: 4, textAlign: 'center' }}>
-          <CheckCircleIcon color="success" sx={{ fontSize: 64, mb: 2 }} />
-          <Typography variant="h5" gutterBottom>
-            {t('wizards.flowDefinition.success.title')}
-          </Typography>
-          <Typography color="text.secondary" paragraph>
-            {wizard.data.activateImmediately 
-              ? t('wizards.flowDefinition.success.messageActive', { name: wizard.data.name })
-              : t('wizards.flowDefinition.success.messageDraft', { name: wizard.data.name })}
-          </Typography>
-          <Typography variant="body2" color="text.secondary">
-            {t('wizards.flowDefinition.success.redirecting')}
-          </Typography>
-        </Paper>
-      </Container>
-    );
+  if (capabilitiesLoading && !capabilities) {
+    return <Box sx={{ display: 'flex', justifyContent: 'center', py: 10 }}><CircularProgress /></Box>;
   }
 
   return (
-    <Container maxWidth="lg" sx={{ py: 4 }}>
-      <Paper elevation={3} sx={{ p: 4 }}>
-        {/* Header */}
-        <Box sx={{ mb: 4 }}>
-          <Typography variant="h4" gutterBottom>
-            {t('wizards.flowDefinition.title')}
-          </Typography>
-          <Typography color="text.secondary">
-            {t('wizards.flowDefinition.description')}
-          </Typography>
-        </Box>
+    <Container maxWidth="md" sx={{ py: 4 }}>
+      <Box sx={{ mb: 3 }}>
+        <Typography variant="h4">Create flow</Typography>
+        <Typography color="text.secondary">MIP 0.3 standard flow</Typography>
+      </Box>
 
-        {/* Stepper */}
-        <Stepper activeStep={wizard.activeStep} sx={{ mb: 4 }}>
-          {getSteps(t).map((step) => (
-            <Step key={step.label}>
-              <StepLabel optional={step.optional && <Typography variant="caption">{t('wizards.common.optional')}</Typography>}>
-                {step.label}
-              </StepLabel>
-            </Step>
-          ))}
-        </Stepper>
+      {capabilityError && (
+        <Alert
+          severity="error"
+          sx={{ mb: 3 }}
+          action={(
+            <Button
+              color="inherit"
+              size="small"
+              startIcon={<RefreshIcon />}
+              onClick={loadCapabilities}
+              disabled={capabilitiesLoading}
+            >
+              Refresh
+            </Button>
+          )}
+        >
+          {capabilityError}
+        </Alert>
+      )}
+      {wizard.error && <Alert severity="error" sx={{ mb: 3 }}>{wizard.error}</Alert>}
+      {wizard.success && <Alert severity="success" sx={{ mb: 3 }}>Draft created. Opening validation workspace...</Alert>}
 
-        {/* Error Alert */}
-        {wizard.error && (
-          <Alert severity="error" sx={{ mb: 3 }}>
-            {wizard.error}
-          </Alert>
-        )}
+      <Stepper activeStep={wizard.activeStep} sx={{ mb: 3 }}>
+        {STEPS.map((label) => <Step key={label}><StepLabel>{label}</StepLabel></Step>)}
+      </Stepper>
 
-        {/* Step Content */}
-        <Box sx={{ minHeight: 400, mb: 4 }}>
-          {renderStepContent()}
-        </Box>
-
-        {/* Navigation Buttons */}
-        <Box sx={{ display: 'flex', justifyContent: 'space-between', pt: 2 }}>
-          <Button
-            onClick={wizard.activeStep === 0 ? () => navigate('/console/org/flows/definitions') : wizard.goBack}
-            startIcon={<ArrowBackIcon />}
-            disabled={wizard.loading}
-            data-testid={wizard.activeStep === 0 ? 'wizard.flow.cancel' : 'wizard.flow.back'}
-          >
-            {wizard.activeStep === 0 ? t('wizards.flowDefinition.buttons.cancel') : t('wizards.flowDefinition.buttons.back')}
-          </Button>
-
-          <Box sx={{ display: 'flex', gap: 2 }}>
-            {/* Skip button for optional steps */}
-            {getSteps(t)[wizard.activeStep].optional && (
-              <Button
-                onClick={wizard.goNext}
-                disabled={wizard.loading}
-                data-testid="wizard.flow.skip"
-              >
-                {t('wizards.flowDefinition.buttons.skip')}
-              </Button>
-            )}
-
-            {wizard.activeStep === getSteps(t).length - 1 ? (
-              <Button
-                variant="contained"
-                onClick={wizard.submit}
-                disabled={wizard.loading || !wizard.isStepValid()}
-                startIcon={wizard.loading ? <CircularProgress size={20} /> : <CheckCircleIcon />}
-                data-testid="wizard.flow.submit"
-              >
-                {wizard.loading ? t('wizards.flowDefinition.buttons.submitting') : t('wizards.flowDefinition.buttons.submit')}
-              </Button>
-            ) : (
-              <Button
-                variant="contained"
-                onClick={wizard.goNext}
-                disabled={wizard.loading || !wizard.isStepValid()}
-                endIcon={<ArrowForwardIcon />}
-                data-testid="wizard.flow.next"
-              >
-                {t('wizards.flowDefinition.buttons.next')}
-              </Button>
-            )}
-          </Box>
-        </Box>
+      <Paper variant="outlined" sx={{ p: { xs: 2, sm: 3 }, minHeight: 420 }}>
+        {content[wizard.activeStep]}
       </Paper>
+
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 3 }}>
+        <Button
+          startIcon={<ArrowBackIcon />}
+          onClick={wizard.activeStep === 0 ? wizard.cancel : wizard.goBack}
+          disabled={wizard.loading || wizard.success}
+          data-testid={wizard.activeStep === 0 ? 'wizard.flow.cancel' : 'wizard.flow.back'}
+        >
+          {wizard.activeStep === 0 ? 'Cancel' : 'Back'}
+        </Button>
+        {wizard.isLastStep ? (
+          <Button
+            variant="contained"
+            startIcon={wizard.loading ? <CircularProgress size={18} /> : <CheckIcon />}
+            onClick={wizard.submit}
+            disabled={wizard.loading || wizard.success || !wizard.isStepValid()}
+            data-testid="wizard.flow.submit"
+          >
+            Create draft
+          </Button>
+        ) : (
+          <Button
+            variant="contained"
+            endIcon={<ArrowForwardIcon />}
+            onClick={wizard.goNext}
+            disabled={!wizard.isStepValid() || wizard.loading || capabilitiesLoading || !capabilities}
+            data-testid="wizard.flow.next"
+          >
+            Next
+          </Button>
+        )}
+      </Box>
     </Container>
   );
 };

@@ -133,14 +133,14 @@ async def test_applicant_stats_counts_application_statuses(
 ) -> None:
     async def fake_request_service_json_with_headers(service_name, path, **kwargs):
         assert service_name == "applicant"
-        assert path == "/v1/applicants/org-applications"
-        return [
+        assert path == "/v1/organizations/org-123/applicants"
+        return {"items": [
             {"id": "app-1", "status": "SUBMITTED"},
             {"id": "app-2", "status": "UNDER_REVIEW"},
             {"id": "app-3", "status": "APPROVED"},
             {"id": "app-4", "status": "OFFERED"},
             {"id": "app-5", "status": "CREDENTIALED"},
-        ], None
+        ]}, None
 
     monkeypatch.setattr(organizations, "_request_service_json_with_headers", fake_request_service_json_with_headers)
 

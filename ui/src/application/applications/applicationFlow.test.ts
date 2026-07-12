@@ -42,6 +42,7 @@ describe('applicationFlow helpers', () => {
   it('normalizes template responses into form config shape', () => {
     expect(normalizeTemplateToFormConfig({
       id: 'tpl-1',
+      application_template_id: 'app-template-1',
       credential_type: 'ExampleCredential',
       name: 'Example',
       claims: [{ name: 'first_name', required: true }, { name: 'email', required: false }],
@@ -49,8 +50,9 @@ describe('applicationFlow helpers', () => {
       id: 'tpl-1',
       credential_type: 'ExampleCredential',
       display_name: 'Example',
-      required_fields: ['first_name'],
-      optional_fields: ['email'],
+      required_fields: [expect.objectContaining({ name: 'first_name', required: true })],
+      optional_fields: [expect.objectContaining({ name: 'email', required: false })],
+      application_template_id: 'app-template-1',
     })
   })
 
@@ -80,7 +82,7 @@ describe('applicationFlow helpers', () => {
       required_fields: [
         { name: 'email', label: 'Email', type: 'email', required: true },
         { name: 'course_name', label: 'Canvas course', type: 'text', required: true },
-        { name: 'score_percent', label: 'Score percent', type: 'number', required: true },
+          { name: 'score_percent', label: 'Score percent', type: 'integer', required: true },
       ],
       optional_fields: [
         { name: 'family_name', label: 'Family Name', type: 'text', required: false },
@@ -137,44 +139,35 @@ describe('applicationFlow helpers', () => {
 
   it('builds standard application payloads', () => {
     expect(buildStandardApplicationPayload({
-      applicantId: 'app-1',
-      credentialConfig: { id: 'cfg-1', credential_type: 'ExampleCredential', display_name: 'Example' },
-      credentialConfigId: 'cfg-fallback',
+      organizationId: 'org-1',
+      credentialConfig: { id: 'cfg-1', application_template_id: 'app-template-1' },
       formData: { documentNumber: '1234' },
-    })).toMatchObject({
-      applicant_id: 'app-1',
-      credential_configuration_id: 'cfg-1',
-      issuing_authority: 'ElevenID LLC',
-      requested_validity_years: 10,
-      metadata: {
-        document_number: '1234',
-        credential_type: 'ExampleCredential',
-        credential_display_name: 'Example',
-      },
+    })).toEqual({
+      organization_id: 'org-1',
+      application_template_id: 'app-template-1',
+      form_data: { documentNumber: '1234' },
+      integration_context: {},
     })
   })
 
   it('marks Canvas LTI applications for demo auto-approval', () => {
     expect(buildStandardApplicationPayload({
-      applicantId: 'app-1',
-      credentialConfig: { id: 'cfg-1', credential_type: 'open_badge', display_name: 'Canvas Badge' },
-      credentialConfigId: 'cfg-fallback',
+      organizationId: 'org-1',
+      credentialConfig: { id: 'cfg-1', application_template_id: 'app-template-1' },
       formData: {},
       canvasLtiContext: {
         state: 'state-1',
         canvas_account_id: 'canvas-real-account-1',
       },
-    })).toMatchObject({
-      applicant_id: 'app-1',
-      credential_configuration_id: 'cfg-1',
-      metadata: {
-        credential_type: 'open_badge',
-        credential_display_name: 'Canvas Badge',
+    })).toEqual({
+      organization_id: 'org-1',
+      application_template_id: 'app-template-1',
+      form_data: {},
+      integration_context: {
         canvas_lti: {
           state: 'state-1',
           canvas_account_id: 'canvas-real-account-1',
         },
-        auto_approve: true,
       },
     })
   })
@@ -280,6 +273,37 @@ describe('applicationFlow helpers', () => {
     })).toEqual({
       valid: false,
       errors: { code: 'Minimum length is 3' },
+    })
+  })
+
+  it('validates typed template fields before submission', () => {
+    const result = validateApplicationStep({
+      stepIndex: 0,
+      steps: [{ label: 'step', fields: [
+        { name: 'birth_date', type: 'date' },
+        { name: 'score', type: 'integer', minimum: 1, maximum: 10 },
+        { name: 'consent', type: 'boolean' },
+        { name: 'level', type: 'select', enum: ['basic', 'advanced'] },
+        { name: 'code', type: 'text', pattern: '[A-Z]{3}' },
+      ] }, { label: 'review', fields: [] }],
+      formData: {
+        birth_date: '03/12/2026',
+        score: 1.5,
+        consent: 'yes',
+        level: 'unknown',
+        code: 'ab',
+      },
+    })
+
+    expect(result).toEqual({
+      valid: false,
+      errors: {
+        birth_date: 'Use a date in YYYY-MM-DD format',
+        score: 'Enter a whole number',
+        consent: 'Choose true or false',
+        level: 'Choose one of the allowed values',
+        code: 'Invalid format',
+      },
     })
   })
 })

@@ -89,7 +89,7 @@ function formatFieldLabel(fieldName) {
 /**
  * Render text input field
  */
-function TextFieldRenderer({ field, value, onChange, error, required, validation }) {
+function TextFieldRenderer({ field, value, onChange, error, required, validation, inputType = 'text' }) {
   const inputProps = {};
   
   if (validation?.min_length) {
@@ -105,6 +105,7 @@ function TextFieldRenderer({ field, value, onChange, error, required, validation
   return (
     <TextField
       fullWidth
+      type={inputType}
       label={field.label || formatFieldLabel(field.name)}
       value={value || ''}
       onChange={(e) => onChange(field.name, e.target.value)}
@@ -126,14 +127,14 @@ function NumberFieldRenderer({ field, value, onChange, error, required, validati
       type="number"
       label={field.label || formatFieldLabel(field.name)}
       value={value || ''}
-      onChange={(e) => onChange(field.name, parseFloat(e.target.value) || '')}
+      onChange={(e) => onChange(field.name, e.target.value === '' ? '' : Number(e.target.value))}
       required={required}
       error={!!error}
       helperText={error}
       inputProps={{
-        min: validation?.min_value,
-        max: validation?.max_value,
-        step: field.step || 'any',
+        min: validation?.minimum ?? validation?.min ?? validation?.min_value,
+        max: validation?.maximum ?? validation?.max ?? validation?.max_value,
+        step: field.type === 'integer' ? 1 : (field.step || 'any'),
       }}
     />
   );
@@ -181,7 +182,7 @@ function DateTimeFieldRenderer({ field, value, onChange, error, required }) {
  * Render select/dropdown field
  */
 function SelectFieldRenderer({ field, value, onChange, error, required, validation }) {
-  const options = validation?.allowed_values || field.options || [];
+  const options = validation?.enum || validation?.allowed_values || field.enum || field.options || [];
 
   return (
     <FormControl fullWidth error={!!error} required={required}>
@@ -191,11 +192,11 @@ function SelectFieldRenderer({ field, value, onChange, error, required, validati
         onChange={(e) => onChange(field.name, e.target.value)}
         label={field.label || formatFieldLabel(field.name)}
       >
-        {options.map((option) => (
-          <MenuItem key={option} value={option}>
-            {typeof option === 'string' ? formatFieldLabel(option) : option}
-          </MenuItem>
-        ))}
+        {options.map((option) => {
+          const optionValue = typeof option === 'object' ? option.value : option;
+          const optionLabel = typeof option === 'object' ? (option.label || option.value) : formatFieldLabel(option);
+          return <MenuItem key={String(optionValue)} value={optionValue}>{optionLabel}</MenuItem>;
+        })}
       </Select>
       {error && (
         <Typography variant="caption" color="error" sx={{ mt: 0.5, ml: 1.75 }}>
@@ -359,15 +360,16 @@ export function DynamicFieldRenderer({
   const renderers = {
     text: TextFieldRenderer,
     number: NumberFieldRenderer,
+    integer: NumberFieldRenderer,
     date: DateFieldRenderer,
     datetime: DateTimeFieldRenderer,
     select: SelectFieldRenderer,
     boolean: BooleanFieldRenderer,
     file: FileFieldRenderer,
     address: AddressFieldRenderer,
-    email: (props) => <TextFieldRenderer {...props} type="email" />,
-    phone: (props) => <TextFieldRenderer {...props} type="tel" />,
-    url: (props) => <TextFieldRenderer {...props} type="url" />,
+    email: (props) => <TextFieldRenderer {...props} inputType="email" />,
+    phone: (props) => <TextFieldRenderer {...props} inputType="tel" />,
+    url: (props) => <TextFieldRenderer {...props} inputType="url" />,
   };
 
   const Renderer = renderers[fieldType] || TextFieldRenderer;
@@ -406,7 +408,7 @@ export function DynamicFieldGroup({
           : field;
         
         const isRequired = requiredFields?.includes(fieldName);
-        const validation = validationRules?.[fieldName];
+        const validation = { ...fieldDef, ...(validationRules?.[fieldName] || {}) };
         const error = errors?.[fieldName];
 
         return (

@@ -80,7 +80,7 @@ const TrustProfileWizard = () => {
   const { t } = useTranslation('console');
   const { organizationId } = useAuth();
   const { activeOrgId } = useConsole();
-  const effectiveOrganizationId = activeOrgId || organizationId;
+  const effectiveOrganizationId = activeOrgId;
 
   const validateStep = useCallback((stepIndex, data) => {
     switch (stepIndex) {

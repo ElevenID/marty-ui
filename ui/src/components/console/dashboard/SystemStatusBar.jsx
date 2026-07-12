@@ -122,7 +122,7 @@ export function SystemStatusBar({ systemHealth }) {
 
   const handleServiceClick = (serviceName) => {
     // Navigate to audit logs filtered by service
-    window.location.href = `/console/audit?service=${serviceName}`;
+    window.location.href = `/console/org/audit?service=${serviceName}`;
   };
 
   return (
@@ -150,7 +150,7 @@ export function SystemStatusBar({ systemHealth }) {
           <IconButton
             size="small"
             component={Link}
-            to="/console/audit"
+            to="/console/org/audit"
             title={t('dashboard.systemStatus.viewAllLogs')}
           >
             <OpenInNewIcon fontSize="small" />

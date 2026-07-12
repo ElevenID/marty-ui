@@ -69,7 +69,7 @@ export const CREDENTIAL_CATALOG_TYPES = {
     processingTime: 'Instant upon issuance',
     requirements: ['Active ElevenID account'],
     format: 'vc+sd-jwt',
-    standard: 'W3C / Open Badge 3.0',
+    standard: 'W3C Verifiable Credentials',
     worksWithLabel: 'Web & VC wallets',
   },
   'org.iso.18013.5.1.mDL': {
@@ -142,7 +142,7 @@ export function mapCredentialTemplateToCatalogItem(template, organizationName) {
 }
 
 export function extractExistingApplicationIds(applications = []) {
-  return applications.map((application) => application?.credential_configuration_id).filter(Boolean);
+  return applications.map((application) => application?.credential_template_id).filter(Boolean);
 }
 
 /**
@@ -154,7 +154,7 @@ export function extractApplicationStatusInfo(applications = []) {
   const counts = { pending: 0, approved: 0, offered: 0, rejected: 0, credentialed: 0 };
 
   for (const app of applications) {
-    const configId = app?.credential_configuration_id;
+    const configId = app?.credential_template_id;
     if (!configId) continue;
     const status = (app.status || '').toLowerCase();
     // Keep the most advanced status per credential

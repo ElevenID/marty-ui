@@ -45,12 +45,14 @@ const SYSTEM_ORG_IDS = new Set([
  * @returns {UsePermissionsReturn}
  */
 export function usePermissions() {
-  const { organizationId, isAuthenticated } = useAuth();
-  const { activeOrgId, mode } = useConsole();
+  const { isAuthenticated } = useAuth();
+  const { activeOrgId, memberships, membershipsLoaded, mode } = useConsole();
   // Never fall through to the system/sentinel org — it's policy-blocked for member operations.
-  const fallbackOrgId = SYSTEM_ORG_IDS.has(organizationId) ? null : organizationId;
-  const effectiveOrganizationId = mode === 'org'
-    ? (activeOrgId || fallbackOrgId)
+  const hasSelectedMembership = membershipsLoaded && Array.isArray(memberships)
+    && memberships.some((membership) => membership.id === activeOrgId);
+  const effectiveOrganizationId = mode === 'org' && hasSelectedMembership
+    && !SYSTEM_ORG_IDS.has(activeOrgId)
+    ? activeOrgId
     : null;
   const [permissions, setPermissions] = useState(/** @type {Set<string>} */ new Set());
   const [roles, setRoles] = useState([]);

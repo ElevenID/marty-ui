@@ -49,7 +49,7 @@ function TrustProfilesPage() {
   const { t } = useTranslation('console');
   const { organizationId } = useAuth();
   const { activeOrgId } = useConsole();
-  const effectiveOrganizationId = activeOrgId || organizationId;
+  const effectiveOrganizationId = activeOrgId;
 
   // Fetch trust profiles from API
   const { data: profiles = [], loading, error } = useAsyncData(

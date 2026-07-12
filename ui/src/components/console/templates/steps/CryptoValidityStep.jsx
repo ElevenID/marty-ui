@@ -44,7 +44,7 @@ const CryptoValidityStep = ({ data, onChange }) => {
   const { t } = useTranslation('console');
   const { organizationId: authOrganizationId } = useAuth();
   const { activeOrgId } = useConsole();
-  const organizationId = activeOrgId || authOrganizationId;
+  const organizationId = activeOrgId;
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   const { data: revocationProfilesData, error: revocationProfilesError } = useAsyncData(

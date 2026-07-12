@@ -67,13 +67,14 @@ ROUTE_CONFIG = {
     "/v1/presentation-policies": {"service": "presentation-policies", "requires_auth": True},
     "/v1/deployment-profiles": {"service": "deployment-profiles", "requires_auth": True},
     "/v1/signing-keys": {"service": "signing-keys", "requires_auth": True},
+    "/v1/passport": {"service": "issuance", "requires_auth": True},
     "/v1/revocation-profiles": {"service": "revocation-profiles", "requires_auth": True},
     "/v1/revocation-batches": {"service": "revocation-profiles", "requires_auth": True},
     "/v1/cascade-revocations": {"service": "revocation-profiles", "requires_auth": True},
     "/v1/devices": {"service": "device-registration", "requires_auth": True},
 
     # Digital Identity Model - Operational Resources
-    "/v1/applicants": {"service": "applicant", "requires_auth": True},
+    "/v1/me": {"service": "applicant", "requires_auth": True},
     "/v1/issued-credentials": {"service": "issuance", "requires_auth": True},
     # OID4VCI wallet-facing endpoints must be public (no auth token available on wallet)
     "/v1/issuance/offers": {"service": "issuance", "requires_auth": False},

@@ -45,6 +45,10 @@ vi.mock('../../../hooks/useAuth', () => ({
   useAuth: () => ({ organizationId: 'org-1' }),
 }));
 
+vi.mock('../../../contexts/ConsoleContext', () => ({
+  useConsole: () => ({ activeOrgId: 'org-1' }),
+}));
+
 vi.mock('../../../services/applicationTemplatesApi', () => ({
   listApplicationTemplates: (...args: unknown[]) => mockListApplicationTemplates(...args),
 }));

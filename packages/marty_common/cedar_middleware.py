@@ -21,6 +21,8 @@ class CedarAuthMiddleware(BaseHTTPMiddleware):
     """Permission-based authorization for org-scoped gateway routes."""
 
     SKIP_PATTERNS = [
+        r"^/v1/flows/capabilities$",
+        r"^/v1/issued-credentials/mine$",
         r"^/v1/organizations$",
         r"^/v1/organizations/mine$",
         r"^/v1/organizations/discover",

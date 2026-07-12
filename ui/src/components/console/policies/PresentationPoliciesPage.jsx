@@ -63,7 +63,7 @@ function PresentationPoliciesPage() {
         listTrustProfiles({ organization_id: organizationId, limit: 1 }),
       ]);
       return {
-        templates: Array.isArray(templatesResult) ? templatesResult : (templatesResult?.items ?? []),
+        templates: templatesResult,
         trustProfiles: Array.isArray(trustProfilesResult) ? trustProfilesResult : [],
       };
     },

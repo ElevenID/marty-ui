@@ -36,6 +36,9 @@ vi.mock('react-router-dom', async () => {
 
 vi.mock('../../../../services/flowsApi', () => ({
   getFlow: (...args: unknown[]) => mockGetFlow(...args),
+  publishFlow: vi.fn(),
+  testFlow: vi.fn(),
+  validateFlow: vi.fn(),
 }))
 
 describe('FlowDetailPage', () => {
@@ -44,7 +47,9 @@ describe('FlowDetailPage', () => {
     mockGetFlow.mockResolvedValue({
       id: 'flow-1',
       name: 'Production credential flow',
-      status: 'PUBLISHED',
+      status: 'ACTIVE',
+      flow_type: 'oid4vci_pre_authorized',
+      resolved_steps: ['create_offer', 'token_exchange', 'credential_request', 'issue_credential'],
       environment: 'production',
       public_url: 'https://beta.elevenidllc.com/apply/flow-1',
       created_at: '2026-07-09T12:00:00Z',

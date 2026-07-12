@@ -42,16 +42,18 @@ class ApplicantProfileProvisioningAdapter:
 
         payload = {
             "organization_id": user.organization_id,
-            "user_id": user.user_id,
             "email": user.email,
             "given_name": user.given_name,
             "family_name": user.family_name,
-            "vetting_level": "basic",
         }
 
         try:
             async with httpx.AsyncClient(timeout=self._timeout) as client:
-                response = await client.post(f"{self._service_url}/v1/applicants", json=payload)
+                response = await client.patch(
+                    f"{self._service_url}/v1/me/applicant-profile",
+                    json=payload,
+                    headers={"X-User-Id": user.user_id, "X-User-Email": user.email},
+                )
                 response.raise_for_status()
         except Exception as exc:
             logger.warning(

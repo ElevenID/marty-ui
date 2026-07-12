@@ -4,6 +4,7 @@ const ORG_ID = '00000000-0000-0000-0000-000000000001';
 const USER_ID = 'cbc0c81b-2427-4d24-8c1d-d8dd91b1af38';
 const APPLICANT_ID = '45fb5b33-14bb-4b7f-9a37-5d4da525004a';
 const TEMPLATE_ID = '50000000-0000-0000-0000-000000000010';
+const APPLICATION_TEMPLATE_ID = '60000000-0000-0000-0000-000000000010';
 const APPLICATION_ID = '4b6bee6f-6b66-4fd5-b541-b140bc1c0be7';
 
 const martyOrg = {
@@ -75,6 +76,75 @@ const walletRegistry = [
     specifications: ['OID4VCI'],
     supported_protocols: ['OID4VCI'],
     supported_platforms: ['ios', 'android'],
+    routing_templates: {
+      generic: 'openid-credential-offer://?credential_offer_uri={offer_encoded}',
+    },
+  },
+  {
+    id: 'wr-marty-001',
+    name: 'Marty Authenticator',
+    description: 'ElevenID-compatible mobile wallet.',
+    is_active: true,
+    supports_qr: true,
+    supports_deeplink: true,
+    specifications: ['OID4VCI'],
+    supported_platforms: ['ios', 'android'],
+    routing_templates: { generic: 'marty-authenticator://open?inner={inner_uri_encoded}' },
+  },
+  {
+    id: 'wr-lissi-001',
+    name: 'LISSI Wallet',
+    description: 'LISSI mobile wallet.',
+    is_active: true,
+    supports_qr: true,
+    supports_deeplink: true,
+    specifications: ['OID4VCI'],
+    supported_platforms: ['ios', 'android'],
+    routing_templates: { generic: 'lissi-wallet://credential?offer={offer_encoded}' },
+  },
+  {
+    id: 'wr-sphereon-001',
+    name: 'Sphereon Wallet',
+    description: 'Sphereon mobile wallet.',
+    is_active: true,
+    supports_qr: true,
+    supports_deeplink: true,
+    specifications: ['OID4VCI'],
+    supported_platforms: ['ios', 'android'],
+    routing_templates: { generic: 'sphereon-wallet://credential?offer={offer_encoded}' },
+  },
+  {
+    id: 'wr-dc4eu-001',
+    name: 'DC4EU Wallet',
+    description: 'DC4EU ecosystem wallet.',
+    is_active: true,
+    supports_qr: true,
+    supports_deeplink: true,
+    specifications: ['OID4VCI'],
+    supported_platforms: ['ios', 'android'],
+    routing_templates: { generic: 'dc4eu-wallet://credential?offer={offer_encoded}' },
+  },
+  {
+    id: 'wr-google-001',
+    name: 'Google Wallet',
+    description: 'Google Wallet on Android.',
+    is_active: true,
+    supports_qr: true,
+    supports_deeplink: true,
+    specifications: ['OID4VCI'],
+    supported_platforms: ['android'],
+    routing_templates: { android: 'google-wallet://credential?offer={offer_encoded}' },
+  },
+  {
+    id: 'wr-apple-001',
+    name: 'Apple Wallet',
+    description: 'Apple Wallet on iOS.',
+    is_active: true,
+    supports_qr: true,
+    supports_deeplink: true,
+    specifications: ['OID4VCI'],
+    supported_platforms: ['ios'],
+    routing_templates: { ios: 'apple-wallet://credential?offer={offer_encoded}' },
   },
 ];
 
@@ -86,8 +156,26 @@ function fulfillJson(route, body, status = 200) {
   });
 }
 
-async function installApplicantWalletMocks(page) {
+async function overflowDiagnostics(page) {
+  return page.evaluate(() => [...document.querySelectorAll('body *')]
+    .map((element) => {
+      const rect = element.getBoundingClientRect();
+      return {
+        tag: element.tagName,
+        className: String(element.className || '').slice(0, 120),
+        text: String(element.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 80),
+        left: Math.round(rect.left),
+        right: Math.round(rect.right),
+        width: Math.round(rect.width),
+      };
+    })
+    .filter((item) => item.right > window.innerWidth + 1 || item.left < -1)
+    .slice(0, 12));
+}
+
+async function installApplicantWalletMocks(page, { applications = [], credentials = [] } = {}) {
   const issueRequests = [];
+  const createRequests = [];
 
   await page.route('**/v1/**', async (route, request) => {
     const url = new URL(request.url());
@@ -114,59 +202,64 @@ async function installApplicantWalletMocks(page) {
       return fulfillJson(route, loginBadgeTemplate);
     }
 
-    if (method === 'GET' && path === `/v1/applicants/profiles/${APPLICANT_ID}`) {
+    if (method === 'GET' && path === '/v1/application-templates') {
+      return fulfillJson(route, [{
+        id: APPLICATION_TEMPLATE_ID,
+        organization_id: ORG_ID,
+        credential_template_id: TEMPLATE_ID,
+        name: 'Marty Member Login Credential Application',
+        status: 'ACTIVE',
+        form_fields: [],
+      }]);
+    }
+
+    if (method === 'GET' && path === '/v1/me/applicant-profile') {
       return fulfillJson(route, applicantProfile);
     }
 
-    if (method === 'GET' && path === `/v1/applicants/by-user/${USER_ID}`) {
-      return fulfillJson(route, applicantProfile);
-    }
-
-    if (method === 'PATCH' && path === `/v1/applicants/profiles/${APPLICANT_ID}`) {
+    if (method === 'PATCH' && path === '/v1/me/applicant-profile') {
       return fulfillJson(route, { ...applicantProfile, ...(request.postDataJSON?.() || {}) });
     }
 
-    if (method === 'GET' && path === `/v1/applicants/profiles/${APPLICANT_ID}/applications`) {
-      return fulfillJson(route, { applications: [], total: 0 });
+    if (method === 'GET' && path === '/v1/me/applications') {
+      return fulfillJson(route, { items: applications, total: applications.length, limit: 100, offset: 0 });
     }
 
-    if (method === 'POST' && path === '/v1/applicants/applications') {
+    if (method === 'POST' && path === '/v1/me/applications') {
+      createRequests.push(request.postDataJSON?.() || {});
       return fulfillJson(route, {
         id: APPLICATION_ID,
         applicant_id: APPLICANT_ID,
-        credential_configuration_id: TEMPLATE_ID,
+        organization_id: ORG_ID,
+        credential_template_id: TEMPLATE_ID,
+        application_template_id: APPLICATION_TEMPLATE_ID,
         status: 'DRAFT',
       });
     }
 
-    if (method === 'POST' && path === `/v1/applicants/applications/${APPLICATION_ID}/submit`) {
+    if (method === 'POST' && path === `/v1/me/applications/${APPLICATION_ID}/submit`) {
       return fulfillJson(route, {
         id: APPLICATION_ID,
         applicant_id: APPLICANT_ID,
-        credential_configuration_id: TEMPLATE_ID,
+        organization_id: ORG_ID,
+        credential_template_id: TEMPLATE_ID,
+        application_template_id: APPLICATION_TEMPLATE_ID,
         status: 'APPROVED',
       });
     }
 
-    if (method === 'POST' && path === `/v1/applicants/applications/${APPLICATION_ID}/issue`) {
+    if (method === 'POST' && path === `/v1/me/applications/${APPLICATION_ID}/claim`) {
       const payload = request.postDataJSON?.() || {};
       issueRequests.push(payload);
 
       return fulfillJson(route, {
         id: APPLICATION_ID,
-        status: 'active',
+        status: 'APPROVED',
+        claim_state: 'OFFER_READY',
         credential_offer_uri: `https://issuer.example.test/offers/${issueRequests.length}`,
-        offer_expires_at: '2026-07-10T23:59:00Z',
-        credential_offer_uris: {
-          'wr-default': 'https://issuer.example.test/offers/default',
-          'wr-spruce-001': 'https://issuer.example.test/offers/spruce',
-          'wr-marty-001': 'https://issuer.example.test/offers/marty',
-        },
-        credential_offer_labels: {
-          'wr-default': 'Any OID4VCI Wallet',
-          'wr-spruce-001': 'SpruceKit',
-          'wr-marty-001': 'Marty Authenticator',
-        },
+        offer_expires_at: '2099-07-10T23:59:00Z',
+        credential_offer_uris: Object.fromEntries(walletRegistry.map((wallet) => [wallet.id, `https://issuer.example.test/offers/${wallet.id}`])),
+        credential_offer_labels: Object.fromEntries(walletRegistry.map((wallet) => [wallet.id, wallet.name])),
         wallet_registry: Object.fromEntries(walletRegistry.map((wallet) => [wallet.id, wallet])),
       });
     }
@@ -179,18 +272,26 @@ async function installApplicantWalletMocks(page) {
       return fulfillJson(route, []);
     }
 
-    if (method === 'GET' && path === '/v1/documents') {
-      return fulfillJson(route, { credentials: [] });
+    if (method === 'GET' && path === '/v1/issued-credentials/mine') {
+      return fulfillJson(route, { items: credentials, total: credentials.length, limit: 100, offset: 0 });
     }
 
     return fulfillJson(route, { detail: `Unhandled mocked route: ${method} ${path}` }, 404);
   });
 
-  return { issueRequests };
+  return { createRequests, issueRequests };
 }
 
 test('applicant selects a browser wallet during login badge claim flow', async ({ page }) => {
-  const { issueRequests } = await installApplicantWalletMocks(page);
+  const pageErrors = [];
+  const failedApiRequests = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  page.on('requestfailed', (request) => {
+    if (new URL(request.url()).pathname.startsWith('/v1/')) {
+      failedApiRequests.push(`${request.method()} ${request.url()}: ${request.failure()?.errorText}`);
+    }
+  });
+  const { createRequests, issueRequests } = await installApplicantWalletMocks(page);
 
   await page.goto(`/console/applicant/apply/${TEMPLATE_ID}`);
 
@@ -204,6 +305,20 @@ test('applicant selects a browser wallet during login badge claim flow', async (
   await expect(page.getByTestId('wallet-option-wr-default')).toHaveAttribute('aria-checked', 'true');
   await expect(page.getByTestId('wallet-option-wr-waltid-001')).toContainText('Browser');
   await expect(page.getByTestId('wallet-option-wr-spruce-001')).toContainText('Mobile');
+  for (const wallet of walletRegistry) {
+    await expect(page.getByTestId(`wallet-option-${wallet.id}`)).toBeVisible();
+  }
+
+  expect(createRequests).toEqual([{
+    organization_id: ORG_ID,
+    application_template_id: APPLICATION_TEMPLATE_ID,
+    form_data: expect.any(Object),
+    integration_context: {},
+  }]);
+  expect(createRequests[0]).not.toHaveProperty('applicant_id');
+  expect(createRequests[0]).not.toHaveProperty('credential_configuration_id');
+  expect(createRequests[0]).not.toHaveProperty('issuing_authority');
+  expect(createRequests[0]).not.toHaveProperty('metadata');
 
   await expect.poll(() => issueRequests.length).toBeGreaterThanOrEqual(1);
   expect(issueRequests[0].delivery_destination_ids).toContain('dd-oid4vci-compatible-wallet');
@@ -222,4 +337,72 @@ test('applicant selects a browser wallet during login badge claim flow', async (
     return JSON.parse(localStorage.getItem(`elevenid_wallets_${userId}`) || '[]');
   }, USER_ID);
   expect(storedWallets).toEqual(['wr-waltid-001']);
+  expect(pageErrors).toEqual([]);
+  expect(failedApiRequests).toEqual([]);
+});
+
+test('holder inventory remains actionable and overflow-free at supported widths', async ({ page }) => {
+  const pageErrors = [];
+  const failedApiRequests = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  page.on('requestfailed', (request) => {
+    if (new URL(request.url()).pathname.startsWith('/v1/')) {
+      failedApiRequests.push(`${request.method()} ${request.url()}: ${request.failure()?.errorText}`);
+    }
+  });
+
+  await installApplicantWalletMocks(page, {
+    applications: [
+      {
+        id: 'application-offer-ready',
+        organization_id: ORG_ID,
+        credential_template_id: TEMPLATE_ID,
+        credential_display_name: 'Member Login Credential',
+        status: 'APPROVED',
+        claim_state: 'OFFER_READY',
+        credential_offer_uri: 'https://issuer.example.test/offers/ready',
+        offer_expires_at: '2099-07-10T23:59:00Z',
+        created_at: '2026-07-11T12:00:00Z',
+        updated_at: '2026-07-11T12:00:00Z',
+      },
+      {
+        id: 'application-blocked',
+        organization_id: ORG_ID,
+        credential_template_id: '50000000-0000-0000-0000-000000000011',
+        credential_display_name: 'Employee Access Credential',
+        status: 'APPROVED',
+        claim_state: 'BLOCKED',
+        claim_blocker: {
+          code: 'NO_ACTIVE_ISSUANCE_FLOW',
+          owner: 'ISSUER',
+          message: 'Waiting for the issuer to activate credential delivery',
+        },
+        created_at: '2026-07-11T11:00:00Z',
+        updated_at: '2026-07-11T11:00:00Z',
+      },
+    ],
+  });
+
+  const viewports = [
+    { width: 320, height: 700 },
+    { width: 390, height: 844 },
+    { width: 768, height: 900 },
+    { width: 1440, height: 1000 },
+  ];
+
+  for (const viewport of viewports) {
+    await page.setViewportSize(viewport);
+    await page.goto('/console/applicant/identity');
+    await expect(page.getByRole('heading', { name: 'My Identity' })).toBeVisible();
+    await expect(page.getByText('Waiting for the issuer to activate credential delivery')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Claim' })).toHaveCount(1);
+    const scrollWidth = await page.evaluate(() => document.documentElement.scrollWidth);
+    expect(scrollWidth, JSON.stringify(await overflowDiagnostics(page), null, 2)).toBeLessThanOrEqual(viewport.width);
+  }
+
+  await page.getByRole('button', { name: 'Details' }).first().click();
+  await expect(page.getByRole('dialog')).toBeVisible();
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(1440);
+  expect(pageErrors).toEqual([]);
+  expect(failedApiRequests).toEqual([]);
 });

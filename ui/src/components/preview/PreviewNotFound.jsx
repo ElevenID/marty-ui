@@ -31,7 +31,7 @@ function PreviewNotFound({ resourceType = 'resource', returnUrl = '/console' }) 
       case 'application':
         return 'Application Template';
       case 'flow':
-        return 'Issuance Flow';
+        return 'Flow';
       case 'catalog':
         return 'Credential Catalog';
       default:

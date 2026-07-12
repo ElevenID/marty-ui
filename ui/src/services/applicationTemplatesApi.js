@@ -5,7 +5,7 @@
  * the required_checks configuration that defines pluggable vetting checks.
  */
 
-import { get, put, del } from './api';
+import { get, patch, del, post } from './api';
 import { postWithIdempotency } from './idempotency';
 
 const API_BASE = '/v1/application-templates';
@@ -35,7 +35,7 @@ export async function listApplicationTemplates(organizationId) {
 // ── Single template ───────────────────────────────────────────────────────────
 
 /** Internal helper — used by updateTemplateRequiredChecks. */
-async function getApplicationTemplate(templateId) {
+export async function getApplicationTemplate(templateId) {
   return get(`${API_BASE}/${templateId}`);
 }
 
@@ -48,15 +48,26 @@ export async function createApplicationTemplate(data) {
 }
 
 /**
- * Full update (PUT) for an existing application template.
- * Use this when saving changes including required_checks.
+ * Patch mutable fields on a draft Application Template.
  */
 export async function updateApplicationTemplate(templateId, data) {
-  return put(`${API_BASE}/${templateId}`, data);
+  return patch(`${API_BASE}/${templateId}`, data);
 }
 
 export async function deleteApplicationTemplate(templateId) {
   return del(`${API_BASE}/${templateId}`);
+}
+
+export async function activateApplicationTemplate(templateId) {
+  return post(`${API_BASE}/${templateId}/activate`, {});
+}
+
+export async function validateApplicationTemplate(templateId) {
+  return post(`${API_BASE}/${templateId}/validate`, {});
+}
+
+export async function deprecateApplicationTemplate(templateId) {
+  return post(`${API_BASE}/${templateId}/deprecate`, {});
 }
 
 // ── Required checks helpers ───────────────────────────────────────────────────
@@ -65,6 +76,5 @@ export async function deleteApplicationTemplate(templateId) {
  * Update only the required_checks of a template, preserving everything else.
  */
 export async function updateTemplateRequiredChecks(templateId, requiredChecks) {
-  const template = await getApplicationTemplate(templateId);
-  return updateApplicationTemplate(templateId, { ...template, required_checks: requiredChecks });
+  return updateApplicationTemplate(templateId, { required_checks: requiredChecks });
 }

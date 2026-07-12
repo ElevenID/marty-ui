@@ -816,8 +816,8 @@ async def _load_applicant_stats_payload(
 ) -> tuple[dict[str, int], Response | None]:
     payload, error_response = await _request_service_json_with_headers(
         "applicant",
-        "/v1/applicants/org-applications",
-        params={"organization_id": org_id, "limit": 500},
+        f"/v1/organizations/{org_id}/applicants",
+        params={"limit": 500},
         headers=headers,
         client=client,
         registry=registry,
@@ -825,7 +825,7 @@ async def _load_applicant_stats_payload(
     if error_response is not None:
         return {}, error_response
 
-    applications = _payload_items(payload, "applications")
+    applications = _payload_items(payload, "items")
     pending_statuses = {"submitted", "under_review", "pending_information", "pending"}
     approved_statuses = {"approved"}
     issuable_statuses = {"approved", "offered"}

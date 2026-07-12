@@ -555,3 +555,49 @@ If you encounter old test patterns, migrate them using this guide:
 ---
 
 **For more examples, see existing tests in `marty-ui/tests/e2e/e2e-flows/`.**
+
+## MIP 0.3 Release Gates
+
+The PR browser gate is deterministic and mocked. The real deployed lifecycle is
+`.github/workflows/e2e-tests.yml`, triggered manually or by the deployment
+orchestrator with the `beta-deployed` repository-dispatch event.
+
+Configure the protected `beta-lifecycle` environment with:
+
+```text
+vars.BETA_ORIGIN
+vars.BETA_AUDIT_ORG_ID
+secrets.TEST_APPLICANT_EMAIL
+secrets.TEST_APPLICANT_PASSWORD
+secrets.TEST_VENDOR_EMAIL
+secrets.TEST_VENDOR_PASSWORD
+```
+
+The job starts the digest-pinned walt.id browser wallet and fails unless:
+
+- the well-known configuration and response header advertise MIP `0.3.0`;
+- canonical applicant, application, and holder-inventory routes succeed;
+- removed applicant routes return `404`;
+- a membership badge is accepted from the canonical UI flow;
+- an Application Template is created as draft and activated;
+- organization verification completes through the browser wallet;
+- no required fixture is missing.
+
+CD also requires exact `MARTY_PROTOCOL_REF` and `MARTY_CREDENTIALS_REF`
+repository variables. Configure the protected `beta-migration-rehearsal`
+environment with:
+
+```text
+secrets.MIGRATION_REHEARSAL_DATABASE_URL
+secrets.MIGRATION_REHEARSAL_DATABASE_MARKER
+```
+
+The marker must be at least six characters and appear in the rehearsal database
+URL. CD applies the one-way migration, verifies it, captures built image digests,
+and emits `release-ready-manifest-<version>` only after the rehearsal succeeds.
+
+SpruceKit Open Badge login remains a protected device-lab gate because SpruceKit
+Mobile is a native SDK/showcase rather than a hosted browser wallet. Its evidence
+must record the wallet build revision, signed request resolution, badge and issuer
+display, requested email disclosure, callback completion, existing-user lookup,
+and authenticated Marty session without changing the standards-compliant request.

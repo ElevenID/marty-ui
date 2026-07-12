@@ -73,9 +73,9 @@ describe('credentialCatalog helpers', () => {
 
   it('extracts existing application ids and filters credentials', () => {
     expect(extractExistingApplicationIds([
-      { credential_configuration_id: 'cfg-1' },
-      { credential_configuration_id: null },
-      { credential_configuration_id: 'cfg-2' },
+      { credential_template_id: 'cfg-1' },
+      { credential_template_id: null },
+      { credential_template_id: 'cfg-2' },
     ])).toEqual(['cfg-1', 'cfg-2']);
 
     expect(filterCredentialCatalogItems([
@@ -188,7 +188,7 @@ describe('credentialCatalog helpers', () => {
       userId: 'user-1',
       getApplicantByUser: vi.fn().mockResolvedValue({ id: 'app-1' }),
       listApplicantApplications: vi.fn().mockResolvedValue([
-        { credential_configuration_id: 'cfg-1' },
+        { credential_template_id: 'cfg-1' },
       ]),
     })).resolves.toEqual(['cfg-1']);
 

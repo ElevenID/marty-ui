@@ -44,7 +44,10 @@ vi.mock('../../services/api', () => ({
 }));
 
 vi.mock('../../services/applicantApi', () => ({
-  getApplicantByUser: mockGetApplicantByUser,
+  listApplications: async () => {
+    const result = await mockGet('/v1/me/applications');
+    return { applications: result?.items || [], total: result?.total || result?.items?.length || 0 };
+  },
 }));
 
 describe('CredentialCatalog', () => {
@@ -101,10 +104,17 @@ describe('CredentialCatalog', () => {
         ]);
       }
 
-      if (endpoint.includes('/v1/applicants/profiles/app-1/applications')) {
+      if (endpoint.includes('/v1/application-templates')) {
         return Promise.resolve([
-          { credential_configuration_id: 'cfg-2' },
+          { id: 'app-tpl-1', credential_template_id: 'cfg-1', status: 'ACTIVE' },
+          { id: 'app-tpl-2', credential_template_id: 'cfg-2', status: 'ACTIVE' },
         ]);
+      }
+
+      if (endpoint.includes('/v1/me/applications')) {
+        return Promise.resolve({ items: [
+          { credential_template_id: 'cfg-2' },
+        ] });
       }
 
       return Promise.resolve([]);

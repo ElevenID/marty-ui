@@ -10,8 +10,16 @@ import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { render } from '@test/utils'
 import { server } from '@test/mocks/server'
+import { mockPolicies } from '@test/mocks/fixtures'
 import { http, HttpResponse } from 'msw'
 import DeploymentProfileWizard from '../DeploymentProfileWizard'
+
+const PRESENTATION_POLICIES_URL = 'http://localhost:8000/v1/presentation-policies'
+
+const goToRuntimeSettings = async (user: ReturnType<typeof userEvent.setup>) => {
+  await user.type(screen.getByLabelText(/profile name/i), 'Test Profile')
+  await user.click(screen.getByTestId('wizard.deployment.next'))
+}
 
 // Mock navigation
 const mockNavigate = vi.fn()
@@ -30,6 +38,11 @@ vi.mock('../../../../contexts/ConsoleContext', () => ({
 describe('DeploymentProfileWizard', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    server.use(
+      http.get(PRESENTATION_POLICIES_URL, () => {
+        return HttpResponse.json([mockPolicies.valid])
+      })
+    )
   })
 
   it('should render wizard with all steps', () => {
@@ -102,6 +115,129 @@ describe('DeploymentProfileWizard', () => {
 
     await waitFor(() => {
       expect(screen.getByText('Integration')).toBeInTheDocument()
+    })
+  })
+
+  it.each([
+    ['a direct array with uppercase status', [mockPolicies.valid]],
+    ['a direct array with lowercase status', [{ ...mockPolicies.valid, status: 'active' }]],
+    ['a direct array with an active flag', [{ ...mockPolicies.valid, status: 'DRAFT', is_active: true }]],
+    ['a direct array with padded uppercase status', [{ ...mockPolicies.valid, status: ' ACTIVE ' }]],
+  ])('should auto-select the sole active policy from %s', async (_label, responseBody) => {
+    const user = userEvent.setup()
+    server.use(
+      http.get(PRESENTATION_POLICIES_URL, () => HttpResponse.json(responseBody))
+    )
+    render(<DeploymentProfileWizard />)
+
+    await goToRuntimeSettings(user)
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: /Runtime Settings/i })).toBeInTheDocument()
+      expect(screen.getByTestId('deployment-default-policy-select')).toHaveTextContent('Age Verification')
+      expect(screen.getByTestId('wizard.deployment.next')).not.toBeDisabled()
+    })
+  })
+
+  it('should exclude inactive policies and route to policy creation', async () => {
+    const user = userEvent.setup()
+    server.use(
+      http.get(PRESENTATION_POLICIES_URL, () => HttpResponse.json([
+        { ...mockPolicies.valid, id: 2, status: 'DRAFT' },
+        { ...mockPolicies.valid, id: 3, status: 'ARCHIVED' },
+        { ...mockPolicies.valid, id: 4, status: null, is_active: false },
+      ]))
+    )
+    render(<DeploymentProfileWizard />)
+
+    await goToRuntimeSettings(user)
+
+    expect(await screen.findByRole('heading', { name: /Presentation Policy Required/i })).toBeInTheDocument()
+    expect(screen.getByTestId('wizard.deployment.next')).toBeDisabled()
+
+    await user.click(screen.getByRole('button', { name: /Create Presentation Policy/i }))
+    expect(mockNavigate).toHaveBeenCalledWith('/console/org/policies/presentation/new')
+  })
+
+  it('should fail closed for an empty direct array', async () => {
+    const user = userEvent.setup()
+    server.use(http.get(PRESENTATION_POLICIES_URL, () => HttpResponse.json([])))
+    render(<DeploymentProfileWizard />)
+
+    await goToRuntimeSettings(user)
+
+    expect(await screen.findByRole('heading', { name: /Presentation Policy Required/i })).toBeInTheDocument()
+    expect(screen.getByTestId('wizard.deployment.next')).toBeDisabled()
+  })
+
+  it.each([
+    ['a null response', null],
+    ['an empty object', {}],
+    ['an unsupported response envelope', { data: { results: [mockPolicies.valid] } }],
+  ])('should expose a recoverable contract error for %s', async (_label, responseBody) => {
+    const user = userEvent.setup()
+    server.use(
+      http.get(PRESENTATION_POLICIES_URL, () => HttpResponse.json(responseBody))
+    )
+    render(<DeploymentProfileWizard />)
+
+    await goToRuntimeSettings(user)
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/malformed list response/i)
+    expect(screen.getByRole('button', { name: /Refresh/i })).toBeInTheDocument()
+    expect(screen.getByTestId('wizard.deployment.next')).toBeDisabled()
+  })
+
+  it('should retry a failed policy request', async () => {
+    const user = userEvent.setup()
+    let shouldFail = true
+    let requestCount = 0
+    server.use(
+      http.get(PRESENTATION_POLICIES_URL, () => {
+        requestCount += 1
+        if (shouldFail) {
+          return HttpResponse.json(
+            { error: { message: 'Presentation policies are temporarily unavailable' } },
+            { status: 400 }
+          )
+        }
+        return HttpResponse.json([mockPolicies.valid])
+      })
+    )
+    render(<DeploymentProfileWizard />)
+
+    await goToRuntimeSettings(user)
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Presentation policies are temporarily unavailable')
+    expect(screen.getByTestId('wizard.deployment.next')).toBeDisabled()
+
+    shouldFail = false
+    await user.click(screen.getByRole('button', { name: /Refresh/i }))
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: /Runtime Settings/i })).toBeInTheDocument()
+      expect(screen.getByTestId('wizard.deployment.next')).not.toBeDisabled()
+    })
+    expect(requestCount).toBe(2)
+  })
+
+  it('should retry after an unsupported policy response', async () => {
+    const user = userEvent.setup()
+    let responseBody: unknown = { data: { results: [mockPolicies.valid] } }
+    server.use(
+      http.get(PRESENTATION_POLICIES_URL, () => HttpResponse.json(responseBody))
+    )
+    render(<DeploymentProfileWizard />)
+
+    await goToRuntimeSettings(user)
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/malformed list response/i)
+    responseBody = [mockPolicies.valid]
+    await user.click(screen.getByRole('button', { name: /Refresh/i }))
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: /Runtime Settings/i })).toBeInTheDocument()
+      expect(screen.getByTestId('wizard.deployment.next')).not.toBeDisabled()
     })
   })
 

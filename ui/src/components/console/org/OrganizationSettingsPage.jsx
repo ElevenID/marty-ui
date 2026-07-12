@@ -62,7 +62,7 @@ function OrganizationSettingsPage() {
   const { t } = useTranslation('console');
   const { organizationId, organizationName } = useAuth();
   const { activeOrgId } = useConsole();
-  const effectiveOrgId = activeOrgId || organizationId;
+  const effectiveOrgId = activeOrgId;
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);

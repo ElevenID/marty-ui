@@ -231,7 +231,7 @@ function ConsoleDashboard() {
     isVendor,
   } = useAuth();
   const { activeOrgId, memberships } = useConsole();
-  const organizationId = activeOrgId || authOrganizationId;
+  const organizationId = activeOrgId;
   const organizationName = useMemo(() => {
     const activeMembership = (memberships || []).find((organization) => organization.id === organizationId);
     return activeMembership?.display_name
@@ -244,9 +244,13 @@ function ConsoleDashboard() {
   const [environment, setEnvironment] = useState(data.environment || null);
   const [purgingPilotData, setPurgingPilotData] = useState(false);
   const [purgeFeedback, setPurgeFeedback] = useState(null);
+  const [setupIntent, setSetupIntent] = useState(null);
 
   // Compute setup readiness and blockers
-  const readiness = useMemo(() => computeSetupReadiness(data), [data]);
+  const readiness = useMemo(() => computeSetupReadiness({
+    ...data,
+    setupIntent: setupIntent || data.setupIntent,
+  }), [data, setupIntent]);
   const blockers = useMemo(() => computeBlockers(readiness), [readiness]);
   const quickActionVisibility = useMemo(() => computeQuickActionVisibility(readiness), [readiness]);
   const dashboardErrors = data.dashboardErrors || {};
@@ -465,7 +469,11 @@ function ConsoleDashboard() {
       <BlockingIssuesPanel blockers={blockers} />
 
       {/* Setup Readiness */}
-      <SetupReadinessPanel readiness={readiness} loading={loading} />
+      <SetupReadinessPanel
+        readiness={readiness}
+        loading={loading}
+        onIntentChange={setSetupIntent}
+      />
 
       {/* Setup Complete / Operational Message */}
       {isOperational && (
@@ -489,7 +497,7 @@ function ConsoleDashboard() {
             <Button
               variant="outlined"
               component={Link}
-              to="/console/audit"
+              to="/console/org/audit"
               sx={{ borderColor: 'success.dark', color: 'success.dark' }}
             >
               {t('dashboard.viewAudit')}

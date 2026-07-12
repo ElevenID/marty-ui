@@ -198,9 +198,19 @@ class TestResolveResourceLookup:
 
     def test_reserved_subresource_has_no_lookup(self):
         assert resolve_resource_lookup("/v1/issuance/offers/tx-123") is None
-        assert resolve_resource_lookup("/v1/flows/definitions/flow-123") is None
-        assert resolve_resource_lookup("/v1/flows/instances/instance-123") is None
+        assert resolve_resource_lookup("/v1/flows/definitions") is None
+        assert resolve_resource_lookup("/v1/flows/instances") is None
         assert resolve_resource_lookup("/v1/flows/verify") is None
+
+    def test_nested_flow_resources_lookup_the_persisted_organization(self):
+        assert resolve_resource_lookup("/v1/flows/definitions/flow-123/activate") == (
+            "flows",
+            "/v1/flows/definitions/flow-123",
+        )
+        assert resolve_resource_lookup("/v1/flows/instances/instance-123") == (
+            "flows",
+            "/v1/flows/instances/instance-123",
+        )
 
     def test_all_lookup_templates_have_paths(self):
         for service_name, lookup_template, _reserved_segments in RESOURCE_LOOKUP_MAP.values():
@@ -273,6 +283,43 @@ async def test_cedar_middleware_looks_up_owner_org_for_top_level_detail_route():
     assert response.status_code == 200
     assert request.state.organization_id == ORG_ID
     assert request.state.required_permission == "application-template:view"
+    http_client.get.assert_awaited_once()
+    org_client.get_membership.assert_awaited_once_with("user-1", ORG_ID)
+
+
+@pytest.mark.asyncio
+async def test_cedar_middleware_uses_flow_instance_org_instead_of_session_default():
+    membership = FakeMembership(permissions={"flow-instance:view"}, role_names={"operator"})
+    org_client = MagicMock()
+    org_client.get_membership = AsyncMock(return_value=membership)
+
+    service_registry = MagicMock()
+    service_registry.get_service_url.return_value = "http://flow-service:8006"
+
+    upstream_response = MagicMock()
+    upstream_response.status_code = 200
+    upstream_response.json.return_value = {"organization_id": ORG_ID}
+    http_client = MagicMock()
+    http_client.get = AsyncMock(return_value=upstream_response)
+
+    app = MagicMock()
+    app.state.org_client = org_client
+    app.state.service_registry = service_registry
+    app.state.http_client = http_client
+
+    request = _build_request("/v1/flows/instances/instance-123", method="GET", app=app)
+    request.state.user_id = "user-1"
+    request.state.organization_id = "00000000-0000-0000-0000-000000000999"
+
+    call_next = AsyncMock(return_value=JSONResponse({"ok": True}))
+    middleware = CedarAuthMiddleware(app=MagicMock())
+
+    response = await middleware.dispatch(request, call_next)
+
+    assert response.status_code == 200
+    assert request.state.organization_id == ORG_ID
+    assert request.state.required_permission == "flow-instance:view"
+    service_registry.get_service_url.assert_called_with("flows")
     http_client.get.assert_awaited_once()
     org_client.get_membership.assert_awaited_once_with("user-1", ORG_ID)
 
@@ -378,6 +425,30 @@ async def test_cedar_middleware_denies_api_key_org_mismatch():
 
     assert response.status_code == 403
     assert json.loads(response.body)["detail"] == "API key does not have access to this organization"
+
+
+@pytest.mark.asyncio
+async def test_cedar_middleware_treats_flow_capabilities_as_org_neutral():
+    org_client = MagicMock()
+    org_client.get_membership = AsyncMock()
+
+    app = MagicMock()
+    app.state.org_client = org_client
+    app.state.service_registry = None
+    app.state.http_client = None
+
+    request = _build_request("/v1/flows/capabilities", method="GET", app=app)
+    request.state.user_id = "user-1"
+    request.state.organization_id = "00000000-0000-0000-0000-000000000999"
+
+    call_next = AsyncMock(return_value=JSONResponse({"protocol_version": "0.3.0"}))
+    middleware = CedarAuthMiddleware(app=MagicMock())
+
+    response = await middleware.dispatch(request, call_next)
+
+    assert response.status_code == 200
+    call_next.assert_awaited_once_with(request)
+    org_client.get_membership.assert_not_called()
 
 
 @pytest.mark.asyncio

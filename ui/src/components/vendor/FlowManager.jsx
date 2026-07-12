@@ -47,6 +47,7 @@ import AndroidIcon from '@mui/icons-material/Android';
 import AccountTreeIcon from '@mui/icons-material/AccountTree';
 
 import { useAuth } from '../../hooks/useAuth';
+import { useConsole } from '../../contexts/ConsoleContext';
 import { useNotifications } from '../../hooks/useNotifications';
 import flowsApi, { FLOW_STATES } from '../../services/flowsApi';
 import credentialsApi from '../../services/credentialsApi';
@@ -101,6 +102,7 @@ const getPrerequisiteErrorMessage = (label, result) => {
 const FlowManager = ({ hideHeader = false }) => {
   const { t } = useTranslation(['vendor', 'common']);
   const { user } = useAuth();
+  const { activeOrgId } = useConsole();
   const { showSuccess, showError, showWarning } = useNotifications();
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState(0);
@@ -158,14 +160,14 @@ const FlowManager = ({ hideHeader = false }) => {
 
     const result = await loadFlowManagerFlows({
       listFlows: flowsApi.listFlows,
-      organizationId: user?.organization_id,
+      organizationId: activeOrgId,
     });
     setFlows(result.flows);
     setError(result.error);
     unsupportedEndpointsRef.current.flows = Boolean(result.unsupported);
     showNotification(result.notification);
     return result;
-  }, [showNotification, user?.organization_id]);
+  }, [activeOrgId, showNotification]);
 
   const loadExecutions = useCallback(async (flowId = null) => {
     if (unsupportedEndpointsRef.current.executions) {
@@ -175,14 +177,14 @@ const FlowManager = ({ hideHeader = false }) => {
 
     const result = await loadFlowManagerExecutions({
       listFlowExecutions: flowsApi.listFlowExecutions,
-      organizationId: user?.organization_id,
+      organizationId: activeOrgId,
       flows,
       flowId,
     });
     setExecutions(result.executions);
     unsupportedEndpointsRef.current.executions = Boolean(result.unsupported);
     showNotification(result.notification);
-  }, [flows, showNotification, user?.organization_id]);
+  }, [activeOrgId, flows, showNotification]);
 
   const loadCredentials = useCallback(async () => {
     if (unsupportedEndpointsRef.current.credentials) {
@@ -193,13 +195,13 @@ const FlowManager = ({ hideHeader = false }) => {
 
     const result = await loadFlowManagerCredentials({
       listCredentials: credentialsApi.listCredentials,
-      organizationId: user?.organization_id,
+      organizationId: activeOrgId,
     });
     setCredentials(result.credentials);
     setCredentialsLoaded(true);
     unsupportedEndpointsRef.current.credentials = Boolean(result.unsupported);
     showNotification(result.notification);
-  }, [showNotification, user?.organization_id]);
+  }, [activeOrgId, showNotification]);
 
   const loadRevocationBatches = useCallback(async () => {
     if (unsupportedEndpointsRef.current.revocationBatches) {
@@ -210,20 +212,20 @@ const FlowManager = ({ hideHeader = false }) => {
 
     const result = await loadFlowManagerRevocationBatches({
       listRevocationBatches: credentialsApi.listRevocationBatches,
-      organizationId: user?.organization_id,
+      organizationId: activeOrgId,
     });
     setRevocationBatches(result.revocationBatches);
     setRevocationBatchesLoaded(true);
     unsupportedEndpointsRef.current.revocationBatches = Boolean(result.unsupported);
     showNotification(result.notification);
-  }, [showNotification, user?.organization_id]);
+  }, [activeOrgId, showNotification]);
 
   useEffect(() => {
     const loadAllData = async () => {
       setLoading(true);
       setPrereqError(null);
 
-      if (isMissingOrganizationId(user?.organization_id)) {
+      if (isMissingOrganizationId(activeOrgId)) {
         setFlows([]);
         setError('An active organization is required before loading flows.');
         setPrereqStatus({
@@ -237,9 +239,9 @@ const FlowManager = ({ hideHeader = false }) => {
 
       const [, trustProfilesResult, templatesResult, deploymentsResult] = await Promise.allSettled([
         loadFlows(),
-        listTrustProfiles({ organization_id: user.organization_id }),
-        listCredentialTemplates({ organization_id: user.organization_id }),
-        listDeploymentProfiles({ organization_id: user.organization_id }),
+        listTrustProfiles({ organization_id: activeOrgId }),
+        listCredentialTemplates({ organization_id: activeOrgId }),
+        listDeploymentProfiles({ organization_id: activeOrgId }),
       ]);
       setPrereqStatus({
         trustProfile: getPrerequisiteStatus(trustProfilesResult),
@@ -255,7 +257,7 @@ const FlowManager = ({ hideHeader = false }) => {
       setLoading(false);
     };
     loadAllData();
-  }, [loadFlows, user?.organization_id]);
+  }, [activeOrgId, loadFlows]);
 
   useEffect(() => {
     loadExecutions();
@@ -282,13 +284,13 @@ const FlowManager = ({ hideHeader = false }) => {
     return startFlowManagerRealtimeUpdates({
       sseService,
       eventTypes: EVENT_TYPES,
-      organizationId: user?.organization_id,
+      organizationId: activeOrgId,
       loadExecutions,
       loadCredentials,
       loadRevocationBatches,
       showSuccess,
     });
-  }, [user, loadExecutions, loadCredentials, loadRevocationBatches]);
+  }, [activeOrgId, loadExecutions, loadCredentials, loadRevocationBatches, showSuccess]);
 
   // Handle approval
   const handleApprove = async (execution) => {
@@ -402,9 +404,9 @@ const FlowManager = ({ hideHeader = false }) => {
             {flows.length === 0 ? (
               <EmptyState
                 icon={AccountTreeIcon}
-                title="Issuance Flows connect applicants to credentials"
+                title="Flows connect people to credentials and verification"
                 description="To create one, you'll need:"
-                actionLabel="Create Issuance Flow"
+                actionLabel="Create Flow"
                 onAction={() => navigate('/console/org/flows/definitions/new')}
                 prerequisites={[
                   { 

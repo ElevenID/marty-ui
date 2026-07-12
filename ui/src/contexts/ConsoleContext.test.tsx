@@ -147,7 +147,7 @@ describe('ConsoleContext', () => {
     expect(screen.getByTestId('active-org')).toHaveTextContent('org-new');
   });
 
-  it('syncs back to the configured default Marty org when no org-console membership is available', async () => {
+  it('does not mutate the applicant organization when no org-console membership is available', async () => {
     window.localStorage.setItem('activeOrgId', 'org-stale');
     vi.mocked(getPreferences).mockResolvedValue({
       last_view_mode: 'org',
@@ -178,7 +178,7 @@ describe('ConsoleContext', () => {
     expect(screen.getByTestId('memberships')).toHaveTextContent('0');
     expect(screen.getByTestId('mode')).toHaveTextContent('applicant');
     expect(screen.getByTestId('active-org')).toHaveTextContent('');
-    expect(setActiveOrganizationId).toHaveBeenCalledWith('00000000-0000-0000-0000-000000000001');
+    expect(setActiveOrganizationId).not.toHaveBeenCalled();
     expect(vi.mocked(updatePreferences)).toHaveBeenCalledWith({
       last_view_mode: 'applicant',
       last_active_org_id: null,

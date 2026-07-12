@@ -50,7 +50,7 @@ export function OrgDefaultsSection() {
   const { t } = useTranslation('console');
   const { organizationId: authOrganizationId } = useAuth();
   const { activeOrgId } = useConsole();
-  const organizationId = activeOrgId || authOrganizationId;
+  const organizationId = activeOrgId;
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
@@ -94,9 +94,9 @@ export function OrgDefaultsSection() {
           default_template_id: defaultsData?.default_template_id || '',
         });
 
-        setTrustProfiles(Array.isArray(profilesData) ? profilesData : profilesData?.items || []);
-        setPolicies(Array.isArray(policiesData) ? policiesData : policiesData?.items || []);
-        setTemplates(Array.isArray(templatesData) ? templatesData : templatesData?.items || []);
+        setTrustProfiles(profilesData);
+        setPolicies(policiesData);
+        setTemplates(templatesData);
       } catch (err) {
         logOrgDefaultsError('Failed to load org defaults:', err);
         setError(t('org.defaultsSection.messages.loadFailed'));

@@ -42,6 +42,7 @@ const {
       state: {
         credential: {
           id: 'cfg-1',
+          application_template_id: 'app-template-1',
           credential_type: 'MemberCredential',
           display_name: 'ElevenID Login Credential',
           name: 'ElevenID Login Credential',
@@ -96,16 +97,13 @@ vi.mock('../../services/api', () => ({
 }));
 
 vi.mock('../../services/applicantApi', () => ({
-  getApplicant: mockGetApplicant,
-  getApplicantByUser: mockGetApplicantByUser,
-  createApplicant: mockCreateApplicant,
+  getMyApplicantProfile: mockGetApplicant,
+  upsertMyApplicantProfile: mockCreateApplicant,
   createApplication: mockCreateApplication,
-  listApplicantApplicationsForProfile: mockListApplicantApplicationsForProfile,
   listApplications: mockListApplications,
   submitApplication: mockSubmitApplication,
-  supersedeApplication: mockSupersedeApplication,
-  updateApplicantProfile: mockUpdateApplicantProfile,
-  enrollBiometric: mockEnrollBiometric,
+  withdrawApplication: mockSupersedeApplication,
+  enrollMyBiometric: mockEnrollBiometric,
 }));
 
 vi.mock('../../services/credentialsApi', () => ({
@@ -132,6 +130,7 @@ describe('ApplicationForm', () => {
       state: {
         credential: {
           id: 'cfg-1',
+          application_template_id: 'app-template-1',
           credential_type: 'MemberCredential',
           display_name: 'ElevenID Login Credential',
           name: 'ElevenID Login Credential',
@@ -293,9 +292,9 @@ describe('ApplicationForm', () => {
 
     await waitFor(() => {
       expect(mockCreateApplication).toHaveBeenCalledWith(expect.objectContaining({
-        applicant_id: 'app-1',
-        credential_configuration_id: 'cfg-1',
-        issuing_authority: 'ElevenID LLC',
+        organization_id: 'org-1',
+        application_template_id: 'app-template-1',
+        form_data: expect.any(Object),
       }));
       expect(mockSubmitApplication).toHaveBeenCalledWith('application-1');
       expect(mockGenerateIssuanceOffer).toHaveBeenCalledWith('application-1');
@@ -312,8 +311,8 @@ describe('ApplicationForm', () => {
 
     await waitFor(() => {
       expect(mockCreateApplication).toHaveBeenCalledWith(expect.objectContaining({
-        applicant_id: 'app-1',
-        credential_configuration_id: 'cfg-1',
+        organization_id: 'org-1',
+        application_template_id: 'app-template-1',
       }));
       expect(mockSubmitApplication).toHaveBeenCalledWith('application-1');
       expect(mockGenerateIssuanceOffer).not.toHaveBeenCalled();

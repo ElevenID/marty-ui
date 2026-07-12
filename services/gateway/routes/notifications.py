@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import logging
 
-from fastapi import APIRouter, Request, Response
+from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 
 from gateway.proxy import get_registry, proxy_request
@@ -126,10 +126,13 @@ async def proxy_webhooks(request: Request, subpath: str = "") -> Response:
 @policy_set_router.api_route("", methods=["GET", "POST"], summary="Policy Sets")
 @policy_set_router.api_route("/{subpath:path}", methods=["GET", "PATCH", "DELETE", "POST"], summary="Policy Sets")
 async def proxy_policy_sets(request: Request, subpath: str = "") -> Response:
-    """Proxy policy-set CRUD (including /activate, /archive, /validate) to organization service."""
+    """Proxy MIP Policy Set operations to the organization-scoped service API."""
+    organization_id = str(request.query_params.get("organization_id") or "").strip()
+    if not organization_id:
+        raise HTTPException(status_code=422, detail="organization_id query parameter is required")
     registry = get_registry()
     service_url = registry.get_service_url("organizations")
-    target_path = "/v1/policy-sets"
+    target_path = f"/v1/organizations/{organization_id}/policy-sets"
     if subpath:
         target_path = f"{target_path}/{subpath}"
     return await proxy_request(request, service_url, target_path)

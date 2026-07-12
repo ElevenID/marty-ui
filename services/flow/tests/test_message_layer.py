@@ -18,7 +18,6 @@ from flow.main import (
     FlowStatus,
     FlowInstance,
     FlowInstanceStatus,
-    FlowStepModel,
     FlowType,
     DigitalCredentialSubmissionRequest,
     InMemoryFlowRepository,
@@ -309,17 +308,8 @@ async def test_update_flow_definition_replaces_existing_flow_and_checks_edit_per
             organization_id="org-1",
             name="Updated flow",
             description="Updated description",
-            flow_type="issuance",
+            flow_type="oid4vci_pre_authorized",
             credential_template_id="template-new",
-            enabled=True,
-            steps=[
-                FlowStepModel(
-                    name="Collect data",
-                    description="Collect claims",
-                    step_type="data_collection",
-                    config={"fields": ["email"]},
-                )
-            ],
         ),
         SimpleNamespace(),
         user_id="user-1",
@@ -329,12 +319,17 @@ async def test_update_flow_definition_replaces_existing_flow_and_checks_edit_per
     updated = await repo.get_definition(flow.id)
     assert response.id == flow.id
     assert response.name == "Updated flow"
-    assert response.status == FlowStatus.ACTIVE.value
+    assert response.status == FlowStatus.DRAFT.value
+    assert response.resolved_steps == [
+        "create_offer",
+        "token_exchange",
+        "credential_request",
+        "issue_credential",
+    ]
     assert updated is not None
     assert updated.version == 2
     assert updated.credential_template_id == "template-new"
-    assert updated.steps[0].name == "Collect data"
-    assert updated.steps[0].config == {"fields": ["email"]}
+    assert updated.steps[0].config == {"protocol_step": "create_offer"}
     assert org_client.calls == [("user-1", "org-1")]
 
 
@@ -357,9 +352,8 @@ async def test_update_flow_definition_rejects_organization_change(monkeypatch):
             CreateFlowDefinitionRequest(
                 organization_id="org-2",
                 name="Moved flow",
-                flow_type="issuance",
+                flow_type="oid4vci_pre_authorized",
                 credential_template_id="template-1",
-                enabled=False,
             ),
             SimpleNamespace(),
             user_id="user-1",
@@ -371,7 +365,7 @@ async def test_update_flow_definition_rejects_organization_change(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_update_flow_definition_requires_active_references_when_enabled(monkeypatch):
+async def test_update_flow_definition_allows_inactive_references_while_draft(monkeypatch):
     _install_reference_validation_stubs(
         monkeypatch,
         templates={"template-draft": {"organization_id": "org-1", "status": "draft"}},
@@ -388,23 +382,20 @@ async def test_update_flow_definition_requires_active_references_when_enabled(mo
     )
     await repo.save_definition(flow)
 
-    with pytest.raises(HTTPException) as exc_info:
-        await update_flow_definition(
-            flow.id,
-            CreateFlowDefinitionRequest(
-                organization_id="org-1",
-                name="Enabled flow",
-                flow_type="issuance",
-                credential_template_id="template-draft",
-                enabled=True,
-            ),
-            SimpleNamespace(),
-            user_id="user-1",
-            repo=repo,
-        )
+    response = await update_flow_definition(
+        flow.id,
+        CreateFlowDefinitionRequest(
+            organization_id="org-1",
+            name="Draft dependency flow",
+            flow_type="oid4vci_pre_authorized",
+            credential_template_id="template-draft",
+        ),
+        SimpleNamespace(),
+        user_id="user-1",
+        repo=repo,
+    )
 
-    assert exc_info.value.status_code == 400
-    assert "must be active" in exc_info.value.detail
+    assert response.status == FlowStatus.DRAFT.value
 
 
 @pytest.mark.asyncio
@@ -458,6 +449,25 @@ async def test_create_oid4vci_artifact_records_credential_offer_message(monkeypa
     assert message["payload"]["mip_flow_instance_id"] == instance.id
 
 
+def _application_approved_custom_flow(*, name: str, credential_template_id: str) -> FlowDefinition:
+    return FlowDefinition(
+        organization_id="org-1",
+        name=name,
+        flow_type=FlowType.CUSTOM,
+        credential_template_id=credential_template_id,
+        trigger={"trigger_type": "WEBHOOK", "config": {"event_type": "APPLICATION_APPROVED"}},
+        extension={
+            "extension_uri": "urn:elevenid:test:application-approved",
+            "extension_version": "1.0.0",
+            "extends_flow_type": FlowType.OID4VCI_PRE_AUTHORIZED.value,
+            "entry_step_id": "create_offer",
+            "steps": [{"step_id": "create_offer", "action": "create_offer", "config": {}}],
+            "transitions": [],
+            "config": {},
+        },
+    )
+
+
 @pytest.mark.asyncio
 async def test_application_approved_webhook_filters_by_credential_template_id(monkeypatch):
     async def _fake_initiate_issuance(instance, flow_def):
@@ -474,22 +484,16 @@ async def test_application_approved_webhook_filters_by_credential_template_id(mo
     monkeypatch.setattr(flow_main, "_initiate_credential_layer_issuance", _fake_initiate_issuance)
 
     repo = InMemoryFlowRepository()
-    matching_flow = FlowDefinition(
-        organization_id="org-1",
+    matching_flow = _application_approved_custom_flow(
         name="Issue Open Badge",
-        flow_type=FlowType.OID4VCI_PRE_AUTHORIZED,
         credential_template_id="template-open-badge",
-        preconditions=["application_approved"],
     )
     matching_flow.activate()
     await repo.save_definition(matching_flow)
 
-    non_matching_flow = FlowDefinition(
-        organization_id="org-1",
+    non_matching_flow = _application_approved_custom_flow(
         name="Issue Different Credential",
-        flow_type=FlowType.OID4VCI_PRE_AUTHORIZED,
         credential_template_id="template-other",
-        preconditions=["application_approved"],
     )
     non_matching_flow.activate()
     await repo.save_definition(non_matching_flow)
@@ -522,12 +526,9 @@ async def test_application_approved_webhook_filters_by_credential_template_id(mo
 @pytest.mark.asyncio
 async def test_application_approved_webhook_returns_zero_when_template_not_found():
     repo = InMemoryFlowRepository()
-    flow_def = FlowDefinition(
-        organization_id="org-1",
+    flow_def = _application_approved_custom_flow(
         name="Issue Open Badge",
-        flow_type=FlowType.OID4VCI_PRE_AUTHORIZED,
         credential_template_id="template-open-badge",
-        preconditions=["application_approved"],
     )
     flow_def.activate()
     await repo.save_definition(flow_def)
@@ -549,12 +550,12 @@ async def test_application_approved_webhook_returns_zero_when_template_not_found
 
     assert result["success"] is True
     assert result["flows_triggered"] == 0
-    assert "No active OID4VCI flow" in result["reason"]
+    assert "No active custom OID4VCI extension" in result["reason"]
     assert "template-missing" in result["reason"]
 
 
 @pytest.mark.asyncio
-async def test_application_approved_webhook_requires_application_approved_precondition(monkeypatch):
+async def test_application_approved_webhook_requires_explicit_custom_trigger(monkeypatch):
     async def _fake_initiate_issuance(instance, flow_def):
         tx = f"tx-{flow_def.id}"
         instance.context["credential_offer_transaction_id"] = tx
@@ -601,7 +602,7 @@ async def test_application_approved_webhook_requires_application_approved_precon
 
     assert result["success"] is False
     assert result["flows_triggered"] == 0
-    assert "application_approved precondition" in result["reason"]
+    assert "custom OID4VCI extension" in result["reason"]
     assert "offers" not in result
 
 
@@ -693,7 +694,7 @@ async def test_application_approved_webhook_manual_issue_does_not_bootstrap_defa
 
     assert result["success"] is False
     assert result["flows_triggered"] == 0
-    assert "No active OID4VCI flow" in result["reason"]
+    assert "No active custom OID4VCI extension" in result["reason"]
     assert await repo.list_definitions("org-1") == []
 
 

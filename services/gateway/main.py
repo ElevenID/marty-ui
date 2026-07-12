@@ -79,6 +79,7 @@ from gateway.routes.issuance import (
     application_template_router,
     issuance_router,
     issued_credential_router,
+    passport_router,
 )
 from gateway.routes.notifications import (
     notification_router,
@@ -269,51 +270,50 @@ def _normalize_oid4vci_issuer_metadata(
     wallet_variant: str | None = None,
 ) -> dict[str, Any]:
     if wallet_variant == "waltid":
-        return _normalize_waltid_oid4vci_issuer_metadata(metadata)
+        normalized = _normalize_waltid_oid4vci_issuer_metadata(metadata)
+    else:
+        configs = metadata.get("credential_configurations_supported")
+        if not isinstance(configs, dict):
+            normalized = dict(metadata)
+        else:
+            normalized = dict(metadata)
+            normalized_configs: dict[str, Any] = {}
+            changed = False
 
-    configs = metadata.get("credential_configurations_supported")
-    if not isinstance(configs, dict):
-        return metadata
+            for config_id, raw_config in configs.items():
+                if not isinstance(raw_config, dict):
+                    normalized_configs[config_id] = raw_config
+                    continue
 
-    normalized = dict(metadata)
-    normalized_configs: dict[str, Any] = {}
-    changed = False
+                config = dict(raw_config)
+                credential_definition = config.get("credential_definition")
+                credential_subject = (
+                    credential_definition.get("credentialSubject")
+                    if isinstance(credential_definition, dict)
+                    else None
+                )
 
-    for config_id, raw_config in configs.items():
-        if not isinstance(raw_config, dict):
-            normalized_configs[config_id] = raw_config
-            continue
+                if isinstance(credential_subject, dict) and credential_subject:
+                    config["credential_definition"] = {
+                        key: value
+                        for key, value in credential_definition.items()
+                        if key != "credentialSubject"
+                    }
+                    metadata_block = dict(config.get("credential_metadata") or {})
+                    metadata_block.pop("claims", None)
+                    if config.get("display") and "display" not in metadata_block:
+                        metadata_block["display"] = config["display"]
+                    config["credential_metadata"] = metadata_block
+                    changed = True
 
-        config = dict(raw_config)
-        credential_definition = config.get("credential_definition")
-        credential_subject = (
-            credential_definition.get("credentialSubject")
-            if isinstance(credential_definition, dict)
-            else None
-        )
+                normalized_configs[config_id] = config
 
-        if isinstance(credential_subject, dict) and credential_subject:
-            config["credential_definition"] = {
-                key: value
-                for key, value in credential_definition.items()
-                if key != "credentialSubject"
-            }
-            metadata_block = dict(config.get("credential_metadata") or {})
-            # walt.id wallet-api 0.22.0 still expects claim metadata as a
-            # namespaced object, while our upstream issuer emits legacy VCDM
-            # claim descriptors. Claim descriptors are optional for issuance,
-            # so omit them from wallet-facing metadata instead of serving a
-            # shape some wallets cannot parse.
-            metadata_block.pop("claims", None)
-            if config.get("display") and "display" not in metadata_block:
-                metadata_block["display"] = config["display"]
-            config["credential_metadata"] = metadata_block
-            changed = True
+            if changed:
+                normalized["credential_configurations_supported"] = normalized_configs
 
-        normalized_configs[config_id] = config
-
-    if changed:
-        normalized["credential_configurations_supported"] = normalized_configs
+    issuer_display_name = normalized.pop("issuer_display_name", None)
+    if issuer_display_name and not normalized.get("display"):
+        normalized["display"] = [{"name": str(issuer_display_name), "locale": "en-US"}]
     return normalized
 
 
@@ -576,6 +576,7 @@ Verification is handled through two complementary approaches:
     app.include_router(canvas_integration_router)
     app.include_router(application_template_router)
     app.include_router(application_router)
+    app.include_router(passport_router)
     app.include_router(subscription_router)
     app.include_router(webhook_router)
     app.include_router(notification_router)
@@ -1062,8 +1063,8 @@ Verification is handled through two complementary approaches:
                 logger.warning("Failed to fetch compliance profiles for MIP config: %s", exc)
 
         return {
-            "mip_version": "0.1",
-            "supported_versions": ["0.1"],
+            "mip_version": "0.3.0",
+            "supported_versions": ["0.3.0"],
             "issuer": issuer_url,
             "api_base_url": f"{issuer_url}/v1",
             "active_compliance_profiles": active_profiles,

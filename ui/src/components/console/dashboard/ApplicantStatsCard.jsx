@@ -54,7 +54,7 @@ export function ApplicantStatsCard() {
   const { t } = useTranslation('console');
   const { organizationId: authOrganizationId } = useAuth();
   const { activeOrgId } = useConsole();
-  const organizationId = activeOrgId || authOrganizationId;
+  const organizationId = activeOrgId;
   const { data: stats, loading, error, reload } = useAsyncData(
     async () => {
       if (!organizationId) return null;
