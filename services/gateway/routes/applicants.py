@@ -37,21 +37,41 @@ def _issuance_url() -> str:
     return get_registry().get_service_url("issuance")
 
 
+def _self_service_headers(request: Request) -> dict[str, str] | None:
+    organization_id = str(getattr(request.state, "session_organization_id", "") or "").strip()
+    return {"X-Organization-ID": organization_id} if organization_id else None
+
+
 # Holder-owned profile and applications.
 
 @applicant_router.get("/v1/me/applicant-profile", summary="Get My Applicant Profile")
 async def get_my_applicant_profile(request: Request) -> Response:
-    return await proxy_request(request, _applicant_url(), "/v1/me/applicant-profile")
+    return await proxy_request(
+        request,
+        _applicant_url(),
+        "/v1/me/applicant-profile",
+        inject_headers=_self_service_headers(request),
+    )
 
 
 @applicant_router.patch("/v1/me/applicant-profile", summary="Update My Applicant Profile")
 async def update_my_applicant_profile(request: Request) -> Response:
-    return await proxy_request(request, _applicant_url(), "/v1/me/applicant-profile")
+    return await proxy_request(
+        request,
+        _applicant_url(),
+        "/v1/me/applicant-profile",
+        inject_headers=_self_service_headers(request),
+    )
 
 
 @applicant_router.post("/v1/me/applicant-profile/biometrics", summary="Enroll My Biometric")
 async def enroll_my_biometric(request: Request) -> Response:
-    return await proxy_request(request, _applicant_url(), "/v1/me/applicant-profile/biometrics")
+    return await proxy_request(
+        request,
+        _applicant_url(),
+        "/v1/me/applicant-profile/biometrics",
+        inject_headers=_self_service_headers(request),
+    )
 
 
 @applicant_router.get("/v1/me/applications", summary="List My Applications")
