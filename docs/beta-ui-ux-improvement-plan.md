@@ -75,26 +75,28 @@ The approved implementation expanded the original UX ballot where protocol chang
 | Workstream | Status | Delivered contract/product behavior |
 | --- | --- | --- |
 | Canonical Flow contract | Implemented | MIP 0.3 aligns FlowTypes, fixed sequences, required references, custom extensions, physical document jobs, examples, conformance fixtures, and generated Python/Rust/TypeScript bindings. |
-| Applicant API clean break | Implemented locally | Canonical organization review and `/v1/me/*` self-service routes replace all `/v1/applicants/*` routes; persisted organization ownership, permissions, caller-derived locks, and header stripping are enforced. |
-| Application contract | Implemented locally | Creation accepts only organization, active Application Template, form data, and integration context; owner, Credential Template, checks, approval, and issuer behavior are server-derived. |
-| Claim readiness and holder inventory | Implemented locally | `claim_state` and `claim_blocker` prevent false Claim actions; `/v1/issued-credentials/mine` replaces `/v1/documents` with a privacy-filtered inventory. |
-| Application Template authoring | Implemented locally | Create, advanced-create, detail, edit, preview, validation-gated activation, and deletion routes are registered; catalog visibility requires an active Application Template. |
-| Deterministic reviewer | Implemented locally | `reviewer@marty.demo` is provisioned through deployment variables, Keycloak bootstrap, and Marty organization reviewer membership. |
-| Protocol bindings | Implemented locally | MIP 0.3 applicant and holder schemas regenerate Python, Rust, and TypeScript; 122 protocol tests and Rust compilation pass. |
+| Applicant API clean break | Deployed 2026-07-12 | Canonical organization review and `/v1/me/*` self-service routes replace all `/v1/applicants/*` routes; persisted organization ownership, permissions, caller-derived locks, and header stripping are enforced. |
+| Application contract | Deployed 2026-07-12 | Creation accepts only organization, active Application Template, form data, and integration context; owner, Credential Template, checks, approval, and issuer behavior are server-derived. |
+| Claim readiness and holder inventory | Deployed 2026-07-12 | `claim_state` and `claim_blocker` prevent false Claim actions; `/v1/issued-credentials/mine` replaces `/v1/documents` with a privacy-filtered inventory. |
+| Application Template authoring | Deployed 2026-07-12 | Create, advanced-create, detail, edit, preview, validation-gated activation, and deletion routes are registered; catalog visibility requires an active Application Template. |
+| Deterministic reviewer | Deployed 2026-07-12 | `reviewer@marty.demo` is provisioned through deployment variables, Keycloak bootstrap, and Marty organization reviewer membership. |
+| Protocol bindings | Released 2026-07-12 | MIP 0.3 applicant and holder schemas regenerate Python, Rust, and TypeScript; protocol conformance, codegen drift, and the pinned Rust wheel pass in CD. |
 | Clean-break service migration | Implemented | Flow persistence and APIs use `resolved_steps`, explicit extensions, canonical triggers/hooks, DRAFT creation, validation, dry-run, and activation gates; legacy noncanonical graphs migrate to `custom`. |
 | Physical document issuance | Implemented | Encrypted intake, data-group generation, remote or explicit test signing, personalization handoff/status, quality verification, activation, webhook updates, safe flow state, capability gating, and production destination authoring. |
 | Guided setup | Implemented | Readiness follows protocol-required references, reports service failures as blockers, and exposes physical capability and approval-policy dependencies without treating optional deployment as mandatory. |
 | Operational spine | Implemented | Flow Instances is the Operate landing surface and joins runtime state to definitions, applications, credentials, and physical production jobs. |
 
-Local remediation verification completed on 2026-07-11/12:
+Remediation and deployment verification completed on 2026-07-11/12:
 
-- MIP protocol code generation is current and all 122 protocol tests pass.
+- MIP protocol code generation is current; the release branch passes `107` tests with `3` explicit skips plus generated-binding drift checks.
 - The external issuance repository passes 226 tests; its 11 explicit skips require the Rust extension that CD builds before release.
 - The MIP 0.3 deterministic browser gate passes all 5 tests with no unexpected requests or page exceptions.
 - The production UI bundle completes successfully; focused Application Template, verification, flow, deployment, applicant, and gateway suites pass.
-- CD now rejects an unset or mutable `marty-credentials` revision and checks out the exact configured 40-character commit SHA for wheel, service, and migration images.
+- CD rejects unset or mutable repository revisions and records exact 40-character SHAs for UI, protocol, credentials, core, CLI, blog, and subscriptions.
+- Atomic CD run `29184445130` passed and published immutable services, public UI, self-host UI, and migration image digests in release `mip-0.3.0-beta-20260712-r5`.
+- Live beta canonical applicant and claim probes pass, removed routes return `404`, and walt.id browser issuance acceptance stores and resolves the membership badge.
 
-Remaining release work is operational: commit and publish the coordinated repository revisions, set the pinned external SHA, rehearse the migration against a beta database copy, run the real full-stack wallet lanes, and deploy the pinned images atomically. SpruceKit conformance and a passing walt.id presentation image remain external acceptance gates; local code does not advertise walt.id presentation as passing.
+Remaining acceptance work is limited to the protected SpruceKit Open Badge login lane, native-wallet handoffs, destructive credential lifecycle scenarios, and the external walt.id presentation parser/issuer-label defects. Walt.id presentation is not advertised as passing.
 
 ## Approval Philosophy
 
@@ -1258,7 +1260,7 @@ Approve these only if the team wants the console to become more intent-first and
 
 ### MIP 0.3 Clean-Break Implementation Evidence
 
-Status: implemented locally; beta deployment evidence pending.
+Status: deployed to beta on 2026-07-12; canonical issuance and walt.id browser acceptance pass.
 
 - Canonical self-service and organization-scoped applicant APIs replace the removed router and legacy routes.
 - Application Template dependencies, authoritative field validation, reviewer locks, claim readiness, and holder inventory now fail closed.
@@ -1269,20 +1271,17 @@ Status: implemented locally; beta deployment evidence pending.
 - The authenticated console shrinks correctly at 320px; holder inventory is overflow-free at 320, 390, 768, and 1440px.
 - Deterministic Playwright coverage uses no conditional skips or soft assertions and exercises applicant, holder, and reviewer paths.
 - The real beta lifecycle workflow replaces the disabled legacy E2E job. It is dispatched after beta deployment, requires protected seeded-user secrets, and fails on mixed MIP versions, canonical-route failures, removed-route compatibility, wallet rejection, template activation failure, or browser verification failure.
-- Walt.id wallet API and web UI are pinned to official `0.5.0` registry digests. Floating `stable` tags and the retired demo-wallet image name are removed.
+- The tested walt.id stable API and demo-wallet images are pinned by immutable registry digests. Walt.id `0.5.0` is rejected because it emits a nonconformant OID4VCI proof JWT type.
 - External issuance CI now installs Alembic and requires one migration head; the local graph resolves to `application_template_mip03`.
-- CD now requires exact `MARTY_PROTOCOL_REF` and `MARTY_CREDENTIALS_REF` commit SHAs. It runs the pinned protocol conformance/binding checks and emits a 90-day atomic release manifest containing repository revisions, immutable image tags, wallet digests, and `mixed_versions_supported: false` before any UI or service image can publish.
-- A protected `beta-migration-rehearsal` job refuses unmarked database URLs, applies the one-way migration to the approved beta copy, verifies every migration head, and publishes a final release-ready manifest with actual registry digests only after rehearsal succeeds.
-- Verification evidence: 654 service tests passed with one existing Redis integration skip; the complete frontend suite passed; 122 MIP tests passed; 226 external issuance tests passed with 11 explicit Rust-extension skips; production build and generated-binding drift checks passed; five focused Chromium tests passed.
+- CD requires exact revisions for protocol, credentials, core, CLI, blog, and subscriptions. It runs pinned protocol conformance/binding checks and emits a 90-day atomic release manifest containing repository revisions, immutable image tags, wallet digests, and `mixed_versions_supported: false` before any UI or service image can publish.
+- The `beta-migration-rehearsal` job refuses unmarked external database URLs and otherwise uses disposable PostgreSQL plus a synthetic MIP 0.2 applicant store. It verifies every migration head, one-way applicant conversion, backup creation, and image digests before publishing the release-ready manifest.
+- Verification evidence: 654 service tests passed with one existing Redis integration skip; the complete frontend suite passed; the release protocol branch passed 107 tests with 3 explicit skips; 226 external issuance tests passed with 11 explicit Rust-extension skips; production build and generated-binding drift checks passed; five focused Chromium tests passed.
 
-Release-only checks still required:
+Remaining external/device checks:
 
-- configure the protected rehearsal database URL/marker and require the CD migration-rehearsal job to pass;
-- deploy protocol, migration, services, gateway, and UI atomically;
-- dispatch the new beta lifecycle workflow after the atomic deployment and require its redacted evidence artifact;
-- commit and publish the coordinated protocol and `marty-credentials` revisions, then set the required 40-character `MARTY_PROTOCOL_REF` and `MARTY_CREDENTIALS_REF` release variables;
 - complete SpruceKit Open Badge login acceptance in the protected conformance/device lane;
 - run native wallet handoffs and destructive suspend, reinstate, revoke, and renewal checks in the device lab.
+- resolve or pin a walt.id presentation release that accepts the signed DCQL request without changing the standards-compliant login contract.
 
 For approved P0/P1 changes, run targeted tests first:
 

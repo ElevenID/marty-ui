@@ -1,25 +1,26 @@
 # Beta Credential Management E2E Audit
 
 Date: 2026-07-11
+Updated: 2026-07-12
 Target: `https://beta.elevenidllc.com`
 Method: Chromium Playwright using the repository's configured testing users and live beta services.
 
 ## Remediation Status
 
-The clean-break MIP 0.3 remediation is implemented locally and is not yet claimed as deployed to beta. Local evidence currently covers:
+The clean-break MIP 0.3 remediation was deployed to beta on 2026-07-12. Implementation and deployment evidence covers:
 
 - old `/v1/applicants/*` routes absent and canonical route inventory present;
 - persisted organization authorization, explicit review/decision permissions, and caller-held reviewer locks;
 - strict application creation, server-derived templates/checks, structured field validation, blocked/ready claim states, and holder inventory;
 - registered Application Template create/detail/edit routes and fail-closed Flow capability loading;
 - dedicated `reviewer@marty.demo` provisioning and reviewer membership configuration;
-- MIP 0.3 generated bindings current, 122 protocol tests passing, and Rust bindings compiling;
+- MIP 0.3 generated bindings current, protocol conformance and drift checks passing, and the pinned Rust wheel compiling in CD;
 - 646 service tests passing with one existing skip, including 64 focused applicant, gateway, migration, metadata, and policy tests;
 - all 1,003 frontend tests passing across 149 test files and a successful production build;
 - a five-test deterministic Chromium gate covering canonical applicant creation/claim, all nine selectable wallet destinations, holder blocked/ready states, reviewer lock/request-info/reject/approve actions, and 320/390/768/1440 responsive widths;
 - browser assertions for no failed API requests in the applicant/holder gate, no reviewer identity fields in decision payloads, and no horizontal page overflow at the supported widths.
 
-The original observations below remain the pre-remediation beta baseline until the atomic release and migration rehearsal pass against `https://beta.elevenidllc.com`. Native wallet acceptance, destructive credential lifecycle actions, and a post-deploy live-beta smoke remain release-environment checks; the local browser gate does not claim those external results.
+The original observations below remain as the pre-remediation beta baseline. The final deployment evidence and current release boundary are recorded at the end of this audit.
 
 ## Executive Summary
 
@@ -302,7 +303,7 @@ Verification completed locally:
 - Complete service suite: `654 passed, 1 skipped` (Redis integration).
 - Complete frontend suite, TypeScript compilation, production Vite build, and generated-binding drift check pass.
 
-Beta deployment, execution of the new full-stack workflow, SpruceKit badge-login acceptance, migration rehearsal against a beta database copy, and destructive lifecycle verification remain release gates. No claim is made here that the currently deployed beta has received the local cutover.
+At that point, beta deployment, full-stack workflow execution, SpruceKit badge-login acceptance, migration rehearsal, and destructive lifecycle verification remained release gates. The deployment section below supersedes this historical pre-cutover status.
 
 ## Live Beta Revalidation - 2026-07-11 22:41-22:50 MDT
 
@@ -388,4 +389,35 @@ Development verification:
 - Browser audit script syntax check: passed.
 - Production TypeScript and Vite build: passed.
 
-These results update the local release candidate only. The live beta release decision remains blocked until the coordinated images and migration are deployed and the strict browser gate passes against that deployment.
+These results drove the coordinated beta deployment documented below.
+
+## MIP 0.3.0 Beta Deployment - 2026-07-12
+
+### Atomic release
+
+- `https://beta.elevenidllc.com` advertises only MIP `0.3.0`; the discovery response and `X-MIP-Version` header both return `0.3.0`.
+- The local beta database, Redis, OpenBao, and applicant store were backed up before the one-way cutover under `tests/artifacts/deployment-mip-0.3.0-beta-20260712/`.
+- The applicant store was migrated to `MIP/0.3.0`, all ten relational service migration heads verify, and the Flow trigger migration is at `20260712_0001`.
+- CD run `29184445130` passed protocol conformance, generated-binding drift, Rust wheel compilation, services/UI/migration image builds, fresh-schema rehearsal, legacy applicant-store rehearsal, and release-manifest publication.
+- The release-ready manifest pins seven repository revisions, four Marty image digests, tested walt.id image digests, `mixed_versions_supported: false`, and migration rehearsal mode `ephemeral-schema`.
+- A fresh-install migration defect discovered by the rehearsal was corrected: the historical Flow migration no longer deletes Presentation Policy tables or migration state owned by another service.
+
+### Live beta acceptance
+
+- Canonical applicant profile, applications, holder inventory, and claim routes return `200`; every removed applicant route probed by the gate returns `404`.
+- A membership-badge claim generated a fresh canonical offer with no failed requests or page exceptions. Evidence: `tests/artifacts/beta-membership-probe-20260712074553/report.json`.
+- Walt.id accepted and stored the Marty Verified Member Badge, resolved its public VCT metadata with `200`, and contained no legacy `marty.example` identifier.
+- Organization-selected dashboard authorization returns `200`; Application Templates are draft-first, validation-gated, and activatable; standalone verification session creation and cancellation work.
+- All coordinated runtime containers are healthy and the post-deployment migration verifier reports `10` successful services and `0` failures.
+
+### Remaining interoperability boundary
+
+- SpruceKit remains the authoritative Open Badge login conformance target and still requires its protected conformance/device acceptance run.
+- Walt.id issuance is accepted, but its presentation API rejects the signed DCQL login request with a wallet-side JSON decoding error for `$.request`. The signed standards request was not weakened to accommodate that parser defect.
+- Walt.id `0.5.0` is not accepted for issuance because it emits proof JWT type `JWT` instead of the required `openid4vci-proof+jwt`; the tested stable API and demo-wallet pair is pinned by digest until an upstream versioned release passes.
+- Walt.id resolves the credential title and VCT metadata but still renders the issuer label as `Unknown`; issuer display metadata remains an interoperability follow-up.
+- Native wallet handoffs and destructive suspend, reinstate, revoke, and renewal scenarios remain device-lab gates.
+
+### Current decision
+
+The MIP `0.3.0` clean-break deployment is live and its canonical issuance path is release-ready. Passwordless badge login is not yet fully accepted until the SpruceKit lane passes; walt.id presentation remains an external compatibility blocker rather than an advertised login path.
