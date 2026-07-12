@@ -1,17 +1,14 @@
 import { useEffect } from 'react';
 import { useLocation } from 'react-router-dom';
+import { waitForFonts } from '../../utils/waitForFonts';
 
 function PrerenderReadySignal() {
   const location = useLocation();
 
   useEffect(() => {
     let cancelled = false;
-    const fontsReady =
-      document.fonts && typeof document.fonts.ready?.then === 'function'
-        ? document.fonts.ready.catch(() => {})
-        : Promise.resolve();
 
-    Promise.resolve(fontsReady).then(() => {
+    waitForFonts().then(() => {
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
           if (!cancelled) {

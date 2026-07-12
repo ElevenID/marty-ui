@@ -64,6 +64,8 @@ export default defineConfig(async ({ mode }) => {
   const enableBundleAnalysis = mode === 'analyze' || process.env.ANALYZE_BUNDLE === '1'
   const isSelfhostBuild = mode === 'selfhost' || env.VITE_UI_VARIANT === 'selfhost'
   const disablePrerender = isDev || isSelfhostBuild || process.env.DISABLE_PRERENDER === '1'
+  const prerenderDebug = process.env.PRERENDER_DEBUG === '1'
+  const prerenderConcurrency = Number(process.env.PRERENDER_CONCURRENCY || 1)
   const port = Number(env.VITE_PORT || env.PORT || env.UI_DEV_PORT || 3000)
   const bundleAnalysisBaseName = isSelfhostBuild ? 'bundle-analysis-selfhost' : 'bundle-analysis-public'
   let authorRoutes = []
@@ -190,10 +192,17 @@ export default defineConfig(async ({ mode }) => {
             '/docs',
           ],
           renderer: new PuppeteerRenderer({
+            maxConcurrentRoutes: prerenderConcurrency,
             renderAfterDocumentEvent: 'app-rendered',
             timeout: 45000,
             skipThirdPartyRequests: true,
             headless: true,
+            pageHandler: prerenderDebug
+              ? (_page, route) => console.info(`[prerender] loaded ${route}`)
+              : undefined,
+            consoleHandler: prerenderDebug
+              ? (route, message) => console.info(`[prerender] ${route} ${message.type()}: ${message.text()}`)
+              : undefined,
           }),
           postProcess(route) {
             // Add prerender status meta tag
