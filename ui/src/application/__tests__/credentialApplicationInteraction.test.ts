@@ -89,8 +89,12 @@ describe('Credential Application — end-to-end interaction', () => {
     expect(credentialConfig).toMatchObject({
       id: 'tpl-mdl',
       credential_type: 'org.iso.18013.5.1.mDL',
-      required_fields: ['given_name', 'family_name', 'birth_date'],
-      optional_fields: ['portrait'],
+      required_fields: [
+        expect.objectContaining({ name: 'given_name', required: true }),
+        expect.objectContaining({ name: 'family_name', required: true }),
+        expect.objectContaining({ name: 'birth_date', required: true }),
+      ],
+      optional_fields: [expect.objectContaining({ name: 'portrait', required: false })],
     });
 
     // ── Step 4: Resolve/create applicant ────────────────────
@@ -173,7 +177,7 @@ describe('Credential Application — end-to-end interaction', () => {
         applications: [
           {
             id: 'existing-appl',
-            credential_configuration_id: 'tpl-mdl',
+            credential_template_id: 'tpl-mdl',
             status: 'CREDENTIALED',
             credential_offer_uri: 'openid-credential-offer://existing',
             credential_offer_uris: {},
@@ -195,8 +199,8 @@ describe('Credential Application — end-to-end interaction', () => {
       userId: 'user-42',
       getApplicantByUser: vi.fn().mockResolvedValue({ id: 'app-1' }),
       listApplicantApplications: vi.fn().mockResolvedValue([
-        { id: 'appl-1', credential_configuration_id: 'tpl-mdl', status: 'approved' },
-        { id: 'appl-2', credential_configuration_id: 'tpl-badge', status: 'pending' },
+        { id: 'appl-1', credential_template_id: 'tpl-mdl', status: 'approved' },
+        { id: 'appl-2', credential_template_id: 'tpl-badge', status: 'pending' },
       ]),
     });
 

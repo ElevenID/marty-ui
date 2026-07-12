@@ -46,18 +46,16 @@ import { usePreview } from '../../contexts/PreviewContext';
 import { get, post } from '../../services/api';
 import { APPLY_LOCATION_STATE_STORAGE_KEY } from '../../application/routing';
 import {
-  createApplicant as createApplicantApi,
   createApplication as createApplicationApi,
-  enrollBiometric as enrollBiometricApi,
-  getApplicant as getApplicantApi,
-  getApplicantByUser as getApplicantByUserApi,
-  listApplicantApplicationsForProfile,
+  enrollMyBiometric,
+  getMyApplicantProfile,
   listApplications as listApplicationsApi,
   submitApplication as submitApplicationApi,
-  supersedeApplication as supersedeApplicationApi,
-  updateApplicantProfile as updateApplicantProfileApi,
+  upsertMyApplicantProfile,
+  withdrawApplication,
 } from '../../services/applicantApi';
 import { generateIssuanceOffer } from '../../services/credentialsApi';
+import { listApplicationTemplates } from '../../services/applicationTemplatesApi';
 import { DynamicFieldGroup } from './DynamicFieldRenderer';
 import ClaimCredentialDialog from '../console/applicant/ClaimCredentialDialog';
 import { pickOfficialReference } from '../../utils/officialReferences';
@@ -309,8 +307,8 @@ export default function ApplicationForm() {
 
   const resolveApplicantId = async () => resolveApplicantIdForApplication({
     user,
-    getApplicant: getApplicantApi,
-    getApplicantByUser: getApplicantByUserApi,
+    getApplicant: () => getMyApplicantProfile(applicationOrganizationId),
+    getApplicantByUser: () => getMyApplicantProfile(applicationOrganizationId),
   });
 
   const readFileAsBase64 = (file) =>
@@ -364,6 +362,7 @@ export default function ApplicationForm() {
           getCredentialTemplate,
           applicationTemplateId: canvasApplicationTemplateId || null,
           getApplicationTemplate,
+          listApplicationTemplates,
         });
         setCredentialConfig(result.credentialConfig);
         if (result.applicationTemplate) {
@@ -561,8 +560,11 @@ export default function ApplicationForm() {
         credentialConfigId,
         hasRegisteredWallet,
         resolveApplicantId,
-        createApplicant: createApplicantApi,
-        updateApplicantProfile: updateApplicantProfileApi,
+        createApplicant: upsertMyApplicantProfile,
+        updateApplicantProfile: (_applicantId, data) => upsertMyApplicantProfile({
+          ...data,
+          organization_id: applicationOrganizationId,
+        }),
         createApplication: createApplicationApi,
         submitApplication: submitApplicationApi,
         generateIssuanceOffer,
@@ -626,15 +628,18 @@ export default function ApplicationForm() {
         canvasLtiContext: canvasLtiApplicationContext,
         allFields,
         resolveApplicantId,
-        createApplicant: createApplicantApi,
-        updateApplicantProfile: updateApplicantProfileApi,
-        getApplicantByUser: getApplicantByUserApi,
+        createApplicant: upsertMyApplicantProfile,
+        updateApplicantProfile: (_applicantId, data) => upsertMyApplicantProfile({
+          ...data,
+          organization_id: applicationOrganizationId,
+        }),
+        getApplicantByUser: () => getMyApplicantProfile(applicationOrganizationId),
         createApplication: createApplicationApi,
         submitApplication: submitApplicationApi,
-        listApplicantApplications: listApplicantApplicationsForProfile,
-        supersedeApplication: supersedeApplicationApi,
+        listApplicantApplications: () => listApplicationsApi({ limit: 100 }).then((page) => page.applications),
+        supersedeApplication: withdrawApplication,
         duplicateApplicationAction,
-        enrollBiometric: enrollBiometricApi,
+        enrollBiometric: (_applicantId, data) => enrollMyBiometric(applicationOrganizationId, data),
         readFileAsBase64,
       });
 
@@ -1020,17 +1025,17 @@ export default function ApplicationForm() {
   // One-click issuance UI (MemberCredential & mDL)
   // ===========================================================================
   if (isOneClickCredential && !isCanvasLtiApplication) {
-    const displayRole = (user?.roles || []).find(r => ['applicant', 'vendor', 'administrator'].includes(r)) || 'applicant';
-
-    const HeroIcon = isMdlCredential ? DirectionsCarIcon : LoginIcon;
-    const heroTitle = isMdlCredential
-      ? (credentialConfig?.display_name || 'Membership ID (mDoc)')
-      : (credentialConfig?.display_name || 'Login Credential (Open Badge)');
-    const heroDescription = isMdlCredential
-      ? (credentialConfig?.description || 'Mobile-first membership identity in mDoc format — compatible with Apple & Google Wallet style experiences.')
-      : (credentialConfig?.description || 'Log in securely using your wallet — no password required. W3C Verifiable Credential in SD-JWT format.');
-    const ctaLabel = isMdlCredential ? 'Get Membership ID' : 'Add to Wallet';
-    const ctaSubtext = isMdlCredential ? 'Free · Instant · mDoc (ISO 18013-5)' : 'Free · Instant · Open Badge (W3C)';
+    const isMdocCredential = isMdlCredential || isMdocMemberCredential;
+    const HeroIcon = isMdlCredential ? DirectionsCarIcon : (isOpenBadgeCredential ? BadgeIcon : LoginIcon);
+    const fallbackTitle = isMdocCredential
+      ? 'Membership ID'
+      : (isOpenBadgeCredential ? 'Verified Member Badge' : 'Login Credential');
+    const heroTitle = credentialConfig?.display_name || credentialConfig?.name || fallbackTitle;
+    const heroDescription = credentialConfig?.description || 'Add this credential to a compatible wallet.';
+    const ctaLabel = isMdocCredential ? 'Get Membership ID' : 'Add to Wallet';
+    const ctaSubtext = [credentialConfig?.processingTime || 'Instant', credentialConfig?.format || credentialConfig?.standard]
+      .filter(Boolean)
+      .join(' - ');
 
     const summaryFields = getOneClickSummaryFields({ credentialConfig, user, organizationId: applicationOrganizationId });
 

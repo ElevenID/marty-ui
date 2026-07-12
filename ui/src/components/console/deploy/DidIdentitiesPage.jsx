@@ -599,7 +599,7 @@ export default function DidIdentitiesPage() {
   const navigate = useNavigate()
   const { organizationId, organizationName } = useAuth()
   const { activeOrgId } = useConsole()
-  const effectiveOrganizationId = activeOrgId || organizationId
+  const effectiveOrganizationId = activeOrgId
   const { showNotification } = useNotifications()
   const { data: signingKeysData, loading, error, reload } = useAsyncData(async () => {
     const data = await signingKeysApi.listSigningKeys({ organization_id: effectiveOrganizationId })

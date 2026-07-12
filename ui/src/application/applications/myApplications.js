@@ -69,7 +69,7 @@ export function canAddMyApplicationToWallet(application) {
 
 export function buildMyApplicationEditNavigation(application) {
   return {
-    path: `/application/${application?.credential_configuration_id}`,
+    path: `/application/${application?.credential_template_id}`,
     state: {
       applicationId: application?.id,
       revisionData: application,

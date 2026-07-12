@@ -84,6 +84,8 @@ vi.mock('../../components/console', () => ({
   CredentialTemplatesPage: () => <div data-testid="credential-templates-page" />,
   CredentialTemplateDetailPage: () => <div data-testid="credential-template-detail-page" />,
   ApplicationTemplatesPage: () => <div data-testid="application-templates-page" />,
+  ApplicationTemplateEditorPage: () => <div data-testid="application-template-editor-page" />,
+  ApplicationTemplateDetailPage: () => <div data-testid="application-template-detail-page" />,
   CredentialTemplateWizard: () => <div data-testid="credential-template-wizard" />,
   PoliciesPage: () => <div data-testid="policies-page" />,
   PresentationPoliciesPage: () => <div data-testid="presentation-policies-page" />,
@@ -94,6 +96,7 @@ vi.mock('../../components/console', () => ({
   ApiKeysPage: () => <div data-testid="api-keys-page" />,
   DidIdentitiesPage: () => <div data-testid="did-identities-page" />,
   CanvasIntegrationsPage: () => <div data-testid="canvas-integrations-page" />,
+  DeliveryDestinationsPage: () => <div data-testid="delivery-destinations-page" />,
   LanesDevicesPage: () => <div data-testid="lanes-devices-page" />,
   DeploymentProfileWizard: () => <div data-testid="deployment-profile-wizard" />,
   KeyManagementServiceWizard: () => <div data-testid="key-management-service-wizard" />,
@@ -102,6 +105,10 @@ vi.mock('../../components/console', () => ({
   FlowDefinitionsPage: () => <div data-testid="flow-definitions-page" />,
   FlowInstancesPage: () => <div data-testid="flow-instances-page" />,
   FlowDefinitionWizard: () => <div data-testid="flow-definition-wizard" />,
+  CustomFlowBuilder: () => <div data-testid="custom-flow-builder" />,
+  PolicySetsPage: () => <div data-testid="policy-sets-page" />,
+  PolicySetWizard: () => <div data-testid="policy-set-wizard" />,
+  PolicySetDetailPage: () => <div data-testid="policy-set-detail-page" />,
   FlowDetailPage: () => <div data-testid="flow-detail-page" />,
   OperatePage: () => <div data-testid="operate-page" />,
   IssuancePage: () => <div data-testid="issuance-page" />,
@@ -238,5 +245,24 @@ describe('ConsoleRoutes login routing', () => {
 
     expect(await screen.findByTestId('console-dashboard')).toBeInTheDocument();
     expect(screen.queryByTestId('guided-setup-wizard')).not.toBeInTheDocument();
+  });
+
+  it('redirects the legacy audit route to the org audit page', async () => {
+    mockUseAuth.mockReturnValue({
+      isAuthenticated: true,
+      isLoading: false,
+      login: mockLogin,
+    });
+    mockUseConsole.mockReturnValue({
+      mode: 'org',
+      activeOrgId: 'org-1',
+      memberships: [{ id: 'org-1', name: 'Marty' }],
+      isLoading: false,
+      isOrgBootstrapRequired: false,
+    });
+
+    renderConsoleRoutes('/console/audit?service=gateway');
+
+    expect(await screen.findByTestId('audit-page')).toBeInTheDocument();
   });
 });

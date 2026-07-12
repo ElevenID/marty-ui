@@ -327,7 +327,7 @@ function CredentialTemplateDetailPage() {
   const { templateId } = useParams();
   const { organizationId: authOrganizationId } = useAuth();
   const { activeOrgId } = useConsole();
-  const organizationId = activeOrgId || authOrganizationId;
+  const organizationId = activeOrgId;
   const [activeTab, setActiveTab] = useState('overview');
   const [destinationBusy, setDestinationBusy] = useState(false);
   const [destinationError, setDestinationError] = useState(null);

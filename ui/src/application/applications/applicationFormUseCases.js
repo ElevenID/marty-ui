@@ -36,7 +36,7 @@ export function findActiveApplicationForCredential(applications = [], credential
   }
 
   return normalizeApplicationsResponse(applications)
-    .filter((application) => application?.credential_configuration_id === credentialConfigId)
+    .filter((application) => application?.credential_template_id === credentialConfigId)
     .filter((application) => DUPLICATE_ACTIVE_APPLICATION_STATUSES.has(applicationStatus(application)))
     .sort((a, b) => new Date(b?.updated_at || b?.updatedAt || b?.created_at || 0) - new Date(a?.updated_at || a?.updatedAt || a?.created_at || 0))[0] || null;
 }
@@ -48,8 +48,16 @@ export async function loadCredentialApplicationConfig({
   getCredentialTemplate,
   applicationTemplateId = null,
   getApplicationTemplate = null,
+  listApplicationTemplates = null,
 }) {
-  if ((!credentialConfigId || credentialConfig) && (!applicationTemplateId || !getApplicationTemplate)) {
+  const shouldResolveLinkedTemplate = Boolean(
+    organizationId
+    && listApplicationTemplates
+    && (credentialConfig?.id || credentialConfigId)
+    && !applicationTemplateId
+    && !credentialConfig?.application_template_id
+  );
+  if ((!credentialConfigId || credentialConfig) && (!applicationTemplateId || !getApplicationTemplate) && !shouldResolveLinkedTemplate) {
     return {
       credentialConfig,
       applicationTemplate: null,
@@ -69,9 +77,19 @@ export async function loadCredentialApplicationConfig({
   const normalizedCredentialConfig = credentialConfig
     ? normalizeCredentialConfigInput(credentialConfig)
     : (template ? normalizeTemplateToFormConfig(template) : null);
-  const applicationTemplate = applicationTemplateId && getApplicationTemplate
-    ? await getApplicationTemplate(applicationTemplateId)
+  const linkedTemplateId = applicationTemplateId || normalizedCredentialConfig?.application_template_id;
+  let applicationTemplate = linkedTemplateId && getApplicationTemplate
+    ? await getApplicationTemplate(linkedTemplateId)
     : null;
+
+  if (!applicationTemplate && organizationId && listApplicationTemplates && normalizedCredentialConfig?.id) {
+    const templates = await listApplicationTemplates(organizationId);
+    applicationTemplate = (Array.isArray(templates) ? templates : templates?.items || [])
+      .find((candidate) => (
+        candidate?.credential_template_id === normalizedCredentialConfig.id
+        && String(candidate?.status || '').trim().toUpperCase() === 'ACTIVE'
+      )) || null;
+  }
 
   return {
     credentialConfig: applicationTemplate
@@ -221,7 +239,7 @@ export async function autoApplyForCredential({
       const existing = applications.find((a) => {
         const status = a.status?.toLowerCase();
         return (
-          a.credential_configuration_id === configId &&
+          a.credential_template_id === configId &&
           ['approved', 'offered', 'credentialed', 'issued'].includes(status)
         );
       });
@@ -266,11 +284,10 @@ export async function autoApplyForCredential({
   });
 
   const createdApplication = await createApplication({
-    applicant_id: applicantId,
-    credential_configuration_id: credentialConfig?.id || credentialConfigId,
-    issuing_authority: 'ElevenID LLC',
-    requested_validity_years: autoApplyContext.requested_validity_years,
-    metadata: autoApplyContext.metadata,
+    organization_id: organizationId,
+    application_template_id: credentialConfig?.application_template_id,
+    form_data: autoApplyContext.metadata,
+    integration_context: {},
   });
 
   const submittedApplication = submitApplication
@@ -352,8 +369,6 @@ export async function submitCredentialApplication({
         }
         await supersedeApplication(duplicate.id, {
           reason: 'superseded_by_reapplication',
-          replacement_credential_configuration_id: effectiveCredentialConfigId,
-          source: canvasLtiContext ? 'canvas_lti_reapplication' : 'applicant_reapplication',
         });
       } else {
         return {
@@ -369,9 +384,8 @@ export async function submitCredentialApplication({
 
   const createdApplication = await createApplication(
     buildStandardApplicationPayload({
-      applicantId,
+      organizationId,
       credentialConfig,
-      credentialConfigId,
       formData,
       canvasLtiContext,
     })
@@ -385,6 +399,7 @@ export async function submitCredentialApplication({
     const templateBase64 = imageBase64 || createFallbackBiometricTemplate();
 
     await enrollBiometric(applicantId, {
+      organization_id: organizationId,
       biometric_type: 'FACIAL',
       template_data_base64: templateBase64,
       image_data_base64: imageBase64,

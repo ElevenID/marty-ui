@@ -35,6 +35,10 @@ CANVAS_DEMO_ADMIN_EMAIL="$(printf '%s' "${CANVAS_DEMO_ADMIN_EMAIL:-canvas.admin@
 CANVAS_DEMO_ADMIN_PASSWORD="${CANVAS_DEMO_ADMIN_PASSWORD:-CanvasAdmin123!}"
 CANVAS_DEMO_ADMIN_FIRST_NAME="${CANVAS_DEMO_ADMIN_FIRST_NAME:-Canvas}"
 CANVAS_DEMO_ADMIN_LAST_NAME="${CANVAS_DEMO_ADMIN_LAST_NAME:-Demo Admin}"
+DEMO_REVIEWER_EMAIL="$(printf '%s' "${DEMO_REVIEWER_EMAIL:-reviewer@marty.demo}" | tr '[:upper:]' '[:lower:]' | tr -d '\r')"
+DEMO_REVIEWER_PASSWORD="${DEMO_REVIEWER_PASSWORD:-}"
+DEMO_REVIEWER_FIRST_NAME="${DEMO_REVIEWER_FIRST_NAME:-Review}"
+DEMO_REVIEWER_LAST_NAME="${DEMO_REVIEWER_LAST_NAME:-User}"
 KCADM="${KCADM_PATH:-/opt/keycloak/bin/kcadm.sh}"
 
 KEYCLOAK_USER_REGISTRATION_ENABLED="${KEYCLOAK_USER_REGISTRATION_ENABLED:-true}"
@@ -218,6 +222,7 @@ main() {
     configure_marty_api_secret
     ensure_marty_org_exists
     ensure_canvas_demo_admin_user
+    ensure_demo_reviewer_user
     ensure_marty_org_admin_role
     
     log_success "=== Keycloak Setup Complete ==="
@@ -344,6 +349,7 @@ ensure_canvas_demo_admin_user() {
         "onboarding_completed": ["true"]
     }
 }
+
 EOF
 
         if kcadm_safe create users -r "$REALM" -f "$payload" > /dev/null; then
@@ -382,6 +388,64 @@ EOF
     fi
 
     grant_realm_role_to_user "$user_id" "$CANVAS_DEMO_ADMIN_EMAIL" "administrator"
+}
+
+ensure_demo_reviewer_user() {
+    if [ -z "$DEMO_REVIEWER_EMAIL" ]; then
+        log_info "DEMO_REVIEWER_EMAIL not set - skipping reviewer bootstrap"
+        return 0
+    fi
+
+    log_info "Ensuring demo reviewer user exists: ${DEMO_REVIEWER_EMAIL}"
+    local user_id
+    user_id=$(find_user_id_by_email "$DEMO_REVIEWER_EMAIL")
+    if [ -z "$user_id" ]; then
+        local payload email first_name last_name
+        payload=$(create_temp_file)
+        email="$(json_escape "$DEMO_REVIEWER_EMAIL")"
+        first_name="$(json_escape "$DEMO_REVIEWER_FIRST_NAME")"
+        last_name="$(json_escape "$DEMO_REVIEWER_LAST_NAME")"
+        cat > "$payload" <<EOF
+{
+    "username": "${email}",
+    "email": "${email}",
+    "emailVerified": true,
+    "enabled": true,
+    "firstName": "${first_name}",
+    "lastName": "${last_name}",
+    "attributes": {
+        "user_type": ["reviewer"],
+        "onboarding_completed": ["true"]
+    }
+}
+EOF
+        if ! kcadm_safe create users -r "$REALM" -f "$payload" > /dev/null; then
+            log_error "Failed to create demo reviewer user: ${DEMO_REVIEWER_EMAIL}"
+            return 1
+        fi
+        user_id=$(find_user_id_by_email "$DEMO_REVIEWER_EMAIL")
+    fi
+
+    if [ -z "$user_id" ]; then
+        log_error "Demo reviewer lookup failed after create: ${DEMO_REVIEWER_EMAIL}"
+        return 1
+    fi
+
+    if [ -n "$DEMO_REVIEWER_PASSWORD" ]; then
+        local password_payload password_value
+        password_payload=$(create_temp_file)
+        password_value="$(json_escape "$DEMO_REVIEWER_PASSWORD")"
+        cat > "$password_payload" <<EOF
+{
+    "type": "password",
+    "value": "${password_value}",
+    "temporary": false
+}
+EOF
+        kcadm_secret_safe update "users/${user_id}/reset-password" -r "$REALM" -f "$password_payload" -n > /dev/null
+    fi
+
+    grant_realm_role_to_user "$user_id" "$DEMO_REVIEWER_EMAIL" "reviewer"
 }
 
 ensure_marty_org_admin_role() {

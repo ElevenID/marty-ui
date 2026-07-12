@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -15,6 +16,22 @@ from common.grpc_factory import (
     create_grpc_server,
     start_grpc_server_port,
 )
+
+
+@pytest.fixture(scope="module", autouse=True)
+def grpc_event_loop():
+    """Keep grpc.aio tests independent from event loops closed by other modules."""
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+    if loop.is_closed():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+    yield loop
 
 
 # ── create_grpc_server ──────────────────────────────────────────────

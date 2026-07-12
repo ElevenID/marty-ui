@@ -49,7 +49,7 @@ const CredentialTemplateWizard = () => {
   const { t } = useTranslation('console');
   const { organizationId: authOrganizationId } = useAuth();
   const { activeOrgId } = useConsole();
-  const effectiveOrganizationId = activeOrgId || authOrganizationId;
+  const effectiveOrganizationId = activeOrgId;
 
   const validateStep = useCallback((stepIndex, data) => {
     switch (stepIndex) {

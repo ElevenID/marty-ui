@@ -7,22 +7,20 @@ import { formatOfficialReference } from '../../../utils/officialReferences';
 
 const {
   mockFetchIssuedCredentials,
-  mockGenerateIssuanceOffer,
+  mockIssueOrganizationApplication,
   mockListCredentialTemplates,
   mockShowSuccess,
   mockShowError,
 } = vi.hoisted(() => ({
   mockFetchIssuedCredentials: vi.fn(),
-  mockGenerateIssuanceOffer: vi.fn(),
+  mockIssueOrganizationApplication: vi.fn(),
   mockListCredentialTemplates: vi.fn(),
   mockShowSuccess: vi.fn(),
   mockShowError: vi.fn(),
 }));
 
-vi.mock('../../../hooks/useAuth', () => ({
-  useAuth: () => ({
-    organizationId: 'org-123',
-  }),
+vi.mock('../../../contexts/ConsoleContext', () => ({
+  useConsole: () => ({ activeOrgId: 'org-123' }),
 }));
 
 vi.mock('../../../application/vendor', () => ({
@@ -40,8 +38,8 @@ vi.mock('../../../services/presentationPolicyApi', () => ({
   listCredentialTemplates: (...args: unknown[]) => mockListCredentialTemplates(...args),
 }));
 
-vi.mock('../../../services/credentialsApi', () => ({
-  generateIssuanceOffer: (...args: unknown[]) => mockGenerateIssuanceOffer(...args),
+vi.mock('../../../services/applicantApi', () => ({
+  issueOrganizationApplication: (...args: unknown[]) => mockIssueOrganizationApplication(...args),
 }));
 
 describe('IssuancePage', () => {
@@ -66,7 +64,7 @@ describe('IssuancePage', () => {
       ],
       total: 1,
     });
-    mockGenerateIssuanceOffer.mockResolvedValue({
+    mockIssueOrganizationApplication.mockResolvedValue({
       offer_url: 'openid-credential-offer://offer/test',
       expires_at: '2026-05-07T12:15:00Z',
       status: 'active',
@@ -122,7 +120,7 @@ describe('IssuancePage', () => {
     await user.click(screen.getByRole('button', { name: /^reissue$/i }));
 
     await waitFor(() => {
-      expect(mockGenerateIssuanceOffer).toHaveBeenCalledWith('application-1');
+      expect(mockIssueOrganizationApplication).toHaveBeenCalledWith('org-123', 'application-1');
     });
 
     expect(screen.getByText('Fresh wallet offer ready')).toBeInTheDocument();

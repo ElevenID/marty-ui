@@ -22,7 +22,7 @@ flow_definitions = Table(
     Column("organization_id", String(255), nullable=False),
     Column("name", String(255), nullable=False),
     Column("description", Text, nullable=True),
-    Column("status", String(50), nullable=False, default="draft"),
+    Column("status", String(50), nullable=False, default="DRAFT"),
     Column("flow_type", String(50), nullable=False),
     
     # Steps and transitions (JSON arrays)
@@ -32,8 +32,16 @@ flow_definitions = Table(
     
     # Linked configurations
     Column("credential_template_id", String(36), nullable=True),
+    Column("application_template_id", String(36), nullable=True),
     Column("presentation_policy_id", String(36), nullable=True),
+    Column("delivery_destination_profile_id", String(128), nullable=True),
     Column("deployment_profile_id", String(36), nullable=True),
+    Column("deployment_profile_ids", JSON, nullable=False, default=list),
+    Column("trust_profile_id", String(36), nullable=True),
+    Column("approval_strategy", String(50), nullable=False, default="AUTO"),
+    Column("hooks", JSON, nullable=False, default=dict),
+    Column("trigger", JSON, nullable=True),
+    Column("extension", JSON, nullable=True),
     Column("preconditions", JSON, nullable=False, server_default="[]"),
     
     # Flow settings

@@ -78,7 +78,7 @@ function AuthenticatedLayout({ children }) {
       <ConsoleHeaderBar onMobileMenuToggle={handleMobileToggle} />
 
       {/* Main content area below header */}
-      <Box sx={{ display: 'flex', flexGrow: 1, pt: `${HEADER_HEIGHT}px` }}>
+      <Box sx={{ display: 'flex', flexGrow: 1, minWidth: 0, width: '100%', pt: `${HEADER_HEIGHT}px` }}>
         {/* Sidebar Navigation */}
         <SidebarNavigation 
           mobileOpen={mobileOpen} 
@@ -90,7 +90,9 @@ function AuthenticatedLayout({ children }) {
           component="main"
           sx={{
             flexGrow: 1,
-            p: 3,
+            minWidth: 0,
+            width: '100%',
+            p: { xs: 2, sm: 3 },
             minHeight: '100%',
             bgcolor: 'background.default',
           }}

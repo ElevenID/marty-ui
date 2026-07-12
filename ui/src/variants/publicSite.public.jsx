@@ -1,5 +1,5 @@
 import { lazy } from 'react';
-import { Route } from 'react-router-dom';
+import { Navigate, Route } from 'react-router-dom';
 import { DISABLE_PUBLIC_GET_STARTED_BUTTONS } from '@ui-public-config';
 import { useAuth } from '../hooks/useAuth';
 
@@ -55,11 +55,13 @@ export function renderMarketingRoutes({ login }) {
       <Route path="/architecture" element={<ArchitecturePage />} />
       <Route path="/security" element={<SecurityPage />} />
       <Route path="/resources" element={<ResourcesPage />} />
+      <Route path="/verification" element={<Navigate to="/verifiable-credential-api" replace />} />
       <Route path="/verifiable-credential-api" element={<VerifiableCredentialApiPage />} />
       <Route path="/eudi-wallet-verification" element={<EudiWalletVerificationPage />} />
       <Route path="/iso-18013-5-mdoc-verification" element={<IsoMdocVerificationPage />} />
       <Route path="/sd-jwt-verification" element={<SdJwtVerificationPage />} />
       <Route path="/open-badges-verification" element={<OpenBadgesVerificationPage />} />
+      <Route path="/issuance" element={<Navigate to="/open-badges-issuance" replace />} />
       <Route path="/open-badges-issuance" element={<OpenBadgesIssuancePage />} />
       <Route path="/trust-registry-infrastructure" element={<TrustRegistryPage />} />
       <Route path="/identity" element={<IdentityGuidePage />} />

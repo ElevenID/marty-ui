@@ -145,7 +145,7 @@ function WebhooksPage() {
   const { t } = useTranslation('console');
   const { organizationId: authOrganizationId } = useAuth();
   const { activeOrgId } = useConsole();
-  const organizationId = activeOrgId || authOrganizationId;
+  const organizationId = activeOrgId;
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingWebhook, setEditingWebhook] = useState(null);
   const [pendingDelete, setPendingDelete] = useState(null);

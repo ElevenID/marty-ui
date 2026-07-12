@@ -82,7 +82,7 @@ const EVIDENCE_TYPES = [
 ];
 
 const DEPLOY_TABS = [
-  { label: 'Issuance Flows', path: '/console/org/flows/definitions' },
+  { label: 'Flows', path: '/console/org/flows/definitions' },
   { label: 'Deployment Profiles', path: '/console/org/deploy/profiles' },
   { label: 'Canvas', path: '/console/org/deploy/canvas' },
   { label: 'Issuer Identity', path: '/console/org/deploy/issuer-identity' },
@@ -302,7 +302,7 @@ function alertSeverityColor(severity) {
 function CanvasIntegrationsPage() {
   const { organizationId: authOrganizationId } = useAuth();
   const { activeOrgId } = useConsole();
-  const organizationId = activeOrgId || authOrganizationId;
+  const organizationId = activeOrgId;
   const [selectedPlatformId, setSelectedPlatformId] = useState('');
   const [platformDialogOpen, setPlatformDialogOpen] = useState(false);
   const [bindingDialogOpen, setBindingDialogOpen] = useState(false);

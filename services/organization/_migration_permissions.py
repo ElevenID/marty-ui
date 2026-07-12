@@ -89,6 +89,7 @@ PERMISSION_CATALOG: list[tuple[str, str, str]] = [
     ("application-template", "activate", "Activate application templates"),
     # Applications
     ("application", "view", "View applications"),
+    ("application", "review", "Review applications, checks, and reviewer locks"),
     ("application", "approve", "Approve applications"),
     ("application", "reject", "Reject applications"),
     # Organization

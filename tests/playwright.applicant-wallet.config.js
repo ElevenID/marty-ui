@@ -8,7 +8,7 @@ const UI_BASE_URL = process.env.UI_BASE_URL || 'http://127.0.0.1:4174';
 
 module.exports = defineConfig({
   testDir: './e2e/integration-ui/applicant',
-  testMatch: '**/*wallet-selection.spec.js',
+  testMatch: ['**/*wallet-selection.spec.js', '**/*mip03.spec.js'],
   timeout: 60_000,
   expect: {
     timeout: 10_000,

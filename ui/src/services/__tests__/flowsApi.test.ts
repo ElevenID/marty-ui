@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { http, HttpResponse } from 'msw'
 import { server } from '@test/mocks/server'
 
-import { createFlow } from '../flowsApi'
+import { createFlow, getFlowInstance, listFlowInstances, listFlows } from '../flowsApi'
 
 describe('flowsApi', () => {
   it('creates flows with organization context and an idempotency key', async () => {
@@ -84,5 +84,42 @@ describe('flowsApi', () => {
 
     expect(attempts).toBe(2)
     expect(idempotencyKeys[0]).toBe(idempotencyKeys[1])
+  })
+
+  it('lists organization-wide runtime instances without one request per flow', async () => {
+    let requestUrl = ''
+    server.use(
+      http.get('http://localhost:8000/v1/flows/instances', ({ request }) => {
+        requestUrl = request.url
+        return HttpResponse.json([{ id: 'instance-1', flow_id: 'flow-1' }])
+      })
+    )
+
+    const result = await listFlowInstances({ organization_id: 'org-123', status: 'pending', limit: 50 })
+
+    expect(result).toHaveLength(1)
+    expect(requestUrl).toContain('organization_id=org-123')
+    expect(requestUrl).toContain('status=pending')
+    expect(requestUrl).toContain('limit=50')
+  })
+
+  it('requires direct arrays for flow definition and instance lists', async () => {
+    server.use(
+      http.get('http://localhost:8000/v1/flows/definitions', () => HttpResponse.json({ items: [] })),
+      http.get('http://localhost:8000/v1/flows/instances', () => HttpResponse.json({ instances: [] })),
+    )
+
+    await expect(listFlows({ organization_id: 'org-123' })).rejects.toThrow(/malformed list response/i)
+    await expect(listFlowInstances({ organization_id: 'org-123' })).rejects.toThrow(/malformed list response/i)
+  })
+
+  it('loads one runtime instance by stable instance ID', async () => {
+    server.use(
+      http.get('http://localhost:8000/v1/flows/instances/instance-1', () => (
+        HttpResponse.json({ id: 'instance-1', status: 'pending' })
+      ))
+    )
+
+    await expect(getFlowInstance('instance-1')).resolves.toMatchObject({ id: 'instance-1' })
   })
 })

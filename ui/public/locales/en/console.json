@@ -285,7 +285,11 @@
   },
   "setupReadiness": {
     "title": "Setup Readiness",
-    "description": "Complete these steps in order to enable full identity operations",
+    "description": "Choose the operation you want to enable, then complete the required MIP objects for that path",
+    "complianceProfile": {
+      "label": "Compliance Profile",
+      "tooltip": "Selects the standards and credential formats available to production templates and flows"
+    },
     "trustProfile": {
       "label": "Trust Profile",
       "tooltip": "Defines which credential formats, issuers, and validation rules you accept"
@@ -1022,7 +1026,8 @@
     },
     "tabs": {
       "issuance": "Issued Credentials",
-      "applications": "Applications"
+      "applications": "Applications",
+      "verify": "Verify"
     },
     "breadcrumbs": {
       "console": "Console",

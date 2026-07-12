@@ -52,6 +52,37 @@ jobs:
         working-directory: services
         run: python -m pytest -v --tb=short -x
 
+  test-credential-lifecycle-browser:
+    name: MIP 0.3 Credential Lifecycle Browser Gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install UI dependencies
+        working-directory: ui
+        run: bun install --frozen-lockfile
+      - name: Install Playwright dependencies
+        working-directory: tests
+        run: npm ci
+      - name: Install Chromium
+        working-directory: tests
+        run: npx playwright install --with-deps chromium
+      - name: Run deterministic credential lifecycle gate
+        working-directory: tests
+        run: npx playwright test --config playwright.applicant-wallet.config.js
+      - name: Upload browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mip-03-credential-lifecycle-browser
+          path: |
+            tests/test-results/
+            tests/playwright-report-applicant-wallet/
+          retention-days: 14
+
   security:
     name: Security Scanning
     runs-on: ubuntu-latest

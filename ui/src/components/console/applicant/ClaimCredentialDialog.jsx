@@ -315,7 +315,7 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
   };
 
   return (
-    <Dialog open={open} onClose={onClose} maxWidth="xs" fullWidth>
+    <Dialog open={open} onClose={onClose} maxWidth="xs" fullWidth fullScreen={isMobile}>
       <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1, pb: 1 }}>
         <WalletIcon color="primary" />
         Receive Credential

@@ -11,14 +11,6 @@ const {
   mockStartVerificationFlow: vi.fn(),
 }));
 
-vi.mock('../../../hooks/useAuth', () => ({
-  useAuth: () => ({
-    user: {
-      organization_id: 'org-1',
-    },
-  }),
-}));
-
 vi.mock('../../../hooks/useNotifications', () => ({
   useNotifications: () => ({
     showSuccess: vi.fn(),
@@ -61,7 +53,7 @@ describe('VerificationSessionManager', () => {
       },
     ]);
 
-    render(<VerificationSessionManager />);
+    render(<VerificationSessionManager organizationId="org-1" />);
 
     expect(await screen.findByRole('tab', { name: /active \(1\)/i })).toBeInTheDocument();
     expect(screen.getByText('Credential verification')).toBeInTheDocument();
@@ -71,7 +63,7 @@ describe('VerificationSessionManager', () => {
   it('surfaces current flow API errors instead of falling back to legacy verification sessions', async () => {
     mockListFlowExecutions.mockRejectedValue(new Error('Flow service unavailable'));
 
-    render(<VerificationSessionManager />);
+    render(<VerificationSessionManager organizationId="org-1" />);
 
     await waitFor(() => {
       expect(mockListFlowExecutions).toHaveBeenCalledWith(null, { organization_id: 'org-1' });

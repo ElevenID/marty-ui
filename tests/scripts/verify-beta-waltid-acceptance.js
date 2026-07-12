@@ -215,14 +215,13 @@ async function collectBetaOffer(browser) {
     timeout: 60_000,
   });
   await page.getByRole('button', { name: /add to wallet/i }).click({ timeout: 60_000 });
-  await page.getByTestId('wallet-selector').waitFor({ state: 'visible', timeout: 60_000 });
+  await page.getByTestId('wallet-selector').waitFor({ state: 'visible', timeout: 15_000 });
   await page.getByTestId('wallet-option-wr-waltid-001').click();
   await page.getByRole('heading', { name: /scan with walt\.id wallet/i }).waitFor({
     state: 'visible',
     timeout: 60_000,
   });
   await waitFor(() => issueResponses.length > 0 && issueResponses[issueResponses.length - 1].json, 60_000);
-
   const latest = issueResponses[issueResponses.length - 1].json;
   const selectedWallets = await page.evaluate(() => (
     Object.fromEntries(Object.entries(localStorage).filter(([key]) => key.startsWith('elevenid_wallets_')))
@@ -231,6 +230,7 @@ async function collectBetaOffer(browser) {
 
   return {
     offerUri: latest.offer_url || latest.credential_offer_uri,
+    offerSource: 'canonical-ui',
     issueStatus: latest.status,
     issueWalletOfferIds: Object.keys(latest.credential_offer_uris || {}),
     selectedWallets,
@@ -364,6 +364,8 @@ async function main() {
     const acceptance = await acceptOfferInLocalWallet(wallet.page, wallet.walletId, beta.offerUri);
     const accepted = acceptance.afterCount > acceptance.beforeCount;
     const releaseReady = (
+      beta.offerSource === 'canonical-ui'
+      &&
       accepted
       && acceptance.checks.storedExpectedVct
       && !acceptance.checks.storedLegacyExampleVct
@@ -373,6 +375,7 @@ async function main() {
     const result = {
       beta: {
         issueStatus: beta.issueStatus,
+        offerSource: beta.offerSource,
         issueWalletOfferIds: beta.issueWalletOfferIds,
         selectedWalletValues: Object.values(beta.selectedWallets).map(redact),
         badResponses: beta.badResponses,
@@ -391,7 +394,19 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.log(JSON.stringify({ error: redact(error.stack || error.message || String(error)) }, null, 2));
-  process.exitCode = 1;
-});
+if (require.main === module) {
+  main().catch((error) => {
+    console.log(JSON.stringify({ error: redact(error.stack || error.message || String(error)) }, null, 2));
+    process.exitCode = 1;
+  });
+}
+
+module.exports = {
+  acceptOfferInLocalWallet,
+  collectBetaOffer,
+  loadEnvFile,
+  offerPart,
+  redact,
+  registerAndLoginLocalWallet,
+  waitFor,
+};

@@ -2324,10 +2324,11 @@ _DELIVERY_PROVIDERS = {
     "canvas_credentials_backpack",
     "open_badges_backpack",
     "custom",
+    "physical_document_bureau",
 }
-_DELIVERY_MODES = {"holder_wallet", "learner_backpack", "organization_mirror", "direct_delivery"}
+_DELIVERY_MODES = {"holder_wallet", "learner_backpack", "organization_mirror", "direct_delivery", "physical_document"}
 _DELIVERY_SETUP_ACTORS = {"learner", "org_admin", "system"}
-_DELIVERY_TARGETS = {"wallet", "didcomm_v2", "canvas_credentials", "external_api", "webhook"}
+_DELIVERY_TARGETS = {"wallet", "didcomm_v2", "canvas_credentials", "external_api", "webhook", "physical_document"}
 
 
 def _normalize_optional_upper(value: str | None) -> str | None:

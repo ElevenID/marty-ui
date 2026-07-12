@@ -60,6 +60,10 @@ vi.mock('../../hooks/useAuth', () => ({
   }),
 }))
 
+vi.mock('../../contexts/ConsoleContext', () => ({
+  useConsole: () => ({ activeOrgId: 'org-1' }),
+}))
+
 vi.mock('../../hooks/useNotifications', () => ({
   useNotifications: () => ({
     showSuccess: mockShowSuccess,

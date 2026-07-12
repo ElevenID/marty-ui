@@ -141,7 +141,20 @@ async def proxy_request(
     body = body_override if body_override is not None else await request.body()
 
     # Forward headers (excluding hop-by-hop headers)
-    excluded_headers = {"host", "connection", "keep-alive", "transfer-encoding"}
+    excluded_headers = {
+        "host",
+        "connection",
+        "keep-alive",
+        "transfer-encoding",
+        # Internal identity and authorization context is gateway-owned.
+        "x-user-id",
+        "x-user-email",
+        "x-user-domain",
+        "x-organization-id",
+        "x-org-permissions",
+        "x-org-roles",
+        "x-required-permission",
+    }
     # Also strip content-length when body_override is provided (size may differ)
     if body_override is not None:
         excluded_headers.add("content-length")
@@ -171,6 +184,18 @@ async def proxy_request(
 
     if hasattr(request.state, "org_plan") and request.state.org_plan:
         headers["X-Org-Plan"] = request.state.org_plan
+
+    org_permissions = getattr(request.state, "org_permissions", None)
+    if org_permissions:
+        headers["X-Org-Permissions"] = ",".join(sorted(str(value) for value in org_permissions))
+
+    org_roles = getattr(request.state, "org_roles", None)
+    if org_roles:
+        headers["X-Org-Roles"] = ",".join(sorted(str(value) for value in org_roles))
+
+    required_permission = getattr(request.state, "required_permission", None)
+    if required_permission:
+        headers["X-Required-Permission"] = str(required_permission)
 
     if inject_headers:
         headers.update(inject_headers)
@@ -215,11 +240,25 @@ async def proxy_request(
             else:
                 # Wrap FastAPI-style {"detail": "..."} or unknown formats
                 detail = err_body.get("detail") if isinstance(err_body, dict) else None
+                detail_payload = detail if isinstance(detail, dict) else {}
+                error = detail_payload.get("error") or err_body.get("error", "service_error")
+                message = (
+                    detail_payload.get("message")
+                    or (detail if isinstance(detail, str) else None)
+                    or response.text[:200]
+                )
+                details = err_body.get("details")
+                if detail_payload:
+                    details = {
+                        key: value
+                        for key, value in detail_payload.items()
+                        if key not in {"error", "message"}
+                    } or details
                 return mip_error_response(
                     status_code=response.status_code,
-                    error=err_body.get("error", "service_error"),
-                    message=detail or response.text[:200],
-                    details=err_body.get("details"),
+                    error=error,
+                    message=message,
+                    details=details,
                 )
         return Response(
             content=response.content,
@@ -238,12 +277,19 @@ async def proxy_request(
         return mip_error_response(status_code=503, error="service_unavailable", message="Service unavailable")
 
 
-async def _resource_exists(service_name: str, path: str, request: Request | None = None) -> bool:
+async def _resource_exists(
+    service_name: str,
+    path: str,
+    request: Request | None = None,
+    *,
+    inject_headers: dict[str, str] | None = None,
+) -> bool:
     """Check if a resource exists by issuing a GET to the backend service."""
     registry = get_registry()
     client = get_http_client()
     url = f"{registry.get_service_url(service_name)}{path}"
     headers = _forward_headers(request)
+    headers.update(inject_headers or {})
     try:
         resp = await client.get(url, timeout=10.0, headers=headers)
         return resp.status_code < 400

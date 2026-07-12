@@ -46,39 +46,45 @@ export const ADMIN_VENDOR_NAV = [
     label: 'Design',
     path: '/console/org/design',
     icon: DesignServicesIcon,
-    description: 'Trust Profiles, Credential Templates, Application Rules, Compliance',
+    description: 'Credential Templates, Application Templates, Flows',
     children: [
-      {
-        id: 'trust-profiles',
-        label: 'Trust Profiles',
-        path: '/console/org/trust/profiles',
-        requiredPermission: { resource: 'trust-profile', action: 'view' },
-      },
-      {
-        id: 'revocation-profiles',
-        label: 'Revocation Profiles',
-        path: '/console/org/trust/revocation',
-        requiredPermission: { resource: 'revocation-profile', action: 'view' },
-      },
       { 
         id: 'credential-templates', 
         label: 'Credential Templates', 
         path: '/console/org/templates/credentials',
         requiredPermission: { resource: 'credential-template', action: 'view' },
-        children: [
-          {
-            id: 'application-templates',
-            label: 'Application Rules',
-            path: '/console/org/templates/applications',
-            requiredPermission: { resource: 'application-template', action: 'view' },
-          },
-          {
-            id: 'compliance-profiles',
-            label: 'Compliance Profiles',
-            path: '/console/org/policies/compliance',
-            requiredPermission: { resource: 'compliance-profile', action: 'view' },
-          },
-        ],
+      },
+      {
+        id: 'application-templates',
+        label: 'Application Templates',
+        path: '/console/org/templates/applications',
+        requiredPermission: { resource: 'application-template', action: 'view' },
+      },
+      {
+        id: 'flows',
+        label: 'Flows',
+        path: '/console/org/flows/definitions',
+        primary: true,
+        requiredPermission: { resource: 'flow-definition', action: 'view' },
+      },
+    ],
+  },
+  {
+    id: 'govern',
+    label: 'Govern',
+    path: '/console/org/govern',
+    icon: PolicyIcon,
+    description: 'Trust, lifecycle, presentation, compliance, and decision policies',
+    children: [
+      { id: 'trust-profiles', label: 'Trust Profiles', path: '/console/org/trust/profiles', requiredPermission: { resource: 'trust-profile', action: 'view' } },
+      { id: 'revocation-profiles', label: 'Revocation Profiles', path: '/console/org/trust/revocation', requiredPermission: { resource: 'revocation-profile', action: 'view' } },
+      { id: 'presentation-policies', label: 'Presentation Policies', path: '/console/org/policies/presentation', requiredPermission: { resource: 'presentation-policy', action: 'view' } },
+      { id: 'compliance-profiles', label: 'Compliance Profiles', path: '/console/org/policies/compliance', requiredPermission: { resource: 'compliance-profile', action: 'view' } },
+      {
+        id: 'policy-sets',
+        label: 'Policy Sets',
+        path: '/console/org/policies/sets',
+        requiredPermission: { resource: 'policy-set', action: 'view' },
       },
     ],
   },
@@ -87,26 +93,13 @@ export const ADMIN_VENDOR_NAV = [
     label: 'Deploy',
     path: '/console/org/deploy',
     icon: CloudUploadIcon,
-    description: 'Issuance Flows, Deployment Profiles, Signing Keys',
+    description: 'Deployment Profiles, Issuer Identity, Key Management',
     children: [
-      { 
-        id: 'issuance-flows', 
-        label: 'Issuance Flows', 
-        path: '/console/org/flows/definitions', 
-        primary: true,
-        requiredPermission: { resource: 'flow-definition', action: 'view' },
-      },
       {
         id: 'deployment-profiles',
         label: 'Deployment Profiles',
         path: '/console/org/deploy/profiles',
         requiredPermission: { resource: 'deployment-profile', action: 'view' },
-      },
-      {
-        id: 'canvas-integrations',
-        label: 'Canvas',
-        path: '/console/org/deploy/canvas',
-        icon: IntegrationInstructionsIcon,
       },
       { id: 'issuer-identity', label: 'Issuer Identity', path: '/console/org/deploy/issuer-identity' },
       {
@@ -118,12 +111,31 @@ export const ADMIN_VENDOR_NAV = [
     ],
   },
   {
+    id: 'connect',
+    label: 'Connect',
+    path: '/console/org/connect',
+    icon: IntegrationInstructionsIcon,
+    description: 'Canvas, API Keys, Webhooks, Delivery Destinations',
+    children: [
+      { id: 'canvas-integrations', label: 'Canvas', path: '/console/org/deploy/canvas' },
+      { id: 'api-keys', label: 'API Keys', path: '/console/org/api-keys', requiredPermission: { resource: 'api-key', action: 'view' } },
+      { id: 'webhooks', label: 'Webhooks', path: '/console/org/webhooks', requiredPermission: { resource: 'webhook', action: 'view' } },
+      { id: 'delivery-destinations', label: 'Delivery Destinations', path: '/console/org/connect/delivery-destinations', requiredPermission: { resource: 'delivery-destination', action: 'view' } },
+    ],
+  },
+  {
     id: 'operate',
     label: 'Operate',
     path: '/console/org/operate',
     icon: PlayArrowIcon,
-    description: 'Applications, Issued Credentials, Flow Instances',
+    description: 'Flow Instances, Applications, Issued Credentials, Verification Sessions',
     children: [
+      {
+        id: 'flow-instances',
+        label: 'Flow Instances',
+        path: '/console/org/operate/flow-instances',
+        requiredPermission: { resource: 'flow-instance', action: 'view' },
+      },
       {
         id: 'applications',
         label: 'Applicant Submissions',
@@ -138,12 +150,6 @@ export const ADMIN_VENDOR_NAV = [
         requiredPermission: { resource: 'issuance', action: 'view' },
       },
       {
-        id: 'flow-instances',
-        label: 'Flow Instances',
-        path: '/console/org/operate/flow-instances',
-        requiredPermission: { resource: 'flow-instance', action: 'view' },
-      },
-      {
         id: 'verify',
         label: 'Verification Sessions',
         path: '/console/org/operate/verify',
@@ -156,7 +162,7 @@ export const ADMIN_VENDOR_NAV = [
     label: 'Org',
     path: '/console/org',
     icon: BusinessIcon,
-    description: 'Organization, Team, Roles, API Keys, Webhooks',
+    description: 'Organization, Team, Roles, Requests, Notifications',
     children: [
       { id: 'my-organizations', label: 'My Organizations', path: '/console/organizations' },
       { id: 'organization', label: 'Organization', path: '/console/org/settings', requiredPermission: { resource: 'organization', action: 'view' } },
@@ -164,8 +170,6 @@ export const ADMIN_VENDOR_NAV = [
       { id: 'membership-requests', label: 'Membership Requests', path: '/console/org/membership-requests', requiredPermission: { resource: 'team', action: 'view' } },
       { id: 'roles', label: 'Roles', path: '/console/org/roles', requiredPermission: { resource: 'role', action: 'view' } },
       { id: 'role-requests', label: 'Role Requests', path: '/console/org/role-requests', requiredPermission: { resource: 'role', action: 'view' } },
-      { id: 'api-keys', label: 'API Keys', path: '/console/org/api-keys', requiredPermission: { resource: 'api-key', action: 'view' } },
-      { id: 'webhooks', label: 'Webhooks', path: '/console/org/webhooks', requiredPermission: { resource: 'webhook', action: 'view' } },
       { id: 'notifications', label: 'Notifications', path: '/console/org/notifications', requiredPermission: { resource: 'notification', action: 'view' } },
     ],
   },
@@ -250,7 +254,7 @@ export const DASHBOARD_QUICK_ACTIONS = {
     { id: 'create-template', label: 'Create Credential Template', path: '/console/org/templates/credentials/new', icon: DescriptionIcon },
     { id: 'create-policy', label: 'Create Presentation Policy', path: '/console/org/policies/presentation/new', icon: PolicyIcon },
     { id: 'generate-api-key', label: 'Create API Key', path: '/console/org/api-keys', icon: CloudUploadIcon },
-    { id: 'create-flow', label: 'Create Issuance Flow', path: '/console/org/flows/definitions/new', icon: AccountTreeIcon, primary: true },
+    { id: 'create-flow', label: 'Create Flow', path: '/console/org/flows/definitions/new', icon: AccountTreeIcon, primary: true },
   ],
   applicant: [
     { id: 'browse-catalog', label: 'Browse Credentials', path: '/console/applicant/catalog', icon: StorefrontIcon },

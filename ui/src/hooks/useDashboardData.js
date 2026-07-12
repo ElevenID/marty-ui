@@ -12,10 +12,14 @@
  */
 
 import { useState, useEffect } from 'react';
-import { listTrustProfiles, listCredentialTemplates, listPresentationPolicies } from '../services/presentationPolicyApi';
+import { listTrustProfiles, listCredentialTemplates, listPresentationPolicies, listRevocationProfiles } from '../services/presentationPolicyApi';
 import { listDeploymentProfiles } from '../services/deploymentProfilesApi';
 import { listFlows } from '../services/flowsApi';
 import { listApiKeys } from '../services/apiKeysApi';
+import { listApplicationTemplates } from '../services/applicationTemplatesApi';
+import { listDeliveryDestinations } from '../services/deliveryDestinationsApi';
+import { listPolicySets } from '../services/policySetsApi';
+import { getPhysicalDocumentCapabilities } from '../services/physicalDocumentsApi';
 import { getKeyManagementConfig, listIssuerProfiles, listSigningKeys } from '../services/signingKeysApi';
 import { 
   getTeamSnapshot, 
@@ -46,7 +50,12 @@ function createEmptyDashboardData() {
     issuerProfiles: [],
     keyManagementConfig: DEFAULT_KEY_MANAGEMENT_CONFIG,
     templates: [],
+    applicationTemplates: [],
+    deliveryDestinations: [],
+    policySets: [],
+    physicalDocumentCapabilities: null,
     policies: [],
+    revocationProfiles: [],
     deployments: [],
     flows: [],
     apiKeys: [],
@@ -68,7 +77,7 @@ function createEmptyDashboardData() {
 export function useDashboardData() {
   const { organizationId: authOrganizationId } = useAuth();
   const { activeOrgId } = useConsole();
-  const organizationId = activeOrgId || authOrganizationId;
+  const organizationId = activeOrgId;
   const [data, setData] = useState(() => createEmptyDashboardData());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -97,7 +106,12 @@ export function useDashboardData() {
         const [
           trustProfilesRes,
           templatesRes,
+          applicationTemplatesRes,
+          deliveryDestinationsRes,
+          policySetsRes,
+          physicalCapabilitiesRes,
           policiesRes,
+          revocationProfilesRes,
           deploymentsRes,
           flowsRes,
           signingKeysRes,
@@ -113,7 +127,12 @@ export function useDashboardData() {
         ] = await Promise.allSettled([
           listTrustProfiles({ organization_id: organizationId }),
           listCredentialTemplates({ organization_id: organizationId }),
+          listApplicationTemplates(organizationId),
+          listDeliveryDestinations({ organizationId, activeOnly: true }),
+          listPolicySets(organizationId),
+          getPhysicalDocumentCapabilities(),
           listPresentationPolicies({ organization_id: organizationId }),
+          listRevocationProfiles({ organization_id: organizationId }),
           listDeploymentProfiles({ organization_id: organizationId }),
           listFlows({ organization_id: organizationId }),
           listSigningKeys({ organization_id: organizationId, limit: 1 }),
@@ -146,7 +165,12 @@ export function useDashboardData() {
         const resourceErrors = {
           trustProfiles: rejectedReason(trustProfilesRes),
           templates: rejectedReason(templatesRes),
+          applicationTemplates: rejectedReason(applicationTemplatesRes),
+          deliveryDestinations: rejectedReason(deliveryDestinationsRes),
+          policySets: rejectedReason(policySetsRes),
+          physicalDocumentCapabilities: rejectedReason(physicalCapabilitiesRes),
           policies: rejectedReason(policiesRes),
+          revocationProfiles: rejectedReason(revocationProfilesRes),
           deployments: rejectedReason(deploymentsRes),
           flows: rejectedReason(flowsRes),
           apiKeys: rejectedReason(apiKeysRes),
@@ -163,7 +187,12 @@ export function useDashboardData() {
           issuerProfiles: Array.isArray(rawIssuerProfiles?.profiles) ? rawIssuerProfiles.profiles : [],
           keyManagementConfig: normalizeKeyManagementConfig(rawKeyManagementConfig || DEFAULT_KEY_MANAGEMENT_CONFIG),
           templates: templatesRes.status === 'fulfilled' ? templatesRes.value : [],
+          applicationTemplates: applicationTemplatesRes.status === 'fulfilled' ? applicationTemplatesRes.value : [],
+          deliveryDestinations: deliveryDestinationsRes.status === 'fulfilled' ? deliveryDestinationsRes.value : [],
+          policySets: policySetsRes.status === 'fulfilled' ? policySetsRes.value : [],
+          physicalDocumentCapabilities: physicalCapabilitiesRes.status === 'fulfilled' ? physicalCapabilitiesRes.value : null,
           policies: policiesRes.status === 'fulfilled' ? policiesRes.value : [],
+          revocationProfiles: revocationProfilesRes.status === 'fulfilled' ? revocationProfilesRes.value : [],
           deployments: deploymentsRes.status === 'fulfilled' ? deploymentsRes.value : [],
           flows: flowsRes.status === 'fulfilled' ? flowsRes.value : [],
           apiKeys: apiKeysRes.status === 'fulfilled' ? apiKeysRes.value : [],

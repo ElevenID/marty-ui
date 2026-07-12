@@ -190,7 +190,7 @@ export function RecentActivityPanel() {
   const { t } = useTranslation('console');
   const { organizationId } = useAuth();
   const { activeOrgId } = useConsole();
-  const effectiveOrgId = activeOrgId || organizationId;
+  const effectiveOrgId = activeOrgId;
   const [liveEvents, setLiveEvents] = useState([]);
   const { data: fetchedEvents = [], loading, error, reload } = useAsyncData(
     async () => {
@@ -248,7 +248,7 @@ export function RecentActivityPanel() {
         <Button
           size="small"
           component={Link}
-          to="/console/audit"
+          to="/console/org/audit"
           endIcon={<ArrowForwardIcon />}
         >
           {t('dashboard.recentActivity.viewAll')}

@@ -11,7 +11,7 @@ import { useState } from 'react';
 import { useParams, useNavigate, Link as RouterLink } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useAsyncData } from '../../../hooks/useAsyncData';
-import { getFlow } from '../../../services/flowsApi';
+import { getFlow, publishFlow, testFlow, validateFlow } from '../../../services/flowsApi';
 import {
   Box,
   Paper,
@@ -50,6 +50,9 @@ import PolicyIcon from '@mui/icons-material/Policy';
 import VerifiedUserIcon from '@mui/icons-material/VerifiedUser';
 import AccountTreeIcon from '@mui/icons-material/AccountTree';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
+import PlayArrowIcon from '@mui/icons-material/PlayArrow';
+import RuleIcon from '@mui/icons-material/Rule';
+import ScienceIcon from '@mui/icons-material/Science';
 
 import { ResourcePage } from '../../common';
 
@@ -64,31 +67,23 @@ const getBreadcrumbs = (t) => [
  * Applicant Journey Timeline - THE MOST IMPORTANT SECTION
  * Makes the end-to-end path undeniable
  */
-function ApplicantJourney() {
-  const { t } = useTranslation('console');
-  const steps = [
-    t('flows.flowDetail.applicantJourney.steps.visitLink'),
-    t('flows.flowDetail.applicantJourney.steps.completeApplication'),
-    t('flows.flowDetail.applicantJourney.steps.submit'),
-    t('flows.flowDetail.applicantJourney.steps.awaitApproval'),
-    t('flows.flowDetail.applicantJourney.steps.scanQr'),
-    t('flows.flowDetail.applicantJourney.steps.credentialIssued'),
-  ];
+function ApplicantJourney({ flow }) {
+  const steps = flow?.resolved_steps || [];
 
   return (
     <Card elevation={0} sx={{ bgcolor: 'primary.50', border: 1, borderColor: 'primary.100' }}>
       <CardContent>
         <Typography variant="h6" gutterBottom fontWeight={600}>
-          {t('flows.flowDetail.applicantJourney.title')}
+          Resolved flow sequence
         </Typography>
         <Typography variant="body2" color="text.secondary" gutterBottom>
-          {t('flows.flowDetail.applicantJourney.description')}
+          {flow.flow_type === 'custom' ? flow.extension?.extension_uri : flow.flow_type}
         </Typography>
         
         <Box sx={{ mt: 3 }}>
-          <Stepper activeStep={-1} alternativeLabel>
-            {steps.map((label, index) => (
-              <Step key={label}>
+          <Stepper activeStep={-1} orientation="vertical">
+            {steps.map((stepName) => (
+              <Step key={stepName}>
                 <StepLabel
                   StepIconProps={{
                     sx: {
@@ -97,7 +92,7 @@ function ApplicantJourney() {
                     },
                   }}
                 >
-                  <Typography variant="caption">{label}</Typography>
+                  <Typography variant="body2">{stepName.replace(/_/g, ' ')}</Typography>
                 </StepLabel>
               </Step>
             ))}
@@ -200,13 +195,7 @@ function ConfigurationSummary({ flow }) {
   const { t } = useTranslation('console');
   const notAvailable = t('flows.flowDetail.configuration.notAvailable');
   const optionalPath = (basePath, id) => (id ? `${basePath}/${id}` : null);
-  const approvalMode = flow?.approval_mode
-    ? (
-        flow.approval_mode === 'auto'
-          ? t('flows.flowDetail.configuration.approvalModeAuto')
-          : t('flows.flowDetail.configuration.approvalModeManual')
-      )
-    : notAvailable;
+  const approvalMode = flow?.approval_strategy || notAvailable;
   const config = [
     {
       label: t('flows.flowDetail.configuration.credentialTemplateLabel'),
@@ -230,6 +219,17 @@ function ConfigurationSummary({ flow }) {
       label: t('flows.flowDetail.configuration.approvalModeLabel'),
       value: approvalMode,
       icon: CheckCircleIcon,
+    },
+    {
+      label: 'Presentation policy',
+      value: flow?.presentation_policy_id || notAvailable,
+      path: optionalPath('/console/org/policies/presentation', flow?.presentation_policy_id),
+      icon: PolicyIcon,
+    },
+    {
+      label: 'Delivery destination',
+      value: flow?.delivery_destination_profile_id || notAvailable,
+      icon: SmartphoneIcon,
     },
   ];
 
@@ -351,6 +351,54 @@ function RuntimeOverview({ flow }) {
   );
 }
 
+function LifecycleActions({ flow, onActivated }) {
+  const [busy, setBusy] = useState('');
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState('');
+
+  const run = async (action, operation) => {
+    setBusy(action);
+    setError('');
+    try {
+      const value = await operation();
+      setResult({ action, value });
+      return value;
+    } catch (cause) {
+      setError(cause.message || `${action} failed.`);
+      return null;
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const activate = async () => {
+    const activated = await run('Activation', () => publishFlow(flow.id));
+    if (activated) onActivated(activated);
+  };
+
+  if (flow.status === 'ACTIVE') {
+    return <Alert severity="success" icon={<CheckCircleIcon />}>This flow is active and can start new instances.</Alert>;
+  }
+
+  return (
+    <Paper variant="outlined" sx={{ p: 2.5, mb: 3 }}>
+      <Typography variant="subtitle1" fontWeight={600} gutterBottom>Draft lifecycle</Typography>
+      <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5}>
+        <Button startIcon={<RuleIcon />} variant="outlined" disabled={Boolean(busy)} onClick={() => run('Validation', () => validateFlow(flow.id))}>Validate</Button>
+        <Button startIcon={<ScienceIcon />} variant="outlined" disabled={Boolean(busy)} onClick={() => run('Dry run', () => testFlow(flow.id))}>Test</Button>
+        <Button startIcon={<PlayArrowIcon />} variant="contained" disabled={Boolean(busy)} onClick={activate}>Activate</Button>
+      </Stack>
+      {error && <Alert severity="error" sx={{ mt: 2 }}>{error}</Alert>}
+      {result && (
+        <Alert severity={result.value.valid ? 'success' : 'warning'} sx={{ mt: 2 }}>
+          {result.action}: {result.value.valid ? 'passed' : `${result.value.errors?.length || 0} blocker(s)`}
+          {result.value.errors?.map((item) => <Box key={`${item.code}-${item.field}`}>{item.message}</Box>)}
+        </Alert>
+      )}
+    </Paper>
+  );
+}
+
 /**
  * Main Flow Detail Page Component
  */
@@ -363,6 +411,7 @@ function FlowDetailPage() {
     [flowId]
   );
   const [copySuccess, setCopySuccess] = useState(false);
+  const [activatedFlow, setActivatedFlow] = useState(null);
 
   const handleCopyUrl = () => {
     if (flow?.public_url) {
@@ -401,7 +450,8 @@ function FlowDetailPage() {
     );
   }
 
-  const isPublished = flow.status === 'PUBLISHED';
+  const displayedFlow = activatedFlow || flow;
+  const isPublished = displayedFlow.status === 'ACTIVE';
 
   return (
     <ResourcePage
@@ -421,18 +471,18 @@ function FlowDetailPage() {
                 <ArrowBackIcon />
               </IconButton>
               <Typography variant="h4" fontWeight={700}>
-                {flow.name}
+                {displayedFlow.name}
               </Typography>
             </Box>
             <Stack direction="row" spacing={1} sx={{ ml: 5 }}>
               <Chip
-                label={isPublished ? t('flows.flowDetail.statusChips.published') : t('flows.flowDetail.statusChips.draft')}
+                label={isPublished ? 'Active' : t('flows.flowDetail.statusChips.draft')}
                 color={isPublished ? 'success' : 'default'}
                 size="small"
                 icon={isPublished ? <CheckCircleIcon /> : <PendingIcon />}
               />
               <Chip
-                label={flow.environment}
+                label={displayedFlow.flow_type}
                 size="small"
                 variant="outlined"
               />
@@ -476,8 +526,10 @@ function FlowDetailPage() {
 
       {/* Applicant Journey Timeline - THE CRITICAL SECTION */}
       <Box sx={{ mb: 3 }}>
-        <ApplicantJourney />
+        <ApplicantJourney flow={displayedFlow} />
       </Box>
+
+      <LifecycleActions flow={displayedFlow} onActivated={setActivatedFlow} />
 
       {/* Preview Button */}
       {isPublished && (
@@ -501,8 +553,8 @@ function FlowDetailPage() {
         <Grid item xs={12} md={6}>
           <Stack spacing={3}>
             <EntryPoints
-              flow={flow}
-              publicUrl={isPublished ? flow.public_url : null}
+              flow={displayedFlow}
+              publicUrl={isPublished ? displayedFlow.public_url : null}
               onCopy={handleCopyUrl}
             />
           </Stack>
@@ -511,8 +563,8 @@ function FlowDetailPage() {
         {/* Right Column */}
         <Grid item xs={12} md={6}>
           <Stack spacing={3}>
-            <ConfigurationSummary flow={flow} />
-            <RuntimeOverview flow={flow} />
+            <ConfigurationSummary flow={displayedFlow} />
+            <RuntimeOverview flow={displayedFlow} />
           </Stack>
         </Grid>
       </Grid>

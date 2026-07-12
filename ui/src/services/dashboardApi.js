@@ -78,7 +78,11 @@ export async function getTeamSnapshot(organizationId) {
 export async function getRuntimeStatus(organizationId) {
   const orgId = requireOrganizationId(organizationId, 'loading runtime status');
   const response = requireDashboardFields(
-    await getDashboard(`${BASE_PATH}/${encodeURIComponent(orgId)}/runtime/status`),
+    await getWithRetryConfig(
+      `${BASE_PATH}/${encodeURIComponent(orgId)}/runtime/status`,
+      {},
+      { maxRetries: 1 },
+    ),
     'Runtime status',
     [
       'can_issue',

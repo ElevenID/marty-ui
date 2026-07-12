@@ -226,7 +226,7 @@ describe('ConsoleHeaderBar', () => {
     })).toBe('E')
   })
 
-  it('keeps the organization selector enabled from auth organizations when console memberships are empty', async () => {
+  it('blocks organization switching until console memberships are loaded', async () => {
     Object.assign(mockAuthState, {
       organizationId: 'org-123',
       organizationName: 'Marty Org',
@@ -254,14 +254,10 @@ describe('ConsoleHeaderBar', () => {
     )
 
     const orgButton = screen.getByRole('button', { name: 'MO' })
-    expect(orgButton).not.toBeDisabled()
-
-    await user.click(orgButton)
-    await user.click(screen.getByRole('menuitem', { name: 'Applicant Only Org' }))
-
-    expect(mockSetMode).toHaveBeenCalledWith('applicant')
-    expect(mockSetActiveOrganizationId).toHaveBeenCalledWith('org-applicant')
-    expect(mockNavigate).toHaveBeenCalledWith('/console/applicant/catalog')
-    expect(mockSetActiveOrgId).not.toHaveBeenCalledWith('org-applicant')
+    expect(orgButton).toBeDisabled()
+    expect(mockSetMode).not.toHaveBeenCalled()
+    expect(mockSetActiveOrganizationId).not.toHaveBeenCalled()
+    expect(mockNavigate).not.toHaveBeenCalled()
+    expect(mockSetActiveOrgId).not.toHaveBeenCalled()
   })
 })

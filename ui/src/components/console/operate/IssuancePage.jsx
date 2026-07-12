@@ -36,19 +36,20 @@ import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { useAuth } from '../../../hooks/useAuth';
 import { useConsole } from '../../../contexts/ConsoleContext';
 import { useAsyncData } from '../../../hooks/useAsyncData';
 import { useNotifications } from '../../../hooks/useNotifications';
 import { fetchIssuedCredentials } from '../../../application/vendor';
-import { generateIssuanceOffer } from '../../../services/credentialsApi';
+import { issueOrganizationApplication } from '../../../services/applicantApi';
 import { listCredentialTemplates } from '../../../services/presentationPolicyApi';
 import { pickOfficialReference } from '../../../utils/officialReferences';
 import { ResourcePage, StatusChip } from '../../common';
 
 const getOperateTabs = (t) => [
+  { label: 'Flow Instances', path: '/console/org/operate/flow-instances' },
   { label: t('operate.tabs.issuance'), path: '/console/org/operate/issuance' },
   { label: t('operate.tabs.applications'), path: '/console/org/operate/applications' },
+  { label: t('operate.tabs.verify'), path: '/console/org/operate/verify' },
 ];
 
 const getBreadcrumbs = (t) => [
@@ -61,9 +62,7 @@ function IssuancePage() {
   const { t } = useTranslation('console');
   const navigate = useNavigate();
   const { credentialId } = useParams();
-  const { organizationId: authOrganizationId } = useAuth();
-  const { activeOrgId } = useConsole();
-  const organizationId = activeOrgId || authOrganizationId;
+  const { activeOrgId: organizationId } = useConsole();
   const { showError, showSuccess } = useNotifications();
   const [searchQuery, setSearchQuery] = useState('');
   const [reissuingCredentialId, setReissuingCredentialId] = useState(null);
@@ -147,7 +146,7 @@ function IssuancePage() {
 
     setReissuingCredentialId(credential.id);
     try {
-      const offer = await generateIssuanceOffer(credential.application_id);
+      const offer = await issueOrganizationApplication(organizationId, credential.application_id);
       setLatestOffer(offer);
       showSuccess('Fresh wallet offer generated successfully');
     } catch (err) {

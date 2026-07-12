@@ -95,7 +95,7 @@ export function resolveApplicantOrganizationId({
  * @param {'applicant' | 'org'} params.newMode
  * @param {string|null|undefined} params.activeOrgId
  * @param {Array<{id: string, name?: string|null}>|null|undefined} params.memberships
- * @returns {{mode: 'applicant' | 'org', activeOrgId: string | null, destination: string, authOrgId?: string, persistence: {last_view_mode: 'applicant' | 'org', last_active_org_id: string | null}}}
+ * @returns {{mode: 'applicant' | 'org', activeOrgId: string | null, destination: string, persistence: {last_view_mode: 'applicant' | 'org', last_active_org_id: string | null}}}
  */
 export function resolveModeChange({ newMode, activeOrgId, memberships }) {
   const safeMemberships = memberships || [];
@@ -118,7 +118,6 @@ export function resolveModeChange({ newMode, activeOrgId, memberships }) {
       mode: ORG_MODE,
       activeOrgId: singleOrg.id,
       destination: '/console/org',
-      authOrgId: singleOrg.id,
       persistence: {
         last_view_mode: ORG_MODE,
         last_active_org_id: singleOrg.id,

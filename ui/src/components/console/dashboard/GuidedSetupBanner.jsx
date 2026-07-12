@@ -23,14 +23,18 @@ function GuidedSetupBanner({ readiness, onDismiss }) {
     setDismissed(isDismissed === 'true');
   }, []);
 
-  // Calculate setup progress
-  const totalSteps = SETUP_ORDER.length;
-  const completedSteps = SETUP_ORDER.filter(
-    (step) => readiness?.[step]?.state === ReadinessState.READY
+  const activeIntentReadiness = readiness?.intents?.[readiness?.activeIntent];
+  const steps = activeIntentReadiness?.steps || readiness || {};
+  const order = activeIntentReadiness?.order || SETUP_ORDER;
+
+  // Calculate setup progress for the selected recipe.
+  const totalSteps = order.length;
+  const completedSteps = order.filter(
+    (step) => steps?.[step]?.state === ReadinessState.READY
   ).length;
-  const hasServiceError = SETUP_ORDER.some((step) => readiness?.[step]?.serviceError);
-  const nextSetupPath = SETUP_ORDER
-    .map((step) => readiness?.[step])
+  const hasServiceError = order.some((step) => steps?.[step]?.serviceError);
+  const nextSetupPath = order
+    .map((step) => steps?.[step])
     .find((step) => step?.state !== ReadinessState.READY && step?.path && !step?.dependencyBlocked)
     ?.path;
 

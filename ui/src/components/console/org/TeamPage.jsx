@@ -132,7 +132,7 @@ function TeamPage() {
   const { showNotification } = useNotifications();
   const { hasPermission, refresh: refreshPermissions } = usePermissions();
 
-  const effectiveOrgId = activeOrgId || organizationId;
+  const effectiveOrgId = activeOrgId;
   const isMartyOrg = effectiveOrgId === MARTY_ORG_ID;
 
   const [loading, setLoading] = useState(true);

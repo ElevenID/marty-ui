@@ -5,11 +5,13 @@ import logging
 import os
 import json
 from fastapi import APIRouter, HTTPException, Query, Request, Response
+from fastapi.responses import JSONResponse
 
 from gateway.models import (
     ApplicationCreate,
     ApplicationResponse,
     ApplicationTemplateCreate,
+    ApplicationTemplatePatch,
     ApplicationTemplateResponse,
     DidcommDeliverRequest,
     DidcommDeliveryResponse,
@@ -21,6 +23,8 @@ from gateway.models import (
 from gateway.proxy import _resource_org_id, get_http_client, get_registry, proxy_request
 
 logger = logging.getLogger(__name__)
+
+passport_router = APIRouter(prefix="/v1/passport", tags=["Physical Documents"])
 
 def _read_secret_value(name: str) -> str:
     direct = os.environ.get(name)
@@ -202,6 +206,85 @@ def _select_issuer_profile_id(body: IssuanceCreate, credential_template: dict) -
 
 issuance_router = APIRouter(prefix="/v1/issuance", tags=["Issuance"])
 issued_credential_router = APIRouter(prefix="/v1/issued-credentials", tags=["Issued Credentials"])
+
+
+def _issuance_service_url() -> str:
+    return get_registry().get_service_url("issuance")
+
+
+@passport_router.get("/capabilities", summary="Get Physical Document Capabilities")
+async def get_passport_capabilities(request: Request) -> Response:
+    service_url = _issuance_service_url()
+    response = await get_http_client().get(
+        f"{service_url}/v1/passport/capabilities",
+        headers=_ISSUANCE_HEADERS,
+        timeout=10.0,
+    )
+    if response.status_code == 404:
+        return JSONResponse({
+            "supported": False,
+            "state": "UNSUPPORTED",
+            "code": "PHYSICAL_DOCUMENTS_UNSUPPORTED",
+            "message": "Physical document issuance is not installed in this deployment.",
+        })
+    if response.status_code in {402, 403}:
+        try:
+            error_payload = response.json()
+        except ValueError:
+            error_payload = {}
+        code = str(error_payload.get("code") or error_payload.get("error") or "").upper()
+        if "PLAN" in code or "ENTITLEMENT" in code:
+            return JSONResponse({
+                "supported": True,
+                "state": "ENTITLEMENT_REQUIRED",
+                "code": code or "PHYSICAL_DOCUMENT_ENTITLEMENT_REQUIRED",
+                "message": "This capability is available but is not included in the current entitlement.",
+            })
+    if response.status_code >= 500:
+        raise HTTPException(status_code=503, detail="Physical document capabilities are temporarily unavailable")
+    if response.status_code >= 400:
+        raise HTTPException(status_code=response.status_code, detail="Unable to load physical document capabilities")
+    payload = response.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=503, detail="Physical document capability response is malformed")
+    payload.setdefault("supported", True)
+    payload.setdefault("state", "AVAILABLE")
+    return JSONResponse(payload)
+
+
+@passport_router.post("/applications", summary="Create Physical Document Application")
+async def create_passport_application(request: Request) -> Response:
+    return await proxy_request(request, _issuance_service_url(), "/v1/passport/applications", inject_headers=_ISSUANCE_HEADERS)
+
+
+@passport_router.post("/applications/{application_id}/generate-sod", summary="Sign Physical Document SOD")
+async def generate_passport_sod(application_id: str, request: Request) -> Response:
+    return await proxy_request(request, _issuance_service_url(), f"/v1/passport/applications/{application_id}/generate-sod", inject_headers=_ISSUANCE_HEADERS)
+
+
+@passport_router.post("/applications/{application_id}/generate-data-groups", summary="Generate Physical Document Data Groups")
+async def generate_passport_data_groups(application_id: str, request: Request) -> Response:
+    return await proxy_request(request, _issuance_service_url(), f"/v1/passport/applications/{application_id}/generate-data-groups", inject_headers=_ISSUANCE_HEADERS)
+
+
+@passport_router.post("/applications/{application_id}/submit-personalization", summary="Submit Physical Document Production")
+async def submit_passport_personalization(application_id: str, request: Request) -> Response:
+    return await proxy_request(request, _issuance_service_url(), f"/v1/passport/applications/{application_id}/submit-personalization", inject_headers=_ISSUANCE_HEADERS)
+
+
+@passport_router.get("/applications/{application_id}/production-status", summary="Get Physical Document Production Status")
+async def get_passport_production_status(application_id: str, request: Request) -> Response:
+    return await proxy_request(request, _issuance_service_url(), f"/v1/passport/applications/{application_id}/production-status", inject_headers=_ISSUANCE_HEADERS)
+
+
+@passport_router.post("/applications/{application_id}/quality-verify", summary="Record Physical Document Quality Result")
+async def verify_passport_quality(application_id: str, request: Request) -> Response:
+    return await proxy_request(request, _issuance_service_url(), f"/v1/passport/applications/{application_id}/quality-verify", inject_headers=_ISSUANCE_HEADERS)
+
+
+@passport_router.post("/applications/{application_id}/activate", summary="Activate Physical Document")
+async def activate_passport(application_id: str, request: Request) -> Response:
+    return await proxy_request(request, _issuance_service_url(), f"/v1/passport/applications/{application_id}/activate", inject_headers=_ISSUANCE_HEADERS)
 application_template_router = APIRouter(prefix="/v1/application-templates", tags=["Application Templates"])
 application_router = APIRouter(prefix="/v1/applications", tags=["Applications"])
 
@@ -338,6 +421,14 @@ async def list_issued_credentials(
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
     return await proxy_request(request, service_url, "/v1/issued-credentials", inject_headers=_ISSUANCE_HEADERS)
+
+
+@issued_credential_router.get("/mine", summary="List My Issued Credentials")
+async def list_my_issued_credentials(request: Request) -> Response:
+    """Return the authenticated holder's privacy-filtered credential inventory."""
+    registry = get_registry()
+    service_url = registry.get_service_url("applicant")
+    return await proxy_request(request, service_url, "/v1/issued-credentials/mine")
 
 
 @issued_credential_router.get("/{credential_id}", response_model=IssuedCredentialRecordResponse, summary="Get Issued Credential")
@@ -575,10 +666,9 @@ async def get_application_template(template_id: str, request: Request) -> Respon
     return await proxy_request(request, service_url, f"/v1/application-templates/{template_id}", inject_headers=_ISSUANCE_HEADERS)
 
 
-@application_template_router.put("/{template_id}", response_model=ApplicationTemplateResponse, summary="Update Application Template")
-async def update_application_template(template_id: str, body: ApplicationTemplateCreate, request: Request) -> Response:
-    """Update an Application Template."""
-    await _validate_application_template_dependencies(body, request)
+@application_template_router.patch("/{template_id}", response_model=ApplicationTemplateResponse, summary="Update draft Application Template")
+async def update_application_template(template_id: str, body: ApplicationTemplatePatch, request: Request) -> Response:
+    """Patch mutable fields on a draft Application Template."""
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
     return await proxy_request(request, service_url, f"/v1/application-templates/{template_id}", inject_headers=_ISSUANCE_HEADERS)
@@ -586,26 +676,34 @@ async def update_application_template(template_id: str, body: ApplicationTemplat
 
 @application_template_router.delete("/{template_id}", summary="Delete Application Template")
 async def delete_application_template(template_id: str, request: Request) -> Response:
-    """Delete an Application Template."""
+    """Delete a draft Application Template."""
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
     return await proxy_request(request, service_url, f"/v1/application-templates/{template_id}", inject_headers=_ISSUANCE_HEADERS)
 
 
+@application_template_router.post("/{template_id}/validate", summary="Validate Application Template")
+async def validate_application_template(template_id: str, request: Request) -> Response:
+    """Return section-scoped validation errors without changing lifecycle state."""
+    registry = get_registry()
+    service_url = registry.get_service_url("issuance")
+    return await proxy_request(request, service_url, f"/v1/application-templates/{template_id}/validate", inject_headers=_ISSUANCE_HEADERS)
+
+
 @application_template_router.post("/{template_id}/activate", response_model=ApplicationTemplateResponse, summary="Activate Application Template")
 async def activate_application_template(template_id: str, request: Request) -> Response:
-    """Activate an Application Template."""
+    """Validate and activate a draft Application Template."""
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
     return await proxy_request(request, service_url, f"/v1/application-templates/{template_id}/activate", inject_headers=_ISSUANCE_HEADERS)
 
 
-@application_template_router.post("/validate-artifacts", summary="Validate Issuer Artifacts")
-async def validate_application_artifacts(request: Request) -> Response:
-    """Validate issuer artifacts (keys, certificates, DIDs) for an Application Template."""
+@application_template_router.post("/{template_id}/deprecate", response_model=ApplicationTemplateResponse, summary="Deprecate Application Template")
+async def deprecate_application_template(template_id: str, request: Request) -> Response:
+    """Deprecate an active Application Template while preserving history."""
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
-    return await proxy_request(request, service_url, "/v1/application-templates/validate-artifacts", inject_headers=_ISSUANCE_HEADERS)
+    return await proxy_request(request, service_url, f"/v1/application-templates/{template_id}/deprecate", inject_headers=_ISSUANCE_HEADERS)
 
 
 # ── Applications ─────────────────────────────────────────────────────

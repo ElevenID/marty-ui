@@ -16,7 +16,7 @@ function CreateTrustProfileDrawer({ open, onClose, onSuccess }) {
   const { showNotification } = useNotifications();
   const { organizationId: authOrganizationId } = useAuth();
   const { activeOrgId } = useConsole();
-  const organizationId = activeOrgId || authOrganizationId;
+  const organizationId = activeOrgId;
 
   const fields = [
     {

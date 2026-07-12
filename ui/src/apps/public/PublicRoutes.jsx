@@ -63,6 +63,7 @@ function PublicRoutes() {
         {renderMarketingRoutes({ login })}
 
         <Route path="/docs" element={<ApiDocumentation />} />
+        <Route path="/docs/quickstart" element={<Navigate to="/docs" replace />} />
         <Route path="/organizations" element={<MyOrganizationsPage />} />
         <Route path="/organizations/discover" element={<DiscoverOrganizationsPage />} />
         <Route path="/organizations/join" element={<JoinOrganizationPage />} />

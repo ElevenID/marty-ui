@@ -90,7 +90,7 @@ function CredentialTemplatesPage() {
   const { t } = useTranslation('console');
   const { organizationId: authOrganizationId } = useAuth();
   const { activeOrgId } = useConsole();
-  const organizationId = activeOrgId || authOrganizationId;
+  const organizationId = activeOrgId;
   const { data: templatesData, loading, error } = useAsyncData(
     () => {
       if (!organizationId) {

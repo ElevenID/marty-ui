@@ -10,17 +10,15 @@ import uuid
 
 
 class PolicySetStatus(str, Enum):
-    ACTIVE = "active"
-    ARCHIVED = "archived"
+    DRAFT = "DRAFT"
+    ACTIVE = "ACTIVE"
+    ARCHIVED = "ARCHIVED"
 
 
 class PolicySetType(str, Enum):
     ACCESS_CONTROL = "ACCESS_CONTROL"
     CREDENTIAL_VERIFICATION = "CREDENTIAL_VERIFICATION"
     APPROVAL_RULES = "APPROVAL_RULES"
-    # Backward-compatible aliases used by early organization-service policy sets.
-    RBAC = "RBAC"
-    ABAC = "ABAC"
     CUSTOM = "CUSTOM"
 
 
@@ -53,7 +51,7 @@ class PolicySet:
         policy_type: PolicySetType = PolicySetType.CUSTOM,
         description: Optional[str] = None,
         created_by: Optional[str] = None,
-        cedar_schema_version: str = "1.0",
+        cedar_schema_version: str = "MIP/1.0",
     ) -> PolicySet:
         now = datetime.now(timezone.utc)
         return PolicySet(
@@ -62,7 +60,7 @@ class PolicySet:
             name=name,
             description=description,
             policy_type=policy_type,
-            status=PolicySetStatus.ACTIVE,
+            status=PolicySetStatus.DRAFT,
             cedar_policies=cedar_policies,
             cedar_schema_version=cedar_schema_version,
             created_by=created_by,

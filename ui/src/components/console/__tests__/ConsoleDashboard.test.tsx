@@ -29,6 +29,13 @@ vi.mock('@hooks/useAuth', () => ({
   }),
 }))
 
+vi.mock('../../../contexts/ConsoleContext', () => ({
+  useConsole: () => ({
+    activeOrgId: 'org_123',
+    memberships: [{ id: 'org_123', display_name: 'Test Organization' }],
+  }),
+}))
+
 // Mock SSE (not needed for rendering tests)
 vi.mock('@hooks/useSSE', () => ({
   useSSE: () => ({ isConnected: false }),
@@ -235,16 +242,18 @@ describe('ConsoleDashboard', () => {
     it('should show setup readiness as incomplete', () => {
       render(<ConsoleDashboard />)
       expect(screen.getByText(/Setup Readiness/i)).toBeInTheDocument()
+      expect(screen.getByRole('tab', { name: /Verify credentials/i })).toBeInTheDocument()
+      expect(screen.getByRole('tab', { name: /Issue credentials/i })).toBeInTheDocument()
       expect(screen.getAllByText(/Trust Profile/i).length).toBeGreaterThanOrEqual(1)
-      expect(screen.getAllByText(/Credential Template/i).length).toBeGreaterThanOrEqual(1)
       expect(screen.getAllByText(/Presentation Policy/i).length).toBeGreaterThanOrEqual(1)
+      expect(screen.queryByText(/^Credential Template$/i)).not.toBeInTheDocument()
     })
 
     it('should show all items as missing', () => {
       render(<ConsoleDashboard />)
       // All resources are MISSING in empty state — shown as unchecked circles
       const unchecked = screen.getAllByTestId('RadioButtonUncheckedIcon')
-      expect(unchecked.length).toBeGreaterThanOrEqual(5)
+      expect(unchecked.length).toBeGreaterThanOrEqual(3)
     })
 
     it('should show quick actions for setup', () => {
@@ -505,6 +514,7 @@ describe('ConsoleDashboard', () => {
       mockDashboardReturn = {
         data: {
           ...emptyDashboardData,
+          setupIntent: 'issue',
           trustProfiles: [{ id: 1, name: 'Active Profile', status: 'active' }],
         },
         loading: false,
@@ -524,6 +534,7 @@ describe('ConsoleDashboard', () => {
       mockDashboardReturn = {
         data: {
           ...fullDashboardData,
+          setupIntent: 'verify',
           policies: [],
           deployments: [],
           flows: [],
@@ -542,22 +553,6 @@ describe('ConsoleDashboard', () => {
       mockDashboardReturn = {
         data: {
           ...fullDashboardData,
-          deployments: [],
-          flows: [],
-          apiKeys: [],
-        },
-        loading: false,
-        error: null,
-        refetch: vi.fn(),
-      }
-      rerender(<ConsoleDashboard />)
-      await user.click(screen.getByText('Create API Key'))
-      expect(mockNavigate).toHaveBeenCalledWith('/console/org/api-keys')
-
-      mockNavigate.mockClear()
-      mockDashboardReturn = {
-        data: {
-          ...fullDashboardData,
           flows: [],
         },
         loading: false,
@@ -565,7 +560,8 @@ describe('ConsoleDashboard', () => {
         refetch: vi.fn(),
       }
       rerender(<ConsoleDashboard />)
-      await user.click(screen.getByText('Create Issuance Flow'))
+      expect(screen.queryByText('Create API Key')).not.toBeInTheDocument()
+      await user.click(screen.getByText('Create Flow'))
       expect(mockNavigate).toHaveBeenCalledWith('/console/org/flows/definitions/new')
     })
 
@@ -573,6 +569,7 @@ describe('ConsoleDashboard', () => {
       mockDashboardReturn = {
         data: {
           ...emptyDashboardData,
+          setupIntent: 'issue',
           signingKeys: [],
           issuerProfiles: [],
           keyManagementConfig: {
@@ -595,6 +592,7 @@ describe('ConsoleDashboard', () => {
       mockDashboardReturn = {
         data: {
           ...emptyDashboardData,
+          setupIntent: 'issue',
           signingKeys: [],
           issuerProfiles: [],
         },

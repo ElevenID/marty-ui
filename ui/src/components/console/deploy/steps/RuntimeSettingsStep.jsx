@@ -47,6 +47,11 @@ const getFlowTypes = (t) => [
   },
 ];
 
+const isActivePolicy = (policy) => (
+  String(policy?.status || '').trim().toLowerCase() === 'active'
+  || policy?.is_active === true
+);
+
 const RuntimeSettingsStep = ({ data, onChange }) => {
   const { t } = useTranslation('console');
   const navigate = useNavigate();
@@ -57,8 +62,7 @@ const RuntimeSettingsStep = ({ data, onChange }) => {
         throw new Error('Select an organization before loading presentation policies.');
       }
       const response = await listPresentationPolicies({ organization_id: activeOrgId });
-      const items = response.data || response || [];
-      return items.filter((p) => p.status === 'active');
+      return response.filter(isActivePolicy);
     },
     [activeOrgId]
   );
@@ -140,7 +144,7 @@ const RuntimeSettingsStep = ({ data, onChange }) => {
           </Button>
           <Button
             variant="outlined"
-            onClick={() => window.location.reload()}
+            onClick={reload}
           >
             {t('wizards.deploymentProfile.runtimeSettingsStep.blocked.refreshButton')}
           </Button>

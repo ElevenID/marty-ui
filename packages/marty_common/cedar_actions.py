@@ -9,6 +9,7 @@ from typing import Optional
 _UUID_RE = r"([a-f0-9\-]{36})"
 _ORG_PATH_RE = re.compile(rf"^/v1/organizations/{_UUID_RE}(?:/|$)")
 _TOP_LEVEL_RESOURCE_RE = re.compile(r"^/v1/([^/]+)/([^/]+)(?:/|$)")
+_FLOW_RESOURCE_RE = re.compile(r"^/v1/flows/(definitions|instances)/([^/]+)(?:/|$)")
 
 
 RESOURCE_LOOKUP_MAP: dict[str, tuple[str, str, set[str]]] = {
@@ -65,7 +66,7 @@ RESOURCE_LOOKUP_MAP: dict[str, tuple[str, str, set[str]]] = {
     "issued-credentials": (
         "issuance",
         "/v1/issued-credentials/{resource_id}",
-        set(),
+        {"mine"},
     ),
     "issuance": (
         "issuance",
@@ -93,6 +94,33 @@ RESOURCE_LOOKUP_MAP: dict[str, tuple[str, str, set[str]]] = {
 
 
 SPECIAL_ROUTE_RULES: list[tuple[re.Pattern[str], dict[str, str], str]] = [
+    (
+        re.compile(r"^/v1/organizations/[^/]+/applicants(?:/[^/]+)?/issue$"),
+        {"POST": "issuance:initiate"},
+        "application",
+    ),
+    (
+        re.compile(r"^/v1/organizations/[^/]+/applicants/[^/]+/approve$"),
+        {"POST": "application:approve"},
+        "application",
+    ),
+    (
+        re.compile(r"^/v1/organizations/[^/]+/applicants/[^/]+/reject$"),
+        {"POST": "application:reject"},
+        "application",
+    ),
+    (
+        re.compile(r"^/v1/organizations/[^/]+/applicants(?:/.*)?$"),
+        {
+            "GET": "application:review",
+            "POST": "application:review",
+            "PATCH": "application:review",
+            "DELETE": "application:review",
+            "HEAD": "application:review",
+            "OPTIONS": "application:review",
+        },
+        "application",
+    ),
     (
         re.compile(r"^/v1/flows/verify$"),
         {"POST": "verification:execute"},
@@ -306,6 +334,11 @@ def extract_org_id(path: str) -> Optional[str]:
 
 
 def resolve_resource_lookup(path: str) -> Optional[tuple[str, str]]:
+    flow_match = _FLOW_RESOURCE_RE.match(path)
+    if flow_match:
+        resource_type, resource_id = flow_match.groups()
+        return ("flows", f"/v1/flows/{resource_type}/{resource_id}")
+
     match = _TOP_LEVEL_RESOURCE_RE.match(path)
     if not match:
         return None

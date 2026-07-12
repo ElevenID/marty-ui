@@ -72,6 +72,15 @@ export function requireOrganizationId(params = {}) {
   return String(organizationId).trim();
 }
 
+function requireDirectArray(value, resourceName) {
+  if (!Array.isArray(value)) {
+    const error = new Error(`${resourceName} service returned a malformed list response.`);
+    error.code = 'MALFORMED_RESPONSE';
+    throw error;
+  }
+  return value;
+}
+
 function normalizeTrustProfileFormat(format) {
   if (!format) {
     return format;
@@ -527,12 +536,13 @@ export async function listPresentationPolicies(params = {}) {
     ? { organization_id: params }
     : (params || {});
   const organizationId = requireOrganizationId(normalizedParams);
-  return get(PRESENTATION_POLICY_BASE, {
+  const result = await get(PRESENTATION_POLICY_BASE, {
     params: {
       ...normalizedParams,
       organization_id: organizationId,
     },
   });
+  return requireDirectArray(result, 'Presentation Policy').map(normalizePresentationPolicy);
 }
 
 /**
@@ -629,7 +639,7 @@ export async function listCredentialTemplates(params = {}) {
       organization_id: organizationId,
     },
   });
-  return Array.isArray(result) ? result.map((template) => normalizeCredentialTemplate(template)) : result;
+  return requireDirectArray(result, 'Credential Template').map(normalizeCredentialTemplate);
 }
 
 /**
@@ -702,7 +712,7 @@ export async function listTrustProfiles(params = {}) {
       organization_id: organizationId,
     },
   });
-  return Array.isArray(result) ? result.map((profile) => normalizeTrustProfile(profile)) : result;
+  return requireDirectArray(result, 'Trust Profile').map(normalizeTrustProfile);
 }
 
 /**

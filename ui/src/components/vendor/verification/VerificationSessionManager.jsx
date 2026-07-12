@@ -32,7 +32,6 @@ import VisibilityIcon from '@mui/icons-material/Visibility';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ErrorIcon from '@mui/icons-material/Error';
 import HourglassTopIcon from '@mui/icons-material/HourglassTop';
-import { useAuth } from '../../../hooks/useAuth';
 import { useNotifications } from '../../../hooks/useNotifications';
 import { startVerificationFlow } from '../../../services/zkVerificationApi';
 import { listFlowExecutions } from '../../../services/flowsApi';
@@ -128,8 +127,7 @@ function formatDate(iso) {
 
 const formatSessionReference = (id) => formatOfficialReference(id, 'record');
 
-function VerificationSessionManager() {
-  const { user } = useAuth();
+function VerificationSessionManager({ organizationId }) {
   const { showSuccess } = useNotifications();
 
   // Sessions state
@@ -153,7 +151,7 @@ function VerificationSessionManager() {
   // ── Data fetching ─────────────────────────────────────────────────────────
 
   const fetchSessions = useCallback(async () => {
-    if (!user?.organization_id) {
+    if (!organizationId) {
       setSessions([]);
       setLoading(false);
       return;
@@ -161,8 +159,8 @@ function VerificationSessionManager() {
     setLoading(true);
     setError(null);
     try {
-      const flowData = await listFlowExecutions(null, { organization_id: user.organization_id });
-      const flowSessions = (Array.isArray(flowData) ? flowData : flowData?.items || flowData?.instances || [])
+      const flowData = await listFlowExecutions(null, { organization_id: organizationId });
+      const flowSessions = flowData
         .filter(isVerificationFlowInstance)
         .map(normalizeFlowSession);
       setSessions(flowSessions);
@@ -172,7 +170,7 @@ function VerificationSessionManager() {
     } finally {
       setLoading(false);
     }
-  }, [user?.organization_id]);
+  }, [organizationId]);
 
   useEffect(() => {
     fetchSessions();
@@ -205,7 +203,7 @@ function VerificationSessionManager() {
       setWizardError(null);
       try {
         let session = await startVerificationFlow({
-          organization_id: user.organization_id,
+          organization_id: organizationId,
           presentation_policy_id: wizardData.policy_id || undefined,
           trust_profile_id: wizardData.trust_profile_id || undefined,
           deployment_profile_id: wizardData.deployment_profile_id || undefined,
@@ -393,6 +391,7 @@ function VerificationSessionManager() {
             <PolicySelectStep
               value={wizardData}
               onChange={setWizardData}
+              organizationId={organizationId}
             />
           )}
           {wizardStep === 1 && (

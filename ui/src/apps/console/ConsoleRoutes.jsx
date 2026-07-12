@@ -1,4 +1,4 @@
-import { Navigate, Route, Routes } from 'react-router-dom';
+import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { Box, CircularProgress, Typography } from '@mui/material';
 
 import { get } from '../../services/api';
@@ -30,6 +30,8 @@ import {
   CredentialTemplatesPage,
   CredentialTemplateDetailPage,
   ApplicationTemplatesPage,
+  ApplicationTemplateEditorPage,
+  ApplicationTemplateDetailPage,
   CredentialTemplateWizard,
   PoliciesPage,
   PresentationPoliciesPage,
@@ -40,6 +42,7 @@ import {
   ApiKeysPage,
   DidIdentitiesPage,
   CanvasIntegrationsPage,
+  DeliveryDestinationsPage,
   LanesDevicesPage,
   DeploymentProfileWizard,
   KeyManagementServiceWizard,
@@ -48,8 +51,11 @@ import {
   FlowDefinitionsPage,
   FlowInstancesPage,
   FlowDefinitionWizard,
+  CustomFlowBuilder,
+  PolicySetsPage,
+  PolicySetWizard,
+  PolicySetDetailPage,
   FlowDetailPage,
-  OperatePage,
   IssuancePage,
   ApplicationsPage,
   ApplicationReviewPage,
@@ -127,6 +133,11 @@ function ConsoleEntryRoute() {
   return <Navigate to={resolveConsoleHomePath({ mode, activeOrgId, memberships, isOrgBootstrapRequired })} replace />;
 }
 
+function ConsoleAuditRedirect() {
+  const location = useLocation();
+  return <Navigate to={`/console/org/audit${location.search || ''}`} replace />;
+}
+
 function ConsoleRoutes() {
   return (
     <Routes>
@@ -134,6 +145,7 @@ function ConsoleRoutes() {
       <Route path="/console/login" element={<LoginPage fallbackRedirectTo="/console" />} />
       <Route path="/login" element={<LoginPage fallbackRedirectTo="/console" />} />
       <Route path="/console/auth/callback" element={<AuthCallback />} />
+      <Route path="/console/audit" element={<ConsoleAuditRedirect />} />
 
       <Route
         path="/console/org"
@@ -144,6 +156,9 @@ function ConsoleRoutes() {
         }
       >
         <Route index element={<ConsoleDashboard />} />
+        <Route path="design" element={<Navigate to="/console/org/templates/credentials" replace />} />
+        <Route path="govern" element={<Navigate to="/console/org/trust/profiles" replace />} />
+        <Route path="connect" element={<Navigate to="/console/org/deploy/canvas" replace />} />
         <Route path="setup-wizard" element={<Navigate to="/console/org" replace />} />
         <Route path="profile" element={<ProfilePage />} />
         <Route path="trust" element={<TrustPage />} />
@@ -160,6 +175,9 @@ function ConsoleRoutes() {
         <Route path="templates/credentials/new" element={<CredentialTemplateWizard />} />
         <Route path="templates/credentials/:templateId" element={<CredentialTemplateDetailPage />} />
         <Route path="templates/applications" element={<ApplicationTemplatesPage />} />
+        <Route path="templates/applications/new" element={<ApplicationTemplateEditorPage />} />
+        <Route path="templates/applications/:templateId" element={<ApplicationTemplateDetailPage />} />
+        <Route path="templates/applications/:templateId/edit" element={<ApplicationTemplateEditorPage />} />
         <Route path="policies" element={<PoliciesPage />} />
         <Route path="policies/presentation" element={<PresentationPoliciesPage />} />
         <Route path="policies/presentation/new" element={<PresentationPolicyWizard />} />
@@ -170,6 +188,7 @@ function ConsoleRoutes() {
         <Route path="deploy/api-keys" element={<Navigate to="/console/org/api-keys" replace />} />
         <Route path="deploy/issuer-identity" element={<DidIdentitiesPage />} />
         <Route path="deploy/canvas" element={<CanvasIntegrationsPage />} />
+        <Route path="connect/delivery-destinations" element={<DeliveryDestinationsPage />} />
         <Route path="deploy/issuer-identity/new" element={<IssuerIdentityWizard />} />
         <Route path="deploy/key-management" element={<SigningKeysPage />} />
         <Route path="deploy/key-management/services" element={<Navigate to="/console/org/deploy/key-management" replace />} />
@@ -184,8 +203,12 @@ function ConsoleRoutes() {
         <Route path="flows" element={<FlowsPage />} />
         <Route path="flows/definitions" element={<FlowDefinitionsPage />} />
         <Route path="flows/definitions/new" element={<FlowDefinitionWizard />} />
+        <Route path="flows/definitions/new/custom" element={<CustomFlowBuilder />} />
         <Route path="flows/definitions/:flowId" element={<FlowDetailPage />} />
-        <Route path="operate" element={<OperatePage />} />
+        <Route path="policies/sets" element={<PolicySetsPage />} />
+        <Route path="policies/sets/new" element={<PolicySetWizard />} />
+        <Route path="policies/sets/:policySetId" element={<PolicySetDetailPage />} />
+        <Route path="operate" element={<Navigate to="/console/org/operate/flow-instances" replace />} />
         <Route path="operate/issuance" element={<IssuancePage />} />
         <Route path="operate/issuance/:credentialId" element={<IssuancePage />} />
         <Route path="operate/applications" element={<ApplicationsPage />} />

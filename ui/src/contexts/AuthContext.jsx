@@ -13,7 +13,6 @@ import {
   createEnrichedUser,
   getAuthFlags,
   resolveInteractiveLoginRedirect,
-  updateUserActiveOrganization,
 } from '../application/session/authSession';
 
 /**
@@ -46,7 +45,6 @@ import {
  * @property {Array<{id: string, name: string|null}>} organizations - Organization memberships
  * @property {Object<string, boolean>} capabilities - Current user capabilities
  * @property {function} hasCapability - Capability check helper
- * @property {function} setActiveOrganizationId - Select active organization
  * @property {function} login - Initiate login flow
  * @property {function} register - Initiate registration flow
  * @property {function} logout - Initiate logout flow
@@ -71,7 +69,6 @@ const defaultContextValue = {
   register: () => {},
   logout: () => {},
   refreshUser: async () => {},
-  setActiveOrganizationId: () => {},
 };
 
 const AuthContext = createContext(defaultContextValue);
@@ -156,23 +153,6 @@ export function AuthProvider({ children }) {
   }, [fetchUser]);
 
   // Computed values - derive role booleans and organization info
-  const setActiveOrganizationId = useCallback(
-    (orgId, selectedOrganization = null) => {
-      setUser((prev) => {
-        const normalizedOrgId = orgId || null;
-
-        if (normalizedOrgId) {
-          window.localStorage.setItem('activeOrgId', normalizedOrgId);
-        } else {
-          window.localStorage.removeItem('activeOrgId');
-        }
-
-        return updateUserActiveOrganization(prev, normalizedOrgId, selectedOrganization);
-      });
-    },
-    [setUser]
-  );
-
   const contextValue = useMemo(() => {
     const { isAdministrator, isVendor, isApplicant, capabilities } = getAuthFlags(user);
     const hasCapability = (capability) => Boolean(capabilities[capability]);
@@ -197,9 +177,8 @@ export function AuthProvider({ children }) {
       register,
       logout,
       refreshUser,
-      setActiveOrganizationId,
     };
-  }, [user, isLoading, login, register, logout, refreshUser, setActiveOrganizationId]);
+  }, [user, isLoading, login, register, logout, refreshUser]);
 
   return (
     <AuthContext.Provider value={contextValue}>

@@ -4,16 +4,14 @@ import { render, screen } from '@test/utils';
 import ApplicantSettingsPage from '../console/applicant/ApplicantSettingsPage.jsx';
 
 const {
-  mockGetApplicantByUser,
-  mockCreateApplicant,
-  mockUpdateApplicantProfile,
+  mockGetMyApplicantProfile,
+  mockUpsertMyApplicantProfile,
   mockListWallets,
   mockWalletPreferenceState,
   mockGetPlatform,
 } = vi.hoisted(() => ({
-  mockGetApplicantByUser: vi.fn(),
-  mockCreateApplicant: vi.fn(),
-  mockUpdateApplicantProfile: vi.fn(),
+  mockGetMyApplicantProfile: vi.fn(),
+  mockUpsertMyApplicantProfile: vi.fn(),
   mockListWallets: vi.fn(),
   mockWalletPreferenceState: { walletIds: [] as string[] },
   mockGetPlatform: vi.fn(),
@@ -33,9 +31,8 @@ vi.mock('../../hooks/useAuth', () => ({
 }));
 
 vi.mock('../../services/applicantApi', () => ({
-  getApplicantByUser: (...args: unknown[]) => mockGetApplicantByUser(...args),
-  createApplicant: (...args: unknown[]) => mockCreateApplicant(...args),
-  updateApplicantProfile: (...args: unknown[]) => mockUpdateApplicantProfile(...args),
+  getMyApplicantProfile: (...args: unknown[]) => mockGetMyApplicantProfile(...args),
+  upsertMyApplicantProfile: (...args: unknown[]) => mockUpsertMyApplicantProfile(...args),
 }));
 
 vi.mock('../../services/walletRegistryApi', () => ({
@@ -59,14 +56,14 @@ describe('ApplicantSettingsPage', () => {
     vi.clearAllMocks();
     mockWalletPreferenceState.walletIds = [];
     mockGetPlatform.mockReturnValue('desktop');
-    mockGetApplicantByUser.mockResolvedValue({
+    mockGetMyApplicantProfile.mockResolvedValue({
       id: 'app-1',
       given_name: 'Ada',
       family_name: 'Lovelace',
       email: 'applicant@example.com',
       phone_number: '',
     });
-    mockCreateApplicant.mockResolvedValue({ id: 'app-created' });
+    mockUpsertMyApplicantProfile.mockResolvedValue({ id: 'app-created' });
     mockListWallets.mockResolvedValue([]);
   });
 
@@ -84,8 +81,8 @@ describe('ApplicantSettingsPage', () => {
   });
 
   it('creates a missing applicant profile with active organization context', async () => {
-    mockGetApplicantByUser.mockResolvedValue(null);
-    mockCreateApplicant.mockResolvedValue({
+    mockGetMyApplicantProfile.mockResolvedValue(null);
+    mockUpsertMyApplicantProfile.mockResolvedValue({
       id: 'app-created',
       given_name: 'Ada',
       family_name: 'Lovelace',
@@ -96,9 +93,8 @@ describe('ApplicantSettingsPage', () => {
     render(<ApplicantSettingsPage />);
 
     expect(await screen.findByDisplayValue('Ada Lovelace')).toBeInTheDocument();
-    expect(mockCreateApplicant).toHaveBeenCalledWith({
+    expect(mockUpsertMyApplicantProfile).toHaveBeenCalledWith({
       organization_id: 'org-1',
-      user_id: 'user-1',
       email: 'applicant@example.com',
       given_name: 'Ada',
       family_name: 'Lovelace',

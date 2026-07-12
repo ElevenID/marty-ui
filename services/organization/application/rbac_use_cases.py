@@ -426,7 +426,7 @@ _REVIEWER_PERMISSION_KEYS = sorted(
             "application-template",
             "application",
         )
-        + ["application:approve", "application:reject"]
+        + ["application:review", "application:approve", "application:reject"]
     )
 )
 

@@ -264,7 +264,7 @@ export default function IssuerIdentityWizard() {
     () => (memberships || []).find((organization) => organization.id === activeOrgId) || null,
     [activeOrgId, memberships]
   );
-  const effectiveOrganizationId = activeOrgId || organizationId;
+  const effectiveOrganizationId = activeOrgId;
   const effectiveOrganizationName = activeOrganization?.display_name || activeOrganization?.name || organizationName;
   const { showNotification } = useNotifications();
   const [publishResult, setPublishResult] = useState(null);
