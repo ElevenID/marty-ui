@@ -21,8 +21,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# Install pre-built marty-rs wheel
-COPY wheels/*.whl /tmp/
+# Install the Linux wheel produced by the release workflow.
+COPY release-wheels/*.whl /tmp/
 RUN pip install --no-cache-dir /tmp/*.whl && rm -rf /tmp/*.whl
 
 # Install Python dependencies
