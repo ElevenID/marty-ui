@@ -93,7 +93,7 @@ Remediation and deployment verification completed on 2026-07-11/12:
 - The MIP 0.3 deterministic browser gate passes all 5 tests with no unexpected requests or page exceptions.
 - The production UI bundle completes successfully; focused Application Template, verification, flow, deployment, applicant, and gateway suites pass.
 - CD rejects unset or mutable repository revisions and records exact 40-character SHAs for UI, protocol, credentials, core, CLI, blog, and subscriptions.
-- Atomic CD run `29184445130` passed and published immutable services, public UI, self-host UI, and migration image digests in release `mip-0.3.0-beta-20260712-r5`.
+- Atomic CD run `29185132375` passed and published immutable services, public UI, self-host UI, and migration image digests in release `mip-0.3.0-beta-20260712-r6`.
 - Live beta canonical applicant and claim probes pass, removed routes return `404`, and walt.id browser issuance acceptance stores and resolves the membership badge.
 
 Remaining acceptance work is limited to the protected SpruceKit Open Badge login lane, native-wallet handoffs, destructive credential lifecycle scenarios, and the external walt.id presentation parser/issuer-label defects. Walt.id presentation is not advertised as passing.
