@@ -45,7 +45,11 @@ def test_self_profile_upsert_returns_existing_and_links_login_subject(repo, clie
 
     response = client.patch(
         "/v1/me/applicant-profile",
-        headers={"X-User-Id": "user-123", "X-User-Email": "alice@example.com"},
+        headers={
+            "X-User-Id": "user-123",
+            "X-User-Email": "alice@example.com",
+            "X-Organization-ID": "org-1",
+        },
         json={
             "organization_id": "org-1",
             "email": "alice@example.com",
@@ -65,3 +69,35 @@ def test_self_profile_upsert_returns_existing_and_links_login_subject(repo, clie
     assert refreshed.oidc_subject == "user-123"
     assert refreshed.user_id == "user-123"
     assert refreshed.family_name == "Smith"
+
+
+def test_self_profile_get_derives_organization_from_authenticated_context(repo, client):
+    applicant = Applicant(
+        id="app-existing-2",
+        user_id="user-456",
+        organization_id="org-2",
+        email="bob@example.com",
+    )
+    _run(repo.save(applicant))
+
+    response = client.get(
+        "/v1/me/applicant-profile",
+        headers={"X-User-Id": "user-456", "X-Organization-ID": "org-2"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["id"] == "app-existing-2"
+
+
+def test_self_profile_patch_rejects_organization_override(repo, client):
+    response = client.patch(
+        "/v1/me/applicant-profile",
+        headers={
+            "X-User-Id": "user-789",
+            "X-User-Email": "eve@example.com",
+            "X-Organization-ID": "org-3",
+        },
+        json={"organization_id": "org-other", "email": "eve@example.com"},
+    )
+
+    assert response.status_code == 403

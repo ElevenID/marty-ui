@@ -2552,11 +2552,14 @@ async def _require_reviewer_lock(
 
 @canonical_router.get("/v1/me/applicant-profile", response_model=ApplicantResponse, response_model_exclude_none=True)
 async def get_my_profile(
-    organization_id: str = Query(...),
     x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+    x_organization_id: str | None = Header(default=None, alias="X-Organization-ID"),
     repo: InMemoryApplicantRepository = Depends(get_repo),
 ) -> ApplicantResponse:
     user_id, _, _ = _identity_headers(x_user_id)
+    organization_id = str(x_organization_id or "").strip()
+    if not organization_id:
+        raise HTTPException(status_code=422, detail="Authenticated organization context is required")
     applicant = await repo.get_by_user_id(user_id, organization_id)
     if not applicant:
         raise HTTPException(status_code=404, detail="Applicant profile not found")
@@ -2568,12 +2571,15 @@ async def upsert_my_profile(
     body: UpdateApplicantRequest,
     x_user_id: str | None = Header(default=None, alias="X-User-Id"),
     x_user_email: str | None = Header(default=None, alias="X-User-Email"),
+    x_organization_id: str | None = Header(default=None, alias="X-Organization-ID"),
     repo: InMemoryApplicantRepository = Depends(get_repo),
 ) -> ApplicantResponse:
     user_id, _, _ = _identity_headers(x_user_id, x_user_email)
-    organization_id = str(body.organization_id or "").strip()
+    organization_id = str(x_organization_id or "").strip()
     if not organization_id:
-        raise HTTPException(status_code=422, detail="organization_id is required")
+        raise HTTPException(status_code=422, detail="Authenticated organization context is required")
+    if body.organization_id and str(body.organization_id).strip() != organization_id:
+        raise HTTPException(status_code=403, detail="Applicant profile organization cannot be changed")
     applicant = await repo.get_by_user_id(user_id, organization_id)
     if not applicant and (body.email or x_user_email):
         applicant = await repo.get_by_email(str(body.email or x_user_email), organization_id)
