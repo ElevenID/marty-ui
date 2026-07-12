@@ -6,9 +6,25 @@ import json
 import httpx
 import pytest
 from fastapi import FastAPI, Response
+from starlette.requests import Request
 
 from gateway.routes import organizations
 from gateway.routes.organizations import organization_router
+
+
+def test_forward_context_headers_includes_selected_org_authorization() -> None:
+    request = Request({"type": "http", "headers": []})
+    request.state.user_id = "user-1"
+    request.state.organization_id = "org-123"
+    request.state.org_permissions = {"application:view", "application:review"}
+    request.state.org_roles = {"reviewer"}
+
+    assert organizations._forward_context_headers(request) == {
+        "X-User-Id": "user-1",
+        "X-Organization-ID": "org-123",
+        "X-Org-Permissions": "application:review,application:view",
+        "X-Org-Roles": "reviewer",
+    }
 
 
 async def _get(path: str, *, headers: dict[str, str] | None = None) -> httpx.Response:

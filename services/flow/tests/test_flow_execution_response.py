@@ -160,7 +160,26 @@ def test_parse_flow_instance_status_accepts_protocol_and_runtime_aliases() -> No
     assert _parse_flow_instance_status("CANCELED") is FlowInstanceStatus.CANCELLED
 
 
-def test_definition_response_normalizes_legacy_string_trigger() -> None:
+@pytest.mark.parametrize(
+    "status",
+    [
+        FlowInstanceStatus.CREATED,
+        FlowInstanceStatus.PENDING,
+        FlowInstanceStatus.IN_PROGRESS,
+        FlowInstanceStatus.AWAITING_WALLET,
+        FlowInstanceStatus.AWAITING_APPROVAL,
+        FlowInstanceStatus.AWAITING_EVIDENCE,
+    ],
+)
+def test_every_non_terminal_flow_state_can_be_cancelled(status: FlowInstanceStatus) -> None:
+    instance = FlowInstance(status=status)
+
+    instance.transition_to(FlowInstanceStatus.CANCELLED)
+
+    assert instance.status is FlowInstanceStatus.CANCELLED
+
+
+def test_definition_response_preserves_canonical_trigger() -> None:
     step = FlowStep(
         name="Create Offer",
         description="Create the OID4VCI offer",
@@ -170,7 +189,7 @@ def test_definition_response_normalizes_legacy_string_trigger() -> None:
     )
     flow_def = FlowDefinition(
         organization_id="org-1",
-        name="Legacy Trigger Flow",
+        name="Canonical Trigger Flow",
         flow_type=FlowType.OID4VCI_PRE_AUTHORIZED,
         steps=[step],
         start_step_id=step.id,
@@ -179,14 +198,17 @@ def test_definition_response_normalizes_legacy_string_trigger() -> None:
         deployment_profile_ids=["deploy-1"],
         credential_template_id="template-1",
     )
-    flow_def.trigger = "credential_login"
+    flow_def.trigger = {
+        "trigger_type": "API_CALL",
+        "config": {"event_type": "CREDENTIAL_LOGIN"},
+    }
     flow_def.version = 3
 
     response = _definition_to_response(flow_def)
 
     assert response.trigger == {
-        "trigger_type": "WEBHOOK",
-        "config": {"legacy_event": "credential_login"},
+        "trigger_type": "API_CALL",
+        "config": {"event_type": "CREDENTIAL_LOGIN"},
     }
     assert response.version == 3
     assert response.deployment_profile_ids == ["deploy-1"]

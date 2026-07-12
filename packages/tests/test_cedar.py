@@ -116,6 +116,7 @@ class TestResolveAction:
         assert resolve_action("POST", ORG_PREFIX + "members") == "team:invite"
         assert resolve_action("GET", ORG_PREFIX + "roles") == "role:view"
         assert resolve_action("POST", ORG_PREFIX + "transfer-ownership") == "organization:transfer-ownership"
+        assert resolve_action("GET", ORG_PREFIX + "dashboard/applicant-stats") == "application:review"
 
     def test_top_level_routes_use_same_permission_namespace(self):
         assert resolve_action("POST", "/v1/application-templates") == "application-template:create"

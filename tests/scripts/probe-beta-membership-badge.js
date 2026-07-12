@@ -50,7 +50,10 @@ async function login(page, email, password, destination) {
   await page.locator('input[name="username"], #username, input[type="email"]').first().fill(email);
   await page.locator('input[name="password"], #password, input[type="password"]').first().fill(password);
   await Promise.all([
-    page.waitForURL((url) => url.href.startsWith(BETA_ORIGIN), { timeout: 60_000 }),
+    page.waitForURL((url) => url.href.startsWith(destination), {
+      waitUntil: 'domcontentloaded',
+      timeout: 60_000,
+    }),
     page.locator('button[type="submit"], input[type="submit"]').first().click(),
   ]);
 }
@@ -115,7 +118,9 @@ async function main() {
   const applyUrl = `${BETA_ORIGIN}/console/applicant/apply/${TEMPLATE_ID}`;
   try {
     await login(page, email, password, applyUrl);
-    await page.goto(applyUrl, { waitUntil: 'domcontentloaded', timeout: 60_000 });
+    if (!page.url().startsWith(applyUrl)) {
+      await page.goto(applyUrl, { waitUntil: 'domcontentloaded', timeout: 60_000 });
+    }
     await page.waitForTimeout(4000);
     const before = {
       url: page.url(),
@@ -168,9 +173,11 @@ async function main() {
       routeProbes.removedProfileApplications,
       routeProbes.removedByUser,
     ];
+    const serverErrors = responses.filter((response) => response.status >= 500);
     const releaseReady = (
       canonicalRoutes.every((probe) => probe.status === 200 && probe.mipVersion === '0.3.0')
       && removedRoutes.every((probe) => probe.status === 404 && probe.mipVersion === '0.3.0')
+      && serverErrors.length === 0
       && failedRequests.length === 0
       && pageErrors.length === 0
     );
@@ -183,6 +190,7 @@ async function main() {
       after,
       routeProbes,
       responses,
+      serverErrors,
       failedRequests,
       pageErrors,
       consoleErrors,
