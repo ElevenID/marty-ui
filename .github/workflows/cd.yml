@@ -14,6 +14,7 @@ env:
   IMAGE_PREFIX: ghcr.io/elevenid/marty-ui
   MARTY_CREDENTIALS_REF: ${{ vars.MARTY_CREDENTIALS_REF }}
   MARTY_PROTOCOL_REF: ${{ vars.MARTY_PROTOCOL_REF }}
+  MARTY_CORE_REF: ${{ vars.MARTY_CORE_REF }}
   MARTY_CLI_REF: ${{ vars.MARTY_CLI_REF }}
   MARTY_BLOG_REF: ${{ vars.MARTY_BLOG_REF }}
   MARTY_SUBSCRIPTIONS_REF: ${{ vars.MARTY_SUBSCRIPTIONS_REF }}
@@ -34,7 +35,7 @@ jobs:
             echo "MARTY_PROTOCOL_REF must be an exact 40-character commit SHA." >&2
             exit 1
           fi
-          for ref_name in MARTY_CLI_REF MARTY_BLOG_REF MARTY_SUBSCRIPTIONS_REF; do
+          for ref_name in MARTY_CORE_REF MARTY_CLI_REF MARTY_BLOG_REF MARTY_SUBSCRIPTIONS_REF; do
             if [[ ! "${!ref_name}" =~ ^[0-9a-f]{40}$ ]]; then
               echo "$ref_name must be an exact 40-character commit SHA." >&2
               exit 1
@@ -82,14 +83,8 @@ jobs:
         with:
           repository: ElevenID/marty-core
           token: ${{ secrets.REPO_ACCESS_TOKEN }}
+          ref: ${{ env.MARTY_CORE_REF }}
           path: marty-core
-
-      - uses: actions/checkout@v4
-        with:
-          repository: ElevenID/longfellow-zk
-          token: ${{ secrets.REPO_ACCESS_TOKEN }}
-          path: longfellow-zk
-          sparse-checkout: lib
 
       - uses: actions/checkout@v4
         with:
@@ -163,6 +158,7 @@ jobs:
             --arg marty_ui_sha "$GITHUB_SHA" \
             --arg marty_protocol_sha "$MARTY_PROTOCOL_REF" \
             --arg marty_credentials_sha "$MARTY_CREDENTIALS_REF" \
+            --arg marty_core_sha "$MARTY_CORE_REF" \
             --arg marty_cli_sha "$MARTY_CLI_REF" \
             --arg marty_blog_sha "$MARTY_BLOG_REF" \
             --arg marty_subscriptions_sha "$MARTY_SUBSCRIPTIONS_REF" \
@@ -180,6 +176,7 @@ jobs:
                 marty_ui: $marty_ui_sha,
                 marty_protocol: $marty_protocol_sha,
                 marty_credentials: $marty_credentials_sha,
+                marty_core: $marty_core_sha,
                 marty_cli: $marty_cli_sha,
                 marty_blog: $marty_blog_sha,
                 marty_subscriptions: $marty_subscriptions_sha
@@ -234,7 +231,7 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          password: ${{ secrets.REPO_ACCESS_TOKEN }}
 
       - name: Build and push
         id: services-image
@@ -289,7 +286,7 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          password: ${{ secrets.REPO_ACCESS_TOKEN }}
 
       - name: Build and push public UI image
         id: public-ui-image
@@ -356,7 +353,7 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          password: ${{ secrets.REPO_ACCESS_TOKEN }}
 
       - name: Build and push
         id: migrations-image
@@ -402,7 +399,7 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          password: ${{ secrets.REPO_ACCESS_TOKEN }}
 
       - name: Apply migration to the beta database copy
         run: |

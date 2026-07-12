@@ -4,6 +4,7 @@ import { configureApi } from '@marty/subscriptions';
 
 import './i18n';
 import { get, post } from './services/api';
+import { waitForFonts } from './utils/waitForFonts';
 
 configureApi({ get, post });
 
@@ -29,13 +30,8 @@ export function mountApp(RootComponent) {
     </React.StrictMode>
   );
 
-  const awaitFonts =
-    document.fonts && typeof document.fonts.ready?.then === 'function'
-      ? document.fonts.ready.catch(() => {})
-      : Promise.resolve();
-
   Promise.resolve()
-    .then(() => awaitFonts)
+    .then(() => waitForFonts())
     .then(() => {
       requestAnimationFrame(() => {
         requestAnimationFrame(markAppReady);
