@@ -398,7 +398,7 @@ These results drove the coordinated beta deployment documented below.
 - `https://beta.elevenidllc.com` advertises only MIP `0.3.0`; the discovery response and `X-MIP-Version` header both return `0.3.0`.
 - The local beta database, Redis, OpenBao, and applicant store were backed up before the one-way cutover under `tests/artifacts/deployment-mip-0.3.0-beta-20260712/`.
 - The applicant store was migrated to `MIP/0.3.0`, all ten relational service migration heads verify, and the Flow trigger migration is at `20260712_0001`.
-- CD run `29184445130` passed protocol conformance, generated-binding drift, Rust wheel compilation, services/UI/migration image builds, fresh-schema rehearsal, legacy applicant-store rehearsal, and release-manifest publication.
+- CD run `29185132375` passed protocol conformance, generated-binding drift, Rust wheel compilation, services/UI/migration image builds, fresh-schema rehearsal, legacy applicant-store rehearsal, and release-manifest publication.
 - The release-ready manifest pins seven repository revisions, four Marty image digests, tested walt.id image digests, `mixed_versions_supported: false`, and migration rehearsal mode `ephemeral-schema`.
 - A fresh-install migration defect discovered by the rehearsal was corrected: the historical Flow migration no longer deletes Presentation Policy tables or migration state owned by another service.
 
