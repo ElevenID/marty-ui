@@ -95,6 +95,11 @@ RESOURCE_LOOKUP_MAP: dict[str, tuple[str, str, set[str]]] = {
 
 SPECIAL_ROUTE_RULES: list[tuple[re.Pattern[str], dict[str, str], str]] = [
     (
+        re.compile(r"^/v1/organizations/[^/]+/dashboard/applicant-stats$"),
+        {"GET": "application:review"},
+        "application",
+    ),
+    (
         re.compile(r"^/v1/organizations/[^/]+/applicants(?:/[^/]+)?/issue$"),
         {"POST": "issuance:initiate"},
         "application",

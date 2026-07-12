@@ -524,6 +524,57 @@ async def test_application_approved_webhook_filters_by_credential_template_id(mo
 
 
 @pytest.mark.asyncio
+async def test_application_approved_webhook_skips_malformed_trigger(monkeypatch):
+    async def _fake_initiate_issuance(instance, flow_def):
+        return {
+            "id": f"tx-{flow_def.id}",
+            "credential_offer_uri": f"openid-credential-offer://?credential_offer={flow_def.id}",
+            "credential_offer_uris": {},
+            "credential_offer_labels": {},
+            "pre_auth_code": f"pre-{flow_def.id}",
+            "expires_at": "2026-05-05T12:00:00+00:00",
+            "status": "offer_created",
+        }
+
+    monkeypatch.setattr(flow_main, "_initiate_credential_layer_issuance", _fake_initiate_issuance)
+
+    repo = InMemoryFlowRepository()
+    malformed_flow = _application_approved_custom_flow(
+        name="Malformed trigger",
+        credential_template_id="template-open-badge",
+    )
+    malformed_flow.trigger = "application_approved"
+    malformed_flow.activate()
+    await repo.save_definition(malformed_flow)
+
+    valid_flow = _application_approved_custom_flow(
+        name="Canonical trigger",
+        credential_template_id="template-open-badge",
+    )
+    valid_flow.activate()
+    await repo.save_definition(valid_flow)
+
+    result = await handle_application_approved(
+        ApplicationApprovedWebhook(
+            event_type="application.approved",
+            aggregate_id="application-malformed-trigger",
+            aggregate_type="application",
+            organization_id="org-1",
+            timestamp="2026-05-05T12:00:00+00:00",
+            data={
+                "applicant_id": "applicant-1",
+                "credential_template_id": "template-open-badge",
+            },
+        ),
+        repo=repo,
+    )
+
+    assert result["success"] is True
+    assert result["flows_triggered"] == 1
+    assert result["offers"][0]["flow_definition_id"] == valid_flow.id
+
+
+@pytest.mark.asyncio
 async def test_application_approved_webhook_returns_zero_when_template_not_found():
     repo = InMemoryFlowRepository()
     flow_def = _application_approved_custom_flow(

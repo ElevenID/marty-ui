@@ -927,6 +927,7 @@ VALID_TRANSITIONS: dict[FlowInstanceStatus, set[FlowInstanceStatus]] = {
     },
     FlowInstanceStatus.PENDING: {
         FlowInstanceStatus.IN_PROGRESS,
+        FlowInstanceStatus.CANCELLED,
     },
     FlowInstanceStatus.IN_PROGRESS: {
         FlowInstanceStatus.AWAITING_WALLET,
@@ -939,6 +940,7 @@ VALID_TRANSITIONS: dict[FlowInstanceStatus, set[FlowInstanceStatus]] = {
     },
     FlowInstanceStatus.AWAITING_WALLET: {
         FlowInstanceStatus.IN_PROGRESS,
+        FlowInstanceStatus.CANCELLED,
         FlowInstanceStatus.EXPIRED,
     },
     FlowInstanceStatus.AWAITING_APPROVAL: {
@@ -948,6 +950,7 @@ VALID_TRANSITIONS: dict[FlowInstanceStatus, set[FlowInstanceStatus]] = {
     },
     FlowInstanceStatus.AWAITING_EVIDENCE: {
         FlowInstanceStatus.IN_PROGRESS,
+        FlowInstanceStatus.CANCELLED,
         FlowInstanceStatus.EXPIRED,
     },
     # Terminal states — no transitions allowed
@@ -1539,13 +1542,6 @@ def _sync_protocol_context(instance: FlowInstance, flow_def: FlowDefinition | No
 
 def _definition_to_response(flow: FlowDefinition) -> FlowDefinitionResponse:
     """Convert FlowDefinition to response model."""
-    trigger_value = flow.trigger
-    if isinstance(trigger_value, str):
-        trigger_value = {
-            "trigger_type": "WEBHOOK",
-            "config": {"legacy_event": trigger_value},
-        }
-
     if flow.flow_type == FlowType.CUSTOM and flow.extension:
         resolved_steps = [step["step_id"] for step in flow.extension.get("steps", [])]
     else:
@@ -1569,7 +1565,7 @@ def _definition_to_response(flow: FlowDefinition) -> FlowDefinitionResponse:
         deployment_profile_ids=flow.deployment_profile_ids,
         approval_strategy=flow.approval_strategy,
         hooks=flow.hooks,
-        trigger=trigger_value,
+        trigger=flow.trigger,
         version=flow.version,
         created_at=flow.created_at.isoformat(),
         updated_at=flow.updated_at.isoformat(),
@@ -4738,7 +4734,7 @@ async def handle_application_approved(
             return False
         if flow.extension.get("extends_flow_type") != FlowType.OID4VCI_PRE_AUTHORIZED.value:
             return False
-        trigger = flow.trigger or {}
+        trigger = flow.trigger if isinstance(flow.trigger, dict) else {}
         trigger_config = trigger.get("config") if isinstance(trigger.get("config"), dict) else {}
         configured_event = str(trigger_config.get("event_type") or "").upper()
         legacy_preconditions = (flow.extension.get("config") or {}).get("legacy_preconditions", [])

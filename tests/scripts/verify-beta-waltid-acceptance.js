@@ -165,7 +165,10 @@ async function loginToBetaApplicant(page, email, password) {
   await page.locator('input[name="username"], #username, input[type="email"]').first().fill(email, { timeout: 30_000 });
   await page.locator('input[name="password"], #password, input[type="password"]').first().fill(password, { timeout: 30_000 });
   await Promise.all([
-    page.waitForURL((url) => url.href.startsWith(BETA_ORIGIN), { timeout: 60_000 }).catch(() => {}),
+    page.waitForURL((url) => url.href.startsWith(applyUrl), {
+      waitUntil: 'domcontentloaded',
+      timeout: 60_000,
+    }),
     page.locator('button[type="submit"], input[type="submit"], button:has-text("Sign In"), button:has-text("Login")').first().click(),
   ]);
   await waitFor(async () => page.url().startsWith(BETA_ORIGIN) && page.evaluate(async () => {
@@ -197,7 +200,8 @@ async function collectBetaOffer(browser) {
   page.on('response', async (response) => {
     const url = response.url();
     if (url.includes('/cdn-cgi/rum')) return;
-    if (url.includes('/issue') && response.request().method() === 'POST') {
+    const canonicalClaim = /\/v1\/me\/applications\/[^/]+\/claim(?:\?|$)/.test(url);
+    if (canonicalClaim && response.request().method() === 'POST') {
       try {
         issueResponses.push({ status: response.status(), json: await response.json() });
       } catch {
@@ -210,10 +214,6 @@ async function collectBetaOffer(browser) {
   });
 
   await loginToBetaApplicant(page, email, password);
-  await page.goto(`${BETA_ORIGIN}/console/applicant/apply/${TEMPLATE_ID}`, {
-    waitUntil: 'domcontentloaded',
-    timeout: 60_000,
-  });
   await page.getByRole('button', { name: /add to wallet/i }).click({ timeout: 60_000 });
   await page.getByTestId('wallet-selector').waitFor({ state: 'visible', timeout: 15_000 });
   await page.getByTestId('wallet-option-wr-waltid-001').click();

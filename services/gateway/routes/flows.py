@@ -162,6 +162,14 @@ async def advance_flow_instance(instance_id: str, request: Request) -> Response:
     return await proxy_request(request, service_url, f"/v1/flows/instances/{instance_id}/advance")
 
 
+@flow_router.post("/instances/{instance_id}/cancel", response_model=FlowInstanceResponse, summary="Cancel Flow")
+async def cancel_flow_instance(instance_id: str, request: Request) -> Response:
+    """Cancel an unfinished Flow Instance."""
+    registry = get_registry()
+    service_url = registry.get_service_url("flows")
+    return await proxy_request(request, service_url, f"/v1/flows/instances/{instance_id}/cancel")
+
+
 # ── Verification Flows ───────────────────────────────────────────────
 
 @flow_router.post("/verify", response_model=VerificationRequestResponse, summary="Start Verification Flow")

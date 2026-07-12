@@ -569,6 +569,14 @@ def _forward_context_headers(request: Request) -> dict[str, str]:
         headers["X-User-Domain"] = request.state.user_domain
     if hasattr(request.state, "org_plan") and request.state.org_plan:
         headers["X-Org-Plan"] = request.state.org_plan
+    if hasattr(request.state, "organization_id") and request.state.organization_id:
+        headers["X-Organization-ID"] = request.state.organization_id
+    org_permissions = getattr(request.state, "org_permissions", None)
+    if org_permissions:
+        headers["X-Org-Permissions"] = ",".join(sorted(str(value) for value in org_permissions))
+    org_roles = getattr(request.state, "org_roles", None)
+    if org_roles:
+        headers["X-Org-Roles"] = ",".join(sorted(str(value) for value in org_roles))
     auth = request.headers.get("authorization")
     if auth:
         headers["Authorization"] = auth

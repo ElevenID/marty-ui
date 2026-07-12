@@ -130,7 +130,15 @@ async function main() {
   const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..+/, '');
   const artifactDir = path.join(ROOT, 'tests', 'artifacts', `beta-org-credential-paths-${stamp}`);
   fs.mkdirSync(artifactDir, { recursive: true });
-  const report = { createdAt: new Date().toISOString(), organizationId: ORG_ID, artifactDir, apiResponses: [], badResponses: [], pageErrors: [] };
+  const report = {
+    createdAt: new Date().toISOString(),
+    organizationId: ORG_ID,
+    artifactDir,
+    apiResponses: [],
+    expectedEntitlementResponses: [],
+    badResponses: [],
+    pageErrors: [],
+  };
   const browser = await chromium.launch({ headless: HEADLESS });
   try {
     let wallet = null;
@@ -153,16 +161,40 @@ async function main() {
     const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
     const page = await context.newPage();
     page.on('pageerror', (error) => report.pageErrors.push(redact(error.message)));
-    page.on('response', (response) => {
+    page.on('response', async (response) => {
       if (/\/v1\/(application-templates|credential-templates|presentation-policies|flows)(?:[/?]|$)/.test(response.url())) {
         report.apiResponses.push({ status: response.status(), method: response.request().method(), url: redact(response.url()) });
       }
       if (response.url().startsWith(BETA_ORIGIN) && response.status() >= 400 && !response.url().includes('/cdn-cgi/rum')) {
-        report.badResponses.push({ status: response.status(), method: response.request().method(), url: redact(response.url()) });
+        const body = await response.json().catch(() => null);
+        const entry = {
+          status: response.status(),
+          method: response.request().method(),
+          url: redact(response.url()),
+        };
+        if (response.status() === 403 && body?.error === 'plan_feature_unavailable') {
+          report.expectedEntitlementResponses.push({
+            ...entry,
+            error: body.error,
+            feature: body.feature || null,
+            currentPlan: body.current_plan || null,
+          });
+        } else {
+          report.badResponses.push(entry);
+        }
       }
     });
     await login(page, email, password);
     report.orgSelection = await selectOrg(page);
+    if (!report.orgSelection.ok) {
+      report.blocker = `Test user cannot select organization ${ORG_ID}`;
+      report.finishedAt = new Date().toISOString();
+      report.releaseReady = false;
+      fs.writeFileSync(path.join(artifactDir, 'report.json'), JSON.stringify(report, null, 2));
+      console.log(JSON.stringify(report, null, 2));
+      process.exitCode = 1;
+      return;
+    }
 
     await page.goto(`${BETA_ORIGIN}/console/org/templates/applications/new?mode=advanced`, { waitUntil: 'domcontentloaded', timeout: 60_000 });
     await page.waitForTimeout(5_000);
@@ -296,6 +328,15 @@ async function main() {
     }
     if (verificationSession?.instanceId) {
       report.verification.poll = await pollFlowInstance(page, verificationSession.instanceId);
+      if (!['COMPLETED', 'PASSED', 'VERIFIED', 'FAILED', 'EXPIRED', 'CANCELLED'].includes(report.verification.poll?.status)) {
+        report.verification.cleanup = await page.evaluate(async (instanceId) => {
+          const response = await fetch(`/v1/flows/instances/${encodeURIComponent(instanceId)}/cancel`, {
+            method: 'POST',
+            credentials: 'include',
+          });
+          return { status: response.status, ok: response.ok };
+        }, verificationSession.instanceId);
+      }
     }
     report.finishedAt = new Date().toISOString();
     report.releaseReady = Boolean(
