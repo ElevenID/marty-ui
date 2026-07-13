@@ -19,6 +19,7 @@ def _required_steps():
         {"label": "post-org-probe", "body_excerpt": "Dashboard"},
         {"label": "kms-service-configured", "body_excerpt": "Key management"},
         {"label": "issuer-identity-active", "body_excerpt": "Issuer identity"},
+        {"label": "compliance-profile-available", "body_excerpt": "Compliance profile"},
         {"label": "trust-profile-active", "body_excerpt": "Trust profile"},
         {"label": "revocation-profile-activated", "body_excerpt": "Revocation profile"},
         {"label": "credential-template-activated", "body_excerpt": "Credential template"},
@@ -165,3 +166,23 @@ def test_release_checks_block_unexplained_failed_request() -> None:
 
     assert checks["status"] == "blocked"
     assert checks["blockers"][0]["code"] == "unexpected_failed_request"
+
+
+def test_release_checks_accept_navigation_cancelled_org_reads() -> None:
+    audit = _load_audit_module()
+    cancelled = {
+        "method": "GET",
+        "url": "https://beta.elevenidllc.com/v1/signing-keys/config?organization_id=org-1",
+        "failure": "net::ERR_ABORTED",
+        "resource_type": "fetch",
+    }
+
+    checks = audit.evaluate_release_checks({
+        "steps": _required_steps(),
+        "bad_responses": [],
+        "failed_requests": [cancelled],
+        "page_errors": [],
+    })
+
+    assert checks["status"] == "pass"
+    assert checks["observations"]["expected_navigation_aborts"] == [cancelled]

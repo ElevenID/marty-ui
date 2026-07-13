@@ -235,6 +235,24 @@ def is_loading_only_step(step: dict[str, Any]) -> bool:
     }
 
 
+def is_expected_navigation_abort(entry: dict[str, Any]) -> bool:
+    if str(entry.get("method") or "").upper() != "GET":
+        return False
+    if str(entry.get("failure") or "") != "net::ERR_ABORTED":
+        return False
+    url = str(entry.get("url") or "")
+    return any(
+        path in url
+        for path in [
+            "/runtime/status",
+            "/v1/signing-keys/config",
+            "/v1/signing-keys?",
+            "/v1/signing-keys/issuer-profiles",
+            "/lifecycle",
+        ]
+    )
+
+
 def evaluate_release_checks(report: dict[str, Any]) -> dict[str, Any]:
     """Classify beta audit output into release blockers and known degradations."""
     report_text = json.dumps(report, default=str)
@@ -353,12 +371,18 @@ def evaluate_release_checks(report: dict[str, Any]) -> dict[str, Any]:
             )
 
     failed_requests = report.get("failed_requests") or []
-    if failed_requests:
+    expected_navigation_aborts = [
+        entry for entry in failed_requests if is_expected_navigation_abort(entry)
+    ]
+    unexplained_failed_requests = [
+        entry for entry in failed_requests if not is_expected_navigation_abort(entry)
+    ]
+    if unexplained_failed_requests:
         add_blocker(
             "unexpected_failed_request",
             "The audit observed an unexplained browser request failure.",
-            count=len(failed_requests),
-            requests=failed_requests[:10],
+            count=len(unexplained_failed_requests),
+            requests=unexplained_failed_requests[:10],
         )
 
     if report.get("page_errors"):
@@ -383,6 +407,7 @@ def evaluate_release_checks(report: dict[str, Any]) -> dict[str, Any]:
             "bad_response_count": len(bad_responses),
             "page_error_count": len(report.get("page_errors") or []),
             "failed_request_count": len(report.get("failed_requests") or []),
+            "expected_navigation_aborts": expected_navigation_aborts,
             "expected_entitlement_responses": expected_entitlements,
             "api_key_secret_screenshot_redacted": bool(
                 api_key_steps and all(step.get("api_key_secret_screenshot_redacted") for step in api_key_steps)
@@ -392,10 +417,17 @@ def evaluate_release_checks(report: dict[str, Any]) -> dict[str, Any]:
 
 
 class Audit:
-    def __init__(self, page: Page, artifact_dir: Path, base_url: str):
+    def __init__(
+        self,
+        page: Page,
+        artifact_dir: Path,
+        base_url: str,
+        recording_pause_ms: int = 0,
+    ):
         self.page = page
         self.artifact_dir = artifact_dir
         self.base_url = base_url.rstrip("/")
+        self.recording_pause_ms = max(0, recording_pause_ms)
         self.steps: list[dict[str, Any]] = []
         self.console: list[dict[str, str]] = []
         self.failed_requests: list[dict[str, str]] = []
@@ -404,6 +436,118 @@ class Audit:
         self.page_errors: list[str] = []
         self.created_api_keys: list[dict[str, str]] = []
         self.cleanup_actions: list[dict[str, str]] = []
+
+    @property
+    def is_recording(self) -> bool:
+        return self.recording_pause_ms > 0
+
+    def show_recording_step(self, label: str, note: str) -> None:
+        if not self.is_recording:
+            return
+        try:
+            self.page.evaluate(
+                """
+                ({ index, label, note }) => {
+                  document.getElementById('marty-recording-step')?.remove();
+                  const overlay = document.createElement('div');
+                  overlay.id = 'marty-recording-step';
+                  Object.assign(overlay.style, {
+                    position: 'fixed',
+                    zIndex: '2147483647',
+                    left: '24px',
+                    bottom: '24px',
+                    maxWidth: '620px',
+                    padding: '16px 20px',
+                    borderRadius: '8px',
+                    background: 'rgba(15, 23, 42, 0.96)',
+                    color: '#f8fafc',
+                    boxShadow: '0 16px 44px rgba(0, 0, 0, 0.32)',
+                    fontFamily: 'Arial, sans-serif',
+                    pointerEvents: 'none',
+                  });
+                  const eyebrow = document.createElement('div');
+                  eyebrow.textContent = `MIP primitive management - Step ${index}`;
+                  Object.assign(eyebrow.style, {
+                    fontSize: '12px',
+                    fontWeight: '700',
+                    color: '#93c5fd',
+                    textTransform: 'uppercase',
+                  });
+                  const title = document.createElement('div');
+                  title.textContent = label;
+                  Object.assign(title.style, {
+                    marginTop: '5px',
+                    fontSize: '24px',
+                    fontWeight: '700',
+                    lineHeight: '1.2',
+                  });
+                  const detail = document.createElement('div');
+                  detail.textContent = note;
+                  Object.assign(detail.style, {
+                    marginTop: '7px',
+                    fontSize: '15px',
+                    lineHeight: '1.4',
+                    color: '#e2e8f0',
+                  });
+                  overlay.append(eyebrow, title, detail);
+                  document.body.appendChild(overlay);
+                }
+                """,
+                {
+                    "index": len(self.steps),
+                    "label": label.replace("-", " ").title(),
+                    "note": note or first_heading(self.page) or "Review the current UI state.",
+                },
+            )
+            self.page.wait_for_timeout(self.recording_pause_ms)
+        except Exception:
+            pass
+        finally:
+            try:
+                self.page.evaluate("() => document.getElementById('marty-recording-step')?.remove()")
+            except Exception:
+                pass
+
+    def show_privacy_shield(self, title: str, detail: str) -> None:
+        if not self.is_recording:
+            return
+        self.page.evaluate(
+            """
+            ({ title, detail }) => {
+              document.getElementById('marty-recording-privacy-shield')?.remove();
+              const shield = document.createElement('div');
+              shield.id = 'marty-recording-privacy-shield';
+              Object.assign(shield.style, {
+                position: 'fixed',
+                inset: '0',
+                zIndex: '2147483647',
+                display: 'grid',
+                placeItems: 'center',
+                background: '#0f172a',
+                color: '#f8fafc',
+                fontFamily: 'Arial, sans-serif',
+                pointerEvents: 'none',
+              });
+              const content = document.createElement('div');
+              Object.assign(content.style, { maxWidth: '680px', padding: '40px', textAlign: 'center' });
+              const heading = document.createElement('div');
+              heading.textContent = title;
+              Object.assign(heading.style, { fontSize: '30px', fontWeight: '700' });
+              const copy = document.createElement('div');
+              copy.textContent = detail;
+              Object.assign(copy.style, {
+                marginTop: '12px',
+                fontSize: '17px',
+                lineHeight: '1.5',
+                color: '#cbd5e1',
+              });
+              content.append(heading, copy);
+              shield.appendChild(content);
+              document.body.appendChild(shield);
+            }
+            """,
+            {"title": title, "detail": detail},
+        )
 
     def attach_events(self) -> None:
         self.page.on(
@@ -638,6 +782,7 @@ class Audit:
             }
         )
         print(f"[audit] {label}: {note or first_heading(self.page) or self.page.url}")
+        self.show_recording_step(label, note)
 
     def click_role(self, role: str, name: str | re.Pattern[str], timeout: int = 5000) -> bool:
         try:
@@ -1553,6 +1698,12 @@ def create_api_key(audit: Audit, run_id: str) -> None:
     except Exception:
         pass
     audit.snapshot("api-key-dialog-filled", "Filled API key dialog.")
+    if audit.is_recording:
+        audit.show_privacy_shield(
+            "One-time API key hidden",
+            "Playwright is creating and validating the integration key behind this shield. "
+            "The secret is intentionally excluded from the recording.",
+        )
     audit.click_role("button", re.compile(r"create integration key|create key", re.I), timeout=5000)
     wait_for_creating_to_settle(page, timeout=15000)
     audit.settle(5000)
@@ -1565,6 +1716,8 @@ def create_api_key(audit: Audit, run_id: str) -> None:
         organization_id,
         key_name,
     )
+    if audit.is_recording:
+        audit.goto("/console/org/api-keys")
     if not api_key or api_key.get("enabled") is not True:
         audit.snapshot(
             "api-key-state-mismatch",
@@ -1711,6 +1864,17 @@ def main() -> int:
         action="store_true",
         help="Run Chromium headed. PWDEBUG=1 also runs headed.",
     )
+    parser.add_argument(
+        "--record-video",
+        action="store_true",
+        help="Record a reviewable WebM video and Playwright trace in the audit artifact directory.",
+    )
+    parser.add_argument(
+        "--recording-pause-ms",
+        type=int,
+        default=1300,
+        help="How long each labeled recording step remains visible. Defaults to 1300 ms.",
+    )
     args = parser.parse_args()
 
     env = load_env_file(ENV_FILE)
@@ -1730,13 +1894,29 @@ def main() -> int:
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=not (args.headed or os.environ.get("PWDEBUG") == "1"))
+        context_options: dict[str, Any] = {
+            "base_url": base_url,
+            "viewport": {"width": 1440, "height": 1100},
+            "ignore_https_errors": True,
+        }
+        if args.record_video:
+            context_options.update({
+                "record_video_dir": str(artifact_dir),
+                "record_video_size": {"width": 1440, "height": 1100},
+            })
         context = browser.new_context(
-            base_url=base_url,
-            viewport={"width": 1440, "height": 1100},
-            ignore_https_errors=True,
+            **context_options,
         )
+        if args.record_video:
+            context.tracing.start(screenshots=True, snapshots=True, sources=True)
         page = context.new_page()
-        audit = Audit(page, artifact_dir, base_url)
+        page_video = page.video if args.record_video else None
+        audit = Audit(
+            page,
+            artifact_dir,
+            base_url,
+            recording_pause_ms=args.recording_pause_ms if args.record_video else 0,
+        )
         audit.attach_events()
 
         try:
@@ -1764,12 +1944,28 @@ def main() -> int:
             raise
         finally:
             audit.cleanup_created_api_keys()
-            report_path = artifact_dir / "report.json"
             report = audit.report()
+            recording: dict[str, str] | None = None
+            if args.record_video:
+                trace_path = artifact_dir / "mip-primitives-management-trace.zip"
+                context.tracing.stop(path=str(trace_path))
+                recording = {
+                    "video": str((artifact_dir / "mip-primitives-management.webm").relative_to(ROOT)),
+                    "trace": str(trace_path.relative_to(ROOT)),
+                }
+            context.close()
+            if page_video is not None:
+                raw_video_path = Path(page_video.path())
+                final_video_path = artifact_dir / "mip-primitives-management.webm"
+                if raw_video_path != final_video_path:
+                    final_video_path.unlink(missing_ok=True)
+                    raw_video_path.replace(final_video_path)
+            browser.close()
+            if recording:
+                report["recording"] = recording
+            report_path = artifact_dir / "report.json"
             report_path.write_text(json.dumps(report, indent=2, default=str), encoding="utf-8")
             print(f"[audit] report={report_path}")
-            context.close()
-            browser.close()
 
     return 0 if report["release_checks"]["status"] == "pass" else 1
 
