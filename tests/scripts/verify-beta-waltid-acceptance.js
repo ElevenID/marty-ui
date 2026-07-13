@@ -182,6 +182,9 @@ async function loginToBetaApplicant(page, email, password) {
 async function collectBetaOffer(browser, {
   walletId = 'wr-waltid-001',
   logoutAfterOffer = false,
+  contextOptions = {},
+  keepContext = false,
+  onStep = null,
 } = {}) {
   loadEnvFile(path.join(ROOT, '.env.tunnel.beta.local'));
   loadEnvFile(path.join(ROOT, '.env'));
@@ -191,7 +194,10 @@ async function collectBetaOffer(browser, {
     throw new Error('Missing TEST_APPLICANT_EMAIL/TEST_APPLICANT_PASSWORD env values');
   }
 
-  const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+  const context = await browser.newContext({
+    viewport: { width: 1440, height: 1000 },
+    ...contextOptions,
+  });
   const page = await context.newPage();
   const issueResponses = [];
   const badResponses = [];
@@ -217,8 +223,22 @@ async function collectBetaOffer(browser, {
   });
 
   await loginToBetaApplicant(page, email, password);
+  if (onStep) {
+    await onStep(
+      page,
+      'Membership application ready',
+      'The applicant is authenticated and the approved membership badge is ready to claim.',
+    );
+  }
   await page.getByRole('button', { name: /add to wallet/i }).click({ timeout: 60_000 });
   await page.getByTestId('wallet-selector').waitFor({ state: 'visible', timeout: 15_000 });
+  if (onStep) {
+    await onStep(
+      page,
+      'Choose a browser wallet',
+      'The holder chooses where the standards-based OpenID4VCI credential offer will be received.',
+    );
+  }
   await page.getByTestId(`wallet-option-${walletId}`).click();
   await waitFor(() => issueResponses.length > 0 && issueResponses[issueResponses.length - 1].json, 60_000);
   const latest = issueResponses[issueResponses.length - 1].json;
@@ -240,10 +260,17 @@ async function collectBetaOffer(browser, {
       const body = await response.json().catch(() => null);
       return body?.authenticated === false ? true : null;
     }), 60_000).catch(() => false);
+    if (onStep) {
+      await onStep(
+        page,
+        'Signed out after issuance',
+        'The original password-backed session is closed before credential login begins.',
+      );
+    }
   }
-  await context.close();
+  if (!keepContext) await context.close();
 
-  return {
+  const result = {
     offerUri: latest.offer_url || latest.credential_offer_uri,
     offerSource: 'canonical-ui',
     issueStatus: latest.status,
@@ -253,6 +280,11 @@ async function collectBetaOffer(browser, {
     badResponses,
     consoleErrors,
   };
+  if (keepContext) {
+    result.context = context;
+    result.page = page;
+  }
+  return result;
 }
 
 async function clickWalletAcceptButton(page) {

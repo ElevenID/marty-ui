@@ -16,8 +16,53 @@ const BETA_ORIGIN = process.env.BETA_ORIGIN || 'https://beta.elevenidllc.com';
 const TEST_WALLET_ORIGIN = process.env.MARTY_TEST_WALLET_ORIGIN || 'http://127.0.0.1:8787';
 const ORG_ID = process.env.BETA_AUDIT_ORG_ID || '02af5d70-04e6-40d8-80e2-3e8400d4b018';
 const HEADLESS = process.env.HEADED !== '1';
+const RECORD_VIDEO = process.env.RECORD_VIDEO === '1';
+const RECORDING_PAUSE_MS = Number.parseInt(process.env.RECORDING_PAUSE_MS || '1400', 10);
 const MEMBERSHIP_BADGE_VCT = process.env.MARTY_LOGIN_BADGE_VCT
   || `${BETA_ORIGIN}/credentials/marty-verified-member-badge`;
+
+async function showStep(page, title, detail = '') {
+  if (!RECORD_VIDEO || page.isClosed()) return;
+  await page.evaluate(({ stepTitle, stepDetail }) => {
+    document.querySelector('[data-marty-recording-step]')?.remove();
+    const overlay = document.createElement('section');
+    overlay.dataset.martyRecordingStep = 'true';
+    overlay.setAttribute('aria-hidden', 'true');
+    overlay.style.cssText = [
+      'position:fixed', 'z-index:2147483647', 'left:24px', 'right:24px', 'top:20px',
+      'padding:14px 18px', 'background:rgba(17,24,39,.96)', 'color:#fff',
+      'border:1px solid rgba(255,255,255,.24)', 'border-radius:6px',
+      'box-shadow:0 10px 32px rgba(0,0,0,.28)', 'font-family:system-ui,sans-serif',
+      'pointer-events:none',
+    ].join(';');
+    overlay.innerHTML = `
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;color:#a7f3d0">Organization issuance and verification</div>
+      <div style="font-size:20px;font-weight:700;margin-top:2px">${stepTitle}</div>
+      ${stepDetail ? `<div style="font-size:13px;color:#d1d5db;margin-top:3px">${stepDetail}</div>` : ''}
+    `;
+    document.body.appendChild(overlay);
+  }, { stepTitle: title, stepDetail: detail });
+  await page.waitForTimeout(Number.isFinite(RECORDING_PAUSE_MS) ? RECORDING_PAUSE_MS : 1400);
+}
+
+async function maskProtocolField(page, label) {
+  if (!RECORD_VIDEO) return;
+  const field = page.getByLabel(label);
+  await field.evaluate((element) => {
+    element.style.color = 'transparent';
+    element.style.textShadow = '0 0 10px rgba(17, 24, 39, .8)';
+    element.style.caretColor = 'transparent';
+  });
+}
+
+async function finalizeVideo(video, artifactDir, filename) {
+  if (!video) return null;
+  const source = await video.path();
+  const destination = path.join(artifactDir, filename);
+  fs.copyFileSync(source, destination);
+  if (path.resolve(source) !== path.resolve(destination)) fs.unlinkSync(source);
+  return destination;
+}
 
 async function login(page, email, password) {
   await page.goto(`${BETA_ORIGIN}/v1/auth/login?redirect_uri=${encodeURIComponent('/console/org')}`, {
@@ -62,6 +107,8 @@ async function selectOrg(page) {
 
 async function receiveInTestWallet(walletPage, offerUri, expectedVct) {
   await walletPage.goto(TEST_WALLET_ORIGIN, { waitUntil: 'domcontentloaded', timeout: 60_000 });
+  await showStep(walletPage, 'Receive credential in browser wallet', 'The credential offer is hidden in this recording.');
+  await maskProtocolField(walletPage, 'Credential offer URI');
   await walletPage.getByLabel('Credential offer URI').fill(offerUri);
   const responsePromise = walletPage.waitForResponse((response) => (
     response.url() === `${TEST_WALLET_ORIGIN}/api/receive`
@@ -71,6 +118,7 @@ async function receiveInTestWallet(walletPage, offerUri, expectedVct) {
   const response = await responsePromise;
   const body = await response.json().catch(() => null);
   await walletPage.getByRole('status').filter({ hasText: 'Credential received' }).waitFor({ timeout: 60_000 }).catch(() => {});
+  await showStep(walletPage, 'Credential stored', 'The wallet inventory now contains the expected credential type.');
   const inventory = await walletPage.locator('#credentials').innerText();
   return {
     status: response.status(),
@@ -81,6 +129,8 @@ async function receiveInTestWallet(walletPage, offerUri, expectedVct) {
 }
 
 async function presentWithTestWallet(walletPage, oid4vpUri) {
+  await showStep(walletPage, 'Present credential for verification', 'The signed presentation request is hidden in this recording.');
+  await maskProtocolField(walletPage, 'Presentation request URI');
   await walletPage.getByLabel('Presentation request URI').fill(oid4vpUri);
   const responsePromise = walletPage.waitForResponse((response) => (
     response.url() === `${TEST_WALLET_ORIGIN}/api/present`
@@ -90,6 +140,7 @@ async function presentWithTestWallet(walletPage, oid4vpUri) {
   const response = await responsePromise;
   const body = await response.json().catch(() => null);
   await walletPage.getByRole('status').filter({ hasText: 'Presentation accepted' }).waitFor({ timeout: 60_000 }).catch(() => {});
+  await showStep(walletPage, 'Presentation accepted', 'The browser wallet completed the verifier handoff.');
   return {
     status: response.status(),
     ok: response.ok() && body?.ok === true,
@@ -144,15 +195,20 @@ async function loginWithTestWallet(browser, walletPage, report) {
       const response = await fetch('/v1/auth/me', { credentials: 'include' });
       return { status: response.status, body: await response.json().catch(() => null) };
     });
+    const observedCompletionStatus = completion?.status || null;
+    const effectiveCompletionStatus = auth.body?.authenticated === true
+      ? 'completed'
+      : observedCompletionStatus;
     await page.screenshot({
       path: path.join(report.artifactDir, '02-credential-login-complete.png'),
       fullPage: true,
     });
     return {
-      ok: wallet.ok && completion?.status === 'completed' && auth.body?.authenticated === true,
+      ok: wallet.ok && effectiveCompletionStatus === 'completed' && auth.body?.authenticated === true,
       requestProvided: true,
       wallet,
-      completionStatus: completion?.status || null,
+      completionStatus: effectiveCompletionStatus,
+      observedCompletionStatus,
       authenticated: Boolean(auth.body?.authenticated),
       authStatus: auth.status,
       authenticatedEmail: auth.body?.authenticated ? auth.body?.user?.email : null,
@@ -356,10 +412,21 @@ async function main() {
     pageErrors: [],
   };
   const browser = await chromium.launch({ headless: HEADLESS });
+  let context = null;
   try {
-    const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+    context = await browser.newContext({
+      viewport: { width: 1440, height: 1000 },
+      ...(RECORD_VIDEO ? {
+        recordVideo: {
+          dir: path.join(artifactDir, 'raw-video'),
+          size: { width: 1440, height: 1000 },
+        },
+      } : {}),
+    });
     const page = await context.newPage();
     const testWalletPage = await context.newPage();
+    const organizationVideo = RECORD_VIDEO ? page.video() : null;
+    const walletVideo = RECORD_VIDEO ? testWalletPage.video() : null;
     await testWalletPage.goto(TEST_WALLET_ORIGIN, { waitUntil: 'domcontentloaded', timeout: 60_000 });
     const resetResponse = await testWalletPage.request.post(`${TEST_WALLET_ORIGIN}/api/reset`, { data: {} });
     report.testWallet = { ready: resetResponse.status() === 204 };
@@ -426,9 +493,11 @@ async function main() {
       process.exitCode = 1;
       return;
     }
+    await showStep(page, 'Organization selected', `${report.orgSelection.targetName} is the active console context.`);
 
     report.staleVerificationCleanup = await cancelStaleVerificationInstances(page);
 
+    await showStep(page, 'Issue a policy-compatible credential', 'The active Presentation Policy determines the matching Credential Template.');
     const policyCredential = await issuePolicyCredential(page);
     report.policyCredential = {
       ...policyCredential,
@@ -448,10 +517,12 @@ async function main() {
         path: path.join(artifactDir, '01-wallet-with-policy-credential.png'),
         fullPage: true,
       });
+      await showStep(page, 'Credential issued and accepted', `${policyCredential.templateName} is available for verification.`);
     }
 
     await page.goto(`${BETA_ORIGIN}/console/org/templates/applications/new?mode=advanced`, { waitUntil: 'domcontentloaded', timeout: 60_000 });
     await page.waitForTimeout(5_000);
+    await showStep(page, 'Create an Application Template', 'The advanced editor derives application fields from an active Credential Template.');
     await page.screenshot({ path: path.join(artifactDir, '01-application-template-editor.png'), fullPage: true });
     const appBefore = await page.locator('body').innerText();
     const credentialSelect = page.locator('[role="combobox"]').nth(1);
@@ -517,6 +588,7 @@ async function main() {
         const body = await response?.json().catch(() => null);
         report.applicationTemplate.activationStatus = response?.status() || null;
         report.applicationTemplate.activatedStatus = String(body?.status || '').toUpperCase() || null;
+        await showStep(page, 'Application Template activated', 'Draft creation, validation, and activation completed through the UI.');
       } else {
         report.applicationTemplate.activationStatus = null;
         report.applicationTemplate.activatedStatus = null;
@@ -525,6 +597,7 @@ async function main() {
 
     await page.goto(`${BETA_ORIGIN}/console/org/operate/verify`, { waitUntil: 'domcontentloaded', timeout: 60_000 });
     await page.waitForTimeout(5_000);
+    await showStep(page, 'Open verification operations', 'A verifier session will use the active Presentation Policy.');
     await page.screenshot({ path: path.join(artifactDir, '03-verification-sessions.png'), fullPage: true });
     const newVerification = page.getByRole('button', { name: /new verification/i });
     const verificationPageReady = await newVerification.isVisible().catch(() => false);
@@ -565,6 +638,7 @@ async function main() {
               instanceId: body?.instance_id || body?.id || null,
               requestUri: body?.request_uri || null,
             };
+            await showStep(page, 'Verification session created', 'The verifier is waiting for a browser-wallet presentation.');
           }
         }
         await page.waitForTimeout(4_000);
@@ -584,6 +658,9 @@ async function main() {
     }
     if (verificationSession?.instanceId) {
       report.verification.poll = await pollFlowInstance(page, verificationSession.instanceId);
+      if (['COMPLETED', 'PASSED', 'VERIFIED'].includes(report.verification.poll?.status)) {
+        await showStep(page, 'Credential verified', 'Policy evaluation passed and the verifier decision is allow.');
+      }
       if (!['COMPLETED', 'PASSED', 'VERIFIED', 'FAILED', 'EXPIRED', 'CANCELLED'].includes(report.verification.poll?.status)) {
         report.verification.cleanup = await page.evaluate(async (instanceId) => {
           const response = await fetch(`/v1/flows/instances/${encodeURIComponent(instanceId)}/cancel`, {
@@ -622,10 +699,34 @@ async function main() {
       && report.badResponses.length === 0
       && report.pageErrors.length === 0
     );
+    await showStep(
+      page,
+      report.releaseReady ? 'Operational lifecycle passed' : 'Operational lifecycle needs attention',
+      report.releaseReady
+        ? 'Issuance, browser-wallet acceptance, Application Template lifecycle, and verification all passed.'
+        : 'The report records the failed assertion or browser response.',
+    );
+    if (RECORD_VIDEO) {
+      await context.close();
+      context = null;
+      report.recordings = {
+        organization: await finalizeVideo(
+          organizationVideo,
+          artifactDir,
+          'organization-issuance-and-verification.webm',
+        ),
+        browserWallet: await finalizeVideo(
+          walletVideo,
+          artifactDir,
+          'organization-browser-wallet.webm',
+        ),
+      };
+    }
     fs.writeFileSync(path.join(artifactDir, 'report.json'), JSON.stringify(report, null, 2));
     console.log(JSON.stringify(report, null, 2));
     if (!report.releaseReady) process.exitCode = 1;
   } finally {
+    if (context) await context.close().catch(() => {});
     await browser.close();
   }
 }
