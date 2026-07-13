@@ -726,7 +726,7 @@ Verification is handled through two complementary approaches:
         return await _proxy_to_issuance_well_known("/.well-known/jwks.json")
 
     @app.get("/.well-known/marty-release")
-    async def get_marty_release() -> dict[str, str]:
+    async def get_marty_release() -> dict[str, Any]:
         """Expose non-secret runtime identity for immutable release gates."""
         from gateway.release_metadata import release_metadata
 

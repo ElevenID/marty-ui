@@ -6,6 +6,7 @@ import PuppeteerRenderer from '@prerenderer/renderer-puppeteer'
 import { visualizer } from 'rollup-plugin-visualizer'
 import Sitemap from 'vite-plugin-sitemap'
 import { fileURLToPath, URL } from 'node:url'
+import { readFileSync } from 'node:fs'
 
 function createManualChunk(id: string) {
   const normalizedId = id.replace(/\\/g, '/')
@@ -70,6 +71,7 @@ export default defineConfig(async ({ mode }) => {
   const bundleAnalysisBaseName = isSelfhostBuild ? 'bundle-analysis-selfhost' : 'bundle-analysis-public'
   let authorRoutes = []
   let blogRoutes = []
+  let demoRoutes = []
 
   if (!isSelfhostBuild) {
     const [
@@ -128,6 +130,18 @@ export default defineConfig(async ({ mode }) => {
         ...GUIDE_ARTICLE_SLUGS.map((slug) => `/blog/${slug}`),
       ]),
     )
+
+    const demoManifestDir = fileURLToPath(new URL('./public/demos/manifests/', import.meta.url))
+    const demoIndex = JSON.parse(readFileSync(`${demoManifestDir}/index.json`, 'utf8'))
+    demoRoutes = ['/demos']
+    demoIndex.releases.forEach(({ stack_version: stackVersion }) => {
+      const manifest = JSON.parse(readFileSync(`${demoManifestDir}/${stackVersion}.json`, 'utf8'))
+      demoRoutes.push(`/demos/${stackVersion}`)
+      manifest.scenarios.forEach(({ slug }) => demoRoutes.push(`/demos/${stackVersion}/${slug}`))
+      if (demoIndex.latest_approved_stack_version === stackVersion) {
+        manifest.scenarios.forEach(({ slug }) => demoRoutes.push(`/demos/latest/${slug}`))
+      }
+    })
   }
   
   return {
@@ -171,6 +185,7 @@ export default defineConfig(async ({ mode }) => {
             '/architecture',
             '/security',
             '/resources',
+            ...demoRoutes,
             '/verifiable-credential-api',
             '/eudi-wallet-verification',
             '/iso-18013-5-mdoc-verification',
@@ -224,6 +239,7 @@ export default defineConfig(async ({ mode }) => {
             '/architecture',
             '/security',
             '/resources',
+            ...demoRoutes,
             '/verifiable-credential-api',
             '/eudi-wallet-verification',
             '/iso-18013-5-mdoc-verification',

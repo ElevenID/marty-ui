@@ -290,6 +290,10 @@ services:
       REDIS_URL: redis://redis:6379
       REDIS_DB_GATEWAY: "2"
       RATE_LIMIT_RPM: ${RATE_LIMIT_RPM:-0}
+      MARTY_RELEASE_VERSION: ${MARTY_RELEASE_VERSION:-development}
+      MARTY_UI_SHA: ${MARTY_UI_SHA:-unknown}
+      ELEVENID_STACK_VERSION: ${ELEVENID_STACK_VERSION:-development}
+      ELEVENID_IMAGE_DIGESTS_JSON: ${ELEVENID_IMAGE_DIGESTS_JSON:-}
       ISSUANCE_API_KEY: ${ISSUANCE_API_KEY:-dev-issuance-api-key}
       SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:-dev-signing-keys-internal-api-key}
       BAO_ADDR: http://openbao:8200

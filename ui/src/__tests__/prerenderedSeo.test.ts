@@ -55,3 +55,18 @@ describeIfBuilt('prerendered blog SEO output', () => {
     expect(authorHtml).toContain('"name":"Daniel Ortega"')
   })
 })
+
+describeIfBuilt('prerendered Stack demo output', () => {
+  it('emits release and scenario pages from the public manifest', () => {
+    const releaseHtml = readPrerenderedHtml('demos', '2026.07.0')
+    expect(releaseHtml).toContain('ElevenID Stack 2026.07.0')
+    expect(releaseHtml).toContain('Implements MIP 0.3.1')
+    expect(releaseHtml).toContain('PARTIAL coverage')
+
+    const scenarioHtml = readPrerenderedHtml('demos', '2026.07.0', 'membership-badge-login')
+    expect(scenarioHtml).toContain('Membership Badge and Login')
+    expect(scenarioHtml).toContain('Recording publication pending')
+    expect(scenarioHtml).toContain('https://elevenidllc.com/demos/2026.07.0/membership-badge-login')
+    expect(scenarioHtml).not.toContain('youtube-nocookie.com/embed')
+  })
+})
