@@ -39,6 +39,7 @@ import PolicySelectStep from './steps/PolicySelectStep';
 import SessionConfigStep from './steps/SessionConfigStep';
 import QRDisplayStep from './steps/QRDisplayStep';
 import VerificationResultSummary from './VerificationResultSummary';
+import Oid4vpQrCode from './Oid4vpQrCode';
 import { formatOfficialReference } from '../../../utils/officialReferences';
 
 const WIZARD_STEPS = ['Select Policy', 'Configure Session', 'Scan & Verify'];
@@ -283,16 +284,24 @@ function VerificationSessionManager({ organizationId }) {
                 <TableCell>{formatDate(session.created_at)}</TableCell>
                 <TableCell>{formatDate(session.updated_at)}</TableCell>
                 <TableCell align="right">
-                  {normalizeSessionStatus(session.status) === 'pending' && session.qr_code_data && (
+                  {normalizeSessionStatus(session.status) === 'pending' && (session.qr_code_data || session.request_uri) && (
                     <Tooltip title="Show QR code">
-                      <IconButton size="small" onClick={() => openDetail(session)}>
+                      <IconButton
+                        size="small"
+                        aria-label="Show QR code"
+                        onClick={() => openDetail(session)}
+                      >
                         <QrCode2Icon fontSize="small" />
                       </IconButton>
                     </Tooltip>
                   )}
                   {normalizeSessionStatus(session.status) !== 'pending' && (
                     <Tooltip title="View details">
-                      <IconButton size="small" onClick={() => openDetail(session)}>
+                      <IconButton
+                        size="small"
+                        aria-label="View session details"
+                        onClick={() => openDetail(session)}
+                      >
                         <VisibilityIcon fontSize="small" />
                       </IconButton>
                     </Tooltip>
@@ -465,13 +474,12 @@ function VerificationSessionManager({ organizationId }) {
                 )}
               </Box>
 
-              {normalizeSessionStatus(detailSession.status) === 'pending' && detailSession.qr_code_data && (
+              {normalizeSessionStatus(detailSession.status) === 'pending' && (detailSession.qr_code_data || detailSession.request_uri) && (
                 <Box sx={{ display: 'flex', justifyContent: 'center' }}>
                   <Paper variant="outlined" sx={{ p: 2, background: '#fff', display: 'inline-block' }}>
-                    <img
-                      src={`data:image/png;base64,${detailSession.qr_code_data}`}
-                      alt="OID4VP QR Code"
-                      style={{ width: 200, height: 200, display: 'block' }}
+                    <Oid4vpQrCode
+                      value={detailSession.qr_code_data || detailSession.request_uri}
+                      size={200}
                     />
                   </Paper>
                 </Box>
