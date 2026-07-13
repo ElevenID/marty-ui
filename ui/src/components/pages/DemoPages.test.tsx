@@ -72,6 +72,18 @@ const manifest = {
   coverage_state: 'PARTIAL',
   release_ready: false,
   public_demo_ready: false,
+  video_distribution: {
+    provider: 'YOUTUBE',
+    status: 'CONFIGURED',
+    channel_name: 'ElevenID LLC',
+    channel_id: `UC${'a'.repeat(22)}`,
+    channel_handle: '@elevenidllc',
+    channel_url: 'https://www.youtube.com/@elevenidllc',
+    playlist_id: `PL${'b'.repeat(24)}`,
+    playlist_url: `https://www.youtube.com/playlist?list=PL${'b'.repeat(24)}`,
+    privacy_enhanced_embeds: true,
+    verified_at: '2026-07-13T12:00:00Z',
+  },
   deployment_release_marker: 'release-1',
   release_evidence: {
     recorded_at: '2026-07-13T12:00:00Z',
@@ -110,6 +122,10 @@ describe('DemoPages', () => {
     expect(screen.getByText('Version v2026.07.0')).toBeInTheDocument();
     expect(screen.getByText('Implements MIP 0.3.1')).toBeInTheDocument();
     expect(screen.getByText('2 of 2')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Watch release playlist' })).toHaveAttribute(
+      'href',
+      `https://www.youtube.com/playlist?list=PL${'b'.repeat(24)}`,
+    );
 
     await user.click(screen.getByRole('button', { name: 'Administrator' }));
     expect(screen.queryByText('Membership Badge and Login')).not.toBeInTheDocument();

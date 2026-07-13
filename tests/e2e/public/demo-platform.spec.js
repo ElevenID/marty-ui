@@ -73,6 +73,7 @@ for (const viewport of viewports) {
     await expect(page.getByText('ElevenID LLC Credential Platform', { exact: true })).toBeVisible();
     await expect(page.getByText('Version v2026.07.0', { exact: true })).toBeVisible();
     await expect(page.getByText('Implements MIP 0.3.1')).toBeVisible();
+    await expect(page.getByRole('combobox', { name: 'Platform version' })).toContainText('v2026.07.0');
     await assertStablePage(page, telemetry);
     const firstPaint = await page.evaluate(() => window.__elevenIdFirstPaint);
     expect(firstPaint.filter((sample) => !sample.ready).every((sample) => sample.rootVisibility === 'hidden' && sample.shellDisplay !== 'none')).toBe(true);

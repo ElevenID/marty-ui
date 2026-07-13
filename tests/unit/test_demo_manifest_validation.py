@@ -43,6 +43,13 @@ class DemoManifestValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(ManifestValidationError, "unsupported or deprecated"):
             validate_manifest(manifest)
 
+    def test_published_video_requires_verified_youtube_distribution(self):
+        manifest = copy.deepcopy(self.manifest)
+        manifest["scenarios"][0]["state"] = "YOUTUBE_UNLISTED"
+        manifest["scenarios"][0]["youtube_id"] = "abcdefghijk"
+        with self.assertRaisesRegex(ManifestValidationError, "verified ElevenID LLC YouTube channel"):
+            validate_manifest(manifest)
+
     def test_sensitive_public_fields_are_rejected(self):
         manifest = copy.deepcopy(self.manifest)
         manifest["scenarios"][0]["credential_offer_uri"] = "https://example.invalid/offer"
@@ -71,6 +78,18 @@ class DemoManifestValidationTests(unittest.TestCase):
         manifest["release_ready"] = True
         manifest["public_demo_ready"] = True
         manifest["recorder_revision"] = {"kind": "git", "value": "a" * 40}
+        manifest["video_distribution"] = {
+            "provider": "YOUTUBE",
+            "status": "CONFIGURED",
+            "channel_name": "ElevenID LLC",
+            "channel_id": "UC" + "a" * 22,
+            "channel_handle": "@elevenidllc",
+            "channel_url": "https://www.youtube.com/@elevenidllc",
+            "playlist_id": "PL" + "b" * 24,
+            "playlist_url": "https://www.youtube.com/playlist?list=PL" + "b" * 24,
+            "privacy_enhanced_embeds": True,
+            "verified_at": "2026-07-13T12:00:00Z",
+        }
         for scenario in manifest["scenarios"]:
             scenario["state"] = "PUBLIC"
             scenario["youtube_id"] = "abcdefghijk"

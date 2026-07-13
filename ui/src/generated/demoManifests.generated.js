@@ -25,6 +25,18 @@ export const DEMO_MANIFESTS = {
     "coverage_state": "PARTIAL",
     "release_ready": false,
     "public_demo_ready": false,
+    "video_distribution": {
+      "provider": "YOUTUBE",
+      "status": "PENDING_CHANNEL_SETUP",
+      "channel_name": "ElevenID LLC",
+      "channel_id": null,
+      "channel_handle": null,
+      "channel_url": null,
+      "playlist_id": null,
+      "playlist_url": null,
+      "privacy_enhanced_embeds": true,
+      "verified_at": null
+    },
     "deployment_release_marker": "mip-0.3.1-local-20260713T070847Z",
     "published_at": null,
     "superseded_by": null,
@@ -774,7 +786,7 @@ export const DEMO_MANIFESTS = {
         ],
         "limitations": [
           "The portable learning-platform contract is pending separate architecture work.",
-          "The prior Canvas recording is historical and is not reused as current Stack evidence."
+          "The prior Canvas recording is historical and is not reused as current ElevenID LLC platform evidence."
         ],
         "published_at": null,
         "inherited_evidence": null

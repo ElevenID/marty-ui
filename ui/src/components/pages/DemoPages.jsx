@@ -30,6 +30,7 @@ import FactCheckRoundedIcon from '@mui/icons-material/FactCheckRounded';
 import PendingRoundedIcon from '@mui/icons-material/PendingRounded';
 import ReplayRoundedIcon from '@mui/icons-material/ReplayRounded';
 import SearchRoundedIcon from '@mui/icons-material/SearchRounded';
+import YouTubeIcon from '@mui/icons-material/YouTube';
 
 import DemoVideoPlayer from '../demos/DemoVideoPlayer';
 import SEOHead from '../seo/SEOHead';
@@ -201,7 +202,22 @@ function ReleaseExperience({ index, manifest }) {
         <Typography variant="body1" color="text.secondary" sx={{ maxWidth: 760 }}>
           Follow credential journeys by role, inspect the exact release binding, and distinguish validated evidence from recordings still awaiting publication.
         </Typography>
-        <CoverageLabel manifest={manifest} />
+        <Stack direction="row" spacing={1.5} useFlexGap flexWrap="wrap" alignItems="center">
+          <CoverageLabel manifest={manifest} />
+          {manifest.video_distribution.status === 'CONFIGURED' && (
+            <Button
+              component="a"
+              href={manifest.video_distribution.playlist_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              size="small"
+              variant="outlined"
+              startIcon={<YouTubeIcon />}
+            >
+              Watch release playlist
+            </Button>
+          )}
+        </Stack>
       </Stack>
 
       {!manifest.public_demo_ready && (
