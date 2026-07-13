@@ -4,6 +4,9 @@ import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import pytest
+from fastapi import HTTPException
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from marty_common.org_authorization import OrganizationMembership, OrganizationRoleSummary
@@ -81,6 +84,7 @@ def test_get_revocation_profile_returns_protocol_shape_only() -> None:
         "id",
         "organization_id",
         "name",
+        "status",
         "revocation_mechanism",
         "mechanism_priority",
         "check_mode",
@@ -95,6 +99,7 @@ def test_get_revocation_profile_returns_protocol_shape_only() -> None:
         "BITSTRING_STATUS_LIST",
         "OCSP",
     ]
+    assert body["status"] == "DRAFT"
     assert body["mechanism_priority"] == ["OCSP", "BITSTRING_STATUS_LIST"]
     assert body["check_mode"] == "CACHED"
     assert body["cache_ttl_seconds"] == 1800
@@ -109,7 +114,6 @@ def test_get_revocation_profile_returns_protocol_shape_only() -> None:
         f"/revocation-profiles/{profile.id}/status-lists/{{mechanism}}/{{purpose}}"
     )
     assert "description" not in body
-    assert "status" not in body
     assert "verifier_config" not in body
     assert "automation_config" not in body
     assert "supported_formats" not in body
@@ -171,9 +175,70 @@ def test_activate_revocation_profile_keeps_protocol_shape_stable() -> None:
     assert response.status_code == 200
     body = response.json()
     assert body["id"] == profile.id
+    assert body["status"] == "ACTIVE"
     assert body["check_mode"] == "CACHED"
     assert body["cache_ttl_seconds"] == 1800
-    assert "status" not in body
     assert "supported_formats" not in body
     assert "description" not in body
     get_membership.assert_awaited_once_with("user-1", "org-1")
+
+
+def test_create_revocation_profile_rejects_legacy_mechanism_spelling() -> None:
+    repo = revocation_profile.InMemoryRevocationProfileRepository()
+    client, _ = _build_client(repo)
+
+    response = client.post(
+        "/v1/revocation-profiles",
+        headers={"x-user-id": "user-1"},
+        json={
+            "organization_id": "org-1",
+            "name": "Invalid legacy profile",
+            "revocation_mechanism": ["StatusList2021"],
+            "check_mode": "ALWAYS",
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_internal_index_allocation_rejects_cross_org_profile() -> None:
+    repo = revocation_profile.InMemoryRevocationProfileRepository()
+    profile = asyncio.run(_save_profile(repo))
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            revocation_profile.allocate_index(
+                profile.id,
+                revocation_profile.AllocateIndexRequest(
+                    organization_id="org-2",
+                    credential_format="sd_jwt_vc",
+                ),
+                repo=repo,
+                status_mgr=AsyncMock(),
+            )
+        )
+
+    assert exc_info.value.status_code == 403
+
+
+def test_internal_lifecycle_update_rejects_cross_org_profile() -> None:
+    repo = revocation_profile.InMemoryRevocationProfileRepository()
+    profile = asyncio.run(_save_profile(repo))
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            revocation_profile.process_revocation(
+                profile.id,
+                revocation_profile.ProcessRevocationRequest(
+                    organization_id="org-2",
+                    credential_id="credential-1",
+                    index=1,
+                    status="revoked",
+                    credential_format="sd_jwt_vc",
+                ),
+                repo=repo,
+                status_mgr=AsyncMock(),
+            )
+        )
+
+    assert exc_info.value.status_code == 403

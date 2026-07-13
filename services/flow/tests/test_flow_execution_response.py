@@ -108,7 +108,7 @@ def test_special_verification_instances_map_to_protocol_flow_type() -> None:
     instance = FlowInstance(
         flow_definition_id="__verification__",
         organization_id="org-1",
-        status=FlowInstanceStatus.WAITING,
+        status=FlowInstanceStatus.AWAITING_WALLET,
         context={
             "flow_type": "verification",
             "protocol_flow_type": FlowType.OID4VP_PRESENTATION.value,
@@ -125,7 +125,7 @@ def test_special_verification_instances_map_to_protocol_flow_type() -> None:
     assert response.status == "AWAITING_WALLET"
     assert response.current_step == "create_request"
     assert response.current_step_index == 0
-    assert response.metadata["runtime_status"] == FlowInstanceStatus.WAITING.value
+    assert response.metadata["runtime_status"] == FlowInstanceStatus.AWAITING_WALLET.value
     assert response.metadata["flow_definition_reference"] == "__verification__"
 
 
@@ -134,7 +134,7 @@ def test_uuid_backed_ad_hoc_verification_instances_expose_protocol_flow_id() -> 
     instance = FlowInstance(
         flow_definition_id=flow_definition_id,
         organization_id="org-1",
-        status=FlowInstanceStatus.WAITING,
+        status=FlowInstanceStatus.AWAITING_WALLET,
         context={
             "flow_definition_reference": "__verification__",
             "flow_type": "verification",
@@ -153,11 +153,16 @@ def test_uuid_backed_ad_hoc_verification_instances_expose_protocol_flow_id() -> 
     assert response.metadata["flow_definition_reference"] == "__verification__"
 
 
-def test_parse_flow_instance_status_accepts_protocol_and_runtime_aliases() -> None:
-    assert _parse_flow_instance_status("AWAITING_APPROVAL") is FlowInstanceStatus.WAITING_APPROVAL
-    assert _parse_flow_instance_status("awaiting_wallet") is FlowInstanceStatus.WAITING
+def test_parse_flow_instance_status_accepts_canonical_protocol_values() -> None:
+    assert _parse_flow_instance_status("AWAITING_APPROVAL") is FlowInstanceStatus.AWAITING_APPROVAL
+    assert _parse_flow_instance_status("awaiting_wallet") is FlowInstanceStatus.AWAITING_WALLET
     assert _parse_flow_instance_status("cancelled") is FlowInstanceStatus.CANCELLED
-    assert _parse_flow_instance_status("CANCELED") is FlowInstanceStatus.CANCELLED
+
+
+@pytest.mark.parametrize("removed_status", ["waiting", "waiting_approval", "canceled"])
+def test_parse_flow_instance_status_rejects_removed_aliases(removed_status: str) -> None:
+    with pytest.raises(ValueError):
+        _parse_flow_instance_status(removed_status)
 
 
 @pytest.mark.parametrize(

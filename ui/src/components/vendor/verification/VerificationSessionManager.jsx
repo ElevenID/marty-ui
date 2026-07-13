@@ -48,16 +48,18 @@ const STATUS_CHIP = {
   completed: { label: 'Verified',  color: 'success', icon: <CheckCircleIcon  sx={{ fontSize: 14 }} /> },
   failed:    { label: 'Failed',    color: 'error',   icon: <ErrorIcon        sx={{ fontSize: 14 }} /> },
   expired:   { label: 'Expired',   color: 'default', icon: <ErrorIcon        sx={{ fontSize: 14 }} /> },
+  cancelled: { label: 'Cancelled', color: 'default', icon: <ErrorIcon        sx={{ fontSize: 14 }} /> },
 };
 
 const ACTIVE_STATUSES   = ['pending'];
-const HISTORY_STATUSES  = ['completed', 'failed', 'expired'];
+const HISTORY_STATUSES  = ['completed', 'failed', 'expired', 'cancelled'];
 
 function normalizeSessionStatus(status) {
   const value = String(status || '').toLowerCase();
   if (['passed', 'completed', 'verified'].includes(value)) return 'completed';
   if (['failed', 'denied'].includes(value)) return 'failed';
   if (value === 'expired') return 'expired';
+  if (['cancelled', 'canceled'].includes(value)) return 'cancelled';
   return 'pending';
 }
 

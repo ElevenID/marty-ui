@@ -54,6 +54,7 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import PolicyIcon from '@mui/icons-material/Policy';
 
 import { useAuth } from '../../../hooks/useAuth';
+import { useConsole } from '../../../contexts/ConsoleContext';
 import { StatusChip } from '../../common';
 import IssuingSection from './IssuingSection';
 import {
@@ -333,7 +334,8 @@ function deriveSignals(application, checks) {
 export default function ApplicationReviewPage() {
   const { applicationId } = useParams();
   const navigate = useNavigate();
-  const { user, organizationId } = useAuth();
+  const { user } = useAuth();
+  const { activeOrgId: organizationId } = useConsole();
 
   const [application, setApplication] = useState(null);
   const [checks, setChecks] = useState([]);
@@ -367,7 +369,11 @@ export default function ApplicationReviewPage() {
   // ---------------------------------------------------------------------------
 
   const loadData = useCallback(async () => {
-    if (!applicationId) return;
+    if (!applicationId || !organizationId) {
+      setLoading(false);
+      setError('Select an organization before reviewing applications.');
+      return;
+    }
     setLoading(true);
     setError(null);
     setSideLoadErrors([]);
@@ -424,7 +430,7 @@ export default function ApplicationReviewPage() {
   // ---------------------------------------------------------------------------
 
   useEffect(() => {
-    if (!applicationId || !reviewerId) return;
+    if (!applicationId || !organizationId || !reviewerId) return;
 
     const acquire = async () => {
       try {

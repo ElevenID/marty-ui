@@ -127,8 +127,8 @@ describe('RevocationProfileWizard', () => {
       expect(mockCreateRevocationProfile).toHaveBeenCalledWith(
         expect.objectContaining({
           name: 'StatusList Profile',
-          check_mode: 'HARD_FAIL',
-          revocation_mechanism: ['StatusList2021'],
+          check_mode: 'ALWAYS',
+          revocation_mechanism: ['STATUS_LIST_2021'],
           organization_id: 'org-1',
         })
       );
@@ -186,23 +186,22 @@ describe('RevocationProfileWizard', () => {
 
     await waitFor(() => {
       const payload = mockCreateRevocationProfile.mock.calls[0][0];
-      expect(payload).not.toHaveProperty('grace_period_seconds');
+      expect(payload).not.toHaveProperty('offline_grace_seconds');
       expect(payload).not.toHaveProperty('cache_ttl_seconds');
     });
   });
 
-  it('includes numeric fields when populated', async () => {
+  it('requires and includes cache TTL for cached mode', async () => {
     mockCreateRevocationProfile.mockResolvedValue({ id: 'rev-2' });
 
     renderWizard();
     fireEvent.change(getNameInput(), { target: { value: 'Timed Profile' } });
-    fireEvent.change(screen.getByTestId('revocationWizard.gracePeriod'), { target: { value: '30' } });
+    fireEvent.change(screen.getByTestId('revocationWizard.checkMode'), { target: { value: 'CACHED' } });
     fireEvent.change(screen.getByTestId('revocationWizard.cacheTtl'), { target: { value: '3600' } });
     fireEvent.click(getCreateButton());
 
     await waitFor(() => {
       const payload = mockCreateRevocationProfile.mock.calls[0][0];
-      expect(payload.grace_period_seconds).toBe(30);
       expect(payload.cache_ttl_seconds).toBe(3600);
     });
   });

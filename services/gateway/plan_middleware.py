@@ -48,7 +48,7 @@ ANALYTICS_METRIC_MAP: dict[str, str] = {
 
 # Enforced resource gauges: creation is blocked when the plan limit is reached.
 ENFORCED_GAUGE_MAP: dict[str, str] = {
-    "/v1/flows": "active_flows",
+    "/v1/flows/definitions": "active_flows",
     "/v1/badge-templates": "badge_templates",
 }
 
@@ -163,8 +163,9 @@ class UsageTrackingMiddleware(BaseHTTPMiddleware):
 
 def _resolve_gauge(path: str) -> str | None:
     """Find the enforced resource gauge for a given path."""
-    for prefix, metric in ENFORCED_GAUGE_MAP.items():
-        if path.startswith(prefix):
+    normalized_path = path.rstrip("/") or "/"
+    for route, metric in ENFORCED_GAUGE_MAP.items():
+        if normalized_path == route:
             return metric
     return None
 

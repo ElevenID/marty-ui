@@ -158,7 +158,7 @@ class MIPMessage:
 
     message_type: MessageType | str
     payload: Any
-    mip_version: str = "0.3.0"
+    mip_version: str = "0.3.1"
     message_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     correlation_id: str | None = None
     timestamp: datetime = field(default_factory=_utc_now)

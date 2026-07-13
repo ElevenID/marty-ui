@@ -238,8 +238,8 @@ services:
       MARTY_MIGRATION_PROFILE: ${MARTY_MIGRATION_PROFILE:-dev}
       MARTY_USE_EXPLICIT_DEMO_SEED_PACK: ${MARTY_USE_EXPLICIT_DEMO_SEED_PACK:-false}
       PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:-}
-      PUBLIC_API_URL: ${PUBLIC_API_URL:-http://gateway:8000}
-      ISSUER_BASE_URL: ${PUBLIC_API_URL:-http://gateway:8000}
+      PUBLIC_API_URL: ${PUBLIC_API_URL:-http://localhost:8000}
+      ISSUER_BASE_URL: ${PUBLIC_API_URL:-http://localhost:8000}
       REDIS_URL: redis://redis:6379
       REDIS_DB_GATEWAY: "2"
       MARTY_KMS_BOOTSTRAP_ENABLED: ${MARTY_KMS_BOOTSTRAP_ENABLED:-true}
@@ -365,6 +365,7 @@ services:
       CREDENTIAL_LOGIN_POLICY_ID: ${CREDENTIAL_LOGIN_POLICY_ID:-}
       CREDENTIAL_LOGIN_REQUIRE_EXISTING_KEYCLOAK_USER: ${CREDENTIAL_LOGIN_REQUIRE_EXISTING_KEYCLOAK_USER:-false}
       CREDENTIAL_LOGIN_CREATE_USERS: ${CREDENTIAL_LOGIN_CREATE_USERS:-false}
+      KEYCLOAK_TOKEN_EXCHANGE_ENABLED: ${KEYCLOAK_TOKEN_EXCHANGE_ENABLED:-false}
       AUTH_SERVICE_INTERNAL_URL: ${AUTH_SERVICE_INTERNAL_URL:-http://auth:8001}
       ISSUANCE_SERVICE_URL: ${ISSUANCE_SERVICE_URL:-http://issuance:8005}
       CREDENTIAL_LOGIN_LISSI_DEEP_LINK_TEMPLATE: ${CREDENTIAL_LOGIN_LISSI_DEEP_LINK_TEMPLATE:-}
@@ -444,6 +445,7 @@ services:
       CREDENTIAL_TEMPLATE_SERVICE_PORT: "8003"
       DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@postgres:5432/marty
       ORG_GRPC_TARGET: organization:9002
+      RP_GRPC_TARGET: revocation-profile:9013
       SIGNING_KEYS_INTERNAL_URL: http://gateway:8000/internal/signing-keys
       SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:-dev-signing-keys-internal-api-key}
       CT_GRPC_PORT: "9003"
@@ -453,6 +455,8 @@ services:
     depends_on:
       db-migrate:
         condition: service_completed_successfully
+      revocation-profile:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
       interval: 10s
@@ -592,6 +596,11 @@ services:
       PP_GRPC_PORT: "9009"
       DID_RESOLUTION_BASE_URL: http://gateway:8000
       TRUST_PROFILE_SERVICE_URL: http://trust-profile:8004
+      ISSUANCE_SERVICE_URL: http://issuance:8005
+      PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:-localhost}
+      PUBLIC_BASE_URL: ${PUBLIC_API_URL:-http://gateway:8000}
+      ISSUER_BASE_URL: ${PUBLIC_API_URL:-http://gateway:8000}
+      MARTY_ORG_SLUG: ${MARTY_ORG_SLUG:-marty}
     ports:
       - "8009:8009"
       - "9009:9009"
@@ -694,14 +703,15 @@ services:
       ISSUANCE_AUTH_SESSION_TTL_MINUTES: ${ISSUANCE_AUTH_SESSION_TTL_MINUTES:-60}
       ORG_GRPC_TARGET: organization:9002
       CT_GRPC_TARGET: credential-template:9003
+      RP_GRPC_TARGET: revocation-profile:9013
       CREDENTIAL_TEMPLATE_SERVICE_URL: http://credential-template:8003
       REVOCATION_PROFILE_SERVICE_URL: http://revocation-profile:8013
-      MARTY_DEFAULT_REVOCATION_PROFILE_ID: ${MARTY_DEFAULT_REVOCATION_PROFILE_ID:-70000000-0000-0000-0000-000000000001}
       ISSUANCE_GRPC_PORT: "9005"
       # OpenBao KMS for credential signing
       BAO_ADDR: http://openbao:8200
       BAO_TOKEN: ${BAO_DEV_ROOT_TOKEN:-dev-only-token}
       ISSUANCE_API_KEY: ${ISSUANCE_API_KEY:-dev-issuance-api-key}
+      TOKEN_HMAC_KEY: ${TOKEN_HMAC_KEY:-dev-only-token-hmac-key-change-me}
       ICAO_DOCUMENT_SIGNER_URL: ${ICAO_DOCUMENT_SIGNER_URL:-}
       ICAO_DOCUMENT_SIGNER_API_KEY: ${ICAO_DOCUMENT_SIGNER_API_KEY:-}
       PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED: ${PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED:-false}

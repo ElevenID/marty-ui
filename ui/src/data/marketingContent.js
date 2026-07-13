@@ -780,7 +780,7 @@ export const STANDARDS_STRATEGIC = {
 export const PROTOCOL = {
   name: 'Marty Identity Protocol',
   abbreviation: 'MIP',
-  version: '0.1.0',
+  version: '0.3.1',
   status: 'Draft',
   license: 'Apache 2.0',
   githubUrl: 'https://github.com/mip-protocol/marty-protocol',

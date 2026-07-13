@@ -54,14 +54,12 @@ async def _save_profile(
         trust_profile_id="trust-1",
         presentation_policy_ids=["policy-1"],
         default_policy_id="policy-1",
-        default_presentation_policy_id="policy-1",
         enabled_flow_ids=["flow-1"],
         network_mode="ONLINE",
         key_access_mode="KEY_VAULT",
         update_channel="stable",
         update_policy={"channel": "stable", "auto_update": True},
         environment_config={"language": "en-US", "offline_cache_ttl_seconds": 86400},
-        ux_config={"language": "en-US"},
     )
     await repo.save(profile)
     return profile
@@ -123,7 +121,6 @@ def test_get_deployment_profile_exposes_protocol_aligned_shape_only() -> None:
         enable_canvas_lti=True,
     )
     profile.branding = deployment_profile.BrandingConfiguration(organization_name="Example Org")
-    profile.default_compliance_profile_id = "compliance-1"
     profile.api_key = "mk_live_secret"
     profile.api_key_prefix = "mk_live_deadbeef..."
     asyncio.run(repo.save(profile))
@@ -146,11 +143,9 @@ def test_get_deployment_profile_exposes_protocol_aligned_shape_only() -> None:
         "presentation_policy_ids",
         "credential_template_ids",
         "default_policy_id",
-        "default_presentation_policy_id",
         "network_mode",
         "key_access_mode",
         "environment_config",
-        "ux_config",
         "enabled_flow_ids",
         "update_channel",
         "update_policy",
@@ -175,6 +170,8 @@ def test_get_deployment_profile_exposes_protocol_aligned_shape_only() -> None:
         "branding",
         "default_trust_profile_id",
         "default_compliance_profile_id",
+        "default_presentation_policy_id",
+        "ux_config",
         "api_key_prefix",
     }:
         assert removed_key not in body
@@ -249,3 +246,39 @@ def test_offline_cache_ttl_hours_preserves_existing_environment_config_seconds()
     body = response.json()
     assert body["offline_cache_ttl_hours"] == 12
     assert body["environment_config"]["offline_cache_ttl_seconds"] == 86400
+
+
+def test_create_rejects_removed_compatibility_fields() -> None:
+    repo = deployment_profile.InMemoryDeploymentProfileRepository()
+    client, _ = _build_client(repo)
+
+    response = client.post(
+        "/v1/deployment-profiles",
+        headers={"x-user-id": "user-1"},
+        json={
+            "organization_id": "org-1",
+            "name": "Legacy profile",
+            "trust_profile_id": "trust-1",
+            "presentation_policy_ids": ["policy-1"],
+            "default_presentation_policy_id": "policy-1",
+            "ux_config": {"language": "en-US"},
+        },
+    )
+
+    assert response.status_code == 422
+    fields = {error["loc"][-1] for error in response.json()["detail"]}
+    assert fields == {"default_presentation_policy_id", "ux_config"}
+
+
+def test_put_update_alias_is_removed() -> None:
+    repo = deployment_profile.InMemoryDeploymentProfileRepository()
+    profile = asyncio.run(_save_profile(repo))
+    client, _ = _build_client(repo)
+
+    response = client.put(
+        f"/v1/deployment-profiles/{profile.id}",
+        headers={"x-user-id": "user-1"},
+        json={"name": "Legacy update"},
+    )
+
+    assert response.status_code == 405

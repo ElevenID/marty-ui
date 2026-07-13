@@ -19,7 +19,6 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import DescriptionIcon from '@mui/icons-material/Description';
 import SecurityIcon from '@mui/icons-material/Security';
 import VpnKeyIcon from '@mui/icons-material/VpnKey';
-import AccountBalanceWalletIcon from '@mui/icons-material/AccountBalanceWallet';
 import { useTranslation } from 'react-i18next';
 import { ReviewSectionCard, ReviewToggleOption, ReviewField } from '../../../common';
 
@@ -196,32 +195,6 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
             </Grid>
           </Grid>
       </ReviewSectionCard>
-
-      {/* Wallet Compatibility */}
-      {data.supported_wallet_ids?.length > 0 && (
-        <ReviewSectionCard
-          sx={{ mb: 3 }}
-          title={t('wizards.credentialTemplate.reviewStep.sections.walletCompatibility')}
-          icon={<AccountBalanceWalletIcon color="primary" />}
-          onEdit={() => onEdit(4)}
-          editLabel={t('wizards.credentialTemplate.reviewStep.actions.edit')}
-        >
-            <Grid container spacing={2}>
-              <Grid item xs={12} md={6}>
-                <ReviewField
-                  label={t('wizards.credentialTemplate.reviewStep.fields.issuanceProtocol')}
-                  value={data.issuance_protocol || 'oid4vci'}
-                />
-              </Grid>
-              <Grid item xs={12}>
-                <ReviewField
-                  label={t('wizards.credentialTemplate.reviewStep.fields.compatibleWallets')}
-                  value={data.supported_wallet_ids.join(', ')}
-                />
-              </Grid>
-            </Grid>
-        </ReviewSectionCard>
-      )}
 
       <Divider sx={{ my: 3 }} />
 

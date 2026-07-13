@@ -1,4 +1,4 @@
-"""Issuance, Issued Credentials, OID4VCI wallet endpoints, Application Templates, and Applications."""
+"""Issuance, issued credentials, OID4VCI wallet endpoints, and Application Templates."""
 from __future__ import annotations
 
 import logging
@@ -8,14 +8,11 @@ from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 
 from gateway.models import (
-    ApplicationCreate,
-    ApplicationResponse,
     ApplicationTemplateCreate,
     ApplicationTemplatePatch,
     ApplicationTemplateResponse,
     DidcommDeliverRequest,
     DidcommDeliveryResponse,
-    EvidenceSubmission,
     IssuanceCreate,
     IssuanceResponse,
     IssuedCredentialRecordResponse,
@@ -286,7 +283,6 @@ async def verify_passport_quality(application_id: str, request: Request) -> Resp
 async def activate_passport(application_id: str, request: Request) -> Response:
     return await proxy_request(request, _issuance_service_url(), f"/v1/passport/applications/{application_id}/activate", inject_headers=_ISSUANCE_HEADERS)
 application_template_router = APIRouter(prefix="/v1/application-templates", tags=["Application Templates"])
-application_router = APIRouter(prefix="/v1/applications", tags=["Applications"])
 
 
 # ── Issuance ─────────────────────────────────────────────────────────
@@ -461,6 +457,18 @@ async def reinstate_issued_credential(credential_id: str, request: Request) -> R
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
     return await proxy_request(request, service_url, f"/v1/issued-credentials/{credential_id}/reinstate", inject_headers=_ISSUANCE_HEADERS)
+
+
+@issued_credential_router.post("/{credential_id}/renew", summary="Renew Issued Credential")
+async def renew_issued_credential(credential_id: str, request: Request) -> Response:
+    registry = get_registry()
+    service_url = registry.get_service_url("issuance")
+    return await proxy_request(
+        request,
+        service_url,
+        f"/v1/issued-credentials/{credential_id}/renew",
+        inject_headers=_ISSUANCE_HEADERS,
+    )
 
 
 @issuance_router.get("/delivery-records/canvas-credentials/provenance", summary="Resolve Canvas Mirror Provenance")
@@ -704,156 +712,3 @@ async def deprecate_application_template(template_id: str, request: Request) -> 
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
     return await proxy_request(request, service_url, f"/v1/application-templates/{template_id}/deprecate", inject_headers=_ISSUANCE_HEADERS)
-
-
-# ── Applications ─────────────────────────────────────────────────────
-
-@application_router.post("", response_model=ApplicationResponse, summary="Create Application")
-async def create_application(body: ApplicationCreate, request: Request) -> Response:
-    """Create an Application from an Application Template."""
-    registry = get_registry()
-    service_url = registry.get_service_url("issuance")
-    return await proxy_request(request, service_url, "/v1/applications", inject_headers=_ISSUANCE_HEADERS)
-
-
-@application_router.get("", response_model=list[ApplicationResponse], summary="List Applications")
-async def list_applications(
-    organization_id: str = Query(..., description="Organization ID"),
-    status: str | None = Query(None, description="Filter by status"),
-    request: Request = None,
-) -> Response:
-    """List Applications for an organization."""
-    registry = get_registry()
-    service_url = registry.get_service_url("issuance")
-    return await proxy_request(request, service_url, "/v1/applications", inject_headers=_ISSUANCE_HEADERS)
-
-
-@application_router.get("/{application_id}", response_model=ApplicationResponse, summary="Get Application")
-async def get_application(application_id: str, request: Request) -> Response:
-    """Get an Application by ID."""
-    registry = get_registry()
-    service_url = registry.get_service_url("issuance")
-    return await proxy_request(request, service_url, f"/v1/applications/{application_id}", inject_headers=_ISSUANCE_HEADERS)
-
-
-@application_router.get("/{application_id}/evidence-facts", summary="List Application Evidence Facts")
-async def list_application_evidence_facts(application_id: str, request: Request) -> Response:
-    """List normalized MIP evidence facts for an application."""
-    registry = get_registry()
-    service_url = registry.get_service_url("issuance")
-    return await proxy_request(
-        request,
-        service_url,
-        f"/v1/applications/{application_id}/evidence-facts",
-        inject_headers=_ISSUANCE_HEADERS,
-    )
-
-
-@application_router.get("/{application_id}/evidence-summary", summary="Get Application Evidence Summary")
-async def get_application_evidence_summary(application_id: str, request: Request) -> Response:
-    """Get evidence facts, policy decision, and issuance transition metadata."""
-    registry = get_registry()
-    service_url = registry.get_service_url("issuance")
-    return await proxy_request(
-        request,
-        service_url,
-        f"/v1/applications/{application_id}/evidence-summary",
-        inject_headers=_ISSUANCE_HEADERS,
-    )
-
-
-@application_router.post("/{application_id}/evidence/api-checks/{check_id}/run", summary="Run External Evidence API Check")
-async def run_external_evidence_api_check(application_id: str, check_id: str, request: Request) -> Response:
-    """Run a configured external evidence API check for an application."""
-    registry = get_registry()
-    service_url = registry.get_service_url("issuance")
-    return await proxy_request(
-        request,
-        service_url,
-        f"/v1/applications/{application_id}/evidence/api-checks/{check_id}/run",
-        inject_headers=_ISSUANCE_HEADERS,
-    )
-
-
-@application_router.post("/evidence/reconcile", summary="Reconcile Canvas Evidence")
-async def reconcile_application_evidence(request: Request) -> Response:
-    """Recover Canvas evidence policy and approval-to-issuance transitions."""
-    registry = get_registry()
-    service_url = registry.get_service_url("issuance")
-    return await proxy_request(
-        request,
-        service_url,
-        "/v1/applications/evidence/reconcile",
-        inject_headers=_ISSUANCE_HEADERS,
-    )
-
-
-@application_router.get("/evidence/reconciliation-report", summary="Canvas Evidence Reconciliation Report")
-async def get_application_evidence_reconciliation_report(request: Request) -> Response:
-    """Return a dry-run Canvas evidence reconciliation report."""
-    registry = get_registry()
-    service_url = registry.get_service_url("issuance")
-    return await proxy_request(
-        request,
-        service_url,
-        "/v1/applications/evidence/reconciliation-report",
-        inject_headers=_ISSUANCE_HEADERS,
-    )
-
-
-@application_router.post("/{application_id}/submit-evidence", response_model=ApplicationResponse, summary="Submit Evidence")
-async def submit_application_evidence(application_id: str, body: EvidenceSubmission, request: Request) -> Response:
-    """Submit evidence for an Application."""
-    registry = get_registry()
-    service_url = registry.get_service_url("issuance")
-    return await proxy_request(request, service_url, f"/v1/applications/{application_id}/submit-evidence", inject_headers=_ISSUANCE_HEADERS)
-
-
-@application_router.post("/{application_id}/approve", response_model=ApplicationResponse, summary="Approve Application")
-async def approve_application(application_id: str, request: Request) -> Response:
-    """Approve an Application for credential issuance."""
-    registry = get_registry()
-    service_url = registry.get_service_url("issuance")
-    return await proxy_request(request, service_url, f"/v1/applications/{application_id}/approve", inject_headers=_ISSUANCE_HEADERS)
-
-
-@application_router.post("/{application_id}/reject", response_model=ApplicationResponse, summary="Reject Application")
-async def reject_application(application_id: str, request: Request) -> Response:
-    """Reject an Application."""
-    registry = get_registry()
-    service_url = registry.get_service_url("issuance")
-    return await proxy_request(request, service_url, f"/v1/applications/{application_id}/reject", inject_headers=_ISSUANCE_HEADERS)
-
-
-@application_router.post("/{application_id}/issuance-offer", summary="Generate Wallet Invite")
-async def generate_issuance_offer(application_id: str, request: Request) -> Response:
-    """Generate (or refresh) a wallet credential offer for an approved application.
-
-    Returns offer_url, qr_payload, wallets deep-link list, email_payload, and expires_at.
-    """
-    registry = get_registry()
-    service_url = registry.get_service_url("issuance")
-    return await proxy_request(request, service_url, f"/v1/applications/{application_id}/issuance-offer", inject_headers=_ISSUANCE_HEADERS)
-
-
-@application_router.get("/{application_id}/issuance-offer", summary="Get Wallet Invite (Applicant)")
-async def get_issuance_offer(application_id: str, request: Request) -> Response:
-    """Retrieve the current wallet credential offer for an application (applicant-facing).
-
-    Returns 404 until an admin has generated the offer via POST.
-    """
-    registry = get_registry()
-    service_url = registry.get_service_url("issuance")
-    return await proxy_request(request, service_url, f"/v1/applications/{application_id}/issuance-offer", inject_headers=_ISSUANCE_HEADERS)
-
-
-@application_router.get("/{application_id}/issuance-events", summary="List Issuance Events (Admin)")
-async def get_application_issuance_events(application_id: str, request: Request) -> Response:
-    """List all lifecycle events for an application (admin audit timeline).
-
-    Returns events in chronological order covering the full issuance lifecycle:
-    offer_generated, offer_viewed, offer_expired, credential_issued.
-    """
-    registry = get_registry()
-    service_url = registry.get_service_url("issuance")
-    return await proxy_request(request, service_url, f"/v1/applications/{application_id}/issuance-events", inject_headers=_ISSUANCE_HEADERS)

@@ -92,3 +92,60 @@ async def test_wallet_open_link_gateway_proxy(monkeypatch: pytest.MonkeyPatch):
     }
     assert body["wallet_id"] == "wr-waltid-001"
     assert body["open_uri"].startswith("https://wallet.demo.walt.id/api/siop/initiateIssuance")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("handler", "suffix"),
+    [
+        (credentials.create_credential_template_version, "new-version"),
+        (credentials.deprecate_credential_template, "deprecate"),
+    ],
+)
+async def test_credential_template_lifecycle_action_proxies(
+    monkeypatch: pytest.MonkeyPatch,
+    handler,
+    suffix: str,
+):
+    captured: dict = {}
+
+    async def _proxy(request, service_url, path):
+        captured.update({"service_url": service_url, "path": path})
+        return JSONResponse({"id": "template-1"})
+
+    monkeypatch.setattr(credentials, "get_registry", lambda: _Registry())
+    monkeypatch.setattr(credentials, "proxy_request", _proxy)
+
+    await handler(
+        "template-1",
+        _request(f"/v1/credential-templates/template-1/{suffix}"),
+    )
+
+    assert captured == {
+        "service_url": "http://credential-template-service",
+        "path": f"/v1/credential-templates/template-1/{suffix}",
+    }
+
+
+@pytest.mark.asyncio
+async def test_credential_template_patch_proxies_without_full_create_model(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    captured: dict = {}
+
+    async def _proxy(request, service_url, path):
+        captured.update({"service_url": service_url, "path": path})
+        return JSONResponse({"id": "template-1"})
+
+    monkeypatch.setattr(credentials, "get_registry", lambda: _Registry())
+    monkeypatch.setattr(credentials, "proxy_request", _proxy)
+
+    await credentials.update_credential_template(
+        "template-1",
+        _request("/v1/credential-templates/template-1"),
+    )
+
+    assert captured == {
+        "service_url": "http://credential-template-service",
+        "path": "/v1/credential-templates/template-1",
+    }

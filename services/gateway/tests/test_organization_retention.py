@@ -114,7 +114,7 @@ async def test_auto_purge_sweep_only_purges_due_hosted_pilot_orgs(monkeypatch):
                 {"id": "org-3"},
             ], None
 
-        if service_name == "organizations" and path == "/v1/organizations/org-1/lifecycle":
+        if service_name == "organizations" and path == "/internal/v1/organizations/org-1/lifecycle":
             return {
                 "created_at": "2026-04-01T00:00:00+00:00",
                 "plan_tier": "starter",
@@ -122,7 +122,7 @@ async def test_auto_purge_sweep_only_purges_due_hosted_pilot_orgs(monkeypatch):
                 "pilot_retention": {"enabled": True, "window_days": 30},
             }, None
 
-        if service_name == "organizations" and path == "/v1/organizations/org-2/lifecycle":
+        if service_name == "organizations" and path == "/internal/v1/organizations/org-2/lifecycle":
             return {
                 "created_at": "2026-04-01T00:00:00+00:00",
                 "plan_tier": "free",
@@ -130,7 +130,7 @@ async def test_auto_purge_sweep_only_purges_due_hosted_pilot_orgs(monkeypatch):
                 "pilot_retention": None,
             }, None
 
-        if service_name == "organizations" and path == "/v1/organizations/org-3/lifecycle":
+        if service_name == "organizations" and path == "/internal/v1/organizations/org-3/lifecycle":
             return {
                 "created_at": "2026-04-01T00:00:00+00:00",
                 "plan_tier": "starter",

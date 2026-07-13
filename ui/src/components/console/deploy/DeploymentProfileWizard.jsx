@@ -63,20 +63,41 @@ const DeploymentProfileWizard = () => {
       throw new Error('Select an organization before creating a deployment profile.');
     }
 
-    // Set status based on activate_immediately flag
+    const callbackFields = {
+      'credential.issued': 'issuance_complete_url',
+      'credential.verified': 'verification_complete_url',
+      'credential.revoked': 'credential_revoked_url',
+      'verification.failed': 'verification_failed_url',
+    };
+    const callbacks = data.webhooks.url
+      ? Object.fromEntries(
+          data.webhooks.events
+            .filter((event) => callbackFields[event])
+            .map((event) => [callbackFields[event], data.webhooks.url])
+        )
+      : undefined;
+    const {
+      qr_code: qrCode,
+      nfc,
+      ble,
+      ...serviceFeatureFlags
+    } = data.feature_flags;
+
     const payload = {
       name: data.name,
       description: data.description,
-      environment_type: data.environment_type,
       network_mode: data.network_mode,
       trust_profile_id: data.trust_profile_id || null,
       default_policy_id: data.default_policy_id || null,
       presentation_policy_ids: data.default_policy_id ? [data.default_policy_id] : [],
-      enabled_flows: data.enabled_flows,
-      webhook_url: data.webhooks.url || null,
-      webhook_events: data.webhooks.events,
-      feature_flags: data.feature_flags,
-      environment_config: data.ux_config,
+      enabled_flow_ids: data.enabled_flows,
+      callbacks,
+      feature_flags: {
+        ...serviceFeatureFlags,
+        enable_qr_code_generation: qrCode,
+        custom_flags: { nfc, ble },
+      },
+      environment_config: data.environment_config,
       organization_id: activeOrgId,
       status: data.activate_immediately ? 'active' : 'draft',
       activate_immediately: data.activate_immediately !== false,
@@ -111,9 +132,9 @@ const DeploymentProfileWizard = () => {
         enable_canvas_ags: false,
         enable_canvas_nrps: false,
       },
-      ux_config: {
-        theme: 'default',
-        language: 'en',
+      environment_config: {
+        theme: 'light',
+        language: 'en-US',
       },
       status: 'active',
       activate_immediately: true,

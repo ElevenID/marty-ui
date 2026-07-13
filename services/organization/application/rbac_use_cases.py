@@ -448,6 +448,7 @@ _OPERATOR_PERMISSION_KEYS = sorted(
             "flow-instance:advance",
             "flow-instance:cancel",
             "issuance:initiate",
+            "issuance:revoke",
             "verification:execute",
         ]
     )

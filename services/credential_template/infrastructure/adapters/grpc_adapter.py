@@ -129,6 +129,7 @@ def _template_to_pb(template: Any, to_response_fn: Any) -> ct_pb2.TemplateRespon
         issuer_algorithm=getattr(resp, "issuer_algorithm", None) or "",
         remote_signing_config_json=json.dumps(getattr(resp, "remote_signing_config", None) or {}),
         issuer_profile_id=getattr(resp, "issuer_profile_id", None) or "",
+        revocation_profile_id=getattr(resp, "revocation_profile_id", None) or "",
     )
 
 

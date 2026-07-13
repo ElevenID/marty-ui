@@ -1,6 +1,7 @@
 export {
   buildApplicantProfileData,
-  buildAutoApplyContext,
+  buildAutoApplyFormData,
+  canAutoApplyApplicationTemplate,
   buildStandardApplicationPayload,
   getCredentialKindFlags,
   getOneClickSummaryFields,

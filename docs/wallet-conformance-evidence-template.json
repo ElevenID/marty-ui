@@ -1,0 +1,103 @@
+{
+  "schema_version": 2,
+  "release_version": "REPLACE_WITH_RELEASE_VERSION",
+  "mip_version": "0.3.1",
+  "beta_origin": "https://beta.elevenidllc.com",
+  "marty_ui_sha": "REPLACE_WITH_40_CHARACTER_COMMIT_SHA",
+  "beta_lifecycle_run_id": "REPLACE_WITH_WORKFLOW_RUN_ID",
+  "tested_at": "REPLACE_WITH_ISO_8601_TIMESTAMP",
+  "device_lab": "REPLACE_WITH_DEVICE_LAB_NAME",
+  "approver": "REPLACE_WITH_APPROVER_IDENTITY",
+  "sprucekit_login": {
+    "wallet_id": "wr-spruce-001",
+    "wallet_build_revision": "REPLACE_WITH_EXACT_BUILD_REVISION",
+    "platform": "ios",
+    "device_model": "REPLACE_WITH_DEVICE_MODEL",
+    "os_version": "REPLACE_WITH_OS_VERSION",
+    "signed_request_sha256": "REPLACE_WITH_SHA256",
+    "resolved_request_sha256": "REPLACE_WITH_THE_SAME_SHA256",
+    "checks": {
+      "offer_received": false,
+      "badge_displayed": false,
+      "issuer_displayed": false,
+      "signed_request_resolved": false,
+      "requested_email_disclosed": false,
+      "callback_completed": false,
+      "existing_user_matched": false,
+      "authenticated_session_created": false,
+      "request_unmodified": false
+    },
+    "credential": {
+      "badge_name": "Marty Verified Member Badge",
+      "issuer_display_name": "ElevenID LLC",
+      "issuer_did": "REPLACE_WITH_ISSUER_DID",
+      "requested_claims": ["email"],
+      "disclosed_claims": ["email"]
+    },
+    "authenticated_email": "REPLACE_WITH_TEST_USER_EMAIL"
+  },
+  "native_handoffs": [
+    {
+      "wallet_id": "wr-spruce-001",
+      "wallet_build_revision": "REPLACE_WITH_EXACT_BUILD_REVISION",
+      "platform": "ios",
+      "device_model": "REPLACE_WITH_DEVICE_MODEL",
+      "os_version": "REPLACE_WITH_OS_VERSION",
+      "checks": {"handoff_invoked": false, "target_app_opened": false, "payload_resolved": false, "recoverable_return": false}
+    },
+    {
+      "wallet_id": "wr-marty-001",
+      "wallet_build_revision": "REPLACE_WITH_EXACT_BUILD_REVISION",
+      "platform": "ios",
+      "device_model": "REPLACE_WITH_DEVICE_MODEL",
+      "os_version": "REPLACE_WITH_OS_VERSION",
+      "checks": {"handoff_invoked": false, "target_app_opened": false, "payload_resolved": false, "recoverable_return": false}
+    },
+    {
+      "wallet_id": "wr-lissi-001",
+      "wallet_build_revision": "REPLACE_WITH_EXACT_BUILD_REVISION",
+      "platform": "android",
+      "device_model": "REPLACE_WITH_DEVICE_MODEL",
+      "os_version": "REPLACE_WITH_OS_VERSION",
+      "checks": {"handoff_invoked": false, "target_app_opened": false, "payload_resolved": false, "recoverable_return": false}
+    },
+    {
+      "wallet_id": "wr-sphereon-001",
+      "wallet_build_revision": "REPLACE_WITH_EXACT_BUILD_REVISION",
+      "platform": "android",
+      "device_model": "REPLACE_WITH_DEVICE_MODEL",
+      "os_version": "REPLACE_WITH_OS_VERSION",
+      "checks": {"handoff_invoked": false, "target_app_opened": false, "payload_resolved": false, "recoverable_return": false}
+    },
+    {
+      "wallet_id": "wr-dc4eu-001",
+      "wallet_build_revision": "REPLACE_WITH_EXACT_BUILD_REVISION",
+      "platform": "android",
+      "device_model": "REPLACE_WITH_DEVICE_MODEL",
+      "os_version": "REPLACE_WITH_OS_VERSION",
+      "checks": {"handoff_invoked": false, "target_app_opened": false, "payload_resolved": false, "recoverable_return": false}
+    },
+    {
+      "wallet_id": "wr-google-001",
+      "wallet_build_revision": "REPLACE_WITH_EXACT_BUILD_REVISION",
+      "platform": "android",
+      "device_model": "REPLACE_WITH_DEVICE_MODEL",
+      "os_version": "REPLACE_WITH_OS_VERSION",
+      "checks": {"handoff_invoked": false, "target_app_opened": false, "payload_resolved": false, "recoverable_return": false}
+    },
+    {
+      "wallet_id": "wr-apple-001",
+      "wallet_build_revision": "REPLACE_WITH_EXACT_BUILD_REVISION",
+      "platform": "ios",
+      "device_model": "REPLACE_WITH_DEVICE_MODEL",
+      "os_version": "REPLACE_WITH_OS_VERSION",
+      "checks": {"handoff_invoked": false, "target_app_opened": false, "payload_resolved": false, "recoverable_return": false}
+    }
+  ],
+  "attachments": [
+    {"kind": "spruce_issuance_recording", "uri": "https://REPLACE_WITH_PROTECTED_URI", "sha256": "REPLACE_WITH_SHA256"},
+    {"kind": "spruce_login_recording", "uri": "https://REPLACE_WITH_PROTECTED_URI", "sha256": "REPLACE_WITH_SHA256"},
+    {"kind": "signed_request_capture", "uri": "https://REPLACE_WITH_PROTECTED_URI", "sha256": "REPLACE_WITH_SHA256"},
+    {"kind": "native_handoff_matrix", "uri": "https://REPLACE_WITH_PROTECTED_URI", "sha256": "REPLACE_WITH_SHA256"}
+  ]
+}

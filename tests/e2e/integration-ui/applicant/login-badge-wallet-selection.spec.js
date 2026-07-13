@@ -209,7 +209,11 @@ async function installApplicantWalletMocks(page, { applications = [], credential
         credential_template_id: TEMPLATE_ID,
         name: 'Marty Member Login Credential Application',
         status: 'ACTIVE',
-        form_fields: [],
+        form_fields: [
+          { field_id: 'email', label: 'Email', field_type: 'EMAIL', required: true },
+          { field_id: 'given_name', label: 'Given name', field_type: 'TEXT', required: true },
+          { field_id: 'family_name', label: 'Family name', field_type: 'TEXT', required: true },
+        ],
       }]);
     }
 

@@ -33,14 +33,12 @@ import ClaimsStep from './steps/ClaimsStep';
 import TrustComplianceStep from './steps/TrustComplianceStep';
 import CryptoValidityStep from './steps/CryptoValidityStep';
 import ReviewStep from './steps/ReviewStep';
-import WalletCompatibilityStep from './steps/WalletCompatibilityStep';
 
 const getSteps = (t) => [
   t('wizards.credentialTemplate.steps.basics'),
   t('wizards.credentialTemplate.steps.claims'),
   t('wizards.credentialTemplate.steps.trustCompliance'),
   t('wizards.credentialTemplate.steps.cryptoValidity'),
-  t('wizards.credentialTemplate.steps.walletCompatibility', 'Wallet Compatibility'),
   t('wizards.credentialTemplate.steps.review'),
 ];
 
@@ -62,12 +60,10 @@ const CredentialTemplateWizard = () => {
       case 1: // Claims
         return data.claims && data.claims.length > 0;
       case 2: // Trust & Compliance
-        return Boolean(data.trust_profile_id && data.issuer_profile_id);
+        return Boolean(data.trust_profile_id && data.issuer_profile_id && data.compliance_profile_id);
       case 3: // Crypto & Validity (optional)
-        return true;
-      case 4: // Wallet Compatibility (optional)
-        return true;
-      case 5: // Review
+        return Boolean(data.revocation_profile_id);
+      case 4: // Review
         return true;
       default:
         return false;
@@ -81,14 +77,11 @@ const CredentialTemplateWizard = () => {
       }));
     }
 
-    // Set status based on activate_immediately flag
     const payload = {
       ...data,
       organization_id: effectiveOrganizationId,
-      status: data.activate_immediately ? 'active' : 'draft',
-      artifacts_auto_generate: data.generate_artifacts_automatically,
+      auto_generate_artifacts: data.generate_artifacts_automatically,
     };
-    delete payload.activate_immediately;
     delete payload.generate_artifacts_automatically;
     
     const result = await createCredentialTemplate(payload);
@@ -113,11 +106,8 @@ const CredentialTemplateWizard = () => {
         max_validity_seconds: 63072000, // 2 years
       },
       revocation_profile_id: null,
-      status: 'active',
       generate_artifacts_automatically: true,
       activate_immediately: true,
-      supported_wallet_ids: [],
-      issuance_protocol: 'oid4vci',
     },
     validateStep,
     onSubmit: handleSubmit,
@@ -161,13 +151,6 @@ const CredentialTemplateWizard = () => {
           />
         );
       case 4:
-        return (
-          <WalletCompatibilityStep
-            data={wizard.data}
-            onChange={wizard.updateData}
-          />
-        );
-      case 5:
         return (
           <ReviewStep
             data={wizard.data}

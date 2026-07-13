@@ -34,13 +34,21 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import AutorenewIcon from '@mui/icons-material/Autorenew';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
+import BlockIcon from '@mui/icons-material/Block';
+import PauseCircleOutlineIcon from '@mui/icons-material/PauseCircleOutline';
+import PlayCircleOutlineIcon from '@mui/icons-material/PlayCircleOutline';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useConsole } from '../../../contexts/ConsoleContext';
 import { useAsyncData } from '../../../hooks/useAsyncData';
 import { useNotifications } from '../../../hooks/useNotifications';
-import { fetchIssuedCredentials } from '../../../application/vendor';
-import { issueOrganizationApplication } from '../../../services/applicantApi';
+import {
+  fetchIssuedCredentials,
+  renewCredential,
+  reinstateCredential,
+  revokeCredential,
+  suspendCredential,
+} from '../../../application/vendor';
 import { listCredentialTemplates } from '../../../services/presentationPolicyApi';
 import { pickOfficialReference } from '../../../utils/officialReferences';
 import { ResourcePage, StatusChip } from '../../common';
@@ -58,6 +66,29 @@ const getBreadcrumbs = (t) => [
   { label: t('operate.breadcrumbs.issuance'), path: '/console/org/operate/issuance' },
 ];
 
+const LIFECYCLE_ACTIONS = {
+  suspend: {
+    label: 'Suspend credential',
+    confirmLabel: 'Suspend',
+    successMessage: 'Credential suspended',
+    description: 'The credential will fail policies that require an active, non-suspended credential.',
+  },
+  reinstate: {
+    label: 'Reinstate credential',
+    confirmLabel: 'Reinstate',
+    successMessage: 'Credential reinstated',
+    description: 'The credential will become active again. Revoked credentials cannot be reinstated.',
+  },
+  revoke: {
+    label: 'Revoke credential',
+    confirmLabel: 'Revoke',
+    successMessage: 'Credential revoked',
+    description: 'Revocation is permanent. The holder will no longer be able to use this credential.',
+  },
+};
+
+const normalizeStatus = (status) => String(status || '').trim().toUpperCase();
+
 function IssuancePage() {
   const { t } = useTranslation('console');
   const navigate = useNavigate();
@@ -65,8 +96,12 @@ function IssuancePage() {
   const { activeOrgId: organizationId } = useConsole();
   const { showError, showSuccess } = useNotifications();
   const [searchQuery, setSearchQuery] = useState('');
-  const [reissuingCredentialId, setReissuingCredentialId] = useState(null);
+  const [renewingCredentialId, setRenewingCredentialId] = useState(null);
   const [latestOffer, setLatestOffer] = useState(null);
+  const [lifecycleAction, setLifecycleAction] = useState(null);
+  const [lifecycleTarget, setLifecycleTarget] = useState(null);
+  const [lifecycleReason, setLifecycleReason] = useState('');
+  const [lifecycleSubmitting, setLifecycleSubmitting] = useState(false);
 
   const {
     data: issuedCredentialsData,
@@ -138,21 +173,57 @@ function IssuancePage() {
     showSuccess('Offer link copied to clipboard');
   };
 
-  const handleReissue = async (credential) => {
-    if (!credential?.application_id) {
-      showError('This credential cannot be reissued because no source application is linked.');
-      return;
-    }
-
-    setReissuingCredentialId(credential.id);
+  const handleRenew = async (credential) => {
+    setRenewingCredentialId(credential.id);
     try {
-      const offer = await issueOrganizationApplication(organizationId, credential.application_id);
-      setLatestOffer(offer);
-      showSuccess('Fresh wallet offer generated successfully');
+      const offer = await renewCredential({ credentialId: credential.id });
+      setLatestOffer({ ...offer, offer_url: offer.credential_offer_uri });
+      navigate(`/console/org/operate/issuance/${encodeURIComponent(credential.id)}`);
+      showSuccess('Renewal offer generated successfully');
     } catch (err) {
-      showError(err?.message || 'Failed to generate a fresh wallet offer');
+      showError(err?.message || 'Failed to generate a renewal offer');
     } finally {
-      setReissuingCredentialId(null);
+      setRenewingCredentialId(null);
+    }
+  };
+
+  const openLifecycleDialog = (action, credential) => {
+    setLifecycleAction(action);
+    setLifecycleTarget(credential);
+    setLifecycleReason('');
+  };
+
+  const closeLifecycleDialog = () => {
+    if (lifecycleSubmitting) return;
+    setLifecycleAction(null);
+    setLifecycleTarget(null);
+    setLifecycleReason('');
+  };
+
+  const handleLifecycleAction = async () => {
+    const credentialId = lifecycleTarget?.id || lifecycleTarget?.credential_id;
+    const reason = lifecycleReason.trim();
+    const config = LIFECYCLE_ACTIONS[lifecycleAction];
+    if (!credentialId || !reason || !config) return;
+
+    const actions = {
+      suspend: suspendCredential,
+      reinstate: reinstateCredential,
+      revoke: revokeCredential,
+    };
+
+    setLifecycleSubmitting(true);
+    try {
+      await actions[lifecycleAction]({ credentialId, reason });
+      showSuccess(config.successMessage);
+      setLifecycleAction(null);
+      setLifecycleTarget(null);
+      setLifecycleReason('');
+      await reload();
+    } catch (err) {
+      showError(err?.message || `Failed to ${lifecycleAction} credential`);
+    } finally {
+      setLifecycleSubmitting(false);
     }
   };
 
@@ -266,19 +337,54 @@ function IssuancePage() {
                         <VisibilityIcon fontSize="small" />
                       </IconButton>
                     </Tooltip>
-                    {credential.application_id && (
-                      <Tooltip title="Generate a fresh wallet offer">
+                    {credential.renewable && (
+                      <Tooltip title={credential.can_renew ? 'Renew credential' : `Renewal available ${credential.renewal_eligible_at ? new Date(credential.renewal_eligible_at).toLocaleString() : 'later'}`}>
                         <span>
                           <IconButton
                             size="small"
                             color="primary"
-                            aria-label={`Reissue credential ${getCredentialReference(credential)}`}
-                            disabled={reissuingCredentialId === credential.id}
-                            onClick={() => handleReissue(credential)}
+                            aria-label={`Renew credential ${getCredentialReference(credential)}`}
+                            disabled={!credential.can_renew || renewingCredentialId === credential.id}
+                            onClick={() => handleRenew(credential)}
                           >
                             <AutorenewIcon fontSize="small" />
                           </IconButton>
                         </span>
+                      </Tooltip>
+                    )}
+                    {normalizeStatus(credential.status) === 'ACTIVE' && (
+                      <Tooltip title="Suspend credential">
+                        <IconButton
+                          size="small"
+                          aria-label={`Suspend credential ${getCredentialReference(credential)}`}
+                          onClick={() => openLifecycleDialog('suspend', credential)}
+                        >
+                          <PauseCircleOutlineIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                    )}
+                    {normalizeStatus(credential.status) === 'SUSPENDED' && (
+                      <Tooltip title="Reinstate credential">
+                        <IconButton
+                          size="small"
+                          color="success"
+                          aria-label={`Reinstate credential ${getCredentialReference(credential)}`}
+                          onClick={() => openLifecycleDialog('reinstate', credential)}
+                        >
+                          <PlayCircleOutlineIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                    )}
+                    {['ACTIVE', 'SUSPENDED'].includes(normalizeStatus(credential.status)) && (
+                      <Tooltip title="Revoke credential">
+                        <IconButton
+                          size="small"
+                          color="error"
+                          aria-label={`Revoke credential ${getCredentialReference(credential)}`}
+                          onClick={() => openLifecycleDialog('revoke', credential)}
+                        >
+                          <BlockIcon fontSize="small" />
+                        </IconButton>
                       </Tooltip>
                     )}
                   </TableCell>
@@ -290,7 +396,7 @@ function IssuancePage() {
       )}
 
       <Dialog
-        open={Boolean(credentialId && selectedCredential)}
+        open={Boolean(credentialId && selectedCredential && !lifecycleAction)}
         onClose={handleCloseDetails}
         maxWidth="sm"
         fullWidth
@@ -376,17 +482,87 @@ function IssuancePage() {
               </Button>
             </>
           )}
-          {selectedCredential?.application_id && (
+          {selectedCredential?.renewable && (
             <Button
               variant="contained"
               startIcon={<AutorenewIcon />}
-              onClick={() => handleReissue(selectedCredential)}
-              disabled={reissuingCredentialId === selectedCredential.id}
+              onClick={() => handleRenew(selectedCredential)}
+              disabled={!selectedCredential.can_renew || renewingCredentialId === selectedCredential.id}
             >
-              {reissuingCredentialId === selectedCredential.id ? 'Generating…' : 'Reissue'}
+              {renewingCredentialId === selectedCredential.id ? 'Generating…' : 'Renew'}
+            </Button>
+          )}
+          {normalizeStatus(selectedCredential?.status) === 'ACTIVE' && (
+            <Button
+              startIcon={<PauseCircleOutlineIcon />}
+              onClick={() => openLifecycleDialog('suspend', selectedCredential)}
+            >
+              Suspend
+            </Button>
+          )}
+          {normalizeStatus(selectedCredential?.status) === 'SUSPENDED' && (
+            <Button
+              color="success"
+              startIcon={<PlayCircleOutlineIcon />}
+              onClick={() => openLifecycleDialog('reinstate', selectedCredential)}
+            >
+              Reinstate
+            </Button>
+          )}
+          {['ACTIVE', 'SUSPENDED'].includes(normalizeStatus(selectedCredential?.status)) && (
+            <Button
+              color="error"
+              startIcon={<BlockIcon />}
+              onClick={() => openLifecycleDialog('revoke', selectedCredential)}
+            >
+              Revoke
             </Button>
           )}
           <Button onClick={handleCloseDetails}>Close</Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={Boolean(lifecycleAction && lifecycleTarget)}
+        onClose={closeLifecycleDialog}
+        maxWidth="xs"
+        fullWidth
+      >
+        <DialogTitle>{LIFECYCLE_ACTIONS[lifecycleAction]?.label}</DialogTitle>
+        <DialogContent dividers>
+          <Stack spacing={2}>
+            <Alert severity={lifecycleAction === 'revoke' ? 'warning' : 'info'}>
+              {LIFECYCLE_ACTIONS[lifecycleAction]?.description}
+            </Alert>
+            <Box>
+              <Typography variant="subtitle2" color="text.secondary">Credential Reference</Typography>
+              <Typography sx={{ fontFamily: 'monospace' }}>
+                {lifecycleTarget ? getCredentialReference(lifecycleTarget) : '-'}
+              </Typography>
+            </Box>
+            <TextField
+              label="Reason"
+              value={lifecycleReason}
+              onChange={(event) => setLifecycleReason(event.target.value)}
+              required
+              autoFocus
+              multiline
+              minRows={3}
+              inputProps={{ maxLength: 500 }}
+              helperText={`${lifecycleReason.length}/500`}
+            />
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={closeLifecycleDialog} disabled={lifecycleSubmitting}>Cancel</Button>
+          <Button
+            variant="contained"
+            color={lifecycleAction === 'revoke' ? 'error' : 'primary'}
+            onClick={handleLifecycleAction}
+            disabled={lifecycleSubmitting || !lifecycleReason.trim()}
+          >
+            {lifecycleSubmitting ? 'Working...' : LIFECYCLE_ACTIONS[lifecycleAction]?.confirmLabel}
+          </Button>
         </DialogActions>
       </Dialog>
     </ResourcePage>

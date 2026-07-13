@@ -13,7 +13,7 @@
  * Props:
  *   open           {boolean}
  *   onClose        {() => void}
- *   offerData      {object|null}  — response from POST /v1/applications/{id}/issuance-offer
+ *   offerData      {object|null}  — response from POST /v1/me/applications/{id}/claim
  *   loading        {boolean}
  *   onRegenerate   {() => void}   — callback to re-call the generate offer API
  */

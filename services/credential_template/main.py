@@ -31,9 +31,9 @@ from enum import Enum
 from typing import Any, AsyncGenerator
 from urllib.parse import parse_qs, quote, urlparse
 
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Header, Request
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Header, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from typing import Annotated
 from marty_common import OrganizationContext, require_org_membership
@@ -534,7 +534,7 @@ SYSTEM_WALLET_CATALOG: tuple[WalletRegistryEntry, ...] = (
     WalletRegistryEntry(
         id="wr-waltid-001",
         name="walt.id Wallet",
-        description="walt.id mobile and web wallet.",
+        description="walt.id community wallet retained for interoperability tracking.",
         wallet_apps=["walt.id Wallet"],
         specifications=["OID4VCI", "OID4VP"],
         logo_url="https://walt.id/favicon.ico",
@@ -547,6 +547,7 @@ SYSTEM_WALLET_CATALOG: tuple[WalletRegistryEntry, ...] = (
         supported_formats=["sd_jwt_vc", "jwt_vc", "mdoc"],
         platforms=["ios", "android", "web"],
         docs_url="https://docs.walt.id",
+        is_active=False,
     ),
     WalletRegistryEntry(
         id="wr-sphereon-001",
@@ -968,12 +969,6 @@ class ValidityRulesModel(BaseModel):
     revalidation_interval_days: int | None = None
 
 
-class IssuerRequirementsModel(BaseModel):
-    allowed_issuer_dids: list[str] = []
-    trust_tier_required: str | None = None
-    audit_level_required: str | None = None
-
-
 class DerivedAttributeModel(BaseModel):
     name: str
     description: str | None = None
@@ -983,6 +978,8 @@ class DerivedAttributeModel(BaseModel):
 
 
 class CreateCredentialTemplateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     organization_id: str = Field(min_length=1, max_length=255)
     name: str = Field(min_length=1, max_length=255)
     description: str | None = Field(None, max_length=2000)
@@ -996,14 +993,12 @@ class CreateCredentialTemplateRequest(BaseModel):
     derived_attributes: list[DerivedAttributeModel] = []
     display_style: DisplayStyleModel | None = None
     validity_rules: ValidityRulesModel | None = None
-    issuer_requirements: IssuerRequirementsModel | None = None
     supported_formats: list[str] = ["SD_JWT_VC"]
     application_template_id: str | None = None
     trust_profile_id: str | None = None
     revocation_profile_id: str | None = None
     # Compliance
-    compliance_profile: dict | None = None
-    compliance_profile_id: str | None = None
+    compliance_profile_id: str = Field(min_length=1, max_length=255)
     issuer_key_id: str | None = None
     issuer_algorithm: str | None = None
     signing_algorithm: str | None = None
@@ -1013,15 +1008,13 @@ class CreateCredentialTemplateRequest(BaseModel):
     issuer_did: str | None = None
     issuer_profile_id: str | None = None
     auto_generate_artifacts: bool = False
-    artifacts_auto_generate: bool | None = None
-    # Wallet compatibility
-    wallet_configs: list[dict] = []
-    issuance_protocol: str = "oid4vci"
     credential_payload_format: str | None = None
     schema_uri: dict | None = None
 
 
 class UpdateCredentialTemplateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str | None = Field(None, min_length=1, max_length=255)
     description: str | None = Field(None, max_length=2000)
     claims: list[ClaimDefinitionModel] | None = None
@@ -1031,7 +1024,6 @@ class UpdateCredentialTemplateRequest(BaseModel):
     derived_attributes: list[DerivedAttributeModel] | None = None
     display_style: DisplayStyleModel | None = None
     validity_rules: ValidityRulesModel | None = None
-    issuer_requirements: IssuerRequirementsModel | None = None
     supported_formats: list[str] | None = None
     application_template_id: str | None = None
     trust_profile_id: str | None = None
@@ -1045,10 +1037,6 @@ class UpdateCredentialTemplateRequest(BaseModel):
     issuer_did: str | None = None
     issuer_profile_id: str | None = None
     auto_generate_artifacts: bool | None = None
-    artifacts_auto_generate: bool | None = None
-    # Wallet compatibility
-    wallet_configs: list[dict] | None = None
-    issuance_protocol: str | None = None
     credential_payload_format: str | None = None
 
 
@@ -1091,12 +1079,8 @@ def _days_from_seconds(seconds: int) -> int:
 
 def _resolve_auto_generate_artifacts(
     auto_generate_artifacts: bool | None,
-    artifacts_auto_generate: bool | None,
 ) -> bool:
-    """Resolve canonical auto-generate flag from legacy/current UI names."""
-
-    if artifacts_auto_generate is not None:
-        return bool(artifacts_auto_generate)
+    """Resolve the canonical auto-generate flag."""
     return bool(auto_generate_artifacts)
 
 
@@ -1571,6 +1555,122 @@ async def _require_active_issuer_profile(
     return payload
 
 
+def _issuer_identifier_candidates(value: str | None) -> set[str]:
+    identifier = str(value or "").strip()
+    if not identifier:
+        return set()
+    candidates = {identifier}
+    if "#" in identifier:
+        candidates.add(identifier.split("#", 1)[0])
+    return candidates
+
+
+def _trust_profile_issuer_identifiers(profile: dict[str, Any]) -> set[str]:
+    identifiers: set[str] = set()
+    for issuer in profile.get("allowed_issuers") or []:
+        if isinstance(issuer, str):
+            identifiers.update(_issuer_identifier_candidates(issuer))
+        elif isinstance(issuer, dict):
+            identifiers.update(
+                _issuer_identifier_candidates(issuer.get("issuer_did") or issuer.get("issuer_id"))
+            )
+    for source in profile.get("trust_sources") or []:
+        if not isinstance(source, dict) or source.get("enabled") is False:
+            continue
+        identifiers.update(
+            _issuer_identifier_candidates(source.get("issuer_did") or source.get("issuer_id"))
+        )
+    return identifiers
+
+
+async def _require_trust_profile_accepts_issuer(
+    *,
+    trust_profile_id: str | None,
+    issuer_did: str | None,
+) -> None:
+    if not trust_profile_id:
+        return
+    if not issuer_did:
+        raise HTTPException(status_code=422, detail="The active issuer profile did not provide an issuer DID.")
+
+    base_url = os.environ.get("TRUST_PROFILE_SERVICE_URL", "http://trust-profile:8004").rstrip("/")
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            response = await client.get(f"{base_url}/internal/v1/trust-profiles/{trust_profile_id}")
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Unable to validate the Trust Profile: {exc}",
+        ) from exc
+
+    if response.status_code == 404:
+        raise HTTPException(status_code=422, detail="trust_profile_id does not reference a Trust Profile.")
+    if response.status_code >= 400:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Trust Profile validation failed with status {response.status_code}.",
+        )
+
+    profile = response.json()
+    if str(profile.get("status") or "").strip().lower() != "active":
+        raise HTTPException(status_code=422, detail="Credential Templates require an active Trust Profile.")
+
+    trusted_identifiers = _trust_profile_issuer_identifiers(profile)
+    if trusted_identifiers and _issuer_identifier_candidates(issuer_did).isdisjoint(trusted_identifiers):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "The selected Trust Profile does not trust the selected issuer profile. "
+                "Add the issuer DID to the Trust Profile before activation."
+            ),
+        )
+
+
+async def _require_active_revocation_profile(
+    *,
+    organization_id: str,
+    revocation_profile_id: str | None,
+) -> None:
+    if not revocation_profile_id or not str(revocation_profile_id).strip():
+        raise HTTPException(
+            status_code=422,
+            detail="revocation_profile_id is required before a Credential Template can be activated.",
+        )
+
+    import grpc
+    from marty_proto.v1 import revocation_profile_service_pb2 as rp_pb2
+    from marty_proto.v1 import revocation_profile_service_pb2_grpc as rp_grpc
+
+    target = os.environ.get("RP_GRPC_TARGET", "revocation-profile:9013")
+    try:
+        async with grpc.aio.insecure_channel(target) as channel:
+            response = await rp_grpc.RevocationProfileServiceStub(channel).GetRevocationProfile(
+                rp_pb2.GetRevocationProfileRequest(profile_id=revocation_profile_id),
+                timeout=3.0,
+            )
+    except grpc.aio.AioRpcError as exc:
+        if exc.code() == grpc.StatusCode.NOT_FOUND:
+            raise HTTPException(
+                status_code=422,
+                detail="revocation_profile_id does not reference a Revocation Profile.",
+            ) from exc
+        raise HTTPException(
+            status_code=503,
+            detail=f"Unable to validate the Revocation Profile: {exc.details() or exc.code().name}.",
+        ) from exc
+
+    if response.organization_id != organization_id:
+        raise HTTPException(
+            status_code=422,
+            detail="The selected Revocation Profile belongs to another organization.",
+        )
+    if str(response.status or "").strip().lower() != "active":
+        raise HTTPException(
+            status_code=422,
+            detail="Credential Templates require an active Revocation Profile.",
+        )
+
+
 @router.post("", response_model=CredentialTemplateResponse, response_model_exclude_none=True)
 async def create_credential_template(
     body: CreateCredentialTemplateRequest,
@@ -1627,7 +1727,7 @@ async def create_credential_template(
 
     resolved_vct = body.vct or f"https://credentials.example.com/{body.credential_type}"
     _validate_template_protocol_requirements(
-        compliance_profile=body.compliance_profile,
+        compliance_profile=None,
         compliance_profile_id=body.compliance_profile_id,
         credential_payload_format=credential_payload_format,
         vct=resolved_vct,
@@ -1647,10 +1747,10 @@ async def create_credential_template(
         selective_disclosure_fields=body.selective_disclosure_fields,
         zk_predicate_claims=body.zk_predicate_claims,
         supported_formats=supported_formats,
-        wallet_configs=[WalletConfig(wallet_id=wc.get("wallet_id", ""), deep_link_scheme=wc.get("deep_link_scheme", "openid-credential-offer://"), format_variant=wc.get("format_variant")) for wc in body.wallet_configs],
-        issuance_protocol=body.issuance_protocol,
+        wallet_configs=[],
+        issuance_protocol="oid4vci",
         credential_payload_format=credential_payload_format,
-        compliance_profile=body.compliance_profile,
+        compliance_profile=None,
         compliance_profile_id=body.compliance_profile_id,
         issuer_profile_id=issuer_fields["issuer_profile_id"],
         issuer_key_id=issuer_fields["issuer_key_id"],
@@ -1661,7 +1761,6 @@ async def create_credential_template(
         issuer_did=issuer_fields["issuer_did"],
         auto_generate_artifacts=_resolve_auto_generate_artifacts(
             body.auto_generate_artifacts,
-            body.artifacts_auto_generate,
         ),
     )
     
@@ -1707,14 +1806,6 @@ async def create_credential_template(
     if body.validity_rules:
         template.validity_rules = _resolve_validity_rules(body.validity_rules)
 
-    # Set issuer requirements
-    if body.issuer_requirements:
-        template.issuer_requirements = IssuerRequirements(
-            allowed_issuer_dids=body.issuer_requirements.allowed_issuer_dids,
-            trust_tier_required=body.issuer_requirements.trust_tier_required,
-            audit_level_required=body.issuer_requirements.audit_level_required,
-        )
-    
     await repo.save(template)
     logger.info(f"Created Credential Template: {template.id}")
     return _template_to_response(template)
@@ -1798,19 +1889,14 @@ async def update_credential_template(
         candidate.issuer_algorithm = request.issuer_algorithm or request.signing_algorithm
     if request.issuer_certificate_chain_pem is not None:
         candidate.issuer_certificate_chain_pem = request.issuer_certificate_chain_pem
-    if request.auto_generate_artifacts is not None or request.artifacts_auto_generate is not None:
+    if request.auto_generate_artifacts is not None:
         candidate.auto_generate_artifacts = _resolve_auto_generate_artifacts(
             request.auto_generate_artifacts,
-            request.artifacts_auto_generate,
         )
     supported_formats = candidate.supported_formats
     if request.supported_formats is not None:
         supported_formats = [normalize_credential_format(f) for f in request.supported_formats]
         candidate.supported_formats = supported_formats
-    if request.wallet_configs is not None:
-        candidate.wallet_configs = [WalletConfig(wallet_id=wc.get("wallet_id", ""), deep_link_scheme=wc.get("deep_link_scheme", "openid-credential-offer://"), format_variant=wc.get("format_variant")) for wc in request.wallet_configs]
-    if request.issuance_protocol is not None:
-        candidate.issuance_protocol = request.issuance_protocol
     if request.credential_payload_format is not None:
         try:
             candidate.credential_payload_format = normalize_credential_payload_format(
@@ -1872,13 +1958,40 @@ async def activate_credential_template(
     if not template.claims:
         raise HTTPException(status_code=400, detail="Template must have at least one claim")
 
-    await _require_active_issuer_profile(
+    _validate_template_protocol_requirements(
+        compliance_profile=template.compliance_profile,
+        compliance_profile_id=template.compliance_profile_id,
+        credential_payload_format=_extract_template_credential_format(template),
+        vct=template.vct,
+    )
+
+    await _require_active_revocation_profile(
+        organization_id=template.organization_id,
+        revocation_profile_id=template.revocation_profile_id,
+    )
+
+    issuer_context = await _require_active_issuer_profile(
         fastapi_request,
         organization_id=template.organization_id,
         issuer_profile_id=template.issuer_profile_id,
         credential_format=payload_format_to_wire(template.credential_payload_format),
         algorithm=template.issuer_algorithm,
     )
+    issuer_fields = _canonical_issuer_fields(
+        issuer_context,
+        requested_algorithm=template.issuer_algorithm,
+    )
+    await _require_trust_profile_accepts_issuer(
+        trust_profile_id=template.trust_profile_id,
+        issuer_did=issuer_fields["issuer_did"],
+    )
+
+    template.issuer_profile_id = issuer_fields["issuer_profile_id"]
+    template.issuer_key_id = issuer_fields["issuer_key_id"]
+    template.issuer_algorithm = issuer_fields["issuer_algorithm"]
+    template.key_access_mode = issuer_fields["key_access_mode"]
+    template.remote_signing_config = issuer_fields["remote_signing_config"]
+    template.issuer_did = issuer_fields["issuer_did"]
     
     template.activate()
     await repo.save(template)
@@ -1923,26 +2036,27 @@ async def create_new_version(
     return _template_to_response(new_template)
 
 
-@router.delete("/{template_id}")
+@router.delete("/{template_id}", status_code=204, response_class=Response)
 async def delete_credential_template(
     template_id: str,
     fastapi_request: Request,
     user_id: str = Depends(get_current_user_id),
     repo: InMemoryCredentialTemplateRepository = Depends(get_repo),
-) -> dict:
-    """Delete a Credential Template (soft delete). Requires authentication."""
+) -> Response:
     """Delete a Credential Template (only allowed for drafts)."""
     template = await repo.get(template_id)
-    if template:
-        await require_org_membership(template.organization_id, fastapi_request, user_id)
+    if not template:
+        raise HTTPException(status_code=404, detail="Credential Template not found")
 
-    if template and template.status != TemplateStatus.DRAFT:
+    await require_org_membership(template.organization_id, fastapi_request, user_id)
+
+    if template.status != TemplateStatus.DRAFT:
         raise HTTPException(
-            status_code=400, 
+            status_code=409,
             detail="Only draft templates can be deleted. Deprecate active templates instead."
         )
     await repo.delete(template_id)
-    return {"success": True}
+    return Response(status_code=204)
 
 
 # Claims sub-resource
@@ -2113,14 +2227,10 @@ def _validate_template_protocol_requirements(
     credential_payload_format: str,
     vct: str | None,
 ) -> None:
-    compliance_code = None
-    if isinstance(compliance_profile, dict):
-        compliance_code = compliance_profile.get("compliance_code") or compliance_profile.get("code")
-
-    if not compliance_profile_id and not compliance_code:
+    if not compliance_profile_id:
         raise HTTPException(
             status_code=422,
-            detail="compliance_profile_id is required unless compatibility mode provides compliance_profile.compliance_code",
+            detail="compliance_profile_id is required",
         )
 
     if credential_payload_format == CredentialFormat.SD_JWT_VC.value and not (vct and str(vct).strip()):
@@ -2138,6 +2248,11 @@ def _validate_template_protocol_requirements(
         raise HTTPException(
             status_code=422,
             detail=f"vct must be an absolute URI (e.g. https://…), got: {vct}",
+        )
+    if vct and urlparse(str(vct).strip()).hostname == "marty.example":
+        raise HTTPException(
+            status_code=422,
+            detail="vct must use the configured public credential metadata origin; marty.example is forbidden",
         )
 
 

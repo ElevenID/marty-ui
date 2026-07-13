@@ -7,16 +7,16 @@ Method: Chromium Playwright using the repository's configured testing users and 
 
 ## Remediation Status
 
-The clean-break MIP 0.3 remediation was deployed to beta on 2026-07-12. Implementation and deployment evidence covers:
+The first clean-break MIP 0.3.1 remediation was deployed to beta on 2026-07-12. Subsequent audit-driven hardening changed the coordinated revision and strengthened release provenance, so that historical deployment is engineering evidence but is not promotion evidence for the current revision. Current implementation evidence covers:
 
 - old `/v1/applicants/*` routes absent and canonical route inventory present;
 - persisted organization authorization, explicit review/decision permissions, and caller-held reviewer locks;
 - strict application creation, server-derived templates/checks, structured field validation, blocked/ready claim states, and holder inventory;
 - registered Application Template create/detail/edit routes and fail-closed Flow capability loading;
 - dedicated `reviewer@marty.demo` provisioning and reviewer membership configuration;
-- MIP 0.3 generated bindings current, protocol conformance and drift checks passing, and the pinned Rust wheel compiling in CD;
-- 646 service tests passing with one existing skip, including 64 focused applicant, gateway, migration, metadata, and policy tests;
-- all 1,003 frontend tests passing across 149 test files and a successful production build;
+- MIP 0.3.1 generated bindings current, protocol conformance and drift checks passing, and Rust/TypeScript bindings building successfully;
+- 742 UI/service tests passing with one explicit skip, 257 credential-service tests passing with 11 explicit skips, 125 protocol tests passing, and all 167 CLI tests passing;
+- the complete frontend suite and production build passing;
 - a five-test deterministic Chromium gate covering canonical applicant creation/claim, all nine selectable wallet destinations, holder blocked/ready states, reviewer lock/request-info/reject/approve actions, and 320/390/768/1440 responsive widths;
 - browser assertions for no failed API requests in the applicant/holder gate, no reviewer identity fields in decision payloads, and no horizontal page overflow at the supported widths.
 
@@ -395,11 +395,12 @@ These results drove the coordinated beta deployment documented below.
 
 ### Atomic release
 
-- `https://beta.elevenidllc.com` advertises only MIP `0.3.0`; the discovery response and `X-MIP-Version` header both return `0.3.0`.
+- `https://beta.elevenidllc.com` advertises only MIP `0.3.1`; the public `X-MIP-Version` header returns `0.3.1`.
 - The local beta database, Redis, OpenBao, and applicant store were backed up before the one-way cutover under `tests/artifacts/deployment-mip-0.3.0-beta-20260712/`.
 - The applicant store was migrated to `MIP/0.3.0`, all ten relational service migration heads verify, and the Flow trigger migration is at `20260712_0001`.
 - CD run `29185132375` passed protocol conformance, generated-binding drift, Rust wheel compilation, services/UI/migration image builds, fresh-schema rehearsal, legacy applicant-store rehearsal, and release-manifest publication.
 - The release-ready manifest pins seven repository revisions, four Marty image digests, tested walt.id image digests, `mixed_versions_supported: false`, and migration rehearsal mode `ephemeral-schema`.
+- That historical ephemeral rehearsal no longer satisfies the strengthened promotion contract. Current CD requires an identified protected beta database copy, records its snapshot ID, and has no empty-schema fallback; a new matching CD run is required before the wallet-conformance workflow can publish a release-ready manifest.
 - A fresh-install migration defect discovered by the rehearsal was corrected: the historical Flow migration no longer deletes Presentation Policy tables or migration state owned by another service.
 
 ### Live beta acceptance
@@ -416,8 +417,237 @@ These results drove the coordinated beta deployment documented below.
 - Walt.id issuance is accepted, but its presentation API rejects the signed DCQL login request with a wallet-side JSON decoding error for `$.request`. The signed standards request was not weakened to accommodate that parser defect.
 - Walt.id `0.5.0` is not accepted for issuance because it emits proof JWT type `JWT` instead of the required `openid4vci-proof+jwt`; the tested stable API and demo-wallet pair is pinned by digest until an upstream versioned release passes.
 - Walt.id resolves the credential title and VCT metadata but still renders the issuer label as `Unknown`; issuer display metadata remains an interoperability follow-up.
-- Native wallet handoffs and destructive suspend, reinstate, revoke, and renewal scenarios remain device-lab gates.
+- Native wallet handoffs remain device-lab gates. The Marty browser-wallet lane now covers renewal, suspension, reinstatement, and revocation deterministically.
+- Repository enforcement is complete: `.github/workflows/wallet-conformance.yml` validates protected SpruceKit and native-handoff evidence against the exact build-ready manifest and beta lifecycle run. CD remains `release_ready=false` until that protected workflow publishes the release-ready attestation.
+
+### SpruceKit metadata remediation - 2026-07-12 14:35-14:50 MDT
+
+The release audit found eight active Credential Templates still using
+`https://marty.example/credentials/*`; seven appeared in the Spruce-specific
+issuer metadata. The prior diagnostic script requested obsolete URLs, disabled
+TLS verification, and exited successfully on HTTP 404, so it could not serve as
+a release check.
+
+The remediation is a clean one-way change:
+
+- migration `20260712_0004` rewrites only active placeholder VCTs to
+  `https://beta.elevenidllc.com/credentials/*` and leaves nine deprecated
+  placeholder values intact for audit display;
+- Credential Template create, update, and activation reject `marty.example`;
+- `scripts/check_spruceid_metadata.py` requires matching canonical and appended
+  metadata, issuer display, the membership profile, public HTTPS SD-JWT VCTs,
+  and correctly formed Spruce mDoc entries;
+- beta lifecycle records the probe as `spruce-metadata.json`, while protected
+  promotion rechecks the live endpoint and binds the rehearsed public origin to
+  the promoted beta origin.
+
+The current migration image was replayed from the preserved pre-cutover dump in
+an isolated database with `PUBLIC_API_URL=https://beta.elevenidllc.com`. All ten
+service heads applied and verified, Credential Template reached `20260712_0004`,
+active legacy VCTs reached zero, application/template references remained
+resolved, and deprecated history remained. A fresh live backup was captured as
+`tests/artifacts/deployment-mip-0.3.0-beta-20260712/postgres-pre-vct-20260712T144640.dump`
+before applying the same image to beta. The isolated rehearsal database was then
+removed.
+
+Live metadata now reports issuer display `ElevenID LLC`, ten Spruce SD-JWT
+configurations plus the valid mDL mDoc configuration, and no active placeholder
+VCT. Gateway, Credential Template, and issuance services are healthy; Walt.id
+diagnostic containers remain stopped. The live migration log also exposed that
+the tunnel environment inherited the compose `dev` migration profile. No new
+seed migration ran and the public HTTPS origin produced the intended result, but
+the beta environment is now explicitly pinned to `MARTY_MIGRATION_PROFILE=beta`
+for subsequent deployments. A second migration verification ran under the beta
+profile with all ten services successful, zero failures, and every head current.
+
+### MIP 0.3.1 lifecycle acceptance - 2026-07-12
+
+The deterministic final-spec browser journey now passes on beta:
+
+1. The holder claims a fresh membership badge through canonical self-service APIs.
+2. The holder explicitly logs out, receives the badge in the Marty browser wallet, presents it to the signed credential-login request, and returns authenticated as `john.doe@marty.demo`.
+3. The organization issues a fresh policy credential bound to the holder public key through `cnf.jwk`.
+4. The organization creates, validates, and activates an Application Template through the UI.
+5. The browser wallet submits a signed DCQL presentation; signature, holder binding, Trust Profile issuer match, and authoritative issuer status all pass.
+6. The Flow result is `COMPLETED`, evaluation is `passed`, and decision is `allow`.
+7. The operator renews an eligible credential through the UI, the wallet redeems the replacement offer, the source is revoked as superseded, and both credentials retain their renewal links.
+8. The replacement verifies as denied while suspended, allowed after reinstatement, and denied after revocation.
+9. A wrong-organization lifecycle request returns `403`, and every status-list URI remains owned by the credential organization.
+
+Development fixes driven by this run:
+
+- issuance now returns the cryptographically verified holder public JWK and strips all private key fields before placing it in `cnf.jwk`;
+- Credential Template activation refreshes the managed issuer context and rejects a Trust Profile that does not trust that issuer DID;
+- authoritative credential status includes `issuer_did`, so non-`did:web` managed identities are accepted only when the stored credential issuer exactly matches the verified presentation issuer;
+- the beta setup audit no longer silently creates a fake manual DID when the managed issuer selector is unavailable;
+- the focused credential-login script uses the Marty browser wallet rather than the unsupported Walt.id presentation path;
+- Credential Template validity policy is copied into issuance transactions, and `/v1/issued-credentials/{id}/renew` creates a linked replacement offer rather than reissuing an application;
+- renewal linkage is restored by the real issuance transaction mapper; the browser gate caught and prevented a misplaced Canvas receipt mapping from reaching release;
+- a one-way issuance migration adds renewal policy and supersession links at the single `credential_renewal_mip031` migration head.
+- the current migration image was rehearsed locally against the preserved pre-cutover beta dump `tests/artifacts/deployment-mip-0.3.0-beta-20260712/postgres-pre.dump`, restored into an isolated beta-copy database. All ten service heads applied and verified with zero failures; post-migration integrity checks found 66 Credential Templates with zero active revocation gaps, 22 applications with zero missing Application Template links, 36 historical Flow Definitions preserved as explicit `custom` extensions, both renewal-link columns, and inactive Walt.id. The isolated database was removed after verification.
+
+Evidence:
+
+- `tests/artifacts/beta-org-credential-paths-20260712T202814/report.json`
+- `tests/artifacts/beta-credential-login-20260712T201139/report.json`
+- `tests/artifacts/beta-membership-probe-20260712201700/report.json`
+- `tests/artifacts/beta-credential-lifecycle-20260712T201804/report.json`
+- `tests/artifacts/beta-org-credential-paths-20260712T204857/report.json`
+- `tests/artifacts/beta-credential-login-20260712T204955/report.json`
+- `tests/artifacts/beta-membership-probe-20260712204839/report.json`
+- `tests/artifacts/beta-credential-lifecycle-20260712T204938/report.json`
 
 ### Current decision
 
-The MIP `0.3.0` clean-break deployment is live and its canonical issuance path is release-ready. Passwordless badge login is not yet fully accepted until the SpruceKit lane passes; walt.id presentation remains an external compatibility blocker rather than an advertised login path.
+The MIP `0.3.1` deterministic beta lifecycle is ready for canonical browser issuance, membership-badge logout/login, Application Template lifecycle, organization verification, renewal, suspension, reinstatement, revocation, cross-organization lifecycle denial, and strict SpruceKit issuer metadata. Overall promotion still requires publishing the final coordinated commit, a beta-copy-qualified CD manifest with the exact rehearsal origin, and protected SpruceKit/native evidence for the same commit and beta run. Walt.id remains inactive and unadvertised until an upstream final-spec issuance and presentation pair passes.
+
+## Final Audit-Driven Revalidation - 2026-07-12 16:37-16:48 MDT
+
+The final browser and log pass found and corrected one issuance-boundary defect and two hidden runtime reliability defects:
+
+- Flow webhook orchestration was copying scalar event metadata into credential claims and ignoring canonical `data.claims`. It now consumes only the applicant service's canonical claim map and requires the structured `APPLICATION_APPROVED` trigger; legacy precondition matching and deferred `_application_id` claim resolution were removed.
+- Credential login profile upsert omitted the trusted organization header. It now supplies `X-Organization-ID`, so canonical profile synchronization succeeds instead of logging a recoverable `422`.
+- Shared gRPC clients pinged idle services every 30 seconds without a limit, causing `ENHANCE_YOUR_CALM / too_many_pings` disconnects. Clients now use a five-minute active-call-only keepalive policy. Disabled Keycloak token exchange is explicit configuration and no longer produces a known `400` probe.
+
+Live claim-boundary proof for Jane Smith:
+
+- application `26ddadcb-9700-4b2f-88d2-252090352f06` stores only `email`, `given_name`, and `family_name` in `form_data`;
+- issuance transaction `68dcc65b-2096-4e3d-8c18-ec2588eff3c7` contains those mapped values plus server-derived `member_id`, `organization_id`, `organization_name`, `issued_at`, and `role`;
+- no applicant ID, arbitrary form field, integration context, or top-level application event metadata became credential content.
+
+Latest release-ready browser evidence:
+
+- `tests/artifacts/beta-membership-probe-20260712225531/report.json`
+- `tests/artifacts/beta-credential-login-20260712T225549/report.json`
+- `tests/artifacts/beta-org-credential-paths-20260712T223813/report.json`
+- `tests/artifacts/beta-credential-lifecycle-20260712T223855/report.json`
+
+Final automated verification:
+
+- Marty UI/services: `727 passed, 1 skipped`.
+- Marty Credentials: `257 passed, 11 skipped`.
+- Frontend: `1,016 passed` across `150` files.
+- MIP protocol: `110 passed, 3 skipped`; generated bindings are current; Rust tests and TypeScript build pass.
+- Latest credential-login and flow logs contain no unexplained error, profile-provisioning warning, token-exchange failure, or gRPC keepalive throttle.
+
+One-way migration evidence is preserved under `tests/artifacts/deployment-mip-0.3.1-beta-20260712T161209/`, including full backups before canonical Application Template conversion and server-owned claim derivation. Both migrations were rehearsed against isolated restores and then applied to beta with all migration services successful.
+
+Release decision: deterministic beta is build-ready and all repository-controlled browser acceptance paths pass. Promotion remains intentionally fail-closed until protected SpruceKit Open Badge login and all required native handoff evidence are attached to the exact coordinated build and beta run.
+
+## Fresh Organization Release Gate - 2026-07-12 17:34-17:38 MDT
+
+The beta lifecycle gate now proves that a new organization can create its own issuance and verification foundation instead of relying only on `BETA_AUDIT_ORG_ID` fixtures. The Playwright owner journey creates a disposable organization and requires canonical active state for signing configuration, issuer identity, Trust Profile, Revocation Profile, Credential Template, Application Template, Presentation Policy, Deployment Profile, OID4VCI issuance flow, OID4VP verification flow, and API key. Both flows must be created as drafts, validate successfully, and activate before final inventory can pass.
+
+The audit drove three corrections:
+
+1. Credential Template creation displayed “now active” while the API resource remained `DRAFT`. The wizard had deleted `activate_immediately` before the service could perform the explicit activation call. The flag now remains in memory, is excluded from the create payload, and triggers `/activate` before success.
+2. Application Template and Flow MUI selects had visible labels but no accessible names. Their `InputLabel` and `Select` controls now use explicit `labelId`/`id` associations, with tests covering the required Credential Template, Approval, Trigger, and dependency controls.
+3. The old organization audit accepted `submitted-or-blocked` checkpoints and always exited zero. Required checkpoints now represent canonical active state, unexplained failures block, activation reads use bounded convergence polling, final inventory is run-scoped, and a blocked report exits nonzero.
+
+Passing evidence: `tests/artifacts/beta-org-console-audit-20260712174926/report.json`. The run created and activated every required primitive against the final deployed console bundle, validated and activated both flow types, verified all run-created MIP dependency links, observed no page exception or failed browser request, and recorded only typed free-plan Policy Set entitlement responses. The fresh audit is installed in `.github/workflows/e2e-tests.yml` before the seeded membership, credential-login, browser-wallet verification, and destructive lifecycle jobs. The complete frontend suite now passes `1,017` tests across `151` files.
+
+## Protected Promotion Hardening - 2026-07-12
+
+The promotion completion audit found that the fresh-organization artifact and exact Marty Core browser-wallet revision were downloaded but not validated by `promote_release_evidence.py`. It also found that protected attachment SHA strings were accepted without downloading the referenced content. These gaps are closed as breaking evidence schema v2:
+
+- promotion requires the successful CD and beta lifecycle workflow names, conclusions, and exact Marty UI SHA;
+- the build manifest must contain exactly all seven coordinated repository SHAs and full lowercase image digests;
+- the beta Marty Core revision must match the build manifest;
+- the fresh-organization report must pass with no page/request failures and contain the exact 11-resource verified inventory;
+- SpruceKit evidence requires exact badge and issuer display names, while every native handoff records its build, platform, device model, and OS version;
+- all four protected attachments are downloaded through HTTPS-only redirects, byte-hashed, and bound to the exact wallet evidence JSON;
+- the release-ready manifest records CD, beta, and promotion run IDs plus non-sensitive attachment kind/hash/size summaries, without holder email or protected URLs.
+
+Focused release-promotion, manifest, and attachment verification suites pass. Protected SpruceKit/native execution remains a real external device-lab input; the repository no longer accepts metadata-only attachment attestations.
+
+The same completion audit then identified a deployment-provenance gap: the beta
+lifecycle artifact recorded the workflow checkout SHA but did not prove that the
+running beta services and UI came from that build. CD now embeds release version
+and Marty UI SHA into both images. The beta gate downloads the selected
+build-ready manifest, verifies the successful CD run at that SHA, and requires
+matching runtime markers from `/.well-known/marty-release` and
+`/marty-ui-release.json` before Playwright starts. Promotion independently checks
+the recorded markers, CD run, release version, exact image set, first-party tags,
+external wallet digests, and built-image digests. The expanded focused suite
+passes 53 tests, and the complete gateway suite passes 294 tests. Existing local beta evidence remains useful engineering evidence
+but cannot promote the next release; the marker-bearing coordinated build must be
+published and deployed first.
+
+The audit also compared the live MIP discovery body with
+`marty-protocol/schemas/mip-configuration.json`. The gateway was advertising
+0.3.1 while still returning a pre-clean-break body that omitted the required
+`mip_configuration_endpoint` and added forbidden profile/endpoint/authorization
+objects. No first-party consumer depended on those fields. The gateway now emits
+the strict canonical document and its generated value passes the protocol JSON
+Schema with URI format checks. The beta gate rejects the removed shape even when
+the body and header version strings are correct.
+
+Pre-deployment confirmation on 2026-07-12: live beta returns `404` for the
+services marker, serves the existing SPA fallback for the UI marker, and still
+returns the removed discovery extensions. This is the expected fail-closed state
+for the newly strengthened gate and confirms that no existing local evidence can
+be mistaken for evidence from the marker-bearing release.
+
+## Repository Completion Pass - 2026-07-12
+
+The post-gate implementation audit found and corrected five additional first-party defects:
+
+1. Self-service Application creation incorrectly searched for the applicant profile inside the target issuer organization and then persisted the Application under the profile organization. The gateway and applicant service now keep the authenticated applicant organization immutable for profile ownership while persisting the requested issuer organization on the Application. A cross-organization regression proves a holder in one default organization can apply to an authorized product in another without moving or duplicating the profile.
+2. `ApplicationReviewPage` used the authentication organization after an operator switched console organizations. Review reads, locks, evidence, and decisions now use only validated `ConsoleContext.activeOrgId`; the regression fixture deliberately gives the user a different authentication organization.
+3. The canonical signing-key purpose and service-capability endpoints returned hard-coded `503` responses even though the signing-key service implemented them. The gateway now proxies both endpoints through the service registry.
+4. Flow status parsing retained removed lifecycle aliases such as `WAITING`, `WAITING_APPROVAL`, and `canceled`. Public and gRPC parsing now accept only canonical MIP 0.3.1 status values.
+5. Credential Template requests still exposed deprecated `issuer_requirements`, `artifacts_auto_generate`, and client-selected status behavior. Public gateway/service models now forbid removed fields and use only `auto_generate_artifacts`; historical storage remains readable for audit.
+6. The pinned Marty Core revision referenced a vendored `core2` patch that was not tracked and ignored the workspace `Cargo.lock`, while the beta workflow required `cargo build --locked`. Marty Core now treats its lockfile, vendored patch, and `marty-test-wallet` crate as release sources. The beta workflow checks all three and runs locked Cargo metadata before compiling the wallet.
+
+The stale OID4VCI auto-trigger guide was also rewritten around canonical reviewer actions, server-derived claims, explicit custom Flow extensions, and `claim_state` recovery. No source or first-party client teaches a removed applicant route.
+
+Latest local verification:
+
+- Marty UI/services: `746 passed, 1 skipped`.
+- Marty Credentials: `257 passed, 11 skipped`.
+- Marty Protocol: `125 passed`; generated output is current; Rust compile tests and the TypeScript binding build pass.
+- Marty CLI: `167 passed`.
+- Frontend: complete test suite and production build pass.
+- Deterministic Chromium credential paths: `5 passed`, covering request information, rejection, approval, browser-wallet selection, and responsive holder inventory.
+- Marty Core release lane: `150` final-spec OID4VCI/browser-wallet tests pass, with two intentional SIOPv2 skips and three ignored doc examples; the browser-wallet crate contributes two tests and the Python bindings compile against the same locked engine.
+- Release/promotion, source-CI, and GitHub environment contract tests: `61 passed`.
+- Application Template lifecycle tests: `15 passed`.
+- Migration runner/applicant conversion tests: `23 passed`.
+- Every one of the eight `marty-ui` Alembic trees resolves to exactly one head; the external issuance tree resolves to `derive_server_owned_claims (head)`.
+
+Current release decision: repository-controlled MIP 0.3.1 work is build-ready. It is not release-ready and must not reuse the historical beta artifacts. The next valid path is to publish one coordinated revision set, run CD against the protected identified beta copy and exact HTTPS origin, deploy the manifest's immutable images atomically, require matching service/UI runtime markers, rerun the full beta lifecycle, and attach SpruceKit plus required native-wallet evidence for that exact build and run. Walt.id remains inactive and unadvertised.
+
+GitHub deployment preflight at this boundary:
+
+- GitHub authentication and package/workflow scopes are available.
+- `beta-lifecycle` exists with the beta origin, audit organization, and seeded applicant/vendor credentials.
+- coordinated repository variables still name the previous release revisions and must be updated only after the final repositories are published.
+- `beta-migration-rehearsal` exists but does not yet contain `MIGRATION_REHEARSAL_DATABASE_URL`, `MIGRATION_REHEARSAL_DATABASE_MARKER`, `MIGRATION_REHEARSAL_SNAPSHOT_ID`, or `MIGRATION_REHEARSAL_PUBLIC_API_URL`; CD will fail closed until an identified beta snapshot is restored to the marked rehearsal database.
+- `wallet-conformance` does not yet exist and must be created with protected review rules before device evidence can promote a release. `WALLET_EVIDENCE_BEARER_TOKEN` is required only when protected attachment URLs need bearer authentication.
+- CD now runs `scripts/check_github_release_environments.py` before building. The machine-readable manifest requires reviewers, disabled self-review and administrator bypass, restricted deployment branches, required input names, and lowercase 40-character coordinated revision variables; the live configuration currently fails for the blockers above.
+- CD also requires successful exact-SHA `CI` workflows for Marty Protocol and Marty Credentials plus the dedicated `MIP Release Wallet` workflow for Marty Core. The broader historical Core CI remains separate from this release authority because it includes unrelated cross-platform, biometrics, and workspace-formatting debt.
+- ElevenID is currently on GitHub Free with a private `marty-ui` repository. GitHub rejects branch-protection configuration with an upgrade-required `403`, and no ElevenID reviewer team exists. [GitHub documents](https://docs.github.com/en/rest/deployments/environments?apiVersion=2026-03-10) required reviewers on private repositories as an Enterprise capability; the organization must use an Enterprise plan (or make an explicit, separately reviewed public-visibility decision) and assign an independent reviewer before the enforced environment preflight can pass. The release contract is not weakened around this entitlement.
+
+## Local Release And Compliance Profile Completion - 2026-07-12/13
+
+GitHub execution is temporarily deferred. A repository-controlled local lane now freezes all coordinated worktrees into checksum-addressed snapshots, verifies that neither source nor snapshots change, backs up PostgreSQL/applicant/Redis/OpenBao state, rehearses the exact migration image on an isolated restored beta copy, builds release-tagged images, applies the live migration, recreates all application/UI containers, and compares local and tunneled runtime markers. Every local manifest is permanently marked `source_kind=local-worktree-snapshot`, `promotion_eligible=false`, and `release_ready=false`.
+
+The first complete immutable run, `mip-0.3.1-local-20260713T021224Z`, proved the lane mechanics. Browser-driven development after that snapshot exposed a remaining MIP dependency defect:
+
+1. Discovery reported no active Compliance Profile while Credential Templates silently used an inline `CUSTOM` fallback.
+2. Credential Template requests still carried client-authored wallet compatibility fields. The UI removed its obsolete Wallet Compatibility step, but the gateway reintroduced `wallet_configs: []` from a defaulted request model.
+3. The Compliance Profiles page exposed Create/Edit/Detail actions with no complete persistent lifecycle behind them.
+
+The clean-break correction now provides immutable system profile `OID4VC Core` (`10000000-0000-0000-0000-000000000001`) as an active discoverable dependency for every organization. Protocol schemas/examples/bindings require lifecycle status, Credential Templates require `compliance_profile_id`, embedded profiles and `wallet_configs` are rejected, wallet compatibility remains server-derived, and dead custom-profile actions are hidden until their full lifecycle exists.
+
+Latest development-stack browser evidence after that correction:
+
+- `tests/artifacts/beta-org-console-audit-20260712210137/report.json`: all `66` fresh-organization checkpoints pass; signing, issuer, trust, system compliance, revocation, Credential/Application templates, Presentation Policy, Deployment Profile, both flows, API key, and final dependency inventory are active; no blocker, page error, or failed request.
+- `tests/artifacts/beta-membership-probe-20260713030407/report.json`: canonical profile/application/inventory routes pass, Claim recovers, and all removed applicant routes return `404`.
+- `tests/artifacts/beta-credential-login-20260713T030427/report.json`: a fresh membership badge is received by the browser wallet, explicit logout occurs, signed DCQL presentation completes, and `john.doe@marty.demo` is authenticated again.
+- `tests/artifacts/beta-org-credential-paths-20260713T030439/report.json`: policy-bound credential issuance, wallet receipt, Application Template draft/validate/activate, and browser-wallet OID4VP verification end in `evaluation=passed`, `decision=allow`.
+- `tests/artifacts/beta-credential-lifecycle-20260713T030519/report.json`: linked renewal succeeds; suspend, reinstate, and revoke produce deny, allow, and deny; status-list ownership matches the organization; wrong-organization mutation returns `403`.
+
+Current automated verification is `746 passed, 1 skipped` for Marty UI/services and `125 passed` for MIP Protocol; generated bindings are current, Rust and TypeScript binding builds pass, the complete frontend suite and production build pass, and `23` local release contract tests plus PowerShell/nginx/Compose validation pass.
+
+This evidence is engineering-complete for the mutable development stack. Final local candidate `mip-0.3.1-local-20260713T031700Z` freezes these corrections; its deployment manifest and repeated five browser reports become the authoritative local evidence only when that run succeeds. Public promotion remains blocked by design until coordinated sources are published and protected SpruceKit/native evidence is attached to the exact protected beta run. Walt.id remains inactive and unadvertised.

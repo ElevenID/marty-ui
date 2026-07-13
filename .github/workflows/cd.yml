@@ -23,7 +23,29 @@ jobs:
   validate-release-manifest:
     name: Validate Pinned Revisions
     runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
     steps:
+      - uses: actions/checkout@v4
+
+      - name: Require successful Marty UI source CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          run_id="$(gh run list \
+            --repo "$GITHUB_REPOSITORY" \
+            --workflow CI \
+            --commit "$GITHUB_SHA" \
+            --status completed \
+            --json conclusion,databaseId \
+            --jq '[.[] | select(.conclusion == "success")][0].databaseId // empty')"
+          if [[ -z "$run_id" ]]; then
+            echo "A successful CI workflow for $GITHUB_SHA is required before CD." >&2
+            exit 1
+          fi
+          echo "Verified source CI run $run_id"
+
       - name: Require exact marty-credentials revision
         shell: bash
         run: |
@@ -41,6 +63,46 @@ jobs:
               exit 1
             fi
           done
+
+      - name: Require successful coordinated source CI
+        env:
+          GH_TOKEN: ${{ secrets.REPO_ACCESS_TOKEN }}
+        shell: bash
+        run: |
+          verify_source_ci() {
+            local repository="$1"
+            local revision="$2"
+            local workflow="$3"
+            local run_id
+            run_id="$(gh run list \
+              --repo "$repository" \
+              --workflow "$workflow" \
+              --commit "$revision" \
+              --status completed \
+              --json conclusion,databaseId \
+              --jq '[.[] | select(.conclusion == "success")][0].databaseId // empty')"
+            if [[ -z "$run_id" ]]; then
+              echo "A successful $workflow workflow for $repository@$revision is required." >&2
+              exit 1
+            fi
+            echo "Verified $repository CI run $run_id for $revision"
+          }
+
+          verify_source_ci Marty-Protocol/Marty-Protocol "$MARTY_PROTOCOL_REF" CI
+          verify_source_ci ElevenID/marty-credentials "$MARTY_CREDENTIALS_REF" CI
+          verify_source_ci ElevenID/marty-core "$MARTY_CORE_REF" "MIP Release Wallet"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Require protected release environments
+        env:
+          GH_TOKEN: ${{ secrets.REPO_ACCESS_TOKEN }}
+        run: python scripts/check_github_release_environments.py
+
+      - name: Run repository release contract tests
+        run: pip install pytest && python -m pytest tests -v --tb=short
 
   verify-protocol-bindings:
     name: Verify Pinned MIP Protocol And Bindings
@@ -68,6 +130,126 @@ jobs:
       - name: Verify generated bindings
         working-directory: marty-protocol
         run: uv run python scripts/codegen.py --check
+
+  verify-coordinated-js:
+    name: Verify Pinned CLI, Blog, And Subscriptions
+    needs: [validate-release-manifest]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ElevenID/marty-cli
+          token: ${{ secrets.REPO_ACCESS_TOKEN }}
+          ref: ${{ env.MARTY_CLI_REF }}
+          path: marty-cli
+
+      - uses: actions/checkout@v4
+        with:
+          repository: ElevenID/marty-blog
+          token: ${{ secrets.REPO_ACCESS_TOKEN }}
+          ref: ${{ env.MARTY_BLOG_REF }}
+          path: marty-blog
+
+      - uses: actions/checkout@v4
+        with:
+          repository: ElevenID/marty-subscriptions
+          token: ${{ secrets.REPO_ACCESS_TOKEN }}
+          ref: ${{ env.MARTY_SUBSCRIPTIONS_REF }}
+          path: marty-subscriptions
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: |
+            marty-cli/package-lock.json
+            marty-blog/package-lock.json
+            marty-subscriptions/package-lock.json
+
+      - name: Test Marty CLI clean-break client
+        working-directory: marty-cli
+        run: npm ci && npm test
+
+      - name: Test and build Marty Blog
+        working-directory: marty-blog
+        run: npm ci && npm test && npm run build
+
+      - name: Test and build Marty Subscriptions
+        working-directory: marty-subscriptions
+        run: npm ci && npm test && npm run build
+
+  verify-credentials-service:
+    name: Verify Pinned Issuance Service
+    needs: [validate-release-manifest]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure Git auth for private repos
+        run: git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
+
+      - uses: actions/checkout@v4
+        with:
+          repository: ElevenID/marty-core
+          token: ${{ secrets.REPO_ACCESS_TOKEN }}
+          ref: ${{ env.MARTY_CORE_REF }}
+          path: marty-core
+
+      - uses: actions/checkout@v4
+        with:
+          repository: ElevenID/marty-credentials
+          token: ${{ secrets.REPO_ACCESS_TOKEN }}
+          ref: ${{ env.MARTY_CREDENTIALS_REF }}
+          path: marty-credentials
+
+      - uses: dtolnay/rust-toolchain@nightly
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install native issuance test dependencies
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev perl clang
+
+      - name: Build Python bindings and install service test dependencies
+        run: |
+          python -m pip install --disable-pip-version-check maturin pytest pytest-asyncio
+          cd marty-credentials/rust/marty-rs
+          maturin build --release --features python --out /tmp/marty-wheels
+          cd ../../..
+          pip install /tmp/marty-wheels/*.whl
+          pip install -e '.[dev]'
+
+      - name: Require one issuance migration head
+        working-directory: marty-credentials/services/issuance/infrastructure/migrations
+        run: python -m alembic -c alembic.ini heads | tee /tmp/issuance-heads.txt && test "$(grep -c '(head)' /tmp/issuance-heads.txt)" -eq 1
+
+      - name: Run issuance service tests
+        working-directory: marty-credentials
+        run: pytest tests/ -q
+
+  verify-core:
+    name: Verify Pinned Marty Core
+    needs: [validate-release-manifest]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ElevenID/marty-core
+          token: ${{ secrets.REPO_ACCESS_TOKEN }}
+          ref: ${{ env.MARTY_CORE_REF }}
+          path: marty-core
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: marty-core
+
+      - name: Install native core test dependencies
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev perl clang
+
+      - name: Test Marty Core workspace
+        working-directory: marty-core
+        run: cargo test --workspace --locked
 
   build-wheel:
     name: Build Rust Wheel
@@ -143,7 +325,7 @@ jobs:
 
   release-manifest:
     name: Build Atomic Release Manifest
-    needs: [validate-release-manifest, verify-protocol-bindings, determine-tag]
+    needs: [validate-release-manifest, verify-protocol-bindings, verify-coordinated-js, verify-credentials-service, verify-core, determine-tag]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -153,6 +335,8 @@ jobs:
         env:
           RELEASE_VERSION: ${{ needs.determine-tag.outputs.version }}
         run: |
+          WALTID_WALLET_API_IMAGE="$(jq -r '.waltid.wallet_api_image' deploy-config/catalog/wallet-test-images.json)"
+          WALTID_WEB_WALLET_IMAGE="$(jq -r '.waltid.web_wallet_image' deploy-config/catalog/wallet-test-images.json)"
           jq -n \
             --arg release_version "$RELEASE_VERSION" \
             --arg marty_ui_sha "$GITHUB_SHA" \
@@ -162,13 +346,13 @@ jobs:
             --arg marty_cli_sha "$MARTY_CLI_REF" \
             --arg marty_blog_sha "$MARTY_BLOG_REF" \
             --arg marty_subscriptions_sha "$MARTY_SUBSCRIPTIONS_REF" \
-            --arg mip_version "0.3.0" \
+            --arg mip_version "0.3.1" \
             --arg services_image "${IMAGE_PREFIX}/services:${RELEASE_VERSION}" \
             --arg ui_image "${IMAGE_PREFIX}/ui:${RELEASE_VERSION}" \
             --arg ui_selfhost_image "${IMAGE_PREFIX}/ui-selfhost:${RELEASE_VERSION}" \
             --arg migrations_image "${IMAGE_PREFIX}/db-migrate:${RELEASE_VERSION}" \
-            --arg waltid_wallet_api "docker.io/waltid/wallet-api:stable@sha256:08f0314c2059b34b6df315052596e8ef3a15b837d7f83e68a8016240ac7a917a" \
-            --arg waltid_web_wallet "docker.io/waltid/waltid-demo-wallet:stable@sha256:789c00b9ab65132fb0197b6f210f2ecbeb96cd5541c31cdf12149b0fd657e76e" \
+            --arg waltid_wallet_api "$WALTID_WALLET_API_IMAGE" \
+            --arg waltid_web_wallet "$WALTID_WEB_WALLET_IMAGE" \
             '{
               release_version: $release_version,
               mip_version: $mip_version,
@@ -240,6 +424,9 @@ jobs:
           context: .
           file: services/Dockerfile.prod
           push: true
+          build-args: |
+            MARTY_RELEASE_VERSION=${{ needs.determine-tag.outputs.version }}
+            MARTY_UI_SHA=${{ github.sha }}
           tags: |
             ${{ env.IMAGE_PREFIX }}/services:${{ needs.determine-tag.outputs.version }}
             ${{ env.IMAGE_PREFIX }}/services:latest
@@ -298,6 +485,9 @@ jobs:
             marty-cli=./_marty-cli
             marty-blog=./_marty-blog
             marty-subscriptions=./_marty-subscriptions
+          build-args: |
+            MARTY_RELEASE_VERSION=${{ needs.determine-tag.outputs.version }}
+            MARTY_UI_SHA=${{ github.sha }}
           push: true
           tags: |
             ${{ env.IMAGE_PREFIX }}/ui:${{ needs.determine-tag.outputs.version }}
@@ -318,6 +508,8 @@ jobs:
           push: true
           build-args: |
             UI_VARIANT=selfhost
+            MARTY_RELEASE_VERSION=${{ needs.determine-tag.outputs.version }}
+            MARTY_UI_SHA=${{ github.sha }}
           tags: |
             ${{ env.IMAGE_PREFIX }}/ui-selfhost:${{ needs.determine-tag.outputs.version }}
             ${{ env.IMAGE_PREFIX }}/ui-selfhost:latest
@@ -375,44 +567,53 @@ jobs:
     needs: [build-migrations, determine-tag, release-manifest]
     runs-on: ubuntu-latest
     environment: beta-migration-rehearsal
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_DB: mip_rehearsal
-          POSTGRES_USER: marty_rehearsal
-          POSTGRES_PASSWORD: marty_rehearsal
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U marty_rehearsal -d mip_rehearsal"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
     permissions:
       contents: read
       packages: read
     outputs:
       mode: ${{ steps.rehearsal-mode.outputs.mode }}
+      snapshot_id: ${{ steps.rehearsal-mode.outputs.snapshot_id }}
+      public_origin: ${{ steps.rehearsal-mode.outputs.public_origin }}
     env:
-      DATABASE_URL: ${{ secrets.MIGRATION_REHEARSAL_DATABASE_URL || 'postgresql://marty_rehearsal:marty_rehearsal@127.0.0.1:5432/mip_rehearsal' }}
-      DATABASE_MARKER: ${{ secrets.MIGRATION_REHEARSAL_DATABASE_MARKER || 'mip_rehearsal' }}
-      REHEARSAL_MODE: ${{ secrets.MIGRATION_REHEARSAL_DATABASE_URL != '' && 'beta-copy' || 'ephemeral-schema' }}
+      DATABASE_URL: ${{ secrets.MIGRATION_REHEARSAL_DATABASE_URL }}
+      DATABASE_MARKER: ${{ secrets.MIGRATION_REHEARSAL_DATABASE_MARKER }}
+      REHEARSAL_SNAPSHOT_ID: ${{ vars.MIGRATION_REHEARSAL_SNAPSHOT_ID }}
+      REHEARSAL_PUBLIC_API_URL: ${{ vars.MIGRATION_REHEARSAL_PUBLIC_API_URL }}
+      REHEARSAL_MODE: beta-copy
       RELEASE_VERSION: ${{ needs.determine-tag.outputs.version }}
     steps:
       - name: Record rehearsal mode
         id: rehearsal-mode
-        run: echo "mode=$REHEARSAL_MODE" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "mode=$REHEARSAL_MODE" >> "$GITHUB_OUTPUT"
+          echo "snapshot_id=$REHEARSAL_SNAPSHOT_ID" >> "$GITHUB_OUTPUT"
+          echo "public_origin=$REHEARSAL_PUBLIC_API_URL" >> "$GITHUB_OUTPUT"
 
       - name: Require an explicitly marked rehearsal database
         shell: bash
         run: |
           if [[ -z "$DATABASE_URL" || -z "$DATABASE_MARKER" || ${#DATABASE_MARKER} -lt 6 ]]; then
-            echo "A rehearsal database URL and marker of at least six characters are required." >&2
+            echo "A protected beta-copy database URL and marker of at least six characters are required." >&2
+            exit 1
+          fi
+          if [[ ! "$DATABASE_MARKER" =~ ^beta-copy-[a-zA-Z0-9._-]+$ ]]; then
+            echo "The safety marker must begin with beta-copy-." >&2
             exit 1
           fi
           if [[ "$DATABASE_URL" != *"$DATABASE_MARKER"* ]]; then
             echo "The rehearsal database URL does not contain the required safety marker." >&2
+            exit 1
+          fi
+          if [[ ! "$REHEARSAL_SNAPSHOT_ID" =~ ^[a-zA-Z0-9][a-zA-Z0-9._:-]{5,127}$ ]]; then
+            echo "MIGRATION_REHEARSAL_SNAPSHOT_ID must identify the restored beta snapshot." >&2
+            exit 1
+          fi
+          if [[ ! "$REHEARSAL_PUBLIC_API_URL" =~ ^https://[^/]+$ ]]; then
+            echo "MIGRATION_REHEARSAL_PUBLIC_API_URL must be the absolute HTTPS beta origin." >&2
+            exit 1
+          fi
+          if [[ "$REHEARSAL_PUBLIC_API_URL" == *"marty.example"* || "$REHEARSAL_PUBLIC_API_URL" == *"gateway"* ]]; then
+            echo "MIGRATION_REHEARSAL_PUBLIC_API_URL cannot use an internal or placeholder host." >&2
             exit 1
           fi
 
@@ -428,6 +629,7 @@ jobs:
             --network host \
             --entrypoint python \
             -e DATABASE_URL \
+            -e PUBLIC_API_URL="$REHEARSAL_PUBLIC_API_URL" \
             -e MARTY_MIGRATION_PROFILE=beta \
             -e MARTY_KMS_BOOTSTRAP_ENABLED=false \
             "${IMAGE_PREFIX}/db-migrate:${RELEASE_VERSION}" \
@@ -439,6 +641,7 @@ jobs:
             --network host \
             --entrypoint python \
             -e DATABASE_URL \
+            -e PUBLIC_API_URL="$REHEARSAL_PUBLIC_API_URL" \
             -e MARTY_MIGRATION_PROFILE=beta \
             -e MARTY_KMS_BOOTSTRAP_ENABLED=false \
             "${IMAGE_PREFIX}/db-migrate:${RELEASE_VERSION}" \
@@ -483,8 +686,8 @@ jobs:
           ' "$RUNNER_TEMP/applicant-rehearsal/applicant_store.json"
           test -f "$RUNNER_TEMP/applicant-rehearsal/applicant_store.json.mip-0.2.bak"
 
-  release-ready-manifest:
-    name: Publish Rehearsed Release Manifest
+  build-ready-manifest:
+    name: Publish Build-Ready Manifest
     needs:
       - build-services
       - build-ui
@@ -506,6 +709,8 @@ jobs:
           UI_SELFHOST_DIGEST: ${{ needs.build-ui.outputs.selfhost_digest }}
           MIGRATIONS_DIGEST: ${{ needs.build-migrations.outputs.digest }}
           MIGRATION_REHEARSAL_MODE: ${{ needs.rehearse-migrations.outputs.mode }}
+          MIGRATION_REHEARSAL_SNAPSHOT_ID: ${{ needs.rehearse-migrations.outputs.snapshot_id }}
+          MIGRATION_REHEARSAL_PUBLIC_ORIGIN: ${{ needs.rehearse-migrations.outputs.public_origin }}
         run: |
           jq \
             --arg services "$SERVICES_DIGEST" \
@@ -513,6 +718,8 @@ jobs:
             --arg ui_selfhost "$UI_SELFHOST_DIGEST" \
             --arg migrations "$MIGRATIONS_DIGEST" \
             --arg migration_rehearsal_mode "$MIGRATION_REHEARSAL_MODE" \
+            --arg migration_rehearsal_snapshot_id "$MIGRATION_REHEARSAL_SNAPSHOT_ID" \
+            --arg migration_rehearsal_public_origin "$MIGRATION_REHEARSAL_PUBLIC_ORIGIN" \
             '. + {
               image_digests: {
                 services: $services,
@@ -522,13 +729,16 @@ jobs:
               },
               migration_rehearsal: {
                 status: "passed",
-                mode: $migration_rehearsal_mode
+                mode: $migration_rehearsal_mode,
+                snapshot_id: $migration_rehearsal_snapshot_id,
+                public_origin: $migration_rehearsal_public_origin
               },
-              release_ready: true
-            }' release-manifest.json > release-ready-manifest.json
+              build_ready: true,
+              release_ready: false
+            }' release-manifest.json > build-ready-manifest.json
 
       - uses: actions/upload-artifact@v4
         with:
-          name: release-ready-manifest-${{ needs.determine-tag.outputs.version }}
-          path: release-ready-manifest.json
+          name: build-ready-manifest-${{ needs.determine-tag.outputs.version }}
+          path: build-ready-manifest.json
           retention-days: 90

@@ -1,6 +1,6 @@
 import {
   buildApplicantProfileData,
-  buildAutoApplyContext,
+  buildAutoApplyFormData,
   buildStandardApplicationPayload,
   normalizeApplicationTemplateToFormConfig,
   normalizeCredentialConfigInput,
@@ -19,11 +19,7 @@ const DUPLICATE_ACTIVE_APPLICATION_STATUSES = new Set([
 ]);
 
 function normalizeApplicationsResponse(data) {
-  if (Array.isArray(data)) {
-    return data;
-  }
-
-  return Array.isArray(data?.applications) ? data.applications : [];
+  return Array.isArray(data) ? data : [];
 }
 
 function applicationStatus(application) {
@@ -38,7 +34,7 @@ export function findActiveApplicationForCredential(applications = [], credential
   return normalizeApplicationsResponse(applications)
     .filter((application) => application?.credential_template_id === credentialConfigId)
     .filter((application) => DUPLICATE_ACTIVE_APPLICATION_STATUSES.has(applicationStatus(application)))
-    .sort((a, b) => new Date(b?.updated_at || b?.updatedAt || b?.created_at || 0) - new Date(a?.updated_at || a?.updatedAt || a?.created_at || 0))[0] || null;
+    .sort((a, b) => new Date(b?.updated_at || b?.created_at || 0) - new Date(a?.updated_at || a?.created_at || 0))[0] || null;
 }
 
 export async function loadCredentialApplicationConfig({
@@ -84,7 +80,7 @@ export async function loadCredentialApplicationConfig({
 
   if (!applicationTemplate && organizationId && listApplicationTemplates && normalizedCredentialConfig?.id) {
     const templates = await listApplicationTemplates(organizationId);
-    applicationTemplate = (Array.isArray(templates) ? templates : templates?.items || [])
+    applicationTemplate = (Array.isArray(templates) ? templates : [])
       .find((candidate) => (
         candidate?.credential_template_id === normalizedCredentialConfig.id
         && String(candidate?.status || '').trim().toUpperCase() === 'ACTIVE'
@@ -133,7 +129,6 @@ export async function ensureApplicantProfileForApplication({
   getApplicantByUser,
 }) {
   const applicantData = buildApplicantProfileData({
-    organizationId,
     user,
     formData,
   });
@@ -185,6 +180,7 @@ export async function autoApplyForCredential({
   organizationId,
   user,
   credentialConfig,
+  applicationTemplate,
   credentialConfigId,
   hasRegisteredWallet = true,
   resolveApplicantId,
@@ -207,8 +203,6 @@ export async function autoApplyForCredential({
 
   if (!applicantId) {
     const createdApplicant = await createApplicant({
-      organization_id: organizationId,
-      user_id: user.user_id,
       given_name: user.given_name || '',
       family_name: user.family_name || '',
       email: user.email,
@@ -235,8 +229,8 @@ export async function autoApplyForCredential({
   const configId = credentialConfig?.id || credentialConfigId;
   if (listApplications) {
     try {
-      const { applications = [] } = await listApplications({ limit: 100 });
-      const existing = applications.find((a) => {
+      const { items } = await listApplications({ limit: 100 });
+      const existing = items.find((a) => {
         const status = a.status?.toLowerCase();
         return (
           a.credential_template_id === configId &&
@@ -277,16 +271,12 @@ export async function autoApplyForCredential({
     }
   }
 
-  const autoApplyContext = buildAutoApplyContext({
-    credentialConfig,
-    user,
-    organizationId,
-  });
+  const formData = buildAutoApplyFormData({ applicationTemplate, user });
 
   const createdApplication = await createApplication({
     organization_id: organizationId,
-    application_template_id: credentialConfig?.application_template_id,
-    form_data: autoApplyContext.metadata,
+    application_template_id: applicationTemplate.id,
+    form_data: formData,
     integration_context: {},
   });
 
@@ -399,7 +389,6 @@ export async function submitCredentialApplication({
     const templateBase64 = imageBase64 || createFallbackBiometricTemplate();
 
     await enrollBiometric(applicantId, {
-      organization_id: organizationId,
       biometric_type: 'FACIAL',
       template_data_base64: templateBase64,
       image_data_base64: imageBase64,

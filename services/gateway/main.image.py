@@ -63,7 +63,6 @@ from gateway.routes.deployment import deployment_profile_router
 from gateway.routes.devices import device_router
 from gateway.routes.flows import flow_router
 from gateway.routes.issuance import (
-    application_router,
     application_template_router,
     issuance_router,
     issued_credential_router,
@@ -305,7 +304,6 @@ Verification is handled through two complementary approaches:
     app.include_router(issued_credential_router)
     app.include_router(issuance_router)
     app.include_router(application_template_router)
-    app.include_router(application_router)
     app.include_router(subscription_router)
     app.include_router(webhook_router)
     app.include_router(notification_router)
@@ -727,6 +725,13 @@ Verification is handled through two complementary approaches:
         """JWKS endpoint."""
         return await _proxy_to_issuance_well_known("/.well-known/jwks.json")
 
+    @app.get("/.well-known/marty-release")
+    async def get_marty_release() -> dict[str, str]:
+        """Expose non-secret runtime identity for immutable release gates."""
+        from gateway.release_metadata import release_metadata
+
+        return release_metadata()
+
     @app.get("/.well-known/mip-configuration")
     async def get_mip_configuration() -> dict:
         """MIP \u00a710 \u2014 Every MIP implementation MUST expose this discovery endpoint."""
@@ -740,8 +745,7 @@ Verification is handled through two complementary approaches:
             client = get_http_client()
             try:
                 resp = await client.get(
-                    f"{compliance_url}/v1/compliance-profiles",
-                    params={"status": "active"},
+                    f"{compliance_url}/v1/compliance-profiles/system/discoverable",
                     timeout=5.0,
                 )
                 if resp.status_code == 200:
@@ -759,52 +763,9 @@ Verification is handled through two complementary approaches:
             except Exception as exc:
                 logger.warning("Failed to fetch compliance profiles for MIP config: %s", exc)
 
-        return {
-            "mip_version": "0.3.0",
-            "supported_versions": ["0.3.0"],
-            "issuer": issuer_url,
-            "api_base_url": f"{issuer_url}/v1",
-            "active_compliance_profiles": active_profiles,
-            "supported_credential_formats": [
-                "MDOC", "SD_JWT_VC", "VC_JWT", "JSON_LD", "ZK_MDOC",
-            ],
-            "supported_issuance_protocols": [
-                "OID4VCI_PRE_AUTH", "OID4VCI_AUTH_CODE", "DIRECT",
-            ],
-            "endpoints": {
-                "trust_profiles": f"{issuer_url}/v1/trust-profiles",
-                "credential_templates": f"{issuer_url}/v1/credential-templates",
-                "presentation_policies": f"{issuer_url}/v1/presentation-policies",
-                "deployment_profiles": f"{issuer_url}/v1/deployment-profiles",
-                "flows": f"{issuer_url}/v1/flows",
-                "compliance_profiles": f"{issuer_url}/v1/compliance-profiles",
-                "revocation_profiles": f"{issuer_url}/v1/revocation-profiles",
-                "issued_credentials": f"{issuer_url}/v1/issued-credentials",
-                "trust_registry": f"{issuer_url}/v1/trust-registry",
-                "organizations": f"{issuer_url}/v1/organizations",
-                "devices": f"{issuer_url}/v1/devices",
-                "policy_sets": f"{issuer_url}/v1/policy-sets",
-                "wallet_registry": f"{issuer_url}/v1/wallet-registry",
-                "notifications": f"{issuer_url}/v1/notifications",
-                "scim": f"{issuer_url}/v1/organizations/{{org_id}}/scim/v2",
-            },
-            "wallet_facing_endpoints": {
-                "credential_offer": f"{issuer_url}/v1/issuance/offers/{{tx_id}}",
-                "token": f"{issuer_url}/v1/issuance/token",
-                "credential": f"{issuer_url}/v1/issuance/credential",
-                "nonce": f"{issuer_url}/v1/issuance/nonce",
-                "deferred_credential": f"{issuer_url}/v1/issuance/deferred-credential",
-                "notification": f"{issuer_url}/v1/issuance/notification",
-                "verification_request": f"{issuer_url}/v1/flows/instances/{{id}}/request",
-                "verification_submit": f"{issuer_url}/v1/flows/instances/{{id}}/submit",
-                "siop_request": f"{issuer_url}/v1/flows/siop/{{id}}/request",
-                "siop_submit": f"{issuer_url}/v1/flows/siop/submit",
-            },
-            "authorization": {
-                "policy_language": "cedar",
-                "cedar_schema_version": "MIP/1.0",
-            },
-        }
+        from gateway.mip_configuration import mip_configuration_document
+
+        return mip_configuration_document(issuer_url, active_profiles)
 
     @app.get("/health/services")
     async def services_health() -> dict:

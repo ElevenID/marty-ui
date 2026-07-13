@@ -1,9 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { renderWithRouter, screen, waitFor } from '@test/utils'
+import { fireEvent, renderWithRouter, screen, waitFor } from '@test/utils'
 
 import RevocationProfileDetailPage from '../RevocationProfileDetailPage'
 
 const getRevocationProfile = vi.fn()
+const activateRevocationProfile = vi.fn()
 
 const translations: Record<string, string> = {
   'trust.revocationDetail.checkModeTitle': 'Revocation Check Policy',
@@ -22,6 +23,7 @@ const translations: Record<string, string> = {
   'trust.revocationDetail.profileId': 'Profile ID',
   'trust.revocationDetail.created': 'Created',
   'trust.revocationDetail.updated': 'Last Updated',
+  'trust.revocationDetail.disabledAdvisory': 'Credential status checking is disabled for this profile.',
 }
 
 vi.mock('react-i18next', () => ({
@@ -33,6 +35,7 @@ vi.mock('react-i18next', () => ({
 
 vi.mock('../../../../services/presentationPolicyApi', () => ({
   getRevocationProfile: (...args: unknown[]) => getRevocationProfile(...args),
+  activateRevocationProfile: (...args: unknown[]) => activateRevocationProfile(...args),
 }))
 
 vi.mock('react-router-dom', async (importOriginal) => {
@@ -50,7 +53,8 @@ vi.mock('react-router-dom', async (importOriginal) => {
 const PROFILE_FIXTURE = {
   id: 'rev-profile-1',
   name: 'OCSP Check Profile',
-  check_mode: 'HARD_FAIL',
+  status: 'DRAFT',
+  check_mode: 'ALWAYS',
   revocation_mechanism: ['StatusList2021'],
   status_list_url: 'https://example.com/status/1',
   organization_id: 'org-1',
@@ -106,41 +110,27 @@ describe('RevocationProfileDetailPage', () => {
     expect(await screen.findByText('Profile Metadata')).toBeInTheDocument()
   })
 
-  it('shows soft-fail advisory for SOFT_FAIL check mode', async () => {
+  it('shows an advisory when status checking is disabled', async () => {
     getRevocationProfile.mockResolvedValue({
       ...PROFILE_FIXTURE,
-      check_mode: 'SOFT_FAIL',
+      check_mode: 'DISABLED',
     })
 
     renderWithRouter(<RevocationProfileDetailPage />)
 
     expect(
-      await screen.findByText(/soft-fail mode means verifications will succeed/i)
+      await screen.findByText(/credential status checking is disabled/i)
     ).toBeInTheDocument()
   })
 
-  it('shows skip advisory for SKIP check mode', async () => {
-    getRevocationProfile.mockResolvedValue({
-      ...PROFILE_FIXTURE,
-      check_mode: 'SKIP',
-    })
-
-    renderWithRouter(<RevocationProfileDetailPage />)
-
-    expect(
-      await screen.findByText(/revocation checking is disabled/i)
-    ).toBeInTheDocument()
-  })
-
-  it('does not show advisory for HARD_FAIL check mode', async () => {
+  it('does not show an advisory for always mode', async () => {
     getRevocationProfile.mockResolvedValue(PROFILE_FIXTURE)
 
     renderWithRouter(<RevocationProfileDetailPage />)
 
     await screen.findAllByText('OCSP Check Profile')
 
-    expect(screen.queryByText(/soft-fail mode/i)).not.toBeInTheDocument()
-    expect(screen.queryByText(/revocation checking is disabled/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/credential status checking is disabled/i)).not.toBeInTheDocument()
   })
 
   it('shows error state when profile fetch fails', async () => {
@@ -173,5 +163,18 @@ describe('RevocationProfileDetailPage', () => {
     expect(
       await screen.findByText('Production revocation check configuration.')
     ).toBeInTheDocument()
+  })
+
+  it('activates a draft profile and reloads its status', async () => {
+    getRevocationProfile
+      .mockResolvedValueOnce(PROFILE_FIXTURE)
+      .mockResolvedValueOnce({ ...PROFILE_FIXTURE, status: 'ACTIVE' })
+    activateRevocationProfile.mockResolvedValue({ ...PROFILE_FIXTURE, status: 'ACTIVE' })
+
+    renderWithRouter(<RevocationProfileDetailPage />)
+    fireEvent.click(await screen.findByRole('button', { name: /^activate$/i }))
+
+    await waitFor(() => expect(activateRevocationProfile).toHaveBeenCalledWith('rev-profile-1'))
+    expect(await screen.findByText('ACTIVE')).toBeInTheDocument()
   })
 })

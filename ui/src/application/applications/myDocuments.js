@@ -79,9 +79,5 @@ export function getMyDocumentNationality(document = {}, user = null) {
 
 export async function loadMyDocuments({ getMyCredentials }) {
   const result = await getMyCredentials();
-  const credentials = Array.isArray(result)
-    ? result
-    : (result?.credentials || result?.documents || []);
-
-  return credentials;
+  return result.items;
 }

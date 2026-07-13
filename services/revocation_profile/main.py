@@ -420,8 +420,8 @@ class CreateRevocationProfileRequest(BaseModel):
     organization_id: str = Field(min_length=1, max_length=255)
     name: str = Field(min_length=1, max_length=255)
     description: str | None = Field(None, max_length=2000)
-    revocation_mechanism: list[str] | None = None
-    mechanism_priority: list[str] | None = None
+    revocation_mechanism: list[RevocationMechanism] | None = None
+    mechanism_priority: list[RevocationMechanism] | None = None
     check_mode: str | None = None
     cache_ttl_seconds: int | None = None
     offline_grace_seconds: int | None = None
@@ -436,6 +436,7 @@ class RevocationProfileResponse(BaseModel):
     id: str
     organization_id: str
     name: str
+    status: str
     revocation_mechanism: list[str]
     mechanism_priority: list[str] | None = None
     check_mode: str
@@ -449,6 +450,7 @@ class RevocationProfileResponse(BaseModel):
 
 class ProcessRevocationRequest(BaseModel):
     """Internal request for processing revocation."""
+    organization_id: str
     credential_id: str
     index: int  # Status list index for this credential
     status: str  # revoked, suspended, reinstated
@@ -459,6 +461,7 @@ class ProcessRevocationRequest(BaseModel):
 class ProcessRevocationResponse(BaseModel):
     """Internal response for revocation processing."""
     success: bool
+    organization_id: str | None = None
     status_list_url: str | None = None
     index: int | None = None
     error: str | None = None
@@ -466,11 +469,13 @@ class ProcessRevocationResponse(BaseModel):
 
 class AllocateIndexRequest(BaseModel):
     """Request to allocate a status list index."""
+    organization_id: str
     credential_format: str
 
 
 class AllocateIndexResponse(BaseModel):
     """Response with allocated index."""
+    organization_id: str
     index: int
     status_list_url: str
 
@@ -672,6 +677,7 @@ def _to_response(profile: RevocationProfile) -> dict:
         "id": profile.id,
         "organization_id": profile.organization_id,
         "name": profile.name,
+        "status": profile.status.value.upper(),
         "revocation_mechanism": _collect_revocation_mechanisms(profile),
         "mechanism_priority": [m.value for m in profile.verifier_config.mechanism_priority],
         "check_mode": profile.verifier_config.timing_mode.value,
@@ -1000,7 +1006,6 @@ async def create_cascade_revocation_operation(
             "affected_credential_count": affected_credential_count,
             "trigger_entity_id": request.trigger_entity_id,
         }
-
     operation = CascadeRevocationOperation(
         organization_id=request.organization_id,
         operation_type=request.operation_type,
@@ -1133,6 +1138,8 @@ async def process_revocation(
             "success": False,
             "error": f"RevocationProfile {profile_id} not found",
         }
+    if profile.organization_id != request.organization_id:
+        raise HTTPException(status_code=403, detail="Revocation Profile belongs to another organization")
     
     if profile.status != RevocationProfileStatus.ACTIVE:
         return {
@@ -1194,6 +1201,7 @@ async def process_revocation(
         
         return {
             "success": True,
+            "organization_id": profile.organization_id,
             "status_list_url": status_list_url,
             "index": request.index,
         }
@@ -1222,6 +1230,8 @@ async def allocate_index(
     profile = await repo.get(profile_id)
     if not profile:
         raise HTTPException(status_code=404, detail="RevocationProfile not found")
+    if profile.organization_id != request.organization_id:
+        raise HTTPException(status_code=403, detail="Revocation Profile belongs to another organization")
     
     if not profile.automation_config.auto_allocate_indices:
         raise HTTPException(
@@ -1263,6 +1273,7 @@ async def allocate_index(
         )
         
         return {
+            "organization_id": profile.organization_id,
             "index": index,
             "status_list_url": status_list_url,
         }

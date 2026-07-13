@@ -149,6 +149,7 @@ describe('CredentialTemplateWizard', () => {
   describe('complete wizard flow', () => {
     it('creates the template in the active console organization', async () => {
       let createdPayload: Record<string, unknown> | undefined
+      let activationRequested = false
 
       server.use(
         http.get('*/v1/trust-profiles', ({ request }) => {
@@ -179,7 +180,26 @@ describe('CredentialTemplateWizard', () => {
         }),
         http.get('*/v1/revocation-profiles', ({ request }) => {
           expect(new URL(request.url).searchParams.get('organization_id')).toBe('console-org')
-          return HttpResponse.json([])
+          return HttpResponse.json([{
+            id: 'revocation-1',
+            organization_id: 'console-org',
+            name: 'Lifecycle Status',
+            status: 'ACTIVE',
+            check_mode: 'ALWAYS',
+          }])
+        }),
+        http.get('*/v1/compliance-profiles', ({ request }) => {
+          expect(new URL(request.url).searchParams.get('organization_id')).toBe('console-org')
+          return HttpResponse.json([{
+            id: 'compliance-1',
+            organization_id: null,
+            name: 'OID4VC Core',
+            compliance_code: 'OID4VC',
+            credential_format: 'SD_JWT_VC',
+            status: 'ACTIVE',
+            is_system: true,
+            discoverable: true,
+          }])
         }),
         http.get('*/v1/wallet-registry', () => HttpResponse.json([])),
         http.post('*/v1/credential-templates', async ({ request }) => {
@@ -190,11 +210,14 @@ describe('CredentialTemplateWizard', () => {
             status: 'draft',
           })
         }),
-        http.post('*/v1/credential-templates/template-1/activate', () => HttpResponse.json({
-          id: 'template-1',
-          name: 'Production mDL Template',
-          status: 'active',
-        }))
+        http.post('*/v1/credential-templates/template-1/activate', () => {
+          activationRequested = true
+          return HttpResponse.json({
+            id: 'template-1',
+            name: 'Production mDL Template',
+            status: 'active',
+          })
+        })
       )
 
       const { user } = render(<CredentialTemplateWizard />)
@@ -210,9 +233,9 @@ describe('CredentialTemplateWizard', () => {
       await waitFor(() => expect(screen.getByTestId('wizard.template.next')).toBeEnabled())
       await user.click(screen.getByTestId('wizard.template.next'))
 
-      await waitFor(() => expect(screen.getByTestId('wizard.template.skip')).toBeEnabled())
-      await user.click(screen.getByTestId('wizard.template.skip'))
-
+      const revocationSelect = await screen.findByLabelText(/revocation profile/i)
+      await user.click(revocationSelect)
+      await user.click(await screen.findByRole('option', { name: /lifecycle status/i }))
       await waitFor(() => expect(screen.getByTestId('wizard.template.next')).toBeEnabled())
       await user.click(screen.getByTestId('wizard.template.next'))
 
@@ -225,7 +248,14 @@ describe('CredentialTemplateWizard', () => {
           issuer_profile_id: 'issuer-1',
           key_access_mode: 'REMOTE_SIGNING',
           trust_profile_id: 'trust-1',
+          compliance_profile_id: 'compliance-1',
+          revocation_profile_id: 'revocation-1',
         }))
+        expect(createdPayload).not.toHaveProperty('activate_immediately')
+        expect(createdPayload).not.toHaveProperty('supported_wallet_ids')
+        expect(createdPayload).not.toHaveProperty('issuance_protocol')
+        expect(activationRequested).toBe(true)
+        expect(screen.getByText(/now active/i)).toBeInTheDocument()
       })
     })
 

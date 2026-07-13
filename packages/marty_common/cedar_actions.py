@@ -58,11 +58,6 @@ RESOURCE_LOOKUP_MAP: dict[str, tuple[str, str, set[str]]] = {
         "/v1/application-templates/{resource_id}",
         {"validate-artifacts"},
     ),
-    "applications": (
-        "issuance",
-        "/v1/applications/{resource_id}",
-        set(),
-    ),
     "issued-credentials": (
         "issuance",
         "/v1/issued-credentials/{resource_id}",
@@ -94,6 +89,60 @@ RESOURCE_LOOKUP_MAP: dict[str, tuple[str, str, set[str]]] = {
 
 
 SPECIAL_ROUTE_RULES: list[tuple[re.Pattern[str], dict[str, str], str]] = [
+    (
+        re.compile(r"^/v1/credential-templates/[^/]+/activate$"),
+        {"POST": "credential-template:activate"},
+        "credential-template",
+    ),
+    (
+        re.compile(r"^/v1/credential-templates/[^/]+/deprecate$"),
+        {"POST": "credential-template:deprecate"},
+        "credential-template",
+    ),
+    (
+        re.compile(r"^/v1/credential-templates/[^/]+/new-version$"),
+        {"POST": "credential-template:version"},
+        "credential-template",
+    ),
+    (
+        re.compile(r"^/v1/revocation-profiles/[^/]+/activate$"),
+        {"POST": "revocation-profile:activate"},
+        "revocation-profile",
+    ),
+    (
+        re.compile(r"^/v1/issued-credentials/[^/]+/(revoke|suspend|reinstate)$"),
+        {"POST": "issuance:revoke"},
+        "issued-credential",
+    ),
+    (
+        re.compile(r"^/v1/issued-credentials/[^/]+/renew$"),
+        {"POST": "issuance:initiate"},
+        "issued-credential",
+    ),
+    (
+        re.compile(r"^/v1/issued-credentials(?:/[^/]+)?$"),
+        {
+            "GET": "issuance:view",
+            "HEAD": "issuance:view",
+            "OPTIONS": "issuance:view",
+        },
+        "issued-credential",
+    ),
+    (
+        re.compile(r"^/v1/issuance/[^/]+/revoke$"),
+        {"POST": "issuance:revoke"},
+        "issued-credential",
+    ),
+    (
+        re.compile(r"^/v1/issuance(?:/[^/]+)?$"),
+        {
+            "GET": "issuance:view",
+            "POST": "issuance:initiate",
+            "HEAD": "issuance:view",
+            "OPTIONS": "issuance:view",
+        },
+        "issuance",
+    ),
     (
         re.compile(r"^/v1/organizations/[^/]+/dashboard/applicant-stats$"),
         {"GET": "application:review"},
@@ -275,7 +324,6 @@ GENERIC_RESOURCE_MAP: dict[str, tuple[str, str]] = {
     "flows": ("flow-definition", "flow-definition"),
     "flow-instances": ("flow-instance", "flow-instance"),
     "application-templates": ("application-template", "application-template"),
-    "applications": ("application", "application"),
     "verification": ("verification", "verification"),
     "integrations": ("integration-connector", "integration-connector"),
     "policy-sets": ("policy-set", "policy-set"),

@@ -367,6 +367,7 @@ class ApiKeyCreatedResponse(ApiKeyResponse):
 
 class IssuedCredentialRecordResponse(BaseModel):
     id: str
+    organization_id: str
     credential_id: str
     credential_type: str
     credential_format: str
@@ -374,6 +375,11 @@ class IssuedCredentialRecordResponse(BaseModel):
     credential_template_id: str
     application_id: str | None = None
     revocation_profile_id: str | None = None
+    renewed_from_credential_id: str | None = None
+    renewed_to_credential_id: str | None = None
+    renewable: bool = False
+    renewal_eligible_at: str | None = None
+    can_renew: bool = False
     subject_id: str
     subject_claims_hash: str | None = None
     issued_at: str
@@ -463,12 +469,9 @@ class TemplateValidityRules(BaseModel):
     revalidation_interval_days: int | None = None
 
 
-class TemplateIssuerRequirements(BaseModel):
-    allowed_issuer_ids: list[str] = []
-    signing_algorithm_constraints: list[str] | None = None
-
-
 class CredentialTemplateCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     """Create a Credential Template (complete issuance definition).
 
     Credential Template is the master configuration combining:
@@ -494,9 +497,8 @@ class CredentialTemplateCreate(BaseModel):
     # INVERTED RELATIONSHIP: Credential Template references Application Template
     application_template_id: str | None = Field(None, max_length=255)
 
-    # Embedded Compliance Profile
-    compliance_profile: dict | None = None
-    compliance_profile_id: str | None = Field(None, max_length=255)
+    # Canonical profile references
+    compliance_profile_id: str = Field(min_length=1, max_length=255)
     trust_profile_id: str | None = Field(None, max_length=255)
     revocation_profile_id: str | None = Field(None, max_length=255)
 
@@ -513,19 +515,15 @@ class CredentialTemplateCreate(BaseModel):
     issuer_certificate_chain_pem: str | None = Field(None, max_length=65536)
     issuer_did: str | None = Field(None, max_length=2048)
     issuer_profile_id: str | None = Field(None, max_length=255)
-    auto_generate_artifacts: bool = True
-    artifacts_auto_generate: bool | None = None
+    auto_generate_artifacts: bool = False
 
-    # Legacy field for backward compatibility during migration
-    issuer_requirements: TemplateIssuerRequirements | None = None
     derived_attributes: list[dict] = []
     display_style: dict | None = None
     # ZK-specific fields
     zk_predicate_claims: list[str] = []
     schema_uri: dict | None = None
-    # Payload format and wallet deep-link configuration
+    # Derived payload format. Wallet compatibility is not client-authored.
     credential_payload_format: str | None = Field(default=None, max_length=100)
-    wallet_configs: list[dict] = []
 
 
 class CredentialTemplateResponse(BaseModel):
@@ -560,8 +558,6 @@ class CredentialTemplateResponse(BaseModel):
     issuer_did: str | None
     artifacts_status: str
 
-    # Legacy field
-    issuer_requirements: dict | None
     # ZK-specific fields
     zk_predicate_claims: list[str] = []
     # Payload format and wallet deep-link configuration
@@ -609,6 +605,8 @@ class ApiSurfaceEndpointModel(BaseModel):
 
 class ComplianceProfileCreate(BaseModel):
     """Create a Compliance Profile for regulatory rules and format abstraction."""
+    model_config = ConfigDict(extra="forbid")
+
     organization_id: str | None = Field(None, max_length=255)
     name: str = Field(min_length=1, max_length=255)
     description: str | None = Field(None, max_length=2000)
@@ -616,7 +614,6 @@ class ComplianceProfileCreate(BaseModel):
     credential_format: str = Field(default="SD_JWT_VC", max_length=50)
     issuance_protocol: str | None = Field(None, max_length=100)
     issuer_artifact_requirements: IssuerArtifactRequirementsModel | None = None
-    default_verification_rules: dict | None = None
     verification_policy_set_id: str | None = Field(None, max_length=255)
     frameworks: list[str] = Field(default_factory=list)
     data_retention: DataRetentionModel | None = None
@@ -628,13 +625,14 @@ class ComplianceProfileCreate(BaseModel):
 
 
 class ComplianceProfileUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str | None = None
     description: str | None = None
     compliance_code: str | None = None
     credential_format: str | None = None
     issuance_protocol: str | None = None
     issuer_artifact_requirements: IssuerArtifactRequirementsModel | None = None
-    default_verification_rules: dict | None = None
     verification_policy_set_id: str | None = None
     trust_profile_constraints: TrustProfileConstraintsModel | None = None
     api_surface: list[ApiSurfaceEndpointModel] | None = None
@@ -654,7 +652,6 @@ class ComplianceProfileResponse(BaseModel):
     credential_format: str
     issuance_protocol: str | None = None
     issuer_artifact_requirements: dict | None = None
-    default_verification_rules: dict | None = None
     verification_policy_set_id: str | None = None
     trust_profile_constraints: dict = Field(default_factory=dict)
     api_surface: list[dict] = Field(default_factory=list)
@@ -855,6 +852,8 @@ class FeatureFlagsModel(BaseModel):
 
 
 class DeploymentProfileCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     organization_id: str = Field(min_length=1, max_length=255)
     name: str = Field(min_length=1, max_length=255)
     description: str | None = Field(None, max_length=2000)
@@ -867,15 +866,15 @@ class DeploymentProfileCreate(BaseModel):
     presentation_policy_ids: list[str] = Field(default_factory=list)
     credential_template_ids: list[str] = Field(default_factory=list)
     default_policy_id: str | None = Field(None, max_length=255)
-    default_presentation_policy_id: str | None = Field(None, max_length=255)
     enabled_flow_ids: list[str] = Field(default_factory=list)
     network_mode: str = Field(default="ONLINE", max_length=50)
     environment_config: dict | None = None
-    ux_config: dict | None = None
     update_channel: str = Field(default="stable", max_length=50)
 
 
 class DeploymentProfileUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str | None = None
     description: str | None = None
     status: str | None = None
@@ -886,9 +885,7 @@ class DeploymentProfileUpdate(BaseModel):
     network_mode: str | None = None
     key_access_mode: str | None = None
     biometric_required: bool | None = None
-    default_presentation_policy_id: str | None = None
     environment_config: dict | None = None
-    ux_config: dict | None = None
     feature_flags: FeatureFlagsModel | None = None
 
 
@@ -908,9 +905,7 @@ class DeploymentProfileResponse(BaseModel):
     default_policy_id: str | None
     network_mode: str | None = None
     key_access_mode: str | None = None
-    default_presentation_policy_id: str | None = None
     environment_config: dict | None = None
-    ux_config: dict | None = None
     update_channel: str | None = None
     update_policy: dict | None = None
     offline_cache_ttl_hours: int | None = None
@@ -1374,11 +1369,13 @@ class FormFieldModel(BaseModel):
 
 
 class ClaimCollectionModel(BaseModel):
-    """Claim collection rule."""
+    """Canonical claim sourcing rule."""
+
+    model_config = ConfigDict(extra="forbid")
+
     claim_name: str
-    source: str
-    source_field: str | None = None
-    required: bool = True
+    source: Literal["FORM_FIELD", "EVIDENCE_EXTRACTION", "EXTERNAL_API", "SYSTEM"]
+    source_config: dict[str, Any] = Field(default_factory=dict)
 
 
 class NotificationConfigModel(BaseModel):
@@ -1428,6 +1425,33 @@ class RequiredApplicationCheckModel(BaseModel):
     external_provider: str | None = None
 
 
+class ApplicationEvidenceRequirementModel(BaseModel):
+    """Canonical evidence requirement on an Application Template."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    evidence_id: str = Field(min_length=1)
+    evidence_type: Literal[
+        "DOCUMENT_SCAN", "BIOMETRIC", "SELFIE", "THIRD_PARTY_VERIFICATION",
+        "EXTERNAL_FACT", "EXTERNAL_API",
+    ]
+    description: str
+    required: bool
+    accepted_formats: list[str] | None = None
+    max_file_size_bytes: int | None = Field(default=None, ge=1)
+    provider: str | None = None
+    fact_type: str | None = None
+    scope: dict[str, Any] | None = None
+    pass_rule: dict[str, Any] | None = None
+    verification_method: str | None = None
+    freshness: dict[str, Any] | None = None
+    manual_fallback: bool | None = None
+    api: dict[str, Any] | None = None
+    expected_response: dict[str, Any] | None = None
+    response_mapping: dict[str, Any] | None = None
+    auto_issue_on_permit: bool | None = None
+
+
 class ApplicationTemplateCreate(BaseModel):
     """Create an Application Template defining how users apply for credentials.
 
@@ -1443,10 +1467,7 @@ class ApplicationTemplateCreate(BaseModel):
     credential_template_id: str | None = None
 
     # Evidence collection requirements
-    evidence_requirements: Any = Field(
-        default=[],
-        description="List of evidence type strings required for this application"
-    )
+    evidence_requirements: list[ApplicationEvidenceRequirementModel] = Field(default_factory=list)
 
     # Form field definitions
     form_fields: list[ApplicationFormFieldModel] = Field(default_factory=list)
@@ -1455,7 +1476,7 @@ class ApplicationTemplateCreate(BaseModel):
     required_checks: list[RequiredApplicationCheckModel] = Field(default_factory=list)
 
     # Claim collection
-    claim_collection_rules: list[dict] = Field(default_factory=list)
+    claim_collection_rules: list[ClaimCollectionModel] = Field(default_factory=list)
 
     # Workflow configuration
     approval_strategy: Literal["AUTO", "MANUAL", "RULES_BASED", "EXTERNAL"] = "MANUAL"
@@ -1477,10 +1498,10 @@ class ApplicationTemplatePatch(BaseModel):
     name: str | None = None
     description: str | None = None
     credential_template_id: str | None = None
-    evidence_requirements: Any | None = None
+    evidence_requirements: list[ApplicationEvidenceRequirementModel] | None = None
     form_fields: list[ApplicationFormFieldModel] | None = None
     required_checks: list[RequiredApplicationCheckModel] | None = None
-    claim_collection_rules: list[dict] | None = None
+    claim_collection_rules: list[ClaimCollectionModel] | None = None
     approval_strategy: Literal["AUTO", "MANUAL", "RULES_BASED", "EXTERNAL"] | None = None
     approval_policy_set_id: str | None = None
     application_validity_days: int | None = Field(default=None, ge=1, le=3650)

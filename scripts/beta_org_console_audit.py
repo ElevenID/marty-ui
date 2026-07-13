@@ -219,6 +219,13 @@ def is_expected_audit_log_unavailable(entry: dict[str, Any]) -> bool:
     )
 
 
+def is_expected_entitlement_response(entry: dict[str, Any]) -> bool:
+    return (
+        int(entry.get("status") or 0) == 403
+        and response_error_code(entry) == "plan_feature_unavailable"
+    )
+
+
 def is_loading_only_step(step: dict[str, Any]) -> bool:
     body = re.sub(r"\s+", " ", str(step.get("body_excerpt") or "")).strip().lower()
     return body in {
@@ -237,18 +244,24 @@ def evaluate_release_checks(report: dict[str, Any]) -> dict[str, Any]:
     required_step_labels = {
         "auth-probe",
         "post-org-probe",
-        "kms-register-submitted",
-        "issuer-identity-submitted-or-blocked",
-        "trust-profile-submitted-or-blocked",
-        "credential-template-submitted-or-blocked",
-        "presentation-policy-submitted-or-blocked",
-        "deployment-profile-submitted-or-blocked",
-        "flow-submitted-or-blocked",
-        "api-key-submitted-or-blocked",
+        "kms-service-configured",
+        "issuer-identity-active",
+        "compliance-profile-available",
+        "trust-profile-active",
+        "revocation-profile-activated",
+        "credential-template-activated",
+        "application-template-activated",
+        "presentation-policy-active",
+        "deployment-profile-active",
+        "issuance-flow-active",
+        "verification-flow-active",
+        "api-key-created",
+        "resource-inventory-verified",
     }
 
     blockers: list[dict[str, Any]] = []
     degraded: list[dict[str, Any]] = []
+    expected_entitlements: list[dict[str, Any]] = []
 
     def add_blocker(code: str, message: str, **extra: Any) -> None:
         blockers.append({"code": code, "message": message, **extra})
@@ -290,7 +303,7 @@ def evaluate_release_checks(report: dict[str, Any]) -> dict[str, Any]:
 
     api_key_steps = [
         step for step in steps
-        if step.get("label") == "api-key-submitted-or-blocked"
+        if step.get("label") == "api-key-created"
     ]
     if api_key_steps and not all(step.get("api_key_secret_screenshot_redacted") for step in api_key_steps):
         add_blocker(
@@ -321,6 +334,14 @@ def evaluate_release_checks(report: dict[str, Any]) -> dict[str, Any]:
                 url=response.get("url"),
                 message_id=response.get("message_id"),
             )
+        elif is_expected_entitlement_response(response):
+            expected_entitlements.append(
+                {
+                    "status": status,
+                    "url": response.get("url"),
+                    "error_code": response_error_code(response),
+                }
+            )
         elif status >= 400:
             add_blocker(
                 "unexpected_bad_response",
@@ -330,6 +351,15 @@ def evaluate_release_checks(report: dict[str, Any]) -> dict[str, Any]:
                 message_id=response.get("message_id"),
                 error_code=response_error_code(response),
             )
+
+    failed_requests = report.get("failed_requests") or []
+    if failed_requests:
+        add_blocker(
+            "unexpected_failed_request",
+            "The audit observed an unexplained browser request failure.",
+            count=len(failed_requests),
+            requests=failed_requests[:10],
+        )
 
     if report.get("page_errors"):
         add_blocker(
@@ -353,6 +383,7 @@ def evaluate_release_checks(report: dict[str, Any]) -> dict[str, Any]:
             "bad_response_count": len(bad_responses),
             "page_error_count": len(report.get("page_errors") or []),
             "failed_request_count": len(report.get("failed_requests") or []),
+            "expected_entitlement_responses": expected_entitlements,
             "api_key_secret_screenshot_redacted": bool(
                 api_key_steps and all(step.get("api_key_secret_screenshot_redacted") for step in api_key_steps)
             ),
@@ -390,7 +421,7 @@ class Audit:
         self.page.on("pageerror", lambda err: self.page_errors.append(str(err)[:1500]))
         self.page.on(
             "requestfailed",
-            lambda req: self.failed_requests.append(self._request_failed_entry(req))
+            self._record_failed_request,
         )
         self.page.on("response", self._record_response)
 
@@ -406,6 +437,15 @@ class Audit:
             "failure": failure_text,
             "resource_type": req.resource_type,
         }
+
+    def _record_failed_request(self, req) -> None:
+        entry = self._request_failed_entry(req)
+        url = entry["url"]
+        if "/cdn-cgi/rum" in url:
+            return
+        if "/v1/notifications/events/push" in url and entry["failure"] == "net::ERR_ABORTED":
+            return
+        self.failed_requests.append(entry)
 
     def _record_response(self, response) -> None:
         try:
@@ -636,9 +676,12 @@ class Audit:
         timeout: int = 3000,
     ) -> bool:
         try:
-            trigger = self.page.get_by_test_id(test_id).first
-            trigger.wait_for(state="visible", timeout=timeout)
-            trigger.click(timeout=timeout)
+            container = self.page.get_by_test_id(test_id).first
+            container.wait_for(state="visible", timeout=timeout)
+            combobox = container if container.get_attribute("role") == "combobox" else container.get_by_role("combobox").first
+            combobox.wait_for(state="visible", timeout=timeout)
+            expect(combobox).to_be_enabled(timeout=timeout)
+            combobox.click(timeout=timeout)
             if preferred is not None:
                 option = self.page.get_by_role("option").filter(has_text=preferred).first
             else:
@@ -787,6 +830,85 @@ def fetch_json_from_page(page: Page, paths: list[str]) -> dict[str, Any]:
     return page.evaluate(script, paths)
 
 
+def active_organization_id(page: Page) -> str:
+    organization_id = page.evaluate("() => window.localStorage.getItem('activeOrgId') || ''")
+    return str(organization_id or '').strip()
+
+
+def fetch_org_collection(page: Page, path: str, organization_id: str) -> dict[str, Any]:
+    separator = '&' if '?' in path else '?'
+    request_path = f"{path}{separator}organization_id={organization_id}"
+    return fetch_json_from_page(page, [request_path]).get(request_path) or {}
+
+
+def collection_items(probe: dict[str, Any]) -> list[dict[str, Any]]:
+    body = probe.get("body")
+    if isinstance(body, list):
+        return [item for item in body if isinstance(item, dict)]
+    if not isinstance(body, dict):
+        return []
+    for candidate in (
+        body.get("data"),
+        body.get("items"),
+        body.get("profiles"),
+        body.get("keys"),
+        body.get("services"),
+    ):
+        if isinstance(candidate, list):
+            return [item for item in candidate if isinstance(item, dict)]
+    nested_data = body.get("data")
+    if isinstance(nested_data, dict) and isinstance(nested_data.get("items"), list):
+        return [item for item in nested_data["items"] if isinstance(item, dict)]
+    return []
+
+
+def find_named_resource(probe: dict[str, Any], name: str) -> dict[str, Any] | None:
+    return next((item for item in collection_items(probe) if item.get("name") == name), None)
+
+
+def find_resource_with_name(probe: dict[str, Any], name_fragment: str) -> dict[str, Any] | None:
+    return next(
+        (
+            item
+            for item in collection_items(probe)
+            if name_fragment in str(item.get("name") or "")
+        ),
+        None,
+    )
+
+
+def is_active(resource: dict[str, Any] | None) -> bool:
+    return bool(resource) and (
+        str(resource.get("status") or "").strip().lower() == "active"
+        or resource.get("is_active") is True
+        or resource.get("enabled") is True
+    )
+
+
+def wait_for_named_resource(
+    page: Page,
+    path: str,
+    organization_id: str,
+    name: str,
+    *,
+    partial_name: bool = False,
+    timeout: int = 15_000,
+) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    deadline = time.monotonic() + (timeout / 1000)
+    last_probe: dict[str, Any] = {}
+    while time.monotonic() < deadline:
+        last_probe = fetch_org_collection(page, path, organization_id)
+        resource = (
+            find_resource_with_name(last_probe, name)
+            if partial_name
+            else find_named_resource(last_probe, name)
+        )
+        if is_active(resource):
+            return resource, last_probe
+        page.wait_for_timeout(250)
+    return None, last_probe
+
+
 def create_org(audit: Audit, run_id: str, email: str) -> str | None:
     page = audit.page
     slug = f"audit-prod-flow-{run_id}"
@@ -892,6 +1014,19 @@ def create_key_service_if_possible(audit: Audit, run_id: str) -> None:
     audit.settle(5000)
     audit.snapshot("kms-register-submitted", "Submitted KMS service registration.")
 
+    organization_id = active_organization_id(page)
+    probe = fetch_org_collection(page, "/v1/signing-keys/config", organization_id)
+    config = probe.get("body") if isinstance(probe.get("body"), dict) else {}
+    services = config.get("services") if isinstance(config, dict) else []
+    if not config.get("hsm_enabled") or not isinstance(services, list) or not services:
+        audit.snapshot("kms-service-state-mismatch", "The canonical signing configuration did not contain an enabled service.")
+        return
+    audit.snapshot(
+        "kms-service-configured",
+        "Configured a signing service for the fresh organization.",
+        {"signing_configuration": {"hsm_enabled": True, "service_count": len(services)}},
+    )
+
 
 def create_issuer_identity(audit: Audit, run_id: str) -> None:
     page = audit.page
@@ -940,7 +1075,17 @@ def create_issuer_identity(audit: Audit, run_id: str) -> None:
         audit.snapshot(f"issuer-step-{index + 1}", "Advanced issuer identity wizard one step.")
     wait_for_creating_to_settle(page, timeout=30000)
     audit.settle(5000)
-    audit.snapshot("issuer-identity-submitted-or-blocked", "Issuer identity wizard final observed state.")
+    organization_id = active_organization_id(page)
+    probe = fetch_org_collection(page, "/v1/signing-keys/issuer-profiles", organization_id)
+    issuer = find_resource_with_name(probe, f"Audit Issuer Key {run_id}")
+    if not is_active(issuer):
+        audit.snapshot("issuer-identity-state-mismatch", "The run-created issuer identity was not active.")
+        return
+    audit.snapshot(
+        "issuer-identity-active",
+        "Created an active issuer identity.",
+        {"issuer_identity": {"id": issuer.get("id"), "name": issuer.get("name"), "status": issuer.get("status")}},
+    )
 
 
 def create_trust_profile(audit: Audit, run_id: str) -> None:
@@ -949,7 +1094,6 @@ def create_trust_profile(audit: Audit, run_id: str) -> None:
     audit.snapshot("trust-profile-wizard-opened", "Opened trust profile wizard.")
 
     name = f"Audit Trust Profile {run_id}"
-    did = f"did:web:audit-{run_id}.example.com"
     if not audit.fill_label(re.compile(r"name", re.I), name):
         audit.fill_textbox(re.compile(r"name", re.I), name)
     audit.fill_label(re.compile(r"description", re.I), "Trust profile created during beta UI audit.")
@@ -961,21 +1105,16 @@ def create_trust_profile(audit: Audit, run_id: str) -> None:
     trusted_existing_identity = audit.select_mui_option(
         "wizard.trustProfile.existingIssuerProfile",
         re.compile(rf"Audit Issuer Key {run_id}|Audit Issuer|did:jwk|did:web", re.I),
-        timeout=5000,
+        timeout=10_000,
     )
     if trusted_existing_identity:
         audit.click_test_id("wizard.trustProfile.useIssuerProfile", timeout=3000)
     else:
-        # Manual DID fallback. Use test IDs to avoid filling the source-type or
-        # managed-identity controls that also contain "DID" in their labels.
-        try:
-            page.get_by_test_id("wizard.trustProfile.issuerDid").fill(did, timeout=3000)
-        except Exception:
-            audit.fill_textbox(re.compile(r"issuer did", re.I), did)
-        audit.fill_label(re.compile(r"^name$", re.I), f"Audit Issuer {run_id}", timeout=1500)
-        audit.fill_label(re.compile(r"country", re.I), "US", timeout=1500)
-        audit.fill_label(re.compile(r"credential types", re.I), "VerifiableCredential|SD_JWT_VC", timeout=1500)
-        audit.click_test_id("wizard.trustProfile.addIssuer", timeout=3000)
+        audit.snapshot(
+            "trust-managed-issuer-blocked",
+            "Trust Profile creation stopped because the managed issuer identity was unavailable.",
+        )
+        return
     audit.snapshot("trust-source-added", "Added the audit issuer identity as a trust source if the form accepted it.")
 
     for index in range(4):
@@ -989,7 +1128,53 @@ def create_trust_profile(audit: Audit, run_id: str) -> None:
         audit.snapshot(f"trust-next-{index + 1}", "Advanced trust wizard one step.")
     wait_for_creating_to_settle(page, timeout=15000)
     audit.settle(5000)
-    audit.snapshot("trust-profile-submitted-or-blocked", "Trust profile wizard final observed state.")
+    organization_id = active_organization_id(page)
+    probe = fetch_org_collection(page, "/v1/trust-profiles", organization_id)
+    profile = find_named_resource(probe, name)
+    if not is_active(profile):
+        audit.snapshot("trust-profile-state-mismatch", "The run-created Trust Profile was not active.")
+        return
+    audit.snapshot(
+        "trust-profile-active",
+        "Created an active Trust Profile.",
+        {"trust_profile": {"id": profile.get("id"), "name": profile.get("name"), "status": profile.get("status")}},
+    )
+
+
+def create_revocation_profile(audit: Audit, run_id: str) -> None:
+    page = audit.page
+    audit.goto("/console/org/trust/revocation/new")
+    audit.snapshot("revocation-profile-wizard-opened", "Opened Revocation Profile creation.")
+
+    name = f"Audit Lifecycle Status {run_id}"
+    if not audit.fill_label(re.compile(r"profile name", re.I), name):
+        audit.fill_textbox(re.compile(r"profile name", re.I), name)
+    audit.fill_label(
+        re.compile(r"description", re.I),
+        "Lifecycle status profile created during the beta organization audit.",
+    )
+    audit.snapshot("revocation-profile-filled", "Configured an always-check Status List profile.")
+
+    if not audit.click_role("button", re.compile(r"create profile", re.I), timeout=5000):
+        audit.snapshot("revocation-profile-create-blocked", "Create Profile was unavailable.")
+        return
+    try:
+        page.wait_for_url(re.compile(r"/console/org/trust/revocation/[^/]+$"), timeout=20_000)
+    except PlaywrightTimeoutError:
+        audit.snapshot("revocation-profile-create-timeout", "Revocation Profile detail did not open.")
+        return
+    audit.settle(2000)
+    audit.snapshot("revocation-profile-created", "Created a draft Revocation Profile.")
+
+    if not audit.click_role("button", re.compile(r"^activate$", re.I), timeout=5000):
+        audit.snapshot("revocation-profile-activation-blocked", "Activate was unavailable for the draft profile.")
+        return
+    try:
+        expect(page.get_by_text(re.compile(r"^ACTIVE$", re.I)).first).to_be_visible(timeout=20_000)
+    except (AssertionError, PlaywrightError):
+        audit.snapshot("revocation-profile-activation-timeout", "Revocation Profile did not become active.")
+        return
+    audit.snapshot("revocation-profile-activated", "Created and activated the lifecycle status dependency.")
 
 
 def create_credential_template(audit: Audit, run_id: str) -> None:
@@ -1021,8 +1206,31 @@ def create_credential_template(audit: Audit, run_id: str) -> None:
         timeout=3000,
     )
     audit.snapshot("template-trust-selected", "Selected trust profile if required.")
+    if not audit.select_mui_option(
+        "template-compliance-profile-select",
+        re.compile(r"OID4VC Core|OID4VC", re.I),
+        timeout=5000,
+    ):
+        audit.snapshot("template-compliance-blocked", "The active system Compliance Profile was unavailable.")
+        return
+    audit.snapshot("compliance-profile-available", "Selected the active OID4VC system Compliance Profile.")
     if not audit.click_role("button", re.compile(r"next", re.I), timeout=3000):
         audit.snapshot("template-trust-next-blocked", "Next unavailable after trust selection.")
+        return
+
+    try:
+        revocation_select = page.locator("#credential-template-revocation-profile").first
+        revocation_select.wait_for(state="visible", timeout=10_000)
+        expect(revocation_select).to_be_enabled(timeout=10_000)
+        revocation_select.click(timeout=5000)
+        revocation_option = page.get_by_role("option").filter(
+            has_text=re.compile(rf"Audit Lifecycle Status {run_id}|Audit Lifecycle Status", re.I)
+        ).first
+        revocation_option.wait_for(state="visible", timeout=5000)
+        revocation_option.click(timeout=5000)
+        audit.snapshot("template-revocation-selected", "Selected the active Revocation Profile.")
+    except Exception:
+        audit.snapshot("template-revocation-selection-blocked", "The active Revocation Profile was unavailable.")
         return
 
     for index in range(5):
@@ -1036,7 +1244,92 @@ def create_credential_template(audit: Audit, run_id: str) -> None:
         audit.snapshot(f"template-next-{index + 1}", "Advanced template wizard one step.")
     wait_for_creating_to_settle(page, timeout=15000)
     audit.settle(5000)
-    audit.snapshot("credential-template-submitted-or-blocked", "Credential template wizard final observed state.")
+    try:
+        expect(page.get_by_text(re.compile(r"now active", re.I)).first).to_be_visible(timeout=20_000)
+    except (AssertionError, PlaywrightError):
+        audit.snapshot("credential-template-activation-blocked", "Credential Template did not become active.")
+        return
+
+    organization_id = active_organization_id(page)
+    probe = fetch_org_collection(page, "/v1/credential-templates", organization_id)
+    template = find_named_resource(probe, name)
+    if not template or str(template.get("status") or "").strip().lower() != "active":
+        audit.snapshot(
+            "credential-template-state-mismatch",
+            "The UI reported success but the canonical Credential Template was not active.",
+            {"credential_template_probe": probe},
+        )
+        return
+    audit.snapshot(
+        "credential-template-activated",
+        "Created and activated the Credential Template.",
+        {"credential_template": {"id": template.get("id"), "name": template.get("name"), "status": template.get("status")}},
+    )
+
+
+def create_application_template(audit: Audit, run_id: str) -> None:
+    page = audit.page
+    audit.goto("/console/org/templates/applications/new?mode=advanced")
+    audit.snapshot("application-template-editor-opened", "Opened Application Template authoring.")
+
+    try:
+        credential_select = page.get_by_role(
+            "combobox",
+            name=re.compile(r"^credential template", re.I),
+        ).first
+        credential_select.wait_for(state="visible", timeout=10_000)
+        expect(credential_select).to_be_enabled(timeout=10_000)
+        credential_select.click(timeout=5000)
+        option = page.get_by_role("option").filter(
+            has_text=re.compile(rf"Audit Employee Credential {run_id}", re.I)
+        ).first
+        option.wait_for(state="visible", timeout=5000)
+        option.click(timeout=5000)
+    except Exception as exc:
+        audit.snapshot(
+            "application-template-credential-blocked",
+            "The active Credential Template was unavailable.",
+            {"selector_error": repr(exc)},
+        )
+        return
+
+    audit.fill_label(re.compile(r"^name", re.I), f"Audit Employee Application {run_id}")
+    audit.fill_label(
+        re.compile(r"description", re.I),
+        "Applicant contract created during the beta organization audit.",
+    )
+    audit.snapshot("application-template-filled", "Configured the Application Template contract.")
+
+    if not audit.click_role("button", re.compile(r"save draft", re.I), timeout=5000):
+        audit.snapshot("application-template-save-blocked", "Save Draft was unavailable.")
+        return
+    try:
+        page.wait_for_url(re.compile(r"/console/org/templates/applications/[^/]+$"), timeout=30_000)
+    except PlaywrightTimeoutError:
+        audit.snapshot("application-template-save-timeout", "Application Template detail did not open.")
+        return
+    audit.settle(3000)
+
+    activate = page.get_by_role("button", name=re.compile(r"^activate$", re.I)).first
+    try:
+        activate.wait_for(state="visible", timeout=20_000)
+        expect(activate).to_be_enabled(timeout=20_000)
+        activate.click(timeout=5000)
+        expect(page.get_by_text(re.compile(r"^ACTIVE$", re.I)).first).to_be_visible(timeout=20_000)
+    except (AssertionError, PlaywrightError, PlaywrightTimeoutError):
+        audit.snapshot("application-template-activation-blocked", "Application Template did not become active.")
+        return
+    organization_id = active_organization_id(page)
+    probe = fetch_org_collection(page, "/v1/application-templates", organization_id)
+    template = find_named_resource(probe, f"Audit Employee Application {run_id}")
+    if not is_active(template):
+        audit.snapshot("application-template-state-mismatch", "The canonical Application Template was not active.")
+        return
+    audit.snapshot(
+        "application-template-activated",
+        "Created and activated the Application Template.",
+        {"application_template": {"id": template.get("id"), "name": template.get("name"), "status": template.get("status")}},
+    )
 
 
 def create_policy_and_deployment(audit: Audit, run_id: str) -> None:
@@ -1074,7 +1367,22 @@ def create_policy_and_deployment(audit: Audit, run_id: str) -> None:
         if not audit.click_role("button", re.compile(r"next", re.I), timeout=1600):
             break
     audit.settle(5000)
-    audit.snapshot("presentation-policy-submitted-or-blocked", "Presentation policy final observed state.")
+    organization_id = active_organization_id(page)
+    policy_name = f"Audit Verification Policy {run_id}"
+    policy, policy_probe = wait_for_named_resource(
+        page,
+        "/v1/presentation-policies",
+        organization_id,
+        policy_name,
+    )
+    if not is_active(policy):
+        audit.snapshot("presentation-policy-state-mismatch", "The run-created Presentation Policy was not active.")
+        return
+    audit.snapshot(
+        "presentation-policy-active",
+        "Created an active Presentation Policy bound to the audit credential.",
+        {"presentation_policy": {"id": policy.get("id"), "name": policy.get("name"), "status": policy.get("status")}},
+    )
 
     audit.goto("/console/org/deploy/profiles/new")
     audit.snapshot("deployment-profile-wizard-opened", "Opened deployment profile wizard.")
@@ -1103,67 +1411,117 @@ def create_policy_and_deployment(audit: Audit, run_id: str) -> None:
         if not audit.click_role("button", re.compile(r"next", re.I), timeout=1600):
             break
     audit.settle(5000)
-    audit.snapshot("deployment-profile-submitted-or-blocked", "Deployment profile final observed state.")
-
-
-def create_flow(audit: Audit, run_id: str) -> None:
-    page = audit.page
-    before_bad_count = len(audit.bad_responses)
-    audit.goto("/console/org/flows/definitions/new")
-    audit.snapshot("flow-wizard-opened", "Opened issuance flow wizard.")
-    if not audit.click_test_id("flow-type-issuance_oid4vci", timeout=3000):
-        audit.click_role("button", re.compile(r"OID4VCI Issuance|OID4VCI|issuance", re.I), timeout=2500)
-    audit.snapshot("flow-type-selected", "Selected issuance/OID4VCI flow type where possible.")
-    if not audit.click_role("button", re.compile(r"next", re.I), timeout=3000):
-        audit.snapshot("flow-type-next-blocked", "Next unavailable after flow type.")
+    deployment_name = f"Audit API Deployment {run_id}"
+    deployment, deployment_probe = wait_for_named_resource(
+        page,
+        "/v1/deployment-profiles",
+        organization_id,
+        deployment_name,
+    )
+    if not is_active(deployment):
+        audit.snapshot("deployment-profile-state-mismatch", "The run-created Deployment Profile was not active.")
         return
-
-    audit.fill_label(re.compile(r"flow name", re.I), f"Audit Production Issuance {run_id}")
-    audit.fill_label(re.compile(r"description", re.I), "Production credential flow created during beta UI audit.")
-    if audit.click_role("button", re.compile(r"use preset", re.I), timeout=2000):
-        audit.click_text(re.compile(r"OID4VCI|QR|Standard|Pre-Authorized", re.I), timeout=2000)
-    else:
-        audit.click_role("button", re.compile(r"add step", re.I), timeout=1000)
-    audit.snapshot("flow-steps-filled", "Configured issuance flow steps where possible.")
-
-    if not audit.click_role("button", re.compile(r"next", re.I), timeout=3000):
-        audit.snapshot("flow-steps-next-blocked", "Next unavailable after configuring flow steps.")
-        return
-
-    if text_visible(page, "Preconditions", timeout=2000):
-        audit.click_role("button", re.compile(r"next", re.I), timeout=3000)
-
-    if text_visible(page, "Bind Deployment", timeout=3000):
-        audit.click_text(re.compile(rf"Audit API Deployment {run_id}|Audit API Deployment", re.I), timeout=2000)
-        audit.select_mui_option(
-            "flow-binding-template-select",
-            re.compile(rf"Audit Employee Credential {run_id}|Audit Employee Credential", re.I),
-            timeout=3000,
-        )
-        audit.select_mui_option(
-            "flow-binding-policy-select",
-            re.compile(rf"Audit Verification Policy {run_id}|Audit Verification Policy", re.I),
-            timeout=1500,
-        )
-        audit.snapshot("flow-binding-filled", "Selected deployment/template binding where possible.")
-        if not audit.click_role("button", re.compile(r"next", re.I), timeout=3000):
-            audit.snapshot("flow-binding-next-blocked", "Next unavailable after flow binding.")
-            return
-
-    for index in range(3):
-        if audit.click_role("button", re.compile(r"create|submit|finish", re.I), timeout=1200):
-            break
-        if audit.click_role("button", re.compile(r"skip", re.I), timeout=1200):
-            continue
-        if not audit.click_role("button", re.compile(r"next", re.I), timeout=1600):
-            break
-    wait_for_creating_to_settle(page, timeout=25000)
-    audit.settle(5000)
-    after_bad_count = len(audit.bad_responses)
     audit.snapshot(
-        "flow-submitted-or-blocked",
-        "Flow wizard final observed state.",
-        {"new_bad_responses_during_flow": audit.bad_responses[before_bad_count:after_bad_count]},
+        "deployment-profile-active",
+        "Created an active Deployment Profile.",
+        {"deployment_profile": {"id": deployment.get("id"), "name": deployment.get("name"), "status": deployment.get("status")}},
+    )
+
+
+def create_flow(audit: Audit, run_id: str, flow_kind: str) -> None:
+    page = audit.page
+    verification = flow_kind == "verification"
+    kind_label = "Verification" if verification else "Issuance"
+    flow_name = f"Audit Production {kind_label} {run_id}"
+    flow_type = "oid4vp_presentation" if verification else "oid4vci_pre_authorized"
+    required_dependency_test_id = (
+        "flow-binding-defaultPolicyId"
+        if verification
+        else "flow-binding-credentialTemplateId"
+    )
+    required_dependency_name = (
+        re.compile(rf"Audit Verification Policy {run_id}", re.I)
+        if verification
+        else re.compile(rf"Audit Employee Credential {run_id}", re.I)
+    )
+
+    audit.goto("/console/org/flows/definitions/new")
+    audit.snapshot(f"{flow_kind}-flow-wizard-opened", f"Opened {flow_kind} flow authoring.")
+    if not audit.click_test_id(f"flow-type-{flow_type}", timeout=5000):
+        audit.snapshot(f"{flow_kind}-flow-type-blocked", f"The {flow_type} capability was unavailable.")
+        return
+    if not audit.click_test_id("wizard.flow.next", timeout=5000):
+        audit.snapshot(f"{flow_kind}-flow-type-next-blocked", "Next was unavailable after selecting the flow type.")
+        return
+
+    audit.fill_label(re.compile(r"flow name", re.I), flow_name)
+    audit.fill_label(
+        re.compile(r"description", re.I),
+        f"Production {flow_kind} flow created during the beta organization audit.",
+    )
+    audit.snapshot(f"{flow_kind}-flow-definition-filled", f"Configured the fixed {flow_type} definition.")
+    if not audit.click_test_id("wizard.flow.next", timeout=5000):
+        audit.snapshot(f"{flow_kind}-flow-definition-next-blocked", "Next was unavailable after flow definition.")
+        return
+
+    if not audit.select_mui_option(required_dependency_test_id, required_dependency_name, timeout=7000):
+        # Exactly one eligible dependency is auto-selected by the UI.
+        dependency = page.get_by_test_id(required_dependency_test_id).first
+        try:
+            expect(dependency).not_to_have_text(re.compile(r"^\s*$"), timeout=5000)
+        except (AssertionError, PlaywrightError):
+            audit.snapshot(f"{flow_kind}-flow-dependency-blocked", "The required active dependency was unavailable.")
+            return
+    audit.select_mui_option(
+        "flow-binding-selectedDeployment",
+        re.compile(rf"Audit API Deployment {run_id}", re.I),
+        timeout=5000,
+    )
+    audit.snapshot(f"{flow_kind}-flow-dependencies-filled", "Bound the active run-created dependencies.")
+    if not audit.click_test_id("wizard.flow.next", timeout=5000):
+        audit.snapshot(f"{flow_kind}-flow-dependencies-next-blocked", "Next was unavailable after dependencies.")
+        return
+
+    audit.snapshot(f"{flow_kind}-flow-review", "Reviewed the canonical draft-first flow contract.")
+    if not audit.click_test_id("wizard.flow.submit", timeout=5000):
+        audit.snapshot(f"{flow_kind}-flow-create-blocked", "Create draft was unavailable.")
+        return
+    try:
+        page.wait_for_url(re.compile(r"/console/org/flows/definitions/[^/]+$"), timeout=20_000)
+    except PlaywrightTimeoutError:
+        audit.snapshot(f"{flow_kind}-flow-detail-timeout", "The created draft did not open its validation workspace.")
+        return
+    audit.settle(5000)
+    audit.snapshot(f"{flow_kind}-flow-draft-created", "Created a draft and opened its validation workspace.")
+
+    if not audit.click_role("button", re.compile(r"^validate$", re.I), timeout=5000):
+        audit.snapshot(f"{flow_kind}-flow-validation-blocked", "Validate was unavailable for the draft.")
+        return
+    try:
+        expect(page.get_by_text(re.compile(r"Validation:\s*passed", re.I)).first).to_be_visible(timeout=20_000)
+    except (AssertionError, PlaywrightError):
+        audit.snapshot(f"{flow_kind}-flow-validation-failed", "Flow validation did not pass.")
+        return
+
+    if not audit.click_role("button", re.compile(r"^activate$", re.I), timeout=5000):
+        audit.snapshot(f"{flow_kind}-flow-activation-blocked", "Activate was unavailable for the validated draft.")
+        return
+    try:
+        expect(page.get_by_text(re.compile(r"flow is active", re.I)).first).to_be_visible(timeout=20_000)
+    except (AssertionError, PlaywrightError):
+        audit.snapshot(f"{flow_kind}-flow-activation-failed", "The validated flow did not become active.")
+        return
+
+    organization_id = active_organization_id(page)
+    probe = fetch_org_collection(page, "/v1/flows/definitions", organization_id)
+    flow = find_named_resource(probe, flow_name)
+    if not is_active(flow) or str(flow.get("flow_type") or "") != flow_type:
+        audit.snapshot(f"{flow_kind}-flow-state-mismatch", "The canonical flow was not active with the expected type.")
+        return
+    audit.snapshot(
+        f"{flow_kind}-flow-active",
+        f"Created, validated, and activated the {flow_kind} flow.",
+        {"flow": {"id": flow.get("id"), "name": flow.get("name"), "status": flow.get("status"), "flow_type": flow.get("flow_type")}},
     )
 
 
@@ -1199,11 +1557,143 @@ def create_api_key(audit: Audit, run_id: str) -> None:
     wait_for_creating_to_settle(page, timeout=15000)
     audit.settle(5000)
     mask_api_key_fields(page)
+    organization_id = active_organization_id(page)
+    key_name = f"Audit Gateway Key {run_id}"
+    api_key, probe = wait_for_named_resource(
+        page,
+        "/v1/api-keys",
+        organization_id,
+        key_name,
+    )
+    if not api_key or api_key.get("enabled") is not True:
+        audit.snapshot(
+            "api-key-state-mismatch",
+            "The run-created API key was not present and enabled.",
+            redact_screenshot=True,
+        )
+        return
     audit.snapshot(
-        "api-key-submitted-or-blocked",
-        "API key creation final observed state.",
-        {"api_key_secret_screenshot_redacted": True},
+        "api-key-created",
+        "Created an enabled organization API key.",
+        {
+            "api_key": {"id": api_key.get("id"), "name": api_key.get("name"), "enabled": True},
+            "api_key_secret_screenshot_redacted": True,
+        },
         redact_screenshot=True,
+    )
+
+
+def verify_resource_inventory(audit: Audit, run_id: str) -> None:
+    page = audit.page
+    organization_id = active_organization_id(page)
+    specs = [
+        ("compliance_profile", "/v1/compliance-profiles", "OID4VC Core", False),
+        ("issuer_identity", "/v1/signing-keys/issuer-profiles", f"Audit Issuer Key {run_id}", True),
+        ("trust_profile", "/v1/trust-profiles", f"Audit Trust Profile {run_id}", False),
+        ("revocation_profile", "/v1/revocation-profiles", f"Audit Lifecycle Status {run_id}", False),
+        ("credential_template", "/v1/credential-templates", f"Audit Employee Credential {run_id}", False),
+        ("application_template", "/v1/application-templates", f"Audit Employee Application {run_id}", False),
+        ("presentation_policy", "/v1/presentation-policies", f"Audit Verification Policy {run_id}", False),
+        ("deployment_profile", "/v1/deployment-profiles", f"Audit API Deployment {run_id}", False),
+        ("issuance_flow", "/v1/flows/definitions", f"Audit Production Issuance {run_id}", False),
+        ("verification_flow", "/v1/flows/definitions", f"Audit Production Verification {run_id}", False),
+        ("api_key", "/v1/api-keys", f"Audit Gateway Key {run_id}", False),
+    ]
+    inventory: list[dict[str, Any]] = []
+    missing: list[str] = []
+    probes: dict[str, dict[str, Any]] = {}
+    resources: dict[str, dict[str, Any]] = {}
+
+    for resource_type, path, name, partial_name in specs:
+        if path not in probes:
+            probes[path] = fetch_org_collection(page, path, organization_id)
+        probe = probes[path]
+        resource = find_resource_with_name(probe, name) if partial_name else find_named_resource(probe, name)
+        if not is_active(resource):
+            missing.append(resource_type)
+            continue
+        resources[resource_type] = resource
+        inventory.append({
+            "resource_type": resource_type,
+            "id": resource.get("id"),
+            "name": resource.get("name"),
+            "status": resource.get("status") or ("active" if resource.get("enabled") else None),
+        })
+
+    config_probe = fetch_org_collection(page, "/v1/signing-keys/config", organization_id)
+    config = config_probe.get("body") if isinstance(config_probe.get("body"), dict) else {}
+    if not config.get("hsm_enabled") or not isinstance(config.get("services"), list) or not config.get("services"):
+        missing.append("signing_service")
+    else:
+        inventory.append({
+            "resource_type": "signing_service",
+            "id": config["services"][0].get("id"),
+            "name": config["services"][0].get("name"),
+            "status": config["services"][0].get("status") or "configured",
+        })
+
+    dependency_errors: list[str] = []
+    if not missing:
+        compliance = resources["compliance_profile"]
+        issuer = resources["issuer_identity"]
+        trust = resources["trust_profile"]
+        revocation = resources["revocation_profile"]
+        credential = resources["credential_template"]
+        application = resources["application_template"]
+        policy = resources["presentation_policy"]
+        deployment = resources["deployment_profile"]
+        issuance_flow = resources["issuance_flow"]
+        verification_flow = resources["verification_flow"]
+
+        expected_links = [
+            ("credential.compliance_profile_id", credential.get("compliance_profile_id"), compliance.get("id")),
+            ("credential.issuer_profile_id", credential.get("issuer_profile_id"), issuer.get("id")),
+            ("credential.trust_profile_id", credential.get("trust_profile_id"), trust.get("id")),
+            ("credential.revocation_profile_id", credential.get("revocation_profile_id"), revocation.get("id")),
+            ("application.credential_template_id", application.get("credential_template_id"), credential.get("id")),
+            ("policy.trust_profile_id", policy.get("trust_profile_id"), trust.get("id")),
+            ("deployment.trust_profile_id", deployment.get("trust_profile_id"), trust.get("id")),
+            ("deployment.default_policy_id", deployment.get("default_policy_id"), policy.get("id")),
+            ("issuance_flow.trust_profile_id", issuance_flow.get("trust_profile_id"), trust.get("id")),
+            ("issuance_flow.credential_template_id", issuance_flow.get("credential_template_id"), credential.get("id")),
+            ("verification_flow.trust_profile_id", verification_flow.get("trust_profile_id"), trust.get("id")),
+            ("verification_flow.presentation_policy_id", verification_flow.get("presentation_policy_id"), policy.get("id")),
+        ]
+        dependency_errors.extend(
+            label for label, actual, expected in expected_links if actual != expected
+        )
+        if policy.get("id") not in (deployment.get("presentation_policy_ids") or []):
+            dependency_errors.append("deployment.presentation_policy_ids")
+        for flow_label, flow in (("issuance_flow", issuance_flow), ("verification_flow", verification_flow)):
+            if deployment.get("id") not in (flow.get("deployment_profile_ids") or []):
+                dependency_errors.append(f"{flow_label}.deployment_profile_ids")
+        credential_claim_ids = {
+            requirement.get("credential_template_id") or requirement.get("credential_type")
+            for requirement in [
+                *(policy.get("credential_requirements") or []),
+                *(policy.get("required_claims") or []),
+            ]
+            if isinstance(requirement, dict)
+        }
+        if credential.get("id") not in credential_claim_ids:
+            dependency_errors.append("policy.credential_template")
+
+    if missing or dependency_errors:
+        audit.snapshot(
+            "resource-inventory-incomplete",
+            "The final canonical inventory was missing required active resources or dependency links.",
+            {
+                "organization_id": organization_id,
+                "missing_resource_types": missing,
+                "dependency_errors": dependency_errors,
+                "inventory": inventory,
+            },
+        )
+        return
+    audit.snapshot(
+        "resource-inventory-verified",
+        "Verified every required run-created primitive in the fresh organization.",
+        {"organization_id": organization_id, "inventory": inventory},
     )
 
 
@@ -1261,22 +1751,27 @@ def main() -> int:
             create_key_service_if_possible(audit, run_id)
             create_issuer_identity(audit, run_id)
             create_trust_profile(audit, run_id)
+            create_revocation_profile(audit, run_id)
             create_credential_template(audit, run_id)
+            create_application_template(audit, run_id)
             create_policy_and_deployment(audit, run_id)
-            create_flow(audit, run_id)
+            create_flow(audit, run_id, "issuance")
+            create_flow(audit, run_id, "verification")
             create_api_key(audit, run_id)
+            verify_resource_inventory(audit, run_id)
         except Exception as exc:
             audit.snapshot("audit-exception", f"Audit stopped with exception: {exc!r}")
             raise
         finally:
             audit.cleanup_created_api_keys()
             report_path = artifact_dir / "report.json"
-            report_path.write_text(json.dumps(audit.report(), indent=2, default=str), encoding="utf-8")
+            report = audit.report()
+            report_path.write_text(json.dumps(report, indent=2, default=str), encoding="utf-8")
             print(f"[audit] report={report_path}")
             context.close()
             browser.close()
 
-    return 0
+    return 0 if report["release_checks"]["status"] == "pass" else 1
 
 
 if __name__ == "__main__":

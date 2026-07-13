@@ -1,8 +1,8 @@
 /**
  * Trust & Compliance Step - Credential Template Wizard
  * 
- * Select the trust profile and optional compliance profile.
- * Trust Profile is required; blocks if none active.
+ * Select the required trust, issuer, and compliance profiles.
+ * The step blocks when any required active dependency is unavailable.
  */
 
 import { useEffect } from 'react';
@@ -149,7 +149,10 @@ const TrustComplianceStep = ({ data, onChange }) => {
       }
       const response = await listComplianceProfiles({ organization_id: activeOrgId });
       const profiles = response?.data || response || [];
-      return profiles.filter((p) => p.discoverable !== false);
+      return profiles.filter((p) => (
+        p.discoverable !== false
+        && (p.is_system === true || String(p.status || '').toLowerCase() === 'active')
+      ));
     },
     [activeOrgId]
   );
@@ -172,6 +175,12 @@ const TrustComplianceStep = ({ data, onChange }) => {
       onChange(buildIssuerProfilePatch(issuerProfiles[0], data.signing_algorithm));
     }
   }, [issuerProfiles]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (complianceProfiles.length === 1 && !data.compliance_profile_id) {
+      onChange({ compliance_profile_id: complianceProfiles[0].id });
+    }
+  }, [complianceProfiles]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleGoToTrustProfiles = () => {
     navigate('/console/org/trust/profiles/new');
@@ -393,7 +402,7 @@ const TrustComplianceStep = ({ data, onChange }) => {
         </Box>
       )}
 
-      {/* Compliance Profile Selection (Optional) */}
+      {/* Compliance Profile Selection */}
       {complianceProfilesError && (
         <Alert severity="error" sx={{ mb: 2 }}>
           {complianceProfilesError?.message || 'Compliance profiles could not be loaded.'}
@@ -402,17 +411,18 @@ const TrustComplianceStep = ({ data, onChange }) => {
           </Button>
         </Alert>
       )}
-      <FormControl fullWidth sx={{ mb: 2 }}>
-        <InputLabel>{t('wizards.credentialTemplate.trustComplianceStep.complianceProfile.label')}</InputLabel>
+      <FormControl fullWidth required sx={{ mb: 2 }}>
+        <InputLabel id="credential-template-compliance-profile-label">{t('wizards.credentialTemplate.trustComplianceStep.complianceProfile.label')}</InputLabel>
         <Select
+          labelId="credential-template-compliance-profile-label"
+          id="credential-template-compliance-profile"
+          data-testid="template-compliance-profile-select"
           value={data.compliance_profile_id || ''}
           onChange={(e) => onChange({ compliance_profile_id: e.target.value || null })}
           label={t('wizards.credentialTemplate.trustComplianceStep.complianceProfile.label')}
           disabled={complianceProfilesLoading}
         >
-          <MenuItem value="">
-            <em>{t('wizards.credentialTemplate.trustComplianceStep.complianceProfile.noneOption')}</em>
-          </MenuItem>
+          <MenuItem value="" disabled>Select an active Compliance Profile</MenuItem>
           {complianceProfilesLoading && (
             <MenuItem value="" disabled>
               Loading compliance profiles...
@@ -431,8 +441,8 @@ const TrustComplianceStep = ({ data, onChange }) => {
         </Select>
         <FormHelperText>
           {complianceProfiles.length > 0
-            ? `${complianceProfiles.length} optional compliance profile${complianceProfiles.length !== 1 ? 's' : ''} available.`
-            : t('wizards.credentialTemplate.trustComplianceStep.complianceProfile.helper')}
+            ? `${complianceProfiles.length} active compliance profile${complianceProfiles.length !== 1 ? 's' : ''} available.`
+            : 'Activate a Compliance Profile before creating a Credential Template.'}
         </FormHelperText>
       </FormControl>
 

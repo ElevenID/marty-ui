@@ -298,7 +298,12 @@ export async function loadCredentialCatalogItems({ organizationId, organizationN
     const templates = Array.isArray(data) ? data : (data?.templates || []);
 
     return {
-      credentials: templates.map((template) => mapCredentialTemplateToCatalogItem(template, organizationName)),
+      credentials: templates
+        .filter((template) => (
+          String(template?.status || '').toUpperCase() === 'ACTIVE'
+          && Boolean(template?.revocation_profile_id)
+        ))
+        .map((template) => mapCredentialTemplateToCatalogItem(template, organizationName)),
       error: null,
       missingOrganization: false,
     };
@@ -323,8 +328,7 @@ export async function loadExistingCredentialApplications({ organizationId, userI
     }
 
     const data = await listApplicantApplications(applicant.id);
-    const applications = Array.isArray(data) ? data : (data?.applications || []);
-    return extractExistingApplicationIds(applications);
+    return extractExistingApplicationIds(data);
   } catch {
     return [];
   }

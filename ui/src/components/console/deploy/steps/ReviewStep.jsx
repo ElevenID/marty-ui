@@ -189,14 +189,14 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
             <Grid item xs={12} md={6}>
               <ReviewField
                 label={t('wizards.deploymentProfile.reviewStep.fields.theme')}
-                value={data.ux_config?.theme || t('wizards.deploymentProfile.reviewStep.values.defaultTheme')}
+                value={data.environment_config?.theme || t('wizards.deploymentProfile.reviewStep.values.defaultTheme')}
               />
             </Grid>
 
             <Grid item xs={12} md={6}>
               <ReviewField
                 label={t('wizards.deploymentProfile.reviewStep.fields.language')}
-                value={data.ux_config?.language || t('wizards.deploymentProfile.reviewStep.values.defaultLanguage')}
+                value={data.environment_config?.language || t('wizards.deploymentProfile.reviewStep.values.defaultLanguage')}
               />
             </Grid>
           </Grid>

@@ -46,7 +46,7 @@ vi.mock('../../services/api', () => ({
 vi.mock('../../services/applicantApi', () => ({
   listApplications: async () => {
     const result = await mockGet('/v1/me/applications');
-    return { applications: result?.items || [], total: result?.total || result?.items?.length || 0 };
+    return { items: result?.items || [], total: result?.total || result?.items?.length || 0 };
   },
 }));
 
@@ -92,12 +92,21 @@ describe('CredentialCatalog', () => {
             description: 'Platform login credential',
             claims: [],
             status: 'active',
+            revocation_profile_id: 'rp-1',
           },
           {
             id: 'cfg-2',
             credential_type: 'passport',
             name: 'Digital Passport',
             description: 'Travel credential',
+            claims: [],
+            status: 'active',
+            revocation_profile_id: 'rp-2',
+          },
+          {
+            id: 'cfg-incomplete',
+            credential_type: 'MemberCredential',
+            name: 'Incomplete Credential',
             claims: [],
             status: 'active',
           },
@@ -108,6 +117,7 @@ describe('CredentialCatalog', () => {
         return Promise.resolve([
           { id: 'app-tpl-1', credential_template_id: 'cfg-1', status: 'ACTIVE' },
           { id: 'app-tpl-2', credential_template_id: 'cfg-2', status: 'ACTIVE' },
+          { id: 'app-tpl-incomplete', credential_template_id: 'cfg-incomplete', status: 'ACTIVE' },
         ]);
       }
 
@@ -158,6 +168,7 @@ describe('CredentialCatalog', () => {
     await waitFor(() => {
       expect(screen.getByTestId('credential-card-cfg-1')).toBeInTheDocument();
       expect(screen.getByTestId('credential-card-cfg-2')).toBeInTheDocument();
+      expect(screen.queryByTestId('credential-card-cfg-incomplete')).not.toBeInTheDocument();
     });
 
     expect(screen.getByTestId('credential-card-cfg-2')).toHaveAttribute('data-credential-status', 'applied');

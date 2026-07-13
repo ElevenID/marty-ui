@@ -72,6 +72,20 @@ async function browserFetch(page, url, options = {}) {
   }, { target: url, init: options });
 }
 
+async function apiGet(request, url) {
+  const response = await request.get(new URL(url, BETA_ORIGIN).href, {
+    failOnStatusCode: false,
+  });
+  const text = await response.text();
+  let body = text;
+  try { body = JSON.parse(text); } catch {}
+  return {
+    status: response.status(),
+    mipVersion: response.headers()['x-mip-version'] || null,
+    body,
+  };
+}
+
 async function main() {
   loadEnvFile(path.join(ROOT, '.env.tunnel.beta.local'));
   loadEnvFile(path.join(ROOT, '.env'));
@@ -150,11 +164,12 @@ async function main() {
       profile: await browserFetch(page, '/v1/me/applicant-profile'),
       applications: await browserFetch(page, '/v1/me/applications?limit=100'),
       holderInventory: await browserFetch(page, '/v1/issued-credentials/mine?limit=100'),
-      removedApplications: await browserFetch(page, '/v1/applicants/applications'),
-      removedOrgApplications: await browserFetch(page, '/v1/applicants/org-applications'),
-      removedProfileApplications: await browserFetch(page, '/v1/applicants/profiles/removed-route-probe/applications'),
+      removedPublicApplications: await apiGet(context.request, '/v1/applications'),
+      removedApplications: await apiGet(context.request, '/v1/applicants/applications'),
+      removedOrgApplications: await apiGet(context.request, '/v1/applicants/org-applications'),
+      removedProfileApplications: await apiGet(context.request, '/v1/applicants/profiles/removed-route-probe/applications'),
       removedByUser: userId
-        ? await browserFetch(page, `/v1/applicants/by-user/${encodeURIComponent(userId)}`)
+        ? await apiGet(context.request, `/v1/applicants/by-user/${encodeURIComponent(userId)}`)
         : { status: 0, body: null },
       credentialLogin: await browserFetch(page, '/v1/auth/credential-login'),
     };
@@ -168,18 +183,32 @@ async function main() {
       routeProbes.holderInventory,
     ];
     const removedRoutes = [
+      routeProbes.removedPublicApplications,
       routeProbes.removedApplications,
       routeProbes.removedOrgApplications,
       routeProbes.removedProfileApplications,
       routeProbes.removedByUser,
     ];
     const serverErrors = responses.filter((response) => response.status >= 500);
+    const removedPaths = new Set([
+      '/v1/applications',
+      '/v1/applicants/applications',
+      '/v1/applicants/org-applications',
+      '/v1/applicants/profiles/removed-route-probe/applications',
+      userId ? `/v1/applicants/by-user/${encodeURIComponent(userId)}` : null,
+    ].filter(Boolean));
+    const unexpectedResponses = responses.filter((response) => {
+      const pathname = new URL(response.url).pathname;
+      return response.status >= 400 && !removedPaths.has(pathname);
+    });
     const releaseReady = (
-      canonicalRoutes.every((probe) => probe.status === 200 && probe.mipVersion === '0.3.0')
-      && removedRoutes.every((probe) => probe.status === 404 && probe.mipVersion === '0.3.0')
+      canonicalRoutes.every((probe) => probe.status === 200 && probe.mipVersion === '0.3.1')
+      && removedRoutes.every((probe) => probe.status === 404 && probe.mipVersion === '0.3.1')
       && serverErrors.length === 0
+      && unexpectedResponses.length === 0
       && failedRequests.length === 0
       && pageErrors.length === 0
+      && consoleErrors.length === 0
     );
 
     const report = {
@@ -191,6 +220,7 @@ async function main() {
       routeProbes,
       responses,
       serverErrors,
+      unexpectedResponses,
       failedRequests,
       pageErrors,
       consoleErrors,

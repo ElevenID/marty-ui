@@ -55,7 +55,8 @@ describe('TrustComplianceStep', () => {
     expect(screen.getByText(/trust profile required/i)).toBeInTheDocument()
   })
 
-  it('loads real optional compliance profiles instead of rendering placeholder choices', () => {
+  it('loads and auto-selects the sole required active compliance profile', async () => {
+    const onChange = vi.fn()
     mockUseAsyncData
       .mockReturnValueOnce({
         data: [{ id: 'trust-1', name: 'Production Trust', status: 'active' }],
@@ -78,7 +79,7 @@ describe('TrustComplianceStep', () => {
       })
       .mockReturnValueOnce({
         data: [
-          { id: 'compliance-1', name: 'Enterprise VC Baseline', compliance_code: 'ENTERPRISE_VC', discoverable: true },
+          { id: 'compliance-1', name: 'OID4VC Core', compliance_code: 'OID4VC', status: 'ACTIVE', is_system: true, discoverable: true },
         ],
         loading: false,
         error: null,
@@ -89,12 +90,16 @@ describe('TrustComplianceStep', () => {
       <MemoryRouter>
         <TrustComplianceStep
           data={{ trust_profile_id: 'trust-1', issuer_profile_id: 'issuer-1', signing_algorithm: 'ES256' }}
-          onChange={vi.fn()}
+          onChange={onChange}
         />
       </MemoryRouter>
     )
 
-    expect(screen.getByText(/1 optional compliance profile available/i)).toBeInTheDocument()
+    expect(screen.getByText(/1 active compliance profile available/i)).toBeInTheDocument()
+    expect(screen.getByTestId('template-compliance-profile-select').parentElement?.querySelector('input')).toBeRequired()
+    await waitFor(() => {
+      expect(onChange).toHaveBeenCalledWith({ compliance_profile_id: 'compliance-1' })
+    })
     expect(screen.queryByText(/coming soon/i)).not.toBeInTheDocument()
   })
 

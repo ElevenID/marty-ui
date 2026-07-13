@@ -81,7 +81,12 @@ async def list_my_applications(request: Request) -> Response:
 
 @applicant_router.post("/v1/me/applications", summary="Create My Application")
 async def create_my_application(request: Request) -> Response:
-    return await proxy_request(request, _applicant_url(), "/v1/me/applications")
+    return await proxy_request(
+        request,
+        _applicant_url(),
+        "/v1/me/applications",
+        inject_headers=_self_service_headers(request),
+    )
 
 
 @applicant_router.get("/v1/me/applications/{application_id}", summary="Get My Application")
@@ -197,7 +202,7 @@ async def get_organization_applicant_evidence_summary(organization_id: str, appl
     return await proxy_request(
         request,
         _issuance_url(),
-        f"/v1/applications/{application_id}/evidence-summary",
+        f"/internal/applications/{application_id}/evidence-summary",
         inject_headers=_ISSUANCE_HEADERS,
     )
 
@@ -207,7 +212,7 @@ async def list_organization_applicant_evidence_facts(organization_id: str, appli
     return await proxy_request(
         request,
         _issuance_url(),
-        f"/v1/applications/{application_id}/evidence-facts",
+        f"/internal/applications/{application_id}/evidence-facts",
         inject_headers=_ISSUANCE_HEADERS,
     )
 
@@ -217,6 +222,6 @@ async def run_organization_applicant_evidence_check(organization_id: str, applic
     return await proxy_request(
         request,
         _issuance_url(),
-        f"/v1/applications/{application_id}/evidence/api-checks/{check_id}/run",
+        f"/internal/applications/{application_id}/evidence/api-checks/{check_id}/run",
         inject_headers=_ISSUANCE_HEADERS,
     )

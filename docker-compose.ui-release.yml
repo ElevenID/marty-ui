@@ -1,0 +1,22 @@
+name: marty-ui-prod
+
+services:
+  ui-prod:
+    image: ${MARTY_UI_RELEASE_IMAGE:?MARTY_UI_RELEASE_IMAGE must be set}
+    container_name: marty-ui-prod
+    restart: unless-stopped
+    ports:
+      - "3002:80"
+    networks:
+      - default
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:80/"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+networks:
+  default:
+    external: true
+    name: marty-infra-network

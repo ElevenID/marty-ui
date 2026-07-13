@@ -72,8 +72,12 @@ describe('FlowDefinitionWizard', () => {
     await user.click(await screen.findByTestId('flow-type-oid4vci_pre_authorized'));
     await user.click(screen.getByTestId('wizard.flow.next'));
     await user.type(await screen.findByLabelText(/Flow name/i), 'Employee credential');
+    expect(screen.getByRole('combobox', { name: /approval/i })).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: /trigger/i })).toBeInTheDocument();
     await user.click(screen.getByTestId('wizard.flow.next'));
     await waitFor(() => expect(screen.getByTestId('wizard.flow.next')).not.toBeDisabled());
+    expect(screen.getByRole('combobox', { name: /credential template/i })).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: /deployment profile/i })).toBeInTheDocument();
     await user.click(screen.getByTestId('wizard.flow.next'));
     expect(await screen.findByText('Review draft')).toBeInTheDocument();
     await user.click(screen.getByTestId('wizard.flow.submit'));

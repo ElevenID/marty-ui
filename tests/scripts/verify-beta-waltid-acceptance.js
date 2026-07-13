@@ -179,7 +179,10 @@ async function loginToBetaApplicant(page, email, password) {
   }), 60_000);
 }
 
-async function collectBetaOffer(browser) {
+async function collectBetaOffer(browser, {
+  walletId = 'wr-waltid-001',
+  logoutAfterOffer = false,
+} = {}) {
   loadEnvFile(path.join(ROOT, '.env.tunnel.beta.local'));
   loadEnvFile(path.join(ROOT, '.env'));
   const email = process.env.TEST_APPLICANT_EMAIL || process.env.TEST_APPLICANT1_EMAIL;
@@ -216,16 +219,28 @@ async function collectBetaOffer(browser) {
   await loginToBetaApplicant(page, email, password);
   await page.getByRole('button', { name: /add to wallet/i }).click({ timeout: 60_000 });
   await page.getByTestId('wallet-selector').waitFor({ state: 'visible', timeout: 15_000 });
-  await page.getByTestId('wallet-option-wr-waltid-001').click();
-  await page.getByRole('heading', { name: /scan with walt\.id wallet/i }).waitFor({
-    state: 'visible',
-    timeout: 60_000,
-  });
+  await page.getByTestId(`wallet-option-${walletId}`).click();
   await waitFor(() => issueResponses.length > 0 && issueResponses[issueResponses.length - 1].json, 60_000);
   const latest = issueResponses[issueResponses.length - 1].json;
   const selectedWallets = await page.evaluate(() => (
     Object.fromEntries(Object.entries(localStorage).filter(([key]) => key.startsWith('elevenid_wallets_')))
   ));
+  let loggedOut = false;
+  if (logoutAfterOffer) {
+    const closeDialog = page.getByRole('button', { name: /^close$/i }).last();
+    if (await closeDialog.isVisible().catch(() => false)) {
+      await closeDialog.click();
+    }
+    const logoutControl = page.locator('button:visible, a:visible')
+      .filter({ hasText: /^logout$/i })
+      .first();
+    await logoutControl.click({ timeout: 15_000 });
+    loggedOut = await waitFor(() => page.evaluate(async () => {
+      const response = await fetch('/v1/auth/me', { credentials: 'include' });
+      const body = await response.json().catch(() => null);
+      return body?.authenticated === false ? true : null;
+    }), 60_000).catch(() => false);
+  }
   await context.close();
 
   return {
@@ -234,6 +249,7 @@ async function collectBetaOffer(browser) {
     issueStatus: latest.status,
     issueWalletOfferIds: Object.keys(latest.credential_offer_uris || {}),
     selectedWallets,
+    loggedOut,
     badResponses,
     consoleErrors,
   };

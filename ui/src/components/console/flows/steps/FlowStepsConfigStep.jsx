@@ -66,8 +66,10 @@ const FlowStepsConfigStep = ({
         />
         <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
           <FormControl fullWidth>
-            <InputLabel>Approval</InputLabel>
+            <InputLabel id="flow-approval-label">Approval</InputLabel>
             <Select
+              id="flow-approval"
+              labelId="flow-approval-label"
               value={approvalStrategy}
               label="Approval"
               onChange={(event) => onUpdate({ approvalStrategy: event.target.value })}
@@ -79,8 +81,10 @@ const FlowStepsConfigStep = ({
             </Select>
           </FormControl>
           <FormControl fullWidth>
-            <InputLabel>Trigger</InputLabel>
+            <InputLabel id="flow-trigger-label">Trigger</InputLabel>
             <Select
+              id="flow-trigger"
+              labelId="flow-trigger-label"
               value={triggerType}
               label="Trigger"
               onChange={(event) => onUpdate({ triggerType: event.target.value })}

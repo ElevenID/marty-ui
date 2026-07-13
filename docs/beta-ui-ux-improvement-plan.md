@@ -54,14 +54,14 @@ Estimate scale:
 | UX-002 | Implemented | `/test-harness` excluded from sitemap and robots output. |
 | UX-003 | Implemented | Presentation Policies added as a first-class Design sidebar item with active-nav coverage. |
 | UX-004 | Implemented | Generic "Issuance Flows" labels replaced with "Flows"; flow routes unchanged. |
-| UX-005 | Implemented | In-app audit links use `/console/org/audit`; `/console/audit` redirects for compatibility. |
+| UX-005 | Implemented | In-app audit links use the canonical `/console/org/audit` route. |
 | UX-006 | Implemented | Setup readiness surfaces an empty active Compliance Profiles state from lifecycle data. |
 | UX-101 | Implemented | Flow wizard cards now store/submit MIP FlowType values while retaining friendly labels; focused wizard tests pass. |
 | UX-102 | Implemented | Standard flows use locked server-resolved MIP sequences and constrained hooks; custom orchestration uses a separate extension builder and schema. |
 | UX-103 | Implemented | Flow step endpoint examples use canonical `/v1/issuance/*` paths. |
 | UX-104 | Implemented | Dashboard readiness branches by Verify, Issue, Application Approval, Physical Document, and Lifecycle; optional deployments no longer block protocol-valid flows. |
 | UX-105 | Implemented | Blog tag URLs now slugify punctuation-heavy labels into canonical ASCII paths, redirect legacy tag variants, and generate sitemap-ready tag routes without encoded punctuation. |
-| UX-201 | Implemented | Console navigation is organized into Design, Govern, Deploy, Connect, Operate, Org, Audit, and Billing with compatibility routes retained. |
+| UX-201 | Implemented | Console navigation is organized into Design, Govern, Deploy, Connect, Operate, Org, Audit, and Billing. |
 | UX-202 | Implemented | Operate lands on Flow Instances; the list uses one organization-wide query and detail shows timeline, current step, and safe related-record links. |
 | UX-203 | Deferred | Requires production proxy/deployment ownership review before changing auth namespace behavior beyond the local audit/public route fixes. |
 | UX-204 | Deferred | Depends on UX-105 plus content/SEO approval for a Learn/Build/Trust public learning IA rewrite. |
@@ -75,28 +75,36 @@ The approved implementation expanded the original UX ballot where protocol chang
 | Workstream | Status | Delivered contract/product behavior |
 | --- | --- | --- |
 | Canonical Flow contract | Implemented | MIP 0.3 aligns FlowTypes, fixed sequences, required references, custom extensions, physical document jobs, examples, conformance fixtures, and generated Python/Rust/TypeScript bindings. |
-| Applicant API clean break | Deployed 2026-07-12 | Canonical organization review and `/v1/me/*` self-service routes replace all `/v1/applicants/*` routes; persisted organization ownership, permissions, caller-derived locks, and header stripping are enforced. |
-| Application contract | Deployed 2026-07-12 | Creation accepts only organization, active Application Template, form data, and integration context; owner, Credential Template, checks, approval, and issuer behavior are server-derived. |
-| Claim readiness and holder inventory | Deployed 2026-07-12 | `claim_state` and `claim_blocker` prevent false Claim actions; `/v1/issued-credentials/mine` replaces `/v1/documents` with a privacy-filtered inventory. |
-| Application Template authoring | Deployed 2026-07-12 | Create, advanced-create, detail, edit, preview, validation-gated activation, and deletion routes are registered; catalog visibility requires an active Application Template. |
-| Deterministic reviewer | Deployed 2026-07-12 | `reviewer@marty.demo` is provisioned through deployment variables, Keycloak bootstrap, and Marty organization reviewer membership. |
+| Applicant API clean break | Implemented; coordinated redeploy pending | Canonical organization review and `/v1/me/*` self-service routes replace all `/v1/applicants/*` routes; persisted organization ownership, immutable applicant-profile scope, target issuer scope, permissions, caller-derived locks, and header stripping are enforced. |
+| Application contract | Implemented; coordinated redeploy pending | Creation accepts only organization, active Application Template, form data, and integration context; owner, Credential Template, checks, approval, and issuer behavior are server-derived. |
+| Claim readiness and holder inventory | Implemented; coordinated redeploy pending | `claim_state` and `claim_blocker` prevent false Claim actions; `/v1/issued-credentials/mine` replaces `/v1/documents` with a privacy-filtered inventory. |
+| Application Template authoring | Implemented; coordinated redeploy pending | Create, advanced-create, detail, edit, preview, validation-gated activation, and deletion routes are registered; catalog visibility requires an active Application Template. |
+| Deterministic reviewer | Implemented; coordinated redeploy pending | `reviewer@marty.demo` is provisioned through deployment variables, Keycloak bootstrap, and Marty organization reviewer membership. |
 | Protocol bindings | Released 2026-07-12 | MIP 0.3 applicant and holder schemas regenerate Python, Rust, and TypeScript; protocol conformance, codegen drift, and the pinned Rust wheel pass in CD. |
 | Clean-break service migration | Implemented | Flow persistence and APIs use `resolved_steps`, explicit extensions, canonical triggers/hooks, DRAFT creation, validation, dry-run, and activation gates; legacy noncanonical graphs migrate to `custom`. |
 | Physical document issuance | Implemented | Encrypted intake, data-group generation, remote or explicit test signing, personalization handoff/status, quality verification, activation, webhook updates, safe flow state, capability gating, and production destination authoring. |
 | Guided setup | Implemented | Readiness follows protocol-required references, reports service failures as blockers, and exposes physical capability and approval-policy dependencies without treating optional deployment as mandatory. |
 | Operational spine | Implemented | Flow Instances is the Operate landing surface and joins runtime state to definitions, applications, credentials, and physical production jobs. |
+| Protected wallet promotion | Implemented; execution pending | A protected workflow validates SpruceKit login, seven active app-specific native handoffs, signed-request identity, evidence checksums, exact build/beta run linkage, and is the only path from build-ready to release-ready. |
 
-Remediation and deployment verification completed on 2026-07-11/12:
+Remediation and historical deployment verification completed on 2026-07-11/12; the current post-audit revision requires a new coordinated deployment:
 
-- MIP protocol code generation is current; the release branch passes `107` tests with `3` explicit skips plus generated-binding drift checks.
-- The external issuance repository passes 226 tests; its 11 explicit skips require the Rust extension that CD builds before release.
-- The MIP 0.3 deterministic browser gate passes all 5 tests with no unexpected requests or page exceptions.
-- The production UI bundle completes successfully; focused Application Template, verification, flow, deployment, applicant, and gateway suites pass.
+- MIP protocol code generation is current; the working revision passes `125` tests, generated-binding drift checks, Rust compile tests, and the TypeScript build.
+- The external issuance repository passes `257` tests with 11 explicit skips that require optional integration/runtime facilities.
+- The MIP 0.3 deterministic browser gates pass membership, credential login, organization creation/verification, and full credential lifecycle with no unexpected requests or page exceptions.
+- The production UI bundle and complete frontend suite pass; `742` UI/service tests pass with one explicit skip, and all `167` CLI tests pass.
 - CD rejects unset or mutable repository revisions and records exact 40-character SHAs for UI, protocol, credentials, core, CLI, blog, and subscriptions.
 - Atomic CD run `29185132375` passed and published immutable services, public UI, self-host UI, and migration image digests in release `mip-0.3.0-beta-20260712-r6`.
-- Live beta canonical applicant and claim probes pass, removed routes return `404`, and walt.id browser issuance acceptance stores and resolves the membership badge.
+- Live beta canonical applicant and claim probes pass, removed routes return `404`, and the final-spec Marty browser wallet receives fresh holder-bound credentials.
+- The 2026-07-12 MIP `0.3.1` lifecycle run completes explicit logout and membership-badge login, Application Template activation, signed DCQL verification, first-class renewal, suspend/deny, reinstate/allow, revoke/deny, issuer-bound status lookup, and cross-org `403` with no unexpected browser or network errors.
+- Applicant-to-flow issuance now accepts credential content only through canonical `data.claims`; top-level event metadata is never promoted into a credential. Live Jane Smith evidence shows three applicant-supplied form values and server-derived membership, organization, timestamp, and role claims in the issuance transaction.
+- Credential login profile upsert now forwards authenticated organization context, and disabled Keycloak token exchange is configuration-driven rather than discovered through a known-failing request. Post-restart login logs contain no provisioning warning or token-exchange `400`.
+- The strengthened migration path was exercised against the preserved pre-cutover beta PostgreSQL dump in an isolated `beta-copy-*` database. All ten migration heads verified, active Credential Templates retained revocation dependencies, applications retained Application Template links, flows retained canonical types, and renewal columns were present; the isolated copy was removed afterward.
+- The completion pass fixed cross-organization application ownership, selected-organization reviewer requests, signing-key capability proxying, canonical-only Flow statuses, and removed Credential Template request fields. Focused regressions and the complete suites pass.
+- Marty Core now publishes the workspace lockfile, vendored `core2` patch, and browser test-wallet crate required by the beta workflow's locked build. Its dedicated release workflow checks those sources, passes 150 final-spec OID4VCI/wallet tests, and compiles Python bindings against the same locked engine; CD requires that exact-SHA workflow result.
+- All eight UI service Alembic trees and the external issuance migration tree resolve to exactly one head. The next protected rehearsal must still use the final pinned migration image and identified beta copy.
 
-Remaining acceptance work is limited to the protected SpruceKit Open Badge login lane, native-wallet handoffs, destructive credential lifecycle scenarios, and the external walt.id presentation parser/issuer-label defects. Walt.id presentation is not advertised as passing.
+Remaining acceptance execution is limited to collecting protected SpruceKit Open Badge login and native-wallet device evidence for the exact build and beta run, then running the wallet-conformance promotion workflow. The repository-side evidence contract and fail-closed promotion gate are implemented. Walt.id is inactive and not advertised because tested community images still fail final OID4VCI proof and signed DCQL presentation contracts.
 
 ## Approval Philosophy
 
@@ -107,11 +115,11 @@ Default recommendation:
 3. Approve UX-104 only after deciding how much the dashboard should become intent-first now versus in the full IA redesign.
 4. Treat P2 as product direction. These are valuable, but they should be approved only if the team wants a more opinionated console shape.
 
-Non-goals for this plan:
+Original first-pass non-goals, now superseded by the approved MIP clean break:
 
 - Do not rewrite the full public site in the first pass.
-- Do not remove backend compatibility aliases in the first pass.
-- Do not change MIP protocol semantics.
+- Removed routes, aliases, dual reads, and mixed MIP versions are not retained.
+- Protocol changes are coordinated through MIP `0.3.1`, generated bindings, conformance fixtures, and an atomic deployment.
 - Do not touch unrelated blog content or workspace files.
 
 ## Dependency Map
@@ -411,7 +419,7 @@ Decision:
 - [ ] Reject
 - [ ] Defer
 
-Recommended decision: Approve both link updates and a compatibility redirect.
+Implemented decision: use one canonical audit route and remove the retired alias.
 
 Problem:
 
@@ -424,14 +432,8 @@ Auditability is a first-class trust signal in MIP. Audit links should be reliabl
 Recommended implementation:
 
 - Update internal links to `/console/org/audit`.
-- Add a compatibility redirect:
-
-```text
-/console/audit -> /console/org/audit
-```
-
-- Preserve query strings, e.g. `/console/audit?service=flow` becomes `/console/org/audit?service=flow`.
-- Update tests that currently use `/console/audit` to either assert the redirect or use the canonical path.
+- Remove the retired `/console/audit` route instead of retaining an alias.
+- Update route tests to use only the canonical path.
 
 Likely repo files:
 
@@ -447,52 +449,53 @@ Likely repo files:
 Acceptance criteria:
 
 - All in-app audit links navigate to `/console/org/audit`.
-- Direct navigation to `/console/audit` redirects to `/console/org/audit`.
-- Existing query parameters are preserved.
+- `/console/audit` is not registered.
 - Audit page breadcrumbs use the canonical path.
 
 Risk:
 
-- Low. Main risk is missing a legacy link.
+- Low. Any external bookmark to the retired route must be corrected.
 
 Rollback:
 
-- Restore old links and remove redirect.
+- Restore the retired alias only by an explicit product decision.
 
 ### UX-006: Surface Empty Active Compliance Profiles
 
 Decision:
 
-- [ ] Approve
+- [x] Approve
 - [ ] Reject
 - [ ] Defer
 
-Recommended decision: Approve if beta is meant to demonstrate production-like setup. Defer if empty compliance profiles are intentional during sandbox demos.
+Implementation status: Complete for the clean-break baseline.
 
 Problem:
 
-Live beta's MIP configuration reports `active_compliance_profiles: []`. MIP positions Compliance Profiles as the abstraction that hides credential format complexity. If none are active, setup should say what that means.
+Credential Templates were previously able to activate through an inline `CUSTOM` fallback while discovery reported no active Compliance Profile. That made the visible dependency graph disagree with MIP and let clients author format behavior outside the referenced primitive.
 
 MIP/UX rationale:
 
-Users should choose standards and compliance profiles rather than raw encodings. Empty active profiles should not be invisible.
+Users choose an active Compliance Profile; clients do not embed a replacement profile or author wallet compatibility inside a Credential Template.
 
 Proposed work:
 
-- Add a dashboard/readiness signal when no active Compliance Profiles exist.
-- Message should be neutral:
+- Seed the immutable active system profile `OID4VC Core` and expose it to every organization.
+- Require `compliance_profile_id` on Credential Template creation in the UI, gateway, service, schema, examples, and generated bindings.
+- Auto-select the sole active profile, show the selector as required, and fail closed when none is available.
+- Reject embedded `compliance_profile`, `wallet_configs`, and other removed client-authored compatibility fields.
+- Publish active Compliance Profiles in MIP discovery through the canonical schema.
+- Keep the empty state actionable:
 
 ```text
-No active Compliance Profiles. Activate a profile before creating production credential templates or flows.
+No active Compliance Profiles. Activate a profile before creating a Credential Template.
 ```
 
-- Link to `/console/org/policies/compliance` or the preferred compliance route.
-- If beta intentionally starts empty, include a clear "sandbox starts empty" state.
+- Keep `/console/org/policies/compliance` as a read-only inventory until custom profile persistence and lifecycle routes are implemented; remove dead Create/Edit/Detail actions.
 
 Alternative:
 
-- Seed beta with at least one system Compliance Profile and avoid adding a warning.
-- Better demo flow, but still worth showing readiness in the console.
+- Add organization-authored Compliance Profiles later as a complete draft/validate/activate lifecycle. Do not expose partial actions before persistence exists.
 
 Likely repo files:
 
@@ -504,19 +507,19 @@ Likely repo files:
 
 Acceptance criteria:
 
-- Dashboard shows a clear setup warning when active compliance profile count is zero.
-- Warning links to the right compliance profile page.
-- Warning disappears when at least one active profile is present.
-- Message does not block verifier-only exploration unless the selected intent requires an active profile.
+- Discovery lists the active `OID4VC Core` profile.
+- A fresh organization can select it and activate a Credential Template.
+- Missing, inactive, malformed, embedded, or wrong-organization profile references fail closed.
+- No Credential Template request contains `wallet_configs` or an inline Compliance Profile.
+- The fresh-organization audit includes the system profile in its dependency-linked inventory.
 
 Risk:
 
-- Medium if readiness data does not currently include compliance state.
-- Low if count is already available.
+- Low for the system baseline. Custom organization-authored profile lifecycle remains intentionally out of scope.
 
 Rollback:
 
-- Remove readiness signal.
+- Revert the coordinated protocol, service, gateway, UI, and discovery release together; mixed behavior is unsupported.
 
 ## P1 Work Items
 
@@ -545,24 +548,18 @@ Recommended mapping:
 | `verification` | `oid4vp_presentation` | Verify a credential |
 | `issuance_oid4vci` | `oid4vci_pre_authorized` | Issue via OID4VCI |
 | `issuance` | `oid4vci_pre_authorized` or remove if duplicate | Issue a credential |
-| `combined` | Keep as advanced/internal only, or replace with `application_approval_issuance` when it means application approval then issue | Application approval then issue |
+| `combined` | Remove; use `application_approval_issuance` when it means application approval then issue | Application approval then issue |
 
-Open product decision:
+Implemented product decision:
 
-- [ ] Treat `combined` as an advanced extension flow.
-- [ ] Replace `combined` with `application_approval_issuance` for the normal user path.
-- [ ] Keep `combined` unchanged for now.
-
-Recommended subdecision:
-
-Replace normal "combined" UX with `application_approval_issuance` where the intent is collect application, approve, then issue. Keep backend `combined` support only as advanced/internal compatibility.
+Replace `combined` with `application_approval_issuance` where the intent is collect application, approve, then issue. Do not retain a backend alias.
 
 Proposed work:
 
 - Update flow type cards to use MIP values.
 - Update `ISSUANCE_FLOW_TYPES` and `PRESENTATION_FLOW_TYPES` sets.
 - Update payload creation so `flow_type` is already normative before it reaches the backend.
-- Keep backend alias mapping unchanged for old clients.
+- Reject removed FlowType values at the service boundary.
 - Update review labels and tests.
 
 Likely repo files:
@@ -685,7 +682,7 @@ Proposed work:
   - `/api/issuance/token` -> `/v1/issuance/token`
   - `/api/issuance/credential` -> `/v1/issuance/credential`
 - Audit API docs UI for similar examples.
-- Keep backend legacy support untouched if needed.
+- Remove the legacy endpoint surface; removed paths must return `404`.
 
 Likely repo files:
 
@@ -1260,7 +1257,7 @@ Approve these only if the team wants the console to become more intent-first and
 
 ### MIP 0.3 Clean-Break Implementation Evidence
 
-Status: deployed to beta on 2026-07-12; canonical issuance and walt.id browser acceptance pass.
+Status: the post-audit MIP `0.3.1` revision passes the complete local development lifecycle. A previous immutable local snapshot proved backup, rehearsal, build, deployment, and marker mechanics; a final snapshot deployment is required after the Compliance Profile correction. Local snapshots are never promotion evidence.
 
 - Canonical self-service and organization-scoped applicant APIs replace the removed router and legacy routes.
 - Application Template dependencies, authoritative field validation, reviewer locks, claim readiness, and holder inventory now fail closed.
@@ -1270,18 +1267,61 @@ Status: deployed to beta on 2026-07-12; canonical issuance and walt.id browser a
 - Blocked approved applications show an issuer-owned waiting state and never expose Claim.
 - The authenticated console shrinks correctly at 320px; holder inventory is overflow-free at 320, 390, 768, and 1440px.
 - Deterministic Playwright coverage uses no conditional skips or soft assertions and exercises applicant, holder, and reviewer paths.
-- The real beta lifecycle workflow replaces the disabled legacy E2E job. It is dispatched after beta deployment, requires protected seeded-user secrets, and fails on mixed MIP versions, canonical-route failures, removed-route compatibility, wallet rejection, template activation failure, or browser verification failure.
-- The tested walt.id stable API and demo-wallet images are pinned by immutable registry digests. Walt.id `0.5.0` is rejected because it emits a nonconformant OID4VCI proof JWT type.
-- External issuance CI now installs Alembic and requires one migration head; the local graph resolves to `application_template_mip03`.
+- Applicant profile ownership remains bound to the authenticated applicant organization while a new Application is persisted under its selected issuer organization; cross-organization regression coverage prevents either organization from being substituted for the other.
+- Reviewer detail, evidence, lock, and decision requests use validated `ConsoleContext.activeOrgId`, including when the authentication default organization differs.
+- Signing-key purpose and service-capability endpoints proxy to the signing-key service instead of returning a hard-coded unavailable response.
+- Flow lifecycle parsing accepts only canonical MIP 0.3.1 statuses. Credential Templates require an active `compliance_profile_id`; gateway/service request models reject removed aliases, embedded profiles, issuer requirement fields, and client-authored wallet configuration.
+- The real beta lifecycle workflow replaces the disabled legacy E2E job. It is dispatched after beta deployment, requires protected seeded-user secrets, and fails on mixed MIP versions, canonical-route failures, removed-route compatibility, holder-bound wallet rejection, badge-login failure, template activation failure, or verification decisions other than `allow`.
+- The same workflow now begins with a disposable-organization browser gate. It creates and canonically verifies configured signing, active issuer/trust/revocation/Credential/Application/Presentation/Deployment resources, validated active issuance and verification flows, and an enabled API key before seeded lifecycle fixtures are trusted.
+- The fresh-org gate returns nonzero for missing coverage, unexpected browser/network failures, incomplete inventory, or incorrect MIP dependency links. Evidence `beta-org-console-audit-20260712210137` passed all `66` checkpoints, selected the active system Compliance Profile, activated every primitive, and recorded no blocker, page exception, or failed request.
+- Audit-driven UI fixes preserve `activate_immediately` through the Credential Template service boundary while stripping it from the create payload, and explicitly associate MUI labels with Application Template and Flow authoring selects.
+- The beta artifact records the selected CD run and release plus immutable UI/Core revisions, lifecycle run ID, origin, and MIP version. CD embeds that release identity independently in the services and UI images; beta must read matching `/.well-known/marty-release` and `/marty-ui-release.json` markers before browser work begins. Protected promotion revalidates both markers, all seven coordinated repository revisions, exact image sets/digests, checksums, and reports.
+- SpruceKit and seven active app-specific native handoffs use clean-break evidence schema v2. Altered signed requests, incorrect badge/issuer display, incomplete disclosure/login, missing device/OS identity, absent handoffs, duplicate attachments, and incomplete fresh-org evidence fail closed.
+- Protected recordings, signed-request capture, and the handoff matrix are downloaded over HTTPS and verified byte-for-byte. Promotion is bound to the exact evidence JSON and records only attachment kind, hash, and size plus CD/beta/promotion run IDs.
+- Credential Template activation now refreshes the managed issuer context and rejects an active Trust Profile that does not trust that issuer DID.
+- Credential renewal is first-class: template validity policy is persisted on issuance, the operator receives a replacement offer, successful redemption revokes the superseded credential, and both records retain directional renewal links.
+- The deterministic lifecycle gate verifies organization-owned status lists, renewal, suspend/deny, reinstate/allow, revoke/deny, and wrong-organization `403` behavior.
+- The audit found a misplaced renewal-field read in the Canvas receipt mapper; the mapping now belongs to the issuance transaction mapper and has a focused regression assertion.
+- Walt.id test images remain digest-pinned for diagnostics, but the registry entry is inactive and carries no supported capabilities until an upstream final-spec pair passes.
+- External issuance CI now installs Alembic and requires one migration head; the current local graph resolves to `derive_server_owned_claims`.
 - CD requires exact revisions for protocol, credentials, core, CLI, blog, and subscriptions. It runs pinned protocol conformance/binding checks and emits a 90-day atomic release manifest containing repository revisions, immutable image tags, wallet digests, and `mixed_versions_supported: false` before any UI or service image can publish.
-- The `beta-migration-rehearsal` job refuses unmarked external database URLs and otherwise uses disposable PostgreSQL plus a synthetic MIP 0.2 applicant store. It verifies every migration head, one-way applicant conversion, backup creation, and image digests before publishing the release-ready manifest.
-- Verification evidence: 654 service tests passed with one existing Redis integration skip; the complete frontend suite passed; the release protocol branch passed 107 tests with 3 explicit skips; 226 external issuance tests passed with 11 explicit Rust-extension skips; production build and generated-binding drift checks passed; five focused Chromium tests passed.
+- The `beta-migration-rehearsal` job requires a protected database restored from an identified beta snapshot. The URL must contain a `beta-copy-*` safety marker; there is no empty-schema fallback. It verifies every migration head, one-way applicant conversion, backup creation, and image digests before publishing a build-ready manifest that records the snapshot ID.
+- Active Credential Template VCTs can no longer use `marty.example`. Migration head `20260712_0004` rewrites only active placeholder VCTs to the configured public origin and preserves deprecated values for historical audit.
+- The protected beta-copy rehearsal now requires `MIGRATION_REHEARSAL_PUBLIC_API_URL`, binds that exact HTTPS origin into migrations, and records it in the build-ready manifest. Promotion rejects a rehearsal origin that differs from the tested beta origin.
+- The beta lifecycle and protected promotion workflows both run `scripts/check_spruceid_metadata.py`. The probe requires identical canonical/appended metadata, issuer `ElevenID LLC`, `MemberCredential#spruce-sd-jwt`, the canonical membership VCT, badge name `Marty Verified Member Badge`, valid public HTTPS Spruce/mDoc configurations, and no placeholder host.
+- The MIP discovery endpoint now validates against the strict 0.3.1 protocol schema. It publishes the required self URL, implementation classes, canonical issuance/verification endpoints, formats, flow types, signing algorithms, and active compliance codes; removed `api_base_url`, profile-object, endpoint-map, wallet-map, and authorization extensions are no longer emitted. The live beta gate asserts this shape rather than checking only the version string.
+- Latest local browser evidence: `beta-org-credential-paths-20260713T030439` proves policy-bound issuance, Application Template activation, badge login, and browser-wallet verification allowed; `beta-credential-login-20260713T030427` independently proves badge receipt, logout, and authenticated return; `beta-credential-lifecycle-20260713T030519` proves linked renewal and destructive lifecycle decisions; `beta-membership-probe-20260713030407` proves canonical routes, removed-route `404`s, claim recovery, and zero browser errors.
+- Migration evidence includes full pre-change PostgreSQL backups `deployment-mip-0.3.1-beta-20260712T161209/postgres-pre-template-clean-break-20260712T161209.dump` and `postgres-pre-system-claim-migration-20260712T162220.dump`; both one-way migrations were rehearsed on isolated restores before live application.
+
+Local GitHub-independent release lane:
+
+- `scripts/create_local_release_manifest.py` freezes tracked and untracked nonignored inputs for all coordinated repositories into checksum-addressed snapshots.
+- `scripts/deploy-local-beta-release.ps1` verifies source and snapshot hashes, backs up stateful stores, rehearses migrations on an isolated beta-copy PostgreSQL database, builds release-tagged images, applies the live migration, recreates the app/UI atomically, and compares local/tunneled runtime markers.
+- Every local manifest records `source_kind=local-worktree-snapshot`, `promotion_eligible=false`, and `release_ready=false`; this is a temporary execution path while protected GitHub features are unavailable.
+- The earlier immutable run `mip-0.3.1-local-20260713T021224Z` completed successfully. The final post-Compliance-Profile snapshot must replace it before local completion evidence is current.
+- Final local candidate `mip-0.3.1-local-20260713T031700Z` is reserved for that frozen snapshot; its deployment manifest and post-deployment browser reports are authoritative only after the run succeeds.
+- Current verification: Marty UI/services `746 passed, 1 skipped`; MIP Protocol `125 passed`; generated bindings current; Rust and TypeScript builds pass; complete frontend test/build pass; local release contracts `23 passed`; PowerShell, nginx, and Compose validation pass.
 
 Remaining external/device checks:
 
-- complete SpruceKit Open Badge login acceptance in the protected conformance/device lane;
-- run native wallet handoffs and destructive suspend, reinstate, revoke, and renewal checks in the device lab.
-- resolve or pin a walt.id presentation release that accepts the signed DCQL request without changing the standards-compliant login contract.
+- publish every coordinated dirty repository and set all seven CD revision variables to those exact 40-character SHAs;
+- rerun CD against an identified protected beta database copy with the exact HTTPS rehearsal origin, deploy the manifest's services/UI/migration image digests as one release, and dispatch beta lifecycle with that `release_version` and `cd_run_id`;
+- require the new services/UI runtime markers and rerun all deterministic lifecycle evidence; older local beta reports cannot promote a newly built release;
+- collect SpruceKit Open Badge login acceptance evidence in the protected device lane;
+- collect all seven active app-specific native wallet handoffs in the device lab;
+- run the protected wallet-conformance workflow to publish the first matching release-ready manifest;
+- re-evaluate Walt.id only when an upstream image supports final OID4VCI `proofs` and the signed DCQL request without changing the standards-compliant contract.
+
+No historical beta report may satisfy these remaining checks. CD, runtime markers, deterministic lifecycle evidence, protected attachments, and promotion must all name the same final coordinated revisions and immutable image digests.
+
+Current GitHub preflight:
+
+- `beta-lifecycle` and its seeded-user inputs are configured.
+- `beta-migration-rehearsal` is missing its protected URL, safety marker, snapshot ID, and public-origin inputs.
+- `wallet-conformance` must be created with protected review; configure its evidence bearer token only when attachment URLs require authentication.
+- all coordinated revision variables still point at the previous release and must be changed only after the final repository revisions are published.
+- CD now enforces this state from `deploy-config/github-release-environments.json` through `scripts/check_github_release_environments.py`; unsafe or incomplete GitHub configuration fails before image builds begin.
+- ElevenID is on GitHub Free, the repository is private, branch-protection configuration returns an upgrade-required `403`, and no reviewer team exists. Use GitHub Enterprise for private required-reviewer rules (or explicitly review a public-visibility decision) and assign an independent release reviewer before attempting CD; do not remove the environment protections to fit the current entitlement.
 
 For approved P0/P1 changes, run targeted tests first:
 
@@ -1302,10 +1342,11 @@ Manual browser checks after deploy:
 https://beta.elevenidllc.com/verification
 https://beta.elevenidllc.com/issuance
 https://beta.elevenidllc.com/docs/quickstart
-https://beta.elevenidllc.com/console/audit
 https://beta.elevenidllc.com/console/org/audit
 https://beta.elevenidllc.com/sitemap.xml
 https://beta.elevenidllc.com/.well-known/mip-configuration
+https://beta.elevenidllc.com/.well-known/marty-release
+https://beta.elevenidllc.com/marty-ui-release.json
 ```
 
 ## Approval Log

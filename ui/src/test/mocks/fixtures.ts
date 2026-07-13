@@ -191,7 +191,6 @@ export const mockDeploymentProfiles = {
     environment: 'production',
     trust_profile_id: 'trust-1',
     default_policy_id: 1,
-    default_presentation_policy_id: 1,
     presentation_policy_ids: [1],
     credential_template_ids: [1],
     organization_id: 1,

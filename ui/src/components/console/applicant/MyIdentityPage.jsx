@@ -711,11 +711,8 @@ function MyIdentityPage() {
         const creds = credentialResult.status === 'fulfilled'
           ? (credentialResult.value.items || []).map(normaliseCredential)
           : null;
-        const applicationPayload = applicationResult.status === 'fulfilled'
-          ? applicationResult.value
-          : null;
-        const apps = applicationPayload
-          ? (applicationPayload.applications || applicationPayload.items || []).map(normaliseApplication)
+        const apps = applicationResult.status === 'fulfilled'
+          ? applicationResult.value.items.map(normaliseApplication)
           : null;
 
         // Deduplicate: keep only the most-advanced row per credential config.

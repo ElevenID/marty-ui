@@ -849,14 +849,19 @@ async def _load_applicant_stats_payload(
 async def _load_organization_lifecycle_payload(
     org_id: str,
     *,
+    internal: bool = False,
     headers: dict[str, str] | None = None,
     client: httpx.AsyncClient | None = None,
     registry: Any | None = None,
 ) -> tuple[dict[str, Any], Response | None]:
     lifecycle_payload, error_response = await _request_service_json_with_headers(
         "organizations",
-        f"/v1/organizations/{org_id}/lifecycle",
-        params={"organization_id": org_id},
+        (
+            f"/internal/v1/organizations/{org_id}/lifecycle"
+            if internal
+            else f"/v1/organizations/{org_id}/lifecycle"
+        ),
+        params=None if internal else {"organization_id": org_id},
         headers=headers,
         client=client,
         registry=registry,
@@ -1013,6 +1018,7 @@ async def run_hosted_pilot_auto_purge_sweep(
 
             lifecycle_payload, lifecycle_error = await _load_organization_lifecycle_payload(
                 org_id,
+                internal=True,
                 client=client,
                 registry=registry,
             )

@@ -15,6 +15,8 @@ import {
   fetchAnalyticsScans,
   fetchIssuedCredentials,
   revokeCredential,
+  suspendCredential,
+  reinstateCredential,
   fetchRevocationHistory,
   fetchMDocConfig,
   saveMDocConfig,
@@ -159,6 +161,18 @@ describe('vendorApi', () => {
     post.mockResolvedValue({});
     await revokeCredential({ credentialId: 'c1', reason: 'lost', comments: 'test' });
     expect(post).toHaveBeenCalledWith(expect.stringContaining('/v1/issued-credentials/c1/revoke'), { reason: 'lost', comments: 'test' });
+  });
+
+  it('suspendCredential calls the canonical lifecycle endpoint', async () => {
+    post.mockResolvedValue({ id: 'c1', status: 'SUSPENDED' });
+    await suspendCredential({ credentialId: 'c1', reason: 'Under review' });
+    expect(post).toHaveBeenCalledWith(expect.stringContaining('/v1/issued-credentials/c1/suspend'), { reason: 'Under review' });
+  });
+
+  it('reinstateCredential calls the canonical lifecycle endpoint', async () => {
+    post.mockResolvedValue({ id: 'c1', status: 'ACTIVE' });
+    await reinstateCredential({ credentialId: 'c1', reason: 'Review complete' });
+    expect(post).toHaveBeenCalledWith(expect.stringContaining('/v1/issued-credentials/c1/reinstate'), { reason: 'Review complete' });
   });
 
   it('fetchRevocationHistory builds offset params', async () => {

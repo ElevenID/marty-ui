@@ -31,6 +31,7 @@ from fastapi import APIRouter, Body, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
 from gateway.middleware import mip_error_response
+from gateway.proxy import get_registry, proxy_request
 
 signing_key_router = APIRouter(prefix="/v1/signing-keys", tags=["Signing Keys"])
 internal_signing_key_router = APIRouter(prefix="/internal/signing-keys", tags=["Internal Signing Keys"])
@@ -2666,33 +2667,17 @@ async def resolve_signing_service(
 
 
 @signing_key_router.get("/config/purposes", summary="List Available Key Purposes")
-async def list_key_purposes():
-    """Deprecated: use GET /v1/signing-keys/config/purposes on signing-keys service.
-
-    This endpoint is preserved for backward compatibility but delegates to the
-    signing-keys microservice via the gateway registry proxy.
-    """
-    # Handler removed; gateway registry routes to signing-keys service
-    raise HTTPException(
-        status_code=503,
-        detail="This endpoint has been migrated to the signing-keys service. "
-               "Contact your administrator if this message persists.",
-    )
+async def list_key_purposes(request: Request):
+    """Return canonical key-purpose metadata from the signing-keys service."""
+    service_url = get_registry().get_service_url("signing-keys")
+    return await proxy_request(request, service_url, "/v1/signing-keys/config/purposes")
 
 
 @signing_key_router.get("/config/service-capabilities", summary="List Provider Capability Metadata")
-async def list_service_capabilities():
-    """Deprecated: use GET /v1/signing-keys/config/service-capabilities on signing-keys service.
-
-    This endpoint is preserved for backward compatibility but delegates to the
-    signing-keys microservice via the gateway registry proxy.
-    """
-    # Handler removed; gateway registry routes to signing-keys service
-    raise HTTPException(
-        status_code=503,
-        detail="This endpoint has been migrated to the signing-keys service. "
-               "Contact your administrator if this message persists.",
-    )
+async def list_service_capabilities(request: Request):
+    """Return canonical provider capabilities from the signing-keys service."""
+    service_url = get_registry().get_service_url("signing-keys")
+    return await proxy_request(request, service_url, "/v1/signing-keys/config/service-capabilities")
 
 
 # ---------------------------------------------------------------------------

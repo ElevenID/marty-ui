@@ -71,7 +71,10 @@ open http://localhost:8000/docs
 /v1/credentials/*    → Credential Service (:8003)
 /v1/trust/*          → Trust Service (:8004)
 /v1/issuance/*       → Issuance Service (:8005)
-/v1/applicants/*     → Applicant Service (:8006)
+/v1/me/applicant-profile                 → Applicant Service (:8006)
+/v1/me/applications/*                    → Applicant Service (:8006)
+/v1/organizations/{org_id}/applicants/*  → Applicant Service (:8006)
+/v1/issued-credentials/mine              → Applicant Service (:8006)
 /v1/notifications/*  → Notification Service (:8007)
 ```
 

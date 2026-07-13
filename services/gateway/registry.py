@@ -99,7 +99,6 @@ ROUTE_CONFIG = {
     "/v1/integrations/canvas/evidence-events": {"service": "issuance", "requires_auth": False},
     "/v1/integrations/canvas": {"service": "issuance", "requires_auth": False},
     "/v1/application-templates": {"service": "issuance", "requires_auth": True},
-    "/v1/applications": {"service": "issuance", "requires_auth": True},
     "/v1/flows/instances": {"service": "flows", "requires_auth": True},  # wallet-facing /request + /submit handled by _WALLET_PUBLIC regex
     "/v1/flows/siop/submit": {"service": "flows", "requires_auth": False},  # SIOPv2 wallet-facing
     "/v1/flows/siop": {"service": "flows", "requires_auth": True},  # SIOPv2 session creation

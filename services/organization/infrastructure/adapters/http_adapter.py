@@ -809,6 +809,18 @@ class UpdatePlanRequest(BaseModel):
     settings_patch: dict[str, Any] | None = None
 
 
+@internal_router.get("/{org_id}/lifecycle", response_model=OrganizationLifecycleResponse, response_model_exclude_none=True)
+async def get_internal_organization_lifecycle(
+    org_id: str,
+    use_case: OrganizationUseCase = Depends(get_org_use_case),
+) -> OrganizationLifecycleResponse:
+    """Return lifecycle metadata to trusted service-to-service callers."""
+    org = await use_case.get_organization(org_id)
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found")
+    return _org_to_lifecycle_response(org)
+
+
 def _body_fields_set(model: BaseModel) -> set[str]:
     fields = getattr(model, "model_fields_set", None)
     if fields is not None:

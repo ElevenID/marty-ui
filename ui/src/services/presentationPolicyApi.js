@@ -457,19 +457,13 @@ function normalizeCredentialTemplateVct(data = {}) {
     return vct;
   }
 
-  return `https://credentials.elevenidllc.com/vct/${vct}`;
-}
-
-function normalizeCredentialTemplateComplianceProfile(data = {}) {
-  if (data.compliance_profile_id || data.compliance_profile?.compliance_code || data.compliance_profile?.code) {
-    return data.compliance_profile;
+  const configuredOrigin = String(import.meta.env.VITE_CREDENTIAL_METADATA_ORIGIN || '').trim();
+  const runtimeOrigin = typeof window !== 'undefined' ? window.location.origin : '';
+  const origin = (configuredOrigin || runtimeOrigin).replace(/\/+$/, '');
+  if (!origin) {
+    throw new Error('Credential metadata origin is unavailable.');
   }
-
-  return {
-    ...(data.compliance_profile || {}),
-    compliance_code: 'CUSTOM',
-    credential_format: inferCredentialFormat(data),
-  };
+  return `${origin}/vct/${vct}`;
 }
 
 function isActiveResource(resource) {
@@ -477,10 +471,27 @@ function isActiveResource(resource) {
 }
 
 export function buildCredentialTemplatePayload(data = {}) {
+  const {
+    status: _status,
+    activate_immediately: _activateImmediately,
+    generate_artifacts_automatically: _generateArtifactsAutomatically,
+    supported_wallet_ids: _supportedWalletIds,
+    issuance_protocol: _issuanceProtocol,
+    wallet_configs: _walletConfigs,
+    compliance_profile: _embeddedComplianceProfile,
+    ...contractData
+  } = data;
   const issuerProfileId = String(data.issuer_profile_id || '').trim();
   if (!issuerProfileId) {
     const error = new Error('An active issuer profile is required before creating a credential template.');
     error.code = 'ISSUER_PROFILE_REQUIRED';
+    error.status = 400;
+    throw error;
+  }
+  const complianceProfileId = String(data.compliance_profile_id || '').trim();
+  if (!complianceProfileId) {
+    const error = new Error('An active compliance profile is required before creating a credential template.');
+    error.code = 'COMPLIANCE_PROFILE_REQUIRED';
     error.status = 400;
     throw error;
   }
@@ -493,11 +504,11 @@ export function buildCredentialTemplatePayload(data = {}) {
     : [];
 
   return {
-    ...data,
+    ...contractData,
     issuer_profile_id: issuerProfileId,
+    compliance_profile_id: complianceProfileId,
     vct: normalizeCredentialTemplateVct(data),
     claims,
-    compliance_profile: normalizeCredentialTemplateComplianceProfile(data),
     ...(validityRules
       ? {
           validity_rules: {
@@ -593,7 +604,7 @@ export async function activatePresentationPolicy(id) {
  */
 export async function createCredentialTemplate(data) {
   const organizationId = requireOrganizationId(data);
-  const shouldActivate = data?.activate_immediately === true || String(data?.status || '').toLowerCase() === 'active';
+  const shouldActivate = data?.activate_immediately === true;
   const payload = buildCredentialTemplatePayload({
     ...data,
     organization_id: organizationId,
@@ -815,5 +826,14 @@ export async function listRevocationProfiles(params = {}, options = {}) {
  */
 export async function getRevocationProfile(id) {
   return get(`${REVOCATION_PROFILE_BASE}/${id}`);
+}
+
+/**
+ * Activate a draft revocation profile.
+ * @param {string} id
+ * @returns {Promise<Object>}
+ */
+export async function activateRevocationProfile(id) {
+  return post(`${REVOCATION_PROFILE_BASE}/${id}/activate`, {});
 }
 

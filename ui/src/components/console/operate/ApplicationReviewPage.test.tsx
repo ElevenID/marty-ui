@@ -16,13 +16,17 @@ const mockListCredentialTemplates = vi.fn();
 
 vi.mock('../../../hooks/useAuth', () => ({
   useAuth: () => ({
-    organizationId: 'org-1',
+    organizationId: 'org-auth-default',
     user: {
       user_id: 'reviewer-1',
       name: 'Reviewer One',
       email: 'reviewer@example.test',
     },
   }),
+}));
+
+vi.mock('../../../contexts/ConsoleContext', () => ({
+  useConsole: () => ({ activeOrgId: 'org-1' }),
 }));
 
 vi.mock('../../../services/applicantApi', () => ({
@@ -110,10 +114,13 @@ describe('ApplicationReviewPage evidence policy controls', () => {
     await user.click(await screen.findByRole('button', { name: /run passport document check/i }));
 
     await waitFor(() => {
+      expect(mockGetOrganizationApplication).toHaveBeenCalledWith('org-1', 'app-1');
+      expect(mockAcquireReviewerLock).toHaveBeenCalledWith('org-1', 'app-1');
       expect(mockRunEvidenceCheck).toHaveBeenCalledWith('org-1', 'app-1', 'passport-document-check', {
         issue_on_permit: true,
       });
     });
+    expect(mockGetOrganizationApplication).not.toHaveBeenCalledWith('org-auth-default', 'app-1');
     expect(await screen.findByText(/policy permitted approval/i)).toBeInTheDocument();
   });
 });

@@ -247,22 +247,24 @@ describe('ConsoleRoutes login routing', () => {
     expect(screen.queryByTestId('guided-setup-wizard')).not.toBeInTheDocument();
   });
 
-  it('redirects the legacy audit route to the org audit page', async () => {
+  it('does not resolve the retired audit alias to the audit page', async () => {
     mockUseAuth.mockReturnValue({
       isAuthenticated: true,
       isLoading: false,
       login: mockLogin,
     });
     mockUseConsole.mockReturnValue({
-      mode: 'org',
-      activeOrgId: 'org-1',
-      memberships: [{ id: 'org-1', name: 'Marty' }],
+      mode: 'applicant',
+      activeOrgId: null,
+      memberships: [],
       isLoading: false,
       isOrgBootstrapRequired: false,
     });
 
-    renderConsoleRoutes('/console/audit?service=gateway');
+    renderConsoleRoutes('/console/audit');
 
-    expect(await screen.findByTestId('audit-page')).toBeInTheDocument();
+    expect(await screen.findByTestId('credential-catalog')).toBeInTheDocument();
+    expect(screen.queryByTestId('audit-page')).not.toBeInTheDocument();
   });
+
 });

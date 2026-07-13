@@ -12,11 +12,13 @@ import SaveIcon from '@mui/icons-material/Save';
 
 import { useConsole } from '../../../contexts/ConsoleContext';
 import { listCredentialTemplates } from '../../../services/presentationPolicyApi';
+import { listPolicySets } from '../../../services/policySetsApi';
 import {
   createApplicationTemplate,
   getApplicationTemplate,
   updateApplicationTemplate,
 } from '../../../services/applicationTemplatesApi';
+import ApplicationEvidenceEditor from './ApplicationEvidenceEditor';
 
 const EMPTY = {
   name: '', description: '', credential_template_id: '', form_fields: [],
@@ -24,6 +26,13 @@ const EMPTY = {
   approval_policy_set_id: null, application_validity_days: 30, notification_config: {},
   ui_config: {},
 };
+
+const SYSTEM_CLAIM_SOURCES = [
+  'applicant.user_id', 'applicant.email', 'applicant.given_name', 'applicant.family_name',
+  'application.id', 'application.reference_number', 'application.organization_id',
+  'current.date', 'current.datetime', 'validity.expiry_date',
+  'template.name', 'template.description', 'constant',
+];
 
 function normalizeFieldType(value) {
   const type = String(value || '').trim().toUpperCase();
@@ -55,6 +64,8 @@ export default function ApplicationTemplateEditorPage() {
   const { activeOrgId: organizationId } = useConsole();
   const [data, setData] = useState(EMPTY);
   const [credentialTemplates, setCredentialTemplates] = useState([]);
+  const [approvalPolicySets, setApprovalPolicySets] = useState([]);
+  const [policySetsError, setPolicySetsError] = useState('');
   const [loading, setLoading] = useState(Boolean(templateId));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -72,7 +83,10 @@ export default function ApplicationTemplateEditorPage() {
       templateId ? getApplicationTemplate(templateId) : Promise.resolve(null),
     ]).then(([templates, existing]) => {
       if (!active) return;
-      setCredentialTemplates(templates.filter((item) => String(item.status || '').toUpperCase() === 'ACTIVE'));
+      setCredentialTemplates(templates.filter((item) => (
+        String(item.status || '').toUpperCase() === 'ACTIVE'
+        && Boolean(item.revocation_profile_id)
+      )));
       if (existing) {
         setData({ ...EMPTY, ...existing });
         if (String(existing.status || '').toUpperCase() !== 'DRAFT') {
@@ -81,6 +95,19 @@ export default function ApplicationTemplateEditorPage() {
       }
     }).catch((reason) => active && setError(reason.message || String(reason)))
       .finally(() => active && setLoading(false));
+
+    listPolicySets(organizationId, 'ACTIVE').then((policySets) => {
+      if (!active) return;
+      setApprovalPolicySets((Array.isArray(policySets) ? policySets : []).filter((item) => (
+        String(item.status || '').toUpperCase() === 'ACTIVE'
+        && String(item.policy_type || '').toUpperCase() === 'APPROVAL_RULES'
+      )));
+      setPolicySetsError('');
+    }).catch((reason) => {
+      if (!active) return;
+      setApprovalPolicySets([]);
+      setPolicySetsError(reason.message || String(reason));
+    });
     return () => { active = false; };
   }, [organizationId, templateId]);
 
@@ -104,9 +131,29 @@ export default function ApplicationTemplateEditorPage() {
     form_fields: current.form_fields.map((field, fieldIndex) => fieldIndex === index ? { ...field, ...changes } : field),
   }));
 
+  const updateClaimRule = (index, changes) => setData((current) => ({
+    ...current,
+    claim_collection_rules: current.claim_collection_rules.map((rule, ruleIndex) => (
+      ruleIndex === index ? { ...rule, ...changes } : rule
+    )),
+  }));
+
   const save = async () => {
+    const invalidEvidence = data.evidence_requirements.some((item) => (
+      !item.evidence_id || !item.description || !item.evidence_type
+      || (['EXTERNAL_FACT', 'EXTERNAL_API'].includes(item.evidence_type) && (!item.provider || !item.fact_type))
+      || (item.evidence_type === 'EXTERNAL_API' && !item.api?.url)
+    ));
     if (!organizationId || !data.name.trim() || !data.credential_template_id || data.form_fields.length === 0) {
       setError('Name, active Credential Template, and at least one form field are required.');
+      return;
+    }
+    if (invalidEvidence) {
+      setError('Complete every required Evidence field before saving.');
+      return;
+    }
+    if (data.approval_strategy === 'RULES_BASED' && !data.approval_policy_set_id) {
+      setError('Select an active approval Policy Set for rules-based approval.');
       return;
     }
     setSaving(true);
@@ -149,13 +196,19 @@ export default function ApplicationTemplateEditorPage() {
         </Box>
       </Stack>
       {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
-      <Paper variant="outlined" sx={{ p: { xs: 2, sm: 3 } }}>
+      <Box>
         <Stack spacing={2.5}>
           <TextField required label="Name" value={data.name} onChange={(event) => setData({ ...data, name: event.target.value })} />
           <TextField label="Description" multiline minRows={2} value={data.description || ''} onChange={(event) => setData({ ...data, description: event.target.value })} />
           <FormControl required>
-            <InputLabel>Credential Template</InputLabel>
-            <Select label="Credential Template" value={data.credential_template_id} onChange={(event) => selectCredential(event.target.value)}>
+            <InputLabel id="application-template-credential-label">Credential Template</InputLabel>
+            <Select
+              id="application-template-credential"
+              labelId="application-template-credential-label"
+              label="Credential Template"
+              value={data.credential_template_id}
+              onChange={(event) => selectCredential(event.target.value)}
+            >
               {credentialTemplates.map((item) => <MenuItem key={item.id} value={item.id}>{item.name}</MenuItem>)}
             </Select>
           </FormControl>
@@ -172,7 +225,7 @@ export default function ApplicationTemplateEditorPage() {
                     <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ sm: 'center' }}>
                       <TextField required label="Field ID" value={field.field_id || ''} onChange={(event) => updateField(index, { field_id: event.target.value })} sx={{ flex: 1 }} />
                       <TextField required label="Label" value={field.label || ''} onChange={(event) => updateField(index, { label: event.target.value })} sx={{ flex: 1 }} />
-                      <FormControl sx={{ minWidth: 145 }}><InputLabel>Type</InputLabel><Select label="Type" value={field.field_type || 'TEXT'} onChange={(event) => updateField(index, { field_type: event.target.value })}>
+                      <FormControl sx={{ minWidth: 145 }}><InputLabel id={`application-field-type-${index}-label`}>Type</InputLabel><Select id={`application-field-type-${index}`} labelId={`application-field-type-${index}-label`} label="Type" value={field.field_type || 'TEXT'} onChange={(event) => updateField(index, { field_type: event.target.value })}>
                         {['TEXT', 'DATE', 'DATETIME', 'INTEGER', 'NUMBER', 'BOOLEAN', 'SELECT', 'EMAIL', 'URL', 'FILE_UPLOAD'].map((type) => <MenuItem key={type} value={type}>{type}</MenuItem>)}
                       </Select></FormControl>
                       <FormControlLabel control={<Checkbox checked={Boolean(field.required)} onChange={(event) => updateField(index, { required: event.target.checked })} />} label="Required" />
@@ -191,19 +244,93 @@ export default function ApplicationTemplateEditorPage() {
             </Stack>
           </Box>
 
+          <ApplicationEvidenceEditor
+            requirements={data.evidence_requirements}
+            onChange={(evidenceRequirements) => setData({ ...data, evidence_requirements: evidenceRequirements })}
+          />
+
           <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
-            <FormControl fullWidth><InputLabel>Approval</InputLabel><Select label="Approval" value={data.approval_strategy || 'MANUAL'} onChange={(event) => setData({ ...data, approval_strategy: event.target.value })}>
+            <FormControl fullWidth><InputLabel id="application-approval-label">Approval</InputLabel><Select id="application-approval" labelId="application-approval-label" label="Approval" value={data.approval_strategy || 'MANUAL'} onChange={(event) => setData({ ...data, approval_strategy: event.target.value })}>
               <MenuItem value="MANUAL">Manual review</MenuItem><MenuItem value="AUTO">Automatic</MenuItem><MenuItem value="RULES_BASED">Rules based</MenuItem>
             </Select></FormControl>
             <TextField fullWidth type="number" label="Valid for days" value={data.application_validity_days || 30} inputProps={{ min: 1, max: 365 }} onChange={(event) => setData({ ...data, application_validity_days: Number(event.target.value) })} />
           </Stack>
 
-          {data.approval_strategy === 'RULES_BASED' && <TextField required label="Approval Policy Set ID" value={data.approval_policy_set_id || ''} onChange={(event) => setData({ ...data, approval_policy_set_id: event.target.value })} />}
+          {data.approval_strategy === 'RULES_BASED' && (
+            <Stack spacing={1}>
+              {policySetsError && <Alert severity="warning">Approval Policy Sets are unavailable: {policySetsError}</Alert>}
+              <FormControl required>
+                <InputLabel id="application-approval-policy-label">Approval Policy Set</InputLabel>
+                <Select id="application-approval-policy" labelId="application-approval-policy-label" label="Approval Policy Set" value={data.approval_policy_set_id || ''} onChange={(event) => setData({ ...data, approval_policy_set_id: event.target.value })}>
+                  {approvalPolicySets.map((item) => <MenuItem key={item.id} value={item.id}>{item.name}</MenuItem>)}
+                </Select>
+              </FormControl>
+              {approvalPolicySets.length === 0 && !policySetsError && (
+                <Alert
+                  severity="info"
+                  action={<Button onClick={() => navigate('/console/org/policies/sets/new')}>Create</Button>}
+                >
+                  Create and activate an Approval Rules Policy Set before using rules-based approval.
+                </Alert>
+              )}
+            </Stack>
+          )}
 
           {advanced && (
             <>
-              <TextField label="Evidence requirements" helperText="Comma-separated evidence identifiers" value={(data.evidence_requirements || []).join(', ')} onChange={(event) => setData({ ...data, evidence_requirements: event.target.value.split(',').map((value) => value.trim()).filter(Boolean) })} />
               <TextField label="Required checks" helperText="Comma-separated check types" value={(data.required_checks || []).map((item) => item.check_type).filter(Boolean).join(', ')} onChange={(event) => setData({ ...data, required_checks: event.target.value.split(',').map((value, index) => value.trim()).filter(Boolean).map((check_type, index) => ({ check_type, is_required: true, order: index + 1 })) })} />
+              <Box>
+                <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1 }}>
+                  <Typography variant="h6">Claim collection rules</Typography>
+                  <Button
+                    startIcon={<AddIcon />}
+                    onClick={() => setData((current) => ({
+                      ...current,
+                      claim_collection_rules: [
+                        ...current.claim_collection_rules,
+                        { claim_name: '', source: 'FORM_FIELD', source_config: {} },
+                      ],
+                    }))}
+                  >
+                    Add rule
+                  </Button>
+                </Stack>
+                <Stack spacing={1.5}>
+                  {data.claim_collection_rules.map((rule, index) => (
+                    <Paper key={`${rule.claim_name}-${index}`} variant="outlined" sx={{ p: 2 }}>
+                      <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ sm: 'center' }}>
+                        <TextField required label="Claim name" value={rule.claim_name || ''} onChange={(event) => updateClaimRule(index, { claim_name: event.target.value })} sx={{ flex: 1 }} />
+                        <FormControl sx={{ minWidth: { sm: 190 } }}>
+                          <InputLabel id={`application-claim-source-${index}-label`}>Source</InputLabel>
+                          <Select id={`application-claim-source-${index}`} labelId={`application-claim-source-${index}-label`} label="Source" value={rule.source || 'FORM_FIELD'} onChange={(event) => updateClaimRule(index, { source: event.target.value, source_config: {} })}>
+                            {['FORM_FIELD', 'EVIDENCE_EXTRACTION', 'EXTERNAL_API', 'SYSTEM'].map((source) => <MenuItem key={source} value={source}>{source}</MenuItem>)}
+                          </Select>
+                        </FormControl>
+                        {rule.source === 'FORM_FIELD' && (
+                          <FormControl sx={{ minWidth: { sm: 190 } }}>
+                            <InputLabel id={`application-claim-form-field-${index}-label`}>Form field</InputLabel>
+                            <Select id={`application-claim-form-field-${index}`} labelId={`application-claim-form-field-${index}-label`} label="Form field" value={rule.source_config?.field_id || ''} onChange={(event) => updateClaimRule(index, { source_config: { field_id: event.target.value } })}>
+                              {data.form_fields.map((field) => <MenuItem key={field.field_id} value={field.field_id}>{field.label || field.field_id}</MenuItem>)}
+                            </Select>
+                          </FormControl>
+                        )}
+                        {rule.source === 'SYSTEM' && (
+                          <FormControl sx={{ minWidth: { sm: 220 } }}>
+                            <InputLabel id={`application-claim-system-${index}-label`}>System value</InputLabel>
+                            <Select id={`application-claim-system-${index}`} labelId={`application-claim-system-${index}-label`} label="System value" value={rule.source_config?.system_field || ''} onChange={(event) => updateClaimRule(index, { source_config: { system_field: event.target.value } })}>
+                              {SYSTEM_CLAIM_SOURCES.map((source) => <MenuItem key={source} value={source}>{source}</MenuItem>)}
+                            </Select>
+                          </FormControl>
+                        )}
+                        {rule.source === 'SYSTEM' && rule.source_config?.system_field === 'constant' && (
+                          <TextField label="Constant value" value={rule.source_config?.value ?? ''} onChange={(event) => updateClaimRule(index, { source_config: { ...rule.source_config, value: event.target.value } })} sx={{ flex: 1 }} />
+                        )}
+                        <IconButton aria-label={`Delete ${rule.claim_name || 'claim rule'}`} onClick={() => setData((current) => ({ ...current, claim_collection_rules: current.claim_collection_rules.filter((_, ruleIndex) => ruleIndex !== index) }))}><DeleteIcon /></IconButton>
+                      </Stack>
+                    </Paper>
+                  ))}
+                </Stack>
+              </Box>
               <TextField label="Submission instructions" multiline minRows={2} value={data.ui_config?.submission_instructions || ''} onChange={(event) => setData({ ...data, ui_config: { ...(data.ui_config || {}), submission_instructions: event.target.value } })} />
               <Stack direction={{ xs: 'column', sm: 'row' }}>
                 <FormControlLabel control={<Checkbox checked={data.notification_config?.send_confirmation !== false} onChange={(event) => setData({ ...data, notification_config: { ...(data.notification_config || {}), send_confirmation: event.target.checked } })} />} label="Send confirmation" />
@@ -217,7 +344,7 @@ export default function ApplicationTemplateEditorPage() {
             <Button variant="contained" startIcon={saving ? <CircularProgress size={18} /> : <SaveIcon />} disabled={saving || !selectedCredential || String(data.status || 'DRAFT').toUpperCase() !== 'DRAFT'} onClick={save}>Save draft</Button>
           </Stack>
         </Stack>
-      </Paper>
+      </Box>
     </Container>
   );
 }

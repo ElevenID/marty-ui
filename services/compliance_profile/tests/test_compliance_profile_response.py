@@ -50,7 +50,6 @@ async def _save_profile(
             cert_key_usage=["digitalSignature"],
             recommended_algorithms=["ES256"],
         ),
-        default_verification_rules={"holder_binding": True},
         verification_policy_set_id="policy-set-1",
         trust_profile_constraints=compliance_profile.TrustProfileConstraints(
             compatible_profile_types=["AAMVA", "CUSTOM"],
@@ -96,13 +95,14 @@ def test_get_compliance_profile_returns_protocol_shape_only() -> None:
         "credential_format",
         "issuance_protocol",
         "issuer_artifact_requirements",
-        "default_verification_rules",
         "verification_policy_set_id",
         "trust_profile_constraints",
         "api_surface",
         "discoverable",
+        "status",
         "is_system",
         "created_at",
+        "updated_at",
     }
     assert body["credential_format"] == "MDOC"
     assert body["issuance_protocol"] == "OID4VCI_PRE_AUTH"
@@ -111,8 +111,7 @@ def test_get_compliance_profile_returns_protocol_shape_only() -> None:
         "required_source_types": ["ROOT_CA"],
         "required_formats": ["MDOC"],
     }
-    assert "status" not in body
-    assert "updated_at" not in body
+    assert body["status"] == "DRAFT"
     assert "frameworks" not in body
     assert "data_retention" not in body
     assert "system_profile" not in body
@@ -133,7 +132,6 @@ def test_create_compliance_profile_returns_canonical_protocol_fields() -> None:
             "compliance_code": "ENTERPRISE_VC",
             "credential_format": "sd_jwt_vc",
             "issuance_protocol": "OID4VCI_PRE_AUTH",
-            "default_verification_rules": {"audience": "wallet"},
             "trust_profile_constraints": {
                 "compatible_profile_types": ["CUSTOM"],
                 "required_source_types": ["TRUST_LIST"],
@@ -149,8 +147,8 @@ def test_create_compliance_profile_returns_canonical_protocol_fields() -> None:
     assert body["compliance_code"] == "ENTERPRISE_VC"
     assert body["credential_format"] == "SD_JWT_VC"
     assert body["discoverable"] is True
+    assert body["status"] == "DRAFT"
     assert body["is_system"] is False
-    assert body["default_verification_rules"] == {"audience": "wallet"}
     assert body["trust_profile_constraints"]["required_formats"] == ["SD_JWT_VC"]
     assert "frameworks" not in body
     assert "data_retention" not in body
@@ -171,8 +169,46 @@ def test_activate_compliance_profile_keeps_protocol_shape_stable() -> None:
     body = response.json()
     assert body["id"] == profile.id
     assert body["is_system"] is True
+    assert body["status"] == "ACTIVE"
     assert body["created_at"] == profile.created_at.isoformat()
-    assert "status" not in body
-    assert "updated_at" not in body
+    assert body["updated_at"] == profile.updated_at.isoformat()
     assert "audit_configuration" not in body
+    get_membership.assert_awaited_once_with("user-1", "org-1")
+
+
+def test_create_rejects_removed_default_verification_rules() -> None:
+    repo = compliance_profile.InMemoryComplianceProfileRepository()
+    client, get_membership = _build_client(repo)
+
+    response = client.post(
+        "/v1/compliance-profiles",
+        headers={"x-user-id": "user-1"},
+        json={
+            "organization_id": "org-1",
+            "name": "Removed compatibility field",
+            "default_verification_rules": {"audience": "wallet"},
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["type"] == "extra_forbidden"
+    get_membership.assert_not_awaited()
+
+
+def test_system_seed_is_active_and_available_to_every_organization() -> None:
+    repo = compliance_profile.InMemoryComplianceProfileRepository()
+    asyncio.run(compliance_profile.seed_system_profiles(repo))
+    client, get_membership = _build_client(repo)
+
+    response = client.get(
+        "/v1/compliance-profiles?organization_id=org-1",
+        headers={"x-user-id": "user-1"},
+    )
+    discovery = client.get("/v1/compliance-profiles/system/discoverable")
+
+    assert response.status_code == 200
+    assert discovery.status_code == 200
+    assert response.json()[0]["compliance_code"] == "OID4VC"
+    assert response.json()[0]["status"] == "ACTIVE"
+    assert discovery.json() == response.json()
     get_membership.assert_awaited_once_with("user-1", "org-1")
