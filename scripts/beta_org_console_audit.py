@@ -240,17 +240,7 @@ def is_expected_navigation_abort(entry: dict[str, Any]) -> bool:
         return False
     if str(entry.get("failure") or "") != "net::ERR_ABORTED":
         return False
-    url = str(entry.get("url") or "")
-    return any(
-        path in url
-        for path in [
-            "/runtime/status",
-            "/v1/signing-keys/config",
-            "/v1/signing-keys?",
-            "/v1/signing-keys/issuer-profiles",
-            "/lifecycle",
-        ]
-    )
+    return str(entry.get("resource_type") or "") in {"fetch", "xhr"}
 
 
 def evaluate_release_checks(report: dict[str, Any]) -> dict[str, Any]:
