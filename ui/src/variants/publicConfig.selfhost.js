@@ -56,6 +56,7 @@ export function getSelfhostPublicTabs(hostname = getCurrentHostname()) {
     { labelKey: 'navigation.solutions', defaultLabel: 'Solutions', path: '/solutions' },
     { labelKey: 'navigation.developers', defaultLabel: 'Developers', path: '/developers', prefixes: ['/developers'] },
     { labelKey: 'navigation.standards', defaultLabel: 'Standards', path: '/standards' },
+    { labelKey: 'navigation.demos', defaultLabel: 'Demos', path: '/demos', prefixes: ['/demos'] },
     {
       labelKey: 'navigation.resources',
       defaultLabel: 'Resources',

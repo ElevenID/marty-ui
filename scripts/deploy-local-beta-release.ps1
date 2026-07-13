@@ -277,6 +277,28 @@ Write-Step "Build marker-bearing public UI image"
 $uiImage = "elevenid-local/ui:$releaseVersion"
 Invoke-Checked -FilePath docker -Arguments @("buildx", "build", "--load", "--file", (Join-Path $script:RepoRoot "docker\ui.Dockerfile"), "--build-context", "marty-cli=$(Join-Path $script:WorkspaceRoot 'marty-cli')", "--build-context", "marty-blog=$(Join-Path $script:WorkspaceRoot 'marty-blog')", "--build-context", "marty-subscriptions=$(Join-Path $script:WorkspaceRoot 'marty-subscriptions')", "--build-arg", "UI_VARIANT=public", "--build-arg", "NGINX_CONFIG=nginx.spa.conf", "--build-arg", "MARTY_RELEASE_VERSION=$releaseVersion", "--build-arg", "MARTY_UI_SHA=$sourceId", "--tag", $uiImage, $script:RepoRoot)
 
+Write-Step "Bind runtime evidence marker to the completed image set"
+$stackVersion = (Get-Content -LiteralPath (Join-Path $script:RepoRoot "VERSION") -Raw).Trim()
+if ($stackVersion -notmatch '^\d{4}\.\d{2}\.\d+$') {
+    throw "VERSION must contain an ElevenID Stack YYYY.MM.PATCH identifier"
+}
+$runtimeImageDigests = [ordered]@{}
+foreach ($service in $script:ApplicationServices) {
+    $imageRef = "elevenid-local/${service}:${releaseVersion}"
+    $imageId = docker image inspect $imageRef --format '{{.Id}}'
+    if ($LASTEXITCODE -ne 0 -or $imageId -notmatch '^sha256:[0-9a-f]{64}$') {
+        throw "Could not resolve immutable image ID for $imageRef"
+    }
+    $runtimeImageDigests[$service] = $imageId
+}
+$uiImageId = docker image inspect $uiImage --format '{{.Id}}'
+if ($LASTEXITCODE -ne 0 -or $uiImageId -notmatch '^sha256:[0-9a-f]{64}$') {
+    throw "Could not resolve immutable image ID for $uiImage"
+}
+$runtimeImageDigests["ui-prod"] = $uiImageId
+$env:ELEVENID_STACK_VERSION = $stackVersion
+$env:ELEVENID_IMAGE_DIGESTS_JSON = $runtimeImageDigests | ConvertTo-Json -Compress
+
 Write-Step "Enter maintenance window and apply live migration"
 Invoke-Checked -FilePath docker -Arguments (@("stop") + $script:ApplicationContainers + @("marty-ui-prod"))
 try {
@@ -309,11 +331,22 @@ foreach ($marker in @($servicesMarker, $uiMarker, $betaServicesMarker, $betaUiMa
         throw "Runtime marker does not match local release provenance"
     }
 }
+foreach ($marker in @($servicesMarker, $betaServicesMarker)) {
+    if ($marker.stack_version -ne $stackVersion -or $marker.mip_version -ne "0.3.1" -or $marker.deployment_release_marker -ne $releaseVersion) {
+        throw "Services runtime marker does not match Stack and MIP provenance"
+    }
+    foreach ($entry in $runtimeImageDigests.GetEnumerator()) {
+        if ($marker.image_digests.($entry.Key) -ne $entry.Value) {
+            throw "Services runtime marker image mismatch for $($entry.Key)"
+        }
+    }
+}
 
 $postDeployContainers = Get-ContainerRecords ($script:ApplicationContainers + @("marty-ui-prod"))
 $deploymentManifest = [ordered]@{
     schema_version = 1
     release_version = $releaseVersion
+    stack_version = $stackVersion
     mip_version = "0.3.1"
     source_kind = "local-worktree-snapshot"
     marty_ui_sha = $sourceId

@@ -16,6 +16,13 @@ vi.mock('../../components/pages/OpenBadgesIssuancePage', () => ({
   default: () => <div>Open Badges issuance content</div>,
 }));
 
+vi.mock('../../components/pages/DemoPages', () => ({
+  DemoCatalogPage: () => <div>Demo catalog content</div>,
+  DemoReleasePage: () => <div>Demo release content</div>,
+  DemoScenarioPage: () => <div>Demo scenario content</div>,
+  DemoLatestScenarioRedirect: () => <div>Latest demo redirect</div>,
+}));
+
 import { renderMarketingRoutes } from '../publicSite.public';
 
 function renderMarketingRoute(path: string) {
@@ -46,6 +53,19 @@ describe('publicSite.public product aliases', () => {
     ['/verification', 'Verification API content'],
     ['/issuance', 'Open Badges issuance content'],
   ])('routes %s to canonical product content', async (path, expectedText) => {
+    renderMarketingRoute(path);
+
+    expect(await screen.findByText(expectedText)).toBeInTheDocument();
+  });
+});
+
+describe('publicSite.public demo routes', () => {
+  it.each([
+    ['/demos', 'Demo catalog content'],
+    ['/demos/2026.07.0', 'Demo release content'],
+    ['/demos/2026.07.0/membership-badge-login', 'Demo scenario content'],
+    ['/demos/latest/membership-badge-login', 'Latest demo redirect'],
+  ])('renders %s', async (path, expectedText) => {
     renderMarketingRoute(path);
 
     expect(await screen.findByText(expectedText)).toBeInTheDocument();

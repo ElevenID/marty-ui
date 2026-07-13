@@ -37,6 +37,10 @@ const WhatIsDigitalCredentialPage = lazy(() => import('../components/pages/WhatI
 const WhatIsMartyProtocolPage = lazy(() => import('../components/pages/WhatIsMartyProtocolPage'));
 const PrivacyPolicyPage = lazyNamedExport(() => import('../components/pages/LegalPages'), 'PrivacyPolicyPage');
 const TermsOfServicePage = lazyNamedExport(() => import('../components/pages/LegalPages'), 'TermsOfServicePage');
+const DemoCatalogPage = lazyNamedExport(() => import('../components/pages/DemoPages'), 'DemoCatalogPage');
+const DemoReleasePage = lazyNamedExport(() => import('../components/pages/DemoPages'), 'DemoReleasePage');
+const DemoScenarioPage = lazyNamedExport(() => import('../components/pages/DemoPages'), 'DemoScenarioPage');
+const DemoLatestScenarioRedirect = lazyNamedExport(() => import('../components/pages/DemoPages'), 'DemoLatestScenarioRedirect');
 
 export function renderPublicRoot() {
   return <LandingPage />;
@@ -55,6 +59,10 @@ export function renderMarketingRoutes({ login }) {
       <Route path="/architecture" element={<ArchitecturePage />} />
       <Route path="/security" element={<SecurityPage />} />
       <Route path="/resources" element={<ResourcesPage />} />
+      <Route path="/demos" element={<DemoCatalogPage />} />
+      <Route path="/demos/latest/:scenario" element={<DemoLatestScenarioRedirect />} />
+      <Route path="/demos/:stackVersion/:scenario" element={<DemoScenarioPage />} />
+      <Route path="/demos/:stackVersion" element={<DemoReleasePage />} />
       <Route path="/verification" element={<Navigate to="/verifiable-credential-api" replace />} />
       <Route path="/verifiable-credential-api" element={<VerifiableCredentialApiPage />} />
       <Route path="/eudi-wallet-verification" element={<EudiWalletVerificationPage />} />
