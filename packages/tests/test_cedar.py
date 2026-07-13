@@ -129,6 +129,15 @@ class TestResolveAction:
         assert resolve_action("POST", "/v1/flows/definitions") == "flow-definition:create"
         assert resolve_action("POST", "/v1/flows/definitions/flow-1/activate") == "flow-definition:activate"
         assert resolve_action("POST", "/v1/flows/verify") == "verification:execute"
+        assert resolve_action("GET", "/v1/issued-credentials") == "issuance:view"
+        assert resolve_action("POST", "/v1/issued-credentials/credential-1/suspend") == "issuance:revoke"
+        assert resolve_action("POST", "/v1/issued-credentials/credential-1/reinstate") == "issuance:revoke"
+        assert resolve_action("POST", "/v1/issued-credentials/credential-1/revoke") == "issuance:revoke"
+        assert resolve_action("POST", "/v1/issued-credentials/credential-1/renew") == "issuance:initiate"
+        assert resolve_action("POST", "/v1/credential-templates/template-1/activate") == "credential-template:activate"
+        assert resolve_action("POST", "/v1/credential-templates/template-1/deprecate") == "credential-template:deprecate"
+        assert resolve_action("POST", "/v1/credential-templates/template-1/new-version") == "credential-template:version"
+        assert resolve_action("POST", "/v1/revocation-profiles/profile-1/activate") == "revocation-profile:activate"
 
     def test_head_and_options_count_as_view(self):
         assert resolve_action("HEAD", ORG_PREFIX + "flows") == "flow-definition:view"
@@ -289,6 +298,114 @@ async def test_cedar_middleware_looks_up_owner_org_for_top_level_detail_route():
 
 
 @pytest.mark.asyncio
+async def test_cedar_middleware_authorizes_issued_credential_lifecycle_from_persisted_org():
+    membership = FakeMembership(permissions={"issuance:revoke"}, role_names={"operator"})
+    org_client = MagicMock()
+    org_client.get_membership = AsyncMock(return_value=membership)
+
+    service_registry = MagicMock()
+    service_registry.get_service_url.return_value = "http://issuance-service:8005"
+    upstream_response = MagicMock()
+    upstream_response.status_code = 200
+    upstream_response.json.return_value = {"organization_id": ORG_ID}
+    http_client = MagicMock()
+    http_client.get = AsyncMock(return_value=upstream_response)
+
+    app = MagicMock()
+    app.state.org_client = org_client
+    app.state.service_registry = service_registry
+    app.state.http_client = http_client
+
+    request = _build_request(
+        "/v1/issued-credentials/credential-123/suspend",
+        method="POST",
+        app=app,
+    )
+    request.state.user_id = "user-1"
+    request.state.session_organization_id = "00000000-0000-0000-0000-000000000999"
+
+    call_next = AsyncMock(return_value=JSONResponse({"ok": True}))
+    middleware = CedarAuthMiddleware(app=MagicMock())
+
+    response = await middleware.dispatch(request, call_next)
+
+    assert response.status_code == 200
+    assert request.state.organization_id == ORG_ID
+    assert request.state.required_permission == "issuance:revoke"
+    service_registry.get_service_url.assert_called_with("issuance")
+    http_client.get.assert_awaited_once()
+    org_client.get_membership.assert_awaited_once_with("user-1", ORG_ID)
+
+
+@pytest.mark.asyncio
+async def test_cedar_middleware_denies_cross_org_issued_credential_lifecycle():
+    org_client = MagicMock()
+    org_client.get_membership = AsyncMock(return_value=None)
+
+    service_registry = MagicMock()
+    service_registry.get_service_url.return_value = "http://issuance-service:8005"
+    upstream_response = MagicMock()
+    upstream_response.status_code = 200
+    upstream_response.json.return_value = {"organization_id": ORG_ID}
+    http_client = MagicMock()
+    http_client.get = AsyncMock(return_value=upstream_response)
+
+    app = MagicMock()
+    app.state.org_client = org_client
+    app.state.service_registry = service_registry
+    app.state.http_client = http_client
+
+    request = _build_request(
+        "/v1/issued-credentials/credential-123/revoke",
+        method="POST",
+        app=app,
+    )
+    request.state.user_id = "user-1"
+
+    call_next = AsyncMock(return_value=JSONResponse({"ok": True}))
+    middleware = CedarAuthMiddleware(app=MagicMock())
+
+    response = await middleware.dispatch(request, call_next)
+
+    assert response.status_code == 403
+    assert json.loads(response.body) == {"detail": "Not a member of this organization"}
+    call_next.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_cedar_middleware_maps_api_key_revoke_scope_to_lifecycle_permission():
+    app = MagicMock()
+    app.state.org_client = MagicMock()
+    app.state.service_registry = MagicMock()
+    app.state.service_registry.get_service_url.return_value = "http://issuance-service:8005"
+    upstream_response = MagicMock()
+    upstream_response.status_code = 200
+    upstream_response.json.return_value = {"organization_id": ORG_ID}
+    app.state.http_client = MagicMock()
+    app.state.http_client.get = AsyncMock(return_value=upstream_response)
+
+    request = _build_request(
+        "/v1/issued-credentials/credential-123/revoke",
+        method="POST",
+        app=app,
+    )
+    request.state.auth_source = "api_key"
+    request.state.api_key_id = "key-1"
+    request.state.api_key_organization_id = ORG_ID
+    request.state.organization_id = ORG_ID
+    request.state.api_key_scopes = ["credentials:revoke"]
+
+    call_next = AsyncMock(return_value=JSONResponse({"ok": True}))
+    middleware = CedarAuthMiddleware(app=MagicMock())
+
+    response = await middleware.dispatch(request, call_next)
+
+    assert response.status_code == 200
+    assert request.state.required_permission == "issuance:revoke"
+    call_next.assert_awaited_once_with(request)
+
+
+@pytest.mark.asyncio
 async def test_cedar_middleware_uses_flow_instance_org_instead_of_session_default():
     membership = FakeMembership(permissions={"flow-instance:view"}, role_names={"operator"})
     org_client = MagicMock()
@@ -442,7 +559,7 @@ async def test_cedar_middleware_treats_flow_capabilities_as_org_neutral():
     request.state.user_id = "user-1"
     request.state.organization_id = "00000000-0000-0000-0000-000000000999"
 
-    call_next = AsyncMock(return_value=JSONResponse({"protocol_version": "0.3.0"}))
+    call_next = AsyncMock(return_value=JSONResponse({"protocol_version": "0.3.1"}))
     middleware = CedarAuthMiddleware(app=MagicMock())
 
     response = await middleware.dispatch(request, call_next)

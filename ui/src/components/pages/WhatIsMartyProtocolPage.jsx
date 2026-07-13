@@ -69,7 +69,7 @@ function WhatIsMartyProtocolPage() {
           <Chip label="Open Source" size="small" color="primary" variant="outlined" />
           <Chip label="Apache 2.0" size="small" variant="outlined" />
           <Chip label="Format Agnostic" size="small" variant="outlined" />
-          <Chip label="v0.3.0" size="small" variant="outlined" />
+          <Chip label="v0.3.1" size="small" variant="outlined" />
         </Box>
       </Paper>
 

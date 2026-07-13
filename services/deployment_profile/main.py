@@ -30,7 +30,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from marty_common.dto import DeleteResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine, AsyncEngine
 from typing import Annotated
 
@@ -238,23 +238,17 @@ class DeploymentProfile:
     feature_flags: FeatureFlags = field(default_factory=FeatureFlags)
     branding: BrandingConfiguration = field(default_factory=BrandingConfiguration)
     
-    # Linked protocol configurations (canonical)
+    # Linked protocol configurations
     trust_profile_id: str | None = None
     presentation_policy_ids: list[str] = field(default_factory=list)
     credential_template_ids: list[str] = field(default_factory=list)
     default_policy_id: str | None = None
 
-    # Linked configurations (legacy aliases retained for compatibility)
-    default_trust_profile_id: str | None = None
-    default_compliance_profile_id: str | None = None
-    default_presentation_policy_id: str | None = None
-    
     # Deployment-specific fields
     site_id: str | None = None
     network_mode: str = "ONLINE"
     key_access_mode: str = "KEY_VAULT"
     environment_config: dict[str, Any] = field(default_factory=dict)
-    ux_config: dict[str, Any] = field(default_factory=dict)
     update_channel: str = "stable"
     update_policy: dict[str, Any] = field(default_factory=dict)
     offline_cache_ttl_hours: int = 24
@@ -429,6 +423,8 @@ class BrandingConfigurationModel(BaseModel):
 
 
 class CreateDeploymentProfileRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     organization_id: str = Field(min_length=1, max_length=255)
     name: str = Field(min_length=1, max_length=255)
     description: str | None = Field(None, max_length=2000)
@@ -439,12 +435,10 @@ class CreateDeploymentProfileRequest(BaseModel):
     presentation_policy_ids: list[str] = Field(default_factory=list)
     credential_template_ids: list[str] = Field(default_factory=list)
     default_policy_id: str | None = None
-    default_presentation_policy_id: str | None = None
     site_id: str | None = None
     network_mode: str = "ONLINE"
     key_access_mode: str = "KEY_VAULT"
     environment_config: dict[str, Any] | None = None
-    ux_config: dict[str, Any] | None = None
     enabled_flow_ids: list[str] = Field(default_factory=list)
     update_channel: str = "stable"
     update_policy: dict | None = None
@@ -456,11 +450,11 @@ class CreateDeploymentProfileRequest(BaseModel):
     rate_limits: RateLimitConfigurationModel | None = None
     feature_flags: FeatureFlagsModel | None = None
     branding: BrandingConfigurationModel | None = None
-    default_trust_profile_id: str | None = None
-    default_compliance_profile_id: str | None = None
 
 
 class UpdateDeploymentProfileRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str | None = Field(None, min_length=1, max_length=255)
     description: str | None = Field(None, max_length=2000)
     status: str | None = None
@@ -468,14 +462,12 @@ class UpdateDeploymentProfileRequest(BaseModel):
     presentation_policy_ids: list[str] | None = None
     credential_template_ids: list[str] | None = None
     default_policy_id: str | None = None
-    default_presentation_policy_id: str | None = None
     network_mode: str | None = None
     key_access_mode: str | None = None
     biometric_required: bool | None = None
     audit_all_events: bool | None = None
     offline_cache_ttl_hours: int | None = None
     environment_config: dict[str, Any] | None = None
-    ux_config: dict[str, Any] | None = None
     enabled_flow_ids: list[str] | None = None
     update_channel: str | None = None
     update_policy: dict[str, Any] | None = None
@@ -484,8 +476,6 @@ class UpdateDeploymentProfileRequest(BaseModel):
     rate_limits: RateLimitConfigurationModel | None = None
     feature_flags: FeatureFlagsModel | None = None
     branding: BrandingConfigurationModel | None = None
-    default_trust_profile_id: str | None = None
-    default_compliance_profile_id: str | None = None
 
 
 class DeploymentProfileResponse(BaseModel):
@@ -499,11 +489,9 @@ class DeploymentProfileResponse(BaseModel):
     presentation_policy_ids: list[str] = Field(default_factory=list)
     credential_template_ids: list[str] = Field(default_factory=list)
     default_policy_id: str | None = None
-    default_presentation_policy_id: str | None = None
     network_mode: str = "ONLINE"
     key_access_mode: str = "KEY_VAULT"
     environment_config: dict[str, Any] = Field(default_factory=dict)
-    ux_config: dict[str, Any] = Field(default_factory=dict)
     enabled_flow_ids: list[str] = Field(default_factory=list)
     update_channel: str = "stable"
     update_policy: dict[str, Any] = Field(default_factory=dict)
@@ -593,10 +581,6 @@ def _resolve_requested_status(status: str | None, activate_immediately: bool | N
     return ProfileStatus.DRAFT
 
 
-def _resolve_default_policy_id(default_policy_id: str | None, legacy_default_policy_id: str | None) -> str | None:
-    return default_policy_id or legacy_default_policy_id
-
-
 def _normalize_presentation_policy_ids(
     presentation_policy_ids: list[str] | None,
     default_policy_id: str | None,
@@ -609,7 +593,6 @@ def _normalize_presentation_policy_ids(
 
 def _build_environment_config(
     environment_config: dict[str, Any] | None,
-    ux_config: dict[str, Any] | None,
     offline_cache_ttl_hours: int | None,
 ) -> dict[str, Any]:
     merged: dict[str, Any] = {
@@ -618,19 +601,11 @@ def _build_environment_config(
         "operator_mode": False,
         "accessibility_mode": False,
     }
-    if ux_config:
-        merged.update({k: v for k, v in ux_config.items() if v is not None})
     if environment_config:
         merged.update({k: v for k, v in environment_config.items() if v is not None})
     if offline_cache_ttl_hours is not None and "offline_cache_ttl_seconds" not in merged:
         merged["offline_cache_ttl_seconds"] = offline_cache_ttl_hours * 3600
     return merged
-
-
-def _build_ux_config(environment_config: dict[str, Any]) -> dict[str, Any]:
-    allowed_keys = {"language", "signage_text", "operator_mode", "accessibility_mode", "theme"}
-    return {key: value for key, value in environment_config.items() if key in allowed_keys}
-
 
 def _sync_update_policy(
     update_channel: str,
@@ -700,11 +675,8 @@ async def create_deployment_profile(
     membership = await org_client.get_membership(user_id, request.organization_id)
     ensure_membership_permission(membership, "deployment-profile", "create")
     
-    trust_profile_id = request.trust_profile_id or request.default_trust_profile_id
-    default_policy_id = _resolve_default_policy_id(
-        request.default_policy_id,
-        request.default_presentation_policy_id,
-    )
+    trust_profile_id = request.trust_profile_id
+    default_policy_id = request.default_policy_id
     presentation_policy_ids = _normalize_presentation_policy_ids(
         request.presentation_policy_ids,
         default_policy_id,
@@ -718,7 +690,6 @@ async def create_deployment_profile(
 
     environment_config = _build_environment_config(
         request.environment_config,
-        request.ux_config,
         request.offline_cache_ttl_hours,
     )
 
@@ -732,14 +703,10 @@ async def create_deployment_profile(
         presentation_policy_ids=presentation_policy_ids,
         credential_template_ids=request.credential_template_ids,
         default_policy_id=default_policy_id,
-        default_trust_profile_id=trust_profile_id,
-        default_compliance_profile_id=request.default_compliance_profile_id,
-        default_presentation_policy_id=default_policy_id,
         site_id=request.site_id,
         network_mode=_normalize_network_mode(request.network_mode),
         key_access_mode=_normalize_key_access_mode(request.key_access_mode),
         environment_config=environment_config,
-        ux_config=_build_ux_config(environment_config),
         update_channel=request.update_channel,
         update_policy=_sync_update_policy(request.update_channel, request.update_policy),
         offline_cache_ttl_hours=request.offline_cache_ttl_hours,
@@ -865,22 +832,12 @@ async def update_deployment_profile(
         profile.status = _parse_profile_status(request.status)
     if request.trust_profile_id is not None:
         profile.trust_profile_id = request.trust_profile_id
-        profile.default_trust_profile_id = request.trust_profile_id
-    if request.default_trust_profile_id is not None:
-        profile.trust_profile_id = request.default_trust_profile_id
-        profile.default_trust_profile_id = request.default_trust_profile_id
-    if request.default_compliance_profile_id is not None:
-        profile.default_compliance_profile_id = request.default_compliance_profile_id
     if request.presentation_policy_ids is not None:
         profile.presentation_policy_ids = list(dict.fromkeys(request.presentation_policy_ids))
     if request.credential_template_ids is not None:
         profile.credential_template_ids = list(dict.fromkeys(request.credential_template_ids))
-    if request.default_policy_id is not None or request.default_presentation_policy_id is not None:
-        profile.default_policy_id = _resolve_default_policy_id(
-            request.default_policy_id,
-            request.default_presentation_policy_id,
-        )
-        profile.default_presentation_policy_id = profile.default_policy_id
+    if request.default_policy_id is not None:
+        profile.default_policy_id = request.default_policy_id
     if request.network_mode is not None:
         profile.network_mode = _normalize_network_mode(request.network_mode)
     if request.key_access_mode is not None:
@@ -893,19 +850,13 @@ async def update_deployment_profile(
         profile.offline_cache_ttl_hours = request.offline_cache_ttl_hours
         profile.environment_config = _build_environment_config(
             profile.environment_config,
-            profile.ux_config,
             profile.offline_cache_ttl_hours,
         )
-        profile.ux_config = _build_ux_config(profile.environment_config)
-    if request.environment_config is not None or request.ux_config is not None:
+    if request.environment_config is not None:
         profile.environment_config = _build_environment_config(
-            request.environment_config if request.environment_config is not None else profile.environment_config,
-            request.ux_config if request.ux_config is not None else profile.ux_config,
+            request.environment_config,
             request.offline_cache_ttl_hours if request.offline_cache_ttl_hours is not None else profile.offline_cache_ttl_hours,
         )
-        profile.ux_config = _build_ux_config(profile.environment_config)
-    if request.ux_config is not None:
-        profile.ux_config = _build_ux_config(profile.environment_config)
     if request.enabled_flow_ids is not None:
         profile.enabled_flow_ids = list(dict.fromkeys(request.enabled_flow_ids))
     if request.update_channel is not None:
@@ -928,17 +879,6 @@ async def update_deployment_profile(
     await repo.save(profile)
     lane_repo = get_lane_repo()
     return _profile_to_response(profile, await lane_repo.list(profile.id))
-
-
-@router.put("/{profile_id}", response_model=DeploymentProfileResponse, response_model_exclude_none=True)
-async def update_deployment_profile_put(
-    profile_id: str,
-    request: UpdateDeploymentProfileRequest,
-    user_id: str = Depends(get_current_user_id),
-    repo: InMemoryDeploymentProfileRepository = Depends(get_repo),
-) -> DeploymentProfileResponse:
-    """Update a Deployment Profile via PUT (alias for PATCH)."""
-    return await update_deployment_profile(profile_id, request, user_id, repo)
 
 
 @router.post("/{profile_id}/activate", response_model=DeploymentProfileResponse, response_model_exclude_none=True)
@@ -1052,11 +992,9 @@ def _profile_to_response(profile: DeploymentProfile, lanes: list[Lane] | None = 
         presentation_policy_ids=profile.presentation_policy_ids,
         credential_template_ids=profile.credential_template_ids,
         default_policy_id=profile.default_policy_id,
-        default_presentation_policy_id=profile.default_policy_id,
         network_mode=profile.network_mode,
         key_access_mode=profile.key_access_mode,
         environment_config=profile.environment_config,
-        ux_config=profile.ux_config,
         enabled_flow_ids=profile.enabled_flow_ids,
         update_channel=profile.update_channel,
         update_policy=profile.update_policy,

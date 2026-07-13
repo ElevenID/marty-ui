@@ -564,10 +564,10 @@ def create_grpc_channel(
         all_interceptors.extend(interceptors)
 
     options = [
-        ("grpc.keepalive_time_ms", 30_000),
-        ("grpc.keepalive_timeout_ms", 5_000),
-        ("grpc.keepalive_permit_without_calls", True),
-        ("grpc.http2.max_pings_without_data", 0),
+        ("grpc.keepalive_time_ms", 300_000),
+        ("grpc.keepalive_timeout_ms", 20_000),
+        ("grpc.keepalive_permit_without_calls", False),
+        ("grpc.http2.max_pings_without_data", 2),
     ]
 
     credentials = _build_channel_credentials()

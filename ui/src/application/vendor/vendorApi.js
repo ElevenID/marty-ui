@@ -167,6 +167,18 @@ export async function revokeCredential({ credentialId, reason, comments }) {
   return post(`${API_URL}/v1/issued-credentials/${credentialId}/revoke`, { reason, comments });
 }
 
+export async function suspendCredential({ credentialId, reason }) {
+  return post(`${API_URL}/v1/issued-credentials/${credentialId}/suspend`, { reason });
+}
+
+export async function reinstateCredential({ credentialId, reason }) {
+  return post(`${API_URL}/v1/issued-credentials/${credentialId}/reinstate`, { reason });
+}
+
+export async function renewCredential({ credentialId }) {
+  return post(`${API_URL}/v1/issued-credentials/${credentialId}/renew`, {});
+}
+
 export async function batchRevokeCredentials({ file, reason }) {
   const formData = new FormData();
   formData.append('file', file);

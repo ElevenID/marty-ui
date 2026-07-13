@@ -81,6 +81,12 @@ class CedarAuthMiddleware(BaseHTTPMiddleware):
             if action in {"revoke", "delete"}:
                 return "credentials:revoke" in scope_set
             return bool(scope_set & {"credentials:read", "credentials:issue"})
+        if resource == "issuance":
+            if action == "initiate":
+                return "credentials:issue" in scope_set
+            if action == "revoke":
+                return "credentials:revoke" in scope_set
+            return bool(scope_set & {"credentials:read", "credentials:issue"})
 
         mapped_scopes = resource_scopes.get(resource)
         if not mapped_scopes:

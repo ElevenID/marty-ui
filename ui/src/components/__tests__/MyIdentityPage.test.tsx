@@ -31,7 +31,7 @@ describe('MyIdentityPage', () => {
     vi.clearAllMocks()
     mockGetMyCredentials.mockResolvedValue({ items: [] })
     mockGetMyApplications.mockResolvedValue({
-      applications: [
+      items: [
         {
           id: 'app-1',
           credential_display_name: 'Verified Member Badge',
@@ -53,7 +53,7 @@ describe('MyIdentityPage', () => {
 
   it('shows Canvas course source context in application details', async () => {
     mockGetMyApplications.mockResolvedValue({
-      applications: [
+      items: [
         {
           id: 'app-canvas-1',
           credential_display_name: 'Interoperable Credentials Foundations Badge',
@@ -88,7 +88,7 @@ describe('MyIdentityPage', () => {
 
   it('shows issuer-owned waiting state for an approved blocked application', async () => {
     mockGetMyApplications.mockResolvedValue({
-      applications: [{
+      items: [{
         id: 'app-blocked',
         credential_display_name: 'Member Credential',
         credential_template_id: 'cfg-member',
@@ -116,7 +116,7 @@ describe('MyIdentityPage', () => {
       .mockResolvedValue({ items: [] })
     mockGetMyApplications
       .mockRejectedValueOnce(new Error('Applications unavailable'))
-      .mockResolvedValue({ applications: [] })
+      .mockResolvedValue({ items: [] })
 
     const { user } = render(<MyIdentityPage />)
 
@@ -143,7 +143,7 @@ describe('MyIdentityPage', () => {
   })
 
   it('shows Canvas Credentials mirror delivery in credential details', async () => {
-    mockGetMyApplications.mockResolvedValue({ applications: [] })
+    mockGetMyApplications.mockResolvedValue({ items: [] })
     mockGetMyCredentials.mockResolvedValue({
       items: [
         {

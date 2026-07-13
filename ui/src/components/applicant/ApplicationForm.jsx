@@ -61,6 +61,7 @@ import ClaimCredentialDialog from '../console/applicant/ClaimCredentialDialog';
 import { pickOfficialReference } from '../../utils/officialReferences';
 import {
   autoApplyForCredential,
+  canAutoApplyApplicationTemplate,
   loadCredentialApplicationConfig,
   resolveApplicantIdForApplication,
   submitCredentialApplication,
@@ -307,8 +308,8 @@ export default function ApplicationForm() {
 
   const resolveApplicantId = async () => resolveApplicantIdForApplication({
     user,
-    getApplicant: () => getMyApplicantProfile(applicationOrganizationId),
-    getApplicantByUser: () => getMyApplicantProfile(applicationOrganizationId),
+    getApplicant: () => getMyApplicantProfile(),
+    getApplicantByUser: () => getMyApplicantProfile(),
   });
 
   const readFileAsBase64 = (file) =>
@@ -543,6 +544,7 @@ export default function ApplicationForm() {
   // MemberCredential / mDL: derived flags & one-click auto-apply handler
   // ===========================================================================
   const { isMemberCredential, isMdlCredential, isMdocMemberCredential, isOpenBadgeCredential, isAccessBadgeCredential, isOneClickCredential } = getCredentialKindFlags(credentialConfig);
+  const canAutoApply = isOneClickCredential && canAutoApplyApplicationTemplate({ applicationTemplate, user });
   const applicationDisplayName = credentialConfig?.display_name || applicationTemplate?.name || t('applicationForm.title.default');
   const applicationDescription = isCanvasLtiApplication
     ? 'Review the course details from Canvas and request the credential. ElevenID will check the issuer requirements after you submit.'
@@ -557,14 +559,12 @@ export default function ApplicationForm() {
         organizationId: applicationOrganizationId,
         user,
         credentialConfig,
+        applicationTemplate,
         credentialConfigId,
         hasRegisteredWallet,
         resolveApplicantId,
         createApplicant: upsertMyApplicantProfile,
-        updateApplicantProfile: (_applicantId, data) => upsertMyApplicantProfile({
-          ...data,
-          organization_id: applicationOrganizationId,
-        }),
+        updateApplicantProfile: (_applicantId, data) => upsertMyApplicantProfile(data),
         createApplication: createApplicationApi,
         submitApplication: submitApplicationApi,
         generateIssuanceOffer,
@@ -629,17 +629,14 @@ export default function ApplicationForm() {
         allFields,
         resolveApplicantId,
         createApplicant: upsertMyApplicantProfile,
-        updateApplicantProfile: (_applicantId, data) => upsertMyApplicantProfile({
-          ...data,
-          organization_id: applicationOrganizationId,
-        }),
-        getApplicantByUser: () => getMyApplicantProfile(applicationOrganizationId),
+        updateApplicantProfile: (_applicantId, data) => upsertMyApplicantProfile(data),
+        getApplicantByUser: () => getMyApplicantProfile(),
         createApplication: createApplicationApi,
         submitApplication: submitApplicationApi,
-        listApplicantApplications: () => listApplicationsApi({ limit: 100 }).then((page) => page.applications),
+        listApplicantApplications: () => listApplicationsApi({ limit: 100 }).then((page) => page.items),
         supersedeApplication: withdrawApplication,
         duplicateApplicationAction,
-        enrollBiometric: (_applicantId, data) => enrollMyBiometric(applicationOrganizationId, data),
+        enrollBiometric: (_applicantId, data) => enrollMyBiometric(data),
         readFileAsBase64,
       });
 
@@ -1024,7 +1021,7 @@ export default function ApplicationForm() {
   // ===========================================================================
   // One-click issuance UI (MemberCredential & mDL)
   // ===========================================================================
-  if (isOneClickCredential && !isCanvasLtiApplication) {
+  if (canAutoApply && !isCanvasLtiApplication) {
     const isMdocCredential = isMdlCredential || isMdocMemberCredential;
     const HeroIcon = isMdlCredential ? DirectionsCarIcon : (isOpenBadgeCredential ? BadgeIcon : LoginIcon);
     const fallbackTitle = isMdocCredential

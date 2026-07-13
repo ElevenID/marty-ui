@@ -73,8 +73,8 @@ class SessionCache:
 # MIP Version Constants
 # =============================================================================
 
-MIP_VERSION = "0.3.0"
-MIP_SUPPORTED_VERSIONS = ["0.3.0"]
+MIP_VERSION = "0.3.1"
+MIP_SUPPORTED_VERSIONS = ["0.3.1"]
 
 
 # =============================================================================

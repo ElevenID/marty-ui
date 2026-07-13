@@ -103,71 +103,6 @@ async def test_application_template_validation_delegates_to_issuance(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_application_evidence_summary_proxy_preserves_metadata(monkeypatch: pytest.MonkeyPatch):
-    captured: dict = {}
-
-    async def _proxy(request, service_url, path, inject_headers=None):
-        captured.update({
-            "service_url": service_url,
-            "path": path,
-            "inject_headers": inject_headers,
-        })
-        return JSONResponse({
-            "application_id": "app-1",
-            "evidence_facts": [{"id": "fact-1", "fact_type": "canvas.course_completion"}],
-            "policy_decision": {"allowed": True, "policy_source": "bundled"},
-        })
-
-    monkeypatch.setattr(issuance, "get_registry", lambda: _Registry())
-    monkeypatch.setattr(issuance, "proxy_request", _proxy)
-    monkeypatch.setattr(issuance, "_ISSUANCE_HEADERS", {"X-API-Key": "secret"})
-
-    response = await issuance.get_application_evidence_summary("app-1", _build_request())
-    body = json.loads(response.body)
-
-    assert captured["service_url"] == "http://issuance-service"
-    assert captured["path"] == "/v1/applications/app-1/evidence-summary"
-    assert captured["inject_headers"] == {"X-API-Key": "secret"}
-    assert body["evidence_facts"][0]["fact_type"] == "canvas.course_completion"
-    assert body["policy_decision"]["allowed"] is True
-
-
-@pytest.mark.asyncio
-async def test_external_evidence_api_check_proxy_preserves_policy_metadata(monkeypatch: pytest.MonkeyPatch):
-    captured: dict = {}
-
-    async def _proxy(request, service_url, path, inject_headers=None):
-        captured.update({
-            "service_url": service_url,
-            "path": path,
-            "inject_headers": inject_headers,
-        })
-        return JSONResponse({
-            "application_id": "app-1",
-            "check_id": "passport-document-check",
-            "evidence_fact": {"id": "fact-1", "fact_type": "passport.document_verified"},
-            "policy_decision": {"allowed": True, "policy_source": "bundled"},
-        })
-
-    monkeypatch.setattr(issuance, "get_registry", lambda: _Registry())
-    monkeypatch.setattr(issuance, "proxy_request", _proxy)
-    monkeypatch.setattr(issuance, "_ISSUANCE_HEADERS", {"X-API-Key": "secret"})
-
-    response = await issuance.run_external_evidence_api_check(
-        "app-1",
-        "passport-document-check",
-        _build_request(),
-    )
-    body = json.loads(response.body)
-
-    assert captured["service_url"] == "http://issuance-service"
-    assert captured["path"] == "/v1/applications/app-1/evidence/api-checks/passport-document-check/run"
-    assert captured["inject_headers"] == {"X-API-Key": "secret"}
-    assert body["evidence_fact"]["fact_type"] == "passport.document_verified"
-    assert body["policy_decision"]["allowed"] is True
-
-
-@pytest.mark.asyncio
 async def test_canvas_evidence_event_status_proxy_preserves_metadata(monkeypatch: pytest.MonkeyPatch):
     captured: dict = {}
 
@@ -679,7 +614,7 @@ async def test_applicant_evidence_summary_route_reads_from_issuance(monkeypatch:
     response = await applicants.get_organization_applicant_evidence_summary("org-1", "app-1", _build_request())
     body = json.loads(response.body)
 
-    assert captured["path"] == "/v1/applications/app-1/evidence-summary"
+    assert captured["path"] == "/internal/applications/app-1/evidence-summary"
     assert captured["inject_headers"] == {"X-API-Key": "secret"}
     assert body["evidence_facts"][0]["fact_type"] == "canvas.module_completion"
 
@@ -713,7 +648,7 @@ async def test_applicant_external_evidence_api_check_route_reads_from_issuance(m
     )
     body = json.loads(response.body)
 
-    assert captured["path"] == "/v1/applications/app-1/evidence/api-checks/passport-document-check/run"
+    assert captured["path"] == "/internal/applications/app-1/evidence/api-checks/passport-document-check/run"
     assert captured["inject_headers"] == {"X-API-Key": "secret"}
     assert body["evidence_fact"]["fact_type"] == "passport.document_verified"
 

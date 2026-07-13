@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import asyncio
 import sys
 import types
 from unittest.mock import patch
@@ -47,3 +48,23 @@ def test_lifecycle_response_ignores_stale_hosted_pilot_retention_fields_for_stan
     assert response.data_retention_mode == "standard"
     assert response.audit_retention_days == 90
     assert response.pilot_retention is None
+
+
+def test_internal_lifecycle_route_uses_resource_id_without_user_context():
+    org = Organization(
+        id="org-1",
+        name="Org 1",
+        slug="org-1",
+        owner_id="user-1",
+        status=OrganizationStatus.ACTIVE,
+        plan="professional",
+        created_at=datetime(2026, 4, 1, tzinfo=timezone.utc),
+    )
+
+    class UseCase:
+        async def get_organization(self, org_id):
+            return org if org_id == org.id else None
+
+    response = asyncio.run(adapter.get_internal_organization_lifecycle("org-1", UseCase()))
+
+    assert response.plan_tier == "professional"

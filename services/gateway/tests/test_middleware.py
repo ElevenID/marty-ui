@@ -608,7 +608,7 @@ class TestMIPCompliance:
             base_url="http://test",
         ) as client:
             resp = await client.get("/v1/test")
-        assert resp.headers.get("X-MIP-Version") == "0.3.0"
+        assert resp.headers.get("X-MIP-Version") == "0.3.1"
 
     async def test_mip_version_header_on_health(self, mip_app):
         """MIP 20 - Health endpoints also carry MIP version."""
@@ -617,7 +617,7 @@ class TestMIPCompliance:
             base_url="http://test",
         ) as client:
             resp = await client.get("/health")
-        assert resp.headers.get("X-MIP-Version") == "0.3.0"
+        assert resp.headers.get("X-MIP-Version") == "0.3.1"
 
     def test_mip_error_response_format(self):
         """MIP 17.7 - Error responses MUST include error, error_description, message_id."""
@@ -629,7 +629,7 @@ class TestMIPCompliance:
         assert data["error_description"] == "Missing required field"
         assert "message_id" in data
         assert data["field"] == "email"
-        assert resp.headers.get("X-MIP-Version") == "0.3.0"
+        assert resp.headers.get("X-MIP-Version") == "0.3.1"
 
     def test_mip_error_response_503_format(self):
         """MIP 17.7 - Service unavailable errors follow the same envelope."""
@@ -639,7 +639,7 @@ class TestMIPCompliance:
         assert data["error"] == "service_unavailable"
         assert "message_id" in data
         assert resp.status_code == 503
-        assert resp.headers.get("X-MIP-Version") == "0.3.0"
+        assert resp.headers.get("X-MIP-Version") == "0.3.1"
 
     def test_mip_error_response_includes_details(self):
         """MIP 17.7 - Validation errors include details array."""
@@ -657,4 +657,4 @@ class TestMIPCompliance:
         assert data["error"] == "validation_error"
         assert len(data["details"]) == 2
         assert data["details"][0]["field"] == "email"
-        assert resp.headers.get("X-MIP-Version") == "0.3.0"
+        assert resp.headers.get("X-MIP-Version") == "0.3.1"

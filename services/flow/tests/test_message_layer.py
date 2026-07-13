@@ -470,7 +470,10 @@ def _application_approved_custom_flow(*, name: str, credential_template_id: str)
 
 @pytest.mark.asyncio
 async def test_application_approved_webhook_filters_by_credential_template_id(monkeypatch):
+    captured_claims = {}
+
     async def _fake_initiate_issuance(instance, flow_def):
+        captured_claims.update(instance.context["claims"])
         return {
             "id": f"tx-{flow_def.credential_template_id}",
             "credential_offer_uri": f"openid-credential-offer://?credential_offer={flow_def.credential_template_id}",
@@ -508,6 +511,15 @@ async def test_application_approved_webhook_filters_by_credential_template_id(mo
             data={
                 "applicant_id": "applicant-1",
                 "credential_template_id": "template-open-badge",
+                "email": "must-not-be-read-from-event-metadata@example.com",
+                "application_status": "approved",
+                "claims": {
+                    "email": "holder@example.com",
+                    "member_id": "user-1",
+                    "organization_id": "org-1",
+                    "issued_at": "2026-05-05T12:00:00+00:00",
+                    "role": "applicant",
+                },
             },
         ),
         repo=repo,
@@ -521,6 +533,13 @@ async def test_application_approved_webhook_filters_by_credential_template_id(mo
     assert offer["credential_offer_transaction_id"] == "tx-template-open-badge"
     assert offer["credential_offer_uri"].startswith("openid-credential-offer://")
     assert offer["issuance_status"] == "offer_created"
+    assert captured_claims == {
+        "email": "holder@example.com",
+        "member_id": "user-1",
+        "organization_id": "org-1",
+        "issued_at": "2026-05-05T12:00:00+00:00",
+        "role": "applicant",
+    }
 
 
 @pytest.mark.asyncio

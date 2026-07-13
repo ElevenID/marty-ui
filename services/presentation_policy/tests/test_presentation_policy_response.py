@@ -333,6 +333,43 @@ def test_verify_sd_jwt_reports_did_resolution_failure(monkeypatch) -> None:
     assert result["claims"]["email"] == "member@example.com"
 
 
+def test_resolve_did_jwk_without_network() -> None:
+    public_jwk = {"kty": "EC", "crv": "P-256", "x": "x-value", "y": "y-value"}
+    encoded = base64.urlsafe_b64encode(json.dumps(public_jwk).encode()).decode().rstrip("=")
+    did = f"did:jwk:{encoded}"
+
+    document = pp._resolve_did_document(did)
+
+    assert document["id"] == did
+    assert document["assertionMethod"] == [did]
+    assert document["verificationMethod"][0]["publicKeyJwk"] == public_jwk
+
+
+def test_verify_sd_jwt_resolves_did_jwk(monkeypatch) -> None:
+    public_jwk = {"kty": "EC", "crv": "P-256", "x": "x-value", "y": "y-value"}
+    encoded = base64.urlsafe_b64encode(json.dumps(public_jwk).encode()).decode().rstrip("=")
+    did = f"did:jwk:{encoded}"
+    token = ".".join(
+        [
+            _jwt_segment({"alg": "ES256", "typ": "dc+sd-jwt", "kid": did}),
+            _jwt_segment({"iss": did, "sub": "did:example:holder", "email": "member@example.com"}),
+            "signature",
+        ]
+    )
+    monkeypatch.setattr(pp, "_public_jwk_to_pem", lambda jwk: json.dumps(jwk))
+    monkeypatch.setattr(
+        pp,
+        "_load_marty_rs_binding",
+        lambda: SimpleNamespace(verify_sd_jwt=lambda *_args, **_kwargs: json.dumps({"valid": True})),
+    )
+
+    result = pp._verify_sd_jwt(token, nonce=None, audience=None)
+
+    assert result["verified"] is True
+    assert result["issuer_did"] == did
+    assert result["claims"]["email"] == "member@example.com"
+
+
 def test_verify_open_badge_v3_uses_binding_and_flattens_claims(monkeypatch) -> None:
     credential = {
         "@context": ["https://purl.imsglobal.org/spec/ob/v3p0/context.json"],
@@ -843,3 +880,80 @@ def test_policy_freshness_denies_managed_issuer_revoked_credential_status(monkey
     assert response.decision == "deny"
     assert response.credential_results[0].freshness_check_passed is False
     assert "Credential is revoked" in response.decision_reason
+
+
+def test_policy_freshness_reports_suspended_credential_status(monkeypatch) -> None:
+    repo = pp.InMemoryPresentationPolicyRepository()
+    policy = asyncio.run(_save_open_badge_login_policy(repo))
+    issuer_did = "did:web:issuer.example:orgs:demo"
+    _install_marty_trust_profile(monkeypatch, allowed_issuers=[issuer_did])
+    policy.freshness = pp.FreshnessPolicy(require_not_revoked=True)
+    asyncio.run(repo.save(policy))
+
+    monkeypatch.setenv("MIP_MANAGED_ISSUER_DIDS", issuer_did)
+    monkeypatch.setattr(pp, "_detect_credential_format", lambda _token: "sd-jwt")
+    monkeypatch.setattr(
+        pp,
+        "_verify_credential_by_format",
+        lambda *_args, **_kwargs: {
+            "verified": True,
+            "claims": {"email": "member@example.com", "jti": "credential-123"},
+            "issuer_did": issuer_did,
+            "format": "sd-jwt",
+            "error": None,
+        },
+    )
+    monkeypatch.setattr(
+        pp,
+        "_get_issued_credential_status",
+        lambda credential_id: {"id": credential_id, "status": "suspended"},
+    )
+
+    response = asyncio.run(
+        pp.evaluate_presentation(
+            policy.id,
+            pp.EvaluatePresentationRequest(vp_token="{}", nonce="nonce-1"),
+            repo=repo,
+        )
+    )
+
+    assert response.result == "failed"
+    assert response.decision == "deny"
+    assert "Credential is suspended" in response.decision_reason
+
+
+def test_status_lookup_accepts_record_bound_to_unconfigured_issuer(monkeypatch) -> None:
+    issuer_did = "did:jwk:issuer-key"
+    monkeypatch.delenv("MIP_MANAGED_ISSUER_DIDS", raising=False)
+    monkeypatch.setattr(
+        pp,
+        "_get_issued_credential_status",
+        lambda credential_id: {
+            "id": credential_id,
+            "issuer_did": issuer_did,
+            "status": "active",
+        },
+    )
+
+    assert pp._lookup_managed_issuer_credential_status_revocation_state(
+        issuer_did=issuer_did,
+        credential_ids=["credential-123"],
+    ) == (True, True, "active")
+
+
+def test_status_lookup_rejects_record_bound_to_different_issuer(monkeypatch) -> None:
+    monkeypatch.delenv("MIP_MANAGED_ISSUER_DIDS", raising=False)
+    monkeypatch.setattr(
+        pp,
+        "_get_issued_credential_status",
+        lambda credential_id: {
+            "id": credential_id,
+            "issuer_did": "did:jwk:other-issuer",
+            "status": "active",
+        },
+    )
+
+    assert pp._lookup_managed_issuer_credential_status_revocation_state(
+        issuer_did="did:jwk:presented-issuer",
+        credential_ids=["credential-123"],
+    ) == (None, None, None)

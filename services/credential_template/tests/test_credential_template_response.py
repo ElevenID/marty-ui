@@ -8,8 +8,30 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from marty_common.org_authorization import OrganizationMembership, OrganizationRoleSummary
+from pydantic import ValidationError
 
 from services.credential_template import main as credential_template
+from services.credential_template.infrastructure.models import credential_templates_table
+
+
+@pytest.mark.parametrize("removed_field", ["issuer_requirements", "artifacts_auto_generate"])
+def test_credential_template_requests_reject_removed_fields(removed_field: str) -> None:
+	payload = {
+		"organization_id": "org-1",
+		"name": "Member badge",
+		"credential_type": "MemberCredential",
+		"claims": [],
+		removed_field: {},
+	}
+	with pytest.raises(ValidationError, match=removed_field):
+		credential_template.CreateCredentialTemplateRequest.model_validate(payload)
+	with pytest.raises(ValidationError, match=removed_field):
+		credential_template.UpdateCredentialTemplateRequest.model_validate({removed_field: {}})
+
+
+def test_credential_template_schema_persists_compliance_contract() -> None:
+	assert credential_templates_table.c.compliance_profile.type.python_type is dict
+	assert credential_templates_table.c.compliance_profile_id.type.python_type is str
 
 
 def _build_client(
@@ -68,6 +90,8 @@ def _build_client(
 	credential_template._require_active_issuer_profile = AsyncMock(
 		side_effect=fake_require_active_issuer_profile
 	)
+	credential_template._require_trust_profile_accepts_issuer = AsyncMock(return_value=None)
+	credential_template._require_active_revocation_profile = AsyncMock(return_value=None)
 	return TestClient(app), get_membership
 
 
@@ -82,6 +106,7 @@ async def _save_template(
 		vct="https://credentials.example.com/EmployeeBadge",
 		compliance_profile_id="123e4567-e89b-12d3-a456-426614174000",
 		issuer_profile_id="issuer-profile-1",
+		revocation_profile_id="revocation-profile-1",
 		supported_formats=[credential_template.CredentialFormat.SD_JWT_VC],
 		privacy_posture=credential_template.PrivacyPosture.SELECTIVE_DISCLOSURE,
 		zk_predicate_claims=["age_over_18"],
@@ -132,6 +157,7 @@ def test_get_credential_template_returns_protocol_shape_only() -> None:
 		"vct",
 		"credential_payload_format",
 		"issuer_profile_id",
+		"revocation_profile_id",
 		"claims",
 		"validity_rules",
 		"issuer_certificate_chain_configured",
@@ -301,7 +327,7 @@ def test_create_credential_template_persists_artifact_pipeline_fields() -> None:
 				"signing_service_id": "stale-client-service",
 				"signing_key_reference": "stale-client-key",
 			},
-			"artifacts_auto_generate": False,
+			"auto_generate_artifacts": False,
 		},
 	)
 
@@ -392,6 +418,36 @@ def test_update_credential_template_applies_canonical_validity_rule_changes() ->
 		"renewable": False,
 		"reissue_within_seconds": 5 * 86400,
 	}
+
+
+def test_delete_credential_template_is_draft_only_and_returns_204() -> None:
+	repo = credential_template.InMemoryCredentialTemplateRepository()
+	template = asyncio.run(_save_template(repo))
+	client, _ = _build_client(repo)
+	headers = {"X-User-Id": "user-1"}
+
+	response = client.delete(f"/v1/credential-templates/{template.id}", headers=headers)
+
+	assert response.status_code == 204
+	assert response.content == b""
+	assert asyncio.run(repo.get(template.id)) is None
+	assert client.delete("/v1/credential-templates/missing", headers=headers).status_code == 404
+
+
+def test_delete_active_credential_template_is_rejected() -> None:
+	repo = credential_template.InMemoryCredentialTemplateRepository()
+	template = asyncio.run(_save_template(repo))
+	template.status = credential_template.TemplateStatus.ACTIVE
+	asyncio.run(repo.save(template))
+	client, _ = _build_client(repo)
+
+	response = client.delete(
+		f"/v1/credential-templates/{template.id}",
+		headers={"X-User-Id": "user-1"},
+	)
+
+	assert response.status_code == 409
+	assert asyncio.run(repo.get(template.id)) is not None
 
 
 def test_update_credential_template_canonicalizes_issuer_metadata() -> None:
@@ -512,6 +568,88 @@ def test_activate_credential_template_keeps_protocol_shape_stable() -> None:
 	assert body["updated_at"] != ""
 	assert "issuer_requirements" not in body
 	assert "version" not in body
+
+
+def test_activate_credential_template_rejects_legacy_placeholder_vct() -> None:
+	repo = credential_template.InMemoryCredentialTemplateRepository()
+	template = asyncio.run(_save_template(repo))
+	template.vct = "https://marty.example/credentials/EmployeeBadge"
+	asyncio.run(repo.save(template))
+	client, _ = _build_client(repo)
+
+	response = client.post(
+		f"/v1/credential-templates/{template.id}/activate",
+		headers={"x-user-id": "user-1"},
+	)
+
+	assert response.status_code == 422
+	assert "marty.example is forbidden" in response.json()["detail"]
+	assert asyncio.run(repo.get(template.id)).status == credential_template.TemplateStatus.DRAFT
+
+
+def test_activate_credential_template_rejects_mismatched_trust_profile() -> None:
+	repo = credential_template.InMemoryCredentialTemplateRepository()
+	template = asyncio.run(_save_template(repo))
+	template.trust_profile_id = "trust-profile-1"
+	asyncio.run(repo.save(template))
+	client, _ = _build_client(repo)
+	credential_template._require_trust_profile_accepts_issuer = AsyncMock(
+		side_effect=credential_template.HTTPException(
+			status_code=422,
+			detail="The selected Trust Profile does not trust the selected issuer profile.",
+		)
+	)
+
+	response = client.post(
+		f"/v1/credential-templates/{template.id}/activate",
+		headers={"x-user-id": "user-1"},
+	)
+
+	assert response.status_code == 422
+	stored = asyncio.run(repo.get(template.id))
+	assert stored.status == credential_template.TemplateStatus.DRAFT
+	credential_template._require_trust_profile_accepts_issuer.assert_awaited_once_with(
+		trust_profile_id="trust-profile-1",
+		issuer_did="did:web:beta.elevenidllc.com:orgs:test",
+	)
+
+
+def test_activate_credential_template_requires_active_revocation_profile() -> None:
+	repo = credential_template.InMemoryCredentialTemplateRepository()
+	template = asyncio.run(_save_template(repo))
+	client, _ = _build_client(repo)
+	credential_template._require_active_revocation_profile = AsyncMock(
+		side_effect=credential_template.HTTPException(
+			status_code=422,
+			detail="Credential Templates require an active Revocation Profile.",
+		)
+	)
+
+	response = client.post(
+		f"/v1/credential-templates/{template.id}/activate",
+		headers={"x-user-id": "user-1"},
+	)
+
+	assert response.status_code == 422
+	assert response.json()["detail"] == "Credential Templates require an active Revocation Profile."
+	stored = asyncio.run(repo.get(template.id))
+	assert stored.status == credential_template.TemplateStatus.DRAFT
+
+
+def test_trust_profile_issuer_identifiers_use_only_enabled_direct_issuers() -> None:
+	identifiers = credential_template._trust_profile_issuer_identifiers({
+		"allowed_issuers": ["did:web:allowed.example#key-1"],
+		"trust_sources": [
+			{"enabled": True, "issuer_did": "did:jwk:trusted"},
+			{"enabled": False, "issuer_did": "did:jwk:disabled"},
+		],
+	})
+
+	assert identifiers == {
+		"did:web:allowed.example#key-1",
+		"did:web:allowed.example",
+		"did:jwk:trusted",
+	}
 
 
 def test_internal_credential_configurations_do_not_emit_default_fallback() -> None:

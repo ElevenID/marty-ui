@@ -51,7 +51,7 @@ const IntegrationStep = ({ data, onChange }) => {
   const { t } = useTranslation('console');
   const webhooks = data.webhooks || { url: '', events: [] };
   const featureFlags = { ...DEFAULT_FEATURE_FLAGS, ...(data.feature_flags || {}) };
-  const uxConfig = data.ux_config || { theme: 'default', language: 'en' };
+  const environmentConfig = data.environment_config || { theme: 'light', language: 'en-US' };
 
   const handleWebhookChange = (key, value) => {
     onChange({ webhooks: { ...webhooks, [key]: value } });
@@ -61,8 +61,8 @@ const IntegrationStep = ({ data, onChange }) => {
     onChange({ feature_flags: { ...featureFlags, [key]: value } });
   };
 
-  const handleUxConfigChange = (key, value) => {
-    onChange({ ux_config: { ...uxConfig, [key]: value } });
+  const handleEnvironmentConfigChange = (key, value) => {
+    onChange({ environment_config: { ...environmentConfig, [key]: value } });
   };
 
   const WEBHOOK_EVENTS = [
@@ -217,14 +217,13 @@ const IntegrationStep = ({ data, onChange }) => {
           <FormControl fullWidth>
             <InputLabel>{t('wizards.deploymentProfile.integrationStep.fields.theme')}</InputLabel>
             <Select
-              value={uxConfig.theme || 'default'}
-              onChange={(e) => handleUxConfigChange('theme', e.target.value)}
+              value={environmentConfig.theme || 'light'}
+              onChange={(e) => handleEnvironmentConfigChange('theme', e.target.value)}
               label={t('wizards.deploymentProfile.integrationStep.fields.theme')}
             >
-              <MenuItem value="default">{t('wizards.deploymentProfile.integrationStep.themes.default')}</MenuItem>
               <MenuItem value="light">{t('wizards.deploymentProfile.integrationStep.themes.light')}</MenuItem>
               <MenuItem value="dark">{t('wizards.deploymentProfile.integrationStep.themes.dark')}</MenuItem>
-              <MenuItem value="high-contrast">{t('wizards.deploymentProfile.integrationStep.themes.highContrast')}</MenuItem>
+              <MenuItem value="high_contrast">{t('wizards.deploymentProfile.integrationStep.themes.highContrast')}</MenuItem>
             </Select>
             <FormHelperText>{t('wizards.deploymentProfile.integrationStep.helpers.theme')}</FormHelperText>
           </FormControl>
@@ -234,14 +233,14 @@ const IntegrationStep = ({ data, onChange }) => {
           <FormControl fullWidth>
             <InputLabel>{t('wizards.deploymentProfile.integrationStep.fields.language')}</InputLabel>
             <Select
-              value={uxConfig.language || 'en'}
-              onChange={(e) => handleUxConfigChange('language', e.target.value)}
+              value={environmentConfig.language || 'en-US'}
+              onChange={(e) => handleEnvironmentConfigChange('language', e.target.value)}
               label={t('wizards.deploymentProfile.integrationStep.fields.language')}
             >
-              <MenuItem value="en">{t('wizards.deploymentProfile.integrationStep.languages.en')}</MenuItem>
-              <MenuItem value="es">{t('wizards.deploymentProfile.integrationStep.languages.es')}</MenuItem>
-              <MenuItem value="fr">{t('wizards.deploymentProfile.integrationStep.languages.fr')}</MenuItem>
-              <MenuItem value="de">{t('wizards.deploymentProfile.integrationStep.languages.de')}</MenuItem>
+              <MenuItem value="en-US">{t('wizards.deploymentProfile.integrationStep.languages.en')}</MenuItem>
+              <MenuItem value="es-ES">{t('wizards.deploymentProfile.integrationStep.languages.es')}</MenuItem>
+              <MenuItem value="fr-FR">{t('wizards.deploymentProfile.integrationStep.languages.fr')}</MenuItem>
+              <MenuItem value="de-DE">{t('wizards.deploymentProfile.integrationStep.languages.de')}</MenuItem>
             </Select>
             <FormHelperText>{t('wizards.deploymentProfile.integrationStep.helpers.language')}</FormHelperText>
           </FormControl>

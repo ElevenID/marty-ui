@@ -80,7 +80,7 @@ describe('ApplicantSettingsPage', () => {
     expect(screen.queryByRole('link', { name: 'View My Organizations' })).not.toBeInTheDocument();
   });
 
-  it('creates a missing applicant profile with active organization context', async () => {
+  it('creates a missing applicant profile without caller-controlled organization context', async () => {
     mockGetMyApplicantProfile.mockResolvedValue(null);
     mockUpsertMyApplicantProfile.mockResolvedValue({
       id: 'app-created',
@@ -94,7 +94,6 @@ describe('ApplicantSettingsPage', () => {
 
     expect(await screen.findByDisplayValue('Ada Lovelace')).toBeInTheDocument();
     expect(mockUpsertMyApplicantProfile).toHaveBeenCalledWith({
-      organization_id: 'org-1',
       email: 'applicant@example.com',
       given_name: 'Ada',
       family_name: 'Lovelace',

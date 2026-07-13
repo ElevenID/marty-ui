@@ -237,7 +237,7 @@ Organization user asks: "What do I need to accomplish?"
 |   |
 |   +-- Required MIP chain
 |   |   |
-|   |   +-- Compliance Profile -> supported format and protocol
+|   |   +-- Active Compliance Profile -> supported format and protocol
 |   |   +-- Trust Profile -> explicit issuers, algorithms, revocation, freshness
 |   |   +-- Presentation Policy -> minimum claims, predicates, consent text
 |   |   +-- Deployment Profile only when a physical/runtime deployment is needed
@@ -262,14 +262,14 @@ Organization user asks: "What do I need to accomplish?"
 |   |
 |   +-- Required MIP chain
 |   |   |
-|   |   +-- Compliance Profile -> derives compatible credential format
+|   |   +-- Active Compliance Profile -> derives compatible credential format
 |   |   +-- Issuer Identity + KMS -> signing readiness
 |   |   +-- Credential Template -> claims, crypto, compliance, optional trust/revocation
 |   |   +-- Flow -> fixed sequence and trigger
 |   |   +-- Deployment Profile only when an endpoint/device bundle is required
 |   |
 |   +-- [OPPORTUNITY] filter every selector to compatible active objects
-|   +-- [OPPORTUNITY] preview wallet compatibility and discovery endpoints before activation
+|   +-- [OPPORTUNITY] preview server-derived wallet compatibility and discovery endpoints before activation
 |
 +-- Collect an application, approve it, then issue
 |   |
@@ -330,9 +330,9 @@ Organization user asks: "What do I need to accomplish?"
 |---|---|---|---|---|---|
 | Intent selection | Five setup recipes include physical issuance; the flow chooser groups every standard type by user outcome | Start from an identity operation, then select the compatible protocol binding | Carry the selected dashboard recipe into the flow wizard URL/state | P1 residual | Dashboard-to-wizard handoff |
 | Flow coverage | MIP 0.3 schema, runtime, gateway, and UI expose the same standard types plus explicit `custom` | Unsupported capabilities must be visible and fail closed | Keep environment capability reporting authoritative; add integration scenarios for mDL and SIOPv2 services | P1 residual | Runtime services |
-| Applicant API | Organization review routes and `/v1/me/*` self-service routes authorize against persisted ownership; old `/v1/applicants/*` routes are absent | Identity and organization scope are server-derived | Keep cross-org, spoofed-header, lock, and resource-enumeration tests as release gates | Complete locally | Beta deployment verification |
-| Claim readiness | Application lifecycle is separate from `claim_state`; blocked approvals remain approved and identify the responsible owner | Claim actions must reflect offer readiness, not approval alone | Exercise offer expiry and issuer recovery in Playwright after deployment | P0 beta gate | Active issuance flow |
-| Holder inventory | `/v1/issued-credentials/mine` replaces the missing document integration and returns display-safe metadata | Holder reads must omit credential material and signing internals | Add production response privacy assertion to beta smoke | P0 beta gate | Issuance service inventory |
+| Applicant API | Organization review routes and `/v1/me/*` self-service routes authorize against persisted ownership; the immutable profile organization is distinct from the target issuer organization; old `/v1/applicants/*` routes return `404` | Identity and organization scope are server-derived | Keep cross-org application, spoofed-header, lock, and resource-enumeration tests as release gates | Implemented; redeploy pending | Deterministic lifecycle gate |
+| Claim readiness | Application lifecycle is separate from `claim_state`; blocked approvals remain approved and identify the responsible owner | Claim actions must reflect offer readiness, not approval alone | Keep fresh-offer recovery, expiry, and issuer-blocker assertions in the release gate | Implemented; redeploy pending | Active issuance flow |
+| Holder inventory | `/v1/issued-credentials/mine` replaces the removed document integration and returns display-safe metadata | Holder reads must omit credential material and signing internals | Keep privacy and holder-ownership assertions in service and beta smoke tests | Implemented; redeploy pending | Issuance service inventory |
 | Application approval | Standard flow binds only `application_template_id`; readiness separately requires an active approval Policy Set | Required references must be type-correct and decision policy auditable | Define a normative Policy Set binding/reference in a future MIP version if runtime evaluation must be flow-specific | Protocol proposal | MIP policy/flow contract |
 | Fixed sequences | Standard wizard uses server-resolved sequences; custom graphs use a separate extension builder and schema | Normative sequences are immutable | Keep extension graph conformance tests versioned with generated bindings | Complete | MIP codegen |
 | Hooks and triggers | UI derives constrained hooks and supports all MIP trigger types | Extension points must be type-specific | Add integration health previews for selected webhook/hook targets | P1 residual | Connect health API |
@@ -343,7 +343,7 @@ Organization user asks: "What do I need to accomplish?"
 | Runtime IA | Operate lands on Flow Instances with timeline and related-record links | Flow execution is the runtime audit unit | Normalize policy, hook, retry, and external callback events into `state_history` | P0 residual | Runtime event schema |
 | Integrations IA | Connect owns Canvas, API Keys, Webhooks, and Delivery Destinations | Integration configuration should have one ownership model | Move Canvas route namespace from legacy `/deploy/canvas` to `/connect/canvas` with redirect | P2 residual | Route migration |
 | Physical issuance | Capability-gated encrypted intake, signer, bureau handoff, status, quality, and activation are implemented | Sensitive document data must not leak into flow state or ordinary responses | Add production bureau sandbox certification and recovery drills | P0 operational | External bureau and signer |
-| Protocol consistency | MIP 0.3 is the canonical schema and generates Python, Rust, and TypeScript bindings with check mode in CI | One versioned source must drive implementations | Publish generated packages and pin services to released package versions | P0 release | Package registries |
+| Protocol consistency | MIP 0.3.1 is the only supported schema and generates Python, Rust, and TypeScript bindings with check mode in CI | One versioned source must drive implementations | Publish generated packages and pin services to released package versions | P0 release | Package registries |
 
 ## Proposed Product Packages
 
@@ -493,12 +493,12 @@ The highest-value product move is Package A. The current dashboard now teaches a
 - The active beta host is `beta.elevenidllc.com`.
 - The live beta sitemap returns canonical URLs on `elevenidllc.com`, not `beta.elevenidllc.com`.
 - Source now resolves `/verification`, `/issuance`, and `/docs/quickstart` with explicit redirects instead of public wildcard fallback. Verify beta deployment after release.
-- Source now redirects `/console/audit` to `/console/org/audit`, preserving query parameters for old links.
+- `/console/org/audit` is the only audit route; the retired `/console/audit` alias is removed.
 - Source now excludes `/test-harness` from sitemap and robots output; verify beta deployment after release.
 - Source now canonicalizes blog tag paths with slugified ASCII paths. Legacy encoded or punctuation variants should replace to the canonical path in React.
-- The Flow wizard's visible activation toggle currently maps to `enabled`, while the MIP Flow lifecycle uses `status` and a separate activate endpoint. Treat the current success message as an implementation risk until the lifecycle is made explicit.
-- The Flow wizard shows purpose, audience, deployment-target, precondition, custom-step, and hook controls whose values are absent from or differently shaped in the agreed Flow request contract. Do not expand these controls until contract tests prove persistence.
-- The MIP repository has FlowType and step-sequence drift between `enums/flow-types.json`, `schemas/flow.json`, `protocol/flow/SPECIFICATION.md`, and the runtime enum. UI capability expansion depends on choosing one generated source of truth.
+- Standard Flow creation is draft-first, uses fixed MIP sequences, validates references, and activates explicitly; custom graphs remain a separate extension contract.
+- Protected SpruceKit Open Badge login and native-app handoff evidence is still required for promotion even though the deterministic Marty browser-wallet gate passes.
+- Walt.id remains inactive and unadvertised until one pinned upstream pair passes final OID4VCI proof and signed DCQL presentation without request adaptation.
 - Tunnel config proxies `/resources/` to Keycloak. The exact `/resources` public page is fine, but future nested UI paths under `/resources/*` would collide.
 - Tunnel config proxies `/auth/*`, so the source-declared public React route `/auth/callback` may be intercepted by backend auth routing on beta. `/console/auth/callback` remains a console React route.
 
@@ -926,7 +926,6 @@ Console paths are not listed in the sitemap and are disallowed in `robots.txt`, 
 ### Console Redirect/Fallback Behavior
 
 ```text
-/console/audit                               -> /console/org/audit, query preserved
 /console/org/setup-wizard                    -> /console/org
 /console/org/trust/issuers                   -> /console/org/trust/profiles
 /console/org/deploy/api-keys                 -> /console/org/api-keys
@@ -994,7 +993,14 @@ Applicant opens a credential product
      -> Yes: direct and catalog links resolve the same active template
         -> Form values satisfy template constraints?
            -> No: field-specific correction; no application request
-           -> Yes: POST /v1/me/applications with organization, application template, form data, integration context
+            -> Yes: POST /v1/me/applications with organization, application template, form data, integration context
+               -> Server resolves applicant profile from immutable authenticated applicant organization
+               -> Server persists Application under requested target issuer organization
+                  -> profile missing in applicant organization: profile-required correction
+                  -> target issuer membership/product unauthorized: fail closed; profile organization is unchanged
+               -> Server resolves Credential Template, checks, approval, validity, and issuer dependencies
+                 -> Claim map uses only canonical field mappings and Application Template SYSTEM rules
+                    -> Flow webhook consumes only data.claims; event metadata cannot become credential content
               -> Submit succeeds
                  -> Reviewer lock available?
                     -> No: read-only "being reviewed" state
@@ -1006,16 +1012,34 @@ Applicant opens a credential product
                              -> Yes: APPROVED + OFFER_READY
                                 -> Holder sees Claim
                                    -> Select one of nine compatible wallet destinations
-                                      -> walt.id: browser acceptance release gate
+                                      -> Marty browser wallet: deterministic final-spec CI acceptance
+                                      -> SpruceKit: authoritative Open Badge login conformance/device gate
+                                      -> walt.id: hidden and unsupported until final-spec issuance and presentation pass
                                       -> Native wallet: handoff gate; device-lab acceptance
                                    -> Offer expired: EXPIRED; Claim removed until a new offer is created
                                    -> Credential accepted: CLAIMED and holder-safe inventory row
 
 Operator opens issued credential
-  -> Source application linked?
-     -> No: reissue is unavailable with an explicit explanation
-     -> Yes: organization-scoped issue action requires issuance:initiate
-        -> Fresh wallet offer | typed issuer-owned blocker
+  -> Credential is ACTIVE and Credential Template allows renewal?
+     -> No: Renew is unavailable with an explicit policy/status explanation
+     -> Yes: current time is within the stored renewal window?
+        -> No: Renew is disabled and displays the eligibility date
+        -> Yes: POST /v1/issued-credentials/{id}/renew requires issuance:initiate
+           -> Fresh replacement offer is shown on the issued-credential detail
+              -> Offer expires or is abandoned: source remains ACTIVE; retry is recoverable
+              -> Wallet redeems offer: replacement becomes ACTIVE
+                 -> source becomes REVOKED as superseded
+                 -> source.renewed_to_credential_id points to replacement
+                 -> replacement.renewed_from_credential_id points to source
+                 -> duplicate renewal is blocked
+
+Operator changes replacement status
+  -> Suspend: authoritative verification denies
+  -> Reinstate: authoritative verification allows
+  -> Revoke: authoritative verification denies permanently
+  -> status-list URI organization matches credential organization?
+     -> No: release gate fails
+     -> Yes: lifecycle evidence is organization-owned
 
 Any application resource request
   -> Persisted resource organization matches authorized membership?
@@ -1033,9 +1057,20 @@ Organization resource page mounts
      -> No: no organization-owned request is sent
      -> Yes: activeOrgId is the sole request organization
         -> switching organization: update local context -> cancel stale consumers -> persist preference -> navigate
-        -> list response is a direct array?
-           -> No: malformed-contract state + Retry
-           -> Yes: render organization-owned resources
+         -> list response is a direct array?
+            -> No: malformed-contract state + Retry
+            -> Yes: render organization-owned resources
+
+Reviewer opens an Application
+  -> activeOrgId is loaded and valid?
+     -> No: do not read, lock, or decide
+     -> Yes: use activeOrgId for detail, evidence, lock, request-info, approve, and reject
+        -> authentication default organization differs: it remains ignored for org-console work
+
+Signing setup loads
+  -> signing-key service is available?
+     -> No: typed unavailable state + Retry
+     -> Yes: gateway proxies purpose and service-capability metadata; setup can continue
 
 Application Template opens
   -> DRAFT
@@ -1048,24 +1083,115 @@ Application Template opens
   -> DEPRECATED
      -> historical display only; absent from new applications
 
+Credential Template activation requested
+  -> request contains removed issuer_requirements, artifacts_auto_generate, status, embedded compliance_profile, or wallet_configs fields?
+     -> Yes: reject as a malformed clean-break request
+     -> No: require compliance_profile_id, use canonical auto_generate_artifacts, and derive wallet compatibility server-side
+  -> referenced Compliance Profile is ACTIVE and either system-owned or owned by activeOrgId?
+     -> No: 422 dependency error; remain DRAFT
+     -> Yes: continue
+  -> VCT uses the configured public credential metadata origin?
+     -> No: 422 correction; placeholder hosts such as marty.example cannot activate
+     -> Yes: continue dependency validation
+  -> active KMS-backed issuer profile resolves?
+     -> No: 422 dependency error; remain DRAFT
+     -> Yes: refresh canonical issuer DID and signing references
+        -> linked Trust Profile is active and trusts that issuer DID?
+           -> No: 422 section-specific correction; remain DRAFT
+           -> Yes: activation may continue
+
 Verification starts
   -> active Flow Definition selected?
      -> Yes: use its policy, trust, and deployment references
      -> No: active Presentation Policy selected directly
         -> request succeeds: browser-wallet handoff
-        -> capability/entitlement unavailable: typed recoverable state
+         -> capability/entitlement unavailable: typed recoverable state
 
-Beta deployment completes
+Flow status is read or written
+  -> value is a canonical MIP 0.3.1 lifecycle status?
+     -> No: reject; WAITING, WAITING_APPROVAL, waiting aliases, and canceled are not accepted
+     -> Yes: render the canonical status without compatibility translation
+
+Local GitHub-independent release lane requested
+  -> create checksum manifest and tar.gz snapshots for every coordinated repository
+     -> worktree or snapshot checksum differs before deployment: fail
+     -> backup PostgreSQL, applicant store, Redis, and OpenBao
+     -> restore the PostgreSQL backup into an isolated beta-copy database
+     -> migration rehearsal or integrity verification fails: keep running stack unchanged and fail
+     -> build all release-tagged service and UI images from the frozen snapshots
+     -> migrate live data and recreate the application/UI containers atomically
+     -> local and tunneled runtime markers differ from the manifest: fail
+     -> pass: preserve deployment manifest and browser evidence
+  -> promotion requested?
+     -> Yes: reject; local-worktree-snapshot is always promotion_eligible=false and release_ready=false
+     -> No: use as temporary local engineering/release evidence
+
+Protected GitHub beta deployment completes
+  -> protected beta-migration-rehearsal environment has marked beta-copy URL, safety marker, snapshot ID, and exact HTTPS public origin?
+     -> No: stop before migration; never fall back to an empty or live database
+     -> Yes: run CD and publish a build-ready manifest
+  -> private repository plan supports required reviewers, disabled self-review/admin bypass, and restricted deployment branches?
+     -> No: entitlement blocker; use GitHub Enterprise for private required reviewers or make an explicit visibility decision
+     -> Yes: environment preflight may continue
   -> dispatch MIP 0.3 Beta Credential Lifecycle workflow
+     -> release version or successful CD run ID missing: fail before browser execution
+     -> CD workflow name/conclusion/head SHA or downloaded build-ready manifest differs: fail
+     -> protocol/credentials source CI or Core MIP Release Wallet did not pass at its exact pinned SHA: fail
+     -> deployed services or UI runtime marker differs from selected release/UI SHA: fail
      -> fixture manifest incomplete: fail before browser execution
-     -> deployed MIP header/config is not exactly 0.3.0: fail
+     -> deployed MIP header/config is not exactly 0.3.1 or discovery still uses removed extension fields instead of the canonical schema: fail
+     -> canonical and appended Spruce metadata differ, issuer is not ElevenID LLC, member config/VCT/badge identity differs, an unsupported format is exposed, or an active placeholder VCT remains: fail
+     -> create a disposable organization through the same console paths used by an owner
+        -> signing service is not configured or issuer identity is not active: fail
+        -> Trust, Revocation, Credential, or Application Template is not active: fail
+        -> Presentation Policy or Deployment Profile is not active: fail
+        -> issuance or verification Flow Definition cannot be drafted, validated, and activated: fail
+        -> enabled API key or final run-scoped canonical inventory is missing: fail
      -> canonical applicant route is unavailable or removed route is not 404: fail
-     -> digest-pinned walt.id badge acceptance fails: fail
-     -> Application Template activation or browser verification fails: fail
+     -> pinned Marty Core lacks Cargo.lock, vendored patches, or marty-test-wallet source: fail before wallet build
+     -> applicant form data or top-level event metadata leaks past canonical claim mappings: fail
+     -> Marty browser wallet cannot receive a fresh holder-bound badge: fail
+     -> explicit logout and credential login do not restore the holder session: fail
+     -> Application Template activation or signed DCQL verification does not end in decision=allow: fail
+     -> eligible renewal does not link replacement and revoke the superseded source: fail
+     -> suspend/reinstate/revoke does not produce deny/allow/deny verification decisions: fail
+     -> lifecycle status list is not organization-owned or wrong-org action is not 403: fail
      -> pass: preserve redacted evidence artifact for release review
-  -> SpruceKit Open Badge login conformance/device evidence attached?
-     -> No: release remains blocked
-     -> Yes: badge-login acceptance gate satisfied
+   -> SpruceKit Open Badge login conformance/device evidence attached?
+      -> No: release remains build-ready only (`release_ready=false`)
+      -> Yes: protected wallet-conformance workflow runs
+          -> CD or beta source workflow is not successful at the exact UI SHA: fail
+          -> beta context CD run/release or deployed services/UI marker differs from build manifest: fail
+         -> beta Marty Core revision differs from the build manifest: fail
+         -> fresh-organization report or dependency-linked inventory does not pass: fail
+         -> evidence UI SHA, release, beta run, MIP version, or checksum mismatch: fail
+         -> signed request changed between Marty and SpruceKit: fail
+         -> badge/issuer display differs from the required product identity: fail
+         -> email disclosure, callback, user lookup, or session fails: fail
+         -> any required active app handoff lacks build, platform, device, OS, or handoff evidence: fail
+         -> protected attachment cannot be downloaded over HTTPS or its bytes differ from its SHA-256: fail
+         -> pass: publish immutable release-ready manifest with evidence hashes
+  -> Walt.id final-spec issuance and signed DCQL presentation both pass?
+     -> No: keep registry entry inactive and do not advertise it
+     -> Yes: add a separate interoperability lane; do not replace SpruceKit login conformance
 ```
 
 The authenticated applicant organization is not console selection state. It remains fixed for self-service routes; org-console headers, permissions, dashboards, templates, trust, deployment, policy, audit, team, flow, issuance, and verification requests all require a validated `activeOrgId`.
+
+### Current Engineering Evidence
+
+- Canonical holder application and server-owned claim derivation: `beta-membership-probe-20260713030407`.
+- Membership-badge receipt, explicit logout, and signed credential login: `beta-credential-login-20260713T030427`.
+- Organization Application Template activation, policy-bound issuance, and signed browser-wallet verification: `beta-org-credential-paths-20260713T030439`.
+- Renewal, suspend/deny, reinstate/allow, revoke/deny, organization-owned status lists, and cross-org `403`: `beta-credential-lifecycle-20260713T030519`.
+- Fresh organization creation through active signing, issuer, trust, system Compliance Profile, revocation, Credential Template, Application Template, Presentation Policy, Deployment Profile, issuance flow, verification flow, API key, and dependency-linked canonical inventory: `beta-org-console-audit-20260712210137` (`66` checkpoints, no blocker, page error, or failed request).
+- The local immutable lane previously completed as `mip-0.3.1-local-20260713T021224Z`; it proves snapshot, backup, rehearsal, build, deployment, and marker mechanics but predates the final Compliance Profile correction and is not promotion evidence.
+- Final local candidate `mip-0.3.1-local-20260713T031700Z` freezes these corrections; its deployment manifest and post-deployment browser reports are the authoritative local evidence when the run completes.
+- Historical beta browser evidence remains valid for the earlier deployed revision but cannot promote the current marker-bearing revision.
+- Current local verification: UI/services `746 passed, 1 skipped`; credentials `257 passed, 11 skipped`; CLI `167 passed`; protocol `125 passed`, with current generated bindings and passing Rust/TypeScript builds; complete frontend suite and production build pass; local release contracts `23 passed`.
+- Deterministic Chromium credential paths: `5 passed`; all eight UI service migration trees and the external issuance migration tree each resolve to exactly one head.
+- The pinned Marty browser wallet now has a publishable lockfile, vendored `core2` patch, and test-wallet crate; the locked Core release lane passes 150 OID4VCI/wallet tests and compiles Python bindings against the same engine.
+- Release boundary: the local snapshot lane is an explicit temporary substitute for GitHub execution and can never promote. Public promotion still requires published coordinated revisions, the protected identified beta-copy rehearsal, immutable images, matching markers, and SpruceKit/native evidence for the exact build and run.
+- Deployment preflight: `beta-lifecycle` is configured; `beta-migration-rehearsal` is missing its protected database inputs; `wallet-conformance` has not yet been created; coordinated revision variables still point at the previous release.
+- CD validates the live GitHub environment contract before any image build: required reviewers, self-review and administrator bypass disabled, restricted deployment branches, required input names, and exact lowercase coordinated SHAs.
+- GitHub currently reports ElevenID on the Free plan and rejects private-repository branch protection with an upgrade-required `403`; no reviewer team exists. GitHub documents private required-reviewer rules as an Enterprise capability. This is an entitlement/configuration blocker, not a reason to weaken the gate.

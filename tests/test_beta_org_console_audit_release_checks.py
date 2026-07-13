@@ -17,18 +17,22 @@ def _required_steps():
     return [
         {"label": "auth-probe", "body_excerpt": "Dashboard"},
         {"label": "post-org-probe", "body_excerpt": "Dashboard"},
-        {"label": "kms-register-submitted", "body_excerpt": "Key management"},
-        {"label": "issuer-identity-submitted-or-blocked", "body_excerpt": "Issuer identity"},
-        {"label": "trust-profile-submitted-or-blocked", "body_excerpt": "Trust profile"},
-        {"label": "credential-template-submitted-or-blocked", "body_excerpt": "Credential template"},
-        {"label": "presentation-policy-submitted-or-blocked", "body_excerpt": "Presentation policy"},
-        {"label": "deployment-profile-submitted-or-blocked", "body_excerpt": "Deployment profile"},
-        {"label": "flow-submitted-or-blocked", "body_excerpt": "Flow"},
+        {"label": "kms-service-configured", "body_excerpt": "Key management"},
+        {"label": "issuer-identity-active", "body_excerpt": "Issuer identity"},
+        {"label": "trust-profile-active", "body_excerpt": "Trust profile"},
+        {"label": "revocation-profile-activated", "body_excerpt": "Revocation profile"},
+        {"label": "credential-template-activated", "body_excerpt": "Credential template"},
+        {"label": "application-template-activated", "body_excerpt": "Application template"},
+        {"label": "presentation-policy-active", "body_excerpt": "Presentation policy"},
+        {"label": "deployment-profile-active", "body_excerpt": "Deployment profile"},
+        {"label": "issuance-flow-active", "body_excerpt": "Issuance flow"},
+        {"label": "verification-flow-active", "body_excerpt": "Verification flow"},
         {
-            "label": "api-key-submitted-or-blocked",
+            "label": "api-key-created",
             "body_excerpt": "API Keys",
             "api_key_secret_screenshot_redacted": True,
         },
+        {"label": "resource-inventory-verified", "body_excerpt": "Inventory"},
     ]
 
 
@@ -67,7 +71,7 @@ def test_release_checks_block_core_console_regressions() -> None:
                 "body_excerpt": "Audit stopped",
             },
             {
-                "label": "api-key-submitted-or-blocked",
+                "label": "api-key-created",
                 "body_excerpt": "Loading console...",
                 "api_key_secret_screenshot_redacted": False,
             }
@@ -114,4 +118,50 @@ def test_release_checks_block_incomplete_audit_even_without_errors() -> None:
 
     assert checks["status"] == "blocked"
     assert checks["blockers"][0]["code"] == "audit_coverage_incomplete"
-    assert "api-key-submitted-or-blocked" in checks["blockers"][0]["missing_steps"]
+    assert "resource-inventory-verified" in checks["blockers"][0]["missing_steps"]
+
+
+def test_release_checks_accept_typed_plan_entitlement_response() -> None:
+    audit = _load_audit_module()
+
+    checks = audit.evaluate_release_checks({
+        "steps": _required_steps(),
+        "bad_responses": [
+            {
+                "status": 403,
+                "url": "https://beta.elevenidllc.com/v1/policy-sets?organization_id=org-1",
+                "error_code": "plan_feature_unavailable",
+            }
+        ],
+        "failed_requests": [],
+        "page_errors": [],
+    })
+
+    assert checks["status"] == "pass"
+    assert checks["observations"]["expected_entitlement_responses"] == [
+        {
+            "status": 403,
+            "url": "https://beta.elevenidllc.com/v1/policy-sets?organization_id=org-1",
+            "error_code": "plan_feature_unavailable",
+        }
+    ]
+
+
+def test_release_checks_block_unexplained_failed_request() -> None:
+    audit = _load_audit_module()
+
+    checks = audit.evaluate_release_checks({
+        "steps": _required_steps(),
+        "bad_responses": [],
+        "failed_requests": [
+            {
+                "method": "POST",
+                "url": "https://beta.elevenidllc.com/v1/deployment-profiles",
+                "failure": "net::ERR_ABORTED",
+            }
+        ],
+        "page_errors": [],
+    })
+
+    assert checks["status"] == "blocked"
+    assert checks["blockers"][0]["code"] == "unexpected_failed_request"

@@ -58,7 +58,7 @@ describe('myApplications helpers', () => {
 
   it('loads normalized applications from the injected service', async () => {
     const listApplications = vi.fn().mockResolvedValue({
-      applications: [{ id: 'app-1' }],
+      items: [{ id: 'app-1' }],
       total: 1,
     })
 

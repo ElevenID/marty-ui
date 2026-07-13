@@ -163,8 +163,8 @@ Gate: transient failures do not leave Canvas evidence permanently stuck between 
 Implemented:
 
 - `marty-credentials/services/issuance/application/evidence_reconciliation.py`
-- `POST /v1/applications/evidence/reconcile`
-- `GET /v1/applications/evidence/reconciliation-report`
+- `POST /internal/applications/evidence/reconcile` (service-to-service only)
+- `GET /internal/applications/evidence/reconciliation-report` (service-to-service only)
 - gateway proxies for both reconciliation endpoints
 - repository support for listing Canvas event receipts
 - issuance audit event types for evidence fact, policy, and approval-to-issuance transitions
@@ -436,7 +436,7 @@ Goal: make the MIP evidence layer useful for Canvas-like use cases that do not d
   - pass rules over normalized fact fields such as `assertion.face_match_score >= 0.85`.
 - [x] Add an issuance backend service that executes an allowed declarative API check and emits an immutable `EvidenceFact`.
 - [x] Reuse the existing MIP Cedar approval evaluation path after the fact is saved.
-- [x] Require explicit `auto_approve_on_evidence` or `auto_issue_on_permit` on the requirement before creating an issuance transaction automatically.
+- [x] Require explicit `auto_issue_on_permit` on the Application Template requirement before creating an issuance transaction automatically. Canvas binding automation remains controlled separately by `auto_approve_on_evidence`.
 - [x] Keep adapters like Canvas for signed/eventful protocols, but let simple provider checks be configured without code.
 - [x] Add SSRF/secret-safety guardrails for user-defined API calls.
 - [x] Add targeted tests for passport-style API mapping, response expectations, path pass rules, policy permit/deny, and no-code fact creation.
@@ -455,7 +455,7 @@ Implemented so far:
 - `marty-protocol/conformance/valid/application-template-external-api-evidence.json` captures a passport verification example.
 - `marty-credentials/services/issuance/application/external_evidence_api.py` executes declarative HTTP checks, applies templates, resolves secret-backed headers, validates endpoint safety, evaluates expected responses, and creates `EvidenceFact` objects.
 - `marty-credentials/services/issuance/application/evidence_policy.py` now supports provider-neutral path pass rules over `assertion`, `scope`, `verification`, and `source`.
-- `POST /v1/applications/{application_id}/evidence/api-checks/{check_id}/run` runs a configured API check, persists the fact, evaluates Cedar, records audit events, and optionally creates/reuses an issuance transaction.
+- `POST /v1/organizations/{org_id}/applicants/{application_id}/evidence/api-checks/{check_id}/run` runs a configured API check, persists the fact, evaluates Cedar, records audit events, and optionally creates or reuses an issuance transaction.
 - `marty-credentials/services/issuance/application/evidence_transition.py` owns the shared fact-to-policy-to-issuance transition used by Canvas and no-code provider checks.
 - Gateway proxies the external evidence API check endpoint with issuance management headers.
 - Applicant/reviewer gateway routes also proxy the external evidence API check endpoint through the existing application review surface.

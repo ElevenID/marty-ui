@@ -52,6 +52,12 @@ const {
           custom_fields: [],
           field_validation_rules: {},
         },
+        applicationTemplate: {
+          id: 'app-template-1',
+          status: 'ACTIVE',
+          credential_template_id: 'cfg-1',
+          form_fields: [{ field_id: 'email', label: 'Email', field_type: 'EMAIL', required: true }],
+        },
       },
       search: '',
     } as any,
@@ -140,6 +146,12 @@ describe('ApplicationForm', () => {
           custom_fields: [],
           field_validation_rules: {},
         },
+        applicationTemplate: {
+          id: 'app-template-1',
+          status: 'ACTIVE',
+          credential_template_id: 'cfg-1',
+          form_fields: [{ field_id: 'email', label: 'Email', field_type: 'EMAIL', required: true }],
+        },
       },
       search: '',
     };
@@ -147,7 +159,7 @@ describe('ApplicationForm', () => {
     mockGetApplicantByUser.mockResolvedValue(null);
     mockCreateApplicant.mockResolvedValue({ id: 'app-created' });
     mockCreateApplication.mockResolvedValue({ id: 'application-1' });
-    mockListApplications.mockResolvedValue({ applications: [] });
+    mockListApplications.mockResolvedValue({ items: [], total: 0, limit: 100, offset: 0 });
     mockListApplicantApplicationsForProfile.mockResolvedValue([]);
     mockSupersedeApplication.mockResolvedValue({ id: 'application-existing', status: 'WITHDRAWN' });
     mockSubmitApplication.mockResolvedValue({

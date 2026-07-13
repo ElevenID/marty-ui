@@ -3,11 +3,12 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import httpx
 import pytest
 from starlette.requests import Request
+from starlette.responses import JSONResponse
 
 from gateway.routes import signing_keys
 
@@ -633,21 +634,39 @@ async def test_resolve_endpoint_returns_404_when_no_service(monkeypatch: pytest.
 
 
 @pytest.mark.asyncio
-async def test_list_key_purposes_gateway_handler_removed():
-    from fastapi import HTTPException as FastAPIHTTPException
+async def test_list_key_purposes_proxies_to_signing_keys_service(monkeypatch: pytest.MonkeyPatch):
+    proxy = AsyncMock(return_value=JSONResponse({"purposes": []}))
+    registry = Mock()
+    registry.get_service_url.return_value = "http://signing-keys:8017"
+    monkeypatch.setattr(signing_keys, "proxy_request", proxy)
+    monkeypatch.setattr(signing_keys, "get_registry", lambda: registry)
+    request = _build_request("org_123")
 
-    with pytest.raises(FastAPIHTTPException) as exc_info:
-        await signing_keys.list_key_purposes()
-    assert exc_info.value.status_code == 503
+    await signing_keys.list_key_purposes(request)
+
+    proxy.assert_awaited_once_with(
+        request,
+        "http://signing-keys:8017",
+        "/v1/signing-keys/config/purposes",
+    )
 
 
 @pytest.mark.asyncio
-async def test_list_service_capabilities_gateway_handler_removed():
-    from fastapi import HTTPException as FastAPIHTTPException
+async def test_list_service_capabilities_proxies_to_signing_keys_service(monkeypatch: pytest.MonkeyPatch):
+    proxy = AsyncMock(return_value=JSONResponse({"service_capabilities": []}))
+    registry = Mock()
+    registry.get_service_url.return_value = "http://signing-keys:8017"
+    monkeypatch.setattr(signing_keys, "proxy_request", proxy)
+    monkeypatch.setattr(signing_keys, "get_registry", lambda: registry)
+    request = _build_request("org_123")
 
-    with pytest.raises(FastAPIHTTPException) as exc_info:
-        await signing_keys.list_service_capabilities()
-    assert exc_info.value.status_code == 503
+    await signing_keys.list_service_capabilities(request)
+
+    proxy.assert_awaited_once_with(
+        request,
+        "http://signing-keys:8017",
+        "/v1/signing-keys/config/service-capabilities",
+    )
 
 
 def test_baseline_validation_warns_on_purpose_algorithm_mismatch():

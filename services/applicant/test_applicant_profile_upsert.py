@@ -51,7 +51,6 @@ def test_self_profile_upsert_returns_existing_and_links_login_subject(repo, clie
             "X-Organization-ID": "org-1",
         },
         json={
-            "organization_id": "org-1",
             "email": "alice@example.com",
             "given_name": "Alice",
             "family_name": "Smith",
@@ -89,7 +88,7 @@ def test_self_profile_get_derives_organization_from_authenticated_context(repo, 
     assert response.json()["id"] == "app-existing-2"
 
 
-def test_self_profile_patch_rejects_organization_override(repo, client):
+def test_self_profile_patch_rejects_identity_fields(repo, client):
     response = client.patch(
         "/v1/me/applicant-profile",
         headers={
@@ -100,4 +99,5 @@ def test_self_profile_patch_rejects_organization_override(repo, client):
         json={"organization_id": "org-other", "email": "eve@example.com"},
     )
 
-    assert response.status_code == 403
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["type"] == "extra_forbidden"

@@ -14,15 +14,10 @@ import {
   TableHead,
   TableRow,
   Chip,
-  IconButton,
-  Tooltip,
   Alert,
   LinearProgress,
   Button,
 } from '@mui/material';
-import EditIcon from '@mui/icons-material/Edit';
-import VisibilityIcon from '@mui/icons-material/Visibility';
-import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
 import { ResourcePage } from '../../common';
@@ -69,7 +64,6 @@ function ComplianceProfilesPage() {
       title={t('complianceProfilesPage.title')}
       description={t('complianceProfilesPage.description')}
       resourceName={t('complianceProfilesPage.resourceName')}
-      buildPath="/console/org/policies/compliance/new"
       tabs={getPoliciesTabs()}
       breadcrumbs={getBreadcrumbs()}
     >
@@ -94,8 +88,8 @@ function ComplianceProfilesPage() {
                 <TableCell>{t('complianceProfilesPage.tableHeaders.credentialFormat', { defaultValue: 'Credential format' })}</TableCell>
                 <TableCell>{t('complianceProfilesPage.tableHeaders.issuanceProtocol', { defaultValue: 'Issuance protocol' })}</TableCell>
                 <TableCell>{t('complianceProfilesPage.tableHeaders.scope', { defaultValue: 'Scope' })}</TableCell>
+                <TableCell>{t('common.status', { defaultValue: 'Status' })}</TableCell>
                 <TableCell>{t('complianceProfilesPage.tableHeaders.createdAt', { defaultValue: 'Created' })}</TableCell>
-                <TableCell align="right">{t('complianceProfilesPage.tableHeaders.actions')}</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
@@ -136,27 +130,14 @@ function ComplianceProfilesPage() {
                       />
                     </TableCell>
                     <TableCell>
-                      {formatDate(profile.created_at)}
+                      <Chip
+                        label={profile.status || (profile.is_system ? 'ACTIVE' : 'DRAFT')}
+                        color={String(profile.status || (profile.is_system ? 'ACTIVE' : '')).toUpperCase() === 'ACTIVE' ? 'success' : 'default'}
+                        size="small"
+                      />
                     </TableCell>
-                    <TableCell align="right">
-                      <Tooltip title={t('complianceProfilesPage.actions.viewDetails')}>
-                        <IconButton
-                          component={Link}
-                          to={`/console/org/policies/compliance/${profile.id}`}
-                          size="small"
-                        >
-                          <VisibilityIcon fontSize="small" />
-                        </IconButton>
-                      </Tooltip>
-                      <Tooltip title={t('complianceProfilesPage.actions.edit')}>
-                        <IconButton
-                          component={Link}
-                          to={`/console/org/policies/compliance/${profile.id}/edit`}
-                          size="small"
-                        >
-                          <EditIcon fontSize="small" />
-                        </IconButton>
-                      </Tooltip>
+                    <TableCell>
+                      {formatDate(profile.created_at)}
                     </TableCell>
                   </TableRow>
                 ))

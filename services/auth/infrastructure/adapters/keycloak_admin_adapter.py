@@ -183,12 +183,18 @@ class KeycloakAdminAdapter:
         client_id: str,
         client_secret: str,
         timeout: float = 8.0,
+        token_exchange_enabled: bool | None = None,
     ) -> None:
         self._admin_url = admin_url.rstrip("/")
         self._realm = realm
         self._client_id = client_id
         self._client_secret = client_secret
         self._timeout = timeout
+        self._token_exchange_enabled = (
+            token_exchange_enabled
+            if token_exchange_enabled is not None
+            else os.environ.get("KEYCLOAK_TOKEN_EXCHANGE_ENABLED", "false").lower() in {"1", "true", "yes"}
+        )
         self._token_url = f"{self._admin_url}/realms/{realm}/protocol/openid-connect/token"
         self._admin_base = f"{self._admin_url}/admin/realms/{realm}"
 
@@ -389,6 +395,9 @@ class KeycloakAdminAdapter:
         Returns a dict with ``id_token`` and ``refresh_token``, or ``None``
         when the exchange fails or KC does not have token exchange enabled.
         """
+        if not self._token_exchange_enabled:
+            return None
+
         sa_token = await self._get_service_account_token()
         if not sa_token:
             return None

@@ -104,18 +104,14 @@ def _field_error(field: str, code: str, message: str) -> dict[str, str]:
 
 def _validate_form_data(form_data: dict[str, Any], fields: list[dict[str, Any]]) -> None:
     errors: list[dict[str, str]] = []
+    allowed_fields: set[str] = set()
     for definition in fields:
         if not isinstance(definition, dict):
             continue
-        name = str(
-            definition.get("name")
-            or definition.get("field_name")
-            or definition.get("claim_name")
-            or definition.get("claim_mapping")
-            or ""
-        ).strip()
+        name = str(definition.get("field_id") or "").strip()
         if not name:
             continue
+        allowed_fields.add(name)
         value = form_data.get(name)
         if definition.get("required") and value in (None, "", []):
             errors.append(_field_error(name, "REQUIRED", "This field is required."))
@@ -123,15 +119,11 @@ def _validate_form_data(form_data: dict[str, Any], fields: list[dict[str, Any]])
         if value in (None, ""):
             continue
 
-        field_type = str(
-            definition.get("type")
-            or definition.get("input_type")
-            or definition.get("field_type")
-            or definition.get("claim_type")
-            or "string"
-        ).strip().lower()
+        field_type = str(definition.get("field_type") or "TEXT").strip().lower()
         if field_type == "date":
             try:
+                if re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(value)) is None:
+                    raise ValueError
                 datetime.strptime(str(value), "%Y-%m-%d")
             except ValueError:
                 errors.append(_field_error(name, "INVALID_DATE", "Use an ISO date in YYYY-MM-DD format."))
@@ -147,28 +139,31 @@ def _validate_form_data(form_data: dict[str, Any], fields: list[dict[str, Any]])
         elif field_type in {"boolean", "bool"} and not isinstance(value, bool):
             errors.append(_field_error(name, "INVALID_BOOLEAN", "Choose true or false."))
 
-        allowed = definition.get("enum") or definition.get("options")
-        if isinstance(allowed, list):
+        allowed = definition.get("options")
+        if isinstance(allowed, list) and allowed:
             normalized_allowed = [
                 item.get("value") if isinstance(item, dict) else item
                 for item in allowed
             ]
             if value not in normalized_allowed:
                 errors.append(_field_error(name, "INVALID_CHOICE", "Choose one of the allowed values."))
-        pattern = definition.get("pattern")
+        pattern = definition.get("validation_pattern")
         if pattern and isinstance(value, str):
             try:
                 if re.fullmatch(str(pattern), value) is None:
                     errors.append(_field_error(name, "PATTERN_MISMATCH", "Value does not match the required format."))
             except re.error:
-                logger.warning("Ignoring invalid template regex for field %s", name)
-        minimum = definition.get("minimum", definition.get("min"))
-        maximum = definition.get("maximum", definition.get("max"))
+                errors.append(_field_error(name, "INVALID_FIELD_CONFIGURATION", "Field validation pattern is invalid."))
+        minimum = definition.get("minimum")
+        maximum = definition.get("maximum")
         if isinstance(value, (int, float)) and not isinstance(value, bool):
             if isinstance(minimum, (int, float)) and value < minimum:
                 errors.append(_field_error(name, "BELOW_MINIMUM", f"Value must be at least {minimum}."))
             if isinstance(maximum, (int, float)) and value > maximum:
                 errors.append(_field_error(name, "ABOVE_MAXIMUM", f"Value must be at most {maximum}."))
+
+    for name in sorted(set(form_data) - allowed_fields):
+        errors.append(_field_error(name, "UNKNOWN_FIELD", "This field is not defined by the Application Template."))
 
     if errors:
         raise HTTPException(
@@ -438,13 +433,56 @@ def _parse_iso_datetime(value: str | datetime | None) -> datetime | None:
         return None
 
 
-def _credential_claim_value(application: "ApplicantApplication", applicant: "Applicant", key: str) -> Any:
-    if key == "email" and applicant.email:
-        return applicant.email
-    value = application.form_data.get(key)
-    if value not in (None, ""):
-        return value
-    return getattr(applicant, key, None)
+def _build_credential_claims(
+    application: "ApplicantApplication",
+    applicant: "Applicant",
+    template: dict[str, Any],
+) -> dict[str, Any]:
+    """Map applicant form fields to credential claims using the active template."""
+    claims: dict[str, Any] = {}
+    for field in template.get("form_fields") or []:
+        if not isinstance(field, dict):
+            continue
+        field_id = str(field.get("field_id") or "").strip()
+        claim_name = str(field.get("claim_mapping") or field_id).strip()
+        if field_id and claim_name and field_id in application.form_data:
+            claims[claim_name] = application.form_data[field_id]
+
+    now = datetime.now(timezone.utc)
+    validity_days = int(template.get("application_validity_days") or 30)
+    system_values = {
+        "applicant.user_id": applicant.user_id,
+        "applicant.email": applicant.email,
+        "applicant.given_name": applicant.given_name,
+        "applicant.family_name": applicant.family_name,
+        "application.id": application.id,
+        "application.reference_number": application.reference_number,
+        "application.organization_id": application.organization_id,
+        "current.date": now.date().isoformat(),
+        "current.datetime": now.isoformat(),
+        "validity.expiry_date": (now + timedelta(days=validity_days)).date().isoformat(),
+        "template.name": template.get("name"),
+        "template.description": template.get("description"),
+    }
+
+    for rule in template.get("claim_collection_rules") or []:
+        if not isinstance(rule, dict):
+            continue
+        source_config = rule.get("source_config")
+        if not isinstance(source_config, dict):
+            continue
+        claim_name = str(rule.get("claim_name") or "").strip()
+        source = str(rule.get("source") or "")
+        field_id = str(source_config.get("field_id") or "").strip()
+        if source == "FORM_FIELD" and field_id and claim_name and field_id in application.form_data:
+            claims[claim_name] = application.form_data[field_id]
+        elif source == "SYSTEM" and claim_name:
+            system_field = str(source_config.get("system_field") or "").strip()
+            value = source_config.get("value") if system_field == "constant" else system_values.get(system_field)
+            if value is not None:
+                claims[claim_name] = value
+
+    return claims
 
 
 def _advance_applicant_to_offered(applicant: "Applicant") -> None:
@@ -1155,7 +1193,8 @@ class CreateApplicantRequest(BaseModel):
 
 
 class UpdateApplicantRequest(BaseModel):
-    organization_id: str | None = Field(None, min_length=1, max_length=255)
+    model_config = ConfigDict(extra="forbid")
+
     email: EmailStr | None = None
     given_name: str | None = Field(None, max_length=255)
     family_name: str | None = Field(None, max_length=255)
@@ -1492,6 +1531,7 @@ async def list_biometrics(
 async def create_application(
     request: CreateApplicationRequest,
     x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+    x_organization_id: str | None = Header(default=None, alias="X-Organization-ID"),
     repo: InMemoryApplicantRepository = Depends(get_repo),
 ) -> ApplicationResponse:
     """Create a holder-owned application from an active Application Template."""
@@ -1509,7 +1549,10 @@ async def create_application(
     form_fields = template.get("form_fields") if isinstance(template.get("form_fields"), list) else []
     _validate_form_data(request.form_data, form_fields)
 
-    applicant = await repo.get_by_user_id(user_id, request.organization_id)
+    applicant_organization_id = str(x_organization_id or "").strip()
+    if not applicant_organization_id:
+        raise HTTPException(status_code=422, detail="Authenticated applicant organization context is required")
+    applicant = await repo.get_by_user_id(user_id, applicant_organization_id)
     if not applicant:
         raise HTTPException(status_code=409, detail="Create your applicant profile before applying")
 
@@ -1535,7 +1578,7 @@ async def create_application(
 
     application = ApplicantApplication(
         applicant_id=applicant.id,
-        organization_id=applicant.organization_id,
+        organization_id=request.organization_id,
         reference_number=_generate_reference_number(),
         application_template_id=request.application_template_id,
         credential_template_id=credential_template_id,
@@ -1724,20 +1767,8 @@ async def auto_issue_application(
     if not applicant:
         raise HTTPException(status_code=404, detail="Applicant not found")
 
-    _AUTO_INTERNAL_FIELDS = {
-        "credential_offer_uri", "offer_expires_at", "issuance_transaction_id",
-        "issuance_fallback", "credential_type", "credential_display_name",
-        "rejection_reason", "review_notes", "info_requests", "auto_approve",
-        "flow_instance_id", "flow_definition_id", "issuance_source",
-        "delivery_preferences",
-    }
-    claims = dict(application.form_data)
-    claims.update({
-        "applicant_id": str(applicant.id),
-        "email": _credential_claim_value(application, applicant, "email"),
-        "given_name": _credential_claim_value(application, applicant, "given_name"),
-        "family_name": _credential_claim_value(application, applicant, "family_name"),
-    })
+    template = await _load_application_template(application.application_template_id)
+    claims = _build_credential_claims(application, applicant, template)
 
     try:
         issuance = await _initiate_issuance_via_flow(
@@ -1968,34 +1999,8 @@ async def issue_application(
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
 
-    # Internal metadata written by the issuance workflow — must never become
-    # credential subject attributes.  Strip them before forwarding to the
-    # issuance service so they don't end up inside the signed JWT.
-    _INTERNAL_METADATA_FIELDS = {
-        "credential_offer_uri",
-        "offer_expires_at",
-        "issuance_transaction_id",
-        "issuance_fallback",
-        "credential_type",
-        "credential_display_name",
-        "rejection_reason",
-        "review_notes",
-        "info_requests",
-        "auto_approve",  # workflow flag — never a credential claim
-        "flow_instance_id",
-        "flow_definition_id",
-        "issuance_source",
-        "delivery_preferences",
-    }
-    claims = dict(application.form_data)
-    claims.update(
-        {
-            "applicant_id": str(applicant.id),
-            "email": _credential_claim_value(application, applicant, "email"),
-            "given_name": _credential_claim_value(application, applicant, "given_name"),
-            "family_name": _credential_claim_value(application, applicant, "family_name"),
-        }
-    )
+    template = await _load_application_template(application.application_template_id)
+    claims = _build_credential_claims(application, applicant, template)
 
     try:
         issuance = await _initiate_issuance_via_flow(
@@ -2578,8 +2583,6 @@ async def upsert_my_profile(
     organization_id = str(x_organization_id or "").strip()
     if not organization_id:
         raise HTTPException(status_code=422, detail="Authenticated organization context is required")
-    if body.organization_id and str(body.organization_id).strip() != organization_id:
-        raise HTTPException(status_code=403, detail="Applicant profile organization cannot be changed")
     applicant = await repo.get_by_user_id(user_id, organization_id)
     if not applicant and (body.email or x_user_email):
         applicant = await repo.get_by_email(str(body.email or x_user_email), organization_id)
@@ -2614,11 +2617,14 @@ async def upsert_my_profile(
 @canonical_router.post("/v1/me/applicant-profile/biometrics", response_model=BiometricResponse, response_model_exclude_none=True)
 async def enroll_my_profile_biometric(
     body: EnrollBiometricRequest,
-    organization_id: str = Query(...),
     x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+    x_organization_id: str | None = Header(default=None, alias="X-Organization-ID"),
     repo: InMemoryApplicantRepository = Depends(get_repo),
 ) -> BiometricResponse:
     user_id, _, _ = _identity_headers(x_user_id)
+    organization_id = str(x_organization_id or "").strip()
+    if not organization_id:
+        raise HTTPException(status_code=422, detail="Authenticated organization context is required")
     applicant = await repo.get_by_user_id(user_id, organization_id)
     if not applicant:
         raise HTTPException(status_code=404, detail="Applicant profile not found")
@@ -2716,9 +2722,15 @@ async def get_my_issued_credentials(
 async def post_my_application(
     body: CreateApplicationRequest,
     x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+    x_organization_id: str | None = Header(default=None, alias="X-Organization-ID"),
     repo: InMemoryApplicantRepository = Depends(get_repo),
 ) -> ApplicationResponse:
-    return await create_application(body, x_user_id=x_user_id, repo=repo)
+    return await create_application(
+        body,
+        x_user_id=x_user_id,
+        x_organization_id=x_organization_id,
+        repo=repo,
+    )
 
 
 @canonical_router.get("/v1/me/applications/{application_id}", response_model=EnrichedApplicationResponse, response_model_exclude_none=True)

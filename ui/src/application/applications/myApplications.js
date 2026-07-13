@@ -79,10 +79,10 @@ export function buildMyApplicationEditNavigation(application) {
 
 export async function loadMyApplications({ listApplications, limit = 50 }) {
   const result = await listApplications({ limit });
-  const applications = Array.isArray(result) ? result : (result?.applications || []);
+  const applications = result.items;
 
   return {
     applications,
-    total: result?.total || applications.length,
+    total: result.total,
   };
 }

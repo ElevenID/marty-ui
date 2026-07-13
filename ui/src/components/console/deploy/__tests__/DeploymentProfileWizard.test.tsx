@@ -329,10 +329,17 @@ describe('DeploymentProfileWizard', () => {
 
     // Verify submitted data
     expect(submittedData.name).toBe('Production')
-    expect(submittedData.environment_type).toBe('api')
+    expect(submittedData).not.toHaveProperty('environment_type')
     expect(submittedData.default_policy_id).toBe(1)
     expect(submittedData.presentation_policy_ids).toEqual([1])
     expect(submittedData.trust_profile_id).toBe('trust-1')
+    expect(submittedData.enabled_flow_ids).toEqual([])
+    expect(submittedData.environment_config).toEqual({ theme: 'light', language: 'en-US' })
+    expect(submittedData.feature_flags).toMatchObject({
+      enable_qr_code_generation: true,
+      custom_flags: { nfc: false, ble: false },
+    })
+    expect(submittedData).not.toHaveProperty('ux_config')
     expect(submittedData.status).toBe('active')
     expect(submittedData.activate_immediately).toBe(true)
   })

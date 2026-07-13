@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { listApplicants, listOrganizationApplications } from '../applicantApi'
+import { listOrganizationApplications } from '../applicantApi'
 import {
   createCanvasIntegrationSecret,
   createCanvasPlatform,
@@ -52,7 +52,6 @@ describe('org-scoped service guards', () => {
   })
 
   it('fails locally before org application requests can drop their org filter', async () => {
-    await expectOrgRequired(listApplicants(undefined as unknown as string))
     await expectOrgRequired(listOrganizationApplications(null as unknown as string))
   })
 

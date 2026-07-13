@@ -83,6 +83,7 @@ function RevocationProfilesPage() {
             <TableHead>
               <TableRow>
                 <TableCell>{t('common.name', 'Name')}</TableCell>
+                <TableCell>{t('common.status', 'Status')}</TableCell>
                 <TableCell>{t('trust.checkMode', 'Check Mode')}</TableCell>
                 <TableCell>{t('trust.mechanisms', 'Mechanisms')}</TableCell>
                 <TableCell>{t('trust.statusListUrl', 'Status List URL')}</TableCell>
@@ -100,6 +101,9 @@ function RevocationProfilesPage() {
                     <Typography variant="caption" color="text.secondary">
                       {profile.id}
                     </Typography>
+                  </TableCell>
+                  <TableCell>
+                    <StatusChip status={profile.status ?? 'DRAFT'} />
                   </TableCell>
                   <TableCell>
                     <StatusChip status={profile.check_mode ?? '—'} />

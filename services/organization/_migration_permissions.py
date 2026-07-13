@@ -81,6 +81,7 @@ PERMISSION_CATALOG: list[tuple[str, str, str]] = [
     # Issuance
     ("issuance", "view", "View issuance transactions"),
     ("issuance", "initiate", "Initiate credential issuance"),
+    ("issuance", "revoke", "Revoke, suspend, and reinstate issued credentials"),
     # Application templates
     ("application-template", "view", "View application templates"),
     ("application-template", "create", "Create application templates"),

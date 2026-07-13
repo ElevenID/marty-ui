@@ -62,7 +62,6 @@ export function normalizeTemplateToFormConfig(template) {
     field_validation_rules: {},
     submission_instructions: null,
     validity_rules: template?.validity_rules || null,
-    issuer_requirements: template?.issuer_requirements || {},
     application_template_id: template?.application_template_id || null,
     claims,
   };
@@ -139,6 +138,25 @@ function normalizeFieldList(fields = [], defaultRequired = false) {
     .filter(Boolean);
 }
 
+function normalizeCanonicalApplicationField(field) {
+  if (!field || typeof field !== 'object' || !field.field_id || !field.field_type) {
+    return null;
+  }
+  return {
+    name: field.field_id,
+    label: field.label || humanizeFieldName(field.field_id),
+    type: normalizeApplicationInputType(field.field_type),
+    required: Boolean(field.required),
+    claim_mapping: field.claim_mapping,
+    pattern: field.validation_pattern,
+    options: field.options,
+    minimum: field.minimum,
+    maximum: field.maximum,
+    placeholder: field.placeholder,
+    hint: field.hint,
+  };
+}
+
 function mergeFieldsByName(...fieldGroups) {
   const fieldsByName = new Map();
 
@@ -161,7 +179,9 @@ function mergeFieldsByName(...fieldGroups) {
 
 export function normalizeApplicationTemplateToFormConfig(applicationTemplate, credentialConfig = null) {
   const baseConfig = normalizeCredentialConfigInput(credentialConfig) || {};
-  const templateFormFields = normalizeFieldList(applicationTemplate?.form_fields, true);
+  const templateFormFields = parseListField(applicationTemplate?.form_fields)
+    .map(normalizeCanonicalApplicationField)
+    .filter(Boolean);
   const requiredTemplateFields = templateFormFields.filter((field) => field.required);
   const optionalTemplateFields = templateFormFields.filter((field) => !field.required);
   const baseRequiredFields = normalizeFieldList(baseConfig.required_fields, true);
@@ -262,30 +282,13 @@ export function getCredentialKindFlags(credentialConfig) {
   };
 }
 
-export function buildApplicantProfileData({ organizationId, user, formData }) {
-  const applicantData = {
-    organization_id: organizationId,
-    user_id: user.user_id,
+export function buildApplicantProfileData({ user, formData }) {
+  return {
     given_name: formData.given_name || formData.first_name || '',
     family_name: formData.family_name || formData.last_name || '',
     email: formData.email || user.email,
-    date_of_birth: formData.date_of_birth || formData.birth_date,
-    nationality: formData.nationality || 'USA',
+    ...(formData.phone ? { phone: formData.phone } : {}),
   };
-
-  const address = {};
-  if (formData.street) address.street_line1 = formData.street;
-  if (formData.city) address.city = formData.city;
-  if (formData.state) address.state_province = formData.state;
-  if (formData.zip || formData.postal_code) address.postal_code = formData.zip || formData.postal_code;
-  if (formData.country) address.country = formData.country;
-  else address.country = 'USA';
-
-  if (Object.keys(address).length > 0) {
-    applicantData.address = address;
-  }
-
-  return applicantData;
 }
 
 export function buildStandardApplicationPayload({ organizationId, credentialConfig, formData, canvasLtiContext = null }) {
@@ -297,111 +300,38 @@ export function buildStandardApplicationPayload({ organizationId, credentialConf
   };
 }
 
-export function buildAutoApplyContext({ credentialConfig, user, organizationId, nowIso = new Date().toISOString() }) {
-  const { isMdlCredential, isMdocMemberCredential, isOpenBadgeCredential, isAccessBadgeCredential } = getCredentialKindFlags(credentialConfig);
-  const role = (user.roles || []).find((value) => ['applicant', 'vendor', 'administrator'].includes(value)) || 'applicant';
-  const organizationName = user.organization_name || 'ElevenID LLC';
+function applicantProfileValue(fieldId, user = {}) {
+  if (fieldId === 'birth_date') return user.birth_date || user.date_of_birth;
+  if (fieldId === 'date_of_birth') return user.date_of_birth || user.birth_date;
+  return ['email', 'given_name', 'family_name'].includes(fieldId) ? user[fieldId] : undefined;
+}
 
-  if (isOpenBadgeCredential) {
-    return {
-      requested_validity_years: 1,
-      metadata: {
-        credential_type: OPEN_BADGE_CREDENTIAL_TYPE,
-        credential_display_name: credentialConfig?.name || 'Verified Member Badge',
-        member_id: user.user_id,
-        given_name: user.given_name || '',
-        family_name: user.family_name || '',
-        email: user.email,
-        organization_id: organizationId,
-        organization_name: organizationName,
-        role,
-        achievement_name: credentialConfig?.name || 'Verified Member Badge',
-        achievement_description: 'Verifiable proof of active membership in the issuing organization.',
-        issued_at: nowIso,
-        auto_approve: true,
-      },
-    };
+export function buildAutoApplyFormData({ applicationTemplate, user }) {
+  const fields = Array.isArray(applicationTemplate?.form_fields) ? applicationTemplate.form_fields : [];
+  if (!applicationTemplate?.id || fields.length === 0) {
+    throw new Error('An active Application Template with form fields is required.');
   }
 
-  if (isAccessBadgeCredential) {
-    return {
-      requested_validity_years: 1,
-      metadata: {
-        credential_type: ACCESS_BADGE_CREDENTIAL_TYPE,
-        credential_display_name: credentialConfig?.name || 'Employee Access Badge',
-        given_name: user.given_name || '',
-        family_name: user.family_name || '',
-        email: user.email,
-        employee_id: `EMP-${user.user_id?.slice(0, 8)?.toUpperCase() || '00000000'}`,
-        department: 'Engineering',
-        job_title: 'Platform Member',
-        clearance_level: 'general',
-        building_access: 'HQ-A, HQ-B',
-        issue_date: nowIso.slice(0, 10),
-        expiry_date: new Date(Date.now() + 365 * 86400000).toISOString().slice(0, 10),
-        auto_approve: true,
-      },
-    };
+  const formData = {};
+  for (const field of fields) {
+    const fieldId = field?.field_id;
+    if (!fieldId) continue;
+    const value = applicantProfileValue(fieldId, user);
+    if (field.required && (value === undefined || value === null || value === '')) {
+      throw new Error(`Complete the required ${field.label || fieldId} field before applying.`);
+    }
+    if (value !== undefined && value !== null && value !== '') formData[fieldId] = value;
   }
+  return formData;
+}
 
-  if (isMdocMemberCredential) {
-    return {
-      requested_validity_years: 1,
-      metadata: {
-        credential_type: MDOC_MEMBER_CREDENTIAL_TYPE,
-        credential_display_name: credentialConfig?.name || 'Membership ID (mDoc)',
-        member_id: user.user_id,
-        user_id: user.user_id,
-        email: user.email,
-        given_name: user.given_name || '',
-        family_name: user.family_name || '',
-        organization_id: organizationId,
-        organization_name: user.organization_name || '',
-        role,
-        issued_at: nowIso,
-        auto_approve: true,
-      },
-    };
+export function canAutoApplyApplicationTemplate({ applicationTemplate, user }) {
+  try {
+    buildAutoApplyFormData({ applicationTemplate, user });
+    return true;
+  } catch {
+    return false;
   }
-
-  if (isMdlCredential) {
-    return {
-      requested_validity_years: 5,
-      metadata: {
-        credential_type: MDL_CREDENTIAL_TYPE,
-        credential_display_name: credentialConfig?.name || 'Mobile Driving Licence',
-        family_name: user.family_name || '',
-        given_name: user.given_name || '',
-        birth_date: user.birth_date || '1990-01-01',
-        issue_date: nowIso.slice(0, 10),
-        expiry_date: new Date(Date.now() + 1825 * 86400000).toISOString().slice(0, 10),
-        issuing_country: 'US',
-        issuing_authority: 'ElevenID LLC',
-        document_number: `MDL-${user.user_id?.slice(0, 8)?.toUpperCase() || '00000000'}`,
-        driving_privileges: 'C',
-        un_distinguishing_sign: 'USA',
-        auto_approve: true,
-      },
-    };
-  }
-
-  return {
-    requested_validity_years: 1,
-    metadata: {
-      credential_type: MEMBER_CREDENTIAL_TYPE,
-      credential_display_name: credentialConfig?.name || 'ElevenID Login Credential',
-      member_id: user.user_id,
-      user_id: user.user_id,
-      email: user.email,
-      given_name: user.given_name || '',
-      family_name: user.family_name || '',
-      organization_id: organizationId,
-      organization_name: user.organization_name || '',
-      role,
-      issued_at: nowIso,
-      auto_approve: true,
-    },
-  };
 }
 
 export function getOneClickSummaryFields({ credentialConfig, user, organizationId }) {
@@ -515,7 +445,7 @@ export function validateApplicationStep({ stepIndex, steps, formData, validation
         }
       }
       const allowedValues = rules.enum || rules.allowed_values || rules.options;
-      if (Array.isArray(allowedValues)) {
+      if (Array.isArray(allowedValues) && allowedValues.length > 0) {
         const normalized = allowedValues.map((item) => typeof item === 'object' ? item.value : item);
         if (!normalized.includes(value)) errors[fieldName] = 'Choose one of the allowed values';
       }

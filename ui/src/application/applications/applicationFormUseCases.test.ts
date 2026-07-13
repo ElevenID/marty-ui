@@ -60,10 +60,10 @@ describe('applicationForm use cases', () => {
         name: 'Canvas Quiz Application',
         credential_template_id: 'credential-template-1',
         form_fields: [
-          { name: 'email', label: 'Email', type: 'email', required: true },
-          { name: 'course_name', label: 'Canvas course', type: 'text', required: true },
+          { field_id: 'email', label: 'Email', field_type: 'EMAIL', required: true },
+          { field_id: 'course_name', label: 'Canvas course', field_type: 'TEXT', required: true },
         ],
-        evidence_requirements: [{ evidence_type: 'canvas.quiz_score' }],
+        evidence_requirements: [{ evidence_id: 'canvas_quiz_score', evidence_type: 'EXTERNAL_FACT', description: 'Verified score', required: true }],
       }),
     })).resolves.toMatchObject({
       credentialConfig: {
@@ -74,7 +74,7 @@ describe('applicationForm use cases', () => {
           { name: 'email', label: 'Email', type: 'email', required: true },
           { name: 'course_name', label: 'Canvas course', type: 'text', required: true },
         ],
-        evidence_requirements: [{ evidence_type: 'canvas.quiz_score' }],
+        evidence_requirements: [expect.objectContaining({ evidence_id: 'canvas_quiz_score', evidence_type: 'EXTERNAL_FACT' })],
       },
       applicationTemplate: {
         id: 'application-template-1',
@@ -95,7 +95,7 @@ describe('applicationForm use cases', () => {
         name: 'Active Application',
         credential_template_id: 'credential-template-1',
         status: 'ACTIVE',
-        form_fields: [{ name: 'email', type: 'email', required: true }],
+        form_fields: [{ field_id: 'email', label: 'Email', field_type: 'EMAIL', required: true }],
       },
     ]);
 
@@ -163,10 +163,11 @@ describe('applicationForm use cases', () => {
     })).resolves.toMatchObject({
       applicantId: 'app-2',
       applicantCreated: true,
-      applicantData: expect.objectContaining({
-        organization_id: 'org-1',
-        user_id: 'user-1',
-      }),
+      applicantData: {
+        given_name: 'Ada',
+        family_name: '',
+        email: 'user@example.com',
+      },
     });
   });
 
@@ -175,6 +176,7 @@ describe('applicationForm use cases', () => {
       organizationId: 'org-1',
       user: { user_id: 'user-1', email: 'user@example.com', roles: ['applicant'] },
       credentialConfig: { id: 'cfg-1', credential_type: 'MemberCredential', name: 'Member Login Credential' },
+      applicationTemplate: { id: 'app-template-1', form_fields: [{ field_id: 'email', label: 'Email', field_type: 'EMAIL', required: true }] },
       credentialConfigId: 'cfg-fallback',
       hasRegisteredWallet: true,
       resolveApplicantId: vi.fn().mockResolvedValue('app-1'),
@@ -213,6 +215,7 @@ describe('applicationForm use cases', () => {
       organizationId: 'org-1',
       user: { user_id: 'user-1', email: 'user@example.com', roles: ['applicant'] },
       credentialConfig: { id: 'cfg-1', application_template_id: 'app-template-1', credential_type: 'open_badge', name: 'Verified Member Badge' },
+      applicationTemplate: { id: 'app-template-1', form_fields: [{ field_id: 'email', label: 'Email', field_type: 'EMAIL', required: true }] },
       credentialConfigId: 'cfg-fallback',
       hasRegisteredWallet: false,
       resolveApplicantId: vi.fn().mockResolvedValue('app-1'),
@@ -220,7 +223,7 @@ describe('applicationForm use cases', () => {
       createApplication: vi.fn().mockResolvedValue({ id: 'application-1' }),
       submitApplication,
       generateIssuanceOffer,
-      listApplications: vi.fn().mockResolvedValue({ applications: [] }),
+      listApplications: vi.fn().mockResolvedValue({ items: [] }),
     })).resolves.toEqual({
       applicationId: 'application-1',
       applicationReference: 'APP-20260317-SUBMITTED',
@@ -255,7 +258,7 @@ describe('applicationForm use cases', () => {
       createApplication: vi.fn(),
       generateIssuanceOffer,
       listApplications: vi.fn().mockResolvedValue({
-        applications: [
+        items: [
           {
             id: 'existing-1',
             credential_template_id: 'cfg-1',

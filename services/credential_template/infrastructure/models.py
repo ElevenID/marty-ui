@@ -64,6 +64,8 @@ credential_templates_table = Table(
     Column("wallet_configs", JSON, nullable=True, server_default="[]"),
 
     # Protocol profile references
+    Column("compliance_profile", JSON, nullable=True),
+    Column("compliance_profile_id", String(36), nullable=True),
     Column("application_template_id", String(36), nullable=True),
     Column("trust_profile_id", String(36), nullable=True),
     Column("revocation_profile_id", String(36), nullable=True),

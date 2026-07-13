@@ -62,12 +62,8 @@ describe('myDocuments helpers', () => {
 
     await expect(loadMyDocuments({
       getMyCredentials: vi.fn().mockResolvedValue({
-        credentials: [{ id: 'cred-1' }],
+        items: [{ id: 'cred-1' }],
       }),
     })).resolves.toEqual([{ id: 'cred-1' }])
-
-    await expect(loadMyDocuments({
-      getMyCredentials: vi.fn().mockResolvedValue([{ id: 'cred-2' }]),
-    })).resolves.toEqual([{ id: 'cred-2' }])
   })
 })

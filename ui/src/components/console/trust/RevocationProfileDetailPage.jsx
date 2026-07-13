@@ -9,6 +9,7 @@
  * - Timestamps and basic metadata
  */
 
+import { useState } from 'react';
 import { useParams, useNavigate, Link as RouterLink } from 'react-router-dom';
 import {
   Alert,
@@ -41,22 +42,19 @@ import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import { useTranslation } from 'react-i18next';
 
 import { useAsyncData } from '../../../hooks/useAsyncData';
-import { getRevocationProfile } from '../../../services/presentationPolicyApi';
+import {
+  activateRevocationProfile,
+  getRevocationProfile,
+} from '../../../services/presentationPolicyApi';
 
 // ─── Check Mode Meta ──────────────────────────────────────────────────────────
 
 const CHECK_MODE_META = {
-  HARD_FAIL: {
+  ALWAYS: {
     color: 'success',
-    icon: <BlockIcon fontSize="small" />,
-    labelKey: 'trust.revocationDetail.checkModes.hardFail',
-    descriptionKey: 'trust.revocationDetail.checkModes.hardFailDescription',
-  },
-  SOFT_FAIL: {
-    color: 'warning',
-    icon: <WarningAmberIcon fontSize="small" />,
-    labelKey: 'trust.revocationDetail.checkModes.softFail',
-    descriptionKey: 'trust.revocationDetail.checkModes.softFailDescription',
+    icon: <CheckCircleIcon fontSize="small" />,
+    labelKey: 'trust.revocationDetail.checkModes.always',
+    descriptionKey: 'trust.revocationDetail.checkModes.alwaysDescription',
   },
   CACHED: {
     color: 'info',
@@ -64,18 +62,24 @@ const CHECK_MODE_META = {
     labelKey: 'trust.revocationDetail.checkModes.cached',
     descriptionKey: 'trust.revocationDetail.checkModes.cachedDescription',
   },
-  SKIP: {
-    color: 'default',
-    icon: <HelpOutlineIcon fontSize="small" />,
-    labelKey: 'trust.revocationDetail.checkModes.skip',
-    descriptionKey: 'trust.revocationDetail.checkModes.skipDescription',
+  OFFLINE_GRACE: {
+    color: 'warning',
+    icon: <WarningAmberIcon fontSize="small" />,
+    labelKey: 'trust.revocationDetail.checkModes.offlineGrace',
+    descriptionKey: 'trust.revocationDetail.checkModes.offlineGraceDescription',
+  },
+  DISABLED: {
+    color: 'error',
+    icon: <BlockIcon fontSize="small" />,
+    labelKey: 'trust.revocationDetail.checkModes.disabled',
+    descriptionKey: 'trust.revocationDetail.checkModes.disabledDescription',
   },
 };
 
 function CheckModePanel({ checkMode }) {
   const { t } = useTranslation('console');
-  const normalised = String(checkMode || 'HARD_FAIL').toUpperCase();
-  const meta = CHECK_MODE_META[normalised] ?? CHECK_MODE_META.HARD_FAIL;
+  const normalised = String(checkMode || 'ALWAYS').toUpperCase();
+  const meta = CHECK_MODE_META[normalised] ?? CHECK_MODE_META.ALWAYS;
 
   return (
     <Paper sx={{ p: 3, mb: 3 }}>
@@ -97,10 +101,10 @@ function CheckModePanel({ checkMode }) {
 
       <Typography variant="body2" color="text.secondary">
         {t(meta.descriptionKey, {
-          HARD_FAIL: 'Verification is rejected if the revocation check cannot be completed. Provides the strongest integrity guarantee.',
-          SOFT_FAIL: 'Verification proceeds even when the revocation endpoint is unreachable. Reduces availability friction at the cost of weaker guarantees.',
+          ALWAYS: 'Credential status is checked for every verification.',
           CACHED: 'Uses a locally cached revocation result if the endpoint is unavailable. Balances availability and integrity.',
-          SKIP: 'Revocation checking is disabled. Use only in controlled or offline-first environments.',
+          OFFLINE_GRACE: 'Uses a last-known status only within the configured offline grace period.',
+          DISABLED: 'Credential status checking is disabled.',
         }[normalised] ?? '')}
       </Typography>
     </Paper>
@@ -276,7 +280,7 @@ function MetadataPanel({ profile }) {
 function SoftFailAdvisory({ checkMode }) {
   const { t } = useTranslation('console');
   const normalised = String(checkMode || '').toUpperCase();
-  if (normalised !== 'SOFT_FAIL' && normalised !== 'SKIP') return null;
+  if (normalised !== 'DISABLED') return null;
 
   return (
     <Alert
@@ -284,15 +288,10 @@ function SoftFailAdvisory({ checkMode }) {
       icon={<ErrorOutlineIcon />}
       sx={{ mb: 3 }}
     >
-      {normalised === 'SKIP'
-        ? t(
-            'trust.revocationDetail.skipAdvisory',
-            'Revocation checking is disabled for this profile. Credentials verified under this profile are not checked for revocation status. Only use this mode in offline or test environments.',
-          )
-        : t(
-            'trust.revocationDetail.softFailAdvisory',
-            "Soft-fail mode means verifications will succeed even when the revocation endpoint is unreachable. Ensure this aligns with your organisation's risk tolerance.",
-          )}
+      {t(
+        'trust.revocationDetail.disabledAdvisory',
+        'Credential status checking is disabled for this profile. Activate it only when lifecycle enforcement is intentionally out of scope.',
+      )}
     </Alert>
   );
 }
@@ -304,10 +303,25 @@ function RevocationProfileDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
 
-  const { data: profile, loading, error } = useAsyncData(
+  const [activating, setActivating] = useState(false);
+  const [actionError, setActionError] = useState(null);
+  const { data: profile, loading, error, reload } = useAsyncData(
     () => (id ? getRevocationProfile(id) : Promise.resolve(null)),
     [id],
   );
+
+  const handleActivate = async () => {
+    setActivating(true);
+    setActionError(null);
+    try {
+      await activateRevocationProfile(id);
+      await reload();
+    } catch (activationError) {
+      setActionError(activationError?.message || 'Failed to activate Revocation Profile.');
+    } finally {
+      setActivating(false);
+    }
+  };
 
   if (loading) {
     return (
@@ -364,26 +378,38 @@ function RevocationProfileDetailPage() {
           <Typography variant="h4" component="h1" gutterBottom>
             {profile.name}
           </Typography>
-          <Chip
-            icon={<SecurityIcon />}
-            label={
-              String(profile.check_mode || 'HARD_FAIL')
-                .replace('_', ' ')
-                .toLowerCase()
-                .replace(/^\w/, (c) => c.toUpperCase())
-            }
-            color={CHECK_MODE_META[String(profile.check_mode || 'HARD_FAIL').toUpperCase()]?.color ?? 'default'}
-            size="small"
-          />
+          <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+            <Chip label={String(profile.status || 'DRAFT').toUpperCase()} color={String(profile.status).toUpperCase() === 'ACTIVE' ? 'success' : 'default'} size="small" />
+            <Chip
+              icon={<SecurityIcon />}
+              label={String(profile.check_mode || 'ALWAYS').replace('_', ' ')}
+              color={CHECK_MODE_META[String(profile.check_mode || 'ALWAYS').toUpperCase()]?.color ?? 'default'}
+              size="small"
+            />
+          </Box>
         </Box>
-        <Button
-          variant="outlined"
-          startIcon={<ArrowBackIcon />}
-          onClick={() => navigate('/console/org/trust/revocation')}
-        >
-          {t('trust.revocationDetail.backToList', 'Back to Revocation Profiles')}
-        </Button>
+        <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+          {String(profile.status || '').toUpperCase() === 'DRAFT' && (
+            <Button
+              variant="contained"
+              startIcon={<CheckCircleIcon />}
+              onClick={handleActivate}
+              disabled={activating}
+            >
+              {activating ? 'Activating...' : 'Activate'}
+            </Button>
+          )}
+          <Button
+            variant="outlined"
+            startIcon={<ArrowBackIcon />}
+            onClick={() => navigate('/console/org/trust/revocation')}
+          >
+            {t('trust.revocationDetail.backToList', 'Back to Revocation Profiles')}
+          </Button>
+        </Box>
       </Box>
+
+      {actionError && <Alert severity="error" sx={{ mb: 3 }}>{actionError}</Alert>}
 
       {/* Soft-fail / skip advisory */}
       <SoftFailAdvisory checkMode={profile.check_mode} />

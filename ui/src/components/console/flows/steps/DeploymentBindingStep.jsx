@@ -96,10 +96,15 @@ const DeploymentBindingStep = ({
     return <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}><CircularProgress /></Box>;
   }
 
-  const select = (label, value, candidates, updateKey, requiredField = false, resolveValue = (nextValue) => nextValue || null) => (
+  const select = (label, value, candidates, updateKey, requiredField = false, resolveValue = (nextValue) => nextValue || null) => {
+    const inputId = `flow-binding-${updateKey}-input`;
+    const labelId = `${inputId}-label`;
+    return (
     <FormControl fullWidth required={requiredField}>
-      <InputLabel>{label}</InputLabel>
+      <InputLabel id={labelId}>{label}</InputLabel>
       <Select
+        id={inputId}
+        labelId={labelId}
         label={label}
         value={value || ''}
         onChange={(event) => onUpdate({ [updateKey]: resolveValue(event.target.value) })}
@@ -111,7 +116,8 @@ const DeploymentBindingStep = ({
         ))}
       </Select>
     </FormControl>
-  );
+    );
+  };
 
   return (
     <Box>

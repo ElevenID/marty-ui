@@ -122,7 +122,7 @@ describe('presentationPolicyApi', () => {
         organization_id: 'org-1',
         name: 'Active Policy',
         required_claims: [{ claim_name: 'employee_id' }],
-        status: 'active',
+        activate_immediately: true,
       })
 
       expect(activatedPolicyId).toBe('policy-activate')
@@ -166,7 +166,7 @@ describe('presentationPolicyApi', () => {
         organization_id: 'org-1',
         name: 'Recovered Policy',
         required_claims: [{ claim_name: 'employee_id' }],
-        status: 'active',
+        activate_immediately: true,
       })
 
       expect(createAttempts).toBe(2)
@@ -254,6 +254,7 @@ describe('presentationPolicyApi', () => {
         doctype: 'org.iso.18013.5.1.mDL',
         namespace: 'org.iso.18013.5.1',
         issuer_profile_id: 'ip-1',
+        compliance_profile_id: 'compliance-1',
         fields: [],
       }
 
@@ -321,6 +322,7 @@ describe('presentationPolicyApi', () => {
         name: 'Wizard Payload',
         credential_type: 'EmployeeBadge',
         issuer_profile_id: 'ip-1',
+        compliance_profile_id: 'compliance-1',
         vct: 'com.example.employee',
         claims: [
           { name: 'employee_id', type: 'string', required: true },
@@ -346,11 +348,9 @@ describe('presentationPolicyApi', () => {
         },
       ])
       expect(receivedData.claims[0]).not.toHaveProperty('type')
-      expect(receivedData.vct).toBe('https://credentials.elevenidllc.com/vct/com.example.employee')
-      expect(receivedData.compliance_profile).toEqual({
-        compliance_code: 'CUSTOM',
-        credential_format: 'sd_jwt_vc',
-      })
+      expect(receivedData.vct).toBe(`${window.location.origin}/vct/com.example.employee`)
+      expect(receivedData.compliance_profile_id).toBe('compliance-1')
+      expect(receivedData).not.toHaveProperty('compliance_profile')
     })
 
     it('activates a newly-created template when requested', async () => {
@@ -387,8 +387,9 @@ describe('presentationPolicyApi', () => {
         name: 'Active Template',
         credential_type: 'EmployeeBadge',
         issuer_profile_id: 'ip-1',
+        compliance_profile_id: 'compliance-1',
         vct: 'com.example.employee',
-        status: 'active',
+        activate_immediately: true,
         claims: [{ name: 'employee_id', type: 'string', required: true }],
       })
 
@@ -431,8 +432,9 @@ describe('presentationPolicyApi', () => {
         name: 'Active Template',
         credential_type: 'EmployeeBadge',
         issuer_profile_id: 'ip-1',
+        compliance_profile_id: 'compliance-1',
         vct: 'com.example.employee',
-        status: 'active',
+        activate_immediately: true,
         claims: [{ name: 'employee_id', type: 'string', required: true }],
       })
 
@@ -482,8 +484,9 @@ describe('presentationPolicyApi', () => {
         name: 'Recovered Created Template',
         credential_type: 'EmployeeBadge',
         issuer_profile_id: 'ip-1',
+        compliance_profile_id: 'compliance-1',
         vct: 'com.example.recovered',
-        status: 'active',
+        activate_immediately: true,
         claims: [{ name: 'employee_id', type: 'string', required: true }],
       })
 
@@ -677,6 +680,9 @@ describe('presentationPolicyApi', () => {
         credential_type: 'EmployeeBadge',
         issuer_profile_id: 'ip-1',
         compliance_profile_id: '123e4567-e89b-12d3-a456-426614174000',
+        supported_wallet_ids: ['removed-wallet-selection'],
+        issuance_protocol: 'oid4vci',
+        wallet_configs: [{ wallet_id: 'removed-wallet-config' }],
         claims: [],
         validity_rules: {
           ttl_seconds: 14 * 86400,
@@ -692,6 +698,9 @@ describe('presentationPolicyApi', () => {
         renewal_window_days: 3,
         not_before_offset_seconds: 900,
       })
+      expect(receivedData).not.toHaveProperty('supported_wallet_ids')
+      expect(receivedData).not.toHaveProperty('issuance_protocol')
+      expect(receivedData).not.toHaveProperty('wallet_configs')
     })
 
     it('should normalize listed credential templates', async () => {

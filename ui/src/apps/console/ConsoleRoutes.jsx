@@ -1,4 +1,4 @@
-import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
+import { Navigate, Route, Routes } from 'react-router-dom';
 import { Box, CircularProgress, Typography } from '@mui/material';
 
 import { get } from '../../services/api';
@@ -133,11 +133,6 @@ function ConsoleEntryRoute() {
   return <Navigate to={resolveConsoleHomePath({ mode, activeOrgId, memberships, isOrgBootstrapRequired })} replace />;
 }
 
-function ConsoleAuditRedirect() {
-  const location = useLocation();
-  return <Navigate to={`/console/org/audit${location.search || ''}`} replace />;
-}
-
 function ConsoleRoutes() {
   return (
     <Routes>
@@ -145,8 +140,6 @@ function ConsoleRoutes() {
       <Route path="/console/login" element={<LoginPage fallbackRedirectTo="/console" />} />
       <Route path="/login" element={<LoginPage fallbackRedirectTo="/console" />} />
       <Route path="/console/auth/callback" element={<AuthCallback />} />
-      <Route path="/console/audit" element={<ConsoleAuditRedirect />} />
-
       <Route
         path="/console/org"
         element={

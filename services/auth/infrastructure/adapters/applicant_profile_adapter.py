@@ -52,7 +52,11 @@ class ApplicantProfileProvisioningAdapter:
                 response = await client.patch(
                     f"{self._service_url}/v1/me/applicant-profile",
                     json=payload,
-                    headers={"X-User-Id": user.user_id, "X-User-Email": user.email},
+                    headers={
+                        "X-User-Id": user.user_id,
+                        "X-User-Email": user.email,
+                        "X-Organization-ID": user.organization_id,
+                    },
                 )
                 response.raise_for_status()
         except Exception as exc:

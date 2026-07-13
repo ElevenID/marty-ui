@@ -474,7 +474,7 @@ def test_wallet_open_link_prefers_platform_routing_template():
 	)
 
 
-def test_wallet_open_link_uses_waltid_web_wallet_route():
+def test_inactive_waltid_wallet_cannot_build_an_open_link():
 	repo = credential_template.InMemoryCredentialTemplateRepository()
 	wallet_repo = credential_template.InMemoryWalletRegistryRepository()
 	client, _ = _build_client(repo, wallet_repo)
@@ -485,14 +485,7 @@ def test_wallet_open_link_uses_waltid_web_wallet_route():
 		params={"inner_uri": inner_uri, "platform": "desktop"},
 	)
 
-	assert response.status_code == 200
-	body = response.json()
-	assert body["wallet_id"] == "wr-waltid-001"
-	assert body["inner_uri"] == inner_uri
-	assert body["open_uri"] == (
-		"https://wallet.demo.walt.id/api/siop/initiateIssuance?"
-		"credential_offer_uri=https%3A%2F%2Fissuer.example%2Foffers%2F123"
-	)
+	assert response.status_code == 404
 
 
 def test_wallet_open_link_uses_spruce_android_intent_without_wrapping_inner_uri():
@@ -612,10 +605,11 @@ def test_create_template_requires_compliance_binding_even_in_compatibility_mode(
 	)
 
 	assert response.status_code == 422
-	assert "compliance_profile_id is required" in response.json()["detail"]
+	details = response.json()["detail"]
+	assert any(item["loc"][-1] == "compliance_profile_id" and item["type"] == "missing" for item in details)
 
 
-def test_create_template_normalizes_legacy_payload_format_aliases():
+def test_create_template_rejects_embedded_compliance_profile():
 	repo = credential_template.InMemoryCredentialTemplateRepository()
 	client, _ = _build_client(repo)
 
@@ -634,17 +628,7 @@ def test_create_template_normalizes_legacy_payload_format_aliases():
 		},
 	)
 
-	assert response.status_code == 200
-	body = response.json()
-	assert body["status"] == "DRAFT"
-	assert body["credential_payload_format"] == "SD_JWT_VC"
-	assert body["validity_rules"]["ttl_seconds"] == 365 * 86400
-	assert body["claims"] == [
-		{
-			"name": "given_name",
-			"type": "STRING",
-			"required": True,
-			"selectively_disclosable": True,
-			"display": {"label": "Given Name"},
-		}
-	]
+	assert response.status_code == 422
+	details = response.json()["detail"]
+	assert any(item["loc"][-1] == "compliance_profile" and item["type"] == "extra_forbidden" for item in details)
+	assert any(item["loc"][-1] == "compliance_profile_id" and item["type"] == "missing" for item in details)

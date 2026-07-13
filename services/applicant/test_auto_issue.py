@@ -52,8 +52,8 @@ def template(monkeypatch):
         "status": "ACTIVE",
         "approval_strategy": "MANUAL",
         "form_fields": [
-            {"name": "given_name", "type": "string", "required": True},
-            {"name": "birth_date", "type": "date", "required": True},
+            {"field_id": "given_name", "label": "Given name", "field_type": "TEXT", "required": True},
+            {"field_id": "birth_date", "label": "Birth date", "field_type": "DATE", "required": True},
         ],
         "required_checks": [
             {"check_type": "identity_verification", "is_required": True, "order": 1},
@@ -91,7 +91,11 @@ def seeded(repo, client):
 
 
 def self_headers(user_id="user-1"):
-    return {"X-User-Id": user_id, "X-User-Email": f"{user_id}@example.test"}
+    return {
+        "X-User-Id": user_id,
+        "X-User-Email": f"{user_id}@example.test",
+        "X-Organization-ID": "org-1",
+    }
 
 
 def reviewer_headers(org_id="org-1", permissions="application:review,application:approve,application:reject"):
@@ -130,6 +134,37 @@ def test_creation_derives_template_and_owner(client, seeded):
     assert body["application_template_id"] == "application-template-1"
     assert "metadata" not in body
     assert "credential_configuration_id" not in body
+
+
+def test_creation_uses_default_profile_but_persists_target_issuer_organization(client, repo):
+    applicant = Applicant(
+        id="applicant-cross-org",
+        organization_id="org-default",
+        user_id="user-cross-org",
+        oidc_subject="user-cross-org",
+        email="cross-org@example.test",
+        status=ApplicantStatus.APPROVED,
+    )
+    run(repo.save(applicant))
+
+    response = client.post(
+        "/v1/me/applications",
+        headers={
+            "X-User-Id": "user-cross-org",
+            "X-User-Email": "cross-org@example.test",
+            "X-Organization-ID": "org-default",
+        },
+        json={
+            "organization_id": "org-1",
+            "application_template_id": "application-template-1",
+            "form_data": {"given_name": "Ada", "birth_date": "1815-12-10"},
+            "integration_context": {},
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["applicant_id"] == "applicant-cross-org"
+    assert response.json()["organization_id"] == "org-1"
 
 
 def test_invalid_iso_date_returns_structured_field_error(client, seeded):
@@ -215,7 +250,13 @@ def test_claim_blocked_state_is_persisted(client, repo, seeded, monkeypatch):
     assert saved.claim_blocker["owner"] == "ISSUER"
 
 
-def test_claim_offer_ready_uses_only_form_claims(client, repo, seeded, monkeypatch):
+def test_claim_offer_ready_uses_only_mapped_form_claims(client, repo, seeded, template, monkeypatch):
+    template["form_fields"][0]["claim_mapping"] = "first_name"
+    template["claim_collection_rules"] = [
+        {"claim_name": "member_id", "source": "SYSTEM", "source_config": {"system_field": "applicant.user_id"}},
+        {"claim_name": "organization_id", "source": "SYSTEM", "source_config": {"system_field": "application.organization_id"}},
+        {"claim_name": "issued_at", "source": "SYSTEM", "source_config": {"system_field": "current.datetime"}},
+    ]
     application_id = create_application(client).json()["id"]
     application = run(repo.get_application(application_id))
     application.status = ApplicationStatus.APPROVED
@@ -240,5 +281,11 @@ def test_claim_offer_ready_uses_only_form_claims(client, repo, seeded, monkeypat
     assert response.status_code == 200
     assert response.json()["claim_state"] == "OFFER_READY"
     assert captured["birth_date"] == "1815-12-10"
+    assert captured["first_name"] == "Ada"
+    assert captured["member_id"] == "user-1"
+    assert captured["organization_id"] == "org-1"
+    assert captured["issued_at"].endswith("+00:00")
+    assert "given_name" not in captured
+    assert "applicant_id" not in captured
     assert "integration_context" not in captured
     assert "approval_strategy" not in captured

@@ -324,7 +324,7 @@ export const handlers = [
   // Flow Definitions
   http.get(`${API_BASE}/v1/flows/capabilities`, () => {
     return HttpResponse.json({
-      protocol_version: '0.3.0',
+      protocol_version: '0.3.1',
       standard_flow_types: [
         'oid4vci_pre_authorized', 'oid4vci_authorization_code', 'mdl_issuance',
         'oid4vp_presentation', 'mdl_presentation', 'siopv2',
@@ -466,15 +466,6 @@ export const handlers = [
       credential_offer_uri: 'openid-credential-offer://offer/test',
       offer_expires_at: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
       status: 'offered',
-    })
-  }),
-
-  http.post(`${API_BASE}/v1/applications/:applicationId/issuance-offer`, ({ params }) => {
-    return HttpResponse.json({
-      id: params.applicationId,
-      offer_url: 'openid-credential-offer://offer/test',
-      expires_at: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
-      status: 'active',
     })
   }),
 
@@ -930,15 +921,6 @@ export const handlers = [
       credential_offer_uri: 'openid-credential-offer://offer/test',
       offer_expires_at: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
       status: 'offered',
-    })
-  }),
-
-  http.post('/v1/applications/:applicationId/issuance-offer', ({ params }) => {
-    return HttpResponse.json({
-      id: params.applicationId,
-      offer_url: 'openid-credential-offer://offer/test',
-      expires_at: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
-      status: 'active',
     })
   }),
 

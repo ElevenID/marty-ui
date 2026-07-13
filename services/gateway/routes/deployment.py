@@ -1,8 +1,6 @@
 """Deployment Profile and Lane routes."""
 from __future__ import annotations
 
-import json
-
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 
 from gateway.models import (
@@ -21,21 +19,14 @@ deployment_profile_router = APIRouter(prefix="/v1/deployment-profiles", tags=["D
 @deployment_profile_router.post("", response_model=DeploymentProfileResponse, summary="Create Deployment Profile")
 async def create_deployment_profile(body: DeploymentProfileCreate, request: Request) -> Response:
     """Create a new Deployment Profile for runtime configuration."""
-    raw_body = await request.body()
-    raw_data = json.loads(raw_body) if raw_body else {}
-    trust_profile_id = raw_data.get("trust_profile_id") or body.trust_profile_id
+    trust_profile_id = body.trust_profile_id
     if not trust_profile_id:
         raise HTTPException(status_code=422, detail="trust_profile_id is required")
     if not await _resource_exists("trust-profiles", f"/v1/trust-profiles/{trust_profile_id}", request):
         raise HTTPException(status_code=422, detail=f"Trust profile not found: {trust_profile_id}")
 
-    default_policy_id = (
-        raw_data.get("default_policy_id")
-        or raw_data.get("default_presentation_policy_id")
-        or body.default_policy_id
-        or body.default_presentation_policy_id
-    )
-    presentation_policy_ids = raw_data.get("presentation_policy_ids") or body.presentation_policy_ids
+    default_policy_id = body.default_policy_id
+    presentation_policy_ids = body.presentation_policy_ids
     if not presentation_policy_ids and default_policy_id:
         presentation_policy_ids = [default_policy_id]
     if not presentation_policy_ids:
@@ -49,7 +40,7 @@ async def create_deployment_profile(body: DeploymentProfileCreate, request: Requ
         if owner_org != body.organization_id:
             raise HTTPException(status_code=403, detail="Access denied: presentation policy belongs to another organization")
 
-    credential_template_ids = raw_data.get("credential_template_ids") or body.credential_template_ids
+    credential_template_ids = body.credential_template_ids
     for template_id in credential_template_ids:
         owner_org = await _resource_org_id("credential-templates", f"/v1/credential-templates/{template_id}", request)
         if owner_org is None:
@@ -58,7 +49,8 @@ async def create_deployment_profile(body: DeploymentProfileCreate, request: Requ
             raise HTTPException(status_code=403, detail="Access denied: credential template belongs to another organization")
     registry = get_registry()
     service_url = registry.get_service_url("deployment-profiles")
-    return await proxy_request(request, service_url, "/v1/deployment-profiles", body_override=raw_body)
+    canonical_body = body.model_dump_json(exclude_none=True).encode("utf-8")
+    return await proxy_request(request, service_url, "/v1/deployment-profiles", body_override=canonical_body)
 
 
 @deployment_profile_router.get("", response_model=list[DeploymentProfileResponse], summary="List Deployment Profiles")
@@ -86,14 +78,6 @@ async def activate_deployment_profile(profile_id: str, request: Request) -> Resp
     registry = get_registry()
     service_url = registry.get_service_url("deployment-profiles")
     return await proxy_request(request, service_url, f"/v1/deployment-profiles/{profile_id}/activate")
-
-
-@deployment_profile_router.put("/{profile_id}", response_model=DeploymentProfileResponse, summary="Update Deployment Profile")
-async def update_deployment_profile(profile_id: str, body: DeploymentProfileUpdate, request: Request) -> Response:
-    """Update a Deployment Profile."""
-    registry = get_registry()
-    service_url = registry.get_service_url("deployment-profiles")
-    return await proxy_request(request, service_url, f"/v1/deployment-profiles/{profile_id}")
 
 
 @deployment_profile_router.patch("/{profile_id}", response_model=DeploymentProfileResponse, summary="Patch Deployment Profile")

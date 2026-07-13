@@ -10,20 +10,19 @@ const orgApplicantsPath = (organizationId) => (
 );
 
 function normalizePage(data, params = {}) {
-  const items = Array.isArray(data) ? data : (data?.items || []);
+  const hasValidCollection = Array.isArray(data) || Array.isArray(data?.items);
+  const items = Array.isArray(data) ? data : (hasValidCollection ? data.items : []);
   return {
-    applications: items,
     items,
-    total: data?.total ?? items.length,
+    total: hasValidCollection ? (data?.total ?? items.length) : 0,
     limit: data?.limit ?? params.limit ?? items.length,
     offset: data?.offset ?? params.offset ?? 0,
   };
 }
 
-export async function getMyApplicantProfile(organizationId) {
-  const orgId = requireOrganizationId(organizationId, 'loading your applicant profile');
+export async function getMyApplicantProfile() {
   try {
-    return await get(withQuery(ME_PROFILE, `organization_id=${encodeURIComponent(orgId)}`));
+    return await get(ME_PROFILE);
   } catch (error) {
     if (error?.status === 404) return null;
     throw error;
@@ -31,17 +30,11 @@ export async function getMyApplicantProfile(organizationId) {
 }
 
 export async function upsertMyApplicantProfile(data) {
-  requireOrganizationId(data?.organization_id, 'saving your applicant profile');
   return patch(ME_PROFILE, data);
 }
 
-export async function enrollMyBiometric(organizationId, data) {
-  const orgId = requireOrganizationId(organizationId, 'enrolling a biometric');
-  return post(withQuery(`${ME_PROFILE}/biometrics`, `organization_id=${encodeURIComponent(orgId)}`), data);
-}
-
-export async function listApplicants(organizationId, params = {}) {
-  return (await listOrganizationApplications(organizationId, params)).applications;
+export async function enrollMyBiometric(data) {
+  return post(`${ME_PROFILE}/biometrics`, data);
 }
 
 export async function listApplications(params = {}) {
@@ -131,7 +124,7 @@ export async function runApplicationExternalEvidenceApiCheck(organizationId, app
 
 export async function getMyCredentials(params = {}) {
   const query = buildTruthyQueryString({ status: params.status, limit: params.limit, offset: params.offset });
-  return get(withQuery('/v1/issued-credentials/mine', query));
+  return normalizePage(await get(withQuery('/v1/issued-credentials/mine', query)), params);
 }
 
 export async function getApplicantStats() {
@@ -139,19 +132,19 @@ export async function getApplicantStats() {
     listApplications({ limit: 100 }),
     getMyCredentials({ limit: 100 }),
   ]);
-  const credentialItems = credentials?.items || [];
+  const credentialItems = credentials.items;
   const pendingStatuses = new Set(['SUBMITTED', 'UNDER_REVIEW', 'VETTING_IN_PROGRESS']);
   const now = new Date();
   const ninetyDays = new Date(now.getTime() + 90 * 24 * 60 * 60 * 1000);
   return {
     activeCredentials: credentialItems.filter((item) => String(item.status).toUpperCase() === 'ACTIVE').length,
-    pendingApplications: applications.applications.filter((item) => pendingStatuses.has(String(item.status).toUpperCase())).length,
+    pendingApplications: applications.items.filter((item) => pendingStatuses.has(String(item.status).toUpperCase())).length,
     expiringSoon: credentialItems.filter((item) => {
       const expiry = item.valid_until ? new Date(item.valid_until) : null;
       return expiry && expiry > now && expiry <= ninetyDays;
     }).length,
     totalApplications: applications.total,
-    totalCredentials: credentials?.total ?? credentialItems.length,
+    totalCredentials: credentials.total,
   };
 }
 

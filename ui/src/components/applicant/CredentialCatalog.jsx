@@ -233,7 +233,7 @@ const CredentialCatalog = () => {
 
   const listApplicantApplications = useCallback(async () => {
     const result = await listApplications({ limit: 100 });
-    return result.applications;
+    return result.items;
   }, []);
 
   /**

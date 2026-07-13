@@ -904,19 +904,10 @@ class FlowInstanceStatus(str, Enum):
     AWAITING_WALLET = "awaiting_wallet"
     AWAITING_APPROVAL = "awaiting_approval"
     AWAITING_EVIDENCE = "awaiting_evidence"
-    WAITING = "awaiting_wallet"
-    WAITING_APPROVAL = "awaiting_approval"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
     EXPIRED = "expired"
-
-    # Legacy aliases for backward compatibility
-    @classmethod
-    def _missing_(cls, value):
-        _aliases = {"waiting": cls.AWAITING_WALLET, "waiting_approval": cls.AWAITING_APPROVAL}
-        return _aliases.get(value)
-
 
 # MIP §9: Valid state transitions — terminal states are immutable.
 VALID_TRANSITIONS: dict[FlowInstanceStatus, set[FlowInstanceStatus]] = {
@@ -968,53 +959,10 @@ TERMINAL_STATES = {
 }
 
 
-FLOW_INSTANCE_STATUS_ALIASES: dict[str, FlowInstanceStatus] = {
-    "created": FlowInstanceStatus.CREATED,
-    "pending": FlowInstanceStatus.PENDING,
-    "in_progress": FlowInstanceStatus.IN_PROGRESS,
-    "awaiting_wallet": FlowInstanceStatus.AWAITING_WALLET,
-    "awaiting_approval": FlowInstanceStatus.AWAITING_APPROVAL,
-    "awaiting_evidence": FlowInstanceStatus.AWAITING_EVIDENCE,
-    # Legacy aliases
-    "waiting": FlowInstanceStatus.AWAITING_WALLET,
-    "waiting_approval": FlowInstanceStatus.AWAITING_APPROVAL,
-    "completed": FlowInstanceStatus.COMPLETED,
-    "failed": FlowInstanceStatus.FAILED,
-    "cancelled": FlowInstanceStatus.CANCELLED,
-    "canceled": FlowInstanceStatus.CANCELLED,
-    "expired": FlowInstanceStatus.EXPIRED,
-}
-
-
 def _parse_flow_instance_status(value: FlowInstanceStatus | str) -> FlowInstanceStatus:
     if isinstance(value, FlowInstanceStatus):
         return value
-
-    normalized = str(value).strip()
-    alias = FLOW_INSTANCE_STATUS_ALIASES.get(normalized.lower())
-    if alias:
-        return alias
-
-    protocol_alias = {
-        "PENDING": FlowInstanceStatus.PENDING,
-        "IN_PROGRESS": FlowInstanceStatus.IN_PROGRESS,
-        "AWAITING_WALLET": FlowInstanceStatus.AWAITING_WALLET,
-        "AWAITING_APPROVAL": FlowInstanceStatus.AWAITING_APPROVAL,
-        "AWAITING_EVIDENCE": FlowInstanceStatus.AWAITING_EVIDENCE,
-        "COMPLETED": FlowInstanceStatus.COMPLETED,
-        "FAILED": FlowInstanceStatus.FAILED,
-        "EXPIRED": FlowInstanceStatus.EXPIRED,
-        "CANCELLED": FlowInstanceStatus.CANCELLED,
-        "CANCELED": FlowInstanceStatus.CANCELLED,
-        "CREATED": FlowInstanceStatus.CREATED,
-        # Legacy
-        "WAITING": FlowInstanceStatus.AWAITING_WALLET,
-        "WAITING_APPROVAL": FlowInstanceStatus.AWAITING_APPROVAL,
-    }.get(normalized.upper())
-    if protocol_alias:
-        return protocol_alias
-
-    return FlowInstanceStatus(normalized.lower())
+    return FlowInstanceStatus(str(value).strip().lower())
 
 
 @dataclass
@@ -1651,27 +1599,14 @@ async def _initiate_credential_layer_issuance(
     issuance service. Use gRPC first and retain an HTTP fallback so local/dev
     stacks can still run when protobuf stubs lag the service image.
     """
-    claims = instance.context.get("claims") or instance.context.get("credential_claims") or {}
+    claims = instance.context.get("claims") or {}
     if not isinstance(claims, dict):
         claims = {}
 
-    # MIP §8.3 – when an application_id is present, pass it to the issuance
-    # service so it can resolve credential claims from the application's
-    # form_data.  The issuance service owns the application aggregate and is
-    # the authoritative source for claim values.
-    application_id = str(instance.context.get("application_id") or "")
-    if application_id and not claims:
-        claims = {"_application_id": application_id}
-        logger.info(
-            "[flow] _initiate_credential_layer_issuance instance=%s application=%s "
-            "deferring claims resolution to issuance service",
-            instance.id, application_id,
-        )
-    else:
-        logger.info(
-            "[flow] _initiate_credential_layer_issuance instance=%s template=%s claims_keys=%s",
-            instance.id, flow_def.credential_template_id, list(claims.keys()),
-        )
+    logger.info(
+        "[flow] _initiate_credential_layer_issuance instance=%s template=%s claims_keys=%s",
+        instance.id, flow_def.credential_template_id, list(claims.keys()),
+    )
 
     try:
         from marty_proto.v1 import issuance_service_pb2 as iss_pb2
@@ -1978,7 +1913,7 @@ def _flow_capabilities() -> dict[str, Any]:
         physical_blockers.append("Configure PERSONALIZATION_BUREAU_URL for document production handoff.")
 
     return {
-        "protocol_version": "0.3.0",
+        "protocol_version": "0.3.1",
         "flow_types": [flow_type.value for flow_type in FlowType],
         "standard_flow_types": [flow_type.value for flow_type in STANDARD_FLOW_TYPES],
         "sequences": {
@@ -2461,7 +2396,7 @@ async def get_flow_instance_result(
     """OID4VP-1FINAL §8.7 — Relying-party result polling endpoint.
 
     Returns the current verification state and any verified claims for the
-    given flow instance.  Before submission the state is ``waiting``; after a
+    given flow instance. Before submission the state is ``awaiting_wallet``; after a
     successful VP submission it is ``completed``.
     """
     instance = await repo.get_instance(instance_id)
@@ -4737,8 +4672,7 @@ async def handle_application_approved(
         trigger = flow.trigger if isinstance(flow.trigger, dict) else {}
         trigger_config = trigger.get("config") if isinstance(trigger.get("config"), dict) else {}
         configured_event = str(trigger_config.get("event_type") or "").upper()
-        legacy_preconditions = (flow.extension.get("config") or {}).get("legacy_preconditions", [])
-        return configured_event == "APPLICATION_APPROVED" or "application_approved" in legacy_preconditions
+        return configured_event == "APPLICATION_APPROVED"
 
     matching_flows = [
         flow for flow in all_flows
@@ -4768,17 +4702,10 @@ async def handle_application_approved(
     
     for flow_def in matching_flows:
         try:
-            # Build credential claims from the event data.  The credential
-            # template defines the claim schema; this event carries the actual
-            # values submitted by the applicant through the application form.
-            _event_claims = {
-                k: v for k, v in event.data.items()
-                if k not in {
-                    "applicant_id", "credential_template_id", "triggered_by_event",
-                    "vetting_level", "id", "organization_id", "aggregate_id",
-                    "event_type", "timestamp",
-                } and isinstance(v, (str, int, float, bool))
-            }
+            # Credential content crosses this boundary only through the
+            # canonical claim map assembled by the applicant service.
+            raw_event_claims = event.data.get("claims")
+            _event_claims = dict(raw_event_claims) if isinstance(raw_event_claims, dict) else {}
             logger.info(
                 "[auto-trigger] event claims keys=%s values_preview=%s",
                 list(_event_claims.keys()),

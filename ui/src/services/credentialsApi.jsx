@@ -245,21 +245,6 @@ export const generateIssuanceOffer = async (applicationId, options = {}) => {
   }
 };
 
-/**
- * Retrieve the current issuance offer for an application (applicant-facing).
- *
- * @param {string} applicationId
- * @returns {Promise<Object>} IssuanceOfferResponse
- */
-export const getIssuanceOffer = async (applicationId) => {
-  try {
-    const response = await apiClient.get(`/v1/applications/${applicationId}/issuance-offer`);
-    return response.data;
-  } catch (error) {
-    throw handleApiError(error);
-  }
-};
-
 export default {
   issueCredential,
   verifyCredential,
@@ -273,5 +258,4 @@ export default {
   getOfferQRCode,
   getIssuanceSessionStatus,
   generateIssuanceOffer,
-  getIssuanceOffer,
 };

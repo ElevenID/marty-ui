@@ -48,8 +48,7 @@ function userDisplayName(user) {
 function ApplicantSettingsPage() {
   const { t } = useTranslation('applicant');
   const location = useLocation();
-  const { user, organizationId } = useAuth();
-  const activeOrganizationId = organizationId || user?.organization_id || user?.default_organization_id || '';
+  const { user } = useAuth();
   const [saving, setSaving] = useState(false);
   const [success, setSuccess] = useState(false);
   const [error, setError] = useState(null);
@@ -86,13 +85,12 @@ function ApplicantSettingsPage() {
     const loadProfile = async () => {
       if (user?.user_id) {
         try {
-          let applicant = await getMyApplicantProfile(activeOrganizationId);
+          let applicant = await getMyApplicantProfile();
 
           // If no profile exists, create one
           if (!applicant) {
             const nameParts = userDisplayName(user).trim().split(/\s+/).filter(Boolean);
             const created = await upsertMyApplicantProfile({
-              organization_id: activeOrganizationId,
               email: user.email || '',
               given_name: user.given_name || nameParts[0] || '',
               family_name: user.family_name || nameParts.slice(1).join(' ') || '',
@@ -118,7 +116,7 @@ function ApplicantSettingsPage() {
     };
 
     loadProfile();
-  }, [user, activeOrganizationId, t]);
+  }, [user, t]);
 
   // Load wallet registry
   useEffect(() => {
@@ -166,7 +164,6 @@ function ApplicantSettingsPage() {
       const family_name = nameParts.slice(1).join(' ') || '';
 
       await upsertMyApplicantProfile({
-        organization_id: activeOrganizationId,
         given_name,
         family_name,
         phone: profile.phone,

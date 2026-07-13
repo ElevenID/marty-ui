@@ -2,7 +2,7 @@
  * OID4VCIInviteDisplay
  *
  * Thin adapter that maps the offer payload from
- * `POST /v1/applications/{id}/issuance-offer` into props understood by
+ * `POST /v1/me/applications/{id}/claim` into props understood by
  * the generic QRCodeDisplay component.
  *
  * When the backend returns `credential_offer_uris` (a per-wallet map), a tab

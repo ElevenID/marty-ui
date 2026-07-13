@@ -28,7 +28,7 @@ from typing import Any, AsyncGenerator
 
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from typing import Annotated
 
 from marty_common import (
@@ -52,10 +52,10 @@ SERVICE_PORT = int(os.environ.get("COMPLIANCE_PROFILE_SERVICE_PORT", "8008"))
 
 class ComplianceProfileStatus(str, Enum):
     """Compliance profile status."""
-    DRAFT = "draft"
-    ACTIVE = "active"
-    SUSPENDED = "suspended"
-    ARCHIVED = "archived"
+    DRAFT = "DRAFT"
+    ACTIVE = "ACTIVE"
+    SUSPENDED = "SUSPENDED"
+    DEPRECATED = "DEPRECATED"
 
 
 from marty_common.domain_enums import CredentialFormat  # noqa: E402
@@ -221,7 +221,6 @@ class ComplianceProfile:
     credential_format: CredentialFormat = CredentialFormat.SD_JWT_VC
     issuance_protocol: IssuanceProtocol | None = None
     issuer_artifact_requirements: IssuerArtifactRequirements | None = None
-    default_verification_rules: dict[str, Any] | None = None
     verification_policy_set_id: str | None = None
     trust_profile_constraints: TrustProfileConstraints = field(default_factory=TrustProfileConstraints)
     api_surface: list[ApiSurfaceEndpoint] = field(default_factory=list)
@@ -274,7 +273,11 @@ class InMemoryComplianceProfileRepository:
         return await self.get(profile_id)
     
     async def list(self, org_id: str) -> list[ComplianceProfile]:
-        return [p for p in self._profiles.values() if p.organization_id == org_id]
+        return [
+            profile
+            for profile in self._profiles.values()
+            if profile.is_system or profile.organization_id == org_id
+        ]
     
     async def delete(self, profile_id: str) -> None:
         self._profiles.pop(profile_id, None)
@@ -359,6 +362,8 @@ class ApiSurfaceEndpointModel(BaseModel):
 
 
 class CreateComplianceProfileRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     organization_id: str | None = Field(None, max_length=255)
     name: str = Field(min_length=1, max_length=255)
     description: str | None = Field(None, max_length=2000)
@@ -366,7 +371,6 @@ class CreateComplianceProfileRequest(BaseModel):
     credential_format: str = "SD_JWT_VC"
     issuance_protocol: str | None = None
     issuer_artifact_requirements: IssuerArtifactRequirementsModel | None = None
-    default_verification_rules: dict[str, Any] | None = None
     verification_policy_set_id: str | None = None
     trust_profile_constraints: TrustProfileConstraintsModel | None = None
     api_surface: list[ApiSurfaceEndpointModel] = Field(default_factory=list)
@@ -383,13 +387,14 @@ class CreateComplianceProfileRequest(BaseModel):
 
 
 class UpdateComplianceProfileRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str | None = Field(None, min_length=1, max_length=255)
     description: str | None = Field(None, max_length=2000)
     compliance_code: str | None = None
     credential_format: str | None = None
     issuance_protocol: str | None = None
     issuer_artifact_requirements: IssuerArtifactRequirementsModel | None = None
-    default_verification_rules: dict[str, Any] | None = None
     verification_policy_set_id: str | None = None
     trust_profile_constraints: TrustProfileConstraintsModel | None = None
     api_surface: list[ApiSurfaceEndpointModel] | None = None
@@ -413,13 +418,14 @@ class ComplianceProfileResponse(BaseModel):
     credential_format: str = "SD_JWT_VC"
     issuance_protocol: str | None = None
     issuer_artifact_requirements: dict | None = None
-    default_verification_rules: dict | None = None
     verification_policy_set_id: str | None = None
     trust_profile_constraints: dict | None = None
     api_surface: list[dict] | None = None
     discoverable: bool | None = None
+    status: ComplianceProfileStatus
     is_system: bool
     created_at: str
+    updated_at: str
 
 
 # =============================================================================
@@ -487,7 +493,6 @@ async def create_compliance_profile(
             cert_key_usage=request.issuer_artifact_requirements.cert_key_usage,
             recommended_algorithms=request.issuer_artifact_requirements.recommended_algorithms,
         ) if request.issuer_artifact_requirements else None,
-        default_verification_rules=request.default_verification_rules,
         verification_policy_set_id=request.verification_policy_set_id,
         trust_profile_constraints=TrustProfileConstraints(
             compatible_profile_types=request.trust_profile_constraints.compatible_profile_types,
@@ -593,6 +598,21 @@ async def list_compliance_profiles(
     return [_profile_to_response(p) for p in profiles[offset:offset + limit]]
 
 
+@router.get("/system/discoverable", response_model=list[ComplianceProfileResponse], response_model_exclude_none=True)
+async def list_discoverable_system_profiles(
+    repo: InMemoryComplianceProfileRepository = Depends(get_repo),
+) -> list[ComplianceProfileResponse]:
+    """Return active deployment-level profiles without an organization identity."""
+    profiles = [
+        profile
+        for profile in repo._profiles.values()
+        if profile.is_system
+        and profile.discoverable
+        and profile.status == ComplianceProfileStatus.ACTIVE
+    ]
+    return [_profile_to_response(profile) for profile in profiles]
+
+
 @router.get("/{profile_id}", response_model=ComplianceProfileResponse, response_model_exclude_none=True)
 async def get_compliance_profile(
     profile_id: str,
@@ -643,8 +663,6 @@ async def update_compliance_profile(
             cert_key_usage=request.issuer_artifact_requirements.cert_key_usage,
             recommended_algorithms=request.issuer_artifact_requirements.recommended_algorithms,
         )
-    if request.default_verification_rules is not None:
-        profile.default_verification_rules = request.default_verification_rules
     if request.verification_policy_set_id is not None:
         profile.verification_policy_set_id = request.verification_policy_set_id
     if request.trust_profile_constraints is not None:
@@ -807,7 +825,6 @@ def _profile_to_response(profile: ComplianceProfile) -> ComplianceProfileRespons
             "cert_key_usage": profile.issuer_artifact_requirements.cert_key_usage,
             "recommended_algorithms": profile.issuer_artifact_requirements.recommended_algorithms,
         } if profile.issuer_artifact_requirements else None,
-        default_verification_rules=profile.default_verification_rules,
         verification_policy_set_id=profile.verification_policy_set_id,
         trust_profile_constraints={
             "compatible_profile_types": profile.trust_profile_constraints.compatible_profile_types,
@@ -831,9 +848,32 @@ def _profile_to_response(profile: ComplianceProfile) -> ComplianceProfileRespons
             for endpoint in profile.api_surface
         ],
         discoverable=profile.discoverable,
+        status=profile.status,
         is_system=profile.is_system,
         created_at=profile.created_at.isoformat(),
+        updated_at=profile.updated_at.isoformat(),
     )
+
+
+async def seed_system_profiles(repo: InMemoryComplianceProfileRepository) -> None:
+    profile = ComplianceProfile(
+        id="10000000-0000-0000-0000-000000000001",
+        organization_id=None,
+        name="OID4VC Core",
+        description="System baseline for standards-based OID4VC issuance and verification.",
+        compliance_code="OID4VC",
+        credential_format=CredentialFormat.SD_JWT_VC,
+        issuance_protocol=IssuanceProtocol.OID4VCI_PRE_AUTH,
+        issuer_artifact_requirements=IssuerArtifactRequirements(
+            requires_did=True,
+            requires_jwk=True,
+            recommended_algorithms=["ES256"],
+        ),
+        discoverable=True,
+        is_system=True,
+        status=ComplianceProfileStatus.ACTIVE,
+    )
+    await repo.save(profile)
 
 
 # =============================================================================
@@ -845,6 +885,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     global _repo
     logger.info(f"Starting {SERVICE_NAME}...")
     _repo = InMemoryComplianceProfileRepository()
+    await seed_system_profiles(_repo)
     
     # Initialize gRPC channel to organization service
     from common.di import setup_org_client, teardown_org_client

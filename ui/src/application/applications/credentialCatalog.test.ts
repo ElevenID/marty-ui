@@ -176,12 +176,21 @@ describe('credentialCatalog helpers', () => {
       organizationId: 'org-1',
       organizationName: 'Acme',
       listCredentialTemplates: vi.fn().mockResolvedValue([
-        { id: 'tpl-1', credential_type: 'MemberCredential', name: 'Member Login Credential', claims: [], status: 'active' },
+        { id: 'tpl-1', credential_type: 'MemberCredential', name: 'Member Login Credential', claims: [], status: 'active', revocation_profile_id: 'rp-1' },
       ]),
     })).resolves.toMatchObject({
       credentials: [expect.objectContaining({ id: 'tpl-1', vendorName: 'Acme' })],
       error: null,
     });
+
+    const incomplete = await loadCredentialCatalogItems({
+      organizationId: 'org-1',
+      organizationName: 'Acme',
+      listCredentialTemplates: vi.fn().mockResolvedValue([
+        { id: 'tpl-incomplete', credential_type: 'MemberCredential', name: 'Incomplete', status: 'active' },
+      ]),
+    });
+    expect(incomplete.credentials).toEqual([]);
 
     await expect(loadExistingCredentialApplications({
       organizationId: 'org-1',
