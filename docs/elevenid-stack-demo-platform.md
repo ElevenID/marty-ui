@@ -4,7 +4,7 @@
 
 The production application, public manifest contract, and local recorder tooling are implemented. **Credential Lifecycle Foundation** is published as a `DRAFT` evidence preview for **ElevenID LLC Credential Platform v2026.07.0**, with `PARTIAL` coverage and MIP `0.3.1` metadata.
 
-The preview does not claim public-demo approval. YouTube publication, SpruceKit acceptance, the isolated ElevenID Demo Wallet package, independent-wallet qualification, portable Canvas execution, and a composed lifecycle video remain release evidence work.
+The preview does not claim release-level public-demo approval. The ElevenID LLC YouTube channel and release playlist are configured, and the **Organization and MIP Primitives** scenario is publicly approved with privacy-enhanced playback. Remaining scenario publication, SpruceKit acceptance, the isolated ElevenID Demo Wallet package, independent-wallet qualification, portable Canvas execution, and a composed lifecycle video remain release evidence work.
 
 Local media composition and privacy scanning are ready with FFmpeg, ffprobe, Tesseract, and in-process ZXing QR decoding.
 
@@ -49,7 +49,7 @@ Run the pinned public browser gate from `tests` with `npm run test:demo-platform
 ## Current Blockers
 
 - Android tooling is absent: Android SDK/ADB/emulator, Appium UiAutomator2, and a pinned EUDI reference-wallet APK/profile.
-- The ElevenID LLC YouTube channel, OAuth publisher, and `2026.07.0` release playlist are not configured yet.
+- The Google OAuth app remains in Testing mode. Its publisher refresh token is short-lived until the app completes the production-readiness process.
 - Existing browser recordings predate the versioned recorder and are retained only as protected preview evidence.
 - Canvas has a portable scenario contract, but the adapter implementation must expose the portable test outcomes before recording.
 
@@ -57,10 +57,12 @@ These blockers keep coverage `PARTIAL`; they do not change the underlying Eleven
 
 ## YouTube Setup
 
-The release manifest now carries a fail-closed `video_distribution` binding. A draft may use `PENDING_CHANNEL_SETUP`; any `YOUTUBE_UNLISTED` or `PUBLIC` scenario requires a verified `ElevenID LLC` channel ID, handle, canonical channel URL, owned release playlist, privacy-enhanced embedding, and verification timestamp.
+The release manifest carries a fail-closed `video_distribution` binding. ElevenID LLC Credential Platform v2026.07.0 is bound to channel `UCjUbog1b4zEdck5pV78EgCw`, handle `@elevenidllc`, and unlisted release playlist `PLH1b0jTIP3-4`. Channel phone verification is complete, and YouTube accepted the release thumbnail and reviewed captions for video `BD3SIlfVJ98`. A draft may use `PENDING_CHANNEL_SETUP`; any `YOUTUBE_UNLISTED` or `PUBLIC` scenario requires a verified `ElevenID LLC` channel ID, handle, canonical channel URL, owned release playlist, privacy-enhanced embedding, and verification timestamp.
 
 The version-controlled `marty-demo-recorder` tooling provides credential-safe status reporting, local PKCE authorization, exact channel verification, idempotent release-playlist creation, binding promotion, release/scenario-bound unlisted upload, privacy-scan hash verification, caption and thumbnail publication, processing checks, playlist ownership checks, and fail-closed `YOUTUBE_UNLISTED` scenario binding. The binding preserves the exact video, captions, thumbnail, privacy-scan, and publication-config hashes as public media-integrity evidence. Google sign-in, channel ownership, recovery, and phone verification remain owner-controlled actions and are never stored in the repositories.
 
 `youtube:import-client` discovers only Google Desktop app credentials in Downloads, ignores Web credentials, suppresses client values and filenames, and refuses ambiguous selection or replacement of a different local credential. The owner setup sequence is `youtube:import-client`, `youtube:auth`, `youtube:setup`, and `youtube:promote`; each command must finish before the next one begins.
+
+The current external Google OAuth app is configured for testing. Google documents that refresh tokens issued to external testing apps with non-basic scopes expire after seven days. Move the app through production readiness before unattended publication depends on a durable token; until then, reauthorization is an expected local maintenance action. Channel phone verification is separate and was completed by an owner before custom-thumbnail publication.
 
 `npm run youtube:status -- --manifest ../marty-ui/ui/public/demos/manifests/2026.07.0.json` reports the next setup action without printing OAuth values. Upload results can only bind to an exact `VALIDATED` scenario revision. `youtube:approve-scenario` then requires complete assertion evidence and an eight-check editorial approval artifact before public scenario promotion. `youtube:approve-release` separately requires technical release readiness and updates the release manifest and latest-approved version index together with rollback on write failure.

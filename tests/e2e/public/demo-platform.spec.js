@@ -101,3 +101,30 @@ test('every release scenario has a canonical detail page and valid poster', asyn
     await assertStablePage(page, telemetry);
   }
 });
+
+test('public video waits for consent and uses the privacy-enhanced player', async ({ page }) => {
+  const youtubeRequests = [];
+  page.on('request', (request) => {
+    if (new URL(request.url()).hostname.endsWith('youtube-nocookie.com')) youtubeRequests.push(request.url());
+  });
+  await page.route('https://www.youtube-nocookie.com/**', (route) => route.fulfill({
+    status: 200,
+    contentType: 'text/html',
+    body: '<!doctype html><title>Privacy-enhanced YouTube player</title>',
+  }));
+
+  await page.goto('/demos/2026.07.0/organization-primitives');
+  const loadButton = page.getByRole('button', { name: 'Load Organization and MIP Primitives from YouTube' });
+  await expect(loadButton).toBeVisible();
+  await expect(page.locator('iframe[src*="youtube"]')).toHaveCount(0);
+  expect(youtubeRequests).toEqual([]);
+
+  await loadButton.click();
+  const player = page.getByTitle('Organization and MIP Primitives video');
+  await expect(player).toHaveAttribute('src', /https:\/\/www\.youtube-nocookie\.com\/embed\/BD3SIlfVJ98/);
+  await expect(player).toHaveAttribute('src', /cc_load_policy=1/);
+  await expect.poll(() => youtubeRequests.length).toBeGreaterThan(0);
+
+  await page.getByRole('button', { name: /1:50 Trust, policy, deployment, and flows/ }).click();
+  await expect(player).toHaveAttribute('src', /start=110/);
+});

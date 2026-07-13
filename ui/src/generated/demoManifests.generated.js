@@ -27,15 +27,15 @@ export const DEMO_MANIFESTS = {
     "public_demo_ready": false,
     "video_distribution": {
       "provider": "YOUTUBE",
-      "status": "PENDING_CHANNEL_SETUP",
+      "status": "CONFIGURED",
       "channel_name": "ElevenID LLC",
-      "channel_id": null,
-      "channel_handle": null,
-      "channel_url": null,
-      "playlist_id": null,
-      "playlist_url": null,
+      "channel_id": "UCjUbog1b4zEdck5pV78EgCw",
+      "channel_handle": "@elevenidllc",
+      "channel_url": "https://www.youtube.com/@elevenidllc",
+      "playlist_id": "PLH1b0jTIP3-4",
+      "playlist_url": "https://www.youtube.com/playlist?list=PLH1b0jTIP3-4",
       "privacy_enhanced_embeds": true,
-      "verified_at": null
+      "verified_at": "2026-07-13T21:32:50.925Z"
     },
     "deployment_release_marker": "mip-0.3.1-local-20260713T070847Z",
     "published_at": null,
@@ -359,7 +359,7 @@ export const DEMO_MANIFESTS = {
         "summary": "An administrator creates an organization and configures the identity, trust, template, policy, deployment, issuance, verification, and API primitives needed to operate it.",
         "scenario_revision": 1,
         "mip_version": "0.3.1",
-        "state": "VALIDATED",
+        "state": "PUBLIC",
         "audiences": [
           "Issuer",
           "Verifier",
@@ -389,8 +389,15 @@ export const DEMO_MANIFESTS = {
           "sha256": "87953594751663889fac73b0291615c40b4bc1d0ebc10b76d019404a5f89b3a3",
           "alt": "ElevenID organization console showing MIP primitive management"
         },
-        "youtube_id": null,
-        "media_evidence": null,
+        "youtube_id": "BD3SIlfVJ98",
+        "media_evidence": {
+          "video_sha256": "bd79f475691e6c6629fdce096f8421273b7c6d43a69e8081bd31d434e96da03a",
+          "captions_sha256": "4f88b8b64c488208dd06a226ed3405ee726ad918cad4b510bfe8bf62b4b6f857",
+          "thumbnail_sha256": "87953594751663889fac73b0291615c40b4bc1d0ebc10b76d019404a5f89b3a3",
+          "privacy_scan_sha256": "755f18bf559506d284d53bdf8976b2aeb6d14b76ed0c681daaaa53c979e25ad0",
+          "publication_config_sha256": "7318e116e6b16cc8f90174b35a0c47a2f90ef5cd1346b0e513b9051ae0dcf9d0",
+          "youtube_uploaded_at": "2026-07-13T21:53:39.058Z"
+        },
         "transcript": {
           "language": "en",
           "segments": [
@@ -466,10 +473,23 @@ export const DEMO_MANIFESTS = {
           }
         ],
         "limitations": [
-          "The validated recording has not completed editorial review or YouTube publication."
+          "This scenario covers organization primitives only; holder and wallet workflows are demonstrated separately."
         ],
-        "published_at": null,
-        "publication_approval": null,
+        "published_at": "2026-07-13T22:06:56.543Z",
+        "publication_approval": {
+          "approval_sha256": "e4a9bfebd4e759fe355f3e5653b1b0b9d2c24053ebcdcc70a0bbc3b03474144f",
+          "reviewed_at": "2026-07-13T22:06:56.543Z",
+          "checks": [
+            "accessibility",
+            "captions",
+            "evidence",
+            "links",
+            "playback",
+            "privacy",
+            "thumbnail",
+            "transcript"
+          ]
+        },
         "inherited_evidence": null
       },
       {
