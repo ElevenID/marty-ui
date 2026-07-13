@@ -6,6 +6,8 @@ The production application, public manifest contract, and local recorder tooling
 
 The preview does not claim public-demo approval. YouTube publication, SpruceKit acceptance, the isolated ElevenID Demo Wallet package, independent-wallet qualification, portable Canvas execution, and a composed lifecycle video remain release evidence work.
 
+Local media composition and privacy scanning are ready with FFmpeg, ffprobe, Tesseract, and in-process ZXing QR decoding.
+
 ## Public Routes
 
 ```text
@@ -32,7 +34,7 @@ The preview does not claim public-demo approval. YouTube publication, SpruceKit 
 
 1. Validate the manifest with `python scripts/validate_demo_manifests.py`.
 2. Build and deploy the coordinated ElevenID LLC platform release from pinned revisions and digests.
-3. Require the deployed release probe to match Stack, MIP, marker, and every image digest.
+3. Require the deployed release probe to match the ElevenID LLC platform version, MIP version, marker, and every image digest.
 4. Record required impacted scenarios with no skipped outcomes or unexplained browser/network failures.
 5. Complete SpruceKit Open Badge login and independent-wallet qualification lanes.
 6. Compose 1080p video, review the single-source transcript/captions, and scan text, frames, OCR, and QR payloads.
@@ -43,10 +45,15 @@ The preview does not claim public-demo approval. YouTube publication, SpruceKit 
 
 ## Current Blockers
 
-- Local video tooling is absent: FFmpeg, ffprobe, Tesseract, and ZBar.
 - Android tooling is absent: Android SDK/ADB/emulator, Appium UiAutomator2, and a pinned EUDI reference-wallet APK/profile.
-- No YouTube OAuth token or Stack `2026.07.0` playlist ID is configured.
+- The ElevenID LLC YouTube channel, OAuth publisher, and `2026.07.0` release playlist are not configured yet.
 - Existing browser recordings predate the versioned recorder and are retained only as protected preview evidence.
 - Canvas has a portable scenario contract, but the adapter implementation must expose the portable test outcomes before recording.
 
-These blockers keep coverage `PARTIAL`; they do not change the underlying Stack software release decision.
+These blockers keep coverage `PARTIAL`; they do not change the underlying ElevenID LLC platform release decision.
+
+## YouTube Setup
+
+The release manifest now carries a fail-closed `video_distribution` binding. A draft may use `PENDING_CHANNEL_SETUP`; any `YOUTUBE_UNLISTED` or `PUBLIC` scenario requires a verified `ElevenID LLC` channel ID, handle, canonical channel URL, owned release playlist, privacy-enhanced embedding, and verification timestamp.
+
+The version-controlled `marty-demo-recorder` tooling provides local PKCE authorization, exact channel verification, idempotent release-playlist creation, binding promotion, unlisted upload, caption and thumbnail publication, processing checks, and playlist ownership checks. Google sign-in, channel ownership, recovery, and phone verification remain owner-controlled actions and are never stored in the repositories.

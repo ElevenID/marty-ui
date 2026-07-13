@@ -18,6 +18,9 @@ GIT_REVISION = re.compile(r"^[a-f0-9]{40}$")
 SHA256 = re.compile(r"^[a-f0-9]{64}$")
 DIGEST = re.compile(r"^sha256:[a-f0-9]{64}$")
 YOUTUBE_ID = re.compile(r"^[A-Za-z0-9_-]{11}$")
+YOUTUBE_CHANNEL_ID = re.compile(r"^UC[A-Za-z0-9_-]{22}$")
+YOUTUBE_HANDLE = re.compile(r"^@[A-Za-z0-9._-]{3,30}$")
+YOUTUBE_PLAYLIST_ID = re.compile(r"^[A-Za-z0-9_-]{10,64}$")
 
 FINAL_PROTOCOLS = {
     "openid4vci-1.0",
@@ -75,6 +78,7 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
     required = {
         "schema_version", "stack_version", "release_name", "mip_version", "publication_state",
         "coverage_state", "release_ready", "public_demo_ready",
+        "video_distribution",
         "deployment_release_marker", "recorder_revision", "component_revisions",
         "image_digests", "release_evidence", "release_differences", "scenarios",
     }
@@ -87,6 +91,29 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
     require(bool(MIP_VERSION.fullmatch(manifest["mip_version"])), "mip_version must be semantic and independent")
     require(manifest["publication_state"] in {"DRAFT", "PUBLIC", "SUPERSEDED"}, "invalid publication_state")
     require(manifest["coverage_state"] in {"PARTIAL", "COMPLETE", "SUPERSEDED"}, "invalid coverage_state")
+
+    distribution = manifest["video_distribution"]
+    require(distribution.get("provider") == "YOUTUBE", "video distribution provider must be YOUTUBE")
+    require(distribution.get("channel_name") == "ElevenID LLC", "video distribution must use the ElevenID LLC channel")
+    require(distribution.get("privacy_enhanced_embeds") is True, "privacy-enhanced YouTube embeds are required")
+    distribution_status = distribution.get("status")
+    require(distribution_status in {"PENDING_CHANNEL_SETUP", "CONFIGURED"}, "invalid video distribution status")
+    if distribution_status == "CONFIGURED":
+        channel_id = distribution.get("channel_id", "")
+        channel_handle = distribution.get("channel_handle")
+        playlist_id = distribution.get("playlist_id", "")
+        require(bool(YOUTUBE_CHANNEL_ID.fullmatch(channel_id)), "configured YouTube channel ID is invalid")
+        require(channel_handle is None or bool(YOUTUBE_HANDLE.fullmatch(channel_handle)), "configured YouTube handle is invalid")
+        expected_channel_urls = {f"https://www.youtube.com/channel/{channel_id}"}
+        if channel_handle:
+            expected_channel_urls.add(f"https://www.youtube.com/{channel_handle}")
+        require(distribution.get("channel_url") in expected_channel_urls, "configured YouTube channel URL does not match its identity")
+        require(bool(YOUTUBE_PLAYLIST_ID.fullmatch(playlist_id)), "configured YouTube playlist ID is invalid")
+        require(distribution.get("playlist_url") == f"https://www.youtube.com/playlist?list={playlist_id}", "configured YouTube playlist URL does not match its identity")
+        require(bool(distribution.get("verified_at")), "configured YouTube distribution requires verification time")
+    else:
+        for field in ("channel_id", "channel_handle", "channel_url", "playlist_id", "playlist_url", "verified_at"):
+            require(distribution.get(field) is None, f"pending YouTube distribution cannot publish {field}")
 
     recorder = manifest["recorder_revision"]
     require(recorder.get("kind") in {"git", "unversioned-source-snapshot"}, "invalid recorder revision kind")
@@ -130,6 +157,7 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
             require(bool(YOUTUBE_ID.fullmatch(youtube_id)), f"{slug}: invalid YouTube ID")
         if state in {"YOUTUBE_UNLISTED", "PUBLIC"}:
             require(youtube_id is not None, f"{slug}: published states require a YouTube ID")
+            require(distribution_status == "CONFIGURED", f"{slug}: published states require a verified ElevenID LLC YouTube channel and release playlist")
         if state == "PUBLIC":
             require(bool(scenario.get("published_at")), f"{slug}: PUBLIC requires published_at")
             require(bool(scenario.get("transcript", {}).get("segments")), f"{slug}: PUBLIC requires a transcript")

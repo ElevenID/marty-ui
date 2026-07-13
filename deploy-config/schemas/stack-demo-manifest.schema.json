@@ -13,6 +13,7 @@
     "coverage_state",
     "release_ready",
     "public_demo_ready",
+    "video_distribution",
     "deployment_release_marker",
     "recorder_revision",
     "component_revisions",
@@ -30,6 +31,48 @@
     "coverage_state": { "enum": ["PARTIAL", "COMPLETE", "SUPERSEDED"] },
     "release_ready": { "type": "boolean" },
     "public_demo_ready": { "type": "boolean" },
+    "video_distribution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider",
+        "status",
+        "channel_name",
+        "channel_id",
+        "channel_handle",
+        "channel_url",
+        "playlist_id",
+        "playlist_url",
+        "privacy_enhanced_embeds",
+        "verified_at"
+      ],
+      "properties": {
+        "provider": { "const": "YOUTUBE" },
+        "status": { "enum": ["PENDING_CHANNEL_SETUP", "CONFIGURED"] },
+        "channel_name": { "const": "ElevenID LLC" },
+        "channel_id": { "type": ["string", "null"], "pattern": "^UC[A-Za-z0-9_-]{22}$" },
+        "channel_handle": { "type": ["string", "null"], "pattern": "^@[A-Za-z0-9._-]{3,30}$" },
+        "channel_url": { "type": ["string", "null"], "format": "uri" },
+        "playlist_id": { "type": ["string", "null"], "pattern": "^[A-Za-z0-9_-]{10,64}$" },
+        "playlist_url": { "type": ["string", "null"], "format": "uri" },
+        "privacy_enhanced_embeds": { "const": true },
+        "verified_at": { "type": ["string", "null"], "format": "date-time" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "status": { "const": "CONFIGURED" } } },
+          "then": {
+            "properties": {
+              "channel_id": { "type": "string", "pattern": "^UC[A-Za-z0-9_-]{22}$" },
+              "channel_url": { "type": "string", "format": "uri" },
+              "playlist_id": { "type": "string", "pattern": "^[A-Za-z0-9_-]{10,64}$" },
+              "playlist_url": { "type": "string", "format": "uri" },
+              "verified_at": { "type": "string", "format": "date-time" }
+            }
+          }
+        }
+      ]
+    },
     "deployment_release_marker": { "type": "string", "minLength": 1 },
     "published_at": { "type": ["string", "null"], "format": "date-time" },
     "superseded_by": { "type": ["string", "null"], "pattern": "^[0-9]{4}\\.[0-9]{2}\\.[0-9]+$" },

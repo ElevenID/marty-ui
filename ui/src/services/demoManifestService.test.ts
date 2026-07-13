@@ -22,6 +22,18 @@ const manifest = {
   stack_version: '2026.07.0',
   release_name: 'Credential Lifecycle Foundation',
   mip_version: '0.3.1',
+  video_distribution: {
+    provider: 'YOUTUBE',
+    status: 'PENDING_CHANNEL_SETUP',
+    channel_name: 'ElevenID LLC',
+    channel_id: null,
+    channel_handle: null,
+    channel_url: null,
+    playlist_id: null,
+    playlist_url: null,
+    privacy_enhanced_embeds: true,
+    verified_at: null,
+  },
   scenarios: [scenario],
 };
 
@@ -54,6 +66,13 @@ describe('demoManifestService', () => {
       ...manifest,
       scenarios: [{ ...scenario, protocols: ['openid4vp-draft-24'] }],
     })).toThrow(DemoManifestError);
+  });
+
+  it('rejects a published video before the ElevenID LLC channel and release playlist are verified', () => {
+    expect(() => validateDemoManifest({
+      ...manifest,
+      scenarios: [{ ...scenario, state: 'YOUTUBE_UNLISTED', youtube_id: 'abcdefghijk' }],
+    })).toThrow('verified ElevenID LLC YouTube channel');
   });
 
   it('rejects a manifest bound to another ElevenID LLC release', async () => {
