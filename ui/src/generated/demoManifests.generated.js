@@ -39,6 +39,7 @@ export const DEMO_MANIFESTS = {
     },
     "deployment_release_marker": "mip-0.3.1-local-20260713T070847Z",
     "published_at": null,
+    "publication_approval": null,
     "superseded_by": null,
     "recorder_revision": {
       "kind": "unversioned-source-snapshot",
@@ -246,6 +247,7 @@ export const DEMO_MANIFESTS = {
           "alt": "ElevenID holder interface showing the membership badge credential login result"
         },
         "youtube_id": null,
+        "media_evidence": null,
         "transcript": {
           "language": "en",
           "segments": [
@@ -348,6 +350,7 @@ export const DEMO_MANIFESTS = {
           "SpruceKit acceptance must pass before this scenario can become PUBLIC."
         ],
         "published_at": null,
+        "publication_approval": null,
         "inherited_evidence": null
       },
       {
@@ -387,6 +390,7 @@ export const DEMO_MANIFESTS = {
           "alt": "ElevenID organization console showing MIP primitive management"
         },
         "youtube_id": null,
+        "media_evidence": null,
         "transcript": {
           "language": "en",
           "segments": [
@@ -465,6 +469,7 @@ export const DEMO_MANIFESTS = {
           "The validated recording has not completed editorial review or YouTube publication."
         ],
         "published_at": null,
+        "publication_approval": null,
         "inherited_evidence": null
       },
       {
@@ -499,6 +504,7 @@ export const DEMO_MANIFESTS = {
           "alt": "ElevenID verification session displaying a rendered wallet handoff QR code"
         },
         "youtube_id": null,
+        "media_evidence": null,
         "transcript": {
           "language": "en",
           "segments": [
@@ -598,6 +604,7 @@ export const DEMO_MANIFESTS = {
           "Ephemeral public-wallet packaging, isolation tests, and publication remain pending."
         ],
         "published_at": null,
+        "publication_approval": null,
         "inherited_evidence": null
       },
       {
@@ -630,6 +637,7 @@ export const DEMO_MANIFESTS = {
           "alt": "Independent browser wallet compatibility result in the ElevenID audit"
         },
         "youtube_id": null,
+        "media_evidence": null,
         "transcript": {
           "language": "en",
           "segments": [
@@ -676,6 +684,7 @@ export const DEMO_MANIFESTS = {
           "The EUDI Android reference wallet is the next qualification candidate."
         ],
         "published_at": null,
+        "publication_approval": null,
         "inherited_evidence": null
       },
       {
@@ -712,6 +721,7 @@ export const DEMO_MANIFESTS = {
           "alt": "ElevenID Application Template activated for a portable learning achievement workflow"
         },
         "youtube_id": null,
+        "media_evidence": null,
         "transcript": {
           "language": "en",
           "segments": [
@@ -789,6 +799,7 @@ export const DEMO_MANIFESTS = {
           "The prior Canvas recording is historical and is not reused as current ElevenID LLC platform evidence."
         ],
         "published_at": null,
+        "publication_approval": null,
         "inherited_evidence": null
       },
       {
@@ -825,6 +836,7 @@ export const DEMO_MANIFESTS = {
           "alt": "ElevenID issued credential lifecycle controls and status history"
         },
         "youtube_id": null,
+        "media_evidence": null,
         "transcript": {
           "language": "en",
           "segments": [
@@ -926,6 +938,7 @@ export const DEMO_MANIFESTS = {
           "The automated lifecycle passes, but a composed public recording and editorial review are pending."
         ],
         "published_at": null,
+        "publication_approval": null,
         "inherited_evidence": null
       }
     ]

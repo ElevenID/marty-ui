@@ -35,12 +35,14 @@ const scenarios = [
     protocols: ['openid4vci-1.0', 'openid4vp-1.0', 'dcql-1.0', 'sd-jwt-vc', 'open-badges-3.0'],
     poster: { src: '/images/demos/2026.07.0/membership-badge-login.png', alt: 'Badge result' },
     youtube_id: null,
+    media_evidence: null,
     transcript: { language: 'en', segments: [{ start_seconds: 0, speaker: 'Narrator', text: 'Receive the badge.' }] },
     chapters: [{ start_seconds: 0, title: 'Receive badge', role: 'Holder', mip_primitives: ['Issuance Flow'], standards: ['Open Badges 3.0'], documentation_links: [] }],
     wallets: [],
     assertions: [{ id: 'badge', label: 'Badge received', result: 'PASS', evidence_sha256: 'a'.repeat(64) }],
     limitations: ['YouTube publication pending.'],
     published_at: null,
+    publication_approval: null,
   },
   {
     slug: 'organization-primitives',
@@ -54,12 +56,25 @@ const scenarios = [
     protocols: ['openid4vci-1.0'],
     poster: { src: '/images/demos/2026.07.0/organization-primitives.png', alt: 'Organization setup' },
     youtube_id: 'abcdefghijk',
+    media_evidence: {
+      video_sha256: 'e'.repeat(64),
+      captions_sha256: 'f'.repeat(64),
+      thumbnail_sha256: '1'.repeat(64),
+      privacy_scan_sha256: '2'.repeat(64),
+      publication_config_sha256: '3'.repeat(64),
+      youtube_uploaded_at: '2026-07-13T11:30:00Z',
+    },
     transcript: { language: 'en', segments: [{ start_seconds: 0, speaker: 'Narrator', text: 'Create the organization.' }] },
     chapters: [{ start_seconds: 0, title: 'Create organization', role: 'Administrator', mip_primitives: ['Organization'], standards: ['OpenID4VCI 1.0'], documentation_links: [] }],
     wallets: [],
     assertions: [{ id: 'organization', label: 'Organization configured', result: 'PASS', evidence_sha256: 'b'.repeat(64) }],
     limitations: [],
     published_at: '2026-07-13T12:00:00Z',
+    publication_approval: {
+      approval_sha256: 'd'.repeat(64),
+      reviewed_at: '2026-07-13T12:00:00Z',
+      checks: ['accessibility', 'captions', 'evidence', 'links', 'playback', 'privacy', 'thumbnail', 'transcript'],
+    },
   },
 ];
 
@@ -72,6 +87,8 @@ const manifest = {
   coverage_state: 'PARTIAL',
   release_ready: false,
   public_demo_ready: false,
+  published_at: null,
+  publication_approval: null,
   video_distribution: {
     provider: 'YOUTUBE',
     status: 'CONFIGURED',
@@ -161,6 +178,8 @@ describe('DemoPages', () => {
     expect(screen.queryByTitle('Organization and MIP Primitives video')).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Load Organization and MIP Primitives from YouTube' }));
     expect(screen.getByTitle('Organization and MIP Primitives video')).toHaveAttribute('src', expect.stringContaining('youtube-nocookie.com'));
+    expect(screen.getByText(/Approval sha256:/)).toHaveTextContent(`Approval sha256:${'d'.repeat(64)}`);
+    expect(screen.getByText(/Video sha256:/)).toHaveTextContent(`Video sha256:${'e'.repeat(64)}`);
   });
 
   it('redirects latest scenario links only to an approved ElevenID LLC release', async () => {

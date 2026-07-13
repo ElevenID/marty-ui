@@ -16,6 +16,7 @@
     "test:onboarding": "playwright test tests/e2e/workflows/onboarding.spec.js",
     "test:enhanced": "playwright test tests/e2e/enhanced-features.spec.js",
     "test:integration:api": "playwright test tests/e2e/integration.spec.js",
+    "test:demo-platform": "playwright test -c playwright.demo-platform.config.js",
     "test:ci": "playwright test --reporter=junit",
     "setup": "bun install && bunx playwright install --with-deps",
     "install:browsers": "bunx playwright install --with-deps",

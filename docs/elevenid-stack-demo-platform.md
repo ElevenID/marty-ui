@@ -40,8 +40,11 @@ Local media composition and privacy scanning are ready with FFmpeg, ffprobe, Tes
 6. Compose 1080p video, review the single-source transcript/captions, and scan text, frames, OCR, and QR payloads.
 7. Confirm every displayed offer has expired.
 8. Upload to the platform-version YouTube playlist as unlisted and verify processing, embedding, captions, and thumbnail.
-9. Complete editorial review, update the manifest with exact publication evidence, then promote the scenario to `PUBLIC`.
-10. Set release coverage to `COMPLETE` only when all six required scenarios are public and independent-wallet evidence passes.
+9. Complete editorial review and run the evidence-bound scenario approval command. It records the review-file hash and promotes only the exact unlisted scenario to `PUBLIC`.
+10. After the technical release gate passes, run the release approval command to update the release manifest and version index together with rollback on write failure.
+11. Set release coverage to `COMPLETE` only when all six required scenarios are public and independent-wallet evidence passes.
+
+Run the pinned public browser gate from `tests` with `npm run test:demo-platform`. This avoids selecting a different Playwright installation from another workspace package.
 
 ## Current Blockers
 
@@ -56,6 +59,6 @@ These blockers keep coverage `PARTIAL`; they do not change the underlying Eleven
 
 The release manifest now carries a fail-closed `video_distribution` binding. A draft may use `PENDING_CHANNEL_SETUP`; any `YOUTUBE_UNLISTED` or `PUBLIC` scenario requires a verified `ElevenID LLC` channel ID, handle, canonical channel URL, owned release playlist, privacy-enhanced embedding, and verification timestamp.
 
-The version-controlled `marty-demo-recorder` tooling provides credential-safe status reporting, local PKCE authorization, exact channel verification, idempotent release-playlist creation, binding promotion, release/scenario-bound unlisted upload, privacy-scan hash verification, caption and thumbnail publication, processing checks, playlist ownership checks, and fail-closed `YOUTUBE_UNLISTED` scenario binding. Google sign-in, channel ownership, recovery, and phone verification remain owner-controlled actions and are never stored in the repositories.
+The version-controlled `marty-demo-recorder` tooling provides credential-safe status reporting, local PKCE authorization, exact channel verification, idempotent release-playlist creation, binding promotion, release/scenario-bound unlisted upload, privacy-scan hash verification, caption and thumbnail publication, processing checks, playlist ownership checks, and fail-closed `YOUTUBE_UNLISTED` scenario binding. The binding preserves the exact video, captions, thumbnail, privacy-scan, and publication-config hashes as public media-integrity evidence. Google sign-in, channel ownership, recovery, and phone verification remain owner-controlled actions and are never stored in the repositories.
 
-`npm run youtube:status -- --manifest ../marty-ui/ui/public/demos/manifests/2026.07.0.json` reports the next setup action without printing OAuth values. Upload results can only bind to an exact `VALIDATED` scenario revision; making a scenario `PUBLIC` remains a separate editorial decision.
+`npm run youtube:status -- --manifest ../marty-ui/ui/public/demos/manifests/2026.07.0.json` reports the next setup action without printing OAuth values. Upload results can only bind to an exact `VALIDATED` scenario revision. `youtube:approve-scenario` then requires complete assertion evidence and an eight-check editorial approval artifact before public scenario promotion. `youtube:approve-release` separately requires technical release readiness and updates the release manifest and latest-approved version index together with rollback on write failure.
