@@ -400,7 +400,9 @@ jobs:
           token: ${{ secrets.REPO_ACCESS_TOKEN }}
           ref: ${{ env.MARTY_CREDENTIALS_REF }}
           path: _marty-credentials
-          sparse-checkout: services/issuance
+          sparse-checkout: |
+            services/issuance
+            python/status_list
 
       - uses: actions/download-artifact@v4
         with:
@@ -408,7 +410,9 @@ jobs:
           path: release-wheels
 
       - name: Include issuance service
-        run: cp -r _marty-credentials/services/issuance services/issuance
+        run: |
+          cp -r _marty-credentials/services/issuance services/issuance
+          cp -r _marty-credentials/python/status_list status_list
 
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
