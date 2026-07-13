@@ -178,21 +178,24 @@ function ReleaseExperience({ index, manifest }) {
   return (
     <Box component="main" data-demo-render-state="settled" sx={{ pt: { xs: 4, md: 6 } }}>
       <SEOHead
-        title={`ElevenID Stack ${manifest.stack_version} Demonstrations`}
-        description={`Release-bound demonstrations and evidence for ElevenID Stack ${manifest.stack_version}, implementing MIP ${manifest.mip_version}.`}
+        title={`${manifest.release_name} | ElevenID LLC v${manifest.stack_version}`}
+        description={`Release-bound demonstrations and evidence for the ${manifest.release_name} release of the ElevenID LLC Credential Platform, implementing MIP ${manifest.mip_version}.`}
         canonicalPath={`/demos/${manifest.stack_version}`}
         ogImage={`https://elevenidllc.com${manifest.scenarios[0].poster.src}`}
-        keywords={['ElevenID Stack', `MIP ${manifest.mip_version}`, 'digital credential demos', 'release evidence']}
+        keywords={['ElevenID LLC Credential Platform', manifest.release_name, `MIP ${manifest.mip_version}`, 'digital credential demos', 'release evidence']}
       />
 
       <Stack spacing={2.5} sx={{ mb: 4, maxWidth: 900 }}>
         <Typography variant="overline" color="text.secondary" fontWeight={700}>
-          Release demonstrations and evidence
+          ElevenID LLC Credential Platform
         </Typography>
         <Typography variant="h2" component="h1" fontWeight={800} sx={{ fontSize: { xs: '2rem', md: '3rem' } }}>
-          ElevenID Stack {manifest.stack_version}
+          {manifest.release_name}
         </Typography>
         <Typography variant="h6" component="p" color="text.secondary" fontWeight={500}>
+          Version v{manifest.stack_version}
+        </Typography>
+        <Typography variant="body1" component="p" color="text.secondary" fontWeight={600}>
           Implements MIP {manifest.mip_version}
         </Typography>
         <Typography variant="body1" color="text.secondary" sx={{ maxWidth: 760 }}>
@@ -215,16 +218,16 @@ function ReleaseExperience({ index, manifest }) {
         <Stack spacing={2}>
           <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} alignItems={{ md: 'center' }}>
             <FormControl size="small" sx={{ minWidth: { xs: '100%', sm: 250 } }}>
-              <InputLabel id="stack-release-label">Stack release</InputLabel>
+              <InputLabel id="stack-release-label">Platform version</InputLabel>
               <Select
                 labelId="stack-release-label"
                 value={manifest.stack_version}
-                label="Stack release"
+                label="Platform version"
                 onChange={(event) => navigate(`/demos/${event.target.value}`)}
               >
                 {index.releases.map((release) => (
                   <MenuItem key={release.stack_version} value={release.stack_version}>
-                    {release.stack_version} / MIP {release.mip_version}
+                    v{release.stack_version} / {release.release_name}
                   </MenuItem>
                 ))}
               </Select>
@@ -276,7 +279,10 @@ function ReleaseExperience({ index, manifest }) {
 
       <Box component="section" aria-labelledby="release-differences" sx={{ mt: 7 }}>
         <Typography id="release-differences" variant="h5" component="h2" fontWeight={750} sx={{ mb: 2 }}>
-          Changes since Stack {manifest.release_differences.previous_stack_version}
+          Release features
+        </Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ mt: -1, mb: 2 }}>
+          Changes since ElevenID LLC v{manifest.release_differences.previous_stack_version}
         </Typography>
         <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: 'repeat(2, minmax(0, 1fr))' }, columnGap: 5, rowGap: 3 }}>
           {Object.entries(manifest.release_differences)
@@ -361,10 +367,10 @@ export function DemoCatalogPage() {
   const indexResource = useAsyncResource((signal) => loadDemoIndex({ signal }), []);
   const version = indexResource.data?.latest_approved_stack_version || indexResource.data?.latest_available_stack_version;
   const manifestResource = useAsyncResource(
-    (signal) => (version ? loadDemoManifest(version, { signal }) : Promise.reject(new Error('No Stack release is available.'))),
+    (signal) => (version ? loadDemoManifest(version, { signal }) : Promise.reject(new Error('No ElevenID LLC release is available.'))),
     [version],
   );
-  const pending = <LoadState resource={indexResource.status === 'ready' ? manifestResource : indexResource} label="Stack demonstrations" />;
+  const pending = <LoadState resource={indexResource.status === 'ready' ? manifestResource : indexResource} label="ElevenID LLC demonstrations" />;
   if (indexResource.status !== 'ready' || manifestResource.status !== 'ready') return pending;
   return <ReleaseExperience index={indexResource.data} manifest={manifestResource.data} />;
 }
@@ -373,8 +379,8 @@ export function DemoReleasePage() {
   const { stackVersion } = useParams();
   const indexResource = useAsyncResource((signal) => loadDemoIndex({ signal }), []);
   const manifestResource = useAsyncResource((signal) => loadDemoManifest(stackVersion, { signal }), [stackVersion]);
-  if (indexResource.status !== 'ready') return <LoadState resource={indexResource} label="Stack releases" />;
-  if (manifestResource.status !== 'ready') return <LoadState resource={manifestResource} label={`Stack ${stackVersion}`} />;
+  if (indexResource.status !== 'ready') return <LoadState resource={indexResource} label="ElevenID LLC releases" />;
+  if (manifestResource.status !== 'ready') return <LoadState resource={manifestResource} label={`ElevenID LLC v${stackVersion}`} />;
   return <ReleaseExperience index={indexResource.data} manifest={manifestResource.data} />;
 }
 
@@ -395,7 +401,7 @@ export function DemoScenarioPage() {
   if (!scenario) {
     return (
       <Alert severity="warning" data-demo-render-state="settled" sx={{ my: 6 }}>
-        This scenario is not part of ElevenID Stack {stackVersion}. <Link component={RouterLink} to={`/demos/${stackVersion}`}>View this release</Link>.
+        This scenario is not part of ElevenID LLC v{stackVersion}. <Link component={RouterLink} to={`/demos/${stackVersion}`}>View this release</Link>.
       </Alert>
     );
   }
@@ -403,7 +409,7 @@ export function DemoScenarioPage() {
   const structuredData = scenario.youtube_id ? {
     '@context': 'https://schema.org',
     '@type': 'VideoObject',
-    name: `${scenario.title} - ElevenID Stack ${manifest.stack_version}`,
+    name: `${scenario.title} - ${manifest.release_name} - ElevenID LLC v${manifest.stack_version}`,
     description: scenario.summary,
     thumbnailUrl: [`https://elevenidllc.com${scenario.poster.src}`],
     uploadDate: scenario.published_at,
@@ -413,7 +419,7 @@ export function DemoScenarioPage() {
   return (
     <Box component="main" data-demo-render-state="settled" sx={{ pt: { xs: 3, md: 5 } }}>
       <SEOHead
-        title={`${scenario.title} - Stack ${manifest.stack_version}`}
+        title={`${scenario.title} | ${manifest.release_name} | ElevenID LLC v${manifest.stack_version}`}
         description={scenario.summary}
         canonicalPath={`/demos/${manifest.stack_version}/${scenario.slug}`}
         ogImage={`https://elevenidllc.com${scenario.poster.src}`}
@@ -422,7 +428,7 @@ export function DemoScenarioPage() {
       />
       <Breadcrumbs aria-label="Demo navigation" sx={{ mb: 3 }}>
         <Link component={RouterLink} to="/demos" underline="hover" color="inherit">Demos</Link>
-        <Link component={RouterLink} to={`/demos/${manifest.stack_version}`} underline="hover" color="inherit">Stack {manifest.stack_version}</Link>
+        <Link component={RouterLink} to={`/demos/${manifest.stack_version}`} underline="hover" color="inherit">v{manifest.stack_version}</Link>
         <Typography color="text.primary">{scenario.title}</Typography>
       </Breadcrumbs>
 
@@ -489,7 +495,8 @@ export function DemoScenarioPage() {
         <Stack component="aside" spacing={3} sx={{ minWidth: 0 }}>
           <Box>
             <Typography variant="overline" color="text.secondary">Release</Typography>
-            <Typography variant="subtitle1" fontWeight={750}>ElevenID Stack {manifest.stack_version}</Typography>
+            <Typography variant="subtitle1" fontWeight={750}>{manifest.release_name}</Typography>
+            <Typography variant="body2" color="text.secondary">ElevenID LLC Credential Platform v{manifest.stack_version}</Typography>
             <Typography variant="body2" color="text.secondary">Implements MIP {manifest.mip_version}</Typography>
           </Box>
           <Divider />
@@ -547,7 +554,7 @@ export function DemoScenarioPage() {
       </Box>
 
       <Button component={RouterLink} to={`/demos/${manifest.stack_version}`} startIcon={<ArrowBackRoundedIcon />} sx={{ mt: 6 }}>
-        All Stack {manifest.stack_version} scenarios
+        All {manifest.release_name} scenarios
       </Button>
     </Box>
   );
@@ -561,7 +568,7 @@ export function DemoLatestScenarioRedirect() {
   if (latest) return <Navigate to={`/demos/${latest}/${scenario}`} replace />;
   return (
     <Alert severity="info" data-demo-render-state="settled" sx={{ my: 6 }}>
-      No Stack release has completed public approval yet.{' '}
+      No ElevenID LLC release has completed public approval yet.{' '}
       <Link component={RouterLink} to={`/demos/${indexResource.data.latest_available_stack_version}/${scenario}`}>
         View the current evidence preview
       </Link>.

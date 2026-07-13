@@ -20,6 +20,7 @@ const scenario = {
 const manifest = {
   schema_version: 1,
   stack_version: '2026.07.0',
+  release_name: 'Credential Lifecycle Foundation',
   mip_version: '0.3.1',
   scenarios: [scenario],
 };
@@ -27,7 +28,7 @@ const manifest = {
 afterEach(() => vi.restoreAllMocks());
 
 describe('demoManifestService', () => {
-  it('orders immutable Stack versions independently from MIP versions', () => {
+  it('orders immutable ElevenID LLC versions independently from MIP versions', () => {
     expect(compareStackVersions('2026.07.1', '2026.07.0')).toBeGreaterThan(0);
     expect(compareStackVersions('2026.08.0', '2026.07.9')).toBeGreaterThan(0);
   });
@@ -37,8 +38,8 @@ describe('demoManifestService', () => {
       schema_version: 1,
       latest_approved_stack_version: '2026.07.1',
       releases: [
-        { stack_version: '2026.07.0', mip_version: '0.3.1' },
-        { stack_version: '2026.07.1', mip_version: '0.3.1' },
+        { stack_version: '2026.07.0', release_name: 'Credential Lifecycle Foundation', mip_version: '0.3.1' },
+        { stack_version: '2026.07.1', release_name: 'Credential Lifecycle Refinement', mip_version: '0.3.1' },
       ],
     }), { status: 200 }));
 
@@ -55,7 +56,7 @@ describe('demoManifestService', () => {
     })).toThrow(DemoManifestError);
   });
 
-  it('rejects a manifest bound to another Stack release', async () => {
+  it('rejects a manifest bound to another ElevenID LLC release', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
       ...manifest,
       stack_version: '2026.08.0',

@@ -69,7 +69,9 @@ for (const viewport of viewports) {
     const telemetry = observeBrowser(page);
 
     await page.goto('/demos', { waitUntil: 'domcontentloaded' });
-    await expect(page.getByRole('heading', { level: 1, name: 'ElevenID Stack 2026.07.0' })).toBeVisible();
+    await expect(page.getByRole('heading', { level: 1, name: 'Credential Lifecycle Foundation' })).toBeVisible();
+    await expect(page.getByText('ElevenID LLC Credential Platform', { exact: true })).toBeVisible();
+    await expect(page.getByText('Version v2026.07.0', { exact: true })).toBeVisible();
     await expect(page.getByText('Implements MIP 0.3.1')).toBeVisible();
     await assertStablePage(page, telemetry);
     const firstPaint = await page.evaluate(() => window.__elevenIdFirstPaint);

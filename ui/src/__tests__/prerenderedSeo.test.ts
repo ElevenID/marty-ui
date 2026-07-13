@@ -56,10 +56,12 @@ describeIfBuilt('prerendered blog SEO output', () => {
   })
 })
 
-describeIfBuilt('prerendered Stack demo output', () => {
+describeIfBuilt('prerendered ElevenID LLC demo output', () => {
   it('emits release and scenario pages from the public manifest', () => {
     const releaseHtml = readPrerenderedHtml('demos', '2026.07.0')
-    expect(releaseHtml).toContain('ElevenID Stack 2026.07.0')
+    expect(releaseHtml).toContain('Credential Lifecycle Foundation')
+    expect(releaseHtml).toContain('ElevenID LLC Credential Platform')
+    expect(releaseHtml).toContain('Version v2026.07.0')
     expect(releaseHtml).toContain('Implements MIP 0.3.1')
     expect(releaseHtml).toContain('PARTIAL coverage')
 

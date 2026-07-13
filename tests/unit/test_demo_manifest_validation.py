@@ -18,9 +18,10 @@ class DemoManifestValidationTests(unittest.TestCase):
     def test_current_preview_is_valid(self):
         validate_manifest(copy.deepcopy(self.manifest))
 
-    def test_stack_releases_can_share_a_mip_version(self):
+    def test_elevenid_llc_releases_can_share_a_mip_version(self):
         second = copy.deepcopy(self.manifest)
         second["stack_version"] = "2026.07.1"
+        second["release_name"] = "Credential Lifecycle Refinement"
         for scenario in second["scenarios"]:
             scenario["poster"]["src"] = scenario["poster"]["src"].replace("2026.07.0", "2026.07.1")
         validate_manifest(second)
@@ -29,8 +30,8 @@ class DemoManifestValidationTests(unittest.TestCase):
                 "schema_version": 1,
                 "latest_approved_stack_version": None,
                 "releases": [
-                    {"stack_version": "2026.07.0", "mip_version": "0.3.1", "coverage_state": "PARTIAL", "manifest_url": "/demos/manifests/2026.07.0.json"},
-                    {"stack_version": "2026.07.1", "mip_version": "0.3.1", "coverage_state": "PARTIAL", "manifest_url": "/demos/manifests/2026.07.1.json"},
+                    {"stack_version": "2026.07.0", "release_name": "Credential Lifecycle Foundation", "mip_version": "0.3.1", "coverage_state": "PARTIAL", "manifest_url": "/demos/manifests/2026.07.0.json"},
+                    {"stack_version": "2026.07.1", "release_name": "Credential Lifecycle Refinement", "mip_version": "0.3.1", "coverage_state": "PARTIAL", "manifest_url": "/demos/manifests/2026.07.1.json"},
                 ],
             },
             {"2026.07.0": self.manifest, "2026.07.1": second},
