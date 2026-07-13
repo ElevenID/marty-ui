@@ -172,7 +172,7 @@ def test_release_checks_accept_navigation_cancelled_org_reads() -> None:
     audit = _load_audit_module()
     cancelled = {
         "method": "GET",
-        "url": "https://beta.elevenidllc.com/v1/signing-keys/config?organization_id=org-1",
+        "url": "https://beta.elevenidllc.com/v1/credential-templates?organization_id=org-1",
         "failure": "net::ERR_ABORTED",
         "resource_type": "fetch",
     }
@@ -186,3 +186,24 @@ def test_release_checks_accept_navigation_cancelled_org_reads() -> None:
 
     assert checks["status"] == "pass"
     assert checks["observations"]["expected_navigation_aborts"] == [cancelled]
+
+
+def test_release_checks_block_cancelled_document_navigation() -> None:
+    audit = _load_audit_module()
+
+    checks = audit.evaluate_release_checks({
+        "steps": _required_steps(),
+        "bad_responses": [],
+        "failed_requests": [
+            {
+                "method": "GET",
+                "url": "https://beta.elevenidllc.com/console/org/templates",
+                "failure": "net::ERR_ABORTED",
+                "resource_type": "document",
+            }
+        ],
+        "page_errors": [],
+    })
+
+    assert checks["status"] == "blocked"
+    assert checks["blockers"][0]["code"] == "unexpected_failed_request"
