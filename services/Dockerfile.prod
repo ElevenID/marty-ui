@@ -42,6 +42,7 @@ RUN pip install --no-cache-dir -e /app/packages/marty_common
 
 # Copy all service code
 COPY services /app/services
+COPY status_list /app/status_list
 
 ENV PYTHONPATH=/app:/app/packages:/app/services
 

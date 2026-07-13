@@ -207,6 +207,8 @@ def test_beta_gate_binds_browser_evidence_to_the_running_cd_release() -> None:
     assert 'gh run download "$CD_RUN_ID"' in workflow
     assert "/.well-known/marty-release" in workflow
     assert "/marty-ui-release.json" in workflow
+    assert "python/status_list" in cd
+    assert "COPY status_list /app/status_list" in service_dockerfile
     assert "cd_run_id: $cd_run_id" in workflow
     assert "release_version: $release_version" in workflow
     assert "MARTY_RELEASE_VERSION=${{ needs.determine-tag.outputs.version }}" in cd
