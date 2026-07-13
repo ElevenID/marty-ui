@@ -24,6 +24,10 @@
     />
 
     <title>ElevenID LLC — Verifiable Identity Infrastructure</title>
+    <script>
+      document.documentElement.classList.remove('app-ready');
+      document.documentElement.classList.add('app-loading');
+    </script>
     <style>
       html,
       body,
@@ -34,10 +38,64 @@
       body {
         margin: 0;
       }
+
+      html.app-loading #root {
+        visibility: hidden;
+      }
+
+      html.app-ready #root {
+        visibility: visible;
+      }
+
+      .app-loading-shell {
+        position: fixed;
+        inset: 0;
+        z-index: 2147483647;
+        display: grid;
+        place-items: center;
+        background: #f5f7f8;
+        color: #173b57;
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+
+      .app-loading-shell__content {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        font-size: 16px;
+        font-weight: 700;
+      }
+
+      .app-loading-shell__spinner {
+        width: 20px;
+        height: 20px;
+        border: 2px solid #b9c8d2;
+        border-top-color: #08775b;
+        border-radius: 50%;
+        animation: app-loading-spin 0.8s linear infinite;
+      }
+
+      html.app-ready .app-loading-shell {
+        display: none;
+      }
+
+      @keyframes app-loading-spin {
+        to { transform: rotate(360deg); }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .app-loading-shell__spinner { animation: none; }
+      }
     </style>
   </head>
-  <body>
+  <body class="app-loading">
     <noscript>You need to enable JavaScript to run this app.</noscript>
+    <div class="app-loading-shell" role="status" aria-label="Loading ElevenID">
+      <div class="app-loading-shell__content">
+        <span class="app-loading-shell__spinner" aria-hidden="true"></span>
+        <span>ElevenID</span>
+      </div>
+    </div>
     <div id="root"></div>
     <script type="module" src="/src/index.jsx"></script>
   </body>

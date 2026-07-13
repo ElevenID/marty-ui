@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@test/utils';
+import userEvent from '@testing-library/user-event';
 
 import VerificationSessionManager from './VerificationSessionManager';
 
@@ -88,5 +89,29 @@ describe('VerificationSessionManager', () => {
 
     expect(await screen.findByRole('tab', { name: /active \(0\)/i })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: /history \(1\)/i })).toBeInTheDocument();
+  });
+
+  it('generates the details QR code when the flow exposes only request_uri', async () => {
+    const user = userEvent.setup();
+    const requestUri = 'openid4vp://authorize?request_uri=https%3A%2F%2Fexample.test%2Frequest';
+    mockListFlowExecutions.mockResolvedValue([
+      {
+        id: 'flow-session-request-only',
+        flow_type: 'oid4vp_presentation',
+        status: 'AWAITING_WALLET',
+        context_data: { request_uri: requestUri },
+        created_at: '2026-07-13T12:00:00Z',
+        updated_at: '2026-07-13T12:00:00Z',
+      },
+    ]);
+
+    render(<VerificationSessionManager organizationId="org-1" />);
+
+    await user.click(await screen.findByRole('button', { name: 'Show QR code' }));
+
+    expect(await screen.findByRole('img', { name: 'OID4VP QR Code' })).toHaveAttribute(
+      'data-qr-value',
+      requestUri,
+    );
   });
 });

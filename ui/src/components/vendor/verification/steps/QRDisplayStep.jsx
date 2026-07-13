@@ -25,6 +25,7 @@ import {
 import { createPresentationTransport } from '../../../../services/walletTransportService';
 import { openDeepLink } from '../../../../utils/deviceDetection';
 import VerificationResultSummary from '../VerificationResultSummary';
+import Oid4vpQrCode from '../Oid4vpQrCode';
 
 const POLL_INTERVAL_MS = 3000;
 const TERMINAL_STATUSES = ['completed', 'failed', 'expired'];
@@ -85,8 +86,8 @@ function QRDisplayStep({ session, onComplete }) {
   }, []);
 
   const statusCfg = STATUS_CONFIG[status] || STATUS_CONFIG.pending;
-  const qrData = session?.qr_code_data;
   const requestUri = session?.request_uri;
+  const qrValue = session?.qr_code_data || requestUri;
   const transport = createPresentationTransport({ requestUri });
   const dcApiRequestUrl = session?.dc_api_request_url || (instanceId ? `/v1/flows/instances/${encodeURIComponent(instanceId)}/request?transport=dc_api` : '');
   const dcApiSubmitUrl = session?.dc_api_submit_url || (instanceId ? `/v1/flows/instances/${encodeURIComponent(instanceId)}/submit/dc-api` : '');
@@ -153,7 +154,7 @@ function QRDisplayStep({ session, onComplete }) {
             </Stack>
           )}
 
-          {qrData ? (
+          {qrValue ? (
             <Box sx={{ display: 'flex', justifyContent: 'center', mb: 2 }}>
               <Paper
                 variant="outlined"
@@ -163,20 +164,13 @@ function QRDisplayStep({ session, onComplete }) {
                   background: '#fff',
                 }}
               >
-                <img
-                  src={`data:image/png;base64,${qrData}`}
-                  alt="OID4VP QR Code"
-                  style={{ width: 220, height: 220, display: 'block' }}
-                />
+                <Oid4vpQrCode value={qrValue} />
               </Paper>
             </Box>
           ) : (
-            <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
-              <CircularProgress size={24} sx={{ mr: 1 }} />
-              <Typography variant="body2" color="text.secondary">
-                Generating QR code…
-              </Typography>
-            </Box>
+            <Alert severity="error" sx={{ mb: 2 }}>
+              The verification session did not return a wallet request. Close this session and try again.
+            </Alert>
           )}
 
           {requestUri && (

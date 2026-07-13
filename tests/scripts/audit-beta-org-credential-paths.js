@@ -244,6 +244,30 @@ async function pollFlowInstance(page, instanceId) {
   return last;
 }
 
+async function inspectRenderedQr(page) {
+  const qrCode = page.getByRole('img', { name: 'OID4VP QR Code' });
+  const visible = await qrCode.isVisible().catch(() => false);
+  if (!visible) return { visible: false, rendered: false, kind: null };
+
+  return qrCode.evaluate((node) => {
+    if (node instanceof HTMLImageElement) {
+      return {
+        visible: true,
+        rendered: node.complete && node.naturalWidth > 0 && node.naturalHeight > 0,
+        kind: 'image',
+      };
+    }
+
+    const svg = node instanceof SVGElement ? node : node.querySelector('svg');
+    const bounds = svg?.getBoundingClientRect();
+    return {
+      visible: true,
+      rendered: Boolean(svg && bounds && bounds.width > 0 && bounds.height > 0),
+      kind: svg ? 'svg' : node.tagName.toLowerCase(),
+    };
+  });
+}
+
 async function issuePolicyCredential(page) {
   return page.evaluate(async ({ organizationId }) => {
     const normalizeList = (body) => (
@@ -645,10 +669,14 @@ async function main() {
       }
     }
     await page.screenshot({ path: path.join(artifactDir, '04-verification-session-result.png'), fullPage: true });
+    const qrCode = verificationSession?.requestUri
+      ? await inspectRenderedQr(page)
+      : { visible: false, rendered: false, kind: null };
     report.verification = {
       pageReady: verificationPageReady,
       policyOptions,
       nextEnabled,
+      qrCode,
       session: verificationSession ? { ...verificationSession, requestUri: verificationSession.requestUri ? '[present]' : null } : null,
       resultText: redact((await page.locator('body').innerText()).slice(0, 2200)),
     };
@@ -690,6 +718,7 @@ async function main() {
       && report.applicationTemplate.activationStatus < 300
       && report.applicationTemplate.activatedStatus === 'ACTIVE'
       && verificationSession?.ok
+      && report.verification.qrCode?.rendered
       && report.testWallet?.ready
       && report.verification.wallet?.ok
       && report.verification.poll?.httpStatus === 200
