@@ -6,6 +6,16 @@ const MIP_VERSION_PATTERN = /^\d+\.\d+\.\d+$/;
 const YOUTUBE_CHANNEL_ID_PATTERN = /^UC[A-Za-z0-9_-]{22}$/;
 const YOUTUBE_HANDLE_PATTERN = /^@[A-Za-z0-9._-]{3,30}$/;
 const YOUTUBE_PLAYLIST_ID_PATTERN = /^[A-Za-z0-9_-]{10,64}$/;
+const SHA256_PATTERN = /^[a-f0-9]{64}$/;
+const ISO_DATE_TIME_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/;
+const PENDING_PUBLICATION_LANGUAGE = /\b(awaiting|must pass before|not completed|not run|pending)\b/i;
+const SCENARIO_PUBLICATION_CHECKS = new Set([
+  'accessibility', 'captions', 'evidence', 'links', 'playback', 'privacy', 'thumbnail', 'transcript',
+]);
+const RELEASE_PUBLICATION_CHECKS = new Set([
+  'accessibility', 'canonical-urls', 'metadata', 'navigation', 'playback', 'privacy',
+  'responsive-layouts', 'version-selection',
+]);
 const FINAL_PROTOCOLS = new Set([
   'openid4vci-1.0',
   'openid4vp-1.0',
@@ -24,6 +34,33 @@ export class DemoManifestError extends Error {
 
 function assert(condition, message) {
   if (!condition) throw new DemoManifestError(message);
+}
+
+function validatePublicationApproval(approval, expectedChecks, publishedAt, label) {
+  assert(approval && typeof approval === 'object', `${label} requires editorial approval evidence.`);
+  assert(SHA256_PATTERN.test(approval.approval_sha256 || ''), `${label} has an invalid approval hash.`);
+  assert(ISO_DATE_TIME_PATTERN.test(approval.reviewed_at || ''), `${label} has an invalid review time.`);
+  assert(approval.reviewed_at === publishedAt, `${label} review time does not match publication.`);
+  assert(Array.isArray(approval.checks), `${label} approval checks are missing.`);
+  const checks = new Set(approval.checks);
+  assert(
+    checks.size === approval.checks.length
+      && checks.size === expectedChecks.size
+      && [...expectedChecks].every((check) => checks.has(check)),
+    `${label} approval checks are incomplete.`,
+  );
+}
+
+function validateMediaEvidence(evidence, label) {
+  assert(evidence && typeof evidence === 'object', `${label} requires release-bound media evidence.`);
+  [
+    'video_sha256',
+    'captions_sha256',
+    'thumbnail_sha256',
+    'privacy_scan_sha256',
+    'publication_config_sha256',
+  ].forEach((field) => assert(SHA256_PATTERN.test(evidence[field] || ''), `${label} has invalid ${field}.`));
+  assert(ISO_DATE_TIME_PATTERN.test(evidence.youtube_uploaded_at || ''), `${label} has an invalid YouTube upload time.`);
 }
 
 async function fetchJson(url, signal) {
@@ -67,11 +104,15 @@ export function validateDemoIndex(index) {
     assert(STACK_VERSION_PATTERN.test(release.stack_version || ''), 'An ElevenID LLC release has an invalid version.');
     assert(typeof release.release_name === 'string' && release.release_name.trim().length >= 3, `${release.stack_version} needs a release name.`);
     assert(MIP_VERSION_PATTERN.test(release.mip_version || ''), `${release.stack_version} has an invalid MIP version.`);
+    assert(['DRAFT', 'PUBLIC', 'SUPERSEDED'].includes(release.publication_state), `${release.stack_version} has an invalid publication state.`);
+    assert(['PARTIAL', 'COMPLETE', 'SUPERSEDED'].includes(release.coverage_state), `${release.stack_version} has an invalid coverage state.`);
     assert(!versions.has(release.stack_version), `${release.stack_version} is duplicated.`);
     versions.add(release.stack_version);
   });
   if (index.latest_approved_stack_version) {
     assert(versions.has(index.latest_approved_stack_version), 'The latest approved ElevenID LLC release is missing.');
+    const latest = index.releases.find((release) => release.stack_version === index.latest_approved_stack_version);
+    assert(latest.publication_state === 'PUBLIC', 'The latest approved ElevenID LLC release is not public.');
   }
   return {
     ...index,
@@ -84,6 +125,7 @@ export function validateDemoManifest(manifest) {
   assert(STACK_VERSION_PATTERN.test(manifest.stack_version || ''), 'Invalid ElevenID LLC version.');
   assert(typeof manifest.release_name === 'string' && manifest.release_name.trim().length >= 3, 'This ElevenID LLC release needs a descriptive name.');
   assert(MIP_VERSION_PATTERN.test(manifest.mip_version || ''), 'Invalid MIP version metadata.');
+  assert(['DRAFT', 'PUBLIC', 'SUPERSEDED'].includes(manifest.publication_state), 'Invalid release publication state.');
   const distribution = manifest.video_distribution;
   assert(distribution?.provider === 'YOUTUBE', 'This release needs a YouTube distribution binding.');
   assert(distribution.channel_name === 'ElevenID LLC', 'YouTube distribution must use the ElevenID LLC channel.');
@@ -113,6 +155,7 @@ export function validateDemoManifest(manifest) {
     scenario.protocols.forEach((protocol) => {
       assert(FINAL_PROTOCOLS.has(protocol), `${scenario.slug}: unsupported protocol ${protocol}.`);
     });
+    assert(['DRAFT', 'VALIDATED', 'YOUTUBE_UNLISTED', 'PUBLIC', 'SUPERSEDED'].includes(scenario.state), `${scenario.slug}: invalid publication state.`);
     assert(
       scenario.poster?.src?.startsWith(`/images/demos/${manifest.stack_version}/`),
       `${scenario.slug}: poster is not bound to this ElevenID LLC release.`,
@@ -120,8 +163,35 @@ export function validateDemoManifest(manifest) {
     if (['YOUTUBE_UNLISTED', 'PUBLIC'].includes(scenario.state)) {
       assert(/^[A-Za-z0-9_-]{11}$/.test(scenario.youtube_id || ''), `${scenario.slug}: published video is missing.`);
       assert(distribution.status === 'CONFIGURED', `${scenario.slug}: a verified ElevenID LLC YouTube channel and release playlist are required.`);
+      validateMediaEvidence(scenario.media_evidence, scenario.slug);
+    } else if (scenario.state !== 'SUPERSEDED') {
+      assert(scenario.media_evidence === null, `${scenario.slug}: unpublished scenario cannot retain media evidence.`);
+    }
+    if (scenario.state === 'PUBLIC') {
+      assert(ISO_DATE_TIME_PATTERN.test(scenario.published_at || ''), `${scenario.slug}: public timestamp is invalid.`);
+      validatePublicationApproval(scenario.publication_approval, SCENARIO_PUBLICATION_CHECKS, scenario.published_at, scenario.slug);
+      assert(Array.isArray(scenario.assertions) && scenario.assertions.length > 0, `${scenario.slug}: public assertions are missing.`);
+      scenario.assertions.forEach((item) => {
+        assert(item.result === 'PASS' && SHA256_PATTERN.test(item.evidence_sha256 || ''), `${scenario.slug}: every public assertion must pass with evidence.`);
+      });
+      assert(
+        !(scenario.limitations || []).some((item) => PENDING_PUBLICATION_LANGUAGE.test(item)),
+        `${scenario.slug}: unresolved publication language is not public evidence.`,
+      );
+    } else if (scenario.state !== 'SUPERSEDED') {
+      assert(scenario.published_at === null, `${scenario.slug}: non-public scenario cannot retain published_at.`);
+      assert(scenario.publication_approval === null, `${scenario.slug}: non-public scenario cannot retain editorial approval.`);
     }
   });
+  if (manifest.publication_state === 'PUBLIC') {
+    assert(manifest.release_ready === true && manifest.public_demo_ready === true, 'Public release evidence has not passed its release gates.');
+    assert(ISO_DATE_TIME_PATTERN.test(manifest.published_at || ''), 'Public release timestamp is invalid.');
+    validatePublicationApproval(manifest.publication_approval, RELEASE_PUBLICATION_CHECKS, manifest.published_at, 'Public release');
+    assert(manifest.scenarios.some((scenario) => scenario.state === 'PUBLIC'), 'Public release has no public scenarios.');
+  } else if (manifest.publication_state !== 'SUPERSEDED') {
+    assert(manifest.published_at === null, 'Non-public release cannot retain published_at.');
+    assert(manifest.publication_approval === null, 'Non-public release cannot retain editorial approval.');
+  }
   return manifest;
 }
 

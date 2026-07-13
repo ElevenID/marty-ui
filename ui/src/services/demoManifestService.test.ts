@@ -15,6 +15,9 @@ const scenario = {
   protocols: ['openid4vci-1.0', 'openid4vp-1.0', 'dcql-1.0', 'sd-jwt-vc', 'open-badges-3.0'],
   poster: { src: '/images/demos/2026.07.0/membership-badge-login.png' },
   youtube_id: null,
+  media_evidence: null,
+  published_at: null,
+  publication_approval: null,
 };
 
 const manifest = {
@@ -22,6 +25,12 @@ const manifest = {
   stack_version: '2026.07.0',
   release_name: 'Credential Lifecycle Foundation',
   mip_version: '0.3.1',
+  publication_state: 'DRAFT',
+  coverage_state: 'PARTIAL',
+  release_ready: false,
+  public_demo_ready: false,
+  published_at: null,
+  publication_approval: null,
   video_distribution: {
     provider: 'YOUTUBE',
     status: 'PENDING_CHANNEL_SETUP',
@@ -50,8 +59,8 @@ describe('demoManifestService', () => {
       schema_version: 1,
       latest_approved_stack_version: '2026.07.1',
       releases: [
-        { stack_version: '2026.07.0', release_name: 'Credential Lifecycle Foundation', mip_version: '0.3.1' },
-        { stack_version: '2026.07.1', release_name: 'Credential Lifecycle Refinement', mip_version: '0.3.1' },
+        { stack_version: '2026.07.0', release_name: 'Credential Lifecycle Foundation', mip_version: '0.3.1', publication_state: 'DRAFT', coverage_state: 'PARTIAL' },
+        { stack_version: '2026.07.1', release_name: 'Credential Lifecycle Refinement', mip_version: '0.3.1', publication_state: 'PUBLIC', coverage_state: 'PARTIAL' },
       ],
     }), { status: 200 }));
 
@@ -73,6 +82,24 @@ describe('demoManifestService', () => {
       ...manifest,
       scenarios: [{ ...scenario, state: 'YOUTUBE_UNLISTED', youtube_id: 'abcdefghijk' }],
     })).toThrow('verified ElevenID LLC YouTube channel');
+  });
+
+  it('rejects public media without release-bound hashes and editorial evidence', () => {
+    const configured = {
+      ...manifest,
+      video_distribution: {
+        ...manifest.video_distribution,
+        status: 'CONFIGURED',
+        channel_id: `UC${'a'.repeat(22)}`,
+        channel_handle: '@elevenidllc',
+        channel_url: 'https://www.youtube.com/@elevenidllc',
+        playlist_id: `PL${'b'.repeat(24)}`,
+        playlist_url: `https://www.youtube.com/playlist?list=PL${'b'.repeat(24)}`,
+        verified_at: '2026-07-13T12:00:00Z',
+      },
+      scenarios: [{ ...scenario, state: 'YOUTUBE_UNLISTED', youtube_id: 'abcdefghijk' }],
+    };
+    expect(() => validateDemoManifest(configured)).toThrow('release-bound media evidence');
   });
 
   it('rejects a manifest bound to another ElevenID LLC release', async () => {

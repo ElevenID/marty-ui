@@ -30,8 +30,8 @@ class DemoManifestValidationTests(unittest.TestCase):
                 "schema_version": 1,
                 "latest_approved_stack_version": None,
                 "releases": [
-                    {"stack_version": "2026.07.0", "release_name": "Credential Lifecycle Foundation", "mip_version": "0.3.1", "coverage_state": "PARTIAL", "manifest_url": "/demos/manifests/2026.07.0.json"},
-                    {"stack_version": "2026.07.1", "release_name": "Credential Lifecycle Refinement", "mip_version": "0.3.1", "coverage_state": "PARTIAL", "manifest_url": "/demos/manifests/2026.07.1.json"},
+                    {"stack_version": "2026.07.0", "release_name": "Credential Lifecycle Foundation", "mip_version": "0.3.1", "publication_state": "DRAFT", "coverage_state": "PARTIAL", "manifest_url": "/demos/manifests/2026.07.0.json"},
+                    {"stack_version": "2026.07.1", "release_name": "Credential Lifecycle Refinement", "mip_version": "0.3.1", "publication_state": "DRAFT", "coverage_state": "PARTIAL", "manifest_url": "/demos/manifests/2026.07.1.json"},
                 ],
             },
             {"2026.07.0": self.manifest, "2026.07.1": second},
@@ -77,6 +77,15 @@ class DemoManifestValidationTests(unittest.TestCase):
         manifest["publication_state"] = "PUBLIC"
         manifest["release_ready"] = True
         manifest["public_demo_ready"] = True
+        manifest["published_at"] = "2026-07-13T12:00:00Z"
+        manifest["publication_approval"] = {
+            "approval_sha256": "b" * 64,
+            "reviewed_at": manifest["published_at"],
+            "checks": [
+                "accessibility", "canonical-urls", "metadata", "navigation", "playback", "privacy",
+                "responsive-layouts", "version-selection",
+            ],
+        }
         manifest["recorder_revision"] = {"kind": "git", "value": "a" * 40}
         manifest["video_distribution"] = {
             "provider": "YOUTUBE",
@@ -93,8 +102,66 @@ class DemoManifestValidationTests(unittest.TestCase):
         for scenario in manifest["scenarios"]:
             scenario["state"] = "PUBLIC"
             scenario["youtube_id"] = "abcdefghijk"
+            scenario["media_evidence"] = {
+                "video_sha256": "1" * 64,
+                "captions_sha256": "2" * 64,
+                "thumbnail_sha256": "3" * 64,
+                "privacy_scan_sha256": "4" * 64,
+                "publication_config_sha256": "5" * 64,
+                "youtube_uploaded_at": "2026-07-13T11:30:00Z",
+            }
             scenario["published_at"] = "2026-07-13T12:00:00Z"
+            scenario["publication_approval"] = {
+                "approval_sha256": "c" * 64,
+                "reviewed_at": scenario["published_at"],
+                "checks": [
+                    "accessibility", "captions", "evidence", "links", "playback", "privacy",
+                    "thumbnail", "transcript",
+                ],
+            }
+            scenario["limitations"] = []
+            for assertion in scenario["assertions"]:
+                assertion["result"] = "PASS"
+                assertion["evidence_sha256"] = "d" * 64
         with self.assertRaisesRegex(ManifestValidationError, "independent-wallet evidence"):
+            validate_manifest(manifest)
+
+    def test_public_scenario_requires_complete_editorial_and_assertion_evidence(self):
+        manifest = copy.deepcopy(self.manifest)
+        manifest["video_distribution"] = {
+            "provider": "YOUTUBE",
+            "status": "CONFIGURED",
+            "channel_name": "ElevenID LLC",
+            "channel_id": "UC" + "a" * 22,
+            "channel_handle": "@elevenidllc",
+            "channel_url": "https://www.youtube.com/@elevenidllc",
+            "playlist_id": "PL" + "b" * 24,
+            "playlist_url": "https://www.youtube.com/playlist?list=PL" + "b" * 24,
+            "privacy_enhanced_embeds": True,
+            "verified_at": "2026-07-13T12:00:00Z",
+        }
+        scenario = manifest["scenarios"][0]
+        scenario["state"] = "PUBLIC"
+        scenario["youtube_id"] = "abcdefghijk"
+        scenario["media_evidence"] = {
+            "video_sha256": "1" * 64,
+            "captions_sha256": "2" * 64,
+            "thumbnail_sha256": "3" * 64,
+            "privacy_scan_sha256": "4" * 64,
+            "publication_config_sha256": "5" * 64,
+            "youtube_uploaded_at": "2026-07-13T12:00:00Z",
+        }
+        scenario["published_at"] = "2026-07-13T12:30:00Z"
+        scenario["publication_approval"] = {
+            "approval_sha256": "c" * 64,
+            "reviewed_at": scenario["published_at"],
+            "checks": [
+                "accessibility", "captions", "evidence", "links", "playback", "privacy",
+                "thumbnail", "transcript",
+            ],
+        }
+        scenario["limitations"] = []
+        with self.assertRaisesRegex(ManifestValidationError, "every PUBLIC assertion must PASS"):
             validate_manifest(manifest)
 
 

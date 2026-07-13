@@ -422,7 +422,8 @@ export function DemoScenarioPage() {
     );
   }
 
-  const structuredData = scenario.youtube_id ? {
+  const isPublicVideo = scenario.state === 'PUBLIC' && Boolean(scenario.youtube_id);
+  const structuredData = isPublicVideo ? {
     '@context': 'https://schema.org',
     '@type': 'VideoObject',
     name: `${scenario.title} - ${manifest.release_name} - ElevenID LLC v${manifest.stack_version}`,
@@ -439,7 +440,7 @@ export function DemoScenarioPage() {
         description={scenario.summary}
         canonicalPath={`/demos/${manifest.stack_version}/${scenario.slug}`}
         ogImage={`https://elevenidllc.com${scenario.poster.src}`}
-        ogType={scenario.youtube_id ? 'video.other' : 'website'}
+        ogType={isPublicVideo ? 'video.other' : 'website'}
         structuredData={structuredData}
       />
       <Breadcrumbs aria-label="Demo navigation" sx={{ mb: 3 }}>
@@ -548,6 +549,28 @@ export function DemoScenarioPage() {
               ))}
             </Stack>
           </Box>
+          {scenario.publication_approval && (
+            <Box>
+              <Typography variant="subtitle2" fontWeight={750} sx={{ mb: 0.5 }}>Editorial approval</Typography>
+              <Typography variant="caption" color="text.secondary" display="block">
+                Reviewed {new Date(scenario.publication_approval.reviewed_at).toLocaleString()}
+              </Typography>
+              <Typography variant="caption" color="text.secondary" display="block" sx={{ overflowWrap: 'anywhere' }}>
+                Approval sha256:{scenario.publication_approval.approval_sha256}
+              </Typography>
+            </Box>
+          )}
+          {scenario.media_evidence && (
+            <Box>
+              <Typography variant="subtitle2" fontWeight={750} sx={{ mb: 0.5 }}>Media integrity</Typography>
+              <Typography variant="caption" color="text.secondary" display="block" sx={{ overflowWrap: 'anywhere' }}>
+                Video sha256:{scenario.media_evidence.video_sha256}
+              </Typography>
+              <Typography variant="caption" color="text.secondary" display="block" sx={{ overflowWrap: 'anywhere' }}>
+                Captions sha256:{scenario.media_evidence.captions_sha256}
+              </Typography>
+            </Box>
+          )}
           {scenario.wallets.length > 0 && (
             <Box>
               <Typography variant="subtitle2" fontWeight={750} sx={{ mb: 1 }}>Wallet evidence</Typography>
@@ -562,10 +585,12 @@ export function DemoScenarioPage() {
               </Stack>
             </Box>
           )}
-          <Alert severity="warning" icon={<PendingRoundedIcon />}>
-            <Typography variant="subtitle2" fontWeight={700} sx={{ mb: 0.5 }}>Limitations</Typography>
-            {scenario.limitations.map((limitation) => <Typography key={limitation} variant="body2" sx={{ mb: 0.5 }}>{limitation}</Typography>)}
-          </Alert>
+          {scenario.limitations.length > 0 && (
+            <Alert severity="warning" icon={<PendingRoundedIcon />}>
+              <Typography variant="subtitle2" fontWeight={700} sx={{ mb: 0.5 }}>Limitations</Typography>
+              {scenario.limitations.map((limitation) => <Typography key={limitation} variant="body2" sx={{ mb: 0.5 }}>{limitation}</Typography>)}
+            </Alert>
+          )}
         </Stack>
       </Box>
 
