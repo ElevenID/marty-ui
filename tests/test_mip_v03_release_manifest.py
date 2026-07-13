@@ -217,6 +217,16 @@ def test_beta_gate_binds_browser_evidence_to_the_running_cd_release() -> None:
     assert "dist-final/marty-ui-release.json" in ui_dockerfile
 
 
+def test_cd_builds_the_service_native_extension_from_marty_core_bindings() -> None:
+    workflow = _text(".github/workflows/cd.yml")
+
+    assert "cd marty-core/marty-bindings" in workflow
+    assert "maturin[patchelf]" in workflow
+    assert "marty-core/target" in workflow
+    assert "hashFiles('marty-core/Cargo.lock')" in workflow
+    assert "cd marty-credentials/rust/marty-rs" not in workflow
+
+
 def test_beta_gate_requires_canonical_mip_discovery_shape() -> None:
     workflow = _text(".github/workflows/e2e-tests.yml")
     implementation = _text("services/gateway/mip_configuration.py")

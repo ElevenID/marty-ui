@@ -211,10 +211,10 @@ jobs:
 
       - name: Build Python bindings and install service test dependencies
         run: |
-          python -m pip install --disable-pip-version-check maturin pytest pytest-asyncio
-          cd marty-credentials/rust/marty-rs
-          maturin build --release --features python --out /tmp/marty-wheels
-          cd ../../..
+          python -m pip install --disable-pip-version-check 'maturin[patchelf]' pytest pytest-asyncio
+          cd marty-core/marty-bindings
+          maturin build --release --out /tmp/marty-wheels
+          cd ../..
           pip install /tmp/marty-wheels/*.whl
           pip install -e '.[dev]'
 
@@ -268,13 +268,6 @@ jobs:
           ref: ${{ env.MARTY_CORE_REF }}
           path: marty-core
 
-      - uses: actions/checkout@v4
-        with:
-          repository: ElevenID/marty-credentials
-          token: ${{ secrets.REPO_ACCESS_TOKEN }}
-          ref: ${{ env.MARTY_CREDENTIALS_REF }}
-          path: marty-credentials
-
       - uses: dtolnay/rust-toolchain@nightly
       - uses: actions/setup-python@v5
         with:
@@ -282,7 +275,7 @@ jobs:
 
       - name: Install build deps
         run: |
-          pip install maturin
+          pip install 'maturin[patchelf]'
           sudo apt-get update && sudo apt-get install -y \
             pkg-config libssl-dev libzstd-dev clang
 
@@ -292,13 +285,13 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            marty-credentials/rust/marty-rs/target
-          key: wheel-${{ runner.os }}-${{ hashFiles('marty-credentials/Cargo.lock') }}
+            marty-core/target
+          key: wheel-${{ runner.os }}-${{ hashFiles('marty-core/Cargo.lock') }}
 
       - name: Build marty-rs wheel
         run: |
-          cd marty-credentials/rust/marty-rs
-          CXX=clang++ CC=clang maturin build --release --features python --out $GITHUB_WORKSPACE/wheels
+          cd marty-core/marty-bindings
+          CXX=clang++ CC=clang maturin build --release --out $GITHUB_WORKSPACE/wheels
 
       - uses: actions/upload-artifact@v4
         with:
