@@ -28,6 +28,7 @@ from playwright.sync_api import expect, sync_playwright
 ROOT = Path(__file__).resolve().parents[1]
 ENV_FILE = ROOT / ".env.tunnel.beta.local"
 ARTIFACT_ROOT = ROOT / "tests" / "artifacts"
+RECORDING_VIEWPORT = {"width": 1920, "height": 1080}
 
 
 SECRET_PATTERNS = [
@@ -134,7 +135,7 @@ def write_redacted_screenshot_placeholder(path: Path, title: str, detail: str) -
             pass
         return False
 
-    image = Image.new("RGB", (1440, 900), "#f8fafc")
+    image = Image.new("RGB", (1920, 1080), "#f8fafc")
     draw = ImageDraw.Draw(image)
     font = ImageFont.load_default()
     heading = redact_sensitive(title)
@@ -1886,13 +1887,13 @@ def main() -> int:
         browser = p.chromium.launch(headless=not (args.headed or os.environ.get("PWDEBUG") == "1"))
         context_options: dict[str, Any] = {
             "base_url": base_url,
-            "viewport": {"width": 1440, "height": 1100},
+            "viewport": RECORDING_VIEWPORT,
             "ignore_https_errors": True,
         }
         if args.record_video:
             context_options.update({
                 "record_video_dir": str(artifact_dir),
-                "record_video_size": {"width": 1440, "height": 1100},
+                "record_video_size": RECORDING_VIEWPORT,
             })
         context = browser.new_context(
             **context_options,

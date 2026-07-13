@@ -137,7 +137,7 @@
       "slug": "organization-primitives",
       "title": "Organization and MIP Primitives",
       "summary": "An administrator creates an organization and configures the identity, trust, template, policy, deployment, issuance, verification, and API primitives needed to operate it.",
-      "scenario_revision": 1,
+      "scenario_revision": 2,
       "mip_version": "0.3.1",
       "state": "PUBLIC",
       "audiences": ["Issuer", "Verifier", "Administrator", "Developer"],
@@ -145,39 +145,49 @@
       "protocols": ["openid4vci-1.0", "openid4vp-1.0", "dcql-1.0", "sd-jwt-vc", "open-badges-3.0"],
       "poster": {
         "src": "/images/demos/2026.07.0/organization-primitives.png",
-        "sha256": "87953594751663889fac73b0291615c40b4bc1d0ebc10b76d019404a5f89b3a3",
+        "sha256": "067e07c7c0f3ffa5404084a5ba64a4e80ec7ee7415c5be5be79a553585136cbf",
         "alt": "ElevenID organization console showing MIP primitive management"
       },
-      "youtube_id": "BD3SIlfVJ98",
+      "youtube_id": "GK7GbqBCwQ8",
       "media_evidence": {
-        "video_sha256": "bd79f475691e6c6629fdce096f8421273b7c6d43a69e8081bd31d434e96da03a",
-        "captions_sha256": "4f88b8b64c488208dd06a226ed3405ee726ad918cad4b510bfe8bf62b4b6f857",
-        "thumbnail_sha256": "87953594751663889fac73b0291615c40b4bc1d0ebc10b76d019404a5f89b3a3",
-        "privacy_scan_sha256": "755f18bf559506d284d53bdf8976b2aeb6d14b76ed0c681daaaa53c979e25ad0",
-        "publication_config_sha256": "7318e116e6b16cc8f90174b35a0c47a2f90ef5cd1346b0e513b9051ae0dcf9d0",
-        "youtube_uploaded_at": "2026-07-13T21:53:39.058Z"
+        "video_sha256": "48f8c58148d4c502d29567dc5c73ae43d9b2d19224551bd37fec7df214bb9c1f",
+        "captions_sha256": "e426df531386e9f8f7a2fb58aa51187d877964260c9ce9cc8b64ba90b3795e31",
+        "thumbnail_sha256": "067e07c7c0f3ffa5404084a5ba64a4e80ec7ee7415c5be5be79a553585136cbf",
+        "privacy_scan_sha256": "18ea1e0570c26621a4d0361891fb3ff2c1e6fe6c2ad74f48cba8d5c3889bc259",
+        "publication_config_sha256": "a1fd74202605e3d956e5ab61f396b5f96f8eb08fdc1321fde2b93b298009dc84",
+        "youtube_uploaded_at": "2026-07-13T22:55:35.840Z"
       },
       "transcript": {
         "language": "en",
         "segments": [
-          { "start_seconds": 0, "speaker": "Narrator", "text": "The administrator begins with a new organization and establishes its cryptographic and issuer identity." },
-          { "start_seconds": 110, "speaker": "Narrator", "text": "Templates, trust profiles, policies, deployments, flows, and API access complete the operating model." }
+          { "start_seconds": 0, "speaker": "Narrator", "text": "An administrator creates a new organization and establishes its key management service." },
+          { "start_seconds": 36, "speaker": "Narrator", "text": "The organization creates an active issuer identity backed by its configured signing service." },
+          { "start_seconds": 70, "speaker": "Narrator", "text": "Trust and revocation profiles define accepted issuers and credential lifecycle checks." },
+          { "start_seconds": 96, "speaker": "Narrator", "text": "Credential and application templates define the issued claims and applicant experience." },
+          { "start_seconds": 132, "speaker": "Narrator", "text": "A presentation policy and deployment profile connect verification rules to a runtime environment." },
+          { "start_seconds": 158, "speaker": "Narrator", "text": "Canonical issuance and verification flows are created, validated, and activated with their dependencies." },
+          { "start_seconds": 203, "speaker": "Narrator", "text": "API access and the final inventory confirm that every required organization primitive is active." }
         ]
       },
       "chapters": [
-        { "start_seconds": 0, "title": "Organization identity and keys", "role": "Administrator", "mip_primitives": ["Organization", "KMS", "Issuer Identity"], "standards": ["SD-JWT VC"], "documentation_links": [{ "label": "Architecture", "href": "/architecture" }] },
-        { "start_seconds": 110, "title": "Trust, policy, deployment, and flows", "role": "Administrator", "mip_primitives": ["Trust Profile", "Credential Template", "Presentation Policy", "Deployment Profile", "Flow Definition"], "standards": ["OpenID4VCI 1.0", "OpenID4VP 1.0", "DCQL 1.0"], "documentation_links": [{ "label": "MIP protocol", "href": "/protocol" }] }
+        { "start_seconds": 0, "title": "Organization and key management", "role": "Administrator", "mip_primitives": ["Organization", "KMS"], "standards": ["SD-JWT VC"], "documentation_links": [{ "label": "Architecture", "href": "/architecture" }] },
+        { "start_seconds": 36, "title": "Issuer identity", "role": "Administrator", "mip_primitives": ["Issuer Identity"], "standards": ["SD-JWT VC"], "documentation_links": [{ "label": "Architecture", "href": "/architecture" }] },
+        { "start_seconds": 70, "title": "Trust and revocation", "role": "Administrator", "mip_primitives": ["Trust Profile", "Revocation Profile"], "standards": ["SD-JWT VC"], "documentation_links": [{ "label": "MIP protocol", "href": "/protocol" }] },
+        { "start_seconds": 96, "title": "Credential and application templates", "role": "Issuer", "mip_primitives": ["Credential Template", "Application Template"], "standards": ["Open Badges 3.0", "SD-JWT VC"], "documentation_links": [{ "label": "MIP protocol", "href": "/protocol" }] },
+        { "start_seconds": 132, "title": "Policy and deployment", "role": "Verifier", "mip_primitives": ["Presentation Policy", "Deployment Profile"], "standards": ["OpenID4VP 1.0", "DCQL 1.0"], "documentation_links": [{ "label": "MIP protocol", "href": "/protocol" }] },
+        { "start_seconds": 158, "title": "Issuance and verification flows", "role": "Administrator", "mip_primitives": ["Flow Definition"], "standards": ["OpenID4VCI 1.0", "OpenID4VP 1.0", "DCQL 1.0"], "documentation_links": [{ "label": "MIP protocol", "href": "/protocol" }] },
+        { "start_seconds": 203, "title": "API access and inventory", "role": "Developer", "mip_primitives": ["API Key"], "standards": ["MIP 0.3.1"], "documentation_links": [{ "label": "API documentation", "href": "/api" }] }
       ],
       "wallets": [],
       "assertions": [
-        { "id": "primitive-management", "label": "The administrator can create and manage the required MIP primitives.", "result": "PASS", "evidence_sha256": "6872d04658ee05ec6e75e91286acfa0481d78299f062ff1dca7dd3b4f44eb052" },
-        { "id": "browser-errors", "label": "The recorded path contains no unexplained browser or network errors.", "result": "PASS", "evidence_sha256": "6872d04658ee05ec6e75e91286acfa0481d78299f062ff1dca7dd3b4f44eb052" }
+        { "id": "primitive-management", "label": "The administrator can create and manage the required MIP primitives.", "result": "PASS", "evidence_sha256": "33a0080fb72f7e503bcf8be99f23afb685daff30607cdcfce2410880a787b1fe" },
+        { "id": "browser-errors", "label": "The recorded path contains no unexplained browser or network errors.", "result": "PASS", "evidence_sha256": "33a0080fb72f7e503bcf8be99f23afb685daff30607cdcfce2410880a787b1fe" }
       ],
       "limitations": ["This scenario covers organization primitives only; holder and wallet workflows are demonstrated separately."],
-      "published_at": "2026-07-13T22:06:56.543Z",
+      "published_at": "2026-07-13T23:05:26.881Z",
       "publication_approval": {
-        "approval_sha256": "e4a9bfebd4e759fe355f3e5653b1b0b9d2c24053ebcdcc70a0bbc3b03474144f",
-        "reviewed_at": "2026-07-13T22:06:56.543Z",
+        "approval_sha256": "48a8185d8353c6e3c4c12dcc67752e743ab5ada14f1932452246b0badc61076d",
+        "reviewed_at": "2026-07-13T23:05:26.881Z",
         "checks": [
           "accessibility",
           "captions",
