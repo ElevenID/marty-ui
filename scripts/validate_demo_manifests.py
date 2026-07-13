@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate public Stack demo manifests without optional dependencies."""
+"""Validate public ElevenID LLC release demo manifests without optional dependencies."""
 
 from __future__ import annotations
 
@@ -73,7 +73,7 @@ def reject_sensitive_keys(value: Any, path: str = "manifest") -> None:
 
 def validate_manifest(manifest: dict[str, Any]) -> None:
     required = {
-        "schema_version", "stack_version", "mip_version", "publication_state",
+        "schema_version", "stack_version", "release_name", "mip_version", "publication_state",
         "coverage_state", "release_ready", "public_demo_ready",
         "deployment_release_marker", "recorder_revision", "component_revisions",
         "image_digests", "release_evidence", "release_differences", "scenarios",
@@ -82,6 +82,8 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
     require(not missing, f"missing required fields: {', '.join(missing)}")
     require(manifest["schema_version"] == 1, "schema_version must be 1")
     require(bool(STACK_VERSION.fullmatch(manifest["stack_version"])), "stack_version must use YYYY.MM.PATCH")
+    release_name = manifest["release_name"]
+    require(isinstance(release_name, str) and 3 <= len(release_name.strip()) <= 80, "release_name must be descriptive")
     require(bool(MIP_VERSION.fullmatch(manifest["mip_version"])), "mip_version must be semantic and independent")
     require(manifest["publication_state"] in {"DRAFT", "PUBLIC", "SUPERSEDED"}, "invalid publication_state")
     require(manifest["coverage_state"] in {"PARTIAL", "COMPLETE", "SUPERSEDED"}, "invalid coverage_state")
@@ -139,7 +141,7 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
 
         inheritance = scenario.get("inherited_evidence")
         if inheritance is not None:
-            require(inheritance.get("source_stack_version") != manifest["stack_version"], f"{slug}: inherited evidence must come from another Stack release")
+            require(inheritance.get("source_stack_version") != manifest["stack_version"], f"{slug}: inherited evidence must come from another ElevenID LLC release")
             for field in ("byte_identical_components", "unchanged_protocols", "unchanged_wallets", "unchanged_behavior"):
                 require(inheritance.get(field) is True, f"{slug}: inheritance requires {field}=true")
             require(bool(SHA256.fullmatch(inheritance.get("attestation_sha256", ""))), f"{slug}: inheritance attestation hash required")
@@ -160,17 +162,18 @@ def validate_index(index: dict[str, Any], manifests: dict[str, dict[str, Any]]) 
     releases = index.get("releases")
     require(isinstance(releases, list) and releases, "index releases cannot be empty")
     versions = [release.get("stack_version") for release in releases]
-    require(len(versions) == len(set(versions)), "index Stack versions must be unique")
+    require(len(versions) == len(set(versions)), "index ElevenID LLC versions must be unique")
     for release in releases:
         version = release.get("stack_version", "")
         require(version in manifests, f"index references missing manifest {version}")
+        require(release.get("release_name") == manifests[version]["release_name"], f"{version}: index release name mismatch")
         require(release.get("mip_version") == manifests[version]["mip_version"], f"{version}: index MIP version mismatch")
         require(release.get("coverage_state") == manifests[version]["coverage_state"], f"{version}: index coverage mismatch")
         require(release.get("manifest_url") == f"/demos/manifests/{version}.json", f"{version}: canonical manifest URL mismatch")
     latest = index.get("latest_approved_stack_version")
     if latest is not None:
-        require(latest in manifests, "latest approved Stack release is missing")
-        require(manifests[latest]["publication_state"] == "PUBLIC", "latest approved Stack release must be PUBLIC")
+        require(latest in manifests, "latest approved ElevenID LLC release is missing")
+        require(manifests[latest]["publication_state"] == "PUBLIC", "latest approved ElevenID LLC release must be PUBLIC")
 
 
 def load_manifests(root: Path, version_file: Path | None = None) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
@@ -194,7 +197,7 @@ def load_manifests(root: Path, version_file: Path | None = None) -> tuple[dict[s
     validate_index(index, manifests)
     if version_file is not None and version_file.exists():
         release_version = version_file.read_text(encoding="utf-8").strip()
-        require(index.get("latest_available_stack_version") == release_version, "latest available Stack release must match VERSION")
+        require(index.get("latest_available_stack_version") == release_version, "latest available ElevenID LLC release must match VERSION")
     return index, manifests
 
 
@@ -208,7 +211,7 @@ def main() -> int:
     except (ManifestValidationError, json.JSONDecodeError) as error:
         print(f"Demo manifest validation failed: {error}", file=sys.stderr)
         return 1
-    print(f"Validated {len(manifests)} Stack demo manifest(s); latest approved: {index.get('latest_approved_stack_version') or 'none'}")
+    print(f"Validated {len(manifests)} ElevenID LLC demo manifest(s); latest approved: {index.get('latest_approved_stack_version') or 'none'}")
     return 0
 
 

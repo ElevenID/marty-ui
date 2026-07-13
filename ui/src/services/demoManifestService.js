@@ -58,16 +58,17 @@ export function compareStackVersions(left, right) {
 
 export function validateDemoIndex(index) {
   assert(index && index.schema_version === 1, 'Unsupported demo index contract.');
-  assert(Array.isArray(index.releases) && index.releases.length > 0, 'No Stack releases are available.');
+  assert(Array.isArray(index.releases) && index.releases.length > 0, 'No ElevenID LLC releases are available.');
   const versions = new Set();
   index.releases.forEach((release) => {
-    assert(STACK_VERSION_PATTERN.test(release.stack_version || ''), 'A Stack release has an invalid version.');
+    assert(STACK_VERSION_PATTERN.test(release.stack_version || ''), 'An ElevenID LLC release has an invalid version.');
+    assert(typeof release.release_name === 'string' && release.release_name.trim().length >= 3, `${release.stack_version} needs a release name.`);
     assert(MIP_VERSION_PATTERN.test(release.mip_version || ''), `${release.stack_version} has an invalid MIP version.`);
     assert(!versions.has(release.stack_version), `${release.stack_version} is duplicated.`);
     versions.add(release.stack_version);
   });
   if (index.latest_approved_stack_version) {
-    assert(versions.has(index.latest_approved_stack_version), 'The latest approved Stack release is missing.');
+    assert(versions.has(index.latest_approved_stack_version), 'The latest approved ElevenID LLC release is missing.');
   }
   return {
     ...index,
@@ -77,12 +78,13 @@ export function validateDemoIndex(index) {
 
 export function validateDemoManifest(manifest) {
   assert(manifest && manifest.schema_version === 1, 'Unsupported demo manifest contract.');
-  assert(STACK_VERSION_PATTERN.test(manifest.stack_version || ''), 'Invalid ElevenID Stack version.');
+  assert(STACK_VERSION_PATTERN.test(manifest.stack_version || ''), 'Invalid ElevenID LLC version.');
+  assert(typeof manifest.release_name === 'string' && manifest.release_name.trim().length >= 3, 'This ElevenID LLC release needs a descriptive name.');
   assert(MIP_VERSION_PATTERN.test(manifest.mip_version || ''), 'Invalid MIP version metadata.');
   assert(Array.isArray(manifest.scenarios) && manifest.scenarios.length > 0, 'This release has no demo scenarios.');
   const slugs = new Set();
   manifest.scenarios.forEach((scenario) => {
-    assert(scenario.mip_version === manifest.mip_version, `${scenario.slug}: MIP metadata does not match its Stack release.`);
+    assert(scenario.mip_version === manifest.mip_version, `${scenario.slug}: MIP metadata does not match its ElevenID LLC release.`);
     assert(!slugs.has(scenario.slug), `${scenario.slug}: duplicate scenario.`);
     slugs.add(scenario.slug);
     assert(Array.isArray(scenario.protocols) && scenario.protocols.length > 0, `${scenario.slug}: protocols are missing.`);
@@ -91,7 +93,7 @@ export function validateDemoManifest(manifest) {
     });
     assert(
       scenario.poster?.src?.startsWith(`/images/demos/${manifest.stack_version}/`),
-      `${scenario.slug}: poster is not bound to this Stack release.`,
+      `${scenario.slug}: poster is not bound to this ElevenID LLC release.`,
     );
     if (['YOUTUBE_UNLISTED', 'PUBLIC'].includes(scenario.state)) {
       assert(/^[A-Za-z0-9_-]{11}$/.test(scenario.youtube_id || ''), `${scenario.slug}: published video is missing.`);
@@ -106,13 +108,13 @@ export async function loadDemoIndex({ signal } = {}) {
 }
 
 export async function loadDemoManifest(stackVersion, { signal } = {}) {
-  assert(STACK_VERSION_PATTERN.test(stackVersion || ''), 'Invalid ElevenID Stack version.');
+  assert(STACK_VERSION_PATTERN.test(stackVersion || ''), 'Invalid ElevenID LLC version.');
   const source = isHeadlessPrerender()
     ? clone(DEMO_MANIFESTS[stackVersion])
     : await fetchJson(`${MANIFEST_ROOT}/${stackVersion}.json`, signal);
-  assert(source, `Stack ${stackVersion} does not have a published manifest.`);
+  assert(source, `ElevenID LLC v${stackVersion} does not have a published manifest.`);
   const manifest = validateDemoManifest(source);
-  assert(manifest.stack_version === stackVersion, 'The requested Stack release does not match the manifest.');
+  assert(manifest.stack_version === stackVersion, 'The requested ElevenID LLC release does not match the manifest.');
   return manifest;
 }
 

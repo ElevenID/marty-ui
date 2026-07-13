@@ -66,6 +66,7 @@ const scenarios = [
 const manifest = {
   schema_version: 1,
   stack_version: '2026.07.0',
+  release_name: 'Credential Lifecycle Foundation',
   mip_version: '0.3.1',
   publication_state: 'DRAFT',
   coverage_state: 'PARTIAL',
@@ -94,17 +95,19 @@ const index = {
   schema_version: 1,
   latest_approved_stack_version: null,
   latest_available_stack_version: '2026.07.0',
-  releases: [{ stack_version: '2026.07.0', mip_version: '0.3.1' }],
+  releases: [{ stack_version: '2026.07.0', release_name: 'Credential Lifecycle Foundation', mip_version: '0.3.1' }],
 };
 
 describe('DemoPages', () => {
-  it('keeps Stack version primary and MIP version secondary in the catalog', async () => {
+  it('leads with the release name and identifies the ElevenID LLC platform version separately from MIP', async () => {
     mockLoadIndex.mockResolvedValue(index);
     mockLoadManifest.mockResolvedValue(manifest);
 
     const { user } = renderWithRouter(<DemoCatalogPage />);
 
-    expect(await screen.findByRole('heading', { level: 1, name: 'ElevenID Stack 2026.07.0' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { level: 1, name: 'Credential Lifecycle Foundation' })).toBeInTheDocument();
+    expect(screen.getByText('ElevenID LLC Credential Platform')).toBeInTheDocument();
+    expect(screen.getByText('Version v2026.07.0')).toBeInTheDocument();
     expect(screen.getByText('Implements MIP 0.3.1')).toBeInTheDocument();
     expect(screen.getByText('2 of 2')).toBeInTheDocument();
 
@@ -144,7 +147,7 @@ describe('DemoPages', () => {
     expect(screen.getByTitle('Organization and MIP Primitives video')).toHaveAttribute('src', expect.stringContaining('youtube-nocookie.com'));
   });
 
-  it('redirects latest scenario links only to an approved Stack release', async () => {
+  it('redirects latest scenario links only to an approved ElevenID LLC release', async () => {
     mockLoadIndex.mockResolvedValue({ ...index, latest_approved_stack_version: '2026.07.0' });
 
     renderWithRouter(

@@ -280,7 +280,7 @@ Invoke-Checked -FilePath docker -Arguments @("buildx", "build", "--load", "--fil
 Write-Step "Bind runtime evidence marker to the completed image set"
 $stackVersion = (Get-Content -LiteralPath (Join-Path $script:RepoRoot "VERSION") -Raw).Trim()
 if ($stackVersion -notmatch '^\d{4}\.\d{2}\.\d+$') {
-    throw "VERSION must contain an ElevenID Stack YYYY.MM.PATCH identifier"
+    throw "VERSION must contain an ElevenID LLC platform YYYY.MM.PATCH identifier"
 }
 $runtimeImageDigests = [ordered]@{}
 foreach ($service in $script:ApplicationServices) {

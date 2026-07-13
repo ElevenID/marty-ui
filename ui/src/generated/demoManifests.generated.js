@@ -6,6 +6,7 @@ export const DEMO_INDEX = {
   "releases": [
     {
       "stack_version": "2026.07.0",
+      "release_name": "Credential Lifecycle Foundation",
       "mip_version": "0.3.1",
       "publication_state": "DRAFT",
       "coverage_state": "PARTIAL",
@@ -18,6 +19,7 @@ export const DEMO_MANIFESTS = {
   "2026.07.0": {
     "schema_version": 1,
     "stack_version": "2026.07.0",
+    "release_name": "Credential Lifecycle Foundation",
     "mip_version": "0.3.1",
     "publication_state": "DRAFT",
     "coverage_state": "PARTIAL",
