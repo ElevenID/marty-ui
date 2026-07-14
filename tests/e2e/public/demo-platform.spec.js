@@ -74,6 +74,8 @@ for (const viewport of viewports) {
     await expect(page.getByText('Version v2026.07.0', { exact: true })).toBeVisible();
     await expect(page.getByText('Implements MIP 0.3.1')).toBeVisible();
     await expect(page.getByRole('combobox', { name: 'Platform version' })).toContainText('v2026.07.0');
+    await expect(page.getByText(/vendor approval is not a publication requirement/i)).toBeVisible();
+    await expect(page.getByRole('link', { name: 'request review or removal' })).toHaveAttribute('href', /sales@elevenidllc\.com/);
     await assertStablePage(page, telemetry);
     const firstPaint = await page.evaluate(() => window.__elevenIdFirstPaint);
     expect(firstPaint.filter((sample) => !sample.ready).every((sample) => sample.rootVisibility === 'hidden' && sample.shellDisplay !== 'none')).toBe(true);
@@ -81,7 +83,7 @@ for (const viewport of viewports) {
 
     await page.getByRole('link', { name: /Membership Badge and Login/ }).click();
     await expect(page.getByRole('heading', { level: 1, name: 'Membership Badge and Login' })).toBeVisible();
-    await expect(page.getByText('Recording publication pending')).toBeVisible();
+    await expect(page.getByText('Validated demonstration')).toBeVisible();
     await expect(page.locator('iframe[src*="youtube-nocookie.com"]')).toHaveCount(0);
     await expect(page.getByRole('heading', { level: 2, name: 'Transcript' })).toBeVisible();
     await assertStablePage(page, telemetry);
@@ -121,10 +123,10 @@ test('public video waits for consent and uses the privacy-enhanced player', asyn
 
   await loadButton.click();
   const player = page.getByTitle('Organization and MIP Primitives video');
-  await expect(player).toHaveAttribute('src', /https:\/\/www\.youtube-nocookie\.com\/embed\/BD3SIlfVJ98/);
+  await expect(player).toHaveAttribute('src', /https:\/\/www\.youtube-nocookie\.com\/embed\/GK7GbqBCwQ8/);
   await expect(player).toHaveAttribute('src', /cc_load_policy=1/);
   await expect.poll(() => youtubeRequests.length).toBeGreaterThan(0);
 
-  await page.getByRole('button', { name: /1:50 Trust, policy, deployment, and flows/ }).click();
-  await expect(player).toHaveAttribute('src', /start=110/);
+  await page.getByRole('button', { name: /2:12 Policy and deployment/ }).click();
+  await expect(player).toHaveAttribute('src', /start=132/);
 });

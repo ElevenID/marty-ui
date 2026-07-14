@@ -120,6 +120,14 @@ function CoverageLabel({ manifest }) {
 
 function ScenarioCard({ manifest, scenario }) {
   const passed = scenario.assertions.filter((assertion) => assertion.result === 'PASS').length;
+  const recordingAvailable = scenario.state === 'PUBLIC' && Boolean(scenario.youtube_id);
+  const mediaLabel = recordingAvailable
+    ? 'Recording available'
+    : scenario.state === 'VALIDATED'
+      ? 'Validated evidence'
+      : scenario.state === 'YOUTUBE_UNLISTED'
+        ? 'Recording in review'
+        : 'Scenario planned';
   return (
     <Card variant="outlined" sx={{ height: '100%', borderRadius: 1 }}>
       <CardActionArea
@@ -143,6 +151,13 @@ function ScenarioCard({ manifest, scenario }) {
             </Typography>
             <Chip size="small" color={stateColors[scenario.state]} label={scenario.state.replaceAll('_', ' ')} />
           </Stack>
+          <Chip
+            size="small"
+            variant="outlined"
+            icon={recordingAvailable ? <YouTubeIcon /> : <FactCheckRoundedIcon />}
+            label={mediaLabel}
+            sx={{ alignSelf: 'flex-start' }}
+          />
           <Typography variant="body2" color="text.secondary" sx={{ flex: 1 }}>
             {scenario.summary}
           </Typography>
@@ -200,7 +215,7 @@ function ReleaseExperience({ index, manifest }) {
           Implements MIP {manifest.mip_version}
         </Typography>
         <Typography variant="body1" color="text.secondary" sx={{ maxWidth: 760 }}>
-          Follow credential journeys by role, inspect the exact release binding, and distinguish validated evidence from recordings still awaiting publication.
+          Follow credential journeys by role, inspect the exact release binding, and see at a glance which scenarios have recordings, validated evidence, or planned coverage.
         </Typography>
         <Stack direction="row" spacing={1.5} useFlexGap flexWrap="wrap" alignItems="center">
           <CoverageLabel manifest={manifest} />
@@ -222,9 +237,21 @@ function ReleaseExperience({ index, manifest }) {
 
       {!manifest.public_demo_ready && (
         <Alert severity="info" icon={<FactCheckRoundedIcon />} sx={{ mb: 4 }}>
-          This release evidence is a publication preview. Independent-wallet qualification and editorial approval are still required for complete public coverage.
+          This release evidence is a publication preview. Independent-wallet qualification and ElevenID LLC publication review are still required for complete public coverage.
         </Alert>
       )}
+
+      <Alert severity="info" sx={{ mb: 4 }}>
+        <Typography variant="subtitle2" fontWeight={700} sx={{ mb: 0.5 }}>
+          Independent wallet demonstrations
+        </Typography>
+        <Typography variant="body2">
+          Third-party wallet names and limited interface footage are used to document interoperability, compatibility, and user experience. They do not imply affiliation or endorsement, and vendor approval is not a publication requirement. Wallet providers may{' '}
+          <Link href="mailto:sales@elevenidllc.com?subject=Demo%20review%20or%20removal%20request">
+            request review or removal
+          </Link>.
+        </Typography>
+      </Alert>
 
       <Box
         component="section"
@@ -551,7 +578,7 @@ export function DemoScenarioPage() {
           </Box>
           {scenario.publication_approval && (
             <Box>
-              <Typography variant="subtitle2" fontWeight={750} sx={{ mb: 0.5 }}>Editorial approval</Typography>
+              <Typography variant="subtitle2" fontWeight={750} sx={{ mb: 0.5 }}>ElevenID LLC publication review</Typography>
               <Typography variant="caption" color="text.secondary" display="block">
                 Reviewed {new Date(scenario.publication_approval.reviewed_at).toLocaleString()}
               </Typography>
