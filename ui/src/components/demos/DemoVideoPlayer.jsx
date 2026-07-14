@@ -4,9 +4,35 @@ import { Box, Button, Stack, Typography } from '@mui/material';
 import PlayArrowRoundedIcon from '@mui/icons-material/PlayArrowRounded';
 import PendingActionsRoundedIcon from '@mui/icons-material/PendingActionsRounded';
 
+function unavailableRecordingCopy(state) {
+  if (state === 'VALIDATED') {
+    return {
+      title: 'Validated demonstration',
+      description: 'The browser run passed. A production-quality recording is being prepared; evidence, chapters, and the transcript remain available below.',
+    };
+  }
+  if (state === 'YOUTUBE_UNLISTED') {
+    return {
+      title: 'Recording in review',
+      description: 'The recording is completing ElevenID LLC publication review. Evidence, chapters, and the transcript remain available below.',
+    };
+  }
+  if (state === 'DRAFT') {
+    return {
+      title: 'Scenario in development',
+      description: 'This scenario has not been recorded yet. Its planned coverage, chapters, and acceptance criteria are available below.',
+    };
+  }
+  return {
+    title: 'Recording unavailable',
+    description: 'Evidence, chapters, and the transcript remain available below.',
+  };
+}
+
 function DemoVideoPlayer({ scenario, startSeconds = 0 }) {
   const [consented, setConsented] = useState(false);
   const videoKey = `${scenario.youtube_id || 'pending'}-${startSeconds}`;
+  const unavailableCopy = unavailableRecordingCopy(scenario.state);
   const embedUrl = useMemo(() => {
     if (!scenario.youtube_id) return null;
     const params = new URLSearchParams({
@@ -79,10 +105,10 @@ function DemoVideoPlayer({ scenario, startSeconds = 0 }) {
               <Stack alignItems="center" spacing={1} sx={{ color: '#fff', textAlign: 'center', maxWidth: 440 }}>
                 <PendingActionsRoundedIcon fontSize="large" />
                 <Typography variant="h6" component="p" fontWeight={700}>
-                  Recording publication pending
+                  {unavailableCopy.title}
                 </Typography>
                 <Typography variant="body2" sx={{ color: 'rgba(255,255,255,0.86)', display: { xs: 'none', sm: 'block' } }}>
-                  Validated evidence, chapters, and the reviewed transcript remain available below.
+                  {unavailableCopy.description}
                 </Typography>
               </Stack>
             )}
@@ -96,6 +122,7 @@ function DemoVideoPlayer({ scenario, startSeconds = 0 }) {
 DemoVideoPlayer.propTypes = {
   scenario: PropTypes.shape({
     title: PropTypes.string.isRequired,
+    state: PropTypes.string.isRequired,
     youtube_id: PropTypes.string,
     poster: PropTypes.shape({
       src: PropTypes.string.isRequired,

@@ -4,7 +4,7 @@
 
 The production application, public manifest contract, and local recorder tooling are implemented. **Credential Lifecycle Foundation** is published as a `DRAFT` evidence preview for **ElevenID LLC Credential Platform v2026.07.0**, with `PARTIAL` coverage and MIP `0.3.1` metadata.
 
-The preview does not claim release-level public-demo approval. The ElevenID LLC YouTube channel and release playlist are configured, and the **Organization and MIP Primitives** scenario is publicly approved with privacy-enhanced playback. Remaining scenario publication, SpruceKit acceptance, the isolated ElevenID Demo Wallet package, independent-wallet qualification, portable Canvas execution, and a composed lifecycle video remain release evidence work.
+The preview does not claim release-level public-demo approval. The ElevenID LLC YouTube channel and release playlist are configured, and the **Organization and MIP Primitives** scenario has completed ElevenID LLC publication review with privacy-enhanced playback. Remaining scenario recordings, the isolated ElevenID Demo Wallet package, independent-wallet qualification, portable Canvas execution, and a composed lifecycle video remain release evidence work.
 
 Local media composition and privacy scanning are ready with FFmpeg, ffprobe, Tesseract, and in-process ZXing QR decoding.
 
@@ -30,13 +30,21 @@ Local media composition and privacy scanning are ready with FFmpeg, ffprobe, Tes
 - Protected evidence remains authoritative. YouTube is a distribution copy whose transcoded bytes are not used as the evidence hash.
 - A first-party wallet cannot satisfy independent-wallet coverage.
 
+## Third-Party Wallet Media Policy
+
+- Third-party wallet names, marks, and limited interface footage may be shown for interoperability testing, compatibility commentary, comparison, documentation, and product education.
+- ElevenID LLC does not require vendor approval before publishing this independent coverage and does not imply affiliation, sponsorship, or endorsement.
+- Demonstrations must use unmodified standards requests, accurately identify the wallet and tested build, distinguish observed results from ElevenID LLC claims, and avoid exposing private or credential material.
+- Wallet providers may request review or removal through `sales@elevenidllc.com`. ElevenID LLC will promptly assess good-faith requests and may remove or revise the affected demonstration.
+- This is the project publication policy for limited fair-use material; specific disputes should still receive legal review.
+
 ## Promotion Gates
 
 1. Validate the manifest with `python scripts/validate_demo_manifests.py`.
 2. Build and deploy the coordinated ElevenID LLC platform release from pinned revisions and digests.
 3. Require the deployed release probe to match the ElevenID LLC platform version, MIP version, marker, and every image digest.
 4. Record required impacted scenarios with no skipped outcomes or unexplained browser/network failures.
-5. Complete SpruceKit Open Badge login and independent-wallet qualification lanes.
+5. Complete the independent-wallet qualification lane for coverage claims; vendor permission is not a publication gate.
 6. Compose 1080p video, review the single-source transcript/captions, and scan text, frames, OCR, and QR payloads.
 7. Confirm every displayed offer has expired.
 8. Upload to the platform-version YouTube playlist as unlisted and verify processing, embedding, captions, and thumbnail.

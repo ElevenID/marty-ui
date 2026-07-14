@@ -337,17 +337,10 @@ export const DEMO_MANIFESTS = {
             "label": "Credential login restores the existing authenticated account.",
             "result": "PASS",
             "evidence_sha256": "c8696e564c316b5287f5e31019ec219ab40f84824978f78aaa7e10c9e16dac5b"
-          },
-          {
-            "id": "sprucekit-acceptance",
-            "label": "SpruceKit accepts issuance and credential login on the conformance lane.",
-            "result": "NOT_RUN",
-            "evidence_sha256": null
           }
         ],
         "limitations": [
-          "YouTube publication and reviewed captions are pending.",
-          "SpruceKit acceptance must pass before this scenario can become PUBLIC."
+          "The validated release-control wallet run is complete; a production-quality YouTube recording and reviewed captions are being prepared."
         ],
         "published_at": null,
         "publication_approval": null,

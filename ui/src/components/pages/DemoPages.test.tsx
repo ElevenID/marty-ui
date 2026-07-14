@@ -139,6 +139,13 @@ describe('DemoPages', () => {
     expect(screen.getByText('Version v2026.07.0')).toBeInTheDocument();
     expect(screen.getByText('Implements MIP 0.3.1')).toBeInTheDocument();
     expect(screen.getByText('2 of 2')).toBeInTheDocument();
+    expect(screen.getByText('Validated evidence')).toBeInTheDocument();
+    expect(screen.getByText('Recording available')).toBeInTheDocument();
+    expect(screen.getByText(/vendor approval is not a publication requirement/i)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'request review or removal' })).toHaveAttribute(
+      'href',
+      'mailto:sales@elevenidllc.com?subject=Demo%20review%20or%20removal%20request',
+    );
     expect(screen.getByRole('link', { name: 'Watch release playlist' })).toHaveAttribute(
       'href',
       `https://www.youtube.com/playlist?list=PL${'b'.repeat(24)}`,
@@ -160,7 +167,7 @@ describe('DemoPages', () => {
     );
 
     expect(await screen.findByRole('heading', { level: 1, name: 'Membership Badge and Login' })).toBeInTheDocument();
-    expect(screen.getByText('Recording publication pending')).toBeInTheDocument();
+    expect(screen.getByText('Validated demonstration')).toBeInTheDocument();
     expect(screen.queryByTitle('Membership Badge and Login video')).not.toBeInTheDocument();
     expect(screen.getByText('Receive the badge.')).toBeInTheDocument();
   });
