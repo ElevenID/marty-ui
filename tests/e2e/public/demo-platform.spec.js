@@ -24,6 +24,7 @@ function observeBrowser(page) {
   });
   page.on('requestfailed', (request) => {
     const url = new URL(request.url());
+    if (url.pathname === '/cdn-cgi/rum' && request.failure()?.errorText === 'net::ERR_ABORTED') return;
     if (url.origin === expectedOrigin) {
       failures.push(`${request.failure()?.errorText || 'failed'} ${request.method()} ${url.pathname}`);
     }
