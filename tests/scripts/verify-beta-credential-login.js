@@ -10,6 +10,12 @@ const {
   redact,
   waitFor,
 } = require('./verify-beta-waltid-acceptance');
+const {
+  VIDEO_SIZE,
+  finalizeVideo,
+  maskProtocolField: maskRecordingProtocolField,
+  showStep: showRecordingStep,
+} = require('./demo-recording');
 
 const ROOT = path.resolve(__dirname, '..', '..');
 const BETA_ORIGIN = process.env.BETA_ORIGIN || 'https://beta.elevenidllc.com';
@@ -18,77 +24,15 @@ const MEMBERSHIP_BADGE_VCT = process.env.MARTY_LOGIN_BADGE_VCT
   || `${BETA_ORIGIN}/credentials/marty-verified-member-badge`;
 const HEADLESS = process.env.HEADED !== '1';
 const RECORD_VIDEO = process.env.RECORD_VIDEO === '1';
-const VIDEO_SIZE = { width: 1365, height: 900 };
-
 async function showStep(page, title, detail) {
-  if (!RECORD_VIDEO) return;
-  await page.evaluate(({ title, detail }) => {
-    document.getElementById('marty-recording-step')?.remove();
-    const overlay = document.createElement('div');
-    overlay.id = 'marty-recording-step';
-    Object.assign(overlay.style, {
-      position: 'fixed',
-      zIndex: '2147483647',
-      left: '24px',
-      bottom: '24px',
-      maxWidth: '600px',
-      padding: '16px 20px',
-      borderRadius: '8px',
-      background: 'rgba(15, 23, 42, 0.96)',
-      color: '#f8fafc',
-      boxShadow: '0 16px 44px rgba(0, 0, 0, 0.32)',
-      fontFamily: 'Arial, sans-serif',
-      pointerEvents: 'none',
-    });
-    const eyebrow = document.createElement('div');
-    eyebrow.textContent = 'Open Badge issuance and credential login';
-    Object.assign(eyebrow.style, {
-      fontSize: '12px',
-      fontWeight: '700',
-      color: '#93c5fd',
-      textTransform: 'uppercase',
-    });
-    const heading = document.createElement('div');
-    heading.textContent = title;
-    Object.assign(heading.style, {
-      marginTop: '5px',
-      fontSize: '24px',
-      fontWeight: '700',
-      lineHeight: '1.2',
-    });
-    const copy = document.createElement('div');
-    copy.textContent = detail;
-    Object.assign(copy.style, {
-      marginTop: '7px',
-      fontSize: '15px',
-      lineHeight: '1.4',
-      color: '#e2e8f0',
-    });
-    overlay.append(eyebrow, heading, copy);
-    document.body.appendChild(overlay);
-  }, { title, detail });
-  await page.waitForTimeout(1800);
-  await page.evaluate(() => document.getElementById('marty-recording-step')?.remove()).catch(() => {});
-}
-
-async function maskProtocolField(page, label) {
-  if (!RECORD_VIDEO) return;
-  await page.getByLabel(label).evaluate((element) => {
-    element.style.color = 'transparent';
-    element.style.caretColor = 'transparent';
-    element.style.textShadow = '0 0 8px #64748b';
+  return showRecordingStep(page, title, detail, {
+    enabled: RECORD_VIDEO,
+    eyebrow: 'Membership badge issuance and credential login',
   });
 }
 
-async function finalizeVideo(video, artifactDir, filename) {
-  if (!video) return null;
-  const rawPath = await video.path();
-  const finalPath = path.join(artifactDir, filename);
-  if (path.resolve(rawPath) !== path.resolve(finalPath)) {
-    fs.rmSync(finalPath, { force: true });
-    fs.renameSync(rawPath, finalPath);
-  }
-  return path.relative(ROOT, finalPath);
+async function maskProtocolField(page, label) {
+  return maskRecordingProtocolField(page, label, RECORD_VIDEO);
 }
 
 async function receiveBadge(walletPage, offerUri) {
@@ -131,12 +75,14 @@ async function presentBadge(walletPage, requestUri) {
 async function main() {
   loadEnvFile(path.join(ROOT, '.env.tunnel.beta.local'));
   loadEnvFile(path.join(ROOT, '.env'));
-  const artifactDir = path.join(
-    ROOT,
-    'tests',
-    'artifacts',
-    `beta-credential-login-${new Date().toISOString().replace(/[-:]/g, '').replace(/\..+/, '')}`,
-  );
+  const artifactDir = process.env.DEMO_ARTIFACT_DIR
+    ? path.resolve(process.env.DEMO_ARTIFACT_DIR)
+    : path.join(
+      ROOT,
+      'tests',
+      'artifacts',
+      `beta-credential-login-${new Date().toISOString().replace(/[-:]/g, '').replace(/\..+/, '')}`,
+    );
   fs.mkdirSync(artifactDir, { recursive: true });
 
   const browser = await chromium.launch({ headless: HEADLESS });
@@ -158,7 +104,7 @@ async function main() {
       walletId: 'wr-default',
       logoutAfterOffer: true,
       keepContext: RECORD_VIDEO,
-      contextOptions: RECORD_VIDEO ? { recordVideo: { dir: artifactDir, size: VIDEO_SIZE } } : {},
+      contextOptions: RECORD_VIDEO ? { viewport: VIDEO_SIZE, recordVideo: { dir: artifactDir, size: VIDEO_SIZE } } : {},
       onStep: showStep,
     });
     const { context: holderContext = null, page: holderPage = null, ...offer } = offerResult;
@@ -286,8 +232,8 @@ async function main() {
     await walletContext.close();
     if (RECORD_VIDEO) {
       report.recordings = {
-        holder: await finalizeVideo(loginVideo, artifactDir, 'open-badge-holder-and-login.webm'),
-        wallet: await finalizeVideo(walletVideo, artifactDir, 'open-badge-browser-wallet.webm'),
+        holder: path.relative(ROOT, await finalizeVideo(loginVideo, artifactDir, 'open-badge-holder-and-login.webm')),
+        wallet: path.relative(ROOT, await finalizeVideo(walletVideo, artifactDir, 'open-badge-browser-wallet.webm')),
       };
     }
     fs.writeFileSync(path.join(artifactDir, 'report.json'), JSON.stringify(report, null, 2));

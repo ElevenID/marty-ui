@@ -482,6 +482,7 @@ export function DemoScenarioPage() {
             <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap" sx={{ mb: 1.5 }}>
               <Chip size="small" color={stateColors[scenario.state]} label={scenario.state.replaceAll('_', ' ')} />
               <Chip size="small" variant="outlined" label={`Revision ${scenario.scenario_revision}`} />
+              <Chip size="small" variant="outlined" label={scenario.recording_classification.replaceAll('_', ' ')} />
             </Stack>
             <Typography variant="h3" component="h1" fontWeight={800} sx={{ fontSize: { xs: '1.8rem', md: '2.5rem' }, mb: 1.5 }}>
               {scenario.title}
@@ -576,15 +577,25 @@ export function DemoScenarioPage() {
               ))}
             </Stack>
           </Box>
-          {scenario.publication_approval && (
+          {scenario.publication_attestation && (
             <Box>
-              <Typography variant="subtitle2" fontWeight={750} sx={{ mb: 0.5 }}>ElevenID LLC publication review</Typography>
+              <Typography variant="subtitle2" fontWeight={750} sx={{ mb: 0.5 }}>Automated publication verification</Typography>
               <Typography variant="caption" color="text.secondary" display="block">
-                Reviewed {new Date(scenario.publication_approval.reviewed_at).toLocaleString()}
+                Published {new Date(scenario.publication_attestation.published_at).toLocaleString()}
               </Typography>
               <Typography variant="caption" color="text.secondary" display="block" sx={{ overflowWrap: 'anywhere' }}>
-                Approval sha256:{scenario.publication_approval.approval_sha256}
+                Result sha256:{scenario.publication_attestation.result_sha256}
               </Typography>
+            </Box>
+          )}
+          {scenario.revision_history.length > 0 && (
+            <Box>
+              <Typography variant="subtitle2" fontWeight={750} sx={{ mb: 0.5 }}>Earlier evidence revisions</Typography>
+              {scenario.revision_history.map((revision) => (
+                <Typography key={revision.scenario_revision} variant="caption" color="text.secondary" display="block">
+                  Revision {revision.scenario_revision}: {revision.recording_classification.replaceAll('_', ' ')} / {revision.state.replaceAll('_', ' ')}
+                </Typography>
+              ))}
             </Box>
           )}
           {scenario.media_evidence && (

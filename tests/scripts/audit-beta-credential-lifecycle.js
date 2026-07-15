@@ -5,6 +5,12 @@ const fs = require('fs');
 const path = require('path');
 const { chromium } = require('@playwright/test');
 const { loadEnvFile, redact } = require('./verify-beta-waltid-acceptance');
+const {
+  VIDEO_SIZE,
+  finalizeVideo,
+  maskProtocolField,
+  showStep,
+} = require('./demo-recording');
 
 const ROOT = path.resolve(__dirname, '..', '..');
 loadEnvFile(path.join(ROOT, '.env.tunnel.beta.local'));
@@ -16,6 +22,14 @@ const ORG_ID = process.env.BETA_AUDIT_ORG_ID || '02af5d70-04e6-40d8-80e2-3e8400d
 const POLICY_ID = process.env.BETA_AUDIT_POLICY_ID || '43336aa5-4532-4a9d-95de-241ac97d5a2a';
 const SOURCE_TEMPLATE_ID = process.env.BETA_AUDIT_TEMPLATE_ID || '1d9d2ea0-1a39-4fc3-99de-c786a5617f78';
 const HEADLESS = process.env.HEADED !== '1';
+const RECORD_VIDEO = process.env.RECORD_VIDEO === '1';
+
+async function showLifecycleStep(page, title, detail) {
+  return showStep(page, title, detail, {
+    enabled: RECORD_VIDEO,
+    eyebrow: 'Credential lifecycle and status-aware verification',
+  });
+}
 
 async function waitFor(fn, timeoutMs = 60_000, intervalMs = 1_000) {
   const deadline = Date.now() + timeoutMs;
@@ -299,6 +313,7 @@ async function receiveCredential(walletPage, offerUri, expectedVct) {
   await walletPage.goto(TEST_WALLET_ORIGIN, { waitUntil: 'domcontentloaded', timeout: 60_000 });
   await walletPage.request.post(`${TEST_WALLET_ORIGIN}/api/reset`, { data: {} });
   await walletPage.reload({ waitUntil: 'domcontentloaded' });
+  await maskProtocolField(walletPage, 'Credential offer URI', RECORD_VIDEO);
   await walletPage.getByLabel('Credential offer URI').fill(offerUri);
   const responsePromise = walletPage.waitForResponse((response) => (
     response.url() === `${TEST_WALLET_ORIGIN}/api/receive`
@@ -417,6 +432,7 @@ async function getCredentialStatus(page, credentialId) {
 }
 
 async function present(walletPage, requestUri) {
+  await maskProtocolField(walletPage, 'Presentation request URI', RECORD_VIDEO);
   await walletPage.getByLabel('Presentation request URI').fill(requestUri);
   const responsePromise = walletPage.waitForResponse((response) => (
     response.url() === `${TEST_WALLET_ORIGIN}/api/present`
@@ -480,7 +496,9 @@ async function main() {
   if (!email || !password) throw new Error('Missing beta operator credentials');
 
   const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..+/, '');
-  const artifactDir = path.join(ROOT, 'tests', 'artifacts', `beta-credential-lifecycle-${stamp}`);
+  const artifactDir = process.env.DEMO_ARTIFACT_DIR
+    ? path.resolve(process.env.DEMO_ARTIFACT_DIR)
+    : path.join(ROOT, 'tests', 'artifacts', `beta-credential-lifecycle-${stamp}`);
   fs.mkdirSync(artifactDir, { recursive: true });
   const report = {
     createdAt: new Date().toISOString(),
@@ -494,9 +512,14 @@ async function main() {
 
   const browser = await chromium.launch({ headless: HEADLESS });
   try {
-    const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+    const context = await browser.newContext({
+      viewport: VIDEO_SIZE,
+      ...(RECORD_VIDEO ? { recordVideo: { dir: artifactDir, size: VIDEO_SIZE } } : {}),
+    });
     const page = await context.newPage();
     const walletPage = await context.newPage();
+    const applicationVideo = page.video();
+    const walletVideo = walletPage.video();
     page.on('pageerror', (error) => report.pageErrors.push(redact(error.message)));
     page.on('response', async (response) => {
       if (!response.url().startsWith(BETA_ORIGIN) || response.status() < 400) return;
@@ -568,6 +591,7 @@ async function main() {
     });
     let row = page.getByRole('row').filter({ hasText: report.issuance.templateName }).first();
     await row.waitFor({ state: 'visible', timeout: 30_000 });
+    await showLifecycleStep(page, 'Active credential issued', 'The issuer inventory shows the newly issued credential and its available lifecycle controls.');
     await page.screenshot({ path: path.join(artifactDir, '01-active-credential.png'), fullPage: true });
 
     report.renewalOffer = await renewCredential(page, row);
@@ -597,6 +621,7 @@ async function main() {
     });
     row = page.getByRole('row').filter({ hasText: report.issuance.templateName }).first();
     await row.waitFor({ state: 'visible', timeout: 30_000 });
+    await showLifecycleStep(page, 'Credential renewed', 'The replacement credential is active and linked to its superseded predecessor.');
     await page.screenshot({ path: path.join(artifactDir, '02-renewed-credential.png'), fullPage: true });
 
     const statusListUris = (credential.status_list_entries || [])
@@ -617,16 +642,19 @@ async function main() {
     report.suspend = await performLifecycleAction(page, row, 'suspend', 'Automated lifecycle suspension audit');
     report.suspend.current = await getCredentialStatus(page, credential.id);
     report.suspend.verification = await verify(page, walletPage, 'Suspended credential audit');
+    await showLifecycleStep(page, 'Suspension denies verification', 'The status-aware verifier rejects the suspended credential while preserving its lifecycle history.');
     await page.screenshot({ path: path.join(artifactDir, '02-suspended-credential.png'), fullPage: true });
 
     report.reinstate = await performLifecycleAction(page, row, 'reinstate', 'Automated lifecycle reinstatement audit');
     report.reinstate.current = await getCredentialStatus(page, credential.id);
     report.reinstate.verification = await verify(page, walletPage, 'Reinstated credential audit');
+    await showLifecycleStep(page, 'Reinstatement restores verification', 'The same canonical presentation succeeds again after the issuer reinstates the credential.');
     await page.screenshot({ path: path.join(artifactDir, '03-reinstated-credential.png'), fullPage: true });
 
     report.revoke = await performLifecycleAction(page, row, 'revoke', 'Automated lifecycle revocation audit');
     report.revoke.current = await getCredentialStatus(page, credential.id);
     report.revoke.verification = await verify(page, walletPage, 'Revoked credential audit');
+    await showLifecycleStep(page, 'Revocation is final', 'The verifier denies the revoked credential and the issuer inventory retains a privacy-safe status history.');
     await page.screenshot({ path: path.join(artifactDir, '04-revoked-credential.png'), fullPage: true });
 
     report.crossOrg = await page.evaluate(async () => {
@@ -669,10 +697,16 @@ async function main() {
       && report.unexpectedResponses.length === 0
     );
     report.finishedAt = new Date().toISOString();
+    await context.close();
+    if (RECORD_VIDEO) {
+      report.recordings = {
+        application: path.relative(ROOT, await finalizeVideo(applicationVideo, artifactDir, 'credential-lifecycle-application.webm')),
+        wallet: path.relative(ROOT, await finalizeVideo(walletVideo, artifactDir, 'credential-lifecycle-wallet.webm')),
+      };
+    }
     fs.writeFileSync(path.join(artifactDir, 'report.json'), JSON.stringify(report, null, 2));
     console.log(JSON.stringify(report, null, 2));
     if (!report.releaseReady) process.exitCode = 1;
-    await context.close();
   } finally {
     await browser.close();
   }

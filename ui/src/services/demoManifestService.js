@@ -36,18 +36,23 @@ function assert(condition, message) {
   if (!condition) throw new DemoManifestError(message);
 }
 
-function validatePublicationApproval(approval, expectedChecks, publishedAt, label) {
-  assert(approval && typeof approval === 'object', `${label} requires editorial approval evidence.`);
-  assert(SHA256_PATTERN.test(approval.approval_sha256 || ''), `${label} has an invalid approval hash.`);
-  assert(ISO_DATE_TIME_PATTERN.test(approval.reviewed_at || ''), `${label} has an invalid review time.`);
-  assert(approval.reviewed_at === publishedAt, `${label} review time does not match publication.`);
-  assert(Array.isArray(approval.checks), `${label} approval checks are missing.`);
-  const checks = new Set(approval.checks);
+function validatePublicationAttestation(attestation, expectedChecks, publishedAt, label) {
+  assert(attestation && typeof attestation === 'object', `${label} requires automated publication evidence.`);
+  assert(attestation.kind === 'AUTOMATED', `${label} publication must be automated.`);
+  assert(/^[a-f0-9]{40}$/.test(attestation.pipeline_revision || ''), `${label} has an invalid pipeline revision.`);
+  assert(SHA256_PATTERN.test(attestation.result_sha256 || ''), `${label} has an invalid publication result hash.`);
+  assert(SHA256_PATTERN.test(attestation.verification_report_sha256 || ''), `${label} has an invalid verification report hash.`);
+  assert(SHA256_PATTERN.test(attestation.smoke_report_sha256 || ''), `${label} has an invalid public smoke report hash.`);
+  assert(attestation.youtube_privacy_status === 'public', `${label} YouTube video is not public.`);
+  assert(ISO_DATE_TIME_PATTERN.test(attestation.published_at || ''), `${label} has an invalid publication time.`);
+  assert(attestation.published_at === publishedAt, `${label} attestation time does not match publication.`);
+  assert(Array.isArray(attestation.checks), `${label} publication checks are missing.`);
+  const checks = new Set(attestation.checks);
   assert(
-    checks.size === approval.checks.length
+    checks.size === attestation.checks.length
       && checks.size === expectedChecks.size
       && [...expectedChecks].every((check) => checks.has(check)),
-    `${label} approval checks are incomplete.`,
+    `${label} automated checks are incomplete.`,
   );
 }
 
@@ -97,7 +102,7 @@ export function compareStackVersions(left, right) {
 }
 
 export function validateDemoIndex(index) {
-  assert(index && index.schema_version === 1, 'Unsupported demo index contract.');
+  assert(index && index.schema_version === 2, 'Unsupported demo index contract.');
   assert(Array.isArray(index.releases) && index.releases.length > 0, 'No ElevenID LLC releases are available.');
   const versions = new Set();
   index.releases.forEach((release) => {
@@ -121,7 +126,7 @@ export function validateDemoIndex(index) {
 }
 
 export function validateDemoManifest(manifest) {
-  assert(manifest && manifest.schema_version === 1, 'Unsupported demo manifest contract.');
+  assert(manifest && manifest.schema_version === 2, 'Unsupported demo manifest contract.');
   assert(STACK_VERSION_PATTERN.test(manifest.stack_version || ''), 'Invalid ElevenID LLC version.');
   assert(typeof manifest.release_name === 'string' && manifest.release_name.trim().length >= 3, 'This ElevenID LLC release needs a descriptive name.');
   assert(MIP_VERSION_PATTERN.test(manifest.mip_version || ''), 'Invalid MIP version metadata.');
@@ -157,6 +162,19 @@ export function validateDemoManifest(manifest) {
     });
     assert(['DRAFT', 'VALIDATED', 'YOUTUBE_UNLISTED', 'PUBLIC', 'SUPERSEDED'].includes(scenario.state), `${scenario.slug}: invalid publication state.`);
     assert(
+      ['FIRST_PARTY_CONTROL', 'INDEPENDENT_WALLET'].includes(scenario.recording_classification),
+      `${scenario.slug}: invalid recording classification.`,
+    );
+    assert(Array.isArray(scenario.revision_history), `${scenario.slug}: revision history is missing.`);
+    const priorRevisions = new Set();
+    scenario.revision_history.forEach((revision) => {
+      assert(Number.isInteger(revision.scenario_revision) && revision.scenario_revision > 0, `${scenario.slug}: invalid prior revision.`);
+      assert(revision.scenario_revision < scenario.scenario_revision, `${scenario.slug}: prior revision must precede the current revision.`);
+      assert(!priorRevisions.has(revision.scenario_revision), `${scenario.slug}: duplicate prior revision.`);
+      assert(['FIRST_PARTY_CONTROL', 'INDEPENDENT_WALLET'].includes(revision.recording_classification), `${scenario.slug}: prior revision classification is invalid.`);
+      priorRevisions.add(revision.scenario_revision);
+    });
+    assert(
       scenario.poster?.src?.startsWith(`/images/demos/${manifest.stack_version}/`),
       `${scenario.slug}: poster is not bound to this ElevenID LLC release.`,
     );
@@ -169,7 +187,7 @@ export function validateDemoManifest(manifest) {
     }
     if (scenario.state === 'PUBLIC') {
       assert(ISO_DATE_TIME_PATTERN.test(scenario.published_at || ''), `${scenario.slug}: public timestamp is invalid.`);
-      validatePublicationApproval(scenario.publication_approval, SCENARIO_PUBLICATION_CHECKS, scenario.published_at, scenario.slug);
+      validatePublicationAttestation(scenario.publication_attestation, SCENARIO_PUBLICATION_CHECKS, scenario.published_at, scenario.slug);
       assert(Array.isArray(scenario.assertions) && scenario.assertions.length > 0, `${scenario.slug}: public assertions are missing.`);
       scenario.assertions.forEach((item) => {
         assert(item.result === 'PASS' && SHA256_PATTERN.test(item.evidence_sha256 || ''), `${scenario.slug}: every public assertion must pass with evidence.`);
@@ -180,17 +198,17 @@ export function validateDemoManifest(manifest) {
       );
     } else if (scenario.state !== 'SUPERSEDED') {
       assert(scenario.published_at === null, `${scenario.slug}: non-public scenario cannot retain published_at.`);
-      assert(scenario.publication_approval === null, `${scenario.slug}: non-public scenario cannot retain editorial approval.`);
+      assert(scenario.publication_attestation === null, `${scenario.slug}: non-public scenario cannot retain publication attestation.`);
     }
   });
   if (manifest.publication_state === 'PUBLIC') {
     assert(manifest.release_ready === true && manifest.public_demo_ready === true, 'Public release evidence has not passed its release gates.');
     assert(ISO_DATE_TIME_PATTERN.test(manifest.published_at || ''), 'Public release timestamp is invalid.');
-    validatePublicationApproval(manifest.publication_approval, RELEASE_PUBLICATION_CHECKS, manifest.published_at, 'Public release');
+    validatePublicationAttestation(manifest.publication_attestation, RELEASE_PUBLICATION_CHECKS, manifest.published_at, 'Public release');
     assert(manifest.scenarios.some((scenario) => scenario.state === 'PUBLIC'), 'Public release has no public scenarios.');
   } else if (manifest.publication_state !== 'SUPERSEDED') {
     assert(manifest.published_at === null, 'Non-public release cannot retain published_at.');
-    assert(manifest.publication_approval === null, 'Non-public release cannot retain editorial approval.');
+    assert(manifest.publication_attestation === null, 'Non-public release cannot retain publication attestation.');
   }
   return manifest;
 }

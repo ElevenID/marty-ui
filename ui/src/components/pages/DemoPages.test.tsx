@@ -28,6 +28,8 @@ const scenarios = [
     title: 'Membership Badge and Login',
     summary: 'Receive a badge and return to the same account.',
     scenario_revision: 1,
+    recording_classification: 'FIRST_PARTY_CONTROL',
+    revision_history: [],
     mip_version: '0.3.1',
     state: 'VALIDATED',
     audiences: ['Holder', 'Issuer'],
@@ -42,13 +44,15 @@ const scenarios = [
     assertions: [{ id: 'badge', label: 'Badge received', result: 'PASS', evidence_sha256: 'a'.repeat(64) }],
     limitations: ['YouTube publication pending.'],
     published_at: null,
-    publication_approval: null,
+    publication_attestation: null,
   },
   {
     slug: 'organization-primitives',
     title: 'Organization and MIP Primitives',
     summary: 'Configure issuer and verifier primitives.',
     scenario_revision: 1,
+    recording_classification: 'FIRST_PARTY_CONTROL',
+    revision_history: [],
     mip_version: '0.3.1',
     state: 'PUBLIC',
     audiences: ['Administrator', 'Developer'],
@@ -70,16 +74,21 @@ const scenarios = [
     assertions: [{ id: 'organization', label: 'Organization configured', result: 'PASS', evidence_sha256: 'b'.repeat(64) }],
     limitations: [],
     published_at: '2026-07-13T12:00:00Z',
-    publication_approval: {
-      approval_sha256: 'd'.repeat(64),
-      reviewed_at: '2026-07-13T12:00:00Z',
+    publication_attestation: {
+      kind: 'AUTOMATED',
+      pipeline_revision: 'c'.repeat(40),
+      result_sha256: 'd'.repeat(64),
+      verification_report_sha256: '4'.repeat(64),
+      smoke_report_sha256: '5'.repeat(64),
+      youtube_privacy_status: 'public',
+      published_at: '2026-07-13T12:00:00Z',
       checks: ['accessibility', 'captions', 'evidence', 'links', 'playback', 'privacy', 'thumbnail', 'transcript'],
     },
   },
 ];
 
 const manifest = {
-  schema_version: 1,
+  schema_version: 2,
   stack_version: '2026.07.0',
   release_name: 'Credential Lifecycle Foundation',
   mip_version: '0.3.1',
@@ -88,7 +97,7 @@ const manifest = {
   release_ready: false,
   public_demo_ready: false,
   published_at: null,
-  publication_approval: null,
+  publication_attestation: null,
   video_distribution: {
     provider: 'YOUTUBE',
     status: 'CONFIGURED',
@@ -121,7 +130,7 @@ const manifest = {
 };
 
 const index = {
-  schema_version: 1,
+  schema_version: 2,
   latest_approved_stack_version: null,
   latest_available_stack_version: '2026.07.0',
   releases: [{ stack_version: '2026.07.0', release_name: 'Credential Lifecycle Foundation', mip_version: '0.3.1' }],
@@ -185,7 +194,7 @@ describe('DemoPages', () => {
     expect(screen.queryByTitle('Organization and MIP Primitives video')).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Load Organization and MIP Primitives from YouTube' }));
     expect(screen.getByTitle('Organization and MIP Primitives video')).toHaveAttribute('src', expect.stringContaining('youtube-nocookie.com'));
-    expect(screen.getByText(/Approval sha256:/)).toHaveTextContent(`Approval sha256:${'d'.repeat(64)}`);
+    expect(screen.getByText(/Result sha256:/)).toHaveTextContent(`Result sha256:${'d'.repeat(64)}`);
     expect(screen.getByText(/Video sha256:/)).toHaveTextContent(`Video sha256:${'e'.repeat(64)}`);
   });
 
