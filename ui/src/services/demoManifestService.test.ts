@@ -12,16 +12,19 @@ const scenario = {
   slug: 'membership-badge-login',
   mip_version: '0.3.1',
   state: 'DRAFT',
+  scenario_revision: 1,
+  recording_classification: 'FIRST_PARTY_CONTROL',
+  revision_history: [],
   protocols: ['openid4vci-1.0', 'openid4vp-1.0', 'dcql-1.0', 'sd-jwt-vc', 'open-badges-3.0'],
   poster: { src: '/images/demos/2026.07.0/membership-badge-login.png' },
   youtube_id: null,
   media_evidence: null,
   published_at: null,
-  publication_approval: null,
+  publication_attestation: null,
 };
 
 const manifest = {
-  schema_version: 1,
+  schema_version: 2,
   stack_version: '2026.07.0',
   release_name: 'Credential Lifecycle Foundation',
   mip_version: '0.3.1',
@@ -30,7 +33,7 @@ const manifest = {
   release_ready: false,
   public_demo_ready: false,
   published_at: null,
-  publication_approval: null,
+  publication_attestation: null,
   video_distribution: {
     provider: 'YOUTUBE',
     status: 'PENDING_CHANNEL_SETUP',
@@ -56,7 +59,7 @@ describe('demoManifestService', () => {
 
   it('loads and sorts the public release index', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
-      schema_version: 1,
+      schema_version: 2,
       latest_approved_stack_version: '2026.07.1',
       releases: [
         { stack_version: '2026.07.0', release_name: 'Credential Lifecycle Foundation', mip_version: '0.3.1', publication_state: 'DRAFT', coverage_state: 'PARTIAL' },
@@ -84,7 +87,7 @@ describe('demoManifestService', () => {
     })).toThrow('verified ElevenID LLC YouTube channel');
   });
 
-  it('rejects public media without release-bound hashes and editorial evidence', () => {
+  it('rejects public media without release-bound hashes and automated evidence', () => {
     const configured = {
       ...manifest,
       video_distribution: {
