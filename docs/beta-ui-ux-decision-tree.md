@@ -1195,3 +1195,37 @@ The authenticated applicant organization is not console selection state. It rema
 - Deployment preflight: `beta-lifecycle` is configured; `beta-migration-rehearsal` is missing its protected database inputs; `wallet-conformance` has not yet been created; coordinated revision variables still point at the previous release.
 - CD validates the live GitHub environment contract before any image build: required reviewers, self-review and administrator bypass disabled, restricted deployment branches, required input names, and exact lowercase coordinated SHAs.
 - GitHub currently reports ElevenID on the Free plan and rejects private-repository branch protection with an upgrade-required `403`; no reviewer team exists. GitHub documents private required-reviewer rules as an Enterprise capability. This is an entitlement/configuration blocker, not a reason to weaken the gate.
+
+## Public Demo Evidence Decision Tree - 2026-07-15
+
+```text
+Public visitor opens /demos
+  -> load manifest index schema v2
+     -> invalid or unavailable: show a recoverable evidence error; never infer a release
+     -> valid: show the ElevenID LLC platform version selector independently from MIP metadata
+  -> visitor selects v2026.07.0 / Credential Lifecycle Foundation
+     -> release remains DRAFT and PARTIAL while required scenarios or independent-wallet evidence are incomplete
+     -> scenario state is PUBLIC?
+        -> No: show validated/pending evidence without a playable claim
+        -> Yes: require complete media hashes and automated publication attestation
+           -> attestation is final: show poster, chapters, transcript, prior revisions, limitations, and evidence hashes
+           -> attestation is transactionally smoke_pending: permit the publication smoke candidate only
+           -> malformed/incomplete: fail closed and do not render the video claim
+  -> visitor selects Play recording
+     -> no consent: poster remains; no YouTube iframe is loaded
+     -> consent: load the exact youtube-nocookie.com video bound by the manifest
+        -> playback/embed failure: return the video to unlisted and restore the previous manifest
+        -> success: preserve the public scenario and final smoke-report hash
+  -> recording classification is FIRST_PARTY_CONTROL?
+     -> Yes: identify the ElevenID LLC control wallet and keep release coverage PARTIAL
+     -> No: require pinned independent-wallet build evidence before claiming interoperability
+```
+
+Live implementation evidence:
+
+- Beta product marker remains `mip-0.3.1-local-20260714T214333Z`; the demo manifest is schema v2 and is rebound to that deployment.
+- Membership Badge and Login revision 2 is public as YouTube video `ol0VxziVwMU`.
+- Credential Lifecycle revision 2 is public as YouTube video `DDjyuqs8Wpg`.
+- Organization and MIP Primitives remains public as video `GK7GbqBCwQ8` after automated unchanged-path rebind attestation.
+- All three public pages pass playback and horizontal-overflow checks at 320, 390, 768, and 1440 pixels with no page exceptions or unexplained request failures.
+- `v2026.07.0` intentionally remains `DRAFT` / `PARTIAL`; first-party control recordings do not satisfy independent-wallet coverage.
