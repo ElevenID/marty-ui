@@ -42,7 +42,11 @@ function validatePublicationAttestation(attestation, expectedChecks, publishedAt
   assert(/^[a-f0-9]{40}$/.test(attestation.pipeline_revision || ''), `${label} has an invalid pipeline revision.`);
   assert(SHA256_PATTERN.test(attestation.result_sha256 || ''), `${label} has an invalid publication result hash.`);
   assert(SHA256_PATTERN.test(attestation.verification_report_sha256 || ''), `${label} has an invalid verification report hash.`);
-  assert(SHA256_PATTERN.test(attestation.smoke_report_sha256 || ''), `${label} has an invalid public smoke report hash.`);
+  if (attestation.smoke_pending === true) {
+    assert(!attestation.smoke_report_sha256, `${label} cannot have final smoke evidence while smoke is pending.`);
+  } else {
+    assert(SHA256_PATTERN.test(attestation.smoke_report_sha256 || ''), `${label} has an invalid public smoke report hash.`);
+  }
   assert(attestation.youtube_privacy_status === 'public', `${label} YouTube video is not public.`);
   assert(ISO_DATE_TIME_PATTERN.test(attestation.published_at || ''), `${label} has an invalid publication time.`);
   assert(attestation.published_at === publishedAt, `${label} attestation time does not match publication.`);
