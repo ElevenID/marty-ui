@@ -651,3 +651,24 @@ Latest development-stack browser evidence after that correction:
 Current automated verification is `746 passed, 1 skipped` for Marty UI/services and `125 passed` for MIP Protocol; generated bindings are current, Rust and TypeScript binding builds pass, the complete frontend suite and production build pass, and `23` local release contract tests plus PowerShell/nginx/Compose validation pass.
 
 This evidence is engineering-complete for the mutable development stack. Final local candidate `mip-0.3.1-local-20260713T031700Z` freezes these corrections; its deployment manifest and repeated five browser reports become the authoritative local evidence only when that run succeeds. Public promotion remains blocked by design until coordinated sources are published and protected SpruceKit/native evidence is attached to the exact protected beta run. Walt.id remains inactive and unadvertised.
+
+## Public Demo Publication Run - 2026-07-15
+
+The draft ElevenID LLC Credential Platform `v2026.07.0` demo release was rebound to deployed beta marker `mip-0.3.1-local-20260714T214333Z`. The product marker and container image remained unchanged while the schema v2 demo application and manifest were deployed as a static distribution update.
+
+Published scenario evidence:
+
+- Membership Badge and Login revision 2: `https://www.youtube.com/watch?v=ol0VxziVwMU`, 2560x1440, 25 FPS, 45 seconds.
+- Credential Lifecycle revision 2: `https://www.youtube.com/watch?v=DDjyuqs8Wpg`, 2560x1440, 25 FPS, 140 seconds.
+- Organization and MIP Primitives: `https://www.youtube.com/watch?v=GK7GbqBCwQ8`, retained after automated unchanged-path rebind evidence.
+
+Both new publication transactions verified public status, completed processing, embedding, reviewed English captions, thumbnail assignment, and release-playlist membership. Final beta checks loaded each public video at 320, 390, 768, and 1440 pixels with no horizontal overflow, page exception, or unexplained request failure. `/demos` exposes the release selector and links to both new public scenarios.
+
+Immutable evidence is stored in:
+
+- `../marty-demo-recorder/artifacts/2026.07.0-membership-badge-login-r2`
+- `../marty-demo-recorder/artifacts/2026.07.0-credential-lifecycle-r2`
+
+Each directory contains raw application/wallet sources, final master, captions, transcript, chapters, thumbnail, functional report, release evidence, privacy and offer-expiration reports, source hashes, YouTube publication result, public-page smoke report, and automated publication attestation. Recorder verification passes 39 tests; the complete frontend suite and production build pass.
+
+The demo release remains `DRAFT` and `PARTIAL`. These are `FIRST_PARTY_CONTROL` recordings and do not replace the remaining SpruceKit, EUDI Android, or other independent-wallet qualification work.

@@ -1356,3 +1356,23 @@ Use this section to record decisions.
 | Date | Decision maker | Approved | Rejected | Deferred | Notes |
 | --- | --- | --- | --- | --- | --- |
 | TBD | TBD | TBD | TBD | TBD | TBD |
+
+## Demo Publication Completion - 2026-07-15
+
+Status: the two validated first-party scenarios are now recorded, automatically published, and deployed. This completes scenario-level publication, not release-level completeness.
+
+- [x] Rebind draft `v2026.07.0` to beta marker `mip-0.3.1-local-20260714T214333Z` with the prior binding and `DRAFT_RELEASE_REBIND` reason preserved.
+- [x] Upgrade public manifests to schema v2 with automated attestations, recording classifications, and revision history.
+- [x] Replace manual editorial approval with an idempotent unlisted-to-public transaction and automatic rollback.
+- [x] Record synchronized 1920x1080 sources and compose progressive 2560x1440 H.264 High Profile BT.709 masters.
+- [x] Enforce reviewed captions, thumbnails, playlist membership, public embedding, OCR/QR/privacy scans, inactive offers, and release-marker/digest matching.
+- [x] Publish Membership Badge and Login revision 2 as `ol0VxziVwMU`.
+- [x] Publish Credential Lifecycle revision 2 as `DDjyuqs8Wpg`.
+- [x] Preserve Organization and MIP Primitives only after an automated unchanged-path attestation and public playback verification.
+- [x] Deploy final prerendered demo pages with version selection, chapters, transcripts, evidence summaries, revision history, and click-to-load YouTube playback.
+- [x] Package immutable source, master, caption, transcript, chapter, thumbnail, functional, release, privacy, expiration, publication, smoke, and attestation evidence under `marty-demo-recorder/artifacts/2026.07.0-*-r2`.
+- [x] Pass 39 recorder tests, the complete frontend suite, production build, final YouTube status checks, and responsive beta smoke checks.
+- [ ] Qualify SpruceKit and the EUDI Android reference wallet as separate independent-wallet revisions.
+- [ ] Publish the remaining required scenarios and advance release coverage only when every required result passes.
+
+Release state remains `DRAFT` / `PARTIAL`. The public videos are product demonstrations using the ElevenID LLC first-party control wallet and are not represented as independent interoperability evidence.
