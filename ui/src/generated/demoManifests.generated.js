@@ -49,9 +49,10 @@ export const DEMO_MANIFESTS = {
     "publication_attestation": null,
     "superseded_by": null,
     "recorder_revision": {
-      "kind": "unversioned-source-snapshot",
-      "value": "66821731489b237971eb4733571d470507bbe21ada1d1dbc6ca02961eb7c8fe1"
+      "kind": "git",
+      "value": "b0245e9843591bd59c2423a89e3e982582de020b"
     },
+    "demo_application_revision": "d4f8ec115dba3b8f993e428ac2333c8578cede77",
     "component_revisions": [
       {
         "component": "longfellow-zk",
@@ -603,15 +604,11 @@ export const DEMO_MANIFESTS = {
         "limitations": [
           "This scenario covers organization primitives only; holder and wallet workflows are demonstrated separately."
         ],
-        "published_at": "2026-07-13T23:05:26.881Z",
+        "published_at": "2026-07-15T00:16:34.471Z",
         "publication_attestation": {
           "kind": "AUTOMATED",
-          "pipeline_revision": "957c039db68a699d741347fe68c15c6744276370",
-          "result_sha256": "48a8185d8353c6e3c4c12dcc67752e743ab5ada14f1932452246b0badc61076d",
-          "verification_report_sha256": "33a0080fb72f7e503bcf8be99f23afb685daff30607cdcfce2410880a787b1fe",
-          "smoke_report_sha256": "33a0080fb72f7e503bcf8be99f23afb685daff30607cdcfce2410880a787b1fe",
-          "youtube_privacy_status": "public",
-          "published_at": "2026-07-13T23:05:26.881Z",
+          "pipeline_revision": "b0245e9843591bd59c2423a89e3e982582de020b",
+          "published_at": "2026-07-15T00:16:34.471Z",
           "checks": [
             "accessibility",
             "captions",
@@ -621,7 +618,11 @@ export const DEMO_MANIFESTS = {
             "privacy",
             "thumbnail",
             "transcript"
-          ]
+          ],
+          "verification_report_sha256": "640eec569d47b13a412473a70ca79be5ea070d1c9d83f34009101ccdacf9c949",
+          "result_sha256": "d7091b311bf31f75229720ac2f6f73f10dbf154c739abdd359f7b1008b176157",
+          "youtube_privacy_status": "public",
+          "smoke_report_sha256": "3374b09fd8c4040df233451fc599b05acb94c04f2cf19e786f1e0013607b4f60"
         },
         "inherited_evidence": null
       },
