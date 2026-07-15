@@ -50,9 +50,9 @@ export const DEMO_MANIFESTS = {
     "superseded_by": null,
     "recorder_revision": {
       "kind": "git",
-      "value": "d6af6712301aa9dc164026635d8a03a38d9f35ea"
+      "value": "3675fdac04b69f00fb2e7372359e576f9f2b0d8a"
     },
-    "demo_application_revision": "d4f8ec115dba3b8f993e428ac2333c8578cede77",
+    "demo_application_revision": "cb3fdb0d7adcd29f3693b5a1832ab4a4333f4294",
     "component_revisions": [
       {
         "component": "longfellow-zk",
@@ -239,7 +239,7 @@ export const DEMO_MANIFESTS = {
           }
         ],
         "mip_version": "0.3.1",
-        "state": "VALIDATED",
+        "state": "PUBLIC",
         "audiences": [
           "Holder",
           "Issuer",
@@ -263,8 +263,15 @@ export const DEMO_MANIFESTS = {
           "sha256": "f4e637ed70e12e7d7245e6c94906b7f0bae12967c47ae75eb291b9866865b3dc",
           "alt": "ElevenID holder interface showing the membership badge credential login result"
         },
-        "youtube_id": null,
-        "media_evidence": null,
+        "youtube_id": "ol0VxziVwMU",
+        "media_evidence": {
+          "video_sha256": "a8604fecb8073d1fe0a95aef5fb572bd3b50e04a052d2512dad3208bb11d2654",
+          "captions_sha256": "c28a5aad0b0874200a343cb663fe9d86a5503fff37659dee76c31629aaf67c20",
+          "thumbnail_sha256": "76bcf19026d069c58f7e0dc17eccff92d892405c1e6d6e90c025d3e5c2494fab",
+          "privacy_scan_sha256": "7a637238e30530a921845ba51f2dfd298c7c3e26915fa3d25cb510961d6a4092",
+          "publication_config_sha256": "f2c9ad8e5d8351dfed9a3400c327b8b9cd88e631c3faf2935b18cdeed08fa10b",
+          "youtube_uploaded_at": "2026-07-15T00:35:40.587Z"
+        },
         "transcript": {
           "language": "en",
           "segments": [
@@ -357,10 +364,28 @@ export const DEMO_MANIFESTS = {
           }
         ],
         "limitations": [
-          "The validated release-control wallet run is complete; a production-quality YouTube recording and reviewed captions are being prepared."
+          "Revision 2 uses the ElevenID LLC first-party control wallet; independent Open Badge wallet qualification is tracked separately."
         ],
-        "published_at": null,
-        "publication_attestation": null,
+        "published_at": "2026-07-15T00:50:42.658Z",
+        "publication_attestation": {
+          "kind": "AUTOMATED",
+          "pipeline_revision": "d6af6712301aa9dc164026635d8a03a38d9f35ea",
+          "published_at": "2026-07-15T00:50:42.658Z",
+          "checks": [
+            "accessibility",
+            "captions",
+            "evidence",
+            "links",
+            "playback",
+            "privacy",
+            "thumbnail",
+            "transcript"
+          ],
+          "verification_report_sha256": "9357c84a8b92660ad4cdf669a275ae4de90acfd7ff9d97747db6eb243696363d",
+          "result_sha256": "646ae8ab913c9576e4ab44f8c16b3ec5ee88f5f5ee2ddd904ea6de59869279a0",
+          "youtube_privacy_status": "public",
+          "smoke_report_sha256": "05c3377f4e32b91ace77e7006675490cfb57650286ee2554ed0b91572adb882f"
+        },
         "inherited_evidence": null
       },
       {
@@ -977,7 +1002,7 @@ export const DEMO_MANIFESTS = {
           }
         ],
         "mip_version": "0.3.1",
-        "state": "VALIDATED",
+        "state": "PUBLIC",
         "audiences": [
           "Holder",
           "Issuer",
@@ -1004,8 +1029,15 @@ export const DEMO_MANIFESTS = {
           "sha256": "b5f125b029fe7a5dbccb856222b7cde6860b7d827fa289b7ad0d1440f4664703",
           "alt": "ElevenID issued credential lifecycle controls and status history"
         },
-        "youtube_id": null,
-        "media_evidence": null,
+        "youtube_id": "DDjyuqs8Wpg",
+        "media_evidence": {
+          "video_sha256": "e6429b5c66ec9cfcee1a14afa6d8c0c4272d63b7a20ee379f8726849f78755b2",
+          "captions_sha256": "019551daed0f998d070e8b8fd7fbe4bbea10e5f5390ccba3c90d18a258f37777",
+          "thumbnail_sha256": "4e77ec12c32adfb6e9619664cdf1e0b1a65578465b117bebe7aae193a699278b",
+          "privacy_scan_sha256": "5a07ccbfb68d964106c4cc240b9599a7855a1edd23e95a581ef16fab533444e3",
+          "publication_config_sha256": "2dd36fc030105cf6827897778b67c8bd4238df748f810d778ba810bae78e0d27",
+          "youtube_uploaded_at": "2026-07-15T00:53:58.374Z"
+        },
         "transcript": {
           "language": "en",
           "segments": [
@@ -1099,15 +1131,33 @@ export const DEMO_MANIFESTS = {
           {
             "id": "public-video",
             "label": "The complete lifecycle is composed, captioned, and published.",
-            "result": "NOT_RUN",
-            "evidence_sha256": null
+            "result": "PASS",
+            "evidence_sha256": "e6429b5c66ec9cfcee1a14afa6d8c0c4272d63b7a20ee379f8726849f78755b2"
           }
         ],
         "limitations": [
           "Revision 2 uses the ElevenID LLC first-party control wallet; independent-wallet qualification is tracked separately."
         ],
-        "published_at": null,
-        "publication_attestation": null,
+        "published_at": "2026-07-15T00:55:51.406Z",
+        "publication_attestation": {
+          "kind": "AUTOMATED",
+          "pipeline_revision": "d6af6712301aa9dc164026635d8a03a38d9f35ea",
+          "published_at": "2026-07-15T00:55:51.406Z",
+          "checks": [
+            "accessibility",
+            "captions",
+            "evidence",
+            "links",
+            "playback",
+            "privacy",
+            "thumbnail",
+            "transcript"
+          ],
+          "verification_report_sha256": "9160e17f3484ba7be92143eefdfa7f6878198a4e3ad8c94888838ca7533800e6",
+          "result_sha256": "f5fbbbd57cc09fbe4a702cbd4cfd2223880d51f569a400640c8bd644f916a2ae",
+          "youtube_privacy_status": "public",
+          "smoke_report_sha256": "92fbc162f3cab0ad9f3949a46417337c72f023203aa5b492ee7ac1690601a583"
+        },
         "inherited_evidence": null
       }
     ]
