@@ -50,7 +50,7 @@ export const DEMO_MANIFESTS = {
     "superseded_by": null,
     "recorder_revision": {
       "kind": "git",
-      "value": "388b1a585fffb900dce099640d7c7a7ef5558c88"
+      "value": "ec97197fda0a8acc4a28360f7f9c991b3b5d4d1f"
     },
     "demo_application_revision": "d4f8ec115dba3b8f993e428ac2333c8578cede77",
     "component_revisions": [
