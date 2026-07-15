@@ -70,6 +70,7 @@ describeIfBuilt('prerendered ElevenID LLC demo output', () => {
     expect(scenarioHtml).toContain('Automated publication verification')
     expect(scenarioHtml).toContain('Play recording')
     expect(scenarioHtml).toContain('https://elevenidllc.com/demos/2026.07.0/membership-badge-login')
-    expect(scenarioHtml).not.toContain('youtube-nocookie.com/embed')
+    expect(scenarioHtml).toContain('youtube-nocookie.com/embed')
+    expect(scenarioHtml).not.toContain('<iframe')
   })
 })
