@@ -32,7 +32,7 @@
   "superseded_by": null,
   "recorder_revision": {
     "kind": "git",
-    "value": "ec97197fda0a8acc4a28360f7f9c991b3b5d4d1f"
+    "value": "d6af6712301aa9dc164026635d8a03a38d9f35ea"
   },
   "demo_application_revision": "d4f8ec115dba3b8f993e428ac2333c8578cede77",
   "component_revisions": [

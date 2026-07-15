@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
 
 import {
   DemoManifestError,
@@ -103,6 +104,38 @@ describe('demoManifestService', () => {
       scenarios: [{ ...scenario, state: 'YOUTUBE_UNLISTED', youtube_id: 'abcdefghijk' }],
     };
     expect(() => validateDemoManifest(configured)).toThrow('release-bound media evidence');
+  });
+
+  it('accepts only an explicit transient smoke candidate without a final smoke hash', () => {
+    const candidate = JSON.parse(readFileSync('public/demos/manifests/2026.07.0.json', 'utf8'));
+    const publishedAt = '2026-07-15T00:00:00Z';
+    const membership = candidate.scenarios.find((item) => item.slug === 'membership-badge-login');
+    membership.state = 'PUBLIC';
+    membership.youtube_id = 'abcdefghijk';
+    membership.published_at = publishedAt;
+    membership.media_evidence = {
+      video_sha256: '1'.repeat(64),
+      captions_sha256: '2'.repeat(64),
+      thumbnail_sha256: '3'.repeat(64),
+      privacy_scan_sha256: '4'.repeat(64),
+      publication_config_sha256: '5'.repeat(64),
+      youtube_uploaded_at: publishedAt,
+    };
+    membership.limitations = ['First-party control evidence.'];
+    membership.publication_attestation = {
+      kind: 'AUTOMATED',
+      smoke_pending: true,
+      pipeline_revision: 'a'.repeat(40),
+      published_at: publishedAt,
+      checks: ['accessibility', 'captions', 'evidence', 'links', 'playback', 'privacy', 'thumbnail', 'transcript'],
+      verification_report_sha256: '6'.repeat(64),
+      result_sha256: '7'.repeat(64),
+      youtube_privacy_status: 'public',
+    };
+
+    expect(() => validateDemoManifest(candidate)).not.toThrow();
+    membership.publication_attestation.smoke_pending = false;
+    expect(() => validateDemoManifest(candidate)).toThrow('invalid public smoke report hash');
   });
 
   it('rejects a manifest bound to another ElevenID LLC release', async () => {
