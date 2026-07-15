@@ -9,6 +9,7 @@ const BETA_ORIGIN = process.env.BETA_ORIGIN || 'https://beta.elevenidllc.com';
 const manifestPath = process.env.ELEVENID_DEMO_MANIFEST;
 const videoId = process.env.ELEVENID_DEMO_VIDEO_ID;
 const reportPath = process.env.ELEVENID_DEMO_SMOKE_REPORT;
+const PUBLIC_BROWSER_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36';
 
 async function main() {
   if (!manifestPath || !videoId || !reportPath) throw new Error('Demo manifest, video ID, and smoke report path are required');
@@ -29,7 +30,10 @@ async function main() {
   };
   try {
     for (const width of [320, 390, 768, 1440]) {
-      const context = await browser.newContext({ viewport: { width, height: width < 768 ? 844 : 1000 } });
+      const context = await browser.newContext({
+        viewport: { width, height: width < 768 ? 844 : 1000 },
+        userAgent: PUBLIC_BROWSER_USER_AGENT,
+      });
       const page = await context.newPage();
       page.on('pageerror', (error) => report.pageErrors.push(error.message));
       page.on('requestfailed', (request) => {
