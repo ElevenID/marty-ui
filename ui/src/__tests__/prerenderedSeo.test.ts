@@ -67,7 +67,8 @@ describeIfBuilt('prerendered ElevenID LLC demo output', () => {
 
     const scenarioHtml = readPrerenderedHtml('demos', '2026.07.0', 'membership-badge-login')
     expect(scenarioHtml).toContain('Membership Badge and Login')
-    expect(scenarioHtml).toContain('Recording publication pending')
+    expect(scenarioHtml).toContain('Automated publication verification')
+    expect(scenarioHtml).toContain('Play recording')
     expect(scenarioHtml).toContain('https://elevenidllc.com/demos/2026.07.0/membership-badge-login')
     expect(scenarioHtml).not.toContain('youtube-nocookie.com/embed')
   })
