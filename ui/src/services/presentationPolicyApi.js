@@ -36,10 +36,25 @@ const TRUST_SOURCE_TYPE_ALIASES = {
 const SECONDS_PER_DAY = 86400;
 
 const HOLDER_BINDING_PAYLOADS = {
-  none: { required: false, binding_methods: [], nonce_required: false },
-  device_key: { required: true, binding_methods: ['DEVICE_KEY'], nonce_required: false },
-  session_nonce: { required: true, binding_methods: ['NONCE'], nonce_required: true },
-  biometric: { required: true, binding_methods: ['BIOMETRIC'], nonce_required: false },
+  none: { required: false },
+  credential_key: {
+    required: true,
+    binding_methods: ['CREDENTIAL_KEY'],
+    proof_profiles: ['SD_JWT_KEY_BINDING'],
+    proof_freshness: { challenge_required: true, audience_binding_required: true, replay_detection_required: true },
+  },
+  device_key: {
+    required: true,
+    binding_methods: ['DEVICE_KEY'],
+    proof_profiles: ['OID4VP_VERIFIABLE_PRESENTATION', 'MDOC_DEVICE_AUTHENTICATION'],
+    proof_freshness: { challenge_required: true, audience_binding_required: true, replay_detection_required: true },
+  },
+  session_binding: {
+    required: true,
+    binding_methods: ['SESSION_BINDING'],
+    proof_profiles: ['OID4VP_VERIFIABLE_PRESENTATION'],
+    proof_freshness: { challenge_required: true, audience_binding_required: true, replay_detection_required: true },
+  },
 };
 
 function resolveOrganizationId(params = {}) {
@@ -334,16 +349,29 @@ function normalizeCredentialTemplateClaim(claim = {}) {
 
 function normalizeHolderBindingPayload(value) {
   if (value && typeof value === 'object' && !Array.isArray(value)) {
+    if (!value.required) return HOLDER_BINDING_PAYLOADS.none;
+    const methods = Array.isArray(value.binding_methods)
+      ? value.binding_methods
+        .filter((method) => typeof method === 'string' && method.trim() && method !== 'BIOMETRIC')
+        .map((method) => method === 'NONCE' ? 'SESSION_BINDING' : method)
+      : [];
     return {
-      required: Boolean(value.required),
-      binding_methods: Array.isArray(value.binding_methods)
-        ? value.binding_methods.filter((method) => typeof method === 'string' && method.trim())
-        : [],
-      nonce_required: Boolean(value.nonce_required),
+      required: true,
+      binding_methods: methods.length ? methods : ['DEVICE_KEY'],
+      proof_profiles: Array.isArray(value.proof_profiles) && value.proof_profiles.length
+        ? value.proof_profiles
+        : ['OID4VP_VERIFIABLE_PRESENTATION'],
+      proof_freshness: value.proof_freshness || {
+        challenge_required: true,
+        audience_binding_required: true,
+        replay_detection_required: true,
+      },
     };
   }
 
   const normalized = String(value || 'none').trim().toLowerCase();
+  if (normalized === 'session_nonce') return HOLDER_BINDING_PAYLOADS.session_binding;
+  if (normalized === 'biometric') return HOLDER_BINDING_PAYLOADS.device_key;
   return HOLDER_BINDING_PAYLOADS[normalized] || HOLDER_BINDING_PAYLOADS.device_key;
 }
 

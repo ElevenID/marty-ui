@@ -21,7 +21,7 @@ import {
   Chip,
 } from '@mui/material';
 import TimerIcon from '@mui/icons-material/Timer';
-import FingerprintIcon from '@mui/icons-material/Fingerprint';
+import KeyIcon from '@mui/icons-material/Key';
 import SecurityIcon from '@mui/icons-material/Security';
 import VerifiedIcon from '@mui/icons-material/Verified';
 import { useTranslation } from 'react-i18next';
@@ -37,16 +37,16 @@ const FreshnessBindingStep = ({ policyConfig, onConfigChange }) => {
       icon: <SecurityIcon />,
     },
     {
-      value: 'session_nonce',
-      label: t('wizards.presentationPolicy.freshnessBindingStep.bindingOptions.session_nonce.label'),
-      description: t('wizards.presentationPolicy.freshnessBindingStep.bindingOptions.session_nonce.description'),
+      value: 'session_binding',
+      label: t('wizards.presentationPolicy.freshnessBindingStep.bindingOptions.session_binding.label'),
+      description: t('wizards.presentationPolicy.freshnessBindingStep.bindingOptions.session_binding.description'),
       icon: <TimerIcon />,
     },
     {
-      value: 'biometric',
-      label: t('wizards.presentationPolicy.freshnessBindingStep.bindingOptions.biometric.label'),
-      description: t('wizards.presentationPolicy.freshnessBindingStep.bindingOptions.biometric.description'),
-      icon: <FingerprintIcon />,
+      value: 'credential_key',
+      label: t('wizards.presentationPolicy.freshnessBindingStep.bindingOptions.credential_key.label'),
+      description: t('wizards.presentationPolicy.freshnessBindingStep.bindingOptions.credential_key.description'),
+      icon: <KeyIcon />,
     },
     {
       value: 'none',

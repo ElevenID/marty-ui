@@ -208,7 +208,7 @@ export const POLICY_TEMPLATES = [
           required_value: null,
         },
       ],
-      holder_binding: 'session_nonce',
+      holder_binding: 'session_binding',
       freshness_requirements: {
         max_credential_age_seconds: 315360000, // 10 years
         max_proof_age_seconds: 300, // 5 minutes
@@ -248,7 +248,7 @@ export const POLICY_TEMPLATES = [
           required_value: null,
         },
       ],
-      holder_binding: 'biometric',
+      holder_binding: 'credential_key',
       freshness_requirements: {
         max_credential_age_seconds: 2592000, // 30 days
         max_proof_age_seconds: 300, // 5 minutes

@@ -1705,13 +1705,13 @@
             "label": "Device Key",
             "description": "Bind to device cryptographic key (recommended)"
           },
-          "session_nonce": {
-            "label": "Session Nonce",
-            "description": "One-time session binding (less secure)"
+          "session_binding": {
+            "label": "Authenticated Session",
+            "description": "Bind the presentation to an authenticated session proof"
           },
-          "biometric": {
-            "label": "Biometric",
-            "description": "Biometric authentication required"
+          "credential_key": {
+            "label": "Credential Key",
+            "description": "Require proof of control of the key bound to the credential"
           },
           "none": {
             "label": "None",
@@ -1763,8 +1763,8 @@
         },
         "holderBindingLabels": {
           "device_key": "Device Key",
-          "session_nonce": "Session Nonce",
-          "biometric": "Biometric",
+          "session_binding": "Authenticated Session",
+          "credential_key": "Credential Key",
           "none": "None"
         },
         "activation": {

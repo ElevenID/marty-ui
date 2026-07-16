@@ -40,8 +40,8 @@ const ReviewStep = ({ data, onEdit, onToggleActivation }) => {
 
   const holderBindingLabels = {
     device_key: t('wizards.presentationPolicy.reviewStep.holderBindingLabels.device_key'),
-    session_nonce: t('wizards.presentationPolicy.reviewStep.holderBindingLabels.session_nonce'),
-    biometric: t('wizards.presentationPolicy.reviewStep.holderBindingLabels.biometric'),
+    session_binding: t('wizards.presentationPolicy.reviewStep.holderBindingLabels.session_binding'),
+    credential_key: t('wizards.presentationPolicy.reviewStep.holderBindingLabels.credential_key'),
     none: t('wizards.presentationPolicy.reviewStep.holderBindingLabels.none'),
   };
 

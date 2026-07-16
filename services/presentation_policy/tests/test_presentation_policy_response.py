@@ -91,7 +91,14 @@ async def _save_policy(
     ]
     policy.accepted_credential_types = ["IdentityCredential"]
     policy.holder_binding = pp.HolderBinding(
-        required=True, binding_methods=["NONCE"], nonce_required=True
+        required=True,
+        binding_methods=["CREDENTIAL_KEY"],
+        proof_profiles=["SD_JWT_KEY_BINDING"],
+        proof_freshness={
+            "challenge_required": True,
+            "audience_binding_required": True,
+            "replay_detection_required": True,
+        },
     )
     policy.freshness = pp.FreshnessPolicy(
         max_age_seconds=3600, require_not_revoked=True
@@ -141,7 +148,9 @@ def test_get_presentation_policy_returns_protocol_shape_only() -> None:
 
     # Nested protocol objects
     assert body["holder_binding"]["required"] is True
-    assert "NONCE" in body["holder_binding"]["binding_methods"]
+    assert "CREDENTIAL_KEY" in body["holder_binding"]["binding_methods"]
+    assert body["holder_binding"]["proof_profiles"] == ["SD_JWT_KEY_BINDING"]
+    assert body["holder_binding"]["proof_freshness"]["challenge_required"] is True
     assert body["freshness"]["max_age_seconds"] == 3600
     assert body["issuer_constraints"]["min_trust_level"] == 50
     assert body["credential_ranking_strategy"] == "HIGHEST_TRUST_FIRST"

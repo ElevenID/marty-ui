@@ -30,7 +30,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from marty_common.dto import DeleteResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine, AsyncEngine
 from typing import Annotated
 
@@ -252,7 +252,7 @@ class DeploymentProfile:
     update_channel: str = "stable"
     update_policy: dict[str, Any] = field(default_factory=dict)
     offline_cache_ttl_hours: int = 24
-    biometric_required: bool = False
+    operator_biometric_authentication_required: bool = False
     audit_all_events: bool = True
     enabled_flow_ids: list[str] = field(default_factory=list)
     
@@ -425,6 +425,16 @@ class BrandingConfigurationModel(BaseModel):
 class CreateDeploymentProfileRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    @model_validator(mode="before")
+    @classmethod
+    def reject_mixed_biometric_aliases(cls, data: Any) -> Any:
+        if isinstance(data, dict) and {
+            "operator_biometric_authentication_required",
+            "biometric_required",
+        } <= data.keys():
+            raise ValueError("use only operator_biometric_authentication_required")
+        return data
+
     organization_id: str = Field(min_length=1, max_length=255)
     name: str = Field(min_length=1, max_length=255)
     description: str | None = Field(None, max_length=2000)
@@ -443,7 +453,13 @@ class CreateDeploymentProfileRequest(BaseModel):
     update_channel: str = "stable"
     update_policy: dict | None = None
     offline_cache_ttl_hours: int = 24
-    biometric_required: bool = False
+    operator_biometric_authentication_required: bool = Field(
+        default=False,
+        validation_alias=AliasChoices(
+            "operator_biometric_authentication_required",
+            "biometric_required",
+        ),
+    )
     audit_all_events: bool = True
     callbacks: CallbackConfigurationModel | None = None
     api_auth: ApiAuthConfigurationModel | None = None
@@ -455,6 +471,16 @@ class CreateDeploymentProfileRequest(BaseModel):
 class UpdateDeploymentProfileRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    @model_validator(mode="before")
+    @classmethod
+    def reject_mixed_biometric_aliases(cls, data: Any) -> Any:
+        if isinstance(data, dict) and {
+            "operator_biometric_authentication_required",
+            "biometric_required",
+        } <= data.keys():
+            raise ValueError("use only operator_biometric_authentication_required")
+        return data
+
     name: str | None = Field(None, min_length=1, max_length=255)
     description: str | None = Field(None, max_length=2000)
     status: str | None = None
@@ -464,7 +490,13 @@ class UpdateDeploymentProfileRequest(BaseModel):
     default_policy_id: str | None = None
     network_mode: str | None = None
     key_access_mode: str | None = None
-    biometric_required: bool | None = None
+    operator_biometric_authentication_required: bool | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "operator_biometric_authentication_required",
+            "biometric_required",
+        ),
+    )
     audit_all_events: bool | None = None
     offline_cache_ttl_hours: int | None = None
     environment_config: dict[str, Any] | None = None
@@ -496,7 +528,7 @@ class DeploymentProfileResponse(BaseModel):
     update_channel: str = "stable"
     update_policy: dict[str, Any] = Field(default_factory=dict)
     offline_cache_ttl_hours: int = 24
-    biometric_required: bool = False
+    operator_biometric_authentication_required: bool = False
     audit_all_events: bool = True
     canvas_feature_flags: dict[str, bool] = Field(default_factory=dict)
     lanes: list[dict[str, Any]] = Field(default_factory=list)
@@ -710,7 +742,7 @@ async def create_deployment_profile(
         update_channel=request.update_channel,
         update_policy=_sync_update_policy(request.update_channel, request.update_policy),
         offline_cache_ttl_hours=request.offline_cache_ttl_hours,
-        biometric_required=request.biometric_required,
+        operator_biometric_authentication_required=request.operator_biometric_authentication_required,
         audit_all_events=request.audit_all_events,
         enabled_flow_ids=request.enabled_flow_ids,
     )
@@ -842,8 +874,8 @@ async def update_deployment_profile(
         profile.network_mode = _normalize_network_mode(request.network_mode)
     if request.key_access_mode is not None:
         profile.key_access_mode = _normalize_key_access_mode(request.key_access_mode)
-    if request.biometric_required is not None:
-        profile.biometric_required = request.biometric_required
+    if request.operator_biometric_authentication_required is not None:
+        profile.operator_biometric_authentication_required = request.operator_biometric_authentication_required
     if request.audit_all_events is not None:
         profile.audit_all_events = request.audit_all_events
     if request.offline_cache_ttl_hours is not None:
@@ -999,7 +1031,7 @@ def _profile_to_response(profile: DeploymentProfile, lanes: list[Lane] | None = 
         update_channel=profile.update_channel,
         update_policy=profile.update_policy,
         offline_cache_ttl_hours=profile.offline_cache_ttl_hours,
-        biometric_required=profile.biometric_required,
+        operator_biometric_authentication_required=profile.operator_biometric_authentication_required,
         audit_all_events=profile.audit_all_events,
         canvas_feature_flags=_canvas_feature_flags(profile.feature_flags),
         lanes=[_lane_to_response(lane).model_dump(exclude_none=True) for lane in (lanes or [])],

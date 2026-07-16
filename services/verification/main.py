@@ -100,6 +100,7 @@ class VerificationSession:
         self.decision_reason: str = ""
         self.verified_claims: dict[str, Any] = {}
         self.credential_results: list[dict] = []
+        self.holder_binding_evidence: dict[str, Any] | None = None
         self.inspection_performed: bool = False
         self.inspection_result: str = ""
         self.vp_token: str | None = None
@@ -157,6 +158,7 @@ def _session_to_redis_dict(session: VerificationSession) -> dict[str, Any]:
         "decision_reason": session.decision_reason,
         "verified_claims": session.verified_claims,
         "credential_results": session.credential_results,
+        "holder_binding_evidence": session.holder_binding_evidence,
         "inspection_performed": session.inspection_performed,
         "inspection_result": session.inspection_result,
         "vp_token": session.vp_token,
@@ -190,6 +192,7 @@ def _session_from_dict(data: dict[str, Any]) -> VerificationSession:
     session.decision_reason = data.get("decision_reason", "")
     session.verified_claims = data.get("verified_claims", {})
     session.credential_results = data.get("credential_results", [])
+    session.holder_binding_evidence = data.get("holder_binding_evidence")
     session.inspection_performed = data.get("inspection_performed", False)
     session.inspection_result = data.get("inspection_result", "")
     session.vp_token = data.get("vp_token")
@@ -407,6 +410,36 @@ def _derive_revocation_checked(credential_results: list[dict[str, Any]]) -> bool
     return None
 
 
+def _normalize_holder_binding_evidence(
+    evaluation: dict[str, Any],
+) -> dict[str, Any] | None:
+    raw = evaluation.get("holder_binding_evidence")
+    if not isinstance(raw, dict):
+        if "holder_binding_validated" not in evaluation:
+            return None
+        raw = {
+            "required": evaluation.get("holder_binding_required", True),
+            "validated": evaluation["holder_binding_validated"],
+        }
+
+    evidence = {
+        "required": bool(raw.get("required", False)),
+        "validated": bool(raw.get("validated", False)),
+    }
+    for key in (
+        "binding_method",
+        "proof_profile",
+        "challenge_validated",
+        "audience_validated",
+        "replay_checked",
+        "proof_age_seconds",
+        "failure_reason",
+    ):
+        if raw.get(key) is not None:
+            evidence[key] = raw[key]
+    return evidence
+
+
 def _protocol_result_for_session(session: VerificationSession) -> dict[str, Any] | None:
     if not session.completed_at and not session.result:
         return None
@@ -428,6 +461,9 @@ def _protocol_result_for_session(session: VerificationSession) -> dict[str, Any]
     revocation_checked = _derive_revocation_checked(session.credential_results)
     if revocation_checked is not None:
         result["revocation_checked"] = revocation_checked
+
+    if session.holder_binding_evidence is not None:
+        result["holder_binding_evidence"] = session.holder_binding_evidence
 
     failure_reason = session.decision_reason or session.error
     if failure_reason and not passed:
@@ -1007,12 +1043,14 @@ async def submit_presentation(
         session.decision_reason = eval_result.get("decision_reason", "")
         session.verified_claims = eval_result.get("verified_claims", {})
         session.credential_results = eval_result.get("credential_results", [])
+        session.holder_binding_evidence = _normalize_holder_binding_evidence(eval_result)
         session.error = None
     except Exception as exc:
         logger.error("Evaluation failed for session %s: %s", session_id, exc)
         session.result = "failed"
         session.decision = "deny"
         session.decision_reason = str(exc)
+        session.holder_binding_evidence = None
         session.error = None
 
     # Optionally call InspectionSystem for deep document verification
