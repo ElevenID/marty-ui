@@ -205,7 +205,40 @@ class DisplayMetadata:
 class HolderBinding:
     required: bool = False
     binding_methods: list[str] = field(default_factory=list)
-    nonce_required: bool = False
+    proof_profiles: list[str] = field(default_factory=list)
+    proof_freshness: dict[str, Any] = field(default_factory=dict)
+
+
+def normalize_holder_binding(value: dict[str, Any] | None) -> HolderBinding:
+    """Read legacy policies while emitting only the MIP canonical shape."""
+    payload = dict(value or {})
+    required = bool(payload.get("required", False))
+    methods = [
+        "SESSION_BINDING" if method == "NONCE" else method
+        for method in payload.get("binding_methods", [])
+        if method != "BIOMETRIC"
+    ]
+    if required and not methods:
+        methods = ["DEVICE_KEY"]
+
+    profiles = list(payload.get("proof_profiles") or [])
+    if required and not profiles:
+        profiles = ["OID4VP_VERIFIABLE_PRESENTATION"]
+
+    proof_freshness = dict(payload.get("proof_freshness") or {})
+    if required and not proof_freshness:
+        proof_freshness = {
+            "challenge_required": True,
+            "audience_binding_required": True,
+            "replay_detection_required": True,
+        }
+
+    return HolderBinding(
+        required=required,
+        binding_methods=methods,
+        proof_profiles=profiles,
+        proof_freshness=proof_freshness,
+    )
 
 
 @dataclass
@@ -1850,7 +1883,7 @@ async def create_presentation_policy(
         purpose=request.purpose,
         accepted_credential_types=request.accepted_credential_types,
         trust_profile_id=request.trust_profile_id,
-        holder_binding=HolderBinding(**request.holder_binding) if request.holder_binding else HolderBinding(),
+        holder_binding=normalize_holder_binding(request.holder_binding),
         freshness=FreshnessPolicy(**request.freshness) if request.freshness else None,
         issuer_constraints=IssuerConstraints(**request.issuer_constraints) if request.issuer_constraints else None,
         credential_ranking_strategy=request.credential_ranking_strategy,
@@ -1981,7 +2014,7 @@ async def update_presentation_policy(
     if request.trust_profile_id is not None:
         policy.trust_profile_id = request.trust_profile_id
     if request.holder_binding is not None:
-        policy.holder_binding = HolderBinding(**request.holder_binding)
+        policy.holder_binding = normalize_holder_binding(request.holder_binding)
     if request.freshness is not None:
         policy.freshness = FreshnessPolicy(**request.freshness)
     if request.issuer_constraints is not None:
@@ -2269,14 +2302,19 @@ async def evaluate_presentation(
     #
     # MIP flow note:
     # - Some credential-login policies intentionally do NOT require holder
-    #   binding (`holder_binding.required=false`, `nonce_required=false`).
+    #   binding (`holder_binding.required=false`).
     # - Passing nonce/audience unconditionally can force SD-JWT key-binding
     #   checks and reject otherwise valid issuer-signed credentials.
     #
-    # Therefore only enforce nonce/audience at credential-verification time when
-    # the policy requires holder binding (or explicitly requires nonce).
-    verify_nonce = request.nonce if (policy.holder_binding.required or policy.holder_binding.nonce_required) else None
-    verify_audience = request.audience if policy.holder_binding.required else None
+    # A nonce is a freshness challenge, not holder binding by itself. It is
+    # supplied only when the configured proof profile requires a signed challenge.
+    proof_freshness = policy.holder_binding.proof_freshness
+    verify_nonce = request.nonce if (
+        policy.holder_binding.required and proof_freshness.get("challenge_required", True)
+    ) else None
+    verify_audience = request.audience if (
+        policy.holder_binding.required and proof_freshness.get("audience_binding_required", True)
+    ) else None
 
     verification_result = _verify_credential_by_format(
         request.vp_token,
@@ -2740,7 +2778,8 @@ def _policy_to_response(policy: PresentationPolicy) -> PresentationPolicyRespons
         holder_binding={
             "required": policy.holder_binding.required,
             "binding_methods": policy.holder_binding.binding_methods,
-            "nonce_required": policy.holder_binding.nonce_required,
+            "proof_profiles": policy.holder_binding.proof_profiles,
+            "proof_freshness": policy.holder_binding.proof_freshness,
         },
         freshness={
             "max_age_seconds": policy.freshness.max_age_seconds,

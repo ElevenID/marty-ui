@@ -8,7 +8,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 # =============================================================================
@@ -760,7 +760,8 @@ class HolderBindingModel(BaseModel):
     """How to verify the presenter is the legitimate holder."""
     required: bool = False
     binding_methods: list[str] = Field(default_factory=list)
-    nonce_required: bool = False
+    proof_profiles: list[str] = Field(default_factory=list)
+    proof_freshness: dict[str, Any] = Field(default_factory=dict)
 
 
 class IssuerConstraintsModel(BaseModel):
@@ -875,6 +876,16 @@ class DeploymentProfileCreate(BaseModel):
 class DeploymentProfileUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    @model_validator(mode="before")
+    @classmethod
+    def reject_mixed_biometric_aliases(cls, data: Any) -> Any:
+        if isinstance(data, dict) and {
+            "operator_biometric_authentication_required",
+            "biometric_required",
+        } <= data.keys():
+            raise ValueError("use only operator_biometric_authentication_required")
+        return data
+
     name: str | None = None
     description: str | None = None
     status: str | None = None
@@ -884,7 +895,13 @@ class DeploymentProfileUpdate(BaseModel):
     default_policy_id: str | None = None
     network_mode: str | None = None
     key_access_mode: str | None = None
-    biometric_required: bool | None = None
+    operator_biometric_authentication_required: bool | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "operator_biometric_authentication_required",
+            "biometric_required",
+        ),
+    )
     environment_config: dict | None = None
     feature_flags: FeatureFlagsModel | None = None
 
@@ -909,7 +926,7 @@ class DeploymentProfileResponse(BaseModel):
     update_channel: str | None = None
     update_policy: dict | None = None
     offline_cache_ttl_hours: int | None = None
-    biometric_required: bool | None = None
+    operator_biometric_authentication_required: bool | None = None
     audit_all_events: bool | None = None
     canvas_feature_flags: dict[str, bool] = Field(default_factory=dict)
     lanes: list[dict] = Field(default_factory=list)

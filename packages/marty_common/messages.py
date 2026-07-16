@@ -91,8 +91,6 @@ class TokenResponsePayload:
     access_token: str
     token_type: str = "Bearer"
     expires_in: int | None = None
-    c_nonce: str | None = None
-    c_nonce_expires_in: int | None = None
 
 
 @dataclass
@@ -104,7 +102,7 @@ class CredentialProofPayload:
 @dataclass
 class CredentialRequestPayload:
     format: str
-    proofs: list[CredentialProofPayload] = field(default_factory=list)
+    proofs: dict[str, list[str]] = field(default_factory=dict)
     credential_configuration_id: str | None = None
     credential_identifier: str | None = None
 

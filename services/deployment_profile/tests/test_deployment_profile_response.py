@@ -4,11 +4,24 @@ import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from marty_common.org_authorization import OrganizationMembership, OrganizationRoleSummary
 
 from services.deployment_profile import main as deployment_profile
+
+
+def test_deployment_profile_rejects_mixed_biometric_aliases() -> None:
+    with pytest.raises(ValueError, match="operator_biometric_authentication_required"):
+        deployment_profile.CreateDeploymentProfileRequest.model_validate(
+            {
+                "organization_id": "org-1",
+                "name": "Profile",
+                "operator_biometric_authentication_required": True,
+                "biometric_required": True,
+            }
+        )
 
 
 def _build_client(
@@ -150,7 +163,7 @@ def test_get_deployment_profile_exposes_protocol_aligned_shape_only() -> None:
         "update_channel",
         "update_policy",
         "offline_cache_ttl_hours",
-        "biometric_required",
+        "operator_biometric_authentication_required",
         "audit_all_events",
         "canvas_feature_flags",
         "lanes",

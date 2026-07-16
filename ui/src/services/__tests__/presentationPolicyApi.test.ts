@@ -84,7 +84,12 @@ describe('presentationPolicyApi', () => {
         holder_binding: {
           required: true,
           binding_methods: ['DEVICE_KEY'],
-          nonce_required: false,
+          proof_profiles: ['OID4VP_VERIFIABLE_PRESENTATION', 'MDOC_DEVICE_AUTHENTICATION'],
+          proof_freshness: {
+            challenge_required: true,
+            audience_binding_required: true,
+            replay_detection_required: true,
+          },
         },
         freshness: {
           max_age_seconds: 86400,

@@ -35,7 +35,7 @@ deployment_profiles = Table(
     Column("update_channel", String(50), nullable=False, default="stable"),
     Column("update_policy", JSON, nullable=False, default=dict),
     Column("offline_cache_ttl_hours", Integer, nullable=False, default=24),
-    Column("biometric_required", Boolean, nullable=False, default=False),
+    Column("operator_biometric_authentication_required", Boolean, nullable=False, default=False),
     Column("audit_all_events", Boolean, nullable=False, default=True),
     Column("api_key", Text, nullable=True),
     Column("api_key_prefix", String(255), nullable=False, default=""),

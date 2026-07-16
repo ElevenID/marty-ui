@@ -121,6 +121,15 @@ def test_submit_presentation_returns_protocol_result() -> None:
                     "revocation_checked": True,
                 }
             ],
+            "holder_binding_evidence": {
+                "required": True,
+                "validated": True,
+                "binding_method": "SESSION_BINDING",
+                "proof_profile": "OID4VP_VERIFIABLE_PRESENTATION",
+                "challenge_validated": True,
+                "audience_validated": True,
+                "replay_checked": True,
+            },
         }
 
     verification._evaluate_via_grpc = _fake_evaluate_via_grpc
@@ -143,6 +152,15 @@ def test_submit_presentation_returns_protocol_result() -> None:
         "claims_missing": ["family_name"],
         "trust_validated": True,
         "revocation_checked": True,
+        "holder_binding_evidence": {
+            "required": True,
+            "validated": True,
+            "binding_method": "SESSION_BINDING",
+            "proof_profile": "OID4VP_VERIFIABLE_PRESENTATION",
+            "challenge_validated": True,
+            "audience_validated": True,
+            "replay_checked": True,
+        },
     }
     assert body["completed_at"] is not None
     assert body["updated_at"] == body["completed_at"]
