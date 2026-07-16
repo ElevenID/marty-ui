@@ -170,16 +170,6 @@
       "saveButton": "Save Changes",
       "saving": "Saving..."
     },
-    "subscription": {
-      "title": "Subscription Plan",
-      "currentPlan": "Current Plan",
-      "status": "Status",
-      "limits": "Limits",
-      "billingPeriod": "Billing Period",
-      "noSubscription": "No active subscription found",
-      "active": "Active",
-      "free": "Free"
-    },
     "info": {
       "title": "Organization Info",
       "created": "Created",
@@ -228,52 +218,6 @@
       "deviceIdPlaceholder": "device-uuid-here",
       "cancelButton": "Cancel",
       "assignButton": "Assign"
-    }
-  },
-  "processingFeeConfig": {
-    "title": "Processing Fees",
-    "description": "Configure fees charged to applicants when they apply for credentials.",
-    "saveButton": "Save Changes",
-    "saving": "Saving...",
-    "mockModeAlert": "Development Mode: Payments are mocked. No real charges will be made.",
-    "freeProcessing": {
-      "label": "Free Processing",
-      "description": "Waive all processing fees for applicants"
-    },
-    "defaultFee": {
-      "title": "Default Processing Fee",
-      "description": "This fee is charged to all applicants unless per-credential fees are configured."
-    },
-    "perCredentialFees": {
-      "label": "Per-Credential Fees",
-      "description": "Set different fees for each credential type",
-      "default": "Default: ${{amount}}"
-    },
-    "summary": {
-      "title": "Fee Summary",
-      "currentConfig": "Current Configuration",
-      "free": "Free",
-      "defaultAmount": "${{amount}} default",
-      "feeRange": "Fee Range",
-      "estimatedRevenue": "Estimated Monthly Revenue",
-      "revenueNote": "Based on ~100 applicants/month"
-    },
-    "info": {
-      "title": "Payment Processing",
-      "description": "Processing fees are collected via Square at the time of application. Funds are deposited to your connected Square account minus Square's transaction fees (2.6% + $0.10)."
-    },
-    "credentialTypes": {
-      "passport": "Passport Application",
-      "visa": "Visa Application",
-      "permit": "Work Permit",
-      "license": "License Renewal",
-      "certificate": "Certificate Request"
-    },
-    "messages": {
-      "loadFailed": "Failed to load settings",
-      "saveSuccess": "Fee settings saved successfully",
-      "saveFailed": "Failed to save settings",
-      "invalidFee": "Invalid fee for {{credType}}: {{error}}"
     }
   },
   "templateCatalog": {
@@ -961,7 +905,6 @@
       "apiKeys": "API Keys",
       "activeApplicants": "Active Applicants",
       "credentialsIssued": "Credentials Issued",
-      "processingFee": "Processing Fee",
       "trend": "+{{count}} this {{period}}"
     },
     "alerts": {
@@ -1022,10 +965,6 @@
       "devices": {
         "title": "Configure Devices",
         "description": "Manage mobile device fleet for your applicants"
-      },
-      "fees": {
-        "title": "Processing Fees",
-        "description": "Set and manage applicant processing fees"
       },
       "apiDocs": {
         "title": "API Documentation",
@@ -1220,9 +1159,7 @@
       "requireDocumentVerification": "Require Document Verification",
       "renewalTitle": "Renewal Settings",
       "allowRenewal": "Allow Credential Renewal",
-      "renewalWindowDays": "Renewal Window (days before expiry)",
-      "feeTitle": "Processing Fee",
-      "processingFee": "Processing Fee ($)"
+      "renewalWindowDays": "Renewal Window (days before expiry)"
     },
     "preview": {
       "title": "Form Preview",

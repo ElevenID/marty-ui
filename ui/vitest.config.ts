@@ -50,6 +50,7 @@ export default defineConfig({
       '@config': resolve(__dirname, './src/config'),
       '@ui-public-config': resolve(__dirname, './src/variants/publicConfig.public.js'),
       '@ui-public-routes': resolve(__dirname, './src/variants/publicSite.public.jsx'),
+      '@marty/commerce-extension': resolve(__dirname, './src/extensions/commerce/publicStub.jsx'),
       '@test': resolve(__dirname, './src/test'),
     },
   },

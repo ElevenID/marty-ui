@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "name": "selfhost-beta-tunnel",
-  "description": "Optional beta.elevenidllc.com Cloudflare tunnel profile for the rare case where beta intentionally routes into the same licensed self-host production edge and Keycloak.",
+  "description": "Optional beta Cloudflare tunnel profile for the self-host production edge and Keycloak.",
   "parent_stack": "selfhost-production",
   "env_file": ".env.selfhost.production.local",
   "compose_files": ["docker-compose.selfhost.prod.yml"],
@@ -10,9 +10,8 @@
   "primary_domain": "beta.elevenidllc.com",
   "required_service_groups": ["selfhost_beta_tunnel"],
   "required_services": ["tunnel-nginx-proxy", "cloudflared-beta"],
-  "required_secrets": ["cloudflare_beta_tunnel_token", "license_key"],
-  "license_policy": "selfhost-system",
-  "artifact_profile": "selfhost-commercial",
+  "required_secrets": ["cloudflare_beta_tunnel_token"],
+  "artifact_profile": "oss-release",
   "deployment_targets": ["docker-compose"],
   "tunnel": {
     "remote_origin": "http://tunnel-nginx-proxy:80",

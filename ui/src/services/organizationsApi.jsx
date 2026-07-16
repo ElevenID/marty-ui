@@ -241,33 +241,6 @@ export async function removeOrganizationMember(organizationId, userId) {
 }
 
 /**
- * Get organization subscription details
- * @param {string} organizationId - Organization ID
- * @returns {Promise<Object>} - Subscription details with tier and limits
- */
-export async function getOrganizationSubscription(organizationId) {
-  const orgId = requireOrganizationId(organizationId, 'loading organization subscription');
-  return get(`${BASE_PATH}/${encodeURIComponent(orgId)}/subscription`);
-}
-
-/**
- * Get organization usage statistics
- * @param {string} organizationId - Organization ID
- * @param {Object} options - Query options
- * @param {string} options.startDate - Start date ISO string
- * @param {string} options.endDate - End date ISO string
- * @returns {Promise<Object>} - Usage statistics
- */
-export async function getOrganizationUsage(organizationId, { startDate, endDate } = {}) {
-  const orgId = requireOrganizationId(organizationId, 'loading organization usage');
-  const queryString = buildTruthyQueryString({
-    start_date: startDate,
-    end_date: endDate,
-  });
-  return get(withQuery(`${BASE_PATH}/${encodeURIComponent(orgId)}/usage`, queryString));
-}
-
-/**
  * Get organization invitations
  * @param {string} organizationId - Organization ID
  * @returns {Promise<Array>} - Array of invitation objects
@@ -348,8 +321,6 @@ export default {
   addOrganizationMember,
   updateOrganizationMember,
   removeOrganizationMember,
-  getOrganizationSubscription,
-  getOrganizationUsage,
   getOrganizationInvitations,
   createOrganizationInvitation,
   cancelOrganizationInvitation,

@@ -1,7 +1,6 @@
 import { Suspense } from 'react';
 import { BrowserRouter as Router } from 'react-router-dom';
 import { Box, Typography } from '@mui/material';
-import { PaymentProvider } from '@marty/subscriptions';
 
 import { AuthProvider } from '../../contexts/AuthContext';
 import { BrandingProvider } from '../../contexts/BrandingContext';
@@ -9,6 +8,7 @@ import { ConsoleProvider } from '../../contexts/ConsoleContext';
 import { NotificationProvider } from '../../contexts/NotificationContext';
 import ErrorBoundary from '../../components/ErrorBoundary';
 import { TrustProvider } from '../../components/trust/TrustProvider';
+import { CommerceProvider } from '../../extensions/commerce';
 
 function LoadingFallback() {
   return (
@@ -25,7 +25,7 @@ function AppProviders({ children }) {
         <BrandingProvider>
           <NotificationProvider>
             <TrustProvider>
-              <PaymentProvider>
+              <CommerceProvider>
                 <Router>
                   <AuthProvider>
                     <ConsoleProvider>
@@ -33,7 +33,7 @@ function AppProviders({ children }) {
                     </ConsoleProvider>
                   </AuthProvider>
                 </Router>
-              </PaymentProvider>
+              </CommerceProvider>
             </TrustProvider>
           </NotificationProvider>
         </BrandingProvider>

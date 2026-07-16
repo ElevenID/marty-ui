@@ -104,7 +104,6 @@ def test_kubernetes_runs_headless_canvas_worker_as_its_own_deployment() -> None:
         if "valueFrom" in item
     }
     assert secret_names == {
-        "LICENSE_KEY": "LICENSE_KEY",
         "DATABASE_URL": "DATABASE_URL",
         "INTEGRATION_SECRET_MASTER_KEY": "INTEGRATION_SECRET_MASTER_KEY",
         "SIGNING_KEYS_INTERNAL_API_KEY": "SIGNING_KEYS_INTERNAL_API_KEY",

@@ -89,7 +89,7 @@ $applicationMap = [ordered]@{
     "marty-compliance-profile" = "compliance-profile"; "marty-presentation-policy" = "presentation-policy"
     "marty-deployment-profile" = "deployment-profile"; "marty-flow" = "flow"; "marty-verification" = "verification"
     "marty-revocation-profile" = "revocation-profile"; "marty-device-registration" = "device-registration"
-    "marty-event-stream" = "event-stream"; "marty-billing" = "billing"; "marty-issuance" = "issuance"
+    "marty-event-stream" = "event-stream"; "marty-issuance" = "issuance"
     "marty-canvas-sync-worker" = "canvas-sync-worker"; "marty-gateway" = "gateway"
 }
 $preDeployDocument = ConvertFrom-Json -InputObject (Get-Content -LiteralPath $preDeployPath -Raw)

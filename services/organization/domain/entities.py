@@ -331,8 +331,9 @@ class Organization:
     contact_phone: str | None = None
     website: str | None = None
     
-    # Plan & billing
-    plan: str = "free"  # free | starter | professional | enterprise
+    # Legacy deployment profile fields retained for database compatibility.
+    # New capability decisions are provided through the extension interface.
+    plan: str = "free"
     plan_expires_at: datetime | None = None
     
     # Settings

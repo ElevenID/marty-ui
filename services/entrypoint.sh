@@ -6,17 +6,6 @@ if [ -r /app/load-secrets-env.sh ]; then
 	. /app/load-secrets-env.sh
 fi
 
-if [ "${MARTY_LICENSE_PREFLIGHT_DONE:-0}" != "1" ]; then
-	case "$(printf '%s' "${MARTY_LICENSE_ENFORCEMENT:-}" | tr '[:upper:]' '[:lower:]')" in
-		""|0|false|off|disabled|none)
-			;;
-		*)
-			python -m marty_common.license_gate
-			export MARTY_LICENSE_PREFLIGHT_DONE=1
-			;;
-	esac
-fi
-
 # Convert hyphens to underscores for Python module names
 MODULE_NAME=$(echo "$SERVICE_NAME" | tr '-' '_')
 

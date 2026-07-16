@@ -23,11 +23,10 @@
     "check:demo-manifests": "node scripts/generate-demo-manifest-module.mjs --check"
   },
   "dependencies": {
-    "@elevenid/marty-api-core": "file:../../marty-cli/packages/api-core",
+    "@elevenid/marty-api-core": "^0.1.0",
     "@emotion/react": "^11.11.0",
     "@emotion/styled": "^11.11.0",
-    "@marty/blog": "file:../../marty-blog",
-    "@marty/subscriptions": "file:../../marty-subscriptions",
+    "@elevenid/marty-blog": "^0.1.0",
     "@mui/icons-material": "^5.14.0",
     "@mui/material": "^5.14.0",
     "@mui/x-date-pickers": "^6.18.0",

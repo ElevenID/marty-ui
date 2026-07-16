@@ -74,10 +74,6 @@ SERVICES = [
         "module": "flow.infrastructure.models",
     },
     {
-        "name": "billing",
-        "module": "billing.infrastructure.models",
-    },
-    {
         "name": "revocation_profile",
         "module": "revocation_profile.infrastructure.models",
     },
@@ -755,7 +751,6 @@ def ensure_schemas(database_url: str) -> None:
         "presentation_policy_service",
         "deployment_profile_service",
         "flow_service",
-        "billing_service",
         "revocation_profile_service",
     ]
     

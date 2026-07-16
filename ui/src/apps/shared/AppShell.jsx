@@ -27,7 +27,6 @@ import BusinessIcon from '@mui/icons-material/Business';
 import StorefrontIcon from '@mui/icons-material/Storefront';
 import SettingsIcon from '@mui/icons-material/Settings';
 import NotificationsIcon from '@mui/icons-material/Notifications';
-import PaymentIcon from '@mui/icons-material/Payment';
 
 import { AuthContext } from '../../contexts/AuthContext';
 import { BrandingContext } from '../../contexts/BrandingContext';
@@ -241,12 +240,6 @@ function AppShell({ children, showAppBar = true }) {
                             <NotificationsIcon fontSize="small" />
                           </ListItemIcon>
                           <ListItemText>{t('common.notifications')}</ListItemText>
-                        </MenuItem>
-                        <MenuItem disabled>
-                          <ListItemIcon>
-                            <PaymentIcon fontSize="small" />
-                          </ListItemIcon>
-                          <ListItemText>{t('common.billingSubscription')}</ListItemText>
                         </MenuItem>
                         <Divider />
                         <MenuItem disabled>

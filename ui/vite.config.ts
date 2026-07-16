@@ -7,12 +7,13 @@ import { visualizer } from 'rollup-plugin-visualizer'
 import Sitemap from 'vite-plugin-sitemap'
 import { fileURLToPath, URL } from 'node:url'
 import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 
 function createManualChunk(id: string) {
   const normalizedId = id.replace(/\\/g, '/')
 
-  if (normalizedId.includes('/node_modules/@marty/blog/')) return 'blog-vendor'
-  if (normalizedId.includes('/node_modules/@marty/subscriptions/')) return 'subscriptions-vendor'
+  if (normalizedId.includes('/node_modules/@elevenid/marty-blog/')) return 'blog-vendor'
+  if (normalizedId.includes('/commerce-extension/')) return 'commerce-extension'
   if (normalizedId.includes('/node_modules/@elevenid/marty-api-core/')) return 'api-core-vendor'
   if (normalizedId.includes('/node_modules/redoc/')) return 'docs-vendor'
   if (normalizedId.includes('/node_modules/@emotion/') || normalizedId.includes('/node_modules/stylis/')) return 'emotion-vendor'
@@ -68,31 +69,27 @@ export default defineConfig(async ({ mode }) => {
   const prerenderDebug = process.env.PRERENDER_DEBUG === '1'
   const prerenderConcurrency = Number(process.env.PRERENDER_CONCURRENCY || 1)
   const port = Number(env.VITE_PORT || env.PORT || env.UI_DEV_PORT || 3000)
+  const commerceExtensionPath = process.env.MARTY_COMMERCE_EXTENSION_PATH
+    ? resolve(process.env.MARTY_COMMERCE_EXTENSION_PATH)
+    : fileURLToPath(new URL('./src/extensions/commerce/publicStub.jsx', import.meta.url))
   const bundleAnalysisBaseName = isSelfhostBuild ? 'bundle-analysis-selfhost' : 'bundle-analysis-public'
   let authorRoutes = []
   let blogRoutes = []
   let demoRoutes = []
 
   if (!isSelfhostBuild) {
-    const [
-      { BLOG_POSTS },
-      { BLOG_AUTHORS },
-      {
-        BLOG_POST_CONCEPT_TAGS,
-        BLOG_POST_STANDARDS_TAGS,
-        GUIDE_ARTICLE_SLUGS,
-        GUIDE_ARTICLES,
-        GUIDE_CHAPTERS,
-      },
-      { ARTICLE_META, getBrowseVisiblePosts },
-      { buildBlogTagPath },
-    ] = await Promise.all([
-      import('../../marty-blog/src/data/blogPosts.js'),
-      import('../../marty-blog/src/data/blogAuthors.js'),
-      import('../../marty-blog/src/data/guideContent.js'),
-      import('../../marty-blog/src/data/articleMeta.js'),
-      import('../../marty-blog/src/utils/blogTagRoutes.js'),
-    ])
+    const {
+      BLOG_POSTS,
+      BLOG_AUTHORS,
+      BLOG_POST_CONCEPT_TAGS,
+      BLOG_POST_STANDARDS_TAGS,
+      GUIDE_ARTICLE_SLUGS,
+      GUIDE_ARTICLES,
+      GUIDE_CHAPTERS,
+      ARTICLE_META,
+      getBrowseVisiblePosts,
+      buildBlogTagPath,
+    } = await import('@elevenid/marty-blog/prerender-data')
 
     const chapterById = Object.fromEntries(GUIDE_CHAPTERS.map((chapter) => [chapter.id, chapter]))
     const tagPaths = new Set()
@@ -149,16 +146,17 @@ export default defineConfig(async ({ mode }) => {
       alias: {
         '@ui-public-config': fileURLToPath(new URL(`./src/variants/publicConfig.${isSelfhostBuild ? 'selfhost' : 'public'}.js`, import.meta.url)),
         '@ui-public-routes': fileURLToPath(new URL(`./src/variants/publicSite.${isSelfhostBuild ? 'selfhost' : 'public'}.jsx`, import.meta.url)),
+        '@marty/commerce-extension': commerceExtensionPath,
       },
       // Force all react-* and router packages to resolve to a single copy from this
-      // project root. This prevents duplicate instances when @marty/blog (a symlinked
+      // project root. This prevents duplicate instances when @elevenid/marty-blog
       // local package) carries its own node_modules with react-router-dom – which would
       // create a second RouterContext that has no access to the outer <BrowserRouter>.
       dedupe: ['react', 'react-dom', 'react/jsx-runtime', 'react/jsx-dev-runtime', 'react-router-dom', 'react-router'],
     },
     optimizeDeps: {
-      include: ['react', 'react-dom', 'react/jsx-runtime', 'react/jsx-dev-runtime', 'react-router-dom', '@marty/subscriptions'],
-      exclude: isSelfhostBuild ? [] : ['@marty/blog'],
+      include: ['react', 'react-dom', 'react/jsx-runtime', 'react/jsx-dev-runtime', 'react-router-dom'],
+      exclude: isSelfhostBuild ? [] : ['@elevenid/marty-blog'],
     },
     plugins: [
       react(),
@@ -203,7 +201,6 @@ export default defineConfig(async ({ mode }) => {
             '/terms-of-service',
             ...blogRoutes,
             ...authorRoutes,
-            '/pricing',
             '/docs',
           ],
           renderer: new PuppeteerRenderer({
@@ -260,7 +257,6 @@ export default defineConfig(async ({ mode }) => {
             '/terms-of-service',
             ...blogRoutes,
             ...authorRoutes,
-            '/pricing',
             '/docs',
           ],
           exclude: [
@@ -283,7 +279,6 @@ export default defineConfig(async ({ mode }) => {
             '/product': 0.9,
             '/solutions': 0.9,
             '/developers': 0.9,
-            '/pricing': 0.9,
             '/standards': 0.8,
             '/resources': 0.8,
             '/architecture': 0.8,
@@ -354,7 +349,7 @@ export default defineConfig(async ({ mode }) => {
       allowedHosts: env.PUBLIC_DOMAIN ? [env.PUBLIC_DOMAIN, 'localhost'] : 'all',
       fs: {
         // Allow serving sibling source packages linked via file: dependencies.
-        allow: ['..', '../../marty-subscriptions', ...(!isSelfhostBuild ? ['../../marty-blog'] : [])],
+        allow: ['..'],
       },
       headers: {
         'Cache-Control': 'no-store',

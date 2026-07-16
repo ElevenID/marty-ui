@@ -121,11 +121,6 @@ services:
     environment:
       SERVICE_NAME: event_stream
 
-  billing:
-    <<: *selfhost-service-image
-    environment:
-      SERVICE_NAME: billing
-
   ui:
     image: ${SELFHOST_IMAGE_PREFIX:-ghcr.io/elevenid/marty-ui}/ui-selfhost:${SELFHOST_IMAGE_TAG:?SELFHOST_IMAGE_TAG must be set to an immutable release tag}
     pull_policy: always

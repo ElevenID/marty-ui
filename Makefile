@@ -24,13 +24,9 @@
 	canvas-real-up canvas-real-down canvas-real-logs canvas-real-status canvas-real-seed canvas-real-bootstrap \
 	proto-gen grpc-health \
 	package-selfhost-bundle \
-	selfhost-images-ghcr-setup selfhost-images-build-dry-run selfhost-images-build selfhost-images-build-push \
-	selfhost-images-artifacts-dry-run selfhost-images-release-artifacts selfhost-images-sbom selfhost-images-scan \
-	selfhost-images-sign selfhost-images-verify-signatures \
-	selfhost-prod-license-init-keypair selfhost-prod-license-issue \
 	selfhost-prod-openbao-up selfhost-prod-openbao-down selfhost-prod-openbao-ps selfhost-prod-openbao-logs \
 	selfhost-prod-openbao-bootstrap selfhost-prod-openbao-export \
-	selfhost-prod-ui-build selfhost-prod-config selfhost-prod-check selfhost-prod-bootstrap selfhost-prod-up \
+	selfhost-prod-config selfhost-prod-check selfhost-prod-bootstrap selfhost-prod-up \
 	selfhost-prod-down selfhost-prod-restart selfhost-prod-ps selfhost-prod-logs \
 	selfhost-prod-beta-tunnel-up selfhost-prod-beta-tunnel-stop selfhost-prod-beta-tunnel-ps selfhost-prod-beta-tunnel-logs \
 	deploy-catalog-validate deploy-stack-plan selfhost-prod-plan selfhost-prod-beta-tunnel-plan \
@@ -78,27 +74,7 @@ SELFHOST_OPENBAO_COMPOSE := $(COMPOSE) --env-file $(SELFHOST_ENV_FILE) -f docker
 SELFHOST_OPENBAO_LOG_SERVICES := openbao openbao-bootstrap
 SELFHOST_PROD_LOG_SERVICES := edge cloudflared gateway keycloak
 SELFHOST_PROD_BETA_TUNNEL_SERVICES := tunnel-nginx-proxy cloudflared-beta
-SELFHOST_ISSUER_TOOL := ../tools/selfhost-license-issuer/selfhost_license_issuer.py
-SELFHOST_IMAGE_RELEASE_SCRIPT := ./scripts/build-selfhost-images-local.sh
-SELFHOST_IMAGE_ARTIFACTS_SCRIPT := ./scripts/prepare-selfhost-release-artifacts.py
-SELFHOST_GHCR_SETUP_SCRIPT := ./scripts/ghcr-setup.sh
-SELFHOST_VERSION_FILE ?= VERSION
-SELFHOST_DEFAULT_RELEASE_TAG := $(strip $(shell if [ -f "$(SELFHOST_VERSION_FILE)" ]; then tr -d '\r\n' < "$(SELFHOST_VERSION_FILE)"; fi))
-SELFHOST_RELEASE_TAG ?= $(if $(TAG),$(TAG),$(SELFHOST_DEFAULT_RELEASE_TAG))
-SELFHOST_RELEASE_SCAN_TOOL ?= auto
-COSIGN_KEY ?=
-COSIGN_PUBLIC_KEY ?=
-ifeq ($(OS),Windows_NT)
-SELFHOST_ISSUER_KEY_DIR ?= $(subst \\,/,$(LOCALAPPDATA))/MartyLicenseIssuer/keys
-else
-SELFHOST_ISSUER_KEY_DIR ?= $(HOME)/.local/share/MartyLicenseIssuer/keys
-endif
-SELFHOST_ISSUER_PRIVATE_KEY ?= $(SELFHOST_ISSUER_KEY_DIR)/private_key.pem
-SELFHOST_ISSUER_PUBLIC_KEY ?= $(SELFHOST_ISSUER_KEY_DIR)/public_key.pem
-SELFHOST_LICENSE_OUTPUT_FILE ?= ../marty-selfhost-prod/license-issuer/issued/selfhost-license.jwt
-SELFHOST_LICENSE_ORG_NAME ?= Marty Self-Host Local
 SELFHOST_SECRET_DIR ?=
-SELFHOST_LICENSE_SUBJECT ?= $(MARTY_ORG_ID)
 
 INFRA_SERVICES := postgres redis keycloak mailpit openbao
 APP_SERVICES := event-stream issuance gateway auth organization credential-template trust-profile applicant notification compliance-profile presentation-policy deployment-profile flow revocation-profile verification envoy
@@ -180,84 +156,10 @@ build-wheels: ## Build native Rust wheels for local Python development (optional
 	@bash $(WHEELS_SCRIPT)
 	@echo "$(GREEN)✓ Native wheels built successfully$(NC)"
 
-package-selfhost-bundle: ## Stage the image-based self-host customer bundle in dist/selfhost-bundle
-	@echo "$(BLUE)Staging self-host customer bundle...$(NC)"
+package-selfhost-bundle: ## Stage the image-based open-source self-host bundle in dist/selfhost-bundle
+	@echo "$(BLUE)Staging open-source self-host bundle...$(NC)"
 	@python scripts/package-selfhost-bundle.py
-	@echo "$(GREEN)✓ Self-host customer bundle staged$(NC)"
-
-selfhost-images-ghcr-setup: ## Authenticate Docker to GHCR for local self-host image publishing
-	@bash $(SELFHOST_GHCR_SETUP_SCRIPT)
-
-selfhost-images-build-dry-run: ## Print the local self-host image build plan (TAG=<version>, defaults to VERSION)
-	@if [ -z "$(SELFHOST_RELEASE_TAG)" ]; then \
-		echo "$(RED)❌ Error: set TAG/SELFHOST_RELEASE_TAG or create VERSION (example: echo 2026.05.0 > VERSION)$(NC)"; \
-		exit 1; \
-	fi
-	@SELFHOST_IMAGE_PREFIX="$(SELFHOST_IMAGE_PREFIX)" bash $(SELFHOST_IMAGE_RELEASE_SCRIPT) --tag "$(SELFHOST_RELEASE_TAG)" --dry-run
-
-selfhost-images-build: ## Build self-host production images locally only (TAG=<version>, defaults to VERSION)
-	@if [ -z "$(SELFHOST_RELEASE_TAG)" ]; then \
-		echo "$(RED)❌ Error: set TAG/SELFHOST_RELEASE_TAG or create VERSION (example: echo 2026.05.0 > VERSION)$(NC)"; \
-		exit 1; \
-	fi
-	@SELFHOST_IMAGE_PREFIX="$(SELFHOST_IMAGE_PREFIX)" bash $(SELFHOST_IMAGE_RELEASE_SCRIPT) --tag "$(SELFHOST_RELEASE_TAG)" --skip-push
-
-selfhost-images-build-push: ## Build self-host production images locally and push to GHCR (TAG=<version>, defaults to VERSION)
-	@if [ -z "$(SELFHOST_RELEASE_TAG)" ]; then \
-		echo "$(RED)❌ Error: set TAG/SELFHOST_RELEASE_TAG or create VERSION (example: echo 2026.05.0 > VERSION)$(NC)"; \
-		exit 1; \
-	fi
-	@SELFHOST_IMAGE_PREFIX="$(SELFHOST_IMAGE_PREFIX)" bash $(SELFHOST_IMAGE_RELEASE_SCRIPT) --tag "$(SELFHOST_RELEASE_TAG)" --push
-
-selfhost-images-artifacts-dry-run: ## Print SBOM/scan/signing artifact commands (TAG=<version>, defaults to VERSION)
-	@if [ -z "$(SELFHOST_RELEASE_TAG)" ]; then \
-		echo "$(RED)❌ Error: set TAG/SELFHOST_RELEASE_TAG or create VERSION (example: echo 2026.05.0 > VERSION)$(NC)"; \
-		exit 1; \
-	fi
-	@SELFHOST_IMAGE_PREFIX="$(SELFHOST_IMAGE_PREFIX)" python $(SELFHOST_IMAGE_ARTIFACTS_SCRIPT) --tag "$(SELFHOST_RELEASE_TAG)" --sbom --scan --inspect-digests --sign --verify-signatures --cosign-key "$(if $(COSIGN_KEY),$(COSIGN_KEY),dry-run-cosign.key)" --cosign-public-key "$(if $(COSIGN_PUBLIC_KEY),$(COSIGN_PUBLIC_KEY),dry-run-cosign.pub)" --dry-run
-
-selfhost-images-release-artifacts: ## Generate SBOMs, scans, manifest, and checksums for built images (TAG=<version>, defaults to VERSION)
-	@if [ -z "$(SELFHOST_RELEASE_TAG)" ]; then \
-		echo "$(RED)❌ Error: set TAG/SELFHOST_RELEASE_TAG or create VERSION (example: echo 2026.05.0 > VERSION)$(NC)"; \
-		exit 1; \
-	fi
-	@SELFHOST_IMAGE_PREFIX="$(SELFHOST_IMAGE_PREFIX)" python $(SELFHOST_IMAGE_ARTIFACTS_SCRIPT) --tag "$(SELFHOST_RELEASE_TAG)" --sbom --scan --scan-tool "$(SELFHOST_RELEASE_SCAN_TOOL)" --inspect-digests
-
-selfhost-images-sbom: ## Generate Syft SBOMs for built self-host images (TAG=<version>, defaults to VERSION)
-	@if [ -z "$(SELFHOST_RELEASE_TAG)" ]; then \
-		echo "$(RED)❌ Error: set TAG/SELFHOST_RELEASE_TAG or create VERSION (example: echo 2026.05.0 > VERSION)$(NC)"; \
-		exit 1; \
-	fi
-	@SELFHOST_IMAGE_PREFIX="$(SELFHOST_IMAGE_PREFIX)" python $(SELFHOST_IMAGE_ARTIFACTS_SCRIPT) --tag "$(SELFHOST_RELEASE_TAG)" --sbom
-
-selfhost-images-scan: ## Run local Trivy/Grype scans for built self-host images (TAG=<version>, defaults to VERSION)
-	@if [ -z "$(SELFHOST_RELEASE_TAG)" ]; then \
-		echo "$(RED)❌ Error: set TAG/SELFHOST_RELEASE_TAG or create VERSION (example: echo 2026.05.0 > VERSION)$(NC)"; \
-		exit 1; \
-	fi
-	@SELFHOST_IMAGE_PREFIX="$(SELFHOST_IMAGE_PREFIX)" python $(SELFHOST_IMAGE_ARTIFACTS_SCRIPT) --tag "$(SELFHOST_RELEASE_TAG)" --scan --scan-tool "$(SELFHOST_RELEASE_SCAN_TOOL)"
-
-selfhost-images-sign: ## Sign pushed self-host image digests with Cosign (TAG=<version> COSIGN_KEY=<path>, defaults to VERSION)
-	@if [ -z "$(SELFHOST_RELEASE_TAG)" ]; then \
-		echo "$(RED)❌ Error: set TAG/SELFHOST_RELEASE_TAG or create VERSION (example: echo 2026.05.0 > VERSION)$(NC)"; \
-		exit 1; \
-	fi
-	@if [ -z "$(COSIGN_KEY)" ]; then \
-		echo "$(RED)❌ Error: COSIGN_KEY is required for signing$(NC)"; \
-		exit 1; \
-	fi
-	@SELFHOST_IMAGE_PREFIX="$(SELFHOST_IMAGE_PREFIX)" python $(SELFHOST_IMAGE_ARTIFACTS_SCRIPT) --tag "$(SELFHOST_RELEASE_TAG)" --sign --cosign-key "$(COSIGN_KEY)"
-
-selfhost-images-verify-signatures: ## Verify pushed self-host image digest signatures (TAG=<version> COSIGN_PUBLIC_KEY=<path>, defaults to VERSION)
-	@if [ -z "$(SELFHOST_RELEASE_TAG)" ]; then \
-		echo "$(RED)❌ Error: set TAG/SELFHOST_RELEASE_TAG or create VERSION (example: echo 2026.05.0 > VERSION)$(NC)"; \
-		exit 1; \
-	fi
-	@if [ -z "$(COSIGN_PUBLIC_KEY)" ]; then \
-		echo "$(RED)❌ Error: COSIGN_PUBLIC_KEY is required for verification$(NC)"; \
-		exit 1; \
-	fi
-	@SELFHOST_IMAGE_PREFIX="$(SELFHOST_IMAGE_PREFIX)" python $(SELFHOST_IMAGE_ARTIFACTS_SCRIPT) --tag "$(SELFHOST_RELEASE_TAG)" --verify-signatures --cosign-public-key "$(COSIGN_PUBLIC_KEY)"
+	@echo "$(GREEN)✓ Open-source self-host bundle staged$(NC)"
 
 deploy-catalog-validate: ## Validate deployment metadata catalogs, stacks, and bundles
 	@python scripts/marty-deploy.py validate
@@ -274,36 +176,6 @@ selfhost-prod-plan: ## Render the self-host production deployment plan
 
 selfhost-prod-beta-tunnel-plan: ## Render the self-host beta tunnel deployment plan
 	@python scripts/marty-deploy.py plan selfhost-beta-tunnel
-
-selfhost-prod-license-init-keypair: ## Generate the operator-side self-host issuer keypair
-	@echo "$(BLUE)Generating self-host issuer keypair...$(NC)"
-	@mkdir -p "$(SELFHOST_ISSUER_KEY_DIR)"
-	@python $(SELFHOST_ISSUER_TOOL) init-keypair \
-		--private-key-file "$(SELFHOST_ISSUER_PRIVATE_KEY)" \
-		--public-key-file "$(SELFHOST_ISSUER_PUBLIC_KEY)"
-	@echo "$(GREEN)✓ Issuer keypair written$(NC)"
-	@echo "  Private key: $(SELFHOST_ISSUER_PRIVATE_KEY)"
-	@echo "  Public key:  $(SELFHOST_ISSUER_PUBLIC_KEY)"
-
-selfhost-prod-license-issue: ## Issue and install a signed self-host license into SELFHOST_SECRET_DIR
-	@if [ -z "$(SELFHOST_LICENSE_SUBJECT)" ]; then \
-		echo "$(RED)❌ Error: MARTY_ORG_ID missing from $(SELFHOST_ENV_FILE) or SELFHOST_LICENSE_SUBJECT override$(NC)"; \
-		exit 1; \
-	fi
-	@if [ -z "$(SELFHOST_SECRET_DIR)" ]; then \
-		echo "$(RED)❌ Error: SELFHOST_SECRET_DIR missing from $(SELFHOST_ENV_FILE) or SELFHOST_SECRET_DIR override$(NC)"; \
-		exit 1; \
-	fi
-	@echo "$(BLUE)Issuing self-host production license...$(NC)"
-	@mkdir -p "$(dir $(SELFHOST_LICENSE_OUTPUT_FILE))"
-	@python $(SELFHOST_ISSUER_TOOL) issue-license \
-		--env-file "$(SELFHOST_ENV_FILE)" \
-		--private-key-file "$(SELFHOST_ISSUER_PRIVATE_KEY)" \
-		--subject "$(SELFHOST_LICENSE_SUBJECT)" \
-		--org-name "$(SELFHOST_LICENSE_ORG_NAME)" \
-		--install-secret-dir "$(SELFHOST_SECRET_DIR)" \
-		--license-output-file "$(SELFHOST_LICENSE_OUTPUT_FILE)"
-	@echo "$(GREEN)✓ Self-host license installed$(NC)"
 
 selfhost-prod-openbao-up: ## Start the standalone self-host OpenBao deployment
 	@echo "$(BLUE)Starting self-host OpenBao...$(NC)"
@@ -331,27 +203,23 @@ selfhost-prod-openbao-export: ## Export the standalone OpenBao state archive
 	@python scripts/export-selfhost-openbao.py --env-file "$(SELFHOST_ENV_FILE)"
 	@echo "$(GREEN)✓ Self-host OpenBao export created$(NC)"
 
-selfhost-prod-ui-build: ## Build the self-host UI bundle
-	@echo "$(BLUE)Building self-host UI bundle...$(NC)"
-	@cd ui && SELFHOST_ENV_FILE="$(SELFHOST_ENV_FILE)" npm run build:selfhost
-	@echo "$(GREEN)✓ Self-host UI bundle built$(NC)"
-
 selfhost-prod-config: ## Validate the self-host production compose files
 	@echo "$(BLUE)Validating self-host production compose files...$(NC)"
 	@$(SELFHOST_OPENBAO_COMPOSE) config >/dev/null
 	@$(SELFHOST_PROD_COMPOSE) config >/dev/null
 	@echo "$(GREEN)✓ Self-host production compose is valid$(NC)"
 
-selfhost-prod-check: ## Validate license, tunnel token, OpenBao state, and main self-host compose health
+selfhost-prod-check: ## Validate tunnel token, OpenBao state, and main self-host compose health
 	@echo "$(BLUE)Checking self-host production deployment state...$(NC)"
 	@python scripts/check-selfhost-production.py --env-file "$(SELFHOST_ENV_FILE)"
 
-selfhost-prod-bootstrap: selfhost-prod-ui-build selfhost-prod-openbao-up selfhost-prod-up ## Build the self-host UI, start OpenBao, then start the main stack
+selfhost-prod-bootstrap: selfhost-prod-openbao-up selfhost-prod-up ## Start OpenBao and the immutable self-host stack
 	@echo "$(GREEN)✓ Self-host production bootstrap complete$(NC)"
 
-selfhost-prod-up: selfhost-prod-config ## Start the self-host production stack with image rebuilds
+selfhost-prod-up: selfhost-prod-config ## Start the self-host production stack from released images
 	@echo "$(BLUE)Starting self-host production stack...$(NC)"
-	@$(SELFHOST_PROD_COMPOSE) up -d --build
+	@$(SELFHOST_PROD_COMPOSE) pull
+	@$(SELFHOST_PROD_COMPOSE) up -d
 	@echo "$(GREEN)✓ Self-host production stack started$(NC)"
 
 selfhost-prod-down: ## Stop the self-host production stack
@@ -824,7 +692,7 @@ canvas-sandbox-status: ## Show Canvas sandbox status and platform setup guide
 	@echo ""
 	@echo "     POST /v1/integrations/canvas/platforms"
 	@echo "     {"
-	@echo '       "organization_id": "<your-org-id>",'
+	@echo '       "organization_id": "<example-org-id>",'
 	@echo '       "canvas_account_id": "sandbox-account-1",'
 	@echo '       "canvas_base_url": "http://canvas-sandbox:8017",'
 	@echo '       "lti_client_id": "any-client-id",'

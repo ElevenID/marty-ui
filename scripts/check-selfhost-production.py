@@ -19,11 +19,6 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "packages"))
 
-from marty_common.licensing import (  # pylint: disable=import-error
-    LicenseValidationError,
-    is_placeholder_value,
-    validate_runtime_license_from_env,
-)
 from marty_common.migration_profile import normalize_migration_profile  # pylint: disable=import-error
 from marty_common.system_ids import MARTY_OPEN_BADGE_LOGIN_POLICY_ID  # pylint: disable=import-error
 from marty_devops import DeploymentCatalog  # pylint: disable=import-error
@@ -31,6 +26,11 @@ from marty_devops import DeploymentCatalog  # pylint: disable=import-error
 
 class CheckError(RuntimeError):
     """Raised when a self-host production check fails."""
+
+
+def is_placeholder_value(value: str) -> bool:
+    normalized = value.strip().lower()
+    return not normalized or normalized.startswith("change-me") or normalized in {"changeme", "placeholder"}
 
 
 class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -131,22 +131,6 @@ def get_compose_services(env_file: Path, compose_file: Path) -> list[dict[str, A
         error_output = (result.stderr or result.stdout).strip()
         raise CheckError(f"{compose_file.name} ps failed: {error_output}")
     return parse_compose_ps_output(result.stdout)
-
-
-def validate_license(env_values: dict[str, str], secret_dir: Path) -> str:
-    claims = validate_runtime_license_from_env(
-        {
-            **env_values,
-            "LICENSE_KEY_FILE": str(secret_dir / "license_key"),
-        }
-    )
-    if claims is None:
-        raise CheckError("License enforcement is disabled; no runtime license validation occurred.")
-    products = ",".join(claims.entitled_products) or "<none>"
-    return (
-        f"subject={claims.sub} plan_tier={claims.plan_tier or 'none'} "
-        f"products={products} expires_at={claims.expires_at.isoformat().replace('+00:00', 'Z')}"
-    )
 
 
 def validate_required_secret_files(secret_dir: Path, catalog: DeploymentCatalog, stack_name: str) -> str:
@@ -1090,7 +1074,6 @@ def validate_main_stack(env_file: Path, compose_file: Path, catalog: DeploymentC
             "flow",
             "verification",
             "revocation-profile",
-            "billing",
             "issuance",
             "event-stream",
             "gateway",
@@ -1124,7 +1107,7 @@ def run_check(name: str, checker) -> CheckResult:
     try:
         detail = checker()
         return CheckResult(name=name, ok=True, detail=detail)
-    except (CheckError, LicenseValidationError) as exc:
+    except CheckError as exc:
         return CheckResult(name=name, ok=False, detail=str(exc))
 
 
@@ -1160,7 +1143,6 @@ def main() -> int:
     ]
     validation_results = [
         run_check("selfhost-required-secrets", lambda: validate_required_secret_files(secret_dir, catalog, "selfhost-production")),
-        run_check("license", lambda: validate_license(env_values, secret_dir)),
         run_check("cloudflare-tunnel-token", lambda: validate_tunnel_token(secret_dir)),
         run_check("migration-profile", lambda: validate_migration_profile(env_values)),
         run_check("google-social-login", lambda: validate_google_social_login(env_values, secret_dir)),

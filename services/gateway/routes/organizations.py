@@ -910,16 +910,13 @@ async def _sync_hosted_pilot_purge_metadata(
         return
 
     update_body: dict[str, Any] = {
-        "plan_tier": lifecycle_payload.get("plan_tier") or "free",
         "settings_patch": {"pilot_retention_last_purged_at": purged_at},
     }
-    if lifecycle_payload.get("plan_expires_at"):
-        update_body["plan_expires_at"] = lifecycle_payload["plan_expires_at"]
 
     _, error_response = await _request_service_json_with_headers(
         "organizations",
-        f"/internal/v1/organizations/{org_id}/plan",
-        method="PUT",
+        f"/internal/v1/organizations/{org_id}/settings",
+        method="PATCH",
         json_body=update_body,
         headers=headers,
         client=client,

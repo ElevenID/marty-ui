@@ -69,8 +69,8 @@ Canvas remains a provider adapter. MIP owns normalized evidence facts, policy de
 - `marty-credentials/services/issuance/application/application_approval.py`
 - `marty-credentials/services/issuance/infrastructure/migrations/versions/20260514_1000_add_evidence_facts.py`
 - `marty-credentials/services/issuance/infrastructure/adapters/canvas_credentials_adapter.py`
-- `marty-ui/packages/marty_common/cedar/approval_rules.cedar`
-- `marty-ui/packages/marty_common/cedar_engine.py`
+- `Marty/packages/marty-common/marty_common/cedar/approval_rules.cedar`
+- `Marty/packages/marty-common/marty_common/cedar_engine.py`
 
 ## Implemented PolicySet Slice
 

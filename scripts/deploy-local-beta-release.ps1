@@ -49,7 +49,6 @@ $script:ApplicationServices = @(
     "revocation-profile",
     "device-registration",
     "event-stream",
-    "billing",
     "issuance",
     "canvas-sync-worker",
     "gateway"
@@ -72,7 +71,6 @@ $script:ApplicationContainers = @(
     "marty-revocation-profile",
     "marty-device-registration",
     "marty-event-stream",
-    "marty-billing",
     "marty-issuance",
     "marty-canvas-sync-worker",
     "marty-gateway"
@@ -429,7 +427,7 @@ Invoke-Compose -Arguments (@("build", "--build-arg", "MARTY_RELEASE_VERSION=$rel
 
 Write-Step "Build marker-bearing public UI image"
 $uiImage = "elevenid-local/ui:$releaseVersion"
-Invoke-Checked -FilePath docker -Arguments @("buildx", "build", "--load", "--file", (Join-Path $script:RepoRoot "docker\ui.Dockerfile"), "--build-context", "marty-cli=$(Join-Path $script:WorkspaceRoot 'marty-cli')", "--build-context", "marty-blog=$(Join-Path $script:WorkspaceRoot 'marty-blog')", "--build-context", "marty-subscriptions=$(Join-Path $script:WorkspaceRoot 'marty-subscriptions')", "--build-arg", "UI_VARIANT=public", "--build-arg", "NGINX_CONFIG=nginx.spa.conf", "--build-arg", "MARTY_RELEASE_VERSION=$releaseVersion", "--build-arg", "MARTY_UI_SHA=$sourceId", "--tag", $uiImage, $script:RepoRoot)
+Invoke-Checked -FilePath docker -Arguments @("buildx", "build", "--load", "--file", (Join-Path $script:RepoRoot "docker\ui.Dockerfile"), "--build-context", "marty-cli=$(Join-Path $script:WorkspaceRoot 'marty-cli')", "--build-context", "marty-blog=$(Join-Path $script:WorkspaceRoot 'marty-blog')", "--build-arg", "UI_VARIANT=public", "--build-arg", "NGINX_CONFIG=nginx.spa.conf", "--build-arg", "MARTY_RELEASE_VERSION=$releaseVersion", "--build-arg", "MARTY_UI_SHA=$sourceId", "--tag", $uiImage, $script:RepoRoot)
 
 # Builds consume coordinated live worktrees. Revalidate every snapshotted input
 # after the final build and before stopping beta writers, so a concurrent edit

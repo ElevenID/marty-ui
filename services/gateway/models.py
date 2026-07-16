@@ -1241,9 +1241,6 @@ class PilotRetentionModel(BaseModel):
 class OrganizationLifecycleResponse(BaseModel):
     created_at: str
     compliance_profiles: list[str] = Field(default_factory=list)
-    plan_tier: str = "free"
-    plan_expires_at: str | None = None
-    commercial_offer: str = "Developer Sandbox"
     data_retention_mode: str = "standard"
     audit_retention_days: int = 90
     pilot_retention: PilotRetentionModel | None = None

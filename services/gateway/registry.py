@@ -35,7 +35,6 @@ class ServiceRegistry:
             "verification": os.environ.get("VERIFICATION_SERVICE_URL", "http://localhost:8012"),
             "revocation-profiles": os.environ.get("REVOCATION_PROFILE_SERVICE_URL", "http://localhost:8013"),
             "device-registration": os.environ.get("DEVICE_REGISTRATION_SERVICE_URL", "http://localhost:8014"),
-            "billing": os.environ.get("BILLING_SERVICE_URL", "http://localhost:8016"),
         }
 
     def get_service_url(self, service_name: str) -> str | None:

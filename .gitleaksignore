@@ -1,0 +1,37 @@
+﻿# Exact reviewed false positives from the pre-publication full-history audit.
+# Each entry binds one finding to its commit, path, rule, and line; new findings still fail.
+
+175340a78ed80d7064fd426f13340a20fb9c2565:services/auth/tests/test_oidc_claims_and_http_user.py:generic-api-key:236
+2893f4252d21c95575ea6d33bb22ad340970592f:docker-compose.yml:generic-api-key:188
+2893f4252d21c95575ea6d33bb22ad340970592f:docker-compose.yml:generic-api-key:247
+3258a1a51e8f0bd19f3b647b220e1a1207964745:ui/src/data/guideContent.js:generic-api-key:1083
+3258a1a51e8f0bd19f3b647b220e1a1207964745:ui/src/data/guideContent.js:generic-api-key:1120
+34546c688c28033f658af6c10ca17eac896279f9:docs/CANVAS_LTI_LOGIN_SETUP.md:curl-auth-header:31
+34546c688c28033f658af6c10ca17eac896279f9:docs/CANVAS_LTI_LOGIN_SETUP.md:curl-auth-header:47
+34546c688c28033f658af6c10ca17eac896279f9:docs/CANVAS_LTI_LOGIN_SETUP.md:curl-auth-header:56
+3b2f16ee23fde2fab69e6cb39a2573f05a255f08:CLOUDFLARE_TUNNEL_SETUP.md:generic-api-key:99
+3b2f16ee23fde2fab69e6cb39a2573f05a255f08:ui/src/components/console/dashboard/DeveloperQuickStartPanel.jsx:curl-auth-header:64
+3b2f16ee23fde2fab69e6cb39a2573f05a255f08:ui/src/components/vendor/__tests__/APIKeyManager.test.tsx:generic-api-key:257
+3b2f16ee23fde2fab69e6cb39a2573f05a255f08:ui/src/components/vendor/__tests__/APIKeyManager.test.tsx:generic-api-key:310
+3c2c408e859458cf519cbfd42971199eb12b66df:API_KEY_AUTHENTICATION.md:curl-auth-header:418
+3c2c408e859458cf519cbfd42971199eb12b66df:API_KEY_AUTHENTICATION.md:curl-auth-header:424
+59f9919adeedeb43739d48d1f81de5b4b3531b1f:services/auth/infrastructure/adapters/http_adapter.py:generic-api-key:598
+90487a425cabb6bf823fdc5e2e89c66b42bd2d02:docs/CANVAS_LTI_LOGIN_SETUP.md:curl-auth-header:131
+90487a425cabb6bf823fdc5e2e89c66b42bd2d02:docs/CANVAS_LTI_LOGIN_SETUP.md:curl-auth-header:154
+90487a425cabb6bf823fdc5e2e89c66b42bd2d02:docs/CANVAS_LTI_LOGIN_SETUP.md:curl-auth-header:158
+90487a425cabb6bf823fdc5e2e89c66b42bd2d02:docs/CANVAS_LTI_LOGIN_SETUP.md:curl-auth-header:162
+90487a425cabb6bf823fdc5e2e89c66b42bd2d02:docs/CANVAS_LTI_LOGIN_SETUP.md:curl-auth-header:222
+90487a425cabb6bf823fdc5e2e89c66b42bd2d02:docs/CANVAS_LTI_LOGIN_SETUP.md:curl-auth-header:60
+90487a425cabb6bf823fdc5e2e89c66b42bd2d02:docs/CANVAS_LTI_LOGIN_SETUP.md:generic-api-key:336
+90487a425cabb6bf823fdc5e2e89c66b42bd2d02:services/auth/tests/test_credential_login_enricher.py:generic-api-key:136
+90487a425cabb6bf823fdc5e2e89c66b42bd2d02:ui/src/components/console/trust/steps/TrustSourcesStep.jsx:generic-api-key:1079
+909471d0f54bd3a27d39a6fa5e3aff83324d7d71:ui/dist-selfhost/assets/AuthorPage-DzrCnYfy.js:generic-api-key:421
+909471d0f54bd3a27d39a6fa5e3aff83324d7d71:ui/dist-selfhost/assets/AuthorPage-DzrCnYfy.js:generic-api-key:425
+909471d0f54bd3a27d39a6fa5e3aff83324d7d71:ui/dist-selfhost/assets/index-BU07R1LL.js:generic-api-key:14
+909471d0f54bd3a27d39a6fa5e3aff83324d7d71:ui/dist-selfhost/assets/index-Clgyqg_T.js:curl-auth-header:212
+909471d0f54bd3a27d39a6fa5e3aff83324d7d71:ui/dist-selfhost/assets/index-Clgyqg_T.js:generic-api-key:214
+aa96dc7832b46472d638800107f914397d96b58c:docker-compose.prod.yml:generic-api-key:29
+aa96dc7832b46472d638800107f914397d96b58c:ui/build/static/js/434.6dd57514.chunk.js.map:generic-api-key:1
+aa96dc7832b46472d638800107f914397d96b58c:ui/build/static/js/434.6dd57514.chunk.js:generic-api-key:1
+d3185cc475c82d70f39e04ae72915228fb658439:services/gateway/tests/test_middleware_edge_cases.py:generic-api-key:101
+d3185cc475c82d70f39e04ae72915228fb658439:services/gateway/tests/test_middleware_edge_cases.py:generic-api-key:70

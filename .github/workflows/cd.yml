@@ -1,786 +1,419 @@
-name: CD
+name: Stack release
 
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
     inputs:
-      tag:
-        description: "Image tag (default: short SHA)"
-        required: false
+      lock_file:
+        description: Committed immutable stack lock
+        required: true
+        default: release/stack-lock.json
+
+concurrency:
+  group: stack-release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
 
 env:
-  REGISTRY: ghcr.io
-  IMAGE_PREFIX: ghcr.io/elevenid/marty-ui
-  MARTY_CREDENTIALS_REF: ${{ vars.MARTY_CREDENTIALS_REF }}
-  MARTY_PROTOCOL_REF: ${{ vars.MARTY_PROTOCOL_REF }}
-  MARTY_CORE_REF: ${{ vars.MARTY_CORE_REF }}
-  MARTY_CLI_REF: ${{ vars.MARTY_CLI_REF }}
-  MARTY_BLOG_REF: ${{ vars.MARTY_BLOG_REF }}
-  MARTY_SUBSCRIPTIONS_REF: ${{ vars.MARTY_SUBSCRIPTIONS_REF }}
+  IMAGE: ghcr.io/elevenid/marty-ui/ui
+  SERVICES_IMAGE: ghcr.io/elevenid/marty-ui/services
+  MIGRATIONS_IMAGE: ghcr.io/elevenid/marty-ui/migrations
 
 jobs:
-  validate-release-manifest:
-    name: Validate Pinned Revisions
+  validate-stack:
     runs-on: ubuntu-latest
-    permissions:
-      actions: read
-      contents: read
+    outputs:
+      version: ${{ steps.components.outputs.version }}
+      api_core_version: ${{ steps.components.outputs.api_core }}
+      api_core_uri: ${{ steps.components.outputs.api_core_uri }}
+      api_core_digest: ${{ steps.components.outputs.api_core_digest }}
+      blog_version: ${{ steps.components.outputs.blog }}
+      blog_uri: ${{ steps.components.outputs.blog_uri }}
+      blog_digest: ${{ steps.components.outputs.blog_digest }}
+      marty_rs_version: ${{ steps.components.outputs.marty_rs }}
+      marty_rs_uri: ${{ steps.components.outputs.marty_rs_uri }}
+      marty_rs_digest: ${{ steps.components.outputs.marty_rs_digest }}
+      marty_common_version: ${{ steps.components.outputs.marty_common }}
+      marty_common_uri: ${{ steps.components.outputs.marty_common_uri }}
+      marty_common_digest: ${{ steps.components.outputs.marty_common_digest }}
+      cli_version: ${{ steps.components.outputs.cli }}
+      cli_uri: ${{ steps.components.outputs.cli_uri }}
+      cli_digest: ${{ steps.components.outputs.cli_digest }}
+      integration_commit: ${{ steps.components.outputs.integration_commit }}
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Require successful Marty UI source CI
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+      - id: components
+        env:
+          LOCK_FILE: ${{ inputs.lock_file || 'release/stack-lock.json' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f "$LOCK_FILE"
+          python scripts/build_stack_manifest.py --lock "$LOCK_FILE" --verify-http
+          release="$(jq -r .release "$LOCK_FILE")"
+          version="${release#marty-ui@}"
+          test "$release" = "marty-ui@$version"
+          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            test "$GITHUB_REF_NAME" = "v$version"
+          fi
+          {
+            echo "version=$version"
+            echo "api_core=$(jq -er '.components[] | select(.name == "marty-api-core") | .version' "$LOCK_FILE")"
+            echo "api_core_uri=$(jq -er '.components[] | select(.name == "marty-api-core") | .artifacts[] | select(.type == "npm") | .uri' "$LOCK_FILE")"
+            echo "api_core_digest=$(jq -er '.components[] | select(.name == "marty-api-core") | .artifacts[] | select(.type == "npm") | .digest' "$LOCK_FILE")"
+            echo "blog=$(jq -er '.components[] | select(.name == "marty-blog") | .version' "$LOCK_FILE")"
+            echo "blog_uri=$(jq -er '.components[] | select(.name == "marty-blog") | .artifacts[] | select(.type == "npm") | .uri' "$LOCK_FILE")"
+            echo "blog_digest=$(jq -er '.components[] | select(.name == "marty-blog") | .artifacts[] | select(.type == "npm") | .digest' "$LOCK_FILE")"
+            echo "marty_rs=$(jq -er '.components[] | select(.name == "marty-core-python") | .version' "$LOCK_FILE")"
+            echo "marty_rs_uri=$(jq -er '.components[] | select(.name == "marty-core-python") | .artifacts[] | select(.type == "python") | .uri' "$LOCK_FILE")"
+            echo "marty_rs_digest=$(jq -er '.components[] | select(.name == "marty-core-python") | .artifacts[] | select(.type == "python") | .digest' "$LOCK_FILE")"
+            echo "marty_common=$(jq -er '.components[] | select(.name == "marty-common") | .version' "$LOCK_FILE")"
+            echo "marty_common_uri=$(jq -er '.components[] | select(.name == "marty-common") | .artifacts[] | select(.type == "python") | .uri' "$LOCK_FILE")"
+            echo "marty_common_digest=$(jq -er '.components[] | select(.name == "marty-common") | .artifacts[] | select(.type == "python") | .digest' "$LOCK_FILE")"
+            echo "cli=$(jq -er '.components[] | select(.name == "marty-cli") | .version' "$LOCK_FILE")"
+            echo "cli_uri=$(jq -er '.components[] | select(.name == "marty-cli") | .artifacts[] | select(.type == "npm") | .uri' "$LOCK_FILE")"
+            echo "cli_digest=$(jq -er '.components[] | select(.name == "marty-cli") | .artifacts[] | select(.type == "npm") | .digest' "$LOCK_FILE")"
+            echo "integration_commit=$(jq -er '.components[] | select(.name == "marty-integration-tests") | .commit' "$LOCK_FILE")"
+          } >> "$GITHUB_OUTPUT"
+      - name: Verify immutable OCI inputs and provenance
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          run_id="$(gh run list \
-            --repo "$GITHUB_REPOSITORY" \
-            --workflow CI \
-            --commit "$GITHUB_SHA" \
-            --status completed \
-            --json conclusion,databaseId \
-            --jq '[.[] | select(.conclusion == "success")][0].databaseId // empty')"
-          if [[ -z "$run_id" ]]; then
-            echo "A successful CI workflow for $GITHUB_SHA is required before CD." >&2
-            exit 1
-          fi
-          echo "Verified source CI run $run_id"
-
-      - name: Require exact marty-credentials revision
+          LOCK_FILE: ${{ inputs.lock_file || 'release/stack-lock.json' }}
         shell: bash
         run: |
-          if [[ ! "$MARTY_CREDENTIALS_REF" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "MARTY_CREDENTIALS_REF must be an exact 40-character commit SHA." >&2
-            exit 1
-          fi
-          if [[ ! "$MARTY_PROTOCOL_REF" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "MARTY_PROTOCOL_REF must be an exact 40-character commit SHA." >&2
-            exit 1
-          fi
-          for ref_name in MARTY_CORE_REF MARTY_CLI_REF MARTY_BLOG_REF MARTY_SUBSCRIPTIONS_REF; do
-            if [[ ! "${!ref_name}" =~ ^[0-9a-f]{40}$ ]]; then
-              echo "$ref_name must be an exact 40-character commit SHA." >&2
-              exit 1
-            fi
+          set -euo pipefail
+          jq -r '.components[] as $component | $component.artifacts[] | select(.type == "oci") | [$component.repository, .uri, .digest] | @tsv' "$LOCK_FILE" |
+          while IFS=$'\t' read -r repository uri digest; do
+            docker pull "$uri@$digest"
+            gh attestation verify "oci://$uri@$digest" --repo "$repository"
           done
 
-      - name: Require successful coordinated source CI
-        env:
-          GH_TOKEN: ${{ secrets.REPO_ACCESS_TOKEN }}
-        shell: bash
-        run: |
-          verify_source_ci() {
-            local repository="$1"
-            local revision="$2"
-            local workflow="$3"
-            local run_id
-            run_id="$(gh run list \
-              --repo "$repository" \
-              --workflow "$workflow" \
-              --commit "$revision" \
-              --status completed \
-              --json conclusion,databaseId \
-              --jq '[.[] | select(.conclusion == "success")][0].databaseId // empty')"
-            if [[ -z "$run_id" ]]; then
-              echo "A successful $workflow workflow for $repository@$revision is required." >&2
-              exit 1
-            fi
-            echo "Verified $repository CI run $run_id for $revision"
-          }
-
-          verify_source_ci Marty-Protocol/Marty-Protocol "$MARTY_PROTOCOL_REF" CI
-          verify_source_ci ElevenID/marty-credentials "$MARTY_CREDENTIALS_REF" CI
-          verify_source_ci ElevenID/marty-core "$MARTY_CORE_REF" "MIP Release Wallet"
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Require protected release environments
-        env:
-          GH_TOKEN: ${{ secrets.REPO_ACCESS_TOKEN }}
-        run: python scripts/check_github_release_environments.py
-
-      - name: Run repository release contract tests
-        run: pip install pytest && python -m pytest tests -v --tb=short
-
-  verify-protocol-bindings:
-    name: Verify Pinned MIP Protocol And Bindings
-    needs: [validate-release-manifest]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          repository: Marty-Protocol/Marty-Protocol
-          ref: ${{ env.MARTY_PROTOCOL_REF }}
-          path: marty-protocol
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install protocol dependencies
-        working-directory: marty-protocol
-        run: pip install uv && uv sync
-
-      - name: Run protocol conformance suite
-        working-directory: marty-protocol
-        run: uv run pytest tests/ -v
-
-      - name: Verify generated bindings
-        working-directory: marty-protocol
-        run: uv run python scripts/codegen.py --check
-
-  verify-coordinated-js:
-    name: Verify Pinned CLI, Blog, And Subscriptions
-    needs: [validate-release-manifest]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          repository: ElevenID/marty-cli
-          token: ${{ secrets.REPO_ACCESS_TOKEN }}
-          ref: ${{ env.MARTY_CLI_REF }}
-          path: marty-cli
-
-      - uses: actions/checkout@v4
-        with:
-          repository: ElevenID/marty-blog
-          token: ${{ secrets.REPO_ACCESS_TOKEN }}
-          ref: ${{ env.MARTY_BLOG_REF }}
-          path: marty-blog
-
-      - uses: actions/checkout@v4
-        with:
-          repository: ElevenID/marty-subscriptions
-          token: ${{ secrets.REPO_ACCESS_TOKEN }}
-          ref: ${{ env.MARTY_SUBSCRIPTIONS_REF }}
-          path: marty-subscriptions
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          cache: npm
-          cache-dependency-path: |
-            marty-cli/package-lock.json
-            marty-blog/package-lock.json
-            marty-subscriptions/package-lock.json
-
-      - name: Test Marty CLI clean-break client
-        working-directory: marty-cli
-        run: npm ci && npm test
-
-      - name: Test and build Marty Blog
-        working-directory: marty-blog
-        run: npm ci && npm test && npm run build
-
-      - name: Test and build Marty Subscriptions
-        working-directory: marty-subscriptions
-        run: npm ci && npm test && npm run build
-
-  verify-credentials-service:
-    name: Verify Pinned Issuance Service
-    needs: [validate-release-manifest]
-    runs-on: ubuntu-latest
-    env:
-      CANVAS_MIGRATION_SOURCE_REVISION: ${{ vars.MARTY_CREDENTIALS_REF }}
-      COMPOSE_PROJECT_NAME: canvas-portable-migration-cd-${{ github.run_id }}-${{ github.run_attempt }}
-    steps:
-      - name: Configure Git auth for private repos
-        run: git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
-
-      - uses: actions/checkout@v4
-        with:
-          repository: ElevenID/marty-core
-          token: ${{ secrets.REPO_ACCESS_TOKEN }}
-          ref: ${{ env.MARTY_CORE_REF }}
-          path: marty-core
-
-      - uses: actions/checkout@v4
-        with:
-          repository: ElevenID/marty-credentials
-          token: ${{ secrets.REPO_ACCESS_TOKEN }}
-          ref: ${{ env.MARTY_CREDENTIALS_REF }}
-          path: marty-credentials
-
-      - uses: dtolnay/rust-toolchain@nightly
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install native issuance test dependencies
-        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev perl clang
-
-      - name: Build Python bindings and install service test dependencies
-        run: |
-          python -m pip install --disable-pip-version-check 'maturin[patchelf]' pytest pytest-asyncio
-          cd marty-core/marty-bindings
-          maturin build --release --out /tmp/marty-wheels
-          cd ../..
-          pip install /tmp/marty-wheels/*.whl
-          pip install -e '.[dev]'
-
-      - name: Require one issuance migration head
-        working-directory: marty-credentials/services/issuance/infrastructure/migrations
-        run: python -m alembic -c alembic.ini heads | tee /tmp/issuance-heads.txt && test "$(grep -c '(head)' /tmp/issuance-heads.txt)" -eq 1
-
-      - name: Validate pinned Canvas migration contract topology
-        working-directory: marty-credentials
-        run: |
-          test "$(git rev-parse HEAD)" = "$CANVAS_MIGRATION_SOURCE_REVISION"
-          docker compose --file docker-compose.canvas-migration-contract.yml config --quiet
-
-      - name: Build pinned Canvas migration contract
-        working-directory: marty-credentials
-        run: |
-          mkdir -p tests/artifacts/canvas-portable-migration
-          docker compose --file docker-compose.canvas-migration-contract.yml build --pull migration-contract
-
-      - name: Require portable Canvas upgrade and downgrade restoration
-        working-directory: marty-credentials
-        run: >-
-          docker compose --file docker-compose.canvas-migration-contract.yml
-          up --force-recreate --abort-on-container-exit
-          --exit-code-from migration-contract migration-contract
-
-      - name: Validate pinned Canvas migration evidence
-        working-directory: marty-credentials
-        run: |
-          test "$(jq -r '.status' tests/artifacts/canvas-portable-migration/contract-result.json)" = passed
-          test "$(jq -r '.baseline_revision' tests/artifacts/canvas-portable-migration/contract-result.json)" = derive_server_owned_claims
-          test "$(jq -r '.portable_revision' tests/artifacts/canvas-portable-migration/contract-result.json)" = portable_canvas_connections
-          test "$(jq -r '.execution_boundary' tests/artifacts/canvas-portable-migration/contract-result.json)" = docker_compose_one_shot
-          test "$(jq -r '.source_revision' tests/artifacts/canvas-portable-migration/contract-result.json)" = "$CANVAS_MIGRATION_SOURCE_REVISION"
-
-      - name: Upload pinned Canvas migration evidence
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: pinned-canvas-portable-migration-${{ github.run_id }}-${{ github.run_attempt }}
-          path: marty-credentials/tests/artifacts/canvas-portable-migration/contract-result.json
-          if-no-files-found: warn
-          retention-days: 14
-
-      - name: Remove pinned Canvas migration contract stack
-        if: always()
-        working-directory: marty-credentials
-        run: docker compose --file docker-compose.canvas-migration-contract.yml down --volumes --remove-orphans
-
-      - name: Run issuance service tests
-        working-directory: marty-credentials
-        run: pytest tests/ -q
-
-  verify-core:
-    name: Verify Pinned Marty Core
-    needs: [validate-release-manifest]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          repository: ElevenID/marty-core
-          token: ${{ secrets.REPO_ACCESS_TOKEN }}
-          ref: ${{ env.MARTY_CORE_REF }}
-          path: marty-core
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: marty-core
-
-      - name: Install native core test dependencies
-        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev perl clang
-
-      - name: Test Marty Core workspace
-        working-directory: marty-core
-        run: cargo test --workspace --locked
-
-  build-wheel:
-    name: Build Rust Wheel
-    needs: [validate-release-manifest]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - name: Configure Git auth for private repos
-        run: git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
-
-      - uses: actions/checkout@v4
-        with:
-          repository: ElevenID/marty-core
-          token: ${{ secrets.REPO_ACCESS_TOKEN }}
-          ref: ${{ env.MARTY_CORE_REF }}
-          path: marty-core
-
-      - uses: dtolnay/rust-toolchain@nightly
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install build deps
-        run: |
-          pip install 'maturin[patchelf]'
-          sudo apt-get update && sudo apt-get install -y \
-            pkg-config libssl-dev libzstd-dev clang
-
-      - name: Cargo cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            marty-core/target
-          key: wheel-${{ runner.os }}-${{ hashFiles('marty-core/Cargo.lock') }}
-
-      - name: Build marty-rs wheel
-        run: |
-          cd marty-core/marty-bindings
-          CXX=clang++ CC=clang maturin build --release --out $GITHUB_WORKSPACE/wheels
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: marty-rs-wheel
-          path: wheels/*.whl
-          retention-days: 1
-
-  determine-tag:
-    name: Determine Image Tag
+  build-ui:
+    needs: validate-stack
     runs-on: ubuntu-latest
     outputs:
-      version: ${{ steps.tag.outputs.VERSION }}
+      digest: ${{ steps.build.outputs.digest }}
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
     steps:
-      - name: Set tag
-        id: tag
-        run: |
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            echo "VERSION=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
-          elif [[ -n "${{ inputs.tag }}" ]]; then
-            echo "VERSION=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "VERSION=${GITHUB_SHA::8}" >> "$GITHUB_OUTPUT"
-          fi
-
-  release-manifest:
-    name: Build Atomic Release Manifest
-    needs: [validate-release-manifest, verify-protocol-bindings, verify-coordinated-js, verify-credentials-service, verify-core, determine-tag]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Write pinned release manifest
-        shell: bash
-        env:
-          RELEASE_VERSION: ${{ needs.determine-tag.outputs.version }}
-        run: |
-          WALTID_WALLET_API_IMAGE="$(jq -r '.waltid.wallet_api_image' deploy-config/catalog/wallet-test-images.json)"
-          WALTID_WEB_WALLET_IMAGE="$(jq -r '.waltid.web_wallet_image' deploy-config/catalog/wallet-test-images.json)"
-          jq -n \
-            --arg release_version "$RELEASE_VERSION" \
-            --arg marty_ui_sha "$GITHUB_SHA" \
-            --arg marty_protocol_sha "$MARTY_PROTOCOL_REF" \
-            --arg marty_credentials_sha "$MARTY_CREDENTIALS_REF" \
-            --arg marty_core_sha "$MARTY_CORE_REF" \
-            --arg marty_cli_sha "$MARTY_CLI_REF" \
-            --arg marty_blog_sha "$MARTY_BLOG_REF" \
-            --arg marty_subscriptions_sha "$MARTY_SUBSCRIPTIONS_REF" \
-            --arg mip_version "0.3.1" \
-            --arg services_image "${IMAGE_PREFIX}/services:${RELEASE_VERSION}" \
-            --arg ui_image "${IMAGE_PREFIX}/ui:${RELEASE_VERSION}" \
-            --arg ui_selfhost_image "${IMAGE_PREFIX}/ui-selfhost:${RELEASE_VERSION}" \
-            --arg migrations_image "${IMAGE_PREFIX}/db-migrate:${RELEASE_VERSION}" \
-            --arg waltid_wallet_api "$WALTID_WALLET_API_IMAGE" \
-            --arg waltid_web_wallet "$WALTID_WEB_WALLET_IMAGE" \
-            '{
-              release_version: $release_version,
-              mip_version: $mip_version,
-              repositories: {
-                marty_ui: $marty_ui_sha,
-                marty_protocol: $marty_protocol_sha,
-                marty_credentials: $marty_credentials_sha,
-                marty_core: $marty_core_sha,
-                marty_cli: $marty_cli_sha,
-                marty_blog: $marty_blog_sha,
-                marty_subscriptions: $marty_subscriptions_sha
-              },
-              images: {
-                services: $services_image,
-                ui: $ui_image,
-                ui_selfhost: $ui_selfhost_image,
-                migrations: $migrations_image,
-                waltid_wallet_api: $waltid_wallet_api,
-                waltid_web_wallet: $waltid_web_wallet
-              },
-              mixed_versions_supported: false
-            }' > release-manifest.json
-
-      - uses: actions/upload-artifact@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
         with:
-          name: release-manifest-${{ needs.determine-tag.outputs.version }}
-          path: release-manifest.json
-          retention-days: 90
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
+        with:
+          context: .
+          file: docker/ui.Dockerfile
+          push: true
+          tags: ${{ env.IMAGE }}:${{ needs.validate-stack.outputs.version }}
+          build-args: |
+            MARTY_RELEASE_VERSION=${{ needs.validate-stack.outputs.version }}
+            MARTY_UI_SHA=${{ github.sha }}
+            MARTY_API_CORE_VERSION=${{ needs.validate-stack.outputs.api_core_version }}
+            MARTY_API_CORE_URI=${{ needs.validate-stack.outputs.api_core_uri }}
+            MARTY_API_CORE_DIGEST=${{ needs.validate-stack.outputs.api_core_digest }}
+            MARTY_BLOG_VERSION=${{ needs.validate-stack.outputs.blog_version }}
+            MARTY_BLOG_URI=${{ needs.validate-stack.outputs.blog_uri }}
+            MARTY_BLOG_DIGEST=${{ needs.validate-stack.outputs.blog_digest }}
+          provenance: mode=max
+          sbom: true
+      - uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+      - uses: sigstore/cosign-installer@d58896d6a1865668819e1d91763c7751a165e159
+      - run: cosign sign --yes "${{ env.IMAGE }}@${{ steps.build.outputs.digest }}"
 
   build-services:
-    name: Build & Push Services Image
-    needs: [build-wheel, determine-tag, release-manifest]
+    needs: validate-stack
     runs-on: ubuntu-latest
     outputs:
-      digest: ${{ steps.services-image.outputs.digest }}
+      services_digest: ${{ steps.services.outputs.digest }}
+      migrations_digest: ${{ steps.migrations.outputs.digest }}
     permissions:
       contents: read
       packages: write
+      id-token: write
+      attestations: write
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
         with:
-          repository: ElevenID/marty-credentials
-          token: ${{ secrets.REPO_ACCESS_TOKEN }}
-          ref: ${{ env.MARTY_CREDENTIALS_REF }}
-          path: _marty-credentials
-          sparse-checkout: |
-            services/issuance
-            python/status_list
-
-      - uses: actions/download-artifact@v4
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - id: services
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
         with:
-          name: marty-rs-wheel
-          path: release-wheels
-
-      - name: Include issuance service
+          context: .
+          file: services/Dockerfile
+          push: true
+          tags: ${{ env.SERVICES_IMAGE }}:${{ needs.validate-stack.outputs.version }}
+          build-args: |
+            SERVICE_NAME=gateway
+            MARTY_RELEASE_VERSION=${{ needs.validate-stack.outputs.version }}
+            MARTY_UI_SHA=${{ github.sha }}
+            MARTY_RS_VERSION=${{ needs.validate-stack.outputs.marty_rs_version }}
+            MARTY_RS_URI=${{ needs.validate-stack.outputs.marty_rs_uri }}
+            MARTY_RS_DIGEST=${{ needs.validate-stack.outputs.marty_rs_digest }}
+            MARTY_COMMON_VERSION=${{ needs.validate-stack.outputs.marty_common_version }}
+            MARTY_COMMON_URI=${{ needs.validate-stack.outputs.marty_common_uri }}
+            MARTY_COMMON_DIGEST=${{ needs.validate-stack.outputs.marty_common_digest }}
+          provenance: mode=max
+          sbom: true
+      - id: migrations
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
+        with:
+          context: .
+          file: services/Dockerfile.migrations
+          push: true
+          tags: ${{ env.MIGRATIONS_IMAGE }}:${{ needs.validate-stack.outputs.version }}
+          build-args: |
+            MARTY_COMMON_VERSION=${{ needs.validate-stack.outputs.marty_common_version }}
+            MARTY_COMMON_URI=${{ needs.validate-stack.outputs.marty_common_uri }}
+            MARTY_COMMON_DIGEST=${{ needs.validate-stack.outputs.marty_common_digest }}
+          provenance: mode=max
+          sbom: true
+      - uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661
+        with:
+          subject-name: ${{ env.SERVICES_IMAGE }}
+          subject-digest: ${{ steps.services.outputs.digest }}
+          push-to-registry: true
+      - uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661
+        with:
+          subject-name: ${{ env.MIGRATIONS_IMAGE }}
+          subject-digest: ${{ steps.migrations.outputs.digest }}
+          push-to-registry: true
+      - uses: sigstore/cosign-installer@d58896d6a1865668819e1d91763c7751a165e159
+      - name: Sign images by digest
         run: |
-          cp -r _marty-credentials/services/issuance services/issuance
-          cp -r _marty-credentials/python/status_list status_list
+          cosign sign --yes "${{ env.SERVICES_IMAGE }}@${{ steps.services.outputs.digest }}"
+          cosign sign --yes "${{ env.MIGRATIONS_IMAGE }}@${{ steps.migrations.outputs.digest }}"
 
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.REPO_ACCESS_TOKEN }}
-
-      - name: Build and push
-        id: services-image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: services/Dockerfile.prod
-          push: true
-          build-args: |
-            MARTY_RELEASE_VERSION=${{ needs.determine-tag.outputs.version }}
-            MARTY_UI_SHA=${{ github.sha }}
-          tags: |
-            ${{ env.IMAGE_PREFIX }}/services:${{ needs.determine-tag.outputs.version }}
-            ${{ env.IMAGE_PREFIX }}/services:latest
-          cache-from: type=gha,scope=services
-          cache-to: type=gha,mode=max,scope=services
-
-  build-ui:
-    name: Build & Push UI Images
-    needs: [determine-tag, release-manifest]
+  public-stack-smoke:
+    needs: [validate-stack, build-ui, build-services]
     runs-on: ubuntu-latest
-    outputs:
-      public_digest: ${{ steps.public-ui-image.outputs.digest }}
-      selfhost_digest: ${{ steps.selfhost-ui-image.outputs.digest }}
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/checkout@v4
-        with:
-          repository: ElevenID/marty-cli
-          token: ${{ secrets.REPO_ACCESS_TOKEN }}
-          ref: ${{ env.MARTY_CLI_REF }}
-          path: _marty-cli
-          sparse-checkout: packages/api-core
-
-      - uses: actions/checkout@v4
-        with:
-          repository: ElevenID/marty-blog
-          token: ${{ secrets.REPO_ACCESS_TOKEN }}
-          ref: ${{ env.MARTY_BLOG_REF }}
-          path: _marty-blog
-
-      - uses: actions/checkout@v4
-        with:
-          repository: ElevenID/marty-subscriptions
-          token: ${{ secrets.REPO_ACCESS_TOKEN }}
-          ref: ${{ env.MARTY_SUBSCRIPTIONS_REF }}
-          path: _marty-subscriptions
-
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.REPO_ACCESS_TOKEN }}
-
-      - name: Build and push public UI image
-        id: public-ui-image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: docker/ui.Dockerfile
-          build-contexts: |
-            marty-cli=./_marty-cli
-            marty-blog=./_marty-blog
-            marty-subscriptions=./_marty-subscriptions
-          build-args: |
-            MARTY_RELEASE_VERSION=${{ needs.determine-tag.outputs.version }}
-            MARTY_UI_SHA=${{ github.sha }}
-          push: true
-          tags: |
-            ${{ env.IMAGE_PREFIX }}/ui:${{ needs.determine-tag.outputs.version }}
-            ${{ env.IMAGE_PREFIX }}/ui:latest
-          cache-from: type=gha,scope=ui
-          cache-to: type=gha,mode=max,scope=ui
-
-      - name: Build and push self-host UI image
-        id: selfhost-ui-image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: docker/ui.Dockerfile
-          build-contexts: |
-            marty-cli=./_marty-cli
-            marty-blog=./_marty-blog
-            marty-subscriptions=./_marty-subscriptions
-          push: true
-          build-args: |
-            UI_VARIANT=selfhost
-            MARTY_RELEASE_VERSION=${{ needs.determine-tag.outputs.version }}
-            MARTY_UI_SHA=${{ github.sha }}
-          tags: |
-            ${{ env.IMAGE_PREFIX }}/ui-selfhost:${{ needs.determine-tag.outputs.version }}
-            ${{ env.IMAGE_PREFIX }}/ui-selfhost:latest
-          cache-from: type=gha,scope=ui-selfhost
-          cache-to: type=gha,mode=max,scope=ui-selfhost
-
-  build-migrations:
-    name: Build & Push Migrations Image
-    needs: [determine-tag, release-manifest]
-    runs-on: ubuntu-latest
-    outputs:
-      digest: ${{ steps.migrations-image.outputs.digest }}
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/checkout@v4
-        with:
-          repository: ElevenID/marty-credentials
-          token: ${{ secrets.REPO_ACCESS_TOKEN }}
-          ref: ${{ env.MARTY_CREDENTIALS_REF }}
-          path: _marty-credentials
-          sparse-checkout: services/issuance
-
-      - name: Include issuance migrations
-        run: |
-          cp -r _marty-credentials/services/issuance services/issuance
-
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.REPO_ACCESS_TOKEN }}
-
-      - name: Build and push
-        id: migrations-image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: services/Dockerfile.migrations.prod
-          push: true
-          build-args: |
-            GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }}
-          tags: |
-            ${{ env.IMAGE_PREFIX }}/db-migrate:${{ needs.determine-tag.outputs.version }}
-            ${{ env.IMAGE_PREFIX }}/db-migrate:latest
-          cache-from: type=gha,scope=migrations
-          cache-to: type=gha,mode=max,scope=migrations
-
-  rehearse-migrations:
-    name: Rehearse One-Way Migration
-    needs: [build-migrations, determine-tag, release-manifest]
-    runs-on: ubuntu-latest
-    environment: beta-migration-rehearsal
     permissions:
       contents: read
       packages: read
-    outputs:
-      mode: ${{ steps.rehearsal-mode.outputs.mode }}
-      snapshot_id: ${{ steps.rehearsal-mode.outputs.snapshot_id }}
-      public_origin: ${{ steps.rehearsal-mode.outputs.public_origin }}
-    env:
-      DATABASE_URL: ${{ secrets.MIGRATION_REHEARSAL_DATABASE_URL }}
-      DATABASE_MARKER: ${{ secrets.MIGRATION_REHEARSAL_DATABASE_MARKER }}
-      REHEARSAL_SNAPSHOT_ID: ${{ vars.MIGRATION_REHEARSAL_SNAPSHOT_ID }}
-      REHEARSAL_PUBLIC_API_URL: ${{ vars.MIGRATION_REHEARSAL_PUBLIC_API_URL }}
-      REHEARSAL_MODE: beta-copy
-      RELEASE_VERSION: ${{ needs.determine-tag.outputs.version }}
     steps:
-      - name: Record rehearsal mode
-        id: rehearsal-mode
-        run: |
-          echo "mode=$REHEARSAL_MODE" >> "$GITHUB_OUTPUT"
-          echo "snapshot_id=$REHEARSAL_SNAPSHOT_ID" >> "$GITHUB_OUTPUT"
-          echo "public_origin=$REHEARSAL_PUBLIC_API_URL" >> "$GITHUB_OUTPUT"
-
-      - name: Require an explicitly marked rehearsal database
-        shell: bash
-        run: |
-          if [[ -z "$DATABASE_URL" || -z "$DATABASE_MARKER" || ${#DATABASE_MARKER} -lt 6 ]]; then
-            echo "A protected beta-copy database URL and marker of at least six characters are required." >&2
-            exit 1
-          fi
-          if [[ ! "$DATABASE_MARKER" =~ ^beta-copy-[a-zA-Z0-9._-]+$ ]]; then
-            echo "The safety marker must begin with beta-copy-." >&2
-            exit 1
-          fi
-          if [[ "$DATABASE_URL" != *"$DATABASE_MARKER"* ]]; then
-            echo "The rehearsal database URL does not contain the required safety marker." >&2
-            exit 1
-          fi
-          if [[ ! "$REHEARSAL_SNAPSHOT_ID" =~ ^[a-zA-Z0-9][a-zA-Z0-9._:-]{5,127}$ ]]; then
-            echo "MIGRATION_REHEARSAL_SNAPSHOT_ID must identify the restored beta snapshot." >&2
-            exit 1
-          fi
-          if [[ ! "$REHEARSAL_PUBLIC_API_URL" =~ ^https://[^/]+$ ]]; then
-            echo "MIGRATION_REHEARSAL_PUBLIC_API_URL must be the absolute HTTPS beta origin." >&2
-            exit 1
-          fi
-          if [[ "$REHEARSAL_PUBLIC_API_URL" == *"marty.example"* || "$REHEARSAL_PUBLIC_API_URL" == *"gateway"* ]]; then
-            echo "MIGRATION_REHEARSAL_PUBLIC_API_URL cannot use an internal or placeholder host." >&2
-            exit 1
-          fi
-
-      - uses: docker/login-action@v3
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.REPO_ACCESS_TOKEN }}
-
-      - name: Apply relational migrations
-        run: |
-          docker run --rm \
-            --network host \
-            --entrypoint python \
-            -e DATABASE_URL \
-            -e PUBLIC_API_URL="$REHEARSAL_PUBLIC_API_URL" \
-            -e MARTY_MIGRATION_PROFILE=beta \
-            -e MARTY_KMS_BOOTSTRAP_ENABLED=false \
-            "${IMAGE_PREFIX}/db-migrate:${RELEASE_VERSION}" \
-            /app/run_all_migrations.py
-
-      - name: Verify relational migration heads
-        run: |
-          docker run --rm \
-            --network host \
-            --entrypoint python \
-            -e DATABASE_URL \
-            -e PUBLIC_API_URL="$REHEARSAL_PUBLIC_API_URL" \
-            -e MARTY_MIGRATION_PROFILE=beta \
-            -e MARTY_KMS_BOOTSTRAP_ENABLED=false \
-            "${IMAGE_PREFIX}/db-migrate:${RELEASE_VERSION}" \
-            /app/run_all_migrations.py --verify-only
-
-      - name: Rehearse legacy applicant-store migration
-        shell: bash
-        run: |
-          mkdir -p "$RUNNER_TEMP/applicant-rehearsal"
-          cat > "$RUNNER_TEMP/applicant-rehearsal/applicant_store.json" <<'JSON'
-          {
-            "applications": [{
-              "id": "application-rehearsal",
-              "applicant_id": "applicant-rehearsal",
-              "organization_id": "organization-rehearsal",
-              "credential_configuration_id": "credential-template-rehearsal",
-              "status": "approved",
-              "metadata": {
-                "given_name": "Rehearsal",
-                "canvas_lti": {"state": "synthetic"},
-                "credential_offer_uri": "openid-credential-offer://synthetic",
-                "auto_approve": true
-              }
-            }]
-          }
-          JSON
-          docker run --rm \
-            -v "$RUNNER_TEMP/applicant-rehearsal:/rehearsal" \
-            -e APPLICANT_DATA_FILE=/rehearsal/applicant_store.json \
-            -e 'APPLICATION_TEMPLATE_MIGRATION_MAP={"credential-template-rehearsal":"application-template-rehearsal"}' \
-            --entrypoint python \
-            "${IMAGE_PREFIX}/db-migrate:${RELEASE_VERSION}" \
-            /app/applicant/migrate_store_v03.py
-          jq -e '
-            .schema_version == "MIP/0.3.0" and
-            .applications[0].credential_template_id == "credential-template-rehearsal" and
-            .applications[0].application_template_id == "application-template-rehearsal" and
-            .applications[0].form_data.given_name == "Rehearsal" and
-            .applications[0].integration_context.canvas_lti.state == "synthetic" and
-            .applications[0].claim_state == "OFFER_READY" and
-            (.applications[0] | has("metadata") | not)
-          ' "$RUNNER_TEMP/applicant-rehearsal/applicant_store.json"
-          test -f "$RUNNER_TEMP/applicant-rehearsal/applicant_store.json.mip-0.2.bak"
-
-  build-ready-manifest:
-    name: Publish Build-Ready Manifest
-    needs:
-      - build-services
-      - build-ui
-      - build-migrations
-      - rehearse-migrations
-      - release-manifest
-      - determine-tag
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/download-artifact@v4
+          path: marty-ui
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
-          name: release-manifest-${{ needs.determine-tag.outputs.version }}
-
-      - name: Attach registry digests and rehearsal result
-        shell: bash
+          repository: ElevenID/marty-integration-tests
+          ref: ${{ needs.validate-stack.outputs.integration_commit }}
+          path: integration-tests
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "22"
+          registry-url: https://registry.npmjs.org
+      - name: Build candidate stack manifest
         env:
-          SERVICES_DIGEST: ${{ needs.build-services.outputs.digest }}
-          UI_DIGEST: ${{ needs.build-ui.outputs.public_digest }}
-          UI_SELFHOST_DIGEST: ${{ needs.build-ui.outputs.selfhost_digest }}
-          MIGRATIONS_DIGEST: ${{ needs.build-migrations.outputs.digest }}
-          MIGRATION_REHEARSAL_MODE: ${{ needs.rehearse-migrations.outputs.mode }}
-          MIGRATION_REHEARSAL_SNAPSHOT_ID: ${{ needs.rehearse-migrations.outputs.snapshot_id }}
-          MIGRATION_REHEARSAL_PUBLIC_ORIGIN: ${{ needs.rehearse-migrations.outputs.public_origin }}
+          LOCK_FILE: ${{ inputs.lock_file || 'release/stack-lock.json' }}
+          UI_DIGEST: ${{ needs.build-ui.outputs.digest }}
+          SERVICES_DIGEST: ${{ needs.build-services.outputs.services_digest }}
+          MIGRATIONS_DIGEST: ${{ needs.build-services.outputs.migrations_digest }}
+          VERSION: ${{ needs.validate-stack.outputs.version }}
+        working-directory: marty-ui
+        shell: bash
         run: |
           jq \
-            --arg services "$SERVICES_DIGEST" \
-            --arg ui "$UI_DIGEST" \
-            --arg ui_selfhost "$UI_SELFHOST_DIGEST" \
-            --arg migrations "$MIGRATIONS_DIGEST" \
-            --arg migration_rehearsal_mode "$MIGRATION_REHEARSAL_MODE" \
-            --arg migration_rehearsal_snapshot_id "$MIGRATION_REHEARSAL_SNAPSHOT_ID" \
-            --arg migration_rehearsal_public_origin "$MIGRATION_REHEARSAL_PUBLIC_ORIGIN" \
-            '. + {
-              image_digests: {
-                services: $services,
-                ui: $ui,
-                ui_selfhost: $ui_selfhost,
-                migrations: $migrations
-              },
-              migration_rehearsal: {
-                status: "passed",
-                mode: $migration_rehearsal_mode,
-                snapshot_id: $migration_rehearsal_snapshot_id,
-                public_origin: $migration_rehearsal_public_origin
-              },
-              build_ready: true,
-              release_ready: false
-            }' release-manifest.json > build-ready-manifest.json
+            --arg sha "$GITHUB_SHA" \
+            --arg version "$VERSION" \
+            --arg ui_digest "$UI_DIGEST" \
+            --arg services_digest "$SERVICES_DIGEST" \
+            --arg migrations_digest "$MIGRATIONS_DIGEST" '
+            .components += [{
+              name: "marty-ui",
+              repository: "ElevenID/marty-ui",
+              version: $version,
+              commit: $sha,
+              artifacts: [
+                {type: "oci", uri: "ghcr.io/elevenid/marty-ui/ui", digest: $ui_digest,
+                 sbom: "https://github.com/ElevenID/marty-ui/attestations",
+                 provenance: "https://github.com/ElevenID/marty-ui/attestations"},
+                {type: "oci", uri: "ghcr.io/elevenid/marty-ui/services", digest: $services_digest,
+                 sbom: "https://github.com/ElevenID/marty-ui/attestations",
+                 provenance: "https://github.com/ElevenID/marty-ui/attestations"},
+                {type: "oci", uri: "ghcr.io/elevenid/marty-ui/migrations", digest: $migrations_digest,
+                 sbom: "https://github.com/ElevenID/marty-ui/attestations",
+                 provenance: "https://github.com/ElevenID/marty-ui/attestations"}
+              ]
+            }]
+          ' "$LOCK_FILE" > release/candidate-stack-lock.json
+          python scripts/build_stack_manifest.py \
+            --lock release/candidate-stack-lock.json \
+            --output ../integration-tests/stack-manifest.json
+      - name: Pull immutable release images
+        run: |
+          docker pull "${{ env.IMAGE }}@${{ needs.build-ui.outputs.digest }}"
+          docker pull "${{ env.SERVICES_IMAGE }}@${{ needs.build-services.outputs.services_digest }}"
+          docker pull "${{ env.MIGRATIONS_IMAGE }}@${{ needs.build-services.outputs.migrations_digest }}"
+      - name: Reject commerce configuration
+        shell: bash
+        run: |
+          for image in \
+            "${{ env.IMAGE }}@${{ needs.build-ui.outputs.digest }}" \
+            "${{ env.SERVICES_IMAGE }}@${{ needs.build-services.outputs.services_digest }}" \
+            "${{ env.MIGRATIONS_IMAGE }}@${{ needs.build-services.outputs.migrations_digest }}"; do
+            if docker inspect "$image" | grep -Eqi 'square|subscription|product[_-]?catalog|billing'; then
+              echo "::error::Forbidden commerce marker in $image"
+              exit 1
+            fi
+          done
+      - name: Smoke-test UI image
+        shell: bash
+        run: |
+          docker run --rm -d --name marty-ui-smoke -p 18080:80 "${{ env.IMAGE }}@${{ needs.build-ui.outputs.digest }}"
+          for _ in $(seq 1 30); do
+            curl --fail --silent http://127.0.0.1:18080/ >/dev/null && exit 0
+            sleep 1
+          done
+          docker logs marty-ui-smoke
+          exit 1
+      - name: Install the released test interface
+        working-directory: integration-tests
+        env:
+          CLI_URI: ${{ needs.validate-stack.outputs.cli_uri }}
+          CLI_DIGEST: ${{ needs.validate-stack.outputs.cli_digest }}
+        run: |
+          python -m pip install .
+          curl --fail --location --silent --show-error "$CLI_URI" --output /tmp/marty-cli.tgz
+          echo "${CLI_DIGEST#sha256:}  /tmp/marty-cli.tgz" | sha256sum --check --strict
+          npm install --global /tmp/marty-cli.tgz
+      - name: Validate upgrade and rollback image roles
+        env:
+          GH_TOKEN: ${{ github.token }}
+        working-directory: integration-tests
+        shell: bash
+        run: |
+          previous_tag="$(gh release list --repo ElevenID/marty-ui --limit 20 --json tagName,isDraft \
+            --jq '[.[] | select(.isDraft == false and .tagName != env.GITHUB_REF_NAME)][0].tagName // empty')"
+          args=(--manifest stack-manifest.json --output .env.stack --pull)
+          if [ -n "$previous_tag" ]; then
+            mkdir previous
+            gh release download "$previous_tag" --repo ElevenID/marty-ui \
+              --pattern stack-manifest.json --dir previous
+            args+=(--previous-manifest previous/stack-manifest.json)
+          else
+            echo "No previous public stack release; rollback comparison begins with the next release."
+          fi
+          python scripts/render_stack_env.py "${args[@]}"
+          docker compose --env-file .env.stack config --quiet
+      - name: Run the artifact-only public integration suite
+        working-directory: integration-tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose --env-file .env.stack up -d
+          trap 'docker compose --env-file .env.stack logs --no-color > public-stack.log; docker compose --env-file .env.stack down -v' EXIT
+          for attempt in $(seq 1 60); do
+            curl --fail --silent http://127.0.0.1:28000/health >/dev/null && break
+            if [ "$attempt" = 60 ]; then exit 1; fi
+            sleep 2
+          done
+          pytest tests/integration -m "integration and not wallet and not marty_wallet and not conformance and not ui_contract" -v
 
-      - uses: actions/upload-artifact@v4
+  publish-manifest:
+    needs: [validate-stack, build-ui, build-services, public-stack-smoke]
+    runs-on: ubuntu-latest
+    environment: stack-release
+    permissions:
+      contents: write
+      packages: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610
         with:
-          name: build-ready-manifest-${{ needs.determine-tag.outputs.version }}
-          path: build-ready-manifest.json
-          retention-days: 90
+          image: ${{ env.IMAGE }}@${{ needs.build-ui.outputs.digest }}
+          format: cyclonedx-json
+          output-file: marty-ui-sbom.cdx.json
+      - uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610
+        with:
+          image: ${{ env.SERVICES_IMAGE }}@${{ needs.build-services.outputs.services_digest }}
+          format: cyclonedx-json
+          output-file: marty-ui-services-sbom.cdx.json
+      - uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610
+        with:
+          image: ${{ env.MIGRATIONS_IMAGE }}@${{ needs.build-services.outputs.migrations_digest }}
+          format: cyclonedx-json
+          output-file: marty-ui-migrations-sbom.cdx.json
+      - name: Add immutable UI evidence
+        env:
+          LOCK_FILE: ${{ inputs.lock_file || 'release/stack-lock.json' }}
+          UI_DIGEST: ${{ needs.build-ui.outputs.digest }}
+          SERVICES_DIGEST: ${{ needs.build-services.outputs.services_digest }}
+          MIGRATIONS_DIGEST: ${{ needs.build-services.outputs.migrations_digest }}
+          VERSION: ${{ needs.validate-stack.outputs.version }}
+        shell: bash
+        run: |
+          jq \
+            --arg sha "$GITHUB_SHA" \
+            --arg version "$VERSION" \
+            --arg ui_digest "$UI_DIGEST" \
+            --arg services_digest "$SERVICES_DIGEST" \
+            --arg migrations_digest "$MIGRATIONS_DIGEST" '
+            .components += [{
+              name: "marty-ui",
+              repository: "ElevenID/marty-ui",
+              version: $version,
+              commit: $sha,
+              artifacts: [
+                {type: "oci", uri: "ghcr.io/elevenid/marty-ui/ui", digest: $ui_digest,
+                 sbom: ("https://github.com/ElevenID/marty-ui/releases/download/v" + $version + "/marty-ui-sbom.cdx.json"),
+                 provenance: "https://github.com/ElevenID/marty-ui/attestations"},
+                {type: "oci", uri: "ghcr.io/elevenid/marty-ui/services", digest: $services_digest,
+                 sbom: ("https://github.com/ElevenID/marty-ui/releases/download/v" + $version + "/marty-ui-services-sbom.cdx.json"),
+                 provenance: "https://github.com/ElevenID/marty-ui/attestations"},
+                {type: "oci", uri: "ghcr.io/elevenid/marty-ui/migrations", digest: $migrations_digest,
+                 sbom: ("https://github.com/ElevenID/marty-ui/releases/download/v" + $version + "/marty-ui-migrations-sbom.cdx.json"),
+                 provenance: "https://github.com/ElevenID/marty-ui/attestations"}
+              ]
+            }]
+          ' "$LOCK_FILE" > release/complete-stack-lock.json
+          python scripts/build_stack_manifest.py --lock release/complete-stack-lock.json --output stack-manifest.json
+      - uses: sigstore/cosign-installer@d58896d6a1865668819e1d91763c7751a165e159
+      - name: Sign and checksum manifest evidence
+        shell: bash
+        run: |
+          for file in stack-manifest.json marty-ui-sbom.cdx.json marty-ui-services-sbom.cdx.json marty-ui-migrations-sbom.cdx.json; do
+            cosign sign-blob --yes --bundle "${file}.sigstore.json" "$file"
+          done
+          sha256sum stack-manifest.json ./*.cdx.json ./*.sigstore.json > SHA256SUMS
+      - uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661
+        with:
+          subject-path: |
+            stack-manifest.json
+            marty-ui-sbom.cdx.json
+            marty-ui-services-sbom.cdx.json
+            marty-ui-migrations-sbom.cdx.json
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
+        with:
+          generate_release_notes: true
+          files: |
+            stack-manifest.json
+            *.cdx.json
+            *.sigstore.json
+            SHA256SUMS

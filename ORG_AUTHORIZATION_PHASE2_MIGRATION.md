@@ -360,8 +360,8 @@ Extend [marty-integration-tests/tests/integration/test_org_authorization.py](../
 ## Files Modified
 
 ### Core Authorization Library
-- [packages/marty_common/org_authorization.py](packages/marty_common/org_authorization.py) - No changes (reused from Phase 1)
-- [packages/marty_common/\_\_init\_\_.py](packages/marty_common/__init__.py) - No changes (exports already present)
+- `marty_common.org_authorization` from the released `ElevenID/Marty` package - reused from Phase 1
+- `marty_common` from the released package - exports already present
 
 ### Phase 2 Services
 1. [services/trust_profile/main.py](services/trust_profile/main.py) - **327 lines total**, 11 endpoints secured
@@ -481,7 +481,7 @@ Before deploying Phase 2 services to production:
 ## References
 
 - [Phase 1 Implementation Summary](ORG_AUTHORIZATION_IMPLEMENTATION.md)
-- [marty_common Authorization Module](packages/marty_common/org_authorization.py)
+- `marty_common.org_authorization` in `ElevenID/Marty`
 - [Integration Tests](../marty-integration-tests/tests/integration/test_org_authorization.py)
 - [Gateway Middleware](services/gateway/main.py#L232-L337)
 

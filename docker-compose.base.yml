@@ -225,8 +225,8 @@ services:
   # ==========================================================================
   db-migrate:
     build:
-      context: ..
-      dockerfile: marty-ui/services/Dockerfile.migrations
+      context: .
+      dockerfile: services/Dockerfile.migrations
     container_name: marty-db-migrate
     environment:
       MARTY_DB_PASSWORD: ${MARTY_DB_PASSWORD:-marty_dev_password}
@@ -261,8 +261,8 @@ services:
   # ==========================================================================
   gateway:
     build:
-      context: ..
-      dockerfile: marty-ui/services/Dockerfile
+      context: .
+      dockerfile: services/Dockerfile
       args:
         SERVICE_NAME: gateway
     container_name: marty-gateway
@@ -281,7 +281,6 @@ services:
       DEVICE_REGISTRATION_SERVICE_URL: http://device-registration:8014
       ISSUANCE_SERVICE_URL: http://issuance:8005
       REVOCATION_PROFILE_SERVICE_URL: http://revocation-profile:8013
-      BILLING_SERVICE_URL: http://billing:8016
       ISSUER_BASE_URL: ${PUBLIC_API_URL:-http://gateway:8000}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://localhost:5173}
       AUTH_GRPC_TARGET: auth:9001
@@ -327,8 +326,6 @@ services:
         condition: service_healthy
       revocation-profile:
         condition: service_healthy
-      billing:
-        condition: service_healthy
       issuance:
         condition: service_healthy
       event-stream:
@@ -346,8 +343,8 @@ services:
 
   auth:
     build:
-      context: ..
-      dockerfile: marty-ui/services/Dockerfile
+      context: .
+      dockerfile: services/Dockerfile
       args:
         SERVICE_NAME: auth
     container_name: marty-auth
@@ -407,8 +404,8 @@ services:
 
   organization:
     build:
-      context: ..
-      dockerfile: marty-ui/services/Dockerfile
+      context: .
+      dockerfile: services/Dockerfile
       args:
         SERVICE_NAME: organization
     container_name: marty-organization
@@ -440,8 +437,8 @@ services:
 
   credential-template:
     build:
-      context: ..
-      dockerfile: marty-ui/services/Dockerfile
+      context: .
+      dockerfile: services/Dockerfile
       args:
         SERVICE_NAME: credential-template
     container_name: marty-credential-template
@@ -472,8 +469,8 @@ services:
 
   trust-profile:
     build:
-      context: ..
-      dockerfile: marty-ui/services/Dockerfile
+      context: .
+      dockerfile: services/Dockerfile
       args:
         SERVICE_NAME: trust-profile
     container_name: marty-trust-profile
@@ -500,8 +497,8 @@ services:
 
   applicant:
     build:
-      context: ..
-      dockerfile: marty-ui/services/Dockerfile
+      context: .
+      dockerfile: services/Dockerfile
       args:
         SERVICE_NAME: applicant
     container_name: marty-applicant
@@ -533,8 +530,8 @@ services:
 
   notification:
     build:
-      context: ..
-      dockerfile: marty-ui/services/Dockerfile
+      context: .
+      dockerfile: services/Dockerfile
       args:
         SERVICE_NAME: notification
     container_name: marty-notification
@@ -563,8 +560,8 @@ services:
 
   compliance-profile:
     build:
-      context: ..
-      dockerfile: marty-ui/services/Dockerfile
+      context: .
+      dockerfile: services/Dockerfile
       args:
         SERVICE_NAME: compliance-profile
     container_name: marty-compliance-profile
@@ -588,8 +585,8 @@ services:
 
   presentation-policy:
     build:
-      context: ..
-      dockerfile: marty-ui/services/Dockerfile
+      context: .
+      dockerfile: services/Dockerfile
       args:
         SERVICE_NAME: presentation-policy
     container_name: marty-presentation-policy
@@ -622,8 +619,8 @@ services:
 
   deployment-profile:
     build:
-      context: ..
-      dockerfile: marty-ui/services/Dockerfile
+      context: .
+      dockerfile: services/Dockerfile
       args:
         SERVICE_NAME: deployment-profile
     container_name: marty-deployment-profile
@@ -647,8 +644,8 @@ services:
 
   flow:
     build:
-      context: ..
-      dockerfile: marty-ui/services/Dockerfile
+      context: .
+      dockerfile: services/Dockerfile
       args:
         SERVICE_NAME: flow
     container_name: marty-flow
@@ -693,9 +690,7 @@ services:
     restart: unless-stopped
 
   issuance:
-    build:
-      context: ..
-      dockerfile: marty-credentials/services/Dockerfile
+    image: ${MARTY_ISSUANCE_IMAGE:?set MARTY_ISSUANCE_IMAGE to an immutable issuance image digest}
     container_name: marty-issuance
     environment:
       ISSUANCE_SERVICE_PORT: "8005"
@@ -781,9 +776,7 @@ services:
   # Portable Canvas synchronization runs out-of-process. The worker leases
   # PostgreSQL jobs and records a database heartbeat consumed by readiness.
   canvas-sync-worker:
-    build:
-      context: ..
-      dockerfile: marty-credentials/services/Dockerfile
+    image: ${MARTY_ISSUANCE_IMAGE:?set MARTY_ISSUANCE_IMAGE to an immutable issuance image digest}
     container_name: marty-canvas-sync-worker
     command: ["python", "-m", "issuance.canvas_worker"]
     environment:
@@ -834,8 +827,8 @@ services:
   # ── Revocation Profile Service ────────────────────────────────────
   revocation-profile:
     build:
-      context: ..
-      dockerfile: marty-ui/services/Dockerfile
+      context: .
+      dockerfile: services/Dockerfile
       args:
         SERVICE_NAME: revocation-profile
     container_name: marty-revocation-profile
@@ -865,8 +858,8 @@ services:
   # ── Device Registration Service ─────────────────────────────────
   device-registration:
     build:
-      context: ..
-      dockerfile: marty-ui/services/Dockerfile
+      context: .
+      dockerfile: services/Dockerfile
       args:
         SERVICE_NAME: device_registration
     container_name: marty-device-registration
@@ -891,8 +884,8 @@ services:
   # ── Event Stream Service (gRPC event bus) ─────────────────────────
   event-stream:
     build:
-      context: ..
-      dockerfile: marty-ui/services/Dockerfile
+      context: .
+      dockerfile: services/Dockerfile
       args:
         SERVICE_NAME: event_stream
     container_name: marty-event-stream
@@ -916,8 +909,8 @@ services:
   # ── Verification Service ─────────────────────────────────────────
   verification:
     build:
-      context: ..
-      dockerfile: marty-ui/services/Dockerfile
+      context: .
+      dockerfile: services/Dockerfile
       args:
         SERVICE_NAME: verification
     container_name: marty-verification
@@ -941,42 +934,6 @@ services:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8012/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-    networks:
-      - marty-network
-    restart: unless-stopped
-
-  # ── Billing Service ──────────────────────────────────────────────
-  billing:
-    build:
-      context: ..
-      dockerfile: marty-ui/services/Dockerfile
-      args:
-        SERVICE_NAME: billing
-    container_name: marty-billing
-    environment:
-      BILLING_SERVICE_PORT: "8016"
-      DATABASE_URL: postgresql+asyncpg://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
-      ORGANIZATION_SERVICE_URL: http://organization:8002
-      SQUARE_ENVIRONMENT: ${SQUARE_ENVIRONMENT:-sandbox}
-      SQUARE_ACCESS_TOKEN: ${SQUARE_ACCESS_TOKEN:-}
-      SQUARE_LOCATION_ID: ${SQUARE_LOCATION_ID:-}
-      SQUARE_WEBHOOK_SIGNATURE_KEY: ${SQUARE_WEBHOOK_SIGNATURE_KEY:-}
-      SQUARE_PLAN_STARTER_ID: ${SQUARE_PLAN_STARTER_ID:-}
-      SQUARE_PLAN_PROFESSIONAL_ID: ${SQUARE_PLAN_PROFESSIONAL_ID:-}
-      SQUARE_PLAN_ENTERPRISE_ID: ${SQUARE_PLAN_ENTERPRISE_ID:-}
-      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://localhost:5173}
-    ports:
-      - "8016:8016"
-    depends_on:
-      db-migrate:
-        condition: service_completed_successfully
-      organization:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8016/health"]
       interval: 10s
       timeout: 5s
       retries: 3

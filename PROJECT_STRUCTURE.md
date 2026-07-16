@@ -58,7 +58,7 @@ marty-ui/
 ### Key areas
 
 - `services/` - active Python microservices and migrations
-- `packages/marty_common/` - shared Python infrastructure used across services
+- `marty-common` - released shared Python infrastructure maintained in `ElevenID/Marty`
 - `packages/marty_proto/` + `proto/` - gRPC definitions and generated stubs
 - `ui/` - Vite/React frontend
 - `docker-compose*.yml` - local stack orchestration

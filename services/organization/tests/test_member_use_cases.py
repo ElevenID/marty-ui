@@ -12,7 +12,7 @@ from services.organization.domain.entities import Member, MemberStatus, Role
 
 @pytest.mark.asyncio
 async def test_add_member_direct_promotes_existing_marty_admin_email_membership(monkeypatch):
-    monkeypatch.setattr(use_cases_module, "MARTY_ORG_ADMIN_EMAIL", "burdettadam@gmail.com")
+    monkeypatch.setattr(use_cases_module, "MARTY_ORG_ADMIN_EMAIL", "admin@example.com")
     monkeypatch.setattr(use_cases_module, "MARTY_ORG_ID", "00000000-0000-0000-0000-000000000001")
 
     applicant_role = Role(
@@ -31,7 +31,7 @@ async def test_add_member_direct_promotes_existing_marty_admin_email_membership(
         id="member-1",
         organization_id=use_cases_module.MARTY_ORG_ID,
         user_id="user-1",
-        email="burdettadam@gmail.com",
+        email="admin@example.com",
         status=MemberStatus.ACTIVE,
         roles=[applicant_role],
     )
@@ -56,7 +56,7 @@ async def test_add_member_direct_promotes_existing_marty_admin_email_membership(
     member = await use_case.add_member_direct(
         organization_id=use_cases_module.MARTY_ORG_ID,
         user_id="user-1",
-        email="burdettadam@gmail.com",
+        email="admin@example.com",
     )
 
     command = role_use_case.set_member_roles.await_args.args[0]
@@ -69,7 +69,7 @@ async def test_add_member_direct_promotes_existing_marty_admin_email_membership(
 
 @pytest.mark.asyncio
 async def test_add_member_direct_assigns_admin_role_to_new_marty_admin_email(monkeypatch):
-    monkeypatch.setattr(use_cases_module, "MARTY_ORG_ADMIN_EMAIL", "burdettadam@gmail.com")
+    monkeypatch.setattr(use_cases_module, "MARTY_ORG_ADMIN_EMAIL", "admin@example.com")
     monkeypatch.setattr(use_cases_module, "MARTY_ORG_ID", "00000000-0000-0000-0000-000000000001")
 
     admin_role = Role(
@@ -105,7 +105,7 @@ async def test_add_member_direct_assigns_admin_role_to_new_marty_admin_email(mon
     member = await use_case.add_member_direct(
         organization_id=use_cases_module.MARTY_ORG_ID,
         user_id="user-2",
-        email="burdettadam@gmail.com",
+        email="admin@example.com",
     )
 
     command = role_use_case.set_member_roles.await_args.args[0]

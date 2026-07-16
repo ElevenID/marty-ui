@@ -34,8 +34,6 @@ async def test_run_hosted_pilot_purge_persists_last_purged_at(monkeypatch):
         if service_name == "organizations" and path == "/v1/organizations/org-1/lifecycle":
             return {
                 "created_at": "2026-04-01T00:00:00+00:00",
-                "plan_tier": "starter",
-                "plan_expires_at": "2026-05-01T00:00:00+00:00",
                 "audit_retention_days": 30,
                 "pilot_retention": {
                     "enabled": True,
@@ -60,7 +58,7 @@ async def test_run_hosted_pilot_purge_persists_last_purged_at(monkeypatch):
                 "purged_records": {"total": 4},
                 "tracked_scope": ["applications"],
             }, None
-        if service_name == "organizations" and path == "/internal/v1/organizations/org-1/plan":
+        if service_name == "organizations" and path == "/internal/v1/organizations/org-1/settings":
             return {"ok": True}, None
         raise AssertionError(f"Unexpected request: {service_name} {path}")
 
@@ -71,11 +69,9 @@ async def test_run_hosted_pilot_purge_persists_last_purged_at(monkeypatch):
     assert error_response is None
     assert payload["purged_at"] == "2026-04-13T12:00:00+00:00"
     sync_call = next(
-        call for call in calls if call["path"] == "/internal/v1/organizations/org-1/plan"
+        call for call in calls if call["path"] == "/internal/v1/organizations/org-1/settings"
     )
     assert sync_call["json_body"] == {
-        "plan_tier": "starter",
-        "plan_expires_at": "2026-05-01T00:00:00+00:00",
         "settings_patch": {
             "pilot_retention_last_purged_at": "2026-04-13T12:00:00+00:00",
         },
@@ -117,7 +113,6 @@ async def test_auto_purge_sweep_only_purges_due_hosted_pilot_orgs(monkeypatch):
         if service_name == "organizations" and path == "/internal/v1/organizations/org-1/lifecycle":
             return {
                 "created_at": "2026-04-01T00:00:00+00:00",
-                "plan_tier": "starter",
                 "audit_retention_days": 30,
                 "pilot_retention": {"enabled": True, "window_days": 30},
             }, None
@@ -125,7 +120,6 @@ async def test_auto_purge_sweep_only_purges_due_hosted_pilot_orgs(monkeypatch):
         if service_name == "organizations" and path == "/internal/v1/organizations/org-2/lifecycle":
             return {
                 "created_at": "2026-04-01T00:00:00+00:00",
-                "plan_tier": "free",
                 "audit_retention_days": 90,
                 "pilot_retention": None,
             }, None
@@ -133,7 +127,6 @@ async def test_auto_purge_sweep_only_purges_due_hosted_pilot_orgs(monkeypatch):
         if service_name == "organizations" and path == "/internal/v1/organizations/org-3/lifecycle":
             return {
                 "created_at": "2026-04-01T00:00:00+00:00",
-                "plan_tier": "starter",
                 "audit_retention_days": 30,
                 "pilot_retention": {"enabled": True, "window_days": 30},
             }, None
@@ -166,7 +159,7 @@ async def test_auto_purge_sweep_only_purges_due_hosted_pilot_orgs(monkeypatch):
                 "tracked_scope": ["applications"],
             }, None
 
-        if service_name == "organizations" and path == "/internal/v1/organizations/org-1/plan":
+        if service_name == "organizations" and path == "/internal/v1/organizations/org-1/settings":
             return {"ok": True}, None
 
         raise AssertionError(f"Unexpected request: {service_name} {path}")

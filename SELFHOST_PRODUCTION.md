@@ -56,15 +56,15 @@ For agent-safe use, keep the real `SELFHOST_SECRET_DIR` outside the repo and out
 
 For prune-safe persistence and future cloud transfer, keep `SELFHOST_STATE_DIR` and `SELFHOST_OPENBAO_STATE_DIR` outside the repo as well. Because Postgres, Redis, applicant storage, and the standalone OpenBao backend are bind-mounted from host directories, they survive reboots and ordinary Docker cleanup, and you can later copy or synchronize that directory tree to another host or managed storage service.
 
-## Customer bundle export
+## Self-host bundle export
 
-To stage the image-based customer bundle from this repo:
+To stage the image-based open-source bundle from this repo:
 
 ```bash
 python scripts/package-selfhost-bundle.py
 ```
 
-That writes `dist/selfhost-bundle` with the runtime assets, secret templates, Keycloak import files, and a generated `docker-compose.yml` that already targets the published images. Use the `README.md` inside that staged bundle for customer-facing pull and startup commands.
+That writes `dist/selfhost-bundle` with the runtime assets, secret templates, Keycloak import files, and a generated `docker-compose.yml` that already targets the published images. Use the `README.md` inside that staged bundle for pull and startup commands.
 
 ## First run
 
@@ -72,24 +72,8 @@ That writes `dist/selfhost-bundle` with the runtime assets, secret templates, Ke
 2. Create external host directories for `SELFHOST_SECRET_DIR`, `SELFHOST_STATE_DIR`, `SELFHOST_BACKUP_DIR`, `SELFHOST_OPENBAO_STATE_DIR`, and `SELFHOST_OPENBAO_EXPORT_DIR`
 3. Copy `docker/secrets/selfhost.example` to `SELFHOST_SECRET_DIR`
 4. Replace the required secret file contents in that external directory
-5. Install the signed license as `license_key` inside that external directory. The CLI validates the license against the Marty issuer public key embedded in the runtime package; it does not mint a license locally:
-
-```bash
-cat /path/to/customer-license.jwt | node ../marty-cli/bin/marty.js license install-selfhost \
-	--env-file .env.selfhost.production.local \
-	--token-stdin
-```
-
-On PowerShell, the same flow is:
-
-```powershell
-Get-Content C:\path\to\customer-license.jwt -Raw | node ..\marty-cli\bin\marty.js license install-selfhost --env-file .env.selfhost.production.local --token-stdin
-```
-
-If you are operating as the issuer yourself, use the internal issuer tool in [tools/selfhost-license-issuer/README.md](../tools/selfhost-license-issuer/README.md) to generate the Ed25519 signing keypair outside the repo and write a signed license directly into `SELFHOST_SECRET_DIR` without printing the JWT. On this workstation, keep the private key under `../marty-selfhost-prod/license-issuer/keys`, adjacent to but not inside `SELFHOST_SECRET_DIR`. The runtime public key remains build-time trusted material; `--public-key-file` is only a dev/test override for validating alternate issuer keys before they are embedded in a release image.
-
-6. Start the standalone OpenBao stack described in [SELFHOST_OPENBAO.md](SELFHOST_OPENBAO.md), or set `BAO_ADDR` to another container-reachable external Vault/OpenBao address if you already run one elsewhere
-7. If you are not using the standalone OpenBao compose project, use `scripts/bootstrap-selfhost-vault.sh` with a bootstrap token to configure the external vault and write `openbao_service_token` into `SELFHOST_SECRET_DIR`, or place an equivalent least-privilege token there yourself:
+5. Start the standalone OpenBao stack described in [SELFHOST_OPENBAO.md](SELFHOST_OPENBAO.md), or set `BAO_ADDR` to another container-reachable external Vault/OpenBao address if you already run one elsewhere
+6. If you are not using the standalone OpenBao compose project, use `scripts/bootstrap-selfhost-vault.sh` with a bootstrap token to configure the external vault and write `openbao_service_token` into `SELFHOST_SECRET_DIR`, or place an equivalent least-privilege token there yourself:
 
 ```bash
 BAO_ADDR=https://vault.example.com \
@@ -152,21 +136,12 @@ Create these files under `SELFHOST_SECRET_DIR`:
 - `openbao_service_token`
 - `cloudflare_tunnel_token`
 - `cloudflare_beta_tunnel_token` when you enable the optional `beta-tunnel` compose profile
-- `license_key`
 
 The stack will refuse to start if any required secret file still contains a placeholder value such as `change-me-postgres`.
 
-The default self-host policy is controlled with non-secret env vars in `.env.selfhost.production.local`:
-
-- `MARTY_LICENSE_ENFORCEMENT=required`
-- `MARTY_LICENSE_REQUIRED_ISSUER=marty-license-issuer`
-- `MARTY_LICENSE_REQUIRED_PLAN_TIER=system`
-- `MARTY_LICENSE_REQUIRED_PRODUCTS=ui-app`
-- `CREDENTIAL_LOGIN_POLICY_ID=50000000-0000-0000-0000-000000000004`
+The credential-login policy is controlled with `CREDENTIAL_LOGIN_POLICY_ID=50000000-0000-0000-0000-000000000004` in `.env.selfhost.production.local`.
 
 `CREDENTIAL_LOGIN_POLICY_ID` is the seeded OpenBadgeLogin presentation policy used by the Keycloak **Present Open Badge Credential** button. If it is blank, the auth service now shows a friendly HTML error page, and `scripts/check-selfhost-production.py` will flag the deployment as incomplete.
-
-`license_key` is not a locally generated password. It is a signed license token issued by the licensing authority. The issuer's PEM-encoded Ed25519 public key is embedded in the self-host runtime image, and the CLI command above validates the token against the configured issuer, required plan tier, and required product set before writing it into `SELFHOST_SECRET_DIR`.
 
 These can be blank if you are not using the integration:
 
@@ -175,8 +150,6 @@ These can be blank if you are not using the integration:
 - `google_analytics_measurement_id`
 - `google_site_verification`
 - `smtp_password`
-- `square_access_token`
-- `square_webhook_signature_key`
 
 `google_client_id` and `google_client_secret` are the OAuth web client credentials used by Keycloak's Google identity provider. When `KEYCLOAK_SOCIAL_LOGIN_ENABLED=true`, both files must contain real values and the Google Cloud OAuth web client must allow this redirect URI:
 

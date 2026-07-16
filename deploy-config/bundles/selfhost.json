@@ -3,7 +3,7 @@
   "name": "selfhost",
   "description": "Customer-facing self-host Docker Compose bundle.",
   "stack": "selfhost-production",
-  "artifact_profile": "selfhost-commercial",
+  "artifact_profile": "oss-release",
   "assets": [
     "docker-compose.selfhost.prod.yml",
     "docker-compose.selfhost.bundle.override.yml",

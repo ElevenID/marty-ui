@@ -1,88 +1,34 @@
-# Dockerfile for running database migrations
-# This is a lightweight container that runs the migration script and exits
-# Build context should be the parent directory containing both marty-ui and marty-microservices-framework
+# Public database migration image. Build context: marty-ui repository root.
+FROM python:3.12-slim
 
-FROM python:3.11-slim
+ARG MARTY_COMMON_VERSION=0.2.0
+ARG MARTY_COMMON_URI
+ARG MARTY_COMMON_DIGEST
 
-# Install system dependencies
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-    postgresql-client \
+RUN apt-get update && apt-get install -y --no-install-recommends curl postgresql-client \
     && rm -rf /var/lib/apt/lists/*
 
-# Set working directory
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONPATH=/app:/app/services
+
 WORKDIR /app
+RUN test -n "$MARTY_COMMON_URI" \
+    && test -n "$MARTY_COMMON_DIGEST" \
+    && curl --fail --location --silent --show-error "$MARTY_COMMON_URI" --output /tmp/marty-common.whl \
+    && echo "${MARTY_COMMON_DIGEST#sha256:}  /tmp/marty-common.whl" | sha256sum --check --strict \
+    && pip install --no-cache-dir \
+    /tmp/marty-common.whl \
+    sqlalchemy alembic psycopg2-binary asyncpg 'redis[hiredis]' \
+    fastapi pydantic httpx 'cryptography>=44.0.0'
 
-# Install Python dependencies first (better caching)
-RUN pip install --no-cache-dir \
-    sqlalchemy \
-    alembic \
-    psycopg2-binary \
-    asyncpg \
-    redis[hiredis] \
-    cedarpy \
-    fastapi \
-    pydantic \
-    httpx \
-    cryptography>=41.0.0
+COPY services /app/services
+COPY scripts/load-secrets-env.sh /app/load-secrets-env.sh
+COPY scripts/run-migrations-with-secrets.sh /app/run-migrations-with-secrets.sh
+RUN chmod +x /app/load-secrets-env.sh /app/run-migrations-with-secrets.sh \
+    && adduser --disabled-password --gecos '' appuser
 
-# Install MMF dependencies first using only pyproject.toml (layer is cached until pyproject.toml changes)
-COPY marty-microservices-framework/pyproject.toml /tmp/mmf-pyproject.toml
-RUN python3 -c "import tomllib, subprocess, sys; data = tomllib.load(open('/tmp/mmf-pyproject.toml', 'rb')); deps = data['project']['dependencies']; subprocess.run([sys.executable, '-m', 'pip', 'install', '--no-cache-dir'] + deps, check=True)" \
-    && rm /tmp/mmf-pyproject.toml
-
-# Copy full MMF source and install the package itself (no deps downloaded - fast)
-COPY marty-microservices-framework /tmp/mmf
-RUN pip install --no-cache-dir --no-deps /tmp/mmf && rm -rf /tmp/mmf
-
-# Install marty_common (provides migration adapter used by run_all_migrations.py)
-COPY marty-ui/packages/marty_common /app/packages/marty_common
-ENV PYTHONPATH="/app/packages:${PYTHONPATH}"
-
-# Copy shared runtime helpers
-COPY marty-ui/scripts/load-secrets-env.sh /app/load-secrets-env.sh
-
-# Copy migration infrastructure
-COPY marty-ui/services/run_all_migrations.py /app/
-COPY marty-ui/scripts/run-migrations-with-secrets.sh /app/run-migrations-with-secrets.sh
-
-# Copy all service infrastructure directories (note: source dirs use hyphens, dest dirs use underscores for Python imports)
-COPY marty-ui/services/organization/infrastructure /app/organization/infrastructure/
-COPY marty-ui/services/organization/manage_migrations.py /app/organization/
-
-COPY marty-ui/services/auth/infrastructure /app/auth/infrastructure/
-COPY marty-ui/services/auth/manage_migrations.py /app/auth/
-
-COPY marty-ui/services/credential_template/infrastructure /app/credential_template/infrastructure/
-COPY marty-ui/services/credential_template/manage_migrations.py /app/credential_template/
-
-COPY marty-ui/services/trust_profile/infrastructure /app/trust_profile/infrastructure/
-COPY marty-ui/services/trust_profile/manage_migrations.py /app/trust_profile/
-
-COPY marty-ui/services/revocation_profile/infrastructure /app/revocation_profile/infrastructure/
-COPY marty-ui/services/revocation_profile/manage_migrations.py /app/revocation_profile/
-
-# Note: issuance service is in marty-credentials, not marty-ui
-COPY marty-credentials/services/issuance/infrastructure /app/issuance/infrastructure/
-COPY marty-credentials/services/issuance/manage_migrations.py /app/issuance/
-COPY marty-credentials/services/__init__.py /app/services/
-COPY marty-credentials/services/issuance/__init__.py /app/services/issuance/
-
-COPY marty-ui/services/presentation_policy/infrastructure /app/presentation_policy/infrastructure/
-COPY marty-ui/services/presentation_policy/manage_migrations.py /app/presentation_policy/
-
-COPY marty-ui/services/deployment_profile/infrastructure /app/deployment_profile/infrastructure/
-COPY marty-ui/services/deployment_profile/manage_migrations.py /app/deployment_profile/
-
-COPY marty-ui/services/flow/infrastructure /app/flow/infrastructure/
-COPY marty-ui/services/flow/manage_migrations.py /app/flow/
-
-COPY marty-ui/services/billing/infrastructure /app/billing/infrastructure/
-COPY marty-ui/services/billing/manage_migrations.py /app/billing/
-
-# Default command runs all migrations
-RUN chmod +x /app/run-migrations-with-secrets.sh
-
+USER appuser
 CMD ["/app/run-migrations-with-secrets.sh"]
-
-

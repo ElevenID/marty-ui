@@ -84,7 +84,7 @@ def test_manifest_snapshots_all_coordinated_repositories(tmp_path: Path) -> None
     workspace.mkdir()
     for name in REPOSITORIES:
         make_repo(workspace / name, content=name)
-        if name in {"marty-blog", "marty-subscriptions"}:
+        if name == "marty-blog":
             repo = workspace / name
             (repo / "package.json").write_text("{}", encoding="utf-8")
             (repo / "src").mkdir()
@@ -115,7 +115,7 @@ def test_manifest_verification_rejects_worktree_drift(tmp_path: Path) -> None:
     workspace.mkdir()
     for name in REPOSITORIES:
         make_repo(workspace / name, content=name)
-        if name in {"marty-blog", "marty-subscriptions"}:
+        if name == "marty-blog":
             repo = workspace / name
             (repo / "package.json").write_text("{}", encoding="utf-8")
             (repo / "src").mkdir()

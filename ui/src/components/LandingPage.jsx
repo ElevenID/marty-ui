@@ -85,7 +85,7 @@ import {
 import {
   GUIDE_CHAPTERS,
   GUIDE_ARTICLES_BY_CHAPTER,
-} from '@marty/blog';
+} from '@elevenid/marty-blog';
 import { UnifiedIdentityFlowDiagram, StandardsStackDiagram, InteractiveProtocolMap, DeploymentModelDiagram } from './diagrams';
 import { verifyVerifierDemoPresentation } from '../application/verifier';
 import { trackEvent } from '../utils/analytics';

@@ -224,8 +224,8 @@ cmd_setup_secrets() {
   local postgres_password keycloak_db_password marty_db_password keycloak_admin_password
   local marty_api_client_secret rabbitmq_password rabbitmq_erlang_cookie
   local google_client_id google_client_secret smtp_username smtp_password
-  local issuance_api_key integration_secret_master_key canvas_credentials_shared_secret openbao_service_token license_key
-  local session_secret_key square_access_token square_webhook_signature_key
+  local issuance_api_key integration_secret_master_key canvas_credentials_shared_secret openbao_service_token
+  local session_secret_key
   local cloudflare_tunnel_token
 
   postgres_password="$(resolve_secret_input POSTGRES_PASSWORD)"
@@ -244,9 +244,6 @@ cmd_setup_secrets() {
   integration_secret_master_key="$(resolve_secret_input INTEGRATION_SECRET_MASTER_KEY)"
   canvas_credentials_shared_secret="$(resolve_secret_input CANVAS_CREDENTIALS_SHARED_SECRET)"
   openbao_service_token="$(resolve_secret_input OPENBAO_SERVICE_TOKEN)"
-  license_key="$(resolve_secret_input LICENSE_KEY)"
-  square_access_token="$(resolve_secret_input SQUARE_ACCESS_TOKEN)"
-  square_webhook_signature_key="$(resolve_secret_input SQUARE_WEBHOOK_SIGNATURE_KEY)"
   cloudflare_tunnel_token="$(resolve_secret_input CLOUDFLARE_TUNNEL_TOKEN)"
 
   require_catalog_required_secrets "$K8S_STACK_NAME"
@@ -275,9 +272,6 @@ cmd_setup_secrets() {
     --from-literal=INTEGRATION_SECRET_MASTER_KEY="$integration_secret_master_key" \
     --from-literal=CANVAS_CREDENTIALS_SHARED_SECRET="$canvas_credentials_shared_secret" \
     --from-literal=OPENBAO_SERVICE_TOKEN="$openbao_service_token" \
-    --from-literal=LICENSE_KEY="$license_key" \
-    --from-literal=SQUARE_ACCESS_TOKEN="$square_access_token" \
-    --from-literal=SQUARE_WEBHOOK_SIGNATURE_KEY="$square_webhook_signature_key" \
     --dry-run=client -o yaml | kubectl apply -f -
   success "Application secrets created/updated"
 

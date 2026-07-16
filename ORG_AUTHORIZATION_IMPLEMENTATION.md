@@ -11,9 +11,9 @@ All phases of the organization-scoped authorization system have been implemented
 ### Phase 1: Shared Authorization Library (`marty_common`)
 
 **Files Modified:**
-- [packages/marty_common/pyproject.toml](marty-ui/packages/marty_common/pyproject.toml) - Added `httpx` and `redis[hiredis]` dependencies
-- [packages/marty_common/org_authorization.py](marty-ui/packages/marty_common/org_authorization.py) - **NEW** 327-line module
-- [packages/marty_common/\_\_init\_\_.py](marty-ui/packages/marty_common/__init__.py) - Exported new auth symbols
+- `ElevenID/Marty` package `marty-common` - owns the shared `httpx` and Redis dependencies
+- `marty_common.org_authorization` - shared organization authorization module
+- `marty_common` - exports the public authorization symbols
 
 **Key Components:**
 - `OrgRole` enum: `OWNER`, `ADMIN`, `MEMBER`, `VIEWER`
@@ -342,9 +342,9 @@ The following services still need org authorization added:
 ## Key Files Reference
 
 ### marty_common Package
-- [pyproject.toml](marty-ui/packages/marty_common/pyproject.toml) - Dependencies
-- [org_authorization.py](marty-ui/packages/marty_common/org_authorization.py) - Main authorization module
-- [__init__.py](marty-ui/packages/marty_common/__init__.py) - Exports
+- `ElevenID/Marty/packages/marty-common/pyproject.toml` - Dependencies
+- `marty_common.org_authorization` - Main authorization module
+- `marty_common` - Exports
 
 ### Organization Service
 - [main.py](marty-ui/services/organization/main.py) - Lifespan, Redis, OrganizationClient

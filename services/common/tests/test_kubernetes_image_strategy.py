@@ -54,16 +54,15 @@ def test_kubernetes_cloudflared_uses_release_wrapper_image():
     assert "imagePullSecrets:" in text
 
 
-def test_kubernetes_app_deployments_use_embedded_license_public_key():
+def test_kubernetes_app_deployments_have_no_commerce_license_gate():
     blocks = k8s_deployment_blocks(K8S_DIR / "07-microservices.yaml")
 
     assert blocks
     for name, block in blocks.items():
         assert "LICENSE_PUBLIC_KEY" not in block
+        assert "LICENSE_KEY" not in block
         assert "envFrom:" in block, name
         assert "name: marty-config" in block, name
-        assert "- name: LICENSE_KEY" in block, name
-        assert "key: LICENSE_KEY" in block, name
 
 
 def test_kubernetes_update_script_updates_selfhost_image_variants():
@@ -83,20 +82,13 @@ def test_registry_build_script_publishes_selfhost_image_variants():
     assert '"cloudflared-wrapper"' in text
 
 
-def test_ui_docker_builds_include_monorepo_file_dependency_contexts():
+def test_ui_docker_builds_include_only_public_source_dependency_contexts():
     dockerfile = (REPO_ROOT / "docker" / "ui.Dockerfile").read_text(encoding="utf-8")
-    local_build_script = (REPO_ROOT / "scripts" / "build-selfhost-images-local.sh").read_text(encoding="utf-8")
     registry_build_script = (REPO_ROOT / "scripts" / "build-push-registry.sh").read_text(encoding="utf-8")
 
-    assert "COPY --from=marty-cli packages/api-core" in dockerfile
-    assert "COPY --from=marty-blog package.json" in dockerfile
-    assert "COPY --from=marty-subscriptions package.json" in dockerfile
-    assert "WORKDIR /workspace/marty-ui/ui" in dockerfile
-    assert "ln -sfn /workspace/marty-ui/ui/node_modules /workspace/node_modules" in dockerfile
-    assert "cd /workspace/marty-blog && bun install --production" in dockerfile
-    assert "cd /workspace/marty-subscriptions && bun install --production" in dockerfile
-    for text in (local_build_script, registry_build_script):
-        assert "--build-context" in text
-        assert "marty-cli" in text
-        assert "marty-blog" in text
-        assert "marty-subscriptions" in text
+    assert 'dependencies.@elevenid/marty-api-core=$MARTY_API_CORE_VERSION' in dockerfile
+    assert 'dependencies.@elevenid/marty-blog=$MARTY_BLOG_VERSION' in dockerfile
+    assert "marty-subscriptions" not in dockerfile
+    assert "COPY ../" not in dockerfile
+    assert "--build-context" not in registry_build_script
+    assert "marty-subscriptions" not in registry_build_script

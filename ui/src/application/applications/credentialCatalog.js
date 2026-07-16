@@ -129,7 +129,6 @@ export function mapCredentialTemplateToCatalogItem(template, organizationName) {
     customFields: [],
     eligibilityCriteria: null,
     submissionInstructions: null,
-    processingFee: 0,
     available: String(template.status || '').toLowerCase() === 'active',
     vendorName: organizationName || 'Issuer',
     templateVersion: template.version,

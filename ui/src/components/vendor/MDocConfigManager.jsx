@@ -169,7 +169,6 @@ export default function MDocConfigManager() {
           requireDocumentVerification: true,
           allowRenewal: true,
           renewalWindowDays: 90,
-          processingFee: 25.00,
         }
       };
       setEnabledTypes(defaultEnabled);
@@ -213,7 +212,6 @@ export default function MDocConfigManager() {
           requireDocumentVerification: false,
           allowRenewal: true,
           renewalWindowDays: 90,
-          processingFee: 25.00,
         }
       }));
     }
@@ -623,24 +621,6 @@ export default function MDocConfigManager() {
             </Paper>
           </Grid>
 
-          {/* Processing Fee */}
-          <Grid item xs={12} md={6}>
-            <Paper sx={{ p: 3 }}>
-              <Typography variant="h6" gutterBottom>
-                Processing Fee
-              </Typography>
-
-              <TextField
-                fullWidth
-                type="number"
-                label="Processing Fee ($)"
-                value={currentConfig?.processingFee || 0}
-                onChange={(e) => handleConfigChange('processingFee', parseFloat(e.target.value))}
-                inputProps={{ min: 0, step: 0.01 }}
-                data-testid="processing-fee-input"
-              />
-            </Paper>
-          </Grid>
         </Grid>
 
         <Box sx={{ mt: 3 }}>

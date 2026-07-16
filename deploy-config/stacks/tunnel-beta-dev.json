@@ -14,8 +14,7 @@
   "required_service_groups": ["infra", "app"],
   "required_services": ["tunnel-nginx-proxy", "cloudflared"],
   "required_secrets": ["cloudflare_tunnel_token"],
-  "license_policy": "internal-dev",
-  "artifact_profile": "source-debuggable",
+  "artifact_profile": "oss-release",
   "deployment_targets": ["docker-compose"],
   "operations": {
     "config": ["config"],
