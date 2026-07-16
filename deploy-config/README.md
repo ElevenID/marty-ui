@@ -42,6 +42,11 @@ This directory separates deployment concerns by target environment to reduce acc
 
 The catalog files are the canonical source for deployment metadata that is shared by Make targets, bundle packaging, checks, and future Kubernetes/image release flows.
 
+Portable Canvas acceptance uses `catalog/canvas-oss.lock.json` for the exact
+upstream source/image pin and `catalog/canvas-oss-portability.json` for the
+fixed OSS/hosted/outside-gate coverage contract. See
+`docs/CANVAS_OSS_PORTABILITY_PIPELINE.md` for the local runner and beta binding.
+
 Useful commands:
 
 - `python scripts/marty-deploy.py validate`

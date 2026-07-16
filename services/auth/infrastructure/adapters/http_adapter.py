@@ -756,7 +756,7 @@ def _build_canvas_lti_user(session_payload: dict[str, Any]) -> AuthenticatedUser
     """Create a constrained applicant identity from a verified Canvas LTI launch."""
     verified_launch = session_payload.get("verified_launch")
     if not isinstance(verified_launch, dict):
-        raise ValueError("Canvas LTI session is missing verified launch data")
+        verified_launch = {}
 
     learner = verified_launch.get("learner_identity")
     if not isinstance(learner, dict):
@@ -777,6 +777,7 @@ def _build_canvas_lti_user(session_payload: dict[str, Any]) -> AuthenticatedUser
         learner.get("subject"),
         raw_claims.get("sub"),
         learner.get("id"),
+        session_payload.get("learner_key"),
     )
     if not subject:
         raise ValueError("Canvas LTI session is missing a learner subject")
@@ -796,6 +797,7 @@ def _build_canvas_lti_user(session_payload: dict[str, Any]) -> AuthenticatedUser
         raw_claims.get("name"),
         raw_claims.get("lis_person_name_full"),
         lis_claims.get("person_name_full"),
+        session_payload.get("learner_display_name"),
     )
     inferred_given_name, inferred_family_name = _split_canvas_lti_name(display_name)
     given_name = _first_non_empty_string(
@@ -832,8 +834,8 @@ def _build_canvas_lti_user(session_payload: dict[str, Any]) -> AuthenticatedUser
         family_name=family_name,
         user_type=UserType.APPLICANT,
         roles=["applicant", "canvas_lti_learner"],
-        organization_id=None,
-        organization_name=None,
+        organization_id=_first_non_empty_string(session_payload.get("organization_id")),
+        organization_name="Canvas learner organization",
         organization=None,
     )
 
@@ -862,6 +864,38 @@ async def _fetch_canvas_lti_experience_session(state: str) -> dict[str, Any]:
     if response.status_code >= 400:
         raise HTTPException(status_code=response.status_code, detail="Canvas LTI session is invalid")
 
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail="Canvas LTI session response was invalid") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=502, detail="Canvas LTI session response was invalid")
+    return payload
+
+
+async def _fetch_current_canvas_lti_experience_session(token: str) -> dict[str, Any]:
+    normalized = str(token or "").strip()
+    if not normalized:
+        raise HTTPException(status_code=401, detail="Canvas LTI session token is required")
+    url = (
+        f"{_issuance_service_url.rstrip('/')}"
+        "/v1/integrations/canvas/lti/experience-sessions/current"
+    )
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
+            response = await client.get(
+                url,
+                headers={"Authorization": f"Bearer {normalized}"},
+                follow_redirects=False,
+            )
+    except httpx.TimeoutException as exc:
+        raise HTTPException(status_code=504, detail="Canvas LTI session lookup timed out") from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail="Canvas LTI session lookup failed") from exc
+    if response.status_code in {401, 404}:
+        raise HTTPException(status_code=401, detail="Canvas LTI session is invalid or expired")
+    if response.status_code >= 400:
+        raise HTTPException(status_code=502, detail="Canvas LTI session service failed")
     try:
         payload = response.json()
     except ValueError as exc:
@@ -1205,25 +1239,13 @@ async def register(
     return RedirectResponse(url=result.authorization_url, status_code=302)
 
 
-@router.get("/canvas-lti/finalize")
-async def canvas_lti_finalize(
+async def _create_canvas_lti_auth_session(
     request: Request,
-    state: str,
-    redirect_uri: str | None = None,
-) -> RedirectResponse:
-    """
-    Create an applicant session from an already verified Canvas LTI launch.
-
-    This intentionally bypasses Keycloak. Canvas proves the learner identity for
-    this launch; ElevenID turns that proof into a constrained applicant session
-    and preserves normal session cookies for the UI.
-    """
+    session_payload: dict[str, Any],
+) -> Session:
+    """Create the constrained applicant session for a verified LTI experience."""
     if _session_repository is None:
         raise HTTPException(status_code=503, detail="Session store not available")
-
-    request_ui_base_url = _request_ui_base_url(request)
-    safe_redirect = _sanitize_redirect_uri(redirect_uri, request_ui_base_url)
-    session_payload = await _fetch_canvas_lti_experience_session(state)
 
     try:
         user = _build_canvas_lti_user(session_payload)
@@ -1258,27 +1280,54 @@ async def canvas_lti_finalize(
         user_agent=request.headers.get("user-agent"),
     )
     await _session_repository.save(session)
-
-    redirect = RedirectResponse(
-        url=_build_ui_redirect_url(safe_redirect, request_ui_base_url),
-        status_code=302,
-    )
-    redirect.set_cookie(
-        key=_cookie_config["key"],
-        value=session.session_id,
-        httponly=_cookie_config["httponly"],
-        secure=_cookie_config["secure"],
-        samesite=_cookie_config["samesite"],
-        max_age=_cookie_config["max_age"],
-        path=_cookie_config["path"],
-    )
     logger.info(
         "Canvas LTI session finalized: org=%s user=%s session=%s...",
         user.organization_id,
         user.user_id,
         session.session_id[:8],
     )
-    return redirect
+    return session
+
+
+def _set_auth_session_cookie(response: Response, session_id: str) -> None:
+    response.set_cookie(
+        key=_cookie_config["key"],
+        value=session_id,
+        httponly=_cookie_config["httponly"],
+        secure=_cookie_config["secure"],
+        samesite=_cookie_config["samesite"],
+        max_age=_cookie_config["max_age"],
+        path=_cookie_config["path"],
+    )
+
+
+@router.get("/canvas-lti/finalize")
+async def canvas_lti_legacy_finalize() -> None:
+    """Reject the removed state-in-query Canvas authentication handoff."""
+    raise HTTPException(
+        status_code=410,
+        detail="Canvas LTI state finalization is no longer supported",
+    )
+
+
+@router.post("/canvas-lti/finalize")
+async def canvas_lti_finalize(request: Request) -> JSONResponse:
+    """Finalize authentication using the short-lived bearer experience session."""
+    authorization = request.headers.get("authorization", "")
+    scheme, separator, token = authorization.partition(" ")
+    if not separator or scheme.lower() != "bearer" or not token.strip():
+        raise HTTPException(status_code=401, detail="Canvas LTI session token is required")
+
+    session_payload = await _fetch_current_canvas_lti_experience_session(token.strip())
+    session = await _create_canvas_lti_auth_session(request, session_payload)
+    response = JSONResponse(
+        {
+            "authenticated": True,
+            "expires_in": _canvas_lti_session_ttl_seconds,
+        }
+    )
+    _set_auth_session_cookie(response, session.session_id)
+    return response
 
 
 @router.get("/callback")

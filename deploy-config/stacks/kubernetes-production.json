@@ -8,7 +8,7 @@
   "domains": ["elevenidllc.com"],
   "primary_domain": "elevenidllc.com",
   "required_service_groups": ["app"],
-  "required_services": ["ui", "cloudflared"],
+  "required_services": ["canvas-sync-worker", "ui", "cloudflared"],
   "required_secrets": [
     "postgres_password",
     "keycloak_db_password",

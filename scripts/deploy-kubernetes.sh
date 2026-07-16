@@ -271,6 +271,7 @@ cmd_setup_secrets() {
     --from-literal=SMTP_USERNAME="$smtp_username" \
     --from-literal=SMTP_PASSWORD="$smtp_password" \
     --from-literal=ISSUANCE_API_KEY="$issuance_api_key" \
+    --from-literal=SIGNING_KEYS_INTERNAL_API_KEY="$issuance_api_key" \
     --from-literal=INTEGRATION_SECRET_MASTER_KEY="$integration_secret_master_key" \
     --from-literal=CANVAS_CREDENTIALS_SHARED_SECRET="$canvas_credentials_shared_secret" \
     --from-literal=OPENBAO_SERVICE_TOKEN="$openbao_service_token" \
@@ -310,6 +311,9 @@ cmd_update_images() {
     kubectl set image deployment/"${svc}" "${svc}=${IMAGE_REGISTRY}/marty-ui/${svc}:${IMAGE_TAG}" \
       -n "$NAMESPACE" 2>/dev/null && success "Updated ${svc}" || warn "Deployment '${svc}' not found (skipped)"
   done < <(catalog_services app)
+  kubectl set image deployment/canvas-sync-worker \
+    "canvas-sync-worker=${IMAGE_REGISTRY}/marty-ui/issuance:${IMAGE_TAG}" \
+    -n "$NAMESPACE" 2>/dev/null && success "Updated canvas-sync-worker" || warn "Deployment 'canvas-sync-worker' not found (skipped)"
   kubectl set image deployment/ui "ui=${IMAGE_REGISTRY}/marty-ui/ui-selfhost:${IMAGE_TAG}" \
     -n "$NAMESPACE" 2>/dev/null && success "Updated ui" || warn "Deployment 'ui' not found (skipped)"
   kubectl set image deployment/cloudflared "cloudflared=${IMAGE_REGISTRY}/marty-ui/cloudflared-wrapper:${IMAGE_TAG}" \

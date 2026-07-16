@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://elevenidllc.com/schemas/canvas-oss-lock.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "source", "image", "runtime_dependencies", "contract_driver", "bootstrap", "acceptance_topology"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "tag", "tag_object", "commit", "tree", "release_train", "dockerfile", "source_modified"],
+      "properties": {
+        "repository": {"const": "https://github.com/instructure/canvas-lms.git"},
+        "tag": {"const": "release/2026-05-06.409"},
+        "tag_object": {"const": "116bf6129f2658f0c292f6242f966b19c1117309"},
+        "commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "tree": {"const": "63f3a4528a7daaccc057eb4e2acac93af89d3c92"},
+        "release_train": {"const": "stable/2026-05-06"},
+        "dockerfile": {"const": "Dockerfile.production"},
+        "source_modified": {"const": false}
+      }
+    },
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "digest", "digest_state", "publication_workflow", "base_image", "required_oci_labels"],
+      "properties": {
+        "repository": {"type": "string", "pattern": "^ghcr\\.io/[a-z0-9._/-]+$"},
+        "digest": {"type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$"},
+        "digest_state": {"enum": ["pending_source_build", "published"]},
+        "publication_workflow": {"const": ".github/workflows/canvas-oss-image.yml"},
+        "base_image": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["reference", "index_digest", "linux_amd64_digest"],
+          "properties": {
+            "reference": {"const": "instructure/ruby-passenger:3.4-jammy"},
+            "index_digest": {"const": "sha256:80d3a0e22c6ae228494de406d67fca88d7ff2de89fece021423206087190fcbe"},
+            "linux_amd64_digest": {"const": "sha256:f928f286e0ea1cbef59025251dbfd121ae748dc4f94a54c85240e842d459e776"}
+          }
+        },
+        "required_oci_labels": {
+          "type": "object",
+          "additionalProperties": {"type": "string"},
+          "required": ["org.opencontainers.image.source", "org.opencontainers.image.revision", "org.opencontainers.image.version", "org.opencontainers.image.ref.name", "org.opencontainers.image.base.name", "org.opencontainers.image.base.digest", "io.elevenid.canvas-oss.base.linux-amd64.digest"]
+        }
+      }
+    },
+    "runtime_dependencies": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["postgres", "redis", "mailpit", "edge"],
+      "properties": {
+        "postgres": {"type": "string", "pattern": "^postgres:14-alpine@sha256:[0-9a-f]{64}$"},
+        "redis": {"type": "string", "pattern": "^redis:7-alpine@sha256:[0-9a-f]{64}$"},
+        "mailpit": {"type": "string", "pattern": "^axllent/mailpit:v1\\.27@sha256:[0-9a-f]{64}$"},
+        "edge": {"type": "string", "pattern": "^nginx:1\\.27-alpine@sha256:[0-9a-f]{64}$"}
+      }
+    },
+    "contract_driver": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_repository", "dockerfile", "package_manifest", "package_lock", "audit_level", "base_image", "compose_service", "monitor_service", "execution_boundary", "secret_transport", "host_browser_processes"],
+      "properties": {
+        "source_repository": {"const": "https://github.com/ElevenID/marty-ui"},
+        "dockerfile": {"const": "tests/Dockerfile.canvas-oss-contract"},
+        "package_manifest": {"const": "tests/canvas-oss-contract/package.json"},
+        "package_lock": {"const": "tests/canvas-oss-contract/package-lock.json"},
+        "audit_level": {"const": "high"},
+        "base_image": {"type": "string", "pattern": "^mcr\\.microsoft\\.com/playwright:v1\\.56\\.0-jammy@sha256:[0-9a-f]{64}$"},
+        "compose_service": {"const": "canvas-contract"},
+        "monitor_service": {"const": "canvas-continuity-monitor"},
+        "execution_boundary": {"const": "docker_compose_one_shot"},
+        "secret_transport": {"const": "compose_secret_files"},
+        "host_browser_processes": {"const": false}
+      }
+    },
+    "bootstrap": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["phase", "allowed_commands", "forbidden_after_start"],
+      "properties": {
+        "phase": {"const": "pre_start_only"},
+        "allowed_commands": {
+          "type": "array",
+          "minItems": 4,
+          "maxItems": 4,
+          "items": {"type": "array", "items": {"type": "string"}, "minItems": 2}
+        },
+        "forbidden_after_start": {
+          "type": "array",
+          "contains": {"const": "rails_runner"}
+        }
+      }
+    },
+    "acceptance_topology": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["marty_origin", "canvas_origin", "timezone", "overnight_window", "runner_labels", "docker_network", "tunnel_owner", "contract_service", "continuity_monitor_service", "driver_execution", "host_runtime_processes"],
+      "properties": {
+        "marty_origin": {"const": "https://beta.elevenidllc.com"},
+        "canvas_origin": {"const": "https://canvas-test.elevenidllc.com"},
+        "timezone": {"const": "America/Denver"},
+        "overnight_window": {"const": "02:00-06:00"},
+        "runner_labels": {"type": "array", "contains": {"const": "canvas-oss-wsl2"}},
+        "docker_network": {"const": "marty-infra-network"},
+        "tunnel_owner": {"const": "existing_beta_stack"},
+        "contract_service": {"const": "canvas-contract"},
+        "continuity_monitor_service": {"const": "canvas-continuity-monitor"},
+        "driver_execution": {"const": "docker_compose_one_shot"},
+        "host_runtime_processes": {"const": false}
+      }
+    }
+  }
+}

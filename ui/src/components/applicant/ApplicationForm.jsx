@@ -40,10 +40,17 @@ import LoginIcon from '@mui/icons-material/Login';
 import BadgeIcon from '@mui/icons-material/Badge';
 import DirectionsCarIcon from '@mui/icons-material/DirectionsCar';
 import PersonIcon from '@mui/icons-material/Person';
+import RefreshIcon from '@mui/icons-material/Refresh';
 import { useAuth } from '../../hooks/useAuth';
 import useWalletPreferences from '../../hooks/useWalletPreferences';
 import { usePreview } from '../../contexts/PreviewContext';
-import { get, post } from '../../services/api';
+import { get } from '../../services/api';
+import {
+  bootstrapCurrentCanvasLtiApplication,
+  enqueueCurrentCanvasLtiEvidenceSync,
+  getCurrentCanvasLtiExperience,
+  getCurrentCanvasLtiEvidenceStatus,
+} from '../../services/canvasLtiExperience';
 import { APPLY_LOCATION_STATE_STORAGE_KEY } from '../../application/routing';
 import {
   createApplication as createApplicationApi,
@@ -90,12 +97,7 @@ function readStoredApplyLocationState() {
 }
 
 function getLtiSessionValue(session, key) {
-  return (
-    session?.[key]
-    || session?.mip_primitives?.context?.[key]
-    || session?.verified_launch?.[key]
-    || null
-  );
+  return session?.[key] || null;
 }
 
 function buildCanvasLtiApplicationContext(session, state, bootstrap = null) {
@@ -103,9 +105,10 @@ function buildCanvasLtiApplicationContext(session, state, bootstrap = null) {
     return null;
   }
 
-  const verifiedLaunch = session.verified_launch || {};
-  const canvasContext = verifiedLaunch.context || {};
-  const learnerIdentity = verifiedLaunch.learner_identity || {};
+  const canvasContext = {
+    ...(session.canvas_context || {}),
+    ...(bootstrap?.canvas_context || {}),
+  };
   return {
     state,
     issuance_application_id: bootstrap?.application_id || session?.application_id || null,
@@ -119,53 +122,39 @@ function buildCanvasLtiApplicationContext(session, state, bootstrap = null) {
     application_template_id: getLtiSessionValue(session, 'application_template_id'),
     credential_template_id: getLtiSessionValue(session, 'credential_template_id'),
     canvas_context: canvasContext,
-    learner_identity: learnerIdentity,
-    roles: verifiedLaunch.roles || [],
-    subject: verifiedLaunch.subject || learnerIdentity.subject || null,
+    roles: session.roles || [],
+    learner_display_name: session.learner_display_name || null,
+    identity_mapping_status:
+      session.identity_mapping_status
+      || bootstrap?.canvas_context?.identity_mapping_status
+      || null,
   };
 }
 
-function canvasLearnerProfile(session) {
-  const verifiedLaunch = session?.verified_launch || {};
-  const learner = verifiedLaunch.learner_identity || {};
-  const rawClaims = verifiedLaunch.raw_claims || {};
+function authenticatedLearnerProfile(user) {
+  const joinedName = [user?.given_name, user?.family_name].filter(Boolean).join(' ').trim();
   return {
-    email: learner.email || rawClaims.email || null,
-    given_name: learner.given_name || rawClaims.given_name || null,
-    family_name: learner.family_name || rawClaims.family_name || null,
-    name: learner.name || rawClaims.name || null,
+    email: user?.email || null,
+    given_name: user?.given_name || null,
+    family_name: user?.family_name || null,
+    name: user?.name || user?.display_name || joinedName || null,
   };
 }
 
-function rawLtiClaim(rawClaims, uri, fallbackKey) {
-  const value = rawClaims?.[uri] || rawClaims?.[fallbackKey];
-  return value && typeof value === 'object' ? value : {};
-}
-
-function canvasLtiDerivedApplicationFields(session, bootstrap = null) {
-  const verifiedLaunch = session?.verified_launch || {};
-  const rawClaims = verifiedLaunch.raw_claims || {};
-  const learner = verifiedLaunch.learner_identity || {};
-  const context = verifiedLaunch.context || {};
-  const custom = rawLtiClaim(rawClaims, 'https://purl.imsglobal.org/spec/lti/claim/custom', 'custom');
-  const resourceLink = rawLtiClaim(rawClaims, 'https://purl.imsglobal.org/spec/lti/claim/resource_link', 'resource_link');
+function canvasLtiDerivedApplicationFields(session, bootstrap = null, user = null) {
+  const profile = authenticatedLearnerProfile(user);
+  const context = session?.canvas_context || {};
   const bootstrapCanvas = bootstrap?.canvas_context || {};
-  const bootstrapFormData = bootstrap?.form_data || bootstrap?.application?.form_data || {};
+  const courseName = context.title || context.label || bootstrapCanvas.title || bootstrapCanvas.label;
 
   return {
-    ...bootstrapFormData,
-    email: learner.email || rawClaims.email || bootstrapFormData.email,
-    given_name: learner.given_name || rawClaims.given_name || bootstrapFormData.given_name,
-    family_name: learner.family_name || rawClaims.family_name || bootstrapFormData.family_name,
-    name: learner.name || rawClaims.name || bootstrapFormData.name,
-    canvas_subject: verifiedLaunch.subject || learner.subject || rawClaims.sub || bootstrapFormData.canvas_subject,
-    canvas_course_id: context.id || context.context_id || bootstrapCanvas.canvas_course_id || bootstrapFormData.canvas_course_id,
-    canvas_course_name: context.title || context.label || bootstrapCanvas.canvas_course_name || bootstrapFormData.canvas_course_name,
-    course_name: context.title || context.label || bootstrapCanvas.canvas_course_name || bootstrapFormData.course_name,
-    canvas_assignment_id: custom.assignment_id || resourceLink.id || bootstrapFormData.canvas_assignment_id,
-    canvas_assignment_name: custom.assignment_name || resourceLink.title || bootstrapFormData.canvas_assignment_name,
-    quiz_name: custom.quiz_name || resourceLink.title || bootstrapFormData.quiz_name,
-    score_percent: custom.score_percent || custom.score || bootstrapFormData.score_percent,
+    email: profile.email,
+    given_name: profile.given_name,
+    family_name: profile.family_name,
+    name: session?.learner_display_name || profile.name,
+    canvas_course_id: context.course_id || bootstrapCanvas.course_id,
+    canvas_course_name: courseName,
+    course_name: courseName,
   };
 }
 
@@ -201,6 +190,9 @@ function formatEvidenceRequirement(requirement) {
   }
   if (isPresent(scope.course_id)) {
     details.push(`course ${scope.course_id}`);
+  }
+  if (isPresent(scope.activity_id)) {
+    details.push(`activity ${scope.activity_id}`);
   }
   if (isPresent(scope.assignment_id)) {
     details.push(`assignment ${scope.assignment_id}`);
@@ -247,6 +239,10 @@ export default function ApplicationForm() {
   const [configLoading, setConfigLoading] = useState(false);
   const [canvasLtiSession, setCanvasLtiSession] = useState(initialApplyState?.canvasLtiSession || null);
   const [canvasLtiBootstrap, setCanvasLtiBootstrap] = useState(initialApplyState?.canvasLtiBootstrap || null);
+  const [canvasEvidenceStatus, setCanvasEvidenceStatus] = useState(null);
+  const [canvasSyncLoading, setCanvasSyncLoading] = useState(false);
+  const [canvasSyncError, setCanvasSyncError] = useState(null);
+  const [canvasSyncPollVersion, setCanvasSyncPollVersion] = useState(0);
   const [applicationTemplate, setApplicationTemplate] = useState(initialApplyState?.applicationTemplate || null);
   const [duplicateConflict, setDuplicateConflict] = useState(null);
 
@@ -398,7 +394,7 @@ export default function ApplicationForm() {
       }
 
       try {
-        const session = await get(`/v1/integrations/canvas/lti/experience-sessions/${encodeURIComponent(canvasLtiState)}`);
+        const session = await getCurrentCanvasLtiExperience();
         if (alive) {
           setCanvasLtiSession(session);
         }
@@ -424,17 +420,16 @@ export default function ApplicationForm() {
         return;
       }
 
-      const learner = canvasLearnerProfile(canvasLtiSession);
+      const profile = authenticatedLearnerProfile(user);
       try {
-        const bootstrap = await post(
-          `/v1/integrations/canvas/lti/experience-sessions/${encodeURIComponent(canvasLtiState)}/bootstrap`,
+        const bootstrap = await bootstrapCurrentCanvasLtiApplication(
           {
-            applicant_identifier: user?.email || user?.user_id || learner.email || null,
+            applicant_identifier: user?.user_id || null,
             applicant_data: {
-              email: user?.email || learner.email || undefined,
-              given_name: user?.given_name || learner.given_name || undefined,
-              family_name: user?.family_name || learner.family_name || undefined,
-              name: learner.name || undefined,
+              email: profile.email || undefined,
+              given_name: profile.given_name || undefined,
+              family_name: profile.family_name || undefined,
+              name: profile.name || undefined,
             },
           }
         );
@@ -455,6 +450,44 @@ export default function ApplicationForm() {
   }, [canvasLtiState, canvasLtiSession, canvasLtiBootstrap, user]);
 
   useEffect(() => {
+    const applicationId = canvasLtiBootstrap?.application_id || canvasLtiSession?.application_id;
+    if (!isCanvasLtiApplication || !applicationId) {
+      return undefined;
+    }
+
+    let alive = true;
+    let timer = null;
+    const activeStatuses = new Set(['queued', 'running', 'retrying']);
+
+    async function loadCanvasEvidenceStatus() {
+      try {
+        const status = await getCurrentCanvasLtiEvidenceStatus();
+        if (!alive) return;
+        setCanvasEvidenceStatus(status);
+        setCanvasSyncError(null);
+        if (activeStatuses.has(status?.sync?.status)) {
+          timer = window.setTimeout(loadCanvasEvidenceStatus, 2000);
+        }
+      } catch (err) {
+        if (alive) {
+          setCanvasSyncError(err?.message || 'Canvas evidence status could not be loaded.');
+        }
+      }
+    }
+
+    loadCanvasEvidenceStatus();
+    return () => {
+      alive = false;
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [
+    isCanvasLtiApplication,
+    canvasLtiBootstrap?.application_id,
+    canvasLtiSession?.application_id,
+    canvasSyncPollVersion,
+  ]);
+
+  useEffect(() => {
     // Pre-fill user email if email field exists
     if (user?.email && allFields.some(f => f.name === 'email')) {
       setFormData(prev => ({ ...prev, email: user.email }));
@@ -466,8 +499,8 @@ export default function ApplicationForm() {
       return;
     }
 
-    const profile = canvasLearnerProfile(canvasLtiSession);
-    const derivedFields = canvasLtiDerivedApplicationFields(canvasLtiSession, canvasLtiBootstrap);
+    const profile = authenticatedLearnerProfile(user);
+    const derivedFields = canvasLtiDerivedApplicationFields(canvasLtiSession, canvasLtiBootstrap, user);
     const fieldNames = new Set(allFields.map((field) => field.name));
     setFormData((prev) => {
       const updates = {};
@@ -490,15 +523,15 @@ export default function ApplicationForm() {
       });
       return Object.keys(updates).length > 0 ? { ...prev, ...updates } : prev;
     });
-  }, [canvasLtiSession, canvasLtiBootstrap, allFields]);
+  }, [canvasLtiSession, canvasLtiBootstrap, allFields, user]);
 
   const canvasLtiApplicationContext = useMemo(
     () => buildCanvasLtiApplicationContext(canvasLtiSession, canvasLtiState, canvasLtiBootstrap),
     [canvasLtiSession, canvasLtiState, canvasLtiBootstrap]
   );
   const canvasDerivedFields = useMemo(
-    () => canvasLtiDerivedApplicationFields(canvasLtiSession, canvasLtiBootstrap),
-    [canvasLtiSession, canvasLtiBootstrap]
+    () => canvasLtiDerivedApplicationFields(canvasLtiSession, canvasLtiBootstrap, user),
+    [canvasLtiSession, canvasLtiBootstrap, user]
   );
   const canvasEvidenceRequirements = useMemo(() => {
     const fromConfig = credentialConfig?.evidence_requirements;
@@ -521,14 +554,10 @@ export default function ApplicationForm() {
       [canvasDerivedFields.given_name, canvasDerivedFields.family_name].filter(Boolean).join(' '),
       user?.given_name || user?.family_name ? [user?.given_name, user?.family_name].filter(Boolean).join(' ') : null
     );
-    const rawClaims = canvasLtiSession?.verified_launch?.raw_claims || {};
-    const resourceLink = rawLtiClaim(rawClaims, 'https://purl.imsglobal.org/spec/lti/claim/resource_link', 'resource_link');
-
     return [
       { label: 'Learner', value: learnerName },
-      { label: 'Email', value: firstPresent(canvasDerivedFields.email, user?.email) },
+      { label: 'Email', value: user?.email },
       { label: 'Course', value: firstPresent(canvasDerivedFields.canvas_course_name, canvasDerivedFields.course_name) },
-      { label: 'Canvas activity', value: firstPresent(canvasDerivedFields.canvas_assignment_name, canvasDerivedFields.quiz_name, resourceLink.title) },
       { label: 'Canvas account', value: canvasLtiSession?.canvas_account_id },
     ].filter((item) => isPresent(item.value));
   }, [isCanvasLtiApplication, canvasDerivedFields, user, canvasLtiSession]);
@@ -662,6 +691,30 @@ export default function ApplicationForm() {
     await submitApplicationForm();
   };
 
+  const handleCanvasEvidenceRefresh = async () => {
+    setCanvasSyncLoading(true);
+    setCanvasSyncError(null);
+    try {
+      const status = await enqueueCurrentCanvasLtiEvidenceSync();
+      setCanvasEvidenceStatus(status);
+      setCanvasSyncPollVersion((version) => version + 1);
+    } catch (err) {
+      setCanvasSyncError(err?.message || 'Canvas evidence synchronization could not be queued.');
+    } finally {
+      setCanvasSyncLoading(false);
+    }
+  };
+
+  const handleCanvasClaim = () => {
+    const boundApplicationId = canvasLtiBootstrap?.application_id || canvasLtiSession?.application_id;
+    if (!boundApplicationId || canvasEvidenceStatus?.claim?.available !== true) {
+      return;
+    }
+    setApplicationId(boundApplicationId);
+    setAutoOfferData(null);
+    setClaimDialogOpen(true);
+  };
+
   const handleUseExistingApplication = () => {
     const existingApplication = duplicateConflict?.existingApplication;
     setDuplicateConflict(null);
@@ -683,6 +736,11 @@ export default function ApplicationForm() {
 
     const evidenceItems = canvasEvidenceRequirements.map(formatEvidenceRequirement);
     const hasNoAdditionalFields = allFields.length === 0;
+    const syncStatus = canvasEvidenceStatus?.sync?.status || null;
+    const evidenceStatus = canvasEvidenceStatus?.evidence?.status || null;
+    const policyStatus = canvasEvidenceStatus?.policy?.status || 'not_evaluated';
+    const claimStatus = canvasEvidenceStatus?.claim?.status || 'not_available';
+    const syncActive = ['queued', 'running', 'retrying'].includes(syncStatus);
 
     return (
       <Box
@@ -704,11 +762,112 @@ export default function ApplicationForm() {
           {canvasLtiBootstrap?.application_status && (
             <Chip size="small" color="primary" variant="outlined" label={`Application ${canvasLtiBootstrap.application_status}`} />
           )}
+          {canvasLtiSession?.identity_mapping_status && (
+            <Chip
+              size="small"
+              color={canvasLtiSession.identity_mapping_status === 'linked' ? 'success' : 'warning'}
+              variant="outlined"
+              label={canvasLtiSession.identity_mapping_status === 'linked'
+                ? 'Canvas identity linked'
+                : 'Canvas identity needs review'}
+            />
+          )}
         </Box>
 
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
           This request started from Canvas. ElevenID will use the course and activity details below, plus the issuer requirements, to evaluate the credential request.
         </Typography>
+
+        <Box
+          data-testid="canvas-evidence-sync-panel"
+          sx={{ mb: 2, p: 1.5, border: '1px solid', borderColor: 'divider', borderRadius: 1, bgcolor: 'background.paper' }}
+        >
+          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, flexWrap: 'wrap' }}>
+            <Box>
+              <Typography variant="subtitle2">Authoritative Canvas evidence</Typography>
+              <Typography variant="caption" color="text.secondary">
+                Scores and completion are read from Canvas by the background worker.
+              </Typography>
+            </Box>
+            <Button
+              type="button"
+              size="small"
+              variant="outlined"
+              startIcon={canvasSyncLoading || syncActive ? <CircularProgress size={15} /> : <RefreshIcon />}
+              disabled={canvasSyncLoading || syncActive || !canvasLtiBootstrap?.application_id}
+              onClick={handleCanvasEvidenceRefresh}
+              data-testid="canvas-evidence-sync-action"
+            >
+              {syncActive ? 'Checking Canvas…' : 'Refresh evidence'}
+            </Button>
+          </Box>
+
+          {canvasSyncError ? (
+            <Alert severity="warning" sx={{ mt: 1.5 }} data-testid="canvas-evidence-sync-error">
+              {canvasSyncError}
+            </Alert>
+          ) : null}
+
+          <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mt: 1.5 }}>
+            {syncStatus ? (
+              <Chip
+                size="small"
+                variant="outlined"
+                color={syncStatus === 'failed' ? 'error' : (syncActive ? 'info' : 'default')}
+                label={`Canvas sync ${syncStatus}`}
+                data-testid="canvas-evidence-sync-status"
+              />
+            ) : null}
+            {evidenceStatus === 'verified' ? (
+              <Chip
+                size="small"
+                color="success"
+                label={`Verified evidence ${canvasEvidenceStatus.evidence.verified_required_count}/${canvasEvidenceStatus.evidence.required_count}`}
+                data-testid="canvas-authoritative-evidence-verified"
+              />
+            ) : null}
+            {evidenceStatus === 'partial' ? (
+              <Chip
+                size="small"
+                color="warning"
+                variant="outlined"
+                label={`Evidence observed ${canvasEvidenceStatus.evidence.current_authoritative_count}/${canvasEvidenceStatus.evidence.required_count}`}
+                data-testid="canvas-authoritative-evidence-partial"
+              />
+            ) : null}
+            {policyStatus === 'permitted' ? (
+              <Chip size="small" color="success" variant="outlined" label="Requirements satisfied" data-testid="canvas-evidence-policy-permitted" />
+            ) : null}
+            {policyStatus === 'not_permitted' ? (
+              <Chip size="small" color="warning" variant="outlined" label="Requirements not yet satisfied" data-testid="canvas-evidence-policy-not-permitted" />
+            ) : null}
+          </Box>
+
+          {claimStatus === 'pending_claim' ? (
+            <Alert severity="info" sx={{ mt: 1.5 }} data-testid="canvas-pending-claim">
+              Canvas has an unsigned pending badge award. It will be signed only after this application is approved and you claim it.
+            </Alert>
+          ) : null}
+          {claimStatus === 'ready_to_claim' && canvasEvidenceStatus?.claim?.available === true ? (
+            <Alert
+              severity="success"
+              sx={{ mt: 1.5 }}
+              data-testid="canvas-ready-to-claim"
+              action={(
+                <Button color="inherit" size="small" onClick={handleCanvasClaim} data-testid="canvas-claim-action">
+                  Claim badge
+                </Button>
+              )}
+            >
+              Your badge is approved and ready for wallet claim. It has not been signed yet.
+            </Alert>
+          ) : null}
+          {claimStatus === 'claimed' ? (
+            <Alert severity="success" sx={{ mt: 1.5 }} data-testid="canvas-claim-complete">
+              This Canvas badge has been claimed.
+            </Alert>
+          ) : null}
+        </Box>
 
         {hasNoAdditionalFields && (
           <Alert severity="info" sx={{ mb: 2 }}>
@@ -1222,6 +1381,15 @@ export default function ApplicationForm() {
         </Box>
       </Paper>
       {renderDuplicateConflictDialog()}
+      {isCanvasLtiApplication ? (
+        <ClaimCredentialDialog
+          open={claimDialogOpen}
+          onClose={() => setClaimDialogOpen(false)}
+          applicationId={applicationId || canvasLtiBootstrap?.application_id || canvasLtiSession?.application_id}
+          offerData={autoOfferData}
+          organizationId={canvasIssuerOrganizationId}
+        />
+      ) : null}
     </Container>
   );
 }

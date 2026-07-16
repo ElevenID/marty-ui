@@ -171,6 +171,7 @@ async def test_get_signing_key_config_returns_service_registry(monkeypatch: pyte
 @pytest.mark.asyncio
 async def test_update_signing_key_config_persists_registered_services(monkeypatch: pytest.MonkeyPatch):
     redis_mock = AsyncMock()
+    redis_mock.get = AsyncMock(return_value=None)
     redis_mock.set = AsyncMock()
     request = _build_request("org_fallback", redis_client=redis_mock)
 
@@ -704,6 +705,12 @@ def test_baseline_validation_passes_on_compatible_purpose_algorithm():
     purpose_check = next((c for c in checks if c["name"] == "Key purpose algorithm fit"), None)
     assert purpose_check is not None
     assert purpose_check["status"] == "pass"
+
+
+def test_lti_tool_signing_is_distinct_and_rs256_only():
+    assert "lti_tool_signing" in signing_keys.KEY_PURPOSES
+    assert signing_keys.KEY_PURPOSE_ALGORITHM_CONSTRAINTS["lti_tool_signing"] == frozenset({"RS256"})
+    assert signing_keys.KEY_PURPOSE_CREDENTIAL_FORMATS["lti_tool_signing"] == ()
 
 
 def test_normalize_requested_registry_persists_format_and_type_defaults():
@@ -1971,6 +1978,364 @@ async def test_sign_payload_accepts_base64_payload(monkeypatch: pytest.MonkeyPat
 
 
 @pytest.mark.asyncio
+async def test_sign_payload_enforces_requested_key_purpose(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    test_service = {
+        "id": "svc-canvas-lti",
+        "service_type": "openbao-transit",
+        "key_reference": "canvas-lti-rs256",
+        "algorithms": ["RS256"],
+        "key_purposes": ["lti_tool_signing"],
+    }
+
+    async def fake_load_registry(request, org_id):
+        return {
+            "services": [test_service],
+            "default_service_id": None,
+            "key_reference_purposes": {
+                "svc-canvas-lti": {
+                    "canvas-lti-rs256": ["lti_tool_signing"],
+                },
+            },
+        }
+
+    class FakeAdapter:
+        provider = "openbao"
+        signature_encoding = "raw_ieee_p1363"
+
+        async def sign(self, config: dict, payload: bytes):
+            return b"signature"
+
+    monkeypatch.setattr(signing_keys, "_load_registered_service_registry", fake_load_registry)
+    monkeypatch.setattr(signing_keys, "_get_adapter", lambda cfg: FakeAdapter())
+    redis_mock = AsyncMock()
+    redis_mock.get = AsyncMock(return_value=None)
+    request = _build_request("org_123", redis_client=redis_mock)
+
+    response = await signing_keys.sign_payload_with_service(
+        request=request,
+        service_id="svc-canvas-lti",
+        body={
+            "payload_b64": "dGVzdA==",
+            "algorithm": "RS256",
+            "key_purpose": "lti_tool_signing",
+            "key_reference": "canvas-lti-rs256",
+        },
+        organization_id=None,
+    )
+    assert response.status_code == 200
+
+    from fastapi import HTTPException as FastAPIHTTPException
+
+    with pytest.raises(FastAPIHTTPException) as exc_info:
+        await signing_keys.sign_payload_with_service(
+            request=request,
+            service_id="svc-canvas-lti",
+            body={
+                "payload_b64": "dGVzdA==",
+                "algorithm": "RS256",
+                "key_purpose": "vc_jwt_issuer",
+                "key_reference": "canvas-lti-rs256",
+            },
+            organization_id=None,
+        )
+    assert exc_info.value.status_code == 409
+    assert "reserved exclusively" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_lti_signing_uses_distinct_key_within_multi_key_openbao_service(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    service = {
+        "id": signing_keys.MANAGED_OPENBAO_SERVICE_ID,
+        "service_type": "openbao-transit",
+        "key_reference": "cred-issuer-marty-rs256",
+        "key_aliases": ["cred-issuer-marty-rs256", "lti-tool-marty-rs256"],
+        "algorithms": ["RS256"],
+        "key_purposes": ["vc_jwt_issuer", "lti_tool_signing"],
+    }
+    registry = {
+        "services": [service],
+        "default_service_id": signing_keys.MANAGED_OPENBAO_SERVICE_ID,
+        "key_reference_purposes": {
+            signing_keys.MANAGED_OPENBAO_SERVICE_ID: {
+                "cred-issuer-marty-rs256": ["vc_jwt_issuer"],
+                "lti-tool-marty-rs256": ["lti_tool_signing"],
+            },
+        },
+    }
+    signed_with: list[str] = []
+
+    async def fake_load_registry(request, org_id):
+        return registry
+
+    class FakeAdapter:
+        signature_encoding = "der"
+
+        async def sign(self, config: dict, payload: bytes):
+            signed_with.append(config["key_reference"])
+            return b"signature"
+
+    monkeypatch.setattr(signing_keys, "_load_registered_service_registry", fake_load_registry)
+    monkeypatch.setattr(signing_keys, "_get_adapter", lambda cfg: FakeAdapter())
+    redis_mock = AsyncMock()
+    redis_mock.get = AsyncMock(return_value=None)
+    request = _build_request("org_123", redis_client=redis_mock)
+
+    response = await signing_keys.sign_payload_with_service(
+        request=request,
+        service_id=signing_keys.MANAGED_OPENBAO_SERVICE_ID,
+        body={
+            "payload_b64": "dGVzdA==",
+            "algorithm": "RS256",
+            "key_purpose": "lti_tool_signing",
+            "key_reference": "lti-tool-marty-rs256",
+        },
+        organization_id=None,
+    )
+
+    assert response.status_code == 200
+    assert signed_with == ["lti-tool-marty-rs256"]
+
+    from fastapi import HTTPException as FastAPIHTTPException
+
+    with pytest.raises(FastAPIHTTPException, match="reserved exclusively"):
+        await signing_keys.sign_payload_with_service(
+            request=request,
+            service_id=signing_keys.MANAGED_OPENBAO_SERVICE_ID,
+            body={
+                "payload_b64": "dGVzdA==",
+                "algorithm": "RS256",
+                "key_purpose": "vc_jwt_issuer",
+                "key_reference": "lti-tool-marty-rs256",
+            },
+            organization_id=None,
+        )
+
+    with pytest.raises(FastAPIHTTPException, match="not registered exclusively") as exc_info:
+        await signing_keys.sign_payload_with_service(
+            request=request,
+            service_id=signing_keys.MANAGED_OPENBAO_SERVICE_ID,
+            body={
+                "payload_b64": "dGVzdA==",
+                "algorithm": "RS256",
+                "key_purpose": "lti_tool_signing",
+                "key_reference": "cred-issuer-marty-rs256",
+            },
+            organization_id=None,
+        )
+    assert exc_info.value.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_lti_signing_fails_closed_without_explicit_key_binding(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    service = {
+        "id": "shared-kms",
+        "service_type": "openbao-transit",
+        "key_reference": "credential-default",
+        "algorithms": ["RS256"],
+        "key_purposes": ["vc_jwt_issuer", "lti_tool_signing"],
+    }
+
+    async def fake_load_registry(request, org_id):
+        return {
+            "services": [service],
+            "default_service_id": "shared-kms",
+            "key_reference_purposes": {},
+        }
+
+    monkeypatch.setattr(signing_keys, "_load_registered_service_registry", fake_load_registry)
+    request = _build_request("org_123")
+
+    from fastapi import HTTPException as FastAPIHTTPException
+
+    for body, expected in (
+        (
+            {
+                "payload_b64": "dGVzdA==",
+                "algorithm": "RS256",
+                "key_purpose": "lti_tool_signing",
+            },
+            "explicit key_reference",
+        ),
+        (
+            {
+                "payload_b64": "dGVzdA==",
+                "algorithm": "RS256",
+                "key_purpose": "lti_tool_signing",
+                "key_reference": "unbound-lti-key",
+            },
+            "not registered exclusively",
+        ),
+    ):
+        with pytest.raises(FastAPIHTTPException, match=expected) as exc_info:
+            await signing_keys.sign_payload_with_service(
+                request=request,
+                service_id="shared-kms",
+                body=body,
+                organization_id=None,
+            )
+        assert exc_info.value.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_lti_signing_rejects_key_assigned_to_issuer_profile(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    key_reference = "shared-rs256-key"
+    service = {
+        "id": "shared-kms",
+        "service_type": "openbao-transit",
+        "key_reference": key_reference,
+        "algorithms": ["RS256"],
+        "key_purposes": ["vc_jwt_issuer", "lti_tool_signing"],
+    }
+
+    async def fake_load_registry(request, org_id):
+        return {
+            "services": [service],
+            "key_reference_purposes": {
+                "shared-kms": {key_reference: ["lti_tool_signing"]},
+            },
+        }
+
+    async def fake_issuer_references(request, organization_id):
+        return {key_reference}
+
+    monkeypatch.setattr(signing_keys, "_load_registered_service_registry", fake_load_registry)
+    monkeypatch.setattr(
+        signing_keys,
+        "_credential_issuer_key_references",
+        fake_issuer_references,
+    )
+
+    from fastapi import HTTPException as FastAPIHTTPException
+
+    with pytest.raises(FastAPIHTTPException, match="credential issuer profile") as exc_info:
+        await signing_keys.sign_payload_with_service(
+            request=_build_request("org_123"),
+            service_id="shared-kms",
+            body={
+                "payload_b64": "dGVzdA==",
+                "algorithm": "RS256",
+                "key_purpose": "lti_tool_signing",
+                "key_reference": key_reference,
+            },
+            organization_id=None,
+        )
+    assert exc_info.value.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_lti_signing_fails_closed_when_issuer_profile_registry_is_invalid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = {
+        "id": "shared-kms",
+        "service_type": "openbao-transit",
+        "key_reference": "lti-key",
+        "algorithms": ["RS256"],
+        "key_purposes": ["lti_tool_signing"],
+    }
+
+    async def fake_load_registry(request, org_id):
+        return {
+            "services": [service],
+            "key_reference_purposes": {
+                "shared-kms": {"lti-key": ["lti_tool_signing"]},
+            },
+        }
+
+    monkeypatch.setattr(
+        signing_keys,
+        "_load_registered_service_registry",
+        fake_load_registry,
+    )
+    redis_mock = AsyncMock()
+    redis_mock.get = AsyncMock(return_value="not-json")
+
+    from fastapi import HTTPException as FastAPIHTTPException
+
+    with pytest.raises(FastAPIHTTPException, match="registry is invalid") as exc_info:
+        await signing_keys.sign_payload_with_service(
+            request=_build_request("org_123", redis_client=redis_mock),
+            service_id="shared-kms",
+            body={
+                "payload_b64": "dGVzdA==",
+                "algorithm": "RS256",
+                "key_purpose": "lti_tool_signing",
+                "key_reference": "lti-key",
+            },
+            organization_id=None,
+        )
+    assert exc_info.value.status_code == 503
+
+
+def test_lti_key_creation_uses_protocol_specific_namespace() -> None:
+    assert signing_keys._normalize_requested_openbao_key_name(
+        "Canvas production",
+        "lti_tool_signing",
+        "RS256",
+    ).startswith("lti-tool-")
+    assert signing_keys._normalize_requested_openbao_key_name(
+        "cred-issuer-canvas-production",
+        "lti_tool_signing",
+        "RS256",
+    ) == "lti-tool-canvas-production-rs256"
+    assert signing_keys._normalize_requested_openbao_key_name(
+        "lti-tool-canvas-production",
+        "vc_jwt_issuer",
+        "RS256",
+    ) == "cred-issuer-canvas-production-rs256"
+
+    from fastapi import HTTPException as FastAPIHTTPException
+
+    with pytest.raises(FastAPIHTTPException, match="cannot combine"):
+        signing_keys._validate_lti_key_reference_bindings(
+            {
+                "shared-kms": {
+                    "reused-key": ["vc_jwt_issuer", "lti_tool_signing"],
+                },
+            }
+        )
+
+    with pytest.raises(FastAPIHTTPException, match="reserved for LTI"):
+        signing_keys._assert_issuer_profile_key_compatible(
+            {
+                "signing_service_id": "shared-kms",
+                "signing_key_reference": "lti-key",
+                "key_purpose": "vc_jwt_issuer",
+            },
+            {
+                "key_reference_purposes": {
+                    "shared-kms": {"lti-key": ["lti_tool_signing"]},
+                },
+            },
+        )
+
+
+@pytest.mark.asyncio
+async def test_lti_key_creation_rejects_non_rs256_algorithm() -> None:
+    from fastapi import HTTPException as FastAPIHTTPException
+
+    with pytest.raises(FastAPIHTTPException, match="must use RS256") as exc_info:
+        await signing_keys.create_signing_key(
+            request=_build_request("org_123"),
+            body={
+                "name": "Canvas production",
+                "algorithm": "ES256",
+                "key_purpose": "lti_tool_signing",
+            },
+            organization_id=None,
+        )
+    assert exc_info.value.status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_sign_payload_accepts_hex_payload(monkeypatch: pytest.MonkeyPatch):
     """sign_payload_with_service should accept and decode hex-encoded payloads."""
     test_service = {
@@ -2834,6 +3199,27 @@ async def test_update_issuer_profile_patches_fields(monkeypatch: pytest.MonkeyPa
         stored[key] = value
 
     redis_mock.set = AsyncMock(side_effect=fake_set)
+
+    async def fake_resolve_effective_service(*args, **kwargs):
+        registry = {
+            "key_reference_purposes": {
+                "svc-1": {"cred-issuer-test-es256": ["vc_jwt_issuer"]},
+            }
+        }
+        service = {
+            "id": "svc-1",
+            "service_type": "openbao-transit",
+            "key_reference": "cred-issuer-test-es256",
+            "key_purposes": ["vc_jwt_issuer"],
+            "algorithms": ["ES256"],
+        }
+        return registry, service, service, True
+
+    monkeypatch.setattr(
+        signing_keys,
+        "_resolve_effective_service",
+        fake_resolve_effective_service,
+    )
 
     request = _build_request("org_issuer", redis_client=redis_mock)
     response = await signing_keys.update_issuer_profile(

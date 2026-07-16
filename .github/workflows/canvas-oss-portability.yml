@@ -1,0 +1,524 @@
+name: Canvas OSS Portability Demonstration
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Full acceptance requires the checked-in standard-flow driver; readiness_only proves infrastructure without a portability claim.
+        required: true
+        type: choice
+        default: full
+        options: [full, readiness_only]
+      canvas_image_build_run_id:
+        description: Successful Canvas OSS Source Image workflow run whose digest has been promoted into the reviewed lock.
+        required: true
+      expected_beta_source_id:
+        description: Reviewed 40-character source ID published by the beta deployment manifest.
+        required: true
+      beta_deployment_manifest:
+        description: Absolute runner path to the beta local-deployment-manifest.json (and sibling source-manifest.json).
+        required: true
+      enforce_overnight_window:
+        description: Require the 02:00-06:00 America/Denver maintenance window for this manual run.
+        required: true
+        type: boolean
+        default: false
+      retain_failed_state:
+        description: Keep the ephemeral Canvas state only for explicit debugging.
+        required: true
+        type: boolean
+        default: false
+  schedule:
+    # Denver observes DST. The guard below admits only the trigger that lands at
+    # 02:07 local and exits the other one without touching the beta fixture.
+    - cron: "7 8,9 * * *"
+
+concurrency:
+  group: canvas-oss-portability-beta
+  cancel-in-progress: false
+
+permissions:
+  actions: read
+  contents: read
+  packages: read
+
+jobs:
+  window-gate:
+    name: Select Denver maintenance trigger
+    runs-on: ubuntu-latest
+    outputs:
+      should_run: ${{ steps.window.outputs.should_run }}
+      deadline_epoch: ${{ steps.window.outputs.deadline_epoch }}
+    steps:
+      - name: Apply DST-safe 02:00-06:00 gate before reserving local runner
+        id: window
+        shell: bash
+        env:
+          REQUESTED_ENFORCEMENT: ${{ inputs.enforce_overnight_window }}
+          NIGHTLY_ENABLED: ${{ vars.CANVAS_OSS_NIGHTLY_ENABLED }}
+        run: |
+          local_hour="$(TZ=America/Denver date +%H)"
+          local_hour_decimal=$((10#$local_hour))
+          should_run=true
+          enforce_deadline=false
+          if [[ "$GITHUB_EVENT_NAME" = "schedule" ]]; then
+            enforce_deadline=true
+            if [[ "$NIGHTLY_ENABLED" != "true" ]]; then
+              echo "Canvas OSS nightly admission remains disabled until the dedicated runner completes a dry run."
+              should_run=false
+            elif (( local_hour_decimal != 2 )); then
+              should_run=false
+            fi
+          elif [[ "$REQUESTED_ENFORCEMENT" = "true" ]]; then
+            enforce_deadline=true
+            if (( local_hour_decimal < 2 || local_hour_decimal >= 6 )); then
+              echo "Manual run is outside 02:00-06:00 America/Denver." >&2
+              exit 1
+            fi
+          fi
+          deadline_epoch=0
+          if [[ "$should_run" = "true" && "$enforce_deadline" = "true" ]]; then
+            local_date="$(TZ=America/Denver date +%F)"
+            deadline_epoch="$(TZ=America/Denver date --date "$local_date 06:00:00" +%s)"
+          fi
+          echo "should_run=$should_run" >> "$GITHUB_OUTPUT"
+          echo "deadline_epoch=$deadline_epoch" >> "$GITHUB_OUTPUT"
+
+  portable-canvas:
+    name: Unmodified Canvas against deployed beta
+    needs: window-gate
+    if: needs.window-gate.outputs.should_run == 'true'
+    runs-on: [self-hosted, linux, x64, canvas-oss-wsl2]
+    environment: canvas-oss-beta
+    timeout-minutes: 230
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CANVAS_OSS_ORIGIN: https://canvas-test.elevenidllc.com
+      CANVAS_OSS_MARTY_ORIGIN: https://beta.elevenidllc.com
+      CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST: https://canvas-test.elevenidllc.com
+      CANVAS_OSS_IMAGE_BUILD_RUN_ID: ${{ inputs.canvas_image_build_run_id || vars.CANVAS_OSS_IMAGE_BUILD_RUN_ID }}
+      CANVAS_OSS_EXPECTED_BETA_SOURCE_ID: ${{ inputs.expected_beta_source_id || vars.CANVAS_OSS_EXPECTED_BETA_SOURCE_ID }}
+      CANVAS_OSS_BETA_DEPLOYMENT_MANIFEST: ${{ inputs.beta_deployment_manifest || vars.CANVAS_OSS_BETA_DEPLOYMENT_MANIFEST }}
+      CANVAS_OSS_ADMIN_EMAIL: ${{ vars.CANVAS_OSS_ADMIN_EMAIL }}
+      CANVAS_OSS_ORGANIZATION_ID: ${{ vars.CANVAS_OSS_ORGANIZATION_ID }}
+      CANVAS_OSS_APPLICATION_TEMPLATE_ID: ${{ vars.CANVAS_OSS_APPLICATION_TEMPLATE_ID }}
+      CANVAS_OSS_CREDENTIAL_TEMPLATE_ID: ${{ vars.CANVAS_OSS_CREDENTIAL_TEMPLATE_ID }}
+      CANVAS_OSS_ARTIFACT_DIR: ${{ github.workspace }}/tests/artifacts/canvas-oss-portability
+      CANVAS_OSS_DRIVER_SOURCE_SHA: ${{ github.sha }}
+      CANVAS_OSS_CONTRACT_IMAGE: elevenid-local/canvas-oss-contract:${{ github.sha }}
+      CANVAS_PORTABILITY_ATTESTATION_PATH: ${{ github.workspace }}/tests/artifacts/canvas-oss-portability/portable-attestation.json
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Import approved maintenance window
+        id: window
+        shell: bash
+        run: |
+          echo "should_run=true" >> "$GITHUB_OUTPUT"
+          echo "deadline_epoch=${{ needs.window-gate.outputs.deadline_epoch }}" >> "$GITHUB_OUTPUT"
+          echo "CANVAS_OSS_CONFIG_DIR=$RUNNER_TEMP/canvas-oss-runtime-config" >> "$GITHUB_ENV"
+          echo "CANVAS_OSS_SECRET_DIR=$RUNNER_TEMP/canvas-oss-runtime-secrets" >> "$GITHUB_ENV"
+
+      - name: Validate contracts and required environment
+        if: steps.window.outputs.should_run == 'true'
+        shell: bash
+        env:
+          MODE: ${{ inputs.mode || 'full' }}
+          CANVAS_OSS_ADMIN_PASSWORD_INPUT: ${{ secrets.CANVAS_OSS_ADMIN_PASSWORD }}
+          CANVAS_OSS_MARTY_API_KEY_INPUT: ${{ secrets.CANVAS_OSS_MARTY_API_KEY }}
+          CANVAS_OSS_LEARNER_EMAIL_INPUT: ${{ secrets.CANVAS_OSS_LEARNER_EMAIL }}
+          CANVAS_OSS_LEARNER_PASSWORD_INPUT: ${{ secrets.CANVAS_OSS_LEARNER_PASSWORD }}
+        run: |
+          [[ "$CANVAS_OSS_ARTIFACT_DIR" = "$GITHUB_WORKSPACE/tests/artifacts/canvas-oss-portability" ]]
+          rm -rf "$CANVAS_OSS_ARTIFACT_DIR"
+          install -d -m 0700 "$CANVAS_OSS_ARTIFACT_DIR"
+          python scripts/check_canvas_oss_portability.py --validate-config
+          for name in CANVAS_OSS_IMAGE_BUILD_RUN_ID CANVAS_OSS_EXPECTED_BETA_SOURCE_ID CANVAS_OSS_BETA_DEPLOYMENT_MANIFEST CANVAS_OSS_ADMIN_EMAIL CANVAS_OSS_ADMIN_PASSWORD_INPUT CANVAS_OSS_ORGANIZATION_ID; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "$name is required; this lane never converts missing configuration into a skip." >&2
+              exit 1
+            fi
+            printf '::add-mask::%s\n' "${!name}"
+          done
+          [[ "$CANVAS_OSS_EXPECTED_BETA_SOURCE_ID" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "CANVAS_OSS_EXPECTED_BETA_SOURCE_ID must be a reviewed 40-character source ID." >&2
+            exit 1
+          }
+          test -f "$CANVAS_OSS_BETA_DEPLOYMENT_MANIFEST" || {
+            echo "Beta deployment manifest does not exist on the local runner." >&2
+            exit 1
+          }
+          if [[ "$MODE" = "full" ]]; then
+            for name in CANVAS_OSS_ORGANIZATION_ID CANVAS_OSS_APPLICATION_TEMPLATE_ID CANVAS_OSS_CREDENTIAL_TEMPLATE_ID CANVAS_OSS_MARTY_API_KEY_INPUT CANVAS_OSS_LEARNER_EMAIL_INPUT CANVAS_OSS_LEARNER_PASSWORD_INPUT; do
+              if [[ -z "${!name:-}" ]]; then
+                echo "$name is required for full portability acceptance." >&2
+                exit 1
+              fi
+              printf '::add-mask::%s\n' "${!name}"
+            done
+          fi
+          rm -rf "$CANVAS_OSS_SECRET_DIR"
+          install -d -m 0700 "$CANVAS_OSS_SECRET_DIR"
+          umask 077
+          postgres_password="$(openssl rand -hex 32)"
+          printf '::add-mask::%s\n' "$postgres_password"
+          printf '%s' "$CANVAS_OSS_ADMIN_EMAIL" > "$CANVAS_OSS_SECRET_DIR/canvas-admin-email"
+          printf '%s' "$CANVAS_OSS_ADMIN_PASSWORD_INPUT" > "$CANVAS_OSS_SECRET_DIR/canvas-admin-password"
+          printf '%s' "$CANVAS_OSS_LEARNER_EMAIL_INPUT" > "$CANVAS_OSS_SECRET_DIR/canvas-learner-email"
+          printf '%s' "$CANVAS_OSS_LEARNER_PASSWORD_INPUT" > "$CANVAS_OSS_SECRET_DIR/canvas-learner-password"
+          printf '%s' "$CANVAS_OSS_MARTY_API_KEY_INPUT" > "$CANVAS_OSS_SECRET_DIR/canvas-marty-api-key"
+          printf '%s' "$postgres_password" > "$CANVAS_OSS_SECRET_DIR/canvas-postgres-password"
+          chmod 0600 "$CANVAS_OSS_SECRET_DIR"/*
+          postgres_password=''
+
+      - name: Require WSL2 runner on the existing beta Docker daemon
+        if: steps.window.outputs.should_run == 'true'
+        run: >-
+          python scripts/check_canvas_oss_runner.py
+          --output tests/artifacts/canvas-oss-portability/runner-preflight.json
+
+      - name: Require deployed beta portable-Canvas capability
+        if: steps.window.outputs.should_run == 'true'
+        run: >-
+          python scripts/check_canvas_beta_capabilities.py
+          --organization-id "$CANVAS_OSS_ORGANIZATION_ID"
+          --output tests/artifacts/canvas-oss-portability/beta-capability-preflight.json
+
+      - name: Download and bind the reviewed Canvas image provenance
+        if: steps.window.outputs.should_run == 'true'
+        shell: bash
+        run: |
+          lock="deploy-config/catalog/canvas-oss.lock.json"
+          source_sha="$(jq -r '.source.commit' "$lock")"
+          image_repo="$(jq -r '.image.repository' "$lock")"
+          image_digest="$(jq -r '.image.digest // empty' "$lock")"
+          test "$(jq -r '.image.digest_state' "$lock")" = "published"
+          [[ "$image_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          run_json="$(gh run view "$CANVAS_OSS_IMAGE_BUILD_RUN_ID" --json conclusion,status,workflowName,headBranch,headSha,event,databaseId)"
+          test "$(jq -r '.status' <<<"$run_json")" = completed
+          test "$(jq -r '.conclusion' <<<"$run_json")" = success
+          test "$(jq -r '.workflowName' <<<"$run_json")" = "Canvas OSS Source Image"
+          test "$(jq -r '.headBranch' <<<"$run_json")" = main
+          test "$(jq -r '.event' <<<"$run_json")" = workflow_dispatch
+          mkdir -p tests/artifacts/canvas-oss-portability/image
+          gh run download "$CANVAS_OSS_IMAGE_BUILD_RUN_ID" \
+            --name "canvas-oss-image-$source_sha" \
+            --dir tests/artifacts/canvas-oss-portability/image
+          manifest=tests/artifacts/canvas-oss-portability/image/canvas-oss-image-manifest.json
+          test "$(jq -r '.source_tag' "$manifest")" = "$(jq -r '.source.tag' "$lock")"
+          test "$(jq -r '.source_tag_object' "$manifest")" = "$(jq -r '.source.tag_object' "$lock")"
+          test "$(jq -r '.source_commit' "$manifest")" = "$source_sha"
+          test "$(jq -r '.source_tree' "$manifest")" = "$(jq -r '.source.tree' "$lock")"
+          test "$(jq -r '.image_digest' "$manifest")" = "$image_digest"
+          test "$(jq -r '.harness_repository' "$manifest")" = "ElevenID/marty-ui"
+          test "$(jq -r '.harness_ref' "$manifest")" = "refs/heads/main"
+          test "$(jq -r '.harness_head_sha' "$manifest")" = "$(jq -r '.headSha' <<<"$run_json")"
+          test "$(jq -r '.publisher_workflow' "$manifest")" = ".github/workflows/canvas-oss-image.yml"
+          test "$(jq -r '.publisher_run_id' "$manifest")" = "$(jq -r '.databaseId' <<<"$run_json")"
+          test "$(jq -cS '.base_image' "$manifest")" = "$(jq -cS '.image.base_image' "$lock")"
+          test "$(jq -r '.base_source_policy' "$manifest")" = "docker/canvas-oss/source-policy.json"
+          test "$(jq -r '.base_source_policy_sha256' "$manifest")" = "$(sha256sum docker/canvas-oss/source-policy.json | cut -d' ' -f1)"
+          test "$(jq -cS '.oci_labels' "$manifest")" = "$(jq -cS '.image.required_oci_labels' "$lock")"
+          test "$(jq -r '.source_modified' "$manifest")" = false
+          image="$image_repo@$image_digest"
+          echo "CANVAS_OSS_IMAGE=$image" >> "$GITHUB_ENV"
+          timeout 30m docker pull "$image"
+          gh attestation verify "oci://$image" \
+            --repo ElevenID/marty-ui \
+            --signer-workflow github.com/ElevenID/marty-ui/.github/workflows/canvas-oss-image.yml \
+            --source-ref refs/heads/main \
+            --source-digest "$(jq -r '.headSha' <<<"$run_json")"
+          image_inspect="$(docker image inspect "$image")"
+          while IFS=$'\t' read -r label expected; do
+            actual="$(jq -r --arg label "$label" '.[0].Config.Labels[$label] // empty' <<<"$image_inspect")"
+            test "$actual" = "$expected"
+          done < <(jq -r '.image.required_oci_labels | to_entries[] | [.key, .value] | @tsv' "$lock")
+          for mapping in \
+            CANVAS_OSS_POSTGRES_IMAGE=postgres \
+            CANVAS_OSS_REDIS_IMAGE=redis \
+            CANVAS_OSS_MAILPIT_IMAGE=mailpit \
+            CANVAS_OSS_EDGE_IMAGE=edge; do
+            variable="${mapping%%=*}"
+            key="${mapping#*=}"
+            dependency="$(jq -r --arg key "$key" '.runtime_dependencies[$key]' "$lock")"
+            [[ "$dependency" =~ @sha256:[0-9a-f]{64}$ ]]
+            echo "$variable=$dependency" >> "$GITHUB_ENV"
+            timeout 20m docker pull "$dependency"
+          done
+          playwright_image="$(jq -r '.contract_driver.base_image' "$lock")"
+          [[ "$playwright_image" =~ ^mcr\.microsoft\.com/playwright:v1\.56\.0-jammy@sha256:[0-9a-f]{64}$ ]]
+          echo "CANVAS_OSS_PLAYWRIGHT_IMAGE=$playwright_image" >> "$GITHUB_ENV"
+          timeout 20m docker pull --platform linux/amd64 "$playwright_image"
+
+      - name: Build and unit-test the Compose-only browser contract
+        if: steps.window.outputs.should_run == 'true'
+        shell: bash
+        run: |
+          mkdir -p "$CANVAS_OSS_ARTIFACT_DIR"
+          docker compose --project-name canvas-oss-portability \
+            --file docker-compose.canvas-oss-acceptance.yml \
+            --profile contract build --pull canvas-contract
+          contract_image_id="$(docker image inspect "$CANVAS_OSS_CONTRACT_IMAGE" --format '{{.Id}}')"
+          [[ "$contract_image_id" =~ ^sha256:[0-9a-f]{64}$ ]]
+          test "$(docker image inspect "$CANVAS_OSS_CONTRACT_IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.source"}}')" = "https://github.com/ElevenID/marty-ui"
+          test "$(docker image inspect "$CANVAS_OSS_CONTRACT_IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$CANVAS_OSS_DRIVER_SOURCE_SHA"
+          test "$(docker image inspect "$CANVAS_OSS_CONTRACT_IMAGE" --format '{{index .Config.Labels "io.elevenid.canvas-oss.execution-boundary"}}')" = "docker-compose-one-shot"
+          export CANVAS_OSS_CONTRACT_IMAGE_ID="$contract_image_id"
+          echo "CANVAS_OSS_CONTRACT_IMAGE_ID=$contract_image_id" >> "$GITHUB_ENV"
+          docker compose --project-name canvas-oss-portability \
+            --file docker-compose.canvas-oss-acceptance.yml \
+            --profile contract run --rm --no-deps canvas-contract \
+            node --test scripts/run-canvas-oss-standard-contract.test.js
+          jq -n \
+            --arg image_reference "$CANVAS_OSS_CONTRACT_IMAGE" \
+            --arg image_id "$contract_image_id" \
+            --arg source_sha "$CANVAS_OSS_DRIVER_SOURCE_SHA" \
+            --arg base_image "$CANVAS_OSS_PLAYWRIGHT_IMAGE" \
+            '{
+              schema_version: 1,
+              execution_boundary: "docker_compose_one_shot",
+              compose_project: "canvas-oss-portability",
+              compose_service: "canvas-contract",
+              image_reference: $image_reference,
+              image_id: $image_id,
+              source_sha: $source_sha,
+              source_repository: "https://github.com/ElevenID/marty-ui",
+              dockerfile: "tests/Dockerfile.canvas-oss-contract",
+              package_manifest: "tests/canvas-oss-contract/package.json",
+              package_lock: "tests/canvas-oss-contract/package-lock.json",
+              audit_level: "high",
+              base_image: $base_image,
+              secret_transport: "compose_secret_files",
+              host_browser_processes: false,
+              unit_test_exit_code: 0,
+              contract_exit_code: null,
+              labels: {
+                "org.opencontainers.image.source": "https://github.com/ElevenID/marty-ui",
+                "org.opencontainers.image.revision": $source_sha,
+                "io.elevenid.canvas-oss.execution-boundary": "docker-compose-one-shot"
+              }
+            }' > "$CANVAS_OSS_ARTIFACT_DIR/contract-driver-manifest.json"
+
+      - name: Preserve beta and stop only replaceable Canvas experiment containers
+        if: steps.window.outputs.should_run == 'true'
+        run: >-
+          python scripts/canvas_oss_beta_lifecycle.py prepare
+          --state tests/artifacts/canvas-oss-portability/beta-host-state.json
+
+      - name: Require fresh isolated Canvas Compose state
+        if: steps.window.outputs.should_run == 'true'
+        run: >-
+          python scripts/prepare_canvas_oss_fresh_state.py
+          --output tests/artifacts/canvas-oss-portability/fresh-state-audit.json
+
+      - name: Start beta continuity monitor
+        if: steps.window.outputs.should_run == 'true'
+        shell: bash
+        run: |
+          rm -f "$CANVAS_OSS_ARTIFACT_DIR/stop-beta-monitor"
+          docker compose --project-name canvas-oss-portability \
+            --file docker-compose.canvas-oss-acceptance.yml \
+            --profile monitor up --detach --no-deps canvas-continuity-monitor
+
+      - name: Capture exact deployed beta release
+        if: steps.window.outputs.should_run == 'true'
+        run: >-
+          python scripts/check_canvas_oss_portability.py
+          --capture-runtime-context tests/artifacts/canvas-oss-portability/runtime-context.json
+
+      - name: Bind runtime markers to reviewed beta deployment evidence
+        if: steps.window.outputs.should_run == 'true'
+        run: >-
+          python scripts/check_canvas_oss_portability.py
+          --validate-runtime-binding "$CANVAS_OSS_BETA_DEPLOYMENT_MANIFEST"
+          --runtime-context tests/artifacts/canvas-oss-portability/runtime-context.json
+          --expected-source-id "$CANVAS_OSS_EXPECTED_BETA_SOURCE_ID"
+
+      - name: Generate ephemeral operator configuration
+        if: steps.window.outputs.should_run == 'true'
+        shell: bash
+        run: |
+          rm -rf "$CANVAS_OSS_CONFIG_DIR"
+          node scripts/canvas-oss/generate-runtime-config.mjs "$CANVAS_OSS_CONFIG_DIR"
+
+      - name: Bootstrap stock Canvas lifecycle and start LMS
+        if: steps.window.outputs.should_run == 'true'
+        run: >-
+          python scripts/run_canvas_oss_lifecycle.py
+          --audit tests/artifacts/canvas-oss-portability/bootstrap-audit.json
+          --health-timeout 900
+
+      - name: Require public Canvas and beta after startup
+        if: steps.window.outputs.should_run == 'true'
+        shell: bash
+        run: |
+          python scripts/canvas_oss_beta_lifecycle.py assert-beta
+          python scripts/canvas_oss_beta_lifecycle.py assert-canvas
+
+      - name: Run standard portable Canvas flow in its Compose one-shot
+        if: steps.window.outputs.should_run == 'true' && (inputs.mode || 'full') == 'full'
+        shell: bash
+        run: |
+          actual_contract_image_id="$(docker image inspect "$CANVAS_OSS_CONTRACT_IMAGE" --format '{{.Id}}')"
+          test "$actual_contract_image_id" = "$CANVAS_OSS_CONTRACT_IMAGE_ID" || {
+            echo "The locally built contract image changed after its provenance was recorded." >&2
+            exit 1
+          }
+          max_driver_seconds=9000
+          deadline_epoch="${{ steps.window.outputs.deadline_epoch }}"
+          if (( deadline_epoch > 0 )); then
+            max_driver_seconds=$((deadline_epoch - $(date +%s) - 1200))
+          fi
+          if (( max_driver_seconds < 60 )); then
+            echo "Insufficient maintenance-window time remains for the portable flow and safe teardown." >&2
+            exit 1
+          fi
+          timeout --signal=TERM --kill-after=30s "${max_driver_seconds}s" \
+            docker compose --project-name canvas-oss-portability \
+              --file docker-compose.canvas-oss-acceptance.yml \
+              --profile contract run --rm --no-deps canvas-contract
+          test -s "$CANVAS_OSS_ARTIFACT_DIR/observations.json"
+          test -s "$CANVAS_OSS_ARTIFACT_DIR/video/canvas-oss-portability.webm"
+          temporary_manifest="$(mktemp)"
+          jq '.contract_exit_code = 0' \
+            "$CANVAS_OSS_ARTIFACT_DIR/contract-driver-manifest.json" > "$temporary_manifest"
+          mv "$temporary_manifest" "$CANVAS_OSS_ARTIFACT_DIR/contract-driver-manifest.json"
+
+      - name: Produce readiness-only non-acceptance observations
+        if: steps.window.outputs.should_run == 'true' && (inputs.mode || 'full') == 'readiness_only'
+        run: >-
+          python scripts/create_canvas_oss_readiness_observations.py
+          --output tests/artifacts/canvas-oss-portability/observations.json
+
+      - name: Stop and enforce beta continuity monitor
+        if: steps.window.outputs.should_run == 'true'
+        shell: bash
+        run: |
+          touch "$CANVAS_OSS_ARTIFACT_DIR/stop-beta-monitor"
+          timeout 2m docker compose --project-name canvas-oss-portability \
+            --file docker-compose.canvas-oss-acceptance.yml \
+            --profile monitor wait canvas-continuity-monitor
+          python scripts/canvas_oss_beta_lifecycle.py assert-monitor \
+            --output "$CANVAS_OSS_ARTIFACT_DIR/beta-continuity.json"
+
+      - name: Require beta release did not drift
+        if: steps.window.outputs.should_run == 'true'
+        shell: bash
+        run: |
+          python scripts/check_canvas_oss_portability.py \
+            --capture-runtime-context tests/artifacts/canvas-oss-portability/runtime-context-after.json
+          diff \
+            <(jq -S '{origin,release_version,source_id}' tests/artifacts/canvas-oss-portability/runtime-context.json) \
+            <(jq -S '{origin,release_version,source_id}' tests/artifacts/canvas-oss-portability/runtime-context-after.json)
+          python scripts/check_canvas_oss_portability.py \
+            --validate-runtime-binding "$CANVAS_OSS_BETA_DEPLOYMENT_MANIFEST" \
+            --runtime-context tests/artifacts/canvas-oss-portability/runtime-context-after.json \
+            --expected-source-id "$CANVAS_OSS_EXPECTED_BETA_SOURCE_ID"
+
+      - name: Remove ephemeral Canvas and runtime secrets before evidence finalization
+        if: steps.window.outputs.should_run == 'true'
+        shell: bash
+        run: |
+          docker compose --project-name canvas-oss-portability \
+            --file docker-compose.canvas-oss-acceptance.yml down --volumes --remove-orphans
+          rm -rf "$CANVAS_OSS_CONFIG_DIR"
+          rm -rf "$CANVAS_OSS_SECRET_DIR"
+          test -f tests/artifacts/canvas-oss-portability/beta-host-state.json
+          python scripts/canvas_oss_beta_lifecycle.py restore \
+            --state tests/artifacts/canvas-oss-portability/beta-host-state.json
+          touch tests/artifacts/canvas-oss-portability/cleanup-complete
+
+      - name: Finalize one canonical portability artifact
+        if: steps.window.outputs.should_run == 'true'
+        shell: bash
+        env:
+          MODE: ${{ inputs.mode || 'full' }}
+        run: |
+          driver_manifest_args=()
+          if [[ "$MODE" = "full" ]]; then
+            driver_manifest_args=(--driver-manifest tests/artifacts/canvas-oss-portability/contract-driver-manifest.json)
+          fi
+          python scripts/check_canvas_oss_portability.py --finalize \
+            --mode "$MODE" \
+            --image-manifest tests/artifacts/canvas-oss-portability/image/canvas-oss-image-manifest.json \
+            --bootstrap-audit tests/artifacts/canvas-oss-portability/bootstrap-audit.json \
+            --runtime-context tests/artifacts/canvas-oss-portability/runtime-context.json \
+            --observations tests/artifacts/canvas-oss-portability/observations.json \
+            --output "$CANVAS_PORTABILITY_ATTESTATION_PATH" \
+            "${driver_manifest_args[@]}"
+          python scripts/canvas_oss_result_to_junit.py \
+            --result "$CANVAS_PORTABILITY_ATTESTATION_PATH" \
+            --output tests/artifacts/canvas-oss-portability/junit.xml
+          python -m pip install --disable-pip-version-check 'jsonschema[format]>=4.23'
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          from jsonschema import Draft202012Validator, FormatChecker
+          schema = json.loads(Path('deploy-config/schemas/canvas-oss-portability-result.schema.json').read_text())
+          result = json.loads(Path('tests/artifacts/canvas-oss-portability/portable-attestation.json').read_text())
+          Draft202012Validator(schema, format_checker=FormatChecker()).validate(result)
+          PY
+
+      - name: Always stop monitor and clean sensitive runtime material
+        if: always() && steps.window.outputs.should_run == 'true'
+        shell: bash
+        env:
+          RETAIN_FAILED_STATE: ${{ inputs.retain_failed_state || 'false' }}
+          CURRENT_JOB_STATUS: ${{ job.status }}
+        run: |
+          touch "$CANVAS_OSS_ARTIFACT_DIR/stop-beta-monitor" || true
+          docker compose --project-name canvas-oss-portability \
+            --file docker-compose.canvas-oss-acceptance.yml \
+            --profile monitor stop --timeout 30 canvas-continuity-monitor || true
+          if [[ ! -f tests/artifacts/canvas-oss-portability/cleanup-complete ]]; then
+            if [[ "$CURRENT_JOB_STATUS" = "failure" && "$RETAIN_FAILED_STATE" = "true" ]]; then
+              docker compose --project-name canvas-oss-portability \
+                --file docker-compose.canvas-oss-acceptance.yml down --remove-orphans || true
+              if [[ -f tests/artifacts/canvas-oss-portability/beta-host-state.json ]]; then
+                python scripts/canvas_oss_beta_lifecycle.py restore \
+                  --state tests/artifacts/canvas-oss-portability/beta-host-state.json
+              fi
+              echo "Retained only named Canvas data volumes; removed containers/config and restored prior beta experiments."
+            else
+              docker compose --project-name canvas-oss-portability \
+                --file docker-compose.canvas-oss-acceptance.yml down --volumes --remove-orphans || true
+              if [[ -f tests/artifacts/canvas-oss-portability/beta-host-state.json ]]; then
+                python scripts/canvas_oss_beta_lifecycle.py restore \
+                  --state tests/artifacts/canvas-oss-portability/beta-host-state.json
+              fi
+            fi
+          fi
+          rm -rf "$CANVAS_OSS_CONFIG_DIR"
+          rm -rf "$CANVAS_OSS_SECRET_DIR"
+
+      - name: Stage only audited fixed-allowlist evidence
+        id: stage
+        if: always() && steps.window.outputs.should_run == 'true'
+        continue-on-error: true
+        run: >-
+          python scripts/stage_canvas_oss_artifacts.py
+          --source tests/artifacts/canvas-oss-portability
+          --output tests/sanitized-artifacts/canvas-oss-portability
+
+      - name: Upload sanitized portability evidence
+        if: always() && steps.stage.outcome == 'success'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: canvas-oss-portability-${{ github.run_id }}
+          path: tests/sanitized-artifacts/canvas-oss-portability/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Preserve artifact staging failure
+        if: always() && steps.stage.outcome == 'failure'
+        run: exit 1
+
+      - name: Enforce completion before 06:00 Denver
+        if: always() && steps.window.outputs.should_run == 'true'
+        shell: bash
+        run: |
+          deadline_epoch="${{ steps.window.outputs.deadline_epoch }}"
+          if (( deadline_epoch > 0 && $(date +%s) >= deadline_epoch )); then
+            echo "Canvas OSS run exceeded the 06:00 America/Denver teardown boundary." >&2
+            exit 1
+          fi

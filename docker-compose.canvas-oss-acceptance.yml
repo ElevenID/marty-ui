@@ -1,0 +1,223 @@
+# Ephemeral, unmodified Canvas OSS acceptance topology.
+#
+# Canvas is built from the exact upstream source lock. No Canvas source tree is
+# mounted. The edge adapter joins the existing beta tunnel network under the
+# `canvas-real` alias expected by nginx-tunnel.conf.template; this file never
+# starts another cloudflared connector.
+
+x-canvas-environment: &canvas-environment
+  RAILS_ENV: production
+  CANVAS_LMS_ADMIN_EMAIL: ${CANVAS_OSS_ADMIN_EMAIL:?CANVAS_OSS_ADMIN_EMAIL is required}
+  CANVAS_LMS_ACCOUNT_NAME: ElevenID Canvas OSS Portability
+  CANVAS_LMS_STATS_COLLECTION: opt_out
+  POSTGRES_PASSWORD_FILE: /run/secrets/canvas_postgres_password
+  CANVAS_DOMAIN: canvas-test.elevenidllc.com
+  RAILS_HOST_WITH_PORT: canvas-test.elevenidllc.com
+  RAILS_SERVE_STATIC_FILES: "true"
+
+x-canvas-volumes: &canvas-volumes
+  - ${CANVAS_OSS_CONFIG_DIR:?CANVAS_OSS_CONFIG_DIR is required}/database.yml:/usr/src/app/config/database.yml:ro
+  - ${CANVAS_OSS_CONFIG_DIR:?CANVAS_OSS_CONFIG_DIR is required}/redis.yml:/usr/src/app/config/redis.yml:ro
+  - ${CANVAS_OSS_CONFIG_DIR:?CANVAS_OSS_CONFIG_DIR is required}/cache_store.yml:/usr/src/app/config/cache_store.yml:ro
+  - ${CANVAS_OSS_CONFIG_DIR:?CANVAS_OSS_CONFIG_DIR is required}/domain.yml:/usr/src/app/config/domain.yml:ro
+  - ${CANVAS_OSS_CONFIG_DIR:?CANVAS_OSS_CONFIG_DIR is required}/outgoing_mail.yml:/usr/src/app/config/outgoing_mail.yml:ro
+  - ${CANVAS_OSS_CONFIG_DIR:?CANVAS_OSS_CONFIG_DIR is required}/security.yml:/usr/src/app/config/security.yml:ro
+  - ${CANVAS_OSS_CONFIG_DIR:?CANVAS_OSS_CONFIG_DIR is required}/session_store.yml:/usr/src/app/config/session_store.yml:ro
+  - ${CANVAS_OSS_CONFIG_DIR:?CANVAS_OSS_CONFIG_DIR is required}/delayed_jobs.yml:/usr/src/app/config/delayed_jobs.yml:ro
+  - ${CANVAS_OSS_CONFIG_DIR:?CANVAS_OSS_CONFIG_DIR is required}/dynamic_settings.yml:/usr/src/app/config/dynamic_settings.yml:ro
+  - canvas_oss_files:/usr/src/app/tmp/files
+  - canvas_oss_log:/usr/src/app/log
+
+services:
+  canvas-postgres:
+    image: ${CANVAS_OSS_POSTGRES_IMAGE:?CANVAS_OSS_POSTGRES_IMAGE must be an immutable digest reference}
+    container_name: marty-canvas-oss-postgres
+    environment:
+      POSTGRES_PASSWORD_FILE: /run/secrets/canvas_postgres_password
+    secrets:
+      - canvas_postgres_password
+    volumes:
+      - canvas_oss_postgres:/var/lib/postgresql/data
+    networks: [canvas-oss-private]
+    mem_limit: 2g
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  canvas-redis:
+    image: ${CANVAS_OSS_REDIS_IMAGE:?CANVAS_OSS_REDIS_IMAGE must be an immutable digest reference}
+    container_name: marty-canvas-oss-redis
+    networks: [canvas-oss-private]
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  canvas-mail:
+    image: ${CANVAS_OSS_MAILPIT_IMAGE:?CANVAS_OSS_MAILPIT_IMAGE must be an immutable digest reference}
+    container_name: marty-canvas-oss-mail
+    networks: [canvas-oss-private]
+    mem_limit: 256m
+
+  canvas-lifecycle:
+    profiles: [lifecycle]
+    image: ${CANVAS_OSS_IMAGE:?CANVAS_OSS_IMAGE must be an immutable digest reference}
+    environment: *canvas-environment
+    secrets:
+      - canvas_admin_password
+      - canvas_postgres_password
+    volumes: *canvas-volumes
+    networks: [canvas-oss-private]
+    mem_limit: 8g
+    depends_on:
+      canvas-postgres:
+        condition: service_healthy
+      canvas-redis:
+        condition: service_healthy
+
+  canvas-web:
+    image: ${CANVAS_OSS_IMAGE:?CANVAS_OSS_IMAGE must be an immutable digest reference}
+    container_name: marty-canvas-oss-web
+    environment: *canvas-environment
+    secrets:
+      - canvas_postgres_password
+    volumes: *canvas-volumes
+    networks: [canvas-oss-private]
+    mem_limit: 6g
+    depends_on:
+      canvas-postgres:
+        condition: service_healthy
+      canvas-redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail --silent --show-error http://127.0.0.1/health_check >/dev/null"]
+      interval: 10s
+      timeout: 10s
+      retries: 42
+      start_period: 120s
+
+  canvas-jobs:
+    image: ${CANVAS_OSS_IMAGE:?CANVAS_OSS_IMAGE must be an immutable digest reference}
+    container_name: marty-canvas-oss-jobs
+    command: ["bundle", "exec", "script/delayed_job", "run"]
+    environment: *canvas-environment
+    secrets:
+      - canvas_postgres_password
+    volumes: *canvas-volumes
+    networks: [canvas-oss-private]
+    mem_limit: 2g
+    depends_on:
+      canvas-web:
+        condition: service_healthy
+
+  # The existing beta tunnel proxies to canvas-real:3000. This adapter is an
+  # operator reverse proxy, not a Canvas source change or plugin.
+  canvas-edge:
+    image: ${CANVAS_OSS_EDGE_IMAGE:?CANVAS_OSS_EDGE_IMAGE must be an immutable digest reference}
+    container_name: marty-canvas-oss-edge
+    volumes:
+      - ./docker/canvas-oss/edge.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      canvas-oss-private: {}
+      beta-tunnel:
+        aliases: [canvas-real]
+    mem_limit: 128m
+    depends_on:
+      canvas-web:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://127.0.0.1:3000/health_check"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  # The browser, API driver, and video recorder are part of the demonstrated
+  # workload. They run only as this one-shot Compose service, never as native
+  # Windows/WSL Playwright processes. Sensitive values arrive as secret files
+  # and therefore do not appear in docker inspect Config.Env.
+  canvas-contract:
+    profiles: [contract]
+    platform: linux/amd64
+    build:
+      context: .
+      dockerfile: tests/Dockerfile.canvas-oss-contract
+      args:
+        CANVAS_OSS_PLAYWRIGHT_IMAGE: ${CANVAS_OSS_PLAYWRIGHT_IMAGE:?CANVAS_OSS_PLAYWRIGHT_IMAGE must be an immutable digest reference}
+        CANVAS_OSS_DRIVER_SOURCE_SHA: ${CANVAS_OSS_DRIVER_SOURCE_SHA:?CANVAS_OSS_DRIVER_SOURCE_SHA is required}
+    image: ${CANVAS_OSS_CONTRACT_IMAGE:?CANVAS_OSS_CONTRACT_IMAGE is required}
+    pull_policy: never
+    init: true
+    shm_size: 1gb
+    environment:
+      CANVAS_OSS_ORIGIN: https://canvas-test.elevenidllc.com
+      CANVAS_OSS_MARTY_ORIGIN: https://beta.elevenidllc.com
+      CANVAS_OSS_ORGANIZATION_ID: ${CANVAS_OSS_ORGANIZATION_ID:-}
+      CANVAS_OSS_APPLICATION_TEMPLATE_ID: ${CANVAS_OSS_APPLICATION_TEMPLATE_ID:-}
+      CANVAS_OSS_CREDENTIAL_TEMPLATE_ID: ${CANVAS_OSS_CREDENTIAL_TEMPLATE_ID:-}
+      CANVAS_OSS_ADMIN_EMAIL_FILE: /run/secrets/canvas_admin_email
+      CANVAS_OSS_ADMIN_PASSWORD_FILE: /run/secrets/canvas_admin_password
+      CANVAS_OSS_LEARNER_EMAIL_FILE: /run/secrets/canvas_learner_email
+      CANVAS_OSS_LEARNER_PASSWORD_FILE: /run/secrets/canvas_learner_password
+      CANVAS_OSS_MARTY_API_KEY_FILE: /run/secrets/canvas_marty_api_key
+      CANVAS_OSS_CONTRACT_SERVICE: canvas-contract
+      CANVAS_OSS_EXECUTION_BOUNDARY: docker_compose_one_shot
+      CANVAS_OSS_SECRET_TRANSPORT: compose_secret_files
+      CANVAS_OSS_CONTRACT_IMAGE_ID: ${CANVAS_OSS_CONTRACT_IMAGE_ID:-}
+      CANVAS_OSS_DRIVER_SOURCE_SHA: ${CANVAS_OSS_DRIVER_SOURCE_SHA:?CANVAS_OSS_DRIVER_SOURCE_SHA is required}
+      CANVAS_OSS_PLAYWRIGHT_IMAGE: ${CANVAS_OSS_PLAYWRIGHT_IMAGE:?CANVAS_OSS_PLAYWRIGHT_IMAGE must be an immutable digest reference}
+    secrets:
+      - canvas_admin_email
+      - canvas_admin_password
+      - canvas_learner_email
+      - canvas_learner_password
+      - canvas_marty_api_key
+    volumes:
+      - ${CANVAS_OSS_ARTIFACT_DIR:?CANVAS_OSS_ARTIFACT_DIR is required}:/artifacts
+    networks: [canvas-oss-private]
+
+  # Continuity evidence is also a Compose workload. The CI runner only creates
+  # the stop sentinel and waits for this service to finalize its report.
+  canvas-continuity-monitor:
+    profiles: [monitor]
+    platform: linux/amd64
+    image: ${CANVAS_OSS_CONTRACT_IMAGE:?CANVAS_OSS_CONTRACT_IMAGE is required}
+    pull_policy: never
+    init: true
+    command: ["node", "scripts/beta-continuity-monitor.mjs"]
+    environment:
+      CANVAS_OSS_MARTY_ORIGIN: https://beta.elevenidllc.com
+      CANVAS_OSS_MONITOR_OUTPUT: /artifacts/beta-continuity.json
+      CANVAS_OSS_MONITOR_STOP_FILE: /artifacts/stop-beta-monitor
+      CANVAS_OSS_MONITOR_INTERVAL_SECONDS: "30"
+    volumes:
+      - ${CANVAS_OSS_ARTIFACT_DIR:?CANVAS_OSS_ARTIFACT_DIR is required}:/artifacts
+    networks: [canvas-oss-private]
+
+networks:
+  canvas-oss-private: {}
+  beta-tunnel:
+    external: true
+    name: marty-infra-network
+
+volumes:
+  canvas_oss_postgres:
+  canvas_oss_files:
+  canvas_oss_log:
+
+secrets:
+  canvas_admin_email:
+    file: ${CANVAS_OSS_SECRET_DIR:?CANVAS_OSS_SECRET_DIR is required}/canvas-admin-email
+  canvas_admin_password:
+    file: ${CANVAS_OSS_SECRET_DIR:?CANVAS_OSS_SECRET_DIR is required}/canvas-admin-password
+  canvas_learner_email:
+    file: ${CANVAS_OSS_SECRET_DIR:?CANVAS_OSS_SECRET_DIR is required}/canvas-learner-email
+  canvas_learner_password:
+    file: ${CANVAS_OSS_SECRET_DIR:?CANVAS_OSS_SECRET_DIR is required}/canvas-learner-password
+  canvas_marty_api_key:
+    file: ${CANVAS_OSS_SECRET_DIR:?CANVAS_OSS_SECRET_DIR is required}/canvas-marty-api-key
+  canvas_postgres_password:
+    file: ${CANVAS_OSS_SECRET_DIR:?CANVAS_OSS_SECRET_DIR is required}/canvas-postgres-password

@@ -85,6 +85,16 @@ const API_KEY_SCOPES = [
     label: 'Manage webhooks',
     description: 'Provision and maintain callback endpoints programmatically.',
   },
+  {
+    id: 'integrations:read',
+    label: 'Read integrations',
+    description: 'Read Canvas platforms, bindings, readiness, synchronization jobs, and reviews.',
+  },
+  {
+    id: 'integrations:write',
+    label: 'Manage integrations',
+    description: 'Configure, authorize, activate, retry, and archive Canvas integrations.',
+  },
 ];
 
 const DEFAULT_CALLBACK_EVENTS = [

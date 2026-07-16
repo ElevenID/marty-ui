@@ -42,6 +42,7 @@ did_web_public_router = APIRouter(tags=["DID Web Resolution"])
 OPENBAO_SIGNING_KEY_PREFIXES = (
     "cred-issuer-",
     "cred-dsc-",
+    "lti-tool-",
 )
 
 OPENBAO_NAME_OVERRIDES = {
@@ -50,6 +51,7 @@ OPENBAO_NAME_OVERRIDES = {
     "cred-issuer-marty-rs256": "Marty RS256 issuer key",
     "cred-issuer-marty-eddsa": "Marty EdDSA issuer key",
     "cred-dsc-marty-primary": "Marty document signer key",
+    "lti-tool-marty-rs256": "Marty LTI tool signing key",
 }
 
 OPENBAO_ALGORITHM_BY_TYPE = {
@@ -108,6 +110,7 @@ KEY_PURPOSES = (
     "vdsnc_signing",     # VDS-NC signing key
     "csca",              # Country Signing CA trust anchor key
     "jwks_signing",      # JWKS endpoint key
+    "lti_tool_signing",  # Canvas LTI Advantage client assertions and Deep Links
 )
 
 #: For each key purpose, the set of algorithms that make sense for it.
@@ -121,6 +124,7 @@ KEY_PURPOSE_ALGORITHM_CONSTRAINTS: dict[str, frozenset[str]] = {
     "vdsnc_signing":        frozenset({"ES256", "ES384", "EdDSA"}),
     "csca":                 frozenset({"ES256", "ES384", "RS256", "EdDSA"}),
     "jwks_signing":         frozenset({"ES256", "ES384", "RS256", "EdDSA"}),
+    "lti_tool_signing":     frozenset({"RS256"}),
 }
 
 #: The credential formats each key purpose maps to naturally.
@@ -133,6 +137,7 @@ KEY_PURPOSE_CREDENTIAL_FORMATS: dict[str, tuple[str, ...]] = {
     "vdsnc_signing":        ("mso_mdoc",),
     "csca":                 ("mso_mdoc", "zk_mdoc"),
     "jwks_signing":         ("jwt_vc_json", "dc+sd-jwt"),
+    "lti_tool_signing":     (),
 }
 
 #: Per-service-type static capability metadata (GAP-007-a).
@@ -365,6 +370,8 @@ def _display_name_for_key(key_name: str) -> str:
 
 
 def _openbao_key_prefix_for_purpose(key_purpose: str | None) -> str:
+    if key_purpose == "lti_tool_signing":
+        return "lti-tool-"
     if key_purpose in {"mdoc_dsc", "x509_doc_signer", "vdsnc_signing", "csca"}:
         return "cred-dsc-"
     return "cred-issuer-"
@@ -376,8 +383,21 @@ def _normalize_requested_openbao_key_name(requested_name: str, key_purpose: str 
     if not safe_name:
         safe_name = "key"
 
-    if not safe_name.startswith(OPENBAO_SIGNING_KEY_PREFIXES):
-        safe_name = f"{_openbao_key_prefix_for_purpose(key_purpose)}{safe_name}"
+    expected_prefix = _openbao_key_prefix_for_purpose(key_purpose)
+    existing_prefix = next(
+        (
+            prefix
+            for prefix in OPENBAO_SIGNING_KEY_PREFIXES
+            if safe_name.startswith(prefix)
+        ),
+        None,
+    )
+    if existing_prefix and existing_prefix != expected_prefix:
+        # A caller-supplied credential prefix must never defeat the protocol
+        # namespace selected by key_purpose.
+        safe_name = safe_name[len(existing_prefix):].lstrip("-") or "key"
+    if not safe_name.startswith(expected_prefix):
+        safe_name = f"{expected_prefix}{safe_name}"
 
     algorithm_suffix = re.sub(r"[^a-z0-9]+", "", (algorithm or "ES256").lower()) or "es256"
     if not safe_name.endswith(f"-{algorithm_suffix}"):
@@ -737,6 +757,67 @@ def _dedupe_strings(values: Any) -> list[str]:
     return deduped
 
 
+def _normalize_key_reference_purposes(value: Any) -> dict[str, dict[str, list[str]]]:
+    """Normalize per-service, per-key purpose bindings.
+
+    Service-level capabilities describe a multi-key KMS.  This registry is the
+    authorization boundary for the individual key selected within that service.
+    """
+
+    if not isinstance(value, dict):
+        return {}
+    normalized: dict[str, dict[str, list[str]]] = {}
+    for raw_service_id, raw_references in value.items():
+        if not isinstance(raw_service_id, str) or not raw_service_id.strip():
+            continue
+        if not isinstance(raw_references, dict):
+            continue
+        references: dict[str, list[str]] = {}
+        for raw_reference, raw_purposes in raw_references.items():
+            if not isinstance(raw_reference, str) or not raw_reference.strip():
+                continue
+            purposes = [
+                purpose
+                for purpose in _dedupe_strings(raw_purposes)
+                if purpose in KEY_PURPOSES
+            ]
+            if purposes:
+                references[raw_reference.strip()] = purposes
+        if references:
+            normalized[raw_service_id.strip()] = references
+    return normalized
+
+
+def _purposes_for_key_reference(
+    registry: dict[str, Any],
+    *,
+    service_id: str,
+    key_reference: str,
+) -> list[str]:
+    bindings = _normalize_key_reference_purposes(
+        registry.get("key_reference_purposes")
+        if isinstance(registry, dict)
+        else None
+    )
+    return list(bindings.get(service_id, {}).get(key_reference, []))
+
+
+def _validate_lti_key_reference_bindings(value: Any) -> None:
+    """Reject protocol-key reuse while allowing one service to host many keys."""
+
+    bindings = _normalize_key_reference_purposes(value)
+    for service_id, references in bindings.items():
+        for key_reference, purposes in references.items():
+            if "lti_tool_signing" in purposes and purposes != ["lti_tool_signing"]:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"Key reference '{key_reference}' in service '{service_id}' "
+                        "cannot combine lti_tool_signing with credential-signing purposes."
+                    ),
+                )
+
+
 def _normalize_algorithm_list(values: Any) -> list[str]:
     return [algorithm for algorithm in _dedupe_strings(values) if algorithm in SUPPORTED_SIGNING_ALGORITHMS]
 
@@ -1007,6 +1088,62 @@ async def _load_json_document(request: Request, storage_key: str, default: dict[
     return parsed if isinstance(parsed, dict) else dict(default)
 
 
+async def _credential_issuer_key_references(
+    request: Request,
+    organization_id: str,
+) -> set[str]:
+    """Load issuer-key assignments without treating storage errors as empty."""
+
+    redis_client = getattr(request.app.state, "redis_client", None)
+    if redis_client is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Issuer profile registry is unavailable for key-isolation validation.",
+        )
+    try:
+        payload = await redis_client.get(_issuer_profiles_storage_key(organization_id))
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Issuer profile registry is unavailable for key-isolation validation.",
+        ) from exc
+    if payload is None:
+        return set()
+    try:
+        decoded = payload if isinstance(payload, str) else payload.decode()
+        profiles_document = json.loads(decoded)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Issuer profile registry is invalid for key-isolation validation.",
+        ) from exc
+    profiles = (
+        profiles_document.get("profiles")
+        if isinstance(profiles_document, dict)
+        else None
+    )
+    if not isinstance(profiles, list):
+        raise HTTPException(
+            status_code=503,
+            detail="Issuer profile registry is invalid for key-isolation validation.",
+        )
+
+    references: set[str] = set()
+    for profile in profiles:
+        if not isinstance(profile, dict) or profile.get("status") == "archived":
+            continue
+        service_id = profile.get("signing_service_id")
+        reference = profile.get("signing_key_reference")
+        if isinstance(reference, str) and reference.strip():
+            references.add(reference.strip())
+        elif isinstance(service_id, str) and service_id.strip():
+            # Legacy profiles without an explicit reference resolve through a
+            # service default. Treat every key in that service as potentially
+            # assigned until an operator repairs the profile.
+            references.add(f"service-default:{service_id.strip()}")
+    return references
+
+
 async def _save_json_document(request: Request, storage_key: str, doc: dict[str, Any]) -> None:
     redis_client = getattr(request.app.state, "redis_client", None)
     if redis_client is None:
@@ -1217,26 +1354,33 @@ def _resolve_service_for_format(
 
 
 async def _load_registered_service_registry(request: Request, organization_id: str | None) -> dict[str, Any]:
+    empty = {
+        "services": [],
+        "default_service_id": None,
+        "format_defaults": {},
+        "type_defaults": {},
+        "key_reference_purposes": {},
+    }
     if not organization_id:
-        return {"services": [], "default_service_id": None, "format_defaults": {}, "type_defaults": {}}
+        return dict(empty)
 
     redis_client = getattr(request.app.state, "redis_client", None)
     if redis_client is None:
-        return {"services": [], "default_service_id": None, "format_defaults": {}, "type_defaults": {}}
+        return dict(empty)
 
     try:
         payload = await redis_client.get(_storage_key(organization_id))
     except Exception:
-        return {"services": [], "default_service_id": None, "format_defaults": {}, "type_defaults": {}}
+        return dict(empty)
 
     if not payload:
-        return {"services": [], "default_service_id": None, "format_defaults": {}, "type_defaults": {}}
+        return dict(empty)
 
     try:
         decoded = payload if isinstance(payload, str) else payload.decode()
         parsed = json.loads(decoded)
     except Exception:
-        return {"services": [], "default_service_id": None, "format_defaults": {}, "type_defaults": {}}
+        return dict(empty)
 
     raw_services = parsed.get("services") if isinstance(parsed, dict) and isinstance(parsed.get("services"), list) else []
     services = [
@@ -1249,11 +1393,15 @@ async def _load_registered_service_registry(request: Request, organization_id: s
     format_defaults = {k: v for k, v in raw_format_defaults.items() if isinstance(k, str) and isinstance(v, str)} if isinstance(raw_format_defaults, dict) else {}
     raw_type_defaults = parsed.get("type_defaults") if isinstance(parsed, dict) else {}
     type_defaults = {k: v for k, v in raw_type_defaults.items() if isinstance(k, str) and isinstance(v, str)} if isinstance(raw_type_defaults, dict) else {}
+    key_reference_purposes = _normalize_key_reference_purposes(
+        parsed.get("key_reference_purposes") if isinstance(parsed, dict) else None
+    )
     return {
         "services": services,
         "default_service_id": default_service_id if isinstance(default_service_id, str) else None,
         "format_defaults": format_defaults,
         "type_defaults": type_defaults,
+        "key_reference_purposes": key_reference_purposes,
     }
 
 
@@ -1273,18 +1421,34 @@ async def _save_registered_service_registry(
         "default_service_id": registry.get("default_service_id"),
         "format_defaults": registry.get("format_defaults") or {},
         "type_defaults": registry.get("type_defaults") or {},
+        "key_reference_purposes": _normalize_key_reference_purposes(
+            registry.get("key_reference_purposes")
+        ),
         "services": registry.get("services") or [],
     }
     await redis_client.set(_storage_key(organization_id), json.dumps(payload))
 
 
-def _managed_openbao_service(snapshot: dict[str, Any], organization_id: str | None) -> dict[str, Any] | None:
+def _managed_openbao_service(
+    snapshot: dict[str, Any],
+    organization_id: str | None,
+    key_reference_purposes: Any = None,
+) -> dict[str, Any] | None:
     config = snapshot.get("config") or {}
     hsm_settings = config.get("hsm_settings") or {}
     if not config.get("hsm_enabled"):
         return None
 
     keys = snapshot.get("keys") or []
+    bindings = _normalize_key_reference_purposes(key_reference_purposes)
+    managed_bindings = bindings.get(MANAGED_OPENBAO_SERVICE_ID, {})
+    managed_purposes = sorted(
+        {
+            purpose
+            for purposes in managed_bindings.values()
+            for purpose in purposes
+        }
+    )
     return {
         "id": MANAGED_OPENBAO_SERVICE_ID,
         "name": "Marty managed OpenBao transit",
@@ -1303,6 +1467,7 @@ def _managed_openbao_service(snapshot: dict[str, Any], organization_id: str | No
         "key_reference": keys[0]["provider_key_name"] if keys else "",
         "key_aliases": [key.get("provider_key_name") or key.get("id") for key in keys],
         "algorithms": _normalize_algorithm_list([key.get("algorithm") for key in keys]),
+        "key_purposes": managed_purposes,
         "status": snapshot.get("provider_metadata", {}).get("status", "configured"),
         "managed": True,
         "read_only": True,
@@ -1450,6 +1615,9 @@ def _normalize_requested_registry(body: dict[str, Any]) -> dict[str, Any] | None
             "default_service_id": default_service_id,
             "format_defaults": format_defaults,
             "type_defaults": type_defaults,
+            "key_reference_purposes": _normalize_key_reference_purposes(
+                body.get("key_reference_purposes")
+            ),
         }
 
     return _registry_from_legacy_body(body)
@@ -2215,8 +2383,17 @@ async def _build_key_management_config(
         if normalized
     ]
 
+    key_reference_purposes = _normalize_key_reference_purposes(
+        registry.get("key_reference_purposes")
+        if isinstance(registry, dict)
+        else None
+    )
     services: list[dict[str, Any]] = []
-    managed_openbao_service = _managed_openbao_service(snapshot, resolved_org_id)
+    managed_openbao_service = _managed_openbao_service(
+        snapshot,
+        resolved_org_id,
+        key_reference_purposes,
+    )
     if managed_openbao_service:
         services.append(managed_openbao_service)
         writable_services = [service for service in writable_services if service.get("id") != MANAGED_OPENBAO_SERVICE_ID]
@@ -2238,6 +2415,7 @@ async def _build_key_management_config(
         "registration_mode": "external-only",
         "default_service_id": default_service_id,
         "services": services,
+        "key_reference_purposes": key_reference_purposes,
         "service_type_catalog": _normalize_service_definition_catalog(),
     }
 
@@ -2510,6 +2688,11 @@ async def create_signing_key(
     key_purpose = body.get("key_purpose") if isinstance(body.get("key_purpose"), str) else "vc_jwt_issuer"
     if key_purpose not in KEY_PURPOSES:
         raise HTTPException(status_code=422, detail=f"Unsupported key_purpose '{key_purpose}'.")
+    if key_purpose == "lti_tool_signing" and algorithm != "RS256":
+        raise HTTPException(
+            status_code=422,
+            detail="lti_tool_signing keys must use RS256.",
+        )
 
     service_id = body.get("service_id") if isinstance(body.get("service_id"), str) else None
     if not service_id:
@@ -2528,11 +2711,36 @@ async def create_signing_key(
         )
 
     provider_key_name = _normalize_requested_openbao_key_name(requested_name, key_purpose, algorithm)
+    registry = await _load_registered_service_registry(request, resolved_org_id)
+    bindings = _normalize_key_reference_purposes(
+        registry.get("key_reference_purposes")
+    )
+    service_bindings = dict(bindings.get(service_id, {}))
+    existing_purposes = service_bindings.get(provider_key_name, [])
+    if existing_purposes and (
+        "lti_tool_signing" in existing_purposes
+        or key_purpose == "lti_tool_signing"
+    ) and existing_purposes != [key_purpose]:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Key reference '{provider_key_name}' already has an incompatible "
+                "purpose and cannot be reused for LTI tool signing."
+            ),
+        )
     created_key_details = await _create_managed_openbao_transit_key(normalized_service, provider_key_name, algorithm)
     created_key = _normalize_openbao_signing_key(provider_key_name, created_key_details)
     created_key["name"] = requested_name.strip()
     created_key["service_id"] = service_id
     created_key["key_purpose"] = key_purpose
+
+    service_bindings[provider_key_name] = _dedupe_strings(
+        [*existing_purposes, key_purpose]
+    )
+    bindings[service_id] = service_bindings
+    _validate_lti_key_reference_bindings(bindings)
+    registry["key_reference_purposes"] = bindings
+    await _save_registered_service_registry(request, resolved_org_id, registry)
 
     return JSONResponse(
         content={
@@ -2567,7 +2775,19 @@ async def update_signing_key_config(
     """Persist the external signing-key service registry for the active organization."""
     resolved_org_id = _resolve_org_id(request, organization_id)
 
+    current_registry = await _load_registered_service_registry(request, resolved_org_id)
     registry_override = _normalize_requested_registry(body) or {"services": [], "default_service_id": None}
+    if "key_reference_purposes" not in body:
+        # The console edits service registrations independently of managed key
+        # bindings.  Never erase the per-key authorization boundary just
+        # because an older client did not round-trip this new field.
+        registry_override["key_reference_purposes"] = current_registry.get(
+            "key_reference_purposes",
+            {},
+        )
+    _validate_lti_key_reference_bindings(
+        registry_override.get("key_reference_purposes")
+    )
     await _save_registered_service_registry(request, resolved_org_id, registry_override)
 
     snapshot = await _load_signing_key_snapshot(resolved_org_id)
@@ -2710,7 +2930,7 @@ async def _generate_csr_from_service(
     try:
         from cryptography import x509
         from cryptography.hazmat.backends import default_backend
-        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives import serialization
         from cryptography.x509.oid import NameOID
 
         adapter = _get_adapter(service_config)
@@ -2724,7 +2944,7 @@ async def _generate_csr_from_service(
             return None
 
         # Load the public key
-        public_key = serialization.load_pem_public_key(public_key_pem.encode(), default_backend())
+        serialization.load_pem_public_key(public_key_pem.encode(), default_backend())
 
         # Build subject name
         service_name = service_config.get("name") or service_config.get("key_reference") or "Marty Signing Key"
@@ -3281,12 +3501,104 @@ async def sign_payload_with_service(
         raise HTTPException(status_code=400, detail="Either payload_b64 or payload_hex is required")
 
     key_reference_override = body.get("key_reference") if isinstance(body.get("key_reference"), str) else None
-    _, service, normalized, _ = await _resolve_effective_service(
+    registry, service, normalized, _ = await _resolve_effective_service(
         request,
         resolved_org_id,
         service_id,
         key_reference_override=key_reference_override,
     )
+
+    # Purpose is an authorization boundary, not descriptive metadata.  A
+    # caller that needs a special-purpose signature (for example, Canvas LTI
+    # tool assertions) must name that purpose and may only use a service that
+    # was registered for it.  This prevents credential-issuer keys from being
+    # reused as protocol/client-assertion keys merely by knowing a service ID.
+    key_purpose = (
+        body.get("key_purpose")
+        if isinstance(body.get("key_purpose"), str)
+        else None
+    )
+    requested_key_reference = (
+        key_reference_override.strip()
+        if isinstance(key_reference_override, str)
+        else ""
+    )
+    reference_purposes = (
+        _purposes_for_key_reference(
+            registry,
+            service_id=service_id,
+            key_reference=requested_key_reference,
+        )
+        if requested_key_reference
+        else []
+    )
+    if (
+        "lti_tool_signing" in reference_purposes
+        and key_purpose != "lti_tool_signing"
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Key reference '{requested_key_reference}' is reserved exclusively "
+                "for lti_tool_signing."
+            ),
+        )
+    if key_purpose:
+        if key_purpose not in KEY_PURPOSES:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Unsupported key_purpose '{key_purpose}'.",
+            )
+        service_purposes = normalized.get("key_purposes")
+        if not isinstance(service_purposes, list):
+            service_purposes = service.get("key_purposes")
+        if not isinstance(service_purposes, list) or key_purpose not in service_purposes:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Signing service '{service_id}' is not configured for "
+                    f"key_purpose '{key_purpose}'."
+                ),
+            )
+
+    if key_purpose == "lti_tool_signing":
+        if not requested_key_reference:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "LTI tool signing requires an explicit key_reference; the "
+                    "signing service default may be a credential issuer key."
+                ),
+            )
+        if algorithm != "RS256":
+            raise HTTPException(
+                status_code=409,
+                detail="LTI tool signing requires the dedicated RSA/RS256 key.",
+            )
+        if reference_purposes != ["lti_tool_signing"]:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Key reference '{requested_key_reference}' is not registered "
+                    "exclusively for lti_tool_signing."
+                ),
+            )
+        if resolved_org_id:
+            issuer_references = await _credential_issuer_key_references(
+                request,
+                resolved_org_id,
+            )
+            if (
+                requested_key_reference in issuer_references
+                or f"service-default:{service_id}" in issuer_references
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"Key reference '{requested_key_reference}' is assigned to a "
+                        "credential issuer profile and cannot sign LTI assertions."
+                    ),
+                )
 
     # Validate algorithm if specified
     service_algorithms = _normalize_algorithm_list(normalized.get("algorithms")) or _normalize_algorithm_list(service.get("algorithms"))
@@ -3458,6 +3770,12 @@ async def internal_resolve_issuer_context(
     )
 
     requested_purpose = key_purpose or profile.get("key_purpose")
+    effective_profile = dict(profile)
+    effective_profile["signing_key_reference"] = (
+        profile.get("signing_key_reference") or normalized.get("key_reference")
+    )
+    effective_profile["key_purpose"] = requested_purpose or "vc_jwt_issuer"
+    _assert_issuer_profile_key_compatible(effective_profile, registry)
     if credential_format or requested_purpose or algorithm:
         resolved = _resolve_service_for_format(registry, credential_format, requested_purpose, algorithm)
         if resolved is not None and resolved.get("id") != service_id:
@@ -3990,6 +4308,11 @@ def _normalize_issuer_profile(
     key_purpose = body.get("key_purpose", base.get("key_purpose", "vc_jwt_issuer"))
     if key_purpose not in KEY_PURPOSES:
         raise HTTPException(status_code=422, detail=f"Invalid key_purpose '{key_purpose}'. Must be one of {list(KEY_PURPOSES)}.")
+    if key_purpose == "lti_tool_signing":
+        raise HTTPException(
+            status_code=422,
+            detail="lti_tool_signing is a protocol-key purpose and cannot be used by an issuer profile.",
+        )
 
     algorithm = body.get("algorithm", base.get("algorithm", ""))
     if algorithm and algorithm not in SUPPORTED_SIGNING_ALGORITHMS:
@@ -4030,6 +4353,48 @@ def _assert_issuer_profile_service_compatible(profile: dict[str, Any], service: 
         raise HTTPException(
             status_code=422,
             detail=f"Signing service '{service.get('id')}' does not support algorithm '{algorithm}'.",
+        )
+
+
+def _assert_issuer_profile_key_compatible(
+    profile: dict[str, Any],
+    registry: dict[str, Any],
+) -> None:
+    """Reject issuer profiles that select a protocol-only key reference."""
+
+    service_id = str(profile.get("signing_service_id") or "").strip()
+    key_reference = str(profile.get("signing_key_reference") or "").strip()
+    key_purpose = str(profile.get("key_purpose") or "vc_jwt_issuer").strip()
+    if key_purpose == "lti_tool_signing":
+        raise HTTPException(
+            status_code=422,
+            detail="LTI tool signing keys cannot be assigned to issuer profiles.",
+        )
+    if not service_id or not key_reference:
+        raise HTTPException(
+            status_code=422,
+            detail="Issuer profiles require an explicit signing key reference.",
+        )
+    reference_purposes = _purposes_for_key_reference(
+        registry,
+        service_id=service_id,
+        key_reference=key_reference,
+    )
+    if "lti_tool_signing" in reference_purposes:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Key reference '{key_reference}' is reserved for LTI tool signing "
+                "and cannot be assigned to an issuer profile."
+            ),
+        )
+    if reference_purposes and key_purpose not in reference_purposes:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Key reference '{key_reference}' is not registered for issuer "
+                f"key_purpose '{key_purpose}'."
+            ),
         )
 
 
@@ -4103,6 +4468,15 @@ async def _resolve_org_scoped_issuer_identity(
             service_id,
             key_reference_override=key_reference,
         )
+        effective_profile = dict(profile)
+        effective_profile["signing_key_reference"] = (
+            profile.get("signing_key_reference")
+            or normalized_service.get("key_reference")
+        )
+        effective_profile["key_purpose"] = (
+            key_purpose or profile.get("key_purpose") or "vc_jwt_issuer"
+        )
+        _assert_issuer_profile_key_compatible(effective_profile, registry)
 
         service_formats = normalized_service.get("credential_formats") if isinstance(normalized_service.get("credential_formats"), list) else []
         service_purposes = normalized_service.get("key_purposes") if isinstance(normalized_service.get("key_purposes"), list) else []
@@ -4194,7 +4568,7 @@ async def create_issuer_profile(
     service_id = str(profile["signing_service_id"])
     key_reference = profile.get("signing_key_reference") if isinstance(profile.get("signing_key_reference"), str) else None
 
-    _, _, normalized_service, _ = await _resolve_effective_service(
+    registry, _, normalized_service, _ = await _resolve_effective_service(
         request,
         resolved_org_id,
         service_id,
@@ -4203,6 +4577,7 @@ async def create_issuer_profile(
     _assert_issuer_profile_service_compatible(profile, normalized_service)
     if not profile.get("signing_key_reference") and normalized_service.get("key_reference"):
         profile["signing_key_reference"] = normalized_service["key_reference"]
+    _assert_issuer_profile_key_compatible(profile, registry)
 
     storage_key = _issuer_profiles_storage_key(resolved_org_id)
     doc = await _load_json_document(request, storage_key, {"profiles": []})
@@ -4346,6 +4721,24 @@ async def update_issuer_profile(
 
     updated = _normalize_issuer_profile(body, existing=profiles[idx], org_id=resolved_org_id)
     updated["id"] = profile_id  # preserve original ID
+    service_id = str(updated["signing_service_id"])
+    key_reference = (
+        updated.get("signing_key_reference")
+        if isinstance(updated.get("signing_key_reference"), str)
+        else None
+    )
+    registry, _, normalized_service, _ = await _resolve_effective_service(
+        request,
+        resolved_org_id,
+        service_id,
+        key_reference_override=key_reference,
+    )
+    _assert_issuer_profile_service_compatible(updated, normalized_service)
+    if not updated.get("signing_key_reference") and normalized_service.get(
+        "key_reference"
+    ):
+        updated["signing_key_reference"] = normalized_service["key_reference"]
+    _assert_issuer_profile_key_compatible(updated, registry)
     profiles[idx] = updated
     doc["profiles"] = profiles
     await _save_json_document(request, storage_key, doc)

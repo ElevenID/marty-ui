@@ -147,6 +147,7 @@ describe('ClaimCredentialDialog', () => {
       />,
     );
 
+    expect(screen.getByTestId('credential-claim-dialog')).toBeInTheDocument();
     expect(await screen.findByTestId('wallet-selector')).toBeInTheDocument();
     expect(screen.getByRole('radio', { name: /Any OID4VCI Wallet/i })).toHaveAttribute('aria-checked', 'true');
     await waitFor(() => {

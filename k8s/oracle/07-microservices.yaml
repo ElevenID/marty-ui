@@ -657,6 +657,84 @@ spec:
                   name: marty-config
                   key: CANVAS_CREDENTIALS_PROVIDER
                   optional: true
+            - name: CANVAS_LTI_EXPERIENCE_BASE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: CANVAS_LTI_EXPERIENCE_BASE_URL
+                  optional: true
+            - name: CANVAS_OAUTH_COMPLETION_REDIRECT_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: CANVAS_OAUTH_COMPLETION_REDIRECT_URL
+                  optional: true
+            - name: CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID
+                  optional: true
+            - name: CANVAS_LTI_TOOL_SIGNING_SERVICE_ID
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: CANVAS_LTI_TOOL_SIGNING_SERVICE_ID
+                  optional: true
+            - name: CANVAS_LTI_TOOL_SIGNING_KEY_REFERENCE
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: CANVAS_LTI_TOOL_SIGNING_KEY_REFERENCE
+                  optional: true
+            - name: CANVAS_CREDENTIAL_ISSUER_KEY_REFERENCES
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: CANVAS_CREDENTIAL_ISSUER_KEY_REFERENCES
+                  optional: true
+            - name: CANVAS_LTI_TOOL_ACTIVE_KID
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: CANVAS_LTI_TOOL_ACTIVE_KID
+                  optional: true
+            - name: CANVAS_LTI_TOOL_PUBLIC_JWKS
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: CANVAS_LTI_TOOL_PUBLIC_JWKS
+                  optional: true
+            - name: CANVAS_PORTABLE_INTEGRATION_ENABLED
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: CANVAS_PORTABLE_INTEGRATION_ENABLED
+                  optional: true
+            - name: CANVAS_PILOT_ORGANIZATION_IDS
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: CANVAS_PILOT_ORGANIZATION_IDS
+                  optional: true
+            - name: CANVAS_LEGACY_EVENT_INGEST_ENABLED
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: CANVAS_LEGACY_EVENT_INGEST_ENABLED
+                  optional: true
+            - name: CANVAS_PRIVATE_ORIGIN_ALLOWLIST
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: CANVAS_PRIVATE_ORIGIN_ALLOWLIST
+                  optional: true
+            - name: CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST
+                  optional: true
             - name: CANVAS_CREDENTIALS_API_BASE_URL
               valueFrom:
                 configMapKeyRef:
@@ -741,7 +819,72 @@ spec:
     app: issuance
 ---
 # ================================================================
-# 6a. Verification (:8012)
+# 6a. Portable Canvas sync worker (headless, PostgreSQL-backed)
+# ================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: canvas-sync-worker
+  namespace: marty-prod
+  labels:
+    app: canvas-sync-worker
+    app.kubernetes.io/part-of: marty-platform
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: canvas-sync-worker
+  template:
+    metadata:
+      labels:
+        app: canvas-sync-worker
+    spec:
+      serviceAccountName: marty-app
+      terminationGracePeriodSeconds: 30
+      imagePullSecrets:
+        - name: ocir-secret
+      containers:
+        - name: canvas-sync-worker
+          image: ${OCIR_REGISTRY}/marty-ui/issuance:${IMAGE_TAG}
+          imagePullPolicy: Always
+          command: ["python"]
+          args: ["-m", "issuance.canvas_worker"]
+          envFrom:
+            - configMapRef:
+                name: marty-config
+          env:
+            - name: LICENSE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: LICENSE_KEY
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: DATABASE_URL
+            - name: INTEGRATION_SECRET_MASTER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: INTEGRATION_SECRET_MASTER_KEY
+            - name: SIGNING_KEYS_INTERNAL_URL
+              value: "http://gateway:8000/internal/signing-keys"
+            - name: SIGNING_KEYS_INTERNAL_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: SIGNING_KEYS_INTERNAL_API_KEY
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+---
+# ================================================================
+# 6b. Verification (:8012)
 # ================================================================
 apiVersion: apps/v1
 kind: Deployment

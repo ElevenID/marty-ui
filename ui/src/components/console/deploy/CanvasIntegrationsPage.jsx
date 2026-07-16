@@ -32,6 +32,7 @@ import {
   Typography,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
+import ArchiveIcon from '@mui/icons-material/Archive';
 import DeleteIcon from '@mui/icons-material/Delete';
 import EditIcon from '@mui/icons-material/Edit';
 import LinkIcon from '@mui/icons-material/Link';
@@ -43,26 +44,40 @@ import TaskAltIcon from '@mui/icons-material/TaskAlt';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 
 import { useAsyncData } from '../../../hooks/useAsyncData';
-import { useAuth } from '../../../hooks/useAuth';
+import { usePermissions } from '../../../hooks/usePermissions';
 import { useConsole } from '../../../contexts/ConsoleContext';
 import {
   createCanvasPlatform,
   createCanvasIntegrationSecret,
   createCanvasProgramBinding,
+  activateCanvasProgramBinding,
+  deactivateCanvasProgramBinding,
   deleteCanvasPlatform,
   deleteCanvasProgramBinding,
+  disconnectCanvasOAuthConnection,
   discoverCanvasScope,
+  finalizeCanvasLtiInstallation,
   getCanvasMirrorHealth,
+  getCanvasLtiRegistrationConfig,
+  getCanvasPlatformReadiness,
+  listCanvasAwardCandidates,
+  listCanvasEvidencePolicyReviews,
   listCanvasIntegrationSecrets,
   listCanvasPlatforms,
   listCanvasProgramBindings,
+  listCanvasSyncJobs,
   processCanvasMirrorStatusSyncFailures,
   processPendingCanvasMirrorDeliveries,
+  resolveCanvasEvidencePolicyReview,
+  resolveCanvasSyncJob,
+  retryCanvasSyncJob,
   runCanvasMirrorAutomationCycle,
+  startCanvasOAuthConnection,
   updateCanvasIntegrationSecret,
   updateCanvasPlatform,
   updateCanvasProgramBinding,
   validateCanvasCredentialsProvider,
+  validateCanvasProgramBinding,
 } from '../../../services/canvasIntegrationsApi';
 import { listApplicationTemplates } from '../../../services/applicationTemplatesApi';
 import { listCredentialTemplates } from '../../../services/presentationPolicyApi';
@@ -73,12 +88,17 @@ import { ResourcePage, EmptyState, StatusChip } from '../../common';
 
 const EVIDENCE_TYPES = [
   { value: 'canvas.course_completion', label: 'Course completion' },
-  { value: 'canvas.assignment_completion', label: 'Assignment completion' },
   { value: 'canvas.assignment_score', label: 'Assignment score' },
-  { value: 'canvas.quiz_completion', label: 'Quiz completion' },
   { value: 'canvas.quiz_score', label: 'Quiz score' },
   { value: 'canvas.module_completion', label: 'Module completion' },
-  { value: 'canvas.manual_instructor_approval', label: 'Instructor approval' },
+];
+
+const OAUTH_CAPABILITIES = [
+  { value: 'catalog', label: 'Course and activity catalog' },
+  { value: 'native_activity_scores', label: 'Existing assignment and quiz scores' },
+  { value: 'course_completion', label: 'Course completion' },
+  { value: 'module_completion', label: 'Module completion' },
+  { value: 'background_roster', label: 'Background roster evaluation' },
 ];
 
 const DEPLOY_TABS = [
@@ -117,6 +137,21 @@ const BREADCRUMBS = [
 
 const BINDING_WIZARD_STEPS = ['Program', 'Canvas activity', 'Delivery'];
 
+const EVIDENCE_SOURCES = [
+  { value: 'ags_result', label: 'Marty-bound assignment (AGS Result)' },
+  { value: 'canvas_rest', label: 'Existing Canvas activity (REST)' },
+];
+
+function defaultEvidenceSource(factType = '') {
+  if (factType === 'canvas.assignment_score') return 'ags_result';
+  return 'canvas_rest';
+}
+
+function evidenceSourcesForFactType(factType = '') {
+  if (factType === 'canvas.assignment_score') return EVIDENCE_SOURCES;
+  return EVIDENCE_SOURCES.filter((source) => source.value === 'canvas_rest');
+}
+
 const CANVAS_CREDENTIALS_DESTINATION_ID = 'dd-canvas-credentials-institutional';
 
 const CANVAS_CREDENTIALS_PROJECTION_POLICY = {
@@ -131,6 +166,7 @@ const CANVAS_CREDENTIALS_PROJECTION_POLICY = {
 };
 
 function platformFormFrom(platform = {}) {
+  const connection = platform.connection_config || {};
   return {
     display_name: platform.display_name || '',
     canvas_account_id: platform.canvas_account_id || '',
@@ -139,7 +175,14 @@ function platformFormFrom(platform = {}) {
     lti_deployment_id: platform.lti_deployment_id || '',
     lti_issuer: platform.lti_issuer || '',
     lti_jwks_url: platform.lti_jwks_url || '',
-    enabled: platform.enabled !== false,
+    oauth_client_id: connection.oauth_client_id || '',
+    oauth_client_secret_value: '',
+    oauth_capabilities: Array.isArray(connection.capabilities)
+      ? connection.capabilities
+      : Array.isArray(platform.oauth_capabilities)
+        ? platform.oauth_capabilities
+        : ['catalog'],
+    enabled: Boolean(platform.enabled),
   };
 }
 
@@ -149,10 +192,41 @@ function firstRequirement(binding = {}) {
     : {};
 }
 
+const PORTABLE_EVIDENCE_SOURCES = new Set(['ags_result', 'canvas_rest']);
+const READINESS_SUCCESS_STATUSES = new Set(['pass', 'ready', 'ok', 'not_applicable']);
+
+function hasLegacyOrAmbiguousEvidenceRequirements(binding = {}) {
+  const requirements = binding.evidence_requirements;
+  return !Array.isArray(requirements)
+    || requirements.length === 0
+    || requirements.some((requirement) => (
+      !requirement
+      || !PORTABLE_EVIDENCE_SOURCES.has(requirement.source)
+    ));
+}
+
+function isSuccessfulReadinessStatus(status) {
+  return READINESS_SUCCESS_STATUSES.has(String(status || '').toLowerCase());
+}
+
+export function requirementFormFields(requirement = {}, fallbackScope = {}) {
+  const scope = requirement.scope || requirement.canvas_scope || fallbackScope || {};
+  const factType = requirement.fact_type || requirement.evidence_type || 'canvas.course_completion';
+  const passRule = requirement.pass_rule || {};
+  const activityId = scope.activity_id || scope.assignment_id || scope.quiz_id || '';
+  return {
+    evidence_type: factType,
+    evidence_source: requirement.source || defaultEvidenceSource(factType),
+    course_id: scope.course_id || '',
+    assignment_id: factType === 'canvas.assignment_score' ? activityId : '',
+    module_id: scope.module_id || '',
+    quiz_id: factType === 'canvas.quiz_score' ? activityId : '',
+    min_score_percent: passRule.min_score_percent ?? passRule.score_percent ?? '',
+  };
+}
+
 function bindingFormFrom(binding = {}, platformId = '') {
   const requirement = firstRequirement(binding);
-  const scope = binding.canvas_scope || requirement.scope || requirement.canvas_scope || {};
-  const passRule = requirement.pass_rule || {};
   const canvasCredentials = binding.canvas_credentials || {};
   return {
     platform_id: binding.platform_id || platformId,
@@ -161,12 +235,7 @@ function bindingFormFrom(binding = {}, platformId = '') {
     application_template_id: binding.application_template_id || '',
     credential_template_id: binding.credential_template_id || '',
     display_name: binding.display_name || '',
-    evidence_type: requirement.fact_type || requirement.evidence_type || 'canvas.course_completion',
-    course_id: scope.course_id || '',
-    assignment_id: scope.assignment_id || '',
-    module_id: scope.module_id || '',
-    quiz_id: scope.quiz_id || '',
-    min_score_percent: passRule.min_score_percent || passRule.score_percent || '',
+    ...requirementFormFields(requirement, binding.canvas_scope),
     auto_approve_on_evidence: Boolean(binding.auto_approve_on_evidence),
     direct_issue_enabled: Boolean(binding.direct_issue_enabled),
     delivery_mode: binding.delivery_mode || 'wallet_only',
@@ -178,11 +247,9 @@ function bindingFormFrom(binding = {}, platformId = '') {
     canvas_credentials_badgeclass_id: canvasCredentials.badgeclass_id || canvasCredentials.canvas_credentials_badgeclass_id || '',
     canvas_credentials_assertion_scope: canvasCredentials.assertion_scope || 'badgeclasses',
     canvas_credentials_api_token_secret_id: canvasCredentials.api_token_secret_id || canvasCredentials.api_token_secret_ref || '',
-    canvas_credentials_api_token_env: canvasCredentials.api_token_env || '',
-    canvas_credentials_api_token_file: canvasCredentials.api_token_file || '',
-    canvas_admin_api_token_env: '',
-    canvas_admin_api_token_file: '',
-    enabled: binding.enabled !== false,
+    legacy_read_only: Boolean(binding.id) && hasLegacyOrAmbiguousEvidenceRequirements(binding),
+    evidence_requirements: Array.isArray(binding.evidence_requirements) ? binding.evidence_requirements : [],
+    enabled: Boolean(binding.enabled),
   };
 }
 
@@ -200,13 +267,36 @@ function enabledCanvasFeatureLabels(flags = {}) {
     .map((key) => CANVAS_FEATURE_LABELS[key]);
 }
 
-function buildCanvasScope(form) {
+export function buildCanvasScope(form) {
+  let activityId = '';
+  if (form.evidence_source === 'canvas_rest' && form.evidence_type === 'canvas.assignment_score') {
+    activityId = form.assignment_id;
+  } else if (form.evidence_source === 'canvas_rest' && form.evidence_type === 'canvas.quiz_score') {
+    activityId = form.quiz_id;
+  }
   return Object.fromEntries(
     [
       ['course_id', form.course_id],
-      ['assignment_id', form.assignment_id],
-      ['module_id', form.module_id],
-      ['quiz_id', form.quiz_id],
+      ['activity_id', activityId],
+      ['module_id', form.evidence_type === 'canvas.module_completion' ? form.module_id : ''],
+    ].filter(([, value]) => String(value || '').trim())
+  );
+}
+
+export function buildCanvasBindingScope(form) {
+  let assignmentId = '';
+  let quizId = '';
+  if (form.evidence_source === 'canvas_rest' && form.evidence_type === 'canvas.assignment_score') {
+    assignmentId = form.assignment_id;
+  } else if (form.evidence_source === 'canvas_rest' && form.evidence_type === 'canvas.quiz_score') {
+    quizId = form.quiz_id;
+  }
+  return Object.fromEntries(
+    [
+      ['course_id', form.course_id],
+      ['assignment_id', assignmentId],
+      ['quiz_id', quizId],
+      ['module_id', form.evidence_type === 'canvas.module_completion' ? form.module_id : ''],
     ].filter(([, value]) => String(value || '').trim())
   );
 }
@@ -223,13 +313,11 @@ function buildCanvasCredentialsConfig(form) {
       ['badgeclass_id', form.canvas_credentials_badgeclass_id],
       ['assertion_scope', form.canvas_credentials_assertion_scope || 'badgeclasses'],
       ['api_token_secret_id', form.canvas_credentials_api_token_secret_id],
-      ['api_token_env', form.canvas_credentials_api_token_env],
-      ['api_token_file', form.canvas_credentials_api_token_file],
     ].filter(([, value]) => String(value || '').trim())
   );
 }
 
-function buildEvidenceRequirement(form) {
+function buildEvidenceRequirement(form, existingRequirement = form.evidence_requirements?.[0]) {
   const scope = buildCanvasScope(form);
   const passRule = {};
   if (form.evidence_type.endsWith('_completion') || form.evidence_type.endsWith('_approval')) {
@@ -239,10 +327,14 @@ function buildEvidenceRequirement(form) {
     passRule.min_score_percent = Number(form.min_score_percent);
   }
   return {
-    provider: 'canvas',
+    ...(existingRequirement?.requirement_id
+      ? { requirement_id: existingRequirement.requirement_id }
+      : {}),
+    source: form.evidence_source || defaultEvidenceSource(form.evidence_type),
     fact_type: form.evidence_type,
     scope,
     pass_rule: passRule,
+    required: true,
   };
 }
 
@@ -300,9 +392,13 @@ function alertSeverityColor(severity) {
 }
 
 function CanvasIntegrationsPage() {
-  const { organizationId: authOrganizationId } = useAuth();
   const { activeOrgId } = useConsole();
+  const { can, isLoading: permissionsLoading } = usePermissions();
   const organizationId = activeOrgId;
+  const canViewCanvas = !permissionsLoading && can('integration-connector', 'view');
+  const canCreateCanvas = !permissionsLoading && can('integration-connector', 'create');
+  const canEditCanvas = !permissionsLoading && can('integration-connector', 'edit');
+  const canDeleteCanvas = !permissionsLoading && can('integration-connector', 'delete');
   const [selectedPlatformId, setSelectedPlatformId] = useState('');
   const [platformDialogOpen, setPlatformDialogOpen] = useState(false);
   const [bindingDialogOpen, setBindingDialogOpen] = useState(false);
@@ -310,6 +406,7 @@ function CanvasIntegrationsPage() {
   const [editingBinding, setEditingBinding] = useState(null);
   const [platformForm, setPlatformForm] = useState(platformFormFrom());
   const [bindingForm, setBindingForm] = useState(bindingFormFrom());
+  const [bindingRequirementIndex, setBindingRequirementIndex] = useState(0);
   const [bindingWizardStep, setBindingWizardStep] = useState(0);
   const [saveError, setSaveError] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -324,6 +421,15 @@ function CanvasIntegrationsPage() {
   const [canvasScopeDiscovery, setCanvasScopeDiscovery] = useState(null);
   const [canvasScopeDiscoveryBusy, setCanvasScopeDiscoveryBusy] = useState(false);
   const [canvasScopeDiscoveryError, setCanvasScopeDiscoveryError] = useState(null);
+  const [registrationConfig, setRegistrationConfig] = useState(null);
+  const [registrationError, setRegistrationError] = useState(null);
+  const [registrationBusy, setRegistrationBusy] = useState(false);
+  const [oauthBusy, setOauthBusy] = useState(false);
+  const [oauthAuthorizationUrl, setOauthAuthorizationUrl] = useState('');
+  const [oauthError, setOauthError] = useState(null);
+  const [bindingActionBusy, setBindingActionBusy] = useState('');
+  const [portableOperationBusy, setPortableOperationBusy] = useState('');
+  const [bindingReadiness, setBindingReadiness] = useState({});
 
   const {
     data: platformsData,
@@ -331,8 +437,9 @@ function CanvasIntegrationsPage() {
     error: platformsError,
     reload: reloadPlatforms,
   } = useAsyncData(async () => {
+    if (!canViewCanvas) return [];
     return listCanvasPlatforms(organizationId);
-  }, [organizationId]);
+  }, [organizationId, canViewCanvas]);
 
   const {
     data: bindingsData,
@@ -340,21 +447,64 @@ function CanvasIntegrationsPage() {
     error: bindingsError,
     reload: reloadBindings,
   } = useAsyncData(async () => {
+    if (!canViewCanvas) return [];
     return listCanvasProgramBindings({ organizationId });
-  }, [organizationId]);
+  }, [organizationId, canViewCanvas]);
+
+  const {
+    data: platformReadiness = null,
+    loading: readinessLoading,
+    error: readinessError,
+    reload: reloadReadiness,
+  } = useAsyncData(async () => {
+    if (!canViewCanvas || !selectedPlatformId) return null;
+    return getCanvasPlatformReadiness(selectedPlatformId);
+  }, [selectedPlatformId, canViewCanvas]);
+
+  const {
+    data: syncJobsData = [],
+    error: syncJobsError,
+    reload: reloadSyncJobs,
+  } = useAsyncData(
+    async () => canViewCanvas ? listCanvasSyncJobs({ organizationId }) : [],
+    [organizationId, canViewCanvas]
+  );
+
+  const {
+    data: awardCandidatesData = [],
+    error: awardCandidatesError,
+    reload: reloadAwardCandidates,
+  } = useAsyncData(
+    async () => canViewCanvas ? listCanvasAwardCandidates({ organizationId }) : [],
+    [organizationId, canViewCanvas]
+  );
+
+  const {
+    data: correctionReviewsData = [],
+    error: correctionReviewsError,
+    reload: reloadCorrectionReviews,
+  } = useAsyncData(
+    async () => canViewCanvas
+      ? listCanvasEvidencePolicyReviews({ organizationId, status: 'open' })
+      : [],
+    [organizationId, canViewCanvas]
+  );
 
   const { data: applicationTemplatesData } = useAsyncData(async () => {
+    if (!canViewCanvas) return [];
     return listApplicationTemplates(organizationId);
-  }, [organizationId]);
+  }, [organizationId, canViewCanvas]);
 
   const { data: credentialTemplatesData } = useAsyncData(async () => {
+    if (!canViewCanvas) return [];
     return normalizeCredentialTemplates(await listCredentialTemplates({ organization_id: organizationId }));
-  }, [organizationId]);
+  }, [organizationId, canViewCanvas]);
 
   const { data: deploymentProfilesData } = useAsyncData(async () => {
+    if (!canViewCanvas) return [];
     const profiles = await listDeploymentProfiles({ organization_id: organizationId });
     return Array.isArray(profiles) ? profiles : [];
-  }, [organizationId]);
+  }, [organizationId, canViewCanvas]);
 
   const {
     data: mirrorHealth = null,
@@ -362,8 +512,9 @@ function CanvasIntegrationsPage() {
     error: mirrorHealthError,
     reload: reloadMirrorHealth,
   } = useAsyncData(async () => {
+    if (!canViewCanvas) return null;
     return getCanvasMirrorHealth(organizationId);
-  }, [organizationId]);
+  }, [organizationId, canViewCanvas]);
 
   const {
     data: deliveryDestinationsData,
@@ -371,22 +522,24 @@ function CanvasIntegrationsPage() {
     error: deliveryDestinationsError,
     reload: reloadDeliveryDestinations,
   } = useAsyncData(async () => {
+    if (!canViewCanvas) return [];
     return listDeliveryDestinations({
       organizationId,
       provider: 'canvas_credentials',
       activeOnly: false,
     });
-  }, [organizationId]);
+  }, [organizationId, canViewCanvas]);
 
   const {
     data: integrationSecretsData,
     reload: reloadIntegrationSecrets,
   } = useAsyncData(async () => {
+    if (!canViewCanvas) return [];
     return listCanvasIntegrationSecrets({
       organizationId,
       provider: 'canvas_credentials',
     });
-  }, [organizationId]);
+  }, [organizationId, canViewCanvas]);
 
   const platforms = Array.isArray(platformsData) ? platformsData : [];
   const bindings = Array.isArray(bindingsData) ? bindingsData : [];
@@ -395,6 +548,13 @@ function CanvasIntegrationsPage() {
   const deploymentProfiles = Array.isArray(deploymentProfilesData) ? deploymentProfilesData : [];
   const deliveryDestinations = Array.isArray(deliveryDestinationsData) ? deliveryDestinationsData : [];
   const integrationSecrets = Array.isArray(integrationSecretsData) ? integrationSecretsData : [];
+  const syncJobs = Array.isArray(syncJobsData) ? syncJobsData : [];
+  const awardCandidates = Array.isArray(awardCandidatesData) ? awardCandidatesData : [];
+  const correctionReviews = Array.isArray(correctionReviewsData) ? correctionReviewsData : [];
+  const readinessChecks = Array.isArray(platformReadiness?.checks) ? platformReadiness.checks : [];
+  const blockingReadinessChecks = readinessChecks.filter((check) => (
+    check.blocking && !isSuccessfulReadinessStatus(check.status)
+  ));
   const selectedIntegrationSecretMissing = Boolean(
     bindingForm.canvas_credentials_api_token_secret_id
     && !integrationSecrets.some((secret) => secret.id === bindingForm.canvas_credentials_api_token_secret_id)
@@ -443,16 +603,22 @@ function CanvasIntegrationsPage() {
   );
 
   const refreshAll = async () => {
+    if (!canViewCanvas) return;
     await Promise.all([
       reloadPlatforms(),
       reloadBindings(),
       reloadMirrorHealth(),
       reloadDeliveryDestinations(),
       reloadIntegrationSecrets(),
+      reloadReadiness(),
+      reloadSyncJobs(),
+      reloadAwardCandidates(),
+      reloadCorrectionReviews(),
     ]);
   };
 
   const openCreatePlatform = () => {
+    if (!canCreateCanvas) return;
     setEditingPlatform(null);
     setPlatformForm(platformFormFrom());
     setSaveError(null);
@@ -460,15 +626,33 @@ function CanvasIntegrationsPage() {
   };
 
   const openEditPlatform = (platform) => {
+    if (!canEditCanvas) return;
     setEditingPlatform(platform);
     setPlatformForm(platformFormFrom(platform));
     setSaveError(null);
+    setOauthAuthorizationUrl('');
+    setOauthError(null);
     setPlatformDialogOpen(true);
   };
 
+  const showRegistrationConfig = async (platform) => {
+    if (!canViewCanvas) return;
+    setRegistrationBusy(true);
+    setRegistrationError(null);
+    try {
+      setRegistrationConfig(await getCanvasLtiRegistrationConfig(platform.id));
+    } catch (error) {
+      setRegistrationError(error);
+    } finally {
+      setRegistrationBusy(false);
+    }
+  };
+
   const openCreateBinding = () => {
+    if (!canCreateCanvas) return;
     setEditingBinding(null);
     setBindingForm(bindingFormFrom({}, selectedPlatformId));
+    setBindingRequirementIndex(0);
     setBindingWizardStep(0);
     setSaveError(null);
     setCanvasCredentialsValidation(null);
@@ -480,8 +664,10 @@ function CanvasIntegrationsPage() {
   };
 
   const openEditBinding = (binding) => {
+    if (!canEditCanvas || hasLegacyOrAmbiguousEvidenceRequirements(binding)) return;
     setEditingBinding(binding);
     setBindingForm(bindingFormFrom(binding, binding.platform_id));
+    setBindingRequirementIndex(0);
     setBindingWizardStep(0);
     setSaveError(null);
     setCanvasCredentialsValidation(null);
@@ -493,17 +679,33 @@ function CanvasIntegrationsPage() {
   };
 
   const savePlatform = async () => {
-    if (!organizationId) return;
+    const canSave = editingPlatform ? canEditCanvas : canCreateCanvas;
+    if (!organizationId || !canSave) return;
+    const ltiClientId = platformForm.lti_client_id.trim();
+    const ltiDeploymentId = platformForm.lti_deployment_id.trim();
+    if (Boolean(ltiClientId) !== Boolean(ltiDeploymentId)) {
+      setSaveError(new Error('Enter both the Canvas LTI client ID and deployment ID, or leave both blank for a draft.'));
+      return;
+    }
     setSaving(true);
     setSaveError(null);
     const payload = {
-      organization_id: organizationId,
-      ...platformForm,
+      display_name: platformForm.display_name,
+      canvas_base_url: platformForm.canvas_base_url,
+      lti_client_id: ltiClientId || null,
+      lti_deployment_id: ltiDeploymentId || null,
+      enabled: editingPlatform ? platformForm.enabled : false,
     };
     try {
       const saved = editingPlatform
         ? await updateCanvasPlatform(editingPlatform.id, payload)
-        : await createCanvasPlatform(payload);
+        : await createCanvasPlatform(payload, { organizationId });
+      if (ltiClientId && ltiDeploymentId) {
+        await finalizeCanvasLtiInstallation(saved.id, {
+          lti_client_id: ltiClientId,
+          lti_deployment_id: ltiDeploymentId,
+        });
+      }
       setSelectedPlatformId(saved.id);
       setPlatformDialogOpen(false);
       await reloadPlatforms();
@@ -514,34 +716,86 @@ function CanvasIntegrationsPage() {
     }
   };
 
+  const connectCanvasOAuth = async () => {
+    if (!canEditCanvas || !editingPlatform || !platformForm.oauth_client_id.trim()) return;
+    setOauthBusy(true);
+    setOauthError(null);
+    setOauthAuthorizationUrl('');
+    try {
+      let secretId = editingPlatform.connection_config?.oauth_client_secret_id;
+      if (secretId && platformForm.oauth_client_secret_value.trim()) {
+        await updateCanvasIntegrationSecret(secretId, { secret_value: platformForm.oauth_client_secret_value });
+      } else if (!secretId) {
+        if (!platformForm.oauth_client_secret_value.trim()) {
+          throw new Error('Enter the Canvas API Developer Key client secret.');
+        }
+        const secret = await createCanvasIntegrationSecret({
+          organization_id: organizationId,
+          name: `Canvas API client secret - ${editingPlatform.id}`,
+          provider: 'canvas',
+          purpose: 'oauth_client_secret',
+          secret_value: platformForm.oauth_client_secret_value,
+          metadata: { canvas_platform_id: editingPlatform.id },
+        });
+        secretId = secret.id;
+      }
+      const result = await startCanvasOAuthConnection(editingPlatform.id, {
+        client_id: platformForm.oauth_client_id,
+        client_secret_secret_id: secretId,
+        capabilities: platformForm.oauth_capabilities,
+      });
+      setPlatformForm({ ...platformForm, oauth_client_secret_value: '' });
+      setOauthAuthorizationUrl(result.authorization_url);
+    } catch (error) {
+      setOauthError(error);
+    } finally {
+      setOauthBusy(false);
+    }
+  };
+
+  const disconnectCanvasOAuth = async () => {
+    if (!canEditCanvas || !editingPlatform) return;
+    setOauthBusy(true);
+    setOauthError(null);
+    try {
+      await disconnectCanvasOAuthConnection(editingPlatform.id);
+      setOauthAuthorizationUrl('');
+      await Promise.all([reloadPlatforms(), reloadReadiness()]);
+    } catch (error) {
+      setOauthError(error);
+    } finally {
+      setOauthBusy(false);
+    }
+  };
+
   const saveBinding = async () => {
     const platformId = bindingForm.platform_id || selectedPlatformId;
-    if (!platformId) return;
+    const canSave = editingBinding ? canEditCanvas : canCreateCanvas;
+    if (!platformId || !canSave || bindingForm.legacy_read_only) return;
     setSaving(true);
     setSaveError(null);
+    const requirements = [...(bindingForm.evidence_requirements || [])];
+    const existingRequirement = requirements[bindingRequirementIndex] || {};
+    requirements[bindingRequirementIndex] = buildEvidenceRequirement(bindingForm, existingRequirement);
     const payload = {
       application_template_id: bindingForm.application_template_id,
       credential_template_id: bindingForm.credential_template_id || null,
       display_name: bindingForm.display_name || null,
-      flow_mode: 'elevenid_orchestrated_canvas_evidence',
-      direct_issue_enabled: bindingForm.direct_issue_enabled,
-      auto_approve_on_evidence: bindingForm.auto_approve_on_evidence,
-      evidence_requirements: [buildEvidenceRequirement(bindingForm)],
-      canvas_scope: buildCanvasScope(bindingForm),
+      auto_approve_on_evidence: editingBinding ? bindingForm.auto_approve_on_evidence : false,
+      evidence_requirements: requirements,
+      canvas_scope: buildCanvasBindingScope(bindingForm),
       delivery_mode: bindingForm.delivery_mode,
-      issuer_mode: bindingForm.issuer_mode,
       approval_policy_set_id: bindingForm.approval_policy_set_id || null,
       deployment_profile_id: bindingForm.deployment_profile_id || null,
       feature_flags: bindingForm.deployment_profile_id
         ? normalizeCanvasFeatureFlags(bindingForm.feature_flags)
         : {},
       canvas_credentials: buildCanvasCredentialsConfig(bindingForm),
-      enabled: bindingForm.enabled,
     };
     try {
       const saved = editingBinding
         ? await updateCanvasProgramBinding(editingBinding.id, payload)
-        : await createCanvasProgramBinding(platformId, payload);
+        : await createCanvasProgramBinding(platformId, payload, { organizationId });
       setSelectedPlatformId(saved.platform_id);
       setBindingDialogOpen(false);
       await reloadBindings();
@@ -552,7 +806,129 @@ function CanvasIntegrationsPage() {
     }
   };
 
+  const persistCurrentRequirement = () => {
+    const requirements = [...(bindingForm.evidence_requirements || [])];
+    const existingRequirement = requirements[bindingRequirementIndex] || {};
+    requirements[bindingRequirementIndex] = buildEvidenceRequirement(bindingForm, existingRequirement);
+    return requirements;
+  };
+
+  const selectBindingRequirement = (index) => {
+    const requirements = persistCurrentRequirement();
+    setBindingRequirementIndex(index);
+    setBindingForm({
+      ...bindingForm,
+      evidence_requirements: requirements,
+      ...requirementFormFields(requirements[index], bindingForm.canvas_scope),
+    });
+  };
+
+  const addBindingRequirement = () => {
+    const requirements = persistCurrentRequirement();
+    const nextRequirement = {
+      source: 'canvas_rest',
+      fact_type: 'canvas.course_completion',
+      scope: bindingForm.course_id ? { course_id: bindingForm.course_id } : {},
+      pass_rule: { completed: true },
+      required: true,
+    };
+    requirements.push(nextRequirement);
+    setBindingRequirementIndex(requirements.length - 1);
+    setBindingForm({
+      ...bindingForm,
+      evidence_requirements: requirements,
+      ...requirementFormFields(nextRequirement),
+    });
+  };
+
+  const removeBindingRequirement = (index) => {
+    const requirements = persistCurrentRequirement();
+    if (requirements.length <= 1) return;
+    requirements.splice(index, 1);
+    const nextIndex = Math.min(bindingRequirementIndex === index ? index : bindingRequirementIndex, requirements.length - 1);
+    setBindingRequirementIndex(nextIndex);
+    setBindingForm({
+      ...bindingForm,
+      evidence_requirements: requirements,
+      ...requirementFormFields(requirements[nextIndex], bindingForm.canvas_scope),
+    });
+  };
+
+  const runBindingAction = async (binding, action) => {
+    if (!canEditCanvas || hasLegacyOrAmbiguousEvidenceRequirements(binding)) return;
+    setBindingActionBusy(`${binding.id}:${action}`);
+    setOpsError(null);
+    try {
+      if (action === 'validate') {
+        const result = await validateCanvasProgramBinding(binding.id);
+        setBindingReadiness((current) => ({ ...current, [binding.id]: result }));
+      } else if (action === 'activate') {
+        await activateCanvasProgramBinding(binding.id);
+      } else {
+        await deactivateCanvasProgramBinding(binding.id);
+      }
+      await Promise.all([reloadBindings(), reloadReadiness()]);
+    } catch (error) {
+      setOpsError(error);
+    } finally {
+      setBindingActionBusy('');
+    }
+  };
+
+  const retryPortableSyncJob = async (job) => {
+    if (!canEditCanvas) return;
+    setPortableOperationBusy(`job:${job.id}`);
+    setOpsError(null);
+    try {
+      await retryCanvasSyncJob(job.id);
+      await reloadSyncJobs();
+    } catch (error) {
+      setOpsError(error);
+    } finally {
+      setPortableOperationBusy('');
+    }
+  };
+
+  const resolvePortableSyncJob = async (job) => {
+    if (!canEditCanvas) return;
+    const confirmed = window.confirm(
+      'Acknowledge this dead letter and leave its synchronization target stopped? Use Retry instead if the target should resume.',
+    );
+    if (!confirmed) return;
+    setPortableOperationBusy(`job:${job.id}`);
+    setOpsError(null);
+    try {
+      await resolveCanvasSyncJob(job.id);
+      await reloadSyncJobs();
+    } catch (error) {
+      setOpsError(error);
+    } finally {
+      setPortableOperationBusy('');
+    }
+  };
+
+  const resolveCorrectionReview = async (review, action) => {
+    if (!canEditCanvas) return;
+    if (['suspend', 'revoke'].includes(action)) {
+      const confirmed = window.confirm(
+        `${action === 'revoke' ? 'Revoke' : 'Suspend'} the credential associated with this evidence correction?`,
+      );
+      if (!confirmed) return;
+    }
+    setPortableOperationBusy(`review:${review.id}`);
+    setOpsError(null);
+    try {
+      await resolveCanvasEvidencePolicyReview(review.id, action);
+      await reloadCorrectionReviews();
+    } catch (error) {
+      setOpsError(error);
+    } finally {
+      setPortableOperationBusy('');
+    }
+  };
+
   const validateCanvasCredentialsSettings = async () => {
+    if (!canViewCanvas) return;
     setCanvasCredentialsValidationBusy(true);
     setCanvasCredentialsValidation(null);
     try {
@@ -572,7 +948,10 @@ function CanvasIntegrationsPage() {
   };
 
   const saveCanvasCredentialsManagedSecret = async () => {
-    if (!organizationId || !canvasCredentialsSecretValue.trim()) return;
+    const maySaveSecret = bindingForm.canvas_credentials_api_token_secret_id
+      ? canEditCanvas
+      : canCreateCanvas;
+    if (!organizationId || !maySaveSecret || !canvasCredentialsSecretValue.trim()) return;
     setCanvasCredentialsSecretBusy(true);
     setCanvasCredentialsSecretError(null);
     try {
@@ -600,8 +979,6 @@ function CanvasIntegrationsPage() {
       setBindingForm({
         ...bindingForm,
         canvas_credentials_api_token_secret_id: saved.id,
-        canvas_credentials_api_token_env: '',
-        canvas_credentials_api_token_file: '',
       });
       setCanvasCredentialsSecretValue('');
       await reloadIntegrationSecrets();
@@ -614,14 +991,12 @@ function CanvasIntegrationsPage() {
 
   const discoverCanvasActivities = async () => {
     const platformId = bindingForm.platform_id || selectedPlatformId;
-    if (!platformId) return;
+    if (!canViewCanvas || !platformId) return;
     setCanvasScopeDiscoveryBusy(true);
     setCanvasScopeDiscoveryError(null);
     try {
       const result = await discoverCanvasScope(platformId, {
         courseId: bindingForm.course_id,
-        apiTokenEnv: bindingForm.canvas_admin_api_token_env,
-        apiTokenFile: bindingForm.canvas_admin_api_token_file,
       });
       setCanvasScopeDiscovery(result);
     } catch (error) {
@@ -632,19 +1007,21 @@ function CanvasIntegrationsPage() {
   };
 
   const removePlatform = async (platform) => {
-    if (!window.confirm(`Delete ${platform.display_name || platform.canvas_account_id}?`)) return;
+    if (!canDeleteCanvas) return;
+    if (!window.confirm(`Archive ${platform.display_name || platform.canvas_account_id}? Existing launches, evidence, and credentials will be retained.`)) return;
     await deleteCanvasPlatform(platform.id);
     await refreshAll();
   };
 
   const removeBinding = async (binding) => {
-    if (!window.confirm(`Delete ${binding.display_name || binding.application_template_id}?`)) return;
+    if (!canDeleteCanvas) return;
+    if (!window.confirm(`Archive ${binding.display_name || binding.application_template_id}? Existing launches, evidence, and credentials will be retained.`)) return;
     await deleteCanvasProgramBinding(binding.id);
     await reloadBindings();
   };
 
   const runMirrorOps = async (action) => {
-    if (!organizationId) return;
+    if (!organizationId || !canEditCanvas) return;
     setOpsBusy(action);
     setOpsError(null);
     setOpsResult(null);
@@ -669,7 +1046,7 @@ function CanvasIntegrationsPage() {
 
   const loading = platformsLoading || bindingsLoading;
   const error = platformsError || bindingsError;
-  const opsDisabled = !organizationId || Boolean(opsBusy);
+  const opsDisabled = !canEditCanvas || !organizationId || Boolean(opsBusy);
   const mirrorAlerts = Array.isArray(mirrorHealth?.alerts) ? mirrorHealth.alerts : [];
   const bindingProfileGated = Boolean(bindingForm.deployment_profile_id);
   const bindingCanvasFlags = normalizeCanvasFeatureFlags(bindingForm.feature_flags);
@@ -682,6 +1059,8 @@ function CanvasIntegrationsPage() {
   const discoveredModules = Array.isArray(canvasScopeDiscovery?.modules) ? canvasScopeDiscovery.modules : [];
   const bindingWizardNextDisabled = (
     saving
+    || bindingForm.legacy_read_only
+    || (editingBinding ? !canEditCanvas : !canCreateCanvas)
     || (bindingWizardStep === 0 && (
       !(bindingForm.platform_id || selectedPlatformId)
       || !bindingForm.application_template_id
@@ -691,11 +1070,38 @@ function CanvasIntegrationsPage() {
   );
   const bindingSaveDisabled = (
     saving
+    || bindingForm.legacy_read_only
+    || (editingBinding ? !canEditCanvas : !canCreateCanvas)
     || !bindingForm.platform_id
     || !bindingForm.application_template_id
+    || !bindingForm.credential_template_id
     || !bindingCanvasEvidenceEnabled
     || (bindingForm.delivery_mode === 'wallet_plus_canvas_mirror' && !bindingCanvasMirrorPublishEnabled)
   );
+
+  if (!canViewCanvas) {
+    return (
+      <ResourcePage
+        title="Canvas"
+        description="Canvas platforms and program bindings."
+        tabs={DEPLOY_TABS}
+        breadcrumbs={BREADCRUMBS}
+      >
+        {permissionsLoading ? (
+          <Stack spacing={1}>
+            <LinearProgress />
+            <Typography variant="body2" color="text.secondary">
+              Checking your Canvas integration permissions...
+            </Typography>
+          </Stack>
+        ) : (
+          <Alert severity="warning">
+            You do not have permission to view Canvas integration connectors for this organization.
+          </Alert>
+        )}
+      </ResourcePage>
+    );
+  }
 
   return (
     <>
@@ -713,17 +1119,21 @@ function CanvasIntegrationsPage() {
                 </IconButton>
               </span>
             </Tooltip>
-            <Button variant="outlined" startIcon={<AddIcon />} onClick={openCreatePlatform}>
-              Platform
-            </Button>
-            <Button
-              variant="contained"
-              startIcon={<LinkIcon />}
-              onClick={openCreateBinding}
-              disabled={!selectedPlatform}
-            >
-              Binding
-            </Button>
+            {canCreateCanvas && (
+              <>
+                <Button variant="outlined" startIcon={<AddIcon />} onClick={openCreatePlatform}>
+                  Platform
+                </Button>
+                <Button
+                  variant="contained"
+                  startIcon={<LinkIcon />}
+                  onClick={openCreateBinding}
+                  disabled={!selectedPlatform}
+                >
+                  Binding
+                </Button>
+              </>
+            )}
           </>
         )}
       >
@@ -736,6 +1146,243 @@ function CanvasIntegrationsPage() {
         {loading && <LinearProgress sx={{ mb: 2 }} />}
 
         <Stack spacing={3}>
+          <Box>
+            <Typography variant="h5">Setup</Typography>
+            <Typography variant="body2" color="text.secondary">
+              Install the standard LTI 1.3 configuration, verify a signed Canvas launch, and authorize only the Canvas API capabilities this program needs.
+            </Typography>
+          </Box>
+
+          <Paper sx={{ p: 2 }} data-testid="canvas-readiness">
+            <Stack spacing={2}>
+              <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} justifyContent="space-between">
+                <Box>
+                  <Typography variant="h6">Production readiness</Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    {selectedPlatform ? selectedPlatform.display_name || selectedPlatform.canvas_base_url : 'Select a Canvas platform.'}
+                  </Typography>
+                </Box>
+                <Stack direction="row" spacing={1} alignItems="center">
+                  <Chip
+                    label={platformReadiness?.ready ? 'Ready' : 'Action required'}
+                    color={platformReadiness?.ready ? 'success' : 'warning'}
+                    variant="outlined"
+                  />
+                  <Tooltip title="Run readiness checks">
+                    <span>
+                      <IconButton disabled={!selectedPlatformId || readinessLoading} onClick={reloadReadiness}>
+                        <RefreshIcon />
+                      </IconButton>
+                    </span>
+                  </Tooltip>
+                </Stack>
+              </Stack>
+              {readinessLoading && <LinearProgress />}
+              {readinessError && <Alert severity="warning">{readinessError?.message || String(readinessError)}</Alert>}
+              {blockingReadinessChecks.length > 0 && (
+                <Alert severity="warning">
+                  Activation is blocked by {blockingReadinessChecks.length} readiness check{blockingReadinessChecks.length === 1 ? '' : 's'}.
+                </Alert>
+              )}
+              <Stack spacing={1}>
+                {readinessChecks.map((check) => {
+                  const passed = isSuccessfulReadinessStatus(check.status);
+                  const readinessLabel = String(check.status || '').toLowerCase() === 'not_applicable'
+                    ? 'Not applicable'
+                    : passed ? 'Pass' : check.blocking ? 'Blocking' : 'Advisory';
+                  return (
+                    <Stack
+                      key={check.code || check.id || check.name}
+                      direction={{ xs: 'column', md: 'row' }}
+                      spacing={1}
+                      alignItems={{ xs: 'flex-start', md: 'center' }}
+                    >
+                      <Chip size="small" label={readinessLabel} color={passed ? 'success' : check.blocking ? 'error' : 'warning'} variant="outlined" />
+                      <Box>
+                        <Typography variant="body2" fontWeight={600}>{check.component || check.name || check.code || check.id}</Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          {check.remediation || check.detail || check.message}
+                        </Typography>
+                      </Box>
+                    </Stack>
+                  );
+                })}
+                {!readinessLoading && readinessChecks.length === 0 && (
+                  <Typography variant="body2" color="text.secondary">No readiness result has been recorded yet.</Typography>
+                )}
+              </Stack>
+            </Stack>
+          </Paper>
+
+          <Box>
+            <Typography variant="h5">Operations</Typography>
+            <Typography variant="body2" color="text.secondary">
+              Monitor synchronization, pending claims, evidence corrections, and the optional Canvas Credentials projection.
+            </Typography>
+          </Box>
+
+          <Paper sx={{ p: 2 }} data-testid="canvas-portable-operations">
+            <Stack spacing={2}>
+              <Typography variant="h6">Portable award pipeline</Typography>
+              {(syncJobsError || awardCandidatesError || correctionReviewsError) && (
+                <Alert severity="warning">
+                  {(syncJobsError || awardCandidatesError || correctionReviewsError)?.message || 'Some Canvas operations could not be loaded.'}
+                </Alert>
+              )}
+              <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+                <Chip label={`Sync jobs: ${syncJobs.length}`} variant="outlined" />
+                <Chip label={`Pending awards: ${awardCandidates.filter((candidate) => candidate.status === 'pending_claim').length}`} color="info" variant="outlined" />
+                <Chip label={`Identity links required: ${awardCandidates.filter((candidate) => candidate.status === 'identity_link_required').length}`} color="warning" variant="outlined" />
+                <Chip label={`Correction reviews: ${correctionReviews.length}`} color={correctionReviews.length ? 'warning' : 'default'} variant="outlined" />
+              </Stack>
+              <Typography variant="caption" color="text.secondary">
+                Background evaluation can prepare a pending claim, but credential signing happens only after the learner completes the wallet claim.
+              </Typography>
+              {opsError && (
+                <Alert severity="error">{opsError?.message || String(opsError)}</Alert>
+              )}
+
+              <Box>
+                <Typography variant="subtitle2" sx={{ mb: 1 }}>Synchronization jobs</Typography>
+                {syncJobs.length === 0 ? (
+                  <Typography variant="body2" color="text.secondary">No synchronization jobs have been recorded.</Typography>
+                ) : (
+                  <TableContainer variant="outlined" component={Paper}>
+                    <Table size="small" aria-label="Canvas synchronization jobs">
+                      <TableHead>
+                        <TableRow>
+                          <TableCell>Target</TableCell>
+                          <TableCell>Status</TableCell>
+                          <TableCell>Attempts</TableCell>
+                          <TableCell>Last result</TableCell>
+                          <TableCell align="right">Action</TableCell>
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        {syncJobs.slice(0, 10).map((job) => {
+                          const retryable = ['dead_letter', 'dead-letter', 'failed'].includes(String(job.status || '').toLowerCase());
+                          return (
+                            <TableRow key={job.id}>
+                              <TableCell>
+                                <Typography variant="body2">{job.target_type || 'Canvas evidence'}</Typography>
+                                <Typography variant="caption" color="text.secondary">{job.application_id || job.candidate_id || job.target_id}</Typography>
+                              </TableCell>
+                              <TableCell><StatusChip status={job.status} /></TableCell>
+                              <TableCell>{job.attempt_count ?? 0} / {job.max_attempts ?? 8}</TableCell>
+                              <TableCell>
+                                <Typography variant="caption" color={job.last_error_summary ? 'error.main' : 'text.secondary'}>
+                                  {job.last_error_summary || job.last_error_code || 'No error'}
+                                </Typography>
+                              </TableCell>
+                              <TableCell align="right">
+                                {retryable && (
+                                  <Stack direction="row" spacing={1} justifyContent="flex-end">
+                                    <Button
+                                      size="small"
+                                      disabled={!canEditCanvas || Boolean(portableOperationBusy)}
+                                      onClick={() => retryPortableSyncJob(job)}
+                                    >
+                                      Retry dead letter
+                                    </Button>
+                                    <Button
+                                      size="small"
+                                      color="inherit"
+                                      disabled={!canEditCanvas || Boolean(portableOperationBusy)}
+                                      onClick={() => resolvePortableSyncJob(job)}
+                                    >
+                                      Resolve dead letter
+                                    </Button>
+                                  </Stack>
+                                )}
+                              </TableCell>
+                            </TableRow>
+                          );
+                        })}
+                      </TableBody>
+                    </Table>
+                  </TableContainer>
+                )}
+              </Box>
+
+              <Box>
+                <Typography variant="subtitle2" sx={{ mb: 1 }}>Pending awards and identity links</Typography>
+                {awardCandidates.length === 0 ? (
+                  <Typography variant="body2" color="text.secondary">No background award candidates have been observed.</Typography>
+                ) : (
+                  <TableContainer variant="outlined" component={Paper}>
+                    <Table size="small" aria-label="Canvas award candidates">
+                      <TableHead>
+                        <TableRow>
+                          <TableCell>Candidate</TableCell>
+                          <TableCell>Binding</TableCell>
+                          <TableCell>Status</TableCell>
+                          <TableCell>Application</TableCell>
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        {awardCandidates.slice(0, 10).map((candidate) => (
+                          <TableRow key={candidate.id}>
+                            <TableCell>{candidate.id}</TableCell>
+                            <TableCell>{candidate.binding_id || 'Not bound'}</TableCell>
+                            <TableCell><StatusChip status={candidate.status} /></TableCell>
+                            <TableCell>{candidate.application_id || 'Learner launch required'}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </TableContainer>
+                )}
+              </Box>
+
+              <Box>
+                <Typography variant="subtitle2" sx={{ mb: 1 }}>Evidence correction reviews</Typography>
+                {correctionReviews.length === 0 ? (
+                  <Typography variant="body2" color="text.secondary">No open evidence corrections require administrator action.</Typography>
+                ) : (
+                  <Stack spacing={1}>
+                    {correctionReviews.slice(0, 10).map((review) => (
+                      <Paper key={review.id} variant="outlined" sx={{ p: 1.5 }}>
+                        <Stack direction={{ xs: 'column', md: 'row' }} spacing={1} justifyContent="space-between" alignItems={{ xs: 'stretch', md: 'center' }}>
+                          <Box>
+                            <Typography variant="body2" fontWeight={600}>Credential {review.credential_id || review.id}</Typography>
+                            <Typography variant="caption" color="text.secondary">
+                              Authoritative Canvas evidence changed from permit to deny. The credential remains active until an administrator acts.
+                            </Typography>
+                          </Box>
+                          <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+                            <Button
+                              size="small"
+                              disabled={!canEditCanvas || Boolean(portableOperationBusy)}
+                              onClick={() => resolveCorrectionReview(review, 'dismiss')}
+                            >
+                              Dismiss
+                            </Button>
+                            <Button
+                              size="small"
+                              color="warning"
+                              disabled={!canEditCanvas || Boolean(portableOperationBusy)}
+                              onClick={() => resolveCorrectionReview(review, 'suspend')}
+                            >
+                              Suspend
+                            </Button>
+                            <Button
+                              size="small"
+                              color="error"
+                              disabled={!canEditCanvas || Boolean(portableOperationBusy)}
+                              onClick={() => resolveCorrectionReview(review, 'revoke')}
+                            >
+                              Revoke
+                            </Button>
+                          </Stack>
+                        </Stack>
+                      </Paper>
+                    ))}
+                  </Stack>
+                )}
+              </Box>
+            </Stack>
+          </Paper>
+
           <Paper sx={{ p: 2 }} data-testid="canvas-mirror-ops">
             <Stack spacing={2}>
               <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} justifyContent="space-between" alignItems={{ xs: 'stretch', md: 'center' }}>
@@ -948,6 +1595,7 @@ function CanvasIntegrationsPage() {
             description="Look up a mirrored Canvas Credentials badge and confirm the canonical ElevenID issuance, issuer DID, and revocation status."
           />
 
+          <Typography variant="h6">Installed platforms</Typography>
           <TableContainer component={Paper}>
             <Table size="small">
               <TableHead>
@@ -990,19 +1638,43 @@ function CanvasIntegrationsPage() {
                       </Stack>
                     </TableCell>
                     <TableCell>
-                      <StatusChip status={platform.enabled ? 'active' : 'disabled'} />
+                      <Stack spacing={0.5} alignItems="flex-start">
+                        <StatusChip status={platform.enabled ? 'active' : 'disabled'} />
+                        <Chip
+                          size="small"
+                          label={platform.registration_status === 'verified' ? 'Launch verified' : 'Installation incomplete'}
+                          color={platform.registration_status === 'verified' ? 'success' : 'warning'}
+                          variant="outlined"
+                        />
+                        {platform.last_connection_error && (
+                          <Typography variant="caption" color="error">{platform.last_connection_error}</Typography>
+                        )}
+                      </Stack>
                     </TableCell>
                     <TableCell align="right" onClick={(event) => event.stopPropagation()}>
-                      <Tooltip title="Edit">
-                        <IconButton size="small" onClick={() => openEditPlatform(platform)}>
-                          <EditIcon fontSize="small" />
+                      <Tooltip title="LTI registration configuration">
+                        <IconButton size="small" onClick={() => showRegistrationConfig(platform)}>
+                          <LinkIcon fontSize="small" />
                         </IconButton>
                       </Tooltip>
-                      <Tooltip title="Delete">
-                        <IconButton size="small" onClick={() => removePlatform(platform)}>
-                          <DeleteIcon fontSize="small" />
-                        </IconButton>
-                      </Tooltip>
+                      {canEditCanvas && (
+                        <Tooltip title="Edit">
+                          <IconButton size="small" onClick={() => openEditPlatform(platform)}>
+                            <EditIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                      )}
+                      {canDeleteCanvas && (
+                        <Tooltip title="Archive">
+                          <IconButton
+                            size="small"
+                            aria-label={`Archive ${platform.display_name || platform.canvas_account_id || platform.id}`}
+                            onClick={() => removePlatform(platform)}
+                          >
+                            <ArchiveIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                      )}
                     </TableCell>
                   </TableRow>
                 ))}
@@ -1010,6 +1682,12 @@ function CanvasIntegrationsPage() {
             </Table>
           </TableContainer>
 
+          <Box>
+            <Typography variant="h5">Program bindings</Typography>
+            <Typography variant="body2" color="text.secondary">
+              Bind typed Canvas evidence rules to one active Open Badge credential template. New bindings remain inactive until every blocking readiness check passes.
+            </Typography>
+          </Box>
           <TableContainer component={Paper}>
             <Table size="small">
               <TableHead>
@@ -1032,6 +1710,9 @@ function CanvasIntegrationsPage() {
                   </TableRow>
                 ) : visibleBindings.map((binding) => {
                   const requirement = firstRequirement(binding);
+                  const legacyBinding = hasLegacyOrAmbiguousEvidenceRequirements(binding);
+                  const readiness = bindingReadiness[binding.id];
+                  const actionBusy = bindingActionBusy.startsWith(`${binding.id}:`);
                   return (
                     <TableRow key={binding.id} hover>
                       <TableCell>
@@ -1052,9 +1733,24 @@ function CanvasIntegrationsPage() {
                       <TableCell>
                         <Stack spacing={0.5}>
                           <Typography variant="body2">{requirement.fact_type || requirement.evidence_type || 'canvas.course_completion'}</Typography>
+                          {(binding.evidence_requirements || []).length > 1 && (
+                            <Typography variant="caption" color="text.secondary">
+                              + {(binding.evidence_requirements || []).length - 1} more requirement{(binding.evidence_requirements || []).length === 2 ? '' : 's'}
+                            </Typography>
+                          )}
+                          <Chip
+                            size="small"
+                            label={requirement.source || 'Legacy custom source'}
+                            color={requirement.source === 'custom_webhook' || !requirement.source ? 'warning' : 'default'}
+                            variant="outlined"
+                            sx={{ alignSelf: 'flex-start' }}
+                          />
                           <Typography variant="caption" color="text.secondary">
                             {Object.entries(binding.canvas_scope || {}).map(([key, value]) => `${key}: ${value}`).join(', ') || 'Any scope'}
                           </Typography>
+                          {legacyBinding && (
+                            <Typography variant="caption" color="warning.main">Legacy binding: migration review required</Typography>
+                          )}
                         </Stack>
                       </TableCell>
                       <TableCell>
@@ -1067,27 +1763,65 @@ function CanvasIntegrationsPage() {
                         </Stack>
                       </TableCell>
                       <TableCell>
-                        <StatusChip status={binding.enabled ? 'active' : 'disabled'} />
+                        <Stack spacing={0.5} alignItems="flex-start">
+                          <StatusChip status={binding.enabled ? 'active' : 'disabled'} />
+                          {readiness && (
+                            <Chip size="small" label={readiness.ready ? 'Ready' : 'Blocked'} color={readiness.ready ? 'success' : 'warning'} variant="outlined" />
+                          )}
+                        </Stack>
                       </TableCell>
                       <TableCell align="right">
-                        <Tooltip title="Edit">
-                          <IconButton
-                            size="small"
-                            aria-label={`Edit ${binding.display_name || binding.canvas_scope?.course_id || binding.id}`}
-                            onClick={() => openEditBinding(binding)}
-                          >
-                            <EditIcon fontSize="small" />
-                          </IconButton>
-                        </Tooltip>
-                        <Tooltip title="Delete">
-                          <IconButton
-                            size="small"
-                            aria-label={`Delete ${binding.display_name || binding.canvas_scope?.course_id || binding.id}`}
-                            onClick={() => removeBinding(binding)}
-                          >
-                            <DeleteIcon fontSize="small" />
-                          </IconButton>
-                        </Tooltip>
+                        {canEditCanvas && (
+                          <>
+                            <Tooltip title="Validate readiness">
+                              <span>
+                                <IconButton
+                                  size="small"
+                                  aria-label={`Validate ${binding.display_name || binding.id}`}
+                                  disabled={actionBusy || legacyBinding}
+                                  onClick={() => runBindingAction(binding, 'validate')}
+                                >
+                                  <TaskAltIcon fontSize="small" />
+                                </IconButton>
+                              </span>
+                            </Tooltip>
+                            <Tooltip title={binding.enabled ? 'Deactivate' : 'Activate'}>
+                              <span>
+                                <IconButton
+                                  size="small"
+                                  aria-label={`${binding.enabled ? 'Deactivate' : 'Activate'} ${binding.display_name || binding.id}`}
+                                  disabled={actionBusy || legacyBinding || (!binding.enabled && readiness?.ready !== true)}
+                                  onClick={() => runBindingAction(binding, binding.enabled ? 'deactivate' : 'activate')}
+                                >
+                                  <PlayCircleIcon fontSize="small" />
+                                </IconButton>
+                              </span>
+                            </Tooltip>
+                            <Tooltip title="Edit">
+                              <span>
+                                <IconButton
+                                  size="small"
+                                  aria-label={`Edit ${binding.display_name || binding.canvas_scope?.course_id || binding.id}`}
+                                  disabled={legacyBinding}
+                                  onClick={() => openEditBinding(binding)}
+                                >
+                                  <EditIcon fontSize="small" />
+                                </IconButton>
+                              </span>
+                            </Tooltip>
+                          </>
+                        )}
+                        {canDeleteCanvas && (
+                          <Tooltip title="Archive">
+                            <IconButton
+                              size="small"
+                              aria-label={`Archive ${binding.display_name || binding.canvas_scope?.course_id || binding.id}`}
+                              onClick={() => removeBinding(binding)}
+                            >
+                              <ArchiveIcon fontSize="small" />
+                            </IconButton>
+                          </Tooltip>
+                        )}
                       </TableCell>
                     </TableRow>
                   );
@@ -1103,26 +1837,133 @@ function CanvasIntegrationsPage() {
         <DialogContent>
           {saveError && <Alert severity="error" sx={{ mb: 2 }}>{saveError?.message || String(saveError)}</Alert>}
           <Stack spacing={2} sx={{ mt: 1 }}>
+            {!editingPlatform && (
+              <Alert severity="info">New Canvas platforms are saved as disabled drafts until installation and readiness checks succeed.</Alert>
+            )}
             <TextField label="Display name" value={platformForm.display_name} onChange={(event) => setPlatformForm({ ...platformForm, display_name: event.target.value })} />
-            <TextField label="Canvas account ID" required value={platformForm.canvas_account_id} onChange={(event) => setPlatformForm({ ...platformForm, canvas_account_id: event.target.value })} />
-            <TextField label="Canvas base URL" value={platformForm.canvas_base_url} onChange={(event) => setPlatformForm({ ...platformForm, canvas_base_url: event.target.value })} />
+            <TextField label="Canvas HTTPS base URL" required value={platformForm.canvas_base_url} onChange={(event) => setPlatformForm({ ...platformForm, canvas_base_url: event.target.value })} helperText="Use the institution's canonical hosted Canvas origin. Redirects and private origins are rejected unless explicitly allowlisted by an operator." />
             <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}>
               <TextField fullWidth label="LTI client ID" value={platformForm.lti_client_id} onChange={(event) => setPlatformForm({ ...platformForm, lti_client_id: event.target.value })} />
               <TextField fullWidth label="LTI deployment ID" value={platformForm.lti_deployment_id} onChange={(event) => setPlatformForm({ ...platformForm, lti_deployment_id: event.target.value })} />
             </Stack>
-            <TextField label="LTI issuer" value={platformForm.lti_issuer} onChange={(event) => setPlatformForm({ ...platformForm, lti_issuer: event.target.value })} />
-            <TextField label="JWKS URL" value={platformForm.lti_jwks_url} onChange={(event) => setPlatformForm({ ...platformForm, lti_jwks_url: event.target.value })} />
+            {editingPlatform && (
+              <Paper variant="outlined" sx={{ p: 2 }}>
+                <Stack spacing={2}>
+                  <Box>
+                    <Typography variant="subtitle2">Scoped Canvas API connection</Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      Optional for modules, submissions, quizzes, and course completion not exposed through LTI services. Tokens are encrypted per organization.
+                    </Typography>
+                  </Box>
+                  <TextField
+                    label="Canvas API Developer Key client ID"
+                    value={platformForm.oauth_client_id}
+                    onChange={(event) => setPlatformForm({ ...platformForm, oauth_client_id: event.target.value })}
+                  />
+                  <TextField
+                    label={editingPlatform.connection_config?.oauth_client_secret_id ? 'Rotate client secret (optional)' : 'Client secret'}
+                    type="password"
+                    value={platformForm.oauth_client_secret_value}
+                    onChange={(event) => setPlatformForm({ ...platformForm, oauth_client_secret_value: event.target.value })}
+                  />
+                  <Box>
+                    <Typography variant="subtitle2">Authorized capabilities</Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      Marty maps these capabilities to a fixed least-privilege Canvas scope allowlist. Raw scopes cannot be entered.
+                    </Typography>
+                  </Box>
+                  <Stack spacing={0.5}>
+                    {OAUTH_CAPABILITIES.map((capability) => (
+                      <FormControlLabel
+                        key={capability.value}
+                        control={(
+                          <Switch
+                            checked={platformForm.oauth_capabilities.includes(capability.value)}
+                            onChange={(event) => setPlatformForm({
+                              ...platformForm,
+                              oauth_capabilities: event.target.checked
+                                ? [...platformForm.oauth_capabilities, capability.value]
+                                : platformForm.oauth_capabilities.filter((value) => value !== capability.value),
+                            })}
+                          />
+                        )}
+                        label={capability.label}
+                      />
+                    ))}
+                  </Stack>
+                  {oauthError && <Alert severity="error">{oauthError?.message || String(oauthError)}</Alert>}
+                  {oauthAuthorizationUrl && (
+                    <Alert severity="success" action={<Button color="inherit" href={oauthAuthorizationUrl}>Authorize in Canvas</Button>}>
+                      OAuth request is ready. Continue to Canvas to approve the requested scopes.
+                    </Alert>
+                  )}
+                  <Stack direction="row" spacing={1}>
+                    <Button variant="outlined" onClick={connectCanvasOAuth} disabled={!canEditCanvas || oauthBusy || !platformForm.oauth_client_id || platformForm.oauth_capabilities.length === 0}>
+                      Prepare Canvas authorization
+                    </Button>
+                    <Button color="warning" variant="text" onClick={disconnectCanvasOAuth} disabled={!canEditCanvas || oauthBusy}>
+                      Disconnect OAuth
+                    </Button>
+                  </Stack>
+                </Stack>
+              </Paper>
+            )}
             <FormControlLabel
               control={<Switch checked={platformForm.enabled} onChange={(event) => setPlatformForm({ ...platformForm, enabled: event.target.checked })} />}
-              label="Enabled"
+              label="Enabled intent (readiness still required)"
             />
           </Stack>
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setPlatformDialogOpen(false)}>Cancel</Button>
-          <Button startIcon={<SaveIcon />} variant="contained" disabled={saving || !platformForm.canvas_account_id} onClick={savePlatform}>
+          <Button
+            startIcon={<SaveIcon />}
+            variant="contained"
+            disabled={
+              saving
+              || (editingPlatform ? !canEditCanvas : !canCreateCanvas)
+              || !platformForm.display_name
+              || !platformForm.canvas_base_url
+            }
+            onClick={savePlatform}
+          >
             Save
           </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={Boolean(registrationConfig) || Boolean(registrationError) || registrationBusy} onClose={() => { setRegistrationConfig(null); setRegistrationError(null); }} fullWidth maxWidth="md">
+        <DialogTitle>Canvas LTI 1.3 registration</DialogTitle>
+        <DialogContent>
+          {registrationBusy && <LinearProgress />}
+          {registrationError && <Alert severity="error">{registrationError?.message || String(registrationError)}</Alert>}
+          {registrationConfig && (
+            <Stack spacing={2} sx={{ mt: 1 }}>
+              <Alert severity="info">
+                A Canvas root-account administrator can use this Developer Key configuration without installing a Canvas plugin or modifying Canvas source.
+              </Alert>
+              <TextField
+                label="Developer Key configuration"
+                value={JSON.stringify(registrationConfig.developer_key_configuration, null, 2)}
+                multiline
+                minRows={14}
+                InputProps={{ readOnly: true }}
+              />
+              {registrationConfig.registration_config_url && (
+                <TextField
+                  label="Revocable registration configuration URL"
+                  value={registrationConfig.registration_config_url}
+                  InputProps={{ readOnly: true }}
+                />
+              )}
+              <Typography variant="caption" color="text.secondary">
+                After installation, enter the Canvas client ID and deployment ID on the platform and complete a signed test launch.
+              </Typography>
+            </Stack>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => { setRegistrationConfig(null); setRegistrationError(null); }}>Close</Button>
         </DialogActions>
       </Dialog>
 
@@ -1213,7 +2054,7 @@ function CanvasIntegrationsPage() {
                   <Select
                     label="Credential template"
                     value={bindingForm.credential_template_id}
-                    onChange={(event) => setBindingForm({ ...bindingForm, credential_template_id: event.target.value })}
+                    disabled
                   >
                     {credentialTemplates.map((template) => (
                       <MenuItem key={template.id} value={template.id}>
@@ -1221,21 +2062,73 @@ function CanvasIntegrationsPage() {
                       </MenuItem>
                     ))}
                   </Select>
+                  <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5 }}>
+                    Inherited from the application template; this template controls the Open Badge format, issuer profile, external KMS key, and credential status.
+                  </Typography>
                 </FormControl>
               </Stack>
             )}
             {bindingWizardStep === 1 && (
               <Stack spacing={2}>
                 <Alert severity="info">
-                  Use Canvas IDs from the institution admin/API setup for the course, assignment, module, or quiz this credential should follow. Leave activity IDs blank only when the binding should match any Canvas launch for this platform.
+                  Marty reads standard Canvas APIs. AGS is only valid for a line item created by this tool; existing assignments, Classic Quizzes, New Quizzes, course progress, and modules use the scoped Canvas REST connection.
                 </Alert>
+                <Paper variant="outlined" sx={{ p: 2 }}>
+                  <Stack spacing={1.5}>
+                    <Stack direction={{ xs: 'column', md: 'row' }} justifyContent="space-between" spacing={1} alignItems={{ xs: 'stretch', md: 'center' }}>
+                      <Box>
+                        <Typography variant="subtitle2">Required evidence rules</Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          Each rule is evaluated independently. Add every Canvas fact the learner must satisfy for this badge.
+                        </Typography>
+                      </Box>
+                      <Button size="small" startIcon={<AddIcon />} onClick={addBindingRequirement}>
+                        Add requirement
+                      </Button>
+                    </Stack>
+                    <Stack spacing={1}>
+                      {Array.from({ length: Math.max(1, bindingForm.evidence_requirements?.length || 0) }).map((_, index) => {
+                        const storedRequirement = bindingForm.evidence_requirements?.[index] || {};
+                        const requirement = index === bindingRequirementIndex
+                          ? buildEvidenceRequirement(bindingForm, storedRequirement)
+                          : storedRequirement;
+                        const typeLabel = EVIDENCE_TYPES.find((type) => type.value === requirement.fact_type)?.label || requirement.fact_type || 'Canvas evidence';
+                        return (
+                          <Stack key={requirement.requirement_id || `requirement-${index}`} direction="row" spacing={1} alignItems="center">
+                            <Button
+                              fullWidth
+                              size="small"
+                              variant={index === bindingRequirementIndex ? 'contained' : 'outlined'}
+                              onClick={() => selectBindingRequirement(index)}
+                              sx={{ justifyContent: 'flex-start' }}
+                            >
+                              Rule {index + 1}: {typeLabel} ({requirement.source || 'canvas_rest'})
+                            </Button>
+                            <Tooltip title="Remove evidence requirement">
+                              <span>
+                                <IconButton
+                                  size="small"
+                                  aria-label={`Remove evidence requirement ${index + 1}`}
+                                  disabled={Math.max(1, bindingForm.evidence_requirements?.length || 0) <= 1}
+                                  onClick={() => removeBindingRequirement(index)}
+                                >
+                                  <DeleteIcon fontSize="small" />
+                                </IconButton>
+                              </span>
+                            </Tooltip>
+                          </Stack>
+                        );
+                      })}
+                    </Stack>
+                  </Stack>
+                </Paper>
                 <Paper variant="outlined" sx={{ p: 2 }}>
                   <Stack spacing={2}>
                     <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} justifyContent="space-between" alignItems={{ xs: 'stretch', md: 'center' }}>
                       <Box>
                         <Typography variant="subtitle2">Import Canvas activity</Typography>
                         <Typography variant="caption" color="text.secondary">
-                          Use an admin API token reference to discover real Canvas courses, assignments, quizzes, and modules.
+                          Use the organization-scoped Canvas OAuth connection to discover real courses, assignments, quizzes, and modules.
                         </Typography>
                       </Box>
                       <Button
@@ -1248,22 +2141,9 @@ function CanvasIntegrationsPage() {
                         Discover
                       </Button>
                     </Stack>
-                    <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}>
-                      <TextField
-                        fullWidth
-                        label="Canvas API token env var"
-                        value={bindingForm.canvas_admin_api_token_env}
-                        onChange={(event) => setBindingForm({ ...bindingForm, canvas_admin_api_token_env: event.target.value })}
-                        helperText="Example: CANVAS_ADMIN_API_TOKEN"
-                      />
-                      <TextField
-                        fullWidth
-                        label="Canvas API token file"
-                        value={bindingForm.canvas_admin_api_token_file}
-                        onChange={(event) => setBindingForm({ ...bindingForm, canvas_admin_api_token_file: event.target.value })}
-                        helperText="Example: /run/secrets/canvas_admin_api_token"
-                      />
-                    </Stack>
+                    <Alert severity="info">
+                      Discovery uses the organization-scoped Canvas OAuth connection configured on the selected platform.
+                    </Alert>
                     {canvasScopeDiscoveryBusy && <LinearProgress />}
                     {canvasScopeDiscoveryError && (
                       <Alert severity="warning">
@@ -1312,9 +2192,9 @@ function CanvasIntegrationsPage() {
                           )}
                           {discoveredQuizzes.length > 0 && (
                             <FormControl fullWidth>
-                              <InputLabel>Imported quiz</InputLabel>
+                              <InputLabel>Imported quiz assignment</InputLabel>
                               <Select
-                                label="Imported quiz"
+                                label="Imported quiz assignment"
                                 value={discoveredQuizzes.some((item) => item.id === bindingForm.quiz_id) ? bindingForm.quiz_id : ''}
                                 onChange={(event) => setBindingForm({ ...bindingForm, quiz_id: event.target.value })}
                               >
@@ -1344,11 +2224,38 @@ function CanvasIntegrationsPage() {
                   </Stack>
                 </Paper>
                 <FormControl fullWidth>
+                  <InputLabel>Evidence source</InputLabel>
+                  <Select
+                    label="Evidence source"
+                    value={bindingForm.evidence_source}
+                    onChange={(event) => setBindingForm({ ...bindingForm, evidence_source: event.target.value })}
+                  >
+                    {evidenceSourcesForFactType(bindingForm.evidence_type).map((source) => (
+                      <MenuItem key={source.value} value={source.value}>{source.label}</MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+                {bindingForm.evidence_source === 'ags_result' && (
+                  <Alert severity="info">
+                    AGS reads only the exact line item associated with Marty through Deep Linking. Existing Canvas assignments and quizzes must use the Canvas REST source.
+                  </Alert>
+                )}
+                <FormControl fullWidth>
                   <InputLabel>Canvas activity</InputLabel>
                   <Select
                     label="Canvas activity"
                     value={bindingForm.evidence_type}
-                    onChange={(event) => setBindingForm({ ...bindingForm, evidence_type: event.target.value })}
+                    onChange={(event) => {
+                      const evidenceType = event.target.value;
+                      const allowed = evidenceSourcesForFactType(evidenceType).map((source) => source.value);
+                      setBindingForm({
+                        ...bindingForm,
+                        evidence_type: evidenceType,
+                        evidence_source: allowed.includes(bindingForm.evidence_source)
+                          ? bindingForm.evidence_source
+                          : defaultEvidenceSource(evidenceType),
+                      });
+                    }}
                   >
                     {EVIDENCE_TYPES.map((type) => (
                       <MenuItem key={type.value} value={type.value}>{type.label}</MenuItem>
@@ -1357,11 +2264,18 @@ function CanvasIntegrationsPage() {
                 </FormControl>
                 <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}>
                   <TextField fullWidth label="Course ID" value={bindingForm.course_id} onChange={(event) => setBindingForm({ ...bindingForm, course_id: event.target.value })} />
-                  <TextField fullWidth label="Assignment ID" value={bindingForm.assignment_id} onChange={(event) => setBindingForm({ ...bindingForm, assignment_id: event.target.value })} />
+                  <TextField fullWidth label="Assignment ID" disabled={bindingForm.evidence_source === 'ags_result' || bindingForm.evidence_type !== 'canvas.assignment_score'} value={bindingForm.assignment_id} onChange={(event) => setBindingForm({ ...bindingForm, assignment_id: event.target.value })} />
                 </Stack>
                 <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}>
-                  <TextField fullWidth label="Module ID" value={bindingForm.module_id} onChange={(event) => setBindingForm({ ...bindingForm, module_id: event.target.value })} />
-                  <TextField fullWidth label="Quiz ID" value={bindingForm.quiz_id} onChange={(event) => setBindingForm({ ...bindingForm, quiz_id: event.target.value })} />
+                  <TextField fullWidth label="Module ID" disabled={bindingForm.evidence_type !== 'canvas.module_completion'} value={bindingForm.module_id} onChange={(event) => setBindingForm({ ...bindingForm, module_id: event.target.value })} />
+                  <TextField
+                    fullWidth
+                    label="Quiz assignment ID"
+                    helperText="Canvas quiz scores are read from the quiz's assignment-backed submission ID."
+                    disabled={bindingForm.evidence_type !== 'canvas.quiz_score'}
+                    value={bindingForm.quiz_id}
+                    onChange={(event) => setBindingForm({ ...bindingForm, quiz_id: event.target.value })}
+                  />
                 </Stack>
                 {bindingForm.evidence_type.endsWith('_score') && (
                   <TextField
@@ -1376,30 +2290,20 @@ function CanvasIntegrationsPage() {
             )}
             {bindingWizardStep === 2 && (
               <Stack spacing={2}>
-                <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}>
-                  <FormControl fullWidth>
-                    <InputLabel>Delivery</InputLabel>
-                    <Select
-                      label="Delivery"
-                      value={bindingForm.delivery_mode}
-                      onChange={(event) => setBindingForm({ ...bindingForm, delivery_mode: event.target.value })}
-                    >
-                      <MenuItem value="wallet_only">Wallet only</MenuItem>
-                      <MenuItem value="wallet_plus_canvas_mirror" disabled={!bindingCanvasMirrorPublishEnabled}>Wallet + Canvas mirror</MenuItem>
-                    </Select>
-                  </FormControl>
-                  <FormControl fullWidth>
-                    <InputLabel>Issuer mode</InputLabel>
-                    <Select
-                      label="Issuer mode"
-                      value={bindingForm.issuer_mode}
-                      onChange={(event) => setBindingForm({ ...bindingForm, issuer_mode: event.target.value })}
-                    >
-                      <MenuItem value="org_managed">Org managed</MenuItem>
-                      <MenuItem value="canvas_alias">Canvas alias</MenuItem>
-                    </Select>
-                  </FormControl>
-                </Stack>
+                <Alert severity="info">
+                  The linked credential template is the only issuer configuration. It must resolve to an active Open Badge format, external KMS key, published DID verification method, and credential-status profile before this binding can activate.
+                </Alert>
+                <FormControl fullWidth>
+                  <InputLabel>Delivery</InputLabel>
+                  <Select
+                    label="Delivery"
+                    value={bindingForm.delivery_mode}
+                    onChange={(event) => setBindingForm({ ...bindingForm, delivery_mode: event.target.value })}
+                  >
+                    <MenuItem value="wallet_only">Wallet claim</MenuItem>
+                    <MenuItem value="wallet_plus_canvas_mirror" disabled={!bindingCanvasMirrorPublishEnabled}>Wallet claim + optional Canvas Credentials projection</MenuItem>
+                  </Select>
+                </FormControl>
                 {bindingForm.delivery_mode === 'wallet_plus_canvas_mirror' && (
                   <Paper variant="outlined" sx={{ p: 2 }}>
                     <Stack spacing={2}>
@@ -1414,7 +2318,7 @@ function CanvasIntegrationsPage() {
                           size="small"
                           variant="outlined"
                           startIcon={<TaskAltIcon />}
-                          disabled={canvasCredentialsValidationBusy}
+                          disabled={!canViewCanvas || canvasCredentialsValidationBusy}
                           onClick={validateCanvasCredentialsSettings}
                         >
                           Validate provider
@@ -1444,7 +2348,6 @@ function CanvasIntegrationsPage() {
                             onChange={(event) => setBindingForm({ ...bindingForm, canvas_credentials_provider: event.target.value })}
                           >
                             <MenuItem value="badgr_api">Canvas Credentials API</MenuItem>
-                            <MenuItem value="bridge">Bridge endpoint</MenuItem>
                           </Select>
                         </FormControl>
                         <FormControl fullWidth>
@@ -1501,8 +2404,6 @@ function CanvasIntegrationsPage() {
                                 onChange={(event) => setBindingForm({
                                   ...bindingForm,
                                   canvas_credentials_api_token_secret_id: event.target.value,
-                                  canvas_credentials_api_token_env: event.target.value ? '' : bindingForm.canvas_credentials_api_token_env,
-                                  canvas_credentials_api_token_file: event.target.value ? '' : bindingForm.canvas_credentials_api_token_file,
                                 })}
                               >
                                 <MenuItem value="">None selected</MenuItem>
@@ -1529,7 +2430,13 @@ function CanvasIntegrationsPage() {
                             <Button
                               variant="outlined"
                               startIcon={<SaveIcon />}
-                              disabled={canvasCredentialsSecretBusy || !canvasCredentialsSecretValue.trim()}
+                              disabled={
+                                canvasCredentialsSecretBusy
+                                || !canvasCredentialsSecretValue.trim()
+                                || (bindingForm.canvas_credentials_api_token_secret_id
+                                  ? !canEditCanvas
+                                  : !canCreateCanvas)
+                              }
                               onClick={saveCanvasCredentialsManagedSecret}
                               sx={{ minWidth: 150 }}
                             >
@@ -1538,42 +2445,23 @@ function CanvasIntegrationsPage() {
                           </Stack>
                         </Stack>
                       </Paper>
-                      <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}>
-                        <TextField
-                          fullWidth
-                          label="API token secret env"
-                          value={bindingForm.canvas_credentials_api_token_env}
-                          disabled={Boolean(bindingForm.canvas_credentials_api_token_secret_id)}
-                          onChange={(event) => setBindingForm({ ...bindingForm, canvas_credentials_api_token_env: event.target.value })}
-                          helperText="Deployment-managed secret name, not the token value."
-                        />
-                        <TextField
-                          fullWidth
-                          label="API token secret file"
-                          value={bindingForm.canvas_credentials_api_token_file}
-                          disabled={Boolean(bindingForm.canvas_credentials_api_token_secret_id)}
-                          onChange={(event) => setBindingForm({ ...bindingForm, canvas_credentials_api_token_file: event.target.value })}
-                          helperText="Mounted secret file path available to issuance."
-                        />
-                      </Stack>
                     </Stack>
                   </Paper>
                 )}
                 <TextField label="Approval PolicySet ID" value={bindingForm.approval_policy_set_id} onChange={(event) => setBindingForm({ ...bindingForm, approval_policy_set_id: event.target.value })} />
-                <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}>
-                  <FormControlLabel
-                    control={<Switch checked={bindingForm.auto_approve_on_evidence} disabled={!bindingCanvasEvidenceEnabled} onChange={(event) => setBindingForm({ ...bindingForm, auto_approve_on_evidence: event.target.checked })} />}
-                    label="Auto approve"
-                  />
-                  <FormControlLabel
-                    control={<Switch checked={bindingForm.direct_issue_enabled} onChange={(event) => setBindingForm({ ...bindingForm, direct_issue_enabled: event.target.checked })} />}
-                    label="Direct issue"
-                  />
-                  <FormControlLabel
-                    control={<Switch checked={bindingForm.enabled} onChange={(event) => setBindingForm({ ...bindingForm, enabled: event.target.checked })} />}
-                    label="Enabled"
-                  />
-                </Stack>
+                <FormControlLabel
+                  control={(
+                    <Switch
+                      checked={bindingForm.auto_approve_on_evidence}
+                      disabled={!canEditCanvas || !editingBinding || !bindingCanvasEvidenceEnabled || bindingReadiness[editingBinding?.id]?.ready !== true}
+                      onChange={(event) => setBindingForm({ ...bindingForm, auto_approve_on_evidence: event.target.checked })}
+                    />
+                  )}
+                  label="Learner auto-approval (pilot gate)"
+                />
+                <Typography variant="caption" color="text.secondary">
+                  New bindings are inactive and auto-approval remains off. Validate and activate the binding from the bindings table after shadow results and all blocking checks pass.
+                </Typography>
               </Stack>
             )}
           </Stack>

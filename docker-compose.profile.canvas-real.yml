@@ -22,8 +22,8 @@
 services:
   issuance:
     environment:
-      CANVAS_ALLOW_PRIVATE_BASE_URLS: "true"
-      CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS: "true"
+      CANVAS_ALLOW_PRIVATE_BASE_URLS: ${CANVAS_ALLOW_PRIVATE_BASE_URLS:-true}
+      CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS: ${CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS:-true}
 
   issuance-canvas-localhost-bridge:
     image: python:3.12-alpine

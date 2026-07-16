@@ -1,0 +1,241 @@
+name: Canvas OSS Source Image
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: canvas-oss-source-image
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+  attestations: write
+
+jobs:
+  build-pinned-upstream:
+    name: Build exact unmodified upstream Canvas source
+    runs-on: [self-hosted, linux, x64, canvas-oss-wsl2]
+    environment: canvas-oss-image-publish
+    timeout-minutes: 240
+    steps:
+      - name: Check out acceptance harness
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Require reviewed default-branch publication
+        shell: bash
+        run: |
+          test "$GITHUB_REPOSITORY" = "ElevenID/marty-ui"
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$GITHUB_EVENT_NAME" = "workflow_dispatch"
+
+      - name: Require verified one-job WSL2 runner
+        run: |
+          mkdir -p tests/artifacts/canvas-oss-image
+          python scripts/check_canvas_oss_runner.py \
+            --output tests/artifacts/canvas-oss-image/runner-preflight.json
+
+      - name: Validate reviewed source lock
+        run: python scripts/check_canvas_oss_portability.py --validate-config
+
+      - name: Read immutable source inputs
+        id: lock
+        shell: bash
+        run: |
+          source_repo="$(jq -r '.source.repository' deploy-config/catalog/canvas-oss.lock.json)"
+          source_tag="$(jq -r '.source.tag' deploy-config/catalog/canvas-oss.lock.json)"
+          source_tag_object="$(jq -r '.source.tag_object' deploy-config/catalog/canvas-oss.lock.json)"
+          source_sha="$(jq -r '.source.commit' deploy-config/catalog/canvas-oss.lock.json)"
+          source_tree="$(jq -r '.source.tree' deploy-config/catalog/canvas-oss.lock.json)"
+          release_train="$(jq -r '.source.release_train' deploy-config/catalog/canvas-oss.lock.json)"
+          image_repo="$(jq -r '.image.repository' deploy-config/catalog/canvas-oss.lock.json)"
+          base_reference="$(jq -r '.image.base_image.reference' deploy-config/catalog/canvas-oss.lock.json)"
+          base_index_digest="$(jq -r '.image.base_image.index_digest' deploy-config/catalog/canvas-oss.lock.json)"
+          base_amd64_digest="$(jq -r '.image.base_image.linux_amd64_digest' deploy-config/catalog/canvas-oss.lock.json)"
+          base_source_policy_sha256="$(sha256sum docker/canvas-oss/source-policy.json | cut -d' ' -f1)"
+          test "$source_repo" = "https://github.com/instructure/canvas-lms.git"
+          test "$source_tag" = "release/2026-05-06.409"
+          [[ "$source_tag_object" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$source_tree" =~ ^[0-9a-f]{40}$ ]]
+          test "$release_train" = "stable/2026-05-06"
+          [[ "$image_repo" =~ ^ghcr.io/ ]]
+          test "$base_reference" = "instructure/ruby-passenger:3.4-jammy"
+          [[ "$base_index_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$base_amd64_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$base_source_policy_sha256" =~ ^[0-9a-f]{64}$ ]]
+          echo "source_tag=$source_tag" >> "$GITHUB_OUTPUT"
+          echo "source_tag_object=$source_tag_object" >> "$GITHUB_OUTPUT"
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+          echo "source_tree=$source_tree" >> "$GITHUB_OUTPUT"
+          echo "release_train=$release_train" >> "$GITHUB_OUTPUT"
+          echo "image_repo=$image_repo" >> "$GITHUB_OUTPUT"
+          echo "base_reference=$base_reference" >> "$GITHUB_OUTPUT"
+          echo "base_index_digest=$base_index_digest" >> "$GITHUB_OUTPUT"
+          echo "base_amd64_digest=$base_amd64_digest" >> "$GITHUB_OUTPUT"
+          echo "base_source_policy_sha256=$base_source_policy_sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Check out exact Canvas source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: instructure/canvas-lms
+          ref: ${{ steps.lock.outputs.source_tag }}
+          fetch-depth: 1
+          path: canvas-source
+          persist-credentials: false
+
+      - name: Prove pristine upstream worktree
+        id: source
+        shell: bash
+        working-directory: canvas-source
+        run: |
+          git fetch --force --depth=1 origin \
+            "refs/tags/${{ steps.lock.outputs.source_tag }}:refs/tags/${{ steps.lock.outputs.source_tag }}"
+          test "$(git rev-parse 'refs/tags/${{ steps.lock.outputs.source_tag }}^{tag}')" = "${{ steps.lock.outputs.source_tag_object }}"
+          test "$(git rev-parse 'refs/tags/${{ steps.lock.outputs.source_tag }}^{}')" = "${{ steps.lock.outputs.source_sha }}"
+          test "$(git rev-parse HEAD)" = "${{ steps.lock.outputs.source_sha }}"
+          test "$(git rev-parse 'HEAD^{tree}')" = "${{ steps.lock.outputs.source_tree }}"
+          test "$(git remote get-url origin)" = "https://github.com/instructure/canvas-lms"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          test -f Dockerfile.production
+          archive_sha256="$(git archive --format=tar HEAD | sha256sum | cut -d' ' -f1)"
+          echo "archive_sha256=$archive_sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Verify the locked upstream production base image
+        shell: bash
+        run: |
+          resolved_index="$(docker buildx imagetools inspect '${{ steps.lock.outputs.base_reference }}' | awk '/^Digest:/ {print $2; exit}')"
+          test "$resolved_index" = "${{ steps.lock.outputs.base_index_digest }}"
+          raw_manifest="$(docker buildx imagetools inspect --raw '${{ steps.lock.outputs.base_reference }}@${{ steps.lock.outputs.base_index_digest }}')"
+          resolved_amd64="$(jq -r '.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64") | .digest' <<<"$raw_manifest")"
+          test "$resolved_amd64" = "${{ steps.lock.outputs.base_amd64_digest }}"
+
+      - name: Build and publish source image with SBOM and provenance
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        env:
+          EXPERIMENTAL_BUILDKIT_SOURCE_POLICY: ${{ github.workspace }}/docker/canvas-oss/source-policy.json
+        with:
+          context: canvas-source
+          file: canvas-source/Dockerfile.production
+          push: true
+          pull: true
+          platforms: linux/amd64
+          build-args: |
+            RUBY=3.4
+          tags: ${{ steps.lock.outputs.image_repo }}:source-${{ steps.lock.outputs.source_sha }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/instructure/canvas-lms
+            org.opencontainers.image.revision=${{ steps.lock.outputs.source_sha }}
+            org.opencontainers.image.version=${{ steps.lock.outputs.source_tag }}
+            org.opencontainers.image.ref.name=${{ steps.lock.outputs.source_tag }}
+            org.opencontainers.image.base.name=${{ steps.lock.outputs.base_reference }}
+            org.opencontainers.image.base.digest=${{ steps.lock.outputs.base_index_digest }}
+            io.elevenid.canvas-oss.base.linux-amd64.digest=${{ steps.lock.outputs.base_amd64_digest }}
+          sbom: true
+          provenance: mode=max
+          cache-from: type=gha,scope=canvas-oss-${{ steps.lock.outputs.source_sha }}
+          cache-to: type=gha,mode=max,scope=canvas-oss-${{ steps.lock.outputs.source_sha }}
+
+      - name: Attest published image digest
+        uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45 # v2
+        with:
+          subject-name: ${{ steps.lock.outputs.image_repo }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      - name: Write fixed image provenance manifest
+        shell: bash
+        run: |
+          mkdir -p tests/artifacts/canvas-oss-image
+          jq -n \
+            --arg source_repository "https://github.com/instructure/canvas-lms.git" \
+            --arg source_tag "${{ steps.lock.outputs.source_tag }}" \
+            --arg source_tag_object "${{ steps.lock.outputs.source_tag_object }}" \
+            --arg source_commit "${{ steps.lock.outputs.source_sha }}" \
+            --arg source_tree "${{ steps.lock.outputs.source_tree }}" \
+            --arg source_archive_sha256 "${{ steps.source.outputs.archive_sha256 }}" \
+            --arg release_train "${{ steps.lock.outputs.release_train }}" \
+            --arg dockerfile "Dockerfile.production" \
+            --arg image_repository "${{ steps.lock.outputs.image_repo }}" \
+            --arg image_digest "${{ steps.build.outputs.digest }}" \
+            --arg harness_repository "${{ github.repository }}" \
+            --arg harness_ref "${{ github.ref }}" \
+            --arg harness_head_sha "${{ github.sha }}" \
+            --arg publisher_workflow ".github/workflows/canvas-oss-image.yml" \
+            --arg publisher_run_id "${{ github.run_id }}" \
+            --arg base_reference "${{ steps.lock.outputs.base_reference }}" \
+            --arg base_index_digest "${{ steps.lock.outputs.base_index_digest }}" \
+            --arg base_amd64_digest "${{ steps.lock.outputs.base_amd64_digest }}" \
+            --arg base_source_policy_sha256 "${{ steps.lock.outputs.base_source_policy_sha256 }}" \
+            '{
+              schema_version: 1,
+              source_repository: $source_repository,
+              source_tag: $source_tag,
+              source_tag_object: $source_tag_object,
+              source_commit: $source_commit,
+              source_tree: $source_tree,
+              source_archive_sha256: $source_archive_sha256,
+              release_train: $release_train,
+              source_modified: false,
+              dockerfile: $dockerfile,
+              image_repository: $image_repository,
+              image_digest: $image_digest,
+              harness_repository: $harness_repository,
+              harness_ref: $harness_ref,
+              harness_head_sha: $harness_head_sha,
+              publisher_workflow: $publisher_workflow,
+              publisher_run_id: $publisher_run_id,
+              base_image: {
+                reference: $base_reference,
+                index_digest: $base_index_digest,
+                linux_amd64_digest: $base_amd64_digest
+              },
+              base_source_policy: "docker/canvas-oss/source-policy.json",
+              base_source_policy_sha256: $base_source_policy_sha256,
+              oci_labels: {
+                "org.opencontainers.image.source": "https://github.com/instructure/canvas-lms",
+                "org.opencontainers.image.revision": $source_commit,
+                "org.opencontainers.image.version": $source_tag,
+                "org.opencontainers.image.ref.name": $source_tag,
+                "org.opencontainers.image.base.name": $base_reference,
+                "org.opencontainers.image.base.digest": $base_index_digest,
+                "io.elevenid.canvas-oss.base.linux-amd64.digest": $base_amd64_digest
+              },
+              sbom: true,
+              provenance: true
+            }' > tests/artifacts/canvas-oss-image/canvas-oss-image-manifest.json
+          jq -e '.image_digest | test("^sha256:[0-9a-f]{64}$")' tests/artifacts/canvas-oss-image/canvas-oss-image-manifest.json >/dev/null
+
+      - name: Upload digest and provenance record
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: canvas-oss-image-${{ steps.lock.outputs.source_sha }}
+          path: |
+            tests/artifacts/canvas-oss-image/canvas-oss-image-manifest.json
+            tests/artifacts/canvas-oss-image/runner-preflight.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Explain digest promotion boundary
+        shell: bash
+        run: |
+          {
+            echo "## Canvas OSS source image"
+            echo "- Source tag: \`${{ steps.lock.outputs.source_tag }}\` (annotated object \`${{ steps.lock.outputs.source_tag_object }}\`)"
+            echo "- Peeled source: \`${{ steps.lock.outputs.source_sha }}\`, tree \`${{ steps.lock.outputs.source_tree }}\`"
+            echo "- Base: \`${{ steps.lock.outputs.base_reference }}@${{ steps.lock.outputs.base_index_digest }}\`"
+            echo "- Image: \`${{ steps.lock.outputs.image_repo }}@${{ steps.build.outputs.digest }}\`"
+            echo "- The portability workflow remains fail-closed until this digest is reviewed and written to \`canvas-oss.lock.json\` with \`digest_state=published\`."
+          } >> "$GITHUB_STEP_SUMMARY"

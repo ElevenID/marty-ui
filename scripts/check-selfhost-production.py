@@ -547,6 +547,155 @@ def validate_selfhost_canvas_public_config(env_values: dict[str, str]) -> str:
     if provider:
         checked.append("CANVAS_CREDENTIALS_PROVIDER")
 
+    portable_enabled = env_values.get("CANVAS_PORTABLE_INTEGRATION_ENABLED", "false").strip().lower() == "true"
+    if portable_enabled:
+        experience_base_url = env_values.get("CANVAS_LTI_EXPERIENCE_BASE_URL", "").strip()
+        if not experience_base_url:
+            raise CheckError(
+                "CANVAS_LTI_EXPERIENCE_BASE_URL is required when the portable Canvas integration is enabled."
+            )
+        pilot_orgs = [
+            value.strip()
+            for value in env_values.get("CANVAS_PILOT_ORGANIZATION_IDS", "").split(",")
+            if value.strip()
+        ]
+        if not pilot_orgs:
+            raise CheckError(
+                "CANVAS_PILOT_ORGANIZATION_IDS must explicitly allow at least one organization when Canvas is enabled."
+            )
+        if env_values.get("CANVAS_LEGACY_EVENT_INGEST_ENABLED", "false").strip().lower() == "true":
+            raise CheckError(
+                "CANVAS_LEGACY_EVENT_INGEST_ENABLED must remain false for the portable production pilot."
+            )
+        signer_keys = (
+            "CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID",
+            "CANVAS_LTI_TOOL_SIGNING_SERVICE_ID",
+            "CANVAS_LTI_TOOL_SIGNING_KEY_REFERENCE",
+            "CANVAS_LTI_TOOL_ACTIVE_KID",
+            "CANVAS_LTI_TOOL_PUBLIC_JWKS",
+        )
+        missing_signer_keys = [key for key in signer_keys if not env_values.get(key, "").strip()]
+        if missing_signer_keys:
+            raise CheckError(
+                "Portable Canvas requires the dedicated RS256 tool signer configuration: "
+                + ", ".join(missing_signer_keys)
+            )
+        signing_service_id = env_values["CANVAS_LTI_TOOL_SIGNING_SERVICE_ID"].strip()
+        signing_key_reference = env_values["CANVAS_LTI_TOOL_SIGNING_KEY_REFERENCE"].strip()
+        if signing_key_reference.startswith(("cred-issuer-", "cred-dsc-")):
+            raise CheckError(
+                "CANVAS_LTI_TOOL_SIGNING_KEY_REFERENCE must identify a dedicated LTI protocol key, "
+                "not a credential issuer/document-signing key."
+            )
+        if (
+            signing_service_id == "managed-openbao-transit"
+            and not signing_key_reference.startswith("lti-tool-")
+        ):
+            raise CheckError(
+                "Managed OpenBao Canvas signing keys must use the lti-tool- namespace so the "
+                "key reference is distinct from credential issuer keys."
+            )
+        credential_key_references = {
+            value.strip()
+            for value in env_values.get(
+                "CANVAS_CREDENTIAL_ISSUER_KEY_REFERENCES",
+                "",
+            ).split(",")
+            if value.strip()
+        }
+        if not credential_key_references:
+            raise CheckError(
+                "CANVAS_CREDENTIAL_ISSUER_KEY_REFERENCES must inventory credential "
+                "issuer/document-signing key references when portable Canvas is enabled."
+            )
+        if signing_key_reference in credential_key_references:
+            raise CheckError(
+                "CANVAS_LTI_TOOL_SIGNING_KEY_REFERENCE is also listed in "
+                "CANVAS_CREDENTIAL_ISSUER_KEY_REFERENCES; LTI and credential issuance keys "
+                "must be distinct."
+            )
+        try:
+            public_jwks = json.loads(env_values["CANVAS_LTI_TOOL_PUBLIC_JWKS"])
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise CheckError("CANVAS_LTI_TOOL_PUBLIC_JWKS must be valid compact JSON.") from exc
+        jwks_keys = public_jwks.get("keys") if isinstance(public_jwks, dict) else None
+        if not isinstance(jwks_keys, list) or not jwks_keys:
+            raise CheckError("CANVAS_LTI_TOOL_PUBLIC_JWKS must contain at least one public RSA key.")
+        private_parameters = {"d", "p", "q", "dp", "dq", "qi", "oth"}
+        active_kid = env_values["CANVAS_LTI_TOOL_ACTIVE_KID"].strip()
+        seen_kids: set[str] = set()
+        for jwk in jwks_keys:
+            if not isinstance(jwk, dict):
+                raise CheckError("CANVAS_LTI_TOOL_PUBLIC_JWKS keys must be JSON objects.")
+            if private_parameters.intersection(jwk):
+                raise CheckError("CANVAS_LTI_TOOL_PUBLIC_JWKS must never contain private RSA parameters.")
+            if jwk.get("kty") != "RSA" or jwk.get("alg") != "RS256" or not jwk.get("n") or not jwk.get("e"):
+                raise CheckError("Every Canvas LTI tool JWK must be a public RSA/RS256 key with n and e.")
+            kid = str(jwk.get("kid") or "").strip()
+            if not kid or kid in seen_kids:
+                raise CheckError("Every Canvas LTI tool JWK must have a unique non-empty kid.")
+            seen_kids.add(kid)
+        if active_kid not in seen_kids:
+            raise CheckError("CANVAS_LTI_TOOL_ACTIVE_KID must identify a key in CANVAS_LTI_TOOL_PUBLIC_JWKS.")
+        processor = env_values.get("CANVAS_SYNC_PROCESSOR", "").strip()
+        module_name, separator, function_name = processor.partition(":")
+        if not separator or not module_name or not function_name:
+            raise CheckError(
+                "CANVAS_SYNC_PROCESSOR must use module:function syntax when portable Canvas is enabled."
+            )
+        if env_values.get("CANVAS_SYNC_WORKER_JOB_TIMEOUT_SECONDS", "").strip() != "600":
+            raise CheckError(
+                "CANVAS_SYNC_WORKER_JOB_TIMEOUT_SECONDS must be 600 when portable Canvas is enabled."
+            )
+        checked.extend(
+            [
+                "CANVAS_PORTABLE_INTEGRATION_ENABLED",
+                "CANVAS_PILOT_ORGANIZATION_IDS",
+                *signer_keys,
+                "CANVAS_SYNC_PROCESSOR",
+                "CANVAS_SYNC_WORKER_JOB_TIMEOUT_SECONDS",
+            ]
+        )
+        checked.append("CANVAS_CREDENTIAL_ISSUER_KEY_REFERENCES")
+
+    if env_values.get("CANVAS_ALLOW_PRIVATE_BASE_URLS", "false").strip().lower() == "true":
+        allowlist = [
+            value.strip()
+            for value in env_values.get("CANVAS_PRIVATE_ORIGIN_ALLOWLIST", "").split(",")
+            if value.strip()
+        ]
+        if not allowlist:
+            raise CheckError(
+                "CANVAS_PRIVATE_ORIGIN_ALLOWLIST is required when private Canvas origins are enabled."
+            )
+        checked.append("CANVAS_PRIVATE_ORIGIN_ALLOWLIST")
+
+    self_managed_origins = [
+        value.strip().rstrip("/")
+        for value in env_values.get("CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST", "").split(",")
+        if value.strip()
+    ]
+    if len(self_managed_origins) != len(set(self_managed_origins)):
+        raise CheckError("CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST cannot contain duplicate origins.")
+    for origin in self_managed_origins:
+        parsed = urlparse(origin)
+        if (
+            parsed.scheme != "https"
+            or not parsed.hostname
+            or parsed.username
+            or parsed.password
+            or parsed.path not in ("", "/")
+            or parsed.params
+            or parsed.query
+            or parsed.fragment
+            or origin != f"https://{parsed.netloc}"
+        ):
+            raise CheckError(
+                "CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST must contain exact HTTPS origins without paths or credentials."
+            )
+    if self_managed_origins:
+        checked.append("CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST")
+
     return f"checked={','.join(checked) if checked else 'none-configured'}"
 
 
