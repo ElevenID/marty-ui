@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from fastapi import HTTPException
 from starlette.responses import JSONResponse
 
 from gateway.routes import applicants
@@ -217,53 +218,103 @@ async def test_canvas_platform_and_program_binding_routes_proxy_with_management_
 
 
 @pytest.mark.asyncio
-async def test_canvas_lti_bootstrap_route_proxies_to_issuance_without_management_header(monkeypatch: pytest.MonkeyPatch):
-    captured: dict = {}
+async def test_canvas_production_management_routes_proxy_with_trusted_header(monkeypatch: pytest.MonkeyPatch):
+    captured: list[dict] = []
 
     async def _proxy(request, service_url, path, inject_headers=None):
-        captured.update({
-            "service_url": service_url,
+        captured.append({
             "path": path,
             "inject_headers": inject_headers,
         })
-        return JSONResponse({"application_id": "app-1", "created": True})
+        return JSONResponse({"ok": True})
 
     monkeypatch.setattr(canvas_integrations, "get_registry", lambda: _Registry())
     monkeypatch.setattr(canvas_integrations, "proxy_request", _proxy)
     monkeypatch.setattr(canvas_integrations, "_ISSUANCE_HEADERS", {"X-API-Key": "secret"})
+    request = _build_request()
 
-    response = await canvas_integrations.bootstrap_canvas_lti_application("state-1", _build_request())
-    body = json.loads(response.body)
+    await canvas_integrations.configure_canvas_lti_installation("platform-1", request)
+    await canvas_integrations.create_canvas_oauth_authorization("platform-1", request)
+    await canvas_integrations.validate_canvas_program_binding("binding-1", request)
+    await canvas_integrations.activate_canvas_program_binding("binding-1", request)
+    await canvas_integrations.approve_canvas_application("application-1", request)
+    await canvas_integrations.enqueue_canvas_application_sync("application-1", request)
+    await canvas_integrations.retry_canvas_sync_job("job-1", request)
+    await canvas_integrations.resolve_canvas_sync_job("job-1", request)
+    await canvas_integrations.list_canvas_award_candidates(request)
+    await canvas_integrations.resolve_canvas_evidence_policy_review("review-1", request)
 
-    assert captured["service_url"] == "http://issuance-service"
-    assert captured["path"] == "/v1/integrations/canvas/lti/experience-sessions/state-1/bootstrap"
-    assert captured["inject_headers"] is None
-    assert body["application_id"] == "app-1"
+    assert [call["path"] for call in captured] == [
+        "/v1/integrations/canvas/platforms/platform-1/lti-installation",
+        "/v1/integrations/canvas/platforms/platform-1/oauth/authorizations",
+        "/v1/integrations/canvas/program-bindings/binding-1/validate",
+        "/v1/integrations/canvas/program-bindings/binding-1/activate",
+        "/v1/integrations/canvas/applications/application-1/approve",
+        "/v1/integrations/canvas/applications/application-1/canvas-sync",
+        "/v1/integrations/canvas/canvas-sync-jobs/job-1/retry",
+        "/v1/integrations/canvas/canvas-sync-jobs/job-1/resolve",
+        "/v1/integrations/canvas/canvas-award-candidates",
+        "/v1/integrations/canvas/evidence-policy-reviews/review-1/resolve",
+    ]
+    assert all(call["inject_headers"] == {"X-API-Key": "secret"} for call in captured)
 
 
 @pytest.mark.asyncio
-async def test_canvas_lti_deep_linking_route_proxies_to_issuance_without_management_header(monkeypatch: pytest.MonkeyPatch):
-    captured: dict = {}
+async def test_canvas_experience_code_and_session_routes_do_not_receive_management_key(monkeypatch: pytest.MonkeyPatch):
+    captured: list[dict] = []
 
     async def _proxy(request, service_url, path, inject_headers=None):
-        captured.update({
-            "service_url": service_url,
+        captured.append({
             "path": path,
             "inject_headers": inject_headers,
+            "authorization": request.headers.get("authorization"),
         })
-        return JSONResponse({"jwt": "signed.jwt", "deep_link_return_url": "https://canvas.example.edu/return"})
+        return JSONResponse({"ok": True})
 
     monkeypatch.setattr(canvas_integrations, "get_registry", lambda: _Registry())
     monkeypatch.setattr(canvas_integrations, "proxy_request", _proxy)
-    monkeypatch.setattr(canvas_integrations, "_ISSUANCE_HEADERS", {"X-API-Key": "secret"})
+    request = _build_request()
+    request.scope["headers"] = [
+        (b"authorization", b"Bearer experience-session-token"),
+    ]
 
-    response = await canvas_integrations.create_canvas_lti_deep_linking_response("state-1", _build_request())
-    body = json.loads(response.body)
+    await canvas_integrations.exchange_canvas_lti_experience_code(request)
+    await canvas_integrations.get_current_canvas_lti_experience(request)
+    await canvas_integrations.bootstrap_current_canvas_lti_application(request)
+    await canvas_integrations.sync_current_canvas_lti_evidence(request)
+    await canvas_integrations.get_current_canvas_lti_evidence_status(request)
+    await canvas_integrations.create_current_canvas_lti_deep_linking_response(request)
 
-    assert captured["service_url"] == "http://issuance-service"
-    assert captured["path"] == "/v1/integrations/canvas/lti/experience-sessions/state-1/deep-linking-response"
-    assert captured["inject_headers"] is None
-    assert body["jwt"] == "signed.jwt"
+    assert [call["path"] for call in captured] == [
+        "/v1/integrations/canvas/lti/experience-sessions/exchange",
+        "/v1/integrations/canvas/lti/experience-sessions/current",
+        "/v1/integrations/canvas/lti/experience-sessions/current/bootstrap",
+        "/v1/integrations/canvas/lti/experience-sessions/current/evidence-sync",
+        "/v1/integrations/canvas/lti/experience-sessions/current/evidence-status",
+        "/v1/integrations/canvas/lti/experience-sessions/current/deep-linking-response",
+    ]
+    assert all(call["inject_headers"] is None for call in captured)
+    assert all(
+        call["authorization"] == "Bearer experience-session-token"
+        for call in captured
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "handler",
+    [
+        canvas_integrations.get_canvas_lti_experience_session,
+        canvas_integrations.bootstrap_canvas_lti_application,
+        canvas_integrations.sync_canvas_lti_evidence,
+        canvas_integrations.create_canvas_lti_deep_linking_response,
+    ],
+)
+async def test_state_addressed_canvas_lti_routes_are_retired(handler) -> None:
+    with pytest.raises(HTTPException) as exc_info:
+        await handler("state-1", _build_request())
+
+    assert exc_info.value.status_code == 410
 
 
 @pytest.mark.asyncio

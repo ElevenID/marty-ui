@@ -71,6 +71,7 @@ def test_kubernetes_update_script_updates_selfhost_image_variants():
 
     assert "ui=${IMAGE_REGISTRY}/marty-ui/ui-selfhost:${IMAGE_TAG}" in text
     assert "cloudflared=${IMAGE_REGISTRY}/marty-ui/cloudflared-wrapper:${IMAGE_TAG}" in text
+    assert "canvas-sync-worker=${IMAGE_REGISTRY}/marty-ui/issuance:${IMAGE_TAG}" in text
     assert "IMAGE_TAG=v1.1" not in text
 
 

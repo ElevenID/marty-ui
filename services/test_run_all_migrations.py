@@ -23,6 +23,98 @@ class FakeRedis:
         return True
 
 
+def test_seed_signing_registry_binds_lti_key_inside_multi_key_service() -> None:
+    redis = FakeRedis()
+    organization_id = "00000000-0000-0000-0000-000000000001"
+
+    migrations._seed_signing_registry(
+        redis,
+        organization_id,
+        migrations.MARTY_KMS_KEY_SPECS,
+    )
+
+    payload = json.loads(redis.store[migrations._storage_key(organization_id)])
+    managed = next(
+        service
+        for service in payload["services"]
+        if service["id"] == migrations.MANAGED_OPENBAO_SERVICE_ID
+    )
+    bindings = payload["key_reference_purposes"][migrations.MANAGED_OPENBAO_SERVICE_ID]
+
+    assert "lti_tool_signing" in managed["key_purposes"]
+    assert "vc_jwt_issuer" in managed["key_purposes"]
+    assert bindings["lti-tool-marty-rs256"] == ["lti_tool_signing"]
+    assert bindings["cred-issuer-marty-rs256"] == ["vc_jwt_issuer"]
+    assert bindings["lti-tool-marty-rs256"] != bindings["cred-issuer-marty-rs256"]
+
+
+def test_seed_signing_registry_preserves_custom_managed_key_bindings() -> None:
+    redis = FakeRedis()
+    organization_id = "00000000-0000-0000-0000-000000000001"
+    redis.store[migrations._storage_key(organization_id)] = json.dumps(
+        {
+            "key_reference_purposes": {
+                migrations.MANAGED_OPENBAO_SERVICE_ID: {
+                    "cred-issuer-customer-es256": ["vc_jwt_issuer"],
+                }
+            }
+        }
+    )
+
+    migrations._seed_signing_registry(
+        redis,
+        organization_id,
+        migrations.MARTY_KMS_KEY_SPECS,
+    )
+
+    payload = json.loads(redis.store[migrations._storage_key(organization_id)])
+    bindings = payload["key_reference_purposes"][migrations.MANAGED_OPENBAO_SERVICE_ID]
+    assert bindings["cred-issuer-customer-es256"] == ["vc_jwt_issuer"]
+    assert bindings["lti-tool-marty-rs256"] == ["lti_tool_signing"]
+
+
+def test_seed_issuer_did_and_jwks_excludes_lti_protocol_key() -> None:
+    redis = FakeRedis()
+    organization_id = "00000000-0000-0000-0000-000000000001"
+    issuer_did = "did:web:issuer.example"
+    credential_key = {
+        "id": "cred-issuer-marty-rs256",
+        "key_purposes": ["vc_jwt_issuer"],
+        "public_jwk": {
+            "kty": "RSA",
+            "alg": "RS256",
+            "n": "credential-modulus",
+            "e": "AQAB",
+        },
+    }
+    lti_key = {
+        "id": "lti-tool-marty-rs256",
+        "key_purposes": ["lti_tool_signing"],
+        "public_jwk": {
+            "kty": "RSA",
+            "alg": "RS256",
+            "n": "lti-modulus",
+            "e": "AQAB",
+        },
+    }
+
+    migrations._seed_did_and_jwks(
+        redis,
+        organization_id,
+        issuer_did,
+        [credential_key, lti_key],
+    )
+
+    did_document = json.loads(redis.store[migrations._did_doc_storage_key(organization_id)])
+    issuer_jwks = json.loads(redis.store[migrations._jwks_storage_key(organization_id)])
+    serialized_did = json.dumps(did_document)
+    assert "cred-issuer-marty-rs256" in serialized_did
+    assert "lti-tool-marty-rs256" not in serialized_did
+    assert [key["kid"] for key in issuer_jwks["keys"]] == [
+        "cred-issuer-marty-rs256"
+    ]
+
+
 def test_seed_issuer_profiles_creates_active_marty_kms_profiles():
     redis = FakeRedis()
     organization_id = "00000000-0000-0000-0000-000000000001"

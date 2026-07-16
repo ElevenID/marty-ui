@@ -6,6 +6,7 @@ Maps service names to URLs and defines per-route auth requirements.
 from __future__ import annotations
 
 import os
+import re
 from typing import Any
 
 
@@ -44,6 +45,24 @@ class ServiceRegistry:
         return self._services.copy()
 
 
+_CANVAS_PUBLIC_PATH_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
+    re.compile(pattern)
+    for pattern in (
+        r"^/v1/integrations/canvas/lti/jwks/?$",
+        r"^/v1/integrations/canvas/lti/config/[^/]+/?$",
+        r"^/v1/integrations/canvas/lti/platforms/[^/]+/(?:login|experience-login|launch|experience)/?$",
+        r"^/v1/integrations/canvas/oauth/callback/?$",
+        r"^/v1/integrations/canvas/lti/experience-sessions/(?:exchange|current(?:/(?:bootstrap|evidence-sync|evidence-status|deep-linking-response))?)/?$",
+    )
+)
+
+
+def is_public_canvas_route(path: str) -> bool:
+    """Return whether ``path`` is an explicitly public Canvas protocol route."""
+
+    return any(pattern.fullmatch(path) for pattern in _CANVAS_PUBLIC_PATH_PATTERNS)
+
+
 ROUTE_CONFIG = {
     # Auth routes (no auth required)
     "/v1/auth": {"service": "auth", "requires_auth": False},
@@ -52,7 +71,6 @@ ROUTE_CONFIG = {
 
     # Organization routes
     "/v1/organizations": {"service": "organizations", "requires_auth": True},
-    "/v1/me": {"service": "organizations", "requires_auth": True},
     "/v1/api-keys": {"service": "organizations", "requires_auth": True},
 
     # Digital Identity Model - Configuration Resources
@@ -89,15 +107,9 @@ ROUTE_CONFIG = {
     "/v1/issuance/didcomm/deliver": {"service": "issuance", "requires_auth": True},
     "/v1/issuance/didcomm/receive": {"service": "issuance", "requires_auth": False},
     "/v1/issuance": {"service": "issuance", "requires_auth": True},
-    "/v1/integrations/canvas/platforms": {"service": "issuance", "requires_auth": True},
-    "/v1/integrations/canvas/program-bindings": {"service": "issuance", "requires_auth": True},
-    "/v1/integrations/canvas/lti/login": {"service": "issuance", "requires_auth": False},
-    "/v1/integrations/canvas/lti/experience-login": {"service": "issuance", "requires_auth": False},
-    "/v1/integrations/canvas/lti/experience-sessions": {"service": "issuance", "requires_auth": False},
-    "/v1/integrations/canvas/lti/experience": {"service": "issuance", "requires_auth": False},
-    "/v1/integrations/canvas/lti/launch": {"service": "issuance", "requires_auth": False},
-    "/v1/integrations/canvas/evidence-events": {"service": "issuance", "requires_auth": False},
-    "/v1/integrations/canvas": {"service": "issuance", "requires_auth": False},
+    # Canvas is authenticated by default. Protocol callbacks and browser handoffs
+    # are selected by the exact public allowlist in ``get_route_config`` below.
+    "/v1/integrations/canvas": {"service": "issuance", "requires_auth": True},
     "/v1/application-templates": {"service": "issuance", "requires_auth": True},
     "/v1/flows/instances": {"service": "flows", "requires_auth": True},  # wallet-facing /request + /submit handled by _WALLET_PUBLIC regex
     "/v1/flows/siop/submit": {"service": "flows", "requires_auth": False},  # SIOPv2 wallet-facing
@@ -115,6 +127,9 @@ ROUTE_CONFIG = {
 
 def get_route_config(path: str) -> dict[str, Any] | None:
     """Find matching route configuration for a path."""
+    if is_public_canvas_route(path):
+        return {"service": "issuance", "requires_auth": False}
+
     for prefix, config in sorted(ROUTE_CONFIG.items(), key=lambda x: -len(x[0])):
         if path.startswith(prefix):
             return config

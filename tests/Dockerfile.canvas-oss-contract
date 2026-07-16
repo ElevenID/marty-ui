@@ -1,0 +1,32 @@
+# syntax=docker/dockerfile:1
+
+ARG CANVAS_OSS_PLAYWRIGHT_IMAGE
+FROM ${CANVAS_OSS_PLAYWRIGHT_IMAGE}
+
+ARG CANVAS_OSS_DRIVER_SOURCE_SHA
+LABEL org.opencontainers.image.source="https://github.com/ElevenID/marty-ui" \
+      org.opencontainers.image.revision="${CANVAS_OSS_DRIVER_SOURCE_SHA}" \
+      io.elevenid.canvas-oss.role="contract-driver" \
+      io.elevenid.canvas-oss.execution-boundary="docker-compose-one-shot"
+
+USER root
+WORKDIR /tests
+
+COPY tests/canvas-oss-contract/package.json tests/canvas-oss-contract/package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --ignore-scripts \
+    && npm audit --audit-level=high \
+    && npm cache clean --force
+
+COPY --chown=pwuser:pwuser tests/scripts/run-canvas-oss-standard-contract.js ./scripts/run-canvas-oss-standard-contract.js
+COPY --chown=pwuser:pwuser tests/scripts/run-canvas-oss-standard-contract.test.js ./scripts/run-canvas-oss-standard-contract.test.js
+COPY --chown=pwuser:pwuser scripts/canvas-oss/beta-continuity-monitor.mjs ./scripts/beta-continuity-monitor.mjs
+
+RUN install -d -o pwuser -g pwuser -m 0700 /artifacts
+
+USER pwuser
+ENV CI=true \
+    HOME=/home/pwuser \
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+
+CMD ["node", "scripts/run-canvas-oss-standard-contract.js", "--observations", "/artifacts/observations.json", "--video", "/artifacts/video/canvas-oss-portability.webm"]

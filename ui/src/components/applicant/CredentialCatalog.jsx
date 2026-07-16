@@ -54,6 +54,7 @@ import { useTranslation } from 'react-i18next';
 import { useAuth } from '../../hooks/useAuth';
 import { usePreview } from '../../contexts/PreviewContext';
 import { get } from '../../services/api';
+import { getCurrentCanvasLtiExperience } from '../../services/canvasLtiExperience';
 import { listApplications } from '../../services/applicantApi';
 import { listApplicationTemplates } from '../../services/applicationTemplatesApi';
 import {
@@ -67,12 +68,7 @@ import {
 } from '../../application/applications';
 
 function getLtiSessionValue(session, key) {
-  return (
-    session?.[key]
-    || session?.mip_primitives?.context?.[key]
-    || session?.verified_launch?.[key]
-    || null
-  );
+  return session?.[key] || null;
 }
 
 function normalizeOrganizationIdCandidate(value) {
@@ -177,7 +173,6 @@ const CredentialCatalog = () => {
     () => new URLSearchParams(location.search || '').get('canvas_lti_state') || '',
     [location.search]
   );
-  const canvasLtiSessionState = getLtiSessionValue(canvasLtiSession, 'state');
   const canvasLtiOrganizationId = useMemo(
     () => getLtiSessionValue(canvasLtiSession, 'organization_id'),
     [canvasLtiSession]
@@ -197,13 +192,13 @@ const CredentialCatalog = () => {
     let alive = true;
 
     async function loadCanvasLtiSession() {
-      if (!canvasLtiState || canvasLtiSessionState === canvasLtiState) {
+      if (!canvasLtiState || canvasLtiSession) {
         return;
       }
 
       setCanvasLtiLoading(true);
       try {
-        const data = await get(`/v1/integrations/canvas/lti/experience-sessions/${encodeURIComponent(canvasLtiState)}`);
+        const data = await getCurrentCanvasLtiExperience();
         if (alive) {
           setCanvasLtiSession(data);
         }
@@ -220,7 +215,7 @@ const CredentialCatalog = () => {
     return () => {
       alive = false;
     };
-  }, [canvasLtiState, canvasLtiSessionState]);
+  }, [canvasLtiState, canvasLtiSession]);
 
   const listCredentialTemplates = useCallback((currentOrganizationId) => {
     const normalizedOrganizationId = normalizeOrganizationIdCandidate(currentOrganizationId);

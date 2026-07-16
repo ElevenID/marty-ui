@@ -10,6 +10,12 @@ _UUID_RE = r"([a-f0-9\-]{36})"
 _ORG_PATH_RE = re.compile(rf"^/v1/organizations/{_UUID_RE}(?:/|$)")
 _TOP_LEVEL_RESOURCE_RE = re.compile(r"^/v1/([^/]+)/([^/]+)(?:/|$)")
 _FLOW_RESOURCE_RE = re.compile(r"^/v1/flows/(definitions|instances)/([^/]+)(?:/|$)")
+_CANVAS_PLATFORM_RESOURCE_RE = re.compile(
+    r"^/v1/integrations/canvas/platforms/([^/]+)(?:/|$)"
+)
+_CANVAS_BINDING_RESOURCE_RE = re.compile(
+    r"^/v1/integrations/canvas/program-bindings/([^/]+)(?:/|$)"
+)
 
 
 RESOURCE_LOOKUP_MAP: dict[str, tuple[str, str, set[str]]] = {
@@ -89,6 +95,56 @@ RESOURCE_LOOKUP_MAP: dict[str, tuple[str, str, set[str]]] = {
 
 
 SPECIAL_ROUTE_RULES: list[tuple[re.Pattern[str], dict[str, str], str]] = [
+    (
+        re.compile(r"^/v1/integrations/canvas/platforms/[^/]+/(?:registration-config|readiness)$"),
+        {"GET": "integration-connector:view"},
+        "integration-connector",
+    ),
+    (
+        re.compile(r"^/v1/integrations/canvas/platforms/[^/]+/scope-discovery$"),
+        {"POST": "integration-connector:view"},
+        "integration-connector",
+    ),
+    (
+        re.compile(r"^/v1/integrations/canvas/platforms/[^/]+/(?:sandbox-probe|jwks-refresh|oauth/start|oauth/authorizations)$"),
+        {"POST": "integration-connector:edit"},
+        "integration-connector",
+    ),
+    (
+        re.compile(r"^/v1/integrations/canvas/platforms/[^/]+/lti-installation$"),
+        {"PUT": "integration-connector:edit"},
+        "integration-connector",
+    ),
+    (
+        re.compile(r"^/v1/integrations/canvas/program-bindings/[^/]+/(?:validate|activate|deactivate)$"),
+        {"POST": "integration-connector:edit"},
+        "integration-connector",
+    ),
+    (
+        re.compile(r"^/v1/integrations/canvas/applications/[^/]+/(?:approve|canvas-sync)$"),
+        {"POST": "integration-connector:edit"},
+        "integration-connector",
+    ),
+    (
+        re.compile(r"^/v1/integrations/canvas/canvas-sync-jobs/[^/]+/(?:retry|resolve)$"),
+        {"POST": "integration-connector:edit"},
+        "integration-connector",
+    ),
+    (
+        re.compile(r"^/v1/integrations/canvas/evidence-policy-reviews/[^/]+/resolve$"),
+        {"POST": "integration-connector:edit"},
+        "integration-connector",
+    ),
+    (
+        re.compile(r"^/v1/integrations/canvas/platforms/[^/]+/oauth$"),
+        {"DELETE": "integration-connector:edit"},
+        "integration-connector",
+    ),
+    (
+        re.compile(r"^/v1/integrations/canvas/canvas-credentials/validate$"),
+        {"POST": "integration-connector:view"},
+        "integration-connector",
+    ),
     (
         re.compile(r"^/v1/credential-templates/[^/]+/activate$"),
         {"POST": "credential-template:activate"},
@@ -387,6 +443,16 @@ def extract_org_id(path: str) -> Optional[str]:
 
 
 def resolve_resource_lookup(path: str) -> Optional[tuple[str, str]]:
+    canvas_platform_match = _CANVAS_PLATFORM_RESOURCE_RE.match(path)
+    if canvas_platform_match:
+        platform_id = canvas_platform_match.group(1)
+        return ("issuance", f"/v1/integrations/canvas/platforms/{platform_id}")
+
+    canvas_binding_match = _CANVAS_BINDING_RESOURCE_RE.match(path)
+    if canvas_binding_match:
+        binding_id = canvas_binding_match.group(1)
+        return ("issuance", f"/v1/integrations/canvas/program-bindings/{binding_id}")
+
     flow_match = _FLOW_RESOURCE_RE.match(path)
     if flow_match:
         resource_type, resource_id = flow_match.groups()

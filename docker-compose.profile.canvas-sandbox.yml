@@ -47,8 +47,8 @@ services:
   # Override issuance to allow private base URLs when sandbox is active
   issuance:
     environment:
-      CANVAS_ALLOW_PRIVATE_BASE_URLS: "true"
-      CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS: "true"
+      CANVAS_ALLOW_PRIVATE_BASE_URLS: ${CANVAS_ALLOW_PRIVATE_BASE_URLS:-true}
+      CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS: ${CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS:-true}
       CANVAS_CREDENTIALS_PROVIDER: bridge
       CANVAS_CREDENTIALS_PUBLISH_URL: ${CANVAS_CREDENTIALS_PUBLISH_URL:-http://canvas-sandbox:8017/api/credentials/mirror/publish}
       CANVAS_CREDENTIALS_STATUS_SYNC_URL: ${CANVAS_CREDENTIALS_STATUS_SYNC_URL:-http://canvas-sandbox:8017/api/credentials/mirror/status}

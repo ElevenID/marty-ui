@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   Alert,
@@ -12,33 +12,78 @@ import {
   Typography,
 } from '@mui/material';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
+import AddLinkIcon from '@mui/icons-material/AddLink';
 import SchoolIcon from '@mui/icons-material/School';
 
-import { get } from '../../services/api';
 import { useAuth } from '../../hooks/useAuth';
+import {
+  CANVAS_LTI_NAVIGATION_MARKER,
+  createCurrentCanvasLtiDeepLinkingResponse,
+  exchangeCanvasLtiExperienceCode,
+  finalizeCanvasLtiAuthentication,
+  getCurrentCanvasLtiExperience,
+} from '../../services/canvasLtiExperience';
+
+const DEEP_LINKING_STAFF_ROLES = new Set(['instructor', 'administrator']);
 
 function compactRoles(roles = []) {
   return roles
-    .map((role) => String(role).split('/').pop())
+    .map((role) => String(role).replace(/#/g, '/').split('/').pop())
     .filter(Boolean)
     .slice(0, 3);
 }
 
-function sessionValue(session, key) {
-  return (
-    session?.[key]
-    || session?.mip_primitives?.context?.[key]
-    || session?.verified_launch?.[key]
-    || null
-  );
+function canvasRoleName(role) {
+  return String(role || '')
+    .trim()
+    .toLowerCase()
+    .replace(/#/g, '/')
+    .replace(/\/+$/, '')
+    .split('/')
+    .pop();
 }
 
-function buildCanvasContinuePath(session, state) {
-  const query = new URLSearchParams({ canvas_lti_state: state });
-  const canvasProgramBindingId = sessionValue(session, 'canvas_program_binding_id');
-  const canvasPlatformId = sessionValue(session, 'canvas_platform_id');
-  const applicationTemplateId = sessionValue(session, 'application_template_id');
-  const credentialTemplateId = sessionValue(session, 'credential_template_id');
+function hasDeepLinkingStaffRole(roles = []) {
+  return roles.some((role) => DEEP_LINKING_STAFF_ROLES.has(canvasRoleName(role)));
+}
+
+function validateDeepLinkingForm(response) {
+  const formPost = response?.form_post;
+  const method = String(formPost?.method || '').trim().toUpperCase();
+  const action = String(formPost?.action || '').trim();
+  const returnUrl = String(response?.deep_link_return_url || '').trim();
+  const jwt = String(response?.jwt || '').trim();
+  const formJwt = String(formPost?.fields?.JWT || '').trim();
+
+  let destination;
+  try {
+    destination = new URL(action);
+  } catch {
+    destination = null;
+  }
+
+  if (
+    method !== 'POST'
+    || !destination
+    || destination.protocol !== 'https:'
+    || action !== returnUrl
+    || !jwt
+    || jwt !== formJwt
+  ) {
+    throw new Error(
+      'Canvas did not return a valid Deep Linking destination. Reopen the activity from Canvas.',
+    );
+  }
+
+  return { action, jwt };
+}
+
+function buildCanvasContinuePath(session) {
+  const query = new URLSearchParams({ canvas_lti_state: CANVAS_LTI_NAVIGATION_MARKER });
+  const canvasProgramBindingId = session?.canvas_program_binding_id;
+  const canvasPlatformId = session?.canvas_platform_id;
+  const applicationTemplateId = session?.application_template_id;
+  const credentialTemplateId = session?.credential_template_id;
 
   if (canvasProgramBindingId) query.set('canvas_program_binding_id', canvasProgramBindingId);
   if (canvasPlatformId) query.set('canvas_platform_id', canvasPlatformId);
@@ -51,32 +96,38 @@ function buildCanvasContinuePath(session, state) {
   return `/console/applicant/catalog?${query.toString()}`;
 }
 
-function buildCanvasLtiSessionPath(state, nextPath) {
-  const query = new URLSearchParams({
-    state,
-    redirect_uri: nextPath,
-  });
-  return `/v1/auth/canvas-lti/finalize?${query.toString()}`;
-}
-
 function CanvasLtiExperiencePage() {
   const [searchParams] = useSearchParams();
   const { isLoading: authLoading = false } = useAuth() || {};
-  const state = searchParams.get('state') || '';
+  const code = searchParams.get('code') || '';
   const [session, setSession] = useState(null);
   const [error, setError] = useState('');
-  const [loading, setLoading] = useState(Boolean(state));
+  const [loading, setLoading] = useState(true);
+  const [deepLinkingError, setDeepLinkingError] = useState('');
+  const [deepLinkingSubmission, setDeepLinkingSubmission] = useState(null);
+  const [deepLinkingSubmitting, setDeepLinkingSubmitting] = useState(false);
+  const sessionLoadRef = useRef(null);
+  const deepLinkingFormRef = useRef(null);
+  const submittedDeepLinkingJwtRef = useRef(null);
 
   useEffect(() => {
     let alive = true;
     async function loadSession() {
-      if (!state) {
-        setError('Canvas launch state is missing.');
-        setLoading(false);
-        return;
-      }
       try {
-        const data = await get(`/v1/integrations/canvas/lti/experience-sessions/${encodeURIComponent(state)}`);
+        if (!sessionLoadRef.current) {
+          sessionLoadRef.current = (async () => {
+            if (code) {
+              await exchangeCanvasLtiExperienceCode(code);
+              window.history.replaceState({}, '', window.location.pathname);
+            }
+            const currentSession = await getCurrentCanvasLtiExperience();
+            if (!currentSession?.lti_capabilities?.deep_linking) {
+              await finalizeCanvasLtiAuthentication();
+            }
+            return currentSession;
+          })();
+        }
+        const data = await sessionLoadRef.current;
         if (alive) {
           setSession(data);
           setError('');
@@ -95,22 +146,55 @@ function CanvasLtiExperiencePage() {
     return () => {
       alive = false;
     };
-  }, [state]);
+  }, [code]);
 
-  const verifiedLaunch = session?.verified_launch || {};
-  const context = verifiedLaunch.context || {};
-  const learner = verifiedLaunch.learner_identity || {};
-  const roles = useMemo(() => compactRoles(verifiedLaunch.roles), [verifiedLaunch.roles]);
-  const nextPath = buildCanvasContinuePath(session, state);
-  const canvasSessionPath = buildCanvasLtiSessionPath(state, nextPath);
-  const canvasProgramBindingId = sessionValue(session, 'canvas_program_binding_id');
-  const credentialTemplateId = sessionValue(session, 'credential_template_id');
+  useEffect(() => {
+    if (!deepLinkingSubmission || !deepLinkingFormRef.current) return;
+    if (submittedDeepLinkingJwtRef.current === deepLinkingSubmission.jwt) return;
+
+    try {
+      submittedDeepLinkingJwtRef.current = deepLinkingSubmission.jwt;
+      deepLinkingFormRef.current.submit();
+    } catch {
+      submittedDeepLinkingJwtRef.current = null;
+      setDeepLinkingSubmitting(false);
+      setDeepLinkingError(
+        'Canvas could not accept the activity. Reopen the activity picker and try again.',
+      );
+    }
+  }, [deepLinkingSubmission]);
+
+  const context = session?.canvas_context || {};
+  const roles = useMemo(() => compactRoles(session?.roles), [session?.roles]);
+  const isDeepLinkingLaunch = Boolean(session?.lti_capabilities?.deep_linking);
+  const canCreateDeepLink = useMemo(
+    () => hasDeepLinkingStaffRole(session?.roles),
+    [session?.roles],
+  );
+  const nextPath = buildCanvasContinuePath(session);
+  const canvasProgramBindingId = session?.canvas_program_binding_id;
+  const credentialTemplateId = session?.credential_template_id;
+  const mappingStatus = session?.identity_mapping_status;
   const continueButtonProps = {
     component: 'a',
-    href: canvasSessionPath,
+    href: nextPath,
     target: '_top',
     rel: 'noreferrer',
   };
+
+  async function addActivityToCanvas() {
+    setDeepLinkingError('');
+    setDeepLinkingSubmitting(true);
+    try {
+      const response = await createCurrentCanvasLtiDeepLinkingResponse();
+      setDeepLinkingSubmission(validateDeepLinkingForm(response));
+    } catch (err) {
+      setDeepLinkingSubmitting(false);
+      setDeepLinkingError(
+        err?.message || 'Canvas could not add the Marty activity. Reopen the activity picker and try again.',
+      );
+    }
+  }
 
   return (
     <Box
@@ -174,10 +258,10 @@ function CanvasLtiExperiencePage() {
                 </Box>
                 <Stack spacing={0.75}>
                   <Typography variant="h4" sx={{ fontSize: { xs: '1.65rem', md: '2rem' } }}>
-                    Continue with Canvas
+                    {isDeepLinkingLaunch ? 'Add Marty activity to Canvas' : 'Continue with Canvas'}
                   </Typography>
                   <Typography variant="body2" color="text.secondary">
-                    Canvas launch verified
+                    {isDeepLinkingLaunch ? 'Canvas Deep Linking launch verified' : 'Canvas launch verified'}
                   </Typography>
                 </Stack>
               </Stack>
@@ -195,32 +279,76 @@ function CanvasLtiExperiencePage() {
                   Course
                 </Typography>
                 <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>
-                  {context.title || context.label || context.id || 'Canvas Course'}
+                  {context.title || context.label || context.course_id || 'Canvas Course'}
                 </Typography>
               </Stack>
 
               <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap">
-                {learner.subject || verifiedLaunch.subject ? (
-                  <Chip label={`Canvas user ${learner.subject || verifiedLaunch.subject}`} />
-                ) : null}
-                {session?.organization_id ? <Chip label={`Org ${session.organization_id}`} /> : null}
+                {session?.learner_display_name ? <Chip label={session.learner_display_name} /> : null}
                 {canvasProgramBindingId ? <Chip label="Bound Canvas program" color="primary" variant="outlined" /> : null}
                 {credentialTemplateId ? <Chip label="Application selected" color="success" variant="outlined" /> : null}
+                {mappingStatus ? (
+                  <Chip
+                    label={mappingStatus === 'linked' ? 'Canvas identity linked' : 'Canvas identity needs review'}
+                    color={mappingStatus === 'linked' ? 'success' : 'warning'}
+                    variant="outlined"
+                  />
+                ) : null}
                 {roles.map((role) => (
                   <Chip key={role} label={role} />
                 ))}
               </Stack>
 
-              <Button
-                {...continueButtonProps}
-                variant="contained"
-                size="large"
-                endIcon={<ArrowForwardIcon />}
-                disabled={authLoading}
-                fullWidth
-              >
-                Continue in ElevenID
-              </Button>
+              {isDeepLinkingLaunch ? (
+                canCreateDeepLink ? (
+                  <Stack spacing={1.5}>
+                    {deepLinkingError ? <Alert severity="error">{deepLinkingError}</Alert> : null}
+                    <Typography variant="body2" color="text.secondary" textAlign="center">
+                      Marty will create the activity from this program binding and return you to Canvas.
+                    </Typography>
+                    <Button
+                      type="button"
+                      variant="contained"
+                      size="large"
+                      startIcon={deepLinkingSubmitting ? <CircularProgress color="inherit" size={18} /> : <AddLinkIcon />}
+                      disabled={authLoading || deepLinkingSubmitting}
+                      onClick={addActivityToCanvas}
+                      fullWidth
+                    >
+                      {deepLinkingSubmitting ? 'Returning to Canvas...' : 'Add Marty activity to Canvas'}
+                    </Button>
+                  </Stack>
+                ) : (
+                  <Alert severity="warning">
+                    Canvas requires an Instructor or Administrator role to add this activity.
+                  </Alert>
+                )
+              ) : (
+                <Button
+                  {...continueButtonProps}
+                  variant="contained"
+                  size="large"
+                  endIcon={<ArrowForwardIcon />}
+                  disabled={authLoading}
+                  fullWidth
+                  data-testid="canvas-lti-continue"
+                >
+                  Continue in ElevenID
+                </Button>
+              )}
+
+              {deepLinkingSubmission ? (
+                <form
+                  ref={deepLinkingFormRef}
+                  method="post"
+                  action={deepLinkingSubmission.action}
+                  target="_top"
+                  aria-hidden="true"
+                  style={{ display: 'none' }}
+                >
+                  <input type="hidden" name="JWT" value={deepLinkingSubmission.jwt} readOnly />
+                </form>
+              ) : null}
             </Stack>
           )}
         </Paper>

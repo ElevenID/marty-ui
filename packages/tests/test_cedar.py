@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import time
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -139,6 +138,56 @@ class TestResolveAction:
         assert resolve_action("POST", "/v1/credential-templates/template-1/new-version") == "credential-template:version"
         assert resolve_action("POST", "/v1/revocation-profiles/profile-1/activate") == "revocation-profile:activate"
 
+    def test_canvas_management_actions_use_connector_permissions(self):
+        assert resolve_action("GET", "/v1/integrations/canvas/platforms/platform-1/readiness") == (
+            "integration-connector:view"
+        )
+        assert resolve_action("POST", "/v1/integrations/canvas/platforms/platform-1/scope-discovery") == (
+            "integration-connector:view"
+        )
+        assert resolve_action("POST", "/v1/integrations/canvas/canvas-credentials/validate") == (
+            "integration-connector:view"
+        )
+        assert resolve_action("POST", "/v1/integrations/canvas/platforms/platform-1/sandbox-probe") == (
+            "integration-connector:edit"
+        )
+        assert resolve_action("POST", "/v1/integrations/canvas/platforms/platform-1/jwks-refresh") == (
+            "integration-connector:edit"
+        )
+        assert resolve_action("POST", "/v1/integrations/canvas/platforms/platform-1/oauth/start") == (
+            "integration-connector:edit"
+        )
+        assert resolve_action("POST", "/v1/integrations/canvas/platforms/platform-1/oauth/authorizations") == (
+            "integration-connector:edit"
+        )
+        assert resolve_action("PUT", "/v1/integrations/canvas/platforms/platform-1/lti-installation") == (
+            "integration-connector:edit"
+        )
+        assert resolve_action("DELETE", "/v1/integrations/canvas/platforms/platform-1/oauth") == (
+            "integration-connector:edit"
+        )
+        assert resolve_action("POST", "/v1/integrations/canvas/platforms/platform-1/program-bindings") == (
+            "integration-connector:create"
+        )
+        assert resolve_action("PUT", "/v1/integrations/canvas/program-bindings/binding-1") == (
+            "integration-connector:edit"
+        )
+        assert resolve_action("DELETE", "/v1/integrations/canvas/program-bindings/binding-1") == (
+            "integration-connector:delete"
+        )
+        assert resolve_action("POST", "/v1/integrations/canvas/program-bindings/binding-1/validate") == (
+            "integration-connector:edit"
+        )
+        assert resolve_action("POST", "/v1/integrations/canvas/program-bindings/binding-1/activate") == (
+            "integration-connector:edit"
+        )
+        assert resolve_action("POST", "/v1/integrations/canvas/canvas-sync-jobs/job-1/retry") == (
+            "integration-connector:edit"
+        )
+        assert resolve_action("POST", "/v1/integrations/canvas/evidence-policy-reviews/review-1/resolve") == (
+            "integration-connector:edit"
+        )
+
     def test_head_and_options_count_as_view(self):
         assert resolve_action("HEAD", ORG_PREFIX + "flows") == "flow-definition:view"
         assert resolve_action("OPTIONS", ORG_PREFIX + "deployment-profiles") == "deployment-profile:view"
@@ -222,6 +271,16 @@ class TestResolveResourceLookup:
             "/v1/flows/instances/instance-123",
         )
 
+    def test_canvas_resources_lookup_the_persisted_organization(self):
+        assert resolve_resource_lookup("/v1/integrations/canvas/platforms/platform-123/readiness") == (
+            "issuance",
+            "/v1/integrations/canvas/platforms/platform-123",
+        )
+        assert resolve_resource_lookup("/v1/integrations/canvas/program-bindings/binding-123") == (
+            "issuance",
+            "/v1/integrations/canvas/program-bindings/binding-123",
+        )
+
     def test_all_lookup_templates_have_paths(self):
         for service_name, lookup_template, _reserved_segments in RESOURCE_LOOKUP_MAP.values():
             assert service_name
@@ -293,6 +352,46 @@ async def test_cedar_middleware_looks_up_owner_org_for_top_level_detail_route():
     assert response.status_code == 200
     assert request.state.organization_id == ORG_ID
     assert request.state.required_permission == "application-template:view"
+    http_client.get.assert_awaited_once()
+    org_client.get_membership.assert_awaited_once_with("user-1", ORG_ID)
+
+
+@pytest.mark.asyncio
+async def test_cedar_middleware_looks_up_canvas_platform_owner_org():
+    membership = FakeMembership(permissions={"integration-connector:view"})
+    org_client = MagicMock()
+    org_client.get_membership = AsyncMock(return_value=membership)
+
+    service_registry = MagicMock()
+    service_registry.get_service_url.return_value = "http://issuance-service:8005"
+    upstream_response = MagicMock()
+    upstream_response.status_code = 200
+    upstream_response.json.return_value = {"organization_id": ORG_ID}
+    http_client = MagicMock()
+    http_client.get = AsyncMock(return_value=upstream_response)
+
+    app = MagicMock()
+    app.state.org_client = org_client
+    app.state.service_registry = service_registry
+    app.state.http_client = http_client
+
+    request = _build_request(
+        "/v1/integrations/canvas/platforms/platform-123/readiness",
+        method="GET",
+        app=app,
+    )
+    request.state.user_id = "user-1"
+    request.state.session_organization_id = "00000000-0000-0000-0000-000000000999"
+
+    call_next = AsyncMock(return_value=JSONResponse({"ok": True}))
+    middleware = CedarAuthMiddleware(app=MagicMock())
+
+    response = await middleware.dispatch(request, call_next)
+
+    assert response.status_code == 200
+    assert request.state.organization_id == ORG_ID
+    assert request.state.required_permission == "integration-connector:view"
+    service_registry.get_service_url.assert_called_with("issuance")
     http_client.get.assert_awaited_once()
     org_client.get_membership.assert_awaited_once_with("user-1", ORG_ID)
 
@@ -545,6 +644,41 @@ async def test_cedar_middleware_denies_api_key_org_mismatch():
     assert json.loads(response.body)["detail"] == "API key does not have access to this organization"
 
 
+def test_cedar_middleware_maps_integration_connector_api_key_scopes():
+    assert CedarAuthMiddleware._api_key_allowed(
+        "integration-connector:view",
+        ["integrations:read"],
+    )
+    assert CedarAuthMiddleware._api_key_allowed(
+        "integration-connector:view",
+        ["integrations:write"],
+    )
+    assert CedarAuthMiddleware._api_key_allowed(
+        "integration-connector:create",
+        ["integrations:write"],
+    )
+    assert not CedarAuthMiddleware._api_key_allowed(
+        "integration-connector:edit",
+        ["integrations:read"],
+    )
+
+
+def test_cedar_resource_lookup_reads_issuance_key_from_secret_file(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    secret_file = tmp_path / "issuance-api-key"
+    secret_file.write_text("file-backed-secret\n", encoding="utf-8")
+    monkeypatch.delenv("ISSUANCE_API_KEY", raising=False)
+    monkeypatch.setenv("ISSUANCE_API_KEY_FILE", str(secret_file))
+
+    request = _build_request("/v1/integrations/canvas/platforms/platform-1")
+
+    assert CedarAuthMiddleware._forward_headers(request, "issuance") == {
+        "X-API-Key": "file-backed-secret"
+    }
+
+
 @pytest.mark.asyncio
 async def test_cedar_middleware_treats_flow_capabilities_as_org_neutral():
     org_client = MagicMock()
@@ -608,6 +742,46 @@ async def test_cedar_middleware_skips_public_status_list_document():
         method="GET",
         app=app,
     )
+
+    call_next = AsyncMock(return_value=JSONResponse({"ok": True}))
+    middleware = CedarAuthMiddleware(app=MagicMock())
+
+    response = await middleware.dispatch(request, call_next)
+
+    assert response.status_code == 200
+    call_next.assert_awaited_once_with(request)
+    org_client.get_membership.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("GET", "/v1/integrations/canvas/lti/jwks"),
+        ("GET", "/v1/integrations/canvas/lti/config/revocable-registration-token"),
+        ("POST", "/v1/integrations/canvas/lti/platforms/platform-1/login"),
+        ("POST", "/v1/integrations/canvas/lti/platforms/platform-1/experience-login"),
+        ("POST", "/v1/integrations/canvas/lti/platforms/platform-1/launch"),
+        ("POST", "/v1/integrations/canvas/lti/platforms/platform-1/experience"),
+        ("GET", "/v1/integrations/canvas/oauth/callback"),
+        ("POST", "/v1/integrations/canvas/lti/experience-sessions/exchange"),
+        ("GET", "/v1/integrations/canvas/lti/experience-sessions/current"),
+        ("POST", "/v1/integrations/canvas/lti/experience-sessions/current/bootstrap"),
+        ("POST", "/v1/integrations/canvas/lti/experience-sessions/current/evidence-sync"),
+        ("POST", "/v1/integrations/canvas/lti/experience-sessions/current/deep-linking-response"),
+    ],
+)
+async def test_cedar_middleware_skips_public_canvas_protocol_routes(method: str, path: str):
+    org_client = MagicMock()
+    org_client.get_membership = AsyncMock()
+
+    app = MagicMock()
+    app.state.org_client = org_client
+    app.state.service_registry = None
+    app.state.http_client = None
+
+    request = _build_request(path, method=method, app=app)
+    request.state.organization_id = ORG_ID
 
     call_next = AsyncMock(return_value=JSONResponse({"ok": True}))
     middleware = CedarAuthMiddleware(app=MagicMock())

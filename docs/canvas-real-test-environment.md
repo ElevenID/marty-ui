@@ -1,5 +1,11 @@
 # Real Canvas LMS test environment (Docker)
 
+> **Development-only profile:** this environment uses a third-party image,
+> Rails-runner seeding, a localhost metadata bridge, and optional synthetic
+> evidence events. It is not portable Canvas acceptance evidence. The unmodified
+> upstream lane is documented in
+> [CANVAS_OSS_PORTABILITY_PIPELINE.md](CANVAS_OSS_PORTABILITY_PIPELINE.md).
+
 This workspace includes an optional profile to run a real Canvas LMS container for development.
 
 ## Why this profile exists

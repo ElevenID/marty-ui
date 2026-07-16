@@ -873,8 +873,8 @@ export const DEMO_MANIFESTS = {
       {
         "slug": "canvas-learning-achievement",
         "title": "Portable Learning Achievement with Canvas",
-        "summary": "Canvas acts as the current adapter for portable learning evidence that can drive MIP policy, badge issuance, wallet delivery, and later verification.",
-        "scenario_revision": 1,
+        "summary": "A source-pinned, unmodified Canvas deployment launches ElevenID through standard LTI, synchronizes authoritative evidence, and produces a learner-claimed KMS-signed Open Badge.",
+        "scenario_revision": 2,
         "recording_classification": "FIRST_PARTY_CONTROL",
         "revision_history": [],
         "mip_version": "0.3.1",
@@ -886,10 +886,11 @@ export const DEMO_MANIFESTS = {
           "Developer"
         ],
         "capabilities": [
-          "Learning evidence",
-          "Policy evaluation",
-          "Achievement issuance",
-          "Wallet delivery",
+          "Stock Canvas assignment",
+          "LTI 1.3 launch",
+          "Authoritative evidence synchronization",
+          "Unsigned pending claim",
+          "KMS-backed Open Badge claim",
           "Verification"
         ],
         "protocols": [
@@ -913,26 +914,70 @@ export const DEMO_MANIFESTS = {
             {
               "start_seconds": 0,
               "speaker": "Narrator",
-              "text": "The scenario begins with portable learning evidence rather than Canvas-specific routes or identifiers."
+              "text": "The scenario begins with a real assignment served by an unmodified, source-pinned Canvas deployment."
             },
             {
-              "start_seconds": 38,
+              "start_seconds": 20,
               "speaker": "Narrator",
-              "text": "MIP policy produces an Open Badge that is delivered to a wallet and verified independently of the learning adapter."
+              "text": "Canvas launches ElevenID through LTI 1.3 and the learner synchronizes authoritative assignment evidence through documented APIs."
+            },
+            {
+              "start_seconds": 45,
+              "speaker": "Narrator",
+              "text": "Background evaluation creates an unsigned pending claim; signing occurs only after learner wallet binding."
+            },
+            {
+              "start_seconds": 68,
+              "speaker": "Narrator",
+              "text": "The KMS-signed Open Badge verifies independently of Canvas with its issuer method and credential status."
             }
           ]
         },
         "chapters": [
           {
             "start_seconds": 0,
-            "title": "Produce portable learning evidence",
-            "role": "Issuer",
+            "title": "Begin in unmodified Canvas",
+            "role": "Learner",
             "mip_primitives": [
-              "Application Template",
-              "Evidence"
+              "Application Template"
             ],
             "standards": [
-              "LTI 1.3",
+              "LTI 1.3"
+            ],
+            "documentation_links": [
+              {
+                "label": "Canvas integration",
+                "href": "/docs"
+              }
+            ]
+          },
+          {
+            "start_seconds": 20,
+            "title": "Launch and synchronize evidence",
+            "role": "Learner",
+            "mip_primitives": [
+              "Evidence",
+              "Approval Policy"
+            ],
+            "standards": [
+              "LTI 1.3"
+            ],
+            "documentation_links": [
+              {
+                "label": "MIP protocol",
+                "href": "/protocol"
+              }
+            ]
+          },
+          {
+            "start_seconds": 45,
+            "title": "Claim the pending badge",
+            "role": "Holder",
+            "mip_primitives": [
+              "Issuance Flow"
+            ],
+            "standards": [
+              "OpenID4VCI 1.0",
               "Open Badges 3.0"
             ],
             "documentation_links": [
@@ -943,16 +988,13 @@ export const DEMO_MANIFESTS = {
             ]
           },
           {
-            "start_seconds": 38,
-            "title": "Issue, deliver, and verify",
+            "start_seconds": 68,
+            "title": "Verify outside Canvas",
             "role": "Verifier",
             "mip_primitives": [
-              "Approval Policy",
-              "Issuance Flow",
               "Presentation Policy"
             ],
             "standards": [
-              "OpenID4VCI 1.0",
               "OpenID4VP 1.0",
               "DCQL 1.0"
             ],
@@ -967,21 +1009,46 @@ export const DEMO_MANIFESTS = {
         "wallets": [],
         "assertions": [
           {
-            "id": "portable-learning-contract",
-            "label": "The scenario consumes portable learning outcomes without binding the recording contract to Canvas URLs or identifiers.",
+            "id": "stock-canvas-assignment-visible",
+            "label": "A real assignment is visibly rendered by the pinned, unmodified Canvas build.",
             "result": "NOT_RUN",
             "evidence_sha256": null
           },
           {
-            "id": "learning-badge-verification",
-            "label": "The issued learning badge is delivered to a wallet and verified.",
+            "id": "standard-lti-launch-verified",
+            "label": "A learner launches the deployed beta tool from a stock Canvas course placement.",
+            "result": "NOT_RUN",
+            "evidence_sha256": null
+          },
+          {
+            "id": "authoritative-evidence-synchronized",
+            "label": "The learner surface reports authoritative Canvas evidence only after synchronization completes.",
+            "result": "NOT_RUN",
+            "evidence_sha256": null
+          },
+          {
+            "id": "pending-claim-visible",
+            "label": "Background evaluation creates an unsigned pending claim rather than a signed credential.",
+            "result": "NOT_RUN",
+            "evidence_sha256": null
+          },
+          {
+            "id": "learning-badge-received",
+            "label": "The learner claims the KMS-signed Open Badge through the canonical wallet flow.",
+            "result": "NOT_RUN",
+            "evidence_sha256": null
+          },
+          {
+            "id": "learning-badge-verified",
+            "label": "The verifier accepts the claimed badge signature, issuer method, and credential status.",
             "result": "NOT_RUN",
             "evidence_sha256": null
           }
         ],
         "limitations": [
-          "The portable learning-platform contract is pending separate architecture work.",
-          "The prior Canvas recording is historical and is not reused as current ElevenID LLC platform evidence."
+          "Revision 2 remains draft until the full OSS portability pipeline produces a fresh passing attestation and recording.",
+          "New Quizzes requires the hosted Canvas contract; Canvas Credentials projection remains outside the production gate.",
+          "The prior synthetic Canvas recording is historical and is not reused as portability evidence."
         ],
         "published_at": null,
         "publication_attestation": null,

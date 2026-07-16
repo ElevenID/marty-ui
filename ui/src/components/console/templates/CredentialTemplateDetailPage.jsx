@@ -139,8 +139,7 @@ function canvasCredentialsConfig(binding = {}) {
 
 function canvasTokenSource(config = {}) {
   if (config.api_token_secret_id || config.api_token_secret_ref) return 'managed secret';
-  if (config.api_token_env) return `env: ${config.api_token_env}`;
-  if (config.api_token_file) return 'secret file';
+  if (config.api_token || config.api_token_env || config.api_token_file) return 'legacy configuration (unsupported)';
   return 'not configured';
 }
 

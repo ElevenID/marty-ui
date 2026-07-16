@@ -17,6 +17,21 @@ from .org_authorization import OrganizationClient
 logger = logging.getLogger(__name__)
 
 
+def _read_secret_value(name: str) -> str:
+    direct = os.environ.get(name)
+    if direct:
+        return direct
+
+    file_path = os.environ.get(f"{name}_FILE")
+    if not file_path:
+        return ""
+    try:
+        with open(file_path, "r", encoding="utf-8") as handle:
+            return handle.read().strip()
+    except OSError:
+        return ""
+
+
 class CedarAuthMiddleware(BaseHTTPMiddleware):
     """Permission-based authorization for org-scoped gateway routes."""
 
@@ -30,6 +45,11 @@ class CedarAuthMiddleware(BaseHTTPMiddleware):
         r"^/v1/organizations/[^/]+/join$",
         r"^/v1/organizations/invitations/",
         r"^/v1/organizations/[^/]+/revocation-profiles/[^/]+/status-lists/[^/]+/[^/]+$",
+        r"^/v1/integrations/canvas/lti/jwks/?$",
+        r"^/v1/integrations/canvas/lti/config/[^/]+/?$",
+        r"^/v1/integrations/canvas/lti/platforms/[^/]+/(?:login|experience-login|launch|experience)/?$",
+        r"^/v1/integrations/canvas/oauth/callback/?$",
+        r"^/v1/integrations/canvas/lti/experience-sessions/(?:exchange|current(?:/(?:bootstrap|evidence-sync|deep-linking-response))?)/?$",
         r"^/health",
         r"^/.well-known/",
     ]
@@ -63,6 +83,7 @@ class CedarAuthMiddleware(BaseHTTPMiddleware):
             "role": ("roles:read", "roles:write"),
             "policy-set": ("trust:read", "trust:admin"),
             "organization": ("users:read", "users:invite"),
+            "integration-connector": ("integrations:read", "integrations:write"),
         }
 
         if resource == "flow-instance":
@@ -125,7 +146,7 @@ class CedarAuthMiddleware(BaseHTTPMiddleware):
             headers["Authorization"] = auth
 
         if service_name == "issuance":
-            issuance_api_key = os.environ.get("ISSUANCE_API_KEY", "")
+            issuance_api_key = _read_secret_value("ISSUANCE_API_KEY")
             if issuance_api_key:
                 headers["X-API-Key"] = issuance_api_key
 

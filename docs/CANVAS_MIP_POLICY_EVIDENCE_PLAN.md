@@ -242,6 +242,12 @@ Implemented so far:
 
 ### Slice 8 - Standards Expansion
 
+> Portability correction (2026-07-14): AGS and NRPS are outbound LTI services,
+> not Canvas webhook event sources. The earlier inbound `/ags/score-events` and
+> `/nrps/membership-events` contracts are deprecated compatibility adapters.
+> The supported path reads the launch-advertised services and is documented in
+> `docs/CANVAS_PORTABLE_INTEGRATION.md`.
+
 Goal: add LMS-native Canvas depth without bypassing the MIP evidence/policy spine.
 
 - [x] Add LTI Deep Linking support for placing ElevenID activities in Canvas.
@@ -266,7 +272,7 @@ Implemented so far:
 - Targeted LTI tests cover Deep Linking, AGS, NRPS, and MIP context propagation.
 - `POST /v1/integrations/canvas/ags/score-events` accepts signed Canvas AGS score payloads.
 - AGS score input normalizes into the existing `CanvasEvidenceEvent -> MipEvidenceReceipt -> EvidenceFact -> Cedar approval` path.
-- AGS-derived facts use `canvas.assignment_score` or `canvas.quiz_score`, score/pass assertions, Canvas scope, and `SIGNED_AGS_SCORE` verification metadata.
+- AGS-derived facts use `canvas.assignment_score` or `canvas.quiz_score`, score/pass assertions, Canvas scope, and `LTI_AGS_RESULT_READ` verification metadata.
 - Gateway proxy `/v1/integrations/canvas/ags/score-events` preserves the signed payload without management-only headers.
 - Targeted tests cover AGS score mapping, replay-safe fact creation, policy permit/auto-approval, and gateway proxying.
 - `POST /v1/integrations/canvas/nrps/membership-events` accepts signed Canvas NRPS membership payloads.

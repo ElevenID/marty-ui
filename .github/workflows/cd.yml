@@ -182,6 +182,9 @@ jobs:
     name: Verify Pinned Issuance Service
     needs: [validate-release-manifest]
     runs-on: ubuntu-latest
+    env:
+      CANVAS_MIGRATION_SOURCE_REVISION: ${{ vars.MARTY_CREDENTIALS_REF }}
+      COMPOSE_PROJECT_NAME: canvas-portable-migration-cd-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - name: Configure Git auth for private repos
         run: git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
@@ -221,6 +224,48 @@ jobs:
       - name: Require one issuance migration head
         working-directory: marty-credentials/services/issuance/infrastructure/migrations
         run: python -m alembic -c alembic.ini heads | tee /tmp/issuance-heads.txt && test "$(grep -c '(head)' /tmp/issuance-heads.txt)" -eq 1
+
+      - name: Validate pinned Canvas migration contract topology
+        working-directory: marty-credentials
+        run: |
+          test "$(git rev-parse HEAD)" = "$CANVAS_MIGRATION_SOURCE_REVISION"
+          docker compose --file docker-compose.canvas-migration-contract.yml config --quiet
+
+      - name: Build pinned Canvas migration contract
+        working-directory: marty-credentials
+        run: |
+          mkdir -p tests/artifacts/canvas-portable-migration
+          docker compose --file docker-compose.canvas-migration-contract.yml build --pull migration-contract
+
+      - name: Require portable Canvas upgrade and downgrade restoration
+        working-directory: marty-credentials
+        run: >-
+          docker compose --file docker-compose.canvas-migration-contract.yml
+          up --force-recreate --abort-on-container-exit
+          --exit-code-from migration-contract migration-contract
+
+      - name: Validate pinned Canvas migration evidence
+        working-directory: marty-credentials
+        run: |
+          test "$(jq -r '.status' tests/artifacts/canvas-portable-migration/contract-result.json)" = passed
+          test "$(jq -r '.baseline_revision' tests/artifacts/canvas-portable-migration/contract-result.json)" = derive_server_owned_claims
+          test "$(jq -r '.portable_revision' tests/artifacts/canvas-portable-migration/contract-result.json)" = portable_canvas_connections
+          test "$(jq -r '.execution_boundary' tests/artifacts/canvas-portable-migration/contract-result.json)" = docker_compose_one_shot
+          test "$(jq -r '.source_revision' tests/artifacts/canvas-portable-migration/contract-result.json)" = "$CANVAS_MIGRATION_SOURCE_REVISION"
+
+      - name: Upload pinned Canvas migration evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: pinned-canvas-portable-migration-${{ github.run_id }}-${{ github.run_attempt }}
+          path: marty-credentials/tests/artifacts/canvas-portable-migration/contract-result.json
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Remove pinned Canvas migration contract stack
+        if: always()
+        working-directory: marty-credentials
+        run: docker compose --file docker-compose.canvas-migration-contract.yml down --volumes --remove-orphans
 
       - name: Run issuance service tests
         working-directory: marty-credentials

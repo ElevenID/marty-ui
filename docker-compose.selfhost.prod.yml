@@ -436,6 +436,21 @@ services:
       DATABASE_URL_TEMPLATE: *database-url-template
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
       ISSUER_BASE_URL: ${PUBLIC_API_URL:-https://prod.example.com}
+      CANVAS_LTI_EXPERIENCE_BASE_URL: ${CANVAS_LTI_EXPERIENCE_BASE_URL:-}
+      CANVAS_OAUTH_COMPLETION_REDIRECT_URL: ${CANVAS_OAUTH_COMPLETION_REDIRECT_URL:-${CANVAS_LTI_EXPERIENCE_BASE_URL:-https://prod.example.com}/console/org/deploy/canvas}
+      CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID: ${CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID:-}
+      CANVAS_LTI_TOOL_SIGNING_SERVICE_ID: ${CANVAS_LTI_TOOL_SIGNING_SERVICE_ID:-}
+      CANVAS_LTI_TOOL_SIGNING_KEY_REFERENCE: ${CANVAS_LTI_TOOL_SIGNING_KEY_REFERENCE:-}
+      CANVAS_CREDENTIAL_ISSUER_KEY_REFERENCES: ${CANVAS_CREDENTIAL_ISSUER_KEY_REFERENCES:-}
+      CANVAS_LTI_TOOL_ACTIVE_KID: ${CANVAS_LTI_TOOL_ACTIVE_KID:-}
+      CANVAS_LTI_TOOL_PUBLIC_JWKS: ${CANVAS_LTI_TOOL_PUBLIC_JWKS:-}
+      CANVAS_PORTABLE_INTEGRATION_ENABLED: ${CANVAS_PORTABLE_INTEGRATION_ENABLED:-false}
+      CANVAS_PILOT_ORGANIZATION_IDS: ${CANVAS_PILOT_ORGANIZATION_IDS:-}
+      CANVAS_LEGACY_EVENT_INGEST_ENABLED: ${CANVAS_LEGACY_EVENT_INGEST_ENABLED:-false}
+      CANVAS_PRIVATE_ORIGIN_ALLOWLIST: ${CANVAS_PRIVATE_ORIGIN_ALLOWLIST:-}
+      CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST: ${CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST:-}
+      CANVAS_BINDING_READINESS_MAX_AGE_SECONDS: ${CANVAS_BINDING_READINESS_MAX_AGE_SECONDS:-900}
+      CANVAS_ISSUANCE_EVIDENCE_MAX_AGE_SECONDS: ${CANVAS_ISSUANCE_EVIDENCE_MAX_AGE_SECONDS:-900}
       ISSUANCE_OFFER_TTL_MINUTES: ${ISSUANCE_OFFER_TTL_MINUTES:-10080}
       ISSUANCE_AUTH_SESSION_TTL_MINUTES: ${ISSUANCE_AUTH_SESSION_TTL_MINUTES:-60}
       ORG_GRPC_TARGET: organization:9002
@@ -448,6 +463,7 @@ services:
       BAO_TOKEN_FILE: /run/secrets/openbao_service_token
       ISSUANCE_API_KEY_FILE: /run/secrets/issuance_api_key
       INTEGRATION_SECRET_MASTER_KEY_FILE: /run/secrets/integration_secret_master_key
+      TOKEN_HMAC_KEY_FILE: /run/secrets/token_hmac_key
       SIGNING_KEYS_INTERNAL_URL: http://gateway:8000/internal/signing-keys
       SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/issuance_api_key
       CANVAS_CREDENTIALS_SHARED_SECRET_FILE: /run/secrets/canvas_credentials_shared_secret
@@ -455,18 +471,22 @@ services:
       CANVAS_CREDENTIALS_PUBLISH_URL: ${CANVAS_CREDENTIALS_PUBLISH_URL:-}
       CANVAS_CREDENTIALS_STATUS_SYNC_URL: ${CANVAS_CREDENTIALS_STATUS_SYNC_URL:-}
       CANVAS_CREDENTIALS_API_BASE_URL: ${CANVAS_CREDENTIALS_API_BASE_URL:-https://api.badgr.io}
+      CANVAS_CREDENTIALS_API_ORIGIN_ALLOWLIST: ${CANVAS_CREDENTIALS_API_ORIGIN_ALLOWLIST:-}
       CANVAS_CREDENTIALS_ISSUER_ID: ${CANVAS_CREDENTIALS_ISSUER_ID:-}
       CANVAS_CREDENTIALS_BADGECLASS_ID: ${CANVAS_CREDENTIALS_BADGECLASS_ID:-}
       CANVAS_CREDENTIALS_ASSERTION_SCOPE: ${CANVAS_CREDENTIALS_ASSERTION_SCOPE:-badgeclasses}
       CANVAS_CREDENTIALS_PROVENANCE_BASE_URL: ${CANVAS_CREDENTIALS_PROVENANCE_BASE_URL:-}
       CANVAS_CREDENTIALS_RECIPIENT_HASHED: ${CANVAS_CREDENTIALS_RECIPIENT_HASHED:-true}
       CANVAS_CREDENTIALS_ALLOW_DUPLICATE_AWARDS: ${CANVAS_CREDENTIALS_ALLOW_DUPLICATE_AWARDS:-false}
+      CANVAS_ALLOW_PRIVATE_BASE_URLS: ${CANVAS_ALLOW_PRIVATE_BASE_URLS:-false}
+      CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS: ${CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS:-false}
       UNIVERSAL_RESOLVER_URL: ${UNIVERSAL_RESOLVER_URL:-}
     secrets:
       - marty_db_password
       - openbao_service_token
       - issuance_api_key
       - integration_secret_master_key
+      - token_hmac_key
       - canvas_credentials_shared_secret
       - license_key
     volumes:
@@ -482,6 +502,65 @@ services:
       start_period: 30s
     restart: unless-stopped
 
+  # Durable Canvas jobs must never run inside the web-service lifespan.
+  canvas-sync-worker:
+    build:
+      context: ..
+      dockerfile: marty-credentials/services/Dockerfile
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        . /app/load-secrets-env.sh
+        exec python -m issuance.canvas_worker
+    environment:
+      ENVIRONMENT: production
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LICENSE_KEY_FILE: /run/secrets/license_key
+      DATABASE_URL_TEMPLATE: *database-url-template
+      MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
+      INTEGRATION_SECRET_MASTER_KEY_FILE: /run/secrets/integration_secret_master_key
+      ISSUANCE_API_KEY_FILE: /run/secrets/issuance_api_key
+      TOKEN_HMAC_KEY_FILE: /run/secrets/token_hmac_key
+      CREDENTIAL_TEMPLATE_SERVICE_URL: http://credential-template:8003
+      REVOCATION_PROFILE_SERVICE_URL: http://revocation-profile:8013
+      SIGNING_KEYS_INTERNAL_URL: http://gateway:8000/internal/signing-keys
+      SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/issuance_api_key
+      CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID: ${CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID:-}
+      CANVAS_LTI_TOOL_SIGNING_SERVICE_ID: ${CANVAS_LTI_TOOL_SIGNING_SERVICE_ID:-}
+      CANVAS_LTI_TOOL_SIGNING_KEY_REFERENCE: ${CANVAS_LTI_TOOL_SIGNING_KEY_REFERENCE:-}
+      CANVAS_CREDENTIAL_ISSUER_KEY_REFERENCES: ${CANVAS_CREDENTIAL_ISSUER_KEY_REFERENCES:-}
+      CANVAS_LTI_TOOL_ACTIVE_KID: ${CANVAS_LTI_TOOL_ACTIVE_KID:-}
+      CANVAS_LTI_TOOL_PUBLIC_JWKS: ${CANVAS_LTI_TOOL_PUBLIC_JWKS:-}
+      CANVAS_PORTABLE_INTEGRATION_ENABLED: ${CANVAS_PORTABLE_INTEGRATION_ENABLED:-false}
+      CANVAS_PILOT_ORGANIZATION_IDS: ${CANVAS_PILOT_ORGANIZATION_IDS:-}
+      CANVAS_LEGACY_EVENT_INGEST_ENABLED: ${CANVAS_LEGACY_EVENT_INGEST_ENABLED:-false}
+      CANVAS_PRIVATE_ORIGIN_ALLOWLIST: ${CANVAS_PRIVATE_ORIGIN_ALLOWLIST:-}
+      CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST: ${CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST:-}
+      CANVAS_BINDING_READINESS_MAX_AGE_SECONDS: ${CANVAS_BINDING_READINESS_MAX_AGE_SECONDS:-900}
+      CANVAS_ALLOW_PRIVATE_BASE_URLS: ${CANVAS_ALLOW_PRIVATE_BASE_URLS:-false}
+      CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS: ${CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS:-false}
+      CANVAS_BACKGROUND_ROSTER_BATCH_SIZE: ${CANVAS_BACKGROUND_ROSTER_BATCH_SIZE:-500}
+      CANVAS_BACKGROUND_ROSTER_MAX_SIZE: ${CANVAS_BACKGROUND_ROSTER_MAX_SIZE:-5000}
+      CANVAS_SYNC_PROCESSOR: ${CANVAS_SYNC_PROCESSOR:-issuance.infrastructure.api.canvas_routes:process_authoritative_canvas_sync_target}
+      CANVAS_SYNC_WORKER_BATCH_SIZE: ${CANVAS_SYNC_WORKER_BATCH_SIZE:-10}
+      CANVAS_SYNC_WORKER_LEASE_SECONDS: ${CANVAS_SYNC_WORKER_LEASE_SECONDS:-120}
+      CANVAS_SYNC_WORKER_JOB_TIMEOUT_SECONDS: ${CANVAS_SYNC_WORKER_JOB_TIMEOUT_SECONDS:-600}
+      CANVAS_SYNC_SCHEDULE_LIMIT: ${CANVAS_SYNC_SCHEDULE_LIMIT:-100}
+      CANVAS_OAUTH_REVOCATION_BATCH_SIZE: ${CANVAS_OAUTH_REVOCATION_BATCH_SIZE:-25}
+      CANVAS_SYNC_WORKER_POLL_SECONDS: ${CANVAS_SYNC_WORKER_POLL_SECONDS:-5}
+    secrets:
+      - marty_db_password
+      - integration_secret_master_key
+      - issuance_api_key
+      - token_hmac_key
+      - license_key
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      disable: true
+    restart: unless-stopped
+
   applicant:
     build:
       context: ..
@@ -494,6 +573,7 @@ services:
       DATABASE_URL_TEMPLATE: *database-url-template
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
       APPLICANT_DATA_FILE: /app/data/applicant_store.json
+      APPLICATION_TEMPLATE_MIGRATION_MAP: ${APPLICATION_TEMPLATE_MIGRATION_MAP:-}
       ISSUANCE_SERVICE_URL: http://issuance:8005
       ORG_GRPC_TARGET: organization:9002
       FLOW_GRPC_TARGET: flow:9011
@@ -928,6 +1008,8 @@ secrets:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/issuance_api_key
   integration_secret_master_key:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/integration_secret_master_key
+  token_hmac_key:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/token_hmac_key
   canvas_credentials_shared_secret:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/canvas_credentials_shared_secret
   openbao_service_token:
