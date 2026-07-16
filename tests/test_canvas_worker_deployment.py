@@ -35,7 +35,7 @@ def test_compose_stacks_run_canvas_worker_outside_issuance_web_process() -> None
         api_environment = api["environment"]
         assert "CANVAS_OAUTH_COMPLETION_REDIRECT_URL" in api_environment
         assert "CANVAS_PORTABLE_INTEGRATION_ENABLED" in environment
-        assert "TOKEN_HMAC_KEY" in environment
+        assert {"TOKEN_HMAC_KEY", "TOKEN_HMAC_KEY_FILE"}.intersection(environment)
         assert "CANVAS_LEGACY_EVENT_INGEST_ENABLED" in environment
         assert "CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID" in environment
         assert "CANVAS_LTI_TOOL_SIGNING_SERVICE_ID" in environment
