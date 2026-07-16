@@ -7,10 +7,12 @@
  */
 
 import { apiClient, handleApiError } from './api';
+import { postWithIdempotency } from './idempotency';
 import { buildDefinedQueryString, withQuery } from './queryUtils';
 
 const FLOW_DEFINITIONS_PATH = '/v1/flows/definitions';
 const FLOW_INSTANCES_PATH = '/v1/flows/instances';
+const FLOW_CAPABILITIES_PATH = '/v1/flows/capabilities';
 
 function createUnsupportedFlowActionError(message) {
   const error = new Error(message);
@@ -18,16 +20,24 @@ function createUnsupportedFlowActionError(message) {
   return error;
 }
 
-function getStoredOrganizationId() {
-  try {
-    return window.localStorage.getItem('activeOrgId') || null;
-  } catch {
-    return null;
-  }
+function resolveOrganizationId(organizationId) {
+  return organizationId || null;
 }
 
-function resolveOrganizationId(organizationId) {
-  return organizationId || getStoredOrganizationId();
+function requireOrganizationId(organizationId) {
+  const resolved = resolveOrganizationId(organizationId);
+  const normalized = String(resolved ?? '').trim();
+  if (
+    normalized === ''
+    || normalized.toLowerCase() === 'null'
+    || normalized.toLowerCase() === 'undefined'
+  ) {
+    const error = new Error('An active organization is required before loading flows.');
+    error.code = 'ORG_REQUIRED';
+    error.status = 400;
+    throw error;
+  }
+  return normalized;
 }
 
 /**
@@ -38,9 +48,6 @@ export const FLOW_STATES = {
   ACTIVE: 'ACTIVE',
   PAUSED: 'PAUSED',
   ARCHIVED: 'ARCHIVED',
-  // Legacy aliases
-  PUBLISHED: 'ACTIVE',
-  DISABLED: 'PAUSED',
 };
 
 /**
@@ -51,10 +58,16 @@ export const APPROVAL_STRATEGIES = {
   MANUAL: 'MANUAL',
   RULES_BASED: 'RULES_BASED',
   EXTERNAL: 'EXTERNAL',
-  // Legacy aliases
-  AUTOMATED_RULES: 'RULES_BASED',
-  MULTI_PARTY: 'EXTERNAL',
 };
+
+function requireDirectArray(value, resourceName) {
+  if (!Array.isArray(value)) {
+    const error = new Error(`${resourceName} service returned a malformed list response.`);
+    error.code = 'MALFORMED_RESPONSE';
+    throw error;
+  }
+  return value;
+}
 
 /**
  * Create a new flow
@@ -66,19 +79,22 @@ export const APPROVAL_STRATEGIES = {
  * @param {string} flowData.credential_template_id - Optional credential template for issuance flows
  * @param {string} flowData.presentation_policy_id - Optional presentation policy for verification flows
  * @param {string} flowData.deployment_profile_id - Optional deployment profile
- * @param {string} flowData.approval_strategy - AUTO, MANUAL, AUTOMATED_RULES, MULTI_PARTY
+ * @param {string} flowData.approval_strategy - AUTO, MANUAL, RULES_BASED, EXTERNAL
  * @param {Object} flowData.steps - Flow step configuration
  * @returns {Promise<Object>} Created flow
  */
 export const createFlow = async (flowData) => {
   try {
-    const organizationId = resolveOrganizationId(flowData?.organization_id);
-    const response = await apiClient.post(FLOW_DEFINITIONS_PATH, {
+    const organizationId = requireOrganizationId(flowData?.organization_id);
+    const payload = {
       ...flowData,
-      ...(organizationId ? { organization_id: organizationId } : {}),
-    });
-    return response.data;
+      organization_id: organizationId,
+    };
+    return await postWithIdempotency(FLOW_DEFINITIONS_PATH, payload);
   } catch (error) {
+    if (error?.operationStatusUnknown) {
+      throw error;
+    }
     throw handleApiError(error);
   }
 };
@@ -94,14 +110,14 @@ export const createFlow = async (flowData) => {
 export const listFlows = async (filters = {}) => {
   try {
     const queryString = buildDefinedQueryString({
-      organization_id: resolveOrganizationId(filters.organization_id),
+      organization_id: requireOrganizationId(filters.organization_id),
       flow_type: filters.flow_type,
       limit: filters.limit,
       offset: filters.offset,
     });
 
     const response = await apiClient.get(withQuery(FLOW_DEFINITIONS_PATH, queryString));
-    return response.data;
+    return requireDirectArray(response.data, 'Flow Definition');
   } catch (error) {
     throw handleApiError(error);
   }
@@ -115,6 +131,33 @@ export const listFlows = async (filters = {}) => {
 export const getFlow = async (flowId) => {
   try {
     const response = await apiClient.get(`${FLOW_DEFINITIONS_PATH}/${flowId}`);
+    return response.data;
+  } catch (error) {
+    throw handleApiError(error);
+  }
+};
+
+export const getFlowCapabilities = async () => {
+  try {
+    const response = await apiClient.get(FLOW_CAPABILITIES_PATH);
+    return response.data;
+  } catch (error) {
+    throw handleApiError(error);
+  }
+};
+
+export const validateFlow = async (flowId) => {
+  try {
+    const response = await apiClient.post(`${FLOW_DEFINITIONS_PATH}/${flowId}/validate`);
+    return response.data;
+  } catch (error) {
+    throw handleApiError(error);
+  }
+};
+
+export const testFlow = async (flowId) => {
+  try {
+    const response = await apiClient.post(`${FLOW_DEFINITIONS_PATH}/${flowId}/test`);
     return response.data;
   } catch (error) {
     throw handleApiError(error);
@@ -177,17 +220,22 @@ export const startFlowExecution = async (flowId, context = {}) => {
  * @returns {Promise<Array>} List of executions
  */
 export const listFlowExecutions = async (flowId, filters = {}) => {
+  return listFlowInstances({ ...filters, flow_definition_id: flowId });
+};
+
+/** List runtime instances across an organization, optionally filtered by flow. */
+export const listFlowInstances = async (filters = {}) => {
   try {
     const queryString = buildDefinedQueryString({
-      organization_id: resolveOrganizationId(filters.organization_id),
-      flow_definition_id: flowId,
+      organization_id: requireOrganizationId(filters.organization_id),
+      flow_definition_id: filters.flow_definition_id,
       status: filters.status,
       limit: filters.limit,
       offset: filters.offset,
     });
 
     const response = await apiClient.get(withQuery(FLOW_INSTANCES_PATH, queryString));
-    return response.data;
+    return requireDirectArray(response.data, 'Flow Instance');
   } catch (error) {
     throw handleApiError(error);
   }
@@ -200,8 +248,13 @@ export const listFlowExecutions = async (flowId, filters = {}) => {
  * @returns {Promise<Object>} Execution details
  */
 export const getFlowExecution = async (flowId, executionId) => {
+  return getFlowInstance(executionId);
+};
+
+/** Get one runtime instance by its stable instance identifier. */
+export const getFlowInstance = async (instanceId) => {
   try {
-    const response = await apiClient.get(`${FLOW_INSTANCES_PATH}/${executionId}`);
+    const response = await apiClient.get(`${FLOW_INSTANCES_PATH}/${instanceId}`);
     return response.data;
   } catch (error) {
     throw handleApiError(error);
@@ -328,13 +381,18 @@ export const getFlowPublicUrl = async (flowId) => {
 
 export default {
   createFlow,
+  getFlowCapabilities,
+  validateFlow,
+  testFlow,
   listFlows,
   getFlow,
   updateFlow,
   deleteFlow,
   startFlowExecution,
   listFlowExecutions,
+  listFlowInstances,
   getFlowExecution,
+  getFlowInstance,
   approveFlowExecution,
   rejectFlowExecution,
   cancelFlowExecution,

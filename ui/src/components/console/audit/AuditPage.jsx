@@ -62,7 +62,7 @@ function AuditPage() {
   
   const getBreadcrumbs = () => [
     { label: t('audit.breadcrumbs.console'), path: '/console' },
-    { label: t('audit.breadcrumbs.audit'), path: '/console/audit' },
+    { label: t('audit.breadcrumbs.audit'), path: '/console/org/audit' },
   ];
 
   const getEventCategories = () => [
@@ -87,7 +87,7 @@ function AuditPage() {
   const SEVERITY_LEVELS = getSeverityLevels();
   const { organizationId } = useAuth();
   const { activeOrgId } = useConsole();
-  const effectiveOrgId = activeOrgId || organizationId;
+  const effectiveOrgId = activeOrgId;
   const { can } = usePermissions();
   const canExportAudit = can('audit', 'export');
 

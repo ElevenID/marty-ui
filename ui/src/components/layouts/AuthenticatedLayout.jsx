@@ -53,10 +53,6 @@ function AuthenticatedLayout({ children }) {
   const { isAdministrator, isVendor, isApplicant } = useAuth();
   const location = useLocation();
 
-  // Debug logging
-  console.log('[AuthenticatedLayout] Rendering');
-  console.log('[AuthenticatedLayout] isAdministrator:', isAdministrator, 'isVendor:', isVendor, 'isApplicant:', isApplicant);
-
   // Mobile drawer state
   const [mobileOpen, setMobileOpen] = useState(false);
 
@@ -70,22 +66,19 @@ function AuthenticatedLayout({ children }) {
 
   // Determine if we should show sidebar (Admin/Vendor get full sidebar, Applicant gets simpler nav)
   const showSidebar = isAdministrator || isVendor || isApplicant;
-  console.log('[AuthenticatedLayout] showSidebar:', showSidebar);
 
   if (!showSidebar) {
     // Fallback for unauthenticated or unknown role
-    console.log('[AuthenticatedLayout] No sidebar, rendering fallback');
     return <Box sx={{ p: 3 }}>{children || <Outlet />}</Box>;
   }
 
-  console.log('[AuthenticatedLayout] Rendering main layout with sidebar');
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
       {/* Top Header Bar */}
       <ConsoleHeaderBar onMobileMenuToggle={handleMobileToggle} />
 
       {/* Main content area below header */}
-      <Box sx={{ display: 'flex', flexGrow: 1, pt: `${HEADER_HEIGHT}px` }}>
+      <Box sx={{ display: 'flex', flexGrow: 1, minWidth: 0, width: '100%', pt: `${HEADER_HEIGHT}px` }}>
         {/* Sidebar Navigation */}
         <SidebarNavigation 
           mobileOpen={mobileOpen} 
@@ -97,7 +90,9 @@ function AuthenticatedLayout({ children }) {
           component="main"
           sx={{
             flexGrow: 1,
-            p: 3,
+            minWidth: 0,
+            width: '100%',
+            p: { xs: 2, sm: 3 },
             minHeight: '100%',
             bgcolor: 'background.default',
           }}

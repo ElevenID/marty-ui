@@ -8,8 +8,7 @@
  * - Links to API keys and docs
  */
 
-import { useMemo, useState } from 'react';
-import { useAsyncData } from '../../../hooks/useAsyncData';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Paper,
   Typography,
@@ -19,8 +18,9 @@ import {
   TextField,
   IconButton,
   Tooltip,
-  Skeleton,
   Alert,
+  AlertTitle,
+  CircularProgress,
 } from '@mui/material';
 import { useTranslation } from 'react-i18next';
 import { Link as RouterLink } from 'react-router-dom';
@@ -30,25 +30,56 @@ import CodeIcon from '@mui/icons-material/Code';
 import VpnKeyIcon from '@mui/icons-material/VpnKey';
 
 import { useAuth } from '../../../hooks/useAuth';
+import { useConsole } from '../../../contexts/ConsoleContext';
 import { getOrganizationIntegrationInfo } from '../../../services/dashboardApi';
+import { getErrorMessage } from '../../../services/api';
 import { formatOfficialReference } from '../../../utils/officialReferences';
+
+function getDashboardMessageId(error) {
+  return error?.response?.message_id
+    || error?.response?.request_id
+    || error?.requestId
+    || null;
+}
 
 /**
  * Developer Quick Start Panel Component
  */
 export function DeveloperQuickStartPanel() {
   const { t } = useTranslation('console');
-  const { organizationId } = useAuth();
-  const { data: integrationInfo, loading } = useAsyncData(
-    async () => {
-      if (!organizationId) return null;
-      return await getOrganizationIntegrationInfo(organizationId);
-    },
-    [organizationId]
-  );
+  const { organizationId: authOrganizationId } = useAuth();
+  const { activeOrgId } = useConsole();
+  const organizationId = activeOrgId;
 
+  const [integrationInfo, setIntegrationInfo] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
   const [copied, setCopied] = useState(null);
   const [showTechnicalId, setShowTechnicalId] = useState(false);
+
+  const loadIntegrationInfo = useCallback(async () => {
+    if (!organizationId) {
+      setIntegrationInfo(null);
+      setError(null);
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+    try {
+      setIntegrationInfo(await getOrganizationIntegrationInfo(organizationId));
+    } catch (err) {
+      setIntegrationInfo(null);
+      setError(err);
+    } finally {
+      setLoading(false);
+    }
+  }, [organizationId]);
+
+  useEffect(() => {
+    loadIntegrationInfo();
+  }, [loadIntegrationInfo]);
 
   const handleCopy = (text, label) => {
     navigator.clipboard.writeText(text);
@@ -58,11 +89,7 @@ export function DeveloperQuickStartPanel() {
 
   const organizationReference = formatOfficialReference(integrationInfo?.orgId || organizationId, 'organization');
 
-  // Generate example curl request
-  const exampleRequest = integrationInfo?.exampleRequest || 
-    `curl -X GET "${integrationInfo?.baseUrl}/v1/organizations/${organizationId}" \
-  -H "Authorization: Bearer YOUR_API_KEY" \\
-  -H "Content-Type: application/json"`;
+  const exampleRequest = integrationInfo?.exampleRequest || '';
   const sanitizedExampleRequest = useMemo(() => {
     const identifiers = [integrationInfo?.orgId, organizationId].filter(Boolean);
     return identifiers.reduce(
@@ -74,8 +101,38 @@ export function DeveloperQuickStartPanel() {
   if (loading) {
     return (
       <Paper sx={{ p: 3 }}>
-        <Skeleton variant="text" width={200} height={32} />
-        <Skeleton variant="rectangular" height={150} sx={{ mt: 2 }} />
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <CircularProgress size={20} />
+          <Typography variant="body2" color="text.secondary">
+            {t('dashboard.developerQuickStart.loading', { defaultValue: 'Loading integration metadata...' })}
+          </Typography>
+        </Box>
+      </Paper>
+    );
+  }
+
+  if (error) {
+    const messageId = getDashboardMessageId(error);
+    return (
+      <Paper sx={{ p: 3 }}>
+        <Alert
+          severity="warning"
+          action={(
+            <Button color="inherit" size="small" onClick={loadIntegrationInfo}>
+              {t('dashboard.retry', { defaultValue: 'Retry' })}
+            </Button>
+          )}
+        >
+          <AlertTitle>
+            {t('dashboard.developerQuickStart.unavailableTitle', { defaultValue: 'Integration metadata unavailable' })}
+          </AlertTitle>
+          {getErrorMessage(error) || t('dashboard.developerQuickStart.unavailable')}
+          {messageId ? (
+            <Typography variant="caption" sx={{ display: 'block', mt: 1 }}>
+              Message ID: {messageId}
+            </Typography>
+          ) : null}
+        </Alert>
       </Paper>
     );
   }

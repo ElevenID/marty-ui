@@ -599,6 +599,7 @@ class ApiKeyUseCase:
             "webhooks:read", "webhooks:write",
             "notifications:send", "notifications:read",
             "deployment:read", "deployment:write",
+            "integrations:read", "integrations:write",
             "admin:full",
         }
         if command.scopes:

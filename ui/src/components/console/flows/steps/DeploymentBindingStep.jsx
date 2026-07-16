@@ -1,235 +1,142 @@
-/**
- * Deployment Binding Step
- * 
- * Optionally bind the flow to a deployment profile and set default policy
- */
-
-import { useState, useEffect, useCallback } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Box,
-  Typography,
-  Card,
-  CardContent,
-  Radio,
-  RadioGroup,
-  FormControlLabel,
-  CircularProgress,
-  Chip,
   Alert,
+  Box,
+  CircularProgress,
   FormControl,
   InputLabel,
-  Select,
   MenuItem,
+  Select,
+  Stack,
+  Typography,
 } from '@mui/material';
-import DeployIcon from '@mui/icons-material/RocketLaunch';
-import ApiIcon from '@mui/icons-material/Api';
-import { useTranslation } from 'react-i18next';
 
+import { listApplicationTemplates } from '../../../../services/applicationTemplatesApi';
+import { listDeliveryDestinations } from '../../../../services/deliveryDestinationsApi';
 import { listDeploymentProfiles } from '../../../../services/deploymentProfilesApi';
-import { listPresentationPolicies } from '../../../../services/presentationPolicyApi';
-import { useAuth } from '../../../../hooks/useAuth';
+import { listCredentialTemplates, listPresentationPolicies } from '../../../../services/presentationPolicyApi';
+import { useConsole } from '../../../../contexts/ConsoleContext';
 
-const DeploymentBindingStep = ({ selectedDeployment, defaultPolicyId, onUpdate }) => {
-  const { t } = useTranslation('console');
-  const { organizationId } = useAuth();
+const CREDENTIAL_TYPES = new Set([
+  'oid4vci_authorization_code', 'oid4vci_pre_authorized', 'mdl_issuance',
+  'credential_renewal', 'credential_revocation', 'physical_document_issuance', 'combined',
+]);
+const APPLICATION_TYPES = new Set(['application_approval_issuance', 'physical_document_issuance']);
+const PRESENTATION_TYPES = new Set(['oid4vp_presentation', 'mdl_presentation', 'siopv2', 'combined']);
+
+function items(response) {
+  const value = response?.data || response || [];
+  return Array.isArray(value) ? value : value.items || [];
+}
+
+function isActive(resource) {
+  return String(resource?.status || '').toLowerCase() === 'active' || resource?.is_active === true;
+}
+
+const DeploymentBindingStep = ({
+  applicationTemplateId,
+  credentialTemplateId,
+  defaultPolicyId,
+  deliveryDestinationProfileId,
+  flowType,
+  onUpdate,
+  selectedDeployment,
+}) => {
+  const { activeOrgId: organizationId } = useConsole();
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [deploymentProfiles, setDeploymentProfiles] = useState([]);
-  const [policies, setPolicies] = useState([]);
+  const [loadErrors, setLoadErrors] = useState([]);
+  const [resources, setResources] = useState({ applications: [], deliveries: [], deployments: [], policies: [], templates: [] });
+
+  const required = useMemo(() => ({
+    application: APPLICATION_TYPES.has(flowType),
+    credential: CREDENTIAL_TYPES.has(flowType),
+    delivery: flowType === 'physical_document_issuance',
+    presentation: PRESENTATION_TYPES.has(flowType),
+  }), [flowType]);
 
   const fetchData = useCallback(async () => {
+    if (!organizationId) return;
     setLoading(true);
-    setError(null);
+    const requests = [
+      ['deployments', listDeploymentProfiles({ organization_id: organizationId })],
+      ['policies', listPresentationPolicies({ organization_id: organizationId })],
+      ['templates', listCredentialTemplates({ organization_id: organizationId })],
+      ['applications', listApplicationTemplates(organizationId)],
+      ['deliveries', listDeliveryDestinations({ organizationId, activeOnly: true })],
+    ];
+    const settled = await Promise.allSettled(requests.map(([, request]) => request));
+    const nextResources = { applications: [], deliveries: [], deployments: [], policies: [], templates: [] };
+    const errors = [];
+    settled.forEach((result, index) => {
+      const key = requests[index][0];
+      if (result.status === 'fulfilled') {
+        nextResources[key] = items(result.value).filter(isActive);
+      } else {
+        errors.push(key);
+      }
+    });
+    setResources(nextResources);
+    setLoadErrors(errors);
+    setLoading(false);
+  }, [organizationId]);
 
-    try {
-      const [deploymentsResponse, policiesResponse] = await Promise.all([
-        listDeploymentProfiles({ organization_id: organizationId }),
-        listPresentationPolicies(),
-      ]);
-
-      setDeploymentProfiles(deploymentsResponse.data || deploymentsResponse || []);
-      setPolicies(policiesResponse.data || policiesResponse || []);
-    } catch (err) {
-      console.error('Failed to fetch data:', err);
-      setError(t('wizards.flowDefinition.deploymentBindingStep.errors.failedToLoad'));
-    } finally {
-      setLoading(false);
-    }
-  }, [organizationId, t]);
+  useEffect(() => { fetchData(); }, [fetchData]);
 
   useEffect(() => {
-    fetchData();
-  }, [fetchData]);
-
-  const handleSelectDeployment = (profile) => {
-    onUpdate({ selectedDeployment: profile });
-  };
-
-  const handleSelectPolicy = (policyId) => {
-    onUpdate({ defaultPolicyId: policyId });
-  };
+    const updates = {};
+    if (!selectedDeployment && resources.deployments.length === 1) updates.selectedDeployment = resources.deployments[0];
+    if (required.credential && !credentialTemplateId && resources.templates.length === 1) updates.credentialTemplateId = resources.templates[0].id;
+    if (required.application && !applicationTemplateId && resources.applications.length === 1) updates.applicationTemplateId = resources.applications[0].id;
+    if (required.presentation && !defaultPolicyId && resources.policies.length === 1) updates.defaultPolicyId = resources.policies[0].id;
+    if (required.delivery && !deliveryDestinationProfileId && resources.deliveries.length === 1) updates.deliveryDestinationProfileId = resources.deliveries[0].id;
+    if (Object.keys(updates).length) onUpdate(updates);
+  }, [applicationTemplateId, credentialTemplateId, defaultPolicyId, deliveryDestinationProfileId, onUpdate, required, resources, selectedDeployment]);
 
   if (loading) {
-    return (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
-        <CircularProgress />
-      </Box>
-    );
+    return <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}><CircularProgress /></Box>;
   }
+
+  const select = (label, value, candidates, updateKey, requiredField = false, resolveValue = (nextValue) => nextValue || null) => {
+    const inputId = `flow-binding-${updateKey}-input`;
+    const labelId = `${inputId}-label`;
+    return (
+    <FormControl fullWidth required={requiredField}>
+      <InputLabel id={labelId}>{label}</InputLabel>
+      <Select
+        id={inputId}
+        labelId={labelId}
+        label={label}
+        value={value || ''}
+        onChange={(event) => onUpdate({ [updateKey]: resolveValue(event.target.value) })}
+        SelectDisplayProps={{ 'data-testid': `flow-binding-${updateKey}` }}
+      >
+        {!requiredField && <MenuItem value=""><em>None</em></MenuItem>}
+        {candidates.map((candidate) => (
+          <MenuItem key={candidate.id} value={candidate.id}>{candidate.name || candidate.display_name || candidate.id}</MenuItem>
+        ))}
+      </Select>
+    </FormControl>
+    );
+  };
 
   return (
     <Box>
-      <Typography variant="h6" gutterBottom>
-        {t('wizards.flowDefinition.deploymentBindingStep.title')}
-      </Typography>
-      
-      <Typography color="text.secondary" paragraph>
-        {t('wizards.flowDefinition.deploymentBindingStep.description')}
-      </Typography>
-
-      {error && (
-        <Alert severity="error" sx={{ mb: 3 }}>
-          {error}
-        </Alert>
-      )}
-
-      {/* Deployment Profile Selection */}
-      <Card sx={{ mb: 3 }}>
-        <CardContent>
-          <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 600 }}>
-            <DeployIcon sx={{ verticalAlign: 'middle', mr: 1 }} />
-            {t('wizards.flowDefinition.deploymentBindingStep.sections.deploymentProfile')}
-          </Typography>
-
-          {deploymentProfiles.length === 0 ? (
-            <Alert severity="info">
-              {t('wizards.flowDefinition.deploymentBindingStep.deployment.empty')}
-            </Alert>
-          ) : (
-            <>
-              <Typography variant="body2" color="text.secondary" paragraph>
-                {t('wizards.flowDefinition.deploymentBindingStep.deployment.helper')}
-              </Typography>
-
-              <RadioGroup
-                value={selectedDeployment?.id || ''}
-                onChange={(e) => {
-                  const profile = deploymentProfiles.find(p => p.id === e.target.value);
-                  handleSelectDeployment(profile);
-                }}
-              >
-                <FormControlLabel
-                  value=""
-                  control={<Radio />}
-                  label={t('wizards.flowDefinition.deploymentBindingStep.deployment.none')}
-                  sx={{ mb: 1 }}
-                />
-                
-                {deploymentProfiles.map((profile) => (
-                  <Card
-                    key={profile.id}
-                    sx={{
-                      mb: 1,
-                      border: 2,
-                      borderColor: selectedDeployment?.id === profile.id ? 'primary.main' : 'transparent',
-                      cursor: 'pointer',
-                      '&:hover': {
-                        borderColor: 'primary.light',
-                      },
-                    }}
-                    onClick={() => handleSelectDeployment(profile)}
-                  >
-                    <CardContent sx={{ py: 1.5 }}>
-                      <Box sx={{ display: 'flex', alignItems: 'center' }}>
-                        <FormControlLabel
-                          value={profile.id}
-                          control={<Radio />}
-                          label=""
-                          sx={{ mr: 2 }}
-                        />
-                        
-                        <Box sx={{ flex: 1 }}>
-                          <Typography variant="body1" sx={{ fontWeight: 500 }}>
-                            {profile.name}
-                          </Typography>
-                          <Typography variant="caption" color="text.secondary">
-                            {profile.description}
-                          </Typography>
-                          <Box sx={{ mt: 0.5 }}>
-                            <Chip
-                              label={profile.network_mode || t('wizards.flowDefinition.deploymentBindingStep.deployment.onlineFallback')}
-                              size="small"
-                              variant="outlined"
-                              sx={{ mr: 0.5 }}
-                            />
-                            {profile.is_active && (
-                              <Chip
-                                label={t('wizards.flowDefinition.deploymentBindingStep.deployment.activeChip')}
-                                size="small"
-                                color="success"
-                                variant="outlined"
-                              />
-                            )}
-                          </Box>
-                        </Box>
-                      </Box>
-                    </CardContent>
-                  </Card>
-                ))}
-              </RadioGroup>
-            </>
-          )}
-        </CardContent>
-      </Card>
-
-      {/* Default Policy Selection */}
-      <Card>
-        <CardContent>
-          <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 600 }}>
-            <ApiIcon sx={{ verticalAlign: 'middle', mr: 1 }} />
-            {t('wizards.flowDefinition.deploymentBindingStep.sections.defaultPolicy')}
-          </Typography>
-
-          {policies.length === 0 ? (
-            <Alert severity="info">
-              {t('wizards.flowDefinition.deploymentBindingStep.policy.empty')}
-            </Alert>
-          ) : (
-            <>
-              <Typography variant="body2" color="text.secondary" paragraph>
-                {t('wizards.flowDefinition.deploymentBindingStep.policy.helper')}
-              </Typography>
-
-              <FormControl fullWidth>
-                <InputLabel>{t('wizards.flowDefinition.deploymentBindingStep.policy.label')}</InputLabel>
-                <Select
-                  value={defaultPolicyId || ''}
-                  onChange={(e) => handleSelectPolicy(e.target.value)}
-                  label={t('wizards.flowDefinition.deploymentBindingStep.policy.label')}
-                >
-                  <MenuItem value="">
-                    <em>{t('wizards.flowDefinition.deploymentBindingStep.policy.none')}</em>
-                  </MenuItem>
-                  {policies.map((policy) => (
-                    <MenuItem key={policy.id} value={policy.id}>
-                      {policy.name}
-                      {policy.is_active && (
-                        <Chip
-                          label={t('wizards.flowDefinition.deploymentBindingStep.policy.activeChip')}
-                          size="small"
-                          color="success"
-                          variant="outlined"
-                          sx={{ ml: 1 }}
-                        />
-                      )}
-                    </MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
-            </>
-          )}
-        </CardContent>
-      </Card>
+      <Typography variant="h6" gutterBottom>Dependencies</Typography>
+      <Stack spacing={2.5}>
+        {loadErrors.length > 0 && <Alert severity="warning">Some dependency catalogs could not be loaded: {loadErrors.join(', ')}.</Alert>}
+        {required.credential && select('Credential template', credentialTemplateId, resources.templates, 'credentialTemplateId', true)}
+        {required.application && select('Application template', applicationTemplateId, resources.applications, 'applicationTemplateId', true)}
+        {required.presentation && select('Presentation policy', defaultPolicyId, resources.policies, 'defaultPolicyId', true)}
+        {required.delivery && select('Production destination', deliveryDestinationProfileId, resources.deliveries, 'deliveryDestinationProfileId', true)}
+        {select(
+          'Deployment profile',
+          selectedDeployment?.id,
+          resources.deployments,
+          'selectedDeployment',
+          false,
+          (profileId) => resources.deployments.find((candidate) => candidate.id === profileId) || null,
+        )}
+      </Stack>
     </Box>
   );
 };

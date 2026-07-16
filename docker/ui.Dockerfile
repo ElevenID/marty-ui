@@ -3,6 +3,8 @@
 FROM oven/bun:alpine AS builder
 
 ARG UI_VARIANT=public
+ARG MARTY_RELEASE_VERSION=development
+ARG MARTY_UI_SHA=unknown
 
 # Set environment variables
 ENV NODE_ENV=production
@@ -39,7 +41,9 @@ RUN bun install \
 COPY ui/ .
 
 # Build the application
-RUN if [ "$UI_VARIANT" = "selfhost" ]; then bun run build:selfhost && mv dist-selfhost dist-final; else bun run build && mv dist dist-final; fi
+RUN if [ "$UI_VARIANT" = "selfhost" ]; then bun run build:selfhost && mv dist-selfhost dist-final; else bun run build && mv dist dist-final; fi \
+    && printf '{"component":"ui","release_version":"%s","marty_ui_sha":"%s"}\n' \
+      "$MARTY_RELEASE_VERSION" "$MARTY_UI_SHA" > dist-final/marty-ui-release.json
 
 # Use nginx to serve the built application
 FROM nginx:alpine

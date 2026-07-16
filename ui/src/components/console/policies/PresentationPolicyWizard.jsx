@@ -28,6 +28,7 @@ import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import { createPresentationPolicy } from '../../../services/presentationPolicyApi';
+import { useConsole } from '../../../contexts/ConsoleContext';
 
 import { useWizard } from '../../../hooks/useWizard';
 import {
@@ -71,6 +72,7 @@ const INITIAL_DATA = {
 const PresentationPolicyWizard = () => {
   const navigate = useNavigate();
   const { t } = useTranslation('console');
+  const { activeOrgId } = useConsole();
   const [apiError, setApiError] = useState(null);
 
   // Validation function for each step
@@ -96,14 +98,22 @@ const PresentationPolicyWizard = () => {
   }, []);
 
   const handleSubmit = useCallback(async (data) => {
+    const credentialRequirements = Array.isArray(data.policyConfig.credential_requirements)
+      ? data.policyConfig.credential_requirements.map((requirement) => ({
+          ...requirement,
+          trust_profile_id: requirement.trust_profile_id || data.selectedTrustProfile?.id,
+        }))
+      : undefined;
     const payload = {
       ...data.policyConfig,
+      ...(credentialRequirements ? { credential_requirements: credentialRequirements } : {}),
+      organization_id: activeOrgId,
       trust_profile_id: data.selectedTrustProfile?.id,
       template_id: data.selectedTemplate?.id,
       status: data.activateImmediately ? 'active' : 'draft',
     };
     return createPresentationPolicy(payload);
-  }, []);
+  }, [activeOrgId]);
 
   const wizard = useWizard({
     steps: getSteps(t),
@@ -132,6 +142,7 @@ const PresentationPolicyWizard = () => {
         purpose: `Verify ${template.name}`,
         ...template.config,
         metadata: {
+          ...(template.config.metadata || {}),
           standard_reference: template.standardReference,
           template_id: template.id,
         },

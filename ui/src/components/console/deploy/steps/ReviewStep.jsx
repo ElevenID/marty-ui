@@ -2,7 +2,6 @@
  * Review Step - Deployment Profile Wizard
  * 
  * Final review of all configuration before submission.
- * Includes API key generation option.
  */
 
 import {
@@ -10,7 +9,6 @@ import {
   Typography,
   Chip,
   Grid,
-  Divider,
 } from '@mui/material';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
@@ -191,31 +189,22 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
             <Grid item xs={12} md={6}>
               <ReviewField
                 label={t('wizards.deploymentProfile.reviewStep.fields.theme')}
-                value={data.ux_config?.theme || t('wizards.deploymentProfile.reviewStep.values.defaultTheme')}
+                value={data.environment_config?.theme || t('wizards.deploymentProfile.reviewStep.values.defaultTheme')}
               />
             </Grid>
 
             <Grid item xs={12} md={6}>
               <ReviewField
                 label={t('wizards.deploymentProfile.reviewStep.fields.language')}
-                value={data.ux_config?.language || t('wizards.deploymentProfile.reviewStep.values.defaultLanguage')}
+                value={data.environment_config?.language || t('wizards.deploymentProfile.reviewStep.values.defaultLanguage')}
               />
             </Grid>
           </Grid>
       </ReviewSectionCard>
 
-      <Divider sx={{ my: 3 }} />
-
       {/* Activation Options */}
       <ReviewToggleOption
-        sx={{ mb: 2 }}
-        checked={data.generate_api_key !== false}
-        onChange={(e) => onChange({ generate_api_key: e.target.checked })}
-        title={t('wizards.deploymentProfile.reviewStep.activationOptions.generateApiKey.label')}
-        description={t('wizards.deploymentProfile.reviewStep.activationOptions.generateApiKey.description')}
-      />
-
-      <ReviewToggleOption
+        sx={{ mt: 3 }}
         checked={data.activate_immediately !== false}
         onChange={(e) => onChange({ activate_immediately: e.target.checked })}
         title={t('wizards.deploymentProfile.reviewStep.activationOptions.activateImmediately.label')}

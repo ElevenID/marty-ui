@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   buildApplicantProfileData,
-  buildAutoApplyContext,
+  buildAutoApplyFormData,
+  canAutoApplyApplicationTemplate,
   buildStandardApplicationPayload,
   getCredentialKindFlags,
   getOneClickSummaryFields,
@@ -42,6 +43,7 @@ describe('applicationFlow helpers', () => {
   it('normalizes template responses into form config shape', () => {
     expect(normalizeTemplateToFormConfig({
       id: 'tpl-1',
+      application_template_id: 'app-template-1',
       credential_type: 'ExampleCredential',
       name: 'Example',
       claims: [{ name: 'first_name', required: true }, { name: 'email', required: false }],
@@ -49,8 +51,9 @@ describe('applicationFlow helpers', () => {
       id: 'tpl-1',
       credential_type: 'ExampleCredential',
       display_name: 'Example',
-      required_fields: ['first_name'],
-      optional_fields: ['email'],
+      required_fields: [expect.objectContaining({ name: 'first_name', required: true })],
+      optional_fields: [expect.objectContaining({ name: 'email', required: false })],
+      application_template_id: 'app-template-1',
     })
   })
 
@@ -61,11 +64,16 @@ describe('applicationFlow helpers', () => {
       description: 'Complete the course quiz.',
       credential_template_id: 'credential-template-1',
       form_fields: [
-        { name: 'email', label: 'Email', type: 'email', required: true },
-        { name: 'course_name', label: 'Canvas course', type: 'string', required: true },
-        { name: 'score_percent', label: 'Score percent', type: 'integer', required: true },
+        { field_id: 'email', label: 'Email', field_type: 'EMAIL', required: true },
+        { field_id: 'course_name', label: 'Canvas course', field_type: 'TEXT', required: true },
+        { field_id: 'score_percent', label: 'Score percent', field_type: 'INTEGER', required: true },
       ],
-      evidence_requirements: [{ evidence_type: 'canvas.quiz_score' }],
+      evidence_requirements: [{
+        evidence_id: 'canvas_quiz_score',
+        evidence_type: 'EXTERNAL_FACT',
+        description: 'Verified Canvas quiz score',
+        required: true,
+      }],
       ui_config: { submission_instructions: 'Review your course details.' },
     }, {
       id: 'credential-template-1',
@@ -80,13 +88,13 @@ describe('applicationFlow helpers', () => {
       required_fields: [
         { name: 'email', label: 'Email', type: 'email', required: true },
         { name: 'course_name', label: 'Canvas course', type: 'text', required: true },
-        { name: 'score_percent', label: 'Score percent', type: 'number', required: true },
+          { name: 'score_percent', label: 'Score percent', type: 'integer', required: true },
       ],
       optional_fields: [
         { name: 'family_name', label: 'Family Name', type: 'text', required: false },
       ],
       submission_instructions: 'Review your course details.',
-      evidence_requirements: [{ evidence_type: 'canvas.quiz_score' }],
+      evidence_requirements: [expect.objectContaining({ evidence_id: 'canvas_quiz_score', evidence_type: 'EXTERNAL_FACT' })],
     })
   })
 
@@ -111,9 +119,8 @@ describe('applicationFlow helpers', () => {
     })
   })
 
-  it('builds applicant profile payloads including address information', () => {
+  it('builds applicant profile payloads without caller-controlled identity fields', () => {
     expect(buildApplicantProfileData({
-      organizationId: 'org-1',
       user: { user_id: 'user-1', email: 'user@example.com' },
       formData: {
         first_name: 'Ada',
@@ -121,107 +128,67 @@ describe('applicationFlow helpers', () => {
         city: 'London',
       },
     })).toEqual({
-      organization_id: 'org-1',
-      user_id: 'user-1',
       given_name: 'Ada',
       family_name: 'Lovelace',
       email: 'user@example.com',
-      date_of_birth: undefined,
-      nationality: 'USA',
-      address: {
-        city: 'London',
-        country: 'USA',
-      },
     })
   })
 
   it('builds standard application payloads', () => {
     expect(buildStandardApplicationPayload({
-      applicantId: 'app-1',
-      credentialConfig: { id: 'cfg-1', credential_type: 'ExampleCredential', display_name: 'Example' },
-      credentialConfigId: 'cfg-fallback',
+      organizationId: 'org-1',
+      credentialConfig: { id: 'cfg-1', application_template_id: 'app-template-1' },
       formData: { documentNumber: '1234' },
-    })).toMatchObject({
-      applicant_id: 'app-1',
-      credential_configuration_id: 'cfg-1',
-      issuing_authority: 'ElevenID LLC',
-      requested_validity_years: 10,
-      metadata: {
-        document_number: '1234',
-        credential_type: 'ExampleCredential',
-        credential_display_name: 'Example',
-      },
+    })).toEqual({
+      organization_id: 'org-1',
+      application_template_id: 'app-template-1',
+      form_data: { documentNumber: '1234' },
+      integration_context: {},
     })
   })
 
   it('marks Canvas LTI applications for demo auto-approval', () => {
     expect(buildStandardApplicationPayload({
-      applicantId: 'app-1',
-      credentialConfig: { id: 'cfg-1', credential_type: 'open_badge', display_name: 'Canvas Badge' },
-      credentialConfigId: 'cfg-fallback',
+      organizationId: 'org-1',
+      credentialConfig: { id: 'cfg-1', application_template_id: 'app-template-1' },
       formData: {},
       canvasLtiContext: {
         state: 'state-1',
         canvas_account_id: 'canvas-real-account-1',
       },
-    })).toMatchObject({
-      applicant_id: 'app-1',
-      credential_configuration_id: 'cfg-1',
-      metadata: {
-        credential_type: 'open_badge',
-        credential_display_name: 'Canvas Badge',
+    })).toEqual({
+      organization_id: 'org-1',
+      application_template_id: 'app-template-1',
+      form_data: {},
+      integration_context: {
         canvas_lti: {
           state: 'state-1',
           canvas_account_id: 'canvas-real-account-1',
         },
-        auto_approve: true,
       },
     })
   })
 
-  it('builds auto-apply context for mDL credentials', () => {
-    const result = buildAutoApplyContext({
-      credentialConfig: { credential_type: 'org.iso.18013.5.1.mDL', name: 'mDL' },
-      user: { user_id: 'abcdef12', family_name: 'Doe', given_name: 'Jane' },
-      organizationId: 'org-1',
-      nowIso: '2026-03-16T10:00:00.000Z',
-    })
-
-    expect(result.requested_validity_years).toBe(5)
-    expect(result.metadata.document_number).toBe('MDL-ABCDEF12')
-  })
-
-  it('builds auto-apply context for open badge membership credentials', () => {
-    const result = buildAutoApplyContext({
-      credentialConfig: { credential_type: 'open_badge', name: 'Verified Member Badge' },
+  it('builds auto-apply form data only from canonical template fields', () => {
+    const applicationTemplate = {
+      id: 'application-template-1',
+      form_fields: [
+        { field_id: 'given_name', label: 'Given name', field_type: 'TEXT', required: true },
+        { field_id: 'email', label: 'Email', field_type: 'EMAIL', required: true },
+      ],
+    }
+    const result = buildAutoApplyFormData({
+      applicationTemplate,
       user: {
         user_id: 'abcdef12',
         family_name: 'Doe',
         given_name: 'Jane',
         email: 'jane@example.com',
-        organization_name: 'Acme Org',
-        roles: ['vendor'],
       },
-      organizationId: 'org-1',
-      nowIso: '2026-03-16T10:00:00.000Z',
     })
 
-    expect(result).toMatchObject({
-      requested_validity_years: 1,
-      metadata: {
-        credential_type: 'open_badge',
-        credential_display_name: 'Verified Member Badge',
-        member_id: 'abcdef12',
-        email: 'jane@example.com',
-        organization_id: 'org-1',
-        organization_name: 'Acme Org',
-        role: 'vendor',
-        achievement_name: 'Verified Member Badge',
-        achievement_description: 'Verifiable proof of active membership in the issuing organization.',
-        issued_at: '2026-03-16T10:00:00.000Z',
-        auto_approve: true,
-      },
-    })
+    expect(result).toEqual({ given_name: 'Jane', email: 'jane@example.com' })
+    expect(canAutoApplyApplicationTemplate({ applicationTemplate, user: { given_name: 'Jane' } })).toBe(false)
   })
 
   it('builds one-click summary fields for member credentials', () => {
@@ -233,7 +200,7 @@ describe('applicationFlow helpers', () => {
       { label: 'Name', value: 'Jane Doe' },
       { label: 'Email', value: 'jane@example.com' },
       { label: 'Role', value: 'Vendor' },
-      { label: 'Organization', value: 'ElevenID LLC' },
+      { label: 'Organization', value: 'Acme' },
     ])
   })
 
@@ -280,6 +247,37 @@ describe('applicationFlow helpers', () => {
     })).toEqual({
       valid: false,
       errors: { code: 'Minimum length is 3' },
+    })
+  })
+
+  it('validates typed template fields before submission', () => {
+    const result = validateApplicationStep({
+      stepIndex: 0,
+      steps: [{ label: 'step', fields: [
+        { name: 'birth_date', type: 'date' },
+        { name: 'score', type: 'integer', minimum: 1, maximum: 10 },
+        { name: 'consent', type: 'boolean' },
+        { name: 'level', type: 'select', enum: ['basic', 'advanced'] },
+        { name: 'code', type: 'text', pattern: '[A-Z]{3}' },
+      ] }, { label: 'review', fields: [] }],
+      formData: {
+        birth_date: '03/12/2026',
+        score: 1.5,
+        consent: 'yes',
+        level: 'unknown',
+        code: 'ab',
+      },
+    })
+
+    expect(result).toEqual({
+      valid: false,
+      errors: {
+        birth_date: 'Use a date in YYYY-MM-DD format',
+        score: 'Enter a whole number',
+        consent: 'Choose true or false',
+        level: 'Choose one of the allowed values',
+        code: 'Invalid format',
+      },
     })
   })
 })

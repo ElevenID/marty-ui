@@ -3,9 +3,9 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import logging
-from typing import Any
-
+import os
 import httpx
+from typing import Any
 from fastapi import APIRouter, Query, Request, Response
 
 from gateway.middleware import mip_error_response
@@ -84,6 +84,64 @@ async def get_organization_lifecycle(org_id: str, request: Request) -> Response 
     if error_response is not None:
         return error_response
     return lifecycle_payload
+
+
+@organization_router.get("/{org_id}/runtime/status", summary="Runtime Status", response_model=None)
+async def get_runtime_status(org_id: str, request: Request) -> Response | dict[str, Any]:
+    """Return conservative runtime readiness derived from live org artifacts."""
+    payload, error_response = await _load_runtime_status_payload(
+        org_id,
+        headers=_forward_context_headers(request),
+    )
+    if error_response is not None:
+        return error_response
+    return payload
+
+
+@organization_router.get("/{org_id}/environment", summary="Organization Environment")
+async def get_organization_environment(org_id: str, request: Request) -> Response:
+    """Return the dashboard environment setting from the organization service."""
+    registry = get_registry()
+    service_url = registry.get_service_url("organizations")
+    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/environment", inject_params={"organization_id": org_id})
+
+
+@organization_router.patch("/{org_id}/environment", summary="Update Organization Environment")
+async def update_organization_environment(org_id: str, request: Request) -> Response:
+    """Update the dashboard environment setting through the organization service."""
+    registry = get_registry()
+    service_url = registry.get_service_url("organizations")
+    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/environment", inject_params={"organization_id": org_id})
+
+
+@organization_router.get("/{org_id}/dashboard/applicant-stats", summary="Applicant Stats", response_model=None)
+async def get_dashboard_applicant_stats(org_id: str, request: Request) -> Response | dict[str, int]:
+    """Return applicant lifecycle counts from the applicant service."""
+    payload, error_response = await _load_applicant_stats_payload(
+        org_id,
+        headers=_forward_context_headers(request),
+    )
+    if error_response is not None:
+        return error_response
+    return payload
+
+
+@organization_router.get("/{org_id}/integration-info", summary="Integration Info")
+async def get_organization_integration_info(org_id: str, request: Request) -> dict[str, str]:
+    """Return real request/deployment-derived developer quick-start metadata."""
+    base_url = _public_api_base_url(request)
+    example_request = (
+        f"curl -sS -X POST \"{base_url}/flows/instances\" \\\n"
+        "  -H \"Content-Type: application/json\" \\\n"
+        "  -H \"X-API-Key: <api-key>\" \\\n"
+        f"  -H \"X-Organization-ID: {org_id}\" \\\n"
+        "  -d '{\"flow_definition_id\":\"<flow-definition-id>\",\"subject_id\":\"<subject-id>\",\"initial_context\":{}}'"
+    )
+    return {
+        "org_id": org_id,
+        "base_url": base_url,
+        "example_request": example_request,
+    }
 
 
 @organization_router.put("/{org_id}", response_model=OrganizationResponse, summary="Update Organization")
@@ -175,11 +233,24 @@ async def list_audit_events(
     }
 
     if resource_type:
-        inject_params["category"] = resource_type
+        inject_params["resource_type"] = resource_type
+    if resource_id:
+        inject_params["resource_id"] = resource_id
+    if action:
+        inject_params["action"] = action
+    if actor:
+        inject_params["actor"] = actor
+    if severity:
+        inject_params["severity"] = severity
+    if ip_address:
+        inject_params["ip_address"] = ip_address
+    if start_date:
+        inject_params["start_date"] = start_date
+    if end_date:
+        inject_params["end_date"] = end_date
 
-    bridged_search = search or actor or resource_id or action or ip_address
-    if bridged_search:
-        inject_params["search"] = bridged_search
+    if search:
+        inject_params["search"] = search
 
     return await proxy_request(request, service_url, "/v1/organizations/audit/events", inject_params=inject_params)
 
@@ -208,11 +279,24 @@ async def export_audit_events(
     }
 
     if resource_type:
-        inject_params["category"] = resource_type
+        inject_params["resource_type"] = resource_type
+    if resource_id:
+        inject_params["resource_id"] = resource_id
+    if action:
+        inject_params["action"] = action
+    if actor:
+        inject_params["actor"] = actor
+    if severity:
+        inject_params["severity"] = severity
+    if ip_address:
+        inject_params["ip_address"] = ip_address
+    if start_date:
+        inject_params["start_date"] = start_date
+    if end_date:
+        inject_params["end_date"] = end_date
 
-    bridged_search = search or actor or resource_id or action or ip_address
-    if bridged_search:
-        inject_params["search"] = bridged_search
+    if search:
+        inject_params["search"] = search
 
     return await proxy_request(request, service_url, "/v1/organizations/audit/events/export", inject_params=inject_params)
 
@@ -457,6 +541,24 @@ async def update_preferences(body: UpdatePreferencesRequest, request: Request) -
     return await proxy_request(request, service_url, "/v1/me/preferences")
 
 
+def _public_api_base_url(request: Request) -> str:
+    configured = (
+        os.environ.get("PUBLIC_API_URL")
+        or os.environ.get("ISSUER_BASE_URL")
+        or os.environ.get("PUBLIC_BASE_URL")
+    )
+    if configured:
+        origin = configured.strip().rstrip("/")
+    else:
+        forwarded_host = request.headers.get("x-forwarded-host") or request.headers.get("host")
+        forwarded_proto = request.headers.get("x-forwarded-proto") or request.url.scheme or "https"
+        host = forwarded_host.split(",", 1)[0].strip() if forwarded_host else request.url.netloc
+        proto = forwarded_proto.split(",", 1)[0].strip().lower() if forwarded_proto else "https"
+        origin = f"{proto}://{host}".rstrip("/")
+
+    return origin if origin.endswith("/v1") else f"{origin}/v1"
+
+
 def _forward_context_headers(request: Request) -> dict[str, str]:
     headers: dict[str, str] = {}
     if hasattr(request.state, "user_id") and request.state.user_id:
@@ -467,6 +569,14 @@ def _forward_context_headers(request: Request) -> dict[str, str]:
         headers["X-User-Domain"] = request.state.user_domain
     if hasattr(request.state, "org_plan") and request.state.org_plan:
         headers["X-Org-Plan"] = request.state.org_plan
+    if hasattr(request.state, "organization_id") and request.state.organization_id:
+        headers["X-Organization-ID"] = request.state.organization_id
+    org_permissions = getattr(request.state, "org_permissions", None)
+    if org_permissions:
+        headers["X-Org-Permissions"] = ",".join(sorted(str(value) for value in org_permissions))
+    org_roles = getattr(request.state, "org_roles", None)
+    if org_roles:
+        headers["X-Org-Roles"] = ",".join(sorted(str(value) for value in org_roles))
     auth = request.headers.get("authorization")
     if auth:
         headers["Authorization"] = auth
@@ -524,8 +634,16 @@ async def _request_service_json_with_headers(
     registry: Any | None = None,
 ) -> tuple[Any, Response | None]:
     registry = registry or get_registry()
+    service_url = registry.get_service_url(service_name)
+    if not service_url:
+        return {}, mip_error_response(
+            status_code=503,
+            error="service_unavailable",
+            message=f"{service_name} service unavailable",
+            extra={"service": service_name},
+        )
     client = client or get_http_client()
-    url = f"{registry.get_service_url(service_name)}{path}"
+    url = f"{service_url}{path}"
 
     try:
         response = await client.request(
@@ -540,24 +658,210 @@ async def _request_service_json_with_headers(
         return {}, mip_error_response(status_code=503, error="service_unavailable", message=f"{service_name} service unavailable")
     except httpx.TimeoutException:
         return {}, mip_error_response(status_code=504, error="service_timeout", message=f"{service_name} service timed out")
+    except httpx.HTTPError as exc:
+        return {}, mip_error_response(
+            status_code=502,
+            error="service_request_failed",
+            message=f"{service_name} service request failed: {exc}",
+            extra={"service": service_name},
+        )
 
     if response.status_code >= 400:
         return {}, _proxy_error_response(response)
 
-    return response.json(), None
+    try:
+        return response.json(), None
+    except ValueError:
+        return {}, mip_error_response(
+            status_code=502,
+            error="invalid_upstream_response",
+            message=f"{service_name} service returned invalid JSON",
+            extra={"service": service_name},
+        )
 
 
-async def _load_organization_lifecycle_payload(
+def _payload_items(payload: Any, *keys: str) -> list[dict[str, Any]]:
+    if isinstance(payload, list):
+        return [item for item in payload if isinstance(item, dict)]
+    if isinstance(payload, dict):
+        for key in keys:
+            value = payload.get(key)
+            if isinstance(value, list):
+                return [item for item in value if isinstance(item, dict)]
+    return []
+
+
+def _status_value(item: dict[str, Any]) -> str:
+    return str(item.get("status") or item.get("state") or "").strip().lower()
+
+
+def _is_active_artifact(item: dict[str, Any]) -> bool:
+    status = _status_value(item)
+    return not status or status in {"active", "enabled", "ready"}
+
+
+async def _load_org_artifact_list(
+    service_name: str,
+    path: str,
+    org_id: str,
+    *,
+    keys: tuple[str, ...],
+    headers: dict[str, str] | None = None,
+    client: httpx.AsyncClient | None = None,
+    registry: Any | None = None,
+) -> tuple[list[dict[str, Any]], Response | None]:
+    payload, error_response = await _request_service_json_with_headers(
+        service_name,
+        path,
+        params={"organization_id": org_id},
+        headers=headers,
+        client=client,
+        registry=registry,
+    )
+    if error_response is not None:
+        return [], error_response
+    return _payload_items(payload, *keys), None
+
+
+async def _load_runtime_status_payload(
     org_id: str,
     *,
     headers: dict[str, str] | None = None,
     client: httpx.AsyncClient | None = None,
     registry: Any | None = None,
 ) -> tuple[dict[str, Any], Response | None]:
+    templates, error_response = await _load_org_artifact_list(
+        "credential-templates",
+        "/v1/credential-templates",
+        org_id,
+        keys=("templates", "credential_templates"),
+        headers=headers,
+        client=client,
+        registry=registry,
+    )
+    if error_response is not None:
+        return {}, error_response
+
+    policies, error_response = await _load_org_artifact_list(
+        "presentation-policies",
+        "/v1/presentation-policies",
+        org_id,
+        keys=("policies", "presentation_policies"),
+        headers=headers,
+        client=client,
+        registry=registry,
+    )
+    if error_response is not None:
+        return {}, error_response
+
+    deployments, error_response = await _load_org_artifact_list(
+        "deployment-profiles",
+        "/v1/deployment-profiles",
+        org_id,
+        keys=("profiles", "deployment_profiles"),
+        headers=headers,
+        client=client,
+        registry=registry,
+    )
+    if error_response is not None:
+        return {}, error_response
+
+    flows, error_response = await _load_org_artifact_list(
+        "flows",
+        "/v1/flows/definitions",
+        org_id,
+        keys=("flows", "definitions", "flow_definitions"),
+        headers=headers,
+        client=client,
+        registry=registry,
+    )
+    if error_response is not None:
+        return {}, error_response
+
+    active_templates = [item for item in templates if _is_active_artifact(item)]
+    active_policies = [item for item in policies if _is_active_artifact(item)]
+    active_deployments = [item for item in deployments if _is_active_artifact(item)]
+    active_flows = [item for item in flows if _is_active_artifact(item)]
+    kms_backed_templates = [
+        item for item in active_templates
+        if item.get("issuer_profile_id") and str(item.get("key_access_mode") or "").upper() == "REMOTE_SIGNING"
+    ]
+
+    issuer_active = bool(kms_backed_templates)
+    issuer_keys_valid = issuer_active
+    deployment_active = bool(active_deployments)
+    policy_reachable = bool(active_policies)
+    issuance_flow_active = any(
+        item.get("credential_template_id") and _status_value(item) in {"active", "enabled", "ready", ""}
+        for item in active_flows
+    )
+
+    return {
+        "can_issue": bool(issuer_active and issuer_keys_valid and deployment_active and issuance_flow_active),
+        "can_verify": bool(policy_reachable and deployment_active),
+        "issuer_keys_valid": issuer_keys_valid,
+        "issuer_active": issuer_active,
+        "deployment_active": deployment_active,
+        "policy_reachable": policy_reachable,
+        "last_issuance_timestamp": None,
+        "last_verification_timestamp": None,
+        "artifact_counts": {
+            "active_credential_templates": len(active_templates),
+            "kms_backed_credential_templates": len(kms_backed_templates),
+            "active_presentation_policies": len(active_policies),
+            "active_deployment_profiles": len(active_deployments),
+            "active_flows": len(active_flows),
+        },
+    }, None
+
+
+async def _load_applicant_stats_payload(
+    org_id: str,
+    *,
+    headers: dict[str, str] | None = None,
+    client: httpx.AsyncClient | None = None,
+    registry: Any | None = None,
+) -> tuple[dict[str, int], Response | None]:
+    payload, error_response = await _request_service_json_with_headers(
+        "applicant",
+        f"/v1/organizations/{org_id}/applicants",
+        params={"limit": 500},
+        headers=headers,
+        client=client,
+        registry=registry,
+    )
+    if error_response is not None:
+        return {}, error_response
+
+    applications = _payload_items(payload, "items")
+    pending_statuses = {"submitted", "under_review", "pending_information", "pending"}
+    approved_statuses = {"approved"}
+    issuable_statuses = {"approved", "offered"}
+
+    return {
+        "pending": sum(1 for item in applications if _status_value(item) in pending_statuses),
+        "approved": sum(1 for item in applications if _status_value(item) in approved_statuses),
+        "issuable": sum(1 for item in applications if _status_value(item) in issuable_statuses),
+        "total": len(applications),
+    }, None
+
+
+async def _load_organization_lifecycle_payload(
+    org_id: str,
+    *,
+    internal: bool = False,
+    headers: dict[str, str] | None = None,
+    client: httpx.AsyncClient | None = None,
+    registry: Any | None = None,
+) -> tuple[dict[str, Any], Response | None]:
     lifecycle_payload, error_response = await _request_service_json_with_headers(
         "organizations",
-        f"/v1/organizations/{org_id}/lifecycle",
-        params={"organization_id": org_id},
+        (
+            f"/internal/v1/organizations/{org_id}/lifecycle"
+            if internal
+            else f"/v1/organizations/{org_id}/lifecycle"
+        ),
+        params=None if internal else {"organization_id": org_id},
         headers=headers,
         client=client,
         registry=registry,
@@ -578,8 +882,8 @@ async def _load_organization_lifecycle_payload(
         registry=registry,
     )
     if summary_error is not None:
-        logger.warning("Retention summary unavailable for org %s; returning base lifecycle payload", org_id)
-        return lifecycle_payload, None
+        logger.warning("Retention summary unavailable for org %s; preserving upstream error", org_id)
+        return {}, summary_error
 
     lifecycle_payload["pilot_retention"] = {
         **pilot_retention,
@@ -714,6 +1018,7 @@ async def run_hosted_pilot_auto_purge_sweep(
 
             lifecycle_payload, lifecycle_error = await _load_organization_lifecycle_payload(
                 org_id,
+                internal=True,
                 client=client,
                 registry=registry,
             )

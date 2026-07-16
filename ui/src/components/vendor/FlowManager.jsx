@@ -47,6 +47,7 @@ import AndroidIcon from '@mui/icons-material/Android';
 import AccountTreeIcon from '@mui/icons-material/AccountTree';
 
 import { useAuth } from '../../hooks/useAuth';
+import { useConsole } from '../../contexts/ConsoleContext';
 import { useNotifications } from '../../hooks/useNotifications';
 import flowsApi, { FLOW_STATES } from '../../services/flowsApi';
 import credentialsApi from '../../services/credentialsApi';
@@ -73,9 +74,35 @@ import FlowPublishDialog from './FlowPublishDialog';
 import FlowDisableDialog from './FlowDisableDialog';
 import { EmptyState } from '../common';
 
+const isMissingOrganizationId = (organizationId) => (
+  organizationId == null
+  || String(organizationId).trim() === ''
+  || String(organizationId).trim().toLowerCase() === 'null'
+  || String(organizationId).trim().toLowerCase() === 'undefined'
+);
+
+const getPrerequisiteStatus = (result) => {
+  if (result.status === 'rejected') {
+    return 'error';
+  }
+
+  return result.value?.length > 0 ? 'ready' : 'missing';
+};
+
+const getPrerequisiteErrorMessage = (label, result) => {
+  if (result.status !== 'rejected') {
+    return null;
+  }
+
+  const message = result.reason?.message || 'unavailable';
+  const messageId = result.reason?.message_id || result.reason?.messageId;
+  return messageId ? `${label}: ${message} (message id: ${messageId})` : `${label}: ${message}`;
+};
+
 const FlowManager = ({ hideHeader = false }) => {
   const { t } = useTranslation(['vendor', 'common']);
   const { user } = useAuth();
+  const { activeOrgId } = useConsole();
   const { showSuccess, showError, showWarning } = useNotifications();
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState(0);
@@ -100,6 +127,7 @@ const FlowManager = ({ hideHeader = false }) => {
     template: 'loading',
     deployment: 'loading',
   });
+  const [prereqError, setPrereqError] = useState(null);
   
   // Dialog states
   const [revocationDialog, setRevocationDialog] = useState(false);
@@ -126,19 +154,20 @@ const FlowManager = ({ hideHeader = false }) => {
   const loadFlows = useCallback(async () => {
     if (unsupportedEndpointsRef.current.flows) {
       setFlows([]);
-      setError(null);
-      return;
+      setError('Flow services are unavailable for this environment.');
+      return null;
     }
 
     const result = await loadFlowManagerFlows({
       listFlows: flowsApi.listFlows,
-      organizationId: user?.organization_id,
+      organizationId: activeOrgId,
     });
     setFlows(result.flows);
     setError(result.error);
     unsupportedEndpointsRef.current.flows = Boolean(result.unsupported);
     showNotification(result.notification);
-  }, [showNotification, user?.organization_id]);
+    return result;
+  }, [activeOrgId, showNotification]);
 
   const loadExecutions = useCallback(async (flowId = null) => {
     if (unsupportedEndpointsRef.current.executions) {
@@ -148,14 +177,14 @@ const FlowManager = ({ hideHeader = false }) => {
 
     const result = await loadFlowManagerExecutions({
       listFlowExecutions: flowsApi.listFlowExecutions,
-      organizationId: user?.organization_id,
+      organizationId: activeOrgId,
       flows,
       flowId,
     });
     setExecutions(result.executions);
     unsupportedEndpointsRef.current.executions = Boolean(result.unsupported);
     showNotification(result.notification);
-  }, [flows, showNotification, user?.organization_id]);
+  }, [activeOrgId, flows, showNotification]);
 
   const loadCredentials = useCallback(async () => {
     if (unsupportedEndpointsRef.current.credentials) {
@@ -166,13 +195,13 @@ const FlowManager = ({ hideHeader = false }) => {
 
     const result = await loadFlowManagerCredentials({
       listCredentials: credentialsApi.listCredentials,
-      organizationId: user?.organization_id,
+      organizationId: activeOrgId,
     });
     setCredentials(result.credentials);
     setCredentialsLoaded(true);
     unsupportedEndpointsRef.current.credentials = Boolean(result.unsupported);
     showNotification(result.notification);
-  }, [showNotification, user?.organization_id]);
+  }, [activeOrgId, showNotification]);
 
   const loadRevocationBatches = useCallback(async () => {
     if (unsupportedEndpointsRef.current.revocationBatches) {
@@ -183,32 +212,52 @@ const FlowManager = ({ hideHeader = false }) => {
 
     const result = await loadFlowManagerRevocationBatches({
       listRevocationBatches: credentialsApi.listRevocationBatches,
-      organizationId: user?.organization_id,
+      organizationId: activeOrgId,
     });
     setRevocationBatches(result.revocationBatches);
     setRevocationBatchesLoaded(true);
     unsupportedEndpointsRef.current.revocationBatches = Boolean(result.unsupported);
     showNotification(result.notification);
-  }, [showNotification, user?.organization_id]);
+  }, [activeOrgId, showNotification]);
 
   useEffect(() => {
     const loadAllData = async () => {
       setLoading(true);
-      const [, trustProfilesResult, templatesResult, deploymentsResult] = await Promise.all([
+      setPrereqError(null);
+
+      if (isMissingOrganizationId(activeOrgId)) {
+        setFlows([]);
+        setError('An active organization is required before loading flows.');
+        setPrereqStatus({
+          trustProfile: 'blocked',
+          template: 'blocked',
+          deployment: 'blocked',
+        });
+        setLoading(false);
+        return;
+      }
+
+      const [, trustProfilesResult, templatesResult, deploymentsResult] = await Promise.allSettled([
         loadFlows(),
-        listTrustProfiles({ organization_id: user?.organization_id }).catch(() => []),
-        listCredentialTemplates({ organization_id: user?.organization_id }).catch(() => []),
-        listDeploymentProfiles({ organization_id: user?.organization_id }).catch(() => []),
+        listTrustProfiles({ organization_id: activeOrgId }),
+        listCredentialTemplates({ organization_id: activeOrgId }),
+        listDeploymentProfiles({ organization_id: activeOrgId }),
       ]);
       setPrereqStatus({
-        trustProfile: (trustProfilesResult?.length > 0) ? 'ready' : 'missing',
-        template: (templatesResult?.length > 0) ? 'ready' : 'missing',
-        deployment: (deploymentsResult?.length > 0) ? 'ready' : 'missing',
+        trustProfile: getPrerequisiteStatus(trustProfilesResult),
+        template: getPrerequisiteStatus(templatesResult),
+        deployment: getPrerequisiteStatus(deploymentsResult),
       });
+      const prereqErrors = [
+        getPrerequisiteErrorMessage('Trust profiles', trustProfilesResult),
+        getPrerequisiteErrorMessage('Credential templates', templatesResult),
+        getPrerequisiteErrorMessage('Deployment profiles', deploymentsResult),
+      ].filter(Boolean);
+      setPrereqError(prereqErrors.length > 0 ? prereqErrors.join('; ') : null);
       setLoading(false);
     };
     loadAllData();
-  }, [loadFlows, user?.organization_id]);
+  }, [activeOrgId, loadFlows]);
 
   useEffect(() => {
     loadExecutions();
@@ -235,13 +284,13 @@ const FlowManager = ({ hideHeader = false }) => {
     return startFlowManagerRealtimeUpdates({
       sseService,
       eventTypes: EVENT_TYPES,
-      organizationId: user?.organization_id,
+      organizationId: activeOrgId,
       loadExecutions,
       loadCredentials,
       loadRevocationBatches,
       showSuccess,
     });
-  }, [user, loadExecutions, loadCredentials, loadRevocationBatches]);
+  }, [activeOrgId, loadExecutions, loadCredentials, loadRevocationBatches, showSuccess]);
 
   // Handle approval
   const handleApprove = async (execution) => {
@@ -334,6 +383,12 @@ const FlowManager = ({ hideHeader = false }) => {
         </Alert>
       )}
 
+      {prereqError && (
+        <Alert severity="error" sx={{ mb: 2 }} onClose={() => setPrereqError(null)}>
+          Unable to load flow prerequisites. {prereqError}
+        </Alert>
+      )}
+
       <Paper sx={{ mb: 3 }}>
         <Tabs value={activeTab} onChange={(e, v) => setActiveTab(v)}>
           <Tab label={t('flowManager.tabs.flows')} />
@@ -349,9 +404,9 @@ const FlowManager = ({ hideHeader = false }) => {
             {flows.length === 0 ? (
               <EmptyState
                 icon={AccountTreeIcon}
-                title="Issuance Flows connect applicants to credentials"
+                title="Flows connect people to credentials and verification"
                 description="To create one, you'll need:"
-                actionLabel="Create Issuance Flow"
+                actionLabel="Create Flow"
                 onAction={() => navigate('/console/org/flows/definitions/new')}
                 prerequisites={[
                   { 

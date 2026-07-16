@@ -13,6 +13,7 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   Box,
   Paper,
@@ -65,19 +66,6 @@ import { formatOfficialReference } from '../../utils/officialReferences';
 
 const formatCredentialReference = (credentialId) => formatOfficialReference(credentialId, 'credential');
 
-// Revocation reason codes (RFC 5280)
-const REVOCATION_REASONS = [
-  { value: 'unspecified', label: 'Unspecified' },
-  { value: 'keyCompromise', label: 'Key Compromise' },
-  { value: 'caCompromise', label: 'CA Compromise' },
-  { value: 'affiliationChanged', label: 'Affiliation Changed' },
-  { value: 'superseded', label: 'Superseded' },
-  { value: 'cessationOfOperation', label: 'Cessation of Operation' },
-  { value: 'certificateHold', label: 'Certificate Hold' },
-  { value: 'privilegeWithdrawn', label: 'Privilege Withdrawn' },
-  { value: 'aaCompromise', label: 'AA Compromise' },
-];
-
 /**
  * Tab Panel Component
  */
@@ -88,7 +76,6 @@ function TabPanel({ children, value, index }) {
     </div>
   );
 }
-
 /**
  * Revoke Credential Dialog
  */
@@ -292,6 +279,14 @@ function ActiveCredentialsTab({ organizationId }) {
     setLoading(true);
     setError(null);
 
+    if (!organizationId || String(organizationId).trim() === '') {
+      setCredentials([]);
+      setTotalCount(0);
+      setError('An active organization is required before loading active credentials.');
+      setLoading(false);
+      return;
+    }
+
     try {
       const data = await fetchIssuedCredentials({
         organizationId,
@@ -379,7 +374,16 @@ function ActiveCredentialsTab({ organizationId }) {
 
       {/* Error Alert */}
       {error && (
-        <Alert severity="warning" sx={{ mb: 3 }} onClose={() => setError(null)}>
+        <Alert
+          severity="warning"
+          sx={{ mb: 3 }}
+          onClose={() => setError(null)}
+          action={
+            <Button color="inherit" size="small" onClick={loadCredentials}>
+              Retry
+            </Button>
+          }
+        >
           {t('revocationManager.activeTab.loadFailed', { error })}
         </Alert>
       )}
@@ -499,20 +503,51 @@ function RevocationHistoryTab({ organizationId }) {
   const { t } = useTranslation('vendor');
   const [revocations, setRevocations] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [totalCount, setTotalCount] = useState(0);
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(25);
 
-  useEffect(() => {
-    if (!organizationId) return;
+  const loadRevocationHistory = useCallback(() => {
     setLoading(true);
+    setError(null);
+    if (!organizationId) {
+      setRevocations([]);
+      setTotalCount(0);
+      setError('An active organization is required before loading revocation history.');
+      setLoading(false);
+      return;
+    }
+
     fetchRevocationHistory({ organizationId, limit: rowsPerPage, offset: page * rowsPerPage })
-      .then((data) => setRevocations(data.revocations || data.items || []))
-      .catch((err) => console.error('Failed to load revocation history:', err))
+      .then((data) => {
+        const records = data.revocations || data.items || [];
+        setRevocations(records);
+        setTotalCount(data.total || data.total_count || records.length);
+      })
+      .catch((err) => {
+        console.error('Failed to load revocation history:', err);
+        setRevocations([]);
+        setTotalCount(0);
+        setError(err.message || 'Failed to load revocation history.');
+      })
       .finally(() => setLoading(false));
   }, [organizationId, page, rowsPerPage]);
 
+  useEffect(() => {
+    loadRevocationHistory();
+  }, [loadRevocationHistory]);
+
   return (
     <Box>
+      {error && (
+        <Alert severity="warning" sx={{ mb: 3 }} onClose={() => setError(null)}>
+          {error}
+          <Button color="inherit" size="small" onClick={loadRevocationHistory} sx={{ ml: 2 }}>
+            Retry
+          </Button>
+        </Alert>
+      )}
       <TableContainer component={Paper}>
         <Table>
           <TableHead>
@@ -558,7 +593,7 @@ function RevocationHistoryTab({ organizationId }) {
         </Table>
         <TablePagination
           component="div"
-          count={50}
+          count={totalCount}
           page={page}
           onPageChange={(e, newPage) => setPage(newPage)}
           rowsPerPage={rowsPerPage}
@@ -575,7 +610,7 @@ function RevocationHistoryTab({ organizationId }) {
 export default function RevocationManager() {
   const { t } = useTranslation('vendor');
   const { organizationId } = useAuth();
-  const { showSuccess, showError, showWarning } = useNotifications();
+  const { showSuccess, showError } = useNotifications();
   const [currentTab, setCurrentTab] = useState(0);
 
   return (
@@ -594,35 +629,4 @@ export default function RevocationManager() {
       </TabPanel>
     </Box>
   );
-}
-
-/**
- * Generate mock credentials
- */
-function generateMockCredentials() {
-  const types = ['travel_visa', 'passport', 'drivers_license', 'access_badge'];
-  return Array.from({ length: 25 }, (_, i) => ({
-    id: `cred_${Math.random().toString(36).substring(2, 15)}`,
-    type: types[i % types.length],
-    holder_email: `user${i + 1}@example.com`,
-    issued_date: new Date(Date.now() - i * 86400000).toISOString(),
-    expiry_date: new Date(Date.now() + 90 * 86400000).toISOString(),
-    status: 'active',
-  }));
-}
-
-/**
- * Generate mock revocations
- */
-function generateMockRevocations() {
-  const reasons = ['keyCompromise', 'affiliationChanged', 'superseded'];
-  return Array.from({ length: 10 }, (_, i) => ({
-    id: `rev_${i}`,
-    credential_id: `cred_${Math.random().toString(36).substring(2, 15)}`,
-    type: 'travel_visa',
-    revoked_date: new Date(Date.now() - i * 86400000).toISOString(),
-    reason: reasons[i % reasons.length],
-    revoked_by: 'admin@example.com',
-    comments: i % 2 === 0 ? 'Holder requested revocation' : '',
-  }));
 }

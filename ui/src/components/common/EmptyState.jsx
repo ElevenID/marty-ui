@@ -54,7 +54,12 @@ function EmptyState({
   const IconComponent = icon || InboxIcon;
   
   // Check if all prerequisites are met
-  const hasBlockedPrerequisites = prerequisites?.some(p => p.status === 'blocked' || p.status === 'pending');
+  const hasBlockedPrerequisites = prerequisites?.some((p) => (
+    p.status === 'blocked'
+    || p.status === 'pending'
+    || p.status === 'missing'
+    || p.status === 'error'
+  ));
   
   // Filtered state shows a simpler message
   if (isFiltered) {
@@ -81,6 +86,8 @@ function EmptyState({
       case 'ready':
         return <CheckCircleIcon fontSize="small" color="success" />;
       case 'blocked':
+      case 'missing':
+      case 'error':
         return <ErrorIcon fontSize="small" color="error" />;
       case 'pending':
         return <InfoIcon fontSize="small" color="warning" />;
@@ -94,6 +101,8 @@ function EmptyState({
       case 'ready':
         return 'success';
       case 'blocked':
+      case 'missing':
+      case 'error':
         return 'error';
       case 'pending':
         return 'warning';

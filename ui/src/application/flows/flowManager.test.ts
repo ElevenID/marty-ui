@@ -1,12 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  FLOW_MANAGER_MOCK_FLOWS,
   formatTruncatedId,
   getApprovalStrategyPresentation,
   getBatchRevocationFeedback,
   getCredentialSelectionState,
-  getFlowManagerMockFlows,
   getFlowStatusPresentation,
   getPendingExecutions,
   toggleAllCredentialSelections,
@@ -14,13 +12,6 @@ import {
 } from './flowManager';
 
 describe('flowManager helpers', () => {
-  it('returns cloned mock flows', () => {
-    const result = getFlowManagerMockFlows();
-
-    expect(result).toEqual(FLOW_MANAGER_MOCK_FLOWS);
-    expect(result).not.toBe(FLOW_MANAGER_MOCK_FLOWS);
-  });
-
   it('builds draft status presentation', () => {
     expect(getFlowStatusPresentation('DRAFT', { DRAFT: 'DRAFT', PUBLISHED: 'PUBLISHED' })).toEqual({
       status: 'DRAFT',

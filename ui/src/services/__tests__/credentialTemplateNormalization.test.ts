@@ -50,6 +50,13 @@ describe('credential template normalization', () => {
       organization_id: 'org-1',
       name: 'Canonical Payload',
       credential_type: 'EmployeeBadge',
+      issuer_profile_id: 'ip-1',
+      compliance_profile_id: 'compliance-1',
+      vct: 'com.example.employee',
+      claims: [
+        { name: 'given_name', type: 'string', required: true },
+        { name: 'score', type: 'number', display_name: 'Score', required: false },
+      ],
       validity_rules: {
         ttl_seconds: 14 * 86400,
         renewable: false,
@@ -65,5 +72,53 @@ describe('credential template normalization', () => {
       renewal_window_days: 3,
       not_before_offset_seconds: 900,
     })
+    expect(payload.vct).toBe(`${window.location.origin}/vct/com.example.employee`)
+    expect(payload.issuer_profile_id).toBe('ip-1')
+    expect(payload.compliance_profile_id).toBe('compliance-1')
+    expect(payload).not.toHaveProperty('compliance_profile')
+    expect(payload.claims).toEqual([
+      {
+        name: 'given_name',
+        display_name: 'Given Name',
+        claim_type: 'string',
+        required: true,
+        selectively_disclosable: true,
+      },
+      {
+        name: 'score',
+        display_name: 'Score',
+        claim_type: 'integer',
+        required: false,
+        selectively_disclosable: true,
+      },
+    ])
+    expect(payload.claims[0]).not.toHaveProperty('type')
+  })
+
+  it('preserves explicit compliance profile IDs and absolute VCT values', () => {
+    const payload = buildCredentialTemplatePayload({
+      organization_id: 'org-1',
+      name: 'EUDI Payload',
+      credential_type: 'PersonIdentificationData',
+      issuer_profile_id: 'ip-1',
+      compliance_profile_id: 'compliance-2',
+      vct: 'https://credentials.example.com/pid',
+      compliance_profile: { compliance_code: 'EUDI_PID', credential_format: 'sd_jwt_vc' },
+      wallet_configs: [{ wallet_id: 'removed-wallet-config' }],
+      claims: [{ name: 'given_name', claim_type: 'string', display_name: 'Given Name' }],
+    })
+
+    expect(payload.vct).toBe('https://credentials.example.com/pid')
+    expect(payload.compliance_profile_id).toBe('compliance-2')
+    expect(payload).not.toHaveProperty('compliance_profile')
+    expect(payload).not.toHaveProperty('wallet_configs')
+  })
+
+  it('rejects payloads without an active issuer profile id', () => {
+    expect(() => buildCredentialTemplatePayload({
+      organization_id: 'org-1',
+      name: 'Missing Issuer',
+      credential_type: 'EmployeeBadge',
+    })).toThrow('active issuer profile')
   })
 })

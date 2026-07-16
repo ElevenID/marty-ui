@@ -2,6 +2,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@test/utils';
 
 import ApplicationForm from '../applicant/ApplicationForm';
+import { storeCanvasLtiSession } from '../../services/canvasLtiExperience';
 
 const {
   mockNavigate,
@@ -42,6 +43,7 @@ const {
       state: {
         credential: {
           id: 'cfg-1',
+          application_template_id: 'app-template-1',
           credential_type: 'MemberCredential',
           display_name: 'ElevenID Login Credential',
           name: 'ElevenID Login Credential',
@@ -50,6 +52,12 @@ const {
           optional_fields: [],
           custom_fields: [],
           field_validation_rules: {},
+        },
+        applicationTemplate: {
+          id: 'app-template-1',
+          status: 'ACTIVE',
+          credential_template_id: 'cfg-1',
+          form_fields: [{ field_id: 'email', label: 'Email', field_type: 'EMAIL', required: true }],
         },
       },
       search: '',
@@ -96,16 +104,13 @@ vi.mock('../../services/api', () => ({
 }));
 
 vi.mock('../../services/applicantApi', () => ({
-  getApplicant: mockGetApplicant,
-  getApplicantByUser: mockGetApplicantByUser,
-  createApplicant: mockCreateApplicant,
+  getMyApplicantProfile: mockGetApplicant,
+  upsertMyApplicantProfile: mockCreateApplicant,
   createApplication: mockCreateApplication,
-  listApplicantApplicationsForProfile: mockListApplicantApplicationsForProfile,
   listApplications: mockListApplications,
   submitApplication: mockSubmitApplication,
-  supersedeApplication: mockSupersedeApplication,
-  updateApplicantProfile: mockUpdateApplicantProfile,
-  enrollBiometric: mockEnrollBiometric,
+  withdrawApplication: mockSupersedeApplication,
+  enrollMyBiometric: mockEnrollBiometric,
 }));
 
 vi.mock('../../services/credentialsApi', () => ({
@@ -124,14 +129,63 @@ vi.mock('../console/applicant/ClaimCredentialDialog', () => ({
   ),
 }));
 
+function canvasApplicationLocationState() {
+  return {
+    search: '?canvas_lti_state=current',
+    state: {
+      credential: {
+        id: 'cfg-canvas',
+        credential_type: 'open_badge',
+        display_name: 'Canvas Achievement Badge',
+        required_fields: [],
+        optional_fields: [],
+        custom_fields: [],
+        field_validation_rules: {},
+      },
+      applicationTemplate: {
+        id: 'app-template-1',
+        evidence_requirements: [{
+          requirement_id: 'course-complete',
+          source: 'canvas_rest',
+          fact_type: 'canvas.course_completion',
+          pass_rule: { completed: true },
+          scope: { course_id: 'course-1' },
+          required: true,
+        }],
+      },
+      canvasLtiSession: {
+        canvas_account_id: 'canvas-account-1',
+        canvas_platform_id: 'platform-1',
+        canvas_program_binding_id: 'binding-1',
+        application_template_id: 'app-template-1',
+        credential_template_id: 'cfg-canvas',
+        canvas_context: { course_id: 'course-1', title: 'Portable Canvas Course' },
+        identity_mapping_status: 'linked',
+        roles: ['Learner'],
+      },
+      canvasLtiBootstrap: {
+        application_id: 'application-canvas-1',
+        application_status: 'pending',
+        created: true,
+      },
+    },
+  };
+}
+
 describe('ApplicationForm', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    sessionStorage.clear();
+    storeCanvasLtiSession({
+      session_token: 'canvas-session-token',
+      expires_at: '2099-01-01T00:00:00.000Z',
+    });
     mockLocationState.params = { credentialType: undefined };
     mockLocationState.location = {
       state: {
         credential: {
           id: 'cfg-1',
+          application_template_id: 'app-template-1',
           credential_type: 'MemberCredential',
           display_name: 'ElevenID Login Credential',
           name: 'ElevenID Login Credential',
@@ -141,6 +195,12 @@ describe('ApplicationForm', () => {
           custom_fields: [],
           field_validation_rules: {},
         },
+        applicationTemplate: {
+          id: 'app-template-1',
+          status: 'ACTIVE',
+          credential_template_id: 'cfg-1',
+          form_fields: [{ field_id: 'email', label: 'Email', field_type: 'EMAIL', required: true }],
+        },
       },
       search: '',
     };
@@ -148,7 +208,7 @@ describe('ApplicationForm', () => {
     mockGetApplicantByUser.mockResolvedValue(null);
     mockCreateApplicant.mockResolvedValue({ id: 'app-created' });
     mockCreateApplication.mockResolvedValue({ id: 'application-1' });
-    mockListApplications.mockResolvedValue({ applications: [] });
+    mockListApplications.mockResolvedValue({ items: [], total: 0, limit: 100, offset: 0 });
     mockListApplicantApplicationsForProfile.mockResolvedValue([]);
     mockSupersedeApplication.mockResolvedValue({ id: 'application-existing', status: 'WITHDRAWN' });
     mockSubmitApplication.mockResolvedValue({
@@ -164,7 +224,7 @@ describe('ApplicationForm', () => {
     mockWalletPreferenceState.walletIds = ['wallet-1'];
   });
 
-  it('explains Canvas-only credential applications with launch context and completion checks', () => {
+  it('explains Canvas-only credential applications with launch context and completion checks', async () => {
     mockLocationState.location = {
       search: '?canvas_lti_state=state-1',
       state: {
@@ -183,9 +243,12 @@ describe('ApplicationForm', () => {
           id: 'app-template-1',
           evidence_requirements: [
             {
-              evidence_type: 'canvas.quiz_score',
+              requirement_id: 'quiz-score',
+              source: 'canvas_rest',
+              fact_type: 'canvas.quiz_score',
               pass_rule: { min_score_percent: 80 },
-              scope: { course_id: '1', quiz_id: 'quiz-1' },
+              scope: { course_id: '1', activity_id: 'quiz-1' },
+              required: true,
             },
           ],
         },
@@ -194,24 +257,13 @@ describe('ApplicationForm', () => {
           canvas_account_id: 'canvas-account-1',
           application_template_id: 'app-template-1',
           credential_template_id: 'cfg-canvas',
-          verified_launch: {
-            subject: 'canvas-user-1',
-            learner_identity: {
-              email: 'learner@example.edu',
-              name: 'ElevenID Test',
-            },
-            context: {
-              id: '1',
-              title: 'ElevenID LTI Test Course',
-            },
-            raw_claims: {
-              'https://purl.imsglobal.org/spec/lti/claim/resource_link': {
-                id: 'quiz-1',
-                title: 'Final Quiz',
-              },
-            },
-            roles: ['http://purl.imsglobal.org/vocab/lis/v2/membership#Learner'],
+          canvas_context: {
+            course_id: '1',
+            title: 'ElevenID LTI Test Course',
           },
+          learner_display_name: 'ElevenID Test',
+          identity_mapping_status: 'linked',
+          roles: ['Learner'],
         },
         canvasLtiBootstrap: {
           application_id: 'application-1',
@@ -220,6 +272,19 @@ describe('ApplicationForm', () => {
         },
       },
     };
+    mockGet.mockResolvedValue({
+      application_status: 'pending',
+      sync: null,
+      evidence: {
+        required_count: 1,
+        current_authoritative_count: 0,
+        verified_authoritative_count: 0,
+        verified_required_count: 0,
+        status: 'not_observed',
+      },
+      policy: { status: 'not_evaluated' },
+      claim: { status: 'not_available', unsigned: false, available: false },
+    });
 
     render(<ApplicationForm />);
 
@@ -228,10 +293,106 @@ describe('ApplicationForm', () => {
     expect(screen.getByText('Course completion requirement')).toBeInTheDocument();
     expect(screen.getByText('No additional form fields are required. Review the course details below, then submit the application so the credential can be checked and issued.')).toBeInTheDocument();
     expect(screen.getByText('ElevenID LTI Test Course')).toBeInTheDocument();
-    expect(screen.getByText('Final Quiz')).toBeInTheDocument();
     expect(screen.getByText('Quiz Score')).toBeInTheDocument();
-    expect(screen.getByText('minimum score 80% - course 1 - quiz quiz-1')).toBeInTheDocument();
+    expect(screen.getByText('minimum score 80% - course 1 - activity quiz-1')).toBeInTheDocument();
+    expect(screen.getByText('Canvas identity linked')).toBeInTheDocument();
     expect(screen.queryByText('applicationForm.steps.review')).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(mockGet).toHaveBeenCalledWith(
+        '/v1/integrations/canvas/lti/experience-sessions/current/evidence-status',
+        { headers: { Authorization: 'Bearer canvas-session-token' } },
+      );
+    });
+  });
+
+  it('renders only server-verified Canvas evidence and a real unsigned pending claim', async () => {
+    mockLocationState.location = canvasApplicationLocationState();
+    mockGet.mockResolvedValue({
+      application_status: 'pending',
+      sync: {
+        job_id: 'job-1',
+        status: 'succeeded',
+        requested_at: '2026-07-15T06:00:00Z',
+        completed_at: '2026-07-15T06:00:03Z',
+      },
+      evidence: {
+        required_count: 1,
+        current_authoritative_count: 1,
+        verified_authoritative_count: 1,
+        verified_required_count: 1,
+        status: 'verified',
+      },
+      policy: { status: 'permitted' },
+      claim: { status: 'pending_claim', unsigned: true, available: false },
+      raw_facts: [{ score: 100, access_token: 'must-not-render' }],
+    });
+
+    render(<ApplicationForm />);
+
+    expect(await screen.findByTestId('canvas-authoritative-evidence-verified')).toHaveTextContent('Verified evidence 1/1');
+    expect(screen.getByTestId('canvas-evidence-policy-permitted')).toBeInTheDocument();
+    expect(screen.getByTestId('canvas-pending-claim')).toHaveTextContent('unsigned pending badge award');
+    expect(screen.queryByTestId('canvas-claim-action')).not.toBeInTheDocument();
+    expect(screen.queryByText('must-not-render')).not.toBeInTheDocument();
+  });
+
+  it('queues a learner refresh and opens claim only when the server marks it available', async () => {
+    mockLocationState.location = canvasApplicationLocationState();
+    let queued = false;
+    const readyStatus = {
+      application_status: 'approved',
+      sync: {
+        job_id: 'job-complete',
+        status: 'succeeded',
+        requested_at: '2026-07-15T06:00:00Z',
+        completed_at: '2026-07-15T06:00:03Z',
+      },
+      evidence: {
+        required_count: 1,
+        current_authoritative_count: 1,
+        verified_authoritative_count: 1,
+        verified_required_count: 1,
+        status: 'verified',
+      },
+      policy: { status: 'permitted' },
+      claim: { status: 'ready_to_claim', unsigned: true, available: true },
+    };
+    const queuedStatus = {
+      ...readyStatus,
+      sync: {
+        job_id: 'job-refresh',
+        status: 'queued',
+        requested_at: '2026-07-15T06:01:00Z',
+        completed_at: null,
+      },
+    };
+    mockGet.mockImplementation(async () => (queued ? queuedStatus : readyStatus));
+    mockPost.mockImplementation(async (url: string) => {
+      if (url.endsWith('/experience-sessions/current/evidence-sync')) {
+        queued = true;
+        return queuedStatus;
+      }
+      throw new Error(`Unexpected POST ${url}`);
+    });
+
+    const { user } = render(<ApplicationForm />);
+
+    await user.click(await screen.findByTestId('canvas-evidence-sync-action'));
+    await waitFor(() => {
+      expect(mockPost).toHaveBeenCalledWith(
+        '/v1/integrations/canvas/lti/experience-sessions/current/evidence-sync',
+        {},
+        { headers: { Authorization: 'Bearer canvas-session-token' } },
+      );
+      expect(screen.getByTestId('canvas-evidence-sync-status')).toHaveTextContent('Canvas sync queued');
+    });
+
+    // Restore the exact server-reported claimable state; the UI never derives
+    // it merely from a successful refresh request.
+    queued = false;
+    mockGet.mockResolvedValue(readyStatus);
+    await user.click(screen.getByTestId('canvas-claim-action'));
+    expect(screen.getByTestId('claim-credential-dialog')).toHaveTextContent('application-canvas-1');
   });
 
   it('does not load org-scoped templates for Canvas LTI learners', async () => {
@@ -241,25 +402,19 @@ describe('ApplicationForm', () => {
       state: null,
     };
     mockGet.mockImplementation(async (url: string) => {
-      if (url.includes('/v1/integrations/canvas/lti/experience-sessions/state-1')) {
+      if (url.includes('/v1/integrations/canvas/lti/experience-sessions/current')) {
         return {
-          state: 'state-1',
           organization_id: 'org-issuer',
           canvas_account_id: 'canvas-account-1',
           application_template_id: 'app-template-1',
           credential_template_id: 'cfg-canvas',
-          verified_launch: {
-            subject: 'canvas-user-1',
-            learner_identity: {
-              email: 'learner@example.edu',
-              name: 'ElevenID Test Learner',
-            },
-            context: {
-              title: 'ElevenID LTI Test Course',
-            },
-            raw_claims: {},
-            roles: ['http://purl.imsglobal.org/vocab/lis/v2/membership#Learner'],
+          canvas_context: {
+            course_id: '1',
+            title: 'ElevenID LTI Test Course',
           },
+          learner_display_name: 'ElevenID Test Learner',
+          identity_mapping_status: 'linked',
+          roles: ['Learner'],
         };
       }
       throw new Error('Not a member of this organization');
@@ -275,13 +430,29 @@ describe('ApplicationForm', () => {
     render(<ApplicationForm />);
 
     await waitFor(() => {
-      expect(mockGet).toHaveBeenCalledWith('/v1/integrations/canvas/lti/experience-sessions/state-1');
+      expect(mockGet).toHaveBeenCalledWith(
+        '/v1/integrations/canvas/lti/experience-sessions/current',
+        { headers: { Authorization: 'Bearer canvas-session-token' } },
+      );
       expect(screen.getByTestId('canvas-application-context')).toBeInTheDocument();
     });
 
     expect(mockGet).not.toHaveBeenCalledWith(expect.stringContaining('/v1/credential-templates/'));
     expect(mockGet).not.toHaveBeenCalledWith(expect.stringContaining('/v1/application-templates/'));
     expect(screen.queryByText('Not a member of this organization')).not.toBeInTheDocument();
+    expect(mockPost).toHaveBeenCalledWith(
+      '/v1/integrations/canvas/lti/experience-sessions/current/bootstrap',
+      {
+        applicant_identifier: 'user-1',
+        applicant_data: {
+          email: 'user@example.com',
+          given_name: 'Ada',
+          family_name: 'Lovelace',
+          name: 'Ada Lovelace',
+        },
+      },
+      { headers: { Authorization: 'Bearer canvas-session-token' } },
+    );
   });
 
   it('runs the one-click credential issuance flow for member credentials', async () => {
@@ -293,9 +464,9 @@ describe('ApplicationForm', () => {
 
     await waitFor(() => {
       expect(mockCreateApplication).toHaveBeenCalledWith(expect.objectContaining({
-        applicant_id: 'app-1',
-        credential_configuration_id: 'cfg-1',
-        issuing_authority: 'ElevenID LLC',
+        organization_id: 'org-1',
+        application_template_id: 'app-template-1',
+        form_data: expect.any(Object),
       }));
       expect(mockSubmitApplication).toHaveBeenCalledWith('application-1');
       expect(mockGenerateIssuanceOffer).toHaveBeenCalledWith('application-1');
@@ -312,8 +483,8 @@ describe('ApplicationForm', () => {
 
     await waitFor(() => {
       expect(mockCreateApplication).toHaveBeenCalledWith(expect.objectContaining({
-        applicant_id: 'app-1',
-        credential_configuration_id: 'cfg-1',
+        organization_id: 'org-1',
+        application_template_id: 'app-template-1',
       }));
       expect(mockSubmitApplication).toHaveBeenCalledWith('application-1');
       expect(mockGenerateIssuanceOffer).not.toHaveBeenCalled();

@@ -26,12 +26,21 @@ import ProductionQuantityLimitsIcon from '@mui/icons-material/ProductionQuantity
 import WarningIcon from '@mui/icons-material/Warning';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import SwapHorizIcon from '@mui/icons-material/SwapHoriz';
+import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
 import { useTranslation } from 'react-i18next';
 
 /**
  * Environment configurations factory
  */
 const getEnvironments = (t) => ({
+  unknown: {
+    label: t('dashboard.environment.unknown', 'Unknown'),
+    fullLabel: t('dashboard.environment.unknownFull', 'Environment unknown'),
+    color: 'default',
+    icon: HelpOutlineIcon,
+    warning: false,
+    description: t('dashboard.environment.unknownDescription', 'Environment could not be loaded.'),
+  },
   development: {
     label: t('dashboard.environment.dev'),
     fullLabel: t('dashboard.environment.development'),
@@ -62,7 +71,7 @@ const getEnvironments = (t) => ({
  * Environment Badge Component
  */
 export function EnvironmentBadge({ 
-  environment = 'development', 
+  environment = 'unknown',
   onEnvironmentChange,
   organizationId,
   showSwitcher = true,
@@ -72,7 +81,7 @@ export function EnvironmentBadge({
   const open = Boolean(anchorEl);
 
   const ENVIRONMENTS = getEnvironments(t);
-  const currentEnv = ENVIRONMENTS[environment] || ENVIRONMENTS.development;
+  const currentEnv = ENVIRONMENTS[environment] || ENVIRONMENTS.unknown;
   const Icon = currentEnv.icon;
 
   const handleClick = (event) => {
@@ -161,7 +170,7 @@ export function EnvironmentBadge({
 export function EnvironmentWarningBanner({ environment = 'development' }) {
   const { t } = useTranslation('console');
   const ENVIRONMENTS = getEnvironments(t);
-  const currentEnv = ENVIRONMENTS[environment] || ENVIRONMENTS.development;
+  const currentEnv = ENVIRONMENTS[environment] || ENVIRONMENTS.unknown;
 
   if (!currentEnv.warning) {
     return null;
@@ -189,7 +198,7 @@ export function EnvironmentWarningBanner({ environment = 'development' }) {
  */
 export function EnvironmentContext({ 
   organizationName, 
-  environment = 'development',
+  environment = 'unknown',
   organizationId,
   onEnvironmentChange,
   showSwitcher = true,

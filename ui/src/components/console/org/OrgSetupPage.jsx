@@ -32,12 +32,18 @@ import CodeIcon from '@mui/icons-material/Code';
 import { useNavigate, Navigate, useSearchParams } from 'react-router-dom';
 
 import { getMyOrganizations } from '../../../services/organizationsApi';
-import { useAuth } from '../../../hooks/useAuth';
 import { useConsole } from '../../../contexts/ConsoleContext';
+import OrgConsoleUnavailable from '../OrgConsoleUnavailable';
 import {
-  membershipHasOrgConsoleAccess,
+  getConsoleEligibleOrganizations,
 } from '../../../application/session/authSession';
 import { ENABLE_ORGANIZATION_CREATION } from '@ui-public-config';
+
+function logOrgSetupError(message, error) {
+  if (import.meta.env?.DEV && import.meta.env?.MODE !== 'test') {
+    console.error(message, error);
+  }
+}
 
 /**
  * Organization Setup Page Component
@@ -48,14 +54,12 @@ export function OrgSetupPage() {
   const {
     activeOrgId,
     setActiveOrgId,
-    setMode,
+    memberships = [],
     membershipsLoaded,
+    membershipLoadError,
+    isOrgBootstrapRequired,
+    reloadConsoleState,
   } = useConsole();
-  const {
-    organizationId: currentOrganizationId,
-    organizations: authOrganizations,
-    setActiveOrganizationId,
-  } = useAuth();
   const returnTo = searchParams.get('returnTo');
   const createOnlyMode = searchParams.get('intent') === 'create';
   const createOrganizationPath = (() => {
@@ -69,11 +73,14 @@ export function OrgSetupPage() {
     () => getMyOrganizations(),
     []
   );
-  const resolvedOrganizations = Array.isArray(organizations) && organizations.length > 0
-    ? organizations
-    : Array.isArray(authOrganizations)
-      ? authOrganizations
-      : [];
+  const fetchedMemberships = getConsoleEligibleOrganizations(organizations);
+  const resolvedOrganizations = fetchedMemberships.length > 0
+    ? fetchedMemberships
+    : memberships;
+  if (membershipLoadError && isOrgBootstrapRequired) {
+    return <OrgConsoleUnavailable error={membershipLoadError} onRetry={reloadConsoleState} />;
+  }
+
   if (createOnlyMode && ENABLE_ORGANIZATION_CREATION) {
     return <Navigate to={createOrganizationPath} replace />;
   }
@@ -87,17 +94,10 @@ export function OrgSetupPage() {
    */
   const handleSelectOrganization = async (org) => {
     try {
-      if (membershipHasOrgConsoleAccess(org)) {
-        await setActiveOrgId(org.id);
-        navigate(returnTo || '/console/org');
-        return;
-      }
-
-      await setMode('applicant');
-      setActiveOrganizationId(org.id);
-      navigate('/console/applicant/catalog');
+      await setActiveOrgId(org.id);
+      navigate(returnTo || '/console/org');
     } catch (err) {
-      console.error('[OrgSetupPage] Failed to switch organization:', err);
+      logOrgSetupError('[OrgSetupPage] Failed to switch organization:', err);
     }
   };
 
@@ -232,10 +232,7 @@ export function OrgSetupPage() {
             {resolvedOrganizations.map((org) => (
               <Grid item xs={12} sm={6} md={4} key={org.id}>
                 {(() => {
-                  const hasOrgConsoleAccess = membershipHasOrgConsoleAccess(org);
-                  const isSelected = hasOrgConsoleAccess
-                    ? org.id === activeOrgId
-                    : org.id === currentOrganizationId;
+                  const isSelected = org.id === activeOrgId;
 
                   return (
                 <Card
@@ -318,11 +315,7 @@ export function OrgSetupPage() {
                       onClick={() => handleSelectOrganization(org)}
                       disabled={org.membership?.status !== 'active'}
                     >
-                      {hasOrgConsoleAccess
-                        ? (org.id === activeOrgId ? 'Current Organization' : 'Open Org Console')
-                        : (org.id === currentOrganizationId
-                          ? 'Current Applicant Organization'
-                          : 'Use for Applications')}
+                      {org.id === activeOrgId ? 'Current Organization' : 'Open Org Console'}
                     </Button>
                   </CardActions>
                 </Card>

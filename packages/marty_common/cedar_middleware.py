@@ -17,10 +17,27 @@ from .org_authorization import OrganizationClient
 logger = logging.getLogger(__name__)
 
 
+def _read_secret_value(name: str) -> str:
+    direct = os.environ.get(name)
+    if direct:
+        return direct
+
+    file_path = os.environ.get(f"{name}_FILE")
+    if not file_path:
+        return ""
+    try:
+        with open(file_path, "r", encoding="utf-8") as handle:
+            return handle.read().strip()
+    except OSError:
+        return ""
+
+
 class CedarAuthMiddleware(BaseHTTPMiddleware):
     """Permission-based authorization for org-scoped gateway routes."""
 
     SKIP_PATTERNS = [
+        r"^/v1/flows/capabilities$",
+        r"^/v1/issued-credentials/mine$",
         r"^/v1/organizations$",
         r"^/v1/organizations/mine$",
         r"^/v1/organizations/discover",
@@ -28,6 +45,11 @@ class CedarAuthMiddleware(BaseHTTPMiddleware):
         r"^/v1/organizations/[^/]+/join$",
         r"^/v1/organizations/invitations/",
         r"^/v1/organizations/[^/]+/revocation-profiles/[^/]+/status-lists/[^/]+/[^/]+$",
+        r"^/v1/integrations/canvas/lti/jwks/?$",
+        r"^/v1/integrations/canvas/lti/config/[^/]+/?$",
+        r"^/v1/integrations/canvas/lti/platforms/[^/]+/(?:login|experience-login|launch|experience)/?$",
+        r"^/v1/integrations/canvas/oauth/callback/?$",
+        r"^/v1/integrations/canvas/lti/experience-sessions/(?:exchange|current(?:/(?:bootstrap|evidence-sync|deep-linking-response))?)/?$",
         r"^/health",
         r"^/.well-known/",
     ]
@@ -37,24 +59,94 @@ class CedarAuthMiddleware(BaseHTTPMiddleware):
         self._skip_patterns = [re.compile(pattern) for pattern in self.SKIP_PATTERNS]
 
     @staticmethod
+    def _api_key_allowed(required_permission: str, scopes: list[str]) -> bool:
+        scope_set = set(scopes or [])
+        if "admin:full" in scope_set:
+            return True
+
+        resource, _, action = required_permission.partition(":")
+        read_action = action in {"view", "read", "list"}
+        write_action = action in {"create", "edit", "delete", "write", "activate", "archive", "validate"}
+
+        resource_scopes: dict[str, tuple[str, str]] = {
+            "credential-template": ("templates:read", "templates:write"),
+            "application-template": ("applications:read", "applications:write"),
+            "application": ("applications:read", "applications:write"),
+            "trust-profile": ("trust:read", "trust:write"),
+            "issuer-entity": ("trust:read", "trust:write"),
+            "presentation-policy": ("trust:read", "trust:write"),
+            "compliance-profile": ("compliance:read", "compliance:write"),
+            "deployment-profile": ("deployment:read", "deployment:write"),
+            "webhook": ("webhooks:read", "webhooks:write"),
+            "notification": ("notifications:read", "notifications:send"),
+            "team": ("users:read", "users:invite"),
+            "role": ("roles:read", "roles:write"),
+            "policy-set": ("trust:read", "trust:admin"),
+            "organization": ("users:read", "users:invite"),
+            "integration-connector": ("integrations:read", "integrations:write"),
+        }
+
+        if resource == "flow-instance":
+            return "flows:execute" in scope_set or "flows:write" in scope_set
+        if resource == "flow-definition":
+            if read_action:
+                return bool(scope_set & {"flows:read", "flows:write", "flows:execute"})
+            return "flows:write" in scope_set
+        if resource == "api-key":
+            return False
+        if resource == "verification":
+            return "flows:execute" in scope_set or "credentials:read" in scope_set
+        if resource == "issued-credential":
+            if action in {"issue", "create"}:
+                return "credentials:issue" in scope_set
+            if action in {"revoke", "delete"}:
+                return "credentials:revoke" in scope_set
+            return bool(scope_set & {"credentials:read", "credentials:issue"})
+        if resource == "issuance":
+            if action == "initiate":
+                return "credentials:issue" in scope_set
+            if action == "revoke":
+                return "credentials:revoke" in scope_set
+            return bool(scope_set & {"credentials:read", "credentials:issue"})
+
+        mapped_scopes = resource_scopes.get(resource)
+        if not mapped_scopes:
+            return False
+        read_scope, write_scope = mapped_scopes
+        if read_action:
+            return read_scope in scope_set or write_scope in scope_set
+        if write_action:
+            return write_scope in scope_set
+        return False
+
+    @staticmethod
     def _forward_headers(request: Request, service_name: str | None = None) -> dict[str, str]:
         headers: dict[str, str] = {}
         user_id = getattr(request.state, "user_id", None)
         user_email = getattr(request.state, "user_email", None)
         user_domain = getattr(request.state, "user_domain", None)
+        organization_id = getattr(request.state, "organization_id", None)
+        api_key_id = getattr(request.state, "api_key_id", None)
+        api_key_scopes = getattr(request.state, "api_key_scopes", None)
         if user_id:
             headers["X-User-Id"] = user_id
         if user_email:
             headers["X-User-Email"] = user_email
         if user_domain:
             headers["X-User-Domain"] = user_domain
+        if organization_id:
+            headers["X-Organization-ID"] = organization_id
+        if api_key_id:
+            headers["X-Api-Key-Id"] = api_key_id
+        if api_key_scopes:
+            headers["X-Api-Key-Scopes"] = ",".join(str(scope) for scope in api_key_scopes)
 
         auth = request.headers.get("authorization")
         if auth:
             headers["Authorization"] = auth
 
         if service_name == "issuance":
-            issuance_api_key = os.environ.get("ISSUANCE_API_KEY", "")
+            issuance_api_key = _read_secret_value("ISSUANCE_API_KEY")
             if issuance_api_key:
                 headers["X-API-Key"] = issuance_api_key
 
@@ -127,7 +219,16 @@ class CedarAuthMiddleware(BaseHTTPMiddleware):
         if query_org_id:
             return query_org_id
 
-        return await self._extract_body_org_id(request)
+        body_org_id = await self._extract_body_org_id(request)
+        if body_org_id:
+            return body_org_id
+
+        state_org_id = (
+            getattr(request.state, "organization_id", None)
+            or getattr(request.state, "session_organization_id", None)
+            or getattr(request.state, "api_key_organization_id", None)
+        )
+        return state_org_id if isinstance(state_org_id, str) and state_org_id else None
 
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
@@ -141,6 +242,25 @@ class CedarAuthMiddleware(BaseHTTPMiddleware):
         required_permission, resource_name = resolved
         org_id = await self._resolve_request_org_id(request, path)
         if not org_id:
+            return await call_next(request)
+
+        if getattr(request.state, "auth_source", None) == "api_key":
+            api_key_org_id = getattr(request.state, "api_key_organization_id", None)
+            if api_key_org_id != org_id:
+                return JSONResponse(status_code=403, content={"detail": "API key does not have access to this organization"})
+
+            api_key_scopes = list(getattr(request.state, "api_key_scopes", []) or [])
+            if not self._api_key_allowed(required_permission, api_key_scopes):
+                return JSONResponse(
+                    status_code=403,
+                    content={"detail": f"API key missing required permission: {required_permission}"},
+                )
+
+            request.state.organization_id = org_id
+            request.state.required_permission = required_permission
+            request.state.org_roles = ["api_key"]
+            request.state.org_permissions = sorted(api_key_scopes)
+            request.state.org_resource = resource_name
             return await call_next(request)
 
         user_id = getattr(request.state, "user_id", None)

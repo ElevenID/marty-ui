@@ -197,6 +197,11 @@ class AuthenticatedUser:
     organization_id: str | None = None
     organization_name: str | None = None
     organization: dict[str, Any] | None = None
+    default_organization_id: str | None = None
+    default_organization_name: str | None = None
+    organizations: list[dict[str, Any]] = field(default_factory=list)
+    organization_context_unavailable: bool = False
+    organization_context_error: str | None = None
     onboarding_completed: datetime | None = None
     picture: str | None = None
     impersonation: ImpersonationContext | None = None
@@ -241,6 +246,11 @@ class AuthenticatedUser:
             "organization_id": self.organization_id,
             "organization_name": self.organization_name,
             "organization": self.organization,
+            "default_organization_id": self.default_organization_id,
+            "default_organization_name": self.default_organization_name,
+            "organizations": self.organizations,
+            "organization_context_unavailable": self.organization_context_unavailable,
+            "organization_context_error": self.organization_context_error,
             "onboarding_completed": self.onboarding_completed.isoformat() if self.onboarding_completed else None,
             "picture": self.picture,
             "impersonation": self.impersonation.to_dict() if self.impersonation else None,
@@ -270,6 +280,11 @@ class AuthenticatedUser:
             organization_id=data.get("organization_id"),
             organization_name=data.get("organization_name"),
             organization=data.get("organization"),
+            default_organization_id=data.get("default_organization_id"),
+            default_organization_name=data.get("default_organization_name"),
+            organizations=data.get("organizations") or [],
+            organization_context_unavailable=bool(data.get("organization_context_unavailable", False)),
+            organization_context_error=data.get("organization_context_error"),
             onboarding_completed=onboarding,
             picture=data.get("picture"),
             impersonation=ImpersonationContext.from_dict(data["impersonation"]) if data.get("impersonation") else None,

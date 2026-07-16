@@ -17,7 +17,9 @@ print("=== StatusListManager Integration Test ===\n")
 
 # Get profile
 resp = requests.get(f"{BASE_URL}/v1/revocation-profiles", params={"organization_id": "system"})
-profile_id = resp.json()[0]["id"]
+profile = resp.json()[0]
+profile_id = profile["id"]
+organization_id = profile["organization_id"]
 print(f"Profile: {profile_id[:8]}...\n")
 
 # Test 1: Allocate indices
@@ -26,7 +28,7 @@ indices = []
 for i in range(3):
     resp = requests.post(
         f"{BASE_URL}/internal/revocation-profiles/{profile_id}/allocate-index",
-        json={"credential_format": "sd_jwt_vc"}
+        json={"organization_id": organization_id, "credential_format": "sd_jwt_vc"}
     )
     idx = resp.json()["index"]
     indices.append(idx)
@@ -37,6 +39,7 @@ print(f"\nTest 2: Revoke index {indices[1]}")
 resp = requests.post(
     f"{BASE_URL}/internal/revocation-profiles/{profile_id}/process-revocation",
     json={
+        "organization_id": organization_id,
         "credential_id": "cred-123",
         "index": indices[1],
         "status": "revoked",
@@ -52,6 +55,7 @@ print(f"\nTest 3: Reinstate index {indices[1]}")
 resp = requests.post(
     f"{BASE_URL}/internal/revocation-profiles/{profile_id}/process-revocation",
     json={
+        "organization_id": organization_id,
         "credential_id": "cred-123",
         "index": indices[1],
         "status": "reinstated",
@@ -65,7 +69,7 @@ print(f"  ✓ Success: {result['success']}")
 print("\nTest 4: mDoc allocation (TOKEN_STATUS_LIST)")
 resp = requests.post(
     f"{BASE_URL}/internal/revocation-profiles/{profile_id}/allocate-index",
-    json={"credential_format": "mdoc"}
+    json={"organization_id": organization_id, "credential_format": "mdoc"}
 )
 print(f"  ✓ Index {resp.json()['index']}")
 

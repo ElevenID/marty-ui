@@ -3,7 +3,7 @@
 import grpc
 import warnings
 
-import event_stream_service_pb2 as event__stream__service__pb2
+from . import event_stream_service_pb2 as event__stream__service__pb2
 
 GRPC_GENERATED_VERSION = '1.80.0'
 GRPC_VERSION = grpc.__version__

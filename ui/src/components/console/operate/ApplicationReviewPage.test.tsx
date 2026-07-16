@@ -4,7 +4,7 @@ import { renderWithRouter, screen, waitFor } from '@test/utils';
 
 import ApplicationReviewPage from './ApplicationReviewPage';
 
-const mockGetApplication = vi.fn();
+const mockGetOrganizationApplication = vi.fn();
 const mockGetApplicationEvidenceSummary = vi.fn();
 const mockGetVettingChecks = vi.fn();
 const mockRunEvidenceCheck = vi.fn();
@@ -16,6 +16,7 @@ const mockListCredentialTemplates = vi.fn();
 
 vi.mock('../../../hooks/useAuth', () => ({
   useAuth: () => ({
+    organizationId: 'org-auth-default',
     user: {
       user_id: 'reviewer-1',
       name: 'Reviewer One',
@@ -24,8 +25,12 @@ vi.mock('../../../hooks/useAuth', () => ({
   }),
 }));
 
+vi.mock('../../../contexts/ConsoleContext', () => ({
+  useConsole: () => ({ activeOrgId: 'org-1' }),
+}));
+
 vi.mock('../../../services/applicantApi', () => ({
-  getApplication: (...args) => mockGetApplication(...args),
+  getOrganizationApplication: (...args) => mockGetOrganizationApplication(...args),
   getApplicationEvidenceSummary: (...args) => mockGetApplicationEvidenceSummary(...args),
   getVettingChecks: (...args) => mockGetVettingChecks(...args),
   runApplicationExternalEvidenceApiCheck: (...args) => mockRunEvidenceCheck(...args),
@@ -67,16 +72,16 @@ function renderPage() {
 describe('ApplicationReviewPage evidence policy controls', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockGetApplication.mockResolvedValue({
+    mockGetOrganizationApplication.mockResolvedValue({
       id: 'app-1',
       applicant_id: 'applicant-1',
       applicant_email: 'ada@example.test',
       organization_id: 'org-1',
-      credential_configuration_id: 'passport-credential',
+      credential_template_id: 'passport-credential',
       credential_display_name: 'Passport Credential',
       status: 'submitted',
       submitted_at: '2026-05-18T10:00:00Z',
-      metadata: {},
+      form_data: {},
     });
     mockGetVettingChecks.mockResolvedValue([]);
     mockGetApplicationEvidenceSummary.mockResolvedValue({
@@ -109,10 +114,13 @@ describe('ApplicationReviewPage evidence policy controls', () => {
     await user.click(await screen.findByRole('button', { name: /run passport document check/i }));
 
     await waitFor(() => {
-      expect(mockRunEvidenceCheck).toHaveBeenCalledWith('app-1', 'passport-document-check', {
+      expect(mockGetOrganizationApplication).toHaveBeenCalledWith('org-1', 'app-1');
+      expect(mockAcquireReviewerLock).toHaveBeenCalledWith('org-1', 'app-1');
+      expect(mockRunEvidenceCheck).toHaveBeenCalledWith('org-1', 'app-1', 'passport-document-check', {
         issue_on_permit: true,
       });
     });
+    expect(mockGetOrganizationApplication).not.toHaveBeenCalledWith('org-auth-default', 'app-1');
     expect(await screen.findByText(/policy permitted approval/i)).toBeInTheDocument();
   });
 });

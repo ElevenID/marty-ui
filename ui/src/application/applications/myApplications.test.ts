@@ -41,7 +41,7 @@ describe('myApplications helpers', () => {
   it('builds edit navigation state', () => {
     expect(buildMyApplicationEditNavigation({
       id: 'app-1',
-      credential_configuration_id: 'cfg-1',
+      credential_template_id: 'cfg-1',
       status: 'needs_revision',
     })).toEqual({
       path: '/application/cfg-1',
@@ -49,7 +49,7 @@ describe('myApplications helpers', () => {
         applicationId: 'app-1',
         revisionData: {
           id: 'app-1',
-          credential_configuration_id: 'cfg-1',
+          credential_template_id: 'cfg-1',
           status: 'needs_revision',
         },
       },
@@ -58,7 +58,7 @@ describe('myApplications helpers', () => {
 
   it('loads normalized applications from the injected service', async () => {
     const listApplications = vi.fn().mockResolvedValue({
-      applications: [{ id: 'app-1' }],
+      items: [{ id: 'app-1' }],
       total: 1,
     })
 

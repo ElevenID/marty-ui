@@ -9,6 +9,13 @@ from typing import Optional
 _UUID_RE = r"([a-f0-9\-]{36})"
 _ORG_PATH_RE = re.compile(rf"^/v1/organizations/{_UUID_RE}(?:/|$)")
 _TOP_LEVEL_RESOURCE_RE = re.compile(r"^/v1/([^/]+)/([^/]+)(?:/|$)")
+_FLOW_RESOURCE_RE = re.compile(r"^/v1/flows/(definitions|instances)/([^/]+)(?:/|$)")
+_CANVAS_PLATFORM_RESOURCE_RE = re.compile(
+    r"^/v1/integrations/canvas/platforms/([^/]+)(?:/|$)"
+)
+_CANVAS_BINDING_RESOURCE_RE = re.compile(
+    r"^/v1/integrations/canvas/program-bindings/([^/]+)(?:/|$)"
+)
 
 
 RESOURCE_LOOKUP_MAP: dict[str, tuple[str, str, set[str]]] = {
@@ -50,22 +57,17 @@ RESOURCE_LOOKUP_MAP: dict[str, tuple[str, str, set[str]]] = {
     "flows": (
         "flows",
         "/v1/flows/{resource_id}",
-        set(),
+        {"definitions", "instances", "verify", "siop"},
     ),
     "application-templates": (
         "issuance",
         "/v1/application-templates/{resource_id}",
         {"validate-artifacts"},
     ),
-    "applications": (
-        "issuance",
-        "/v1/applications/{resource_id}",
-        set(),
-    ),
     "issued-credentials": (
         "issuance",
         "/v1/issued-credentials/{resource_id}",
-        set(),
+        {"mine"},
     ),
     "issuance": (
         "issuance",
@@ -84,10 +86,182 @@ RESOURCE_LOOKUP_MAP: dict[str, tuple[str, str, set[str]]] = {
             "transactions",
         },
     ),
+    "policy-sets": (
+        "organizations",
+        "/v1/policy-sets/{resource_id}",
+        {"validate"},
+    ),
 }
 
 
 SPECIAL_ROUTE_RULES: list[tuple[re.Pattern[str], dict[str, str], str]] = [
+    (
+        re.compile(r"^/v1/integrations/canvas/platforms/[^/]+/(?:registration-config|readiness)$"),
+        {"GET": "integration-connector:view"},
+        "integration-connector",
+    ),
+    (
+        re.compile(r"^/v1/integrations/canvas/platforms/[^/]+/scope-discovery$"),
+        {"POST": "integration-connector:view"},
+        "integration-connector",
+    ),
+    (
+        re.compile(r"^/v1/integrations/canvas/platforms/[^/]+/(?:sandbox-probe|jwks-refresh|oauth/start|oauth/authorizations)$"),
+        {"POST": "integration-connector:edit"},
+        "integration-connector",
+    ),
+    (
+        re.compile(r"^/v1/integrations/canvas/platforms/[^/]+/lti-installation$"),
+        {"PUT": "integration-connector:edit"},
+        "integration-connector",
+    ),
+    (
+        re.compile(r"^/v1/integrations/canvas/program-bindings/[^/]+/(?:validate|activate|deactivate)$"),
+        {"POST": "integration-connector:edit"},
+        "integration-connector",
+    ),
+    (
+        re.compile(r"^/v1/integrations/canvas/applications/[^/]+/(?:approve|canvas-sync)$"),
+        {"POST": "integration-connector:edit"},
+        "integration-connector",
+    ),
+    (
+        re.compile(r"^/v1/integrations/canvas/canvas-sync-jobs/[^/]+/(?:retry|resolve)$"),
+        {"POST": "integration-connector:edit"},
+        "integration-connector",
+    ),
+    (
+        re.compile(r"^/v1/integrations/canvas/evidence-policy-reviews/[^/]+/resolve$"),
+        {"POST": "integration-connector:edit"},
+        "integration-connector",
+    ),
+    (
+        re.compile(r"^/v1/integrations/canvas/platforms/[^/]+/oauth$"),
+        {"DELETE": "integration-connector:edit"},
+        "integration-connector",
+    ),
+    (
+        re.compile(r"^/v1/integrations/canvas/canvas-credentials/validate$"),
+        {"POST": "integration-connector:view"},
+        "integration-connector",
+    ),
+    (
+        re.compile(r"^/v1/credential-templates/[^/]+/activate$"),
+        {"POST": "credential-template:activate"},
+        "credential-template",
+    ),
+    (
+        re.compile(r"^/v1/credential-templates/[^/]+/deprecate$"),
+        {"POST": "credential-template:deprecate"},
+        "credential-template",
+    ),
+    (
+        re.compile(r"^/v1/credential-templates/[^/]+/new-version$"),
+        {"POST": "credential-template:version"},
+        "credential-template",
+    ),
+    (
+        re.compile(r"^/v1/revocation-profiles/[^/]+/activate$"),
+        {"POST": "revocation-profile:activate"},
+        "revocation-profile",
+    ),
+    (
+        re.compile(r"^/v1/issued-credentials/[^/]+/(revoke|suspend|reinstate)$"),
+        {"POST": "issuance:revoke"},
+        "issued-credential",
+    ),
+    (
+        re.compile(r"^/v1/issued-credentials/[^/]+/renew$"),
+        {"POST": "issuance:initiate"},
+        "issued-credential",
+    ),
+    (
+        re.compile(r"^/v1/issued-credentials(?:/[^/]+)?$"),
+        {
+            "GET": "issuance:view",
+            "HEAD": "issuance:view",
+            "OPTIONS": "issuance:view",
+        },
+        "issued-credential",
+    ),
+    (
+        re.compile(r"^/v1/issuance/[^/]+/revoke$"),
+        {"POST": "issuance:revoke"},
+        "issued-credential",
+    ),
+    (
+        re.compile(r"^/v1/issuance(?:/[^/]+)?$"),
+        {
+            "GET": "issuance:view",
+            "POST": "issuance:initiate",
+            "HEAD": "issuance:view",
+            "OPTIONS": "issuance:view",
+        },
+        "issuance",
+    ),
+    (
+        re.compile(r"^/v1/organizations/[^/]+/dashboard/applicant-stats$"),
+        {"GET": "application:review"},
+        "application",
+    ),
+    (
+        re.compile(r"^/v1/organizations/[^/]+/applicants(?:/[^/]+)?/issue$"),
+        {"POST": "issuance:initiate"},
+        "application",
+    ),
+    (
+        re.compile(r"^/v1/organizations/[^/]+/applicants/[^/]+/approve$"),
+        {"POST": "application:approve"},
+        "application",
+    ),
+    (
+        re.compile(r"^/v1/organizations/[^/]+/applicants/[^/]+/reject$"),
+        {"POST": "application:reject"},
+        "application",
+    ),
+    (
+        re.compile(r"^/v1/organizations/[^/]+/applicants(?:/.*)?$"),
+        {
+            "GET": "application:review",
+            "POST": "application:review",
+            "PATCH": "application:review",
+            "DELETE": "application:review",
+            "HEAD": "application:review",
+            "OPTIONS": "application:review",
+        },
+        "application",
+    ),
+    (
+        re.compile(r"^/v1/flows/verify$"),
+        {"POST": "verification:execute"},
+        "verification",
+    ),
+    (
+        re.compile(r"^/v1/flows/definitions/[^/]+/activate$"),
+        {"POST": "flow-definition:activate"},
+        "flow-definition",
+    ),
+    (
+        re.compile(r"^/v1/flows/instances(?:/[^/]+)?(?:/advance)?$"),
+        {
+            "GET": "flow-instance:view",
+            "POST": "flow-instance:start",
+            "HEAD": "flow-instance:view",
+            "OPTIONS": "flow-instance:view",
+        },
+        "flow-instance",
+    ),
+    (
+        re.compile(r"^/v1/flows/definitions(?:/[^/]+)?(?:/activate)?$"),
+        {
+            "GET": "flow-definition:view",
+            "POST": "flow-definition:create",
+            "PUT": "flow-definition:edit",
+            "PATCH": "flow-definition:edit",
+            "DELETE": "flow-definition:delete",
+        },
+        "flow-definition",
+    ),
     (
         re.compile(rf"^/v1/organizations/{_UUID_RE}/transfer-ownership$"),
         {"POST": "organization:transfer-ownership"},
@@ -142,6 +316,26 @@ SPECIAL_ROUTE_RULES: list[tuple[re.Pattern[str], dict[str, str], str]] = [
         "api-key",
     ),
     (
+        re.compile(rf"^/v1(?:/organizations/{_UUID_RE})?/policy-sets/[^/]+/activate$"),
+        {"POST": "policy-set:activate"},
+        "policy-set",
+    ),
+    (
+        re.compile(rf"^/v1(?:/organizations/{_UUID_RE})?/policy-sets/[^/]+/archive$"),
+        {"POST": "policy-set:archive"},
+        "policy-set",
+    ),
+    (
+        re.compile(rf"^/v1(?:/organizations/{_UUID_RE})?/policy-sets/validate$"),
+        {"POST": "policy-set:validate"},
+        "policy-set",
+    ),
+    (
+        re.compile(rf"^/v1(?:/organizations/{_UUID_RE})?/policy-sets/[^/]+/validate$"),
+        {"POST": "policy-set:validate"},
+        "policy-set",
+    ),
+    (
         re.compile(rf"^/v1/organizations/{_UUID_RE}/lifecycle$"),
         {"GET": "organization:view"},
         "organization",
@@ -186,10 +380,9 @@ GENERIC_RESOURCE_MAP: dict[str, tuple[str, str]] = {
     "flows": ("flow-definition", "flow-definition"),
     "flow-instances": ("flow-instance", "flow-instance"),
     "application-templates": ("application-template", "application-template"),
-    "applications": ("application", "application"),
     "verification": ("verification", "verification"),
     "integrations": ("integration-connector", "integration-connector"),
-    "policy-sets": ("trust-profile", "trust-profile"),
+    "policy-sets": ("policy-set", "policy-set"),
 }
 
 
@@ -250,6 +443,21 @@ def extract_org_id(path: str) -> Optional[str]:
 
 
 def resolve_resource_lookup(path: str) -> Optional[tuple[str, str]]:
+    canvas_platform_match = _CANVAS_PLATFORM_RESOURCE_RE.match(path)
+    if canvas_platform_match:
+        platform_id = canvas_platform_match.group(1)
+        return ("issuance", f"/v1/integrations/canvas/platforms/{platform_id}")
+
+    canvas_binding_match = _CANVAS_BINDING_RESOURCE_RE.match(path)
+    if canvas_binding_match:
+        binding_id = canvas_binding_match.group(1)
+        return ("issuance", f"/v1/integrations/canvas/program-bindings/{binding_id}")
+
+    flow_match = _FLOW_RESOURCE_RE.match(path)
+    if flow_match:
+        resource_type, resource_id = flow_match.groups()
+        return ("flows", f"/v1/flows/{resource_type}/{resource_id}")
+
     match = _TOP_LEVEL_RESOURCE_RE.match(path)
     if not match:
         return None

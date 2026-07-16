@@ -22,6 +22,7 @@ Port: 8000
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 from typing import Any, AsyncGenerator
@@ -74,10 +75,10 @@ from gateway.routes.deployment import deployment_profile_router
 from gateway.routes.devices import device_router
 from gateway.routes.flows import flow_router
 from gateway.routes.issuance import (
-    application_router,
     application_template_router,
     issuance_router,
     issued_credential_router,
+    passport_router,
 )
 from gateway.routes.notifications import (
     notification_router,
@@ -111,6 +112,25 @@ logger = logging.getLogger(__name__)
 SERVICE_NAME = "api-gateway"
 SERVICE_PORT = int(os.environ.get("GATEWAY_PORT", "8000"))
 
+_DEFAULT_READY_SERVICES = (
+    "auth",
+    "organizations",
+    "credential-templates",
+    "trust-profiles",
+    "presentation-policies",
+    "deployment-profiles",
+    "signing-keys",
+    "flows",
+    "issuance",
+)
+
+
+def _required_ready_services() -> tuple[str, ...]:
+    configured = os.environ.get("GATEWAY_REQUIRED_READY_SERVICES")
+    if configured is None:
+        return _DEFAULT_READY_SERVICES
+    return tuple(service.strip() for service in configured.split(",") if service.strip())
+
 
 def _read_bool_env(name: str, default: bool) -> bool:
     raw = os.environ.get(name)
@@ -139,6 +159,181 @@ HOSTED_PILOT_AUTO_PURGE_BATCH_SIZE = _read_positive_int_env(
     "HOSTED_PILOT_AUTO_PURGE_BATCH_SIZE",
     100,
 )
+WALTID_SUPPORTED_CREDENTIAL_FORMATS = {
+    "jwt_vc_json",
+    "jwt_vc_json-ld",
+    "ldp_vc",
+    "mso_mdoc",
+    "jwt_vc",
+}
+
+
+def _unique_strings(values: list[Any]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if not isinstance(value, str) or not value:
+            continue
+        if value in seen:
+            continue
+        result.append(value)
+        seen.add(value)
+    return result
+
+
+def _issuer_url_with_variant(issuer_url: Any, variant: str) -> str | None:
+    if not isinstance(issuer_url, str):
+        return None
+    issuer = issuer_url.rstrip("/")
+    if not issuer:
+        return None
+    if issuer.endswith(f"/{variant}"):
+        return issuer
+    return f"{issuer}/{variant}"
+
+
+def _waltid_credentials_supported_entries(configs: dict[str, Any]) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for config_id, raw_config in configs.items():
+        if not isinstance(raw_config, dict):
+            continue
+        credential_format = raw_config.get("format") or "jwt_vc_json"
+        if credential_format not in WALTID_SUPPORTED_CREDENTIAL_FORMATS:
+            continue
+
+        credential_definition = raw_config.get("credential_definition")
+        types = (
+            credential_definition.get("type")
+            if isinstance(credential_definition, dict)
+            else None
+        )
+        if isinstance(types, str):
+            types = [types]
+
+        supported_ids = [config_id]
+        if isinstance(config_id, str) and "#" not in config_id:
+            supported_ids.append(f"{config_id}#sd-jwt")
+
+        for supported_id in _unique_strings(supported_ids):
+            if supported_id in seen_ids:
+                continue
+            seen_ids.add(supported_id)
+            entry: dict[str, Any] = {
+                "id": supported_id,
+                "format": credential_format,
+            }
+            if isinstance(types, list) and types:
+                entry["types"] = types
+            if isinstance(raw_config.get("display"), list):
+                entry["display"] = raw_config["display"]
+            if isinstance(raw_config.get("cryptographic_binding_methods_supported"), list):
+                entry["cryptographic_binding_methods_supported"] = raw_config[
+                    "cryptographic_binding_methods_supported"
+                ]
+            suites = (
+                raw_config.get("cryptographic_suites_supported")
+                or raw_config.get("credential_signing_alg_values_supported")
+            )
+            if isinstance(suites, list):
+                entry["cryptographic_suites_supported"] = suites
+            entries.append(entry)
+    return entries
+
+
+def _normalize_waltid_oid4vci_issuer_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    configs = metadata.get("credential_configurations_supported")
+    if not isinstance(configs, dict):
+        return metadata
+
+    normalized = {
+        key: value
+        for key, value in metadata.items()
+        if key != "credential_configurations_supported"
+    }
+    credential_issuer = _issuer_url_with_variant(metadata.get("credential_issuer"), "waltid")
+    if credential_issuer:
+        normalized["credential_issuer"] = credential_issuer
+    entries = _waltid_credentials_supported_entries(configs)
+    normalized["credentials_supported"] = entries
+    normalized["credential_configurations_supported"] = {
+        entry["id"]: entry
+        for entry in entries
+        if isinstance(entry.get("id"), str) and entry["id"]
+    }
+    return normalized
+
+
+def _normalize_oid4vci_issuer_metadata(
+    metadata: dict[str, Any],
+    wallet_variant: str | None = None,
+) -> dict[str, Any]:
+    if wallet_variant == "waltid":
+        normalized = _normalize_waltid_oid4vci_issuer_metadata(metadata)
+    else:
+        configs = metadata.get("credential_configurations_supported")
+        if not isinstance(configs, dict):
+            normalized = dict(metadata)
+        else:
+            normalized = dict(metadata)
+            normalized_configs: dict[str, Any] = {}
+            changed = False
+
+            for config_id, raw_config in configs.items():
+                if not isinstance(raw_config, dict):
+                    normalized_configs[config_id] = raw_config
+                    continue
+
+                config = dict(raw_config)
+                credential_definition = config.get("credential_definition")
+                credential_subject = (
+                    credential_definition.get("credentialSubject")
+                    if isinstance(credential_definition, dict)
+                    else None
+                )
+
+                if isinstance(credential_subject, dict) and credential_subject:
+                    config["credential_definition"] = {
+                        key: value
+                        for key, value in credential_definition.items()
+                        if key != "credentialSubject"
+                    }
+                    metadata_block = dict(config.get("credential_metadata") or {})
+                    metadata_block.pop("claims", None)
+                    if config.get("display") and "display" not in metadata_block:
+                        metadata_block["display"] = config["display"]
+                    config["credential_metadata"] = metadata_block
+                    changed = True
+
+                normalized_configs[config_id] = config
+
+            if changed:
+                normalized["credential_configurations_supported"] = normalized_configs
+
+    issuer_display_name = normalized.pop("issuer_display_name", None)
+    if issuer_display_name and not normalized.get("display"):
+        normalized["display"] = [{"name": str(issuer_display_name), "locale": "en-US"}]
+    return normalized
+
+
+def _normalize_oid4vci_issuer_metadata_content(
+    content: bytes,
+    content_type: str | None,
+    wallet_variant: str | None = None,
+) -> bytes:
+    if "json" not in (content_type or "").lower():
+        return content
+    try:
+        body = json.loads(content)
+    except Exception:
+        return content
+    if not isinstance(body, dict):
+        return content
+
+    normalized = _normalize_oid4vci_issuer_metadata(body, wallet_variant=wallet_variant)
+    if normalized == body:
+        return content
+    return json.dumps(normalized, separators=(",", ":")).encode("utf-8")
 
 
 async def _hosted_pilot_auto_purge_loop(app: FastAPI, stop_event: asyncio.Event) -> None:
@@ -341,13 +536,13 @@ Verification is handled through two complementary approaches:
 
     session_cache = _proxy_mod._session_cache
 
-    # Add Cedar auth middleware first, then billing, then auth middleware, then
-    # rate limiter, then MIP version.  Starlette executes middleware in reverse
-    # registration order, so this makes MIPVersionMiddleware run outermost.
+    # Starlette executes middleware in reverse registration order, so keep
+    # idempotency inside current authz checks. A replay should still pass
+    # current Cedar/billing authorization before a cached response is returned.
     app.add_middleware(UsageTrackingMiddleware)
+    app.add_middleware(IdempotencyMiddleware)
     app.add_middleware(BillingAuthMiddleware)
     app.add_middleware(CedarAuthMiddleware)
-    app.add_middleware(IdempotencyMiddleware)
     app.add_middleware(ETagMiddleware)
     app.add_middleware(ContentTypeEnforcementMiddleware)
     app.add_middleware(AuthMiddleware, session_cache=session_cache)
@@ -379,7 +574,7 @@ Verification is handled through two complementary approaches:
     app.include_router(issuance_router)
     app.include_router(canvas_integration_router)
     app.include_router(application_template_router)
-    app.include_router(application_router)
+    app.include_router(passport_router)
     app.include_router(subscription_router)
     app.include_router(webhook_router)
     app.include_router(notification_router)
@@ -462,6 +657,83 @@ Verification is handled through two complementary approaches:
     @app.get("/health")
     async def health_check() -> dict:
         return {"status": "healthy", "service": SERVICE_NAME}
+
+    async def signing_keys_local_readiness(client: httpx.AsyncClient) -> dict:
+        details = {"status": "healthy", "mode": "gateway-local"}
+        redis_client = getattr(app.state, "redis_client", None)
+        if redis_client is None:
+            return {"status": "unhealthy", "mode": "gateway-local", "error": "redis storage is not configured"}
+        try:
+            await redis_client.ping()
+        except Exception as exc:
+            return {"status": "unreachable", "mode": "gateway-local", "error": str(exc)}
+
+        bao_addr = os.environ.get("BAO_ADDR")
+        if bao_addr:
+            headers = {}
+            bao_token = os.environ.get("BAO_TOKEN")
+            bao_token_file = os.environ.get("BAO_TOKEN_FILE")
+            if not bao_token and bao_token_file:
+                try:
+                    with open(bao_token_file, encoding="utf-8") as handle:
+                        bao_token = handle.read().strip()
+                except OSError:
+                    bao_token = None
+            if bao_token:
+                headers["X-Vault-Token"] = bao_token
+            try:
+                response = await client.get(f"{bao_addr.rstrip('/')}/v1/sys/health", headers=headers, timeout=3.0)
+                details["openbao_status_code"] = response.status_code
+                if response.status_code not in {200, 429, 472, 473}:
+                    details["status"] = "unhealthy"
+            except Exception as exc:
+                return {"status": "unreachable", "mode": "gateway-local", "error": f"openbao: {exc}"}
+        return details
+
+    async def readiness_check():
+        registry = get_registry()
+        client = get_http_client()
+        services = {}
+
+        for service in _required_ready_services():
+            if service == "signing-keys":
+                services[service] = await signing_keys_local_readiness(client)
+                continue
+            url = registry.get_service_url(service)
+            if not url:
+                services[service] = {"status": "missing", "url": None}
+                continue
+
+            try:
+                response = await client.get(f"{url}/health", timeout=3.0)
+                services[service] = {
+                    "status": "healthy" if response.status_code == 200 else "unhealthy",
+                    "url": url,
+                    "status_code": response.status_code,
+                }
+            except Exception as exc:
+                services[service] = {
+                    "status": "unreachable",
+                    "url": url,
+                    "error": str(exc),
+                }
+
+        unhealthy = {
+            service: details
+            for service, details in services.items()
+            if details["status"] != "healthy"
+        }
+        payload = {
+            "status": "ready" if not unhealthy else "not_ready",
+            "service": SERVICE_NAME,
+            "services": services,
+        }
+        if unhealthy:
+            return JSONResponse(status_code=503, content=payload)
+        return payload
+
+    app.add_api_route("/ready", readiness_check, methods=["GET"])
+    app.add_api_route("/health/ready", readiness_check, methods=["GET"])
 
     # \u2500\u2500 Usage & billing analytics \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 
@@ -570,7 +842,7 @@ Verification is handled through two complementary approaches:
             )
         return await proxy_request(request, service_url, f"/v1/billing/{path}")
 
-    async def _proxy_to_issuance_well_known(path: str) -> Response:
+    async def _proxy_to_issuance_well_known(path: str, wallet_variant: str | None = None) -> Response:
         """Proxy a well-known request to the issuance service.
 
         The issuance service is the source of truth for OID4VCI metadata.
@@ -591,14 +863,23 @@ Verification is handled through two complementary approaches:
             logger.error("Error proxying well-known to issuance (%s): %s", path, exc)
             raise HTTPException(status_code=502, detail="Issuance service error")
 
+        content_type = upstream.headers.get("content-type")
+        content = upstream.content
+        if "/openid-credential-issuer" in path:
+            content = _normalize_oid4vci_issuer_metadata_content(
+                content,
+                content_type,
+                wallet_variant=wallet_variant,
+            )
+
         return Response(
-            content=upstream.content,
+            content=content,
             status_code=upstream.status_code,
-            media_type=upstream.headers.get("content-type"),
+            media_type=content_type,
             headers={
                 k: v
                 for k, v in upstream.headers.items()
-                if k.lower() not in ("content-encoding", "transfer-encoding")
+                if k.lower() not in ("content-encoding", "content-length", "transfer-encoding")
             },
         )
 
@@ -610,6 +891,30 @@ Verification is handled through two complementary approaches:
 
     @app.get("/.well-known/oauth-authorization-server/org/{org_id}")
     async def get_org_oauth_authorization_server_metadata(org_id: str) -> Response:
+        return await _proxy_to_issuance_well_known(f"/.well-known/oauth-authorization-server/org/{org_id}")
+
+    # walt.id browser wallet compatibility variants
+
+    @app.get("/.well-known/openid-credential-issuer/org/{org_id}/waltid")
+    async def get_org_waltid_issuer_metadata(org_id: str) -> Response:
+        return await _proxy_to_issuance_well_known(
+            f"/.well-known/openid-credential-issuer/org/{org_id}",
+            wallet_variant="waltid",
+        )
+
+    @app.get("/org/{org_id}/waltid/.well-known/openid-credential-issuer")
+    async def get_org_waltid_issuer_metadata_appended(org_id: str) -> Response:
+        return await _proxy_to_issuance_well_known(
+            f"/.well-known/openid-credential-issuer/org/{org_id}",
+            wallet_variant="waltid",
+        )
+
+    @app.get("/.well-known/oauth-authorization-server/org/{org_id}/waltid")
+    async def get_org_waltid_as_metadata(org_id: str) -> Response:
+        return await _proxy_to_issuance_well_known(f"/.well-known/oauth-authorization-server/org/{org_id}")
+
+    @app.get("/org/{org_id}/waltid/.well-known/oauth-authorization-server")
+    async def get_org_waltid_as_metadata_appended(org_id: str) -> Response:
         return await _proxy_to_issuance_well_known(f"/.well-known/oauth-authorization-server/org/{org_id}")
 
     # SpruceID / SpruceKit wallet variants
@@ -723,6 +1028,13 @@ Verification is handled through two complementary approaches:
         """JWKS endpoint."""
         return await _proxy_to_issuance_well_known("/.well-known/jwks.json")
 
+    @app.get("/.well-known/marty-release")
+    async def get_marty_release() -> dict[str, Any]:
+        """Expose non-secret runtime identity for immutable release gates."""
+        from gateway.release_metadata import release_metadata
+
+        return release_metadata()
+
     @app.get("/.well-known/mip-configuration")
     async def get_mip_configuration() -> dict:
         """MIP \u00a710 \u2014 Every MIP implementation MUST expose this discovery endpoint."""
@@ -736,8 +1048,7 @@ Verification is handled through two complementary approaches:
             client = get_http_client()
             try:
                 resp = await client.get(
-                    f"{compliance_url}/v1/compliance-profiles",
-                    params={"status": "active"},
+                    f"{compliance_url}/v1/compliance-profiles/system/discoverable",
                     timeout=5.0,
                 )
                 if resp.status_code == 200:
@@ -755,52 +1066,9 @@ Verification is handled through two complementary approaches:
             except Exception as exc:
                 logger.warning("Failed to fetch compliance profiles for MIP config: %s", exc)
 
-        return {
-            "mip_version": "0.1",
-            "supported_versions": ["0.1"],
-            "issuer": issuer_url,
-            "api_base_url": f"{issuer_url}/v1",
-            "active_compliance_profiles": active_profiles,
-            "supported_credential_formats": [
-                "MDOC", "SD_JWT_VC", "VC_JWT", "JSON_LD", "ZK_MDOC",
-            ],
-            "supported_issuance_protocols": [
-                "OID4VCI_PRE_AUTH", "OID4VCI_AUTH_CODE", "DIRECT",
-            ],
-            "endpoints": {
-                "trust_profiles": f"{issuer_url}/v1/trust-profiles",
-                "credential_templates": f"{issuer_url}/v1/credential-templates",
-                "presentation_policies": f"{issuer_url}/v1/presentation-policies",
-                "deployment_profiles": f"{issuer_url}/v1/deployment-profiles",
-                "flows": f"{issuer_url}/v1/flows",
-                "compliance_profiles": f"{issuer_url}/v1/compliance-profiles",
-                "revocation_profiles": f"{issuer_url}/v1/revocation-profiles",
-                "issued_credentials": f"{issuer_url}/v1/issued-credentials",
-                "trust_registry": f"{issuer_url}/v1/trust-registry",
-                "organizations": f"{issuer_url}/v1/organizations",
-                "devices": f"{issuer_url}/v1/devices",
-                "policy_sets": f"{issuer_url}/v1/policy-sets",
-                "wallet_registry": f"{issuer_url}/v1/wallet-registry",
-                "notifications": f"{issuer_url}/v1/notifications",
-                "scim": f"{issuer_url}/v1/organizations/{{org_id}}/scim/v2",
-            },
-            "wallet_facing_endpoints": {
-                "credential_offer": f"{issuer_url}/v1/issuance/offers/{{tx_id}}",
-                "token": f"{issuer_url}/v1/issuance/token",
-                "credential": f"{issuer_url}/v1/issuance/credential",
-                "nonce": f"{issuer_url}/v1/issuance/nonce",
-                "deferred_credential": f"{issuer_url}/v1/issuance/deferred-credential",
-                "notification": f"{issuer_url}/v1/issuance/notification",
-                "verification_request": f"{issuer_url}/v1/flows/instances/{{id}}/request",
-                "verification_submit": f"{issuer_url}/v1/flows/instances/{{id}}/submit",
-                "siop_request": f"{issuer_url}/v1/flows/siop/{{id}}/request",
-                "siop_submit": f"{issuer_url}/v1/flows/siop/submit",
-            },
-            "authorization": {
-                "policy_language": "cedar",
-                "cedar_schema_version": "MIP/1.0",
-            },
-        }
+        from gateway.mip_configuration import mip_configuration_document
+
+        return mip_configuration_document(issuer_url, active_profiles)
 
     @app.get("/health/services")
     async def services_health() -> dict:

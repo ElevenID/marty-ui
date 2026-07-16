@@ -13,6 +13,7 @@ const {
   mockDeleteSigningKey,
   mockGetKeyManagementConfig,
   mockUpdateKeyManagementConfig,
+  mockUseConsole,
 } = vi.hoisted(() => ({
   mockCan: vi.fn(),
   mockRoles: vi.fn(),
@@ -24,6 +25,7 @@ const {
   mockDeleteSigningKey: vi.fn(),
   mockGetKeyManagementConfig: vi.fn(),
   mockUpdateKeyManagementConfig: vi.fn(),
+  mockUseConsole: vi.fn(),
 }))
 
 vi.mock('react-i18next', () => ({
@@ -62,9 +64,16 @@ vi.mock('../../../hooks/usePermissions', () => ({
   }),
 }))
 
+vi.mock('../../../contexts/ConsoleContext', () => ({
+  useConsole: () => mockUseConsole(),
+}))
+
 describe('SigningKeysPage', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockUseConsole.mockReturnValue({
+      activeOrgId: 'org-123',
+    })
     mockRoles.mockReturnValue([])
     mockCan.mockImplementation((resource: string, action: string) => {
       if (resource === 'signing-key' && (action === 'create' || action === 'delete')) {
@@ -130,7 +139,11 @@ describe('SigningKeysPage', () => {
       expect(screen.getByText('No signing keys discovered yet')).toBeInTheDocument()
     })
 
+    expect(mockListSigningKeys).toHaveBeenCalledWith({ organization_id: 'org-123' })
+    expect(mockGetKeyManagementConfig).toHaveBeenCalledWith({ organization_id: 'org-123' })
     expect(screen.getByRole('button', { name: 'Register key management service' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Create issuer identity' })).toBeInTheDocument()
+    expect(screen.getByText(/Create an issuer identity and choose "Create new key in KMS"/i)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'deploy.signingKeys.uploadKey' })).not.toBeInTheDocument()
     expect(screen.getByText('Elevenidllc managed OpenBao transit')).toBeInTheDocument()
   })
@@ -205,7 +218,7 @@ describe('SigningKeysPage', () => {
     await user.click(screen.getByRole('button', { name: 'Rotate key' }))
 
     await waitFor(() => {
-      expect(mockRotateServiceKey).toHaveBeenCalledWith('managed-openbao-transit')
+      expect(mockRotateServiceKey).toHaveBeenCalledWith('managed-openbao-transit', { organization_id: 'org-123' })
       expect(mockShowNotification).toHaveBeenCalledWith('Key rotation completed successfully.', 'success')
     })
   })

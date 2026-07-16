@@ -24,6 +24,8 @@ import {
   Button,
   ToggleButtonGroup,
   ToggleButton,
+  TextField,
+  InputAdornment,
 } from '@mui/material';
 import { Link as RouterLink } from 'react-router-dom';
 import { useNavigate } from 'react-router-dom';
@@ -40,7 +42,6 @@ import SearchIcon from '@mui/icons-material/Search';
 import { useAuth } from '../../hooks/useAuth';
 import { useBranding } from '../../hooks/useBranding';
 import { useConsole } from '../../contexts/ConsoleContext';
-import { membershipHasOrgConsoleAccess } from '../../application/session/authSession';
 import LanguageSwitcher from '../common/LanguageSwitcher';
 
 const DEFAULT_MOBILE_LOGO_SRC = '/apple-touch-icon.png';
@@ -172,8 +173,6 @@ export function ConsoleHeaderBar({ onMobileMenuToggle }) {
     logout,
     organizationId,
     organizationName,
-    organizations: authOrganizations,
-    setActiveOrganizationId,
     isAdministrator,
     isVendor,
     isApplicant,
@@ -181,11 +180,20 @@ export function ConsoleHeaderBar({ onMobileMenuToggle }) {
   const { mode, activeOrgId, memberships, isOrgBlocked, setActiveOrgId, setMode, isApplicantConsoleAvailable, isOrgConsoleAvailable } = useConsole();
   const [anchorEl, setAnchorEl] = useState(null);
   const [orgMenuAnchor, setOrgMenuAnchor] = useState(null);
+  const [orgSearch, setOrgSearch] = useState('');
   const showConsoleSwitcher = isApplicantConsoleAvailable && isOrgConsoleAvailable;
-  const selectableOrganizations = Array.isArray(authOrganizations) && authOrganizations.length > 0
-    ? authOrganizations
-    : (Array.isArray(user?.organizations) && user.organizations.length > 0 ? user.organizations : memberships);
-  const selectedOrgId = organizationId || activeOrgId || null;
+  const selectableOrganizations = Array.isArray(memberships) ? memberships : [];
+  const selectedOrgId = mode === 'org' ? activeOrgId : organizationId;
+  const filteredOrganizations = [...selectableOrganizations]
+    .filter((org) => {
+      const haystack = `${org.display_name || ''} ${org.name || ''} ${org.id || ''}`.toLowerCase();
+      return haystack.includes(orgSearch.trim().toLowerCase());
+    })
+    .sort((left, right) => {
+      if (left.id === selectedOrgId) return -1;
+      if (right.id === selectedOrgId) return 1;
+      return String(left.display_name || left.name || left.id).localeCompare(String(right.display_name || right.name || right.id));
+    });
   const brandLogoSrc = branding.logoUrl || DEFAULT_MOBILE_LOGO_SRC;
 
   // Find active org details
@@ -217,16 +225,10 @@ export function ConsoleHeaderBar({ onMobileMenuToggle }) {
 
   const handleSelectOrganization = async (organization) => {
     setOrgMenuAnchor(null);
+    setOrgSearch('');
 
     try {
-      if (membershipHasOrgConsoleAccess(organization)) {
-        await setActiveOrgId(organization.id);
-        return;
-      }
-
-      await setMode('applicant');
-      setActiveOrganizationId(organization.id);
-      navigate('/console/applicant/catalog');
+      await setActiveOrgId(organization.id);
     } catch (error) {
       console.error('[ConsoleHeaderBar] Failed to switch organization:', error);
     }
@@ -416,46 +418,63 @@ export function ConsoleHeaderBar({ onMobileMenuToggle }) {
           <Menu
             anchorEl={orgMenuAnchor}
             open={Boolean(orgMenuAnchor)}
-            onClose={() => setOrgMenuAnchor(null)}
+            onClose={() => { setOrgMenuAnchor(null); setOrgSearch(''); }}
             transformOrigin={{ horizontal: 'right', vertical: 'top' }}
             anchorOrigin={{ horizontal: 'right', vertical: 'bottom' }}
             PaperProps={{
               elevation: 0,
               sx: {
-                overflow: 'visible',
+                overflow: 'hidden',
                 filter: 'drop-shadow(0px 2px 8px rgba(0,0,0,0.1))',
                 mt: 1,
-                minWidth: 220,
+                minWidth: 280,
+                maxWidth: 'calc(100vw - 24px)',
               },
             }}
           >
             {selectableOrganizations.length > 0 && (
-              <Box sx={{ px: 2, py: 0.5 }}>
+              <Box sx={{ px: 1.5, pt: 1.25, pb: 0.75 }}>
                 <Typography variant="caption" color="text.secondary" fontWeight={600}>
                   Your Organizations
                 </Typography>
+                <TextField
+                  autoFocus
+                  fullWidth
+                  size="small"
+                  placeholder="Search organizations"
+                  value={orgSearch}
+                  onChange={(event) => setOrgSearch(event.target.value)}
+                  onKeyDown={(event) => event.stopPropagation()}
+                  sx={{ mt: 0.75 }}
+                  InputProps={{
+                    startAdornment: (
+                      <InputAdornment position="start"><SearchIcon fontSize="small" /></InputAdornment>
+                    ),
+                  }}
+                />
               </Box>
             )}
-            {selectableOrganizations.map((org) => (
-              <MenuItem
-                key={org.id}
-                selected={org.id === selectedOrgId}
-                onClick={() => handleSelectOrganization(org)}
-              >
-                <ListItemIcon>
-                  <BusinessIcon fontSize="small" />
-                </ListItemIcon>
-                <ListItemText
-                  primary={org.display_name || org.name || org.id}
-                  secondary={getMembershipRoleSummary(org)}
-                  primaryTypographyProps={{ variant: 'body2' }}
-                  secondaryTypographyProps={{ variant: 'caption' }}
-                />
-                {org.id === selectedOrgId && (
-                  <CheckIcon fontSize="small" color="primary" sx={{ ml: 1 }} />
-                )}
-              </MenuItem>
-            ))}
+            <Box sx={{ maxHeight: 360, overflowY: 'auto' }}>
+              {filteredOrganizations.map((org) => (
+                <MenuItem
+                  key={org.id}
+                  selected={org.id === selectedOrgId}
+                  onClick={() => handleSelectOrganization(org)}
+                >
+                  <ListItemIcon><BusinessIcon fontSize="small" /></ListItemIcon>
+                  <ListItemText
+                    primary={org.display_name || org.name || org.id}
+                    secondary={getMembershipRoleSummary(org)}
+                    primaryTypographyProps={{ variant: 'body2', noWrap: true }}
+                    secondaryTypographyProps={{ variant: 'caption' }}
+                  />
+                  {org.id === selectedOrgId && <CheckIcon fontSize="small" color="primary" sx={{ ml: 1 }} />}
+                </MenuItem>
+              ))}
+              {filteredOrganizations.length === 0 && (
+                <MenuItem disabled>No matching organizations</MenuItem>
+              )}
+            </Box>
             {selectableOrganizations.length > 0 && <Divider />}
             <MenuItem
               onClick={() => {

@@ -157,6 +157,47 @@ class JoinMechanism(str, Enum):
     DOMAIN = "domain"  # Domain-based suggestions (future)
 
 
+@dataclass
+class AuditEvent:
+    """Immutable organization audit event."""
+
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    organization_id: str = ""
+    event_type: str = ""
+    action: str = ""
+    category: str = "settings"
+    resource_type: str = "settings"
+    resource_id: str | None = None
+    resource_name: str | None = None
+    actor_id: str | None = None
+    actor_type: str = "system"
+    severity: str = "info"
+    message: str = ""
+    changes: dict[str, Any] | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "organization_id": self.organization_id,
+            "timestamp": self.timestamp.isoformat(),
+            "event_type": self.event_type,
+            "type": self.event_type,
+            "action": self.action,
+            "category": self.category,
+            "resource_type": self.resource_type,
+            "resource_id": self.resource_id,
+            "resource_name": self.resource_name,
+            "actor_id": self.actor_id,
+            "actor_type": self.actor_type,
+            "severity": self.severity,
+            "message": self.message,
+            "changes": self.changes,
+            "metadata": self.metadata,
+        }
+
+
 APPLICANT_PERMISSION_KEYS: frozenset[str] = frozenset(
     {
         "organization:view",

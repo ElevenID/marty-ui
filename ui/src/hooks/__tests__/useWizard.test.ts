@@ -381,6 +381,30 @@ describe('useWizard', () => {
       expect(result.current.loading).toBe(false)
     })
 
+    it('should surface unknown operation status with the idempotency key', async () => {
+      const mockError = Object.assign(new Error('Failed to fetch'), {
+        operationStatusUnknown: true,
+        idempotencyKey: 'templates:create:123',
+      })
+      mockOnSubmit.mockRejectedValue(mockError)
+
+      const { result } = renderHook(() =>
+        useWizard({
+          steps: mockSteps,
+          initialData: mockInitialData,
+          onSubmit: mockOnSubmit,
+        })
+      )
+
+      await act(async () => {
+        await result.current.submit()
+      })
+
+      expect(result.current.error).toContain('Operation status unknown')
+      expect(result.current.error).toContain('templates:create:123')
+      expect(result.current.error).toContain('Refresh the page')
+    })
+
     it('should set loading state during submission', async () => {
       let resolveSubmit: (value: any) => void
       const submitPromise = new Promise((resolve) => {

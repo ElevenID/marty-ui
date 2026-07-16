@@ -1,25 +1,27 @@
-"""Issuance, Issued Credentials, OID4VCI wallet endpoints, Application Templates, and Applications."""
+"""Issuance, issued credentials, OID4VCI wallet endpoints, and Application Templates."""
 from __future__ import annotations
 
 import logging
 import os
+import json
 from fastapi import APIRouter, HTTPException, Query, Request, Response
+from fastapi.responses import JSONResponse
 
 from gateway.models import (
-    ApplicationCreate,
-    ApplicationResponse,
     ApplicationTemplateCreate,
+    ApplicationTemplatePatch,
     ApplicationTemplateResponse,
     DidcommDeliverRequest,
     DidcommDeliveryResponse,
-    EvidenceSubmission,
     IssuanceCreate,
     IssuanceResponse,
     IssuedCredentialRecordResponse,
 )
-from gateway.proxy import _resource_org_id, get_registry, proxy_request
+from gateway.proxy import _resource_org_id, get_http_client, get_registry, proxy_request
 
 logger = logging.getLogger(__name__)
+
+passport_router = APIRouter(prefix="/v1/passport", tags=["Physical Documents"])
 
 def _read_secret_value(name: str) -> str:
     direct = os.environ.get(name)
@@ -65,128 +67,222 @@ def _normalize_credential_format(value: str | None) -> str | None:
 def _key_purpose_for_format(value: str | None) -> str | None:
     normalized = _normalize_credential_format(value)
     if not normalized:
-        return None
+        return "vc_jwt_issuer"
     if normalized in {"vc+sd_jwt", "spruce_vc+sd_jwt", "dc+sd_jwt"}:
         return "vc_jwt_issuer"
     return _FORMAT_KEY_PURPOSE.get(normalized)
 
 
-async def _resolve_signing_service_id(
-    request: Request,
-    organization_id: str | None,
-    credential_format: str | None,
-) -> str | None:
-    """Resolve the best KMS signing service for the given org + credential format.
-
-    Returns the service ID string, or None if no service can be resolved or if
-    the signing-keys subsystem is unavailable (treated as non-fatal).
-    """
-    try:
-        from gateway.routes.signing_keys import (  # noqa: PLC0415
-            _load_registered_service_registry,
-            _normalize_registered_service,
-            _resolve_service_for_format,
-        )
-    except ImportError:
-        return None
-
-    try:
-        registry = await _load_registered_service_registry(request, organization_id)
-        key_purpose = _FORMAT_KEY_PURPOSE.get(credential_format or "", None) if credential_format else None
-        service = _resolve_service_for_format(registry, credential_format, key_purpose, algorithm=None)
-        if service and isinstance(service, dict):
-            normalized = _normalize_registered_service(service)
-            if normalized and normalized.get("id"):
-                return str(normalized["id"])
-    except Exception:  # noqa: BLE001
-        logger.debug("KMS service resolution failed (non-fatal) for format=%s", credential_format)
-    return None
-
-
 async def _resolve_issuer_identity(
     request: Request,
     organization_id: str | None,
+    issuer_profile_id: str | None,
     credential_format: str | None = None,
     key_purpose: str | None = None,
     algorithm: str | None = None,
 ) -> dict[str, str] | None:
-    """Return an active DID issuer identity scoped by format/purpose when known."""
+    """Return the explicitly selected active DID issuer identity."""
+    if not issuer_profile_id:
+        return None
+    if not organization_id:
+        raise HTTPException(status_code=422, detail="organization_id is required to resolve issuer profile.")
+
     try:
         from gateway.routes.signing_keys import (  # noqa: PLC0415
-            _issuer_profiles_storage_key,
-            _load_registered_service_registry,
-            _load_json_document,
-            _normalize_registered_service,
-            _resolve_org_id,
-            _resolve_service_for_format,
+            internal_resolve_issuer_context,
         )
     except ImportError:
-        return None
+        raise HTTPException(
+            status_code=503,
+            detail="Signing-keys issuer profile resolver is unavailable.",
+        )
 
     try:
-        resolved_org_id = _resolve_org_id(request, organization_id)
-        storage_key = _issuer_profiles_storage_key(resolved_org_id)
-        doc = await _load_json_document(request, storage_key, {"profiles": []})
-        profiles: list = doc.get("profiles") or []
-        active_profiles = [
-            profile
-            for profile in profiles
-            if isinstance(profile, dict)
-            and profile.get("status") == "active"
-            and profile.get("issuer_did")
-            and profile.get("signing_service_id")
-        ]
-
-        requested_purpose = key_purpose or _key_purpose_for_format(credential_format)
-        if requested_purpose:
-            explicit = [profile for profile in active_profiles if profile.get("key_purpose") == requested_purpose]
-            unscoped = [profile for profile in active_profiles if not profile.get("key_purpose")]
-            active_profiles = explicit or unscoped
-
-        if not active_profiles:
+        response = await internal_resolve_issuer_context(
+            request=request,
+            organization_id=organization_id,
+            issuer_profile_id=issuer_profile_id,
+            issuer_mode="org_managed",
+            credential_format=credential_format,
+            key_purpose=key_purpose or _key_purpose_for_format(credential_format),
+            algorithm=algorithm,
+            x_api_key=_read_secret_value("SIGNING_KEYS_INTERNAL_API_KEY") or _read_secret_value("ISSUANCE_API_KEY"),
+        )
+    except HTTPException as exc:
+        if exc.status_code in {404, 409, 422}:
             return None
+        raise
 
-        registry = await _load_registered_service_registry(request, resolved_org_id)
-        resolved_service = _resolve_service_for_format(registry, credential_format, requested_purpose, algorithm)
-        resolved_service_id = str(resolved_service.get("id")) if isinstance(resolved_service, dict) and resolved_service.get("id") else None
-        if resolved_service_id:
-            service_matches = [
-                profile
-                for profile in active_profiles
-                if str(profile.get("signing_service_id") or "") == resolved_service_id
-            ]
-            if service_matches:
-                active_profiles = service_matches
+    try:
+        payload = json.loads(response.body)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail="Signing-keys issuer profile resolver returned an invalid response.") from exc
 
-        profile = active_profiles[0]
-        service_id = str(profile["signing_service_id"])
-        key_reference = str(profile.get("signing_key_reference") or "")
-        normalized_service = _normalize_registered_service(resolved_service) if isinstance(resolved_service, dict) else None
-        return {
-            "issuer_did": str(profile["issuer_did"]),
-            "signing_service_id": service_id,
-            "signing_key_reference": key_reference,
-            "verification_method_id": str(profile.get("verification_method_id") or ""),
-            "key_purpose": str(profile.get("key_purpose") or requested_purpose or "vc_jwt_issuer"),
-            "algorithm": str(profile.get("algorithm") or (normalized_service or {}).get("algorithm") or ""),
-        }
-    except Exception:  # noqa: BLE001
-        logger.debug("Issuer profile resolution failed (non-fatal) for org=%s", organization_id, exc_info=True)
-    return None
+    if not payload.get("ok") or not payload.get("issuer_did") or not payload.get("signing_service_id"):
+        return None
+
+    service = payload.get("service") if isinstance(payload.get("service"), dict) else {}
+    algorithm_value = service.get("algorithm") or ""
+    return {
+        "issuer_did": str(payload["issuer_did"]),
+        "signing_service_id": str(payload["signing_service_id"]),
+        "signing_key_reference": str(payload.get("signing_key_reference") or ""),
+        "verification_method_id": str(payload.get("verification_method_id") or ""),
+        "key_purpose": str(payload.get("key_purpose") or key_purpose or _key_purpose_for_format(credential_format) or "vc_jwt_issuer"),
+        "algorithm": str(algorithm_value),
+    }
 
 
-async def _resolve_issuer_did(
-    request: Request,
-    organization_id: str | None,
-) -> str | None:
-    """Return the issuer DID from the org's first active IssuerProfile, or None."""
-    identity = await _resolve_issuer_identity(request, organization_id)
-    return identity.get("issuer_did") if identity else None
+async def _load_credential_template(template_id: str, request: Request) -> dict:
+    registry = get_registry()
+    client = get_http_client()
+    url = f"{registry.get_service_url('credential-templates')}/v1/credential-templates/{template_id}"
+    headers: dict[str, str] = {}
+    if getattr(request.state, "user_id", None):
+        headers["X-User-Id"] = request.state.user_id
+    if getattr(request.state, "user_email", None):
+        headers["X-User-Email"] = request.state.user_email
+    auth = request.headers.get("authorization")
+    if auth:
+        headers["Authorization"] = auth
+    response = await client.get(url, timeout=10.0, headers=headers)
+    if response.status_code == 404:
+        raise HTTPException(status_code=404, detail=f"Credential template not found: {template_id}")
+    if response.status_code >= 400:
+        raise HTTPException(status_code=response.status_code, detail=response.text[:300])
+    data = response.json()
+    return data if isinstance(data, dict) else {}
+
+
+def _clean_optional_id(value: object) -> str | None:
+    if value is None:
+        return None
+    cleaned = str(value).strip()
+    return cleaned or None
+
+
+def _select_issuer_profile_id(body: IssuanceCreate, credential_template: dict) -> str:
+    template_issuer_profile_id = _clean_optional_id(credential_template.get("issuer_profile_id"))
+    body_issuer_profile_id = _clean_optional_id(body.issuer_profile_id)
+    claim_issuer_profile_id = (
+        _clean_optional_id(body.claims.get("issuer_profile_id"))
+        if isinstance(body.claims, dict)
+        else None
+    )
+
+    if credential_template:
+        if not template_issuer_profile_id:
+            raise HTTPException(
+                status_code=422,
+                detail="credential_template_id must reference a template bound to an active KMS-backed issuer profile.",
+            )
+        if body_issuer_profile_id and body_issuer_profile_id != template_issuer_profile_id:
+            raise HTTPException(
+                status_code=422,
+                detail="issuer_profile_id cannot override the credential template issuer profile.",
+            )
+        if claim_issuer_profile_id and claim_issuer_profile_id != template_issuer_profile_id:
+            raise HTTPException(
+                status_code=422,
+                detail="claims.issuer_profile_id cannot override the credential template issuer profile.",
+            )
+        return template_issuer_profile_id
+
+    if not body_issuer_profile_id:
+        raise HTTPException(
+            status_code=422,
+            detail="issuer_profile_id is required for direct issuance without a credential template.",
+        )
+    if claim_issuer_profile_id and claim_issuer_profile_id != body_issuer_profile_id:
+        raise HTTPException(
+            status_code=422,
+            detail="claims.issuer_profile_id cannot override the request issuer profile.",
+        )
+    return body_issuer_profile_id
+
 
 issuance_router = APIRouter(prefix="/v1/issuance", tags=["Issuance"])
 issued_credential_router = APIRouter(prefix="/v1/issued-credentials", tags=["Issued Credentials"])
+
+
+def _issuance_service_url() -> str:
+    return get_registry().get_service_url("issuance")
+
+
+@passport_router.get("/capabilities", summary="Get Physical Document Capabilities")
+async def get_passport_capabilities(request: Request) -> Response:
+    service_url = _issuance_service_url()
+    response = await get_http_client().get(
+        f"{service_url}/v1/passport/capabilities",
+        headers=_ISSUANCE_HEADERS,
+        timeout=10.0,
+    )
+    if response.status_code == 404:
+        return JSONResponse({
+            "supported": False,
+            "state": "UNSUPPORTED",
+            "code": "PHYSICAL_DOCUMENTS_UNSUPPORTED",
+            "message": "Physical document issuance is not installed in this deployment.",
+        })
+    if response.status_code in {402, 403}:
+        try:
+            error_payload = response.json()
+        except ValueError:
+            error_payload = {}
+        code = str(error_payload.get("code") or error_payload.get("error") or "").upper()
+        if "PLAN" in code or "ENTITLEMENT" in code:
+            return JSONResponse({
+                "supported": True,
+                "state": "ENTITLEMENT_REQUIRED",
+                "code": code or "PHYSICAL_DOCUMENT_ENTITLEMENT_REQUIRED",
+                "message": "This capability is available but is not included in the current entitlement.",
+            })
+    if response.status_code >= 500:
+        raise HTTPException(status_code=503, detail="Physical document capabilities are temporarily unavailable")
+    if response.status_code >= 400:
+        raise HTTPException(status_code=response.status_code, detail="Unable to load physical document capabilities")
+    payload = response.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=503, detail="Physical document capability response is malformed")
+    payload.setdefault("supported", True)
+    payload.setdefault("state", "AVAILABLE")
+    return JSONResponse(payload)
+
+
+@passport_router.post("/applications", summary="Create Physical Document Application")
+async def create_passport_application(request: Request) -> Response:
+    return await proxy_request(request, _issuance_service_url(), "/v1/passport/applications", inject_headers=_ISSUANCE_HEADERS)
+
+
+@passport_router.post("/applications/{application_id}/generate-sod", summary="Sign Physical Document SOD")
+async def generate_passport_sod(application_id: str, request: Request) -> Response:
+    return await proxy_request(request, _issuance_service_url(), f"/v1/passport/applications/{application_id}/generate-sod", inject_headers=_ISSUANCE_HEADERS)
+
+
+@passport_router.post("/applications/{application_id}/generate-data-groups", summary="Generate Physical Document Data Groups")
+async def generate_passport_data_groups(application_id: str, request: Request) -> Response:
+    return await proxy_request(request, _issuance_service_url(), f"/v1/passport/applications/{application_id}/generate-data-groups", inject_headers=_ISSUANCE_HEADERS)
+
+
+@passport_router.post("/applications/{application_id}/submit-personalization", summary="Submit Physical Document Production")
+async def submit_passport_personalization(application_id: str, request: Request) -> Response:
+    return await proxy_request(request, _issuance_service_url(), f"/v1/passport/applications/{application_id}/submit-personalization", inject_headers=_ISSUANCE_HEADERS)
+
+
+@passport_router.get("/applications/{application_id}/production-status", summary="Get Physical Document Production Status")
+async def get_passport_production_status(application_id: str, request: Request) -> Response:
+    return await proxy_request(request, _issuance_service_url(), f"/v1/passport/applications/{application_id}/production-status", inject_headers=_ISSUANCE_HEADERS)
+
+
+@passport_router.post("/applications/{application_id}/quality-verify", summary="Record Physical Document Quality Result")
+async def verify_passport_quality(application_id: str, request: Request) -> Response:
+    return await proxy_request(request, _issuance_service_url(), f"/v1/passport/applications/{application_id}/quality-verify", inject_headers=_ISSUANCE_HEADERS)
+
+
+@passport_router.post("/applications/{application_id}/activate", summary="Activate Physical Document")
+async def activate_passport(application_id: str, request: Request) -> Response:
+    return await proxy_request(request, _issuance_service_url(), f"/v1/passport/applications/{application_id}/activate", inject_headers=_ISSUANCE_HEADERS)
 application_template_router = APIRouter(prefix="/v1/application-templates", tags=["Application Templates"])
-application_router = APIRouter(prefix="/v1/applications", tags=["Applications"])
 
 
 # ── Issuance ─────────────────────────────────────────────────────────
@@ -199,22 +295,32 @@ async def create_issuance(body: IssuanceCreate, request: Request) -> Response:
     signing service so downstream issuance signs with the key published for
     that DID.
     """
+    credential_template: dict = {}
     if body.credential_template_id:
-        owner_org = await _resource_org_id("credential-templates", f"/v1/credential-templates/{body.credential_template_id}", request)
-        if owner_org is None:
-            raise HTTPException(status_code=404, detail=f"Credential template not found: {body.credential_template_id}")
+        credential_template = await _load_credential_template(body.credential_template_id, request)
+        owner_org = credential_template.get("organization_id")
         if owner_org != body.organization_id:
             raise HTTPException(status_code=403, detail="Access denied: credential template belongs to another organization")
 
     # Resolve the DID issuer identity and its bound remote signing service as a
     # pair. A format-only KMS resolver can select a key that is not published in
     # the DID document, which breaks BYOK issuer identity guarantees.
-    credential_format: str | None = body.claims.get("credential_format") if isinstance(body.claims, dict) else None
+    credential_format: str | None = (
+        credential_template.get("credential_payload_format")
+        or (body.claims.get("credential_format") if isinstance(body.claims, dict) else None)
+    )
+    issuer_profile_id = _select_issuer_profile_id(body, credential_template)
     issuer_identity = await _resolve_issuer_identity(
         request,
         body.organization_id,
+        issuer_profile_id,
         credential_format=credential_format,
     )
+    if issuer_identity is None:
+        raise HTTPException(
+            status_code=422,
+            detail="issuer_profile_id must reference an active KMS-backed issuer profile for this organization.",
+        )
     signing_service_id = issuer_identity.get("signing_service_id") if issuer_identity else None
 
     inject_headers: dict[str, str] = dict(_ISSUANCE_HEADERS or {})
@@ -313,6 +419,14 @@ async def list_issued_credentials(
     return await proxy_request(request, service_url, "/v1/issued-credentials", inject_headers=_ISSUANCE_HEADERS)
 
 
+@issued_credential_router.get("/mine", summary="List My Issued Credentials")
+async def list_my_issued_credentials(request: Request) -> Response:
+    """Return the authenticated holder's privacy-filtered credential inventory."""
+    registry = get_registry()
+    service_url = registry.get_service_url("applicant")
+    return await proxy_request(request, service_url, "/v1/issued-credentials/mine")
+
+
 @issued_credential_router.get("/{credential_id}", response_model=IssuedCredentialRecordResponse, summary="Get Issued Credential")
 async def get_issued_credential(credential_id: str, request: Request) -> Response:
     """Get an issued credential lifecycle record by ID."""
@@ -343,6 +457,18 @@ async def reinstate_issued_credential(credential_id: str, request: Request) -> R
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
     return await proxy_request(request, service_url, f"/v1/issued-credentials/{credential_id}/reinstate", inject_headers=_ISSUANCE_HEADERS)
+
+
+@issued_credential_router.post("/{credential_id}/renew", summary="Renew Issued Credential")
+async def renew_issued_credential(credential_id: str, request: Request) -> Response:
+    registry = get_registry()
+    service_url = registry.get_service_url("issuance")
+    return await proxy_request(
+        request,
+        service_url,
+        f"/v1/issued-credentials/{credential_id}/renew",
+        inject_headers=_ISSUANCE_HEADERS,
+    )
 
 
 @issuance_router.get("/delivery-records/canvas-credentials/provenance", summary="Resolve Canvas Mirror Provenance")
@@ -548,10 +674,9 @@ async def get_application_template(template_id: str, request: Request) -> Respon
     return await proxy_request(request, service_url, f"/v1/application-templates/{template_id}", inject_headers=_ISSUANCE_HEADERS)
 
 
-@application_template_router.put("/{template_id}", response_model=ApplicationTemplateResponse, summary="Update Application Template")
-async def update_application_template(template_id: str, body: ApplicationTemplateCreate, request: Request) -> Response:
-    """Update an Application Template."""
-    await _validate_application_template_dependencies(body, request)
+@application_template_router.patch("/{template_id}", response_model=ApplicationTemplateResponse, summary="Update draft Application Template")
+async def update_application_template(template_id: str, body: ApplicationTemplatePatch, request: Request) -> Response:
+    """Patch mutable fields on a draft Application Template."""
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
     return await proxy_request(request, service_url, f"/v1/application-templates/{template_id}", inject_headers=_ISSUANCE_HEADERS)
@@ -559,176 +684,31 @@ async def update_application_template(template_id: str, body: ApplicationTemplat
 
 @application_template_router.delete("/{template_id}", summary="Delete Application Template")
 async def delete_application_template(template_id: str, request: Request) -> Response:
-    """Delete an Application Template."""
+    """Delete a draft Application Template."""
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
     return await proxy_request(request, service_url, f"/v1/application-templates/{template_id}", inject_headers=_ISSUANCE_HEADERS)
 
 
+@application_template_router.post("/{template_id}/validate", summary="Validate Application Template")
+async def validate_application_template(template_id: str, request: Request) -> Response:
+    """Return section-scoped validation errors without changing lifecycle state."""
+    registry = get_registry()
+    service_url = registry.get_service_url("issuance")
+    return await proxy_request(request, service_url, f"/v1/application-templates/{template_id}/validate", inject_headers=_ISSUANCE_HEADERS)
+
+
 @application_template_router.post("/{template_id}/activate", response_model=ApplicationTemplateResponse, summary="Activate Application Template")
 async def activate_application_template(template_id: str, request: Request) -> Response:
-    """Activate an Application Template."""
+    """Validate and activate a draft Application Template."""
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
     return await proxy_request(request, service_url, f"/v1/application-templates/{template_id}/activate", inject_headers=_ISSUANCE_HEADERS)
 
 
-@application_template_router.post("/validate-artifacts", summary="Validate Issuer Artifacts")
-async def validate_application_artifacts(request: Request) -> Response:
-    """Validate issuer artifacts (keys, certificates, DIDs) for an Application Template."""
+@application_template_router.post("/{template_id}/deprecate", response_model=ApplicationTemplateResponse, summary="Deprecate Application Template")
+async def deprecate_application_template(template_id: str, request: Request) -> Response:
+    """Deprecate an active Application Template while preserving history."""
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
-    return await proxy_request(request, service_url, "/v1/application-templates/validate-artifacts", inject_headers=_ISSUANCE_HEADERS)
-
-
-# ── Applications ─────────────────────────────────────────────────────
-
-@application_router.post("", response_model=ApplicationResponse, summary="Create Application")
-async def create_application(body: ApplicationCreate, request: Request) -> Response:
-    """Create an Application from an Application Template."""
-    registry = get_registry()
-    service_url = registry.get_service_url("issuance")
-    return await proxy_request(request, service_url, "/v1/applications", inject_headers=_ISSUANCE_HEADERS)
-
-
-@application_router.get("", response_model=list[ApplicationResponse], summary="List Applications")
-async def list_applications(
-    organization_id: str = Query(..., description="Organization ID"),
-    status: str | None = Query(None, description="Filter by status"),
-    request: Request = None,
-) -> Response:
-    """List Applications for an organization."""
-    registry = get_registry()
-    service_url = registry.get_service_url("issuance")
-    return await proxy_request(request, service_url, "/v1/applications", inject_headers=_ISSUANCE_HEADERS)
-
-
-@application_router.get("/{application_id}", response_model=ApplicationResponse, summary="Get Application")
-async def get_application(application_id: str, request: Request) -> Response:
-    """Get an Application by ID."""
-    registry = get_registry()
-    service_url = registry.get_service_url("issuance")
-    return await proxy_request(request, service_url, f"/v1/applications/{application_id}", inject_headers=_ISSUANCE_HEADERS)
-
-
-@application_router.get("/{application_id}/evidence-facts", summary="List Application Evidence Facts")
-async def list_application_evidence_facts(application_id: str, request: Request) -> Response:
-    """List normalized MIP evidence facts for an application."""
-    registry = get_registry()
-    service_url = registry.get_service_url("issuance")
-    return await proxy_request(
-        request,
-        service_url,
-        f"/v1/applications/{application_id}/evidence-facts",
-        inject_headers=_ISSUANCE_HEADERS,
-    )
-
-
-@application_router.get("/{application_id}/evidence-summary", summary="Get Application Evidence Summary")
-async def get_application_evidence_summary(application_id: str, request: Request) -> Response:
-    """Get evidence facts, policy decision, and issuance transition metadata."""
-    registry = get_registry()
-    service_url = registry.get_service_url("issuance")
-    return await proxy_request(
-        request,
-        service_url,
-        f"/v1/applications/{application_id}/evidence-summary",
-        inject_headers=_ISSUANCE_HEADERS,
-    )
-
-
-@application_router.post("/{application_id}/evidence/api-checks/{check_id}/run", summary="Run External Evidence API Check")
-async def run_external_evidence_api_check(application_id: str, check_id: str, request: Request) -> Response:
-    """Run a configured external evidence API check for an application."""
-    registry = get_registry()
-    service_url = registry.get_service_url("issuance")
-    return await proxy_request(
-        request,
-        service_url,
-        f"/v1/applications/{application_id}/evidence/api-checks/{check_id}/run",
-        inject_headers=_ISSUANCE_HEADERS,
-    )
-
-
-@application_router.post("/evidence/reconcile", summary="Reconcile Canvas Evidence")
-async def reconcile_application_evidence(request: Request) -> Response:
-    """Recover Canvas evidence policy and approval-to-issuance transitions."""
-    registry = get_registry()
-    service_url = registry.get_service_url("issuance")
-    return await proxy_request(
-        request,
-        service_url,
-        "/v1/applications/evidence/reconcile",
-        inject_headers=_ISSUANCE_HEADERS,
-    )
-
-
-@application_router.get("/evidence/reconciliation-report", summary="Canvas Evidence Reconciliation Report")
-async def get_application_evidence_reconciliation_report(request: Request) -> Response:
-    """Return a dry-run Canvas evidence reconciliation report."""
-    registry = get_registry()
-    service_url = registry.get_service_url("issuance")
-    return await proxy_request(
-        request,
-        service_url,
-        "/v1/applications/evidence/reconciliation-report",
-        inject_headers=_ISSUANCE_HEADERS,
-    )
-
-
-@application_router.post("/{application_id}/submit-evidence", response_model=ApplicationResponse, summary="Submit Evidence")
-async def submit_application_evidence(application_id: str, body: EvidenceSubmission, request: Request) -> Response:
-    """Submit evidence for an Application."""
-    registry = get_registry()
-    service_url = registry.get_service_url("issuance")
-    return await proxy_request(request, service_url, f"/v1/applications/{application_id}/submit-evidence", inject_headers=_ISSUANCE_HEADERS)
-
-
-@application_router.post("/{application_id}/approve", response_model=ApplicationResponse, summary="Approve Application")
-async def approve_application(application_id: str, request: Request) -> Response:
-    """Approve an Application for credential issuance."""
-    registry = get_registry()
-    service_url = registry.get_service_url("issuance")
-    return await proxy_request(request, service_url, f"/v1/applications/{application_id}/approve", inject_headers=_ISSUANCE_HEADERS)
-
-
-@application_router.post("/{application_id}/reject", response_model=ApplicationResponse, summary="Reject Application")
-async def reject_application(application_id: str, request: Request) -> Response:
-    """Reject an Application."""
-    registry = get_registry()
-    service_url = registry.get_service_url("issuance")
-    return await proxy_request(request, service_url, f"/v1/applications/{application_id}/reject", inject_headers=_ISSUANCE_HEADERS)
-
-
-@application_router.post("/{application_id}/issuance-offer", summary="Generate Wallet Invite")
-async def generate_issuance_offer(application_id: str, request: Request) -> Response:
-    """Generate (or refresh) a wallet credential offer for an approved application.
-
-    Returns offer_url, qr_payload, wallets deep-link list, email_payload, and expires_at.
-    """
-    registry = get_registry()
-    service_url = registry.get_service_url("issuance")
-    return await proxy_request(request, service_url, f"/v1/applications/{application_id}/issuance-offer", inject_headers=_ISSUANCE_HEADERS)
-
-
-@application_router.get("/{application_id}/issuance-offer", summary="Get Wallet Invite (Applicant)")
-async def get_issuance_offer(application_id: str, request: Request) -> Response:
-    """Retrieve the current wallet credential offer for an application (applicant-facing).
-
-    Returns 404 until an admin has generated the offer via POST.
-    """
-    registry = get_registry()
-    service_url = registry.get_service_url("issuance")
-    return await proxy_request(request, service_url, f"/v1/applications/{application_id}/issuance-offer", inject_headers=_ISSUANCE_HEADERS)
-
-
-@application_router.get("/{application_id}/issuance-events", summary="List Issuance Events (Admin)")
-async def get_application_issuance_events(application_id: str, request: Request) -> Response:
-    """List all lifecycle events for an application (admin audit timeline).
-
-    Returns events in chronological order covering the full issuance lifecycle:
-    offer_generated, offer_viewed, offer_expired, credential_issued.
-    """
-    registry = get_registry()
-    service_url = registry.get_service_url("issuance")
-    return await proxy_request(request, service_url, f"/v1/applications/{application_id}/issuance-events", inject_headers=_ISSUANCE_HEADERS)
+    return await proxy_request(request, service_url, f"/v1/application-templates/{template_id}/deprecate", inject_headers=_ISSUANCE_HEADERS)

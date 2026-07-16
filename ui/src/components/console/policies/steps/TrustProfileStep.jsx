@@ -26,6 +26,7 @@ import VerifiedUserIcon from '@mui/icons-material/VerifiedUser';
 import { useTranslation } from 'react-i18next';
 
 import { listTrustProfiles } from '../../../../services/presentationPolicyApi';
+import { useConsole } from '../../../../contexts/ConsoleContext';
 
 const FRAMEWORK_LABELS = {
   icao: { key: 'icao', icon: '✈️' },
@@ -34,9 +35,16 @@ const FRAMEWORK_LABELS = {
   custom: { key: 'custom', icon: '🔧' },
 };
 
+function logTrustProfileStepError(message, error) {
+  if (import.meta.env?.DEV && import.meta.env?.MODE !== 'test') {
+    console.error(message, error);
+  }
+}
+
 const TrustProfileStep = ({ selectedTrustProfile, onSelectTrustProfile }) => {
   const { t } = useTranslation('console');
   const navigate = useNavigate();
+  const { activeOrgId } = useConsole();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [trustProfiles, setTrustProfiles] = useState([]);
@@ -46,20 +54,26 @@ const TrustProfileStep = ({ selectedTrustProfile, onSelectTrustProfile }) => {
     setError(null);
 
     try {
-      const response = await listTrustProfiles();
-      setTrustProfiles(response.data || response || []);
+      if (!activeOrgId) {
+        throw new Error('Select an organization before loading trust profiles.');
+      }
+
+      const response = await listTrustProfiles({ organization_id: activeOrgId });
+      const profiles = response.data || response || [];
+      setTrustProfiles(profiles);
 
       // Auto-select if only one profile exists
-      if (response.data?.length === 1 && !selectedTrustProfile) {
-        onSelectTrustProfile(response.data[0]);
+      if (profiles.length === 1 && !selectedTrustProfile) {
+        onSelectTrustProfile(profiles[0]);
       }
     } catch (err) {
-      console.error('Failed to fetch trust profiles:', err);
-      setError(t('wizards.presentationPolicy.trustProfileStep.errors.failedToLoadTrustProfiles'));
+      logTrustProfileStepError('Failed to fetch trust profiles:', err);
+      setTrustProfiles([]);
+      setError(err?.message || t('wizards.presentationPolicy.trustProfileStep.errors.failedToLoadTrustProfiles'));
     } finally {
       setLoading(false);
     }
-  }, [selectedTrustProfile, onSelectTrustProfile, t]);
+  }, [activeOrgId, selectedTrustProfile, onSelectTrustProfile, t]);
 
   useEffect(() => {
     fetchTrustProfiles();
@@ -77,6 +91,19 @@ const TrustProfileStep = ({ selectedTrustProfile, onSelectTrustProfile }) => {
     return (
       <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
         <CircularProgress />
+      </Box>
+    );
+  }
+
+  if (error) {
+    return (
+      <Box sx={{ py: 4 }}>
+        <Alert severity="error" sx={{ mb: 3 }}>
+          {error}
+        </Alert>
+        <Button variant="outlined" onClick={fetchTrustProfiles}>
+          Retry
+        </Button>
       </Box>
     );
   }
@@ -125,12 +152,6 @@ const TrustProfileStep = ({ selectedTrustProfile, onSelectTrustProfile }) => {
         {t('wizards.presentationPolicy.trustProfileStep.description')}
       </Typography>
 
-      {error && (
-        <Alert severity="error" sx={{ mb: 3 }}>
-          {error}
-        </Alert>
-      )}
-
       <RadioGroup
         value={selectedTrustProfile?.id || ''}
         onChange={(e) => {
@@ -144,6 +165,10 @@ const TrustProfileStep = ({ selectedTrustProfile, onSelectTrustProfile }) => {
           return (
             <Card
               key={profile.id}
+              role="button"
+              tabIndex={0}
+              aria-pressed={selectedTrustProfile?.id === profile.id}
+              aria-label={`Select ${profile.name} trust profile`}
               sx={{
                 mb: 2,
                 border: 2,
@@ -156,6 +181,12 @@ const TrustProfileStep = ({ selectedTrustProfile, onSelectTrustProfile }) => {
                 },
               }}
               onClick={() => handleSelectProfile(profile)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault();
+                  handleSelectProfile(profile);
+                }
+              }}
             >
               <CardContent>
                 <Box sx={{ display: 'flex', alignItems: 'flex-start' }}>

@@ -69,7 +69,7 @@ export const CREDENTIAL_CATALOG_TYPES = {
     processingTime: 'Instant upon issuance',
     requirements: ['Active ElevenID account'],
     format: 'vc+sd-jwt',
-    standard: 'W3C / Open Badge 3.0',
+    standard: 'W3C Verifiable Credentials',
     worksWithLabel: 'Web & VC wallets',
   },
   'org.iso.18013.5.1.mDL': {
@@ -142,7 +142,7 @@ export function mapCredentialTemplateToCatalogItem(template, organizationName) {
 }
 
 export function extractExistingApplicationIds(applications = []) {
-  return applications.map((application) => application?.credential_configuration_id).filter(Boolean);
+  return applications.map((application) => application?.credential_template_id).filter(Boolean);
 }
 
 /**
@@ -154,7 +154,7 @@ export function extractApplicationStatusInfo(applications = []) {
   const counts = { pending: 0, approved: 0, offered: 0, rejected: 0, credentialed: 0 };
 
   for (const app of applications) {
-    const configId = app?.credential_configuration_id;
+    const configId = app?.credential_template_id;
     if (!configId) continue;
     const status = (app.status || '').toLowerCase();
     // Keep the most advanced status per credential
@@ -298,7 +298,12 @@ export async function loadCredentialCatalogItems({ organizationId, organizationN
     const templates = Array.isArray(data) ? data : (data?.templates || []);
 
     return {
-      credentials: templates.map((template) => mapCredentialTemplateToCatalogItem(template, organizationName)),
+      credentials: templates
+        .filter((template) => (
+          String(template?.status || '').toUpperCase() === 'ACTIVE'
+          && Boolean(template?.revocation_profile_id)
+        ))
+        .map((template) => mapCredentialTemplateToCatalogItem(template, organizationName)),
       error: null,
       missingOrganization: false,
     };
@@ -323,8 +328,7 @@ export async function loadExistingCredentialApplications({ organizationId, userI
     }
 
     const data = await listApplicantApplications(applicant.id);
-    const applications = Array.isArray(data) ? data : (data?.applications || []);
-    return extractExistingApplicationIds(applications);
+    return extractExistingApplicationIds(data);
   } catch {
     return [];
   }

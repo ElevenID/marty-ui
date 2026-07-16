@@ -10,6 +10,7 @@ import {
   mockUsers,
   mockOrganization,
   mockTrustProfiles,
+  mockComplianceProfiles,
   mockTemplates,
   mockPolicies,
   mockDeploymentProfiles,
@@ -203,6 +204,14 @@ export const handlers = [
     })
   }),
 
+  http.post(`${API_BASE}/v1/trust-profiles/:id/activate`, ({ params }) => {
+    return HttpResponse.json({
+      ...mockTrustProfiles.active,
+      id: params.id,
+      status: 'active',
+    })
+  }),
+
   http.post(`${API_BASE}/v1/trust-profiles/:id/issuers`, async ({ request }) => {
     const body = await request.json() as any
     return HttpResponse.json({
@@ -245,6 +254,22 @@ export const handlers = [
 
   http.delete(`${API_BASE}/v1/credential-templates/:id`, () => {
     return HttpResponse.json({ message: 'Deleted successfully' })
+  }),
+
+  http.get(`${API_BASE}/v1/application-templates`, () => {
+    return HttpResponse.json([{ id: 1, name: 'Default Application', status: 'ACTIVE' }])
+  }),
+
+  http.get(`${API_BASE}/v1/delivery-destinations`, () => {
+    return HttpResponse.json([{ id: 1, name: 'Default Production Bureau', status: 'ACTIVE' }])
+  }),
+
+  http.get(`${API_BASE}/v1/policy-sets`, () => {
+    return HttpResponse.json([])
+  }),
+
+  http.get(`${API_BASE}/v1/passport/capabilities`, () => {
+    return HttpResponse.json({ supported: false, blockers: ['Signer unavailable'] })
   }),
 
   // Presentation Policies
@@ -297,6 +322,48 @@ export const handlers = [
   }),
 
   // Flow Definitions
+  http.get(`${API_BASE}/v1/flows/capabilities`, () => {
+    return HttpResponse.json({
+      protocol_version: '0.3.1',
+      standard_flow_types: [
+        'oid4vci_pre_authorized', 'oid4vci_authorization_code', 'mdl_issuance',
+        'oid4vp_presentation', 'mdl_presentation', 'siopv2',
+        'application_approval_issuance', 'credential_renewal', 'credential_revocation',
+        'physical_document_issuance', 'combined',
+      ],
+      sequences: {
+        oid4vci_pre_authorized: ['create_offer', 'token_exchange', 'credential_request', 'issue_credential'],
+        oid4vci_authorization_code: ['create_offer', 'authorization', 'token_exchange', 'credential_request', 'issue_credential'],
+        oid4vp_presentation: ['create_request', 'wallet_selection', 'presentation_submission', 'verify_presentation'],
+        combined: ['accept_application', 'approval_decision', 'issue_credential', 'create_request', 'presentation_submission', 'verify_presentation'],
+      },
+      extensible_steps: {
+        application_approval_issuance: ['approval_decision', 'deliver_credential'],
+        physical_document_issuance: ['approval_decision', 'submit_to_personalization', 'quality_verify'],
+      },
+      physical_document_issuance: { supported: false, blockers: ['Signer unavailable'] },
+    })
+  }),
+
+  http.get(`${API_BASE}/v1/flows/definitions`, () => {
+    return HttpResponse.json([mockFlows.valid])
+  }),
+
+  http.get(`${API_BASE}/v1/flows/definitions/:id`, ({ params }) => {
+    return HttpResponse.json({ ...mockFlows.valid, id: params.id })
+  }),
+
+  http.post(`${API_BASE}/v1/flows/definitions`, async ({ request }) => {
+    const body = await request.json() as any
+    return HttpResponse.json({
+      ...mockFlows.valid,
+      ...body,
+      id: Math.floor(Math.random() * 1000),
+      flow_type: body.flow_type || body.type || mockFlows.valid.flow_type,
+      status: 'DRAFT',
+    }, { status: 201 })
+  }),
+
   http.get(`${API_BASE}/v1/flows`, () => {
     return HttpResponse.json([mockFlows.valid])
   }),
@@ -393,21 +460,12 @@ export const handlers = [
     ])
   }),
 
-  http.post(`${API_BASE}/v1/applicants/applications/:applicationId/issue`, ({ params }) => {
+  http.post(`${API_BASE}/v1/me/applications/:applicationId/claim`, ({ params }) => {
     return HttpResponse.json({
       id: params.applicationId,
       credential_offer_uri: 'openid-credential-offer://offer/test',
       offer_expires_at: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
       status: 'offered',
-    })
-  }),
-
-  http.post(`${API_BASE}/v1/applications/:applicationId/issuance-offer`, ({ params }) => {
-    return HttpResponse.json({
-      id: params.applicationId,
-      offer_url: 'openid-credential-offer://offer/test',
-      expires_at: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
-      status: 'active',
     })
   }),
 
@@ -418,7 +476,7 @@ export const handlers = [
         id: 'key_1',
         name: 'Production API',
         masked_key: 'pk_live_••••••••1234',
-        scopes: ['read:credentials', 'write:credentials'],
+        scopes: ['credentials:read', 'credentials:issue'],
         created_at: new Date().toISOString(),
         status: 'active',
       },
@@ -527,6 +585,20 @@ export const handlers = [
   }),
 
   // Dashboard service endpoints
+  http.get(`${API_BASE}/v1/organizations/:id/integration-info`, ({ params }) => {
+    return HttpResponse.json({
+      org_id: params.id,
+      base_url: `${API_BASE}/v1`,
+      example_request: [
+        `curl -sS -X POST "${API_BASE}/v1/flows/instances"`,
+        '  -H "Content-Type: application/json"',
+        '  -H "X-API-Key: <api-key>"',
+        `  -H "X-Organization-ID: ${params.id}"`,
+        '  -d \'{"flow_definition_id":"<flow-definition-id>","subject_id":"<subject-id>","initial_context":{}}\'',
+      ].join(' \\\n'),
+    })
+  }),
+
   http.get(`${API_BASE}/v1/organizations/:id/team/snapshot`, () => {
     return HttpResponse.json({
       members: [
@@ -589,6 +661,14 @@ export const handlers = [
         total: 0,
       },
     })
+  }),
+
+  http.get(`${API_BASE}/v1/compliance-profiles`, ({ request }) => {
+    const organizationId = new URL(request.url).searchParams.get('organization_id')
+    if (!organizationId) {
+      return errorResponses.validationError('organization_id', 'organization_id is required')
+    }
+    return HttpResponse.json([mockComplianceProfiles.active, mockComplianceProfiles.hidden])
   }),
 
   // Fallback handlers for relative URLs (without base)
@@ -664,6 +744,22 @@ export const handlers = [
     })
   }),
 
+  http.get('/v1/compliance-profiles', ({ request }) => {
+    const organizationId = new URL(request.url).searchParams.get('organization_id')
+    if (!organizationId) {
+      return errorResponses.validationError('organization_id', 'organization_id is required')
+    }
+    return HttpResponse.json([mockComplianceProfiles.active, mockComplianceProfiles.hidden])
+  }),
+
+  http.post('/v1/trust-profiles/:id/activate', ({ params }) => {
+    return HttpResponse.json({
+      ...mockTrustProfiles.active,
+      id: params.id,
+      status: 'active',
+    })
+  }),
+
   http.post('/v1/trust-profiles/:id/issuers', async ({ request }) => {
     const body = await request.json() as any
     return HttpResponse.json({
@@ -735,7 +831,7 @@ export const handlers = [
         id: 'key_1',
         name: 'Production API',
         masked_key: 'pk_live_\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u20221234',
-        scopes: ['read:credentials', 'write:credentials'],
+        scopes: ['credentials:read', 'credentials:issue'],
         created_at: new Date().toISOString(),
         status: 'active',
       },
@@ -819,21 +915,12 @@ export const handlers = [
     ])
   }),
 
-  http.post('/v1/applicants/applications/:applicationId/issue', ({ params }) => {
+  http.post('/v1/me/applications/:applicationId/claim', ({ params }) => {
     return HttpResponse.json({
       id: params.applicationId,
       credential_offer_uri: 'openid-credential-offer://offer/test',
       offer_expires_at: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
       status: 'offered',
-    })
-  }),
-
-  http.post('/v1/applications/:applicationId/issuance-offer', ({ params }) => {
-    return HttpResponse.json({
-      id: params.applicationId,
-      offer_url: 'openid-credential-offer://offer/test',
-      expires_at: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
-      status: 'active',
     })
   }),
 

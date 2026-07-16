@@ -11,6 +11,11 @@ import { http, HttpResponse } from 'msw'
 import CredentialTemplateWizard from '../CredentialTemplateWizard'
 import { mockTrustProfiles } from '@test/mocks/fixtures'
 
+const mockOrgContext = vi.hoisted(() => ({
+  activeOrgId: 'console-org',
+  authOrganizationId: 'auth-org',
+}))
+
 const mockNavigate = vi.fn()
 vi.mock('react-router-dom', async () => {
   const actual = await vi.importActual('react-router-dom')
@@ -20,9 +25,19 @@ vi.mock('react-router-dom', async () => {
   }
 })
 
+vi.mock('../../../../hooks/useAuth', () => ({
+  useAuth: () => ({ organizationId: mockOrgContext.authOrganizationId }),
+}))
+
+vi.mock('../../../../contexts/ConsoleContext', () => ({
+  useConsole: () => ({ activeOrgId: mockOrgContext.activeOrgId }),
+}))
+
 describe('CredentialTemplateWizard', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockOrgContext.activeOrgId = 'console-org'
+    mockOrgContext.authOrganizationId = 'auth-org'
   })
 
   describe('initial render', () => {
@@ -132,6 +147,118 @@ describe('CredentialTemplateWizard', () => {
   })
 
   describe('complete wizard flow', () => {
+    it('creates the template in the active console organization', async () => {
+      let createdPayload: Record<string, unknown> | undefined
+      let activationRequested = false
+
+      server.use(
+        http.get('*/v1/trust-profiles', ({ request }) => {
+          expect(new URL(request.url).searchParams.get('organization_id')).toBe('console-org')
+          return HttpResponse.json([
+            {
+              id: 'trust-1',
+              name: 'Production Trust',
+              status: 'active',
+              trust_sources: [{ issuer_did: 'did:web:issuer.example.com' }],
+            },
+          ])
+        }),
+        http.get('*/v1/signing-keys/issuer-profiles', ({ request }) => {
+          expect(new URL(request.url).searchParams.get('organization_id')).toBe('console-org')
+          return HttpResponse.json({
+            profiles: [
+              {
+                id: 'issuer-1',
+                name: 'Production Issuer',
+                issuer_did: 'did:web:issuer.example.com',
+                signing_service_id: 'managed-openbao-transit',
+                signing_key_reference: 'issuer-key',
+                status: 'active',
+              },
+            ],
+          })
+        }),
+        http.get('*/v1/revocation-profiles', ({ request }) => {
+          expect(new URL(request.url).searchParams.get('organization_id')).toBe('console-org')
+          return HttpResponse.json([{
+            id: 'revocation-1',
+            organization_id: 'console-org',
+            name: 'Lifecycle Status',
+            status: 'ACTIVE',
+            check_mode: 'ALWAYS',
+          }])
+        }),
+        http.get('*/v1/compliance-profiles', ({ request }) => {
+          expect(new URL(request.url).searchParams.get('organization_id')).toBe('console-org')
+          return HttpResponse.json([{
+            id: 'compliance-1',
+            organization_id: null,
+            name: 'OID4VC Core',
+            compliance_code: 'OID4VC',
+            credential_format: 'SD_JWT_VC',
+            status: 'ACTIVE',
+            is_system: true,
+            discoverable: true,
+          }])
+        }),
+        http.get('*/v1/wallet-registry', () => HttpResponse.json([])),
+        http.post('*/v1/credential-templates', async ({ request }) => {
+          createdPayload = await request.json() as Record<string, unknown>
+          return HttpResponse.json({
+            id: 'template-1',
+            ...createdPayload,
+            status: 'draft',
+          })
+        }),
+        http.post('*/v1/credential-templates/template-1/activate', () => {
+          activationRequested = true
+          return HttpResponse.json({
+            id: 'template-1',
+            name: 'Production mDL Template',
+            status: 'active',
+          })
+        })
+      )
+
+      const { user } = render(<CredentialTemplateWizard />)
+
+      await user.type(screen.getByLabelText(/Template Name/i), 'Production mDL Template')
+      await user.type(screen.getByLabelText(/VCT/i), 'org.example.employee')
+      await user.click(screen.getByTestId('wizard.template.next'))
+
+      await user.click(await screen.findByRole('button', { name: /employee/i }))
+      await waitFor(() => expect(screen.getByTestId('wizard.template.next')).toBeEnabled())
+      await user.click(screen.getByTestId('wizard.template.next'))
+
+      await waitFor(() => expect(screen.getByTestId('wizard.template.next')).toBeEnabled())
+      await user.click(screen.getByTestId('wizard.template.next'))
+
+      const revocationSelect = await screen.findByLabelText(/revocation profile/i)
+      await user.click(revocationSelect)
+      await user.click(await screen.findByRole('option', { name: /lifecycle status/i }))
+      await waitFor(() => expect(screen.getByTestId('wizard.template.next')).toBeEnabled())
+      await user.click(screen.getByTestId('wizard.template.next'))
+
+      await waitFor(() => expect(screen.getByTestId('wizard.template.submit')).toBeEnabled())
+      await user.click(screen.getByTestId('wizard.template.submit'))
+
+      await waitFor(() => {
+        expect(createdPayload).toEqual(expect.objectContaining({
+          organization_id: 'console-org',
+          issuer_profile_id: 'issuer-1',
+          key_access_mode: 'REMOTE_SIGNING',
+          trust_profile_id: 'trust-1',
+          compliance_profile_id: 'compliance-1',
+          revocation_profile_id: 'revocation-1',
+        }))
+        expect(createdPayload).not.toHaveProperty('activate_immediately')
+        expect(createdPayload).not.toHaveProperty('supported_wallet_ids')
+        expect(createdPayload).not.toHaveProperty('issuance_protocol')
+        expect(activationRequested).toBe(true)
+        expect(screen.getByText(/now active/i)).toBeInTheDocument()
+      })
+    })
+
     it('should successfully create template with minimum required data', async () => {
       const { user } = render(<CredentialTemplateWizard />)
 

@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "suite": "canvas_oss_portability",
+  "target": {
+    "marty_origin": "https://beta.elevenidllc.com",
+    "canvas_origin": "https://canvas-test.elevenidllc.com"
+  },
+  "artifact_policy": {
+    "allow_har": false,
+    "allow_browser_storage": false,
+    "allow_cookies": false,
+    "allow_raw_claims": false,
+    "allow_tokens": false,
+    "sanitized_screenshots": true,
+    "sanitized_video": true
+  },
+  "cases": [
+    {"id": "upstream_source_and_image_provenance", "classification": "oss_required"},
+    {"id": "stock_lifecycle_bootstrap_only", "classification": "oss_required"},
+    {"id": "beta_release_bound_and_healthy", "classification": "oss_required"},
+    {"id": "canvas_public_https_reachable", "classification": "oss_required"},
+    {"id": "standard_lti_13_install", "classification": "oss_required"},
+    {"id": "instructor_deep_linking", "classification": "oss_required"},
+    {"id": "learner_resource_launch", "classification": "oss_required"},
+    {"id": "marty_bound_ags_result", "classification": "oss_required"},
+    {"id": "nrps_roster", "classification": "oss_required"},
+    {"id": "canvas_oauth_authorization", "classification": "oss_required"},
+    {"id": "existing_assignment_submission", "classification": "oss_required"},
+    {"id": "classic_quiz_submission", "classification": "oss_required"},
+    {"id": "authoritative_evidence_sync", "classification": "oss_required"},
+    {"id": "module_completion", "classification": "oss_required"},
+    {"id": "course_completion", "classification": "oss_required"},
+    {"id": "background_pending_claim_unsigned", "classification": "oss_required"},
+    {"id": "kms_open_badge_claim_and_verify", "classification": "oss_required"},
+    {"id": "pre_issuance_grade_correction", "classification": "oss_required"},
+    {"id": "post_issuance_correction_review_only", "classification": "oss_required"},
+    {"id": "legacy_event_ingest_unavailable", "classification": "oss_required"},
+    {"id": "new_quizzes_authoritative_submission", "classification": "hosted_required"},
+    {"id": "canvas_credentials_projection", "classification": "outside_gate"}
+  ],
+  "portable_attestation": {
+    "canvas_source_modified": false,
+    "canvas_custom_plugins": [],
+    "rails_runner_calls": 0,
+    "rails_console_calls": 0,
+    "post_bootstrap_database_access": false,
+    "legacy_event_ingest": false,
+    "new_quizzes": "hosted_required",
+    "canvas_credentials": "outside_gate"
+  }
+}

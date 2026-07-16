@@ -132,7 +132,7 @@ function TeamPage() {
   const { showNotification } = useNotifications();
   const { hasPermission, refresh: refreshPermissions } = usePermissions();
 
-  const effectiveOrgId = activeOrgId || organizationId;
+  const effectiveOrgId = activeOrgId;
   const isMartyOrg = effectiveOrgId === MARTY_ORG_ID;
 
   const [loading, setLoading] = useState(true);
@@ -154,6 +154,7 @@ function TeamPage() {
       setMembers([]);
       setPendingInvites([]);
       setAvailableRoles([]);
+      setError(new Error('Organization context unavailable'));
       setLoading(false);
       return;
     }
@@ -164,7 +165,7 @@ function TeamPage() {
 
       const [memberData, rolesData] = await Promise.all([
         teamApi.listMembers(effectiveOrgId),
-        listRoles(effectiveOrgId).catch(() => []),
+        listRoles(effectiveOrgId),
       ]);
 
       const membershipRecords = Array.isArray(memberData)
@@ -275,6 +276,7 @@ function TeamPage() {
             variant="contained"
             startIcon={<AddIcon />}
             onClick={inviteDialog.open}
+            disabled={loading || Boolean(error)}
             data-testid="org.team.invite.action"
           >
             {t('org.team.members.actions.invite')}

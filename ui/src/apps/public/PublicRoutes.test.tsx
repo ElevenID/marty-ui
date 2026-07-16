@@ -168,4 +168,24 @@ describe('PublicRoutes', () => {
     expect(screen.queryByTestId('browser-redirect')).not.toBeInTheDocument();
     expect(screen.getByTestId('public-root')).toBeInTheDocument();
   });
+
+  it('routes /docs/quickstart to API docs instead of the public fallback', () => {
+    mockUseAuth.mockReturnValue({
+      isAuthenticated: false,
+      isAdministrator: false,
+      isVendor: false,
+      isApplicant: false,
+      login: vi.fn(),
+    });
+    mockGetPublicLoginFallback.mockReturnValue('/');
+
+    renderWithoutRouter(
+      <MemoryRouter initialEntries={['/docs/quickstart']}>
+        <PublicRoutes />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByTestId('api-docs')).toBeInTheDocument();
+    expect(screen.queryByTestId('public-root')).not.toBeInTheDocument();
+  });
 });

@@ -30,6 +30,7 @@ KEY_PURPOSES = (
     "presentation_signing",
     "vdsnc_signing",
     "jwks_signing",
+    "lti_tool_signing",
 )
 
 KEY_PURPOSE_ALGORITHM_CONSTRAINTS: dict[str, frozenset[str]] = {
@@ -40,6 +41,7 @@ KEY_PURPOSE_ALGORITHM_CONSTRAINTS: dict[str, frozenset[str]] = {
     "presentation_signing": frozenset({"ES256", "EdDSA"}),
     "vdsnc_signing": frozenset({"ES256", "ES384", "EdDSA"}),
     "jwks_signing": frozenset({"ES256", "ES384", "RS256", "EdDSA"}),
+    "lti_tool_signing": frozenset({"RS256"}),
 }
 
 KEY_PURPOSE_CREDENTIAL_FORMATS: dict[str, tuple[str, ...]] = {
@@ -50,6 +52,7 @@ KEY_PURPOSE_CREDENTIAL_FORMATS: dict[str, tuple[str, ...]] = {
     "presentation_signing": ("jwt_vc_json", "dc+sd-jwt", "mso_mdoc", "zk_mdoc"),
     "vdsnc_signing": ("vds_nc",),
     "jwks_signing": ("jwt_vc_json", "dc+sd-jwt"),
+    "lti_tool_signing": (),
 }
 
 KEY_MANAGEMENT_SERVICE_TYPES: tuple[dict[str, Any], ...] = (

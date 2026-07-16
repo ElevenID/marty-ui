@@ -54,7 +54,9 @@ import { useTranslation } from 'react-i18next';
 import { useAuth } from '../../hooks/useAuth';
 import { usePreview } from '../../contexts/PreviewContext';
 import { get } from '../../services/api';
-import { getApplicantByUser } from '../../services/applicantApi';
+import { getCurrentCanvasLtiExperience } from '../../services/canvasLtiExperience';
+import { listApplications } from '../../services/applicantApi';
+import { listApplicationTemplates } from '../../services/applicationTemplatesApi';
 import {
   buildCredentialApplicationNavigationState,
   extractApplicationStatusInfo,
@@ -66,12 +68,7 @@ import {
 } from '../../application/applications';
 
 function getLtiSessionValue(session, key) {
-  return (
-    session?.[key]
-    || session?.mip_primitives?.context?.[key]
-    || session?.verified_launch?.[key]
-    || null
-  );
+  return session?.[key] || null;
 }
 
 function normalizeOrganizationIdCandidate(value) {
@@ -176,7 +173,6 @@ const CredentialCatalog = () => {
     () => new URLSearchParams(location.search || '').get('canvas_lti_state') || '',
     [location.search]
   );
-  const canvasLtiSessionState = getLtiSessionValue(canvasLtiSession, 'state');
   const canvasLtiOrganizationId = useMemo(
     () => getLtiSessionValue(canvasLtiSession, 'organization_id'),
     [canvasLtiSession]
@@ -196,13 +192,13 @@ const CredentialCatalog = () => {
     let alive = true;
 
     async function loadCanvasLtiSession() {
-      if (!canvasLtiState || canvasLtiSessionState === canvasLtiState) {
+      if (!canvasLtiState || canvasLtiSession) {
         return;
       }
 
       setCanvasLtiLoading(true);
       try {
-        const data = await get(`/v1/integrations/canvas/lti/experience-sessions/${encodeURIComponent(canvasLtiState)}`);
+        const data = await getCurrentCanvasLtiExperience();
         if (alive) {
           setCanvasLtiSession(data);
         }
@@ -219,7 +215,7 @@ const CredentialCatalog = () => {
     return () => {
       alive = false;
     };
-  }, [canvasLtiState, canvasLtiSessionState]);
+  }, [canvasLtiState, canvasLtiSession]);
 
   const listCredentialTemplates = useCallback((currentOrganizationId) => {
     const normalizedOrganizationId = normalizeOrganizationIdCandidate(currentOrganizationId);
@@ -230,8 +226,9 @@ const CredentialCatalog = () => {
     return get(`/v1/credential-templates?organization_id=${encodeURIComponent(normalizedOrganizationId)}&status=active`);
   }, []);
 
-  const listApplicantApplications = useCallback((applicantId) => {
-    return get(`/v1/applicants/profiles/${applicantId}/applications`);
+  const listApplicantApplications = useCallback(async () => {
+    const result = await listApplications({ limit: 100 });
+    return result.items;
   }, []);
 
   /**
@@ -239,13 +236,35 @@ const CredentialCatalog = () => {
    */
   const fetchAvailableCredentials = useCallback(async () => {
     setLoading(true);
+    if (!effectiveOrganizationId) {
+      setCredentials([]);
+      setCatalogLoadError(new Error('Choose or join an organization to view its credential catalog.'));
+      setCatalogMissingOrganization(true);
+      setLoading(false);
+      return;
+    }
     try {
-      const result = await loadCredentialCatalogItems({
-        organizationId: effectiveOrganizationId,
-        organizationName,
-        listCredentialTemplates,
-      });
-      setCredentials(result.credentials);
+      const [result, applicationTemplates] = await Promise.all([
+        loadCredentialCatalogItems({
+          organizationId: effectiveOrganizationId,
+          organizationName,
+          listCredentialTemplates,
+        }),
+        listApplicationTemplates(effectiveOrganizationId),
+      ]);
+      const activeApplicationTemplateByCredential = new Map(
+        (applicationTemplates || [])
+          .filter((template) => String(template.status || '').toUpperCase() === 'ACTIVE')
+          .map((template) => [template.credential_template_id, template]),
+      );
+      setCredentials(result.credentials
+        .map((credential) => {
+          const applicationTemplate = activeApplicationTemplateByCredential.get(credential.id);
+          return applicationTemplate
+            ? { ...credential, application_template_id: applicationTemplate.id, application_template: applicationTemplate }
+            : null;
+        })
+        .filter(Boolean));
       setCatalogLoadError(result.error || null);
       setCatalogMissingOrganization(Boolean(result.missingOrganization));
       if (result.error && !result.missingOrganization) {
@@ -272,21 +291,12 @@ const CredentialCatalog = () => {
     }
 
     try {
-      const applicationIds = await loadExistingCredentialApplications({
-        organizationId: effectiveOrganizationId,
-        userId: user?.user_id,
-        getApplicantByUser,
-        listApplicantApplications,
-      });
+      const applications = await listApplicantApplications();
+      const applicationIds = applications.map((application) => application.credential_template_id).filter(Boolean);
       setExistingApplications(applicationIds);
 
       // Also fetch raw application data for status counts
-      const applicant = await getApplicantByUser(user?.user_id);
-      if (applicant?.id) {
-        const data = await listApplicantApplications(applicant.id);
-        const apps = Array.isArray(data) ? data : (data?.applications || []);
-        setAppStatusInfo(extractApplicationStatusInfo(apps));
-      }
+      setAppStatusInfo(extractApplicationStatusInfo(applications));
     } catch (error) {
       console.error('Failed to fetch applications:', error);
       setExistingApplications([]);
@@ -660,48 +670,6 @@ const CredentialCatalog = () => {
           })
         )}
       </Grid>
-
-      {/* Multi-standard explanation */}
-      <Paper variant="outlined" sx={{ p: 3, mt: 4, mb: 3 }}>
-        <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1.5 }}>
-          <VerifiedIcon color="primary" />
-          <Typography variant="h6">Why multiple credential types?</Typography>
-        </Stack>
-        <Typography variant="body2" color="text.secondary" paragraph sx={{ mb: 2 }}>
-          Different wallets support different standards. ElevenID supports both so you can choose
-          the format that works best for your device and use case.
-        </Typography>
-        <Grid container spacing={2}>
-          <Grid item xs={12} sm={6}>
-            <Box sx={{ p: 2, borderRadius: 1, border: 1, borderColor: 'divider' }}>
-              <Typography variant="subtitle2" gutterBottom>Open Badge / VC (W3C)</Typography>
-              <Typography variant="caption" color="text.secondary" display="block">
-                Use for: Web login, professional credentials
-              </Typography>
-              <Typography variant="caption" color="text.secondary" display="block">
-                Format: SD-JWT Verifiable Credential
-              </Typography>
-              <Typography variant="caption" color="text.secondary" display="block">
-                Compatible with: Web & VC wallets
-              </Typography>
-            </Box>
-          </Grid>
-          <Grid item xs={12} sm={6}>
-            <Box sx={{ p: 2, borderRadius: 1, border: 1, borderColor: 'divider' }}>
-              <Typography variant="subtitle2" gutterBottom>mDoc (ISO 18013-5)</Typography>
-              <Typography variant="caption" color="text.secondary" display="block">
-                Use for: Mobile-first verification, in-person ID
-              </Typography>
-              <Typography variant="caption" color="text.secondary" display="block">
-                Format: ISO mDoc (CBOR)
-              </Typography>
-              <Typography variant="caption" color="text.secondary" display="block">
-                Compatible with: Mobile wallets (Apple / Google)
-              </Typography>
-            </Box>
-          </Grid>
-        </Grid>
-      </Paper>
 
       {/* Credential Details Dialog */}
       <Dialog

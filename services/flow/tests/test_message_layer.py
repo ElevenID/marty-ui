@@ -13,6 +13,7 @@ from marty_common.messages import MessageType
 from flow.main import (
     ApplicationApprovedWebhook,
     _DC_API_PROTOCOL,
+    CreateFlowDefinitionRequest,
     FlowDefinition,
     FlowStatus,
     FlowInstance,
@@ -32,6 +33,7 @@ from flow.main import (
     get_verification_request_object,
     submit_digital_credential_response,
     submit_verification_response,
+    update_flow_definition,
 )
 
 
@@ -66,7 +68,15 @@ def _install_reference_validation_stubs(monkeypatch, *, templates, policies):
             template = templates.get(request.template_id)
             if template is None:
                 return SimpleNamespace(id="")
-            return SimpleNamespace(id=request.template_id, **template)
+            template_payload = {
+                "issuer_profile_id": "issuer-profile-1",
+                "key_access_mode": "REMOTE_SIGNING",
+            }
+            template_payload.update(template)
+            return SimpleNamespace(
+                id=request.template_id,
+                **template_payload,
+            )
 
     class FakePresentationPolicyStub:
         def __init__(self, _channel):
@@ -88,6 +98,39 @@ def _install_reference_validation_stubs(monkeypatch, *, templates, policies):
     )
     monkeypatch.setattr("flow.main.app.state.ct_grpc_channel", object(), raising=False)
     monkeypatch.setattr("flow.main.app.state.pp_grpc_channel", object(), raising=False)
+
+
+class _FakeMembership:
+    def __init__(self, permissions: set[str] | None = None):
+        self.permissions = permissions or set()
+        self.status = "active"
+
+    def is_active(self) -> bool:
+        return True
+
+    def has_permission(self, resource: str, action: str | None = None) -> bool:
+        permission = resource if action is None else f"{resource}:{action}"
+        return permission in self.permissions
+
+
+class _FakeOrgClient:
+    def __init__(self, membership: _FakeMembership):
+        self.membership = membership
+        self.calls: list[tuple[str, str]] = []
+
+    async def get_membership(self, user_id: str, organization_id: str):
+        self.calls.append((user_id, organization_id))
+        return self.membership
+
+
+def _install_org_client(monkeypatch, *, permissions: set[str]):
+    org_client = _FakeOrgClient(_FakeMembership(permissions))
+
+    async def _fake_get_organization_client(_request):
+        return org_client
+
+    monkeypatch.setattr(flow_main, "get_organization_client", _fake_get_organization_client)
+    return org_client
 
 
 def _ed25519_did_key(public_key) -> str:
@@ -189,6 +232,31 @@ async def test_validate_credential_layer_references_requires_active_for_activati
 
 
 @pytest.mark.asyncio
+async def test_validate_credential_layer_references_rejects_template_without_kms_issuer(monkeypatch):
+    _install_reference_validation_stubs(
+        monkeypatch,
+        templates={
+            "template-legacy": {
+                "organization_id": "org-1",
+                "status": "active",
+                "issuer_profile_id": "",
+                "key_access_mode": "LOCAL",
+            }
+        },
+        policies={},
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _validate_credential_layer_references(
+            organization_id="org-1",
+            credential_template_id="template-legacy",
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "KMS-backed issuer profile" in exc_info.value.detail
+
+
+@pytest.mark.asyncio
 async def test_validate_credential_layer_references_validates_policy_requirement_templates(monkeypatch):
     _install_reference_validation_stubs(
         monkeypatch,
@@ -213,6 +281,121 @@ async def test_validate_credential_layer_references_validates_policy_requirement
 
     assert exc_info.value.status_code == 400
     assert "Credential template template-1" in exc_info.value.detail
+
+
+@pytest.mark.asyncio
+async def test_update_flow_definition_replaces_existing_flow_and_checks_edit_permission(monkeypatch):
+    _install_reference_validation_stubs(
+        monkeypatch,
+        templates={"template-new": {"organization_id": "org-1", "status": "active"}},
+        policies={},
+    )
+    org_client = _install_org_client(monkeypatch, permissions={"flow-definition:edit"})
+
+    repo = InMemoryFlowRepository()
+    flow = FlowDefinition(
+        organization_id="org-1",
+        name="Old flow",
+        flow_type=FlowType.OID4VCI_PRE_AUTHORIZED,
+        credential_template_id="template-old",
+    )
+    flow.activate()
+    await repo.save_definition(flow)
+
+    response = await update_flow_definition(
+        flow.id,
+        CreateFlowDefinitionRequest(
+            organization_id="org-1",
+            name="Updated flow",
+            description="Updated description",
+            flow_type="oid4vci_pre_authorized",
+            credential_template_id="template-new",
+        ),
+        SimpleNamespace(),
+        user_id="user-1",
+        repo=repo,
+    )
+
+    updated = await repo.get_definition(flow.id)
+    assert response.id == flow.id
+    assert response.name == "Updated flow"
+    assert response.status == FlowStatus.DRAFT.value
+    assert response.resolved_steps == [
+        "create_offer",
+        "token_exchange",
+        "credential_request",
+        "issue_credential",
+    ]
+    assert updated is not None
+    assert updated.version == 2
+    assert updated.credential_template_id == "template-new"
+    assert updated.steps[0].config == {"protocol_step": "create_offer"}
+    assert org_client.calls == [("user-1", "org-1")]
+
+
+@pytest.mark.asyncio
+async def test_update_flow_definition_rejects_organization_change(monkeypatch):
+    _install_org_client(monkeypatch, permissions={"flow-definition:edit"})
+
+    repo = InMemoryFlowRepository()
+    flow = FlowDefinition(
+        organization_id="org-1",
+        name="Org-owned flow",
+        flow_type=FlowType.OID4VCI_PRE_AUTHORIZED,
+        credential_template_id="template-1",
+    )
+    await repo.save_definition(flow)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await update_flow_definition(
+            flow.id,
+            CreateFlowDefinitionRequest(
+                organization_id="org-2",
+                name="Moved flow",
+                flow_type="oid4vci_pre_authorized",
+                credential_template_id="template-1",
+            ),
+            SimpleNamespace(),
+            user_id="user-1",
+            repo=repo,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "organization_id cannot be changed" in exc_info.value.detail
+
+
+@pytest.mark.asyncio
+async def test_update_flow_definition_allows_inactive_references_while_draft(monkeypatch):
+    _install_reference_validation_stubs(
+        monkeypatch,
+        templates={"template-draft": {"organization_id": "org-1", "status": "draft"}},
+        policies={},
+    )
+    _install_org_client(monkeypatch, permissions={"flow-definition:edit"})
+
+    repo = InMemoryFlowRepository()
+    flow = FlowDefinition(
+        organization_id="org-1",
+        name="Draft flow",
+        flow_type=FlowType.OID4VCI_PRE_AUTHORIZED,
+        credential_template_id="template-old",
+    )
+    await repo.save_definition(flow)
+
+    response = await update_flow_definition(
+        flow.id,
+        CreateFlowDefinitionRequest(
+            organization_id="org-1",
+            name="Draft dependency flow",
+            flow_type="oid4vci_pre_authorized",
+            credential_template_id="template-draft",
+        ),
+        SimpleNamespace(),
+        user_id="user-1",
+        repo=repo,
+    )
+
+    assert response.status == FlowStatus.DRAFT.value
 
 
 @pytest.mark.asyncio
@@ -266,9 +449,31 @@ async def test_create_oid4vci_artifact_records_credential_offer_message(monkeypa
     assert message["payload"]["mip_flow_instance_id"] == instance.id
 
 
+def _application_approved_custom_flow(*, name: str, credential_template_id: str) -> FlowDefinition:
+    return FlowDefinition(
+        organization_id="org-1",
+        name=name,
+        flow_type=FlowType.CUSTOM,
+        credential_template_id=credential_template_id,
+        trigger={"trigger_type": "WEBHOOK", "config": {"event_type": "APPLICATION_APPROVED"}},
+        extension={
+            "extension_uri": "urn:elevenid:test:application-approved",
+            "extension_version": "1.0.0",
+            "extends_flow_type": FlowType.OID4VCI_PRE_AUTHORIZED.value,
+            "entry_step_id": "create_offer",
+            "steps": [{"step_id": "create_offer", "action": "create_offer", "config": {}}],
+            "transitions": [],
+            "config": {},
+        },
+    )
+
+
 @pytest.mark.asyncio
 async def test_application_approved_webhook_filters_by_credential_template_id(monkeypatch):
+    captured_claims = {}
+
     async def _fake_initiate_issuance(instance, flow_def):
+        captured_claims.update(instance.context["claims"])
         return {
             "id": f"tx-{flow_def.credential_template_id}",
             "credential_offer_uri": f"openid-credential-offer://?credential_offer={flow_def.credential_template_id}",
@@ -282,22 +487,16 @@ async def test_application_approved_webhook_filters_by_credential_template_id(mo
     monkeypatch.setattr(flow_main, "_initiate_credential_layer_issuance", _fake_initiate_issuance)
 
     repo = InMemoryFlowRepository()
-    matching_flow = FlowDefinition(
-        organization_id="org-1",
+    matching_flow = _application_approved_custom_flow(
         name="Issue Open Badge",
-        flow_type=FlowType.OID4VCI_PRE_AUTHORIZED,
         credential_template_id="template-open-badge",
-        preconditions=["application_approved"],
     )
     matching_flow.activate()
     await repo.save_definition(matching_flow)
 
-    non_matching_flow = FlowDefinition(
-        organization_id="org-1",
+    non_matching_flow = _application_approved_custom_flow(
         name="Issue Different Credential",
-        flow_type=FlowType.OID4VCI_PRE_AUTHORIZED,
         credential_template_id="template-other",
-        preconditions=["application_approved"],
     )
     non_matching_flow.activate()
     await repo.save_definition(non_matching_flow)
@@ -312,6 +511,15 @@ async def test_application_approved_webhook_filters_by_credential_template_id(mo
             data={
                 "applicant_id": "applicant-1",
                 "credential_template_id": "template-open-badge",
+                "email": "must-not-be-read-from-event-metadata@example.com",
+                "application_status": "approved",
+                "claims": {
+                    "email": "holder@example.com",
+                    "member_id": "user-1",
+                    "organization_id": "org-1",
+                    "issued_at": "2026-05-05T12:00:00+00:00",
+                    "role": "applicant",
+                },
             },
         ),
         repo=repo,
@@ -325,17 +533,72 @@ async def test_application_approved_webhook_filters_by_credential_template_id(mo
     assert offer["credential_offer_transaction_id"] == "tx-template-open-badge"
     assert offer["credential_offer_uri"].startswith("openid-credential-offer://")
     assert offer["issuance_status"] == "offer_created"
+    assert captured_claims == {
+        "email": "holder@example.com",
+        "member_id": "user-1",
+        "organization_id": "org-1",
+        "issued_at": "2026-05-05T12:00:00+00:00",
+        "role": "applicant",
+    }
+
+
+@pytest.mark.asyncio
+async def test_application_approved_webhook_skips_malformed_trigger(monkeypatch):
+    async def _fake_initiate_issuance(instance, flow_def):
+        return {
+            "id": f"tx-{flow_def.id}",
+            "credential_offer_uri": f"openid-credential-offer://?credential_offer={flow_def.id}",
+            "credential_offer_uris": {},
+            "credential_offer_labels": {},
+            "pre_auth_code": f"pre-{flow_def.id}",
+            "expires_at": "2026-05-05T12:00:00+00:00",
+            "status": "offer_created",
+        }
+
+    monkeypatch.setattr(flow_main, "_initiate_credential_layer_issuance", _fake_initiate_issuance)
+
+    repo = InMemoryFlowRepository()
+    malformed_flow = _application_approved_custom_flow(
+        name="Malformed trigger",
+        credential_template_id="template-open-badge",
+    )
+    malformed_flow.trigger = "application_approved"
+    malformed_flow.activate()
+    await repo.save_definition(malformed_flow)
+
+    valid_flow = _application_approved_custom_flow(
+        name="Canonical trigger",
+        credential_template_id="template-open-badge",
+    )
+    valid_flow.activate()
+    await repo.save_definition(valid_flow)
+
+    result = await handle_application_approved(
+        ApplicationApprovedWebhook(
+            event_type="application.approved",
+            aggregate_id="application-malformed-trigger",
+            aggregate_type="application",
+            organization_id="org-1",
+            timestamp="2026-05-05T12:00:00+00:00",
+            data={
+                "applicant_id": "applicant-1",
+                "credential_template_id": "template-open-badge",
+            },
+        ),
+        repo=repo,
+    )
+
+    assert result["success"] is True
+    assert result["flows_triggered"] == 1
+    assert result["offers"][0]["flow_definition_id"] == valid_flow.id
 
 
 @pytest.mark.asyncio
 async def test_application_approved_webhook_returns_zero_when_template_not_found():
     repo = InMemoryFlowRepository()
-    flow_def = FlowDefinition(
-        organization_id="org-1",
+    flow_def = _application_approved_custom_flow(
         name="Issue Open Badge",
-        flow_type=FlowType.OID4VCI_PRE_AUTHORIZED,
         credential_template_id="template-open-badge",
-        preconditions=["application_approved"],
     )
     flow_def.activate()
     await repo.save_definition(flow_def)
@@ -355,11 +618,14 @@ async def test_application_approved_webhook_returns_zero_when_template_not_found
         repo=repo,
     )
 
-    assert result == {"success": True, "flows_triggered": 0}
+    assert result["success"] is True
+    assert result["flows_triggered"] == 0
+    assert "No active custom OID4VCI extension" in result["reason"]
+    assert "template-missing" in result["reason"]
 
 
 @pytest.mark.asyncio
-async def test_application_approved_webhook_falls_back_to_active_oid4vci_without_precondition(monkeypatch):
+async def test_application_approved_webhook_requires_explicit_custom_trigger(monkeypatch):
     async def _fake_initiate_issuance(instance, flow_def):
         tx = f"tx-{flow_def.id}"
         instance.context["credential_offer_transaction_id"] = tx
@@ -404,13 +670,14 @@ async def test_application_approved_webhook_falls_back_to_active_oid4vci_without
         repo=repo,
     )
 
-    assert result["success"] is True
-    assert result["flows_triggered"] == 1
-    assert len(result["offers"]) == 1
+    assert result["success"] is False
+    assert result["flows_triggered"] == 0
+    assert "custom OID4VCI extension" in result["reason"]
+    assert "offers" not in result
 
 
 @pytest.mark.asyncio
-async def test_application_approved_webhook_fallback_respects_template_filter(monkeypatch):
+async def test_application_approved_webhook_ignores_other_template_flows(monkeypatch):
     async def _fake_initiate_issuance(instance, flow_def):
         tx = f"tx-{flow_def.id}"
         instance.context["credential_offer_transaction_id"] = tx
@@ -454,11 +721,13 @@ async def test_application_approved_webhook_fallback_respects_template_filter(mo
         repo=repo,
     )
 
-    assert result == {"success": True, "flows_triggered": 0}
+    assert result["success"] is True
+    assert result["flows_triggered"] == 0
+    assert "template-open-badge" in result["reason"]
 
 
 @pytest.mark.asyncio
-async def test_application_approved_webhook_manual_issue_bootstraps_default_flow(monkeypatch):
+async def test_application_approved_webhook_manual_issue_does_not_bootstrap_default_flow(monkeypatch):
     async def _fake_initiate_issuance(instance, flow_def):
         tx = f"tx-{flow_def.id}"
         instance.context["credential_offer_transaction_id"] = tx
@@ -493,13 +762,10 @@ async def test_application_approved_webhook_manual_issue_bootstraps_default_flow
         repo=repo,
     )
 
-    assert result["success"] is True
-    assert result["flows_triggered"] == 1
-    [saved_flow] = await repo.list_definitions("org-1")
-    assert saved_flow.status == FlowStatus.ACTIVE
-    assert saved_flow.flow_type == FlowType.OID4VCI_PRE_AUTHORIZED
-    assert saved_flow.credential_template_id == "template-open-badge"
-    assert "application_approved" in saved_flow.preconditions
+    assert result["success"] is False
+    assert result["flows_triggered"] == 0
+    assert "No active custom OID4VCI extension" in result["reason"]
+    assert await repo.list_definitions("org-1") == []
 
 
 @pytest.mark.asyncio

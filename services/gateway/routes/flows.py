@@ -13,6 +13,7 @@ from gateway.models import (
     VerificationResultResponse,
 )
 from gateway.proxy import _resource_exists, get_registry, proxy_request
+from gateway.routes.issuance import _ISSUANCE_HEADERS
 
 flow_router = APIRouter(prefix="/v1/flows", tags=["Flows"])
 
@@ -23,17 +24,33 @@ async def _validate_flow_definition_refs(body: FlowDefinitionCreate, request: Re
         if not await _resource_exists("credential-templates", f"/v1/credential-templates/{body.credential_template_id}", request):
             raise HTTPException(status_code=404, detail=f"Credential template not found: {body.credential_template_id}")
     if body.application_template_id:
-        if not await _resource_exists("credential-templates", f"/v1/application-templates/{body.application_template_id}", request):
+        if not await _resource_exists(
+            "issuance",
+            f"/v1/application-templates/{body.application_template_id}",
+            request,
+            inject_headers=_ISSUANCE_HEADERS,
+        ):
             raise HTTPException(status_code=404, detail=f"Application template not found: {body.application_template_id}")
     if body.presentation_policy_id:
         if not await _resource_exists("presentation-policies", f"/v1/presentation-policies/{body.presentation_policy_id}", request):
             raise HTTPException(status_code=422, detail=f"Presentation policy not found: {body.presentation_policy_id}")
+    if body.delivery_destination_profile_id:
+        if not await _resource_exists("credential-templates", f"/v1/delivery-destinations/{body.delivery_destination_profile_id}", request):
+            raise HTTPException(status_code=422, detail=f"Delivery destination not found: {body.delivery_destination_profile_id}")
     if body.trust_profile_id:
         if not await _resource_exists("trust-profiles", f"/v1/trust-profiles/{body.trust_profile_id}", request):
             raise HTTPException(status_code=422, detail=f"Trust profile not found: {body.trust_profile_id}")
 
 
 # ── Flow Definitions ─────────────────────────────────────────────────
+
+@flow_router.get("/capabilities", summary="Get Flow Capabilities")
+async def get_flow_capabilities(request: Request) -> Response:
+    """Return fixed sequences, extension points, and runtime blockers."""
+    registry = get_registry()
+    service_url = registry.get_service_url("flows")
+    return await proxy_request(request, service_url, "/v1/flows/capabilities")
+
 
 @flow_router.post("/definitions", response_model=FlowDefinitionResponse, summary="Create Flow Definition")
 async def create_flow_definition(body: FlowDefinitionCreate, request: Request) -> Response:
@@ -71,6 +88,22 @@ async def activate_flow_definition(flow_id: str, request: Request) -> Response:
     return await proxy_request(request, service_url, f"/v1/flows/definitions/{flow_id}/activate")
 
 
+@flow_router.post("/definitions/{flow_id}/validate", summary="Validate Flow")
+async def validate_flow_definition(flow_id: str, request: Request) -> Response:
+    """Return dependency and capability blockers for a draft flow."""
+    registry = get_registry()
+    service_url = registry.get_service_url("flows")
+    return await proxy_request(request, service_url, f"/v1/flows/definitions/{flow_id}/validate")
+
+
+@flow_router.post("/definitions/{flow_id}/test", summary="Test Flow")
+async def test_flow_definition(flow_id: str, request: Request) -> Response:
+    """Resolve a dry-run execution plan without external side effects."""
+    registry = get_registry()
+    service_url = registry.get_service_url("flows")
+    return await proxy_request(request, service_url, f"/v1/flows/definitions/{flow_id}/test")
+
+
 @flow_router.put("/definitions/{flow_id}", response_model=FlowDefinitionResponse, summary="Update Flow Definition")
 async def update_flow_definition(flow_id: str, body: FlowDefinitionCreate, request: Request) -> Response:
     """Update a Flow Definition."""
@@ -101,6 +134,10 @@ async def start_flow_instance(body: FlowInstanceCreate, request: Request) -> Res
 @flow_router.get("/instances", response_model=list[FlowInstanceResponse], summary="List Flow Instances")
 async def list_flow_instances(
     organization_id: str = Query(..., description="Organization ID"),
+    flow_definition_id: str | None = Query(None, description="Filter by flow definition"),
+    status: str | None = Query(None, description="Filter by status"),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
     request: Request = None,
 ) -> Response:
     """List Flow Instances for an organization."""
@@ -123,6 +160,14 @@ async def advance_flow_instance(instance_id: str, request: Request) -> Response:
     registry = get_registry()
     service_url = registry.get_service_url("flows")
     return await proxy_request(request, service_url, f"/v1/flows/instances/{instance_id}/advance")
+
+
+@flow_router.post("/instances/{instance_id}/cancel", response_model=FlowInstanceResponse, summary="Cancel Flow")
+async def cancel_flow_instance(instance_id: str, request: Request) -> Response:
+    """Cancel an unfinished Flow Instance."""
+    registry = get_registry()
+    service_url = registry.get_service_url("flows")
+    return await proxy_request(request, service_url, f"/v1/flows/instances/{instance_id}/cancel")
 
 
 # ── Verification Flows ───────────────────────────────────────────────

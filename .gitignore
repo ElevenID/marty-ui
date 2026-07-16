@@ -99,12 +99,14 @@ playwright/.cache/
 coverage/
 storybook-static/
 .vitest/
+tests/artifacts/
 
 # =============================================================================
 # Debug / Development Scripts
 # =============================================================================
 debug-login.js
 debug-*.png
+tests/wallet-debug-*.png
 
 # =============================================================================
 # Temporary Files

@@ -26,6 +26,10 @@ vi.mock('../../../hooks/useAuth', () => ({
   }),
 }))
 
+vi.mock('../../../contexts/ConsoleContext', () => ({
+  useConsole: () => ({ activeOrgId: 'org-123' }),
+}))
+
 vi.mock('../../../services/webhooksApi', () => ({
   listWebhooks: (...args: unknown[]) => mockListWebhooks(...args),
   getAvailableEventTypes: (...args: unknown[]) => mockGetAvailableEventTypes(...args),

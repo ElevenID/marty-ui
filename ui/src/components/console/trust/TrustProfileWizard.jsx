@@ -25,7 +25,8 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 
 import { useWizard } from '../../../hooks/useWizard';
 import { useAuth } from '../../../hooks/useAuth';
-import { addTrustProfileIssuer, createTrustProfile } from '../../../services/presentationPolicyApi';
+import { useConsole } from '../../../contexts/ConsoleContext';
+import { activateTrustProfile, addTrustProfileIssuer, createTrustProfile } from '../../../services/presentationPolicyApi';
 import signingKeysApi from '../../../services/signingKeysApi';
 import BasicsStep from './steps/BasicsStep';
 import TrustSourcesStep from './steps/TrustSourcesStep';
@@ -58,8 +59,17 @@ const issuerSigningServiceId = (issuer) => issuerMetadata(issuer).signing_servic
 
 const issuerSigningKeyReference = (issuer) => issuerMetadata(issuer).signing_key_reference || issuer.signing_key_reference || '';
 
+const hasTrustConfiguration = (data) => (
+  (data.trusted_issuers?.length || 0) > 0
+  || (data.trust_sources?.length || 0) > 0
+  || data.allow_all_issuers === true
+);
+
 const needsManagedIssuerProfile = (issuer) => {
   if (!issuer?.did || issuer.certificate_pem || issuerProfileId(issuer)) {
+    return false;
+  }
+  if (issuerMetadata(issuer).source === 'kms-derived-identity' && issuerSigningKeyReference(issuer)) {
     return false;
   }
   return MANAGED_ISSUER_SOURCES.has(issuerMetadata(issuer).source);
@@ -69,6 +79,8 @@ const TrustProfileWizard = () => {
   const navigate = useNavigate();
   const { t } = useTranslation('console');
   const { organizationId } = useAuth();
+  const { activeOrgId } = useConsole();
+  const effectiveOrganizationId = activeOrgId;
 
   const validateStep = useCallback((stepIndex, data) => {
     switch (stepIndex) {
@@ -79,15 +91,20 @@ const TrustProfileWizard = () => {
       case 2: // Validation Rules (optional)
         return true;
       case 3: // Review
-        return data.name?.trim().length > 0;
+        return data.name?.trim().length > 0 && (!data.activate_immediately || hasTrustConfiguration(data));
       default:
         return false;
     }
   }, []);
 
   const handleSubmit = useCallback(async (data) => {
-    if (!organizationId) {
+    if (!effectiveOrganizationId) {
       throw new Error(t('trust.failedToLoad', { defaultValue: 'Organization context is required to create a trust profile.' }));
+    }
+    if (data.activate_immediately && !hasTrustConfiguration(data)) {
+      throw new Error(t('trust.activeProfileRequiresTrustSource', {
+        defaultValue: 'Add at least one trusted issuer, trust source, or explicitly allow any issuer before activating a trust profile.',
+      }));
     }
 
     const trustedIssuers = data.trusted_issuers || [];
@@ -101,7 +118,7 @@ const TrustProfileWizard = () => {
       }
 
       if (!keyManagementConfig) {
-        keyManagementConfig = await signingKeysApi.getKeyManagementConfig();
+        keyManagementConfig = await signingKeysApi.getKeyManagementConfig({ organization_id: effectiveOrganizationId });
       }
 
       const signingServiceId = issuerSigningServiceId(issuer) || keyManagementConfig?.default_service_id || '';
@@ -112,6 +129,7 @@ const TrustProfileWizard = () => {
       }
 
       const response = await signingKeysApi.createIssuerProfile({
+        organization_id: effectiveOrganizationId,
         name: issuer.name || issuer.did,
         issuer_did: issuer.did,
         signing_service_id: signingServiceId,
@@ -158,7 +176,7 @@ const TrustProfileWizard = () => {
     const profile = await createTrustProfile({
       ...data,
       trusted_issuers: trustedIssuersWithProfiles,
-      organization_id: organizationId,
+      organization_id: effectiveOrganizationId,
       status: data.activate_immediately ? 'active' : 'draft',
       allowed_issuers: effectiveAllowedIssuers,
       validation_rules: effectiveValidationRules,
@@ -173,8 +191,12 @@ const TrustProfileWizard = () => {
       }))
     );
 
+    if (data.activate_immediately) {
+      return activateTrustProfile(profile.id);
+    }
+
     return profile;
-  }, [organizationId, t]);
+  }, [effectiveOrganizationId, t]);
 
   const wizard = useWizard({
     steps: getSteps(t),
@@ -229,6 +251,7 @@ const TrustProfileWizard = () => {
           <TrustSourcesStep
             data={wizard.data}
             onChange={wizard.updateData}
+            organizationId={effectiveOrganizationId}
           />
         );
       case 2:

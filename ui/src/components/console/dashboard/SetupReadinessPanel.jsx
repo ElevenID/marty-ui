@@ -18,6 +18,8 @@ import {
   ListItemText,
   Button,
   Tooltip,
+  Tabs,
+  Tab,
 } from '@mui/material';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
@@ -31,10 +33,54 @@ import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import AccountTreeIcon from '@mui/icons-material/AccountTree';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
+import LocalShippingIcon from '@mui/icons-material/LocalShipping';
+import SecurityIcon from '@mui/icons-material/Security';
 
-import { ReadinessState } from '../../../config/dashboardRules';
+import { ReadinessState, SETUP_ORDER } from '../../../config/dashboardRules';
 
 const getResourceConfig = (t) => ({
+  compliance: {
+    label: t('setupReadiness.complianceProfile.label'),
+    icon: PolicyIcon,
+    path: '/console/org/policies/compliance',
+    tooltip: t('setupReadiness.complianceProfile.tooltip'),
+  },
+  issuer: {
+    label: 'Issuer Identity / KMS',
+    icon: CloudUploadIcon,
+    path: '/console/org/deploy/issuer-identity',
+    tooltip: 'Issuer identity and signing services required for production issuance.',
+  },
+  applicationTemplate: {
+    label: 'Application Template',
+    icon: DescriptionIcon,
+    path: '/console/org/templates/applications',
+    tooltip: 'Defines the application intake form and checks before credential approval.',
+  },
+  policySet: {
+    label: 'Approval Policy Set',
+    icon: PolicyIcon,
+    path: '/console/org/policies/sets',
+    tooltip: 'Defines auditable Cedar rules used to govern approval decisions.',
+  },
+  physicalCapability: {
+    label: 'Physical Issuance Capability',
+    icon: SecurityIcon,
+    path: '/console/org/deploy/key-management',
+    tooltip: 'Requires document signing, encrypted artifact storage, and a configured personalization bureau.',
+  },
+  deliveryDestination: {
+    label: 'Production Destination',
+    icon: LocalShippingIcon,
+    path: '/console/org/connect/delivery-destinations',
+    tooltip: 'Identifies the approved personalization bureau or physical production destination.',
+  },
+  revocation: {
+    label: 'Revocation Profile',
+    icon: PolicyIcon,
+    path: '/console/org/policies/revocation',
+    tooltip: 'Defines revocation or renewal controls for credential lifecycle operations.',
+  },
   trust: {
     label: t('setupReadiness.trustProfile.label'),
     icon: VerifiedUserIcon,
@@ -183,20 +229,55 @@ function ReadinessRow({ resourceKey, readiness }) {
 /**
  * Setup Readiness Panel Component
  */
-export function SetupReadinessPanel({ readiness, loading }) {
+export function SetupReadinessPanel({ readiness, loading, onIntentChange }) {
   const { t } = useTranslation('console');
   
   if (loading) {
     return null; // Parent handles loading state
   }
 
-  const resourceOrder = ['trust', 'template', 'policy', 'deployment', 'flow'];
+  const hasIntentReadiness = Boolean(readiness?.intents?.[readiness.activeIntent]);
+  const activeIntent = hasIntentReadiness ? readiness.activeIntent : null;
+  const activeIntentReadiness = hasIntentReadiness ? readiness.intents[activeIntent] : null;
+  const displayReadiness = activeIntentReadiness?.steps || readiness || {};
+  const resourceOrder = activeIntentReadiness
+    ? activeIntentReadiness.order.filter((key) => displayReadiness?.[key])
+    : SETUP_ORDER.filter((key) => displayReadiness?.[key]);
+  const intentEntries = hasIntentReadiness ? Object.values(readiness.intents) : [];
 
   return (
     <Paper sx={{ p: 3, mb: 3 }}>
-      <Typography variant="h6" gutterBottom>
-        {t('setupReadiness.title')}
-      </Typography>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 2, alignItems: 'flex-start', mb: 1 }}>
+        <Box>
+          <Typography variant="h6" gutterBottom>
+            {activeIntentReadiness
+              ? `${t('setupReadiness.title')}: ${activeIntentReadiness.label}`
+              : t('setupReadiness.title')}
+          </Typography>
+          {activeIntentReadiness?.description && (
+            <Typography variant="body2" color="text.secondary">
+              {activeIntentReadiness.description}
+            </Typography>
+          )}
+        </Box>
+      </Box>
+      {intentEntries.length > 0 && (
+        <Tabs
+          value={activeIntent}
+          onChange={(_, value) => onIntentChange?.(value)}
+          variant="scrollable"
+          scrollButtons="auto"
+          sx={{ mb: 2, borderBottom: 1, borderColor: 'divider' }}
+        >
+          {intentEntries.map((intent) => (
+            <Tab
+              key={intent.id}
+              value={intent.id}
+              label={intent.label}
+            />
+          ))}
+        </Tabs>
+      )}
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
         {t('setupReadiness.description')}
       </Typography>
@@ -205,7 +286,7 @@ export function SetupReadinessPanel({ readiness, loading }) {
           <Box key={key}>
             <ReadinessRow
               resourceKey={key}
-              readiness={readiness[key]}
+              readiness={displayReadiness[key]}
             />
             {index < resourceOrder.length - 1 && (
               <Box

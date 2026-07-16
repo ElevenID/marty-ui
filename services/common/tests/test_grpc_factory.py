@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -15,6 +16,22 @@ from common.grpc_factory import (
     create_grpc_server,
     start_grpc_server_port,
 )
+
+
+@pytest.fixture(scope="module", autouse=True)
+def grpc_event_loop():
+    """Keep grpc.aio tests independent from event loops closed by other modules."""
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+    if loop.is_closed():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+    yield loop
 
 
 # ── create_grpc_server ──────────────────────────────────────────────
@@ -77,9 +94,19 @@ class TestCreateGrpcChannel:
         assert channel is not None
 
     def test_creates_channel_with_keepalive(self):
-        channel = create_grpc_channel("localhost:50052")
-        # Channel is created; keepalive options are internal
-        assert channel is not None
+        with patch("common.grpc_factory.grpc_aio.insecure_channel") as create_channel:
+            create_channel.return_value = MagicMock()
+
+            channel = create_grpc_channel("localhost:50052")
+
+        assert channel is create_channel.return_value
+        options = dict(create_channel.call_args.kwargs["options"])
+        assert options == {
+            "grpc.keepalive_time_ms": 300_000,
+            "grpc.keepalive_timeout_ms": 20_000,
+            "grpc.keepalive_permit_without_calls": False,
+            "grpc.http2.max_pings_without_data": 2,
+        }
 
 
 # ── LoggingMetricsInterceptor ────────────────────────────────────────

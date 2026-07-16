@@ -1,0 +1,65 @@
+{
+  "schema_version": 2,
+  "mip_version": "0.3.1",
+  "sprucekit_login": {
+    "wallet_id": "wr-spruce-001",
+    "expected_configuration_id": "MemberCredential#spruce-sd-jwt",
+    "expected_vct_path": "/credentials/marty-verified-member-badge",
+    "expected_badge_name": "Marty Verified Member Badge",
+    "expected_issuer_display_name": "ElevenID LLC",
+    "required_checks": [
+      "offer_received",
+      "badge_displayed",
+      "issuer_displayed",
+      "signed_request_resolved",
+      "requested_email_disclosed",
+      "callback_completed",
+      "existing_user_matched",
+      "authenticated_session_created",
+      "request_unmodified"
+    ]
+  },
+  "native_handoffs": {
+    "required_wallet_ids": [
+      "wr-spruce-001",
+      "wr-marty-001",
+      "wr-lissi-001",
+      "wr-sphereon-001",
+      "wr-dc4eu-001",
+      "wr-google-001",
+      "wr-apple-001"
+    ],
+    "required_checks": [
+      "handoff_invoked",
+      "target_app_opened",
+      "payload_resolved",
+      "recoverable_return"
+    ],
+    "required_device_fields": [
+      "device_model",
+      "os_version"
+    ]
+  },
+  "coverage_accounting": {
+    "historical_nine_wallet_handoffs": {
+      "deterministic_browser": ["wr-default"],
+      "protected_device": [
+        "wr-spruce-001",
+        "wr-marty-001",
+        "wr-lissi-001",
+        "wr-sphereon-001",
+        "wr-dc4eu-001",
+        "wr-google-001",
+        "wr-apple-001"
+      ],
+      "inactive_external_blocker": ["wr-waltid-001"]
+    },
+    "non_handoff_integrations": ["wr-didcomm-001"]
+  },
+  "required_attachment_kinds": [
+    "spruce_issuance_recording",
+    "spruce_login_recording",
+    "signed_request_capture",
+    "native_handoff_matrix"
+  ]
+}

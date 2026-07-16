@@ -2,8 +2,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { renderWithRouter, screen, waitFor } from '@test/utils'
 import CredentialTemplatesPage from './CredentialTemplatesPage'
 
-const { mockListCredentialTemplates } = vi.hoisted(() => ({
+const { mockListCredentialTemplates, mockListTrustProfiles } = vi.hoisted(() => ({
   mockListCredentialTemplates: vi.fn(),
+  mockListTrustProfiles: vi.fn(),
 }))
 
 vi.mock('react-i18next', async () => {
@@ -19,15 +20,21 @@ vi.mock('react-i18next', async () => {
 
 vi.mock('../../../services/presentationPolicyApi', () => ({
   listCredentialTemplates: (...args: unknown[]) => mockListCredentialTemplates(...args),
+  listTrustProfiles: (...args: unknown[]) => mockListTrustProfiles(...args),
 }))
 
 vi.mock('../../../hooks/useAuth', () => ({
   useAuth: () => ({ organizationId: 'org-1' }),
 }))
 
+vi.mock('../../../contexts/ConsoleContext', () => ({
+  useConsole: () => ({ activeOrgId: 'org-1' }),
+}))
+
 describe('CredentialTemplatesPage', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockListTrustProfiles.mockResolvedValue([])
   })
 
   it('renders safely when credential templates resolve to null', async () => {

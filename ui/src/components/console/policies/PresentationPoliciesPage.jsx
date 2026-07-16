@@ -30,7 +30,7 @@ import QrCodeIcon from '@mui/icons-material/QrCode';
 import { Link } from 'react-router-dom';
 
 import { ResourcePage, EmptyState, EmptyStates, StatusChip } from '../../common';
-import { useAuth } from '../../../hooks/useAuth';
+import { useConsole } from '../../../contexts/ConsoleContext';
 import { listPresentationPolicies, listCredentialTemplates, listTrustProfiles } from '../../../services/presentationPolicyApi';
 
 const getPoliciesTabs = (t) => [
@@ -46,21 +46,24 @@ const getBreadcrumbs = (t) => [
 
 function PresentationPoliciesPage() {
   const { t } = useTranslation('console');
-  const { organizationId } = useAuth();
+  const { activeOrgId: organizationId } = useConsole();
   const { data: policies = [], loading, error } = useAsyncData(
-    () => listPresentationPolicies(),
-    []
+    () => listPresentationPolicies({ organization_id: organizationId }),
+    [organizationId]
   );
 
-  const { data: depData = { templates: [], trustProfiles: [] } } = useAsyncData(
+  const {
+    data: depData = { templates: [], trustProfiles: [] },
+    loading: depLoading,
+    error: depError,
+  } = useAsyncData(
     async () => {
-      if (!organizationId) return { templates: [], trustProfiles: [] };
       const [templatesResult, trustProfilesResult] = await Promise.all([
-        listCredentialTemplates({ organization_id: organizationId, limit: 1 }).catch(() => []),
-        listTrustProfiles({ organization_id: organizationId, limit: 1 }).catch(() => []),
+        listCredentialTemplates({ organization_id: organizationId, limit: 1 }),
+        listTrustProfiles({ organization_id: organizationId, limit: 1 }),
       ]);
       return {
-        templates: Array.isArray(templatesResult) ? templatesResult : (templatesResult?.items ?? []),
+        templates: templatesResult,
         trustProfiles: Array.isArray(trustProfilesResult) ? trustProfilesResult : [],
       };
     },
@@ -71,12 +74,12 @@ function PresentationPoliciesPage() {
   const policyPrerequisites = [
     {
       label: t('policies.prerequisites.trustProfile', { defaultValue: 'Trust Profile' }),
-      status: safeDepData.trustProfiles.length > 0 ? 'ready' : 'missing',
+      status: depError ? 'error' : depLoading ? 'pending' : safeDepData.trustProfiles.length > 0 ? 'ready' : 'missing',
       path: '/console/org/trust/profiles',
     },
     {
       label: t('policies.prerequisites.credentialTemplate', { defaultValue: 'Credential Template' }),
-      status: safeDepData.templates.length > 0 ? 'ready' : 'missing',
+      status: depError ? 'error' : depLoading ? 'pending' : safeDepData.templates.length > 0 ? 'ready' : 'missing',
       path: '/console/org/templates/credentials',
     },
   ];
@@ -118,6 +121,12 @@ function PresentationPoliciesPage() {
       {error && (
         <Alert severity="error" sx={{ mb: 3 }}>
           {error?.message || String(error)}
+        </Alert>
+      )}
+
+      {depError && (
+        <Alert severity="error" sx={{ mb: 3 }}>
+          {depError?.message || t('policies.prerequisites.loadFailed', { defaultValue: 'Unable to load policy prerequisites.' })}
         </Alert>
       )}
 

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import userEvent from '@testing-library/user-event'
-import { renderWithRouter, screen, waitFor } from '@test/utils'
+import { renderWithRouter, screen, waitFor, within } from '@test/utils'
 
 import DidIdentitiesPage from './DidIdentitiesPage'
 
@@ -8,10 +8,15 @@ const mockShowNotification = vi.fn()
 const mockListSigningKeys = vi.fn()
 const mockGetKeyManagementConfig = vi.fn()
 const mockListIssuerProfiles = vi.fn()
+const mockCreateIssuerProfile = vi.fn()
 const mockGetOrganizationLifecycle = vi.fn()
 const mockClipboardWriteText = vi.fn()
 
 vi.mock('react-i18next', () => ({
+  initReactI18next: {
+    type: '3rdParty',
+    init: vi.fn(),
+  },
   useTranslation: () => ({
     t: (key) => key,
   }),
@@ -22,6 +27,7 @@ vi.mock('../../../services/signingKeysApi', () => ({
     listSigningKeys: (...args) => mockListSigningKeys(...args),
     getKeyManagementConfig: (...args) => mockGetKeyManagementConfig(...args),
     listIssuerProfiles: (...args) => mockListIssuerProfiles(...args),
+    createIssuerProfile: (...args) => mockCreateIssuerProfile(...args),
   },
 }))
 
@@ -36,6 +42,10 @@ vi.mock('../../../hooks/useAuth', () => ({
     organizationId: 'org-test-1',
     organizationName: 'Marty Identity Platform',
   }),
+}))
+
+vi.mock('../../../contexts/ConsoleContext', () => ({
+  useConsole: () => ({ activeOrgId: 'org-test-1' }),
 }))
 
 vi.mock('../../../services/dashboardApi', () => ({
@@ -53,6 +63,7 @@ describe('DidIdentitiesPage', () => {
           provider_key_name: 'cred-issuer-marty-es256',
           name: 'Marty issuer signing key',
           status: 'active',
+          signing_service_id: 'managed-openbao-transit',
           public_jwk: {
             kty: 'EC',
             crv: 'P-256',
@@ -66,6 +77,7 @@ describe('DidIdentitiesPage', () => {
           provider_key_name: 'cred-dsc-marty-primary',
           name: 'Marty document signer key',
           status: 'active',
+          signing_service_id: 'managed-openbao-transit',
         },
       ],
       domain_config: {
@@ -97,6 +109,17 @@ describe('DidIdentitiesPage', () => {
           created_at: '2026-04-18T00:00:00Z',
         },
       ],
+    })
+
+    mockCreateIssuerProfile.mockResolvedValue({
+      ok: true,
+      profile: {
+        id: 'profile-imported',
+        issuer_did: 'did:web:external.example.com',
+        signing_service_id: 'managed-openbao-transit',
+        signing_key_reference: 'cred-dsc-marty-primary',
+        status: 'active',
+      },
     })
 
     mockGetOrganizationLifecycle.mockResolvedValue({
@@ -143,5 +166,33 @@ describe('DidIdentitiesPage', () => {
 
     expect(screen.getAllByText(/did:jwk:/).length).toBeGreaterThan(0)
     expect(screen.getByRole('button', { name: 'Copy JSON' })).toBeInTheDocument()
+  })
+
+  it('imports an existing DID through the selected KMS signing service', async () => {
+    const user = userEvent.setup()
+
+    renderWithRouter(<DidIdentitiesPage />, {
+      initialEntries: ['/console/org/deploy/issuer-identity'],
+    })
+
+    await waitFor(() => {
+      expect(screen.getByText('Marty document signer key')).toBeInTheDocument()
+    })
+
+    await user.click(screen.getByRole('button', { name: 'Import DID' }))
+
+    const dialog = screen.getByRole('dialog', { name: 'Import existing DID' })
+    await user.type(within(dialog).getByLabelText('DID'), 'did:web:external.example.com')
+    await user.click(within(dialog).getByRole('button', { name: 'Import DID' }))
+
+    await waitFor(() => {
+      expect(mockCreateIssuerProfile).toHaveBeenCalledWith(expect.objectContaining({
+        organization_id: 'org-test-1',
+        issuer_did: 'did:web:external.example.com',
+        signing_service_id: 'managed-openbao-transit',
+        signing_key_reference: 'cred-dsc-marty-primary',
+        status: 'active',
+      }))
+    })
   })
 })

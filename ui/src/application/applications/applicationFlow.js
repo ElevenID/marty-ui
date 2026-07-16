@@ -2,9 +2,9 @@
  * Pure helpers for applicant application flows.
  */
 
-const PERSONAL_FIELDS = ['first_name', 'last_name', 'family_name', 'given_name', 'date_of_birth', 'birth_date', 'email', 'phone', 'nationality', 'sex', 'gender'];
+const PERSONAL_FIELDS = ['first_name', 'last_name', 'family_name', 'surname', 'given_name', 'date_of_birth', 'birth_date', 'email', 'phone', 'nationality', 'sex', 'gender'];
 const ADDRESS_FIELDS = ['street', 'city', 'state', 'zip', 'postal_code', 'country', 'address'];
-const DOCUMENT_FIELDS = ['document_number', 'license_class', 'driving_privileges', 'restrictions', 'issue_date', 'expiry_date'];
+const DOCUMENT_FIELDS = ['document_number', 'license_class', 'driving_privileges', 'restrictions', 'issue_date', 'date_of_issue', 'expiry_date', 'date_of_expiry', 'issuing_state', 'issuing_authority'];
 const PHOTO_FIELDS = ['portrait', 'signature', 'photo'];
 const MDL_CREDENTIAL_TYPE = 'org.iso.18013.5.1.mDL';
 const MEMBER_CREDENTIAL_TYPE = 'MemberCredential';
@@ -46,8 +46,8 @@ export function normalizeCredentialConfigInput(config) {
 
 export function normalizeTemplateToFormConfig(template) {
   const claims = Array.isArray(template?.claims) ? template.claims : [];
-  const requiredClaims = claims.filter((claim) => claim?.required).map((claim) => claim?.name).filter(Boolean);
-  const optionalClaims = claims.filter((claim) => !claim?.required).map((claim) => claim?.name).filter(Boolean);
+  const requiredClaims = claims.filter((claim) => claim?.required && claim?.name);
+  const optionalClaims = claims.filter((claim) => !claim?.required && claim?.name);
 
   return {
     id: template?.id,
@@ -62,7 +62,7 @@ export function normalizeTemplateToFormConfig(template) {
     field_validation_rules: {},
     submission_instructions: null,
     validity_rules: template?.validity_rules || null,
-    issuer_requirements: template?.issuer_requirements || {},
+    application_template_id: template?.application_template_id || null,
     claims,
   };
 }
@@ -93,10 +93,12 @@ function humanizeFieldName(fieldName) {
 function normalizeApplicationInputType(type) {
   const normalized = String(type || 'text').toLowerCase();
   if (['string', 'str'].includes(normalized)) return 'text';
-  if (['integer', 'int', 'float', 'decimal'].includes(normalized)) return 'number';
+  if (['integer', 'int'].includes(normalized)) return 'integer';
+  if (['float', 'decimal'].includes(normalized)) return 'number';
+  if (['enum'].includes(normalized)) return 'select';
   if (['bool'].includes(normalized)) return 'boolean';
   if (['datetime-local', 'datetime'].includes(normalized)) return 'datetime';
-  if (['email', 'phone', 'url', 'date', 'select', 'file', 'address', 'boolean', 'number', 'text'].includes(normalized)) {
+  if (['email', 'phone', 'url', 'date', 'select', 'file', 'address', 'boolean', 'integer', 'number', 'text'].includes(normalized)) {
     return normalized;
   }
   return 'text';
@@ -136,6 +138,25 @@ function normalizeFieldList(fields = [], defaultRequired = false) {
     .filter(Boolean);
 }
 
+function normalizeCanonicalApplicationField(field) {
+  if (!field || typeof field !== 'object' || !field.field_id || !field.field_type) {
+    return null;
+  }
+  return {
+    name: field.field_id,
+    label: field.label || humanizeFieldName(field.field_id),
+    type: normalizeApplicationInputType(field.field_type),
+    required: Boolean(field.required),
+    claim_mapping: field.claim_mapping,
+    pattern: field.validation_pattern,
+    options: field.options,
+    minimum: field.minimum,
+    maximum: field.maximum,
+    placeholder: field.placeholder,
+    hint: field.hint,
+  };
+}
+
 function mergeFieldsByName(...fieldGroups) {
   const fieldsByName = new Map();
 
@@ -158,7 +179,9 @@ function mergeFieldsByName(...fieldGroups) {
 
 export function normalizeApplicationTemplateToFormConfig(applicationTemplate, credentialConfig = null) {
   const baseConfig = normalizeCredentialConfigInput(credentialConfig) || {};
-  const templateFormFields = normalizeFieldList(applicationTemplate?.form_fields, true);
+  const templateFormFields = parseListField(applicationTemplate?.form_fields)
+    .map(normalizeCanonicalApplicationField)
+    .filter(Boolean);
   const requiredTemplateFields = templateFormFields.filter((field) => field.required);
   const optionalTemplateFields = templateFormFields.filter((field) => !field.required);
   const baseRequiredFields = normalizeFieldList(baseConfig.required_fields, true);
@@ -220,10 +243,15 @@ export function groupFieldsIntoSteps(requiredFields = [], optionalFields = [], c
     ...customFields.map((field) => normalizeField(field, false)),
   ];
 
-  const personal = allFields.filter((field) => PERSONAL_FIELDS.some((name) => field.name?.toLowerCase().includes(name)));
-  const address = allFields.filter((field) => ADDRESS_FIELDS.some((name) => field.name?.toLowerCase().includes(name)));
-  const document = allFields.filter((field) => DOCUMENT_FIELDS.some((name) => field.name?.toLowerCase().includes(name)));
-  const photo = allFields.filter((field) => PHOTO_FIELDS.some((name) => field.name?.toLowerCase().includes(name)));
+  const matches = (field, names) => {
+    const normalized = String(field.name || '').toLowerCase();
+    const leaf = normalized.split(/[.:/]/).pop();
+    return names.includes(normalized) || names.includes(leaf);
+  };
+  const personal = allFields.filter((field) => matches(field, PERSONAL_FIELDS));
+  const document = allFields.filter((field) => matches(field, DOCUMENT_FIELDS));
+  const address = allFields.filter((field) => !document.includes(field) && matches(field, ADDRESS_FIELDS));
+  const photo = allFields.filter((field) => matches(field, PHOTO_FIELDS));
   const other = allFields.filter((field) => !personal.includes(field) && !address.includes(field) && !document.includes(field) && !photo.includes(field));
 
   if (personal.length > 0) steps.push({ label: t('applicationForm.steps.personalInfo'), fields: personal });
@@ -254,157 +282,56 @@ export function getCredentialKindFlags(credentialConfig) {
   };
 }
 
-export function buildApplicantProfileData({ organizationId, user, formData }) {
-  const applicantData = {
-    organization_id: organizationId,
-    user_id: user.user_id,
+export function buildApplicantProfileData({ user, formData }) {
+  return {
     given_name: formData.given_name || formData.first_name || '',
     family_name: formData.family_name || formData.last_name || '',
     email: formData.email || user.email,
-    date_of_birth: formData.date_of_birth || formData.birth_date,
-    nationality: formData.nationality || 'USA',
-  };
-
-  const address = {};
-  if (formData.street) address.street_line1 = formData.street;
-  if (formData.city) address.city = formData.city;
-  if (formData.state) address.state_province = formData.state;
-  if (formData.zip || formData.postal_code) address.postal_code = formData.zip || formData.postal_code;
-  if (formData.country) address.country = formData.country;
-  else address.country = 'USA';
-
-  if (Object.keys(address).length > 0) {
-    applicantData.address = address;
-  }
-
-  return applicantData;
-}
-
-export function buildStandardApplicationPayload({ applicantId, credentialConfig, credentialConfigId, formData, canvasLtiContext = null }) {
-  return {
-    applicant_id: applicantId,
-    credential_configuration_id: credentialConfig?.id || credentialConfigId,
-    issuing_authority: 'ElevenID LLC',
-    requested_validity_years: 10,
-    metadata: {
-      document_number: formData.documentNumber,
-      credential_type: credentialConfig?.credentialType || credentialConfig?.credential_type,
-      credential_display_name: credentialConfig?.name || credentialConfig?.display_name,
-      license_class: formData.licenseClass,
-      restrictions: formData.restrictions,
-      ...(canvasLtiContext ? {
-        canvas_lti: canvasLtiContext,
-        auto_approve: true,
-      } : {}),
-    },
+    ...(formData.phone ? { phone: formData.phone } : {}),
   };
 }
 
-export function buildAutoApplyContext({ credentialConfig, user, organizationId, nowIso = new Date().toISOString() }) {
-  const { isMdlCredential, isMdocMemberCredential, isOpenBadgeCredential, isAccessBadgeCredential } = getCredentialKindFlags(credentialConfig);
-  const role = (user.roles || []).find((value) => ['applicant', 'vendor', 'administrator'].includes(value)) || 'applicant';
-  const organizationName = user.organization_name || 'ElevenID LLC';
-
-  if (isOpenBadgeCredential) {
-    return {
-      requested_validity_years: 1,
-      metadata: {
-        credential_type: OPEN_BADGE_CREDENTIAL_TYPE,
-        credential_display_name: credentialConfig?.name || 'Verified Member Badge',
-        member_id: user.user_id,
-        given_name: user.given_name || '',
-        family_name: user.family_name || '',
-        email: user.email,
-        organization_id: organizationId,
-        organization_name: organizationName,
-        role,
-        achievement_name: credentialConfig?.name || 'Verified Member Badge',
-        achievement_description: 'Verifiable proof of active membership in the issuing organization.',
-        issued_at: nowIso,
-        auto_approve: true,
-      },
-    };
-  }
-
-  if (isAccessBadgeCredential) {
-    return {
-      requested_validity_years: 1,
-      metadata: {
-        credential_type: ACCESS_BADGE_CREDENTIAL_TYPE,
-        credential_display_name: credentialConfig?.name || 'Employee Access Badge',
-        given_name: user.given_name || '',
-        family_name: user.family_name || '',
-        email: user.email,
-        employee_id: `EMP-${user.user_id?.slice(0, 8)?.toUpperCase() || '00000000'}`,
-        department: 'Engineering',
-        job_title: 'Platform Member',
-        clearance_level: 'general',
-        building_access: 'HQ-A, HQ-B',
-        issue_date: nowIso.slice(0, 10),
-        expiry_date: new Date(Date.now() + 365 * 86400000).toISOString().slice(0, 10),
-        auto_approve: true,
-      },
-    };
-  }
-
-  if (isMdocMemberCredential) {
-    return {
-      requested_validity_years: 1,
-      metadata: {
-        credential_type: MDOC_MEMBER_CREDENTIAL_TYPE,
-        credential_display_name: credentialConfig?.name || 'Membership ID (mDoc)',
-        member_id: user.user_id,
-        user_id: user.user_id,
-        email: user.email,
-        given_name: user.given_name || '',
-        family_name: user.family_name || '',
-        organization_id: organizationId,
-        organization_name: user.organization_name || '',
-        role,
-        issued_at: nowIso,
-        auto_approve: true,
-      },
-    };
-  }
-
-  if (isMdlCredential) {
-    return {
-      requested_validity_years: 5,
-      metadata: {
-        credential_type: MDL_CREDENTIAL_TYPE,
-        credential_display_name: credentialConfig?.name || 'Mobile Driving Licence',
-        family_name: user.family_name || '',
-        given_name: user.given_name || '',
-        birth_date: user.birth_date || '1990-01-01',
-        issue_date: nowIso.slice(0, 10),
-        expiry_date: new Date(Date.now() + 1825 * 86400000).toISOString().slice(0, 10),
-        issuing_country: 'US',
-        issuing_authority: 'ElevenID LLC',
-        document_number: `MDL-${user.user_id?.slice(0, 8)?.toUpperCase() || '00000000'}`,
-        driving_privileges: 'C',
-        un_distinguishing_sign: 'USA',
-        auto_approve: true,
-      },
-    };
-  }
-
+export function buildStandardApplicationPayload({ organizationId, credentialConfig, formData, canvasLtiContext = null }) {
   return {
-    requested_validity_years: 1,
-    metadata: {
-      credential_type: MEMBER_CREDENTIAL_TYPE,
-      credential_display_name: credentialConfig?.name || 'ElevenID Login Credential',
-      member_id: user.user_id,
-      user_id: user.user_id,
-      email: user.email,
-      given_name: user.given_name || '',
-      family_name: user.family_name || '',
-      organization_id: organizationId,
-      organization_name: user.organization_name || '',
-      role,
-      issued_at: nowIso,
-      auto_approve: true,
-    },
+    organization_id: organizationId,
+    application_template_id: credentialConfig?.application_template_id,
+    form_data: { ...formData },
+    integration_context: canvasLtiContext ? { canvas_lti: canvasLtiContext } : {},
   };
+}
+
+function applicantProfileValue(fieldId, user = {}) {
+  if (fieldId === 'birth_date') return user.birth_date || user.date_of_birth;
+  if (fieldId === 'date_of_birth') return user.date_of_birth || user.birth_date;
+  return ['email', 'given_name', 'family_name'].includes(fieldId) ? user[fieldId] : undefined;
+}
+
+export function buildAutoApplyFormData({ applicationTemplate, user }) {
+  const fields = Array.isArray(applicationTemplate?.form_fields) ? applicationTemplate.form_fields : [];
+  if (!applicationTemplate?.id || fields.length === 0) {
+    throw new Error('An active Application Template with form fields is required.');
+  }
+
+  const formData = {};
+  for (const field of fields) {
+    const fieldId = field?.field_id;
+    if (!fieldId) continue;
+    const value = applicantProfileValue(fieldId, user);
+    if (field.required && (value === undefined || value === null || value === '')) {
+      throw new Error(`Complete the required ${field.label || fieldId} field before applying.`);
+    }
+    if (value !== undefined && value !== null && value !== '') formData[fieldId] = value;
+  }
+  return formData;
+}
+
+export function canAutoApplyApplicationTemplate({ applicationTemplate, user }) {
+  try {
+    buildAutoApplyFormData({ applicationTemplate, user });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function getOneClickSummaryFields({ credentialConfig, user, organizationId }) {
@@ -454,7 +381,7 @@ export function getOneClickSummaryFields({ credentialConfig, user, organizationI
     { label: 'Name', value: [user?.given_name, user?.family_name].filter(Boolean).join(' ') || '—' },
     { label: 'Email', value: user?.email || '—' },
     { label: 'Role', value: roleLabel },
-    { label: 'Organization', value: 'ElevenID LLC' },
+    { label: 'Organization', value: user?.organization_name || user?.default_organization_name || organizationId || 'ElevenID LLC' },
   ];
 }
 
@@ -477,32 +404,58 @@ export function validateApplicationStep({ stepIndex, steps, formData, validation
   currentStepFields.forEach((field) => {
     const fieldName = field.name;
     const value = formData[fieldName];
-    const rules = validationRules[fieldName];
+    const rules = { ...field, ...(validationRules[fieldName] || {}) };
+    const missing = value === undefined || value === null || value === '' || (Array.isArray(value) && value.length === 0);
 
-    if (field.required && !value) {
+    if (field.required && missing) {
       errors[fieldName] = `${field.label || fieldName.replace(/_/g, ' ')} is required`;
       return;
     }
 
-    if (!value && !field.required) {
+    if (missing && !field.required) {
       return;
     }
 
     if (rules) {
+      const fieldType = String(rules.type || 'text').toLowerCase();
+      if (fieldType === 'date') {
+        const validDate = /^\d{4}-\d{2}-\d{2}$/.test(String(value))
+          && !Number.isNaN(new Date(`${value}T00:00:00Z`).getTime());
+        if (!validDate) errors[fieldName] = 'Use a date in YYYY-MM-DD format';
+      } else if (['datetime', 'datetime-local'].includes(fieldType) && Number.isNaN(new Date(value).getTime())) {
+        errors[fieldName] = 'Use a valid date and time';
+      } else if (fieldType === 'boolean' && typeof value !== 'boolean') {
+        errors[fieldName] = 'Choose true or false';
+      } else if (fieldType === 'number' && (typeof value !== 'number' || Number.isNaN(value))) {
+        errors[fieldName] = 'Enter a number';
+      } else if (fieldType === 'integer' && !Number.isInteger(value)) {
+        errors[fieldName] = 'Enter a whole number';
+      }
       if (rules.min_length && value.length < rules.min_length) {
         errors[fieldName] = `Minimum length is ${rules.min_length}`;
       }
       if (rules.max_length && value.length > rules.max_length) {
         errors[fieldName] = `Maximum length is ${rules.max_length}`;
       }
-      if (rules.pattern && !new RegExp(rules.pattern).test(value)) {
-        errors[fieldName] = rules.pattern_description || 'Invalid format';
+      if (rules.pattern) {
+        try {
+          if (!new RegExp(`^(?:${rules.pattern})$`).test(value)) errors[fieldName] = rules.pattern_description || 'Invalid format';
+        } catch {
+          // Invalid template patterns are rejected server-side during template validation.
+        }
       }
-      if (rules.min_value !== undefined && value < rules.min_value) {
-        errors[fieldName] = `Minimum value is ${rules.min_value}`;
+      const allowedValues = rules.enum || rules.allowed_values || rules.options;
+      if (Array.isArray(allowedValues) && allowedValues.length > 0) {
+        const normalized = allowedValues.map((item) => typeof item === 'object' ? item.value : item);
+        if (!normalized.includes(value)) errors[fieldName] = 'Choose one of the allowed values';
       }
-      if (rules.max_value !== undefined && value > rules.max_value) {
-        errors[fieldName] = `Maximum value is ${rules.max_value}`;
+      const minimum = rules.minimum ?? rules.min ?? rules.min_value;
+      const maximum = rules.maximum ?? rules.max ?? rules.max_value;
+      if (minimum !== undefined && value < minimum) {
+        errors[fieldName] = `Minimum value is ${minimum}`;
+      }
+      if (maximum !== undefined && value > maximum) {
+        errors[fieldName] = `Maximum value is ${maximum}`;
       }
     }
   });

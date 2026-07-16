@@ -60,6 +60,43 @@ describe('auditApi', () => {
     expect(queryParams?.get('offset')).toBe('50')
   })
 
+  it('trims organization id before constructing audit routes', async () => {
+    let requestedOrgId: string | undefined
+
+    server.use(
+      http.get('*/v1/organizations/:orgId/audit-events', ({ params }) => {
+        requestedOrgId = params.orgId as string
+        return HttpResponse.json({
+          events: [],
+          total: 0,
+          page: 1,
+          per_page: 25,
+        })
+      })
+    )
+
+    await listAuditEvents(' org_123 ')
+
+    expect(requestedOrgId).toBe('org_123')
+  })
+
+  it('fails locally before constructing audit routes without a valid organization id', async () => {
+    let requested = false
+
+    server.use(
+      http.get('*/v1/organizations/:orgId/audit-events', () => {
+        requested = true
+        return HttpResponse.json({ events: [] })
+      })
+    )
+
+    await expect(listAuditEvents('null')).rejects.toMatchObject({
+      code: 'ORG_REQUIRED',
+      status: 400,
+    })
+    expect(requested).toBe(false)
+  })
+
   it('normalizes an audit event by id', async () => {
     let requestedEventId: string | undefined
 
@@ -96,19 +133,76 @@ describe('auditApi', () => {
     expect(event.ipAddress).toBe('127.0.0.1')
   })
 
-  it('builds an audit export download URL with filters and format', async () => {
+  it('requests an audit export with filters and format', async () => {
+    let requestedOrgId: string | undefined
+    let queryParams: URLSearchParams | undefined
+
+    server.use(
+      http.get('*/v1/organizations/:orgId/audit-events/export', ({ params, request }) => {
+        requestedOrgId = params.orgId as string
+        queryParams = new URL(request.url).searchParams
+        return HttpResponse.json({ download_url: '/exports/audit.json' })
+      })
+    )
+
     const result = await exportAuditEvents(
       'org_123',
       { severity: 'error', actor: 'ops@example.com' },
       'json'
     )
 
-    const url = new URL(result.download_url, 'http://localhost')
+    expect(result).toEqual({ download_url: '/exports/audit.json' })
+    expect(requestedOrgId).toBe('org_123')
+    expect(queryParams?.get('format')).toBe('json')
+    expect(queryParams?.get('severity')).toBe('error')
+    expect(queryParams?.get('actor')).toBe('ops@example.com')
+  })
 
-    expect(url.pathname).toBe('/v1/organizations/org_123/audit-events/export')
-    expect(url.searchParams.get('format')).toBe('json')
-    expect(url.searchParams.get('severity')).toBe('error')
-    expect(url.searchParams.get('actor')).toBe('ops@example.com')
+  it('creates a download URL when audit export returns inline content', async () => {
+    const originalCreateObjectURL = URL.createObjectURL
+    const createObjectURL = vi.fn(() => 'blob:audit-export')
+    Object.defineProperty(URL, 'createObjectURL', {
+      configurable: true,
+      value: createObjectURL,
+    })
+
+    try {
+      server.use(
+        http.get('*/v1/organizations/:orgId/audit-events/export', () => {
+          return HttpResponse.json({
+            filename: 'audit-events.csv',
+            content_type: 'text/csv',
+            content: 'id,action\nevt_1,api_key.created\n',
+          })
+        })
+      )
+
+      const result = await exportAuditEvents('org_123', {}, 'csv')
+
+      expect(result.download_url).toBe('blob:audit-export')
+      expect(createObjectURL).toHaveBeenCalledWith(expect.any(Blob))
+    } finally {
+      Object.defineProperty(URL, 'createObjectURL', {
+        configurable: true,
+        value: originalCreateObjectURL,
+      })
+    }
+  })
+
+  it('surfaces unavailable audit export instead of creating a fake download URL', async () => {
+    server.use(
+      http.get('*/v1/organizations/:orgId/audit-events/export', () => {
+        return HttpResponse.json(
+          {
+            error: 'audit_log_unavailable',
+            message: 'Organization audit log storage is not configured for this deployment.',
+          },
+          { status: 501 }
+        )
+      })
+    )
+
+    await expect(exportAuditEvents('org_123', {}, 'csv')).rejects.toThrow(/not implemented/i)
   })
 
   it('gets critical audit events from the org-scoped event feed', async () => {

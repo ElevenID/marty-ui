@@ -74,3 +74,50 @@ async def test_sandbox_plan_still_applies_fair_use_cap():
     assert response.status_code == 429
     assert body["error"] == "sandbox_fair_use_exceeded"
     tracker.get.assert_awaited_once_with("org-1", "sandbox_monthly_activity")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["/v1/flows/verify", "/v1/flows/instances"])
+async def test_runtime_flow_operations_do_not_consume_flow_definition_gauge(path: str):
+    tracker = SimpleNamespace(
+        get=AsyncMock(return_value=999),
+        increment=AsyncMock(),
+        increment_gauge=AsyncMock(),
+    )
+    request = _build_request(tracker=tracker, plan="professional", path=path)
+    middleware = UsageTrackingMiddleware(app=request.app)
+
+    async def call_next(_request: Request) -> Response:
+        return Response(status_code=200)
+
+    response = await middleware.dispatch(request, call_next)
+
+    assert response.status_code == 200
+    tracker.get.assert_not_awaited()
+    tracker.increment_gauge.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_flow_definition_creation_enforces_active_flow_gauge():
+    tracker = SimpleNamespace(
+        get=AsyncMock(return_value=2),
+        increment=AsyncMock(),
+        increment_gauge=AsyncMock(),
+    )
+    request = _build_request(
+        tracker=tracker,
+        plan="sandbox",
+        path="/v1/flows/definitions",
+    )
+    middleware = UsageTrackingMiddleware(app=request.app)
+
+    async def call_next(_request: Request) -> Response:
+        return Response(status_code=200)
+
+    response = await middleware.dispatch(request, call_next)
+    body = json.loads(response.body)
+
+    assert response.status_code == 429
+    assert body["error"] == "plan_limit_exceeded"
+    assert body["metric"] == "active_flows"
+    tracker.get.assert_awaited_once_with("org-1", "active_flows")

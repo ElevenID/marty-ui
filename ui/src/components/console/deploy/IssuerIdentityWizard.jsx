@@ -35,6 +35,7 @@ import { useWizard } from '../../../hooks/useWizard';
 import { useAsyncData } from '../../../hooks/useAsyncData';
 import { useAuth } from '../../../hooks/useAuth';
 import { useNotifications } from '../../../hooks/useNotifications';
+import { useConsole } from '../../../contexts/ConsoleContext';
 import { getOrganizationLifecycle } from '../../../services/dashboardApi';
 import {
   DEFAULT_KEY_MANAGEMENT_CONFIG,
@@ -108,6 +109,7 @@ const IDENTITY_LABEL_SUFFIX = {
   'did:key': 'key issuer',
 };
 
+const MANAGED_OPENBAO_SERVICE_ID = 'managed-openbao-transit';
 const KEY_REFERENCE_PREFIX = /^cred-(issuer|dsc|key|signer)-/i;
 
 const humanizeKeyLabel = (value) => value
@@ -220,20 +222,31 @@ function MethodCard({ method, selected, onSelect, ready, readinessLabel }) {
   );
 }
 
-function KeySourceCard({ option, selected, onSelect }) {
+function KeySourceCard({ option, selected, onSelect, disabled = false, disabledReason = '' }) {
   return (
     <Paper
       variant="outlined"
-      onClick={() => onSelect(option.id)}
+      onClick={() => {
+        if (!disabled) {
+          onSelect(option.id);
+        }
+      }}
       sx={{
         p: 2.5,
-        cursor: 'pointer',
+        cursor: disabled ? 'not-allowed' : 'pointer',
         borderColor: selected ? 'primary.main' : 'divider',
         bgcolor: selected ? 'action.selected' : 'background.paper',
+        opacity: disabled ? 0.58 : 1,
       }}
+      aria-disabled={disabled}
     >
       <Typography variant="h6" sx={{ mb: 0.5 }}>{option.label}</Typography>
       <Typography variant="body2" color="text.secondary">{option.description}</Typography>
+      {disabled && disabledReason && (
+        <Alert severity="warning" sx={{ mt: 1.5 }}>
+          {disabledReason}
+        </Alert>
+      )}
     </Paper>
   );
 }
@@ -242,7 +255,17 @@ export default function IssuerIdentityWizard() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const prefillKeyId = searchParams.get('prefill_key_id') || '';
+  const requestedKeySource = searchParams.get('key_source') === 'create' ? 'create' : '';
+  const requestedNewKeyName = searchParams.get('key_name') || '';
+  const requestedSigningServiceId = searchParams.get('signing_service_id') || '';
   const { organizationId, organizationName } = useAuth();
+  const { activeOrgId, memberships } = useConsole();
+  const activeOrganization = useMemo(
+    () => (memberships || []).find((organization) => organization.id === activeOrgId) || null,
+    [activeOrgId, memberships]
+  );
+  const effectiveOrganizationId = activeOrgId;
+  const effectiveOrganizationName = activeOrganization?.display_name || activeOrganization?.name || organizationName;
   const { showNotification } = useNotifications();
   const [publishResult, setPublishResult] = useState(null);
   const [preflightAcknowledged, setPreflightAcknowledged] = useState(false);
@@ -251,13 +274,13 @@ export default function IssuerIdentityWizard() {
     data: signingKeysData,
     loading: keysLoading,
   } = useAsyncData(async () => {
-    const data = await signingKeysApi.listSigningKeys();
+    const data = await signingKeysApi.listSigningKeys({ organization_id: effectiveOrganizationId });
     const rawKeys = Array.isArray(data) ? data : data?.keys || [];
     return {
       keys: Array.isArray(rawKeys) ? rawKeys.filter((k) => k && typeof k === 'object') : [],
       domainConfig: data?.domain_config || null,
     };
-  }, []);
+  }, [effectiveOrganizationId]);
 
   const {
     data: configData,
@@ -265,14 +288,16 @@ export default function IssuerIdentityWizard() {
     error: configError,
     reload: reloadConfig,
   } = useAsyncData(
-    async () => normalizeKeyManagementConfig(await signingKeysApi.getKeyManagementConfig()),
-    [],
+    async () => normalizeKeyManagementConfig(
+      await signingKeysApi.getKeyManagementConfig({ organization_id: effectiveOrganizationId })
+    ),
+    [effectiveOrganizationId],
   );
 
   const { data: organizationLifecycle } = useAsyncData(async () => {
-    if (!organizationId) return null;
-    return getOrganizationLifecycle(organizationId);
-  }, [organizationId]);
+    if (!effectiveOrganizationId) return null;
+    return getOrganizationLifecycle(effectiveOrganizationId);
+  }, [effectiveOrganizationId]);
 
   const keyManagementConfig = normalizeKeyManagementConfig(configData || DEFAULT_KEY_MANAGEMENT_CONFIG);
   const defaultService = getDefaultKeyManagementService(keyManagementConfig);
@@ -284,19 +309,25 @@ export default function IssuerIdentityWizard() {
   const planTier = normalizePlanTier(organizationLifecycle?.planTier);
   const x509Eligible = isDidWebX509ChainEligible(planTier);
   const publicDomain = domainSummary?.public_domain || '';
+  const managedOpenBaoService = keyManagementConfig.services.find((service) => service.id === MANAGED_OPENBAO_SERVICE_ID) || null;
+  const canUseManagedKeyCreation = Boolean(managedOpenBaoService);
+  const defaultServiceLabel = defaultService?.name
+    || defaultService?.provider_label
+    || defaultService?.id
+    || 'the default signing service';
 
   // Derive a URL-safe slug from the org name, falling back to the org ID
   const orgSlug = useMemo(() => {
-    if (organizationName) {
-      return organizationName
+    if (effectiveOrganizationName) {
+      return effectiveOrganizationName
         .trim()
         .toLowerCase()
         .replace(/[^a-z0-9]+/g, '-')
         .replace(/^-|-$/g, '')
-        .slice(0, 64) || organizationId || '';
+        .slice(0, 64) || effectiveOrganizationId || '';
     }
-    return organizationId || '';
-  }, [organizationName, organizationId]);
+    return effectiveOrganizationId || '';
+  }, [effectiveOrganizationName, effectiveOrganizationId]);
 
   const methodCatalog = useMemo(
     () => buildDidMethodCatalog(safeKeys, domainSummary),
@@ -349,11 +380,43 @@ export default function IssuerIdentityWizard() {
     [safeKeys],
   );
 
+  const getServiceById = useCallback((serviceId) => (
+    keyManagementConfig.services.find((service) => service.id === serviceId) || null
+  ), [keyManagementConfig.services]);
+
+  const getKeyServiceId = useCallback((key) => (
+    key?.service_id
+    || key?.signing_service_id
+    || key?.service?.id
+    || defaultService?.id
+    || ''
+  ), [defaultService?.id]);
+
+  const getServiceLabel = useCallback((service) => (
+    service?.name
+    || service?.provider_label
+    || service?.id
+    || 'Signing service'
+  ), []);
+
+  const getCreateServiceForData = useCallback((data) => (
+    getServiceById(data?.signing_service_id)
+    || managedOpenBaoService
+    || null
+  ), [getServiceById, managedOpenBaoService]);
+
+  const canCreateKeyForData = useCallback((data) => (
+    getCreateServiceForData(data)?.id === MANAGED_OPENBAO_SERVICE_ID
+  ), [getCreateServiceForData]);
+
   const validateStep = useCallback((stepIndex, data) => {
     switch (stepIndex) {
       case 0:
         return Boolean(data.did_method);
       case 1:
+        if (data.key_source === 'create') {
+          return Boolean(canCreateKeyForData(data));
+        }
         return Boolean(data.key_source);
       case 2:
         if (data.key_source === 'existing') {
@@ -361,7 +424,8 @@ export default function IssuerIdentityWizard() {
         }
         if (data.key_source === 'create') {
           return Boolean(
-            data.new_key_name?.trim()
+            canCreateKeyForData(data)
+            && data.new_key_name?.trim()
             && data.new_key_algorithm
             && isAlgorithmAllowedForPurpose(data.new_key_purpose, data.new_key_algorithm),
           );
@@ -377,32 +441,47 @@ export default function IssuerIdentityWizard() {
       default:
         return false;
     }
-  }, []);
+  }, [canCreateKeyForData]);
 
   const handleSubmit = useCallback(async (data) => {
     const selectedKey = safeKeys.find((k) => k.id === data.selected_key_id);
+    const createService = getCreateServiceForData(data);
+    let signingServiceId = data.key_source === 'create'
+      ? createService?.id
+      : (getKeyServiceId(selectedKey) || data.signing_service_id || defaultService?.id);
     let createdKey = null;
     let effectiveKeyReference = selectedKey?.provider_key_name || selectedKey?.id || null;
     const errors = [];
     let identitiesForLookup = derivedIdentities;
 
     // Hard guard: a signing service is required for every DID method
-    if (!defaultService?.id) {
+    if (!signingServiceId) {
       throw new Error(
         'No key management service is registered. Go to Deploy → Key Management and register a signing service before creating an issuer identity.',
       );
     }
 
     // ── Key creation ("create new in KMS") ────────────────────────────
+    if (data.key_source === 'create' && signingServiceId !== MANAGED_OPENBAO_SERVICE_ID) {
+      throw new Error(
+        'Creating a new key from the console is supported only for the Marty managed OpenBao transit service. Use an existing key from the registered KMS, or choose the managed OpenBao service for this issuer identity.',
+      );
+    }
+
     if (data.key_source === 'create') {
       try {
         const createResult = await signingKeysApi.createSigningKey({
-          service_id: defaultService.id,
+          organization_id: effectiveOrganizationId,
+          service_id: signingServiceId,
           name: data.new_key_name,
           algorithm: data.new_key_algorithm,
           key_purpose: data.new_key_purpose || 'vc_jwt_issuer',
         });
         createdKey = createResult?.key || createResult || null;
+        signingServiceId = createResult?.service_id
+          || createdKey?.service_id
+          || createdKey?.signing_service_id
+          || signingServiceId;
         effectiveKeyReference = createdKey?.provider_key_name || createdKey?.id || effectiveKeyReference;
         if (!effectiveKeyReference) {
           throw new Error('The signing service did not return a usable key reference.');
@@ -410,12 +489,19 @@ export default function IssuerIdentityWizard() {
 
         // Refresh key inventory so self-contained DID methods can resolve
         // against newly created KMS keys in the same submit operation.
-        const latestSigningKeysResponse = await signingKeysApi.listSigningKeys();
+        const latestSigningKeysResponse = await signingKeysApi.listSigningKeys({ organization_id: effectiveOrganizationId });
         const latestRawKeys = Array.isArray(latestSigningKeysResponse)
           ? latestSigningKeysResponse
           : latestSigningKeysResponse?.keys || [];
-        if (Array.isArray(latestRawKeys) && latestRawKeys.length > 0) {
+        if (Array.isArray(latestRawKeys)) {
           const latestKeys = latestRawKeys.filter((entry) => entry && typeof entry === 'object');
+          const latestIncludesCreatedKey = latestKeys.some((entry) => (
+            (createdKey?.id && entry.id === createdKey.id)
+            || (createdKey?.provider_key_name && entry.provider_key_name === createdKey.provider_key_name)
+          ));
+          if (createdKey && typeof createdKey === 'object' && !latestIncludesCreatedKey) {
+            latestKeys.unshift(createdKey);
+          }
           identitiesForLookup = buildDidIdentities({ keys: latestKeys, domainSummary });
         }
       } catch (err) {
@@ -441,8 +527,10 @@ export default function IssuerIdentityWizard() {
 
       try {
         await Promise.all([
-          signingKeysApi.publishServiceToJwks(defaultService.id),
-          signingKeysApi.publishServiceToDidVm(defaultService.id, undefined, {
+          signingKeysApi.publishServiceToJwks(signingServiceId, effectiveOrganizationId, {
+            key_reference: effectiveKeyReference || undefined,
+          }),
+          signingKeysApi.publishServiceToDidVm(signingServiceId, effectiveOrganizationId, {
             did_id: didId,
             org_slug: orgSlug,
             key_reference: effectiveKeyReference || undefined,
@@ -461,29 +549,31 @@ export default function IssuerIdentityWizard() {
       if (didId) {
         try {
           await signingKeysApi.createIssuerProfile({
+            organization_id: effectiveOrganizationId,
             name: resolveIdentityLabel(data, didId, effectiveKeyReference),
             issuer_did: didId,
-            signing_service_id: defaultService.id,
+            signing_service_id: signingServiceId,
             signing_key_reference: effectiveKeyReference || undefined,
             key_purpose: data.key_source === 'existing' ? data.compliance_target : data.new_key_purpose,
             status: 'active',
           });
         } catch (err) {
-          errors.push(
-            `Issuer profile could not be saved: ${err?.response?.data?.detail || err?.message || 'Unknown error'}. You can create it later from the Issuer Identity page.`,
+          throw new Error(
+            `Issuer profile could not be saved: ${err?.response?.data?.detail || err?.message || 'Unknown error'}. Resolve the issuer profile error before using this identity for credential issuance.`,
           );
         }
       }
     } else if (data.did_method) {
       // did:jwk / did:key — self-contained, still needs issuer profile
       const lookupKeyId = createdKey?.id || data.selected_key_id;
+      const hasSpecificKeyReference = Boolean(lookupKeyId || effectiveKeyReference);
       const derivedMatch = identitiesForLookup.find(
         (id) => id.method === data.did_method && lookupKeyId && id.backingKeyId === lookupKeyId,
       ) || identitiesForLookup.find(
         (id) => id.method === data.did_method
           && effectiveKeyReference
           && (id.source === effectiveKeyReference || id.source === createdKey?.provider_key_name),
-      ) || identitiesForLookup.find((id) => id.method === data.did_method) || null;
+      ) || (!hasSpecificKeyReference ? identitiesForLookup.find((id) => id.method === data.did_method) : null);
       const derivedDid = derivedMatch?.did;
       if (!derivedDid) {
         throw new Error(
@@ -493,22 +583,25 @@ export default function IssuerIdentityWizard() {
 
       try {
         await signingKeysApi.createIssuerProfile({
+          organization_id: effectiveOrganizationId,
           name: resolveIdentityLabel(data, derivedDid, effectiveKeyReference),
           issuer_did: derivedDid,
-          signing_service_id: defaultService.id,
+          signing_service_id: signingServiceId,
           signing_key_reference: effectiveKeyReference || undefined,
           key_purpose: data.key_source === 'existing' ? data.compliance_target : data.new_key_purpose,
           status: 'active',
         });
       } catch (err) {
-        errors.push(
-          `Issuer profile could not be saved: ${err?.response?.data?.detail || err?.message || 'Unknown error'}. You can create it later from the Issuer Identity page.`,
+        throw new Error(
+          `Issuer profile could not be saved: ${err?.response?.data?.detail || err?.message || 'Unknown error'}. Resolve the issuer profile error before using this identity for credential issuance.`,
         );
       }
 
       // Publish JWKS so JWT verifiers can resolve the public key
       try {
-        await signingKeysApi.publishServiceToJwks(defaultService.id);
+        await signingKeysApi.publishServiceToJwks(signingServiceId, effectiveOrganizationId, {
+          key_reference: effectiveKeyReference || undefined,
+        });
       } catch {
         // Non-fatal: JWKS publication will be retried when the profile is activated
       }
@@ -524,18 +617,19 @@ export default function IssuerIdentityWizard() {
     }
 
     return { method: data.did_method, key: effectiveKeyReference || selectedKey?.id || data.new_key_name, warnings: errors };
-  }, [defaultService?.id, derivedIdentities, domainSummary, orgSlug, publicDomain, resolveIdentityLabel, safeKeys, showNotification]);
+  }, [defaultService?.id, derivedIdentities, domainSummary, effectiveOrganizationId, getCreateServiceForData, getKeyServiceId, orgSlug, publicDomain, resolveIdentityLabel, safeKeys, showNotification]);
 
   const wizard = useWizard({
     steps: STEPS,
     initialData: {
       did_method: '',
-      key_source: prefillKeyId ? 'existing' : '',
+      key_source: prefillKeyId ? 'existing' : requestedKeySource,
       selected_key_id: prefillKeyId,
       compliance_target: 'vc_jwt_issuer',
-      new_key_name: '',
+      new_key_name: requestedNewKeyName,
       new_key_algorithm: 'ES256',
       new_key_purpose: 'vc_jwt_issuer',
+      signing_service_id: requestedSigningServiceId || (requestedKeySource === 'create' ? MANAGED_OPENBAO_SERVICE_ID : ''),
       did_web_domain: publicDomain,
       did_web_path: orgSlug ? `orgs/${orgSlug}` : '',
       identity_label: '',
@@ -550,6 +644,22 @@ export default function IssuerIdentityWizard() {
     },
   });
 
+  const selectedCreationService = getCreateServiceForData(wizard.data);
+  const supportsGatewayManagedKeyCreation = selectedCreationService?.id === MANAGED_OPENBAO_SERVICE_ID;
+  const selectedCreationServiceLabel = getServiceLabel(selectedCreationService || managedOpenBaoService);
+
+  const useManagedKeyCreationForIdentity = useCallback(() => {
+    if (!managedOpenBaoService) {
+      return;
+    }
+
+    wizard.updateData({
+      key_source: 'create',
+      signing_service_id: MANAGED_OPENBAO_SERVICE_ID,
+    });
+    setPreflightAcknowledged(true);
+  }, [managedOpenBaoService, wizard.updateData]);
+
   // Sync wizard defaults when async data (publicDomain / orgSlug) arrives
   // after the initial render where they were still empty strings.
   useEffect(() => {
@@ -562,6 +672,7 @@ export default function IssuerIdentityWizard() {
   }, [publicDomain, orgSlug]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const selectedKey = safeKeys.find((k) => k.id === wizard.data.selected_key_id);
+  const selectedExistingKeyService = getServiceById(getKeyServiceId(selectedKey)) || defaultService;
 
   const selectedExistingKey = useMemo(
     () => (wizard.data.key_source === 'existing' ? safeKeys.find((k) => k.id === wizard.data.selected_key_id) || null : null),
@@ -708,19 +819,37 @@ export default function IssuerIdentityWizard() {
         )}
 
         <Alert severity="info" sx={{ mb: 3 }}>
-          Private keys never enter this portal. Key creation and lifecycle actions are performed entirely in your external KMS/HSM.
+          Private keys never enter this portal. With the Marty managed OpenBao signer, this wizard can create a new
+          KMS key through the signing-key create endpoint. With registered external KMS services, create the key in
+          the provider first, then use the discovered key here.
         </Alert>
 
         <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: { xs: '1fr', md: 'repeat(2, 1fr)' } }}>
-          {KEY_SOURCE_OPTIONS.map((option) => (
-            <KeySourceCard
-              key={option.id}
-              option={option}
-              selected={wizard.data.key_source === option.id}
-              onSelect={(id) => wizard.updateData({ key_source: id })}
-            />
-          ))}
+          {KEY_SOURCE_OPTIONS.map((option) => {
+            const createDisabled = option.id === 'create' && !canUseManagedKeyCreation;
+            return (
+              <KeySourceCard
+                key={option.id}
+                option={option}
+                selected={wizard.data.key_source === option.id}
+                onSelect={(id) => wizard.updateData(id === 'create'
+                  ? { key_source: id, signing_service_id: MANAGED_OPENBAO_SERVICE_ID }
+                  : { key_source: id })}
+                disabled={createDisabled}
+                disabledReason={createDisabled
+                  ? 'Console key creation currently requires the Marty managed OpenBao transit service to be registered. Use an existing key from the registered KMS, or register the managed service.'
+                  : ''}
+              />
+            );
+          })}
         </Box>
+
+        {canUseManagedKeyCreation && defaultService?.id !== MANAGED_OPENBAO_SERVICE_ID && (
+          <Alert severity="info" sx={{ mt: 3 }}>
+            Create new key in KMS will use the Marty managed OpenBao service for this issuer identity only. The org
+            default signer remains {defaultServiceLabel}.
+          </Alert>
+        )}
       </Box>
     );
   };
@@ -736,9 +865,27 @@ export default function IssuerIdentityWizard() {
           </Typography>
 
           {activeKeys.length === 0 ? (
-            <Alert severity="warning">
-              No active signing keys found. Keys must be created in your KMS first, then discovered via your registered signing service.
-            </Alert>
+            <Stack spacing={2}>
+              <Alert severity="warning">
+                No active signing keys found for {defaultServiceLabel}. Issuer identity setup needs a signing key
+                with public material that can be published into the DID document.
+              </Alert>
+              <Alert severity={canUseManagedKeyCreation ? 'info' : 'warning'}>
+                {canUseManagedKeyCreation
+                  ? 'Use managed OpenBao key creation for this issuer identity. The wizard will create the key before publishing the issuer profile, without changing the org default signer.'
+                  : 'Create the key in your registered KMS provider first, confirm the key reference on the Key Management page, refresh discovered keys, then return here and choose it.'}
+              </Alert>
+              <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5}>
+                {canUseManagedKeyCreation && (
+                  <Button variant="contained" onClick={useManagedKeyCreationForIdentity}>
+                    Use managed key creation
+                  </Button>
+                )}
+                <Button variant="outlined" onClick={() => navigate('/console/org/deploy/key-management')}>
+                  Open key management
+                </Button>
+              </Stack>
+            </Stack>
           ) : (
             <Box sx={{ display: 'grid', gap: 1.5 }}>
               {activeKeys.map((key) => (
@@ -756,6 +903,7 @@ export default function IssuerIdentityWizard() {
                     const shouldKeepCurrentMethod = currentMethod && compatibility[currentMethod];
                     wizard.updateData({
                       selected_key_id: key.id,
+                      signing_service_id: getKeyServiceId(key),
                       did_method: shouldKeepCurrentMethod ? currentMethod : recommendedMethod,
                     });
                   }}
@@ -788,6 +936,21 @@ export default function IssuerIdentityWizard() {
       );
     }
 
+    if (wizard.data.key_source === 'create' && !supportsGatewayManagedKeyCreation) {
+      return (
+        <Box>
+          <Typography variant="h5" gutterBottom>Create key in KMS</Typography>
+          <Alert severity="warning" sx={{ mb: 2 }}>
+            Console key creation is supported only for the Marty managed OpenBao transit service. Use an existing key
+            from the registered KMS, or register managed OpenBao and choose it for this issuer identity.
+          </Alert>
+          <Button variant="outlined" onClick={() => wizard.updateData({ key_source: 'existing' })}>
+            Use existing key
+          </Button>
+        </Box>
+      );
+    }
+
     if (wizard.data.key_source === 'create') {
       return (
         <Box>
@@ -795,6 +958,10 @@ export default function IssuerIdentityWizard() {
           <Typography color="text.secondary" sx={{ mb: 3 }}>
             Marty will request your connected KMS to generate a new signing key. The private key never leaves the KMS.
           </Typography>
+
+          <Alert severity="info" sx={{ mb: 2 }}>
+            This issuer identity will create the key with {selectedCreationServiceLabel}. The org default signer is not changed.
+          </Alert>
 
           <Box sx={{ display: 'grid', gap: 2 }}>
             <TextField
@@ -859,14 +1026,15 @@ export default function IssuerIdentityWizard() {
             )}
           </Box>
 
-          {!defaultService && (
+          {!selectedCreationService && (
             <Alert severity="warning" sx={{ mt: 2 }}>
-              No default signing service configured. <Button size="small" onClick={() => navigate('/console/org/deploy/key-management/services/new')}>Register a service</Button> before creating keys.
+              No create-capable signing service is configured. <Button size="small" onClick={() => navigate('/console/org/deploy/key-management/services/new')}>Register a service</Button> before creating keys.
             </Alert>
           )}
 
           <Alert severity="info" sx={{ mt: 2 }}>
-            Key generation happens in your external KMS/HSM via the registered signing service connector. Marty stores only the key{"'s"} public metadata.
+            Key generation happens in the managed OpenBao KMS through the signing-key create endpoint. Marty stores only
+            the key{"'s"} public metadata and the provider key reference.
           </Alert>
         </Box>
       );
@@ -1002,6 +1170,9 @@ export default function IssuerIdentityWizard() {
     const keyLabel = wizard.data.key_source === 'existing'
       ? (selectedKey?.name || selectedKey?.provider_key_name || wizard.data.selected_key_id)
       : wizard.data.new_key_name || 'New key';
+    const reviewSigningService = wizard.data.key_source === 'create'
+      ? selectedCreationService
+      : selectedExistingKeyService;
     const effectiveDomain = wizard.data.did_web_domain || publicDomain;
     const effectivePath = wizard.data.did_web_path ? `:${wizard.data.did_web_path.replace(/\//g, ':')}` : '';
     const previewDid = wizard.data.did_method === 'did:web' && effectiveDomain
@@ -1021,6 +1192,7 @@ export default function IssuerIdentityWizard() {
           <Typography variant="h6" sx={{ mb: 1.5 }}>Summary</Typography>
           <Typography variant="body2" sx={{ mb: 0.75 }}>DID method: {methodLabel}</Typography>
           <Typography variant="body2" sx={{ mb: 0.75 }}>Key source: {wizard.data.key_source === 'existing' ? 'Existing KMS key' : 'Create new in KMS'}</Typography>
+          <Typography variant="body2" sx={{ mb: 0.75 }}>Signing service: {getServiceLabel(reviewSigningService)}</Typography>
           <Typography variant="body2" sx={{ mb: 0.75 }}>Key: {keyLabel}</Typography>
           {wizard.data.did_method === 'did:web' && (
             <>
@@ -1164,16 +1336,27 @@ export default function IssuerIdentityWizard() {
       severity: 'warning',
       icon: <VpnKeyIcon />,
       title: 'No signing keys discovered',
-      description:
-        'Your signing service is registered but has no keys yet. You can still proceed and create a key during the wizard, or configure keys in your KMS first.',
+      description: canUseManagedKeyCreation
+        ? `No active signing keys were discovered for this org. You can create a managed OpenBao key for this issuer identity without changing the org default signer${defaultService ? ` (${defaultServiceLabel})` : ''}.`
+        : `The default signer (${defaultServiceLabel}) has no discovered keys yet. Create the key in the KMS provider first, verify the key reference in Key Management, refresh discovered keys, then return to create the issuer identity.`,
       action: (
-        <Button
-          variant="outlined"
-          size="small"
-          onClick={() => navigate('/console/org/deploy/key-management')}
-        >
-          Manage keys
-        </Button>
+        canUseManagedKeyCreation ? (
+          <Button
+            variant="outlined"
+            size="small"
+            onClick={useManagedKeyCreationForIdentity}
+          >
+            Use managed key creation
+          </Button>
+        ) : (
+          <Button
+            variant="outlined"
+            size="small"
+            onClick={() => navigate('/console/org/deploy/key-management')}
+          >
+            Manage keys
+          </Button>
+        )
       ),
     });
   }

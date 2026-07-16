@@ -188,7 +188,8 @@
     "openFullEditor": "open the full editor",
     "creating": "Creating...",
     "create": "Create",
-    "failedToCreate": "Failed to create resource"
+    "failedToCreate": "Failed to create resource",
+    "operationStatusUnknown": "Operation status unknown"
   },
   "permissions": {
     "roles": {

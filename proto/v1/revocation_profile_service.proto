@@ -171,6 +171,7 @@ message ProcessRevocationRequest {
   string status = 4;              // revoked | suspended | reinstated
   string reason = 5;
   string credential_format = 6;   // sd_jwt_vc | mdoc | vc_jwt
+  string organization_id = 7;
 }
 
 message ProcessRevocationResponse {
@@ -178,16 +179,19 @@ message ProcessRevocationResponse {
   string status_list_url = 2;
   int32  index = 3;
   string error = 4;
+  string organization_id = 5;
 }
 
 message AllocateIndexRequest {
   string profile_id = 1;
   string credential_format = 2;   // sd_jwt_vc | mdoc
+  string organization_id = 3;
 }
 
 message AllocateIndexResponse {
   int32  index = 1;
   string status_list_url = 2;
+  string organization_id = 3;
 }
 
 // ---------------------------------------------------------------------------

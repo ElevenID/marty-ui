@@ -1,6 +1,7 @@
 """Tests for gateway.middleware — SessionCache, AuthMiddleware, RateLimitMiddleware."""
 from __future__ import annotations
 
+import asyncio
 import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -9,7 +10,9 @@ import httpx
 import pytest
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from marty_common.middleware import IdempotencyMiddleware
 
+from gateway import main as gateway_main
 from gateway.middleware import (
     AuthMiddleware,
     ContentTypeEnforcementMiddleware,
@@ -159,6 +162,141 @@ def content_type_app():
         return JSONResponse({"ok": True})
 
     return app
+
+
+class FakeRedis:
+    def __init__(self):
+        self.store: dict[str, str] = {}
+
+    async def get(self, key: str):
+        return self.store.get(key)
+
+    async def set(self, key: str, value: str, ex: int | None = None, nx: bool = False):
+        if nx and key in self.store:
+            return False
+        self.store[key] = value
+        return True
+
+    async def setex(self, key: str, ttl: int, value: str):
+        self.store[key] = value
+        return True
+
+    async def delete(self, key: str):
+        self.store.pop(key, None)
+        return 1
+
+
+@pytest.mark.asyncio
+async def test_idempotency_middleware_replays_successful_redis_create_and_rejects_conflict():
+    redis = FakeRedis()
+    app = FastAPI()
+    app.state.redis_client = redis
+    app.add_middleware(IdempotencyMiddleware)
+    creates = 0
+
+    @app.post("/v1/artifacts")
+    async def create_artifact(payload: dict):
+        nonlocal creates
+        creates += 1
+        return JSONResponse({"id": f"artifact-{creates}", "name": payload["name"]}, status_code=201)
+
+    @app.post("/v1/other-artifacts")
+    async def create_other_artifact(payload: dict):
+        nonlocal creates
+        creates += 1
+        return JSONResponse({"id": f"other-{creates}", "name": payload["name"]}, status_code=201)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        first = await client.post(
+            "/v1/artifacts",
+            json={"name": "Alpha"},
+            headers={"Idempotency-Key": "create-alpha"},
+        )
+        replay = await client.post(
+            "/v1/artifacts",
+            json={"name": "Alpha"},
+            headers={"Idempotency-Key": "create-alpha"},
+        )
+        conflict = await client.post(
+            "/v1/artifacts",
+            json={"name": "Beta"},
+            headers={"Idempotency-Key": "create-alpha"},
+        )
+        cross_endpoint_conflict = await client.post(
+            "/v1/other-artifacts",
+            json={"name": "Alpha"},
+            headers={"Idempotency-Key": "create-alpha"},
+        )
+
+    assert first.status_code == 201
+    assert replay.status_code == 201
+    assert replay.headers["Idempotency-Replayed"] == "true"
+    assert replay.json() == first.json()
+    assert conflict.status_code == 409
+    assert conflict.json()["error"] == "idempotency_conflict"
+    assert cross_endpoint_conflict.status_code == 409
+    assert cross_endpoint_conflict.json()["error"] == "idempotency_conflict"
+    assert creates == 1
+
+
+@pytest.mark.asyncio
+async def test_idempotency_middleware_rejects_concurrent_same_key_redis_create():
+    redis = FakeRedis()
+    app = FastAPI()
+    app.state.redis_client = redis
+    app.add_middleware(IdempotencyMiddleware)
+    started = asyncio.Event()
+    finish = asyncio.Event()
+    creates = 0
+
+    @app.post("/v1/artifacts")
+    async def create_artifact(payload: dict):
+        nonlocal creates
+        creates += 1
+        started.set()
+        await finish.wait()
+        return JSONResponse({"id": f"artifact-{creates}", "name": payload["name"]}, status_code=201)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        first_task = asyncio.create_task(client.post(
+            "/v1/artifacts",
+            json={"name": "Alpha"},
+            headers={"Idempotency-Key": "create-alpha"},
+        ))
+        await started.wait()
+
+        in_progress = await client.post(
+            "/v1/artifacts",
+            json={"name": "Alpha"},
+            headers={"Idempotency-Key": "create-alpha"},
+        )
+
+        finish.set()
+        first = await first_task
+        replay = await client.post(
+            "/v1/artifacts",
+            json={"name": "Alpha"},
+            headers={"Idempotency-Key": "create-alpha"},
+        )
+
+    assert in_progress.status_code == 409
+    assert in_progress.json()["error"] == "idempotency_in_progress"
+    assert first.status_code == 201
+    assert replay.status_code == 201
+    assert replay.headers["Idempotency-Replayed"] == "true"
+    assert replay.json() == first.json()
+    assert creates == 1
+
+
+def test_gateway_idempotency_runs_after_current_authorization_checks():
+    app = gateway_main.create_app()
+    middleware_names = [middleware.cls.__name__ for middleware in app.user_middleware]
+
+    assert middleware_names.index("CedarAuthMiddleware") < middleware_names.index("IdempotencyMiddleware")
+    assert middleware_names.index("BillingAuthMiddleware") < middleware_names.index("IdempotencyMiddleware")
+    assert middleware_names.index("IdempotencyMiddleware") < middleware_names.index("UsageTrackingMiddleware")
 
 
 # ---------------------------------------------------------------------------
@@ -463,25 +601,23 @@ def mip_app():
 class TestMIPCompliance:
     """MIP 10 - Discovery, MIP 17.7 - Error envelope, MIP 20 - Headers."""
 
-    def test_mip_version_header_on_all_responses(self, mip_app):
+    async def test_mip_version_header_on_all_responses(self, mip_app):
         """MIP 20 - Every response MUST include X-MIP-Version header."""
-        import httpx
-        with httpx.Client(
-            transport=httpx.WSGIorASGITransport(app=mip_app) if hasattr(httpx, "WSGIorASGITransport") else httpx.ASGITransport(app=mip_app),
-            base_url="http://test",
-        ) as client:
-            resp = client.get("/v1/test")
-        assert resp.headers.get("X-MIP-Version") == "0.1"
-
-    def test_mip_version_header_on_health(self, mip_app):
-        """MIP 20 - Health endpoints also carry MIP version."""
-        import httpx
-        with httpx.Client(
+        async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=mip_app),
             base_url="http://test",
         ) as client:
-            resp = client.get("/health")
-        assert resp.headers.get("X-MIP-Version") == "0.1"
+            resp = await client.get("/v1/test")
+        assert resp.headers.get("X-MIP-Version") == "0.3.1"
+
+    async def test_mip_version_header_on_health(self, mip_app):
+        """MIP 20 - Health endpoints also carry MIP version."""
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=mip_app),
+            base_url="http://test",
+        ) as client:
+            resp = await client.get("/health")
+        assert resp.headers.get("X-MIP-Version") == "0.3.1"
 
     def test_mip_error_response_format(self):
         """MIP 17.7 - Error responses MUST include error, error_description, message_id."""
@@ -493,7 +629,7 @@ class TestMIPCompliance:
         assert data["error_description"] == "Missing required field"
         assert "message_id" in data
         assert data["field"] == "email"
-        assert resp.headers.get("X-MIP-Version") == "0.1"
+        assert resp.headers.get("X-MIP-Version") == "0.3.1"
 
     def test_mip_error_response_503_format(self):
         """MIP 17.7 - Service unavailable errors follow the same envelope."""
@@ -503,7 +639,7 @@ class TestMIPCompliance:
         assert data["error"] == "service_unavailable"
         assert "message_id" in data
         assert resp.status_code == 503
-        assert resp.headers.get("X-MIP-Version") == "0.1"
+        assert resp.headers.get("X-MIP-Version") == "0.3.1"
 
     def test_mip_error_response_includes_details(self):
         """MIP 17.7 - Validation errors include details array."""
@@ -521,4 +657,4 @@ class TestMIPCompliance:
         assert data["error"] == "validation_error"
         assert len(data["details"]) == 2
         assert data["details"][0]["field"] == "email"
-        assert resp.headers.get("X-MIP-Version") == "0.1"
+        assert resp.headers.get("X-MIP-Version") == "0.3.1"

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor, within } from '@test/utils';
 
 import CredentialCatalog from '../applicant/CredentialCatalog';
+import { storeCanvasLtiSession } from '../../services/canvasLtiExperience';
 
 const { mockNavigate, mockGet, mockGetApplicantByUser, mockAuthState } = vi.hoisted(() => ({
   mockNavigate: vi.fn(),
@@ -44,12 +45,20 @@ vi.mock('../../services/api', () => ({
 }));
 
 vi.mock('../../services/applicantApi', () => ({
-  getApplicantByUser: mockGetApplicantByUser,
+  listApplications: async () => {
+    const result = await mockGet('/v1/me/applications');
+    return { items: result?.items || [], total: result?.total || result?.items?.length || 0 };
+  },
 }));
 
 describe('CredentialCatalog', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    sessionStorage.clear();
+    storeCanvasLtiSession({
+      session_token: 'canvas-session-token',
+      expires_at: '2099-01-01T00:00:00.000Z',
+    });
     mockPathname = '/';
     mockSearch = '';
     mockLocationState = null;
@@ -57,26 +66,17 @@ describe('CredentialCatalog', () => {
     mockAuthState.organizationName = 'Acme Org';
     mockAuthState.user = { user_id: 'user-1' };
     mockGet.mockImplementation((endpoint: string) => {
-      if (endpoint.includes('/v1/integrations/canvas/lti/experience-sessions/state-1')) {
+      if (endpoint.includes('/v1/integrations/canvas/lti/experience-sessions/current')) {
         return Promise.resolve({
-          state: 'state-1',
           organization_id: 'marty-canvas-org',
           canvas_platform_id: 'platform-1',
           canvas_program_binding_id: 'binding-1',
           application_template_id: 'app-tpl-1',
           credential_template_id: 'cfg-1',
-          verified_launch: {
-            subject: 'learner-1',
-          },
-          mip_primitives: {
-            context: {
-              organization_id: 'marty-canvas-org',
-              canvas_platform_id: 'platform-1',
-              canvas_program_binding_id: 'binding-1',
-              application_template_id: 'app-tpl-1',
-              credential_template_id: 'cfg-1',
-            },
-          },
+          canvas_context: { course_id: 'course-1', title: 'Canvas Course' },
+          learner_display_name: 'Canvas Learner',
+          identity_mapping_status: 'linked',
+          roles: ['Learner'],
         });
       }
 
@@ -89,6 +89,7 @@ describe('CredentialCatalog', () => {
             description: 'Platform login credential',
             claims: [],
             status: 'active',
+            revocation_profile_id: 'rp-1',
           },
           {
             id: 'cfg-2',
@@ -97,14 +98,30 @@ describe('CredentialCatalog', () => {
             description: 'Travel credential',
             claims: [],
             status: 'active',
+            revocation_profile_id: 'rp-2',
+          },
+          {
+            id: 'cfg-incomplete',
+            credential_type: 'MemberCredential',
+            name: 'Incomplete Credential',
+            claims: [],
+            status: 'active',
           },
         ]);
       }
 
-      if (endpoint.includes('/v1/applicants/profiles/app-1/applications')) {
+      if (endpoint.includes('/v1/application-templates')) {
         return Promise.resolve([
-          { credential_configuration_id: 'cfg-2' },
+          { id: 'app-tpl-1', credential_template_id: 'cfg-1', status: 'ACTIVE' },
+          { id: 'app-tpl-2', credential_template_id: 'cfg-2', status: 'ACTIVE' },
+          { id: 'app-tpl-incomplete', credential_template_id: 'cfg-incomplete', status: 'ACTIVE' },
         ]);
+      }
+
+      if (endpoint.includes('/v1/me/applications')) {
+        return Promise.resolve({ items: [
+          { credential_template_id: 'cfg-2' },
+        ] });
       }
 
       return Promise.resolve([]);
@@ -148,6 +165,7 @@ describe('CredentialCatalog', () => {
     await waitFor(() => {
       expect(screen.getByTestId('credential-card-cfg-1')).toBeInTheDocument();
       expect(screen.getByTestId('credential-card-cfg-2')).toBeInTheDocument();
+      expect(screen.queryByTestId('credential-card-cfg-incomplete')).not.toBeInTheDocument();
     });
 
     expect(screen.getByTestId('credential-card-cfg-2')).toHaveAttribute('data-credential-status', 'applied');
@@ -194,8 +212,10 @@ describe('CredentialCatalog', () => {
             name: 'Member Login Credential',
           }),
           canvasLtiSession: expect.objectContaining({
-            state: 'state-1',
             credential_template_id: 'cfg-1',
+            canvas_program_binding_id: 'binding-1',
+            canvas_context: { course_id: 'course-1', title: 'Canvas Course' },
+            identity_mapping_status: 'linked',
           }),
         },
       },

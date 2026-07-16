@@ -153,14 +153,18 @@ describe('guardPolicy', () => {
       ).toEqual({ kind: 'allow' })
     })
 
-    it('allows applicant mode users through to subsequent capability checks', () => {
+    it('redirects applicant mode users without an active organization', () => {
       expect(
         evaluateOrgConsolePolicy({
           consoleLoading: false,
           mode: 'applicant',
           activeOrgId: null,
         })
-      ).toEqual({ kind: 'allow' })
+      ).toEqual({
+        kind: 'redirect',
+        destination: '/console/org/setup',
+        reason: 'missing-org-selection',
+      })
     })
   })
 })

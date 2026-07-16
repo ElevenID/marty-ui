@@ -4,8 +4,8 @@
  * API client functions for organization management.
  * Uses the centralized api.js service for consistent error handling and retry logic.
  */
-import { get, post, patch, del, getErrorMessage } from './api';
-import { buildDefinedQueryString, buildTruthyQueryString, withQuery } from './queryUtils';
+import { get, getWithRetryConfig, post, patch, del, getErrorMessage } from './api';
+import { buildDefinedQueryString, buildTruthyQueryString, requireOrganizationId, withQuery } from './queryUtils';
 
 const BASE_PATH = '/v1/organizations';
 
@@ -15,7 +15,8 @@ const BASE_PATH = '/v1/organizations';
  * @returns {Promise<Object>} - Organization object with details
  */
 export async function getOrganization(organizationId) {
-  return get(`${BASE_PATH}/${organizationId}`);
+  const orgId = requireOrganizationId(organizationId, 'loading organization');
+  return get(`${BASE_PATH}/${encodeURIComponent(orgId)}`);
 }
 
 /**
@@ -52,7 +53,10 @@ export async function listOrganizations({ limit = 100, offset = 0 } = {}) {
  * Get current user's organizations with membership details
  * @returns {Promise<Array>} - Array of organizations with membership info
  */
-export async function getMyOrganizations() {
+export async function getMyOrganizations({ retryConfig } = {}) {
+  if (retryConfig) {
+    return getWithRetryConfig(`${BASE_PATH}/mine`, {}, retryConfig);
+  }
   return get(`${BASE_PATH}/mine`);
 }
 
@@ -104,7 +108,8 @@ export async function validateJoinCode(code) {
  * @returns {Promise<Object>} - Organization and membership details
  */
 export async function joinOrganization(organizationId) {
-  return post(`${BASE_PATH}/${organizationId}/join`, {});
+  const orgId = requireOrganizationId(organizationId, 'joining organization');
+  return post(`${BASE_PATH}/${encodeURIComponent(orgId)}/join`, {});
 }
 
 /**
@@ -173,12 +178,13 @@ export async function acceptOrganizationInvitation(token) {
  * @returns {Promise<Object>} - Updated organization object
  */
 export async function updateOrganization(organizationId, updates) {
+  const orgId = requireOrganizationId(organizationId, 'updating organization');
   const body = {};
   if (updates.name !== undefined) body.name = updates.name;
   if (updates.logoUrl !== undefined) body.logo_url = updates.logoUrl;
   if (updates.websiteUrl !== undefined) body.website_url = updates.websiteUrl;
   if (updates.contactEmail !== undefined) body.contact_email = updates.contactEmail;
-  return patch(`${BASE_PATH}/${organizationId}`, body);
+  return patch(`${BASE_PATH}/${encodeURIComponent(orgId)}`, body);
 }
 
 /**
@@ -187,7 +193,8 @@ export async function updateOrganization(organizationId, updates) {
  * @returns {Promise<Array>} - Array of member objects with roles
  */
 export async function getOrganizationMembers(organizationId) {
-  const response = await get(`${BASE_PATH}/${organizationId}/members`);
+  const orgId = requireOrganizationId(organizationId, 'loading organization members');
+  const response = await get(`${BASE_PATH}/${encodeURIComponent(orgId)}/members`);
   return response?.members || [];
 }
 
@@ -200,7 +207,8 @@ export async function getOrganizationMembers(organizationId) {
  * @returns {Promise<Object>} - Created member object
  */
 export async function addOrganizationMember(organizationId, { userId, roleIds }) {
-  return post(`${BASE_PATH}/${organizationId}/members`, {
+  const orgId = requireOrganizationId(organizationId, 'adding organization members');
+  return post(`${BASE_PATH}/${encodeURIComponent(orgId)}/members`, {
     user_id: userId,
     role_ids: roleIds,
   });
@@ -214,7 +222,11 @@ export async function addOrganizationMember(organizationId, { userId, roleIds })
  * @returns {Promise<Object>} - Updated member object
  */
 export async function updateOrganizationMember(organizationId, userId, roleIds) {
-  return patch(`${BASE_PATH}/${organizationId}/members/${userId}`, { role_ids: roleIds });
+  const orgId = requireOrganizationId(organizationId, 'updating organization members');
+  return patch(
+    `${BASE_PATH}/${encodeURIComponent(orgId)}/members/${encodeURIComponent(userId)}`,
+    { role_ids: roleIds },
+  );
 }
 
 /**
@@ -224,7 +236,8 @@ export async function updateOrganizationMember(organizationId, userId, roleIds) 
  * @returns {Promise<null>} - Empty response on success
  */
 export async function removeOrganizationMember(organizationId, userId) {
-  return del(`${BASE_PATH}/${organizationId}/members/${userId}`);
+  const orgId = requireOrganizationId(organizationId, 'removing organization members');
+  return del(`${BASE_PATH}/${encodeURIComponent(orgId)}/members/${encodeURIComponent(userId)}`);
 }
 
 /**
@@ -233,7 +246,8 @@ export async function removeOrganizationMember(organizationId, userId) {
  * @returns {Promise<Object>} - Subscription details with tier and limits
  */
 export async function getOrganizationSubscription(organizationId) {
-  return get(`${BASE_PATH}/${organizationId}/subscription`);
+  const orgId = requireOrganizationId(organizationId, 'loading organization subscription');
+  return get(`${BASE_PATH}/${encodeURIComponent(orgId)}/subscription`);
 }
 
 /**
@@ -245,11 +259,12 @@ export async function getOrganizationSubscription(organizationId) {
  * @returns {Promise<Object>} - Usage statistics
  */
 export async function getOrganizationUsage(organizationId, { startDate, endDate } = {}) {
+  const orgId = requireOrganizationId(organizationId, 'loading organization usage');
   const queryString = buildTruthyQueryString({
     start_date: startDate,
     end_date: endDate,
   });
-  return get(withQuery(`${BASE_PATH}/${organizationId}/usage`, queryString));
+  return get(withQuery(`${BASE_PATH}/${encodeURIComponent(orgId)}/usage`, queryString));
 }
 
 /**
@@ -258,7 +273,8 @@ export async function getOrganizationUsage(organizationId, { startDate, endDate 
  * @returns {Promise<Array>} - Array of invitation objects
  */
 export async function getOrganizationInvitations(organizationId) {
-  const response = await get(`${BASE_PATH}/${organizationId}/invitations`);
+  const orgId = requireOrganizationId(organizationId, 'loading organization invitations');
+  const response = await get(`${BASE_PATH}/${encodeURIComponent(orgId)}/invitations`);
   return response?.invitations || [];
 }
 
@@ -271,7 +287,8 @@ export async function getOrganizationInvitations(organizationId) {
  * @returns {Promise<Object>} - Created invitation with invite code
  */
 export async function createOrganizationInvitation(organizationId, { email, roleIds }) {
-  return post(`${BASE_PATH}/${organizationId}/members`, {
+  const orgId = requireOrganizationId(organizationId, 'creating organization invitations');
+  return post(`${BASE_PATH}/${encodeURIComponent(orgId)}/members`, {
     email,
     role_ids: roleIds,
   });
@@ -284,7 +301,8 @@ export async function createOrganizationInvitation(organizationId, { email, role
  * @returns {Promise<null>} - Empty response on success
  */
 export async function cancelOrganizationInvitation(organizationId, invitationId) {
-  return del(`${BASE_PATH}/${organizationId}/invitations/${invitationId}`);
+  const orgId = requireOrganizationId(organizationId, 'canceling organization invitations');
+  return del(`${BASE_PATH}/${encodeURIComponent(orgId)}/invitations/${encodeURIComponent(invitationId)}`);
 }
 
 /**
@@ -293,7 +311,8 @@ export async function cancelOrganizationInvitation(organizationId, invitationId)
  * @returns {Promise<Object>} - Organization defaults
  */
 export async function getOrganizationDefaults(organizationId) {
-  return get(`${BASE_PATH}/${organizationId}/defaults`);
+  const orgId = requireOrganizationId(organizationId, 'loading organization defaults');
+  return get(`${BASE_PATH}/${encodeURIComponent(orgId)}/defaults`);
 }
 
 /**
@@ -306,7 +325,8 @@ export async function getOrganizationDefaults(organizationId) {
  * @returns {Promise<Object>} - Updated defaults
  */
 export async function updateOrganizationDefaults(organizationId, defaults) {
-  return patch(`${BASE_PATH}/${organizationId}/defaults`, defaults);
+  const orgId = requireOrganizationId(organizationId, 'updating organization defaults');
+  return patch(`${BASE_PATH}/${encodeURIComponent(orgId)}/defaults`, defaults);
 }
 
 // Re-export getErrorMessage for convenience

@@ -33,12 +33,15 @@ export function resolveConsoleBootstrap({ preferences, memberships, localStoredO
   const normalizedPreferences = normalizeConsolePreferences(preferences);
   const safeMemberships = memberships || [];
   const hasMemberships = safeMemberships.length > 0;
-  const restoredOrgId = normalizedPreferences.last_active_org_id || localStoredOrgId || null;
+  const restoredOrgCandidates = [
+    localStoredOrgId || null,
+    normalizedPreferences.last_active_org_id || null,
+  ].filter(Boolean);
 
   // Prefer stored org ID if it exists in memberships
-  let activeOrgId = safeMemberships.find((entry) => entry.id === restoredOrgId)
-    ? restoredOrgId
-    : null;
+  let activeOrgId = restoredOrgCandidates.find((candidateOrgId) => (
+    safeMemberships.find((entry) => entry.id === candidateOrgId)
+  )) || null;
 
   const effectiveMode = hasMemberships ? normalizedPreferences.last_view_mode : APPLICANT_MODE;
 
@@ -92,7 +95,7 @@ export function resolveApplicantOrganizationId({
  * @param {'applicant' | 'org'} params.newMode
  * @param {string|null|undefined} params.activeOrgId
  * @param {Array<{id: string, name?: string|null}>|null|undefined} params.memberships
- * @returns {{mode: 'applicant' | 'org', activeOrgId: string | null, destination: string, authOrgId?: string, persistence: {last_view_mode: 'applicant' | 'org', last_active_org_id: string | null}}}
+ * @returns {{mode: 'applicant' | 'org', activeOrgId: string | null, destination: string, persistence: {last_view_mode: 'applicant' | 'org', last_active_org_id: string | null}}}
  */
 export function resolveModeChange({ newMode, activeOrgId, memberships }) {
   const safeMemberships = memberships || [];
@@ -115,7 +118,6 @@ export function resolveModeChange({ newMode, activeOrgId, memberships }) {
       mode: ORG_MODE,
       activeOrgId: singleOrg.id,
       destination: '/console/org',
-      authOrgId: singleOrg.id,
       persistence: {
         last_view_mode: ORG_MODE,
         last_active_org_id: singleOrg.id,

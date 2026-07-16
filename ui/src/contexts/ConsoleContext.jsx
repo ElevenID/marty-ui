@@ -21,7 +21,6 @@ import { getConsoleEligibleOrganizations } from '../application/session/authSess
 import {
   getDefaultLandingPath,
   isOrgConsoleBlocked,
-  resolveApplicantOrganizationId,
   resolveActiveOrgSelection,
   resolveConsoleBootstrap,
   resolveModeChange,
@@ -41,7 +40,7 @@ import {
  * @property {boolean} isOrgConsoleAvailable - Whether org console should be shown
  * @property {boolean} isOrgBlocked - Whether org console is blocked (no org selected)
  * @property {function(ConsoleMode): Promise<void>} setMode - Change console mode
- * @property {function(string): Promise<void>} setActiveOrgId - Set active organization
+ * @property {function(string, Array=): Promise<void>} setActiveOrgId - Set active organization
  * @property {function(): void} clearActiveOrg - Clear active org (triggers setup flow)
  * @property {function(): Promise<void>} refreshMemberships - Reload memberships from backend
  */
@@ -51,17 +50,105 @@ const defaultContextValue = {
   activeOrgId: null,
   memberships: [],
   membershipsLoaded: false,
+  membershipLoadError: null,
+  orgLoadError: null,
   isLoading: true,
   isOrgConsoleAvailable: false,
   isApplicantConsoleAvailable: true,
+  isOrgBootstrapRequired: false,
   isOrgBlocked: false,
   setMode: async () => {},
   setActiveOrgId: async () => {},
   clearActiveOrg: () => {},
   refreshMemberships: async () => {},
+  reloadConsoleState: async () => {},
 };
 
 export const ConsoleContext = createContext(defaultContextValue);
+
+const ORG_BOOTSTRAP_ROLES = new Set([
+  'admin',
+  'administrator',
+  'vendor',
+  'org_admin',
+  'organization-admin',
+  'owner',
+  'access_admin',
+  'catalog_admin',
+  'reviewer',
+  'operator',
+  'viewer',
+]);
+
+const BOOTSTRAP_MEMBERSHIP_RETRY_CONFIG = {
+  maxRetries: 0,
+};
+
+const SHOULD_LOG_CONSOLE_DIAGNOSTICS = import.meta.env.DEV && import.meta.env.MODE !== 'test';
+
+function logConsoleContextWarning(...args) {
+  if (SHOULD_LOG_CONSOLE_DIAGNOSTICS) {
+    console.warn(...args);
+  }
+}
+
+function logConsoleContextError(...args) {
+  if (SHOULD_LOG_CONSOLE_DIAGNOSTICS) {
+    console.error(...args);
+  }
+}
+
+function getMessageId(error) {
+  return error?.response?.message_id
+    || error?.response?.request_id
+    || error?.requestId
+    || error?.request_id
+    || null;
+}
+
+function normalizeMembershipLoadError(error) {
+  if (!error) {
+    return null;
+  }
+
+  return {
+    message: error?.response?.error?.user_message
+      || error?.response?.error_description
+      || error?.message
+      || 'Organization memberships could not be loaded.',
+    status: error?.status || null,
+    messageId: getMessageId(error),
+    raw: error,
+  };
+}
+
+function userNeedsOrgBootstrap(user, fallbackMemberships = []) {
+  if (!user) {
+    return false;
+  }
+
+  const roles = Array.isArray(user.roles) ? user.roles : [];
+  return Boolean(user.capabilities?.['org:view'])
+    || getConsoleEligibleOrganizations(user.organizations).length > 0
+    || fallbackMemberships.length > 0
+    || roles.some((role) => ORG_BOOTSTRAP_ROLES.has(role))
+    || ['administrator', 'vendor'].includes(user.user_type);
+}
+
+function mergePreferredFallbackMembership(fetchedMemberships, fallbackMemberships, preferredOrgId) {
+  const safeFetchedMemberships = Array.isArray(fetchedMemberships) ? fetchedMemberships : [];
+  if (
+    !preferredOrgId
+    || safeFetchedMemberships.some((organization) => organization.id === preferredOrgId)
+  ) {
+    return safeFetchedMemberships;
+  }
+
+  const preferredFallback = (fallbackMemberships || []).find((organization) => organization.id === preferredOrgId);
+  return preferredFallback
+    ? [...safeFetchedMemberships, preferredFallback]
+    : safeFetchedMemberships;
+}
 
 /**
  * ConsoleProvider - Manages console mode and org selection state
@@ -73,13 +160,13 @@ export function ConsoleProvider({ children }) {
     user,
     isAuthenticated,
     isLoading: authLoading,
-    setActiveOrganizationId: updateAuthOrg,
   } = useContext(AuthContext);
   
   const [mode, setModeState] = useState('applicant');
   const [activeOrgId, setActiveOrgIdState] = useState(null);
   const [memberships, setMemberships] = useState([]);
   const [membershipsLoaded, setMembershipsLoaded] = useState(false);
+  const [membershipLoadError, setMembershipLoadError] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const fallbackMemberships = useMemo(
     () => getConsoleEligibleOrganizations(user?.organizations),
@@ -91,8 +178,10 @@ export function ConsoleProvider({ children }) {
       && !user?.capabilities?.['org:view'],
     [user?.roles, user?.capabilities]
   );
-  const currentOrganizationId = user?.organization_id || null;
-  const defaultApplicantOrgId = user?.default_organization_id || null;
+  const isOrgBootstrapRequired = useMemo(
+    () => !isCanvasApplicantOnlyUser && userNeedsOrgBootstrap(user, fallbackMemberships),
+    [fallbackMemberships, isCanvasApplicantOnlyUser, user]
+  );
 
   const transitionTo = useCallback((destination, options = {}) => {
     if (!destination) {
@@ -112,36 +201,53 @@ export function ConsoleProvider({ children }) {
    */
   const loadState = useCallback(async () => {
     if (!isAuthenticated || authLoading) {
-      setIsLoading(false);
+      setMembershipLoadError(null);
+      setMemberships([]);
+      setMembershipsLoaded(false);
+      setIsLoading(Boolean(authLoading));
       return;
     }
 
     try {
       setIsLoading(true);
 
-      // Load preferences and memberships in parallel
-      const [prefs, orgs] = await Promise.all([
-        getPreferences().catch(() => ({ last_view_mode: 'applicant', last_active_org_id: null })),
-        getMyOrganizations().catch(() => []),
+      const defaultPreferences = { last_view_mode: 'applicant', last_active_org_id: null };
+      const [preferencesResult, organizationsResult] = await Promise.allSettled([
+        getPreferences(),
+        getMyOrganizations({ retryConfig: BOOTSTRAP_MEMBERSHIP_RETRY_CONFIG }),
       ]);
 
-      const resolvedMemberships = !isCanvasApplicantOnlyUser && Array.isArray(orgs) && orgs.length > 0
-        ? getConsoleEligibleOrganizations(orgs)
-        : fallbackMemberships;
-      const applicantOrganizations = Array.isArray(orgs) && orgs.length > 0
-        ? orgs
-        : (Array.isArray(user?.organizations) ? user.organizations : []);
-      const resolvedApplicantOrgId = resolveApplicantOrganizationId({
-        defaultOrganizationId: defaultApplicantOrgId,
-        currentOrganizationId,
-        organizations: applicantOrganizations,
-      });
+      const prefs = preferencesResult.status === 'fulfilled'
+        ? preferencesResult.value
+        : defaultPreferences;
+      if (preferencesResult.status === 'rejected') {
+        logConsoleContextWarning('[ConsoleContext] Failed to load console preferences:', preferencesResult.reason);
+      }
 
+      if (organizationsResult.status === 'rejected') {
+        const normalizedError = normalizeMembershipLoadError(organizationsResult.reason);
+        setMembershipLoadError(normalizedError);
+        setMemberships(fallbackMemberships);
+        setMembershipsLoaded(false);
+        setModeState('applicant');
+        setActiveOrgIdState(null);
+        window.localStorage.removeItem('activeOrgId');
+        return;
+      }
+
+      const orgs = Array.isArray(organizationsResult.value) ? organizationsResult.value : [];
+      setMembershipLoadError(null);
+
+      const localStoredOrgId = window.localStorage.getItem('activeOrgId');
+      const preferredOrgId = localStoredOrgId || prefs?.last_active_org_id || null;
+      const fetchedMemberships = getConsoleEligibleOrganizations(orgs);
+      const resolvedMemberships = !isCanvasApplicantOnlyUser
+        ? mergePreferredFallbackMembership(fetchedMemberships, fallbackMemberships, preferredOrgId)
+        : [];
       setMemberships(resolvedMemberships);
       setMembershipsLoaded(true);
 
       // Restore last mode and org (fallback to localStorage when backend prefs are stale/unavailable)
-      const localStoredOrgId = window.localStorage.getItem('activeOrgId');
       const { mode: effectiveMode, activeOrgId: validOrgId } = resolveConsoleBootstrap({
         preferences: prefs,
         memberships: resolvedMemberships,
@@ -157,13 +263,6 @@ export function ConsoleProvider({ children }) {
         window.localStorage.removeItem('activeOrgId');
       }
 
-      // Sync with AuthContext
-      if (validOrgId && updateAuthOrg && currentOrganizationId !== validOrgId) {
-        updateAuthOrg(validOrgId);
-      } else if (!validOrgId && updateAuthOrg && currentOrganizationId !== resolvedApplicantOrgId) {
-        updateAuthOrg(resolvedApplicantOrgId);
-      }
-
       if (
         prefs?.last_view_mode !== effectiveMode
         || (prefs?.last_active_org_id || null) !== validOrgId
@@ -172,31 +271,25 @@ export function ConsoleProvider({ children }) {
           last_view_mode: effectiveMode,
           last_active_org_id: validOrgId,
         }).catch((error) => {
-          console.warn('[ConsoleContext] Failed to heal stale console preferences:', error);
+          logConsoleContextWarning('[ConsoleContext] Failed to heal stale console preferences:', error);
         });
       }
     } catch (error) {
-      console.error('[ConsoleContext] Failed to load state:', error);
-      // Use defaults on error
+      logConsoleContextError('[ConsoleContext] Failed to load state:', error);
+      setMembershipLoadError(normalizeMembershipLoadError(error));
       setModeState('applicant');
       setActiveOrgIdState(null);
       setMemberships(fallbackMemberships);
-      setMembershipsLoaded(true);
-      if (updateAuthOrg && currentOrganizationId !== defaultApplicantOrgId) {
-        updateAuthOrg(defaultApplicantOrgId);
-      }
+      setMembershipsLoaded(false);
     } finally {
       setIsLoading(false);
     }
   }, [
     isAuthenticated,
     authLoading,
-    currentOrganizationId,
-    defaultApplicantOrgId,
     fallbackMemberships,
     user?.organizations,
     isCanvasApplicantOnlyUser,
-    updateAuthOrg,
   ]);
 
   /**
@@ -222,12 +315,6 @@ export function ConsoleProvider({ children }) {
     setModeState(nextState.mode);
     setActiveOrgIdState(nextState.activeOrgId);
 
-    if (nextState.authOrgId && updateAuthOrg) {
-      updateAuthOrg(nextState.authOrgId);
-    } else if (newMode === 'applicant' && updateAuthOrg) {
-      updateAuthOrg(defaultApplicantOrgId);
-    }
-
     if (nextState.activeOrgId) {
       window.localStorage.setItem('activeOrgId', nextState.activeOrgId);
     } else {
@@ -240,25 +327,28 @@ export function ConsoleProvider({ children }) {
       await updatePreferences(nextState.persistence);
     } catch (error) {
       // Keep in-memory UI state even if persistence fails (backend may reject some payloads)
-      console.warn('[ConsoleContext] Failed to persist mode preference, keeping local state:', error);
+      logConsoleContextWarning('[ConsoleContext] Failed to persist mode preference, keeping local state:', error);
     }
-  }, [mode, activeOrgId, memberships, transitionTo, updateAuthOrg, defaultApplicantOrgId]);
+  }, [mode, activeOrgId, memberships, transitionTo]);
 
   /**
    * Set active organization
    */
-  const setActiveOrgId = useCallback(async (orgId) => {
+  const setActiveOrgId = useCallback(async (orgId, membershipOverride = null) => {
     if (orgId === activeOrgId) return;
+    const membershipsForSelection = Array.isArray(membershipOverride)
+      ? membershipOverride
+      : memberships;
 
     const nextSelection = resolveActiveOrgSelection({
       orgId,
       currentMode: mode,
-      memberships,
+      memberships: membershipsForSelection,
     });
 
     // Validate org exists in memberships
     if (!nextSelection.valid) {
-      console.warn('[ConsoleContext] Attempted to set invalid org ID:', orgId);
+      logConsoleContextWarning('[ConsoleContext] Attempted to set invalid org ID:', orgId);
       return;
     }
 
@@ -276,11 +366,6 @@ export function ConsoleProvider({ children }) {
       setModeState(nextSelection.mode);
     }
 
-    // Sync with AuthContext for permissions
-    if (updateAuthOrg) {
-      updateAuthOrg(orgId || defaultApplicantOrgId);
-    }
-
     try {
       await updatePreferences(nextSelection.persistence);
 
@@ -290,12 +375,12 @@ export function ConsoleProvider({ children }) {
       }
     } catch (error) {
       // Keep selected org locally even if preference persistence fails
-      console.warn('[ConsoleContext] Failed to persist active org preference, keeping local selection:', error);
+      logConsoleContextWarning('[ConsoleContext] Failed to persist active org preference, keeping local selection:', error);
       if (nextSelection.destination) {
         transitionTo(nextSelection.destination);
       }
     }
-  }, [activeOrgId, mode, memberships, transitionTo, updateAuthOrg, defaultApplicantOrgId]);
+  }, [activeOrgId, mode, memberships, transitionTo]);
 
   /**
    * Clear active org (triggers setup flow)
@@ -303,13 +388,10 @@ export function ConsoleProvider({ children }) {
   const clearActiveOrg = useCallback(() => {
     setActiveOrgIdState(null);
     window.localStorage.removeItem('activeOrgId');
-    if (updateAuthOrg) {
-      updateAuthOrg(defaultApplicantOrgId);
-    }
     if (mode === 'org') {
       transitionTo('/console/org/setup');
     }
-  }, [defaultApplicantOrgId, mode, transitionTo, updateAuthOrg]);
+  }, [mode, transitionTo]);
 
   /**
    * Refresh memberships from backend
@@ -317,10 +399,11 @@ export function ConsoleProvider({ children }) {
   const refreshMemberships = useCallback(async () => {
     try {
       const orgs = await getMyOrganizations();
-      const resolvedMemberships = !isCanvasApplicantOnlyUser && Array.isArray(orgs) && orgs.length > 0
+      const resolvedMemberships = !isCanvasApplicantOnlyUser && Array.isArray(orgs)
         ? getConsoleEligibleOrganizations(orgs)
-        : fallbackMemberships;
+        : [];
 
+      setMembershipLoadError(null);
       setMemberships(resolvedMemberships);
       setMembershipsLoaded(true);
 
@@ -328,18 +411,23 @@ export function ConsoleProvider({ children }) {
       if (activeOrgId && !resolvedMemberships.find((organization) => organization.id === activeOrgId)) {
         clearActiveOrg();
       }
+
+      return resolvedMemberships;
     } catch (error) {
-      console.error('[ConsoleContext] Failed to refresh memberships:', error);
+      logConsoleContextError('[ConsoleContext] Failed to refresh memberships:', error);
+      setMembershipLoadError(normalizeMembershipLoadError(error));
+      setMembershipsLoaded(false);
+      return null;
     }
-  }, [activeOrgId, clearActiveOrg, fallbackMemberships, isCanvasApplicantOnlyUser]);
+  }, [activeOrgId, clearActiveOrg, isCanvasApplicantOnlyUser]);
 
   /**
    * Computed: Is org console available?
    * Only available for users with admin or vendor roles.
    */
   const isOrgConsoleAvailable = useMemo(() => {
-    return memberships.length > 0;
-  }, [memberships.length]);
+    return !membershipLoadError && memberships.length > 0;
+  }, [membershipLoadError, memberships.length]);
 
   /**
    * Computed: Is applicant console available?
@@ -362,27 +450,34 @@ export function ConsoleProvider({ children }) {
     activeOrgId,
     memberships,
     membershipsLoaded,
+    membershipLoadError,
+    orgLoadError: membershipLoadError,
     isLoading,
     isOrgConsoleAvailable,
     isApplicantConsoleAvailable,
+    isOrgBootstrapRequired,
     isOrgBlocked,
     setMode,
     setActiveOrgId,
     clearActiveOrg,
     refreshMemberships,
+    reloadConsoleState: loadState,
   }), [
     mode,
     activeOrgId,
     memberships,
     membershipsLoaded,
+    membershipLoadError,
     isLoading,
     isOrgConsoleAvailable,
     isApplicantConsoleAvailable,
+    isOrgBootstrapRequired,
     isOrgBlocked,
     setMode,
     setActiveOrgId,
     clearActiveOrg,
     refreshMemberships,
+    loadState,
   ]);
 
   return (

@@ -73,8 +73,8 @@ class SessionCache:
 # MIP Version Constants
 # =============================================================================
 
-MIP_VERSION = "0.1"
-MIP_SUPPORTED_VERSIONS = ["0.1"]
+MIP_VERSION = "0.3.1"
+MIP_SUPPORTED_VERSIONS = ["0.3.1"]
 
 
 # =============================================================================
@@ -117,6 +117,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
     def __init__(self, app, session_cache: SessionCache):
         super().__init__(app)
         self.session_cache = session_cache
+        self.api_key_cache = SessionCache(ttl_seconds=int(os.environ.get("API_KEY_AUTH_CACHE_TTL", "30")))
 
     async def dispatch(self, request: Request, call_next):
         """Process request and inject user context headers."""
@@ -144,6 +145,26 @@ class AuthMiddleware(BaseHTTPMiddleware):
             or _WALLET_PUBLIC.match(request.url.path)
             or _STATUS_LIST_PUBLIC.match(request.url.path)
         ):
+            return await call_next(request)
+
+        api_key = self._extract_api_key(request)
+        if api_key:
+            try:
+                api_key_data = await self._validate_api_key(request, api_key)
+            except Exception as exc:
+                logger.error("Error validating API key: %s", exc)
+                return mip_error_response(
+                    status_code=503,
+                    error="service_unavailable",
+                    message="Organization service unavailable",
+                )
+            if api_key_data is None:
+                return mip_error_response(
+                    status_code=401,
+                    error="unauthorized",
+                    message="Invalid or expired API key",
+                )
+            self._inject_api_key_context(request, api_key_data)
             return await call_next(request)
 
         # Extract session ID from cookie
@@ -233,6 +254,59 @@ class AuthMiddleware(BaseHTTPMiddleware):
         except grpc.aio.AioRpcError as e:
             logger.error(f"gRPC session validation error: {e.code()} {e.details()}")
             raise
+
+    @staticmethod
+    def _extract_api_key(request: Request) -> str | None:
+        header_key = request.headers.get("x-api-key")
+        if header_key and header_key.strip():
+            return header_key.strip()
+
+        authorization = request.headers.get("authorization") or ""
+        if not authorization.lower().startswith("bearer "):
+            return None
+        token = authorization[7:].strip()
+        if token.startswith(("mk_live_", "mk_test_", "pk_live_", "pk_test_")):
+            return token
+        return None
+
+    async def _validate_api_key(self, request: Request, api_key: str) -> dict | None:
+        cache_key = hashlib.sha256(api_key.encode("utf-8")).hexdigest()
+        cached = self.api_key_cache.get(cache_key)
+        if cached:
+            return cached
+
+        org_client = getattr(request.app.state, "org_client", None)
+        if org_client is None:
+            logger.error("Organization client unavailable for API-key authentication")
+            raise RuntimeError("Organization client unavailable")
+
+        api_ctx = await org_client.validate_api_key(api_key)
+        if not api_ctx:
+            return None
+
+        api_key_data = {
+            "api_key_id": api_ctx.api_key_id,
+            "organization_id": api_ctx.organization_id,
+            "key_prefix": api_ctx.key_prefix,
+            "scopes": list(api_ctx.scopes or []),
+        }
+        self.api_key_cache.set(cache_key, api_key_data)
+        return api_key_data
+
+    @staticmethod
+    def _inject_api_key_context(request: Request, api_key_data: dict) -> None:
+        api_key_id = api_key_data.get("api_key_id") or "unknown"
+        organization_id = api_key_data.get("organization_id")
+        request.state.auth_source = "api_key"
+        request.state.api_key_id = api_key_id
+        request.state.api_key_prefix = api_key_data.get("key_prefix")
+        request.state.api_key_scopes = list(api_key_data.get("scopes") or [])
+        request.state.api_key_organization_id = organization_id
+        request.state.user_id = f"api_key:{api_key_id}"
+        request.state.user_email = None
+        request.state.user_domain = None
+        request.state.session_organization_id = organization_id
+        request.state.organization_id = organization_id
 
 
 # =============================================================================

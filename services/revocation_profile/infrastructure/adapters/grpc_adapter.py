@@ -205,13 +205,21 @@ class RevocationProfileServiceGrpc(
     async def ProcessRevocation(self, request, context):
         from revocation_profile.main import RevocationProfileStatus
         from revocation_profile.status_list_manager import StatusListFormat
-        from revocation_profile.main import _build_status_list_url, _status_list_purpose_for_status
+        from revocation_profile.main import _build_status_list_url, _status_list_purpose_for_status, _status_list_scope
 
         profile = await self._repo.get(request.profile_id)
         if not profile:
             return rp_pb2.ProcessRevocationResponse(
                 success=False,
                 error=f"RevocationProfile {request.profile_id} not found",
+            )
+
+        if profile.organization_id != request.organization_id:
+            context.set_code(grpc.StatusCode.PERMISSION_DENIED)
+            context.set_details("Revocation Profile belongs to another organization")
+            return rp_pb2.ProcessRevocationResponse(
+                success=False,
+                error="Revocation Profile belongs to another organization",
             )
 
         if profile.status != RevocationProfileStatus.ACTIVE:
@@ -241,7 +249,7 @@ class RevocationProfileServiceGrpc(
                 )
 
             success = await self._status_mgr.set_status(
-                tenant_id=profile.organization_id,
+                tenant_id=_status_list_scope(profile),
                 index=request.index,
                 status=status_value,
                 format=sl_format,
@@ -259,7 +267,7 @@ class RevocationProfileServiceGrpc(
             # Publish if auto-publish enabled
             if profile.automation_config.auto_publish:
                 await self._status_mgr.publish(
-                    tenant_id=profile.organization_id,
+                    tenant_id=_status_list_scope(profile),
                     format=sl_format,
                 )
 
@@ -272,6 +280,7 @@ class RevocationProfileServiceGrpc(
                 success=True,
                 status_list_url=status_list_url,
                 index=request.index,
+                organization_id=profile.organization_id,
             )
 
         except Exception as e:
@@ -283,12 +292,17 @@ class RevocationProfileServiceGrpc(
 
     async def AllocateIndex(self, request, context):
         from revocation_profile.status_list_manager import StatusListFormat
-        from revocation_profile.main import _build_status_list_url
+        from revocation_profile.main import _build_status_list_url, _status_list_scope
 
         profile = await self._repo.get(request.profile_id)
         if not profile:
             context.set_code(grpc.StatusCode.NOT_FOUND)
             context.set_details(f"RevocationProfile {request.profile_id} not found")
+            return rp_pb2.AllocateIndexResponse()
+
+        if profile.organization_id != request.organization_id:
+            context.set_code(grpc.StatusCode.PERMISSION_DENIED)
+            context.set_details("Revocation Profile belongs to another organization")
             return rp_pb2.AllocateIndexResponse()
 
         if not profile.automation_config.auto_allocate_indices:
@@ -304,7 +318,7 @@ class RevocationProfileServiceGrpc(
                 sl_format = StatusListFormat.BITSTRING
 
             index = await self._status_mgr.allocate_index(
-                tenant_id=profile.organization_id,
+                tenant_id=_status_list_scope(profile),
                 format=sl_format,
             )
 
@@ -317,7 +331,7 @@ class RevocationProfileServiceGrpc(
 
             if profile.automation_config.auto_publish:
                 await self._status_mgr.get_or_create(
-                    tenant_id=profile.organization_id,
+                    tenant_id=_status_list_scope(profile),
                     format=sl_format,
                 )
 
@@ -329,6 +343,7 @@ class RevocationProfileServiceGrpc(
             return rp_pb2.AllocateIndexResponse(
                 index=index,
                 status_list_url=status_list_url,
+                organization_id=profile.organization_id,
             )
 
         except Exception as e:

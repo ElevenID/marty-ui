@@ -94,6 +94,7 @@ PERMISSIONS = [
     ("application-template", "activate", "Activate application templates"),
     # Applications
     ("application", "view", "View applications"),
+    ("application", "review", "Review applications, checks, and reviewer locks"),
     ("application", "approve", "Approve applications"),
     ("application", "reject", "Reject applications"),
     # Organization
@@ -213,7 +214,7 @@ _REVIEWER_PERMS = sorted(
             "application-template",
             "application",
         )
-        + [("application", "approve"), ("application", "reject")]
+        + [("application", "review"), ("application", "approve"), ("application", "reject")]
     )
 )
 

@@ -20,7 +20,6 @@
  */
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { Link as RouterLink } from 'react-router-dom';
 import {
   Dialog,
   DialogTitle,
@@ -37,6 +36,7 @@ import {
   Checkbox,
   CircularProgress,
   LinearProgress,
+  Radio,
   Typography,
   useMediaQuery,
   useTheme,
@@ -51,17 +51,27 @@ import PhoneAndroidIcon from '@mui/icons-material/PhoneAndroid';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import LockIcon from '@mui/icons-material/Lock';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
-import SchoolIcon from '@mui/icons-material/School';
 
 import OID4VCIInviteDisplay from '../../issuance/OID4VCIInviteDisplay';
 import { generateIssuanceOffer } from '../../../services/credentialsApi';
 import { useAuth } from '../../../hooks/useAuth';
 import useWalletPreferences from '../../../hooks/useWalletPreferences';
+import {
+  ANY_OID4VCI_WALLET_ID,
+  buildClaimWalletOptions,
+  getWalletOfferDialogError,
+  resolveClaimWalletDeliveryDestinationId,
+  resolveClaimWalletSelection,
+  selectedClaimWalletIds,
+  walletSupportsBrowserLaunch,
+} from '../../../application/applications';
 import { buildWalletOpenLink, listWallets } from '../../../services/walletRegistryApi';
-import { resolvePreferredCredentialOfferTransport } from '../../../services/walletTransportService';
+import {
+  createCredentialOfferTransport,
+  resolvePreferredCredentialOfferTransport,
+} from '../../../services/walletTransportService';
 import { listDeliveryDestinations } from '../../../services/deliveryDestinationsApi';
 
-const APPLICANT_WALLET_SELECTION_SETTINGS_PATH = '/console/applicant/settings#wallet-selection';
 const ELEVENID_WALLET_DESTINATION_ID = 'dd-elevenid-wallet';
 const COMPATIBLE_WALLET_DESTINATION_ID = 'dd-oid4vci-compatible-wallet';
 const CANVAS_CREDENTIALS_DESTINATION_ID = 'dd-canvas-credentials-institutional';
@@ -70,13 +80,12 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
   const { user } = useAuth();
-  const { walletIds: preferredWallets } = useWalletPreferences(user?.user_id);
-  const hasRegisteredWallet = preferredWallets.length > 0;
+  const { walletIds: preferredWallets, setWalletIds } = useWalletPreferences(user?.user_id);
   const [registryWallets, setRegistryWallets] = useState([]);
   const [deliveryDestinations, setDeliveryDestinations] = useState([]);
   const [destinationsLoading, setDestinationsLoading] = useState(false);
   const [destinationError, setDestinationError] = useState(null);
-  const [selectedDestinationId, setSelectedDestinationId] = useState(COMPATIBLE_WALLET_DESTINATION_ID);
+  const [selectedWalletId, setSelectedWalletId] = useState(ANY_OID4VCI_WALLET_ID);
   const [canvasConsent, setCanvasConsent] = useState(true);
 
   const [liveOffer, setLiveOffer] = useState(offerData);
@@ -85,6 +94,25 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
   const [emailTab, setEmailTab] = useState(false);
   const [emailValue, setEmailValue] = useState('');
   const [emailSent, setEmailSent] = useState(false);
+  const walletOptions = useMemo(() => buildClaimWalletOptions({ registryWallets }), [registryWallets]);
+  const selectedWallet = useMemo(
+    () => walletOptions.find((wallet) => wallet.id === selectedWalletId) || walletOptions[0] || null,
+    [selectedWalletId, walletOptions],
+  );
+  const selectedWalletName = selectedWallet?.name || 'Any OID4VCI Wallet';
+  const selectedWalletIdList = useMemo(() => selectedClaimWalletIds(selectedWalletId), [selectedWalletId]);
+  const selectedWalletDestinationId = resolveClaimWalletDeliveryDestinationId(selectedWalletId, {
+    compatibleDestinationId: COMPATIBLE_WALLET_DESTINATION_ID,
+    elevenIdDestinationId: ELEVENID_WALLET_DESTINATION_ID,
+  });
+
+  const handleSelectWallet = useCallback((walletId) => {
+    const nextWalletId = walletId || ANY_OID4VCI_WALLET_ID;
+    setSelectedWalletId(nextWalletId);
+    if (nextWalletId !== ANY_OID4VCI_WALLET_ID) {
+      setWalletIds([nextWalletId]);
+    }
+  }, [setWalletIds]);
 
   useEffect(() => {
     if (open) {
@@ -94,10 +122,21 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
       setEmailTab(false);
       setEmailSent(false);
       setEmailValue(user?.email || '');
-      setSelectedDestinationId(hasRegisteredWallet ? ELEVENID_WALLET_DESTINATION_ID : COMPATIBLE_WALLET_DESTINATION_ID);
       setCanvasConsent(true);
     }
-  }, [open, applicationId, hasRegisteredWallet, user?.email]); // eslint-disable-line react-hooks/exhaustive-deps -- keep active QR stable while parent data refreshes
+  }, [open, applicationId, user?.email]); // eslint-disable-line react-hooks/exhaustive-deps -- keep active QR stable while parent data refreshes
+
+  useEffect(() => {
+    if (!open || walletOptions.length === 0) return;
+    const nextSelection = resolveClaimWalletSelection({ preferredWallets, walletOptions });
+    setSelectedWalletId((current) => {
+      const currentStillAvailable = walletOptions.some((wallet) => wallet.id === current);
+      const hasPreferredSelection = preferredWallets.some((walletId) => walletOptions.some((wallet) => wallet.id === walletId));
+      if (!currentStillAvailable) return nextSelection;
+      if (current === ANY_OID4VCI_WALLET_ID && hasPreferredSelection) return nextSelection;
+      return current;
+    });
+  }, [open, preferredWallets, walletOptions]);
 
   // Load wallet registry once for label resolution
   useEffect(() => {
@@ -140,16 +179,14 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
   ), [deliveryDestinations]);
 
   const canvasDestinationReady = Boolean(canvasDestination?.is_enabled !== false && canvasDestination);
-  const selectedIsCanvas = selectedDestinationId === CANVAS_CREDENTIALS_DESTINATION_ID;
-  const selectedRequiresRegisteredWallet = selectedDestinationId === ELEVENID_WALLET_DESTINATION_ID;
-  const canGenerateWalletOffer = !selectedIsCanvas && (!selectedRequiresRegisteredWallet || hasRegisteredWallet);
+  const canGenerateWalletOffer = true;
 
   const handleRegenerate = useCallback(async () => {
     if (!applicationId || !canGenerateWalletOffer) return;
     setRefreshing(true);
     setError(null);
     try {
-      const selectedDestinationIds = [selectedDestinationId];
+      const selectedDestinationIds = [selectedWalletDestinationId];
       if (canvasConsent && canvasDestinationReady) {
         selectedDestinationIds.push(canvasDestination.id || CANVAS_CREDENTIALS_DESTINATION_ID);
       }
@@ -159,11 +196,11 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
       });
       setLiveOffer(fresh);
     } catch (err) {
-      setError(err?.message || 'Failed to generate wallet offer. Please try again.');
+      setError(getWalletOfferDialogError(err));
     } finally {
       setRefreshing(false);
     }
-  }, [applicationId, canGenerateWalletOffer, selectedDestinationId, canvasConsent, canvasDestinationReady, canvasDestination]);
+  }, [applicationId, canGenerateWalletOffer, selectedWalletDestinationId, canvasConsent, canvasDestinationReady, canvasDestination]);
 
   // OID4VCI pre-authorized codes are single-use. A previous wallet attempt can
   // consume a code even when its offer has not expired, so mint a fresh offer on
@@ -174,22 +211,15 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
   }, [open, applicationId, canGenerateWalletOffer, handleRegenerate]);
 
   // Build per-wallet offer data.
-  // When the backend already provides per-wallet URIs, use them.
-  // Otherwise, synthesise entries for the user's registered wallets (all
-  // known wallets use the same openid-credential-offer:// scheme, so the
-  // base URL works for every wallet).
+  // Keep backend-provided wallet URIs, then synthesize the selected wallet from
+  // the generic OID4VCI offer when the backend does not return that wallet.
   const enrichedOffer = useMemo(() => {
     if (!liveOffer) return liveOffer;
-    const backendUris = liveOffer.credential_offer_uris;
-
-    if (!hasRegisteredWallet) {
-      return liveOffer;
-    }
 
     // Build wallet maps from the registry for labels and fallback routing.
     const labelMap = {};
     const walletMap = {};
-    for (const w of registryWallets) {
+    for (const w of walletOptions) {
       walletMap[w.id] = w;
       labelMap[w.id] = w.name;
     }
@@ -203,30 +233,18 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
       ...walletMap,
     };
 
-    if (backendUris && Object.keys(backendUris).length > 0) {
-      return {
-        ...liveOffer,
-        wallet_registry: walletRegistry,
-        wallets_by_id: walletsById,
-      };
-    }
-
     const baseUrl = liveOffer.offer_url || liveOffer.credential_offer_uri;
-    if (!baseUrl) {
-      return {
-        ...liveOffer,
-        wallet_registry: walletRegistry,
-        wallets_by_id: walletsById,
-      };
-    }
-
-    // Use user's preferred wallets if they've registered any
-    const uris = {};
+    const uris = { ...(liveOffer.credential_offer_uris || {}) };
     const labels = { ...(liveOffer.credential_offer_labels || {}) };
-    for (const id of preferredWallets) {
-      uris[id] = baseUrl;
-      if (!labels[id]) {
-        labels[id] = labelMap[id] || id;
+
+    if (baseUrl) {
+      for (const id of selectedWalletIdList) {
+        if (!uris[id]) {
+          uris[id] = baseUrl;
+        }
+        if (!labels[id]) {
+          labels[id] = labelMap[id] || id;
+        }
       }
     }
 
@@ -237,51 +255,31 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
       wallet_registry: walletRegistry,
       wallets_by_id: walletsById,
     };
-  }, [liveOffer, hasRegisteredWallet, preferredWallets, registryWallets]);
+  }, [liveOffer, selectedWalletIdList, walletOptions]);
 
-  const preferredTransport = useMemo(
-    () => resolvePreferredCredentialOfferTransport({ offerData: enrichedOffer, preferredWalletIds: preferredWallets }),
-    [enrichedOffer, preferredWallets],
-  );
+  const preferredTransport = useMemo(() => {
+    if (selectedWalletId === ANY_OID4VCI_WALLET_ID) {
+      const defaultOfferUri = enrichedOffer?.offer_url || enrichedOffer?.credential_offer_uri || '';
+      return {
+        walletId: '',
+        offerUri: defaultOfferUri,
+        defaultOfferUri,
+        transport: createCredentialOfferTransport({ offerUri: defaultOfferUri }),
+      };
+    }
+
+    return resolvePreferredCredentialOfferTransport({
+      offerData: enrichedOffer,
+      preferredWalletIds: selectedWalletIdList,
+    });
+  }, [enrichedOffer, selectedWalletId, selectedWalletIdList]);
 
   const offerUrl = liveOffer?.offer_url || null;
   const primaryOfferUrl = preferredTransport.offerUri || offerUrl;
   const isExpired = liveOffer?.status === 'expired';
   const loadingInitialOffer = canGenerateWalletOffer && (refreshing || (applicationId && liveOffer === null)) && !primaryOfferUrl && !error;
   const notGenerated = canGenerateWalletOffer && !loadingInitialOffer && liveOffer != null && !primaryOfferUrl && !error;
-  const showWalletRegistrationGuard = selectedRequiresRegisteredWallet && !hasRegisteredWallet;
-  const showCanvasOnlyMessage = selectedIsCanvas;
   const showContent = canGenerateWalletOffer && !loadingInitialOffer && !notGenerated && !!primaryOfferUrl && !isExpired && !error;
-  const destinationOptions = [
-    {
-      id: ELEVENID_WALLET_DESTINATION_ID,
-      title: 'Add to ElevenID Wallet',
-      description: hasRegisteredWallet
-        ? 'Use your selected wallet app and wallet-specific handoff.'
-        : 'Choose a wallet app in settings before using this option.',
-      icon: <WalletIcon fontSize="small" />,
-      disabled: false,
-      chip: hasRegisteredWallet ? 'Ready' : 'Setup needed',
-    },
-    {
-      id: COMPATIBLE_WALLET_DESTINATION_ID,
-      title: 'Open in compatible wallet',
-      description: 'Use a standards-based OID4VCI link or QR code with any compatible wallet.',
-      icon: <OpenInNewIcon fontSize="small" />,
-      disabled: false,
-      chip: 'OID4VCI',
-    },
-    {
-      id: CANVAS_CREDENTIALS_DESTINATION_ID,
-      title: 'Show in Canvas Credentials',
-      description: canvasDestinationReady
-        ? 'Publishes the public badge view after canonical issuance.'
-        : 'Requires your organization to enable Canvas Credentials publishing.',
-      icon: <SchoolIcon fontSize="small" />,
-      disabled: !canvasDestinationReady,
-      chip: canvasDestinationReady ? 'Org managed' : 'Not configured',
-    },
-  ];
 
   // Deep link handler for mobile
   const handleOpenInWallet = async () => {
@@ -317,58 +315,75 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
   };
 
   return (
-    <Dialog open={open} onClose={onClose} maxWidth="xs" fullWidth>
+    <Dialog
+      open={open}
+      onClose={onClose}
+      maxWidth="xs"
+      fullWidth
+      fullScreen={isMobile}
+      data-testid="credential-claim-dialog"
+    >
       <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1, pb: 1 }}>
         <WalletIcon color="primary" />
         Receive Credential
-        {showWalletRegistrationGuard && <Chip label="Wallet required" color="warning" size="small" sx={{ ml: 'auto' }} />}
+        <Chip label={selectedWalletName} color="primary" variant="outlined" size="small" sx={{ ml: 'auto' }} />
         {isExpired && <Chip label="Expired" color="error" size="small" sx={{ ml: 'auto' }} />}
-        {showContent && <Chip label="Ready" color="success" size="small" sx={{ ml: 'auto' }} />}
-        {error && <Chip label="Error" color="error" size="small" sx={{ ml: 'auto' }} />}
+        {showContent && <Chip label="Ready" color="success" size="small" />}
+        {error && <Chip label="Error" color="error" size="small" />}
       </DialogTitle>
 
       <DialogContent dividers>
-        <Stack spacing={1.25} sx={{ mb: 2 }} data-testid="delivery-destination-selector">
+        <Stack spacing={1.25} sx={{ mb: 2 }} data-testid="wallet-selector" role="radiogroup" aria-label="Choose wallet">
           {destinationsLoading && <LinearProgress />}
           {destinationError && <Alert severity="info">{destinationError}</Alert>}
-          {destinationOptions.map((option) => {
-            const selected = option.id === selectedDestinationId;
+          {walletOptions.map((option) => {
+            const selected = option.id === selectedWalletId;
+            const isCompatibleWallet = option.id === ANY_OID4VCI_WALLET_ID;
+            const browserLaunch = walletSupportsBrowserLaunch(option);
+            const platforms = Array.isArray(option.supported_platforms || option.platforms)
+              ? (option.supported_platforms || option.platforms).slice(0, 3)
+              : [];
             return (
               <Card
                 key={option.id}
                 variant="outlined"
-                role="button"
-                tabIndex={option.disabled ? -1 : 0}
-                aria-pressed={selected}
-                data-testid={`delivery-destination-${option.id}`}
-                onClick={() => {
-                  if (!option.disabled) setSelectedDestinationId(option.id);
-                }}
+                role="radio"
+                tabIndex={0}
+                aria-checked={selected}
+                data-testid={`wallet-option-${option.id}`}
+                onClick={() => handleSelectWallet(option.id)}
                 onKeyDown={(event) => {
-                  if (!option.disabled && (event.key === 'Enter' || event.key === ' ')) {
+                  if (event.key === 'Enter' || event.key === ' ') {
                     event.preventDefault();
-                    setSelectedDestinationId(option.id);
+                    handleSelectWallet(option.id);
                   }
                 }}
                 sx={{
-                  opacity: option.disabled ? 0.55 : 1,
-                  cursor: option.disabled ? 'not-allowed' : 'pointer',
+                  cursor: 'pointer',
                   borderColor: selected ? 'primary.main' : 'divider',
                   bgcolor: selected ? 'action.selected' : 'background.paper',
                 }}
               >
                 <CardContent sx={{ py: 1.25, '&:last-child': { pb: 1.25 } }}>
                   <Stack direction="row" spacing={1.25} alignItems="flex-start">
-                    <Box sx={{ color: selected ? 'primary.main' : 'text.secondary', mt: 0.25 }}>
-                      {option.icon}
-                    </Box>
+                    <Radio checked={selected} size="small" sx={{ p: 0.25, mt: 0.1 }} />
                     <Box sx={{ minWidth: 0, flex: 1 }}>
                       <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
-                        <Typography variant="body2" fontWeight={700}>{option.title}</Typography>
-                        <Chip size="small" label={option.chip} color={selected && !option.disabled ? 'primary' : 'default'} variant="outlined" />
+                        <Typography variant="body2" fontWeight={700}>{option.name}</Typography>
+                        <Chip
+                          size="small"
+                          icon={browserLaunch ? <OpenInNewIcon /> : <PhoneAndroidIcon />}
+                          label={browserLaunch ? 'Browser' : 'Mobile'}
+                          color={selected ? 'primary' : 'default'}
+                          variant="outlined"
+                        />
+                        {isCompatibleWallet && <Chip size="small" label="OID4VCI" variant="outlined" />}
+                        {platforms.map((platform) => (
+                          <Chip key={`${option.id}-${platform}`} size="small" label={platform} variant="outlined" />
+                        ))}
                       </Stack>
                       <Typography variant="caption" color="text.secondary">
-                        {option.description}
+                        {option.description || 'Receive this credential with this wallet.'}
                       </Typography>
                     </Box>
                     {selected && <CheckCircleIcon color="primary" fontSize="small" />}
@@ -379,7 +394,7 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
           })}
         </Stack>
 
-        {!selectedIsCanvas && canvasDestinationReady && (
+        {canvasDestinationReady && (
           <FormControlLabel
             sx={{ mb: 1.5, alignItems: 'flex-start' }}
             control={
@@ -398,43 +413,6 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
               </Box>
             }
           />
-        )}
-
-        {showCanvasOnlyMessage && (
-          <Stack spacing={2} sx={{ py: 1 }} data-testid="canvas-credentials-destination-message">
-            <Alert severity={canvasDestinationReady ? 'info' : 'warning'}>
-              Canvas Credentials display happens after the credential is issued. Add the credential to a wallet first, then ElevenID can publish the public badge view to Canvas.
-            </Alert>
-            <Button
-              variant="contained"
-              startIcon={<OpenInNewIcon />}
-              onClick={() => setSelectedDestinationId(COMPATIBLE_WALLET_DESTINATION_ID)}
-            >
-              Use Compatible Wallet First
-            </Button>
-          </Stack>
-        )}
-
-        {showWalletRegistrationGuard && (
-          <Stack spacing={2} sx={{ py: 1 }} data-testid="wallet-registration-guard">
-            <Alert severity="warning" icon={<WalletIcon fontSize="small" />}>
-              Select a wallet app before you can receive this credential.
-            </Alert>
-            <Typography variant="body2" color="text.secondary">
-              Choose the wallet app you use in Settings, then come back here to receive the
-              credential. Right now, wallet selection is the registration step.
-            </Typography>
-            <Button
-              component={RouterLink}
-              to={APPLICANT_WALLET_SELECTION_SETTINGS_PATH}
-              variant="contained"
-              startIcon={<WalletIcon />}
-              onClick={onClose}
-              sx={{ alignSelf: 'flex-start' }}
-            >
-              Choose Wallet
-            </Button>
-          </Stack>
         )}
 
         {loadingInitialOffer && (
@@ -498,10 +476,12 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
                   onClick={handleOpenInWallet}
                   sx={{ py: 1.5, fontSize: '1rem', borderRadius: 2 }}
                 >
-                  Open in Wallet App
+                  {selectedWalletId === ANY_OID4VCI_WALLET_ID ? 'Open Wallet' : `Open ${selectedWalletName}`}
                 </Button>
                 <Typography variant="caption" color="text.secondary" textAlign="center">
-                  Your wallet app will open to receive this credential.
+                  {selectedWalletId === ANY_OID4VCI_WALLET_ID
+                    ? 'Your browser will hand this invite to a compatible wallet.'
+                    : `${selectedWalletName} will open to receive this credential.`}
                 </Typography>
               </Stack>
             )}
@@ -512,9 +492,15 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
               onRegenerate={applicationId ? handleRegenerate : undefined}
               loading={refreshing}
               showDeepLink={!isMobile}
-              allowedWalletIds={selectedRequiresRegisteredWallet ? preferredWallets : null}
-              showDefaultWalletTab={!selectedRequiresRegisteredWallet}
-              title={isMobile ? 'Or scan with another device' : 'Scan with your wallet app'}
+              allowedWalletIds={selectedWalletIdList.length > 0 ? selectedWalletIdList : null}
+              showDefaultWalletTab={selectedWalletId === ANY_OID4VCI_WALLET_ID}
+              title={
+                isMobile
+                  ? 'Or scan with another device'
+                  : selectedWalletId === ANY_OID4VCI_WALLET_ID
+                    ? 'Scan with your wallet app'
+                    : `Scan with ${selectedWalletName}`
+              }
               instructions={
                 isMobile
                   ? 'If you prefer to use a wallet on a different device, scan this QR code.'

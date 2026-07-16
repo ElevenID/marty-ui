@@ -28,8 +28,34 @@ logger = logging.getLogger(__name__)
 
 # Marty default organization ID (must match migration)
 MARTY_ORG_ID = os.environ.get("MARTY_ORG_ID", MARTY_DEFAULT_ORG_ID)
+MARTY_ORG_SLUG = os.environ.get("MARTY_ORG_SLUG", "marty")
+MARTY_ORG_NAME = os.environ.get("MARTY_ORG_NAME", "Marty")
 UNKNOWN_DATE_OF_BIRTH = date(1900, 1, 1)
 UNKNOWN_NATIONALITY = "UNK"
+
+
+def _marty_organization_summary(
+    org_id: str | None,
+    org_name: str | None,
+    role_names: list[str],
+    has_org_console_access: bool,
+) -> list[dict[str, object]]:
+    """Build the org-membership shape the browser auth session expects."""
+    if not org_id:
+        return []
+
+    return [{
+        "id": org_id,
+        "name": MARTY_ORG_SLUG,
+        "display_name": org_name or MARTY_ORG_NAME,
+        "membership": {
+            "roles": [{"name": role_name, "display_name": role_name} for role_name in role_names],
+            "status": "active",
+            "permissions": [],
+            "has_org_console_access": has_org_console_access,
+            "is_owner": "owner" in set(role_names),
+        },
+    }]
 
 
 class JITUserProvisioningAdapter(UserProvisioningPort):
@@ -126,14 +152,14 @@ class JITUserProvisioningAdapter(UserProvisioningPort):
             family_name = None
         return given_name, family_name
     
-    async def _add_to_marty_organization(self, user_id: str, email: str) -> None:
+    async def _add_to_marty_organization(self, user_id: str, email: str) -> bool:
         """
         Add a new user to the default Marty organization via gRPC.
         Best-effort — failures are logged but don't block provisioning.
         """
         if self._org_stub is None:
             logger.warning("No org gRPC channel — skipping auto-add to Marty org")
-            return
+            return False
         try:
             from marty_proto.v1 import organization_service_pb2
             await self._org_stub.AddMember(
@@ -145,16 +171,18 @@ class JITUserProvisioningAdapter(UserProvisioningPort):
                 timeout=5.0,
             )
             logger.info(f"Successfully added user {user_id} to Marty organization")
+            return True
         except Exception as e:
             logger.error(
                 f"Failed to add user {user_id} to Marty organization: {e}",
                 exc_info=True
             )
+            return False
 
     async def _resolve_marty_organization_context(
         self,
         user_id: str,
-    ) -> tuple[str | None, str | None, list[str], bool]:
+    ) -> tuple[str | None, str | None, list[str], bool, bool]:
         """Resolve the user's default organization context through gRPC.
 
         This replaces the legacy direct join against the retired monolith
@@ -162,7 +190,7 @@ class JITUserProvisioningAdapter(UserProvisioningPort):
         enrich the authenticated user object.
         """
         if self._org_stub is None:
-            return None, None, [], False
+            return None, None, [], False, True
 
         from marty_proto.v1 import organization_service_pb2
 
@@ -176,26 +204,26 @@ class JITUserProvisioningAdapter(UserProvisioningPort):
             )
         except grpc.RpcError as exc:
             if exc.code() == grpc.StatusCode.NOT_FOUND:
-                return None, None, [], False
+                return None, None, [], False, False
             logger.warning(
                 "Failed to resolve Marty org membership for %s: %s",
                 user_id,
                 exc,
             )
-            return None, None, [], False
+            return None, None, [], False, True
         except Exception as exc:
             logger.warning(
                 "Unexpected error resolving Marty org membership for %s: %s",
                 user_id,
                 exc,
             )
-            return None, None, [], False
+            return None, None, [], False, True
 
         org_id = member.organization_id or None
         member_role_names = [role.name for role in member.roles]
         has_org_console_access = bool(member.has_org_console_access)
         if not org_id:
-            return None, None, [], False
+            return None, None, [], False, False
 
         org_name = None
         try:
@@ -221,7 +249,7 @@ class JITUserProvisioningAdapter(UserProvisioningPort):
                 exc,
             )
 
-        return org_id, org_name, member_role_names, has_org_console_access
+        return org_id, org_name, member_role_names, has_org_console_access, False
     
     async def provision_user(self, oidc_user: OIDCUserInfo) -> AuthenticatedUser:
         """
@@ -261,10 +289,13 @@ class JITUserProvisioningAdapter(UserProvisioningPort):
             given_name, family_name = self._to_authenticated_name_parts(applicant)
             
             # Ensure user is in the default Marty organization (idempotent - safe for all users)
-            await self._add_to_marty_organization(user_id, applicant.email)
+            marty_add_succeeded = await self._add_to_marty_organization(user_id, applicant.email)
             
             # Resolve organization membership via the organization service.
-            org_id, org_name, member_role_names, has_org_console_access = await self._resolve_marty_organization_context(user_id)
+            org_id, org_name, member_role_names, has_org_console_access, org_context_unavailable = (
+                await self._resolve_marty_organization_context(user_id)
+            )
+            org_context_unavailable = org_context_unavailable or not marty_add_succeeded
             roles = list(oidc_user.roles)
             for member_role_name in member_role_names:
                 if member_role_name not in roles:
@@ -289,6 +320,19 @@ class JITUserProvisioningAdapter(UserProvisioningPort):
                 organization_id=org_id or oidc_user.organization_id,
                 organization_name=org_name or oidc_user.organization_name,
                 organization=oidc_user.organization,
+                default_organization_id=org_id or oidc_user.organization_id,
+                default_organization_name=org_name or oidc_user.organization_name,
+                organizations=_marty_organization_summary(
+                    org_id,
+                    org_name,
+                    member_role_names,
+                    has_org_console_access,
+                ),
+                organization_context_unavailable=org_context_unavailable,
+                organization_context_error=(
+                    "marty_organization_context_unavailable"
+                    if org_context_unavailable else None
+                ),
                 onboarding_completed=(
                     applicant.identity_proofing_date
                     if applicant.identity_proofing_completed
@@ -318,11 +362,11 @@ class InMemoryUserProvisioningAdapter(UserProvisioningPort):
             from marty_proto.v1.organization_service_pb2_grpc import OrganizationServiceStub
             self._org_stub = OrganizationServiceStub(org_grpc_channel)
 
-    async def _add_to_marty_organization(self, user_id: str, email: str) -> None:
+    async def _add_to_marty_organization(self, user_id: str, email: str) -> bool:
         """Add user to the default Marty organisation via gRPC (idempotent, best-effort)."""
         if self._org_stub is None:
             logger.warning("No org gRPC channel — skipping auto-add to Marty org")
-            return
+            return False
         try:
             from marty_proto.v1 import organization_service_pb2
             await self._org_stub.AddMember(
@@ -334,19 +378,21 @@ class InMemoryUserProvisioningAdapter(UserProvisioningPort):
                 timeout=5.0,
             )
             logger.info(f"Successfully added user {user_id} to Marty organization")
+            return True
         except Exception as e:
             logger.error(
                 f"Failed to add user {user_id} to Marty organization: {e}",
                 exc_info=True,
             )
+            return False
 
     async def _resolve_marty_organization_context(
         self,
         user_id: str,
-    ) -> tuple[str | None, str | None, list[str], bool]:
+    ) -> tuple[str | None, str | None, list[str], bool, bool]:
         """Resolve the user's Marty membership and org display name via gRPC."""
         if self._org_stub is None:
-            return None, None, [], False
+            return None, None, [], False, True
 
         from marty_proto.v1 import organization_service_pb2
 
@@ -360,26 +406,26 @@ class InMemoryUserProvisioningAdapter(UserProvisioningPort):
             )
         except grpc.RpcError as exc:
             if exc.code() == grpc.StatusCode.NOT_FOUND:
-                return None, None, [], False
+                return None, None, [], False, False
             logger.warning(
                 "Failed to resolve Marty org membership for %s: %s",
                 user_id,
                 exc,
             )
-            return None, None, [], False
+            return None, None, [], False, True
         except Exception as exc:
             logger.warning(
                 "Unexpected error resolving Marty org membership for %s: %s",
                 user_id,
                 exc,
             )
-            return None, None, [], False
+            return None, None, [], False, True
 
         org_id = member.organization_id or None
         member_role_names = [role.name for role in member.roles]
         has_org_console_access = bool(member.has_org_console_access)
         if not org_id:
-            return None, None, [], False
+            return None, None, [], False, False
 
         org_name = None
         try:
@@ -405,7 +451,7 @@ class InMemoryUserProvisioningAdapter(UserProvisioningPort):
                 exc,
             )
 
-        return org_id, org_name, member_role_names, has_org_console_access
+        return org_id, org_name, member_role_names, has_org_console_access, False
 
     async def provision_user(self, oidc_user: OIDCUserInfo) -> AuthenticatedUser:
         """Create or update user in memory."""
@@ -449,10 +495,13 @@ class InMemoryUserProvisioningAdapter(UserProvisioningPort):
             )
 
         # Ensure user is in the default Marty organisation (idempotent)
-        await self._add_to_marty_organization(oidc_user.sub, oidc_user.email)
+        marty_add_succeeded = await self._add_to_marty_organization(oidc_user.sub, oidc_user.email)
 
         # Resolve organization membership after the add so the session includes it.
-        org_id, org_name, member_role_names, has_org_console_access = await self._resolve_marty_organization_context(oidc_user.sub)
+        org_id, org_name, member_role_names, has_org_console_access, org_context_unavailable = (
+            await self._resolve_marty_organization_context(oidc_user.sub)
+        )
+        org_context_unavailable = org_context_unavailable or not marty_add_succeeded
         for member_role_name in member_role_names:
             if member_role_name not in roles:
                 roles.append(member_role_name)
@@ -475,6 +524,19 @@ class InMemoryUserProvisioningAdapter(UserProvisioningPort):
             organization_id=org_id or oidc_user.organization_id,
             organization_name=org_name or oidc_user.organization_name,
             organization=oidc_user.organization,
+            default_organization_id=org_id or oidc_user.organization_id,
+            default_organization_name=org_name or oidc_user.organization_name,
+            organizations=_marty_organization_summary(
+                org_id,
+                org_name,
+                member_role_names,
+                has_org_console_access,
+            ),
+            organization_context_unavailable=org_context_unavailable,
+            organization_context_error=(
+                "marty_organization_context_unavailable"
+                if org_context_unavailable else None
+            ),
             picture=oidc_user.picture,
         )
 

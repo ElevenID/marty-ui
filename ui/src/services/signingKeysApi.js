@@ -5,10 +5,52 @@
  * Keys can be rotated, and HSM/Vault integration can be configured.
  */
 
-import { get, post, patch, del } from './api';
-import { buildTruthyQueryString, withQuery } from './queryUtils';
+import { get, post, put, patch, del } from './api';
+import { postWithIdempotency } from './idempotency';
+import { buildDefinedQueryString, buildTruthyQueryString, withQuery } from './queryUtils';
 
 const BASE_PATH = '/v1/signing-keys';
+
+function resolveOrganizationId(params = {}) {
+  if (typeof params === 'string') {
+    return params;
+  }
+  return params?.organization_id || params?.organizationId || null;
+}
+
+function requireOrganizationId(params = {}, action = 'using signing keys') {
+  const organizationId = resolveOrganizationId(params);
+  if (
+    organizationId == null
+    || String(organizationId).trim() === ''
+    || String(organizationId).trim().toLowerCase() === 'null'
+    || String(organizationId).trim().toLowerCase() === 'undefined'
+  ) {
+    const error = new Error(`An active organization is required before ${action}.`);
+    error.code = 'ORG_REQUIRED';
+    error.status = 400;
+    throw error;
+  }
+  return String(organizationId).trim();
+}
+
+function withOrganizationQuery(path, params = {}, extra = {}, action) {
+  const organizationId = requireOrganizationId(params, action);
+  return withQuery(path, buildDefinedQueryString({
+    organization_id: organizationId,
+    ...extra,
+  }));
+}
+
+function withoutOrganizationFields(value = {}) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return value;
+  }
+  const rest = { ...value };
+  delete rest.organization_id;
+  delete rest.organizationId;
+  return rest;
+}
 
 /**
  * List signing keys for the organization
@@ -19,7 +61,8 @@ const BASE_PATH = '/v1/signing-keys';
  * @returns {Promise<Array>} List of signing keys
  */
 export async function listSigningKeys(filters = {}) {
-  const queryString = buildTruthyQueryString({
+  const queryString = buildDefinedQueryString({
+    organization_id: requireOrganizationId(filters, 'loading signing keys'),
     status: filters.status,
     limit: filters.limit,
     offset: filters.offset,
@@ -32,8 +75,8 @@ export async function listSigningKeys(filters = {}) {
  * @param {string} keyId - Key ID
  * @returns {Promise<Object>} Signing key details
  */
-export async function getSigningKey(keyId) {
-  return get(`${BASE_PATH}/${keyId}`);
+export async function getSigningKey(keyId, params = {}) {
+  return get(withOrganizationQuery(`${BASE_PATH}/${keyId}`, params, {}, 'loading signing keys'));
 }
 
 /**
@@ -48,7 +91,11 @@ export async function getSigningKey(keyId) {
  * @returns {Promise<Object>} Created signing key
  */
 export async function createSigningKey(keyData) {
-  return post(BASE_PATH, keyData);
+  const body = withoutOrganizationFields(keyData);
+  return postWithIdempotency(
+    withOrganizationQuery(BASE_PATH, keyData, {}, 'creating signing keys'),
+    body
+  );
 }
 
 /**
@@ -59,7 +106,7 @@ export async function createSigningKey(keyData) {
  * @returns {Promise<Object>} New signing key
  */
 export async function rotateSigningKey(keyId, options = {}) {
-  return post(`${BASE_PATH}/${keyId}/rotate`, options);
+  return post(withOrganizationQuery(`${BASE_PATH}/${keyId}/rotate`, options), withoutOrganizationFields(options));
 }
 
 /**
@@ -70,8 +117,8 @@ export async function rotateSigningKey(keyId, options = {}) {
  * @param {string} updates.status - New status: 'active', 'deprecated', 'revoked'
  * @returns {Promise<Object>} Updated signing key
  */
-export async function updateSigningKey(keyId, updates) {
-  return patch(`${BASE_PATH}/${keyId}`, updates);
+export async function updateSigningKey(keyId, updates = {}) {
+  return patch(withOrganizationQuery(`${BASE_PATH}/${keyId}`, updates), withoutOrganizationFields(updates));
 }
 
 /**
@@ -79,16 +126,16 @@ export async function updateSigningKey(keyId, updates) {
  * @param {string} keyId - Key ID
  * @returns {Promise<void>}
  */
-export async function deleteSigningKey(keyId) {
-  return del(`${BASE_PATH}/${keyId}`);
+export async function deleteSigningKey(keyId, params = {}) {
+  return del(withOrganizationQuery(`${BASE_PATH}/${keyId}`, params));
 }
 
 /**
  * Get HSM/Vault configuration
  * @returns {Promise<Object>} HSM/Vault settings
  */
-export async function getKeyManagementConfig() {
-  return get(`${BASE_PATH}/config`);
+export async function getKeyManagementConfig(params = {}) {
+  return get(withOrganizationQuery(`${BASE_PATH}/config`, params, {}, 'loading key management configuration'));
 }
 
 /**
@@ -101,7 +148,10 @@ export async function getKeyManagementConfig() {
  * @returns {Promise<Object>} Updated configuration
  */
 export async function updateKeyManagementConfig(config) {
-  return patch(`${BASE_PATH}/config`, config);
+  return patch(
+    withOrganizationQuery(`${BASE_PATH}/config`, config, {}, 'saving key management configuration'),
+    withoutOrganizationFields(config)
+  );
 }
 
 /**
@@ -110,7 +160,7 @@ export async function updateKeyManagementConfig(config) {
  * @returns {Promise<Object>} Validation checks and overall status
  */
 export async function validateKeyManagementService(payload) {
-  return post(`${BASE_PATH}/config/validate`, payload);
+  return post(withOrganizationQuery(`${BASE_PATH}/config/validate`, payload, {}, 'validating key management services'), withoutOrganizationFields(payload));
 }
 
 /**
@@ -122,7 +172,7 @@ export async function validateKeyManagementService(payload) {
  * @returns {Promise<Object>} Resolved service or null
  */
 export async function resolveSigningService(params) {
-  return post(`${BASE_PATH}/config/resolve`, params);
+  return post(withOrganizationQuery(`${BASE_PATH}/config/resolve`, params), withoutOrganizationFields(params));
 }
 
 /**
@@ -146,9 +196,13 @@ export async function listServiceCapabilities() {
  * @param {number} [thresholdDays=30] - Days ahead to look for expiring certs
  * @returns {Promise<Object>} { alerts: Array }
  */
-export async function getCertificateExpiryAlerts(thresholdDays) {
-  const queryString = thresholdDays != null ? `?threshold_days=${thresholdDays}` : '';
-  return get(`${BASE_PATH}/config/certificate-expiry-alerts${queryString}`);
+export async function getCertificateExpiryAlerts(thresholdDays, params = {}) {
+  return get(withOrganizationQuery(
+    `${BASE_PATH}/config/certificate-expiry-alerts`,
+    params,
+    { days_until_expiry: thresholdDays },
+    'loading certificate expiry alerts'
+  ));
 }
 
 /**
@@ -157,9 +211,11 @@ export async function getCertificateExpiryAlerts(thresholdDays) {
  * @param {string} [organizationId]
  * @returns {Promise<Object>}
  */
-export async function publishServiceToJwks(serviceId, organizationId) {
-  const queryString = organizationId ? `?organization_id=${organizationId}` : '';
-  return post(`${BASE_PATH}/services/${serviceId}/publish-jwks${queryString}`, {});
+export async function publishServiceToJwks(serviceId, organizationId, body = {}) {
+  return post(
+    withOrganizationQuery(`${BASE_PATH}/services/${serviceId}/publish-jwks`, organizationId),
+    withoutOrganizationFields(body || {})
+  );
 }
 
 /**
@@ -170,8 +226,10 @@ export async function publishServiceToJwks(serviceId, organizationId) {
  * @returns {Promise<Object>}
  */
 export async function publishServiceToDidVm(serviceId, organizationId, body) {
-  const queryString = organizationId ? `?organization_id=${organizationId}` : '';
-  return post(`${BASE_PATH}/services/${serviceId}/publish-did-vm${queryString}`, body || {});
+  return post(
+    withOrganizationQuery(`${BASE_PATH}/services/${serviceId}/publish-did-vm`, organizationId),
+    withoutOrganizationFields(body || {})
+  );
 }
 
 /**
@@ -181,7 +239,10 @@ export async function publishServiceToDidVm(serviceId, organizationId, body) {
  * @returns {Promise<Object>} { csr_pem: string }
  */
 export async function generateServiceCsr(serviceId, subjectFields = {}) {
-  return post(`${BASE_PATH}/services/${serviceId}/certificate-csr`, subjectFields);
+  return post(
+    withOrganizationQuery(`${BASE_PATH}/services/${serviceId}/certificate-csr`, subjectFields),
+    withoutOrganizationFields(subjectFields)
+  );
 }
 
 /**
@@ -191,7 +252,10 @@ export async function generateServiceCsr(serviceId, subjectFields = {}) {
  * @returns {Promise<Object>}
  */
 export async function setServiceCertificate(serviceId, certData) {
-  return post(`${BASE_PATH}/services/${serviceId}/certificate`, certData);
+  return put(
+    withOrganizationQuery(`${BASE_PATH}/services/${serviceId}/certificate`, certData),
+    withoutOrganizationFields(certData)
+  );
 }
 
 /**
@@ -199,8 +263,8 @@ export async function setServiceCertificate(serviceId, certData) {
  * @param {string} serviceId
  * @returns {Promise<Object>} { cert_pem, cert_chain_pem, cert_expires_at, ... }
  */
-export async function getServiceCertificate(serviceId) {
-  return get(`${BASE_PATH}/services/${serviceId}/certificate`);
+export async function getServiceCertificate(serviceId, params = {}) {
+  return get(withOrganizationQuery(`${BASE_PATH}/services/${serviceId}/certificate`, params));
 }
 
 /**
@@ -210,7 +274,7 @@ export async function getServiceCertificate(serviceId) {
  * @returns {Promise<Object>}
  */
 export async function rotateServiceKey(serviceId, options = {}) {
-  return post(`${BASE_PATH}/services/${serviceId}/rotate`, options);
+  return post(withOrganizationQuery(`${BASE_PATH}/services/${serviceId}/rotate`, options), withoutOrganizationFields(options));
 }
 
 /**
@@ -218,8 +282,8 @@ export async function rotateServiceKey(serviceId, options = {}) {
  * @param {string} serviceId
  * @returns {Promise<Object>} { x5c: string[], ... }
  */
-export async function getMdocX5cMaterial(serviceId) {
-  return get(`${BASE_PATH}/services/${serviceId}/mdoc-x5c`);
+export async function getMdocX5cMaterial(serviceId, params = {}) {
+  return get(withOrganizationQuery(`${BASE_PATH}/services/${serviceId}/mdoc-x5c`, params));
 }
 
 /**
@@ -229,7 +293,7 @@ export async function getMdocX5cMaterial(serviceId) {
  * @returns {Promise<Object>} { signature_b64, signature_hex, algorithm, ... }
  */
 export async function signPayload(serviceId, payload) {
-  return post(`${BASE_PATH}/services/${serviceId}/sign`, payload);
+  return post(withOrganizationQuery(`${BASE_PATH}/services/${serviceId}/sign`, payload), withoutOrganizationFields(payload));
 }
 
 /**
@@ -238,7 +302,7 @@ export async function signPayload(serviceId, payload) {
  * @returns {Promise<Object>}
  */
 export async function registerHolderKey(keyData) {
-  return post(`${BASE_PATH}/holder-keys`, keyData);
+  return post(withOrganizationQuery(`${BASE_PATH}/holder-keys`, keyData), withoutOrganizationFields(keyData));
 }
 
 /**
@@ -247,7 +311,10 @@ export async function registerHolderKey(keyData) {
  * @returns {Promise<Object>}
  */
 export async function listHolderKeys(filters = {}) {
-  const queryString = buildTruthyQueryString(filters);
+  const queryString = buildTruthyQueryString({
+    ...filters,
+    organization_id: requireOrganizationId(filters, 'loading holder keys'),
+  });
   return get(withQuery(`${BASE_PATH}/holder-keys`, queryString));
 }
 
@@ -257,7 +324,7 @@ export async function listHolderKeys(filters = {}) {
  * @returns {Promise<Object>}
  */
 export async function deriveHolderBindingKey(params) {
-  return post(`${BASE_PATH}/holder-keys/derive`, params);
+  return post(withOrganizationQuery(`${BASE_PATH}/holder-keys/derive`, params), withoutOrganizationFields(params));
 }
 
 /**
@@ -266,8 +333,7 @@ export async function deriveHolderBindingKey(params) {
  * @returns {Promise<Object>} JWKS document
  */
 export async function getOrgJwks(organizationId) {
-  const queryString = organizationId ? `?organization_id=${organizationId}` : '';
-  return get(`${BASE_PATH}/jwks${queryString}`);
+  return get(withOrganizationQuery(`${BASE_PATH}/jwks`, organizationId));
 }
 
 /**
@@ -276,8 +342,7 @@ export async function getOrgJwks(organizationId) {
  * @returns {Promise<Object>} DID document
  */
 export async function getOrgDidDocument(organizationId) {
-  const queryString = organizationId ? `?organization_id=${organizationId}` : '';
-  return get(`${BASE_PATH}/did-document${queryString}`);
+  return get(withOrganizationQuery(`${BASE_PATH}/did-document`, organizationId));
 }
 
 // ---------------------------------------------------------------------------
@@ -290,15 +355,19 @@ export async function getOrgDidDocument(organizationId) {
  * @returns {Promise<Object>} { ok, profile }
  */
 export async function createIssuerProfile(body) {
-  return post(`${BASE_PATH}/issuer-profiles`, body);
+  const requestBody = withoutOrganizationFields(body);
+  return postWithIdempotency(
+    withOrganizationQuery(`${BASE_PATH}/issuer-profiles`, body, {}, 'creating issuer profiles'),
+    requestBody
+  );
 }
 
 /**
  * List issuer profiles for the current organization.
  * @returns {Promise<Object>} { profiles: [...] }
  */
-export async function listIssuerProfiles() {
-  return get(`${BASE_PATH}/issuer-profiles`);
+export async function listIssuerProfiles(params = {}) {
+  return get(withOrganizationQuery(`${BASE_PATH}/issuer-profiles`, params, {}, 'loading issuer profiles'));
 }
 
 /**
@@ -306,8 +375,8 @@ export async function listIssuerProfiles() {
  * @param {string} profileId
  * @returns {Promise<Object>} { profile }
  */
-export async function getIssuerProfile(profileId) {
-  return get(`${BASE_PATH}/issuer-profiles/${profileId}`);
+export async function getIssuerProfile(profileId, params = {}) {
+  return get(withOrganizationQuery(`${BASE_PATH}/issuer-profiles/${profileId}`, params));
 }
 
 /**
@@ -317,7 +386,7 @@ export async function getIssuerProfile(profileId) {
  * @returns {Promise<Object>} { ok, profile }
  */
 export async function updateIssuerProfile(profileId, body) {
-  return patch(`${BASE_PATH}/issuer-profiles/${profileId}`, body);
+  return patch(withOrganizationQuery(`${BASE_PATH}/issuer-profiles/${profileId}`, body), withoutOrganizationFields(body));
 }
 
 /**
@@ -325,8 +394,8 @@ export async function updateIssuerProfile(profileId, body) {
  * @param {string} profileId
  * @returns {Promise<Object>} { ok, deleted }
  */
-export async function deleteIssuerProfile(profileId) {
-  return del(`${BASE_PATH}/issuer-profiles/${profileId}`);
+export async function deleteIssuerProfile(profileId, params = {}) {
+  return del(withOrganizationQuery(`${BASE_PATH}/issuer-profiles/${profileId}`, params));
 }
 
 export default {

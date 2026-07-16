@@ -205,7 +205,40 @@ class DisplayMetadata:
 class HolderBinding:
     required: bool = False
     binding_methods: list[str] = field(default_factory=list)
-    nonce_required: bool = False
+    proof_profiles: list[str] = field(default_factory=list)
+    proof_freshness: dict[str, Any] = field(default_factory=dict)
+
+
+def normalize_holder_binding(value: dict[str, Any] | None) -> HolderBinding:
+    """Read legacy policies while emitting only the MIP canonical shape."""
+    payload = dict(value or {})
+    required = bool(payload.get("required", False))
+    methods = [
+        "SESSION_BINDING" if method == "NONCE" else method
+        for method in payload.get("binding_methods", [])
+        if method != "BIOMETRIC"
+    ]
+    if required and not methods:
+        methods = ["DEVICE_KEY"]
+
+    profiles = list(payload.get("proof_profiles") or [])
+    if required and not profiles:
+        profiles = ["OID4VP_VERIFIABLE_PRESENTATION"]
+
+    proof_freshness = dict(payload.get("proof_freshness") or {})
+    if required and not proof_freshness:
+        proof_freshness = {
+            "challenge_required": True,
+            "audience_binding_required": True,
+            "replay_detection_required": True,
+        }
+
+    return HolderBinding(
+        required=required,
+        binding_methods=methods,
+        proof_profiles=profiles,
+        proof_freshness=proof_freshness,
+    )
 
 
 @dataclass
@@ -479,6 +512,7 @@ class PresentationPolicyResponse(BaseModel):
     id: str
     organization_id: str
     name: str
+    status: str = "draft"
     description: str | None = None
     purpose: str | None = None
     required_claims: list[dict] = Field(default_factory=list)
@@ -712,6 +746,35 @@ def _did_resolution_candidate_urls(did: str) -> list[str]:
 
 def _resolve_did_document(did: str) -> dict[str, Any]:
     import httpx
+
+    if did.startswith("did:jwk:"):
+        encoded_jwk = did[len("did:jwk:"):]
+        try:
+            public_jwk = json.loads(_b64decode_unpadded(encoded_jwk))
+        except Exception as exc:
+            raise RuntimeError(f"DID resolution failed for {did}: invalid did:jwk payload") from exc
+        if not isinstance(public_jwk, dict) or not public_jwk.get("kty"):
+            raise RuntimeError(f"DID resolution failed for {did}: invalid JWK")
+        public_jwk = {
+            key: value
+            for key, value in public_jwk.items()
+            if key not in {"d", "p", "q", "dp", "dq", "qi", "oth", "k"}
+        }
+        method_id = did
+        return {
+            "@context": ["https://www.w3.org/ns/did/v1"],
+            "id": did,
+            "verificationMethod": [
+                {
+                    "id": method_id,
+                    "type": "JsonWebKey2020",
+                    "controller": did,
+                    "publicKeyJwk": public_jwk,
+                }
+            ],
+            "authentication": [method_id],
+            "assertionMethod": [method_id],
+        }
 
     errors: list[str] = []
     for url in _did_resolution_candidate_urls(did):
@@ -1664,10 +1727,11 @@ def _lookup_managed_issuer_credential_status_revocation_state(
     caller supplies candidate credential IDs extracted from the verified
     presentation, and this function tries the configured status endpoint.
     """
-    if not _is_managed_issuer_identifier(issuer_did):
-        return None, None, None
     if not credential_ids:
         return None, None, None
+
+    configured_managed_issuer = _is_managed_issuer_identifier(issuer_did)
+    issuer_candidates = _issuer_identifier_candidates(issuer_did)
 
     for credential_id in credential_ids:
         try:
@@ -1686,6 +1750,23 @@ def _lookup_managed_issuer_credential_status_revocation_state(
                 "Credential status lookup found no managed issuer record for %s credential=%s",
                 issuer_did,
                 credential_id[:8] + "..." if len(credential_id) > 8 else credential_id,
+            )
+            continue
+
+        status_issuer = status_payload.get("issuer_did")
+        if status_issuer:
+            if issuer_candidates.isdisjoint(_issuer_identifier_candidates(str(status_issuer))):
+                logger.warning(
+                    "Credential status issuer mismatch for credential=%s presented=%s recorded=%s",
+                    credential_id[:8] + "..." if len(credential_id) > 8 else credential_id,
+                    issuer_did,
+                    status_issuer,
+                )
+                continue
+        elif not configured_managed_issuer:
+            logger.warning(
+                "Credential status record omitted issuer identity for unconfigured issuer %s",
+                issuer_did,
             )
             continue
 
@@ -1802,7 +1883,7 @@ async def create_presentation_policy(
         purpose=request.purpose,
         accepted_credential_types=request.accepted_credential_types,
         trust_profile_id=request.trust_profile_id,
-        holder_binding=HolderBinding(**request.holder_binding) if request.holder_binding else HolderBinding(),
+        holder_binding=normalize_holder_binding(request.holder_binding),
         freshness=FreshnessPolicy(**request.freshness) if request.freshness else None,
         issuer_constraints=IssuerConstraints(**request.issuer_constraints) if request.issuer_constraints else None,
         credential_ranking_strategy=request.credential_ranking_strategy,
@@ -1933,7 +2014,7 @@ async def update_presentation_policy(
     if request.trust_profile_id is not None:
         policy.trust_profile_id = request.trust_profile_id
     if request.holder_binding is not None:
-        policy.holder_binding = HolderBinding(**request.holder_binding)
+        policy.holder_binding = normalize_holder_binding(request.holder_binding)
     if request.freshness is not None:
         policy.freshness = FreshnessPolicy(**request.freshness)
     if request.issuer_constraints is not None:
@@ -2221,14 +2302,19 @@ async def evaluate_presentation(
     #
     # MIP flow note:
     # - Some credential-login policies intentionally do NOT require holder
-    #   binding (`holder_binding.required=false`, `nonce_required=false`).
+    #   binding (`holder_binding.required=false`).
     # - Passing nonce/audience unconditionally can force SD-JWT key-binding
     #   checks and reject otherwise valid issuer-signed credentials.
     #
-    # Therefore only enforce nonce/audience at credential-verification time when
-    # the policy requires holder binding (or explicitly requires nonce).
-    verify_nonce = request.nonce if (policy.holder_binding.required or policy.holder_binding.nonce_required) else None
-    verify_audience = request.audience if policy.holder_binding.required else None
+    # A nonce is a freshness challenge, not holder binding by itself. It is
+    # supplied only when the configured proof profile requires a signed challenge.
+    proof_freshness = policy.holder_binding.proof_freshness
+    verify_nonce = request.nonce if (
+        policy.holder_binding.required and proof_freshness.get("challenge_required", True)
+    ) else None
+    verify_audience = request.audience if (
+        policy.holder_binding.required and proof_freshness.get("audience_binding_required", True)
+    ) else None
 
     verification_result = _verify_credential_by_format(
         request.vp_token,
@@ -2431,7 +2517,13 @@ async def evaluate_presentation(
                 nonce=request.nonce,
             )
         if not_revoked is not True:
-            verification_error = "Credential is revoked"
+            normalized_lifecycle_status = str(
+                verification_result.get("revocation_status") or ""
+            ).strip().lower()
+            verification_error = {
+                "suspended": "Credential is suspended",
+                "expired": "Credential is expired",
+            }.get(normalized_lifecycle_status, "Credential is revoked")
             credential_results = [
                 CredentialEvaluationResult(
                     credential_template_id=req.credential_template_id,
@@ -2676,6 +2768,7 @@ def _policy_to_response(policy: PresentationPolicy) -> PresentationPolicyRespons
         id=policy.id,
         organization_id=policy.organization_id,
         name=policy.name,
+        status=policy.status.value if hasattr(policy.status, "value") else str(policy.status),
         description=policy.description,
         purpose=policy.purpose or policy.display_metadata.purpose_description,
         required_claims=policy.protocol_required_claims,
@@ -2685,7 +2778,8 @@ def _policy_to_response(policy: PresentationPolicy) -> PresentationPolicyRespons
         holder_binding={
             "required": policy.holder_binding.required,
             "binding_methods": policy.holder_binding.binding_methods,
-            "nonce_required": policy.holder_binding.nonce_required,
+            "proof_profiles": policy.holder_binding.proof_profiles,
+            "proof_freshness": policy.holder_binding.proof_freshness,
         },
         freshness={
             "max_age_seconds": policy.freshness.max_age_seconds,

@@ -1,199 +1,115 @@
-# OID4VCI Auto-Trigger Workflow
+# OID4VCI Application Approval Trigger
 
 ## Overview
-Automatic credential offer generation when applications are approved.
 
-## Components
+MIP 0.3.1 can generate a pre-authorized OID4VCI offer after an organization reviewer approves an application. The application service owns claim derivation and invokes only an active custom Flow extension that explicitly handles `APPLICATION_APPROVED` for the application's Credential Template.
 
-### 1. Event Publisher (`services/common/events.py`)
-- Lightweight HTTP-based event bus
-- Publishes domain events to registered webhooks
-- Supports multiple event types (application.approved, identity.verified, etc.)
+There are no legacy applicant review routes or client-selected issuance claims in this workflow.
 
-### 2. Applicant Service (`services/applicant/main.py`)
-- Emits `APPLICATION_APPROVED` event when applicant is approved
-- Event includes applicant details (ID, email, name, vetting level)
-- Non-blocking: approval succeeds even if event publishing fails
+## Required Resources
 
-### 3. Flow Service Webhook (`services/flow/main.py`)
-- Receives `APPLICATION_APPROVED` events at `/v1/flows/webhooks/application-approved`
-- Finds all active OID4VCI flows with `application_approved` precondition
-- Automatically starts flow instances for each matching flow
-- Creates QR codes/credential offers immediately
+The target organization must have:
+
+- an active KMS-backed issuer identity;
+- an active Trust Profile that trusts the issuer;
+- an active Revocation Profile;
+- an active Credential Template;
+- an active Application Template linked to that Credential Template; and
+- an active custom Flow Definition extending `OID4VCI_PRE_AUTHORIZED` and linked to the same Credential Template.
+
+The Flow extension uses this canonical trigger:
+
+```json
+{
+  "trigger_type": "WEBHOOK",
+  "config": {
+    "event_type": "APPLICATION_APPROVED"
+  }
+}
+```
 
 ## Workflow
 
-```
-1. Admin approves applicant
-   └─> POST /v1/applicants/{id}/review { decision: "approve" }
-
-2. Applicant service updates status
-   └─> applicant.status = APPROVED
-
-3. Event published
-   └─> POST http://flow-service:8011/v1/flows/webhooks/application-approved
-       {
-         "event_type": "application.approved",
-         "aggregate_id": "applicant-123",
-         "organization_id": "org-456",
-         "data": {
-           "applicant_id": "applicant-123",
-           "email": "user@example.com",
-           "given_name": "Jane",
-           "family_name": "Doe",
-           "status": "approved"
-         }
-       }
-
-4. Flow service receives webhook
-   └─> Queries for active OID4VCI flows with precondition "application_approved"
-
-5. For each matching flow:
-   a. Creates FlowInstance with initial context:
-      - application_status: "approved"
-      - applicant_id, email, name
-   
-   b. Starts flow at first step (usually "Check Preconditions")
-   
-   c. Creates OID4VCI artifact:
-      - Generates pre-authorized code
-      - Builds credential_offer_uri
-      - Creates QR code payload
-   
-   d. Flow is now waiting for wallet to scan QR
-
-6. Applicant scans QR code with wallet
-   └─> Wallet exchanges pre-auth code for credential
+```text
+1. A holder submits an application through POST /v1/me/applications/{id}/submit.
+2. An authorized reviewer acquires the current application lock.
+3. The reviewer approves through:
+   POST /v1/organizations/{organization_id}/applicants/{application_id}/approve
+4. The applicant service derives required checks and credential claims from the
+   persisted Application Template, form_data, and server-owned SYSTEM mappings.
+5. The applicant service posts an internal APPLICATION_APPROVED event to:
+   POST /v1/flows/webhooks/application-approved
+6. The Flow service selects active custom extensions that:
+   - extend OID4VCI_PRE_AUTHORIZED;
+   - explicitly handle APPLICATION_APPROVED;
+   - belong to the persisted application organization; and
+   - reference the application's Credential Template.
+7. The Flow service creates an instance and generates a pre-authorized offer.
+8. The application becomes OFFER_READY only when a live offer exists.
+9. The holder claims the offer and the resulting credential appears in:
+   GET /v1/issued-credentials/mine
 ```
 
-## Configuration
+Only `data.claims` crosses the application-to-issuance boundary as credential content. Event metadata, reviewer identity, request headers, `integration_context`, and arbitrary top-level fields are not credential claims.
 
-### Environment Variables
+## Flow Lifecycle
 
-**Applicant Service**:
-```bash
-FLOW_SERVICE_URL=http://flow-service:8011
-```
+Flow Definitions are draft-first. Create the custom extension as `DRAFT`, validate all references, and activate it explicitly. A client cannot create an active Flow Definition directly.
 
-**Flow Service**:
-- No additional config needed (webhook endpoint auto-registered)
+The extension must declare:
 
-### Flow Definition Setup
-
-When creating an OID4VCI flow, configure preconditions:
-
-```javascript
+```json
 {
-  "name": "Auto-Issue Employee Badge",
-  "flow_type": "issuance_oid4vci",
-  "preconditions": ["application_approved"],  // ← Key setting
-  "steps": [...],
-  "is_active": true
+  "flow_type": "custom",
+  "credential_template_id": "credential-template-uuid",
+  "trigger": {
+    "trigger_type": "WEBHOOK",
+    "config": {
+      "event_type": "APPLICATION_APPROVED"
+    }
+  },
+  "extension": {
+    "extension_uri": "https://example.org/mip/extensions/application-approved",
+    "extends_flow_type": "OID4VCI_PRE_AUTHORIZED"
+  }
 }
 ```
 
-Available preconditions:
-- `application_approved` - Auto-trigger on approval
-- `identity_verified` - Require biometric verification
-- `manual_admin_approval` - Wait for admin action
-- `external_verification` - Wait for webhook callback
+The service resolves the standard OID4VCI sequence. Custom extensions may add constrained hooks, but they do not replace or reorder the normative protocol sequence.
 
-## Testing
+## Failure Behavior
 
-### Manual Test
+Approval and offer readiness are separate states:
 
-1. Create OID4VCI flow with `application_approved` precondition:
-```bash
-POST /v1/flows/definitions
-{
-  "organization_id": "org-123",
-  "name": "Test Auto-Issue",
-  "flow_type": "issuance_oid4vci",
-  "preconditions": ["application_approved"],
-  "steps": [...],
-  "is_active": true
-}
-```
+- If offer generation succeeds, the application remains `APPROVED` with `claim_state: OFFER_READY`.
+- If no eligible active Flow exists, the application remains `APPROVED` with `claim_state: BLOCKED` and `claim_blocker.code: NO_ACTIVE_ISSUANCE_FLOW`.
+- If an existing offer is expired, used, or absent, a claim request may generate a fresh offer when issuance dependencies are available.
+- A redeemed application cannot create a duplicate credential.
 
-2. Create and approve applicant:
-```bash
-# Create applicant
-POST /v1/applicants
-{
-  "organization_id": "org-123",
-  "email": "test@example.com",
-  "given_name": "Test",
-  "family_name": "User"
-}
+The holder UI shows Claim only for a non-expired `OFFER_READY` offer. Issuer-owned failures are recoverable waiting states, not false-ready actions.
 
-# Approve applicant (triggers auto-flow)
-POST /v1/applicants/{id}/review
-{
-  "decision": "approve",
-  "notes": "All documents verified"
-}
-```
+## Authorization
 
-3. Check that flow instance was created:
-```bash
-GET /v1/flows/instances?organization_id=org-123
-```
+- The application organization comes from the persisted resource.
+- The applicant identity comes from the authenticated self-service profile.
+- Reviewer and lock-holder identity come from authenticated request state.
+- Review requires `application:review`; approval also requires the explicit approve permission and the current lock.
+- Operator issuance requires `issuance:initiate`.
+- Incoming identity headers are stripped at the gateway and replaced with authenticated values.
 
-Should return a flow instance with:
-- `subject_id` = applicant ID
-- `external_reference` = "auto-approved-{applicant_id}"
-- `context.triggered_by_event` = "application.approved"
-- QR code artifact created
+Cross-organization access, spoofed identity, stale locks, and resource-ID enumeration fail closed and emit privacy-safe audit events.
 
-## Monitoring
+## Verification
 
-### Logs
+Automated coverage must prove:
 
-**Applicant Service**:
-```
-INFO: Published APPLICATION_APPROVED event for applicant {id}
-```
+- draft validation and activation of the custom Flow extension;
+- exact organization and Credential Template matching;
+- canonical trigger parsing and rejection of legacy scalar triggers;
+- claim derivation from mapped `form_data` plus server-owned SYSTEM claims only;
+- `OFFER_READY`, `BLOCKED`, expired-offer recovery, and duplicate-redemption behavior;
+- reviewer lock and permission enforcement;
+- holder inventory privacy; and
+- removed applicant routes returning `404`.
 
-**Flow Service**:
-```
-INFO: Received APPLICATION_APPROVED event for applicant {id} in org {org_id}
-INFO: Auto-triggered flow {flow_id} ({name}) for applicant {id}: instance {instance_id}
-INFO: Created OID4VCI artifact: {artifact_id}
-```
-
-### Metrics
-
-Track:
-- Event publish success/failure rate
-- Webhook delivery latency
-- Auto-triggered flow count
-- QR code generation success rate
-
-## Error Handling
-
-### Event Publishing Fails
-- Applicant approval still succeeds (logged warning)
-- Admin can manually trigger flow from UI
-
-### Webhook Delivery Fails
-- Event publisher logs error
-- No automatic retry (future enhancement)
-- Admin can manually trigger flow
-
-### No Matching Flows
-- Webhook succeeds with `flows_triggered: 0`
-- Normal scenario if org hasn't configured OID4VCI flows
-
-### Flow Instance Creation Fails
-- Logged as error
-- Does not block other flows from triggering
-- Returns partial success response
-
-## Future Enhancements
-
-1. **Retry Logic**: Add exponential backoff for failed event deliveries
-2. **Dead Letter Queue**: Store failed events for manual replay
-3. **Event Store**: Persist all events for audit trail
-4. **Multiple Preconditions**: Support complex AND/OR logic
-5. **Rate Limiting**: Prevent event flooding
-6. **Message Broker**: Replace HTTP with RabbitMQ/Kafka for production
+The deterministic beta lifecycle gate additionally receives the credential in the Marty browser wallet, logs out, signs back in with the membership badge, and verifies an organization credential through signed DCQL presentation.

@@ -92,7 +92,7 @@ class PostgresPolicySetRepository:
             return [self._to_entity(row) for row in result.mappings()]
 
     async def get_active_by_org(self, organization_id: str) -> list[PolicySet]:
-        return await self.list_by_org(organization_id, status="active")
+        return await self.list_by_org(organization_id, status=PolicySetStatus.ACTIVE.value)
 
     async def delete(self, policy_set_id: str, organization_id: str) -> bool:
         async with self.session_factory() as session:

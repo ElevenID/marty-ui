@@ -111,6 +111,14 @@ MARTY_KMS_KEY_SPECS: list[dict[str, Any]] = [
         "credential_formats": ["jwt_vc_json"],
     },
     {
+        "id": "lti-tool-marty-rs256",
+        "name": "Marty LTI tool signing key",
+        "type": "rsa-2048",
+        "algorithm": "RS256",
+        "key_purposes": ["lti_tool_signing"],
+        "credential_formats": [],
+    },
+    {
         "id": "cred-issuer-marty-eddsa",
         "name": "Marty EdDSA issuer key",
         "type": "ed25519",
@@ -514,13 +522,35 @@ def _seed_signing_registry(redis_client: Any, organization_id: str, key_records:
         format_defaults.setdefault(credential_format, MANAGED_OPENBAO_SERVICE_ID)
 
     type_defaults = registry.get("type_defaults") if isinstance(registry.get("type_defaults"), dict) else {}
-    for key_purpose in ("vc_jwt_issuer", "jwks_signing", "mdoc_dsc", "vdsnc_signing"):
+    for key_purpose in ("vc_jwt_issuer", "jwks_signing", "lti_tool_signing", "mdoc_dsc", "vdsnc_signing"):
         type_defaults.setdefault(key_purpose, MANAGED_OPENBAO_SERVICE_ID)
 
     registry["services"] = services
     registry["default_service_id"] = registry.get("default_service_id") or MANAGED_OPENBAO_SERVICE_ID
     registry["format_defaults"] = format_defaults
     registry["type_defaults"] = type_defaults
+    key_reference_purposes = (
+        registry.get("key_reference_purposes")
+        if isinstance(registry.get("key_reference_purposes"), dict)
+        else {}
+    )
+    managed_key_purposes = (
+        dict(key_reference_purposes.get(MANAGED_OPENBAO_SERVICE_ID) or {})
+        if isinstance(key_reference_purposes.get(MANAGED_OPENBAO_SERVICE_ID), dict)
+        else {}
+    )
+    for record in key_records:
+        key_reference = record["id"]
+        seeded_purposes = list(record.get("key_purposes") or [])
+        existing_purposes = managed_key_purposes.get(key_reference)
+        if existing_purposes is not None and existing_purposes != seeded_purposes:
+            raise RuntimeError(
+                f"Managed signing key {key_reference!r} has conflicting purpose bindings: "
+                f"{existing_purposes!r} != {seeded_purposes!r}"
+            )
+        managed_key_purposes[key_reference] = seeded_purposes
+    key_reference_purposes[MANAGED_OPENBAO_SERVICE_ID] = managed_key_purposes
+    registry["key_reference_purposes"] = key_reference_purposes
     _save_json_to_redis(redis_client, storage_key, registry)
 
 
@@ -563,8 +593,15 @@ def _seed_did_and_jwks(
         and not any(entry.endswith(f"#{_did_fragment_for_key_reference(key_id)}") for key_id in key_ids)
     ]
 
+    # Protocol/client-assertion keys are published only through the Canvas LTI
+    # JWKS. They must never become credential issuer assertion methods.
+    issuer_key_records = [
+        record
+        for record in key_records
+        if "lti_tool_signing" not in (record.get("key_purposes") or [])
+    ]
     jwks = []
-    for record in key_records:
+    for record in issuer_key_records:
         key_id = record["id"]
         fragment = _did_fragment_for_key_reference(key_id)
         vm_id = f"{issuer_did}#{fragment}"
@@ -815,7 +852,7 @@ def run_service_migration(service_config: dict, database_url: str, verify_only: 
                 print(f"  New revision: {new_current or 'None'}")
                 print(f"✓ {service_name}: Migrations applied successfully")
             else:
-                print(f"  Already up-to-date")
+                print("  Already up-to-date")
                 print(f"✓ {service_name}: No migrations needed")
             
             return True
@@ -907,7 +944,7 @@ def main():
         print(f"\n✗ {failure_count} service(s) failed migration")
         sys.exit(1)
     else:
-        print(f"\n✓ All migrations completed successfully")
+        print("\n✓ All migrations completed successfully")
         sys.exit(0)
 
 

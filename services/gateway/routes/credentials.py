@@ -34,15 +34,20 @@ async def create_credential_template(body: CredentialTemplateCreate, request: Re
     if body.trust_profile_id:
         if not await _resource_exists("trust-profiles", f"/v1/trust-profiles/{body.trust_profile_id}", request):
             raise HTTPException(status_code=422, detail=f"Trust profile not found: {body.trust_profile_id}")
-    if body.compliance_profile_id:
-        owner_org = await _resource_org_id("compliance-profiles", f"/v1/compliance-profiles/{body.compliance_profile_id}", request)
-        if owner_org is None:
-            raise HTTPException(status_code=422, detail=f"Compliance profile not found: {body.compliance_profile_id}")
-        if owner_org != body.organization_id:
-            raise HTTPException(status_code=403, detail="Access denied: compliance profile belongs to another organization")
+    compliance_path = f"/v1/compliance-profiles/{body.compliance_profile_id}"
+    if not await _resource_exists("compliance-profiles", compliance_path, request):
+        raise HTTPException(status_code=422, detail=f"Compliance profile not found: {body.compliance_profile_id}")
+    owner_org = await _resource_org_id("compliance-profiles", compliance_path, request)
+    if owner_org is not None and owner_org != body.organization_id:
+        raise HTTPException(status_code=403, detail="Access denied: compliance profile belongs to another organization")
     registry = get_registry()
     service_url = registry.get_service_url("credential-templates")
-    return await proxy_request(request, service_url, "/v1/credential-templates", body_override=body.model_dump_json().encode())
+    return await proxy_request(
+        request,
+        service_url,
+        "/v1/credential-templates",
+        body_override=body.model_dump_json(exclude_none=True).encode(),
+    )
 
 
 @credential_template_router.get("", response_model=list[CredentialTemplateResponse], summary="List Credential Templates")
@@ -61,7 +66,11 @@ async def get_credential_template(template_id: str, request: Request) -> Respons
     """Get a Credential Template by ID."""
     registry = get_registry()
     service_url = registry.get_service_url("credential-templates")
-    return await proxy_request(request, service_url, f"/v1/credential-templates/{template_id}")
+    return await proxy_request(
+        request,
+        service_url,
+        f"/v1/credential-templates/{template_id}",
+    )
 
 
 @credential_template_router.get("/{template_id}/wallet-compatibility", summary="Get Wallet Compatibility")
@@ -72,9 +81,9 @@ async def get_credential_template_wallet_compatibility(template_id: str, request
     return await proxy_request(request, service_url, f"/v1/credential-templates/{template_id}/wallet-compatibility")
 
 
-@credential_template_router.put("/{template_id}", response_model=CredentialTemplateResponse, summary="Update Credential Template")
-async def update_credential_template(template_id: str, body: CredentialTemplateCreate, request: Request) -> Response:
-    """Update a Credential Template."""
+@credential_template_router.patch("/{template_id}", response_model=CredentialTemplateResponse, summary="Update Draft Credential Template")
+async def update_credential_template(template_id: str, request: Request) -> Response:
+    """Partially update a draft Credential Template."""
     registry = get_registry()
     service_url = registry.get_service_url("credential-templates")
     return await proxy_request(request, service_url, f"/v1/credential-templates/{template_id}")
@@ -103,6 +112,30 @@ async def validate_credential_template_artifacts(template_id: str, request: Requ
     return await proxy_request(request, service_url, f"/v1/credential-templates/{template_id}/validate-artifacts")
 
 
+@credential_template_router.post("/{template_id}/activate", response_model=CredentialTemplateResponse, summary="Activate Credential Template")
+async def activate_credential_template(template_id: str, request: Request) -> Response:
+    """Activate a Credential Template."""
+    registry = get_registry()
+    service_url = registry.get_service_url("credential-templates")
+    return await proxy_request(request, service_url, f"/v1/credential-templates/{template_id}/activate")
+
+
+@credential_template_router.post("/{template_id}/new-version", response_model=CredentialTemplateResponse, summary="Create Credential Template Version")
+async def create_credential_template_version(template_id: str, request: Request) -> Response:
+    """Create a new draft version from an existing Credential Template."""
+    registry = get_registry()
+    service_url = registry.get_service_url("credential-templates")
+    return await proxy_request(request, service_url, f"/v1/credential-templates/{template_id}/new-version")
+
+
+@credential_template_router.post("/{template_id}/deprecate", response_model=CredentialTemplateResponse, summary="Deprecate Credential Template")
+async def deprecate_credential_template(template_id: str, request: Request) -> Response:
+    """Deprecate an active Credential Template."""
+    registry = get_registry()
+    service_url = registry.get_service_url("credential-templates")
+    return await proxy_request(request, service_url, f"/v1/credential-templates/{template_id}/deprecate")
+
+
 @credential_template_router.get("/{template_id}/application-template", summary="Get Linked Application Template")
 async def get_credential_template_application_template(template_id: str, request: Request) -> Response:
     """Get the Application Template linked to this Credential Template (if any)."""
@@ -127,6 +160,14 @@ async def get_wallet_registry_entry(wallet_id: str, request: Request) -> Respons
     registry = get_registry()
     service_url = registry.get_service_url("credential-templates")
     return await proxy_request(request, service_url, f"/v1/wallet-registry/{wallet_id}")
+
+
+@wallet_registry_router.get("/{wallet_id}/open-link", summary="Build Wallet Open Link")
+async def build_wallet_registry_open_link(wallet_id: str, request: Request) -> Response:
+    """Build a wallet-specific open link for a standard OID4VC inner URI."""
+    registry = get_registry()
+    service_url = registry.get_service_url("credential-templates")
+    return await proxy_request(request, service_url, f"/v1/wallet-registry/{wallet_id}/open-link")
 
 
 @wallet_registry_router.get("/resolve/profile", summary="Resolve Wallet Compatibility")
@@ -240,7 +281,7 @@ async def activate_compliance_profile(profile_id: str, request: Request) -> Resp
     return await proxy_request(request, service_url, f"/v1/compliance-profiles/{profile_id}/activate")
 
 
-@compliance_profile_router.put("/{profile_id}", response_model=ComplianceProfileResponse, summary="Update Compliance Profile")
+@compliance_profile_router.patch("/{profile_id}", response_model=ComplianceProfileResponse, summary="Update Compliance Profile")
 async def update_compliance_profile(profile_id: str, body: ComplianceProfileUpdate, request: Request) -> Response:
     """Update a Compliance Profile."""
     registry = get_registry()

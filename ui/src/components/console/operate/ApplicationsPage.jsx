@@ -37,22 +37,25 @@ import ReplayIcon from '@mui/icons-material/Replay';
 import SendIcon from '@mui/icons-material/Send';
 import { Link, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { useAuth } from '../../../hooks/useAuth';
+import { useConsole } from '../../../contexts/ConsoleContext';
 import { useAsyncData } from '../../../hooks/useAsyncData';
 import { useNotifications } from '../../../hooks/useNotifications';
 import {
   issueOrganizationApplication,
   reviewOrganizationApplication,
+  acquireReviewerLock,
+  releaseReviewerLock,
 } from '../../../services/applicantApi';
-import { generateIssuanceOffer } from '../../../services/credentialsApi';
 import { loadOrganizationApplications } from '../../../application/applications';
 import { pickOfficialReference } from '../../../utils/officialReferences';
 
 import { ResourcePage, EmptyState, EmptyStates, StatusChip } from '../../common';
 
 const getOperateTabs = (t) => [
+  { label: 'Flow Instances', path: '/console/org/operate/flow-instances' },
   { label: t('operate.tabs.issuance'), path: '/console/org/operate/issuance' },
   { label: t('operate.tabs.applications'), path: '/console/org/operate/applications' },
+  { label: t('operate.tabs.verify'), path: '/console/org/operate/verify' },
 ];
 
 const getBreadcrumbs = (t) => [
@@ -69,11 +72,10 @@ const PENDING_STATUSES = new Set([
 
 function ApplicationsPage() {
   const { t } = useTranslation('console');
-  const { organizationId } = useAuth();
+  const { activeOrgId: organizationId } = useConsole();
   const navigate = useNavigate();
   const { showError, showSuccess } = useNotifications();
   const { data: _applicationsData, loading, error, reload } = useAsyncData(async () => {
-    if (!organizationId) return [];
     return loadOrganizationApplications({ organizationId });
   }, [organizationId]);
   const applications = _applicationsData ?? [];
@@ -82,7 +84,9 @@ function ApplicationsPage() {
 
   const handleApprove = async (applicationId) => {
     try {
-      await reviewOrganizationApplication(applicationId, 'approve');
+      await acquireReviewerLock(organizationId, applicationId);
+      await reviewOrganizationApplication(organizationId, applicationId, 'approve');
+      await releaseReviewerLock(organizationId, applicationId);
       await reload();
     } catch (err) {
       showError(err.message || 'Failed to approve application');
@@ -91,9 +95,11 @@ function ApplicationsPage() {
 
   const handleReject = async (applicationId) => {
     try {
-      await reviewOrganizationApplication(applicationId, 'reject', {
+      await acquireReviewerLock(organizationId, applicationId);
+      await reviewOrganizationApplication(organizationId, applicationId, 'reject', {
         reason: 'Rejected by organization reviewer',
       });
+      await releaseReviewerLock(organizationId, applicationId);
       await reload();
     } catch (err) {
       showError(err.message || 'Failed to reject application');
@@ -102,7 +108,7 @@ function ApplicationsPage() {
 
   const handleIssue = async (applicationId) => {
     try {
-      await issueOrganizationApplication(applicationId);
+      await issueOrganizationApplication(organizationId, applicationId);
       await reload();
     } catch (err) {
       showError(err.message || 'Failed to issue credential');
@@ -111,7 +117,7 @@ function ApplicationsPage() {
 
   const handleReissue = async (applicationId) => {
     try {
-      await generateIssuanceOffer(applicationId);
+      await issueOrganizationApplication(organizationId, applicationId);
       showSuccess('New wallet invite generated — the applicant can now re-claim their credential.');
       await reload();
     } catch (err) {

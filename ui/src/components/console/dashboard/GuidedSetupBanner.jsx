@@ -5,6 +5,7 @@ import RocketLaunchIcon from '@mui/icons-material/RocketLaunch';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import CloseIcon from '@mui/icons-material/Close';
 import { useTranslation } from 'react-i18next';
+import { ReadinessState, SETUP_ORDER } from '../../../config/dashboardRules';
 
 /**
  * GuidedSetupBanner - Shows a persistent banner prompting users to complete setup
@@ -22,15 +23,20 @@ function GuidedSetupBanner({ readiness, onDismiss }) {
     setDismissed(isDismissed === 'true');
   }, []);
 
-  // Calculate setup progress
-  const totalSteps = 5; // trust, template, policy, deployment, flow
-  const completedSteps = [
-    readiness.trust?.state === 'READY',
-    readiness.template?.state === 'READY',
-    readiness.policy?.state === 'READY',
-    readiness.deployment?.state === 'READY',
-    readiness.flow?.state === 'READY',
-  ].filter(Boolean).length;
+  const activeIntentReadiness = readiness?.intents?.[readiness?.activeIntent];
+  const steps = activeIntentReadiness?.steps || readiness || {};
+  const order = activeIntentReadiness?.order || SETUP_ORDER;
+
+  // Calculate setup progress for the selected recipe.
+  const totalSteps = order.length;
+  const completedSteps = order.filter(
+    (step) => steps?.[step]?.state === ReadinessState.READY
+  ).length;
+  const hasServiceError = order.some((step) => steps?.[step]?.serviceError);
+  const nextSetupPath = order
+    .map((step) => steps?.[step])
+    .find((step) => step?.state !== ReadinessState.READY && step?.path && !step?.dependencyBlocked)
+    ?.path;
 
   const progress = (completedSteps / totalSteps) * 100;
   const isComplete = completedSteps === totalSteps;
@@ -45,7 +51,7 @@ function GuidedSetupBanner({ readiness, onDismiss }) {
   };
 
   // Don't show if complete or dismissed
-  if (isComplete || dismissed) return null;
+  if (isComplete || dismissed || hasServiceError || !nextSetupPath) return null;
 
   return (
     <Alert
@@ -82,7 +88,7 @@ function GuidedSetupBanner({ readiness, onDismiss }) {
         </Box>
         <Button
           component={Link}
-          to="/console/org/setup-wizard"
+          to={nextSetupPath}
           variant="contained"
           size="small"
           startIcon={isStarted ? <PlayArrowIcon /> : <RocketLaunchIcon />}

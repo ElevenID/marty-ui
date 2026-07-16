@@ -16,7 +16,7 @@
 
 services:
   waltid-wallet-api:
-    image: docker.io/waltid/wallet-api:stable
+    image: docker.io/waltid/wallet-api:latest@sha256:81aed55138ddfadaf2cbc5c42e04840fb5dd0787acbff15d17d2bb5f9ac130c8
     container_name: waltid-wallet-api
     pull_policy: missing
     ports:
@@ -31,7 +31,7 @@ services:
     restart: unless-stopped
 
   waltid-web-wallet:
-    image: docker.io/waltid/waltid-demo-wallet:stable
+    image: docker.io/waltid/waltid-demo-wallet:latest@sha256:54eba235f8158223c3b6ae02d4e1f7086f55ef9ffe8cb0597000b1b113f4d8ff
     container_name: waltid-web-wallet
     pull_policy: missing
     environment:

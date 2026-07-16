@@ -5,6 +5,7 @@
  */
 
 import { get, post, patch, del, put } from './api';
+import { requireOrganizationId } from './queryUtils';
 
 /**
  * Get the current user's permissions in an organization
@@ -12,7 +13,8 @@ import { get, post, patch, del, put } from './api';
  * @returns {Promise<{permissions: string[], roles: Array<{id: string, name: string, display_name: string}>}>}
  */
 export async function getMyPermissions(organizationId) {
-  return get(`/v1/organizations/${organizationId}/members/me/permissions`);
+  const orgId = requireOrganizationId(organizationId, 'loading permissions');
+  return get(`/v1/organizations/${encodeURIComponent(orgId)}/members/me/permissions`);
 }
 
 /**
@@ -21,7 +23,8 @@ export async function getMyPermissions(organizationId) {
  * @returns {Promise<Object>} Permission catalog grouped by resource
  */
 export async function listPermissions(organizationId) {
-  return get(`/v1/organizations/${organizationId}/permissions`);
+  const orgId = requireOrganizationId(organizationId, 'loading permission catalog');
+  return get(`/v1/organizations/${encodeURIComponent(orgId)}/permissions`);
 }
 
 /**
@@ -31,8 +34,9 @@ export async function listPermissions(organizationId) {
  * @returns {Promise<Array>} List of roles
  */
 export async function listRoles(organizationId, includeMemberCount = false) {
+  const orgId = requireOrganizationId(organizationId, 'loading roles');
   const params = includeMemberCount ? '?include_member_count=true' : '';
-  return get(`/v1/organizations/${organizationId}/roles${params}`);
+  return get(`/v1/organizations/${encodeURIComponent(orgId)}/roles${params}`);
 }
 
 /**
@@ -47,7 +51,8 @@ export async function listRoles(organizationId, includeMemberCount = false) {
  * @returns {Promise<Object>} Created role
  */
 export async function createRole(organizationId, data) {
-  return post(`/v1/organizations/${organizationId}/roles`, data);
+  const orgId = requireOrganizationId(organizationId, 'creating roles');
+  return post(`/v1/organizations/${encodeURIComponent(orgId)}/roles`, data);
 }
 
 /**
@@ -57,7 +62,8 @@ export async function createRole(organizationId, data) {
  * @returns {Promise<Object>} Role details
  */
 export async function getRole(organizationId, roleId) {
-  return get(`/v1/organizations/${organizationId}/roles/${roleId}`);
+  const orgId = requireOrganizationId(organizationId, 'loading roles');
+  return get(`/v1/organizations/${encodeURIComponent(orgId)}/roles/${encodeURIComponent(roleId)}`);
 }
 
 /**
@@ -68,7 +74,8 @@ export async function getRole(organizationId, roleId) {
  * @returns {Promise<Object>} Updated role
  */
 export async function updateRole(organizationId, roleId, data) {
-  return patch(`/v1/organizations/${organizationId}/roles/${roleId}`, data);
+  const orgId = requireOrganizationId(organizationId, 'updating roles');
+  return patch(`/v1/organizations/${encodeURIComponent(orgId)}/roles/${encodeURIComponent(roleId)}`, data);
 }
 
 /**
@@ -79,8 +86,9 @@ export async function updateRole(organizationId, roleId, data) {
  * @returns {Promise<void>}
  */
 export async function deleteRole(organizationId, roleId, replacementRoleId) {
-  const params = replacementRoleId ? `?replacement_role_id=${replacementRoleId}` : '';
-  return del(`/v1/organizations/${organizationId}/roles/${roleId}${params}`);
+  const orgId = requireOrganizationId(organizationId, 'deleting roles');
+  const params = replacementRoleId ? `?replacement_role_id=${encodeURIComponent(replacementRoleId)}` : '';
+  return del(`/v1/organizations/${encodeURIComponent(orgId)}/roles/${encodeURIComponent(roleId)}${params}`);
 }
 
 /**
@@ -91,7 +99,8 @@ export async function deleteRole(organizationId, roleId, replacementRoleId) {
  * @returns {Promise<Object>} Updated member roles
  */
 export async function setMemberRoles(organizationId, memberId, roleIds) {
-  return put(`/v1/organizations/${organizationId}/members/${memberId}/roles`, {
+  const orgId = requireOrganizationId(organizationId, 'updating member roles');
+  return put(`/v1/organizations/${encodeURIComponent(orgId)}/members/${encodeURIComponent(memberId)}/roles`, {
     role_ids: roleIds,
   });
 }
@@ -105,7 +114,8 @@ export async function setMemberRoles(organizationId, memberId, roleIds) {
  * @returns {Promise<Object>} Updated member roles
  */
 export async function addMemberRole(organizationId, memberId, roleId) {
-  return post(`/v1/organizations/${organizationId}/members/${memberId}/roles/${roleId}`);
+  const orgId = requireOrganizationId(organizationId, 'updating member roles');
+  return post(`/v1/organizations/${encodeURIComponent(orgId)}/members/${encodeURIComponent(memberId)}/roles/${encodeURIComponent(roleId)}`);
 }
 
 /**
@@ -117,5 +127,6 @@ export async function addMemberRole(organizationId, memberId, roleId) {
  * @returns {Promise<Object>} Updated member roles
  */
 export async function removeMemberRole(organizationId, memberId, roleId) {
-  return del(`/v1/organizations/${organizationId}/members/${memberId}/roles/${roleId}`);
+  const orgId = requireOrganizationId(organizationId, 'updating member roles');
+  return del(`/v1/organizations/${encodeURIComponent(orgId)}/members/${encodeURIComponent(memberId)}/roles/${encodeURIComponent(roleId)}`);
 }

@@ -5,16 +5,33 @@
  * Uses the centralized api.js service for consistent error handling and retry logic.
  */
 import { get, post, patch, del, getErrorMessage } from './api';
-import { buildTruthyQueryString, withQuery } from './queryUtils';
+import { postWithIdempotency } from './idempotency';
+import { buildDefinedQueryString, withQuery } from './queryUtils';
 
-const BASE_PATH = '/v1/organizations';
+const ORGANIZATION_BASE_PATH = '/v1/organizations';
+const API_KEYS_BASE_PATH = '/v1/api-keys';
+
+function requireOrganizationId(organizationId) {
+  const normalized = String(organizationId ?? '').trim();
+  if (
+    normalized === ''
+    || normalized.toLowerCase() === 'null'
+    || normalized.toLowerCase() === 'undefined'
+  ) {
+    const error = new Error('An active organization is required before managing API keys.');
+    error.code = 'ORG_REQUIRED';
+    error.status = 400;
+    throw error;
+  }
+  return normalized;
+}
 
 /**
  * Get available API key scopes
  * @returns {Promise<{scopes: Array<{id: string, label: string, description: string}>}>}
  */
 export async function getAvailableScopes() {
-  return get(`${BASE_PATH}/api-key-scopes`);
+  return get(`${ORGANIZATION_BASE_PATH}/api-key-scopes`);
 }
 
 /**
@@ -26,11 +43,13 @@ export async function getAvailableScopes() {
  * @returns {Promise<Array>} - Array of API key objects
  */
 export async function listApiKeys(organizationId, { includeRevoked = false, includeExpired = false } = {}) {
-  const queryString = buildTruthyQueryString({
+  const activeOrganizationId = requireOrganizationId(organizationId);
+  const queryString = buildDefinedQueryString({
+    organization_id: activeOrganizationId,
     include_revoked: includeRevoked ? 'true' : undefined,
     include_expired: includeExpired ? 'true' : undefined,
   });
-  const url = withQuery(`${BASE_PATH}/${organizationId}/api-keys`, queryString);
+  const url = withQuery(API_KEYS_BASE_PATH, queryString);
   const response = await get(url);
   return Array.isArray(response) ? response : (response?.keys || []);
 }
@@ -45,7 +64,9 @@ export async function listApiKeys(organizationId, { includeRevoked = false, incl
  * @returns {Promise<Object>} - Created API key with plain text 'key' field
  */
 export async function createApiKey(organizationId, { name, scopes, expiresAt }) {
-  return post(`${BASE_PATH}/${organizationId}/api-keys`, {
+  const activeOrganizationId = requireOrganizationId(organizationId);
+  const url = withQuery(API_KEYS_BASE_PATH, buildDefinedQueryString({ organization_id: activeOrganizationId }));
+  return postWithIdempotency(url, {
     name,
     scopes,
     expires_at: expiresAt || null,
@@ -59,7 +80,7 @@ export async function createApiKey(organizationId, { name, scopes, expiresAt }) 
  * @returns {Promise<Object>} - API key object
  */
 export async function getApiKey(organizationId, keyId) {
-  return get(`${BASE_PATH}/${organizationId}/api-keys/${keyId}`);
+  return get(withQuery(`${API_KEYS_BASE_PATH}/${keyId}`, buildDefinedQueryString({ organization_id: requireOrganizationId(organizationId) })));
 }
 
 /**
@@ -75,7 +96,10 @@ export async function updateApiKey(organizationId, keyId, { name, scopes }) {
   const body = {};
   if (name !== undefined) body.name = name;
   if (scopes !== undefined) body.scopes = scopes;
-  return patch(`${BASE_PATH}/${organizationId}/api-keys/${keyId}`, body);
+  return patch(
+    withQuery(`${API_KEYS_BASE_PATH}/${keyId}`, buildDefinedQueryString({ organization_id: requireOrganizationId(organizationId) })),
+    body
+  );
 }
 
 /**
@@ -85,7 +109,7 @@ export async function updateApiKey(organizationId, keyId, { name, scopes }) {
  * @returns {Promise<Object>} - Updated API key object with is_active=false
  */
 export async function revokeApiKey(organizationId, keyId) {
-  return post(`${BASE_PATH}/${organizationId}/api-keys/${keyId}/revoke`, {});
+  return del(withQuery(`${API_KEYS_BASE_PATH}/${keyId}`, buildDefinedQueryString({ organization_id: requireOrganizationId(organizationId) })));
 }
 
 /**
@@ -95,7 +119,7 @@ export async function revokeApiKey(organizationId, keyId) {
  * @returns {Promise<null>} - Empty response on success
  */
 export async function deleteApiKey(organizationId, keyId) {
-  return del(`${BASE_PATH}/${organizationId}/api-keys/${keyId}`);
+  return del(withQuery(`${API_KEYS_BASE_PATH}/${keyId}`, buildDefinedQueryString({ organization_id: requireOrganizationId(organizationId) })));
 }
 
 /**
@@ -104,7 +128,7 @@ export async function deleteApiKey(organizationId, keyId) {
  * @returns {Promise<{valid: boolean, organization_id?: string, scopes?: Array, message?: string}>}
  */
 export async function validateApiKey(apiKey) {
-  return post(`${BASE_PATH}/api-keys/validate`, {}, {
+  return post(`${ORGANIZATION_BASE_PATH}/api-keys/validate`, {}, {
     headers: {
       'X-API-Key': apiKey,
     },

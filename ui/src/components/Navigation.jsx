@@ -26,7 +26,7 @@ const VENDOR_TABS = [
   { labelKey: 'navigation.applications', defaultLabel: 'Applications', path: '/console/org/operate/applications' },
   { labelKey: 'navigation.trust', defaultLabel: 'Trust', path: '/console/org/trust/profiles' },
   { labelKey: 'navigation.verification', defaultLabel: 'Verification', path: '/console/org/operate/flow-instances' },
-  { labelKey: 'navigation.auditLogs', defaultLabel: 'Audit Logs', path: '/console/audit' },
+  { labelKey: 'navigation.auditLogs', defaultLabel: 'Audit Logs', path: '/console/org/audit' },
   { labelKey: 'navigation.team', defaultLabel: 'Team', path: '/console/org/team' },
 ];
 

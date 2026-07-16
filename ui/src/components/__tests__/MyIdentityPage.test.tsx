@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen, waitFor } from '@test/utils'
+import { render, screen } from '@test/utils'
 
 import MyIdentityPage from '../console/applicant/MyIdentityPage'
 
@@ -29,13 +29,13 @@ vi.mock('../console/applicant/ClaimCredentialDialog', () => ({
 describe('MyIdentityPage', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    mockGetMyCredentials.mockResolvedValue({ credentials: [] })
+    mockGetMyCredentials.mockResolvedValue({ items: [] })
     mockGetMyApplications.mockResolvedValue({
-      applications: [
+      items: [
         {
           id: 'app-1',
           credential_display_name: 'Verified Member Badge',
-          credential_configuration_id: 'cfg-login-badge',
+          credential_template_id: 'cfg-login-badge',
           status: 'CREDENTIALED',
           submitted_at: '2026-05-18T00:00:00.000Z',
           updated_at: '2026-05-18T00:05:00.000Z',
@@ -44,27 +44,20 @@ describe('MyIdentityPage', () => {
     })
   })
 
-  it('allows applicants to receive the login badge again from the identity dashboard', async () => {
-    const { user } = render(
-      <MyIdentityPage />,
-    )
+  it('does not expose a claim action after the application is credentialed', async () => {
+    render(<MyIdentityPage />)
 
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Receive Again' })).toBeInTheDocument()
-    })
-
-    await user.click(screen.getByRole('button', { name: 'Receive Again' }))
-
-    expect(screen.getByTestId('claim-credential-dialog')).toHaveTextContent('app-1')
+    await screen.findByText('Verified Member Badge')
+    expect(screen.queryByRole('button', { name: /claim|receive again/i })).not.toBeInTheDocument()
   })
 
   it('shows Canvas course source context in application details', async () => {
     mockGetMyApplications.mockResolvedValue({
-      applications: [
+      items: [
         {
           id: 'app-canvas-1',
           credential_display_name: 'Interoperable Credentials Foundations Badge',
-          credential_configuration_id: 'cfg-canvas-badge',
+          credential_template_id: 'cfg-canvas-badge',
           status: 'SUBMITTED',
           submitted_at: '2026-05-18T00:00:00.000Z',
           updated_at: '2026-05-18T00:05:00.000Z',
@@ -93,10 +86,66 @@ describe('MyIdentityPage', () => {
     expect(screen.getByText('Delivery: wallet plus canvas mirror')).toBeInTheDocument()
   })
 
+  it('shows issuer-owned waiting state for an approved blocked application', async () => {
+    mockGetMyApplications.mockResolvedValue({
+      items: [{
+        id: 'app-blocked',
+        credential_display_name: 'Member Credential',
+        credential_template_id: 'cfg-member',
+        status: 'APPROVED',
+        claim_state: 'BLOCKED',
+        claim_blocker: {
+          code: 'NO_ACTIVE_ISSUANCE_FLOW',
+          owner: 'ISSUER',
+          message: 'The issuer is still preparing this credential.',
+        },
+        updated_at: '2026-05-18T00:05:00.000Z',
+      }],
+    })
+
+    render(<MyIdentityPage />)
+
+    await screen.findByText('Member Credential')
+    expect(screen.getByText('Waiting for Issuer')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Claim' })).not.toBeInTheDocument()
+  })
+
+  it('does not present failed identity requests as an empty inventory and allows retry', async () => {
+    mockGetMyCredentials
+      .mockRejectedValueOnce(new Error('Inventory unavailable'))
+      .mockResolvedValue({ items: [] })
+    mockGetMyApplications
+      .mockRejectedValueOnce(new Error('Applications unavailable'))
+      .mockResolvedValue({ items: [] })
+
+    const { user } = render(<MyIdentityPage />)
+
+    expect(await screen.findByText(/Credential inventory could not be loaded/)).toBeInTheDocument()
+    expect(screen.getByText(/Applications could not be loaded/)).toBeInTheDocument()
+    expect(screen.queryByText('No credentials yet')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Retry' }))
+
+    expect(await screen.findByText('No credentials yet')).toBeInTheDocument()
+    expect(screen.queryByText(/could not be loaded/)).not.toBeInTheDocument()
+    expect(mockGetMyCredentials).toHaveBeenCalledTimes(2)
+    expect(mockGetMyApplications).toHaveBeenCalledTimes(2)
+  })
+
+  it('retains successful application data when credential inventory fails', async () => {
+    mockGetMyCredentials.mockRejectedValue(new Error('Inventory unavailable'))
+
+    render(<MyIdentityPage />)
+
+    expect(await screen.findByText('Verified Member Badge')).toBeInTheDocument()
+    expect(screen.getByText('Credential inventory could not be loaded.')).toBeInTheDocument()
+    expect(screen.queryByText('No credentials yet')).not.toBeInTheDocument()
+  })
+
   it('shows Canvas Credentials mirror delivery in credential details', async () => {
-    mockGetMyApplications.mockResolvedValue({ applications: [] })
+    mockGetMyApplications.mockResolvedValue({ items: [] })
     mockGetMyCredentials.mockResolvedValue({
-      credentials: [
+      items: [
         {
           id: 'cred-1',
           credential_display_name: 'Interoperable Credentials Foundations Badge',

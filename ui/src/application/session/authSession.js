@@ -120,6 +120,15 @@ export function deriveCapabilities(rawUser, organizations = []) {
  * @returns {Array<{id: string, name: string|null, display_name?: string|null}>}
  */
 export function getFallbackOrganizations(rawUser, parsedClaim = parseOrganizationClaim(rawUser?.organization)) {
+  if (Array.isArray(rawUser?.organizations) && rawUser.organizations.length > 0) {
+    return rawUser.organizations.map((organization) => ({
+      ...organization,
+      id: organization.id || organization.organization_id,
+      name: organization.name || organization.display_name || organization.displayName || null,
+      display_name: organization.display_name || organization.displayName || organization.name || null,
+    })).filter((organization) => organization.id);
+  }
+
   if (parsedClaim.organizations.length > 0) {
     return parsedClaim.organizations.map((organization) => ({
       ...organization,
@@ -371,22 +380,33 @@ export function createEnrichedUser(rawUser, fetchedOrganizations, storedOrgId) {
  *
  * @param {Object|null|undefined} previousUser
  * @param {string|null|undefined} orgId
+ * @param {Object|null|undefined} selectedOrganization
  * @returns {Object|null|undefined}
  */
-export function updateUserActiveOrganization(previousUser, orgId) {
+export function updateUserActiveOrganization(previousUser, orgId, selectedOrganization = null) {
   if (!previousUser) {
     return previousUser;
   }
 
   const memberships = previousUser.organizations || [];
-  const selected = memberships.find((entry) => entry.id === orgId);
+  const normalizedSelectedOrganization = selectedOrganization && orgId
+    ? {
+      ...selectedOrganization,
+      id: selectedOrganization.id || selectedOrganization.organization_id,
+      name: selectedOrganization.name || selectedOrganization.display_name || selectedOrganization.displayName || null,
+      display_name: selectedOrganization.display_name || selectedOrganization.displayName || selectedOrganization.name || null,
+    }
+    : null;
+  const existingMembership = memberships.find((entry) => entry.id === orgId);
+  const selected = existingMembership
+    || (normalizedSelectedOrganization?.id === orgId ? normalizedSelectedOrganization : null);
   const resolvedOrganization = selected || (orgId ? { id: orgId, name: null } : null);
 
   if (!resolvedOrganization && orgId) {
     return previousUser;
   }
 
-  const nextMemberships = selected
+  const nextMemberships = existingMembership
     ? memberships
     : orgId
       ? [...memberships, resolvedOrganization]

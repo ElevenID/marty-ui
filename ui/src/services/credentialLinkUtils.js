@@ -8,6 +8,12 @@ const OID4VCI_PROFILE_BY_FORMAT = {
     credentialConfigurationSuffix: 'spruce-sd-jwt',
   },
 };
+const OID4VCI_PROFILE_BY_WALLET_ID = {
+  'wr-waltid-001': {
+    issuerPath: 'waltid',
+    credentialConfigurationSuffix: 'sd-jwt',
+  },
+};
 const KNOWN_WALLET_ROUTE_TEMPLATES = {
   'wr-spruce-001': {
     generic: 'openid-credential-offer://?{credential_offer_param}={offer_encoded}',
@@ -28,6 +34,11 @@ const KNOWN_WALLET_ROUTE_TEMPLATES = {
     generic: 'marty-authenticator://open?inner={inner_uri_encoded}',
     ios: 'marty-authenticator://open?inner={inner_uri_encoded}',
     android: 'marty-authenticator://open?inner={inner_uri_encoded}',
+  },
+  'wr-waltid-001': {
+    generic: 'openid-credential-offer://?{credential_offer_param}={offer_encoded}',
+    web: 'https://wallet.demo.walt.id/api/siop/initiateIssuance?{credential_offer_param}={offer_encoded}',
+    desktop: 'https://wallet.demo.walt.id/api/siop/initiateIssuance?{credential_offer_param}={offer_encoded}',
   },
   marty: {
     generic: 'marty-authenticator://open?inner={inner_uri_encoded}',
@@ -143,14 +154,17 @@ export function resolveWalletOid4vciProfile(wallet) {
   const profileFormat = walletFormatValues(wallet)
     .map(normalizeFormatToken)
     .find((format) => OID4VCI_PROFILE_BY_FORMAT[format]);
-  return profileFormat ? OID4VCI_PROFILE_BY_FORMAT[profileFormat] : null;
+  if (profileFormat) return OID4VCI_PROFILE_BY_FORMAT[profileFormat];
+
+  const knownProfile = OID4VCI_PROFILE_BY_WALLET_ID[wallet.id] || OID4VCI_PROFILE_BY_WALLET_ID[wallet.wallet_id];
+  return knownProfile || null;
 }
 
 function issuerUrlWithProfilePath(issuerUrl, profile) {
   const issuer = normalizeUri(issuerUrl).replace(/\/+$/, '');
   const issuerPath = normalizeUri(profile?.issuerPath || profile?.issuer_path).replace(/^\/+|\/+$/g, '');
   if (!issuer || !issuerPath || issuer.endsWith(`/${issuerPath}`)) return issuer;
-  return `${issuer.replace(/\/(credential-manager|apple-wallet|spruce)$/, '')}/${issuerPath}`;
+  return `${issuer.replace(/\/(credential-manager|apple-wallet|spruce|waltid)$/, '')}/${issuerPath}`;
 }
 
 function credentialConfigurationIdForProfile(configId, profile) {

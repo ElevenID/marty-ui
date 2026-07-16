@@ -29,6 +29,7 @@ import { useTranslation } from 'react-i18next';
 
 import { useAsyncData } from '../../../../hooks/useAsyncData';
 import { useAuth } from '../../../../hooks/useAuth';
+import { useConsole } from '../../../../contexts/ConsoleContext';
 import { listRevocationProfiles } from '../../../../services/presentationPolicyApi';
 
 const getSigningAlgorithms = (t) => [
@@ -41,15 +42,23 @@ const getSigningAlgorithms = (t) => [
 
 const CryptoValidityStep = ({ data, onChange }) => {
   const { t } = useTranslation('console');
-  const { organizationId } = useAuth();
+  const { organizationId: authOrganizationId } = useAuth();
+  const { activeOrgId } = useConsole();
+  const organizationId = activeOrgId;
   const [showAdvanced, setShowAdvanced] = useState(false);
 
-  const { data: revocationProfiles = [] } = useAsyncData(
-    () =>
-      organizationId
-        ? listRevocationProfiles({ organization_id: organizationId })
-        : Promise.resolve([]),
+  const { data: revocationProfilesData, error: revocationProfilesError } = useAsyncData(
+    () => {
+      if (!organizationId) {
+        throw new Error('Select an organization before loading revocation profiles.');
+      }
+      return listRevocationProfiles({ organization_id: organizationId });
+    },
     [organizationId],
+  );
+  const revocationProfiles = Array.isArray(revocationProfilesData) ? revocationProfilesData : [];
+  const activeRevocationProfiles = revocationProfiles.filter(
+    (profile) => String(profile?.status || '').trim().toUpperCase() === 'ACTIVE',
   );
   
   const validity = data.validity_rules || {
@@ -80,6 +89,15 @@ const CryptoValidityStep = ({ data, onChange }) => {
       <Typography color="text.secondary" paragraph>
         {t('wizards.credentialTemplate.cryptoValidityStep.description')}
       </Typography>
+
+      {revocationProfilesError && (
+        <Alert severity="warning" sx={{ mb: 3 }}>
+          {revocationProfilesError?.message || t(
+            'wizards.credentialTemplate.cryptoValidityStep.revocationProfile.loadError',
+            { defaultValue: 'Revocation profiles could not be loaded. Retry before treating revocation as unavailable.' },
+          )}
+        </Alert>
+      )}
 
       <Alert severity="success" sx={{ mb: 3 }}>
         <Typography variant="body2" gutterBottom>
@@ -149,6 +167,43 @@ const CryptoValidityStep = ({ data, onChange }) => {
         </Typography>
       </Box>
 
+      <FormControl fullWidth required error={!data.revocation_profile_id} sx={{ mt: 3 }}>
+        <InputLabel id="credential-template-revocation-profile-label">
+          {t('wizards.credentialTemplate.cryptoValidityStep.revocationProfile.label')}
+        </InputLabel>
+        <Select
+          id="credential-template-revocation-profile"
+          labelId="credential-template-revocation-profile-label"
+          value={data.revocation_profile_id || ''}
+          onChange={(e) => onChange({ revocation_profile_id: e.target.value || null })}
+          label={t('wizards.credentialTemplate.cryptoValidityStep.revocationProfile.label')}
+        >
+          <MenuItem value="" disabled>
+            <em>Select an active Revocation Profile</em>
+          </MenuItem>
+          {activeRevocationProfiles.map((profile) => (
+            <MenuItem key={profile.id} value={profile.id}>
+              {profile.name}
+              {profile.check_mode ? ` (${profile.check_mode.replace('_', ' ')})` : ''}
+            </MenuItem>
+          ))}
+        </Select>
+        <FormHelperText>
+          {data.revocation_profile_id
+            ? t('wizards.credentialTemplate.cryptoValidityStep.revocationProfile.helper')
+            : 'An active Revocation Profile is required before this template can be activated.'}
+        </FormHelperText>
+        {activeRevocationProfiles.length === 0 && !revocationProfilesError && (
+          <Button
+            href="/console/org/trust/revocation/new"
+            size="small"
+            sx={{ alignSelf: 'flex-start', mt: 1 }}
+          >
+            Create Revocation Profile
+          </Button>
+        )}
+      </FormControl>
+
       {/* Advanced Options Toggle */}
       <Box sx={{ mt: 3 }}>
         <Button
@@ -187,30 +242,6 @@ const CryptoValidityStep = ({ data, onChange }) => {
               </FormHelperText>
             </FormControl>
 
-            <Divider sx={{ my: 3 }} />
-
-            {/* Revocation Profile */}
-            <FormControl fullWidth>
-              <InputLabel>{t('wizards.credentialTemplate.cryptoValidityStep.revocationProfile.label')}</InputLabel>
-              <Select
-                value={data.revocation_profile_id || ''}
-                onChange={(e) => onChange({ revocation_profile_id: e.target.value || null })}
-                label={t('wizards.credentialTemplate.cryptoValidityStep.revocationProfile.label')}
-              >
-                <MenuItem value="">
-                  <em>{t('wizards.credentialTemplate.cryptoValidityStep.revocationProfile.none')}</em>
-                </MenuItem>
-                {revocationProfiles.map((profile) => (
-                  <MenuItem key={profile.id} value={profile.id}>
-                    {profile.name}
-                    {profile.check_mode ? ` (${profile.check_mode.replace('_', ' ')})` : ''}
-                  </MenuItem>
-                ))}
-              </Select>
-              <FormHelperText>
-                {t('wizards.credentialTemplate.cryptoValidityStep.revocationProfile.helper')}
-              </FormHelperText>
-            </FormControl>
           </Box>
         </Collapse>
       </Box>

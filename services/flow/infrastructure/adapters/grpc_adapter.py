@@ -378,7 +378,7 @@ class FlowServiceGrpc(flow_service_pb2_grpc.FlowServiceServicer):
             context.set_details("Flow instance not found")
             return flow_service_pb2.FlowInstanceResponse()
 
-        if instance.status not in (FlowInstanceStatus.IN_PROGRESS, FlowInstanceStatus.WAITING):
+        if instance.status not in (FlowInstanceStatus.IN_PROGRESS, FlowInstanceStatus.AWAITING_WALLET):
             context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
             context.set_details(f"Cannot advance flow in {instance.status.value} status")
             return flow_service_pb2.FlowInstanceResponse()

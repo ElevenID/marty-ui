@@ -26,7 +26,11 @@ from .application.use_cases import (
 )
 from .application.rbac_use_cases import RoleUseCase
 from .application.policy_set_use_cases import PolicySetUseCase
-from .infrastructure.adapters.audit_adapter import router as audit_router
+from .infrastructure.adapters.audit_adapter import (
+    configure_audit_router,
+    router as audit_router,
+)
+from .infrastructure.adapters.audit_publisher import AuditEventPublisher
 from .infrastructure.adapters.grpc_adapter import OrganizationServiceGrpc
 from .infrastructure.adapters.http_adapter import (
     configure_org_router,
@@ -48,6 +52,7 @@ from .infrastructure.adapters.scim_http_adapter import (
 )
 from .infrastructure.adapters.postgres_adapter import (
     PostgresApiKeyRepository,
+    PostgresAuditEventRepository,
     PostgresConsoleContextPreferenceRepository,
     PostgresJoinCodeRepository,
     PostgresMemberRepository,
@@ -76,6 +81,7 @@ SERVICE_NAME = "organization-service"
 SERVICE_PORT = int(os.environ.get("ORGANIZATION_SERVICE_PORT", "8002"))
 MARTY_ORG_ID = os.environ.get("MARTY_ORG_ID", MARTY_DEFAULT_ORG_ID)
 MARTY_ORG_ADMIN_EMAIL = os.environ.get("MARTY_ORG_ADMIN_EMAIL", "").strip().lower()
+MARTY_ORG_REVIEWER_EMAIL = os.environ.get("MARTY_ORG_REVIEWER_EMAIL", "").strip().lower()
 
 
 async def _ensure_system_roles_for_existing_orgs(
@@ -93,54 +99,53 @@ async def _ensure_system_roles_for_existing_orgs(
         await role_use_case.seed_default_roles(str(organization.id))
 
 
-async def _ensure_marty_admin_membership(
+async def _ensure_marty_bootstrap_memberships(
     member_repo: PostgresMemberRepository,
     role_use_case: RoleUseCase,
 ) -> None:
-    """Ensure the configured Marty admin email is pre-seeded with the admin role."""
+    """Pre-seed deterministic admin and reviewer memberships."""
 
-    if not MARTY_ORG_ADMIN_EMAIL:
-        return
-
-    admin_role = await role_use_case.role_repo.get_by_name(MARTY_ORG_ID, "admin")
-    if admin_role is None:
-        logger.warning("Marty admin role missing during bootstrap; skipping pre-seed")
-        return
-
-    member = await member_repo.get_by_email_and_org(MARTY_ORG_ADMIN_EMAIL, MARTY_ORG_ID)
-    if member is None:
-        member = Member(
-            organization_id=MARTY_ORG_ID,
-            user_id="",
-            email=MARTY_ORG_ADMIN_EMAIL,
-            status=MemberStatus.ACTIVE,
-        )
-        await member_repo.save(member)
-
-    existing_role_ids = {role.id for role in member.roles}
-    existing_role_names = {role.name for role in member.roles}
-    if admin_role.id in existing_role_ids:
-        return
-
-    if not existing_role_names or existing_role_names <= {"applicant"}:
-        await role_use_case.set_member_roles(
-            SetMemberRolesCommand(
+    for email, role_name in (
+        (MARTY_ORG_ADMIN_EMAIL, "admin"),
+        (MARTY_ORG_REVIEWER_EMAIL, "reviewer"),
+    ):
+        if not email:
+            continue
+        role = await role_use_case.role_repo.get_by_name(MARTY_ORG_ID, role_name)
+        if role is None:
+            logger.warning("Marty %s role missing during bootstrap; skipping %s", role_name, email)
+            continue
+        member = await member_repo.get_by_email_and_org(email, MARTY_ORG_ID)
+        if member is None:
+            member = Member(
+                organization_id=MARTY_ORG_ID,
+                user_id="",
+                email=email,
+                status=MemberStatus.ACTIVE,
+            )
+            await member_repo.save(member)
+        existing_role_ids = {item.id for item in member.roles}
+        existing_role_names = {item.name for item in member.roles}
+        if role.id in existing_role_ids:
+            continue
+        if not existing_role_names or existing_role_names <= {"applicant"}:
+            await role_use_case.set_member_roles(
+                SetMemberRolesCommand(
+                    member_id=member.id,
+                    organization_id=MARTY_ORG_ID,
+                    role_ids=[role.id],
+                    updated_by="system",
+                )
+            )
+            continue
+        await role_use_case.add_member_role(
+            AddMemberRoleCommand(
                 member_id=member.id,
                 organization_id=MARTY_ORG_ID,
-                role_ids=[admin_role.id],
+                role_id=role.id,
                 updated_by="system",
             )
         )
-        return
-
-    await role_use_case.add_member_role(
-        AddMemberRoleCommand(
-            member_id=member.id,
-            organization_id=MARTY_ORG_ID,
-            role_id=admin_role.id,
-            updated_by="system",
-        )
-    )
 
 
 def get_config() -> dict:
@@ -183,9 +188,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     role_repo = PostgresRoleRepository(session_factory)
     permission_repo = PostgresPermissionRepository(session_factory)
     policy_set_repo = PostgresPolicySetRepository(session_factory)
+    audit_event_repo = PostgresAuditEventRepository(session_factory)
     
-    # Initialize event publisher (gRPC event bus)
-    event_publisher = GrpcEventBusPublisher()
+    # Persist audit events, then fan out live events over the gRPC event bus.
+    event_publisher = AuditEventPublisher(
+        audit_repo=audit_event_repo,
+        delegate=GrpcEventBusPublisher(),
+    )
     
     # Initialize use cases
     org_use_case = OrganizationUseCase(
@@ -229,7 +238,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Wire RBAC seeding into org creation
     org_use_case.role_use_case = role_use_case
     await _ensure_system_roles_for_existing_orgs(org_use_case, role_use_case)
-    await _ensure_marty_admin_membership(member_repo, role_use_case)
+    await _ensure_marty_bootstrap_memberships(member_repo, role_use_case)
     
     # Configure routers
     configure_org_router(
@@ -245,6 +254,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     
     configure_rbac_router(
         role_use_case=role_use_case,
+    )
+    configure_audit_router(
+        audit_repo=audit_event_repo,
     )
     configure_scim_router(
         organization_use_case=org_use_case,

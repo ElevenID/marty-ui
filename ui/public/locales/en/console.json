@@ -21,13 +21,13 @@
       "title": "Blocking Issues"
     },
     "guidedSetupBanner": {
-      "resumeSetup": "Resume Organization Setup",
-      "getStarted": "Get Started with Guided Setup",
-      "resumeProgress": "You're {{completed}} of {{total}} steps complete. Continue the guided setup to finish configuring your organization.",
-      "startDescription": "Walk through a step-by-step wizard to configure trust profiles, templates, policies, deployment, and flows.",
+      "resumeSetup": "Continue Organization Setup",
+      "getStarted": "Complete Organization Setup",
+      "resumeProgress": "You're {{completed}} of {{total}} steps complete. Continue with the next setup task to finish configuring your organization.",
+      "startDescription": "Start with the next required setup task, then use the dedicated trust, template, policy, deployment, and flow wizards.",
       "stepsProgress": "{{completed}}/{{total}} steps",
-      "resumeButton": "Resume Setup",
-      "startButton": "Start Guided Setup",
+      "resumeButton": "Continue Setup",
+      "startButton": "Start Setup",
       "dismiss": "Dismiss"
     },
     "applicantStats": {
@@ -59,9 +59,12 @@
       "development": "Development",
       "stagingFull": "Staging",
       "production": "Production",
+      "unknown": "Unknown",
+      "unknownFull": "Environment unknown",
       "devDescription": "Development environment for testing",
       "stagingDescription": "Pre-production testing environment",
       "prodDescription": "Live production environment",
+      "unknownDescription": "Environment could not be loaded.",
       "clickToSwitch": "Click to switch environment • {{description}}",
       "warningTitle": "Production Environment",
       "warningMessage": "You are operating in the live production environment. Changes will affect real users and data.",
@@ -182,6 +185,8 @@
       "view": "View",
       "system": "System",
       "noActivity": "Activity will appear here once you begin issuing or verifying credentials",
+      "unavailableTitle": "Recent activity unavailable",
+      "unavailableFallback": "Recent activity could not be loaded for this organization.",
       "info": "Info",
       "success": "Success",
       "warning": "Warning",
@@ -280,7 +285,11 @@
   },
   "setupReadiness": {
     "title": "Setup Readiness",
-    "description": "Complete these steps in order to enable full identity operations",
+    "description": "Choose the operation you want to enable, then complete the required MIP objects for that path",
+    "complianceProfile": {
+      "label": "Compliance Profile",
+      "tooltip": "Selects the standards and credential formats available to production templates and flows"
+    },
     "trustProfile": {
       "label": "Trust Profile",
       "tooltip": "Defines which credential formats, issuers, and validation rules you accept"
@@ -582,6 +591,9 @@
     "credentialType": "Credential Type",
     "credentialTypePlaceholder": "e.g., \"EmployeeBadgeCredential\"",
     "credentialTypeHelper": "The type identifier for this credential",
+    "issuerProfile": "Issuer Profile",
+    "issuerProfileRequired": "Create an active issuer profile before creating credential templates.",
+    "issuerProfilesUnavailable": "Issuer profiles could not be loaded. Retry after issuer identity is available.",
     "description": "Description",
     "descriptionPlaceholder": "Describe the purpose of this template...",
     "descriptionHelper": "Optional description for documentation",
@@ -694,7 +706,8 @@
         "openInNewTabTooltip": "Open in new tab",
         "qrCodeLabel": "QR Code",
         "downloadQrButton": "Download QR Code",
-        "qrCodeAlert": "QR code will be generated when flow is published"
+        "qrCodeAlert": "QR code will be generated when flow is published",
+        "qrDownloadUnavailable": "QR download is unavailable until the flow API returns a QR payload"
       },
       "configuration": {
         "title": "Flow Configuration",
@@ -704,7 +717,8 @@
         "complianceProfileLabel": "Compliance Profile",
         "approvalModeLabel": "Approval Mode",
         "approvalModeAuto": "Automatic Approval",
-        "approvalModeManual": "Manual Approval Required"
+        "approvalModeManual": "Manual Approval Required",
+        "notAvailable": "N/A"
       },
       "runtime": {
         "title": "Runtime Overview",
@@ -713,6 +727,7 @@
         "pendingApprovalLabel": "Pending Approval",
         "credentialsIssuedLabel": "Credentials Issued",
         "failures24hLabel": "Failures (24h)",
+        "notAvailable": "N/A",
         "viewApplicationsButton": "View Applications",
         "viewIssuedCredentialsButton": "View Issued Credentials"
       },
@@ -757,7 +772,7 @@
     "lanesDevices": "Lanes & Devices",
     "webhooks": "Webhooks",
     "apiKeysPage": {
-      "generateKey": "Generate API Key",
+      "generateKey": "Create API Key",
       "tableHeaders": {
         "name": "Name",
         "keyPrefix": "Key Prefix",
@@ -1011,7 +1026,8 @@
     },
     "tabs": {
       "issuance": "Issued Credentials",
-      "applications": "Applications"
+      "applications": "Applications",
+      "verify": "Verify"
     },
     "breadcrumbs": {
       "console": "Console",
@@ -1312,6 +1328,7 @@
           "trustedIssuersConfigured_plural": "{{count}} trusted issuers configured",
           "andMore": "... and {{count}} more",
           "noneConfigured": "No trust sources are configured. This profile will trust no issuers until trust sources are added.",
+          "noneConfiguredActive": "This profile is set to activate immediately, but no trust sources are configured. Add a trusted issuer or explicitly allow any issuer before activating.",
           "noneConfiguredAllowAll": "No trust sources are configured. This profile is explicitly set to trust any issuer that passes cryptographic validation."
         },
         "activationExplanation": {
@@ -1688,13 +1705,13 @@
             "label": "Device Key",
             "description": "Bind to device cryptographic key (recommended)"
           },
-          "session_nonce": {
-            "label": "Session Nonce",
-            "description": "One-time session binding (less secure)"
+          "session_binding": {
+            "label": "Authenticated Session",
+            "description": "Bind the presentation to an authenticated session proof"
           },
-          "biometric": {
-            "label": "Biometric",
-            "description": "Biometric authentication required"
+          "credential_key": {
+            "label": "Credential Key",
+            "description": "Require proof of control of the key bound to the credential"
           },
           "none": {
             "label": "None",
@@ -1746,8 +1763,8 @@
         },
         "holderBindingLabels": {
           "device_key": "Device Key",
-          "session_nonce": "Session Nonce",
-          "biometric": "Biometric",
+          "session_binding": "Authenticated Session",
+          "credential_key": "Credential Key",
           "none": "None"
         },
         "activation": {
@@ -1898,7 +1915,7 @@
       },
       "deploymentBindingStep": {
         "title": "Bind to Deployment",
-        "description": "Optionally bind this flow to a deployment profile and set a default presentation policy. This step can be skipped and configured later.",
+        "description": "Bind this flow to an active deployment profile. Issuance flows also require an active credential template; verification flows require a presentation policy.",
         "errors": {
           "failedToLoad": "Failed to load deployment profiles and policies"
         },
@@ -1907,8 +1924,8 @@
           "defaultPolicy": "Default Presentation Policy"
         },
         "deployment": {
-          "none": "None (bind later)",
-          "empty": "No deployment profiles available. You can create one later and bind it to this flow.",
+          "none": "No deployment selected",
+          "empty": "No active deployment profiles are available. Create and activate a deployment profile before creating this flow.",
           "helper": "Select a deployment profile to bind this flow to a specific runtime environment",
           "activeChip": "Active",
           "onlineFallback": "ONLINE"
@@ -2001,7 +2018,6 @@
         "title": "Deployment Profile Created Successfully!",
         "messageActive": "\"{{name}}\" is now active and ready to use.",
         "messageDraft": "\"{{name}}\" is now saved as draft.",
-        "apiKeyGenerated": "API key has been generated. Check your deployment profile details.",
         "redirecting": "Redirecting to Flow Definitions..."
       },
       "environmentStep": {
@@ -2184,10 +2200,6 @@
           "ble": "BLE"
         },
         "activationOptions": {
-          "generateApiKey": {
-            "label": "Generate API key automatically",
-            "description": "Create an API key for programmatic access to this deployment"
-          },
           "activateImmediately": {
             "label": "Activate immediately",
             "description": "Make this deployment profile active and ready to use"

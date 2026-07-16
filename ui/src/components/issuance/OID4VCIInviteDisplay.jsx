@@ -2,7 +2,7 @@
  * OID4VCIInviteDisplay
  *
  * Thin adapter that maps the offer payload from
- * `POST /v1/applications/{id}/issuance-offer` into props understood by
+ * `POST /v1/me/applications/{id}/claim` into props understood by
  * the generic QRCodeDisplay component.
  *
  * When the backend returns `credential_offer_uris` (a per-wallet map), a tab
@@ -53,6 +53,20 @@ const FALLBACK_WALLET_LABELS = {
 const walletLabel = (id, labels = {}) => labels[id] || FALLBACK_WALLET_LABELS[id] || id;
 
 const DEFAULT_TAB = '__default__';
+const PROTOCOL_ONLY_OPEN_LINK = /^(openid-credential-offer|openid4vp|haip-vci|haip-vp):/i;
+
+function chooseWalletOpenUri(walletOpenUri, fallbackOpenLink) {
+  if (!walletOpenUri) return fallbackOpenLink;
+  if (
+    fallbackOpenLink &&
+    fallbackOpenLink !== walletOpenUri &&
+    PROTOCOL_ONLY_OPEN_LINK.test(walletOpenUri) &&
+    !PROTOCOL_ONLY_OPEN_LINK.test(fallbackOpenLink)
+  ) {
+    return fallbackOpenLink;
+  }
+  return walletOpenUri;
+}
 
 export default function OID4VCIInviteDisplay({
   offerData,
@@ -130,7 +144,7 @@ export default function OID4VCIInviteDisplay({
         innerUri: transport.innerUri,
         platform: transport.platform,
       });
-      window.location.href = response?.open_uri || fallbackOpenLink;
+      window.location.href = chooseWalletOpenUri(response?.open_uri, fallbackOpenLink);
     } catch {
       window.location.href = fallbackOpenLink;
     }

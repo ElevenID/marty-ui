@@ -38,7 +38,8 @@ class PostgresPresentationPolicyRepository:
                     "holder_binding": {
                         "required": policy.holder_binding.required,
                         "binding_methods": policy.holder_binding.binding_methods,
-                        "nonce_required": policy.holder_binding.nonce_required,
+                        "proof_profiles": policy.holder_binding.proof_profiles,
+                        "proof_freshness": policy.holder_binding.proof_freshness,
                     },
                     "freshness": {
                         "max_age_seconds": policy.freshness.max_age_seconds,
@@ -190,7 +191,7 @@ class PostgresPresentationPolicyRepository:
         from presentation_policy.main import (
             PresentationPolicy, PolicyStatus, DisplayMetadata, CredentialRequirement,
             AlternativeRequirement, RequestedClaim, ClaimConstraint, RequestPurpose, ConstraintType,
-            HolderBinding, FreshnessPolicy, IssuerConstraints
+            FreshnessPolicy, IssuerConstraints, normalize_holder_binding
         )
         
         async with self._session_factory() as session:
@@ -335,7 +336,7 @@ class PostgresPresentationPolicyRepository:
                 credential_requirements=credential_requirements,
                 alternative_requirements=alternative_requirements,
                 trust_profile_id=protocol_data.get("trust_profile_id"),
-                holder_binding=HolderBinding(**(protocol_data.get("holder_binding") or {})),
+                holder_binding=normalize_holder_binding(protocol_data.get("holder_binding")),
                 freshness=FreshnessPolicy(**protocol_data["freshness"]) if protocol_data.get("freshness") else None,
                 issuer_constraints=IssuerConstraints(**protocol_data["issuer_constraints"]) if protocol_data.get("issuer_constraints") else None,
                 credential_ranking_strategy=protocol_data.get("credential_ranking_strategy", "FRESHEST_FIRST"),
@@ -352,7 +353,7 @@ class PostgresPresentationPolicyRepository:
         from presentation_policy.main import (
             PresentationPolicy, PolicyStatus, DisplayMetadata, CredentialRequirement,
             AlternativeRequirement, RequestedClaim, ClaimConstraint, RequestPurpose, ConstraintType,
-            HolderBinding, FreshnessPolicy, IssuerConstraints
+            FreshnessPolicy, IssuerConstraints, normalize_holder_binding
         )
         
         async with self._session_factory() as session:
@@ -499,7 +500,7 @@ class PostgresPresentationPolicyRepository:
                         credential_requirements=credential_requirements,
                         alternative_requirements=alternative_requirements,
                         trust_profile_id=protocol_data.get("trust_profile_id"),
-                        holder_binding=HolderBinding(**(protocol_data.get("holder_binding") or {})),
+                        holder_binding=normalize_holder_binding(protocol_data.get("holder_binding")),
                         freshness=FreshnessPolicy(**protocol_data["freshness"]) if protocol_data.get("freshness") else None,
                         issuer_constraints=IssuerConstraints(**protocol_data["issuer_constraints"]) if protocol_data.get("issuer_constraints") else None,
                         credential_ranking_strategy=protocol_data.get("credential_ranking_strategy", "FRESHEST_FIRST"),

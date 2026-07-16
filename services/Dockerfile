@@ -37,31 +37,13 @@ COPY longfellow-zk/lib ./longfellow-zk/lib
 COPY marty-credentials/Cargo.toml ./marty-credentials/
 COPY marty-credentials/Cargo.lock* ./marty-credentials/
 COPY marty-credentials/rust ./marty-credentials/rust
+COPY marty-ui/scripts/localize_marty_core_dependencies.py ./marty-ui/scripts/
 
 # Rewrite marty-core git dependencies to local path dependencies so Docker
 # builds do not require GitHub credentials.
-RUN python3 - <<'PY'
-from pathlib import Path
-
-path = Path('/build/marty-credentials/Cargo.toml')
-text = path.read_text()
-
-replacements = {
-    'marty-crypto = { git = "https://github.com/ElevenID/marty-core.git", branch = "main", features = ["sod-builder"] }': 'marty-crypto = { path = "../marty-core/marty-crypto", features = ["sod-builder"] }',
-    'marty-crypto = { git = "https://github.com/ElevenID/marty-core.git", rev = "438d0f81", features = ["sod-builder"] }': 'marty-crypto = { path = "../marty-core/marty-crypto", features = ["sod-builder"] }',
-    'marty-verification = { git = "https://github.com/ElevenID/marty-core.git", branch = "main" }': 'marty-verification = { path = "../marty-core/marty-verification" }',
-    'marty-verification = { git = "https://github.com/ElevenID/marty-core.git", rev = "438d0f81" }': 'marty-verification = { path = "../marty-core/marty-verification" }',
-    'marty-secure-storage = { git = "https://github.com/ElevenID/marty-core.git", branch = "main" }': 'marty-secure-storage = { path = "../marty-core/marty-secure-storage" }',
-    'marty-secure-storage = { git = "https://github.com/ElevenID/marty-core.git", rev = "438d0f81" }': 'marty-secure-storage = { path = "../marty-core/marty-secure-storage" }',
-    'marty-oid4vci = { git = "https://github.com/ElevenID/marty-core.git", branch = "main" }': 'marty-oid4vci = { path = "../marty-core/marty-oid4vci" }',
-    'marty-oid4vci = { git = "https://github.com/ElevenID/marty-core.git", rev = "438d0f81" }': 'marty-oid4vci = { path = "../marty-core/marty-oid4vci" }',
-}
-
-for old, new in replacements.items():
-    text = text.replace(old, new)
-
-path.write_text(text)
-PY
+RUN python3 /build/marty-ui/scripts/localize_marty_core_dependencies.py \
+    /build/marty-credentials/Cargo.toml \
+    --core-root ../marty-core
 
 # Build the Python wheel for marty-rs bindings
 WORKDIR /build/marty-credentials/rust/marty-rs
@@ -102,7 +84,11 @@ RUN pip install -e /app/packages/marty_common
 FROM base AS final
 
 ARG SERVICE_NAME
-ENV SERVICE_NAME=${SERVICE_NAME}
+ARG MARTY_RELEASE_VERSION=development
+ARG MARTY_UI_SHA=unknown
+ENV SERVICE_NAME=${SERVICE_NAME} \
+    MARTY_RELEASE_VERSION=${MARTY_RELEASE_VERSION} \
+    MARTY_UI_SHA=${MARTY_UI_SHA}
 
 # Copy ALL services (needed for package structure)
 COPY marty-ui/services /app/services
@@ -111,6 +97,8 @@ COPY marty-ui/services /app/services
 # Keep the local image path aligned with the production/CD image path by copying
 # the issuance service from the sibling marty-credentials repository.
 COPY marty-credentials/services/issuance /app/services/issuance
+# Issuance encrypts persisted signing material through this shared package.
+COPY marty-credentials/python/status_list /app/status_list
 
 # Set Python path to include services parent
 ENV PYTHONPATH=/app:/app/packages:/app/services

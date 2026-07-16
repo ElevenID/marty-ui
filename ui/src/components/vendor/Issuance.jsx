@@ -91,8 +91,11 @@ export default function Issuance({ hideHeader = false }) {
     setLoadingData(true);
     try {
       // Fetch approved applicants
-      const applicantsData = await applicantApi.listApplications({ status: 'approved', limit: 100 });
-      setApplicants(applicantsData.applications || []);
+      const applicantsData = await applicantApi.listOrganizationApplications(
+        organizationId,
+        { status: 'approved', limit: 100 },
+      );
+      setApplicants(applicantsData.items);
       
       // Fetch credential templates
       const data = await fetchCredentialConfigs({ organizationId });
