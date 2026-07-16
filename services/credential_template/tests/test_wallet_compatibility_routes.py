@@ -33,6 +33,39 @@ def _build_client(
 		)
 	)
 	app.state.org_client = SimpleNamespace(get_membership=get_membership)
+
+	async def fake_require_active_issuer_profile(
+		request,
+		*,
+		organization_id: str,
+		issuer_profile_id: str | None,
+		credential_format: str | None = None,
+		algorithm: str | None = None,
+	) -> dict:
+		if not issuer_profile_id:
+			raise credential_template.HTTPException(
+				status_code=422,
+				detail="issuer_profile_id is required.",
+			)
+		return {
+			"ok": True,
+			"organization_id": organization_id,
+			"issuer_profile_id": issuer_profile_id,
+			"issuer_did": "did:web:beta.elevenidllc.com:orgs:test",
+			"signing_service_id": "managed-openbao-transit",
+			"signing_key_reference": "cred-issuer-test-es256",
+			"verification_method_id": "did:web:beta.elevenidllc.com:orgs:test#cred-issuer-test-es256",
+			"key_purpose": "vc_jwt_issuer",
+			"service": {
+				"id": "managed-openbao-transit",
+				"algorithm": "ES256",
+				"key_reference": "cred-issuer-test-es256",
+			},
+		}
+
+	credential_template._require_active_issuer_profile = AsyncMock(
+		side_effect=fake_require_active_issuer_profile
+	)
 	return TestClient(app), get_membership
 
 
@@ -441,6 +474,20 @@ def test_wallet_open_link_prefers_platform_routing_template():
 	)
 
 
+def test_inactive_waltid_wallet_cannot_build_an_open_link():
+	repo = credential_template.InMemoryCredentialTemplateRepository()
+	wallet_repo = credential_template.InMemoryWalletRegistryRepository()
+	client, _ = _build_client(repo, wallet_repo)
+	inner_uri = "openid-credential-offer://?credential_offer_uri=https%3A%2F%2Fissuer.example%2Foffers%2F123"
+
+	response = client.get(
+		"/v1/wallet-registry/wr-waltid-001/open-link",
+		params={"inner_uri": inner_uri, "platform": "desktop"},
+	)
+
+	assert response.status_code == 404
+
+
 def test_wallet_open_link_uses_spruce_android_intent_without_wrapping_inner_uri():
 	repo = credential_template.InMemoryCredentialTemplateRepository()
 	wallet_repo = credential_template.InMemoryWalletRegistryRepository()
@@ -551,16 +598,18 @@ def test_create_template_requires_compliance_binding_even_in_compatibility_mode(
 			"organization_id": "org-1",
 			"name": "Missing compliance binding",
 			"credential_type": "PersonIdentificationData",
+			"issuer_profile_id": "issuer-profile-1",
 			"claims": [{"name": "given_name", "display_name": "Given Name", "claim_type": "string", "required": True}],
 			"supported_formats": ["sd_jwt_vc"],
 		},
 	)
 
 	assert response.status_code == 422
-	assert "compliance_profile_id is required" in response.json()["detail"]
+	details = response.json()["detail"]
+	assert any(item["loc"][-1] == "compliance_profile_id" and item["type"] == "missing" for item in details)
 
 
-def test_create_template_normalizes_legacy_payload_format_aliases():
+def test_create_template_rejects_embedded_compliance_profile():
 	repo = credential_template.InMemoryCredentialTemplateRepository()
 	client, _ = _build_client(repo)
 
@@ -571,6 +620,7 @@ def test_create_template_normalizes_legacy_payload_format_aliases():
 			"organization_id": "org-1",
 			"name": "Legacy payload format template",
 			"credential_type": "PersonIdentificationData",
+			"issuer_profile_id": "issuer-profile-1",
 			"claims": [{"name": "given_name", "display_name": "Given Name", "claim_type": "string", "required": True}],
 			"supported_formats": ["sd_jwt_vc"],
 			"credential_payload_format": "w3c_vcdm_v2_sd_jwt",
@@ -578,17 +628,7 @@ def test_create_template_normalizes_legacy_payload_format_aliases():
 		},
 	)
 
-	assert response.status_code == 200
-	body = response.json()
-	assert body["status"] == "DRAFT"
-	assert body["credential_payload_format"] == "SD_JWT_VC"
-	assert body["validity_rules"]["ttl_seconds"] == 365 * 86400
-	assert body["claims"] == [
-		{
-			"name": "given_name",
-			"type": "STRING",
-			"required": True,
-			"selectively_disclosable": True,
-			"display": {"label": "Given Name"},
-		}
-	]
+	assert response.status_code == 422
+	details = response.json()["detail"]
+	assert any(item["loc"][-1] == "compliance_profile" and item["type"] == "extra_forbidden" for item in details)
+	assert any(item["loc"][-1] == "compliance_profile_id" and item["type"] == "missing" for item in details)

@@ -33,7 +33,7 @@ function MyCredentialsPage() {
   const { t } = useTranslation('applicant');
   const { data: credentials = [], loading, error } = useAsyncData(async () => {
     const result = await getMyCredentials();
-    return (result.credentials || result.documents || []).map(doc => ({
+    return result.items.map(doc => ({
       id: doc.id,
       type: doc.document_type || doc.credential_type || 'Credential',
       issuer: doc.issuing_authority || doc.issuer || 'Issuer',

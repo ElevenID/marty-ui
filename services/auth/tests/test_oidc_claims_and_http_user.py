@@ -59,21 +59,30 @@ def _build_request(*, referer: str = "") -> Request:
     )
 
 
-def _build_forwarded_request(*, host: str, proto: str = "https") -> Request:
+def _build_forwarded_request(
+    *,
+    host: str,
+    proto: str = "https",
+    method: str = "GET",
+    authorization: str | None = None,
+) -> Request:
+    headers = [
+        (b"host", b"edge"),
+        (b"x-forwarded-host", host.encode("utf-8")),
+        (b"x-forwarded-proto", proto.encode("utf-8")),
+    ]
+    if authorization:
+        headers.append((b"authorization", authorization.encode("utf-8")))
     return Request(
         {
             "type": "http",
             "http_version": "1.1",
-            "method": "GET",
+            "method": method,
             "scheme": "http",
             "path": "/v1/auth/login",
             "raw_path": b"/v1/auth/login",
             "query_string": b"",
-            "headers": [
-                (b"host", b"edge"),
-                (b"x-forwarded-host", host.encode("utf-8")),
-                (b"x-forwarded-proto", proto.encode("utf-8")),
-            ],
+            "headers": headers,
             "client": ("127.0.0.1", 443),
             "server": ("edge", 80),
         }
@@ -122,6 +131,9 @@ async def test_get_current_user_includes_raw_keycloak_organization_claim():
         organization_id="org-1",
         organization_name="Acme",
         organization={"org-1": {"name": "Acme"}},
+        default_organization_id="org-1",
+        default_organization_name="Acme",
+        organizations=[{"id": "org-1", "name": "Acme", "display_name": "Acme"}],
     )
 
     response = await get_current_user(Response(), user)
@@ -129,6 +141,8 @@ async def test_get_current_user_includes_raw_keycloak_organization_claim():
     assert response.authenticated is True
     assert response.user is not None
     assert response.user.organization == {"org-1": {"name": "Acme"}}
+    assert response.user.default_organization_id == "org-1"
+    assert response.user.organizations == [{"id": "org-1", "name": "Acme", "display_name": "Acme"}]
 
 
 def test_root_post_auth_redirects_land_in_console_entry():
@@ -195,9 +209,13 @@ class _FakeRedis:
     def __init__(self, payload: str | None):
         self._payload = payload
         self.deleted_keys: list[str] = []
+        self.completed_payloads: list[dict] = []
 
     async def get(self, key: str) -> str | None:
         return self._payload
+
+    async def setex(self, key: str, ttl: int, value: str) -> None:
+        self.completed_payloads.append(json.loads(value))
 
     async def delete(self, key: str) -> None:
         self.deleted_keys.append(key)
@@ -213,23 +231,11 @@ class _FakeSessionRepository:
 
 def _canvas_lti_session_payload() -> dict:
     return {
-        "state": "state-1",
         "organization_id": "00000000-0000-0000-0000-000000000001",
         "canvas_account_id": "canvas-account-1",
-        "verified_launch": {
-            "issuer": "https://canvas-test.elevenidllc.com",
-            "subject": "canvas-user-1",
-            "roles": [
-                "http://purl.imsglobal.org/vocab/lis/v2/membership#Learner",
-                "http://purl.imsglobal.org/vocab/lis/v2/membership#Instructor",
-            ],
-            "learner_identity": {
-                "email": "learner@example.edu",
-                "name": "Canvas Learner",
-                "subject": "canvas-user-1",
-            },
-            "raw_claims": {},
-        },
+        "learner_key": "c3b3d1c3314a1ba18a2f3a165a3ecaa443ca9f3ef1b95b4f7f6d18b8c011aa11",
+        "learner_display_name": "Canvas Learner",
+        "roles": ["Learner"],
     }
 
 
@@ -242,14 +248,15 @@ def test_build_canvas_lti_user_creates_stable_constrained_applicant_identity(mon
 
     assert user.user_id == second_user.user_id
     assert user.user_id.startswith("canvas-lti-")
-    assert user.email == "learner@example.edu"
-    assert user.username == "learner"
+    assert user.email.startswith("canvas-")
+    assert user.email.endswith("@canvas.lti.local")
+    assert user.username == user.email.split("@", 1)[0]
     assert user.given_name == "Canvas"
     assert user.family_name == "Learner"
     assert user.user_type.value == "applicant"
     assert user.roles == ["applicant", "canvas_lti_learner"]
-    assert user.organization_id is None
-    assert user.organization_name is None
+    assert user.organization_id == "00000000-0000-0000-0000-000000000001"
+    assert user.organization_name == "Canvas learner organization"
     assert user.organization is None
 
 
@@ -257,11 +264,11 @@ def test_build_canvas_lti_user_creates_stable_constrained_applicant_identity(mon
 async def test_canvas_lti_finalize_sets_canvas_user_session_cookie(monkeypatch: pytest.MonkeyPatch):
     fake_repo = _FakeSessionRepository()
 
-    async def fake_fetch(state: str) -> dict:
-        assert state == "state-1"
+    async def fake_fetch(token: str) -> dict:
+        assert token == "experience-token"
         return _canvas_lti_session_payload()
 
-    monkeypatch.setattr(http_adapter, "_fetch_canvas_lti_experience_session", fake_fetch)
+    monkeypatch.setattr(http_adapter, "_fetch_current_canvas_lti_experience_session", fake_fetch)
     monkeypatch.setattr(http_adapter, "_session_repository", fake_repo)
     monkeypatch.setattr(http_adapter, "_applicant_profile_provisioner", None)
     monkeypatch.setattr(http_adapter, "_ui_base_url", "https://elevenidllc.com")
@@ -276,20 +283,23 @@ async def test_canvas_lti_finalize_sets_canvas_user_session_cookie(monkeypatch: 
     monkeypatch.setenv("UI_ADDITIONAL_BASE_URLS", "https://beta.elevenidllc.com")
 
     response = await http_adapter.canvas_lti_finalize(
-        request=_build_forwarded_request(host="beta.elevenidllc.com"),
-        state="state-1",
-        redirect_uri="/console/applicant/apply/cfg-1?canvas_lti_state=state-1",
+        request=_build_forwarded_request(
+            host="beta.elevenidllc.com",
+            method="POST",
+            authorization="Bearer experience-token",
+        ),
     )
 
-    assert response.status_code == 302
-    assert response.headers["location"] == (
-        "https://beta.elevenidllc.com/console/applicant/apply/cfg-1?canvas_lti_state=state-1"
-    )
+    assert response.status_code == 200
+    assert json.loads(response.body) == {
+        "authenticated": True,
+        "expires_in": http_adapter._canvas_lti_session_ttl_seconds,
+    }
     assert "sessionId=" in response.headers.get("set-cookie", "")
     assert len(fake_repo.saved) == 1
-    assert fake_repo.saved[0].user.email == "learner@example.edu"
+    assert fake_repo.saved[0].user.email.endswith("@canvas.lti.local")
     assert fake_repo.saved[0].user.roles == ["applicant", "canvas_lti_learner"]
-    assert fake_repo.saved[0].user.organization_id is None
+    assert fake_repo.saved[0].user.organization_id == "00000000-0000-0000-0000-000000000001"
 
 
 @pytest.mark.asyncio
@@ -316,6 +326,65 @@ async def test_credential_login_finalize_redirects_to_console_and_sets_cookie(mo
     assert response.headers["location"] == "https://elevenidllc.com/console"
     assert "sessionId=session-123" in response.headers.get("set-cookie", "")
     assert fake_redis.deleted_keys == [f"{http_adapter._COMPLETE_KEY}nonce-123"]
+
+
+@pytest.mark.asyncio
+async def test_credential_verified_allows_claim_only_login_without_keycloak_admin(monkeypatch: pytest.MonkeyPatch):
+    fake_redis = _FakeRedis(json.dumps({"state": "pending"}))
+    fake_repo = _FakeSessionRepository()
+
+    monkeypatch.setattr(http_adapter, "_redis_client", fake_redis)
+    monkeypatch.setattr(http_adapter, "_session_repository", fake_repo)
+    monkeypatch.setattr(http_adapter, "_kc_admin_adapter", None)
+    monkeypatch.setattr(http_adapter, "_user_provisioning", None)
+    monkeypatch.setattr(http_adapter, "_applicant_profile_provisioner", None)
+    monkeypatch.setattr(http_adapter, "_credential_login_require_existing_keycloak_user", False)
+    monkeypatch.setattr(http_adapter, "_credential_login_create_users", False)
+
+    result = await http_adapter.credential_verified(
+        payload=http_adapter.CredentialVerifiedPayload(
+            flow_instance_id="flow-1",
+            result="success",
+            decision="allow",
+            verified_claims={"email": "alice@example.com", "given_name": "Alice"},
+        ),
+        nonce="nonce-claim-only",
+        request=_build_forwarded_request(host="elevenidllc.com"),
+    )
+
+    assert result["status"] == "completed"
+    assert len(fake_repo.saved) == 1
+    assert fake_repo.saved[0].user.email == "alice@example.com"
+    assert fake_redis.completed_payloads[0]["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_credential_verified_denies_without_keycloak_admin_when_existing_user_required(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    fake_redis = _FakeRedis(json.dumps({"state": "pending"}))
+    fake_repo = _FakeSessionRepository()
+
+    monkeypatch.setattr(http_adapter, "_redis_client", fake_redis)
+    monkeypatch.setattr(http_adapter, "_session_repository", fake_repo)
+    monkeypatch.setattr(http_adapter, "_kc_admin_adapter", None)
+    monkeypatch.setattr(http_adapter, "_credential_login_require_existing_keycloak_user", True)
+    monkeypatch.setattr(http_adapter, "_credential_login_create_users", False)
+
+    result = await http_adapter.credential_verified(
+        payload=http_adapter.CredentialVerifiedPayload(
+            flow_instance_id="flow-1",
+            result="success",
+            decision="allow",
+            verified_claims={"email": "alice@example.com"},
+        ),
+        nonce="nonce-existing-required",
+        request=_build_forwarded_request(host="elevenidllc.com"),
+    )
+
+    assert result["status"] == "denied"
+    assert fake_repo.saved == []
+    assert fake_redis.completed_payloads[0]["reason_code"] == "keycloak_admin_unavailable"
 
 
 def test_credential_login_failure_payload_maps_trust_mismatch_to_user_friendly_message():

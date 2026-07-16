@@ -108,7 +108,7 @@ def test_special_verification_instances_map_to_protocol_flow_type() -> None:
     instance = FlowInstance(
         flow_definition_id="__verification__",
         organization_id="org-1",
-        status=FlowInstanceStatus.WAITING,
+        status=FlowInstanceStatus.AWAITING_WALLET,
         context={
             "flow_type": "verification",
             "protocol_flow_type": FlowType.OID4VP_PRESENTATION.value,
@@ -125,7 +125,7 @@ def test_special_verification_instances_map_to_protocol_flow_type() -> None:
     assert response.status == "AWAITING_WALLET"
     assert response.current_step == "create_request"
     assert response.current_step_index == 0
-    assert response.metadata["runtime_status"] == FlowInstanceStatus.WAITING.value
+    assert response.metadata["runtime_status"] == FlowInstanceStatus.AWAITING_WALLET.value
     assert response.metadata["flow_definition_reference"] == "__verification__"
 
 
@@ -134,7 +134,7 @@ def test_uuid_backed_ad_hoc_verification_instances_expose_protocol_flow_id() -> 
     instance = FlowInstance(
         flow_definition_id=flow_definition_id,
         organization_id="org-1",
-        status=FlowInstanceStatus.WAITING,
+        status=FlowInstanceStatus.AWAITING_WALLET,
         context={
             "flow_definition_reference": "__verification__",
             "flow_type": "verification",
@@ -153,24 +153,77 @@ def test_uuid_backed_ad_hoc_verification_instances_expose_protocol_flow_id() -> 
     assert response.metadata["flow_definition_reference"] == "__verification__"
 
 
-def test_parse_flow_instance_status_accepts_protocol_and_runtime_aliases() -> None:
-    assert _parse_flow_instance_status("AWAITING_APPROVAL") is FlowInstanceStatus.WAITING_APPROVAL
-    assert _parse_flow_instance_status("awaiting_wallet") is FlowInstanceStatus.WAITING
+def test_parse_flow_instance_status_accepts_canonical_protocol_values() -> None:
+    assert _parse_flow_instance_status("AWAITING_APPROVAL") is FlowInstanceStatus.AWAITING_APPROVAL
+    assert _parse_flow_instance_status("awaiting_wallet") is FlowInstanceStatus.AWAITING_WALLET
     assert _parse_flow_instance_status("cancelled") is FlowInstanceStatus.CANCELLED
-    assert _parse_flow_instance_status("CANCELED") is FlowInstanceStatus.CANCELLED
 
 
-def test_definition_response_normalizes_legacy_string_trigger() -> None:
+@pytest.mark.parametrize("removed_status", ["waiting", "waiting_approval", "canceled"])
+def test_parse_flow_instance_status_rejects_removed_aliases(removed_status: str) -> None:
+    with pytest.raises(ValueError):
+        _parse_flow_instance_status(removed_status)
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        FlowInstanceStatus.CREATED,
+        FlowInstanceStatus.PENDING,
+        FlowInstanceStatus.IN_PROGRESS,
+        FlowInstanceStatus.AWAITING_WALLET,
+        FlowInstanceStatus.AWAITING_APPROVAL,
+        FlowInstanceStatus.AWAITING_EVIDENCE,
+    ],
+)
+def test_every_non_terminal_flow_state_can_be_cancelled(status: FlowInstanceStatus) -> None:
+    instance = FlowInstance(status=status)
+
+    instance.transition_to(FlowInstanceStatus.CANCELLED)
+
+    assert instance.status is FlowInstanceStatus.CANCELLED
+
+
+def test_definition_response_preserves_canonical_trigger() -> None:
+    step = FlowStep(
+        name="Create Offer",
+        description="Create the OID4VCI offer",
+        step_type=StepType.ISSUANCE,
+        config={"protocol_step": "create_offer"},
+        timeout_seconds=60,
+    )
     flow_def = FlowDefinition(
         organization_id="org-1",
-        name="Legacy Trigger Flow",
+        name="Canonical Trigger Flow",
         flow_type=FlowType.OID4VCI_PRE_AUTHORIZED,
+        steps=[step],
+        start_step_id=step.id,
+        preconditions=["application_approved"],
+        deployment_profile_id="deploy-1",
+        deployment_profile_ids=["deploy-1"],
+        credential_template_id="template-1",
     )
-    flow_def.trigger = "credential_login"
+    flow_def.trigger = {
+        "trigger_type": "API_CALL",
+        "config": {"event_type": "CREDENTIAL_LOGIN"},
+    }
+    flow_def.version = 3
 
     response = _definition_to_response(flow_def)
 
-    assert response.trigger == {"event": "credential_login"}
+    assert response.trigger == {
+        "trigger_type": "API_CALL",
+        "config": {"event_type": "CREDENTIAL_LOGIN"},
+    }
+    assert response.version == 3
+    assert response.deployment_profile_ids == ["deploy-1"]
+    assert response.credential_template_id == "template-1"
+    assert response.resolved_steps == [
+        "create_offer",
+        "token_exchange",
+        "credential_request",
+        "issue_credential",
+    ]
 
 
 @pytest.mark.asyncio

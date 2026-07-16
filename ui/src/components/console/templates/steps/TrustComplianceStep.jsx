@@ -1,8 +1,8 @@
 /**
  * Trust & Compliance Step - Credential Template Wizard
  * 
- * Select the trust profile and optional compliance profile.
- * Trust Profile is required; blocks if none active.
+ * Select the required trust, issuer, and compliance profiles.
+ * The step blocks when any required active dependency is unavailable.
  */
 
 import { useEffect } from 'react';
@@ -22,13 +22,14 @@ import {
 } from '@mui/material';
 import { useNavigate } from 'react-router-dom';
 import SecurityIcon from '@mui/icons-material/Security';
-import WarningIcon from '@mui/icons-material/Warning';
 import AddCircleOutlineIcon from '@mui/icons-material/AddCircleOutline';
 import LanguageIcon from '@mui/icons-material/Language';
 import { useTranslation } from 'react-i18next';
 
 import { listTrustProfiles } from '../../../../services/presentationPolicyApi';
+import { listComplianceProfiles } from '../../../../services/complianceProfilesApi';
 import signingKeysApi from '../../../../services/signingKeysApi';
+import { useConsole } from '../../../../contexts/ConsoleContext';
 
 const firstNonEmpty = (...values) => values
   .map((value) => (typeof value === 'string' ? value.trim() : value))
@@ -37,6 +38,24 @@ const firstNonEmpty = (...values) => values
 const pruneEmpty = (value) => Object.fromEntries(
   Object.entries(value).filter(([, entryValue]) => entryValue !== undefined && entryValue !== null && entryValue !== '')
 );
+
+const isActiveKmsBackedIssuerProfile = (profile) => {
+  if (!profile) {
+    return false;
+  }
+  const issuerDid = firstNonEmpty(profile.issuer_did, profile.did);
+  const signingServiceId = firstNonEmpty(
+    profile.signing_service_id,
+    profile.service_id,
+    profile.metadata?.signing_service_id
+  );
+  return (
+    String(profile.status || '').toLowerCase() === 'active' &&
+    typeof issuerDid === 'string' &&
+    issuerDid.startsWith('did:') &&
+    Boolean(signingServiceId)
+  );
+};
 
 const buildIssuerProfilePatch = (profile, currentAlgorithm = 'ES256') => {
   if (!profile) {
@@ -88,23 +107,61 @@ const buildIssuerProfilePatch = (profile, currentAlgorithm = 'ES256') => {
 const TrustComplianceStep = ({ data, onChange }) => {
   const { t } = useTranslation('console');
   const navigate = useNavigate();
-  const { data: trustProfiles = [], loading, error } = useAsyncData(
+  const { activeOrgId } = useConsole();
+  const { data: trustProfilesData = [], loading, error, reload } = useAsyncData(
     async () => {
-      const response = await listTrustProfiles();
+      if (!activeOrgId) {
+        throw new Error('Select an organization before loading trust profiles.');
+      }
+      const response = await listTrustProfiles({ organization_id: activeOrgId });
       const profiles = response.data || response || [];
       return profiles.filter((p) => p.status === 'active');
     },
-    []
+    [activeOrgId]
   );
 
-  const { data: issuerProfiles = [], loading: issuerProfilesLoading } = useAsyncData(
+  const {
+    data: issuerProfilesData = [],
+    loading: issuerProfilesLoading,
+    error: issuerProfilesError,
+    reload: reloadIssuerProfiles,
+  } = useAsyncData(
     async () => {
-      const response = await signingKeysApi.listIssuerProfiles();
+      if (!activeOrgId) {
+        throw new Error('Select an organization before loading issuer profiles.');
+      }
+      const response = await signingKeysApi.listIssuerProfiles({ organization_id: activeOrgId });
       const profiles = response?.profiles || [];
-      return profiles.filter((p) => p.status === 'active');
+      return profiles.filter(isActiveKmsBackedIssuerProfile);
     },
-    []
+    [activeOrgId]
   );
+
+  const {
+    data: complianceProfilesData = [],
+    loading: complianceProfilesLoading,
+    error: complianceProfilesError,
+    reload: reloadComplianceProfiles,
+  } = useAsyncData(
+    async () => {
+      if (!activeOrgId) {
+        throw new Error('Select an organization before loading compliance profiles.');
+      }
+      const response = await listComplianceProfiles({ organization_id: activeOrgId });
+      const profiles = response?.data || response || [];
+      return profiles.filter((p) => (
+        p.discoverable !== false
+        && (p.is_system === true || String(p.status || '').toLowerCase() === 'active')
+      ));
+    },
+    [activeOrgId]
+  );
+
+  const trustProfiles = Array.isArray(trustProfilesData) ? trustProfilesData : [];
+  const issuerProfiles = Array.isArray(issuerProfilesData)
+    ? issuerProfilesData.filter(isActiveKmsBackedIssuerProfile)
+    : [];
+  const complianceProfiles = Array.isArray(complianceProfilesData) ? complianceProfilesData : [];
 
   // Auto-select if only one active profile and none already selected
   useEffect(() => {
@@ -113,14 +170,46 @@ const TrustComplianceStep = ({ data, onChange }) => {
     }
   }, [trustProfiles]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  useEffect(() => {
+    if (issuerProfiles.length === 1 && !data.issuer_profile_id) {
+      onChange(buildIssuerProfilePatch(issuerProfiles[0], data.signing_algorithm));
+    }
+  }, [issuerProfiles]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (complianceProfiles.length === 1 && !data.compliance_profile_id) {
+      onChange({ compliance_profile_id: complianceProfiles[0].id });
+    }
+  }, [complianceProfiles]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const handleGoToTrustProfiles = () => {
     navigate('/console/org/trust/profiles/new');
+  };
+
+  const handleGoToIssuerProfiles = () => {
+    navigate('/console/org/deploy/issuer-identity/new');
   };
 
   if (loading) {
     return (
       <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
         <CircularProgress />
+      </Box>
+    );
+  }
+
+  if (error) {
+    return (
+      <Box sx={{ py: 4 }}>
+        <Alert severity="error" sx={{ mb: 3 }}>
+          {error?.message || t('wizards.credentialTemplate.trustComplianceStep.errors.failedToLoadTrustProfiles')}
+        </Alert>
+        <Button
+          variant="outlined"
+          onClick={reload}
+        >
+          {t('wizards.credentialTemplate.trustComplianceStep.blocked.refreshButton')}
+        </Button>
       </Box>
     );
   }
@@ -164,6 +253,52 @@ const TrustComplianceStep = ({ data, onChange }) => {
     );
   }
 
+  if (issuerProfilesLoading) {
+    return (
+      <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
+        <CircularProgress />
+      </Box>
+    );
+  }
+
+  if (issuerProfilesError) {
+    return (
+      <Box sx={{ py: 4 }}>
+        <Alert severity="error" sx={{ mb: 3 }}>
+          {issuerProfilesError?.message || 'Issuer profiles could not be loaded.'}
+        </Alert>
+        <Button variant="outlined" onClick={reloadIssuerProfiles}>
+          {t('wizards.credentialTemplate.trustComplianceStep.blocked.refreshButton')}
+        </Button>
+      </Box>
+    );
+  }
+
+  if (issuerProfiles.length === 0) {
+    return (
+      <Box sx={{ textAlign: 'center', py: 4 }}>
+        <LanguageIcon sx={{ fontSize: 80, color: 'warning.main', mb: 3 }} />
+        <Typography variant="h5" gutterBottom>
+          Active issuer profile required
+        </Typography>
+        <Typography color="text.secondary" paragraph sx={{ maxWidth: 640, mx: 'auto' }}>
+          Credential templates must reference an active DID issuer profile backed by a registered KMS signing service.
+        </Typography>
+        <Alert severity="warning" sx={{ maxWidth: 640, mx: 'auto', mb: 3 }}>
+          Create an issuer identity first, then return to bind this template to that issuer profile.
+        </Alert>
+        <Box sx={{ display: 'flex', gap: 2, justifyContent: 'center' }}>
+          <Button variant="contained" startIcon={<AddCircleOutlineIcon />} onClick={handleGoToIssuerProfiles}>
+            Create issuer identity
+          </Button>
+          <Button variant="outlined" onClick={reloadIssuerProfiles}>
+            {t('wizards.credentialTemplate.trustComplianceStep.blocked.refreshButton')}
+          </Button>
+        </Box>
+      </Box>
+    );
+  }
+
   return (
     <Box>
       <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -174,12 +309,6 @@ const TrustComplianceStep = ({ data, onChange }) => {
         {t('wizards.credentialTemplate.trustComplianceStep.description')}
       </Typography>
 
-      {error && (
-        <Alert severity="error" sx={{ mb: 3 }}>
-          {error?.message || t('wizards.credentialTemplate.trustComplianceStep.errors.failedToLoadTrustProfiles')}
-        </Alert>
-      )}
-
       {/* Trust Profile Selection */}
       <FormControl fullWidth required sx={{ mb: 3 }}>
         <InputLabel>{t('wizards.credentialTemplate.trustComplianceStep.trustProfile.label')}</InputLabel>
@@ -187,6 +316,7 @@ const TrustComplianceStep = ({ data, onChange }) => {
           value={data.trust_profile_id || ''}
           onChange={(e) => onChange({ trust_profile_id: e.target.value })}
           label={t('wizards.credentialTemplate.trustComplianceStep.trustProfile.label')}
+          SelectDisplayProps={{ 'data-testid': 'template-trust-profile-select' }}
         >
           {trustProfiles.map((profile) => (
             <MenuItem key={profile.id} value={profile.id}>
@@ -224,8 +354,8 @@ const TrustComplianceStep = ({ data, onChange }) => {
         </Box>
       )}
 
-      {/* Issuer Profile Selection (Optional) */}
-      <FormControl fullWidth sx={{ mb: 3 }}>
+      {/* Issuer Profile Selection */}
+      <FormControl fullWidth required sx={{ mb: 3 }}>
         <InputLabel>Issuer Profile</InputLabel>
         <Select
           value={data.issuer_profile_id || ''}
@@ -235,10 +365,8 @@ const TrustComplianceStep = ({ data, onChange }) => {
           }}
           label="Issuer Profile"
           disabled={issuerProfilesLoading}
+          SelectDisplayProps={{ 'data-testid': 'template-issuer-profile-select' }}
         >
-          <MenuItem value="">
-            <em>Default (org signing key)</em>
-          </MenuItem>
           {issuerProfiles.map((profile) => (
             <MenuItem key={profile.id} value={profile.id}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, width: '100%' }}>
@@ -253,9 +381,7 @@ const TrustComplianceStep = ({ data, onChange }) => {
           ))}
         </Select>
         <FormHelperText>
-          {issuerProfiles.length > 0
-            ? `${issuerProfiles.length} active issuer profile${issuerProfiles.length !== 1 ? 's' : ''} available. Credentials will claim this DID as the issuer.`
-            : 'No active issuer profiles. Credentials will use the default org signing key.'}
+          {`${issuerProfiles.length} active issuer profile${issuerProfiles.length !== 1 ? 's' : ''} available. Credentials will claim the selected DID as the issuer.`}
         </FormHelperText>
       </FormControl>
 
@@ -276,27 +402,47 @@ const TrustComplianceStep = ({ data, onChange }) => {
         </Box>
       )}
 
-      {/* Compliance Profile Selection (Optional) */}
-      <FormControl fullWidth sx={{ mb: 2 }}>
-        <InputLabel>{t('wizards.credentialTemplate.trustComplianceStep.complianceProfile.label')}</InputLabel>
+      {/* Compliance Profile Selection */}
+      {complianceProfilesError && (
+        <Alert severity="error" sx={{ mb: 2 }}>
+          {complianceProfilesError?.message || 'Compliance profiles could not be loaded.'}
+          <Button color="inherit" size="small" onClick={reloadComplianceProfiles} sx={{ ml: 2 }}>
+            Retry
+          </Button>
+        </Alert>
+      )}
+      <FormControl fullWidth required sx={{ mb: 2 }}>
+        <InputLabel id="credential-template-compliance-profile-label">{t('wizards.credentialTemplate.trustComplianceStep.complianceProfile.label')}</InputLabel>
         <Select
+          labelId="credential-template-compliance-profile-label"
+          id="credential-template-compliance-profile"
+          data-testid="template-compliance-profile-select"
           value={data.compliance_profile_id || ''}
           onChange={(e) => onChange({ compliance_profile_id: e.target.value || null })}
           label={t('wizards.credentialTemplate.trustComplianceStep.complianceProfile.label')}
+          disabled={complianceProfilesLoading}
         >
-          <MenuItem value="">
-            <em>{t('wizards.credentialTemplate.trustComplianceStep.complianceProfile.noneOption')}</em>
-          </MenuItem>
-          {/* TODO: Load actual compliance profiles when available */}
-          <MenuItem value="gdpr" disabled>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              {t('wizards.credentialTemplate.trustComplianceStep.complianceProfile.gdpr')}
-              <Chip label={t('wizards.credentialTemplate.trustComplianceStep.complianceProfile.comingSoon')} size="small" />
-            </Box>
-          </MenuItem>
+          <MenuItem value="" disabled>Select an active Compliance Profile</MenuItem>
+          {complianceProfilesLoading && (
+            <MenuItem value="" disabled>
+              Loading compliance profiles...
+            </MenuItem>
+          )}
+          {complianceProfiles.map((profile) => (
+            <MenuItem key={profile.id} value={profile.id}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, width: '100%' }}>
+                <span>{profile.name || profile.compliance_code || profile.id}</span>
+                {profile.compliance_code && (
+                  <Chip label={profile.compliance_code} size="small" sx={{ ml: 'auto' }} />
+                )}
+              </Box>
+            </MenuItem>
+          ))}
         </Select>
         <FormHelperText>
-          {t('wizards.credentialTemplate.trustComplianceStep.complianceProfile.helper')}
+          {complianceProfiles.length > 0
+            ? `${complianceProfiles.length} active compliance profile${complianceProfiles.length !== 1 ? 's' : ''} available.`
+            : 'Activate a Compliance Profile before creating a Credential Template.'}
         </FormHelperText>
       </FormControl>
 

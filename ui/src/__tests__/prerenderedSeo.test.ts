@@ -30,7 +30,9 @@ describeIfBuilt('prerendered blog SEO output', () => {
     const articleHtml = readPrerenderedHtml('blog', 'why-identity-needs-a-protocol')
     expect(articleHtml).toContain('meta property="article:published_time" content="2025-01-06"')
     expect(articleHtml).toContain('meta property="article:author" content="Daniel Ortega"')
-    expect(articleHtml).toContain('"dateModified":"2026-04-05"')
+    expect(articleHtml).toContain('meta property="og:image" content="https://elevenidllc.com/images/social/why-identity-needs-a-protocol.png"')
+    expect(articleHtml).toContain('meta property="og:image:width" content="1200"')
+    expect(articleHtml).toContain('"dateModified":"2026-06-28"')
   })
 
   it('emits collection and author metadata for archive surfaces', () => {
@@ -51,5 +53,24 @@ describeIfBuilt('prerendered blog SEO output', () => {
     expect(authorHtml).toContain('<meta property="og:type" content="profile">')
     expect(authorHtml).toContain('"@type":"Person"')
     expect(authorHtml).toContain('"name":"Daniel Ortega"')
+  })
+})
+
+describeIfBuilt('prerendered ElevenID LLC demo output', () => {
+  it('emits release and scenario pages from the public manifest', () => {
+    const releaseHtml = readPrerenderedHtml('demos', '2026.07.0')
+    expect(releaseHtml).toContain('Credential Lifecycle Foundation')
+    expect(releaseHtml).toContain('ElevenID LLC Credential Platform')
+    expect(releaseHtml).toContain('Version v2026.07.0')
+    expect(releaseHtml).toContain('Implements MIP 0.3.1')
+    expect(releaseHtml).toContain('PARTIAL coverage')
+
+    const scenarioHtml = readPrerenderedHtml('demos', '2026.07.0', 'membership-badge-login')
+    expect(scenarioHtml).toContain('Membership Badge and Login')
+    expect(scenarioHtml).toContain('Automated publication verification')
+    expect(scenarioHtml).toContain('Play recording')
+    expect(scenarioHtml).toContain('https://elevenidllc.com/demos/2026.07.0/membership-badge-login')
+    expect(scenarioHtml).toContain('youtube-nocookie.com/embed')
+    expect(scenarioHtml).not.toContain('<iframe')
   })
 })

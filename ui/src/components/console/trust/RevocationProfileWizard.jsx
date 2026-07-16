@@ -33,34 +33,35 @@ import SaveIcon from '@mui/icons-material/Save';
 import { useTranslation } from 'react-i18next';
 
 import { useAuth } from '../../../hooks/useAuth';
+import { useConsole } from '../../../contexts/ConsoleContext';
 import { createRevocationProfile } from '../../../services/presentationPolicyApi';
 
 const CHECK_MODES = [
   {
-    value: 'HARD_FAIL',
-    label: 'Hard Fail',
-    description: 'Reject verification if the revocation endpoint is unreachable.',
-  },
-  {
-    value: 'SOFT_FAIL',
-    label: 'Soft Fail',
-    description: 'Allow verification to proceed when the endpoint is unreachable.',
+    value: 'ALWAYS',
+    label: 'Always',
+    description: 'Check current credential status for every verification.',
   },
   {
     value: 'CACHED',
     label: 'Cached',
-    description: 'Use cached status when live lookup fails.',
+    description: 'Use status results for the configured cache period.',
   },
   {
-    value: 'SKIP',
-    label: 'Skip',
-    description: 'Revocation checking disabled entirely. Use only in test environments.',
+    value: 'OFFLINE_GRACE',
+    label: 'Offline Grace',
+    description: 'Accept a last-known status within the configured grace period.',
+  },
+  {
+    value: 'DISABLED',
+    label: 'Disabled',
+    description: 'Do not perform credential status checks.',
   },
 ];
 
 const MECHANISMS = [
-  { value: 'StatusList2021', label: 'Status List 2021' },
-  { value: 'BitstringStatusList', label: 'Bitstring Status List' },
+  { value: 'STATUS_LIST_2021', label: 'Status List 2021' },
+  { value: 'BITSTRING_STATUS_LIST', label: 'Bitstring Status List' },
   { value: 'OCSP', label: 'OCSP' },
   { value: 'CRL', label: 'CRL' },
 ];
@@ -68,17 +69,19 @@ const MECHANISMS = [
 const INITIAL_FORM = {
   name: '',
   description: '',
-  check_mode: 'HARD_FAIL',
-  revocation_mechanism: ['StatusList2021'],
+  check_mode: 'ALWAYS',
+  revocation_mechanism: ['STATUS_LIST_2021'],
   status_list_url: '',
-  grace_period_seconds: '',
+  offline_grace_seconds: '',
   cache_ttl_seconds: '',
 };
 
 function RevocationProfileWizard() {
   const { t } = useTranslation('console');
   const navigate = useNavigate();
-  const { organizationId } = useAuth();
+  const { organizationId: authOrganizationId } = useAuth();
+  const { activeOrgId } = useConsole();
+  const organizationId = activeOrgId;
 
   const [form, setForm] = useState(INITIAL_FORM);
   const [submitting, setSubmitting] = useState(false);
@@ -108,8 +111,8 @@ function RevocationProfileWizard() {
         status_list_url: form.status_list_url.trim() || null,
         organization_id: organizationId,
       };
-      if (form.grace_period_seconds !== '') {
-        payload.grace_period_seconds = Number(form.grace_period_seconds);
+      if (form.offline_grace_seconds !== '') {
+        payload.offline_grace_seconds = Number(form.offline_grace_seconds);
       }
       if (form.cache_ttl_seconds !== '') {
         payload.cache_ttl_seconds = Number(form.cache_ttl_seconds);
@@ -126,7 +129,10 @@ function RevocationProfileWizard() {
     }
   }, [form, organizationId, navigate, t]);
 
-  const isValid = form.name.trim().length > 0 && form.revocation_mechanism.length > 0;
+  const isValid = form.name.trim().length > 0
+    && form.revocation_mechanism.length > 0
+    && (form.check_mode !== 'CACHED' || Number(form.cache_ttl_seconds) > 0)
+    && (form.check_mode !== 'OFFLINE_GRACE' || Number(form.offline_grace_seconds) > 0);
 
   return (
     <Box>
@@ -280,40 +286,45 @@ function RevocationProfileWizard() {
           {t('trust.revocationWizard.timingTitle', 'Timing Configuration')}
         </Typography>
 
-        {/* Grace Period */}
-        <TextField
-          fullWidth
-          type="number"
-          label={t('trust.revocationWizard.gracePeriodLabel', 'Grace Period (optional)')}
-          value={form.grace_period_seconds}
-          onChange={(e) => setForm((prev) => ({ ...prev, grace_period_seconds: e.target.value }))}
-          sx={{ mb: 3 }}
-          InputProps={{
-            endAdornment: <InputAdornment position="end">seconds</InputAdornment>,
-            inputProps: { min: 0, 'data-testid': 'revocationWizard.gracePeriod' },
-          }}
-          helperText={t(
-            'trust.revocationWizard.gracePeriodHelper',
-            'Window after revocation before the credential is rejected. Leave blank to use the service default.'
-          )}
-        />
+        {form.check_mode === 'OFFLINE_GRACE' && (
+          <TextField
+            fullWidth
+            required
+            type="number"
+            label={t('trust.revocationWizard.gracePeriodLabel', 'Offline Grace Period')}
+            value={form.offline_grace_seconds}
+            onChange={(e) => setForm((prev) => ({ ...prev, offline_grace_seconds: e.target.value }))}
+            sx={{ mb: 3 }}
+            InputProps={{
+              endAdornment: <InputAdornment position="end">seconds</InputAdornment>,
+              inputProps: { min: 1, 'data-testid': 'revocationWizard.gracePeriod' },
+            }}
+            helperText={t(
+              'trust.revocationWizard.gracePeriodHelper',
+              'How long a last-known status may be used while the live endpoint is unavailable.'
+            )}
+          />
+        )}
 
         {/* Cache TTL */}
-        <TextField
-          fullWidth
-          type="number"
-          label={t('trust.revocationWizard.cacheTtlLabel', 'Cache TTL (optional)')}
-          value={form.cache_ttl_seconds}
-          onChange={(e) => setForm((prev) => ({ ...prev, cache_ttl_seconds: e.target.value }))}
-          InputProps={{
-            endAdornment: <InputAdornment position="end">seconds</InputAdornment>,
-            inputProps: { min: 0, 'data-testid': 'revocationWizard.cacheTtl' },
-          }}
-          helperText={t(
-            'trust.revocationWizard.cacheTtlHelper',
-            'How long to cache the revocation status before re-fetching. Leave blank to use the service default.'
-          )}
-        />
+        {form.check_mode === 'CACHED' && (
+          <TextField
+            fullWidth
+            required
+            type="number"
+            label={t('trust.revocationWizard.cacheTtlLabel', 'Cache TTL')}
+            value={form.cache_ttl_seconds}
+            onChange={(e) => setForm((prev) => ({ ...prev, cache_ttl_seconds: e.target.value }))}
+            InputProps={{
+              endAdornment: <InputAdornment position="end">seconds</InputAdornment>,
+              inputProps: { min: 1, 'data-testid': 'revocationWizard.cacheTtl' },
+            }}
+            helperText={t(
+              'trust.revocationWizard.cacheTtlHelper',
+              'How long to reuse a status result before checking again.'
+            )}
+          />
+        )}
       </Paper>
 
       {/* Actions */}

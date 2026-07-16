@@ -89,7 +89,7 @@ function RolesPage() {
   const { activeOrgId } = useConsole();
   const { showNotification } = useNotifications();
   const { can, refresh: refreshPermissions } = usePermissions();
-  const effectiveOrgId = activeOrgId || organizationId;
+  const effectiveOrgId = activeOrgId;
 
   // Data state
   const [roles, setRoles] = useState([]);

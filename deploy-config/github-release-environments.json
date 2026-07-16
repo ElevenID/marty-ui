@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "repository_variables": [
+    "MARTY_BLOG_REF",
+    "MARTY_CLI_REF",
+    "MARTY_CORE_REF",
+    "MARTY_CREDENTIALS_REF",
+    "MARTY_PROTOCOL_REF",
+    "MARTY_SUBSCRIPTIONS_REF"
+  ],
+  "environments": {
+    "beta-migration-rehearsal": {
+      "prevent_admin_bypass": true,
+      "prevent_self_review": true,
+      "require_reviewers": true,
+      "require_branch_policy": true,
+      "required_secrets": [
+        "MIGRATION_REHEARSAL_DATABASE_MARKER",
+        "MIGRATION_REHEARSAL_DATABASE_URL"
+      ],
+      "required_variables": [
+        "MIGRATION_REHEARSAL_PUBLIC_API_URL",
+        "MIGRATION_REHEARSAL_SNAPSHOT_ID"
+      ]
+    },
+    "beta-lifecycle": {
+      "prevent_admin_bypass": true,
+      "prevent_self_review": true,
+      "require_reviewers": true,
+      "require_branch_policy": true,
+      "required_secrets": [
+        "TEST_APPLICANT_EMAIL",
+        "TEST_APPLICANT_PASSWORD",
+        "TEST_VENDOR_EMAIL",
+        "TEST_VENDOR_PASSWORD"
+      ],
+      "required_variables": [
+        "BETA_AUDIT_ORG_ID",
+        "BETA_ORIGIN"
+      ]
+    },
+    "wallet-conformance": {
+      "prevent_admin_bypass": true,
+      "prevent_self_review": true,
+      "require_reviewers": true,
+      "require_branch_policy": true,
+      "required_secrets": [],
+      "required_variables": []
+    }
+  }
+}

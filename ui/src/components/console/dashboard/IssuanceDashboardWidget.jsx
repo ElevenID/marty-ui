@@ -33,8 +33,17 @@ import VisibilityIcon from '@mui/icons-material/Visibility';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 
 import { useAuth } from '../../../hooks/useAuth';
+import { useConsole } from '../../../contexts/ConsoleContext';
 import sseService, { EVENT_TYPES } from '../../../services/sseService';
 import { loadIssuanceMetrics } from '../../../application/issuance';
+
+const SHOULD_LOG_ISSUANCE_WIDGET_DIAGNOSTICS = import.meta.env.DEV && import.meta.env.MODE !== 'test';
+
+function logIssuanceWidgetError(message, error) {
+  if (SHOULD_LOG_ISSUANCE_WIDGET_DIAGNOSTICS) {
+    console.error(message, error);
+  }
+}
 
 /**
  * Mini stat display
@@ -80,7 +89,9 @@ MiniStat.propTypes = {
  */
 export default function IssuanceDashboardWidget({ compact = false }) {
   const { t } = useTranslation('console');
-  const { organizationId } = useAuth();
+  const { organizationId: authOrganizationId } = useAuth();
+  const { activeOrgId } = useConsole();
+  const organizationId = activeOrgId;
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [metrics, setMetrics] = useState({
@@ -104,7 +115,7 @@ export default function IssuanceDashboardWidget({ compact = false }) {
       if (loadError) throw new Error(loadError);
       setMetrics(loaded);
     } catch (err) {
-      console.error('Error fetching issuance metrics:', err);
+      logIssuanceWidgetError('Error fetching issuance metrics:', err);
       setError(t('dashboard.issuance.failedToLoad'));
     } finally {
       setLoading(false);

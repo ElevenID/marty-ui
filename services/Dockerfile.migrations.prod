@@ -50,6 +50,7 @@ COPY scripts/run-migrations-with-secrets.sh /app/run-migrations-with-secrets.sh
 
 # Copy migration runner
 COPY services/run_all_migrations.py /app/
+COPY services/applicant/migrate_store_v03.py /app/applicant/migrate_store_v03.py
 
 # Copy service migration directories
 COPY services/organization/infrastructure /app/organization/infrastructure/

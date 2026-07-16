@@ -18,6 +18,11 @@ from gateway.registry import ServiceRegistry
 
 logger = logging.getLogger(__name__)
 
+_RETRYABLE_TRANSPORT_ERRORS = (
+    httpx.TransportError,
+    httpx.TimeoutException,
+)
+
 
 # =============================================================================
 # Module-level globals (set by lifespan in main.py)
@@ -61,6 +66,12 @@ def _forward_headers(request: Request | None) -> dict[str, str]:
         headers["X-User-Email"] = request.state.user_email
     if hasattr(request.state, "user_domain") and request.state.user_domain:
         headers["X-User-Domain"] = request.state.user_domain
+    if hasattr(request.state, "organization_id") and request.state.organization_id:
+        headers["X-Organization-ID"] = request.state.organization_id
+    if hasattr(request.state, "api_key_id") and request.state.api_key_id:
+        headers["X-Api-Key-Id"] = request.state.api_key_id
+    if hasattr(request.state, "api_key_scopes") and request.state.api_key_scopes:
+        headers["X-Api-Key-Scopes"] = ",".join(str(scope) for scope in request.state.api_key_scopes)
     if hasattr(request.state, "org_plan") and request.state.org_plan:
         headers["X-Org-Plan"] = request.state.org_plan
     # Forward auth header if present
@@ -73,7 +84,7 @@ def _forward_headers(request: Request | None) -> dict[str, str]:
 @retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=0.5, min=0.5, max=4),
-    retry=retry_if_exception_type((httpx.ConnectError, httpx.TimeoutException)),
+    retry=retry_if_exception_type(_RETRYABLE_TRANSPORT_ERRORS),
     reraise=True,
 )
 async def _request_with_retry(
@@ -130,7 +141,24 @@ async def proxy_request(
     body = body_override if body_override is not None else await request.body()
 
     # Forward headers (excluding hop-by-hop headers)
-    excluded_headers = {"host", "connection", "keep-alive", "transfer-encoding"}
+    excluded_headers = {
+        "host",
+        "connection",
+        "keep-alive",
+        "transfer-encoding",
+        # Internal identity and authorization context is gateway-owned.
+        "x-user-id",
+        "x-user-email",
+        "x-user-domain",
+        "x-organization-id",
+        "x-api-key",
+        "x-api-key-id",
+        "x-api-key-scopes",
+        "x-org-plan",
+        "x-org-permissions",
+        "x-org-roles",
+        "x-required-permission",
+    }
     # Also strip content-length when body_override is provided (size may differ)
     if body_override is not None:
         excluded_headers.add("content-length")
@@ -149,8 +177,29 @@ async def proxy_request(
     if hasattr(request.state, "user_domain") and request.state.user_domain:
         headers["X-User-Domain"] = request.state.user_domain
 
+    if hasattr(request.state, "organization_id") and request.state.organization_id:
+        headers["X-Organization-ID"] = request.state.organization_id
+
+    if hasattr(request.state, "api_key_id") and request.state.api_key_id:
+        headers["X-Api-Key-Id"] = request.state.api_key_id
+
+    if hasattr(request.state, "api_key_scopes") and request.state.api_key_scopes:
+        headers["X-Api-Key-Scopes"] = ",".join(str(scope) for scope in request.state.api_key_scopes)
+
     if hasattr(request.state, "org_plan") and request.state.org_plan:
         headers["X-Org-Plan"] = request.state.org_plan
+
+    org_permissions = getattr(request.state, "org_permissions", None)
+    if org_permissions:
+        headers["X-Org-Permissions"] = ",".join(sorted(str(value) for value in org_permissions))
+
+    org_roles = getattr(request.state, "org_roles", None)
+    if org_roles:
+        headers["X-Org-Roles"] = ",".join(sorted(str(value) for value in org_roles))
+
+    required_permission = getattr(request.state, "required_permission", None)
+    if required_permission:
+        headers["X-Required-Permission"] = str(required_permission)
 
     if inject_headers:
         headers.update(inject_headers)
@@ -195,11 +244,25 @@ async def proxy_request(
             else:
                 # Wrap FastAPI-style {"detail": "..."} or unknown formats
                 detail = err_body.get("detail") if isinstance(err_body, dict) else None
+                detail_payload = detail if isinstance(detail, dict) else {}
+                error = detail_payload.get("error") or err_body.get("error", "service_error")
+                message = (
+                    detail_payload.get("message")
+                    or (detail if isinstance(detail, str) else None)
+                    or response.text[:200]
+                )
+                details = err_body.get("details")
+                if detail_payload:
+                    details = {
+                        key: value
+                        for key, value in detail_payload.items()
+                        if key not in {"error", "message"}
+                    } or details
                 return mip_error_response(
                     status_code=response.status_code,
-                    error=err_body.get("error", "service_error"),
-                    message=detail or response.text[:200],
-                    details=err_body.get("details"),
+                    error=error,
+                    message=message,
+                    details=details,
                 )
         return Response(
             content=response.content,
@@ -210,22 +273,31 @@ async def proxy_request(
             },
             media_type=response.headers.get("content-type"),
         )
-    except httpx.ConnectError:
-        return mip_error_response(status_code=503, error="service_unavailable", message="Service unavailable")
     except httpx.TimeoutException:
+        logger.warning("Timed out proxying request to %s", url, exc_info=True)
         return mip_error_response(status_code=504, error="service_timeout", message="Service timeout")
+    except httpx.TransportError:
+        logger.warning("Transport error proxying request to %s", url, exc_info=True)
+        return mip_error_response(status_code=503, error="service_unavailable", message="Service unavailable")
 
 
-async def _resource_exists(service_name: str, path: str, request: Request | None = None) -> bool:
+async def _resource_exists(
+    service_name: str,
+    path: str,
+    request: Request | None = None,
+    *,
+    inject_headers: dict[str, str] | None = None,
+) -> bool:
     """Check if a resource exists by issuing a GET to the backend service."""
     registry = get_registry()
     client = get_http_client()
     url = f"{registry.get_service_url(service_name)}{path}"
     headers = _forward_headers(request)
+    headers.update(inject_headers or {})
     try:
         resp = await client.get(url, timeout=10.0, headers=headers)
         return resp.status_code < 400
-    except (httpx.ConnectError, httpx.TimeoutException):
+    except _RETRYABLE_TRANSPORT_ERRORS:
         return False
 
 

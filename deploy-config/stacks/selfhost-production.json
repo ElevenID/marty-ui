@@ -8,7 +8,7 @@
   "domains": ["elevenidllc.com"],
   "primary_domain": "elevenidllc.com",
   "required_service_groups": ["infra", "selfhost_core", "app"],
-  "required_services": [],
+  "required_services": ["canvas-sync-worker"],
   "optional_services": ["device-registration"],
   "required_secrets": [
     "postgres_password",
@@ -18,6 +18,7 @@
     "marty_api_client_secret",
     "issuance_api_key",
     "integration_secret_master_key",
+    "token_hmac_key",
     "openbao_service_token",
     "cloudflare_tunnel_token",
     "license_key"

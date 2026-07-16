@@ -14,8 +14,10 @@ import {
   updatePresentationPolicy,
   deletePresentationPolicy,
   createCredentialTemplate,
+  activateCredentialTemplate,
   listCredentialTemplates,
   getCredentialTemplate,
+  activateTrustProfile,
   createTrustProfile,
   listTrustProfiles,
 } from '../presentationPolicyApi'
@@ -32,9 +34,24 @@ describe('presentationPolicyApi', () => {
   describe('Presentation Policies', () => {
     it('should create policy with correct payload', async () => {
       const newPolicy = {
+        organization_id: 'org-1',
         name: 'Age Verification',
         description: 'Verify age over 21',
-        credential_requirements: [{ field: 'age', condition: 'gt', value: 21 }],
+        purpose: 'Verify employee eligibility',
+        accepted_credential_types: ['EmployeeBadge'],
+        required_claims: [
+          {
+            claim_name: 'age',
+            credential_type: 'EmployeeBadge',
+            required_value: 21,
+            accept_predicate: true,
+          },
+        ],
+        holder_binding: 'device_key',
+        freshness_requirements: {
+          max_credential_age_seconds: 86400,
+          require_revocation_check: true,
+        },
       }
 
       let receivedData: any
@@ -50,12 +67,122 @@ describe('presentationPolicyApi', () => {
 
       const result = await createPresentationPolicy(newPolicy)
 
-      expect(receivedData).toEqual(newPolicy)
+      expect(receivedData).toMatchObject({
+        organization_id: 'org-1',
+        name: 'Age Verification',
+        description: 'Verify age over 21',
+        purpose: 'Verify employee eligibility',
+        accepted_credential_types: ['EmployeeBadge'],
+        required_claims: [
+          {
+            claim_name: 'age',
+            credential_type: 'EmployeeBadge',
+            value_constraint: 21,
+            predicate_spec: null,
+          },
+        ],
+        holder_binding: {
+          required: true,
+          binding_methods: ['DEVICE_KEY'],
+          proof_profiles: ['OID4VP_VERIFIABLE_PRESENTATION', 'MDOC_DEVICE_AUTHENTICATION'],
+          proof_freshness: {
+            challenge_required: true,
+            audience_binding_required: true,
+            replay_detection_required: true,
+          },
+        },
+        freshness: {
+          max_age_seconds: 86400,
+          require_not_revoked: true,
+        },
+      })
       expect(result.name).toBe(newPolicy.name)
     })
 
+    it('activates a newly-created presentation policy when requested', async () => {
+      let activatedPolicyId: string | undefined
+      server.use(
+        http.post('http://localhost:8000/v1/presentation-policies', async ({ request }) => {
+          const body = await request.json() as any
+          return HttpResponse.json({
+            ...mockPolicies.valid,
+            id: 'policy-activate',
+            organization_id: body.organization_id,
+            name: body.name,
+            status: 'DRAFT',
+          })
+        }),
+        http.post('http://localhost:8000/v1/presentation-policies/:id/activate', ({ params }) => {
+          activatedPolicyId = params.id as string
+          return HttpResponse.json({
+            ...mockPolicies.valid,
+            id: params.id,
+            organization_id: 'org-1',
+            status: 'ACTIVE',
+          })
+        }),
+      )
+
+      const result = await createPresentationPolicy({
+        organization_id: 'org-1',
+        name: 'Active Policy',
+        required_claims: [{ claim_name: 'employee_id' }],
+        activate_immediately: true,
+      })
+
+      expect(activatedPolicyId).toBe('policy-activate')
+      expect(result.status).toBe('active')
+    })
+
+    it('retries presentation policy creation once with the same idempotency key after an aborted response', async () => {
+      let activatedPolicyId: string | undefined
+      const idempotencyKeys: string[] = []
+      let createAttempts = 0
+      server.use(
+        http.post('http://localhost:8000/v1/presentation-policies', async ({ request }) => {
+          idempotencyKeys.push(String(request.headers.get('Idempotency-Key')))
+          createAttempts += 1
+          if (createAttempts === 1) {
+            return HttpResponse.error()
+          }
+          const body = await request.json() as any
+          return HttpResponse.json({
+            ...mockPolicies.valid,
+            id: 'policy-create-retried',
+            organization_id: body.organization_id,
+            name: body.name,
+            status: 'draft',
+            required_claims: body.required_claims,
+          })
+        }),
+        http.post('http://localhost:8000/v1/presentation-policies/:id/activate', ({ params }) => {
+          activatedPolicyId = params.id as string
+          return HttpResponse.json({
+            ...mockPolicies.valid,
+            id: params.id,
+            organization_id: 'org-1',
+            name: 'Recovered Policy',
+            status: 'active',
+          })
+        }),
+      )
+
+      const result = await createPresentationPolicy({
+        organization_id: 'org-1',
+        name: 'Recovered Policy',
+        required_claims: [{ claim_name: 'employee_id' }],
+        activate_immediately: true,
+      })
+
+      expect(createAttempts).toBe(2)
+      expect(idempotencyKeys[0]).toBe(idempotencyKeys[1])
+      expect(activatedPolicyId).toBe('policy-create-retried')
+      expect(result.id).toBe('policy-create-retried')
+      expect(result.status).toBe('active')
+    })
+
     it('should list policies', async () => {
-      const policies = await listPresentationPolicies()
+      const policies = await listPresentationPolicies({ organization_id: 'org-1' })
 
       expect(Array.isArray(policies)).toBe(true)
       expect(policies[0]).toHaveProperty('id')
@@ -71,7 +198,7 @@ describe('presentationPolicyApi', () => {
     })
 
     it('should update policy', async () => {
-      const updates = { name: 'Updated Policy Name' }
+      const updates = { organization_id: 'org-1', name: 'Updated Policy Name' }
 
       let receivedData: any
       server.use(
@@ -83,7 +210,12 @@ describe('presentationPolicyApi', () => {
 
       const result = await updatePresentationPolicy(1, updates)
 
-      expect(receivedData).toEqual(updates)
+      expect(receivedData).toMatchObject({
+        organization_id: 'org-1',
+        name: 'Updated Policy Name',
+        required_claims: [],
+        accepted_credential_types: [],
+      })
       expect(result.name).toBe(updates.name)
     })
 
@@ -111,16 +243,23 @@ describe('presentationPolicyApi', () => {
         })
       )
 
-      await expect(createPresentationPolicy({})).rejects.toThrow()
+      await expect(createPresentationPolicy({
+        organization_id: 'org-1',
+        name: 'Bad Policy',
+        required_claims: [{ claim_name: 'employee_id' }],
+      })).rejects.toThrow()
     })
   })
 
   describe('Credential Templates', () => {
     it('should create template with correct shape', async () => {
       const newTemplate = {
+        organization_id: 'org-1',
         name: 'mDL Template',
         doctype: 'org.iso.18013.5.1.mDL',
         namespace: 'org.iso.18013.5.1',
+        issuer_profile_id: 'ip-1',
+        compliance_profile_id: 'compliance-1',
         fields: [],
       }
 
@@ -138,15 +277,323 @@ describe('presentationPolicyApi', () => {
       const result = await createCredentialTemplate(newTemplate)
 
       expect(receivedData.name).toBe(newTemplate.name)
+      expect(receivedData.organization_id).toBe('org-1')
+      expect(receivedData.issuer_profile_id).toBe('ip-1')
       expect(result.doctype).toBe(newTemplate.doctype)
     })
 
+    it('fails locally instead of creating a credential template without an issuer profile', async () => {
+      let requested = false
+      server.use(
+        http.post('http://localhost:8000/v1/credential-templates', () => {
+          requested = true
+          return HttpResponse.json({})
+        })
+      )
+
+      await expect(createCredentialTemplate({
+        organization_id: 'org-1',
+        name: 'Missing Issuer Profile',
+        credential_type: 'EmployeeBadge',
+      })).rejects.toMatchObject({
+        code: 'ISSUER_PROFILE_REQUIRED',
+        status: 400,
+      })
+      expect(requested).toBe(false)
+    })
+
+    it('normalizes wizard claims before creating a template', async () => {
+      let receivedData: any
+      server.use(
+        http.post('http://localhost:8000/v1/credential-templates', async ({ request }) => {
+          receivedData = await request.json()
+          return HttpResponse.json(
+            {
+              ...mockTemplates.valid,
+              id: 'ct-claims',
+              organization_id: receivedData.organization_id,
+              name: receivedData.name,
+              credential_type: receivedData.credential_type,
+              claims: receivedData.claims,
+              validity_rules: {},
+            },
+            { status: 201 }
+          )
+        })
+      )
+
+      await createCredentialTemplate({
+        organization_id: 'org-1',
+        name: 'Wizard Payload',
+        credential_type: 'EmployeeBadge',
+        issuer_profile_id: 'ip-1',
+        compliance_profile_id: 'compliance-1',
+        vct: 'com.example.employee',
+        claims: [
+          { name: 'employee_id', type: 'string', required: true },
+          { name: 'score', type: 'number', required: false },
+        ],
+      })
+
+      expect(receivedData.organization_id).toBe('org-1')
+      expect(receivedData.claims).toEqual([
+        {
+          name: 'employee_id',
+          display_name: 'Employee Id',
+          claim_type: 'string',
+          required: true,
+          selectively_disclosable: true,
+        },
+        {
+          name: 'score',
+          display_name: 'Score',
+          claim_type: 'integer',
+          required: false,
+          selectively_disclosable: true,
+        },
+      ])
+      expect(receivedData.claims[0]).not.toHaveProperty('type')
+      expect(receivedData.vct).toBe(`${window.location.origin}/vct/com.example.employee`)
+      expect(receivedData.compliance_profile_id).toBe('compliance-1')
+      expect(receivedData).not.toHaveProperty('compliance_profile')
+    })
+
+    it('activates a newly-created template when requested', async () => {
+      let activatedTemplateId: string | undefined
+      server.use(
+        http.post('http://localhost:8000/v1/credential-templates', async ({ request }) => {
+          const body = (await request.json()) as any
+          return HttpResponse.json({
+            ...mockTemplates.valid,
+            id: 'ct-activate',
+            organization_id: body.organization_id,
+            name: body.name,
+            credential_type: body.credential_type,
+            claims: body.claims,
+            status: 'DRAFT',
+            validity_rules: {},
+          })
+        }),
+        http.post('http://localhost:8000/v1/credential-templates/:id/activate', ({ params }) => {
+          activatedTemplateId = params.id as string
+          return HttpResponse.json({
+            ...mockTemplates.valid,
+            id: params.id,
+            organization_id: 'org-1',
+            status: 'ACTIVE',
+            claims: [],
+            validity_rules: {},
+          })
+        })
+      )
+
+      const result = await createCredentialTemplate({
+        organization_id: 'org-1',
+        name: 'Active Template',
+        credential_type: 'EmployeeBadge',
+        issuer_profile_id: 'ip-1',
+        compliance_profile_id: 'compliance-1',
+        vct: 'com.example.employee',
+        activate_immediately: true,
+        claims: [{ name: 'employee_id', type: 'string', required: true }],
+      })
+
+      expect(activatedTemplateId).toBe('ct-activate')
+      expect(result.status).toBe('active')
+    })
+
+    it('recovers when template activation is applied but the activation response is aborted', async () => {
+      server.use(
+        http.post('http://localhost:8000/v1/credential-templates', async ({ request }) => {
+          const body = (await request.json()) as any
+          return HttpResponse.json({
+            ...mockTemplates.valid,
+            id: 'ct-activation-aborted',
+            organization_id: body.organization_id,
+            name: body.name,
+            credential_type: body.credential_type,
+            claims: body.claims,
+            status: 'DRAFT',
+            validity_rules: {},
+          })
+        }),
+        http.post('http://localhost:8000/v1/credential-templates/:id/activate', () => {
+          return HttpResponse.error()
+        }),
+        http.get('http://localhost:8000/v1/credential-templates/:id', ({ params }) => {
+          return HttpResponse.json({
+            ...mockTemplates.valid,
+            id: params.id,
+            organization_id: 'org-1',
+            status: 'ACTIVE',
+            claims: [],
+            validity_rules: {},
+          })
+        })
+      )
+
+      const result = await createCredentialTemplate({
+        organization_id: 'org-1',
+        name: 'Active Template',
+        credential_type: 'EmployeeBadge',
+        issuer_profile_id: 'ip-1',
+        compliance_profile_id: 'compliance-1',
+        vct: 'com.example.employee',
+        activate_immediately: true,
+        claims: [{ name: 'employee_id', type: 'string', required: true }],
+      })
+
+      expect(result.id).toBe('ct-activation-aborted')
+      expect(result.status).toBe('active')
+    })
+
+    it('retries template creation once with the same idempotency key after an aborted response', async () => {
+      let activatedTemplateId: string | undefined
+      const idempotencyKeys: string[] = []
+      let createAttempts = 0
+      server.use(
+        http.post('http://localhost:8000/v1/credential-templates', async ({ request }) => {
+          idempotencyKeys.push(String(request.headers.get('Idempotency-Key')))
+          createAttempts += 1
+          if (createAttempts === 1) {
+            return HttpResponse.error()
+          }
+          const body = await request.json() as any
+          return HttpResponse.json({
+            ...mockTemplates.valid,
+            id: 'ct-create-retried',
+            organization_id: body.organization_id,
+            name: body.name,
+            status: 'DRAFT',
+            vct: body.vct,
+            claims: body.claims,
+            validity_rules: {},
+          })
+        }),
+        http.post('http://localhost:8000/v1/credential-templates/:id/activate', ({ params }) => {
+          activatedTemplateId = params.id as string
+          return HttpResponse.json({
+            ...mockTemplates.valid,
+            id: params.id,
+            organization_id: 'org-1',
+            name: 'Recovered Created Template',
+            status: 'ACTIVE',
+            claims: [],
+            validity_rules: {},
+          })
+        })
+      )
+
+      const result = await createCredentialTemplate({
+        organization_id: 'org-1',
+        name: 'Recovered Created Template',
+        credential_type: 'EmployeeBadge',
+        issuer_profile_id: 'ip-1',
+        compliance_profile_id: 'compliance-1',
+        vct: 'com.example.recovered',
+        activate_immediately: true,
+        claims: [{ name: 'employee_id', type: 'string', required: true }],
+      })
+
+      expect(createAttempts).toBe(2)
+      expect(idempotencyKeys[0]).toBe(idempotencyKeys[1])
+      expect(activatedTemplateId).toBe('ct-create-retried')
+      expect(result.id).toBe('ct-create-retried')
+      expect(result.status).toBe('active')
+    })
+
+    it('activates an existing template through the template activation endpoint', async () => {
+      let activatedTemplateId: string | undefined
+      server.use(
+        http.post('http://localhost:8000/v1/credential-templates/:id/activate', ({ params }) => {
+          activatedTemplateId = params.id as string
+          return HttpResponse.json({
+            ...mockTemplates.valid,
+            id: params.id,
+            organization_id: 'org-1',
+            status: 'ACTIVE',
+            claims: [],
+            validity_rules: {},
+          })
+        })
+      )
+
+      const result = await activateCredentialTemplate('ct-existing')
+
+      expect(activatedTemplateId).toBe('ct-existing')
+      expect(result.status).toBe('active')
+    })
+
+    it('recovers when trust profile activation is applied but the activation response is aborted', async () => {
+      server.use(
+        http.post('http://localhost:8000/v1/trust-profiles/:id/activate', () => {
+          return HttpResponse.error()
+        }),
+        http.get('http://localhost:8000/v1/trust-profiles/:id', ({ params }) => {
+          return HttpResponse.json({
+            id: params.id,
+            organization_id: 'org-1',
+            name: 'Recovered Trust Profile',
+            status: 'ACTIVE',
+            trust_sources: [],
+            validation_rules: {},
+          })
+        })
+      )
+
+      const result = await activateTrustProfile('trust-activation-aborted')
+
+      expect(result.id).toBe('trust-activation-aborted')
+      expect(result.status).toBe('active')
+    })
+
+    it('retries trust profile creation once with the same idempotency key after an aborted response', async () => {
+      const idempotencyKeys: string[] = []
+      let createAttempts = 0
+      server.use(
+        http.post('http://localhost:8000/v1/trust-profiles', async ({ request }) => {
+          idempotencyKeys.push(String(request.headers.get('Idempotency-Key')))
+          createAttempts += 1
+          if (createAttempts === 1) {
+            return HttpResponse.error()
+          }
+          const body = await request.json() as any
+          return HttpResponse.json({
+            id: 'trust-create-retried',
+            organization_id: 'org-1',
+            name: body.name,
+            status: 'DRAFT',
+            trust_sources: [],
+            validation_rules: {},
+          })
+        })
+      )
+
+      const result = await createTrustProfile({
+        organization_id: 'org-1',
+        name: 'Recovered Trust Profile',
+        status: 'draft',
+      })
+
+      expect(createAttempts).toBe(2)
+      expect(idempotencyKeys[0]).toBe(idempotencyKeys[1])
+      expect(result.id).toBe('trust-create-retried')
+      expect(result.status).toBe('draft')
+    })
+
     it('should list templates', async () => {
-      const templates = await listCredentialTemplates()
+      const templates = await listCredentialTemplates({ organization_id: 'org-1' })
 
       expect(Array.isArray(templates)).toBe(true)
       expect(templates[0]).toHaveProperty('id')
       expect(templates[0]).toHaveProperty('doctype')
+    })
+
+    it('fails locally instead of listing templates without an active organization', async () => {
+      await expect(listCredentialTemplates()).rejects.toMatchObject({
+        code: 'ORG_REQUIRED',
+        status: 400,
+      })
     })
 
     it('should pass query params', async () => {
@@ -158,7 +605,7 @@ describe('presentationPolicyApi', () => {
         })
       )
 
-      await listCredentialTemplates({ status: 'active' })
+      await listCredentialTemplates({ organization_id: 'org-1', status: 'active' })
 
       expect(queryParams?.toString()).toContain('status=active')
     })
@@ -236,7 +683,11 @@ describe('presentationPolicyApi', () => {
         organization_id: 'org-1',
         name: 'Canonical Payload',
         credential_type: 'EmployeeBadge',
+        issuer_profile_id: 'ip-1',
         compliance_profile_id: '123e4567-e89b-12d3-a456-426614174000',
+        supported_wallet_ids: ['removed-wallet-selection'],
+        issuance_protocol: 'oid4vci',
+        wallet_configs: [{ wallet_id: 'removed-wallet-config' }],
         claims: [],
         validity_rules: {
           ttl_seconds: 14 * 86400,
@@ -252,6 +703,9 @@ describe('presentationPolicyApi', () => {
         renewal_window_days: 3,
         not_before_offset_seconds: 900,
       })
+      expect(receivedData).not.toHaveProperty('supported_wallet_ids')
+      expect(receivedData).not.toHaveProperty('issuance_protocol')
+      expect(receivedData).not.toHaveProperty('wallet_configs')
     })
 
     it('should normalize listed credential templates', async () => {
@@ -274,7 +728,7 @@ describe('presentationPolicyApi', () => {
         })
       )
 
-      const templates = await listCredentialTemplates()
+      const templates = await listCredentialTemplates({ organization_id: 'org-1' })
 
       expect(templates[0].status).toBe('active')
       expect(templates[0].validity_rules.default_validity_days).toBe(1)
@@ -284,6 +738,7 @@ describe('presentationPolicyApi', () => {
   describe('Trust Profiles', () => {
     it('should create trust profile', async () => {
       const newProfile = {
+        organization_id: 'org-1',
         name: 'Production Trust',
         trust_list_url: 'https://example.com/trust-list',
         status: 'active',
@@ -295,8 +750,46 @@ describe('presentationPolicyApi', () => {
       expect(result).toHaveProperty('id')
     })
 
+    it('fails locally instead of creating trust profiles without an active organization', async () => {
+      let requested = false
+      server.use(
+        http.post('http://localhost:8000/v1/trust-profiles', () => {
+          requested = true
+          return HttpResponse.json({ id: 'unexpected' })
+        })
+      )
+
+      await expect(createTrustProfile({
+        name: 'Missing Org Trust',
+      })).rejects.toMatchObject({
+        code: 'ORG_REQUIRED',
+        status: 400,
+      })
+
+      expect(requested).toBe(false)
+    })
+
+    it('should activate trust profile with the service activation route', async () => {
+      let activatedId: string | undefined
+      server.use(
+        http.post('http://localhost:8000/v1/trust-profiles/:id/activate', ({ params }) => {
+          activatedId = params.id as string
+          return HttpResponse.json({
+            id: params.id,
+            name: 'Production Trust',
+            status: 'ACTIVE',
+          })
+        })
+      )
+
+      const result = await activateTrustProfile('trust-profile-1')
+
+      expect(activatedId).toBe('trust-profile-1')
+      expect(result.status).toBe('active')
+    })
+
     it('should list trust profiles', async () => {
-      const profiles = await listTrustProfiles()
+      const profiles = await listTrustProfiles({ organization_id: 'org-1' })
 
       expect(Array.isArray(profiles)).toBe(true)
       expect(profiles[0]).toHaveProperty('id')
@@ -304,7 +797,7 @@ describe('presentationPolicyApi', () => {
     })
 
     it('should validate response structure', async () => {
-      const profile = await listTrustProfiles().then((list: any[]) => list[0])
+      const profile = await listTrustProfiles({ organization_id: 'org-1' }).then((list: any[]) => list[0])
 
       // Validate expected fields exist
       expect(profile).toHaveProperty('id')
@@ -324,7 +817,7 @@ describe('presentationPolicyApi', () => {
         })
       )
 
-      await createPresentationPolicy({ name: 'Test' })
+      await createPresentationPolicy({ organization_id: 'org-1', name: 'Test' })
 
       expect(method).toBe('POST')
     })
@@ -338,7 +831,7 @@ describe('presentationPolicyApi', () => {
         })
       )
 
-      await updatePresentationPolicy(1, { name: 'Updated' })
+      await updatePresentationPolicy(1, { organization_id: 'org-1', name: 'Updated' })
 
       expect(method).toBe('PATCH')
     })

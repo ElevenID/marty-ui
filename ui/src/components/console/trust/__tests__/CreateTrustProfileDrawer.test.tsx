@@ -45,6 +45,10 @@ vi.mock('../../../../hooks/useAuth', () => ({
   useAuth: () => authState,
 }))
 
+vi.mock('../../../../contexts/ConsoleContext', () => ({
+  useConsole: () => ({ activeOrgId: authState.organizationId }),
+}))
+
 vi.mock('../../../../hooks/useNotifications', () => ({
   useNotifications: () => ({
     showNotification,

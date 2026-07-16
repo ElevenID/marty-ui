@@ -13,7 +13,7 @@ import { http, HttpResponse } from 'msw'
 import APIKeyManager from '../APIKeyManager'
 
 // Mock auth hook
-vi.mock('@hooks/useAuth', () => ({
+vi.mock('../../../hooks/useAuth', () => ({
   useAuth: () => ({
     organizationId: 'org_123',
     user: { id: 1, name: 'Admin' },
@@ -69,7 +69,7 @@ describe('APIKeyManager', () => {
     
     // Setup default handlers
     server.use(
-      http.get('http://localhost:8000/v1/organizations/:orgId/api-keys', ({ request }) => {
+      http.get('http://localhost:8000/v1/api-keys', ({ request }) => {
         const url = new URL(request.url)
         const includeRevoked = url.searchParams.get('include_revoked') === 'true'
         const includeExpired = url.searchParams.get('include_expired') === 'true'
@@ -174,7 +174,7 @@ describe('APIKeyManager', () => {
       const user = userEvent.setup()
 
       server.use(
-        http.get('http://localhost:8000/v1/organizations/:orgId/api-keys', ({ request }) => {
+        http.get('http://localhost:8000/v1/api-keys', ({ request }) => {
           const url = new URL(request.url)
           const includeRevoked = url.searchParams.get('include_revoked') === 'true'
           const includeExpired = url.searchParams.get('include_expired') === 'true'
@@ -268,13 +268,13 @@ describe('APIKeyManager', () => {
       
       let createdKey: any
       server.use(
-        http.post('http://localhost:8000/v1/organizations/:orgId/api-keys', async ({ request }) => {
+        http.post('http://localhost:8000/v1/api-keys', async ({ request }) => {
           createdKey = await request.json()
           return HttpResponse.json(
             {
               id: 'key_new',
               name: createdKey.name,
-              key: 'pk_live_abcdefgh12345678',
+              key: 'sample_api_key_primary',
               masked_key: 'pk_live_••••••••5678',
               scopes: createdKey.scopes,
               created_at: new Date().toISOString(),
@@ -304,7 +304,7 @@ describe('APIKeyManager', () => {
       // Success message with full key
       await waitFor(() => {
         expect(screen.getAllByText(/api key created/i).length).toBeGreaterThanOrEqual(1)
-        expect(screen.getByText(/pk_live_abcdefgh12345678/i)).toBeInTheDocument()
+        expect(screen.getByText(/sample_api_key_primary/i)).toBeInTheDocument()
       })
 
       // Verify payload
@@ -316,11 +316,11 @@ describe('APIKeyManager', () => {
       const user = userEvent.setup()
       
       server.use(
-        http.post('http://localhost:8000/v1/organizations/:orgId/api-keys', () => {
+        http.post('http://localhost:8000/v1/api-keys', () => {
           return HttpResponse.json({
             id: 'key_new',
             name: 'Test',
-            key: 'pk_live_secret123',
+            key: 'sample_api_key_copyable',
             masked_key: 'pk_live_••••••••123',
             scopes: ['read:credentials'],
             created_at: new Date().toISOString(),
@@ -342,7 +342,7 @@ describe('APIKeyManager', () => {
 
       // New key alert should show full key and copy button
       await waitFor(() => {
-        expect(screen.getByText(/pk_live_secret123/i)).toBeInTheDocument()
+        expect(screen.getByText(/sample_api_key_copyable/i)).toBeInTheDocument()
       })
       const copyButton = await waitFor(() => screen.getByRole('button', { name: /copy/i }))
       expect(copyButton).toBeInTheDocument()
@@ -355,7 +355,7 @@ describe('APIKeyManager', () => {
       
       let revokedKeyId: string | undefined
       server.use(
-        http.post('http://localhost:8000/v1/organizations/:orgId/api-keys/:keyId/revoke', ({ params }) => {
+        http.delete('http://localhost:8000/v1/api-keys/:keyId', ({ params }) => {
           revokedKeyId = params.keyId as string
           return HttpResponse.json({ status: 'revoked', is_active: false })
         })
@@ -390,7 +390,7 @@ describe('APIKeyManager', () => {
       
       let deletedKeyId: string | undefined
       server.use(
-        http.delete('http://localhost:8000/v1/organizations/:orgId/api-keys/:keyId', ({ params }) => {
+        http.delete('http://localhost:8000/v1/api-keys/:keyId', ({ params }) => {
           deletedKeyId = params.keyId as string
           return HttpResponse.json({ message: 'Deleted' })
         })
@@ -417,7 +417,7 @@ describe('APIKeyManager', () => {
   describe('Loading and Error States', () => {
     it('should show loading skeletons', () => {
       server.use(
-        http.get('http://localhost:8000/v1/organizations/:orgId/api-keys', () => {
+        http.get('http://localhost:8000/v1/api-keys', () => {
           return new Promise(() => {}) // Never resolves
         })
       )
@@ -431,7 +431,7 @@ describe('APIKeyManager', () => {
 
     it('should handle API errors', async () => {
       server.use(
-        http.get('http://localhost:8000/v1/organizations/:orgId/api-keys', () => {
+        http.get('http://localhost:8000/v1/api-keys', () => {
           return HttpResponse.json(
             { error: { message: 'Forbidden' } },
             { status: 403 }
@@ -454,7 +454,7 @@ describe('APIKeyManager', () => {
       let fetchCount = 0
 
       server.use(
-        http.get('http://localhost:8000/v1/organizations/:orgId/api-keys', () => {
+        http.get('http://localhost:8000/v1/api-keys', () => {
           fetchCount++
           return HttpResponse.json({ keys: mockApiKeys.filter((k) => k.status === 'active') })
         })

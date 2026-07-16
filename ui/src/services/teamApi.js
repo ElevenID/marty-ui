@@ -5,7 +5,7 @@
  */
 
 import { get, post, del } from './api';
-import { buildTruthyQueryString, withQuery } from './queryUtils';
+import { buildTruthyQueryString, requireOrganizationId, withQuery } from './queryUtils';
 
 /**
  * List team members
@@ -16,11 +16,12 @@ import { buildTruthyQueryString, withQuery } from './queryUtils';
  * @returns {Promise<Array>} List of team members
  */
 export async function listMembers(organizationId, filters = {}) {
+  const orgId = requireOrganizationId(organizationId, 'loading team members');
   const queryString = buildTruthyQueryString({
     role: filters.role,
     status: filters.status,
   });
-  const path = `/v1/organizations/${organizationId}/members`;
+  const path = `/v1/organizations/${encodeURIComponent(orgId)}/members`;
   return get(withQuery(path, queryString));
 }
 
@@ -31,7 +32,8 @@ export async function listMembers(organizationId, filters = {}) {
  * @returns {Promise<Object>} Team member details
  */
 export async function getMember(organizationId, memberId) {
-  return get(`/v1/organizations/${organizationId}/members/${memberId}`);
+  const orgId = requireOrganizationId(organizationId, 'loading team member');
+  return get(`/v1/organizations/${encodeURIComponent(orgId)}/members/${encodeURIComponent(memberId)}`);
 }
 
 /**
@@ -44,7 +46,8 @@ export async function getMember(organizationId, memberId) {
  * @returns {Promise<Object>} Created invite
  */
 export async function inviteMember(organizationId, invite) {
-  return post(`/v1/organizations/${organizationId}/members`, invite);
+  const orgId = requireOrganizationId(organizationId, 'inviting team members');
+  return post(`/v1/organizations/${encodeURIComponent(orgId)}/members`, invite);
 }
 
 /**
@@ -54,7 +57,8 @@ export async function inviteMember(organizationId, invite) {
  * @returns {Promise<void>}
  */
 export async function removeMember(organizationId, memberId) {
-  return del(`/v1/organizations/${organizationId}/members/${memberId}`);
+  const orgId = requireOrganizationId(organizationId, 'removing team members');
+  return del(`/v1/organizations/${encodeURIComponent(orgId)}/members/${encodeURIComponent(memberId)}`);
 }
 
 /**
@@ -64,7 +68,8 @@ export async function removeMember(organizationId, memberId) {
  * @returns {Promise<Object>} Updated organization
  */
 export async function transferOwnership(organizationId, newOwnerId) {
-  return post(`/v1/organizations/${organizationId}/transfer-ownership`, {
+  const orgId = requireOrganizationId(organizationId, 'transferring organization ownership');
+  return post(`/v1/organizations/${encodeURIComponent(orgId)}/transfer-ownership`, {
     new_owner_id: newOwnerId,
   });
 }
@@ -75,7 +80,8 @@ export async function transferOwnership(organizationId, newOwnerId) {
  * @returns {Promise<Object>} Team snapshot with counts and recent activity
  */
 export async function getTeamSnapshot(organizationId) {
-  return get(`/v1/organizations/${organizationId}/team/snapshot`);
+  const orgId = requireOrganizationId(organizationId, 'loading team snapshot');
+  return get(`/v1/organizations/${encodeURIComponent(orgId)}/team/snapshot`);
 }
 
 export default {

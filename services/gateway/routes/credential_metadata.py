@@ -135,6 +135,11 @@ def _canvas_badge_achievement(request: Request) -> dict[str, Any]:
     summary="Marty Verified Member Badge type metadata",
     response_class=JSONResponse,
 )
+@credential_metadata_router.get(
+    f"/.well-known/vct/credentials/{MARTY_BADGE_SLUG}",
+    summary="Marty Verified Member Badge well-known type metadata",
+    response_class=JSONResponse,
+)
 async def get_marty_verified_member_badge_metadata(request: Request) -> JSONResponse:
     """Return SD-JWT VC type metadata for the Marty membership badge."""
     metadata = {
@@ -179,6 +184,11 @@ async def get_marty_verified_member_badge_metadata(request: Request) -> JSONResp
 @credential_metadata_router.get(
     f"/credentials/{CANVAS_INTEROPERABILITY_BADGE_SLUG}",
     summary="Canvas interoperability badge type metadata",
+    response_class=JSONResponse,
+)
+@credential_metadata_router.get(
+    f"/.well-known/vct/credentials/{CANVAS_INTEROPERABILITY_BADGE_SLUG}",
+    summary="Canvas interoperability badge well-known type metadata",
     response_class=JSONResponse,
 )
 async def get_canvas_interoperability_badge_metadata(request: Request) -> JSONResponse:

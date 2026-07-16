@@ -107,6 +107,32 @@ export const mockTrustProfiles = {
   },
 }
 
+// Compliance Profile fixtures
+export const mockComplianceProfiles = {
+  active: {
+    id: 'compliance-1',
+    organization_id: 'console-org',
+    name: 'Enterprise VC Baseline',
+    compliance_code: 'ENTERPRISE_VC',
+    credential_format: 'SD_JWT_VC',
+    issuance_protocol: 'OID4VCI_PRE_AUTH',
+    discoverable: true,
+    is_system: false,
+    created_at: '2024-01-01T00:00:00Z',
+  },
+  hidden: {
+    id: 'compliance-hidden',
+    organization_id: 'console-org',
+    name: 'Hidden Compliance Baseline',
+    compliance_code: 'HIDDEN',
+    credential_format: 'SD_JWT_VC',
+    issuance_protocol: 'OID4VCI_PRE_AUTH',
+    discoverable: false,
+    is_system: false,
+    created_at: '2024-01-01T00:00:00Z',
+  },
+}
+
 // Credential Template fixtures
 export const mockTemplates = {
   valid: {
@@ -145,8 +171,9 @@ export const mockPolicies = {
     id: 1,
     name: 'Age Verification',
     description: 'Verify age over 21',
-    status: 'active',
+    status: 'ACTIVE',
     credential_template_id: 1,
+    trust_profile_id: 'trust-1',
     organization_id: 1,
     created_at: '2024-01-01T00:00:00Z',
     updated_at: '2024-01-01T00:00:00Z',
@@ -162,6 +189,10 @@ export const mockDeploymentProfiles = {
     description: 'Production deployment profile',
     status: 'active',
     environment: 'production',
+    trust_profile_id: 'trust-1',
+    default_policy_id: 1,
+    presentation_policy_ids: [1],
+    credential_template_ids: [1],
     organization_id: 1,
     created_at: '2024-01-01T00:00:00Z',
     updated_at: '2024-01-01T00:00:00Z',
@@ -175,10 +206,14 @@ export const mockFlows = {
     name: 'Onboarding Flow',
     description: 'User onboarding flow',
     status: 'active',
-    steps: [],
+    flow_type: 'oid4vci_pre_authorized',
+    flow_category: 'ISSUANCE',
+    resolved_steps: ['create_offer', 'token_exchange', 'credential_request', 'issue_credential'],
     trust_profile_id: 1,
+    credential_template_id: 1,
     presentation_policy_id: 1,
-    deployment_profile_id: 1,
+    deployment_profile_ids: [1],
+    approval_strategy: 'AUTO',
     organization_id: 1,
     created_at: '2024-01-01T00:00:00Z',
     updated_at: '2024-01-01T00:00:00Z',

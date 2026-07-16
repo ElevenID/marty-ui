@@ -1,6 +1,7 @@
 export {
   buildApplicantProfileData,
-  buildAutoApplyContext,
+  buildAutoApplyFormData,
+  canAutoApplyApplicationTemplate,
   buildStandardApplicationPayload,
   getCredentialKindFlags,
   getOneClickSummaryFields,
@@ -71,16 +72,24 @@ export {
 } from './myApplications';
 
 export {
+  ANY_OID4VCI_WALLET_ID,
+  MARTY_AUTHENTICATOR_WALLET_ID,
   buildWalletRegistryMaps,
+  buildClaimWalletOptions,
   createWalletOfferDialogState,
   enrichWalletOfferForRouting,
   getWalletOfferDialogError,
   getWalletOfferPrimaryUri,
   loadWalletOfferDialog,
   resetWalletOfferDialogState,
+  resolveClaimWalletDeliveryDestinationId,
+  resolveClaimWalletSelection,
   resolveWalletOfferDialogLoad,
   resolveWalletOfferRoutingWalletIds,
+  selectedClaimWalletIds,
   startWalletOfferDialogLoad,
+  walletSupportsBrowserLaunch,
+  walletSupportsOid4vci,
 } from './walletOfferDialogUseCases';
 
 export {

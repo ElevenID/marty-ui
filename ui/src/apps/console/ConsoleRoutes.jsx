@@ -4,20 +4,20 @@ import { Box, CircularProgress, Typography } from '@mui/material';
 import { get } from '../../services/api';
 import ProtectedRoute, { ApplicantConsoleRoute, OrgConsoleRoute } from '../../components/ProtectedRoute';
 import AuthCallback from '../../components/AuthCallback';
+import LoginPage from '../../components/LoginPage';
 import ProfilePage from '../../components/ProfilePage';
 import { ApplicationForm } from '../../components/applicant';
 import CredentialCatalog from '../../components/applicant/CredentialCatalog';
 import { AuthenticatedLayout } from '../../components/layouts';
-import BrowserRedirect from '../../components/BrowserRedirect';
 import MyOrganizationsPage from '../../components/pages/MyOrganizationsPage';
 import DiscoverOrganizationsPage from '../../components/pages/DiscoverOrganizationsPage';
 import JoinOrganizationPage from '../../components/pages/JoinOrganizationPage';
 import CreateOrganizationPage from '../../components/organizations/CreateOrganizationPage';
+import OrgConsoleUnavailable from '../../components/console/OrgConsoleUnavailable';
 import { useAuth } from '../../hooks/useAuth';
 import { useConsole, getDefaultLandingPath } from '../../contexts/ConsoleContext';
 import {
   ConsoleDashboard,
-  GuidedSetupWizard,
   TrustPage,
   TrustProfilesPage,
   RevocationProfilesPage,
@@ -30,6 +30,8 @@ import {
   CredentialTemplatesPage,
   CredentialTemplateDetailPage,
   ApplicationTemplatesPage,
+  ApplicationTemplateEditorPage,
+  ApplicationTemplateDetailPage,
   CredentialTemplateWizard,
   PoliciesPage,
   PresentationPoliciesPage,
@@ -40,6 +42,7 @@ import {
   ApiKeysPage,
   DidIdentitiesPage,
   CanvasIntegrationsPage,
+  DeliveryDestinationsPage,
   LanesDevicesPage,
   DeploymentProfileWizard,
   KeyManagementServiceWizard,
@@ -48,8 +51,11 @@ import {
   FlowDefinitionsPage,
   FlowInstancesPage,
   FlowDefinitionWizard,
+  CustomFlowBuilder,
+  PolicySetsPage,
+  PolicySetWizard,
+  PolicySetDetailPage,
   FlowDetailPage,
-  OperatePage,
   IssuancePage,
   ApplicationsPage,
   ApplicationReviewPage,
@@ -88,7 +94,11 @@ function GuardLoadingState({ message }) {
   );
 }
 
-function resolveConsoleHomePath({ mode, activeOrgId, memberships }) {
+function resolveConsoleHomePath({ mode, activeOrgId, memberships, isOrgBootstrapRequired }) {
+  if (isOrgBootstrapRequired && (!Array.isArray(memberships) || memberships.length === 0)) {
+    return '/console/org/setup';
+  }
+
   if (mode === 'org' && !activeOrgId) {
     return '/console/org/setup';
   }
@@ -98,7 +108,15 @@ function resolveConsoleHomePath({ mode, activeOrgId, memberships }) {
 
 function ConsoleEntryRoute() {
   const { isAuthenticated, isLoading: authLoading } = useAuth();
-  const { mode, activeOrgId, memberships, isLoading: consoleLoading } = useConsole();
+  const {
+    mode,
+    activeOrgId,
+    memberships,
+    isLoading: consoleLoading,
+    membershipLoadError,
+    isOrgBootstrapRequired,
+    reloadConsoleState,
+  } = useConsole();
 
   if (authLoading || consoleLoading) {
     return <GuardLoadingState message="Loading console..." />;
@@ -108,17 +126,20 @@ function ConsoleEntryRoute() {
     return <Navigate to="/login" state={{ from: { pathname: '/console' } }} replace />;
   }
 
-  return <Navigate to={resolveConsoleHomePath({ mode, activeOrgId, memberships })} replace />;
+  if (membershipLoadError && isOrgBootstrapRequired) {
+    return <OrgConsoleUnavailable error={membershipLoadError} onRetry={reloadConsoleState} />;
+  }
+
+  return <Navigate to={resolveConsoleHomePath({ mode, activeOrgId, memberships, isOrgBootstrapRequired })} replace />;
 }
 
 function ConsoleRoutes() {
   return (
     <Routes>
       <Route path="/console" element={<ConsoleEntryRoute />} />
-      <Route path="/console/login" element={<BrowserRedirect to="/login" message="Opening login..." />} />
-      <Route path="/login" element={<BrowserRedirect to="/login" message="Opening login..." />} />
+      <Route path="/console/login" element={<LoginPage fallbackRedirectTo="/console" />} />
+      <Route path="/login" element={<LoginPage fallbackRedirectTo="/console" />} />
       <Route path="/console/auth/callback" element={<AuthCallback />} />
-
       <Route
         path="/console/org"
         element={
@@ -128,7 +149,10 @@ function ConsoleRoutes() {
         }
       >
         <Route index element={<ConsoleDashboard />} />
-        <Route path="setup-wizard" element={<GuidedSetupWizard />} />
+        <Route path="design" element={<Navigate to="/console/org/templates/credentials" replace />} />
+        <Route path="govern" element={<Navigate to="/console/org/trust/profiles" replace />} />
+        <Route path="connect" element={<Navigate to="/console/org/deploy/canvas" replace />} />
+        <Route path="setup-wizard" element={<Navigate to="/console/org" replace />} />
         <Route path="profile" element={<ProfilePage />} />
         <Route path="trust" element={<TrustPage />} />
         <Route path="trust/profiles" element={<TrustProfilesPage />} />
@@ -144,6 +168,9 @@ function ConsoleRoutes() {
         <Route path="templates/credentials/new" element={<CredentialTemplateWizard />} />
         <Route path="templates/credentials/:templateId" element={<CredentialTemplateDetailPage />} />
         <Route path="templates/applications" element={<ApplicationTemplatesPage />} />
+        <Route path="templates/applications/new" element={<ApplicationTemplateEditorPage />} />
+        <Route path="templates/applications/:templateId" element={<ApplicationTemplateDetailPage />} />
+        <Route path="templates/applications/:templateId/edit" element={<ApplicationTemplateEditorPage />} />
         <Route path="policies" element={<PoliciesPage />} />
         <Route path="policies/presentation" element={<PresentationPoliciesPage />} />
         <Route path="policies/presentation/new" element={<PresentationPolicyWizard />} />
@@ -154,6 +181,7 @@ function ConsoleRoutes() {
         <Route path="deploy/api-keys" element={<Navigate to="/console/org/api-keys" replace />} />
         <Route path="deploy/issuer-identity" element={<DidIdentitiesPage />} />
         <Route path="deploy/canvas" element={<CanvasIntegrationsPage />} />
+        <Route path="connect/delivery-destinations" element={<DeliveryDestinationsPage />} />
         <Route path="deploy/issuer-identity/new" element={<IssuerIdentityWizard />} />
         <Route path="deploy/key-management" element={<SigningKeysPage />} />
         <Route path="deploy/key-management/services" element={<Navigate to="/console/org/deploy/key-management" replace />} />
@@ -168,8 +196,12 @@ function ConsoleRoutes() {
         <Route path="flows" element={<FlowsPage />} />
         <Route path="flows/definitions" element={<FlowDefinitionsPage />} />
         <Route path="flows/definitions/new" element={<FlowDefinitionWizard />} />
+        <Route path="flows/definitions/new/custom" element={<CustomFlowBuilder />} />
         <Route path="flows/definitions/:flowId" element={<FlowDetailPage />} />
-        <Route path="operate" element={<OperatePage />} />
+        <Route path="policies/sets" element={<PolicySetsPage />} />
+        <Route path="policies/sets/new" element={<PolicySetWizard />} />
+        <Route path="policies/sets/:policySetId" element={<PolicySetDetailPage />} />
+        <Route path="operate" element={<Navigate to="/console/org/operate/flow-instances" replace />} />
         <Route path="operate/issuance" element={<IssuancePage />} />
         <Route path="operate/issuance/:credentialId" element={<IssuancePage />} />
         <Route path="operate/applications" element={<ApplicationsPage />} />

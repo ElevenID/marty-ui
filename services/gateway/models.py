@@ -8,7 +8,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 # =============================================================================
@@ -367,6 +367,7 @@ class ApiKeyCreatedResponse(ApiKeyResponse):
 
 class IssuedCredentialRecordResponse(BaseModel):
     id: str
+    organization_id: str
     credential_id: str
     credential_type: str
     credential_format: str
@@ -374,6 +375,11 @@ class IssuedCredentialRecordResponse(BaseModel):
     credential_template_id: str
     application_id: str | None = None
     revocation_profile_id: str | None = None
+    renewed_from_credential_id: str | None = None
+    renewed_to_credential_id: str | None = None
+    renewable: bool = False
+    renewal_eligible_at: str | None = None
+    can_renew: bool = False
     subject_id: str
     subject_claims_hash: str | None = None
     issued_at: str
@@ -426,24 +432,46 @@ class TrustRegistryStatusResponse(BaseModel):
 
 class ClaimDefinitionModel(BaseModel):
     name: str
-    display_name: str
+    display_name: str | None = None
     claim_type: str = "string"
+    type: str | None = Field(None, exclude=True)
     required: bool = True
     selectively_disclosable: bool = True
+
+    @model_validator(mode="after")
+    def normalize_claim(self) -> "ClaimDefinitionModel":
+        if not self.display_name:
+            self.display_name = " ".join(
+                part.capitalize()
+                for part in self.name.replace("-", "_").split("_")
+                if part
+            ) or self.name
+        if self.type:
+            normalized_type = self.type.lower()
+            self.claim_type = "integer" if normalized_type == "number" else normalized_type
+        return self
 
 
 class TemplateValidityRules(BaseModel):
     ttl_days: int = 365
     expiration_mode: str = "hard"
     reissue_window_days: int = 30
-
-
-class TemplateIssuerRequirements(BaseModel):
-    allowed_issuer_ids: list[str] = []
-    signing_algorithm_constraints: list[str] | None = None
+    default_validity_days: int | None = None
+    max_validity_days: int | None = None
+    renewable: bool | None = None
+    renewal_window_days: int | None = None
+    ttl_seconds: int | None = None
+    reissue_within_seconds: int | None = None
+    not_before_offset_seconds: int | None = None
+    not_before_offset: int | None = None
+    max_validity_seconds: int | None = None
+    require_revalidation: bool | None = None
+    revalidation_interval_days: int | None = None
 
 
 class CredentialTemplateCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     """Create a Credential Template (complete issuance definition).
 
     Credential Template is the master configuration combining:
@@ -460,16 +488,17 @@ class CredentialTemplateCreate(BaseModel):
     # Schema & Claims
     credential_type: str = Field(min_length=1, max_length=500)
     vct: str = Field(min_length=1, max_length=2048)
+    doctype: str | None = Field(None, max_length=2048)
     claims: list[ClaimDefinitionModel] = []
     privacy_posture: str = Field(default="selective_disclosure", max_length=50)
+    selective_disclosure_fields: list[str] = []
     supported_formats: list[str] = ["sd_jwt_vc"]
 
     # INVERTED RELATIONSHIP: Credential Template references Application Template
     application_template_id: str | None = Field(None, max_length=255)
 
-    # Embedded Compliance Profile
-    compliance_profile: dict | None = None
-    compliance_profile_id: str | None = Field(None, max_length=255)
+    # Canonical profile references
+    compliance_profile_id: str = Field(min_length=1, max_length=255)
     trust_profile_id: str | None = Field(None, max_length=255)
     revocation_profile_id: str | None = Field(None, max_length=255)
 
@@ -479,19 +508,22 @@ class CredentialTemplateCreate(BaseModel):
     # Cryptographic configuration
     issuer_key_id: str | None = Field(None, max_length=255)
     issuer_key_algorithm: str | None = Field(None, max_length=50)
+    issuer_algorithm: str | None = Field(None, max_length=50)
+    signing_algorithm: str | None = Field(None, max_length=50)
     key_access_mode: str = Field(default="key_vault", max_length=50)
+    remote_signing_config: dict[str, Any] | None = None
     issuer_certificate_chain_pem: str | None = Field(None, max_length=65536)
     issuer_did: str | None = Field(None, max_length=2048)
-    auto_generate_artifacts: bool = True
+    issuer_profile_id: str | None = Field(None, max_length=255)
+    auto_generate_artifacts: bool = False
 
-    # Legacy field for backward compatibility during migration
-    issuer_requirements: TemplateIssuerRequirements | None = None
+    derived_attributes: list[dict] = []
+    display_style: dict | None = None
     # ZK-specific fields
     zk_predicate_claims: list[str] = []
     schema_uri: dict | None = None
-    # Payload format and wallet deep-link configuration
+    # Derived payload format. Wallet compatibility is not client-authored.
     credential_payload_format: str | None = Field(default=None, max_length=100)
-    wallet_configs: list[dict] = []
 
 
 class CredentialTemplateResponse(BaseModel):
@@ -526,8 +558,6 @@ class CredentialTemplateResponse(BaseModel):
     issuer_did: str | None
     artifacts_status: str
 
-    # Legacy field
-    issuer_requirements: dict | None
     # ZK-specific fields
     zk_predicate_claims: list[str] = []
     # Payload format and wallet deep-link configuration
@@ -575,6 +605,8 @@ class ApiSurfaceEndpointModel(BaseModel):
 
 class ComplianceProfileCreate(BaseModel):
     """Create a Compliance Profile for regulatory rules and format abstraction."""
+    model_config = ConfigDict(extra="forbid")
+
     organization_id: str | None = Field(None, max_length=255)
     name: str = Field(min_length=1, max_length=255)
     description: str | None = Field(None, max_length=2000)
@@ -582,7 +614,6 @@ class ComplianceProfileCreate(BaseModel):
     credential_format: str = Field(default="SD_JWT_VC", max_length=50)
     issuance_protocol: str | None = Field(None, max_length=100)
     issuer_artifact_requirements: IssuerArtifactRequirementsModel | None = None
-    default_verification_rules: dict | None = None
     verification_policy_set_id: str | None = Field(None, max_length=255)
     frameworks: list[str] = Field(default_factory=list)
     data_retention: DataRetentionModel | None = None
@@ -594,13 +625,14 @@ class ComplianceProfileCreate(BaseModel):
 
 
 class ComplianceProfileUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str | None = None
     description: str | None = None
     compliance_code: str | None = None
     credential_format: str | None = None
     issuance_protocol: str | None = None
     issuer_artifact_requirements: IssuerArtifactRequirementsModel | None = None
-    default_verification_rules: dict | None = None
     verification_policy_set_id: str | None = None
     trust_profile_constraints: TrustProfileConstraintsModel | None = None
     api_surface: list[ApiSurfaceEndpointModel] | None = None
@@ -620,7 +652,6 @@ class ComplianceProfileResponse(BaseModel):
     credential_format: str
     issuance_protocol: str | None = None
     issuer_artifact_requirements: dict | None = None
-    default_verification_rules: dict | None = None
     verification_policy_set_id: str | None = None
     trust_profile_constraints: dict = Field(default_factory=dict)
     api_surface: list[dict] = Field(default_factory=list)
@@ -729,7 +760,8 @@ class HolderBindingModel(BaseModel):
     """How to verify the presenter is the legitimate holder."""
     required: bool = False
     binding_methods: list[str] = Field(default_factory=list)
-    nonce_required: bool = False
+    proof_profiles: list[str] = Field(default_factory=list)
+    proof_freshness: dict[str, Any] = Field(default_factory=dict)
 
 
 class IssuerConstraintsModel(BaseModel):
@@ -821,9 +853,13 @@ class FeatureFlagsModel(BaseModel):
 
 
 class DeploymentProfileCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     organization_id: str = Field(min_length=1, max_length=255)
     name: str = Field(min_length=1, max_length=255)
     description: str | None = Field(None, max_length=2000)
+    status: str | None = Field(None, max_length=50)
+    activate_immediately: bool | None = None
     environment: str = Field(default="development", max_length=50)
     callbacks: CallbacksModel | None = None
     feature_flags: FeatureFlagsModel | None = None
@@ -831,27 +867,42 @@ class DeploymentProfileCreate(BaseModel):
     presentation_policy_ids: list[str] = Field(default_factory=list)
     credential_template_ids: list[str] = Field(default_factory=list)
     default_policy_id: str | None = Field(None, max_length=255)
-    default_presentation_policy_id: str | None = Field(None, max_length=255)
     enabled_flow_ids: list[str] = Field(default_factory=list)
     network_mode: str = Field(default="ONLINE", max_length=50)
     environment_config: dict | None = None
-    ux_config: dict | None = None
     update_channel: str = Field(default="stable", max_length=50)
 
 
 class DeploymentProfileUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_mixed_biometric_aliases(cls, data: Any) -> Any:
+        if isinstance(data, dict) and {
+            "operator_biometric_authentication_required",
+            "biometric_required",
+        } <= data.keys():
+            raise ValueError("use only operator_biometric_authentication_required")
+        return data
+
     name: str | None = None
     description: str | None = None
+    status: str | None = None
     trust_profile_id: str | None = None
     presentation_policy_ids: list[str] | None = None
     credential_template_ids: list[str] | None = None
     default_policy_id: str | None = None
     network_mode: str | None = None
     key_access_mode: str | None = None
-    biometric_required: bool | None = None
-    default_presentation_policy_id: str | None = None
+    operator_biometric_authentication_required: bool | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "operator_biometric_authentication_required",
+            "biometric_required",
+        ),
+    )
     environment_config: dict | None = None
-    ux_config: dict | None = None
     feature_flags: FeatureFlagsModel | None = None
 
 
@@ -859,29 +910,27 @@ class DeploymentProfileResponse(BaseModel):
     id: str
     organization_id: str
     name: str
-    description: str | None
-    status: str
-    environment: str
-    callbacks: dict
-    feature_flags: dict
+    description: str | None = None
+    status: str | None = None
+    environment: str | None = None
+    callbacks: dict | None = None
+    feature_flags: dict | None = None
     trust_profile_id: str | None = None
     presentation_policy_ids: list[str] = Field(default_factory=list)
     credential_template_ids: list[str] = Field(default_factory=list)
     enabled_flow_ids: list[str] = Field(default_factory=list)
     default_policy_id: str | None
-    network_mode: str
+    network_mode: str | None = None
     key_access_mode: str | None = None
-    default_presentation_policy_id: str | None = None
     environment_config: dict | None = None
-    ux_config: dict | None
-    update_channel: str
+    update_channel: str | None = None
     update_policy: dict | None = None
     offline_cache_ttl_hours: int | None = None
-    biometric_required: bool | None = None
+    operator_biometric_authentication_required: bool | None = None
     audit_all_events: bool | None = None
     canvas_feature_flags: dict[str, bool] = Field(default_factory=dict)
     lanes: list[dict] = Field(default_factory=list)
-    api_key_prefix: str | None
+    api_key_prefix: str | None = None
     created_at: str
     updated_at: str
 
@@ -918,28 +967,83 @@ class DeviceAssignment(BaseModel):
 # Flow
 # =============================================================================
 
-class FlowStepModel(BaseModel):
-    name: str
-    step_type: str = "user_input"
-    config: dict = Field(default_factory=dict)
+class FlowExtensionStepModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    step_id: str = Field(pattern=r"^[a-z][a-z0-9_-]*$", max_length=128)
+    action: str = Field(pattern=r"^[a-z][a-z0-9_.:-]*$", max_length=160)
+    description: str | None = Field(None, max_length=512)
+    config: dict[str, Any] = Field(default_factory=dict)
+    timeout_seconds: int | None = Field(None, ge=1, le=86400)
+
+
+class FlowExtensionTransitionModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    from_step_id: str
+    to_step_id: str
+    outcome: Literal["SUCCESS", "FAILURE", "APPROVED", "REJECTED", "TIMEOUT", "CUSTOM"]
+    condition: dict[str, Any] | None = None
+
+
+class FlowExtensionModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    extension_uri: str
+    extension_version: str
+    extends_flow_type: str
+    entry_step_id: str
+    steps: list[FlowExtensionStepModel] = Field(min_length=1)
+    transitions: list[FlowExtensionTransitionModel] = Field(default_factory=list)
+    config: dict[str, Any] = Field(default_factory=dict)
+
+
+class FlowHookModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    hook_type: Literal["WEBHOOK", "EXTERNAL_API", "SCRIPT"]
+    url: str | None = None
+    config: dict[str, Any] = Field(default_factory=dict)
+
+
+class FlowTriggerModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    trigger_type: Literal["API_CALL", "WEBHOOK", "SCHEDULE", "APPLICATION_SUBMITTED"]
+    config: dict[str, Any] = Field(default_factory=dict)
 
 
 class FlowDefinitionCreate(BaseModel):
     """Create a Flow Definition for orchestrating credential operations."""
+    model_config = ConfigDict(extra="forbid")
+
     organization_id: str
     name: str
     description: str | None = None
-    flow_type: str = "oid4vci_pre_authorized"
-    steps: list[FlowStepModel] = Field(default_factory=list)
-    approval_strategy: str = "AUTO"
-    enabled: bool = True
-    hooks: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
-    trigger: dict[str, Any] | None = None
+    flow_type: Literal[
+        "oid4vci_pre_authorized", "oid4vci_authorization_code", "mdl_issuance",
+        "oid4vp_presentation", "mdl_presentation", "siopv2",
+        "application_approval_issuance", "credential_renewal", "credential_revocation",
+        "physical_document_issuance", "combined", "custom",
+    ]
+    approval_strategy: Literal["AUTO", "MANUAL", "RULES_BASED", "EXTERNAL"] = "AUTO"
+    hooks: dict[str, list[FlowHookModel]] = Field(default_factory=dict)
+    trigger: FlowTriggerModel | None = None
+    extension: FlowExtensionModel | None = None
     trust_profile_id: str | None = None
     credential_template_id: str | None = None
     application_template_id: str | None = None
     presentation_policy_id: str | None = None
+    delivery_destination_profile_id: str | None = None
     deployment_profile_ids: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_custom_extension(self) -> "FlowDefinitionCreate":
+        if self.flow_type == "custom" and self.extension is None:
+            raise ValueError("extension is required for custom flow_type")
+        if self.flow_type != "custom" and self.extension is not None:
+            raise ValueError("extension is only permitted for custom flow_type")
+        return self
 
 
 class FlowDefinitionResponse(BaseModel):
@@ -950,13 +1054,14 @@ class FlowDefinitionResponse(BaseModel):
     status: str
     flow_type: str
     flow_category: str | None = None
-    steps: list[dict]
+    resolved_steps: list[str] = Field(default_factory=list)
+    extension: dict[str, Any] | None = None
     trust_profile_id: str | None
     credential_template_id: str | None
     application_template_id: str | None
     presentation_policy_id: str | None
+    delivery_destination_profile_id: str | None = None
     approval_strategy: str | None = None
-    enabled: bool | None = None
     hooks: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
     trigger: dict[str, Any] | None = None
     deployment_profile_ids: list[str]
@@ -968,34 +1073,28 @@ class FlowDefinitionResponse(BaseModel):
 class FlowInstanceCreate(BaseModel):
     flow_definition_id: str
     subject_id: str | None = None
+    subject_type: str = "applicant"
+    external_reference: str | None = None
     initial_context: dict = Field(default_factory=dict)
 
 
 class FlowInstanceResponse(BaseModel):
     id: str
-    flow_definition_id: str
     flow_id: str | None = None
+    flow_type: str | None = None
     organization_id: str
     status: str
-    protocol_status: str | None = None
-    flow_type: str | None = None
-    current_step_id: str | None
     current_step: str | None = None
     current_step_index: int | None = None
-    context: dict
     context_data: dict = Field(default_factory=dict)
     step_results: dict[str, dict[str, Any]] = Field(default_factory=dict)
-    step_history: list[dict] = Field(default_factory=list)
     issued_credential_id: str | None = None
-    subject_id: str | None = None
-    external_reference: str | None = None
     started_at: str | None = None
     completed_at: str | None = None
     expires_at: str | None = None
-    result: dict | None = None
-    error: str | None = None
     error_code: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+    state_history: list[dict[str, Any]] = Field(default_factory=list)
     created_at: str
     updated_at: str
 
@@ -1213,6 +1312,7 @@ class IssuanceCreate(BaseModel):
     """Create an issuance request."""
     organization_id: str
     credential_template_id: str | None = None
+    issuer_profile_id: str | None = None
     subject_did: str | None = None
     holder_did: str | None = None  # DIDComm v2: holder's DID for push delivery
     application_id: str | None = None
@@ -1286,11 +1386,13 @@ class FormFieldModel(BaseModel):
 
 
 class ClaimCollectionModel(BaseModel):
-    """Claim collection rule."""
+    """Canonical claim sourcing rule."""
+
+    model_config = ConfigDict(extra="forbid")
+
     claim_name: str
-    source: str
-    source_field: str | None = None
-    required: bool = True
+    source: Literal["FORM_FIELD", "EVIDENCE_EXTRACTION", "EXTERNAL_API", "SYSTEM"]
+    source_config: dict[str, Any] = Field(default_factory=dict)
 
 
 class NotificationConfigModel(BaseModel):
@@ -1307,6 +1409,66 @@ class ApplicationUIConfigModel(BaseModel):
     instructions: str | None = None
 
 
+class ApplicationFormFieldModel(BaseModel):
+    """Canonical MIP 0.3 applicant form field."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    field_id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
+    label: str = Field(min_length=1, max_length=256)
+    field_type: Literal[
+        "TEXT", "DATE", "DATETIME", "SELECT", "FILE_UPLOAD",
+        "INTEGER", "NUMBER", "BOOLEAN", "EMAIL", "URL",
+    ]
+    required: bool
+    claim_mapping: str | None = None
+    validation_pattern: str | None = None
+    options: list[str] | None = None
+    minimum: float | None = None
+    maximum: float | None = None
+    placeholder: str | None = None
+    hint: str | None = None
+
+
+class RequiredApplicationCheckModel(BaseModel):
+    """Server-enforced check configured on an Application Template."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    check_type: str = Field(min_length=1)
+    is_required: bool = True
+    order: int = Field(ge=1)
+    config: dict[str, Any] = Field(default_factory=dict)
+    external_provider: str | None = None
+
+
+class ApplicationEvidenceRequirementModel(BaseModel):
+    """Canonical evidence requirement on an Application Template."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    evidence_id: str = Field(min_length=1)
+    evidence_type: Literal[
+        "DOCUMENT_SCAN", "BIOMETRIC", "SELFIE", "THIRD_PARTY_VERIFICATION",
+        "EXTERNAL_FACT", "EXTERNAL_API",
+    ]
+    description: str
+    required: bool
+    accepted_formats: list[str] | None = None
+    max_file_size_bytes: int | None = Field(default=None, ge=1)
+    provider: str | None = None
+    fact_type: str | None = None
+    scope: dict[str, Any] | None = None
+    pass_rule: dict[str, Any] | None = None
+    verification_method: str | None = None
+    freshness: dict[str, Any] | None = None
+    manual_fallback: bool | None = None
+    api: dict[str, Any] | None = None
+    expected_response: dict[str, Any] | None = None
+    response_mapping: dict[str, Any] | None = None
+    auto_issue_on_permit: bool | None = None
+
+
 class ApplicationTemplateCreate(BaseModel):
     """Create an Application Template defining how users apply for credentials.
 
@@ -1314,33 +1476,53 @@ class ApplicationTemplateCreate(BaseModel):
     This is a PURE USER-FACING entity with NO cryptographic concerns.
     It defines the application workflow, not the credential structure.
     """
+    model_config = ConfigDict(extra="forbid")
+
     organization_id: str
     name: str
     description: str | None = None
     credential_template_id: str | None = None
 
     # Evidence collection requirements
-    evidence_requirements: Any = Field(
-        default=[],
-        description="List of evidence type strings required for this application"
-    )
+    evidence_requirements: list[ApplicationEvidenceRequirementModel] = Field(default_factory=list)
 
     # Form field definitions
-    form_fields: list[dict] = Field(default_factory=list)
+    form_fields: list[ApplicationFormFieldModel] = Field(default_factory=list)
+
+    # Review checks are authoritative template policy, never applicant input.
+    required_checks: list[RequiredApplicationCheckModel] = Field(default_factory=list)
 
     # Claim collection
-    claim_collection_rules: list[dict] = Field(default_factory=list)
+    claim_collection_rules: list[ClaimCollectionModel] = Field(default_factory=list)
 
     # Workflow configuration
-    approval_strategy: str = "auto"
-    application_validity_days: int = 30
-    auto_approval_rules: list[dict] = []
+    approval_strategy: Literal["AUTO", "MANUAL", "RULES_BASED", "EXTERNAL"] = "MANUAL"
+    approval_policy_set_id: str | None = None
+    application_validity_days: int = Field(default=30, ge=1, le=3650)
 
     # Notification settings
-    notifications: NotificationConfigModel | None = None
-    notification_config: dict = {}
+    notification_config: dict = Field(default_factory=dict)
 
     # UI/UX configuration
+    ui_config: ApplicationUIConfigModel | dict | None = None
+
+
+class ApplicationTemplatePatch(BaseModel):
+    """Patch mutable fields on a draft MIP 0.3 Application Template."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = None
+    description: str | None = None
+    credential_template_id: str | None = None
+    evidence_requirements: list[ApplicationEvidenceRequirementModel] | None = None
+    form_fields: list[ApplicationFormFieldModel] | None = None
+    required_checks: list[RequiredApplicationCheckModel] | None = None
+    claim_collection_rules: list[ClaimCollectionModel] | None = None
+    approval_strategy: Literal["AUTO", "MANUAL", "RULES_BASED", "EXTERNAL"] | None = None
+    approval_policy_set_id: str | None = None
+    application_validity_days: int | None = Field(default=None, ge=1, le=3650)
+    notification_config: dict | None = None
     ui_config: ApplicationUIConfigModel | dict | None = None
 
 
@@ -1354,22 +1536,23 @@ class ApplicationTemplateResponse(BaseModel):
     status: str
 
     # Evidence collection
-    evidence_requirements: list[str]
+    evidence_requirements: list[Any]
 
     # Form configuration
-    form_fields: list[dict]
+    form_fields: list[ApplicationFormFieldModel]
+    required_checks: list[RequiredApplicationCheckModel] = Field(default_factory=list)
 
     # Claim collection
     claim_collection_rules: list[dict]
 
     # Workflow
     approval_strategy: str
+    approval_policy_set_id: str | None = None
     application_validity_days: int
-    auto_approval_rules: list[dict] = []
 
     # Notifications
     notifications: dict | None = None
-    notification_config: dict = {}
+    notification_config: dict = Field(default_factory=dict)
 
     # UI configuration
     ui_config: dict | None

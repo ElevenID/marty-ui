@@ -1,0 +1,161 @@
+{
+  "schema_version": 1,
+  "suite": "hosted_canvas_portability",
+  "artifact_policy": {
+    "fixed_schema_only": true,
+    "include_response_bodies": false,
+    "include_request_headers": false,
+    "include_urls": false,
+    "include_tenant_identifiers": false,
+    "include_screenshots_or_traces": false
+  },
+  "automated_cases": [
+    {
+      "id": "gateway_management_auth_default",
+      "required": true,
+      "mutates_tenant": false
+    },
+    {
+      "id": "marty_lti_jwks_rs256",
+      "required": true,
+      "mutates_tenant": false
+    },
+    {
+      "id": "marty_registration_config_public_only",
+      "required": true,
+      "mutates_tenant": false
+    },
+    {
+      "id": "marty_platform_portable_ready",
+      "required": true,
+      "mutates_tenant": false
+    },
+    {
+      "id": "hosted_canvas_course_access",
+      "required": true,
+      "mutates_tenant": false
+    },
+    {
+      "id": "hosted_canvas_lti_tool_installed",
+      "required": true,
+      "mutates_tenant": false
+    },
+    {
+      "id": "hosted_canvas_sessionless_launch_available",
+      "required": true,
+      "mutates_tenant": false
+    }
+  ],
+  "operator_acceptance_cases": [
+    {
+      "id": "root_admin_installs_standard_lti_13_key",
+      "required": true
+    },
+    {
+      "id": "instructor_deep_linking_placement",
+      "required": true
+    },
+    {
+      "id": "learner_oidc_login_and_resource_launch",
+      "required": true
+    },
+    {
+      "id": "ags_result_read_normalizes_evidence",
+      "required": true
+    },
+    {
+      "id": "existing_assignment_submission_score_is_authoritative",
+      "required": true
+    },
+    {
+      "id": "classic_quiz_assignment_submission_score_is_authoritative",
+      "required": true
+    },
+    {
+      "id": "new_quiz_assignment_submission_score_is_authoritative",
+      "required": true
+    },
+    {
+      "id": "module_based_course_completion_is_authoritative",
+      "required": true
+    },
+    {
+      "id": "module_completion_with_student_context_is_authoritative",
+      "required": true
+    },
+    {
+      "id": "roster_sync_creates_unsigned_pending_claim",
+      "required": true
+    },
+    {
+      "id": "canvas_oauth_refresh_revoke_and_reconnect",
+      "required": true
+    },
+    {
+      "id": "external_kms_claim_issues_and_verifies_open_badge",
+      "required": true
+    },
+    {
+      "id": "pre_issuance_grade_correction_changes_decision",
+      "required": true
+    },
+    {
+      "id": "post_issuance_grade_correction_creates_review_only",
+      "required": true
+    },
+    {
+      "id": "rs256_rotation_keeps_retiring_key_for_seven_days",
+      "required": true
+    },
+    {
+      "id": "cross_organization_resource_access_is_denied",
+      "required": true
+    },
+    {
+      "id": "pilot_allowlist_and_global_kill_switch_fail_closed",
+      "required": true
+    },
+    {
+      "id": "worker_retry_and_dead_letter_recovery_is_idempotent",
+      "required": true
+    },
+    {
+      "id": "legacy_event_ingest_is_unavailable",
+      "required": true
+    },
+    {
+      "id": "optional_canvas_credentials_mirror_preserves_provenance",
+      "required": false,
+      "production_gate": false
+    }
+  ],
+  "rollout_gates": [
+    {
+      "mode": "shadow",
+      "allows_automatic_approval": false,
+      "allows_background_delivery": false
+    },
+    {
+      "mode": "admin_approved",
+      "allows_automatic_approval": false,
+      "allows_background_delivery": false
+    },
+    {
+      "mode": "auto",
+      "allows_automatic_approval": true,
+      "allows_background_delivery": false
+    },
+    {
+      "mode": "background",
+      "allows_automatic_approval": true,
+      "allows_background_delivery": true
+    }
+  ],
+  "portability_exclusions": [
+    "canvas_source_patch",
+    "custom_canvas_plugin",
+    "rails_runner",
+    "rails_console",
+    "custom_event_ingest"
+  ]
+}

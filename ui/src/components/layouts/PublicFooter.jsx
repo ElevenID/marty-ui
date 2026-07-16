@@ -5,6 +5,7 @@ const footerLinks = [
   { label: 'Privacy Policy', to: '/privacy-policy', testId: 'public-footer-privacy-link' },
   { label: 'Terms of Service', to: '/terms-of-service', testId: 'public-footer-terms-link' },
   { label: 'Security', to: '/security', testId: 'public-footer-security-link' },
+  { label: 'Demos', to: '/demos', testId: 'public-footer-demos-link' },
   { label: 'Resources', to: '/resources', testId: 'public-footer-resources-link' },
 ];
 

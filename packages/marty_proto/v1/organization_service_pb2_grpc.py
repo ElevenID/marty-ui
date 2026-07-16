@@ -3,7 +3,7 @@
 import grpc
 import warnings
 
-import organization_service_pb2 as organization__service__pb2
+from . import organization_service_pb2 as organization__service__pb2
 
 GRPC_GENERATED_VERSION = '1.80.0'
 GRPC_VERSION = grpc.__version__

@@ -49,12 +49,13 @@ async def test_resolve_marty_organization_context_returns_membership_and_org_nam
         ),
     )
 
-    org_id, org_name, member_roles, has_org_console_access = await adapter._resolve_marty_organization_context("user-123")
+    org_id, org_name, member_roles, has_org_console_access, context_unavailable = await adapter._resolve_marty_organization_context("user-123")
 
     assert org_id == MARTY_ORG_ID
     assert org_name == "Marty Default Org"
     assert member_roles == ["applicant", "admin"]
     assert has_org_console_access is True
+    assert context_unavailable is False
 
 
 @pytest.mark.asyncio
@@ -65,12 +66,13 @@ async def test_resolve_marty_organization_context_returns_none_when_membership_m
         GetOrganization=AsyncMock(),
     )
 
-    org_id, org_name, member_roles, has_org_console_access = await adapter._resolve_marty_organization_context("user-123")
+    org_id, org_name, member_roles, has_org_console_access, context_unavailable = await adapter._resolve_marty_organization_context("user-123")
 
     assert org_id is None
     assert org_name is None
     assert member_roles == []
     assert has_org_console_access is False
+    assert context_unavailable is False
     adapter._org_stub.GetOrganization.assert_not_awaited()
 
 
@@ -182,6 +184,23 @@ async def test_in_memory_provisioning_enriches_session_with_marty_org_context():
 
     assert user.organization_id == MARTY_ORG_ID
     assert user.organization_name == "Marty Identity Platform"
+    assert user.default_organization_id == MARTY_ORG_ID
+    assert user.default_organization_name == "Marty Identity Platform"
+    assert user.organizations == [
+        {
+            "id": MARTY_ORG_ID,
+            "name": "marty",
+            "display_name": "Marty Identity Platform",
+            "membership": {
+                "roles": [{"name": "admin", "display_name": "admin"}],
+                "status": "active",
+                "permissions": [],
+                "has_org_console_access": True,
+                "is_owner": False,
+            },
+        }
+    ]
+    assert user.organization_context_unavailable is False
     assert user.organization == {
         MARTY_ORG_ID: {"name": "Marty Identity Platform"},
     }

@@ -55,7 +55,7 @@ function renderSelfhostRoot(authState: {
 
 describe('publicSite.selfhost', () => {
   it('keeps login enabled and disables marketing CTAs only on the production host', () => {
-    const expectedPublicPaths = ['/', '/product', '/solutions', '/developers', '/standards', '/resources', '/pricing'];
+    const expectedPublicPaths = ['/', '/product', '/solutions', '/developers', '/standards', '/demos', '/resources', '/pricing'];
     const publicResourcesTab = publicTabs.find((tab) => tab.path === '/resources');
     const selfhostResourcesTab = selfhostTabs.find((tab) => tab.path === '/resources');
 

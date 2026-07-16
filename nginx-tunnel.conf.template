@@ -60,8 +60,22 @@ server {
         proxy_set_header X-Forwarded-Proto https;
     }
 
-    # Health check
-    location /health {
+    # Readiness and health checks. Keep readiness out of the UI SPA fallback.
+    location = /ready {
+        set $backend_api ${GATEWAY_UPSTREAM};
+        proxy_pass http://$backend_api/ready;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+    }
+
+    location = /health/ready {
+        set $backend_api ${GATEWAY_UPSTREAM};
+        proxy_pass http://$backend_api/health/ready;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+    }
+
+    location = /health {
         set $backend_api ${GATEWAY_UPSTREAM};
         proxy_pass http://$backend_api/health;
         proxy_http_version 1.1;
@@ -135,6 +149,18 @@ server {
 
     # Standard appended form: /org/<id>/.well-known/openid-credential-issuer
     # → rewrite to: /.well-known/openid-credential-issuer/org/<id>
+    # walt.id browser wallet appended form: /org/<id>/waltid/.well-known/openid-credential-issuer
+    location ~ "^/org/([0-9a-fA-F-]{36})/waltid/\.well-known/(openid-credential-issuer|oauth-authorization-server)$" {
+        set $backend_api ${GATEWAY_UPSTREAM};
+        proxy_pass http://$backend_api/.well-known/$2/org/$1/waltid;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        add_header Access-Control-Allow-Origin * always;
+    }
+
     location ~ "^/org/([0-9a-fA-F-]{36})/\.well-known/(openid-credential-issuer|oauth-authorization-server)$" {
         set $backend_api ${GATEWAY_UPSTREAM};
         proxy_pass http://$backend_api/.well-known/$2/org/$1;
@@ -429,17 +455,6 @@ server {
     add_header X-Frame-Options "SAMEORIGIN" always;
     add_header X-Content-Type-Options "nosniff" always;
     add_header X-XSS-Protection "1; mode=block" always;
-
-    # The readystack Canvas image does not expose standards-style OIDC
-    # discovery without a registration token. Publish the LTI platform metadata
-    # expected by ElevenID using the public Canvas hostname so browser redirects
-    # never point back at localhost/private addresses.
-    location = /.well-known/openid-configuration {
-        default_type application/json;
-        add_header Access-Control-Allow-Origin * always;
-        add_header X-Content-Type-Options "nosniff" always;
-        return 200 '{"issuer":"https://${CANVAS_REAL_PUBLIC_HOST}","authorization_endpoint":"https://${CANVAS_REAL_PUBLIC_HOST}/api/lti/authorize_redirect","token_endpoint":"https://${CANVAS_REAL_PUBLIC_HOST}/login/oauth2/token","jwks_uri":"https://${CANVAS_REAL_PUBLIC_HOST}/api/lti/security/jwks","registration_endpoint":"https://${CANVAS_REAL_PUBLIC_HOST}/api/lti/registrations","scopes_supported":["openid"],"response_types_supported":["id_token"],"subject_types_supported":["public"],"id_token_signing_alg_values_supported":["RS256"],"claims_supported":["iss","sub","aud","exp","iat","nonce","https://purl.imsglobal.org/spec/lti/claim/deployment_id","https://purl.imsglobal.org/spec/lti/claim/context","https://purl.imsglobal.org/spec/lti/claim/roles","https://purl.imsglobal.org/spec/lti/claim/message_type","https://purl.imsglobal.org/spec/lti/claim/version","https://purl.imsglobal.org/spec/lti/claim/target_link_uri"]}';
-    }
 
     location / {
         set $canvas_real_upstream canvas-real:3000;

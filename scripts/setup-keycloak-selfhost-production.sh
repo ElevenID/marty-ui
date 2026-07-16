@@ -33,6 +33,7 @@ find_user_id() {
 for email in \
     admin@marty.demo \
     canvas.admin@marty.demo \
+    reviewer@marty.demo \
     vendor@marty.demo \
     john.doe@marty.demo \
     jane.smith@marty.demo \

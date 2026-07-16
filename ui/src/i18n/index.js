@@ -20,7 +20,7 @@ i18n
     supportedLngs: ['en', 'de', 'ja', 'es', 'fr', 'nl'],
     
     // Debug mode (disable in production)
-    debug: import.meta.env.DEV,
+    debug: import.meta.env.DEV && import.meta.env.MODE !== 'test',
     
     // Namespaces
     ns: I18N_NAMESPACES,

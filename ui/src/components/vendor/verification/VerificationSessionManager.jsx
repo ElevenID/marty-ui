@@ -32,7 +32,6 @@ import VisibilityIcon from '@mui/icons-material/Visibility';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ErrorIcon from '@mui/icons-material/Error';
 import HourglassTopIcon from '@mui/icons-material/HourglassTop';
-import { useAuth } from '../../../hooks/useAuth';
 import { useNotifications } from '../../../hooks/useNotifications';
 import { startVerificationFlow } from '../../../services/zkVerificationApi';
 import { listFlowExecutions } from '../../../services/flowsApi';
@@ -40,6 +39,7 @@ import PolicySelectStep from './steps/PolicySelectStep';
 import SessionConfigStep from './steps/SessionConfigStep';
 import QRDisplayStep from './steps/QRDisplayStep';
 import VerificationResultSummary from './VerificationResultSummary';
+import Oid4vpQrCode from './Oid4vpQrCode';
 import { formatOfficialReference } from '../../../utils/officialReferences';
 
 const WIZARD_STEPS = ['Select Policy', 'Configure Session', 'Scan & Verify'];
@@ -49,16 +49,18 @@ const STATUS_CHIP = {
   completed: { label: 'Verified',  color: 'success', icon: <CheckCircleIcon  sx={{ fontSize: 14 }} /> },
   failed:    { label: 'Failed',    color: 'error',   icon: <ErrorIcon        sx={{ fontSize: 14 }} /> },
   expired:   { label: 'Expired',   color: 'default', icon: <ErrorIcon        sx={{ fontSize: 14 }} /> },
+  cancelled: { label: 'Cancelled', color: 'default', icon: <ErrorIcon        sx={{ fontSize: 14 }} /> },
 };
 
 const ACTIVE_STATUSES   = ['pending'];
-const HISTORY_STATUSES  = ['completed', 'failed', 'expired'];
+const HISTORY_STATUSES  = ['completed', 'failed', 'expired', 'cancelled'];
 
 function normalizeSessionStatus(status) {
   const value = String(status || '').toLowerCase();
   if (['passed', 'completed', 'verified'].includes(value)) return 'completed';
   if (['failed', 'denied'].includes(value)) return 'failed';
   if (value === 'expired') return 'expired';
+  if (['cancelled', 'canceled'].includes(value)) return 'cancelled';
   return 'pending';
 }
 
@@ -128,8 +130,7 @@ function formatDate(iso) {
 
 const formatSessionReference = (id) => formatOfficialReference(id, 'record');
 
-function VerificationSessionManager() {
-  const { user } = useAuth();
+function VerificationSessionManager({ organizationId }) {
   const { showSuccess } = useNotifications();
 
   // Sessions state
@@ -153,7 +154,7 @@ function VerificationSessionManager() {
   // ── Data fetching ─────────────────────────────────────────────────────────
 
   const fetchSessions = useCallback(async () => {
-    if (!user?.organization_id) {
+    if (!organizationId) {
       setSessions([]);
       setLoading(false);
       return;
@@ -161,8 +162,8 @@ function VerificationSessionManager() {
     setLoading(true);
     setError(null);
     try {
-      const flowData = await listFlowExecutions(null, { organization_id: user.organization_id });
-      const flowSessions = (Array.isArray(flowData) ? flowData : flowData?.items || flowData?.instances || [])
+      const flowData = await listFlowExecutions(null, { organization_id: organizationId });
+      const flowSessions = flowData
         .filter(isVerificationFlowInstance)
         .map(normalizeFlowSession);
       setSessions(flowSessions);
@@ -172,7 +173,7 @@ function VerificationSessionManager() {
     } finally {
       setLoading(false);
     }
-  }, [user?.organization_id]);
+  }, [organizationId]);
 
   useEffect(() => {
     fetchSessions();
@@ -205,7 +206,7 @@ function VerificationSessionManager() {
       setWizardError(null);
       try {
         let session = await startVerificationFlow({
-          organization_id: user.organization_id,
+          organization_id: organizationId,
           presentation_policy_id: wizardData.policy_id || undefined,
           trust_profile_id: wizardData.trust_profile_id || undefined,
           deployment_profile_id: wizardData.deployment_profile_id || undefined,
@@ -283,16 +284,24 @@ function VerificationSessionManager() {
                 <TableCell>{formatDate(session.created_at)}</TableCell>
                 <TableCell>{formatDate(session.updated_at)}</TableCell>
                 <TableCell align="right">
-                  {normalizeSessionStatus(session.status) === 'pending' && session.qr_code_data && (
+                  {normalizeSessionStatus(session.status) === 'pending' && (session.qr_code_data || session.request_uri) && (
                     <Tooltip title="Show QR code">
-                      <IconButton size="small" onClick={() => openDetail(session)}>
+                      <IconButton
+                        size="small"
+                        aria-label="Show QR code"
+                        onClick={() => openDetail(session)}
+                      >
                         <QrCode2Icon fontSize="small" />
                       </IconButton>
                     </Tooltip>
                   )}
                   {normalizeSessionStatus(session.status) !== 'pending' && (
                     <Tooltip title="View details">
-                      <IconButton size="small" onClick={() => openDetail(session)}>
+                      <IconButton
+                        size="small"
+                        aria-label="View session details"
+                        onClick={() => openDetail(session)}
+                      >
                         <VisibilityIcon fontSize="small" />
                       </IconButton>
                     </Tooltip>
@@ -393,6 +402,7 @@ function VerificationSessionManager() {
             <PolicySelectStep
               value={wizardData}
               onChange={setWizardData}
+              organizationId={organizationId}
             />
           )}
           {wizardStep === 1 && (
@@ -464,13 +474,12 @@ function VerificationSessionManager() {
                 )}
               </Box>
 
-              {normalizeSessionStatus(detailSession.status) === 'pending' && detailSession.qr_code_data && (
+              {normalizeSessionStatus(detailSession.status) === 'pending' && (detailSession.qr_code_data || detailSession.request_uri) && (
                 <Box sx={{ display: 'flex', justifyContent: 'center' }}>
                   <Paper variant="outlined" sx={{ p: 2, background: '#fff', display: 'inline-block' }}>
-                    <img
-                      src={`data:image/png;base64,${detailSession.qr_code_data}`}
-                      alt="OID4VP QR Code"
-                      style={{ width: 200, height: 200, display: 'block' }}
+                    <Oid4vpQrCode
+                      value={detailSession.qr_code_data || detailSession.request_uri}
+                      size={200}
                     />
                   </Paper>
                 </Box>

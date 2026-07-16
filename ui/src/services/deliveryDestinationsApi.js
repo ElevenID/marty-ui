@@ -1,4 +1,6 @@
 import { apiClient } from './api';
+import { postWithIdempotency } from './idempotency';
+import { requireOrganizationId } from './queryUtils';
 
 const BASE = '/v1/delivery-destinations';
 
@@ -8,10 +10,11 @@ export const listDeliveryDestinations = async ({
   provider,
   mode,
 } = {}) => {
+  const orgId = requireOrganizationId(organizationId, 'loading delivery destinations');
   const response = await apiClient.get(BASE, {
     params: {
       active_only: activeOnly,
-      ...(organizationId ? { organization_id: organizationId } : {}),
+      organization_id: orgId,
       ...(provider ? { provider } : {}),
       ...(mode ? { mode } : {}),
     },
@@ -25,8 +28,13 @@ export const getDeliveryDestination = async (destinationId) => {
 };
 
 export const createDeliveryDestination = async (payload) => {
-  const response = await apiClient.post(BASE, payload);
-  return response.data;
+  return postWithIdempotency(BASE, {
+    ...payload,
+    organization_id: requireOrganizationId(
+      payload?.organization_id || payload?.organizationId,
+      'creating delivery destinations',
+    ),
+  });
 };
 
 export const updateDeliveryDestination = async (destinationId, payload) => {

@@ -4,7 +4,7 @@ import { screen, renderWithRouter } from '@test/utils';
 import VerificationSessionsPage from './VerificationSessionsPage';
 
 vi.mock('../../vendor/verification/VerificationSessionManager', () => ({
-  default: () => <div data-testid="oid4vp-session-manager">OID4VP session manager</div>,
+  default: ({ organizationId }) => <div data-testid="oid4vp-session-manager">OID4VP session manager {organizationId}</div>,
 }));
 
 vi.mock('../../canvas/CanvasMirrorProvenanceLookup', () => ({
@@ -15,8 +15,8 @@ vi.mock('../../canvas/CanvasMirrorProvenanceLookup', () => ({
   ),
 }));
 
-vi.mock('../../../hooks/useAuth', () => ({
-  useAuth: () => ({ organizationId: 'org-1' }),
+vi.mock('../../../contexts/ConsoleContext', () => ({
+  useConsole: () => ({ activeOrgId: 'org-1' }),
 }));
 
 describe('VerificationSessionsPage', () => {
@@ -25,7 +25,8 @@ describe('VerificationSessionsPage', () => {
       initialEntries: ['/console/org/operate/verify'],
     });
 
-    expect(screen.getByTestId('oid4vp-session-manager')).toBeInTheDocument();
+    expect(screen.getByTestId('oid4vp-session-manager')).toHaveTextContent('org-1');
+    expect(screen.getByText('Verify')).toBeInTheDocument();
 
     await user.click(screen.getByRole('tab', { name: /canvas provenance/i }));
 

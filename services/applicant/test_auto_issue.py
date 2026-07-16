@@ -1,309 +1,291 @@
-"""
-Tests for the auto-approve / auto-issue workflow.
-
-Covers:
-  - submit with auto_approve=True → immediately reaches APPROVED (no vetting checks created)
-  - submit without auto_approve → reaches SUBMITTED with vetting checks
-  - POST /applications/{id}/auto-issue → atomically reaches ISSUED (issuance mocked)
-  - POST /applications/{id}/auto-issue rejected when auto_approve not set
-"""
+"""MIP 0.3 application lifecycle and authorization regressions."""
 
 from __future__ import annotations
 
 import asyncio
 import os
-import uuid
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-# Ensure the store won't read/write production data during tests.
-os.environ.setdefault("APPLICANT_DATA_FILE", "/tmp/_test_applicant_store.json")
-
-# Use a relative import so the test runs both from the services/ root and
-# from the repo root: `pytest services/applicant/test_auto_issue.py`.
 try:
-    from applicant.main import (  # when cwd == services/
-        ApplicationStatus, ApplicantStatus, Applicant,
-        InMemoryApplicantRepository, create_app, get_repo,
+    from applicant.main import (
+        Applicant,
+        ApplicantStatus,
+        ApplicationStatus,
+        InMemoryApplicantRepository,
+        create_app,
+        get_repo,
     )
-    import applicant.main as _svc
+    import applicant.main as service
 except ModuleNotFoundError:
-    from services.applicant.main import (  # when cwd == repo root
-        ApplicationStatus, ApplicantStatus, Applicant,
-        InMemoryApplicantRepository, create_app, get_repo,
+    from services.applicant.main import (
+        Applicant,
+        ApplicantStatus,
+        ApplicationStatus,
+        InMemoryApplicantRepository,
+        create_app,
+        get_repo,
     )
-    import services.applicant.main as _svc  # type: ignore[no-redef]
+    import services.applicant.main as service
 
 
+def run(coro):
+    return asyncio.run(coro)
 
-def _run(coro):
-    """Run a coroutine synchronously (helper for fixtures)."""
-    return asyncio.get_event_loop().run_until_complete(coro)
-
-
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
 
 @pytest.fixture()
 def repo(tmp_path):
-    """In-memory repo backed by a per-test temp file."""
-    store = str(tmp_path / "store.json")
-    with patch.dict(os.environ, {"APPLICANT_DATA_FILE": store}):
+    with patch.dict(os.environ, {"APPLICANT_DATA_FILE": str(tmp_path / "store.json")}):
         yield InMemoryApplicantRepository()
 
 
 @pytest.fixture()
-def client(repo):
-    """TestClient with the repo dependency override applied."""
-    application = create_app()
-    application.dependency_overrides[get_repo] = lambda: repo
-    return TestClient(application, raise_server_exceptions=True)
+def template(monkeypatch):
+    value = {
+        "id": "application-template-1",
+        "organization_id": "org-1",
+        "credential_template_id": "credential-template-1",
+        "name": "Member Credential Application",
+        "status": "ACTIVE",
+        "approval_strategy": "MANUAL",
+        "form_fields": [
+            {"field_id": "given_name", "label": "Given name", "field_type": "TEXT", "required": True},
+            {"field_id": "birth_date", "label": "Birth date", "field_type": "DATE", "required": True},
+        ],
+        "required_checks": [
+            {"check_type": "identity_verification", "is_required": True, "order": 1},
+        ],
+    }
+
+    async def load(_template_id):
+        return dict(value)
+
+    monkeypatch.setattr(service, "_load_application_template", load)
+    return value
+
+
+@pytest.fixture()
+def client(repo, template):
+    app = create_app()
+    app.dependency_overrides[get_repo] = lambda: repo
+    return TestClient(app, raise_server_exceptions=True)
 
 
 @pytest.fixture()
 def seeded(repo, client):
-    """Seed a minimal applicant; return (repo, client, applicant)."""
     applicant = Applicant(
-        id=str(uuid.uuid4()),
+        id="applicant-1",
         organization_id="org-1",
-        email="test@example.com",
-        given_name="Test",
-        family_name="User",
+        user_id="user-1",
+        oidc_subject="user-1",
+        email="holder@example.test",
+        given_name="Ada",
+        family_name="Lovelace",
         status=ApplicantStatus.APPROVED,
     )
-    _run(repo.save(applicant))
-    return repo, client, applicant
+    run(repo.save(applicant))
+    return applicant
 
 
-def _make_app_payload(applicant_id: str, *, auto_approve: bool = False) -> dict:
-    meta: dict = {
-        "credential_type": "MemberCredential",
-        "credential_display_name": "Member Login Credential",
-        "email": "test@example.com",
-        "given_name": "Test",
-        "family_name": "User",
-        "member_id": "user-123",
-        "organization_id": "org-1",
-        "role": "applicant",
-    }
-    if auto_approve:
-        meta["auto_approve"] = True
+def self_headers(user_id="user-1"):
     return {
-        "applicant_id": applicant_id,
-        "credential_configuration_id": "50000000-0000-0000-0000-000000000010",
-        "issuing_authority": "Marty Trust Services",
-        "requested_validity_years": 1,
-        "metadata": meta,
+        "X-User-Id": user_id,
+        "X-User-Email": f"{user_id}@example.test",
+        "X-Organization-ID": "org-1",
     }
 
 
-def _fake_issuance_post(captured: dict | None = None):
-    """Return an async function that stubs httpx.AsyncClient.post."""
-    offer_id = f"local-{uuid.uuid4().hex[:12]}"
+def reviewer_headers(org_id="org-1", permissions="application:review,application:approve,application:reject"):
+    return {
+        "X-User-Id": "reviewer-1",
+        "X-User-Email": "reviewer@example.test",
+        "X-Organization-Id": org_id,
+        "X-Org-Permissions": permissions,
+    }
 
-    async def _post(self_, url, *, json=None, **_kw):
-        if captured is not None:
-            captured.update((json or {}).get("claims", {}))
-        resp = MagicMock()
-        resp.status_code = 200
-        resp.content = b"{}"
-        resp.raise_for_status = lambda: None
-        resp.json.return_value = {
-            "offers": [{
-                "flow_instance_id": f"flow-{offer_id}",
-                "credential_offer_transaction_id": offer_id,
-                "credential_offer_uri": f"openid-credential-offer://?id={offer_id}",
-                "credential_offer_uris": {"marty": f"marty://offer/{offer_id}"},
-                "expires_at": "2026-03-08T00:00:00Z",
-            }],
+
+def create_application(client, **overrides):
+    payload = {
+        "organization_id": "org-1",
+        "application_template_id": "application-template-1",
+        "form_data": {"given_name": "Ada", "birth_date": "1815-12-10"},
+        "integration_context": {},
+    }
+    payload.update(overrides)
+    return client.post("/v1/me/applications", headers=self_headers(), json=payload)
+
+
+def test_removed_routes_and_fields_are_rejected(client, seeded):
+    assert client.post("/v1/applicants/applications", json={}).status_code == 404
+    response = create_application(client, applicant_id="spoofed-applicant")
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["type"] == "extra_forbidden"
+
+
+def test_creation_derives_template_and_owner(client, seeded):
+    response = create_application(client)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["applicant_id"] == "applicant-1"
+    assert body["credential_template_id"] == "credential-template-1"
+    assert body["application_template_id"] == "application-template-1"
+    assert "metadata" not in body
+    assert "credential_configuration_id" not in body
+
+
+def test_creation_uses_default_profile_but_persists_target_issuer_organization(client, repo):
+    applicant = Applicant(
+        id="applicant-cross-org",
+        organization_id="org-default",
+        user_id="user-cross-org",
+        oidc_subject="user-cross-org",
+        email="cross-org@example.test",
+        status=ApplicantStatus.APPROVED,
+    )
+    run(repo.save(applicant))
+
+    response = client.post(
+        "/v1/me/applications",
+        headers={
+            "X-User-Id": "user-cross-org",
+            "X-User-Email": "cross-org@example.test",
+            "X-Organization-ID": "org-default",
+        },
+        json={
+            "organization_id": "org-1",
+            "application_template_id": "application-template-1",
+            "form_data": {"given_name": "Ada", "birth_date": "1815-12-10"},
+            "integration_context": {},
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["applicant_id"] == "applicant-cross-org"
+    assert response.json()["organization_id"] == "org-1"
+
+
+def test_invalid_iso_date_returns_structured_field_error(client, seeded):
+    response = create_application(
+        client,
+        form_data={"given_name": "Ada", "birth_date": "12/10/1815"},
+    )
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail["error"] == "FIELD_VALIDATION_FAILED"
+    assert detail["field_errors"] == [{
+        "field": "birth_date",
+        "code": "INVALID_DATE",
+        "message": "Use an ISO date in YYYY-MM-DD format.",
+    }]
+
+
+def test_self_service_is_owner_scoped(client, seeded):
+    application_id = create_application(client).json()["id"]
+    response = client.get(
+        f"/v1/me/applications/{application_id}",
+        headers=self_headers("other-user"),
+    )
+    assert response.status_code == 403
+
+
+def test_review_requires_actual_org_permission_and_callers_lock(client, seeded):
+    application_id = create_application(client).json()["id"]
+    submitted = client.post(f"/v1/me/applications/{application_id}/submit", headers=self_headers())
+    assert submitted.status_code == 200, submitted.text
+
+    wrong_org = client.get(
+        f"/v1/organizations/org-2/applicants/{application_id}",
+        headers=reviewer_headers("org-2"),
+    )
+    assert wrong_org.status_code == 403
+
+    no_lock = client.post(
+        f"/v1/organizations/org-1/applicants/{application_id}/approve",
+        headers=reviewer_headers(),
+        json={"notes": "verified"},
+    )
+    assert no_lock.status_code == 409
+
+    lock = client.post(
+        f"/v1/organizations/org-1/applicants/{application_id}/lock",
+        headers=reviewer_headers(),
+        json={"reviewer_id": "spoofed"},
+    )
+    assert lock.status_code == 200
+    assert lock.json()["holder_user_id"] == "reviewer-1"
+
+    approved = client.post(
+        f"/v1/organizations/org-1/applicants/{application_id}/approve",
+        headers=reviewer_headers(),
+        json={"notes": "verified"},
+    )
+    assert approved.status_code == 200, approved.text
+    assert approved.json()["status"] == ApplicationStatus.APPROVED.value
+
+
+def test_claim_blocked_state_is_persisted(client, repo, seeded, monkeypatch):
+    application_id = create_application(client).json()["id"]
+    application = run(repo.get_application(application_id))
+    application.status = ApplicationStatus.APPROVED
+    run(repo.save_application(application))
+
+    async def unavailable(**_kwargs):
+        raise HTTPException(status_code=409, detail="No active flow")
+
+    monkeypatch.setattr(service, "_initiate_issuance_via_flow", unavailable)
+    response = client.post(
+        f"/v1/me/applications/{application_id}/claim",
+        headers=self_headers(),
+        json={},
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"]["error"] == "NO_ACTIVE_ISSUANCE_FLOW"
+
+    saved = run(repo.get_application(application_id))
+    assert saved.status == ApplicationStatus.APPROVED
+    assert saved.claim_state.value == "BLOCKED"
+    assert saved.claim_blocker["owner"] == "ISSUER"
+
+
+def test_claim_offer_ready_uses_only_mapped_form_claims(client, repo, seeded, template, monkeypatch):
+    template["form_fields"][0]["claim_mapping"] = "first_name"
+    template["claim_collection_rules"] = [
+        {"claim_name": "member_id", "source": "SYSTEM", "source_config": {"system_field": "applicant.user_id"}},
+        {"claim_name": "organization_id", "source": "SYSTEM", "source_config": {"system_field": "application.organization_id"}},
+        {"claim_name": "issued_at", "source": "SYSTEM", "source_config": {"system_field": "current.datetime"}},
+    ]
+    application_id = create_application(client).json()["id"]
+    application = run(repo.get_application(application_id))
+    application.status = ApplicationStatus.APPROVED
+    run(repo.save_application(application))
+    captured = {}
+
+    async def issue(**kwargs):
+        captured.update(kwargs["claims"])
+        return {
+            "id": "transaction-1",
+            "status": "pending",
+            "credential_offer_uri": "openid-credential-offer://offer-1",
+            "expires_at": "2099-01-01T00:00:00Z",
         }
-        return resp
 
-    return patch.object(_svc.httpx.AsyncClient, "post", new=_post)
-
-
-# ---------------------------------------------------------------------------
-# Tests: submit with auto_approve=True
-# ---------------------------------------------------------------------------
-
-class TestSubmitAutoApprove:
-    def test_reaches_approved_status(self, seeded):
-        repo, client, applicant = seeded
-        app_id = client.post("/v1/applicants/applications",
-                             json=_make_app_payload(applicant.id, auto_approve=True)).json()["id"]
-
-        resp = client.post(f"/v1/applicants/applications/{app_id}/submit")
-        assert resp.status_code == 200, resp.text
-        body = resp.json()
-        assert body["status"] == ApplicationStatus.APPROVED.value
-        assert body["reviewed_at"] is not None
-
-    def test_creates_no_vetting_checks(self, seeded):
-        repo, client, applicant = seeded
-        app_id = client.post("/v1/applicants/applications",
-                             json=_make_app_payload(applicant.id, auto_approve=True)).json()["id"]
-        client.post(f"/v1/applicants/applications/{app_id}/submit")
-
-        checks = _run(repo.list_checks_for_application(app_id))
-        assert checks == [], f"Expected no checks, found {len(checks)}"
-
-    def test_second_submit_rejected(self, seeded):
-        """Submitting an already-approved application is a 400."""
-        repo, client, applicant = seeded
-        app_id = client.post("/v1/applicants/applications",
-                             json=_make_app_payload(applicant.id, auto_approve=True)).json()["id"]
-        client.post(f"/v1/applicants/applications/{app_id}/submit")
-        resp = client.post(f"/v1/applicants/applications/{app_id}/submit")
-        assert resp.status_code == 400
-
-
-# ---------------------------------------------------------------------------
-# Tests: submit without auto_approve
-# ---------------------------------------------------------------------------
-
-class TestSubmitNormal:
-    def test_reaches_submitted_status(self, seeded):
-        repo, client, applicant = seeded
-        app_id = client.post("/v1/applicants/applications",
-                             json=_make_app_payload(applicant.id)).json()["id"]
-        resp = client.post(f"/v1/applicants/applications/{app_id}/submit")
-        assert resp.status_code == 200, resp.text
-        assert resp.json()["status"] == ApplicationStatus.SUBMITTED.value
-
-    def test_creates_vetting_checks(self, seeded):
-        repo, client, applicant = seeded
-        app_id = client.post("/v1/applicants/applications",
-                             json=_make_app_payload(applicant.id)).json()["id"]
-        client.post(f"/v1/applicants/applications/{app_id}/submit")
-        checks = _run(repo.list_checks_for_application(app_id))
-        assert len(checks) >= 1, "Expected at least one vetting check"
-
-
-# ---------------------------------------------------------------------------
-# Tests: POST …/auto-issue
-# ---------------------------------------------------------------------------
-
-class TestSupersedeApplication:
-    def test_superseding_approved_application_allows_reapplication(self, seeded):
-        repo, client, applicant = seeded
-        app_id = client.post(
-            "/v1/applicants/applications",
-            json=_make_app_payload(applicant.id, auto_approve=True),
-        ).json()["id"]
-        client.post(f"/v1/applicants/applications/{app_id}/submit")
-
-        duplicate = client.post(
-            "/v1/applicants/applications",
-            json=_make_app_payload(applicant.id, auto_approve=True),
-        )
-        assert duplicate.status_code == 409
-
-        supersede = client.post(
-            f"/v1/applicants/applications/{app_id}/supersede",
-            json={
-                "reason": "superseded_by_canvas_reapplication",
-                "replacement_credential_configuration_id": "50000000-0000-0000-0000-000000000010",
-                "source": "canvas_lti_reapplication",
-            },
-        )
-        assert supersede.status_code == 200, supersede.text
-        assert supersede.json()["status"] == ApplicationStatus.WITHDRAWN.value
-
-        replacement = client.post(
-            "/v1/applicants/applications",
-            json=_make_app_payload(applicant.id, auto_approve=True),
-        )
-        assert replacement.status_code == 200, replacement.text
-        assert replacement.json()["id"] != app_id
-
-
-class TestAutoIssueEndpoint:
-    def test_full_flow_reaches_issued(self, seeded):
-        repo, client, applicant = seeded
-        app_id = client.post("/v1/applicants/applications",
-                             json=_make_app_payload(applicant.id, auto_approve=True)).json()["id"]
-        with _fake_issuance_post():
-            resp = client.post(f"/v1/applicants/applications/{app_id}/auto-issue")
-        assert resp.status_code == 200, resp.text
-        body = resp.json()
-        assert body["status"] == ApplicationStatus.OFFERED.value
-        assert body["credential_offer_uri"] is not None
-
-    def test_works_from_draft_without_prior_submit(self, seeded):
-        """auto-issue should transition DRAFT→SUBMITTED→APPROVED→ISSUED atomically."""
-        repo, client, applicant = seeded
-        app_id = client.post("/v1/applicants/applications",
-                             json=_make_app_payload(applicant.id, auto_approve=True)).json()["id"]
-        with _fake_issuance_post():
-            resp = client.post(f"/v1/applicants/applications/{app_id}/auto-issue")
-        assert resp.status_code == 200, resp.text
-        assert resp.json()["status"] == ApplicationStatus.OFFERED.value
-
-    def test_rejected_without_flag(self, seeded):
-        repo, client, applicant = seeded
-        app_id = client.post("/v1/applicants/applications",
-                             json=_make_app_payload(applicant.id)).json()["id"]
-        resp = client.post(f"/v1/applicants/applications/{app_id}/auto-issue")
-        assert resp.status_code == 400
-        assert "auto_approve" in resp.json()["detail"]
-
-    def test_404_for_unknown_application(self, client):
-        resp = client.post(f"/v1/applicants/applications/{uuid.uuid4()}/auto-issue")
-        assert resp.status_code == 404
-
-    def test_auto_approve_stripped_from_claims(self, seeded):
-        """auto_approve must NOT appear in claims sent to the issuance service."""
-        repo, client, applicant = seeded
-        app_id = client.post("/v1/applicants/applications",
-                             json=_make_app_payload(applicant.id, auto_approve=True)).json()["id"]
-        captured: dict = {}
-        with _fake_issuance_post(captured=captured):
-            resp = client.post(f"/v1/applicants/applications/{app_id}/auto-issue")
-        assert resp.status_code == 200, resp.text
-        assert "auto_approve" not in captured, f"auto_approve leaked: {captured}"
-
-    def test_internal_fields_stripped_from_claims(self, seeded):
-        """Internal metadata must never appear in VC claims."""
-        repo, client, applicant = seeded
-        app_id = client.post("/v1/applicants/applications",
-                             json=_make_app_payload(applicant.id, auto_approve=True)).json()["id"]
-        captured: dict = {}
-        with _fake_issuance_post(captured=captured):
-            client.post(f"/v1/applicants/applications/{app_id}/auto-issue")
-        internal = {"credential_display_name", "credential_type", "auto_approve",
-                    "review_notes", "rejection_reason", "info_requests"}
-        leaked = internal & captured.keys()
-        assert not leaked, f"Internal fields leaked into VC claims: {leaked}"
-
-    def test_issue_records_delivery_preferences_without_leaking_claims(self, seeded):
-        repo, client, applicant = seeded
-        app_id = client.post(
-            "/v1/applicants/applications",
-            json=_make_app_payload(applicant.id, auto_approve=True),
-        ).json()["id"]
-        client.post(f"/v1/applicants/applications/{app_id}/submit")
-
-        captured: dict = {}
-        with _fake_issuance_post(captured=captured):
-            resp = client.post(
-                f"/v1/applicants/applications/{app_id}/issue",
-                json={
-                    "delivery_destination_ids": [
-                        "dd-oid4vci-compatible-wallet",
-                        "dd-canvas-credentials-institutional",
-                    ],
-                    "canvas_credentials_consent": True,
-                },
-            )
-
-        assert resp.status_code == 200, resp.text
-        saved = _run(repo.get_application(app_id))
-        assert saved.metadata["delivery_preferences"]["canvas_credentials_consent"] is True
-        assert saved.metadata["delivery_preferences"]["delivery_destination_ids"] == [
-            "dd-oid4vci-compatible-wallet",
-            "dd-canvas-credentials-institutional",
-        ]
-        assert "delivery_preferences" not in captured
+    monkeypatch.setattr(service, "_initiate_issuance_via_flow", issue)
+    response = client.post(
+        f"/v1/me/applications/{application_id}/claim",
+        headers=self_headers(),
+        json={},
+    )
+    assert response.status_code == 200
+    assert response.json()["claim_state"] == "OFFER_READY"
+    assert captured["birth_date"] == "1815-12-10"
+    assert captured["first_name"] == "Ada"
+    assert captured["member_id"] == "user-1"
+    assert captured["organization_id"] == "org-1"
+    assert captured["issued_at"].endswith("+00:00")
+    assert "given_name" not in captured
+    assert "applicant_id" not in captured
+    assert "integration_context" not in captured
+    assert "approval_strategy" not in captured

@@ -29,6 +29,7 @@ def build_user_entities(
             "attrs": {
                 "email": email or "",
                 "status": status.upper(),
+                "user_id": user_id,
             },
             "parents": [
                 {"type": "MIP::Organization", "id": org_id},

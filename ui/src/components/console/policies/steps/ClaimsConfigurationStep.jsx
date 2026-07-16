@@ -27,31 +27,40 @@ import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import { useTranslation } from 'react-i18next';
 
 import { listCredentialTemplates } from '../../../../services/presentationPolicyApi';
-import { useAuth } from '../../../../hooks/useAuth';
+import { useConsole } from '../../../../contexts/ConsoleContext';
+
+const credentialTypeForTemplate = (template) => (
+  template?.vct
+  || template?.credential_type
+  || template?.type
+  || template?.id
+  || ''
+);
 
 const ClaimsConfigurationStep = ({ policyConfig, onConfigChange }) => {
   const { t } = useTranslation('console');
-  const { organizationId } = useAuth();
-  const { data: { templates: credentialTemplates = [], claims: availableClaims = [] } = {} } = useAsyncData(
+  const { activeOrgId } = useConsole();
+  const { data } = useAsyncData(
     async () => {
-      if (!organizationId) {
+      if (!activeOrgId) {
         return { templates: [], claims: [] };
       }
-      const response = await listCredentialTemplates({ organization_id: organizationId });
+      const response = await listCredentialTemplates({ organization_id: activeOrgId });
       const templates = response.data || response || [];
       const claims = templates.flatMap(template =>
         (template.claims || []).map(claim => ({
           name: claim.name,
           display_name: claim.display_name || claim.name,
-          credential_type: template.credential_type,
+          credential_type: credentialTypeForTemplate(template),
           data_type: claim.data_type,
           predicate_type: claim.predicate_type,
         }))
       );
       return { templates, claims };
     },
-    [organizationId]
+    [activeOrgId]
   );
+  const { templates: credentialTemplates = [], claims: availableClaims = [] } = data || {};
 
   const handleFieldChange = (field, value) => {
     onConfigChange({
@@ -111,7 +120,7 @@ const ClaimsConfigurationStep = ({ policyConfig, onConfigChange }) => {
   };
 
   // Get available credential types from templates
-  const availableCredentialTypes = credentialTemplates.map(t => t.credential_type).filter(Boolean);
+  const availableCredentialTypes = credentialTemplates.map((template) => credentialTypeForTemplate(template)).filter(Boolean);
 
   return (
     <Box>

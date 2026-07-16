@@ -15,6 +15,8 @@ import {
   fetchAnalyticsScans,
   fetchIssuedCredentials,
   revokeCredential,
+  suspendCredential,
+  reinstateCredential,
   fetchRevocationHistory,
   fetchMDocConfig,
   saveMDocConfig,
@@ -41,6 +43,15 @@ import { get, post, put, del } from '../../services/api';
 
 describe('vendorApi', () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it('org-scoped helpers fail fast without organization context', async () => {
+    await expect(fetchIssuanceTemplates({ organizationId: '' })).rejects.toMatchObject({ code: 'ORG_REQUIRED' });
+    await expect(fetchTrustProfiles({ organizationId: ' ' })).rejects.toMatchObject({ code: 'ORG_REQUIRED' });
+    await expect(saveIssuanceTemplate({ templateData: { name: 'T' }, organizationId: '' })).rejects.toMatchObject({ code: 'ORG_REQUIRED' });
+
+    expect(get).not.toHaveBeenCalled();
+    expect(post).not.toHaveBeenCalled();
+  });
 
   // ── Credential Configuration ─────────────────────────────────
 
@@ -150,6 +161,18 @@ describe('vendorApi', () => {
     post.mockResolvedValue({});
     await revokeCredential({ credentialId: 'c1', reason: 'lost', comments: 'test' });
     expect(post).toHaveBeenCalledWith(expect.stringContaining('/v1/issued-credentials/c1/revoke'), { reason: 'lost', comments: 'test' });
+  });
+
+  it('suspendCredential calls the canonical lifecycle endpoint', async () => {
+    post.mockResolvedValue({ id: 'c1', status: 'SUSPENDED' });
+    await suspendCredential({ credentialId: 'c1', reason: 'Under review' });
+    expect(post).toHaveBeenCalledWith(expect.stringContaining('/v1/issued-credentials/c1/suspend'), { reason: 'Under review' });
+  });
+
+  it('reinstateCredential calls the canonical lifecycle endpoint', async () => {
+    post.mockResolvedValue({ id: 'c1', status: 'ACTIVE' });
+    await reinstateCredential({ credentialId: 'c1', reason: 'Review complete' });
+    expect(post).toHaveBeenCalledWith(expect.stringContaining('/v1/issued-credentials/c1/reinstate'), { reason: 'Review complete' });
   });
 
   it('fetchRevocationHistory builds offset params', async () => {

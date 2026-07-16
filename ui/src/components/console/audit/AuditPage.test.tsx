@@ -132,7 +132,7 @@ describe('AuditPage', () => {
 
   it('renders audit events and expands row details', async () => {
     const { user } = renderWithRouter(<AuditPage />, {
-      initialEntries: ['/console/audit'],
+      initialEntries: ['/console/org/audit'],
     })
 
     await waitFor(() => {
@@ -155,7 +155,7 @@ describe('AuditPage', () => {
 
   it('exports audit events and opens the download URL', async () => {
     const { user } = renderWithRouter(<AuditPage />, {
-      initialEntries: ['/console/audit'],
+      initialEntries: ['/console/org/audit'],
     })
 
     await waitFor(() => {
@@ -185,7 +185,7 @@ describe('AuditPage', () => {
 
   it('applies a saved view and reloads audit events with its filters', async () => {
     const { user } = renderWithRouter(<AuditPage />, {
-      initialEntries: ['/console/audit'],
+      initialEntries: ['/console/org/audit'],
     })
 
     await waitFor(() => {
@@ -217,7 +217,7 @@ describe('AuditPage', () => {
     })
 
     renderWithRouter(<AuditPage />, {
-      initialEntries: ['/console/audit'],
+      initialEntries: ['/console/org/audit'],
     })
 
     await waitFor(() => {

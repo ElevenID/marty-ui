@@ -23,23 +23,35 @@ describe('orgApplicationsFlow', () => {
 });
 
 describe('orgApplicationsUseCases', () => {
-  it('loads applications and applicants in parallel and merges them', async () => {
+  it('loads the canonical organization application page once', async () => {
     const getApplications = vi.fn().mockResolvedValue({
-      applications: [{ id: 'app-1', applicant_id: 'a-1', status: 'submitted', metadata: {} }],
+      items: [{
+        id: 'app-1',
+        applicant_id: 'a-1',
+        applicant_identifier: 'alice@example.com',
+        status: 'submitted',
+        metadata: {},
+      }],
     });
-    const getApplicants = vi.fn().mockResolvedValue([
-      { id: 'a-1', email: 'alice@example.com' },
-    ]);
 
     const result = await loadOrganizationApplications({
       organizationId: 'org-1',
       getApplications,
-      getApplicants,
     });
 
     expect(result).toHaveLength(1);
     expect(result[0].applicant).toBe('alice@example.com');
     expect(getApplications).toHaveBeenCalledWith('org-1');
-    expect(getApplicants).toHaveBeenCalledWith('org-1');
+  });
+
+  it('fails before loading applications without an organization id', async () => {
+    const getApplications = vi.fn();
+
+    await expect(loadOrganizationApplications({
+      organizationId: '',
+      getApplications,
+    })).rejects.toMatchObject({ code: 'ORG_REQUIRED' });
+
+    expect(getApplications).not.toHaveBeenCalled();
   });
 });

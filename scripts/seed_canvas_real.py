@@ -477,8 +477,7 @@ def _canvas_open_badge_evidence_requirement(
             "value": cfg.program_binding_score_threshold,
         },
         "required": True,
-        "auto_approve_on_evidence": cfg.program_binding_auto_approve,
-        "auto_issue_on_permit": True,
+        "auto_issue_on_permit": cfg.program_binding_auto_approve,
     }
 
 
@@ -935,8 +934,7 @@ def _canvas_program_binding_evidence_requirement(
         "fact_type": cfg.program_binding_evidence_type,
         "verification_method": "SIGNED_AGS_SCORE" if cfg.program_binding_evidence_type.endswith("_score") else "SIGNED_WEBHOOK",
         "scope": dict(canvas_scope or {}),
-        "auto_approve_on_evidence": cfg.program_binding_auto_approve,
-        "auto_issue_on_permit": True,
+        "auto_issue_on_permit": cfg.program_binding_auto_approve,
     }
     if cfg.program_binding_evidence_type.endswith("_score"):
         requirement["pass_rule"] = {
@@ -1991,7 +1989,7 @@ def _create_canvas_demo_application(
     }
     result = _json_request(
         "POST",
-        f"{connector_cfg.issuance_base_url.rstrip('/')}/v1/applications",
+        f"{connector_cfg.issuance_base_url.rstrip('/')}/internal/applications",
         payload=payload,
         headers=_connector_headers(connector_cfg.issuance_api_key),
     )

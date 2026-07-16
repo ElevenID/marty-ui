@@ -41,6 +41,8 @@ describe('Credential Application — end-to-end interaction', () => {
 
   const MDL_TEMPLATE = {
     id: 'tpl-mdl',
+    status: 'active',
+    revocation_profile_id: 'rp-mdl',
     credential_type: 'org.iso.18013.5.1.mDL',
     name: "Mobile Driver's License",
     description: 'ISO 18013-5 mDL',
@@ -89,8 +91,12 @@ describe('Credential Application — end-to-end interaction', () => {
     expect(credentialConfig).toMatchObject({
       id: 'tpl-mdl',
       credential_type: 'org.iso.18013.5.1.mDL',
-      required_fields: ['given_name', 'family_name', 'birth_date'],
-      optional_fields: ['portrait'],
+      required_fields: [
+        expect.objectContaining({ name: 'given_name', required: true }),
+        expect.objectContaining({ name: 'family_name', required: true }),
+        expect.objectContaining({ name: 'birth_date', required: true }),
+      ],
+      optional_fields: [expect.objectContaining({ name: 'portrait', required: false })],
     });
 
     // ── Step 4: Resolve/create applicant ────────────────────
@@ -133,6 +139,7 @@ describe('Credential Application — end-to-end interaction', () => {
       organizationId: ORG.id,
       user: { ...USER, user_id: 'user-42' },
       credentialConfig: { id: 'tpl-mdl' },
+      applicationTemplate: { id: 'app-template-1', form_fields: [{ field_id: 'email', label: 'Email', field_type: 'EMAIL', required: true }] },
       credentialConfigId: 'tpl-mdl',
       hasRegisteredWallet: true,
       resolveApplicantId: vi.fn().mockResolvedValue('app-1'),
@@ -145,7 +152,7 @@ describe('Credential Application — end-to-end interaction', () => {
         credential_offer_uris: { marty: 'openid-credential-offer://marty/offer?id=abc' },
         offer_expires_at: '2026-04-10T00:00:00Z',
       }),
-      listApplications: vi.fn().mockResolvedValue({ applications: [] }),
+      listApplications: vi.fn().mockResolvedValue({ items: [], total: 0, limit: 100, offset: 0 }),
     });
 
     expect(result).toMatchObject({
@@ -170,15 +177,18 @@ describe('Credential Application — end-to-end interaction', () => {
       submitApplication: vi.fn(),
       generateIssuanceOffer: vi.fn(),
       listApplications: vi.fn().mockResolvedValue({
-        applications: [
+        items: [
           {
             id: 'existing-appl',
-            credential_configuration_id: 'tpl-mdl',
+            credential_template_id: 'tpl-mdl',
             status: 'CREDENTIALED',
             credential_offer_uri: 'openid-credential-offer://existing',
             credential_offer_uris: {},
           },
         ],
+        total: 1,
+        limit: 100,
+        offset: 0,
       }),
     });
 
@@ -195,8 +205,8 @@ describe('Credential Application — end-to-end interaction', () => {
       userId: 'user-42',
       getApplicantByUser: vi.fn().mockResolvedValue({ id: 'app-1' }),
       listApplicantApplications: vi.fn().mockResolvedValue([
-        { id: 'appl-1', credential_configuration_id: 'tpl-mdl', status: 'approved' },
-        { id: 'appl-2', credential_configuration_id: 'tpl-badge', status: 'pending' },
+        { id: 'appl-1', credential_template_id: 'tpl-mdl', status: 'approved' },
+        { id: 'appl-2', credential_template_id: 'tpl-badge', status: 'pending' },
       ]),
     });
 

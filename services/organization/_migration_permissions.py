@@ -18,6 +18,14 @@ PERMISSION_CATALOG: list[tuple[str, str, str]] = [
     ("trust-profile", "delete", "Delete trust profiles"),
     ("trust-profile", "activate", "Activate trust profiles"),
     ("trust-profile", "suspend", "Suspend trust profiles"),
+    # Cedar policy sets
+    ("policy-set", "view", "View Cedar policy sets"),
+    ("policy-set", "create", "Create Cedar policy sets"),
+    ("policy-set", "edit", "Edit Cedar policy sets"),
+    ("policy-set", "delete", "Delete Cedar policy sets"),
+    ("policy-set", "activate", "Activate Cedar policy sets"),
+    ("policy-set", "archive", "Archive Cedar policy sets"),
+    ("policy-set", "validate", "Validate Cedar policy sets"),
     # Trusted issuers
     ("trusted-issuer", "view", "View trusted issuers"),
     ("trusted-issuer", "create", "Create trusted issuers"),
@@ -73,6 +81,7 @@ PERMISSION_CATALOG: list[tuple[str, str, str]] = [
     # Issuance
     ("issuance", "view", "View issuance transactions"),
     ("issuance", "initiate", "Initiate credential issuance"),
+    ("issuance", "revoke", "Revoke, suspend, and reinstate issued credentials"),
     # Application templates
     ("application-template", "view", "View application templates"),
     ("application-template", "create", "Create application templates"),
@@ -81,6 +90,7 @@ PERMISSION_CATALOG: list[tuple[str, str, str]] = [
     ("application-template", "activate", "Activate application templates"),
     # Applications
     ("application", "view", "View applications"),
+    ("application", "review", "Review applications, checks, and reviewer locks"),
     ("application", "approve", "Approve applications"),
     ("application", "reject", "Reject applications"),
     # Organization

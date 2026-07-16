@@ -49,6 +49,7 @@ describe('Flow Management — vendor console interaction', () => {
     // ── Step 1: Load flows ──────────────────────────────────
     const { flows } = await loadFlowManagerFlows({
       listFlows: vi.fn().mockResolvedValue([DRAFT_FLOW]),
+      organizationId: 'org-1',
     });
     expect(flows).toHaveLength(1);
 
@@ -84,15 +85,17 @@ describe('Flow Management — vendor console interaction', () => {
     expect(publishedStatusInfo.hasApplicantEntry).toBe(true);
   });
 
-  it('falls back to mock flows when backend is unavailable', async () => {
-    const { flows, notification } = await loadFlowManagerFlows({
+  it('surfaces backend failures without returning mock flows', async () => {
+    const { flows, error, notification } = await loadFlowManagerFlows({
       listFlows: vi.fn().mockRejectedValue(new Error('ECONNREFUSED')),
+      organizationId: 'org-1',
     });
 
-    expect(flows.length).toBeGreaterThan(0);
+    expect(flows).toEqual([]);
+    expect(error).toBe('ECONNREFUSED');
     expect(notification).toMatchObject({
-      type: 'warning',
-      message: expect.stringContaining('Backend service unavailable'),
+      type: 'error',
+      message: 'Unable to load flow definitions',
     });
   });
 
@@ -107,6 +110,7 @@ describe('Flow Management — vendor console interaction', () => {
 
     const { executions } = await loadFlowManagerExecutions({
       listFlowExecutions: vi.fn().mockResolvedValue([execution]),
+      organizationId: 'org-1',
       flowId: 'flow-1',
     });
     expect(executions).toHaveLength(1);
@@ -130,6 +134,7 @@ describe('Flow Management — vendor console interaction', () => {
 
     const { executions } = await loadFlowManagerExecutions({
       listFlowExecutions,
+      organizationId: 'org-1',
       flows: [{ id: 'flow-1' }, { id: 'flow-2' }],
     });
 

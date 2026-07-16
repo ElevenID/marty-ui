@@ -4,11 +4,24 @@ import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from marty_common.org_authorization import OrganizationMembership, OrganizationRoleSummary
 
 from services.deployment_profile import main as deployment_profile
+
+
+def test_deployment_profile_rejects_mixed_biometric_aliases() -> None:
+    with pytest.raises(ValueError, match="operator_biometric_authentication_required"):
+        deployment_profile.CreateDeploymentProfileRequest.model_validate(
+            {
+                "organization_id": "org-1",
+                "name": "Profile",
+                "operator_biometric_authentication_required": True,
+                "biometric_required": True,
+            }
+        )
 
 
 def _build_client(
@@ -54,14 +67,12 @@ async def _save_profile(
         trust_profile_id="trust-1",
         presentation_policy_ids=["policy-1"],
         default_policy_id="policy-1",
-        default_presentation_policy_id="policy-1",
         enabled_flow_ids=["flow-1"],
         network_mode="ONLINE",
         key_access_mode="KEY_VAULT",
         update_channel="stable",
         update_policy={"channel": "stable", "auto_update": True},
         environment_config={"language": "en-US", "offline_cache_ttl_seconds": 86400},
-        ux_config={"language": "en-US"},
     )
     await repo.save(profile)
     return profile
@@ -123,7 +134,6 @@ def test_get_deployment_profile_exposes_protocol_aligned_shape_only() -> None:
         enable_canvas_lti=True,
     )
     profile.branding = deployment_profile.BrandingConfiguration(organization_name="Example Org")
-    profile.default_compliance_profile_id = "compliance-1"
     profile.api_key = "mk_live_secret"
     profile.api_key_prefix = "mk_live_deadbeef..."
     asyncio.run(repo.save(profile))
@@ -141,20 +151,19 @@ def test_get_deployment_profile_exposes_protocol_aligned_shape_only() -> None:
         "id",
         "organization_id",
         "name",
+        "status",
         "trust_profile_id",
         "presentation_policy_ids",
         "credential_template_ids",
         "default_policy_id",
-        "default_presentation_policy_id",
         "network_mode",
         "key_access_mode",
         "environment_config",
-        "ux_config",
         "enabled_flow_ids",
         "update_channel",
         "update_policy",
         "offline_cache_ttl_hours",
-        "biometric_required",
+        "operator_biometric_authentication_required",
         "audit_all_events",
         "canvas_feature_flags",
         "lanes",
@@ -164,8 +173,8 @@ def test_get_deployment_profile_exposes_protocol_aligned_shape_only() -> None:
     # description and site_id are None for this fixture → excluded by exclude_none
     assert "description" not in body
     assert "site_id" not in body
+    assert body["status"] == "draft"
     for removed_key in {
-        "status",
         "environment",
         "callbacks",
         "api_auth",
@@ -174,6 +183,8 @@ def test_get_deployment_profile_exposes_protocol_aligned_shape_only() -> None:
         "branding",
         "default_trust_profile_id",
         "default_compliance_profile_id",
+        "default_presentation_policy_id",
+        "ux_config",
         "api_key_prefix",
     }:
         assert removed_key not in body
@@ -186,6 +197,33 @@ def test_get_deployment_profile_exposes_protocol_aligned_shape_only() -> None:
         "enable_canvas_ags": False,
         "enable_canvas_nrps": False,
     }
+
+
+def test_create_deployment_profile_honors_active_status() -> None:
+    repo = deployment_profile.InMemoryDeploymentProfileRepository()
+    client, _ = _build_client(repo)
+
+    response = client.post(
+        "/v1/deployment-profiles",
+        headers={"x-user-id": "user-1"},
+        json={
+            "organization_id": "org-1",
+            "name": "Production API",
+            "status": "active",
+            "environment": "production",
+            "trust_profile_id": "trust-1",
+            "presentation_policy_ids": ["policy-1"],
+            "default_policy_id": "policy-1",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "active"
+
+    saved = asyncio.run(repo.get(body["id"]))
+    assert saved is not None
+    assert saved.status == deployment_profile.ProfileStatus.ACTIVE
 
 
 def test_update_channel_keeps_update_policy_channel_in_sync() -> None:
@@ -221,3 +259,39 @@ def test_offline_cache_ttl_hours_preserves_existing_environment_config_seconds()
     body = response.json()
     assert body["offline_cache_ttl_hours"] == 12
     assert body["environment_config"]["offline_cache_ttl_seconds"] == 86400
+
+
+def test_create_rejects_removed_compatibility_fields() -> None:
+    repo = deployment_profile.InMemoryDeploymentProfileRepository()
+    client, _ = _build_client(repo)
+
+    response = client.post(
+        "/v1/deployment-profiles",
+        headers={"x-user-id": "user-1"},
+        json={
+            "organization_id": "org-1",
+            "name": "Legacy profile",
+            "trust_profile_id": "trust-1",
+            "presentation_policy_ids": ["policy-1"],
+            "default_presentation_policy_id": "policy-1",
+            "ux_config": {"language": "en-US"},
+        },
+    )
+
+    assert response.status_code == 422
+    fields = {error["loc"][-1] for error in response.json()["detail"]}
+    assert fields == {"default_presentation_policy_id", "ux_config"}
+
+
+def test_put_update_alias_is_removed() -> None:
+    repo = deployment_profile.InMemoryDeploymentProfileRepository()
+    profile = asyncio.run(_save_profile(repo))
+    client, _ = _build_client(repo)
+
+    response = client.put(
+        f"/v1/deployment-profiles/{profile.id}",
+        headers={"x-user-id": "user-1"},
+        json={"name": "Legacy update"},
+    )
+
+    assert response.status_code == 405

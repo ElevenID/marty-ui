@@ -20,10 +20,6 @@ import {
   ListItem,
   ListItemIcon,
   ListItemText,
-  FormControl,
-  InputLabel,
-  Select,
-  MenuItem,
   IconButton,
   Tooltip,
   CircularProgress,
@@ -52,7 +48,6 @@ function ProfilePage() {
     isApplicant,
     organizationId,
     organizations = [],
-    setActiveOrganizationId,
     refreshUser,
   } = useAuth();
   const { activeOrgId, setActiveOrgId } = useConsole();
@@ -274,31 +269,13 @@ function ProfilePage() {
                   <ListItemIcon>
                     <BusinessIcon />
                   </ListItemIcon>
-                  {organizations.length > 1 ? (
-                    <FormControl fullWidth size="small">
-                      <InputLabel id="org-select-label">Organization</InputLabel>
-                      <Select
-                        labelId="org-select-label"
-                        value={organizationId || ''}
-                        label="Organization"
-                        onChange={(event) => setActiveOrganizationId(event.target.value)}
-                      >
-                        {organizations.map((org) => (
-                          <MenuItem key={org.id} value={org.id}>
-                            {org.name || formatOfficialReference(org.id, 'organization')}
-                          </MenuItem>
-                        ))}
-                      </Select>
-                    </FormControl>
-                  ) : (
-                    <ListItemText
-                      primary="Organization"
-                      secondary={
-                        (organizations || [])[0]?.name
-                        || ((organizations || [])[0]?.id ? formatOfficialReference((organizations || [])[0].id, 'organization') : 'Not assigned')
-                      }
-                    />
-                  )}
+                  <ListItemText
+                    primary="Default applicant organization"
+                    secondary={
+                      organizations.find((organization) => organization.id === organizationId)?.name
+                      || (organizationId ? formatOfficialReference(organizationId, 'organization') : 'Not assigned')
+                    }
+                  />
                 </ListItem>
 
                 <ListItem>

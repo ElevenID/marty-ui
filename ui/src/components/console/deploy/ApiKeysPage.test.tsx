@@ -10,18 +10,24 @@ const {
   mockRevokeApiKey,
   mockListWebhooks,
   mockCreateWebhook,
+  mockUseConsole,
 } = vi.hoisted(() => ({
   mockListApiKeys: vi.fn(),
   mockCreateApiKey: vi.fn(),
   mockRevokeApiKey: vi.fn(),
   mockListWebhooks: vi.fn(),
   mockCreateWebhook: vi.fn(),
+  mockUseConsole: vi.fn(),
 }))
 
 vi.mock('../../../hooks/useAuth', () => ({
   useAuth: () => ({
-    organizationId: 'org-123',
+    organizationId: 'auth-org',
   }),
+}))
+
+vi.mock('../../../contexts/ConsoleContext', () => ({
+  useConsole: () => mockUseConsole(),
 }))
 
 vi.mock('../../../services/apiKeysApi', () => ({
@@ -38,6 +44,7 @@ vi.mock('../../../services/webhooksApi', () => ({
 describe('ApiKeysPage', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockUseConsole.mockReturnValue({ activeOrgId: 'org-123' })
     mockListApiKeys.mockResolvedValue([])
     mockListWebhooks.mockResolvedValue([])
     mockCreateApiKey.mockResolvedValue({
@@ -45,7 +52,7 @@ describe('ApiKeysPage', () => {
       name: 'Gateway Partner',
       key: 'pk_live_secret',
       key_prefix: 'pk_live_',
-      scopes: ['verify:presentations'],
+      scopes: ['flows:execute'],
       status: 'active',
       created_at: '2026-04-20T10:00:00Z',
     })
@@ -95,6 +102,32 @@ describe('ApiKeysPage', () => {
     expect(screen.getByText('No scopes assigned')).toBeInTheDocument()
   })
 
+  it('shows callback status as unavailable when webhooks cannot be loaded', async () => {
+    mockListApiKeys.mockResolvedValueOnce([
+      {
+        id: 'key-1',
+        name: 'Partner A',
+        key_prefix: 'pk_live_',
+        scopes: ['flows:execute'],
+        status: 'active',
+      },
+    ])
+    mockListWebhooks.mockRejectedValueOnce(new Error('webhook service unavailable'))
+
+    renderWithoutRouter(
+      <MemoryRouter>
+        <ApiKeysPage />
+      </MemoryRouter>
+    )
+
+    await waitFor(() => {
+      expect(screen.getByText('Partner A')).toBeInTheDocument()
+    })
+
+    expect(screen.getByText(/Callback status could not be loaded/i)).toBeInTheDocument()
+    expect(screen.getAllByText('Unavailable').length).toBeGreaterThanOrEqual(2)
+  })
+
   it('creates an api key and paired callback in one flow', async () => {
     const { user } = renderWithoutRouter(
       <MemoryRouter>
@@ -116,7 +149,7 @@ describe('ApiKeysPage', () => {
     await waitFor(() => {
       expect(mockCreateApiKey).toHaveBeenCalledWith('org-123', expect.objectContaining({
         name: 'Gateway Partner',
-        scopes: expect.arrayContaining(['verify:presentations']),
+        scopes: expect.arrayContaining(['flows:execute']),
       }))
     })
 
@@ -132,13 +165,46 @@ describe('ApiKeysPage', () => {
     })
   })
 
+  it('creates an api key without claiming a callback was provisioned when callback is disabled', async () => {
+    const { user } = renderWithoutRouter(
+      <MemoryRouter>
+        <ApiKeysPage />
+      </MemoryRouter>
+    )
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /create api key|generate api key|deploy\.apiKeysPage\.generateKey/i })).toBeInTheDocument()
+    })
+
+    await user.click(screen.getByRole('button', { name: /create api key|generate api key|deploy\.apiKeysPage\.generateKey/i }))
+
+    const dialog = screen.getByRole('dialog')
+    await user.type(within(dialog).getByLabelText('Key name'), 'Gateway Partner')
+    await user.click(within(dialog).getByLabelText('Provision associated callback'))
+    await user.click(within(dialog).getByRole('button', { name: 'Create integration key' }))
+
+    await waitFor(() => {
+      expect(mockCreateApiKey).toHaveBeenCalledWith('org-123', expect.objectContaining({
+        name: 'Gateway Partner',
+        scopes: expect.arrayContaining(['flows:execute']),
+      }))
+    })
+
+    expect(mockCreateWebhook).not.toHaveBeenCalled()
+    await waitFor(() => {
+      expect(screen.getByText('Integration provisioned')).toBeInTheDocument()
+      expect(screen.getByText(/No callback endpoint was provisioned/i)).toBeInTheDocument()
+      expect(screen.queryByText(/Callback endpoint provisioned for asynchronous events/i)).not.toBeInTheDocument()
+    })
+  })
+
   it('opens and confirms revoke confirmation dialog', async () => {
     mockListApiKeys.mockResolvedValueOnce([
       {
         id: 'key-1',
         name: 'Partner A',
         key_prefix: 'pk_live_',
-        scopes: ['verify:presentations'],
+        scopes: ['flows:execute'],
         status: 'active',
         created_at: '2026-04-20T09:00:00Z',
         last_used_at: null,

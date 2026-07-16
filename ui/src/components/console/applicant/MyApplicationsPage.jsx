@@ -105,7 +105,7 @@ function MyApplicationsPage() {
       try {
         if (showLoading) setLoading(true);
         const result = await getMyApplications({ limit: 100 });
-        const apps = (result.applications || []).map(app => {
+        const apps = result.items.map(app => {
           const status = app.status?.toLowerCase();
           const step = getStepFromStatus(status);
           

@@ -53,6 +53,7 @@ import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import SchoolIcon from '@mui/icons-material/School';
 import SyncAltIcon from '@mui/icons-material/SyncAlt';
 import WorkspacePremiumIcon from '@mui/icons-material/WorkspacePremium';
+import RefreshIcon from '@mui/icons-material/Refresh';
 
 import { getMyCredentials, getMyApplications } from '../../../services/applicantApi';
 import ClaimCredentialDialog from './ClaimCredentialDialog';
@@ -70,7 +71,13 @@ const STAGES = [
 ];
 
 const TERMINAL_STATUSES = new Set(['issued', 'credentialed', 'rejected']);
-const ACTION_STATUSES = new Set(['approved', 'needs_info']);
+const ACTION_STATUSES = new Set(['needs_info']);
+
+function hasLiveOffer(row) {
+  if (row?.claimState !== 'OFFER_READY') return false;
+  if (!row.offerExpiresAt) return Boolean(row.offerUrl || Object.keys(row.offerUris || {}).length);
+  return new Date(row.offerExpiresAt).getTime() > Date.now();
+}
 
 /** Map raw status → pipeline step index (0-based). */
 function getStepIndex(status) {
@@ -91,7 +98,13 @@ function getStepIndex(status) {
 }
 
 /** Status → inline explanation message. */
-function getStatusMessage(status) {
+function getStatusMessage(rowOrStatus) {
+  const row = typeof rowOrStatus === 'object' ? rowOrStatus : null;
+  const status = row?.status || rowOrStatus;
+  if (row?.claimState === 'BLOCKED') {
+    return row.claimBlocker?.message || 'Waiting for the issuer to finish setup';
+  }
+  if (row?.claimState === 'EXPIRED') return 'Wallet invite expired';
   switch (status) {
     case 'draft':                   return 'Draft — not yet submitted';
     case 'submitted':               return 'Waiting for issuer review';
@@ -99,7 +112,7 @@ function getStatusMessage(status) {
     case 'vetting_in_progress':     return 'Under review by issuer';
     case 'pending_approval':        return 'Awaiting final approval';
     case 'needs_info':              return 'Additional information required';
-    case 'approved':                return 'Ready for you to claim';
+    case 'approved':                return 'Approved - waiting for issuer setup';
     case 'offered':                 return 'Wallet invite ready';
     case 'credentialed':
     case 'issued':                  return 'Credential issued';
@@ -112,6 +125,7 @@ function getStatusMessage(status) {
 function isActionRequired(row) {
   if (row.kind === 'credential' && row.status === 'expired') return true;
   if (row.kind === 'application' && ACTION_STATUSES.has(row.status)) return true;
+  if (row.kind === 'application' && hasLiveOffer(row)) return true;
   return false;
 }
 
@@ -123,9 +137,7 @@ function getActionLabel(row) {
   }
   switch (row.status) {
     case 'approved':
-    case 'offered':      return 'Claim';
-    case 'credentialed':
-    case 'issued':       return 'Receive Again';
+    case 'offered':      return hasLiveOffer(row) ? 'Claim' : null;
     case 'needs_info':   return 'Continue';
     default:             return null;
   }
@@ -158,7 +170,7 @@ function normaliseCredential(doc) {
     id: doc.id,
     kind: 'credential',
     type: doc.credential_display_name || doc.name || doc.document_type || doc.credential_type || 'Credential',
-    credentialConfigId: doc.credential_configuration_id || doc.credential_template_id || doc.credential_type,
+    credentialConfigId: doc.credential_template_id || doc.credential_type,
     issuer: doc.issuing_authority || doc.issuer || 'Issuer',
     issuerDid: doc.issuer_did || doc.issuerDid || null,
     date: doc.issued_at || doc.created_at,
@@ -183,13 +195,15 @@ function normaliseApplication(app) {
     kind: 'application',
     organizationId: app.organization_id || app.organizationId || null,
     type: app.credential_display_name || app.credential_type || app.document_type || 'Credential',
-    credentialConfigId: app.credential_configuration_id || app.credential_type,
+    credentialConfigId: app.credential_template_id || app.credential_type,
     issuer: null,
     issuerDid: integrationContext.issuer_did || integrationContext.issuerDid || null,
     date: app.submitted_at || app.created_at,
     updatedAt: app.updated_at || app.submitted_at || app.created_at,
     expiresAt: null,
     status,
+    claimState: app.claim_state || 'NOT_READY',
+    claimBlocker: app.claim_blocker || null,
     step: getStepIndex(status),
     reference: app.reference_number,
     offerUrl: app.credential_offer_uri || null,
@@ -239,7 +253,9 @@ function claimStatusForRow(row = {}) {
     if (row.status === 'expired') return 'Expired';
     return getStatusLabel(row);
   }
-  if (['approved', 'offered'].includes(row.status)) return 'Ready to claim';
+  if (hasLiveOffer(row)) return 'Ready to claim';
+  if (row.claimState === 'BLOCKED') return 'Issuer action required';
+  if (row.claimState === 'EXPIRED') return 'Invite expired';
   if (['credentialed', 'issued'].includes(row.status)) return 'Claimed';
   if (row.status === 'rejected') return 'Not claimable';
   return 'Not ready to claim';
@@ -362,7 +378,7 @@ function getStatusLabel(row) {
     case 'vetting_in_progress':   return 'Under Review';
     case 'pending_approval':      return 'Pending Approval';
     case 'needs_info':            return 'Info Required';
-    case 'approved':              return 'Ready to Claim';
+    case 'approved':              return hasLiveOffer(row) ? 'Ready to Claim' : 'Waiting for Issuer';
     case 'offered':               return 'Wallet Invite Ready';
     case 'credentialed':
     case 'issued':                return 'Credential Issued';
@@ -511,6 +527,8 @@ const STATUS_META = {
   pending_approval:    { label: 'Pending Approval',  color: '#6366f1', variant: 'outlined'  },
   needs_info:          { label: 'Info Required',     color: '#f97316', variant: 'filled'    },
   approved:            { label: 'Ready to Claim',    color: '#3b82f6', variant: 'emphasis'  },
+  claim_blocked:       { label: 'Waiting for Issuer', color: '#f59e0b', variant: 'outlined'  },
+  claim_expired:       { label: 'Wallet Invite Expired', color: '#ef4444', variant: 'filled' },
   offered:             { label: 'Wallet Invite Ready', color: '#3b82f6', variant: 'emphasis'  },
   credentialed:        { label: 'Credential Issued', color: '#22c55e', variant: 'filled'    },
   issued:              { label: 'Issued',            color: '#22c55e', variant: 'filled'    },
@@ -520,6 +538,12 @@ const STATUS_META = {
   expired:             { label: 'Expired',           color: '#ef4444', variant: 'filled'    },
   revoked:             { label: 'Revoked',           color: '#ef4444', variant: 'filled'    },
 };
+
+function statusCircleKey(row) {
+  if (row?.kind === 'application' && row.claimState === 'BLOCKED') return 'claim_blocked';
+  if (row?.kind === 'application' && row.claimState === 'EXPIRED') return 'claim_expired';
+  return row?.status;
+}
 
 /**
  * StatusCircle
@@ -638,6 +662,8 @@ function StatusCircle({ status, showLabel = false, size = 'sm' }) {
 
 function MyIdentityPage() {
   const { t } = useTranslation('applicant');
+  const translateRef = useRef(t);
+  translateRef.current = t;
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
 
@@ -654,6 +680,7 @@ function MyIdentityPage() {
   const [filter, setFilter] = useState(FILTER_ALL);
   const [selectedApp, setSelectedApp] = useState(null);
   const [claimApp, setClaimApp] = useState(null);
+  const [retryCount, setRetryCount] = useState(0);
 
   // --- Data loading ---
   useEffect(() => {
@@ -661,39 +688,64 @@ function MyIdentityPage() {
 
     const load = async (showLoading = true) => {
       try {
-        if (showLoading) setLoading(true);
+        if (showLoading) {
+          setLoading(true);
+          setError(null);
+        }
 
-        const [credResult, appResult] = await Promise.all([
-          getMyCredentials().catch(() => ({ credentials: [] })),
-          getMyApplications({ limit: 100 }).catch(() => ({ applications: [] })),
+        const [credentialResult, applicationResult] = await Promise.allSettled([
+          getMyCredentials(),
+          getMyApplications({ limit: 100 }),
         ]);
 
         if (cancelled) return;
 
-        const creds = (credResult.credentials || credResult.documents || []).map(normaliseCredential);
-        const apps  = (appResult.applications || []).map(normaliseApplication);
+        const failures = [];
+        if (credentialResult.status === 'rejected') {
+          failures.push(translateRef.current('identity.errors.credentials', 'Credential inventory could not be loaded.'));
+        }
+        if (applicationResult.status === 'rejected') {
+          failures.push(translateRef.current('identity.errors.applications', 'Applications could not be loaded.'));
+        }
+
+        const creds = credentialResult.status === 'fulfilled'
+          ? (credentialResult.value.items || []).map(normaliseCredential)
+          : null;
+        const apps = applicationResult.status === 'fulfilled'
+          ? applicationResult.value.items.map(normaliseApplication)
+          : null;
 
         // Deduplicate: keep only the most-advanced row per credential config.
         // If an application reaches credentialed/issued, discard any matching
         // credential document row (the app row has richer progress context).
         // Also deduplicate multiple applications for the same credential config
         // by keeping only the most recent one.
-        const appsByConfig = new Map();
-        for (const app of apps) {
-          const key = app.credentialConfigId || app.id;
-          const existing = appsByConfig.get(key);
-          if (!existing || new Date(app.updatedAt || 0) > new Date(existing.updatedAt || 0)) {
-            appsByConfig.set(key, app);
+        let dedupedApps = null;
+        if (apps) {
+          const appsByConfig = new Map();
+          for (const app of apps) {
+            const key = app.credentialConfigId || app.id;
+            const existing = appsByConfig.get(key);
+            if (!existing || new Date(app.updatedAt || 0) > new Date(existing.updatedAt || 0)) {
+              appsByConfig.set(key, app);
+            }
           }
+          dedupedApps = Array.from(appsByConfig.values());
+          setApplications(dedupedApps);
         }
-        const dedupedApps = Array.from(appsByConfig.values());
 
-        const appConfigIds = new Set(dedupedApps.map((a) => a.credentialConfigId).filter(Boolean));
-        const dedupedCreds = creds.filter((c) => !appConfigIds.has(c.credentialConfigId));
-
-        setCredentials(dedupedCreds);
-        setApplications(dedupedApps);
-        setError(null);
+        if (creds) {
+          const appConfigIds = new Set(
+            (dedupedApps || []).map((app) => app.credentialConfigId).filter(Boolean),
+          );
+          setCredentials(creds.filter((credential) => !appConfigIds.has(credential.credentialConfigId)));
+        } else if (dedupedApps) {
+          const appConfigIds = new Set(dedupedApps.map((app) => app.credentialConfigId).filter(Boolean));
+          setCredentials((current) => current.filter(
+            (credential) => !appConfigIds.has(credential.credentialConfigId),
+          ));
+        }
+        setError(failures.length > 0 ? failures.join(' ') : null);
       } catch (err) {
         if (!cancelled) {
           console.error('Error loading identity data:', err);
@@ -715,7 +767,7 @@ function MyIdentityPage() {
       clearInterval(interval);
       window.removeEventListener('focus', onFocus);
     };
-  }, []);
+  }, [retryCount]);
 
   // Auto-open detail dialog when arriving via ?id=
   useEffect(() => {
@@ -771,7 +823,7 @@ function MyIdentityPage() {
   // --- Row action handler ---
   const handlePrimaryAction = useCallback((row) => {
     const label = getActionLabel(row);
-    if (label === 'Claim' || label === 'Receive Again') {
+    if (label === 'Claim') {
       setClaimApp(row);
     } else if (label === 'Continue' || label === 'Present') {
       setSelectedApp(row);
@@ -812,12 +864,12 @@ function MyIdentityPage() {
             </Box>
           </Stack>
           <Box sx={{ ml: 1.5, flexShrink: 0 }}>
-            <StatusCircle status={row.status} size="md" showLabel />
+            <StatusCircle status={statusCircleKey(row)} size="md" showLabel />
           </Box>
         </Stack>
 
         {/* Inline message */}
-        {getStatusMessage(row.status) && (
+        {getStatusMessage(row) && (
           <Stack direction="row" alignItems="center" spacing={0.5} sx={{ mb: 0.5 }}>
             {isActionRequired(row) && (
               <WarningAmberIcon sx={{ fontSize: 14, color: 'warning.main' }} />
@@ -827,7 +879,7 @@ function MyIdentityPage() {
               color={isActionRequired(row) ? 'warning.dark' : 'text.secondary'}
               fontWeight={isActionRequired(row) ? 600 : 400}
             >
-              {getStatusMessage(row.status)}
+              {getStatusMessage(row)}
             </Typography>
           </Stack>
         )}
@@ -916,15 +968,15 @@ function MyIdentityPage() {
 
       {/* Status — StatusCircle + label + optional message */}
       <Box sx={{ flex: '1 1 200px', minWidth: 0 }}>
-        <StatusCircle status={row.status} showLabel size="sm" />
-        {getStatusMessage(row.status) && (
+        <StatusCircle status={statusCircleKey(row)} showLabel size="sm" />
+        {getStatusMessage(row) && (
           <Typography
             variant="caption"
             color={isActionRequired(row) ? 'warning.dark' : 'text.secondary'}
             fontWeight={isActionRequired(row) ? 600 : 400}
             sx={{ display: 'block', mt: 0.25, pl: '22px' }}
           >
-            {getStatusMessage(row.status)}
+            {getStatusMessage(row)}
           </Typography>
         )}
       </Box>
@@ -1006,7 +1058,13 @@ function MyIdentityPage() {
   return (
     <Box>
       {/* Header */}
-      <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 2 }}>
+      <Stack
+        direction={{ xs: 'column', sm: 'row' }}
+        justifyContent="space-between"
+        alignItems={{ xs: 'stretch', sm: 'center' }}
+        spacing={{ xs: 1.5, sm: 2 }}
+        sx={{ mb: 2, minWidth: 0 }}
+      >
         <Box>
           <Typography variant="h4" gutterBottom>
             {t('identity.title', 'My Identity')}
@@ -1019,7 +1077,7 @@ function MyIdentityPage() {
           variant="contained"
           startIcon={<AddIcon />}
           href="/console/applicant/catalog"
-          sx={{ whiteSpace: 'nowrap' }}
+          sx={{ whiteSpace: 'nowrap', alignSelf: { xs: 'stretch', sm: 'center' } }}
         >
           {t('identity.applyButton', 'Apply for Credential')}
         </Button>
@@ -1031,7 +1089,13 @@ function MyIdentityPage() {
         exclusive
         onChange={(_, v) => v && setFilter(v)}
         size="small"
-        sx={{ mb: 2 }}
+        fullWidth={isMobile}
+        sx={{
+          mb: 2,
+          display: 'grid',
+          gridTemplateColumns: { xs: 'repeat(2, minmax(0, 1fr))', sm: 'repeat(4, max-content)' },
+          '& .MuiToggleButton-root': { minWidth: 0, whiteSpace: 'normal', lineHeight: 1.2 },
+        }}
       >
         <ToggleButton value={FILTER_ALL}>
           {t('identity.filters.all', 'All')} ({counts.all})
@@ -1047,11 +1111,28 @@ function MyIdentityPage() {
         </ToggleButton>
       </ToggleButtonGroup>
 
-      {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
+      {error && (
+        <Alert
+          severity="error"
+          sx={{ mb: 2 }}
+          action={(
+            <Button
+              color="inherit"
+              size="small"
+              startIcon={<RefreshIcon />}
+              onClick={() => setRetryCount((count) => count + 1)}
+            >
+              {t('identity.errors.retry', 'Retry')}
+            </Button>
+          )}
+        >
+          {error}
+        </Alert>
+      )}
 
       {loading ? (
         <LinearProgress />
-      ) : rows.length === 0 ? (
+      ) : error && rows.length === 0 ? null : rows.length === 0 ? (
         <Paper sx={{ p: 6, textAlign: 'center' }}>
           <Typography variant="h6" gutterBottom>
             {filter === FILTER_ALL
@@ -1140,7 +1221,7 @@ function MyIdentityPage() {
       />
 
       {/* Application Details Dialog */}
-      <Dialog open={!!selectedApp} onClose={() => setSelectedApp(null)} maxWidth="sm" fullWidth>
+      <Dialog open={!!selectedApp} onClose={() => setSelectedApp(null)} maxWidth="sm" fullWidth fullScreen={isMobile}>
         <DialogTitle>{selectedApp?.kind === 'credential' ? 'Credential Details' : 'Application Details'}</DialogTitle>
         <DialogContent>
           {selectedApp && (
@@ -1193,7 +1274,7 @@ function MyIdentityPage() {
                 )}
               </Stack>
               <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-                {getStatusMessage(selectedApp.status)}
+                {getStatusMessage(selectedApp)}
               </Typography>
 
               {canvasDetailsForRow(selectedApp).length > 0 && (

@@ -27,7 +27,7 @@ ENV CI=true
 ENV TEST_PROVIDER=mailpit
 ENV MAILPIT_URL=http://mailpit:8025
 ENV BASE_URL=http://ui:80
-ENV API_URL=http://oid4vc-api:8000
+ENV API_URL=http://gateway:8000
 ENV KEYCLOAK_URL=http://keycloak:8080
 # Use only Chromium for local testing
 ENV PLAYWRIGHT_BROWSERS=chromium

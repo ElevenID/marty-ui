@@ -1,0 +1,119 @@
+name: Hosted Canvas Portability Contract
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 9 * * *"
+
+concurrency:
+  group: hosted-canvas-portability-contract
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  read-only-contract:
+    name: Redaction-safe hosted Canvas checks
+    runs-on: ubuntu-latest
+    environment: hosted-canvas-contract
+    timeout-minutes: 15
+    env:
+      HOSTED_CANVAS_MARTY_ORIGIN: ${{ vars.HOSTED_CANVAS_MARTY_ORIGIN }}
+      HOSTED_CANVAS_PLATFORM_ID: ${{ vars.HOSTED_CANVAS_PLATFORM_ID }}
+      HOSTED_CANVAS_MARTY_API_KEY: ${{ secrets.HOSTED_CANVAS_MARTY_API_KEY }}
+      HOSTED_CANVAS_ORIGIN: ${{ vars.HOSTED_CANVAS_ORIGIN }}
+      HOSTED_CANVAS_API_TOKEN: ${{ secrets.HOSTED_CANVAS_API_TOKEN }}
+      HOSTED_CANVAS_COURSE_ID: ${{ vars.HOSTED_CANVAS_COURSE_ID }}
+      HOSTED_CANVAS_EXTERNAL_TOOL_ID: ${{ vars.HOSTED_CANVAS_EXTERNAL_TOOL_ID }}
+      HOSTED_CANVAS_LTI_CLIENT_ID: ${{ vars.HOSTED_CANVAS_LTI_CLIENT_ID }}
+      HOSTED_CANVAS_EXPECTED_ACTIVE_KID: ${{ vars.HOSTED_CANVAS_EXPECTED_ACTIVE_KID }}
+      HOSTED_CANVAS_EXPECTED_RETIRING_KID: ${{ vars.HOSTED_CANVAS_EXPECTED_RETIRING_KID }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: Mask tenant configuration before any probe
+        shell: bash
+        run: |
+          for name in \
+            HOSTED_CANVAS_MARTY_ORIGIN \
+            HOSTED_CANVAS_PLATFORM_ID \
+            HOSTED_CANVAS_MARTY_API_KEY \
+            HOSTED_CANVAS_ORIGIN \
+            HOSTED_CANVAS_API_TOKEN \
+            HOSTED_CANVAS_COURSE_ID \
+            HOSTED_CANVAS_EXTERNAL_TOOL_ID \
+            HOSTED_CANVAS_LTI_CLIENT_ID \
+            HOSTED_CANVAS_EXPECTED_ACTIVE_KID \
+            HOSTED_CANVAS_EXPECTED_RETIRING_KID
+          do
+            value="${!name:-}"
+            if [[ -n "$value" ]]; then
+              printf '::add-mask::%s\n' "$value"
+            fi
+          done
+
+      - name: Validate checked-in acceptance contract
+        run: >-
+          python scripts/check-hosted-canvas-contract.py
+          --config deploy-config/catalog/hosted-canvas-acceptance.json
+          --validate-config
+
+      - name: Run non-mutating hosted Canvas checks
+        id: contract
+        continue-on-error: true
+        run: >-
+          python scripts/check-hosted-canvas-contract.py
+          --config deploy-config/catalog/hosted-canvas-acceptance.json
+          --require-config
+          --output tests/artifacts/hosted-canvas-contract/result.json
+
+      - name: Enforce fixed-schema artifact redaction
+        if: always()
+        run: >-
+          python scripts/check-hosted-canvas-contract.py
+          --config deploy-config/catalog/hosted-canvas-acceptance.json
+          --verify-output tests/artifacts/hosted-canvas-contract/result.json
+
+      - name: Upload sanitized contract result only
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: hosted-canvas-portability-contract
+          path: tests/artifacts/hosted-canvas-contract/result.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Write sanitized workflow summary
+        if: always() && hashFiles('tests/artifacts/hosted-canvas-contract/result.json') != ''
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          result = json.loads(Path("tests/artifacts/hosted-canvas-contract/result.json").read_text())
+          counts = {
+              status: sum(case["status"] == status for case in result["cases"])
+              for status in ("passed", "failed", "skipped")
+          }
+          summary = (
+              "## Hosted Canvas portability contract\n"
+              f"- Result: `{result['status']}`\n"
+              f"- Passed: `{counts['passed']}`\n"
+              f"- Failed: `{counts['failed']}`\n"
+              f"- Skipped: `{counts['skipped']}`\n"
+              "- Artifact: fixed-schema result only; no tenant identifiers or response captures\n"
+          )
+          with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a", encoding="utf-8") as handle:
+              handle.write(summary)
+          PY
+
+      - name: Preserve contract failure after artifact publication
+        if: always() && steps.contract.outcome == 'failure'
+        run: exit 1

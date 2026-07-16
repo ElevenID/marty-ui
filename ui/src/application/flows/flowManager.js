@@ -2,31 +2,6 @@
  * Pure helpers for the vendor flow management console.
  */
 
-export const FLOW_MANAGER_MOCK_FLOWS = [
-  {
-    id: 'flow-1',
-    name: 'EU Digital Identity – Employee Issuance',
-    flow_type: 'issuance',
-    status: 'PUBLISHED',
-    approval_strategy: 'manual',
-    credential_template_name: 'EU Digital Identity Credential',
-    credential_template_id: 'ct-1',
-  },
-  {
-    id: 'flow-2',
-    name: 'Mobile Driver License Issuance',
-    flow_type: 'issuance',
-    status: 'DRAFT',
-    approval_strategy: 'auto',
-    credential_template_name: 'Mobile Driving License',
-    credential_template_id: 'ct-2',
-  },
-];
-
-export function getFlowManagerMockFlows() {
-  return FLOW_MANAGER_MOCK_FLOWS.map((flow) => ({ ...flow }));
-}
-
 export function getFlowStatusPresentation(status, flowStates = {}) {
   const draftState = flowStates.DRAFT || 'DRAFT';
   const publishedState = flowStates.PUBLISHED || 'PUBLISHED';

@@ -211,4 +211,16 @@ describe('TeamPage', () => {
     expect(inviteRow).not.toBeNull()
     expect(within(inviteRow as HTMLElement).queryByRole('button')).not.toBeInTheDocument()
   })
+
+  it('surfaces role loading failures instead of rendering team management with empty roles', async () => {
+    mockListRoles.mockRejectedValue(new Error('Roles service unavailable'))
+
+    renderWithRouter(<TeamPage />, {
+      initialEntries: ['/console/org/team'],
+    })
+
+    expect((await screen.findAllByText(/Roles service unavailable/i)).length).toBeGreaterThan(0)
+    expect(screen.getByRole('button', { name: 'org.team.members.actions.invite' })).toBeDisabled()
+    expect(screen.queryByText('alex@example.com')).not.toBeInTheDocument()
+  })
 })

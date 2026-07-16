@@ -29,6 +29,13 @@ vi.mock('@hooks/useAuth', () => ({
   }),
 }))
 
+vi.mock('../../../contexts/ConsoleContext', () => ({
+  useConsole: () => ({
+    activeOrgId: 'org_123',
+    memberships: [{ id: 'org_123', display_name: 'Test Organization' }],
+  }),
+}))
+
 // Mock SSE (not needed for rendering tests)
 vi.mock('@hooks/useSSE', () => ({
   useSSE: () => ({ isConnected: false }),
@@ -67,12 +74,25 @@ const emptyDashboardData = {
 const partialDashboardData = {
   trustProfiles: [{ id: 1, name: 'Active Profile', status: 'active' }],
   signingKeys: [{ id: 'key_1', name: 'Issuer Key' }],
-  issuerProfiles: [],
+  issuerProfiles: [{
+    id: 'issuer_1',
+    issuer_did: 'did:web:issuer.example.com',
+    signing_service_id: 'managed-openbao-transit',
+    status: 'active',
+  }],
   keyManagementConfig: {
     default_service_id: 'managed-openbao-transit',
     services: [{ id: 'managed-openbao-transit', name: 'Managed OpenBao', status: 'configured' }],
   },
-  templates: [{ id: 1, name: 'Test Template', status: 'active', artifacts_status: 'missing', trust_profile_id: 1 }],
+  templates: [{
+    id: 1,
+    name: 'Test Template',
+    status: 'active',
+    artifacts_status: 'missing',
+    trust_profile_id: 1,
+    issuer_profile_id: 'issuer_1',
+    key_access_mode: 'REMOTE_SIGNING',
+  }],
   policies: [],
   deployments: [],
   flows: [],
@@ -88,12 +108,25 @@ const partialDashboardData = {
 const fullDashboardData = {
   trustProfiles: [{ id: 1, name: 'Active Profile', status: 'active' }],
   signingKeys: [{ id: 'key_1', name: 'Issuer Key' }],
-  issuerProfiles: [{ id: 'issuer_1', issuer_did: 'did:web:issuer.example.com' }],
+  issuerProfiles: [{
+    id: 'issuer_1',
+    issuer_did: 'did:web:issuer.example.com',
+    signing_service_id: 'managed-openbao-transit',
+    status: 'active',
+  }],
   keyManagementConfig: {
     default_service_id: 'managed-openbao-transit',
     services: [{ id: 'managed-openbao-transit', name: 'Managed OpenBao', status: 'configured' }],
   },
-  templates: [{ id: 1, name: 'Test Template', status: 'active', artifacts_status: 'valid', trust_profile_id: 1 }],
+  templates: [{
+    id: 1,
+    name: 'Test Template',
+    status: 'active',
+    artifacts_status: 'valid',
+    trust_profile_id: 1,
+    issuer_profile_id: 'issuer_1',
+    key_access_mode: 'REMOTE_SIGNING',
+  }],
   policies: [{ id: 1, name: 'Test Policy', status: 'active', required_claims: ['age'] }],
   deployments: [{ id: 1, name: 'Prod Deploy', status: 'active' }],
   flows: [{ id: 1, name: 'Verify Flow', status: 'active', trust_profile_id: 1, presentation_policy_id: 1 }],
@@ -170,11 +203,6 @@ describe('ConsoleDashboard', () => {
         issuable: 0,
         total: 0,
       })),
-      http.get('http://localhost:8000/v1/organizations/:orgId/integration-info', ({ params }) => HttpResponse.json({
-        orgId: params.orgId,
-        baseUrl: 'http://localhost:8000',
-        exampleRequest: `curl -X GET "http://localhost:8000/v1/organizations/${params.orgId}"`,
-      })),
       http.get('http://localhost:8000/api/issuance/analytics/summary', () => HttpResponse.json({
         active_offers: 0,
         total_scans: 0,
@@ -214,16 +242,18 @@ describe('ConsoleDashboard', () => {
     it('should show setup readiness as incomplete', () => {
       render(<ConsoleDashboard />)
       expect(screen.getByText(/Setup Readiness/i)).toBeInTheDocument()
+      expect(screen.getByRole('tab', { name: /Verify credentials/i })).toBeInTheDocument()
+      expect(screen.getByRole('tab', { name: /Issue credentials/i })).toBeInTheDocument()
       expect(screen.getAllByText(/Trust Profile/i).length).toBeGreaterThanOrEqual(1)
-      expect(screen.getAllByText(/Credential Template/i).length).toBeGreaterThanOrEqual(1)
       expect(screen.getAllByText(/Presentation Policy/i).length).toBeGreaterThanOrEqual(1)
+      expect(screen.queryByText(/^Credential Template$/i)).not.toBeInTheDocument()
     })
 
     it('should show all items as missing', () => {
       render(<ConsoleDashboard />)
       // All resources are MISSING in empty state — shown as unchecked circles
       const unchecked = screen.getAllByTestId('RadioButtonUncheckedIcon')
-      expect(unchecked.length).toBeGreaterThanOrEqual(5)
+      expect(unchecked.length).toBeGreaterThanOrEqual(3)
     })
 
     it('should show quick actions for setup', () => {
@@ -311,6 +341,26 @@ describe('ConsoleDashboard', () => {
       expect(screen.getByText(/Recent Activity/i)).toBeInTheDocument()
     })
 
+    it('should show recent activity degradation with message id instead of empty activity', async () => {
+      server.use(
+        http.get('http://localhost:8000/v1/organizations/:orgId/audit-events', () => HttpResponse.json({
+          error: 'service_error',
+          error_description: {
+            error: 'audit_log_unavailable',
+            message: 'Organization audit log storage is not configured for this deployment.',
+          },
+          message_id: 'msg-recent-activity-1',
+        }, { status: 501 }))
+      )
+
+      render(<ConsoleDashboard />)
+
+      expect(await screen.findByText(/Recent activity unavailable/i)).toBeInTheDocument()
+      expect(screen.getByText('Organization audit log storage is not configured for this deployment.')).toBeInTheDocument()
+      expect(screen.getByText(/Message ID: msg-recent-activity-1/i)).toBeInTheDocument()
+      expect(screen.queryByText(/Activity will appear here once you begin issuing or verifying credentials/i)).not.toBeInTheDocument()
+    })
+
     it('should link to operate page', () => {
       render(<ConsoleDashboard />)
       const operateLink = screen.getByRole('link', { name: /Go to Operate/i })
@@ -335,6 +385,58 @@ describe('ConsoleDashboard', () => {
       render(<ConsoleDashboard />)
       // Environment badge shows short label "Dev"
       expect(screen.getByText('Dev')).toBeInTheDocument()
+    })
+
+    it('should show unknown environment when environment loading fails', () => {
+      mockDashboardReturn = {
+        data: {
+          ...fullDashboardData,
+          environment: null,
+          dashboardErrors: {
+            environment: Object.assign(new Error('organization service unavailable'), {
+              response: { message_id: 'msg-env-1' },
+            }),
+          },
+        },
+        loading: false,
+        error: null,
+        refetch: vi.fn(),
+      }
+
+      render(<ConsoleDashboard />)
+
+      expect(screen.getByText(/Environment unavailable/i)).toBeInTheDocument()
+      expect(screen.getByText('Unknown')).toBeInTheDocument()
+      expect(screen.queryByText('Dev')).not.toBeInTheDocument()
+    })
+
+    it('should render structured dashboard error envelopes without crashing', () => {
+      mockDashboardReturn = {
+        data: {
+          ...fullDashboardData,
+          dashboardErrors: {
+            criticalEvents: {
+              response: {
+                error: 'service_error',
+                error_description: {
+                  error: 'audit_log_unavailable',
+                  message: 'Organization audit log storage is not configured for this deployment.',
+                },
+                message_id: 'msg-audit-1',
+              },
+            },
+          },
+        },
+        loading: false,
+        error: null,
+        refetch: vi.fn(),
+      }
+
+      render(<ConsoleDashboard />)
+
+      expect(screen.getByText(/Critical events unavailable/i)).toBeInTheDocument()
+      expect(screen.getByText('Organization audit log storage is not configured for this deployment.')).toBeInTheDocument()
+      expect(screen.getByText(/Message ID: msg-audit-1/i)).toBeInTheDocument()
     })
   })
 
@@ -406,10 +508,68 @@ describe('ConsoleDashboard', () => {
       expect(mockNavigate).toHaveBeenCalledWith('/console/org/trust/profiles/new')
     })
 
+    it('should route the template quick action to the credential template wizard', async () => {
+      const user = userEvent.setup()
+
+      mockDashboardReturn = {
+        data: {
+          ...emptyDashboardData,
+          setupIntent: 'issue',
+          trustProfiles: [{ id: 1, name: 'Active Profile', status: 'active' }],
+        },
+        loading: false,
+        error: null,
+        refetch: vi.fn(),
+      }
+
+      render(<ConsoleDashboard />)
+      await user.click(screen.getByText('Create Credential Template'))
+
+      expect(mockNavigate).toHaveBeenCalledWith('/console/org/templates/credentials/new')
+    })
+
+    it('should route later setup quick actions to dedicated artifact wizards', async () => {
+      const user = userEvent.setup()
+
+      mockDashboardReturn = {
+        data: {
+          ...fullDashboardData,
+          setupIntent: 'verify',
+          policies: [],
+          deployments: [],
+          flows: [],
+          apiKeys: [],
+        },
+        loading: false,
+        error: null,
+        refetch: vi.fn(),
+      }
+
+      const { rerender } = render(<ConsoleDashboard />)
+      await user.click(screen.getByText('Create Presentation Policy'))
+      expect(mockNavigate).toHaveBeenCalledWith('/console/org/policies/presentation/new')
+
+      mockNavigate.mockClear()
+      mockDashboardReturn = {
+        data: {
+          ...fullDashboardData,
+          flows: [],
+        },
+        loading: false,
+        error: null,
+        refetch: vi.fn(),
+      }
+      rerender(<ConsoleDashboard />)
+      expect(screen.queryByText('Create API Key')).not.toBeInTheDocument()
+      await user.click(screen.getByText('Create Flow'))
+      expect(mockNavigate).toHaveBeenCalledWith('/console/org/flows/definitions/new')
+    })
+
     it('should prioritize signing service setup when trust dependencies are blocked by KMS', () => {
       mockDashboardReturn = {
         data: {
           ...emptyDashboardData,
+          setupIntent: 'issue',
           signingKeys: [],
           issuerProfiles: [],
           keyManagementConfig: {
@@ -432,6 +592,7 @@ describe('ConsoleDashboard', () => {
       mockDashboardReturn = {
         data: {
           ...emptyDashboardData,
+          setupIntent: 'issue',
           signingKeys: [],
           issuerProfiles: [],
         },

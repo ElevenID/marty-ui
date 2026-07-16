@@ -6,7 +6,6 @@
 
 // Dashboard
 export { default as ConsoleDashboard } from './ConsoleDashboard';
-export { default as GuidedSetupWizard } from './dashboard/GuidedSetupWizard';
 
 // Trust
 export { default as TrustPage } from './trust/TrustPage';
@@ -23,6 +22,8 @@ export { default as TemplatesPage } from './templates/TemplatesPage';
 export { default as CredentialTemplatesPage } from './templates/CredentialTemplatesPage';
 export { default as CredentialTemplateDetailPage } from './templates/CredentialTemplateDetailPage';
 export { default as ApplicationTemplatesPage } from './templates/ApplicationTemplatesPage';
+export { default as ApplicationTemplateEditorPage } from './templates/ApplicationTemplateEditorPage';
+export { default as ApplicationTemplateDetailPage } from './templates/ApplicationTemplateDetailPage';
 export { default as CredentialTemplateWizard } from './templates/CredentialTemplateWizard';
 
 // Policies
@@ -38,6 +39,7 @@ export { default as ApiKeysPage } from './deploy/ApiKeysPage';
 export { default as DidIdentitiesPage } from './deploy/DidIdentitiesPage';
 export { default as SigningKeysPage } from './deploy/SigningKeysPage';
 export { default as CanvasIntegrationsPage } from './deploy/CanvasIntegrationsPage';
+export { default as DeliveryDestinationsPage } from './connect/DeliveryDestinationsPage';
 export { default as KeyManagementServiceWizard } from './deploy/KeyManagementServiceWizard';
 export { default as IssuerIdentityWizard } from './deploy/IssuerIdentityWizard';
 export { default as LanesDevicesPage } from './deploy/LanesDevicesPage';
@@ -49,6 +51,10 @@ export { default as FlowDefinitionsPage } from './flows/FlowDefinitionsPage';
 export { default as FlowInstancesPage } from './flows/FlowInstancesPage';
 export { default as FlowDefinitionWizard } from './flows/FlowDefinitionWizard';
 export { default as FlowDetailPage } from './flows/FlowDetailPage';
+export { default as CustomFlowBuilder } from './flows/CustomFlowBuilder';
+export { default as PolicySetsPage } from './policies/PolicySetsPage';
+export { default as PolicySetWizard } from './policies/PolicySetWizard';
+export { default as PolicySetDetailPage } from './policies/PolicySetDetailPage';
 
 // Operate
 export { default as OperatePage } from './operate/OperatePage';

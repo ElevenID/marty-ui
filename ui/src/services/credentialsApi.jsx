@@ -230,7 +230,7 @@ export const getIssuanceSessionStatus = async (transactionId) => {
  */
 export const generateIssuanceOffer = async (applicationId, options = {}) => {
   try {
-    const response = await apiClient.post(`/v1/applicants/applications/${applicationId}/issue`, options || {});
+    const response = await apiClient.post(`/v1/me/applications/${applicationId}/claim`, options || {});
     const data = response.data;
     // Normalise to the shape OID4VCIInviteDisplay / IssuingSection expect
     return {
@@ -240,21 +240,6 @@ export const generateIssuanceOffer = async (applicationId, options = {}) => {
       // Pass through in case callers want raw fields too
       ...data,
     };
-  } catch (error) {
-    throw handleApiError(error);
-  }
-};
-
-/**
- * Retrieve the current issuance offer for an application (applicant-facing).
- *
- * @param {string} applicationId
- * @returns {Promise<Object>} IssuanceOfferResponse
- */
-export const getIssuanceOffer = async (applicationId) => {
-  try {
-    const response = await apiClient.get(`/v1/applications/${applicationId}/issuance-offer`);
-    return response.data;
   } catch (error) {
     throw handleApiError(error);
   }
@@ -273,5 +258,4 @@ export default {
   getOfferQRCode,
   getIssuanceSessionStatus,
   generateIssuanceOffer,
-  getIssuanceOffer,
 };

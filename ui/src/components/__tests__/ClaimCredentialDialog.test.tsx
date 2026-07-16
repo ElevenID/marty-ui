@@ -9,16 +9,25 @@ const {
   mockListWallets,
   mockListDeliveryDestinations,
   mockWalletPreferenceState,
+  mockSetWalletIds,
 } = vi.hoisted(() => ({
   mockGenerateIssuanceOffer: vi.fn(),
   mockBuildWalletOpenLink: vi.fn(),
   mockListWallets: vi.fn(),
   mockListDeliveryDestinations: vi.fn(),
   mockWalletPreferenceState: { walletIds: [] as string[] },
+  mockSetWalletIds: vi.fn(),
 }));
 
 type InviteDisplayProps = {
-  offerData?: { offer_url?: string | null };
+  offerData?: {
+    offer_url?: string | null;
+    credential_offer_uri?: string | null;
+    credential_offer_uris?: Record<string, string>;
+    credential_offer_labels?: Record<string, string>;
+  };
+  allowedWalletIds?: string[] | null;
+  showDefaultWalletTab?: boolean;
   title?: string;
   instructions?: string;
 };
@@ -48,15 +57,24 @@ vi.mock('../../hooks/useAuth', () => ({
 vi.mock('../../hooks/useWalletPreferences', () => ({
   default: () => ({
     walletIds: mockWalletPreferenceState.walletIds,
+    setWalletIds: (...args: unknown[]) => mockSetWalletIds(...args),
   }),
 }));
 
 vi.mock('../issuance/OID4VCIInviteDisplay', () => ({
-  default: ({ offerData, title, instructions }: InviteDisplayProps) => (
+  default: ({ offerData, allowedWalletIds, showDefaultWalletTab, title, instructions }: InviteDisplayProps) => (
     <div data-testid="claim-invite-display">
       <div data-testid="claim-invite-title">{title}</div>
       <div data-testid="claim-invite-instructions">{instructions || ''}</div>
       <div data-testid="claim-invite-url">{offerData?.offer_url || ''}</div>
+      <div data-testid="claim-invite-allowed-wallets">{allowedWalletIds?.join(',') || 'all'}</div>
+      <div data-testid="claim-invite-default-tab">{String(showDefaultWalletTab)}</div>
+      <div data-testid="claim-invite-wallet-uris">
+        {Object.keys(offerData?.credential_offer_uris || {}).join(',')}
+      </div>
+      <div data-testid="claim-invite-walt-uri">
+        {offerData?.credential_offer_uris?.['wr-waltid-001'] || ''}
+      </div>
     </div>
   ),
 }));
@@ -67,8 +85,24 @@ describe('ClaimCredentialDialog', () => {
     mockWalletPreferenceState.walletIds = [];
     mockBuildWalletOpenLink.mockResolvedValue({ open_uri: 'marty-authenticator://open?inner=spruce-specific' });
     mockListWallets.mockResolvedValue([
-      { id: 'wallet-1', name: 'Test Wallet' },
-      { id: 'wr-spruce-001', name: 'SpruceKit' },
+      {
+        id: 'wr-default',
+        name: 'Any OID4VCI Wallet',
+        specifications: ['OID4VCI'],
+        supported_platforms: ['web', 'ios', 'android'],
+      },
+      {
+        id: 'wr-waltid-001',
+        name: 'walt.id Wallet',
+        specifications: ['OID4VCI'],
+        supported_platforms: ['web', 'ios', 'android'],
+      },
+      {
+        id: 'wr-spruce-001',
+        name: 'SpruceKit',
+        specifications: ['OID4VCI'],
+        supported_platforms: ['ios', 'android'],
+      },
     ]);
     mockListDeliveryDestinations.mockResolvedValue([
       {
@@ -113,7 +147,9 @@ describe('ClaimCredentialDialog', () => {
       />,
     );
 
-    expect(await screen.findByTestId('delivery-destination-selector')).toBeInTheDocument();
+    expect(screen.getByTestId('credential-claim-dialog')).toBeInTheDocument();
+    expect(await screen.findByTestId('wallet-selector')).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: /Any OID4VCI Wallet/i })).toHaveAttribute('aria-checked', 'true');
     await waitFor(() => {
       expect(mockListDeliveryDestinations).toHaveBeenCalledWith({
         activeOnly: true,
@@ -131,31 +167,70 @@ describe('ClaimCredentialDialog', () => {
       );
     });
     expect(await screen.findByTestId('claim-invite-display')).toBeInTheDocument();
+    expect(screen.getByTestId('claim-invite-allowed-wallets')).toHaveTextContent('all');
+    expect(screen.getByTestId('claim-invite-default-tab')).toHaveTextContent('true');
     expect(screen.getByText('Also show this badge in Canvas Credentials')).toBeInTheDocument();
     expect(screen.queryByTestId('wallet-registration-guard')).not.toBeInTheDocument();
   });
 
-  it('blocks the ElevenID wallet option until the applicant selects a wallet app', async () => {
-    const onClose = vi.fn();
+  it('explains when the issuer has not activated an OID4VCI issuance flow', async () => {
+    mockGenerateIssuanceOffer.mockRejectedValue({
+      response: {
+        error_description: 'No active issuance flow produced an offer for this application. Configure and activate an OID4VCI flow for the credential template.',
+      },
+    });
+
+    render(
+      <ClaimCredentialDialog
+        open
+        onClose={vi.fn()}
+        applicationId="app-1"
+        organizationId="org-1"
+        offerData={undefined}
+      />,
+    );
+
+    expect(await screen.findByText(/issuer needs to activate an OID4VCI issuance flow/i)).toBeInTheDocument();
+  });
+
+  it('lets the applicant select a browser wallet in the claim flow', async () => {
+    mockGenerateIssuanceOffer.mockResolvedValue({
+      offer_url: 'https://issuer.example/offers/generic',
+      credential_offer_uri: 'https://issuer.example/offers/generic',
+      credential_offer_uris: {
+        'wr-default': 'https://issuer.example/offers/default',
+        'wr-spruce-001': 'https://issuer.example/offers/spruce',
+      },
+      credential_offer_labels: {
+        'wr-spruce-001': 'SpruceKit',
+      },
+      status: 'active',
+    });
+
     const { user } = render(
-      <ClaimCredentialDialog open onClose={onClose} applicationId="app-1" organizationId="org-1" offerData={undefined} />,
+      <ClaimCredentialDialog open onClose={vi.fn()} applicationId="app-1" organizationId="org-1" offerData={undefined} />,
     );
 
-    await user.click(await screen.findByTestId('delivery-destination-dd-elevenid-wallet'));
+    await user.click(await screen.findByTestId('wallet-option-wr-waltid-001'));
 
-    expect(await screen.findByTestId('wallet-registration-guard')).toHaveTextContent(
-      'Select a wallet app before you can receive this credential.',
-    );
-
-    const setupLink = screen.getByRole('link', { name: 'Choose Wallet' });
-    expect(setupLink).toHaveAttribute('href', '/console/applicant/settings#wallet-selection');
-
-    await user.click(setupLink);
-    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(mockSetWalletIds).toHaveBeenCalledWith(['wr-waltid-001']);
+    await waitFor(() => {
+      expect(mockGenerateIssuanceOffer).toHaveBeenCalledWith(
+        'app-1',
+        expect.objectContaining({
+          delivery_destination_ids: expect.arrayContaining(['dd-oid4vci-compatible-wallet']),
+        }),
+      );
+    });
+    expect(await screen.findByTestId('claim-invite-display')).toBeInTheDocument();
+    expect(screen.getByTestId('claim-invite-allowed-wallets')).toHaveTextContent('wr-waltid-001');
+    expect(screen.getByTestId('claim-invite-default-tab')).toHaveTextContent('false');
+    expect(screen.getByTestId('claim-invite-wallet-uris')).toHaveTextContent('wr-waltid-001');
+    expect(screen.getByTestId('claim-invite-walt-uri')).toHaveTextContent('https://issuer.example/offers/generic');
   });
 
   it('loads a fresh wallet offer once a wallet app is selected', async () => {
-    mockWalletPreferenceState.walletIds = ['wallet-1'];
+    mockWalletPreferenceState.walletIds = ['wr-waltid-001'];
 
     render(<ClaimCredentialDialog open onClose={vi.fn()} applicationId="app-1" organizationId="org-1" offerData={undefined} />);
 
@@ -163,7 +238,7 @@ describe('ClaimCredentialDialog', () => {
       expect(mockGenerateIssuanceOffer).toHaveBeenCalledWith(
         'app-1',
         expect.objectContaining({
-          delivery_destination_ids: expect.arrayContaining(['dd-elevenid-wallet']),
+          delivery_destination_ids: expect.arrayContaining(['dd-oid4vci-compatible-wallet']),
         }),
       );
     });
@@ -210,16 +285,16 @@ describe('ClaimCredentialDialog', () => {
       expect(mockGenerateIssuanceOffer).toHaveBeenCalledWith(
         'app-1',
         expect.objectContaining({
-          delivery_destination_ids: expect.arrayContaining(['dd-elevenid-wallet']),
+          delivery_destination_ids: expect.arrayContaining(['dd-oid4vci-compatible-wallet']),
         }),
       );
     });
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Open in Wallet App' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Open SpruceKit' })).toBeInTheDocument();
     });
 
-    screen.getByRole('button', { name: 'Open in Wallet App' }).click();
+    screen.getByRole('button', { name: 'Open SpruceKit' }).click();
 
     await waitFor(() => {
       expect(mockBuildWalletOpenLink).toHaveBeenCalledWith(
@@ -241,15 +316,12 @@ describe('ClaimCredentialDialog', () => {
     });
   });
 
-  it('explains that Canvas Credentials display runs after wallet issuance', async () => {
-    const { user } = render(
+  it('keeps Canvas Credentials as an optional post-issuance mirror', async () => {
+    render(
       <ClaimCredentialDialog open onClose={vi.fn()} applicationId="app-1" organizationId="org-1" offerData={undefined} />,
     );
 
-    await user.click(await screen.findByTestId('delivery-destination-dd-canvas-credentials-institutional'));
-
-    expect(await screen.findByTestId('canvas-credentials-destination-message')).toHaveTextContent(
-      'Canvas Credentials display happens after the credential is issued.',
-    );
+    expect(await screen.findByText('Also show this badge in Canvas Credentials')).toBeInTheDocument();
+    expect(screen.queryByTestId('canvas-credentials-destination-message')).not.toBeInTheDocument();
   });
 });

@@ -1,0 +1,83 @@
+{
+  "schema_version": 1,
+  "source": {
+    "repository": "https://github.com/instructure/canvas-lms.git",
+    "tag": "release/2026-05-06.409",
+    "tag_object": "116bf6129f2658f0c292f6242f966b19c1117309",
+    "commit": "b6932922d0d06cef2667820a4dd6560b667e2bef",
+    "tree": "63f3a4528a7daaccc057eb4e2acac93af89d3c92",
+    "release_train": "stable/2026-05-06",
+    "dockerfile": "Dockerfile.production",
+    "source_modified": false
+  },
+  "image": {
+    "repository": "ghcr.io/elevenid/canvas-oss-portability",
+    "digest": null,
+    "digest_state": "pending_source_build",
+    "publication_workflow": ".github/workflows/canvas-oss-image.yml",
+    "base_image": {
+      "reference": "instructure/ruby-passenger:3.4-jammy",
+      "index_digest": "sha256:80d3a0e22c6ae228494de406d67fca88d7ff2de89fece021423206087190fcbe",
+      "linux_amd64_digest": "sha256:f928f286e0ea1cbef59025251dbfd121ae748dc4f94a54c85240e842d459e776"
+    },
+    "required_oci_labels": {
+      "org.opencontainers.image.source": "https://github.com/instructure/canvas-lms",
+      "org.opencontainers.image.revision": "b6932922d0d06cef2667820a4dd6560b667e2bef",
+      "org.opencontainers.image.version": "release/2026-05-06.409",
+      "org.opencontainers.image.ref.name": "release/2026-05-06.409",
+      "org.opencontainers.image.base.name": "instructure/ruby-passenger:3.4-jammy",
+      "org.opencontainers.image.base.digest": "sha256:80d3a0e22c6ae228494de406d67fca88d7ff2de89fece021423206087190fcbe",
+      "io.elevenid.canvas-oss.base.linux-amd64.digest": "sha256:f928f286e0ea1cbef59025251dbfd121ae748dc4f94a54c85240e842d459e776"
+    }
+  },
+  "runtime_dependencies": {
+    "postgres": "postgres:14-alpine@sha256:f1341c01408dc7278e9d365ed4f860cd3f87dd16b4464ac326fc0f422083a579",
+    "redis": "redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99",
+    "mailpit": "axllent/mailpit:v1.27@sha256:e22dce5b36f93c77082e204a3942fb6b283b7896e057458400a4c88344c3df68",
+    "edge": "nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10"
+  },
+  "contract_driver": {
+    "source_repository": "https://github.com/ElevenID/marty-ui",
+    "dockerfile": "tests/Dockerfile.canvas-oss-contract",
+    "package_manifest": "tests/canvas-oss-contract/package.json",
+    "package_lock": "tests/canvas-oss-contract/package-lock.json",
+    "audit_level": "high",
+    "base_image": "mcr.microsoft.com/playwright:v1.56.0-jammy@sha256:8901203e4be3245885e0c0c58a3098d21a0892e17525bb32ce66ae37033434af",
+    "compose_service": "canvas-contract",
+    "monitor_service": "canvas-continuity-monitor",
+    "execution_boundary": "docker_compose_one_shot",
+    "secret_transport": "compose_secret_files",
+    "host_browser_processes": false
+  },
+  "bootstrap": {
+    "phase": "pre_start_only",
+    "allowed_commands": [
+      ["bin/rails", "db:create"],
+      ["bin/rails", "db:migrate"],
+      ["bin/rails", "db:initial_setup"],
+      ["bin/rails", "brand_configs:generate_and_upload_all"]
+    ],
+    "forbidden_after_start": [
+      "rails_runner",
+      "rails_console",
+      "direct_database_access",
+      "canvas_source_mount",
+      "custom_canvas_plugin",
+      "canvas_source_patch",
+      "custom_event_ingest"
+    ]
+  },
+  "acceptance_topology": {
+    "marty_origin": "https://beta.elevenidllc.com",
+    "canvas_origin": "https://canvas-test.elevenidllc.com",
+    "timezone": "America/Denver",
+    "overnight_window": "02:00-06:00",
+    "runner_labels": ["self-hosted", "linux", "x64", "canvas-oss-wsl2"],
+    "docker_network": "marty-infra-network",
+    "tunnel_owner": "existing_beta_stack",
+    "contract_service": "canvas-contract",
+    "continuity_monitor_service": "canvas-continuity-monitor",
+    "driver_execution": "docker_compose_one_shot",
+    "host_runtime_processes": false
+  }
+}

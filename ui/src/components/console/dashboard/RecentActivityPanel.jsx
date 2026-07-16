@@ -35,6 +35,7 @@ import { useAuth } from '../../../hooks/useAuth';
 import { useConsole } from '../../../contexts/ConsoleContext';
 import { listAuditEvents } from '../../../services/auditApi';
 import sseService, { EVENT_TYPES } from '../../../services/sseService';
+import DashboardErrorAlert from './DashboardErrorAlert';
 
 /**
  * Severity levels and their visual styling factory
@@ -189,20 +190,13 @@ export function RecentActivityPanel() {
   const { t } = useTranslation('console');
   const { organizationId } = useAuth();
   const { activeOrgId } = useConsole();
-  const effectiveOrgId = activeOrgId || organizationId;
+  const effectiveOrgId = activeOrgId;
   const [liveEvents, setLiveEvents] = useState([]);
-  const { data: fetchedEvents = [], loading } = useAsyncData(
+  const { data: fetchedEvents = [], loading, error, reload } = useAsyncData(
     async () => {
       if (!effectiveOrgId) return [];
-      try {
-        const response = await listAuditEvents(effectiveOrgId, { limit: 5 });
-        return response?.events || response || [];
-      } catch (err) {
-        if (err?.status !== 403) {
-          console.error('Failed to fetch recent activity:', err);
-        }
-        return [];
-      }
+      const response = await listAuditEvents(effectiveOrgId, { limit: 5 });
+      return response?.events || response || [];
     },
     [effectiveOrgId]
   );
@@ -254,7 +248,7 @@ export function RecentActivityPanel() {
         <Button
           size="small"
           component={Link}
-          to="/console/audit"
+          to="/console/org/audit"
           endIcon={<ArrowForwardIcon />}
         >
           {t('dashboard.recentActivity.viewAll')}
@@ -267,6 +261,16 @@ export function RecentActivityPanel() {
             <Skeleton key={i} height={48} sx={{ my: 0.5 }} />
           ))}
         </Box>
+      ) : error ? (
+        <DashboardErrorAlert
+          title={t('dashboard.recentActivity.unavailableTitle', 'Recent activity unavailable')}
+          error={error}
+          onRetry={reload}
+          fallback={t(
+            'dashboard.recentActivity.unavailableFallback',
+            'Recent activity could not be loaded for this organization.'
+          )}
+        />
       ) : events.length === 0 ? (
         <Box sx={{ py: 3, textAlign: 'center' }}>
           <Typography variant="body2" color="text.secondary">

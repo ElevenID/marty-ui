@@ -1,0 +1,13 @@
+{
+  "rules": [
+    {
+      "action": "CONVERT",
+      "selector": {
+        "identifier": "docker-image://docker.io/instructure/ruby-passenger:3.4-jammy"
+      },
+      "updates": {
+        "identifier": "docker-image://docker.io/instructure/ruby-passenger:3.4-jammy@sha256:f928f286e0ea1cbef59025251dbfd121ae748dc4f94a54c85240e842d459e776"
+      }
+    }
+  ]
+}

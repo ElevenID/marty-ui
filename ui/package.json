@@ -7,7 +7,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "prebuild": "node -e \"require('fs').mkdirSync('dist', { recursive: true })\"",
+    "prebuild": "node scripts/generate-demo-manifest-module.mjs && node -e \"require('fs').mkdirSync('dist', { recursive: true })\"",
     "build": "tsc -p tsconfig.build.json && vite build",
     "analyze:bundle": "tsc -p tsconfig.build.json && vite build --mode analyze",
     "build:selfhost": "node scripts/build-selfhost.mjs",
@@ -19,7 +19,8 @@
     "test:ui": "vitest --ui",
     "storybook": "storybook dev -p 6006",
     "storybook:build": "storybook build",
-    "test:visual": "playwright test tests/visual"
+    "test:visual": "playwright test tests/visual",
+    "check:demo-manifests": "node scripts/generate-demo-manifest-module.mjs --check"
   },
   "dependencies": {
     "@elevenid/marty-api-core": "file:../../marty-cli/packages/api-core",

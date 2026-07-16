@@ -24,7 +24,9 @@ import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import { useTranslation } from 'react-i18next';
 
 import { useAuth } from '../../../hooks/useAuth';
+import { useConsole } from '../../../contexts/ConsoleContext';
 import { getApplicantStats } from '../../../services/dashboardApi';
+import DashboardErrorAlert from './DashboardErrorAlert';
 
 /**
  * Stat display component
@@ -50,10 +52,12 @@ function StatItem({ icon: Icon, label, value, color = 'primary' }) {
  */
 export function ApplicantStatsCard() {
   const { t } = useTranslation('console');
-  const { organizationId } = useAuth();
-  const { data: stats = { pending: 0, approved: 0, issuable: 0, total: 0 }, loading } = useAsyncData(
+  const { organizationId: authOrganizationId } = useAuth();
+  const { activeOrgId } = useConsole();
+  const organizationId = activeOrgId;
+  const { data: stats, loading, error, reload } = useAsyncData(
     async () => {
-      if (!organizationId) return { pending: 0, approved: 0, issuable: 0, total: 0 };
+      if (!organizationId) return null;
       return await getApplicantStats(organizationId);
     },
     [organizationId]
@@ -68,8 +72,17 @@ export function ApplicantStatsCard() {
     );
   }
 
-  if (!stats) {
-    return null;
+  if (error || !stats) {
+    return (
+      <Paper sx={{ p: 3, mb: 3 }}>
+        <DashboardErrorAlert
+          title="Applicant stats unavailable"
+          error={error}
+          onRetry={reload}
+          fallback="Applicant lifecycle stats could not be loaded from a live backing source."
+        />
+      </Paper>
+    );
   }
 
   return (

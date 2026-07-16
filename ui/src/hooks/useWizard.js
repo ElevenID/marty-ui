@@ -14,6 +14,31 @@
  */
 
 import { useState, useCallback } from 'react';
+import { operationStatusUnknownMessage } from '../services/idempotency';
+
+const SHOULD_LOG_WIZARD_DIAGNOSTICS = import.meta.env.DEV && import.meta.env.MODE !== 'test';
+
+function logWizardError(...args) {
+  if (SHOULD_LOG_WIZARD_DIAGNOSTICS) {
+    console.error(...args);
+  }
+}
+
+function wizardErrorMessage(error) {
+  if (error?.operationStatusUnknown) {
+    return operationStatusUnknownMessage(error, 'Operation status unknown');
+  }
+  const response = error?.response || {};
+  const message = response?.error?.user_message
+    || response?.error?.message
+    || response?.error_description
+    || (typeof response?.error === 'string' && response.error !== 'validation_error' ? response.error : null)
+    || error?.message
+    || 'Submission failed';
+  const messageId = response?.message_id || response?.request_id || error?.requestId || null;
+
+  return messageId ? `${message} (Message ID: ${messageId})` : message;
+}
 
 /**
  * @typedef {Object} WizardConfig
@@ -96,7 +121,7 @@ export function useWizard({
    */
   const submit = useCallback(async () => {
     if (!onSubmit) {
-      console.error('No onSubmit handler provided to useWizard');
+      logWizardError('No onSubmit handler provided to useWizard');
       return;
     }
 
@@ -116,8 +141,8 @@ export function useWizard({
 
       return result;
     } catch (err) {
-      console.error('Wizard submission failed:', err);
-      setError(err.message || 'Submission failed');
+      logWizardError('Wizard submission failed:', err);
+      setError(wizardErrorMessage(err));
       return null;
     } finally {
       setLoading(false);

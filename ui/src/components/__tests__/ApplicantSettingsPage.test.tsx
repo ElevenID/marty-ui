@@ -4,16 +4,14 @@ import { render, screen } from '@test/utils';
 import ApplicantSettingsPage from '../console/applicant/ApplicantSettingsPage.jsx';
 
 const {
-  mockGetApplicantByUser,
-  mockCreateApplicant,
-  mockUpdateApplicantProfile,
+  mockGetMyApplicantProfile,
+  mockUpsertMyApplicantProfile,
   mockListWallets,
   mockWalletPreferenceState,
   mockGetPlatform,
 } = vi.hoisted(() => ({
-  mockGetApplicantByUser: vi.fn(),
-  mockCreateApplicant: vi.fn(),
-  mockUpdateApplicantProfile: vi.fn(),
+  mockGetMyApplicantProfile: vi.fn(),
+  mockUpsertMyApplicantProfile: vi.fn(),
   mockListWallets: vi.fn(),
   mockWalletPreferenceState: { walletIds: [] as string[] },
   mockGetPlatform: vi.fn(),
@@ -25,14 +23,16 @@ vi.mock('../../hooks/useAuth', () => ({
       user_id: 'user-1',
       email: 'applicant@example.com',
       name: 'Ada Lovelace',
+      given_name: 'Ada',
+      family_name: 'Lovelace',
     },
+    organizationId: 'org-1',
   }),
 }));
 
 vi.mock('../../services/applicantApi', () => ({
-  getApplicantByUser: (...args: unknown[]) => mockGetApplicantByUser(...args),
-  createApplicant: (...args: unknown[]) => mockCreateApplicant(...args),
-  updateApplicantProfile: (...args: unknown[]) => mockUpdateApplicantProfile(...args),
+  getMyApplicantProfile: (...args: unknown[]) => mockGetMyApplicantProfile(...args),
+  upsertMyApplicantProfile: (...args: unknown[]) => mockUpsertMyApplicantProfile(...args),
 }));
 
 vi.mock('../../services/walletRegistryApi', () => ({
@@ -56,14 +56,14 @@ describe('ApplicantSettingsPage', () => {
     vi.clearAllMocks();
     mockWalletPreferenceState.walletIds = [];
     mockGetPlatform.mockReturnValue('desktop');
-    mockGetApplicantByUser.mockResolvedValue({
+    mockGetMyApplicantProfile.mockResolvedValue({
       id: 'app-1',
       given_name: 'Ada',
       family_name: 'Lovelace',
       email: 'applicant@example.com',
       phone_number: '',
     });
-    mockCreateApplicant.mockResolvedValue({ id: 'app-created' });
+    mockUpsertMyApplicantProfile.mockResolvedValue({ id: 'app-created' });
     mockListWallets.mockResolvedValue([]);
   });
 
@@ -78,6 +78,26 @@ describe('ApplicantSettingsPage', () => {
     expect(screen.queryByRole('link', { name: 'Manage Wallet Setup' })).not.toBeInTheDocument();
     expect(screen.queryByTestId('organization-membership-section')).not.toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'View My Organizations' })).not.toBeInTheDocument();
+  });
+
+  it('creates a missing applicant profile without caller-controlled organization context', async () => {
+    mockGetMyApplicantProfile.mockResolvedValue(null);
+    mockUpsertMyApplicantProfile.mockResolvedValue({
+      id: 'app-created',
+      given_name: 'Ada',
+      family_name: 'Lovelace',
+      email: 'applicant@example.com',
+      phone_number: '',
+    });
+
+    render(<ApplicantSettingsPage />);
+
+    expect(await screen.findByDisplayValue('Ada Lovelace')).toBeInTheDocument();
+    expect(mockUpsertMyApplicantProfile).toHaveBeenCalledWith({
+      email: 'applicant@example.com',
+      given_name: 'Ada',
+      family_name: 'Lovelace',
+    });
   });
 
   it('warns iOS users when a preferred wallet only supports protocol deep links', async () => {

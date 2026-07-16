@@ -28,7 +28,7 @@ import PreviewIcon from '@mui/icons-material/Preview';
 import RuleIcon from '@mui/icons-material/Rule';
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { useAuth } from '../../../hooks/useAuth';
+import { useConsole } from '../../../contexts/ConsoleContext';
 import { listApplicationTemplates } from '../../../services/applicationTemplatesApi';
 import { listCredentialTemplates } from '../../../services/presentationPolicyApi';
 import { ResourcePage, EmptyState, EmptyStates, StatusChip } from '../../common';
@@ -36,17 +36,15 @@ import CheckConfigurationDialog from './CheckConfigurationDialog';
 
 function ApplicationTemplatesPage() {
   const { t } = useTranslation('console');
-  const { organizationId } = useAuth();
+  const { activeOrgId: organizationId } = useConsole();
   const { data: templates = [], loading, error, reload } = useAsyncData(async () => {
-    if (!organizationId) return [];
     const data = await listApplicationTemplates(organizationId);
     return data || [];
   }, [organizationId]);
 
   const { data: credentialTemplates = [] } = useAsyncData(async () => {
-    if (!organizationId) return [];
     const result = await listCredentialTemplates({ organization_id: organizationId });
-    const items = Array.isArray(result) ? result : (result?.items || []);
+    const items = result;
     return items;
   }, [organizationId]);
 
@@ -164,15 +162,15 @@ function ApplicationTemplatesPage() {
                       {template.updated_at ? new Date(template.updated_at).toLocaleDateString() : '—'}
                     </TableCell>
                     <TableCell align="right">
-                      <Tooltip title="Configure required checks">
-                        <IconButton
-                          size="small"
-                          color="secondary"
-                          onClick={() => checksDialog.open(template)}
-                        >
-                          <RuleIcon fontSize="small" />
-                        </IconButton>
-                      </Tooltip>
+                      {String(template.status || '').toUpperCase() === 'DRAFT' && <Tooltip title="Configure required checks">
+                          <IconButton
+                            size="small"
+                            color="secondary"
+                            onClick={() => checksDialog.open(template)}
+                          >
+                            <RuleIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>}
                       <Tooltip title={t('applicationTemplatesPage.actions.viewDetails')}>
                         <IconButton
                           component={Link}
@@ -182,7 +180,7 @@ function ApplicationTemplatesPage() {
                           <VisibilityIcon fontSize="small" />
                         </IconButton>
                       </Tooltip>
-                      <Tooltip title={t('applicationTemplatesPage.actions.edit')}>
+                      {String(template.status || '').toUpperCase() === 'DRAFT' && <Tooltip title={t('applicationTemplatesPage.actions.edit')}>
                         <IconButton
                           component={Link}
                           to={`/console/org/templates/applications/${template.id}/edit`}
@@ -190,7 +188,7 @@ function ApplicationTemplatesPage() {
                         >
                           <EditIcon fontSize="small" />
                         </IconButton>
-                      </Tooltip>
+                      </Tooltip>}
                       <Tooltip title={t('applicationTemplatesPage.actions.previewForm')}>
                         <IconButton
                           onClick={() => window.open(`/applicant/preview/applications/${template.id}`, '_blank')}

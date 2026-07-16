@@ -19,6 +19,10 @@ vi.mock('react-router-dom', async () => {
   }
 })
 
+vi.mock('../../../../contexts/ConsoleContext', () => ({
+  useConsole: () => ({ activeOrgId: 'org-1' }),
+}))
+
 describe('PresentationPolicyWizard', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -108,7 +112,7 @@ expect(screen.getByTestId('wizard.policy.next')).toBeInTheDocument()
     it('should allow customizing holder binding', async () => {
       const { user } = render(<PresentationPolicyWizard />)
 
-      // Test holder_binding options: device_key, biometric, etc.
+      // Test holder_binding options: device_key, credential_key, etc.
     })
 
     it('should be marked as optional step', () => {

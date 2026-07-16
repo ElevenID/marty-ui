@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '@test/utils';
+import { render, screen } from '@test/utils';
 
 import OrgSetupPage from './OrgSetupPage';
 
@@ -45,6 +45,7 @@ describe('OrgSetupPage', () => {
     mockSearchParams.mockReturnValue(new URLSearchParams(''));
     mockUseConsole.mockReturnValue({
       activeOrgId: null,
+      memberships: [],
       membershipsLoaded: true,
       refreshMemberships: vi.fn().mockResolvedValue(undefined),
       setActiveOrgId: vi.fn().mockResolvedValue(undefined),
@@ -69,35 +70,23 @@ describe('OrgSetupPage', () => {
     ]);
   });
 
-  it('shows applicant-only memberships and lets users continue to the catalog', async () => {
-    const setMode = vi.fn().mockResolvedValue(undefined);
-    const setActiveOrganizationId = vi.fn();
+  it('excludes applicant-only memberships from organization-console selection', async () => {
+    const setActiveOrgId = vi.fn().mockResolvedValue(undefined);
 
     mockUseConsole.mockReturnValue({
       activeOrgId: null,
+      memberships: [],
       membershipsLoaded: true,
       refreshMemberships: vi.fn().mockResolvedValue(undefined),
-      setActiveOrgId: vi.fn().mockResolvedValue(undefined),
-      setMode,
-    });
-    mockUseAuth.mockReturnValue({
-      organizationId: null,
-      organizations: [],
-      setActiveOrganizationId,
+      setActiveOrgId,
+      setMode: vi.fn().mockResolvedValue(undefined),
     });
 
-    const { user } = render(<OrgSetupPage />);
+    render(<OrgSetupPage />);
 
-    expect(await screen.findByText('Marty')).toBeInTheDocument();
-    expect(screen.queryByText('No Organizations Yet')).not.toBeInTheDocument();
-
-    await user.click(await screen.findByRole('button', { name: 'Use for Applications' }));
-
-    await waitFor(() => {
-      expect(setMode).toHaveBeenCalledWith('applicant');
-      expect(setActiveOrganizationId).toHaveBeenCalledWith('marty-org');
-      expect(mockNavigate).toHaveBeenCalledWith('/console/applicant/catalog');
-    });
+    expect(await screen.findByText('No Organizations Yet')).toBeInTheDocument();
+    expect(screen.queryByText('Marty')).not.toBeInTheDocument();
+    expect(setActiveOrgId).not.toHaveBeenCalled();
   });
 
   it('restores discover and join entry points in the empty setup state', async () => {

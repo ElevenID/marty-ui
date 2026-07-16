@@ -66,6 +66,11 @@ services:
     environment:
       SERVICE_NAME: issuance
 
+  canvas-sync-worker:
+    <<: *selfhost-service-image
+    environment:
+      SERVICE_NAME: issuance
+
   applicant:
     <<: *selfhost-service-image
     environment:

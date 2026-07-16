@@ -5,9 +5,10 @@ import { useSearchParams } from 'react-router-dom';
 import VerificationSessionManager from '../../vendor/verification/VerificationSessionManager';
 import CanvasMirrorProvenanceLookup from '../../canvas/CanvasMirrorProvenanceLookup';
 import { ResourcePage } from '../../common';
-import { useAuth } from '../../../hooks/useAuth';
+import { useConsole } from '../../../contexts/ConsoleContext';
 
 const getOperateTabs = (t) => [
+  { label: 'Flow Instances', path: '/console/org/operate/flow-instances' },
   { label: t('operate.tabs.issuance'),    path: '/console/org/operate/issuance' },
   { label: t('operate.tabs.applications'), path: '/console/org/operate/applications' },
   { label: t('operate.tabs.verify'),      path: '/console/org/operate/verify' },
@@ -35,7 +36,7 @@ function hasCanvasLookupParams(params) {
 
 function VerificationSessionsPage() {
   const { t } = useTranslation('console');
-  const { organizationId } = useAuth();
+  const { activeOrgId: organizationId } = useConsole();
   const [searchParams] = useSearchParams();
   const canvasLookupParams = useMemo(() => canvasLookupParamsFromSearch(searchParams), [searchParams]);
   const hasCanvasLookup = hasCanvasLookupParams(canvasLookupParams);
@@ -62,7 +63,7 @@ function VerificationSessionsPage() {
       </Box>
 
       {activeSection === 'sessions' ? (
-        <VerificationSessionManager />
+        <VerificationSessionManager organizationId={organizationId} />
       ) : (
         <Box data-testid="verification-canvas-provenance-section">
           <Alert severity="info" sx={{ mb: 2 }}>

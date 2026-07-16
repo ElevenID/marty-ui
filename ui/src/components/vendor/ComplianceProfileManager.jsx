@@ -48,10 +48,12 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import SecurityIcon from '@mui/icons-material/Security';
 import VerifiedUserIcon from '@mui/icons-material/VerifiedUser';
 
+import { useAuth } from '../../hooks/useAuth';
 import complianceProfilesApi from '../../services/complianceProfilesApi';
 
 const ComplianceProfileManager = () => {
   const { t } = useTranslation('vendor');
+  const { organizationId } = useAuth();
   const COMPLIANCE_CODES = [
     { value: 'ICAO_DTC', label: t('complianceProfiles.codes.icao'), description: t('complianceProfiles.codes.icaoDesc') },
     { value: 'AAMVA_MDL', label: t('complianceProfiles.codes.aamva'), description: t('complianceProfiles.codes.aamvaDesc') },
@@ -84,15 +86,19 @@ const ComplianceProfileManager = () => {
   // Load profiles
   useEffect(() => {
     loadProfiles();
-  }, []);
+  }, [organizationId]);
 
   const loadProfiles = async () => {
+    if (!organizationId) {
+      setProfiles([]);
+      setError(t('complianceProfiles.loadFailed'));
+      setLoading(false);
+      return;
+    }
+
     setLoading(true);
     try {
-      const [allProfiles] = await Promise.all([
-        complianceProfilesApi.listComplianceProfiles(),
-        complianceProfilesApi.getSystemPresets(),
-      ]);
+      const allProfiles = await complianceProfilesApi.listComplianceProfiles({ organization_id: organizationId });
       setProfiles(allProfiles);
       setError(null);
     } catch (err) {

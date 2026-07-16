@@ -1,0 +1,476 @@
+{
+  "schema_version": 2,
+  "stack_version": "2026.07.0",
+  "release_name": "Credential Lifecycle Foundation",
+  "mip_version": "0.3.1",
+  "publication_state": "DRAFT",
+  "coverage_state": "PARTIAL",
+  "release_ready": false,
+  "public_demo_ready": false,
+  "video_distribution": {
+    "provider": "YOUTUBE",
+    "status": "CONFIGURED",
+    "channel_name": "ElevenID LLC",
+    "channel_id": "UCjUbog1b4zEdck5pV78EgCw",
+    "channel_handle": "@elevenidllc",
+    "channel_url": "https://www.youtube.com/@elevenidllc",
+    "playlist_id": "PLH1b0jTIP3-4",
+    "playlist_url": "https://www.youtube.com/playlist?list=PLH1b0jTIP3-4",
+    "privacy_enhanced_embeds": true,
+    "verified_at": "2026-07-13T21:32:50.925Z"
+  },
+  "deployment_release_marker": "mip-0.3.1-local-20260714T214333Z",
+  "binding_revision": 2,
+  "rebound_at": "2026-07-14T22:00:00Z",
+  "rebind_reason": "DRAFT_RELEASE_REBIND",
+  "previous_binding": {
+    "deployment_release_marker": "mip-0.3.1-local-20260713T070847Z",
+    "ui_image_digest": "sha256:b3e014cebc88dad46337be7b6afee1167ce6b3d03f7a3b64837af47dab5b079d"
+  },
+  "published_at": null,
+  "publication_attestation": null,
+  "superseded_by": null,
+  "recorder_revision": {
+    "kind": "git",
+    "value": "3675fdac04b69f00fb2e7372359e576f9f2b0d8a"
+  },
+  "demo_application_revision": "cb3fdb0d7adcd29f3693b5a1832ab4a4333f4294",
+  "component_revisions": [
+    { "component": "longfellow-zk", "repository": "https://github.com/ElevenID/longfellow-zk", "revision": "37f0c08c891c84503e63e33c7a9ab3e3229561c6" },
+    { "component": "marty-blog", "repository": "https://github.com/ElevenID/marty-blog", "revision": "37aca6de1639db9eb67102d6996b95e4ab2f035c" },
+    { "component": "marty-cli", "repository": "https://github.com/ElevenID/marty-cli", "revision": "0dba9e79127062c2bd4258b622a6c0a5067324b9" },
+    { "component": "marty-core", "repository": "https://github.com/ElevenID/marty-core", "revision": "d4bbfb9c3093efff719ba405ef58667b3f826fd8" },
+    { "component": "marty-credentials", "repository": "https://github.com/ElevenID/marty-credentials", "revision": "7cf179644893583412895d3c34263f9e2a101501" },
+    { "component": "marty-microservices-framework", "repository": "https://github.com/ElevenID/marty-microservices-framework", "revision": "5790bf7afcaab30c506e45a2414d8e54e2a9ff5c" },
+    { "component": "marty-protocol", "repository": "https://github.com/ElevenID/marty-protocol", "revision": "6648d3e2c9b1f56c35043fb5052b95693c17bf4b" },
+    { "component": "marty-subscriptions", "repository": "https://github.com/ElevenID/marty-subscriptions", "revision": "dc504a3b64176811e5856bbe50d6d4e3f6c658a6" },
+    { "component": "marty-ui", "repository": "https://github.com/ElevenID/marty-ui", "revision": "96cfedc0280980340777a6c39629052bec0a106e" }
+  ],
+  "image_digests": [
+    { "component": "auth", "digest": "sha256:deedeabf7c839d8bcfaa99a3d93cdfa85eaed4978757f3b9af00e44d0bd5dc0c" },
+    { "component": "organization", "digest": "sha256:e28cf753bdaa2c623b31eaaef83af00b40c178c67f4198e4bb7ae8525d20fbd9" },
+    { "component": "credential-template", "digest": "sha256:445f073df417b7dd50d3e8e3c43647a78748f53cbb50e90690658e726f19f4f0" },
+    { "component": "trust-profile", "digest": "sha256:7f6fca3f3d57d93e8da249b029ba6abd2328daec663183c2f4380c3ce9bb748b" },
+    { "component": "applicant", "digest": "sha256:13f2d2dfa01c635b0f6866a56ba81f90d7b8ed3e053faa030cec7bd4ddc85fd2" },
+    { "component": "notification", "digest": "sha256:ec5718dea4fd418d0c7ce0c203d769a4e04e071edbabac79c8fbb412ab8e6790" },
+    { "component": "compliance-profile", "digest": "sha256:e642b54320154321c9038ce61d62c25bc7da325bcab2a0f86d783e81b3234683" },
+    { "component": "presentation-policy", "digest": "sha256:84c9e78cb1e8e5b338114ebe1758445d6850d3ffb45687a4a9c67d2b6540d837" },
+    { "component": "deployment-profile", "digest": "sha256:b9bf7fe2a93d1d1c7d75a7010fcf206fa60aa6f34608cbf8b076aab75bba9d9a" },
+    { "component": "flow", "digest": "sha256:e6645057bad8fa2e8fcfbe05206b2ae4e5fdcd8d6a6b9fa16e6f550404b6db1a" },
+    { "component": "verification", "digest": "sha256:ddebaf4595db80556c377c7802b94571084fa0aced6fc7735ef6648273e25f00" },
+    { "component": "revocation-profile", "digest": "sha256:dfbb58b36fdb605ed14ad7531de507569a9b3074b69cf10b3194c06de9c37af9" },
+    { "component": "device-registration", "digest": "sha256:4642811216829e4fb304d4c127d303af8c5fba99f86d2f5f6bf077b63a14aa51" },
+    { "component": "event-stream", "digest": "sha256:c27fa417bc252494cf48fc1006ff966883b587759bec6398408ef9fed4c7456c" },
+    { "component": "billing", "digest": "sha256:2f209d8ec5b983224d8793c8f57f46efc5c36439417688fa19758a93c452a7ed" },
+    { "component": "issuance", "digest": "sha256:98bca882567cf43719ab58e40cd7439c25ebd5703d4ddc07dae0b49812c15cd9" },
+    { "component": "gateway", "digest": "sha256:e032194880317b8d4e0a10432befc15c259cab55445ada5bc959d90c1bf474e2" },
+    { "component": "ui-prod", "digest": "sha256:b7a8ec793c5ad3f7a19aa8c26eb86cbbb234a9a71df55db74fbcba0a99fad8d5" }
+  ],
+  "release_evidence": {
+    "environment": "local beta deployment",
+    "recorded_at": "2026-07-13T07:21:33Z",
+    "displayed_offers_invalidated_at": "2026-07-13T07:21:33Z",
+    "source_marker": "73f0b969545eb18bf84293bbf48ad54154dd1386",
+    "artifacts": [
+      { "label": "Membership badge and login report", "sha256": "c8696e564c316b5287f5e31019ec219ab40f84824978f78aaa7e10c9e16dac5b", "visibility": "PROTECTED" },
+      { "label": "Organization primitives trace", "sha256": "05d2d34de4460a11d919780e4f31bf4dc249db662df30c3e411449afcfeb8f7a", "visibility": "PROTECTED" },
+      { "label": "Issuance and verification report", "sha256": "4cf99915a8ca0e749ade63d8f35e2a1964c305d119a59ba80f259e0e3d89746c", "visibility": "PROTECTED" },
+      { "label": "Credential lifecycle report", "sha256": "4bfb08fea9a3391986b033dd6b59464f412c259622b3fceaf6018d08f8128ab6", "visibility": "PROTECTED" }
+    ]
+  },
+  "release_differences": {
+    "previous_stack_version": "2026.05.0",
+    "ux": [
+      "Adds draft-first Application Template lifecycle controls and validation states.",
+      "Adds release-bound credential demonstrations with accessible evidence summaries."
+    ],
+    "services": [
+      "Moves applicant and holder workflows to canonical MIP 0.3.1 contracts.",
+      "Adds holder inventory, claim readiness, and canonical issuance recovery behavior."
+    ],
+    "wallets": [
+      "Validates deterministic browser-wallet issuance and verification as an internal control.",
+      "Keeps independent-wallet coverage pending until a final-protocol implementation passes unchanged requests."
+    ],
+    "integrations": [
+      "Defines a portable learning-achievement scenario boundary for the Canvas adapter."
+    ],
+    "operations": [
+      "Binds evidence to coordinated source revisions, container image digests, and a deployment marker."
+    ]
+  },
+  "scenarios": [
+    {
+      "slug": "membership-badge-login",
+      "title": "Membership Badge and Login",
+      "summary": "A holder receives an Open Badge membership credential, signs out, presents the badge, and returns to the same account.",
+      "scenario_revision": 2,
+      "recording_classification": "FIRST_PARTY_CONTROL",
+      "revision_history": [
+        { "scenario_revision": 1, "state": "VALIDATED", "recording_classification": "FIRST_PARTY_CONTROL", "evidence_sha256": "c8696e564c316b5287f5e31019ec219ab40f84824978f78aaa7e10c9e16dac5b" }
+      ],
+      "mip_version": "0.3.1",
+      "state": "PUBLIC",
+      "audiences": ["Holder", "Issuer", "Developer"],
+      "capabilities": ["Open Badge issuance", "Wallet receipt", "Credential login", "Existing-account recovery"],
+      "protocols": ["openid4vci-1.0", "openid4vp-1.0", "dcql-1.0", "sd-jwt-vc", "open-badges-3.0"],
+      "poster": {
+        "src": "/images/demos/2026.07.0/membership-badge-login.png",
+        "sha256": "f4e637ed70e12e7d7245e6c94906b7f0bae12967c47ae75eb291b9866865b3dc",
+        "alt": "ElevenID holder interface showing the membership badge credential login result"
+      },
+      "youtube_id": "ol0VxziVwMU",
+      "media_evidence": {
+        "video_sha256": "a8604fecb8073d1fe0a95aef5fb572bd3b50e04a052d2512dad3208bb11d2654",
+        "captions_sha256": "c28a5aad0b0874200a343cb663fe9d86a5503fff37659dee76c31629aaf67c20",
+        "thumbnail_sha256": "76bcf19026d069c58f7e0dc17eccff92d892405c1e6d6e90c025d3e5c2494fab",
+        "privacy_scan_sha256": "7a637238e30530a921845ba51f2dfd298c7c3e26915fa3d25cb510961d6a4092",
+        "publication_config_sha256": "f2c9ad8e5d8351dfed9a3400c327b8b9cd88e631c3faf2935b18cdeed08fa10b",
+        "youtube_uploaded_at": "2026-07-15T00:35:40.587Z"
+      },
+      "transcript": {
+        "language": "en",
+        "segments": [
+          { "start_seconds": 0, "speaker": "Narrator", "text": "The holder accepts a standards-based membership badge into the release control wallet." },
+          { "start_seconds": 24, "speaker": "Narrator", "text": "After signing out, the holder presents the badge and ElevenID restores the existing account." }
+        ]
+      },
+      "chapters": [
+        { "start_seconds": 0, "title": "Receive membership badge", "role": "Holder", "mip_primitives": ["Credential Template", "Issuance Flow"], "standards": ["Open Badges 3.0", "OpenID4VCI 1.0"], "documentation_links": [{ "label": "Open Badge issuance", "href": "/open-badges-issuance" }] },
+        { "start_seconds": 24, "title": "Return with the badge", "role": "Holder", "mip_primitives": ["Presentation Policy"], "standards": ["OpenID4VP 1.0", "DCQL 1.0"], "documentation_links": [{ "label": "Open Badge verification", "href": "/open-badges-verification" }] }
+      ],
+      "wallets": [
+        { "implementation": "Marty deterministic browser wallet", "vendor": "ElevenID LLC", "build": "a590abde0f33f76b184827ce44108808bb96e0be", "deployment_mode": "INTERNAL_CONTROL", "classification": "INTERNAL_CONTROL", "protocols": ["openid4vci-1.0", "openid4vp-1.0", "dcql-1.0", "sd-jwt-vc", "open-badges-3.0"], "capabilities": ["issuance", "presentation", "credential login"], "result": "PASS", "tested_at": "2026-07-13T07:21:33Z" }
+      ],
+      "assertions": [
+        {
+          "id": "badge-received",
+          "label": "The release control wallet stores the expected badge type.",
+          "result": "PASS",
+          "evidence_sha256": "c8696e564c316b5287f5e31019ec219ab40f84824978f78aaa7e10c9e16dac5b"
+        },
+        {
+          "id": "account-restored",
+          "label": "Credential login restores the existing authenticated account.",
+          "result": "PASS",
+          "evidence_sha256": "c8696e564c316b5287f5e31019ec219ab40f84824978f78aaa7e10c9e16dac5b"
+        }
+      ],
+      "limitations": [
+        "Revision 2 uses the ElevenID LLC first-party control wallet; independent Open Badge wallet qualification is tracked separately."
+      ],
+      "published_at": "2026-07-15T00:50:42.658Z",
+      "publication_attestation": {
+        "kind": "AUTOMATED",
+        "pipeline_revision": "d6af6712301aa9dc164026635d8a03a38d9f35ea",
+        "published_at": "2026-07-15T00:50:42.658Z",
+        "checks": [
+          "accessibility",
+          "captions",
+          "evidence",
+          "links",
+          "playback",
+          "privacy",
+          "thumbnail",
+          "transcript"
+        ],
+        "verification_report_sha256": "9357c84a8b92660ad4cdf669a275ae4de90acfd7ff9d97747db6eb243696363d",
+        "result_sha256": "646ae8ab913c9576e4ab44f8c16b3ec5ee88f5f5ee2ddd904ea6de59869279a0",
+        "youtube_privacy_status": "public",
+        "smoke_report_sha256": "05c3377f4e32b91ace77e7006675490cfb57650286ee2554ed0b91572adb882f"
+      },
+      "inherited_evidence": null
+    },
+    {
+      "slug": "organization-primitives",
+      "title": "Organization and MIP Primitives",
+      "summary": "An administrator creates an organization and configures the identity, trust, template, policy, deployment, issuance, verification, and API primitives needed to operate it.",
+      "scenario_revision": 2,
+      "recording_classification": "FIRST_PARTY_CONTROL",
+      "revision_history": [
+        { "scenario_revision": 1, "state": "SUPERSEDED", "recording_classification": "FIRST_PARTY_CONTROL", "evidence_sha256": "33a0080fb72f7e503bcf8be99f23afb685daff30607cdcfce2410880a787b1fe" }
+      ],
+      "mip_version": "0.3.1",
+      "state": "PUBLIC",
+      "audiences": ["Issuer", "Verifier", "Administrator", "Developer"],
+      "capabilities": ["Organization setup", "KMS", "Issuer identity", "Trust", "Templates", "Policies", "Deployments", "Flows", "API access"],
+      "protocols": ["openid4vci-1.0", "openid4vp-1.0", "dcql-1.0", "sd-jwt-vc", "open-badges-3.0"],
+      "poster": {
+        "src": "/images/demos/2026.07.0/organization-primitives.png",
+        "sha256": "067e07c7c0f3ffa5404084a5ba64a4e80ec7ee7415c5be5be79a553585136cbf",
+        "alt": "ElevenID organization console showing MIP primitive management"
+      },
+      "youtube_id": "GK7GbqBCwQ8",
+      "media_evidence": {
+        "video_sha256": "48f8c58148d4c502d29567dc5c73ae43d9b2d19224551bd37fec7df214bb9c1f",
+        "captions_sha256": "e426df531386e9f8f7a2fb58aa51187d877964260c9ce9cc8b64ba90b3795e31",
+        "thumbnail_sha256": "067e07c7c0f3ffa5404084a5ba64a4e80ec7ee7415c5be5be79a553585136cbf",
+        "privacy_scan_sha256": "18ea1e0570c26621a4d0361891fb3ff2c1e6fe6c2ad74f48cba8d5c3889bc259",
+        "publication_config_sha256": "a1fd74202605e3d956e5ab61f396b5f96f8eb08fdc1321fde2b93b298009dc84",
+        "youtube_uploaded_at": "2026-07-13T22:55:35.840Z"
+      },
+      "transcript": {
+        "language": "en",
+        "segments": [
+          { "start_seconds": 0, "speaker": "Narrator", "text": "An administrator creates a new organization and establishes its key management service." },
+          { "start_seconds": 36, "speaker": "Narrator", "text": "The organization creates an active issuer identity backed by its configured signing service." },
+          { "start_seconds": 70, "speaker": "Narrator", "text": "Trust and revocation profiles define accepted issuers and credential lifecycle checks." },
+          { "start_seconds": 96, "speaker": "Narrator", "text": "Credential and application templates define the issued claims and applicant experience." },
+          { "start_seconds": 132, "speaker": "Narrator", "text": "A presentation policy and deployment profile connect verification rules to a runtime environment." },
+          { "start_seconds": 158, "speaker": "Narrator", "text": "Canonical issuance and verification flows are created, validated, and activated with their dependencies." },
+          { "start_seconds": 203, "speaker": "Narrator", "text": "API access and the final inventory confirm that every required organization primitive is active." }
+        ]
+      },
+      "chapters": [
+        { "start_seconds": 0, "title": "Organization and key management", "role": "Administrator", "mip_primitives": ["Organization", "KMS"], "standards": ["SD-JWT VC"], "documentation_links": [{ "label": "Architecture", "href": "/architecture" }] },
+        { "start_seconds": 36, "title": "Issuer identity", "role": "Administrator", "mip_primitives": ["Issuer Identity"], "standards": ["SD-JWT VC"], "documentation_links": [{ "label": "Architecture", "href": "/architecture" }] },
+        { "start_seconds": 70, "title": "Trust and revocation", "role": "Administrator", "mip_primitives": ["Trust Profile", "Revocation Profile"], "standards": ["SD-JWT VC"], "documentation_links": [{ "label": "MIP protocol", "href": "/protocol" }] },
+        { "start_seconds": 96, "title": "Credential and application templates", "role": "Issuer", "mip_primitives": ["Credential Template", "Application Template"], "standards": ["Open Badges 3.0", "SD-JWT VC"], "documentation_links": [{ "label": "MIP protocol", "href": "/protocol" }] },
+        { "start_seconds": 132, "title": "Policy and deployment", "role": "Verifier", "mip_primitives": ["Presentation Policy", "Deployment Profile"], "standards": ["OpenID4VP 1.0", "DCQL 1.0"], "documentation_links": [{ "label": "MIP protocol", "href": "/protocol" }] },
+        { "start_seconds": 158, "title": "Issuance and verification flows", "role": "Administrator", "mip_primitives": ["Flow Definition"], "standards": ["OpenID4VCI 1.0", "OpenID4VP 1.0", "DCQL 1.0"], "documentation_links": [{ "label": "MIP protocol", "href": "/protocol" }] },
+        { "start_seconds": 203, "title": "API access and inventory", "role": "Developer", "mip_primitives": ["API Key"], "standards": ["MIP 0.3.1"], "documentation_links": [{ "label": "API documentation", "href": "/api" }] }
+      ],
+      "wallets": [],
+      "assertions": [
+        { "id": "primitive-management", "label": "The administrator can create and manage the required MIP primitives.", "result": "PASS", "evidence_sha256": "33a0080fb72f7e503bcf8be99f23afb685daff30607cdcfce2410880a787b1fe" },
+        { "id": "browser-errors", "label": "The recorded path contains no unexplained browser or network errors.", "result": "PASS", "evidence_sha256": "33a0080fb72f7e503bcf8be99f23afb685daff30607cdcfce2410880a787b1fe" }
+      ],
+      "limitations": ["This scenario covers organization primitives only; holder and wallet workflows are demonstrated separately."],
+      "published_at": "2026-07-15T00:16:34.471Z",
+      "publication_attestation": {
+        "kind": "AUTOMATED",
+        "pipeline_revision": "b0245e9843591bd59c2423a89e3e982582de020b",
+        "published_at": "2026-07-15T00:16:34.471Z",
+        "checks": [
+          "accessibility",
+          "captions",
+          "evidence",
+          "links",
+          "playback",
+          "privacy",
+          "thumbnail",
+          "transcript"
+        ],
+        "verification_report_sha256": "640eec569d47b13a412473a70ca79be5ea070d1c9d83f34009101ccdacf9c949",
+        "result_sha256": "d7091b311bf31f75229720ac2f6f73f10dbf154c739abdd359f7b1008b176157",
+        "youtube_privacy_status": "public",
+        "smoke_report_sha256": "3374b09fd8c4040df233451fc599b05acb94c04f2cf19e786f1e0013607b4f60"
+      },
+      "inherited_evidence": null
+    },
+    {
+      "slug": "first-party-browser-wallet",
+      "title": "First-Party Browser Wallet",
+      "summary": "The browser control demonstrates credential issuance, storage, presentation, verification, and login while the isolated ElevenID Demo Wallet packaging is completed.",
+      "scenario_revision": 1,
+      "recording_classification": "FIRST_PARTY_CONTROL",
+      "revision_history": [],
+      "mip_version": "0.3.1",
+      "state": "DRAFT",
+      "audiences": ["Holder", "Issuer", "Verifier", "Developer"],
+      "capabilities": ["Browser issuance", "Credential storage", "Presentation", "Verification", "Credential login"],
+      "protocols": ["openid4vci-1.0", "openid4vp-1.0", "dcql-1.0", "sd-jwt-vc"],
+      "poster": {
+        "src": "/images/demos/2026.07.0/first-party-browser-wallet.png",
+        "sha256": "cf029f4190354fb978ca6bddc17a542f2317a1bfc3f3f2f8731434484c4b9237",
+        "alt": "ElevenID verification session displaying a rendered wallet handoff QR code"
+      },
+      "youtube_id": null,
+      "media_evidence": null,
+      "transcript": {
+        "language": "en",
+        "segments": [
+          { "start_seconds": 0, "speaker": "Narrator", "text": "The release control wallet accepts a canonical credential offer without changing the signed request." },
+          { "start_seconds": 34, "speaker": "Narrator", "text": "The holder presents the stored credential and the verifier returns an allow decision." }
+        ]
+      },
+      "chapters": [
+        { "start_seconds": 0, "title": "Issue and store", "role": "Holder", "mip_primitives": ["Credential Template", "Deployment Profile", "Issuance Flow"], "standards": ["OpenID4VCI 1.0", "SD-JWT VC"], "documentation_links": [{ "label": "Issuance", "href": "/open-badges-issuance" }] },
+        { "start_seconds": 34, "title": "Present and verify", "role": "Verifier", "mip_primitives": ["Presentation Policy", "Verification Flow"], "standards": ["OpenID4VP 1.0", "DCQL 1.0"], "documentation_links": [{ "label": "Verification", "href": "/verifiable-credential-api" }] }
+      ],
+      "wallets": [
+        { "implementation": "Marty deterministic browser wallet", "vendor": "ElevenID LLC", "build": "a590abde0f33f76b184827ce44108808bb96e0be", "deployment_mode": "INTERNAL_CONTROL", "classification": "INTERNAL_CONTROL", "protocols": ["openid4vci-1.0", "openid4vp-1.0", "dcql-1.0", "sd-jwt-vc"], "capabilities": ["issuance", "storage", "presentation", "verification", "credential login"], "result": "PASS", "tested_at": "2026-07-13T07:21:01Z" }
+      ],
+      "assertions": [
+        { "id": "wallet-control", "label": "The deterministic browser-wallet control completes issuance and verification.", "result": "PASS", "evidence_sha256": "4cf99915a8ca0e749ade63d8f35e2a1964c305d119a59ba80f259e0e3d89746c" },
+        { "id": "demo-wallet-isolation", "label": "The public ElevenID Demo Wallet enforces session isolation, expiry, and synthetic identities.", "result": "NOT_RUN", "evidence_sha256": null }
+      ],
+      "limitations": ["The current evidence uses the internal Marty control and is not presented as the public ElevenID Demo Wallet.", "Ephemeral public-wallet packaging, isolation tests, and publication remain pending."],
+      "published_at": null,
+      "publication_attestation": null,
+      "inherited_evidence": null
+    },
+    {
+      "slug": "independent-wallet-interoperability",
+      "title": "Independent Wallet Interoperability",
+      "summary": "A pinned independent wallet must accept canonical issuance and verification requests without protocol downgrades or request mutation.",
+      "scenario_revision": 1,
+      "recording_classification": "INDEPENDENT_WALLET",
+      "revision_history": [],
+      "mip_version": "0.3.1",
+      "state": "DRAFT",
+      "audiences": ["Holder", "Issuer", "Verifier", "Developer"],
+      "capabilities": ["Independent issuance", "Independent presentation", "Unchanged-request verification"],
+      "protocols": ["openid4vci-1.0", "openid4vp-1.0", "dcql-1.0", "sd-jwt-vc"],
+      "poster": {
+        "src": "/images/demos/2026.07.0/independent-wallet-interoperability.png",
+        "sha256": "e1d411ae538e17fcc85da624097266600079792a986a81237ef52afeaa99003a",
+        "alt": "Independent browser wallet compatibility result in the ElevenID audit"
+      },
+      "youtube_id": null,
+      "media_evidence": null,
+      "transcript": {
+        "language": "en",
+        "segments": [
+          { "start_seconds": 0, "speaker": "Narrator", "text": "Independent-wallet qualification is intentionally pending until a pinned build supports the final protocol profile." }
+        ]
+      },
+      "chapters": [
+        { "start_seconds": 0, "title": "Qualification status", "role": "Developer", "mip_primitives": ["Issuance Flow", "Verification Flow"], "standards": ["OpenID4VCI 1.0", "OpenID4VP 1.0", "DCQL 1.0"], "documentation_links": [{ "label": "Standards", "href": "/standards" }] }
+      ],
+      "wallets": [],
+      "assertions": [
+        { "id": "independent-wallet-pass", "label": "A pinned independent implementation passes issuance and verification with unchanged canonical requests.", "result": "BLOCKED", "evidence_sha256": null }
+      ],
+      "limitations": ["Observed walt.id builds do not satisfy final wallet-side DCQL requirements and remain inactive.", "The EUDI Android reference wallet is the next qualification candidate."],
+      "published_at": null,
+      "publication_attestation": null,
+      "inherited_evidence": null
+    },
+    {
+      "slug": "canvas-learning-achievement",
+      "title": "Portable Learning Achievement with Canvas",
+      "summary": "A source-pinned, unmodified Canvas deployment launches ElevenID through standard LTI, synchronizes authoritative evidence, and produces a learner-claimed KMS-signed Open Badge.",
+      "scenario_revision": 2,
+      "recording_classification": "FIRST_PARTY_CONTROL",
+      "revision_history": [],
+      "mip_version": "0.3.1",
+      "state": "DRAFT",
+      "audiences": ["Holder", "Issuer", "Administrator", "Developer"],
+      "capabilities": ["Stock Canvas assignment", "LTI 1.3 launch", "Authoritative evidence synchronization", "Unsigned pending claim", "KMS-backed Open Badge claim", "Verification"],
+      "protocols": ["lti-1.3", "openid4vci-1.0", "openid4vp-1.0", "dcql-1.0", "sd-jwt-vc", "open-badges-3.0"],
+      "poster": {
+        "src": "/images/demos/2026.07.0/canvas-learning-achievement.png",
+        "sha256": "3ef1afb66dc2de1439413ed8111e86cfb86e03a6c168a664b6b9fff13667a0be",
+        "alt": "ElevenID Application Template activated for a portable learning achievement workflow"
+      },
+      "youtube_id": null,
+      "media_evidence": null,
+      "transcript": {
+        "language": "en",
+        "segments": [
+          { "start_seconds": 0, "speaker": "Narrator", "text": "The scenario begins with a real assignment served by an unmodified, source-pinned Canvas deployment." },
+          { "start_seconds": 20, "speaker": "Narrator", "text": "Canvas launches ElevenID through LTI 1.3 and the learner synchronizes authoritative assignment evidence through documented APIs." },
+          { "start_seconds": 45, "speaker": "Narrator", "text": "Background evaluation creates an unsigned pending claim; signing occurs only after learner wallet binding." },
+          { "start_seconds": 68, "speaker": "Narrator", "text": "The KMS-signed Open Badge verifies independently of Canvas with its issuer method and credential status." }
+        ]
+      },
+      "chapters": [
+        { "start_seconds": 0, "title": "Begin in unmodified Canvas", "role": "Learner", "mip_primitives": ["Application Template"], "standards": ["LTI 1.3"], "documentation_links": [{ "label": "Canvas integration", "href": "/docs" }] },
+        { "start_seconds": 20, "title": "Launch and synchronize evidence", "role": "Learner", "mip_primitives": ["Evidence", "Approval Policy"], "standards": ["LTI 1.3"], "documentation_links": [{ "label": "MIP protocol", "href": "/protocol" }] },
+        { "start_seconds": 45, "title": "Claim the pending badge", "role": "Holder", "mip_primitives": ["Issuance Flow"], "standards": ["OpenID4VCI 1.0", "Open Badges 3.0"], "documentation_links": [{ "label": "Open Badges", "href": "/what-is-open-badge" }] },
+        { "start_seconds": 68, "title": "Verify outside Canvas", "role": "Verifier", "mip_primitives": ["Presentation Policy"], "standards": ["OpenID4VP 1.0", "DCQL 1.0"], "documentation_links": [{ "label": "MIP protocol", "href": "/protocol" }] }
+      ],
+      "wallets": [],
+      "assertions": [
+        { "id": "stock-canvas-assignment-visible", "label": "A real assignment is visibly rendered by the pinned, unmodified Canvas build.", "result": "NOT_RUN", "evidence_sha256": null },
+        { "id": "standard-lti-launch-verified", "label": "A learner launches the deployed beta tool from a stock Canvas course placement.", "result": "NOT_RUN", "evidence_sha256": null },
+        { "id": "authoritative-evidence-synchronized", "label": "The learner surface reports authoritative Canvas evidence only after synchronization completes.", "result": "NOT_RUN", "evidence_sha256": null },
+        { "id": "pending-claim-visible", "label": "Background evaluation creates an unsigned pending claim rather than a signed credential.", "result": "NOT_RUN", "evidence_sha256": null },
+        { "id": "learning-badge-received", "label": "The learner claims the KMS-signed Open Badge through the canonical wallet flow.", "result": "NOT_RUN", "evidence_sha256": null },
+        { "id": "learning-badge-verified", "label": "The verifier accepts the claimed badge signature, issuer method, and credential status.", "result": "NOT_RUN", "evidence_sha256": null }
+      ],
+      "limitations": ["Revision 2 remains draft until the full OSS portability pipeline produces a fresh passing attestation and recording.", "New Quizzes requires the hosted Canvas contract; Canvas Credentials projection remains outside the production gate.", "The prior synthetic Canvas recording is historical and is not reused as portability evidence."],
+      "published_at": null,
+      "publication_attestation": null,
+      "inherited_evidence": null
+    },
+    {
+      "slug": "credential-lifecycle",
+      "title": "Credential Lifecycle",
+      "summary": "An issuer renews, suspends, reinstates, and revokes credentials while verification and inventory reflect the current status.",
+      "scenario_revision": 2,
+      "recording_classification": "FIRST_PARTY_CONTROL",
+      "revision_history": [
+        { "scenario_revision": 1, "state": "VALIDATED", "recording_classification": "FIRST_PARTY_CONTROL", "evidence_sha256": "4bfb08fea9a3391986b033dd6b59464f412c259622b3fceaf6018d08f8128ab6" }
+      ],
+      "mip_version": "0.3.1",
+      "state": "PUBLIC",
+      "audiences": ["Holder", "Issuer", "Verifier", "Administrator", "Developer"],
+      "capabilities": ["Renewal", "Suspension", "Reinstatement", "Revocation", "Status-aware verification", "Privacy-safe audit"],
+      "protocols": ["openid4vci-1.0", "openid4vp-1.0", "dcql-1.0", "sd-jwt-vc"],
+      "poster": {
+        "src": "/images/demos/2026.07.0/credential-lifecycle.png",
+        "sha256": "b5f125b029fe7a5dbccb856222b7cde6860b7d827fa289b7ad0d1440f4664703",
+        "alt": "ElevenID issued credential lifecycle controls and status history"
+      },
+      "youtube_id": "DDjyuqs8Wpg",
+      "media_evidence": {
+        "video_sha256": "e6429b5c66ec9cfcee1a14afa6d8c0c4272d63b7a20ee379f8726849f78755b2",
+        "captions_sha256": "019551daed0f998d070e8b8fd7fbe4bbea10e5f5390ccba3c90d18a258f37777",
+        "thumbnail_sha256": "4e77ec12c32adfb6e9619664cdf1e0b1a65578465b117bebe7aae193a699278b",
+        "privacy_scan_sha256": "5a07ccbfb68d964106c4cc240b9599a7855a1edd23e95a581ef16fab533444e3",
+        "publication_config_sha256": "2dd36fc030105cf6827897778b67c8bd4238df748f810d778ba810bae78e0d27",
+        "youtube_uploaded_at": "2026-07-15T00:53:58.374Z"
+      },
+      "transcript": {
+        "language": "en",
+        "segments": [
+          { "start_seconds": 0, "speaker": "Narrator", "text": "A credential is renewed and the holder inventory identifies its successor without exposing credential material." },
+          { "start_seconds": 52, "speaker": "Narrator", "text": "Suspension denies verification, reinstatement allows it again, and revocation produces a final denial." }
+        ]
+      },
+      "chapters": [
+        { "start_seconds": 0, "title": "Renew and update inventory", "role": "Issuer", "mip_primitives": ["Issued Credential", "Holder Inventory"], "standards": ["OpenID4VCI 1.0", "SD-JWT VC"], "documentation_links": [{ "label": "Digital credentials", "href": "/what-is-digital-credential" }] },
+        { "start_seconds": 52, "title": "Enforce current status", "role": "Verifier", "mip_primitives": ["Revocation Profile", "Presentation Policy", "Audit Event"], "standards": ["OpenID4VP 1.0", "DCQL 1.0"], "documentation_links": [{ "label": "Security", "href": "/security" }] }
+      ],
+      "wallets": [
+        { "implementation": "Marty deterministic browser wallet", "vendor": "ElevenID LLC", "build": "a590abde0f33f76b184827ce44108808bb96e0be", "deployment_mode": "INTERNAL_CONTROL", "classification": "INTERNAL_CONTROL", "protocols": ["openid4vci-1.0", "openid4vp-1.0", "dcql-1.0", "sd-jwt-vc"], "capabilities": ["renewal receipt", "status-aware presentation"], "result": "PASS", "tested_at": "2026-07-13T03:27:27Z" }
+      ],
+      "assertions": [
+        {
+          "id": "renewal",
+          "label": "Renewal creates a successor and updates the source credential state.",
+          "result": "PASS",
+          "evidence_sha256": "4bfb08fea9a3391986b033dd6b59464f412c259622b3fceaf6018d08f8128ab6"
+        },
+        {
+          "id": "status-enforcement",
+          "label": "Verification denies suspended and revoked credentials and allows reinstated credentials.",
+          "result": "PASS",
+          "evidence_sha256": "4bfb08fea9a3391986b033dd6b59464f412c259622b3fceaf6018d08f8128ab6"
+        },
+        {
+          "id": "public-video",
+          "label": "The complete lifecycle is composed, captioned, and published.",
+          "result": "PASS",
+          "evidence_sha256": "e6429b5c66ec9cfcee1a14afa6d8c0c4272d63b7a20ee379f8726849f78755b2"
+        }
+      ],
+      "limitations": [
+        "Revision 2 uses the ElevenID LLC first-party control wallet; independent-wallet qualification is tracked separately."
+      ],
+      "published_at": "2026-07-15T00:55:51.406Z",
+      "publication_attestation": {
+        "kind": "AUTOMATED",
+        "pipeline_revision": "d6af6712301aa9dc164026635d8a03a38d9f35ea",
+        "published_at": "2026-07-15T00:55:51.406Z",
+        "checks": [
+          "accessibility",
+          "captions",
+          "evidence",
+          "links",
+          "playback",
+          "privacy",
+          "thumbnail",
+          "transcript"
+        ],
+        "verification_report_sha256": "9160e17f3484ba7be92143eefdfa7f6878198a4e3ad8c94888838ca7533800e6",
+        "result_sha256": "f5fbbbd57cc09fbe4a702cbd4cfd2223880d51f569a400640c8bd644f916a2ae",
+        "youtube_privacy_status": "public",
+        "smoke_report_sha256": "92fbc162f3cab0ad9f3949a46417337c72f023203aa5b492ee7ac1690601a583"
+      },
+      "inherited_evidence": null
+    }
+  ]
+}

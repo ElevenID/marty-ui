@@ -10,22 +10,40 @@ import {
 } from './flowManagerUseCases';
 
 describe('flowManager use cases', () => {
-  it('loads flows and falls back to sample data on failure', async () => {
+  it('loads flows and surfaces backend failures without sample data fallback', async () => {
     const listFlows = vi.fn().mockResolvedValue([{ id: 'flow-1' }]);
 
-    await expect(loadFlowManagerFlows({ listFlows })).resolves.toEqual({
+    await expect(loadFlowManagerFlows({ listFlows, organizationId: 'org-1' })).resolves.toEqual({
       flows: [{ id: 'flow-1' }],
       error: null,
       notification: null,
       unsupported: false,
     });
+    expect(listFlows).toHaveBeenCalledWith({ organization_id: 'org-1', limit: 100 });
 
     const failingListFlows = vi.fn().mockRejectedValue(new Error('offline'));
-    const fallback = await loadFlowManagerFlows({ listFlows: failingListFlows });
+    const failure = await loadFlowManagerFlows({ listFlows: failingListFlows, organizationId: 'org-1' });
 
-    expect(fallback.notification).toBeTruthy();
-    expect(Array.isArray(fallback.flows)).toBe(true);
-    expect(typeof fallback.unsupported).toBe('boolean');
+    expect(failure.flows).toEqual([]);
+    expect(failure.error).toBe('offline');
+    expect(failure.notification).toEqual({
+      type: 'error',
+      message: 'Unable to load flow definitions',
+      options: { autoHideDuration: 8000 },
+    });
+    expect(failure.unsupported).toBe(false);
+  });
+
+  it('does not call flow APIs without an organization id', async () => {
+    const listFlows = vi.fn();
+
+    await expect(loadFlowManagerFlows({ listFlows, organizationId: '' })).resolves.toEqual({
+      flows: [],
+      error: 'An active organization is required before loading flows.',
+      notification: null,
+      unsupported: false,
+    });
+    expect(listFlows).not.toHaveBeenCalled();
   });
 
   it('loads executions for one or many flows', async () => {
@@ -43,6 +61,7 @@ describe('flowManager use cases', () => {
 
     await expect(loadFlowManagerExecutions({
       listFlowExecutions,
+      organizationId: 'org-1',
       flowId: 'flow-1',
     })).resolves.toEqual({
       executions: [{ id: 'exec-1' }],
@@ -52,6 +71,7 @@ describe('flowManager use cases', () => {
 
     await expect(loadFlowManagerExecutions({
       listFlowExecutions,
+      organizationId: 'org-1',
       flows: [{ id: 'flow-1' }, { id: 'flow-2' }],
     })).resolves.toEqual({
       executions: [{ id: 'exec-1' }, { id: 'exec-2' }],
@@ -63,6 +83,7 @@ describe('flowManager use cases', () => {
   it('loads credentials and revocation batches with safe fallbacks', async () => {
     await expect(loadFlowManagerCredentials({
       listCredentials: vi.fn().mockResolvedValue([{ id: 'cred-1' }]),
+      organizationId: 'org-1',
     })).resolves.toEqual({
       credentials: [{ id: 'cred-1' }],
       notification: null,
@@ -71,6 +92,7 @@ describe('flowManager use cases', () => {
 
     await expect(loadFlowManagerRevocationBatches({
       listRevocationBatches: vi.fn().mockResolvedValue([{ batch_id: 'batch-1' }]),
+      organizationId: 'org-1',
     })).resolves.toEqual({
       revocationBatches: [{ batch_id: 'batch-1' }],
       notification: null,

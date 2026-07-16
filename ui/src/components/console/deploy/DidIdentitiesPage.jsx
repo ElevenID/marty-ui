@@ -37,6 +37,7 @@ import { TableSkeleton } from '../../common/skeletons'
 import { useNotifications } from '../../../hooks/useNotifications'
 import { useAsyncData } from '../../../hooks/useAsyncData'
 import { useAuth } from '../../../hooks/useAuth'
+import { useConsole } from '../../../contexts/ConsoleContext'
 import {
   DEFAULT_KEY_MANAGEMENT_CONFIG,
   normalizeKeyManagementConfig,
@@ -65,6 +66,12 @@ const GENERIC_ISSUER_PROFILE_NAMES = new Set([
 ])
 
 const KEY_REFERENCE_PREFIX = /^cred-(issuer|dsc|key|signer)-/i
+
+function logDidIdentitiesPageError(message, error) {
+  if (import.meta.env?.DEV && import.meta.env?.MODE !== 'test') {
+    console.error(message, error)
+  }
+}
 
 const humanizeProfileSegment = (value) => value
   .split(/[-_]+/)
@@ -107,6 +114,14 @@ const getDidMethodFromProfile = (issuerDid) => {
   }
   return ''
 }
+
+const getSigningKeyServiceId = (signingKey) => (
+  signingKey?.signing_service_id
+  || signingKey?.service_id
+  || signingKey?.metadata?.signing_service_id
+  || signingKey?.metadata?.service_id
+  || ''
+)
 
 const getIssuerProfileDisplayName = (profile, organizationName) => {
   const explicitName = typeof profile?.name === 'string' ? profile.name.trim() : ''
@@ -330,7 +345,7 @@ function IdentityRecordCard({ identity, selected, onSelect }) {
   )
 }
 
-function ImportDidDialog({ open, signingKey, onClose, onImported }) {
+function ImportDidDialog({ open, signingKey, organizationId, onClose, onImported }) {
   const [didValue, setDidValue] = useState('')
   const [label, setLabel] = useState('')
   const [submitting, setSubmitting] = useState(false)
@@ -338,6 +353,7 @@ function ImportDidDialog({ open, signingKey, onClose, onImported }) {
   const { showNotification } = useNotifications()
 
   const keyLabel = signingKey?.name || signingKey?.provider_key_name || signingKey?.id || 'Signing key'
+  const signingServiceId = getSigningKeyServiceId(signingKey)
 
   const isValidDid = (value) => /^did:[a-z0-9]+:.+/.test(value.trim())
 
@@ -354,12 +370,22 @@ function ImportDidDialog({ open, signingKey, onClose, onImported }) {
       setError('Enter a valid DID (e.g. did:web:example.com or did:key:z6Mk…)')
       return
     }
+    if (!organizationId) {
+      setError('An active organization is required before importing a DID.')
+      return
+    }
+    if (!signingServiceId) {
+      setError('This signing key is not linked to a key management service. Select a KMS-backed key before importing a DID.')
+      return
+    }
     setSubmitting(true)
     setError('')
     try {
       await signingKeysApi.createIssuerProfile({
+        organization_id: organizationId,
         name: label.trim() || `${keyLabel} — imported`,
         issuer_did: trimmedDid,
+        signing_service_id: signingServiceId,
         signing_key_reference: signingKey?.provider_key_name || signingKey?.id || undefined,
         status: 'active',
       })
@@ -403,6 +429,11 @@ function ImportDidDialog({ open, signingKey, onClose, onImported }) {
             size="small"
             helperText="Human-readable name for this issuer profile."
           />
+          {!signingServiceId && (
+            <Alert severity="warning">
+              This signing key is missing its key management service binding. Import is unavailable until the key is repaired or recreated through KMS.
+            </Alert>
+          )}
         </Stack>
       </DialogContent>
       <DialogActions sx={{ px: 3, pb: 2 }}>
@@ -410,7 +441,7 @@ function ImportDidDialog({ open, signingKey, onClose, onImported }) {
         <Button
           variant="contained"
           onClick={handleSubmit}
-          disabled={submitting || !didValue.trim()}
+          disabled={submitting || !didValue.trim() || !signingServiceId}
           startIcon={submitting ? <CircularProgress size={16} /> : null}
         >
           Import DID
@@ -567,27 +598,34 @@ export default function DidIdentitiesPage() {
   const { t } = useTranslation('console')
   const navigate = useNavigate()
   const { organizationId, organizationName } = useAuth()
+  const { activeOrgId } = useConsole()
+  const effectiveOrganizationId = activeOrgId
   const { showNotification } = useNotifications()
   const { data: signingKeysData, loading, error, reload } = useAsyncData(async () => {
-    const data = await signingKeysApi.listSigningKeys()
+    const data = await signingKeysApi.listSigningKeys({ organization_id: effectiveOrganizationId })
     const rawKeys = Array.isArray(data) ? data : data?.keys || []
     return {
       keys: Array.isArray(rawKeys) ? rawKeys.filter((key) => key && typeof key === 'object') : [],
       domainConfig: data?.domain_config || null,
       providerMetadata: data?.provider_metadata || null,
     }
-  }, [])
+  }, [effectiveOrganizationId])
 
   const {
     data: keyManagementData,
-  } = useAsyncData(async () => normalizeKeyManagementConfig(await signingKeysApi.getKeyManagementConfig()), [])
+  } = useAsyncData(
+    async () => normalizeKeyManagementConfig(
+      await signingKeysApi.getKeyManagementConfig({ organization_id: effectiveOrganizationId })
+    ),
+    [effectiveOrganizationId]
+  )
 
   const { data: organizationLifecycle } = useAsyncData(async () => {
-    if (!organizationId) {
+    if (!effectiveOrganizationId) {
       return null
     }
-    return getOrganizationLifecycle(organizationId)
-  }, [organizationId])
+    return getOrganizationLifecycle(effectiveOrganizationId)
+  }, [effectiveOrganizationId])
 
   const {
     data: issuerProfilesData,
@@ -595,9 +633,9 @@ export default function DidIdentitiesPage() {
     error: issuerProfilesError,
     reload: reloadIssuerProfiles,
   } = useAsyncData(async () => {
-    const response = await signingKeysApi.listIssuerProfiles()
+    const response = await signingKeysApi.listIssuerProfiles({ organization_id: effectiveOrganizationId })
     return response?.profiles || []
-  }, [])
+  }, [effectiveOrganizationId])
 
   const safeKeys = Array.isArray(signingKeysData?.keys) ? signingKeysData.keys : EMPTY_KEYS
   const issuerProfiles = Array.isArray(issuerProfilesData) ? issuerProfilesData : EMPTY_PROFILES
@@ -675,7 +713,7 @@ export default function DidIdentitiesPage() {
       await navigator.clipboard.writeText(JSON.stringify(document, null, 2))
       showNotification?.('Copied DID document JSON to clipboard.', 'success')
     } catch (err) {
-      console.error('Failed to copy DID document JSON:', err)
+      logDidIdentitiesPageError('Failed to copy DID document JSON:', err)
       showNotification?.('Unable to copy DID document JSON.', 'error')
     }
   }
@@ -925,12 +963,19 @@ export default function DidIdentitiesPage() {
                               size="small"
                               onClick={async () => {
                                 try {
-                                  await signingKeysApi.updateIssuerProfile(profile.id, { status: 'active' })
+                                  await signingKeysApi.updateIssuerProfile(profile.id, {
+                                    organization_id: effectiveOrganizationId,
+                                    status: 'active',
+                                  })
                                   // Publish key material now that the profile is active
                                   if (profile.signing_service_id) {
                                     await Promise.allSettled([
-                                      signingKeysApi.publishServiceToJwks(profile.signing_service_id),
-                                      signingKeysApi.publishServiceToDidVm(profile.signing_service_id),
+                                      signingKeysApi.publishServiceToJwks(profile.signing_service_id, effectiveOrganizationId, {
+                                        key_reference: profile.signing_key_reference || undefined,
+                                      }),
+                                      signingKeysApi.publishServiceToDidVm(profile.signing_service_id, effectiveOrganizationId, {
+                                        key_reference: profile.signing_key_reference || undefined,
+                                      }),
                                     ])
                                   }
                                   showNotification?.('Issuer profile activated and keys published.', 'success')
@@ -950,7 +995,10 @@ export default function DidIdentitiesPage() {
                               color="warning"
                               onClick={async () => {
                                 try {
-                                  await signingKeysApi.updateIssuerProfile(profile.id, { status: 'revoked' })
+                                  await signingKeysApi.updateIssuerProfile(profile.id, {
+                                    organization_id: effectiveOrganizationId,
+                                    status: 'revoked',
+                                  })
                                   showNotification?.('Issuer profile revoked.', 'success')
                                   reloadIssuerProfiles()
                                 } catch (err) {
@@ -967,7 +1015,7 @@ export default function DidIdentitiesPage() {
                             color="error"
                             onClick={async () => {
                               try {
-                                await signingKeysApi.deleteIssuerProfile(profile.id)
+                                await signingKeysApi.deleteIssuerProfile(profile.id, { organization_id: effectiveOrganizationId })
                                 showNotification?.('Issuer profile deleted.', 'success')
                                 reloadIssuerProfiles()
                               } catch (err) {
@@ -991,6 +1039,7 @@ export default function DidIdentitiesPage() {
       <ImportDidDialog
         open={Boolean(importDialogKey)}
         signingKey={importDialogKey}
+        organizationId={effectiveOrganizationId}
         onClose={() => setImportDialogKey(null)}
         onImported={() => { setImportDialogKey(null); reload(); reloadIssuerProfiles() }}
       />

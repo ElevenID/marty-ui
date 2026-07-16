@@ -13,14 +13,6 @@ const {
   mockOnChange: vi.fn(),
 }));
 
-vi.mock('../../../../hooks/useAuth', () => ({
-  useAuth: () => ({
-    user: {
-      organization_id: 'org-1',
-    },
-  }),
-}));
-
 vi.mock('../../../../services/presentationPolicyApi', () => ({
   listPresentationPolicies: (...args: unknown[]) => mockListPresentationPolicies(...args),
 }));
@@ -32,11 +24,9 @@ vi.mock('../../../../services/flowsApi', () => ({
 describe('PolicySelectStep', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockListPresentationPolicies.mockResolvedValue({
-      policies: [
-        { id: 'policy-1', name: 'Open Badge Employer Review' },
-      ],
-    });
+    mockListPresentationPolicies.mockResolvedValue([
+      { id: 'policy-1', name: 'Open Badge Employer Review' },
+    ]);
     mockListFlows.mockResolvedValue([
       {
         id: 'flow-1',
@@ -56,7 +46,7 @@ describe('PolicySelectStep', () => {
   });
 
   it('lets a verifier start from a saved verification flow', async () => {
-    const { user } = render(<PolicySelectStep value={{}} onChange={mockOnChange} />);
+    const { user } = render(<PolicySelectStep value={{}} onChange={mockOnChange} organizationId="org-1" />);
 
     expect(await screen.findByText('Select Presentation Policy')).toBeInTheDocument();
     await waitFor(() => {
@@ -75,5 +65,28 @@ describe('PolicySelectStep', () => {
       trust_profile_id: 'trust-1',
       deployment_profile_id: 'deploy-1',
     }));
+  });
+
+  it('surfaces verification flow load failures', async () => {
+    mockListFlows.mockRejectedValue(new Error('flow service unavailable'));
+
+    render(<PolicySelectStep value={{}} onChange={mockOnChange} organizationId="org-1" />);
+
+    expect(await screen.findByText(/flow service unavailable/i)).toBeInTheDocument();
+    expect(screen.queryByRole('combobox', { name: /verification flow/i })).not.toBeInTheDocument();
+  });
+
+  it('retries after a malformed policy response', async () => {
+    mockListPresentationPolicies
+      .mockRejectedValueOnce(new Error('Presentation Policy service returned a malformed list response.'))
+      .mockResolvedValueOnce([{ id: 'policy-1', name: 'Recovered Policy' }]);
+
+    const { user } = render(<PolicySelectStep value={{}} onChange={mockOnChange} organizationId="org-1" />);
+
+    expect(await screen.findByText(/malformed list response/i)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /retry/i }));
+
+    expect(await screen.findByRole('combobox', { name: /presentation policy/i })).toBeInTheDocument();
+    expect(mockListPresentationPolicies).toHaveBeenCalledTimes(2);
   });
 });

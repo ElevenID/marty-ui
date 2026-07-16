@@ -266,7 +266,7 @@ class AuthServiceGrpc(auth_service_pb2_grpc.AuthServiceServicer):
                     )
                     await self._redis.delete(f"{_PENDING_KEY}{nonce}")
                     return auth_service_pb2.CredentialVerifiedResponse(ok=True, status="denied")
-        elif self._credential_login_require_existing_keycloak_user or not self._credential_login_create_users:
+        elif self._credential_login_require_existing_keycloak_user:
             await self._redis.setex(
                 f"{_COMPLETE_KEY}{nonce}",
                 _COMPLETE_TTL,

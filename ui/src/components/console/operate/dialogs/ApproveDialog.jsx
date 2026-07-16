@@ -33,7 +33,7 @@ export default function ApproveDialog({ open, application, checks, initialNote, 
 
   if (!application) return null;
 
-  const credentialDisplay = application.credential_display_name || application.credential_configuration_id;
+  const credentialDisplay = application.credential_display_name || application.credential_template_id;
   const applicantName = [application.applicant_given_name, application.applicant_family_name].filter(Boolean).join(' ')
     || application.applicant_email || application.applicant_id;
 

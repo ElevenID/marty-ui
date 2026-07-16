@@ -24,6 +24,7 @@ import SaveIcon from '@mui/icons-material/Save';
 import { useTranslation } from 'react-i18next';
 
 import { useAuth } from '../../../hooks/useAuth';
+import { useConsole } from '../../../contexts/ConsoleContext';
 import {
   getOrganizationDefaults,
   updateOrganizationDefaults,
@@ -34,12 +35,22 @@ import {
   listCredentialTemplates,
 } from '../../../services/presentationPolicyApi';
 
+const SHOULD_LOG_ORG_DEFAULTS_DIAGNOSTICS = import.meta.env.DEV && import.meta.env.MODE !== 'test';
+
+function logOrgDefaultsError(message, error) {
+  if (SHOULD_LOG_ORG_DEFAULTS_DIAGNOSTICS) {
+    console.error(message, error);
+  }
+}
+
 /**
  * Organization Defaults Section Component
  */
 export function OrgDefaultsSection() {
   const { t } = useTranslation('console');
-  const { organizationId } = useAuth();
+  const { organizationId: authOrganizationId } = useAuth();
+  const { activeOrgId } = useConsole();
+  const organizationId = activeOrgId;
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
@@ -59,16 +70,22 @@ export function OrgDefaultsSection() {
 
   useEffect(() => {
     async function loadData() {
-      if (!organizationId) return;
+      if (!organizationId) {
+        setLoading(false);
+        setError(t('org.defaultsSection.messages.organizationRequired', {
+          defaultValue: 'Select an organization before configuring defaults.',
+        }));
+        return;
+      }
 
       setLoading(true);
       try {
         // Load defaults and available resources in parallel
         const [defaultsData, profilesData, policiesData, templatesData] = await Promise.all([
-          getOrganizationDefaults(organizationId).catch(() => ({})),
-          listTrustProfiles({ organization_id: organizationId }).catch(() => []),
-          listPresentationPolicies({ organization_id: organizationId }).catch(() => []),
-          listCredentialTemplates({ organization_id: organizationId }).catch(() => []),
+          getOrganizationDefaults(organizationId),
+          listTrustProfiles({ organization_id: organizationId }),
+          listPresentationPolicies({ organization_id: organizationId }),
+          listCredentialTemplates({ organization_id: organizationId }),
         ]);
 
         setDefaults({
@@ -77,11 +94,11 @@ export function OrgDefaultsSection() {
           default_template_id: defaultsData?.default_template_id || '',
         });
 
-        setTrustProfiles(Array.isArray(profilesData) ? profilesData : profilesData?.items || []);
-        setPolicies(Array.isArray(policiesData) ? policiesData : policiesData?.items || []);
-        setTemplates(Array.isArray(templatesData) ? templatesData : templatesData?.items || []);
+        setTrustProfiles(profilesData);
+        setPolicies(policiesData);
+        setTemplates(templatesData);
       } catch (err) {
-        console.error('Failed to load org defaults:', err);
+        logOrgDefaultsError('Failed to load org defaults:', err);
         setError(t('org.defaultsSection.messages.loadFailed'));
       } finally {
         setLoading(false);
@@ -101,7 +118,7 @@ export function OrgDefaultsSection() {
       setSuccess(true);
       setTimeout(() => setSuccess(false), 3000);
     } catch (err) {
-      console.error('Failed to save org defaults:', err);
+      logOrgDefaultsError('Failed to save org defaults:', err);
       setError(t('org.defaultsSection.messages.saveFailed'));
     } finally {
       setSaving(false);

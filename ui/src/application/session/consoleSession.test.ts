@@ -17,7 +17,7 @@ describe('consoleSession helpers', () => {
     })
   })
 
-  it('resolves bootstrap state from memberships and preferences', () => {
+  it('resolves bootstrap state from memberships and local storage before preferences', () => {
     expect(
       resolveConsoleBootstrap({
         preferences: { last_view_mode: 'org', last_active_org_id: 'org-2' },
@@ -26,6 +26,22 @@ describe('consoleSession helpers', () => {
           { id: 'org-2' },
         ],
         localStoredOrgId: 'org-1',
+      })
+    ).toEqual({
+      mode: 'org',
+      activeOrgId: 'org-1',
+    })
+  })
+
+  it('falls back to preferences when local storage points at a stale org', () => {
+    expect(
+      resolveConsoleBootstrap({
+        preferences: { last_view_mode: 'org', last_active_org_id: 'org-2' },
+        memberships: [
+          { id: 'org-1' },
+          { id: 'org-2' },
+        ],
+        localStoredOrgId: 'org-missing',
       })
     ).toEqual({
       mode: 'org',
@@ -95,7 +111,6 @@ describe('consoleSession helpers', () => {
       mode: 'org',
       activeOrgId: 'org-1',
       destination: '/console/org',
-      authOrgId: 'org-1',
       persistence: {
         last_view_mode: 'org',
         last_active_org_id: 'org-1',

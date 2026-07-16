@@ -11,6 +11,7 @@ describe('PublicFooter', () => {
     expect(screen.getByTestId('public-footer-privacy-link')).toHaveAttribute('href', '/privacy-policy');
     expect(screen.getByTestId('public-footer-terms-link')).toHaveAttribute('href', '/terms-of-service');
     expect(screen.getByTestId('public-footer-security-link')).toHaveAttribute('href', '/security');
+    expect(screen.getByTestId('public-footer-demos-link')).toHaveAttribute('href', '/demos');
     expect(screen.getByTestId('public-footer-resources-link')).toHaveAttribute('href', '/resources');
     expect(screen.getByTestId('public-footer-contact-link')).toHaveAttribute('href', 'mailto:sales@elevenidllc.com');
   });

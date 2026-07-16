@@ -6,8 +6,27 @@
  */
 
 import { apiClient, handleApiError } from './api';
+import { postWithIdempotency } from './idempotency';
 
 const BASE_PATH = '/v1/compliance-profiles';
+
+function isMissingOrganizationId(organizationId) {
+  return organizationId == null
+    || String(organizationId).trim() === ''
+    || String(organizationId).trim().toLowerCase() === 'null'
+    || String(organizationId).trim().toLowerCase() === 'undefined';
+}
+
+export function requireOrganizationId(params = {}) {
+  const organizationId = typeof params === 'string' ? params : params?.organization_id;
+  if (isMissingOrganizationId(organizationId)) {
+    const error = new Error('An active organization is required before loading compliance profiles.');
+    error.code = 'ORG_REQUIRED';
+    error.status = 400;
+    throw error;
+  }
+  return String(organizationId).trim();
+}
 
 /**
  * Create a new compliance profile
@@ -23,12 +42,10 @@ const BASE_PATH = '/v1/compliance-profiles';
  * @returns {Promise<Object>} Created compliance profile
  */
 export const createComplianceProfile = async (profileData) => {
-  try {
-    const response = await apiClient.post(BASE_PATH, profileData);
-    return response.data;
-  } catch (error) {
-    throw handleApiError(error);
-  }
+  return postWithIdempotency(BASE_PATH, {
+    ...profileData,
+    organization_id: requireOrganizationId(profileData),
+  });
 };
 
 /**
@@ -40,8 +57,10 @@ export const createComplianceProfile = async (profileData) => {
  * @returns {Promise<Array>} List of compliance profiles
  */
 export const listComplianceProfiles = async (filters = {}) => {
+  const organizationId = requireOrganizationId(filters);
   try {
     const params = new URLSearchParams();
+    params.append('organization_id', organizationId);
     if (filters.system_profiles_only !== undefined) {
       params.append('system_profiles_only', filters.system_profiles_only);
     }
@@ -101,14 +120,21 @@ export const deleteComplianceProfile = async (profileId) => {
  * Get system compliance profile presets
  * @returns {Promise<Array>} List of system presets (ICAO_DTC, AAMVA_MDL, EUDI_PID, ENTERPRISE_VC)
  */
-export const getSystemPresets = async () => {
+export const getSystemPresets = async (filters = {}) => {
+  const organizationId = requireOrganizationId(filters);
   try {
-    const response = await apiClient.get(`${BASE_PATH}?system_profiles_only=true`);
+    const params = new URLSearchParams({
+      organization_id: organizationId,
+      system_profiles_only: 'true',
+    });
+    const response = await apiClient.get(`${BASE_PATH}?${params.toString()}`);
     return response.data;
   } catch (error) {
     throw handleApiError(error);
   }
 };
+
+export const listSystemPresets = getSystemPresets;
 
 /**
  * Validate issuer artifacts against compliance profile requirements
@@ -135,5 +161,6 @@ export default {
   updateComplianceProfile,
   deleteComplianceProfile,
   getSystemPresets,
+  listSystemPresets,
   validateIssuerArtifacts,
 };

@@ -6,6 +6,7 @@ import PuppeteerRenderer from '@prerenderer/renderer-puppeteer'
 import { visualizer } from 'rollup-plugin-visualizer'
 import Sitemap from 'vite-plugin-sitemap'
 import { fileURLToPath, URL } from 'node:url'
+import { readFileSync } from 'node:fs'
 
 function createManualChunk(id: string) {
   const normalizedId = id.replace(/\\/g, '/')
@@ -64,10 +65,13 @@ export default defineConfig(async ({ mode }) => {
   const enableBundleAnalysis = mode === 'analyze' || process.env.ANALYZE_BUNDLE === '1'
   const isSelfhostBuild = mode === 'selfhost' || env.VITE_UI_VARIANT === 'selfhost'
   const disablePrerender = isDev || isSelfhostBuild || process.env.DISABLE_PRERENDER === '1'
+  const prerenderDebug = process.env.PRERENDER_DEBUG === '1'
+  const prerenderConcurrency = Number(process.env.PRERENDER_CONCURRENCY || 1)
   const port = Number(env.VITE_PORT || env.PORT || env.UI_DEV_PORT || 3000)
   const bundleAnalysisBaseName = isSelfhostBuild ? 'bundle-analysis-selfhost' : 'bundle-analysis-public'
   let authorRoutes = []
   let blogRoutes = []
+  let demoRoutes = []
 
   if (!isSelfhostBuild) {
     const [
@@ -126,6 +130,18 @@ export default defineConfig(async ({ mode }) => {
         ...GUIDE_ARTICLE_SLUGS.map((slug) => `/blog/${slug}`),
       ]),
     )
+
+    const demoManifestDir = fileURLToPath(new URL('./public/demos/manifests/', import.meta.url))
+    const demoIndex = JSON.parse(readFileSync(`${demoManifestDir}/index.json`, 'utf8'))
+    demoRoutes = ['/demos']
+    demoIndex.releases.forEach(({ stack_version: stackVersion }) => {
+      const manifest = JSON.parse(readFileSync(`${demoManifestDir}/${stackVersion}.json`, 'utf8'))
+      demoRoutes.push(`/demos/${stackVersion}`)
+      manifest.scenarios.forEach(({ slug }) => demoRoutes.push(`/demos/${stackVersion}/${slug}`))
+      if (demoIndex.latest_approved_stack_version === stackVersion) {
+        manifest.scenarios.forEach(({ slug }) => demoRoutes.push(`/demos/latest/${slug}`))
+      }
+    })
   }
   
   return {
@@ -169,6 +185,7 @@ export default defineConfig(async ({ mode }) => {
             '/architecture',
             '/security',
             '/resources',
+            ...demoRoutes,
             '/verifiable-credential-api',
             '/eudi-wallet-verification',
             '/iso-18013-5-mdoc-verification',
@@ -190,10 +207,17 @@ export default defineConfig(async ({ mode }) => {
             '/docs',
           ],
           renderer: new PuppeteerRenderer({
+            maxConcurrentRoutes: prerenderConcurrency,
             renderAfterDocumentEvent: 'app-rendered',
             timeout: 45000,
             skipThirdPartyRequests: true,
             headless: true,
+            pageHandler: prerenderDebug
+              ? (_page, route) => console.info(`[prerender] loaded ${route}`)
+              : undefined,
+            consoleHandler: prerenderDebug
+              ? (route, message) => console.info(`[prerender] ${route} ${message.type()}: ${message.text()}`)
+              : undefined,
           }),
           postProcess(route) {
             // Add prerender status meta tag
@@ -215,6 +239,7 @@ export default defineConfig(async ({ mode }) => {
             '/architecture',
             '/security',
             '/resources',
+            ...demoRoutes,
             '/verifiable-credential-api',
             '/eudi-wallet-verification',
             '/iso-18013-5-mdoc-verification',
@@ -248,6 +273,7 @@ export default defineConfig(async ({ mode }) => {
             '/vendor',
             '/vendor/*',
             '/dashboard',
+            '/test-harness',
             '/login',
             '/auth/*',
           ],
@@ -286,6 +312,7 @@ export default defineConfig(async ({ mode }) => {
                 '/vendor',
                 '/vendor/*',
                 '/dashboard',
+                '/test-harness',
                 '/auth/*',
                 '/api/*',
                 '/v1/*',

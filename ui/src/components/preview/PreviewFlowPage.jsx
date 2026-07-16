@@ -18,7 +18,7 @@ function PreviewFlowContent() {
   const { updateContextLabel } = usePreview();
   const { data: flow, loading, error } = useAsyncData(async () => {
     const data = await fetchPreviewFlow({ flowId });
-    updateContextLabel(`Issuance Flow: ${data.name || flowId}`);
+    updateContextLabel(`Flow: ${data.name || flowId}`);
     return data;
   }, [flowId]);
 
