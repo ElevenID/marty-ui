@@ -43,7 +43,6 @@
     { "component": "marty-credentials", "repository": "https://github.com/ElevenID/marty-credentials", "revision": "7cf179644893583412895d3c34263f9e2a101501" },
     { "component": "marty-microservices-framework", "repository": "https://github.com/ElevenID/marty-microservices-framework", "revision": "5790bf7afcaab30c506e45a2414d8e54e2a9ff5c" },
     { "component": "marty-protocol", "repository": "https://github.com/ElevenID/marty-protocol", "revision": "6648d3e2c9b1f56c35043fb5052b95693c17bf4b" },
-    { "component": "marty-subscriptions", "repository": "https://github.com/ElevenID/marty-subscriptions", "revision": "dc504a3b64176811e5856bbe50d6d4e3f6c658a6" },
     { "component": "marty-ui", "repository": "https://github.com/ElevenID/marty-ui", "revision": "96cfedc0280980340777a6c39629052bec0a106e" }
   ],
   "image_digests": [
@@ -61,7 +60,6 @@
     { "component": "revocation-profile", "digest": "sha256:dfbb58b36fdb605ed14ad7531de507569a9b3074b69cf10b3194c06de9c37af9" },
     { "component": "device-registration", "digest": "sha256:4642811216829e4fb304d4c127d303af8c5fba99f86d2f5f6bf077b63a14aa51" },
     { "component": "event-stream", "digest": "sha256:c27fa417bc252494cf48fc1006ff966883b587759bec6398408ef9fed4c7456c" },
-    { "component": "billing", "digest": "sha256:2f209d8ec5b983224d8793c8f57f46efc5c36439417688fa19758a93c452a7ed" },
     { "component": "issuance", "digest": "sha256:98bca882567cf43719ab58e40cd7439c25ebd5703d4ddc07dae0b49812c15cd9" },
     { "component": "gateway", "digest": "sha256:e032194880317b8d4e0a10432befc15c259cab55445ada5bc959d90c1bf474e2" },
     { "component": "ui-prod", "digest": "sha256:b7a8ec793c5ad3f7a19aa8c26eb86cbbb234a9a71df55db74fbcba0a99fad8d5" }

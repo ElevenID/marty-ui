@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "name": "selfhost-production",
-  "description": "Licensed self-host production stack serving elevenidllc.com through the self-host edge and production Cloudflare tunnel.",
+  "description": "Open-source self-host production stack served through the configured edge and tunnel.",
   "env_file": ".env.selfhost.production.local",
   "compose_files": ["docker-compose.selfhost.prod.yml"],
   "compose_profiles": [],
@@ -20,11 +20,9 @@
     "integration_secret_master_key",
     "token_hmac_key",
     "openbao_service_token",
-    "cloudflare_tunnel_token",
-    "license_key"
+    "cloudflare_tunnel_token"
   ],
-  "license_policy": "selfhost-system",
-  "artifact_profile": "selfhost-commercial",
+  "artifact_profile": "oss-release",
   "deployment_targets": ["docker-compose", "customer-bundle"],
   "operations": {
     "config": ["config"],

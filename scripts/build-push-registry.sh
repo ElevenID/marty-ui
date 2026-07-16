@@ -38,6 +38,10 @@ PUSH_ONLY=false
 BUILD_ONLY=false
 TAG_LATEST=false
 PLATFORM="${PLATFORM:-linux/arm64}"
+MARTY_API_CORE_VERSION="${MARTY_API_CORE_VERSION:?Set the released @elevenid/marty-api-core version}"
+MARTY_BLOG_VERSION="${MARTY_BLOG_VERSION:?Set the released @elevenid/marty-blog version}"
+MARTY_COMMON_VERSION="${MARTY_COMMON_VERSION:?Set the released marty-common version}"
+MARTY_RS_VERSION="${MARTY_RS_VERSION:?Set the released marty-credentials Python version}"
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -127,7 +131,6 @@ if [[ "$PLATFORM" == "linux/arm64" ]] && ! docker buildx inspect marty-builder &
   docker buildx inspect --bootstrap
 fi
 BUILDER_CMD="docker buildx build --platform ${PLATFORM} --load"
-UI_BUILD_CONTEXT_ARGS="--build-context marty-cli=marty-cli --build-context marty-blog=marty-blog --build-context marty-subscriptions=marty-subscriptions"
 
 catalog_services() {
   "$PYTHON_BIN" "$REPO_ROOT/scripts/marty-deploy.py" services --group "$1" --field id
@@ -168,44 +171,39 @@ build_and_push() {
   fi
 }
 
-PARENT_DIR="$(cd "$REPO_ROOT/.." && pwd)"
-cd "$PARENT_DIR"
+cd "$REPO_ROOT"
 
 while IFS= read -r svc; do
   [[ -z "$svc" || "$svc" == "issuance" ]] && continue
   build_and_push \
     "$svc" \
-    "marty-ui/services/Dockerfile" \
+    "services/Dockerfile" \
     "." \
-    "--build-arg SERVICE_NAME=${svc}"
+    "--build-arg SERVICE_NAME=${svc} --build-arg MARTY_RS_VERSION=${MARTY_RS_VERSION} --build-arg MARTY_COMMON_VERSION=${MARTY_COMMON_VERSION}"
 done < <(catalog_services app)
 
 build_and_push \
-  "issuance" \
-  "marty-credentials/services/Dockerfile" \
-  "."
-
-build_and_push \
   "db-migrate" \
-  "marty-ui/services/Dockerfile.migrations" \
-  "."
+  "services/Dockerfile.migrations" \
+  "." \
+  "--build-arg MARTY_COMMON_VERSION=${MARTY_COMMON_VERSION}"
 
 build_and_push \
   "ui-selfhost" \
-  "marty-ui/docker/ui.Dockerfile" \
-  "marty-ui" \
-  "${UI_BUILD_CONTEXT_ARGS} --build-arg UI_VARIANT=selfhost"
+  "docker/ui.Dockerfile" \
+  "." \
+  "--build-arg UI_VARIANT=selfhost --build-arg MARTY_API_CORE_VERSION=${MARTY_API_CORE_VERSION} --build-arg MARTY_BLOG_VERSION=${MARTY_BLOG_VERSION}"
 
 build_and_push \
   "ui" \
-  "marty-ui/docker/ui.Dockerfile" \
-  "marty-ui" \
-  "${UI_BUILD_CONTEXT_ARGS} --build-arg UI_VARIANT=public"
+  "docker/ui.Dockerfile" \
+  "." \
+  "--build-arg UI_VARIANT=public --build-arg MARTY_API_CORE_VERSION=${MARTY_API_CORE_VERSION} --build-arg MARTY_BLOG_VERSION=${MARTY_BLOG_VERSION}"
 
 build_and_push \
   "cloudflared-wrapper" \
-  "marty-ui/docker/cloudflared-wrapper.Dockerfile" \
-  "marty-ui"
+  "docker/cloudflared-wrapper.Dockerfile" \
+  "."
 
 echo ""
 success "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

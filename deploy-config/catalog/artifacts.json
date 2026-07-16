@@ -1,34 +1,14 @@
 {
   "schema_version": 1,
   "artifacts": {
-    "source-debuggable": {
-      "description": "Internal development/support images that may contain source code and debugging tools.",
-      "commercial": false,
-      "license_enforcement": "optional",
-      "source_policy": "source-included",
-      "python_packaging": "editable-or-source-copy",
-      "debug_tools": "allowed",
-      "source_maps": "allowed"
-    },
-    "selfhost-commercial": {
-      "description": "Customer-facing self-host images that require a valid license and are packaged for production distribution.",
-      "commercial": true,
-      "license_enforcement": "required",
-      "source_policy": "production-packaged",
-      "python_packaging": "wheels-or-runtime-packages",
+    "oss-release": {
+      "description": "Public, signed Marty release artifacts built from this repository.",
+      "source_policy": "public-source",
+      "python_packaging": "released-packages",
       "debug_tools": "excluded-by-default",
-      "source_maps": "excluded",
-      "image_signing": "required-before-ga",
-      "sbom": "required-before-ga"
-    },
-    "selfhost-commercial-support": {
-      "description": "Restricted support image variant with extra diagnostics, still license-gated and not for general customer distribution.",
-      "commercial": true,
-      "license_enforcement": "required",
-      "source_policy": "limited-diagnostics-no-tests",
-      "python_packaging": "wheels-or-runtime-packages",
-      "debug_tools": "restricted",
-      "source_maps": "excluded"
+      "source_maps": "included",
+      "image_signing": "required",
+      "sbom": "required"
     }
   }
 }

@@ -70,12 +70,12 @@ import {
   SigningKeysPage,
   WebhooksPage,
   AuditPage,
-  UsageDashboard,
   ApplicantDashboard,
   MyIdentityPage,
   ApplicantSettingsPage,
   DeviceManagementPage,
 } from '../../components/console';
+import { renderCommerceConsoleRoutes } from '../../extensions/commerce';
 
 function GuardLoadingState({ message }) {
   return (
@@ -218,7 +218,7 @@ function ConsoleRoutes() {
         <Route path="membership-requests" element={<MembershipRequestsPage />} />
         <Route path="role-requests" element={<RoleEscalationRequestsPage />} />
         <Route path="audit" element={<AuditPage />} />
-        <Route path="billing" element={<UsageDashboard get={get} />} />
+        {renderCommerceConsoleRoutes({ get })}
       </Route>
 
       <Route

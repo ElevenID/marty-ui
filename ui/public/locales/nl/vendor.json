@@ -170,16 +170,6 @@
       "saveButton": "Wijzigingen opslaan",
       "saving": "Opslaan..."
     },
-    "subscription": {
-      "title": "Abonnement",
-      "currentPlan": "Huidig plan",
-      "status": "Status",
-      "limits": "Limieten",
-      "billingPeriod": "Factureringsperiode",
-      "noSubscription": "Geen actief abonnement gevonden",
-      "active": "Actief",
-      "free": "Gratis"
-    },
     "info": {
       "title": "Organisatie-informatie",
       "created": "Aangemaakt",
@@ -228,52 +218,6 @@
       "deviceIdPlaceholder": "device-uuid-here",
       "cancelButton": "Annuleren",
       "assignButton": "Toewijzen"
-    }
-  },
-  "processingFeeConfig": {
-    "title": "Verwerkingskosten",
-    "description": "Configureer kosten die aan aanvragers worden berekend wanneer zij referenties aanvragen.",
-    "saveButton": "Wijzigingen opslaan",
-    "saving": "Opslaan...",
-    "mockModeAlert": "Ontwikkelmodus: Betalingen worden gemockt. Er worden geen echte kosten in rekening gebracht.",
-    "freeProcessing": {
-      "label": "Gratis verwerking",
-      "description": "Alle verwerkingskosten voor aanvragers kwijtschelden"
-    },
-    "defaultFee": {
-      "title": "Standaard verwerkingskosten",
-      "description": "Deze kosten worden aan alle aanvragers berekend, tenzij per-referentie kosten zijn geconfigureerd."
-    },
-    "perCredentialFees": {
-      "label": "Kosten per referentie",
-      "description": "Stel verschillende kosten in per referentietype",
-      "default": "Standaard: ${{amount}}"
-    },
-    "summary": {
-      "title": "Kostenoverzicht",
-      "currentConfig": "Huidige configuratie",
-      "free": "Gratis",
-      "defaultAmount": "${{amount}} standaard",
-      "feeRange": "Kostenbereik",
-      "estimatedRevenue": "Geschatte maandelijkse omzet",
-      "revenueNote": "Gebaseerd op ~100 aanvragers/maand"
-    },
-    "info": {
-      "title": "Betalingsverwerking",
-      "description": "Verwerkingskosten worden via Square geïnd op het moment van aanvragen. Fondsen worden gestort op uw gekoppelde Square-account minus de transactiekosten van Square (2,6% + $0,10)."
-    },
-    "credentialTypes": {
-      "passport": "Paspoortaanvraag",
-      "visa": "Visumaanvraag",
-      "permit": "Werkvergunning",
-      "license": "Licentievernieuwing",
-      "certificate": "Certificaataanvraag"
-    },
-    "messages": {
-      "loadFailed": "Kan instellingen niet laden",
-      "saveSuccess": "Kosteninstellingen succesvol opgeslagen",
-      "saveFailed": "Kan instellingen niet opslaan",
-      "invalidFee": "Ongeldige kosten voor {{credType}}: {{error}}"
     }
   },
   "templateCatalog": {

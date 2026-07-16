@@ -5,8 +5,7 @@
     "MARTY_CLI_REF",
     "MARTY_CORE_REF",
     "MARTY_CREDENTIALS_REF",
-    "MARTY_PROTOCOL_REF",
-    "MARTY_SUBSCRIPTIONS_REF"
+    "MARTY_PROTOCOL_REF"
   ],
   "environments": {
     "beta-migration-rehearsal": {

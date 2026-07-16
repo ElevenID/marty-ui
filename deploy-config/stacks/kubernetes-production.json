@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "name": "kubernetes-production",
-  "description": "Provider-neutral Kubernetes production deployment using licensed Marty service images and the shared secret schema.",
+  "description": "Provider-neutral Kubernetes production deployment using signed public Marty images.",
   "env_file": ".env.production",
   "manifest_dir": "k8s/oracle",
   "namespace": "marty-prod",
@@ -20,11 +20,9 @@
     "session_secret_key",
     "issuance_api_key",
     "integration_secret_master_key",
-    "openbao_service_token",
-    "license_key"
+    "openbao_service_token"
   ],
-  "license_policy": "selfhost-system",
-  "artifact_profile": "selfhost-commercial",
+  "artifact_profile": "oss-release",
   "deployment_targets": ["kubernetes"],
   "operations": {
     "status": ["status"],

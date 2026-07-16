@@ -19,8 +19,8 @@
 services:
   canvas-sandbox:
     build:
-      context: ..
-      dockerfile: marty-ui/docker/canvas-sandbox/Dockerfile
+      context: .
+      dockerfile: docker/canvas-sandbox/Dockerfile
     container_name: marty-canvas-sandbox
     environment:
       CANVAS_SANDBOX_HOST: ${CANVAS_SANDBOX_HOST:-canvas-sandbox.${PUBLIC_DOMAIN:-beta.elevenidllc.com}}

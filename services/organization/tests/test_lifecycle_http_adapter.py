@@ -24,14 +24,13 @@ with patch("pydantic.networks.version", return_value="2.0.0"):
     from services.organization.infrastructure.adapters import http_adapter as adapter
 
 
-def test_lifecycle_response_ignores_stale_hosted_pilot_retention_fields_for_standard_plan():
+def test_lifecycle_response_ignores_disabled_pilot_retention_fields():
     org = Organization(
         id="org-1",
         name="Org 1",
         slug="org-1",
         owner_id="user-1",
         status=OrganizationStatus.ACTIVE,
-        plan="professional",
         created_at=datetime(2026, 4, 1, tzinfo=timezone.utc),
         settings={
             "pilot_retention_enabled": False,
@@ -44,7 +43,7 @@ def test_lifecycle_response_ignores_stale_hosted_pilot_retention_fields_for_stan
 
     response = adapter._org_to_lifecycle_response(org)
 
-    assert response.plan_tier == "professional"
+    assert "plan_tier" not in response.model_dump()
     assert response.data_retention_mode == "standard"
     assert response.audit_retention_days == 90
     assert response.pilot_retention is None
@@ -57,7 +56,6 @@ def test_internal_lifecycle_route_uses_resource_id_without_user_context():
         slug="org-1",
         owner_id="user-1",
         status=OrganizationStatus.ACTIVE,
-        plan="professional",
         created_at=datetime(2026, 4, 1, tzinfo=timezone.utc),
     )
 
@@ -67,4 +65,4 @@ def test_internal_lifecycle_route_uses_resource_id_without_user_context():
 
     response = asyncio.run(adapter.get_internal_organization_lifecycle("org-1", UseCase()))
 
-    assert response.plan_tier == "professional"
+    assert "plan_tier" not in response.model_dump()

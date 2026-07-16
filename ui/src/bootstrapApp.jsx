@@ -1,12 +1,12 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import { configureApi } from '@marty/subscriptions';
 
 import './i18n';
 import { get, post } from './services/api';
+import { configureCommerceApi } from './extensions/commerce';
 import { waitForFonts } from './utils/waitForFonts';
 
-configureApi({ get, post });
+configureCommerceApi({ get, post });
 
 function markAppReady() {
   document.documentElement.classList.remove('app-loading');

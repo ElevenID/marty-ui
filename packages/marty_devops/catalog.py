@@ -1,7 +1,7 @@
 """Manifest-driven deployment catalog for Marty DevOps workflows.
 
 The catalog is intentionally read-only for this first implementation slice. It
-centralizes service, secret, artifact, license-policy, stack, and bundle metadata
+centralizes service, secret, artifact, stack, and bundle metadata
 so Make targets and deployment scripts can gradually stop duplicating those
 facts.
 """
@@ -27,7 +27,6 @@ class DeploymentCatalog:
     service_groups: dict[str, list[str]]
     secrets: dict[str, Any]
     artifacts: dict[str, Any]
-    license_policies: dict[str, Any]
     stacks: dict[str, Any]
     bundles: dict[str, Any]
 
@@ -41,7 +40,6 @@ class DeploymentCatalog:
         services_payload = _read_json(catalog_dir / "services.json")
         secrets_payload = _read_json(catalog_dir / "secrets.json")
         artifacts_payload = _read_json(catalog_dir / "artifacts.json")
-        license_payload = _read_json(catalog_dir / "license-policies.json")
 
         stacks = _read_named_documents(stacks_dir)
         bundles = _read_named_documents(bundles_dir)
@@ -55,7 +53,6 @@ class DeploymentCatalog:
             },
             secrets=dict(secrets_payload.get("secrets", {})),
             artifacts=dict(artifacts_payload.get("artifacts", {})),
-            license_policies=dict(license_payload.get("policies", {})),
             stacks=stacks,
             bundles=bundles,
         )
@@ -106,22 +103,6 @@ class DeploymentCatalog:
             artifact_profile = stack.get("artifact_profile")
             if artifact_profile not in self.artifacts:
                 errors.append(f"stack {stack_name!r} references unknown artifact profile {artifact_profile!r}")
-
-            license_policy = stack.get("license_policy")
-            if license_policy not in self.license_policies:
-                errors.append(f"stack {stack_name!r} references unknown license policy {license_policy!r}")
-
-            artifact = self.artifacts.get(artifact_profile, {})
-            license_policy_doc = self.license_policies.get(license_policy, {})
-            if (
-                license_policy_doc.get("enforcement") == "required"
-                and "selfhost" in str(license_policy)
-                and not artifact.get("commercial")
-            ):
-                errors.append(
-                    f"stack {stack_name!r} uses required self-host license policy {license_policy!r} "
-                    f"but non-commercial artifact profile {artifact_profile!r}"
-                )
 
             parent_stack = stack.get("parent_stack")
             if parent_stack and parent_stack not in self.stacks:
@@ -253,7 +234,6 @@ class DeploymentCatalog:
     def redacted_stack_plan(self, stack_name: str) -> dict[str, Any]:
         stack = self.stack(stack_name)
         artifact_profile = stack.get("artifact_profile")
-        license_policy = stack.get("license_policy")
         return {
             "name": stack_name,
             "description": stack.get("description", ""),
@@ -265,9 +245,6 @@ class DeploymentCatalog:
             "running_services": self.running_services_for_stack(stack_name),
             "required_secret_names": self.required_secrets_for_stack(stack_name),
             "artifact_profile": artifact_profile,
-            "artifact_commercial": bool(self.artifacts.get(artifact_profile, {}).get("commercial")),
-            "license_policy": license_policy,
-            "license_enforcement": self.license_policies.get(license_policy, {}).get("enforcement"),
             "deployment_targets": list(stack.get("deployment_targets", [])),
         }
 

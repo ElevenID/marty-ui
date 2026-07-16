@@ -156,9 +156,6 @@ export async function getOrganizationLifecycle(organizationId) {
   return {
     createdAt: response?.created_at || null,
     complianceProfiles: response?.compliance_profiles || [],
-    planTier: response?.plan_tier || null,
-    planExpiresAt: response?.plan_expires_at || null,
-    commercialOffer: response?.commercial_offer || null,
     dataRetentionMode: response?.data_retention_mode || null,
     auditRetentionDays: response?.audit_retention_days ?? null,
     pilotRetention: response?.pilot_retention ? {

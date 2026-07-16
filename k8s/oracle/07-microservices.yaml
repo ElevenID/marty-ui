@@ -43,11 +43,6 @@ spec:
           ports:
             - containerPort: 8000
           env:
-            - name: LICENSE_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: marty-secrets
-                  key: LICENSE_KEY
             - name: GATEWAY_PORT
               value: "8000"
             - name: AUTH_SERVICE_URL
@@ -196,11 +191,6 @@ spec:
           ports:
             - containerPort: 8001
           env:
-            - name: LICENSE_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: marty-secrets
-                  key: LICENSE_KEY
             - name: AUTH_SERVICE_PORT
               value: "8001"
             - name: UI_BASE_URL
@@ -352,11 +342,6 @@ spec:
           ports:
             - containerPort: 8002
           env:
-            - name: LICENSE_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: marty-secrets
-                  key: LICENSE_KEY
             - name: ORGANIZATION_SERVICE_PORT
               value: "8002"
             - name: DATABASE_URL
@@ -451,11 +436,6 @@ spec:
           ports:
             - containerPort: 8003
           env:
-            - name: LICENSE_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: marty-secrets
-                  key: LICENSE_KEY
             - name: CREDENTIAL_TEMPLATE_SERVICE_PORT
               value: "8003"
             - name: DATABASE_URL
@@ -535,11 +515,6 @@ spec:
           ports:
             - containerPort: 8004
           env:
-            - name: LICENSE_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: marty-secrets
-                  key: LICENSE_KEY
             - name: TRUST_PROFILE_SERVICE_PORT
               value: "8004"
             - name: DATABASE_URL
@@ -619,11 +594,6 @@ spec:
           ports:
             - containerPort: 8005
           env:
-            - name: LICENSE_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: marty-secrets
-                  key: LICENSE_KEY
             - name: ISSUANCE_SERVICE_PORT
               value: "8005"
             - name: DATABASE_URL
@@ -853,11 +823,6 @@ spec:
             - configMapRef:
                 name: marty-config
           env:
-            - name: LICENSE_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: marty-secrets
-                  key: LICENSE_KEY
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
@@ -918,11 +883,6 @@ spec:
             - containerPort: 8012
             - containerPort: 9017
           env:
-            - name: LICENSE_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: marty-secrets
-                  key: LICENSE_KEY
             - name: VERIFICATION_SERVICE_PORT
               value: "8012"
             - name: PP_GRPC_TARGET
@@ -1017,11 +977,6 @@ spec:
           ports:
             - containerPort: 8006
           env:
-            - name: LICENSE_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: marty-secrets
-                  key: LICENSE_KEY
             - name: APPLICANT_SERVICE_PORT
               value: "8006"
             - name: DATABASE_URL
@@ -1126,11 +1081,6 @@ spec:
           ports:
             - containerPort: 8007
           env:
-            - name: LICENSE_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: marty-secrets
-                  key: LICENSE_KEY
             - name: NOTIFICATION_SERVICE_PORT
               value: "8007"
             - name: DATABASE_URL
@@ -1230,11 +1180,6 @@ spec:
           ports:
             - containerPort: 8008
           env:
-            - name: LICENSE_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: marty-secrets
-                  key: LICENSE_KEY
             - name: COMPLIANCE_PROFILE_SERVICE_PORT
               value: "8008"
             - name: DATABASE_URL
@@ -1314,11 +1259,6 @@ spec:
           ports:
             - containerPort: 8009
           env:
-            - name: LICENSE_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: marty-secrets
-                  key: LICENSE_KEY
             - name: PRESENTATION_POLICY_SERVICE_PORT
               value: "8009"
             - name: DID_RESOLUTION_BASE_URL
@@ -1400,11 +1340,6 @@ spec:
           ports:
             - containerPort: 8010
           env:
-            - name: LICENSE_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: marty-secrets
-                  key: LICENSE_KEY
             - name: DEPLOYMENT_PROFILE_SERVICE_PORT
               value: "8010"
             - name: DATABASE_URL
@@ -1484,11 +1419,6 @@ spec:
           ports:
             - containerPort: 8011
           env:
-            - name: LICENSE_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: marty-secrets
-                  key: LICENSE_KEY
             - name: FLOW_SERVICE_PORT
               value: "8011"
             - name: DATABASE_URL

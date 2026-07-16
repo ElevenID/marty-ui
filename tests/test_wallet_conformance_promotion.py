@@ -116,7 +116,6 @@ def _build_manifest() -> dict:
             "marty_core": "3" * 40,
             "marty_cli": "7" * 40,
             "marty_blog": "8" * 40,
-            "marty_subscriptions": "9" * 40,
         },
         "images": {
             "services": f"ghcr.io/elevenid/marty-ui/services:{RELEASE_VERSION}",
@@ -308,7 +307,7 @@ def test_promotion_rejects_beta_wallet_from_another_core_revision(tmp_path: Path
 def test_promotion_rejects_incomplete_coordinated_repository_set(tmp_path: Path) -> None:
     args = _promotion_args(tmp_path)
     manifest = json.loads(args.build_manifest.read_text(encoding="utf-8"))
-    del manifest["repositories"]["marty_subscriptions"]
+    del manifest["repositories"]["marty_blog"]
     _write_json(args.build_manifest, manifest)
 
     with pytest.raises(EvidenceError, match="coordinated repository set mismatch"):

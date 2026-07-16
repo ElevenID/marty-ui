@@ -844,8 +844,8 @@ export const PROTOCOL = {
 // AI research personas — domain experts representing curated protocol analysis
 
 // ── Blog content ─────────────────────────────────────────────────────────────
-// Moved to @marty/blog. Re-exported here for backward compatibility during migration.
-export { BLOG_AUTHORS, BLOG_POSTS, BLOG_ROADMAP, AUTHOR_AVATAR_PROMPTS } from '@marty/blog';
+// Moved to @elevenid/marty-blog. Re-exported here for backward compatibility during migration.
+export { BLOG_AUTHORS, BLOG_POSTS, BLOG_ROADMAP, AUTHOR_AVATAR_PROMPTS } from '@elevenid/marty-blog';
 
 // Trust and infrastructure messaging
 export const TRUST_SIGNALS = {

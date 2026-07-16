@@ -634,9 +634,6 @@ export const handlers = [
     return HttpResponse.json({
       created_at: new Date().toISOString(),
       compliance_profiles: [],
-      plan_tier: 'free',
-      plan_expires_at: null,
-      commercial_offer: 'Developer Sandbox',
       data_retention_mode: 'standard',
       audit_retention_days: 90,
       pilot_retention: null,
@@ -689,9 +686,6 @@ export const handlers = [
     return HttpResponse.json({
       created_at: new Date().toISOString(),
       compliance_profiles: [],
-      plan_tier: 'free',
-      plan_expires_at: null,
-      commercial_offer: 'Developer Sandbox',
       data_retention_mode: 'standard',
       audit_retention_days: 90,
       pilot_retention: null,

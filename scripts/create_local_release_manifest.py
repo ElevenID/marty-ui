@@ -22,7 +22,6 @@ REPOSITORIES = (
     "marty-core",
     "marty-cli",
     "marty-blog",
-    "marty-subscriptions",
     "marty-microservices-framework",
     "longfellow-zk",
 )
@@ -30,7 +29,6 @@ REPOSITORIES = (
 REPOSITORY_INCLUDE_PREFIXES = {
     # The public UI image consumes only these named-context paths.
     "marty-blog": ("package.json", "src/"),
-    "marty-subscriptions": ("package.json", "src/"),
 }
 
 REPOSITORY_EXCLUDE_PREFIXES = {

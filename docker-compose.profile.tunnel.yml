@@ -91,9 +91,7 @@ services:
         condition: service_healthy
 
   docs:
-    build:
-      context: ../marty-docs
-      dockerfile: Dockerfile
+    image: ${MARTY_DOCS_IMAGE:?set MARTY_DOCS_IMAGE to an immutable documentation image digest}
     container_name: marty-docs
     networks:
       - marty-network

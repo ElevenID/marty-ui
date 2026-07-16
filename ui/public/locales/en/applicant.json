@@ -191,8 +191,6 @@
     },
     "detailsDialog": {
       "processingTime": "Processing Time",
-      "processingFee": "Processing Fee",
-      "noFee": "No fee required",
       "requirements": "Requirements",
       "instructions": "Submission Instructions",
       "requiredInfo": "Required Information",

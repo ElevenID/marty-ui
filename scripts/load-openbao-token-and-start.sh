@@ -43,17 +43,6 @@ until curl -sf "${BAO_ADDR}/v1/sys/health" >/dev/null 2>&1; do
     sleep 2
 done
 
-if [ "${MARTY_LICENSE_PREFLIGHT_DONE:-0}" != "1" ]; then
-    case "$(printf '%s' "${MARTY_LICENSE_ENFORCEMENT:-}" | tr '[:upper:]' '[:lower:]')" in
-        ""|0|false|off|disabled|none)
-            ;;
-        *)
-            python -m marty_common.license_gate
-            export MARTY_LICENSE_PREFLIGHT_DONE=1
-            ;;
-    esac
-fi
-
 if [ "$#" -gt 0 ]; then
     exec "$@"
 fi

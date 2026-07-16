@@ -18,7 +18,6 @@ import BadgeIcon from '@mui/icons-material/Badge';
 import FolderSharedIcon from '@mui/icons-material/FolderShared';
 import StorefrontIcon from '@mui/icons-material/Storefront';
 import SettingsIcon from '@mui/icons-material/Settings';
-import PaymentIcon from '@mui/icons-material/Payment';
 import DesignServicesIcon from '@mui/icons-material/DesignServices';
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
 import IntegrationInstructionsIcon from '@mui/icons-material/IntegrationInstructions';
@@ -181,14 +180,6 @@ export const ADMIN_VENDOR_NAV = [
     description: 'Audit Events',
     exact: true,
     requiredPermission: { resource: 'audit', action: 'view' },
-  },
-  {
-    id: 'billing',
-    label: 'Usage & Billing',
-    path: '/console/org/billing',
-    icon: PaymentIcon,
-    description: 'Usage metrics, plan limits, and billing',
-    exact: true,
   },
 ];
 

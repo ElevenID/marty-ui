@@ -24,7 +24,6 @@ REQUIRED_REPOSITORIES = {
     "marty_core",
     "marty_cli",
     "marty_blog",
-    "marty_subscriptions",
 }
 REQUIRED_IMAGES = {
     "services",

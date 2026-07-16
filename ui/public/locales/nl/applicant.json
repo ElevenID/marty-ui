@@ -189,8 +189,6 @@
     },
     "detailsDialog": {
       "processingTime": "Verwerkingstijd",
-      "processingFee": "Verwerkingskosten",
-      "noFee": "Geen kosten vereist",
       "requirements": "Vereisten",
       "instructions": "Inzendingsinstructies",
       "requiredInfo": "Vereiste informatie",

@@ -23,6 +23,7 @@
       "@hooks/*": ["./src/hooks/*"],
       "@contexts/*": ["./src/contexts/*"],
       "@config/*": ["./src/config/*"],
+      "@marty/commerce-extension": ["./src/extensions/commerce/publicStub.jsx"],
       "@test/*": ["./src/test/*"]
     },
 

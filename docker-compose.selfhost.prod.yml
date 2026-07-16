@@ -11,12 +11,7 @@ x-runtime-env: &runtime-env
   UI_BASE_URL: ${UI_BASE_URL:-https://localhost}
   ISSUER_BASE_URL: ${ISSUER_BASE_URL:-https://localhost}
   MARTY_ISSUER_BASE_URL: ${MARTY_ISSUER_BASE_URL:-https://localhost}
-  MARTY_LICENSE_ENFORCEMENT: ${MARTY_LICENSE_ENFORCEMENT:-required}
-  MARTY_LICENSE_REQUIRED_ISSUER: ${MARTY_LICENSE_REQUIRED_ISSUER:-marty-license-issuer}
-  MARTY_LICENSE_REQUIRED_PLAN_TIER: ${MARTY_LICENSE_REQUIRED_PLAN_TIER:-system}
-  MARTY_LICENSE_REQUIRED_PRODUCTS: ${MARTY_LICENSE_REQUIRED_PRODUCTS:-ui-app}
   ORGANIZATION_CREATION_ENABLED: ${ORGANIZATION_CREATION_ENABLED:-false}
-  LICENSE_KEY_FILE: /run/secrets/license_key
 
 x-database-url-template: &database-url-template postgresql+asyncpg://marty:$${MARTY_DB_PASSWORD}@postgres:5432/marty
 x-database-url-sync-template: &database-url-sync-template postgresql://marty:$${MARTY_DB_PASSWORD}@postgres:5432/marty
@@ -164,8 +159,8 @@ services:
 
   db-migrate:
     build:
-      context: ..
-      dockerfile: marty-ui/services/Dockerfile.migrations
+      context: .
+      dockerfile: services/Dockerfile.migrations
     environment:
       <<: *runtime-env
       DATABASE_URL_TEMPLATE: *database-url-sync-template
@@ -186,7 +181,6 @@ services:
     secrets:
       - marty_db_password
       - openbao_service_token
-      - license_key
     depends_on:
       postgres:
         condition: service_healthy
@@ -196,8 +190,8 @@ services:
 
   gateway:
     build:
-      context: ..
-      dockerfile: marty-ui/services/Dockerfile
+      context: .
+      dockerfile: services/Dockerfile
       args:
         SERVICE_NAME: gateway
     environment:
@@ -216,7 +210,6 @@ services:
       DEVICE_REGISTRATION_SERVICE_URL: http://device-registration:8014
       ISSUANCE_SERVICE_URL: http://issuance:8005
       REVOCATION_PROFILE_SERVICE_URL: http://revocation-profile:8013
-      BILLING_SERVICE_URL: http://billing:8016
       ISSUER_BASE_URL: ${PUBLIC_API_URL:-https://localhost}
       CORS_ORIGINS: ${CORS_ORIGINS:?CORS_ORIGINS must be set}
       AUTH_GRPC_TARGET: auth:9001
@@ -232,7 +225,6 @@ services:
     secrets:
       - issuance_api_key
       - openbao_service_token
-      - license_key
     ports:
       - "127.0.0.1:${SELFHOST_GATEWAY_HOST_PORT:-18000}:8000"
     depends_on:
@@ -260,8 +252,6 @@ services:
         condition: service_healthy
       revocation-profile:
         condition: service_healthy
-      billing:
-        condition: service_healthy
       issuance:
         condition: service_healthy
       event-stream:
@@ -275,8 +265,8 @@ services:
 
   auth:
     build:
-      context: ..
-      dockerfile: marty-ui/services/Dockerfile
+      context: .
+      dockerfile: services/Dockerfile
       args:
         SERVICE_NAME: auth
     environment:
@@ -317,7 +307,6 @@ services:
       AUTH_GRPC_PORT: "9001"
     secrets:
       - marty_api_client_secret
-      - license_key
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -336,8 +325,8 @@ services:
 
   organization:
     build:
-      context: ..
-      dockerfile: marty-ui/services/Dockerfile
+      context: .
+      dockerfile: services/Dockerfile
       args:
         SERVICE_NAME: organization
     environment:
@@ -351,7 +340,6 @@ services:
       MARTY_ORG_ADMIN_EMAIL: ${MARTY_ORG_ADMIN_EMAIL:-}
     secrets:
       - marty_db_password
-      - license_key
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -366,8 +354,8 @@ services:
 
   credential-template:
     build:
-      context: ..
-      dockerfile: marty-ui/services/Dockerfile
+      context: .
+      dockerfile: services/Dockerfile
       args:
         SERVICE_NAME: credential-template
     environment:
@@ -382,7 +370,6 @@ services:
     secrets:
       - marty_db_password
       - issuance_api_key
-      - license_key
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -395,8 +382,8 @@ services:
 
   trust-profile:
     build:
-      context: ..
-      dockerfile: marty-ui/services/Dockerfile
+      context: .
+      dockerfile: services/Dockerfile
       args:
         SERVICE_NAME: trust-profile
     entrypoint: ["/bin/sh", "/app/load-openbao-token-and-start.sh"]
@@ -411,7 +398,6 @@ services:
     secrets:
       - marty_db_password
       - openbao_service_token
-      - license_key
     volumes:
       - ./scripts/load-openbao-token-and-start.sh:/app/load-openbao-token-and-start.sh:ro
     depends_on:
@@ -425,9 +411,7 @@ services:
     restart: unless-stopped
 
   issuance:
-    build:
-      context: ..
-      dockerfile: marty-credentials/services/Dockerfile
+    image: ${MARTY_ISSUANCE_IMAGE:?set MARTY_ISSUANCE_IMAGE to an immutable issuance image digest}
     entrypoint: ["/bin/sh", "/app/load-openbao-token-and-start.sh"]
     command: ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8005"]
     environment:
@@ -488,7 +472,6 @@ services:
       - integration_secret_master_key
       - token_hmac_key
       - canvas_credentials_shared_secret
-      - license_key
     volumes:
       - ./scripts/load-openbao-token-and-start.sh:/app/load-openbao-token-and-start.sh:ro
     depends_on:
@@ -504,9 +487,7 @@ services:
 
   # Durable Canvas jobs must never run inside the web-service lifespan.
   canvas-sync-worker:
-    build:
-      context: ..
-      dockerfile: marty-credentials/services/Dockerfile
+    image: ${MARTY_ISSUANCE_IMAGE:?set MARTY_ISSUANCE_IMAGE to an immutable issuance image digest}
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
@@ -515,7 +496,6 @@ services:
     environment:
       ENVIRONMENT: production
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      LICENSE_KEY_FILE: /run/secrets/license_key
       DATABASE_URL_TEMPLATE: *database-url-template
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
       INTEGRATION_SECRET_MASTER_KEY_FILE: /run/secrets/integration_secret_master_key
@@ -553,7 +533,6 @@ services:
       - integration_secret_master_key
       - issuance_api_key
       - token_hmac_key
-      - license_key
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -563,8 +542,8 @@ services:
 
   applicant:
     build:
-      context: ..
-      dockerfile: marty-ui/services/Dockerfile
+      context: .
+      dockerfile: services/Dockerfile
       args:
         SERVICE_NAME: applicant
     environment:
@@ -579,7 +558,6 @@ services:
       FLOW_GRPC_TARGET: flow:9011
     secrets:
       - marty_db_password
-      - license_key
     volumes:
       - type: bind
         source: ${SELFHOST_STATE_DIR:?SELFHOST_STATE_DIR must be set}/applicant
@@ -597,8 +575,8 @@ services:
 
   notification:
     build:
-      context: ..
-      dockerfile: marty-ui/services/Dockerfile
+      context: .
+      dockerfile: services/Dockerfile
       args:
         SERVICE_NAME: notification
     environment:
@@ -614,7 +592,6 @@ services:
     secrets:
       - marty_db_password
       - smtp_password
-      - license_key
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -627,8 +604,8 @@ services:
 
   compliance-profile:
     build:
-      context: ..
-      dockerfile: marty-ui/services/Dockerfile
+      context: .
+      dockerfile: services/Dockerfile
       args:
         SERVICE_NAME: compliance-profile
     environment:
@@ -639,7 +616,6 @@ services:
       ORG_GRPC_TARGET: organization:9002
     secrets:
       - marty_db_password
-      - license_key
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -652,8 +628,8 @@ services:
 
   presentation-policy:
     build:
-      context: ..
-      dockerfile: marty-ui/services/Dockerfile
+      context: .
+      dockerfile: services/Dockerfile
       args:
         SERVICE_NAME: presentation-policy
     environment:
@@ -672,7 +648,6 @@ services:
       ISSUANCE_SERVICE_URL: http://issuance:8005
     secrets:
       - marty_db_password
-      - license_key
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -685,8 +660,8 @@ services:
 
   deployment-profile:
     build:
-      context: ..
-      dockerfile: marty-ui/services/Dockerfile
+      context: .
+      dockerfile: services/Dockerfile
       args:
         SERVICE_NAME: deployment-profile
     environment:
@@ -697,7 +672,6 @@ services:
       ORG_GRPC_TARGET: organization:9002
     secrets:
       - marty_db_password
-      - license_key
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -710,8 +684,8 @@ services:
 
   flow:
     build:
-      context: ..
-      dockerfile: marty-ui/services/Dockerfile
+      context: .
+      dockerfile: services/Dockerfile
       args:
         SERVICE_NAME: flow
     environment:
@@ -730,7 +704,6 @@ services:
       FLOW_GRPC_PORT: "9011"
     secrets:
       - marty_db_password
-      - license_key
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -751,8 +724,8 @@ services:
 
   verification:
     build:
-      context: ..
-      dockerfile: marty-ui/services/Dockerfile
+      context: .
+      dockerfile: services/Dockerfile
       args:
         SERVICE_NAME: verification
     environment:
@@ -767,7 +740,6 @@ services:
       SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/issuance_api_key
     secrets:
       - issuance_api_key
-      - license_key
     depends_on:
       presentation-policy:
         condition: service_healthy
@@ -782,8 +754,8 @@ services:
 
   revocation-profile:
     build:
-      context: ..
-      dockerfile: marty-ui/services/Dockerfile
+      context: .
+      dockerfile: services/Dockerfile
       args:
         SERVICE_NAME: revocation-profile
     environment:
@@ -796,7 +768,6 @@ services:
       RP_GRPC_PORT: "9013"
     secrets:
       - marty_db_password
-      - license_key
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -811,8 +782,8 @@ services:
 
   device-registration:
     build:
-      context: ..
-      dockerfile: marty-ui/services/Dockerfile
+      context: .
+      dockerfile: services/Dockerfile
       args:
         SERVICE_NAME: device_registration
     environment:
@@ -823,7 +794,6 @@ services:
       ORG_GRPC_TARGET: organization:9002
     secrets:
       - marty_db_password
-      - license_key
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -836,8 +806,8 @@ services:
 
   event-stream:
     build:
-      context: ..
-      dockerfile: marty-ui/services/Dockerfile
+      context: .
+      dockerfile: services/Dockerfile
       args:
         SERVICE_NAME: event_stream
     environment:
@@ -845,50 +815,12 @@ services:
       EVENT_STREAM_GRPC_ENABLED: "true"
       EVENT_STREAM_GRPC_PORT: "9015"
     secrets:
-      - license_key
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8015/health"]
       interval: 30s
       timeout: 10s
       retries: 5
       start_period: 10s
-    restart: unless-stopped
-
-  billing:
-    build:
-      context: ..
-      dockerfile: marty-ui/services/Dockerfile
-      args:
-        SERVICE_NAME: billing
-    environment:
-      <<: *runtime-env
-      BILLING_SERVICE_PORT: "8016"
-      DATABASE_URL_TEMPLATE: *database-url-template
-      MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
-      ORGANIZATION_SERVICE_URL: http://organization:8002
-      SQUARE_ENVIRONMENT: ${SQUARE_ENVIRONMENT:-sandbox}
-      SQUARE_ACCESS_TOKEN_FILE: /run/secrets/square_access_token
-      SQUARE_LOCATION_ID: ${SQUARE_LOCATION_ID:-}
-      SQUARE_WEBHOOK_SIGNATURE_KEY_FILE: /run/secrets/square_webhook_signature_key
-      SQUARE_PLAN_STARTER_ID: ${SQUARE_PLAN_STARTER_ID:-}
-      SQUARE_PLAN_PROFESSIONAL_ID: ${SQUARE_PLAN_PROFESSIONAL_ID:-}
-      SQUARE_PLAN_ENTERPRISE_ID: ${SQUARE_PLAN_ENTERPRISE_ID:-}
-      CORS_ORIGINS: ${CORS_ORIGINS:?CORS_ORIGINS must be set}
-    secrets:
-      - marty_db_password
-      - square_access_token
-      - square_webhook_signature_key
-      - license_key
-    depends_on:
-      db-migrate:
-        condition: service_completed_successfully
-      organization:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8016/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
     restart: unless-stopped
 
   ui:
@@ -1018,8 +950,6 @@ secrets:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/cloudflare_tunnel_token
   cloudflare_beta_tunnel_token:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/cloudflare_beta_tunnel_token
-  license_key:
-    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/license_key
   google_client_id:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/google_client_id
   google_client_secret:
@@ -1030,7 +960,3 @@ secrets:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/google_site_verification
   smtp_password:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/smtp_password
-  square_access_token:
-    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/square_access_token
-  square_webhook_signature_key:
-    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/square_webhook_signature_key

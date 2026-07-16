@@ -20,19 +20,6 @@ export {
   submitCredentialApplication,
 } from './applicationFormUseCases';
 
-// Moved to @marty/subscriptions. Re-exported here for backward compatibility during migration.
-export {
-  buildPaymentCheckoutInitialBillingInfo,
-  buildPaymentCheckoutMetadata,
-  buildPaymentCheckoutReceipt,
-  buildPaymentCheckoutSubmissionPayload,
-  initializePaymentCheckout,
-  processPaymentCheckout,
-  submitPaymentCheckoutApplication,
-  updatePaymentCheckoutBillingInfo,
-  validatePaymentCheckoutBilling,
-} from '@marty/subscriptions';
-
 export {
   buildCredentialApplicationNavigationState,
   resolveCredentialApplicationPath,

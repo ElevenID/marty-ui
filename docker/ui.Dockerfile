@@ -5,6 +5,12 @@ FROM oven/bun:alpine AS builder
 ARG UI_VARIANT=public
 ARG MARTY_RELEASE_VERSION=development
 ARG MARTY_UI_SHA=unknown
+ARG MARTY_API_CORE_VERSION
+ARG MARTY_API_CORE_URI
+ARG MARTY_API_CORE_DIGEST
+ARG MARTY_BLOG_VERSION
+ARG MARTY_BLOG_URI
+ARG MARTY_BLOG_DIGEST
 
 # Set environment variables
 ENV NODE_ENV=production
@@ -15,27 +21,26 @@ ENV VITE_WALLET_API=http://localhost:8082
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
 
-# Set work directory to preserve package.json file:../../ dependency paths.
 WORKDIR /workspace/marty-ui/ui
 
 # Install Chromium for prerendering
 RUN apk add --no-cache chromium nss freetype harfbuzz ca-certificates ttf-freefont
 
-# Install dependencies. The UI package references sibling workspace packages via
-# file:../../ paths, so the build command must provide these named contexts:
-#   --build-context marty-cli=<workspace>/marty-cli
-#   --build-context marty-blog=<workspace>/marty-blog
-#   --build-context marty-subscriptions=<workspace>/marty-subscriptions
-COPY --from=marty-cli packages/api-core /workspace/marty-cli/packages/api-core
-COPY --from=marty-blog package.json /workspace/marty-blog/package.json
-COPY --from=marty-blog src /workspace/marty-blog/src
-COPY --from=marty-subscriptions package.json /workspace/marty-subscriptions/package.json
-COPY --from=marty-subscriptions src /workspace/marty-subscriptions/src
 COPY ui/package.json ui/bun.lock ./
-RUN bun install \
-    && ln -sfn /workspace/marty-ui/ui/node_modules /workspace/node_modules \
-    && cd /workspace/marty-blog && bun install --production \
-    && cd /workspace/marty-subscriptions && bun install --production
+RUN test -n "$MARTY_API_CORE_VERSION" \
+    && test -n "$MARTY_BLOG_VERSION" \
+    && test -n "$MARTY_API_CORE_URI" \
+    && test -n "$MARTY_API_CORE_DIGEST" \
+    && test -n "$MARTY_BLOG_URI" \
+    && test -n "$MARTY_BLOG_DIGEST" \
+    && wget -q -O /tmp/marty-api-core.tgz "$MARTY_API_CORE_URI" \
+    && wget -q -O /tmp/marty-blog.tgz "$MARTY_BLOG_URI" \
+    && echo "${MARTY_API_CORE_DIGEST#sha256:}  /tmp/marty-api-core.tgz" | sha256sum -c - \
+    && echo "${MARTY_BLOG_DIGEST#sha256:}  /tmp/marty-blog.tgz" | sha256sum -c - \
+    && bun pm pkg set "dependencies.@elevenid/marty-api-core=file:/tmp/marty-api-core.tgz" \
+    && bun pm pkg set "dependencies.@elevenid/marty-blog=file:/tmp/marty-blog.tgz" \
+    && bun install \
+    && ln -sfn /workspace/marty-ui/ui/node_modules /workspace/node_modules
 
 # Copy application code
 COPY ui/ .

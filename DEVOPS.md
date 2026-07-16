@@ -1,111 +1,35 @@
-# DevOps & Maintenance Runbook
+# GitHub automation and releases
 
-## Secrets Management
+`marty-ui` uses GitHub-hosted standard runners for pull requests and releases. Fork pull requests receive no secrets and no write token. Self-hosted runners are not part of the public workflow trust boundary.
 
-### GitHub Actions — `REPO_ACCESS_TOKEN`
+## Pull requests
 
-A classic Personal Access Token (PAT) is used for cross-repo operations in CI/CD.
+The repository CI workflow runs the open-source boundary check, tests, and builds from released dependencies. The default `GITHUB_TOKEN` permission is read-only. Marketplace actions and reusable workflows are pinned to full commit SHAs.
 
-| Repo | Purpose |
-|------|---------|
-| `ElevenID/marty-core` | `repository_dispatch` to marty-credentials and marty-verifier on release |
-| `ElevenID/marty-ui` | Checkout private repos (marty-core, longfellow-zk, marty-credentials) in CD pipeline |
+Repository settings must require approval before an outside collaborator's workflow runs. Required checks, dependency review, CodeQL, secret scanning with push protection, and branch protection are configured in GitHub rather than bypassed in workflow code.
 
-**Scopes:** `repo` (full)
-**Owner:** `burdettadam`
-**Rotation:** Check expiration date in [GitHub Settings > Tokens](https://github.com/settings/tokens). When expired:
+## Component inputs
 
-```bash
-# After creating a new PAT in the GitHub UI:
-echo "<new-token>" | gh secret set REPO_ACCESS_TOKEN -R ElevenID/marty-core
-echo "<new-token>" | gh secret set REPO_ACCESS_TOKEN -R ElevenID/marty-ui
-```
+The release workflow consumes an immutable `release/stack-lock.json`. It must identify exact SemVer versions and commits for every component and immutable digests for OCI artifacts. Python and JavaScript dependencies come from PyPI and npm; source checkouts and repository-access PATs are not supported release inputs.
 
-### OCI Vault — Production Secrets
+## Stack release
 
-**Vault:** `marty-secrets` in `marty-production` compartment (us-phoenix-1)
-**Encryption Key:** `marty-secrets-key` (AES-256)
-**Management endpoint:** `https://efu4k54kaafau-management.kms.us-phoenix-1.oraclecloud.com`
+A protected `v*` tag runs `.github/workflows/cd.yml`. The workflow:
 
-Secrets stored (sourced from `.env.production`):
+1. validates the stack lock and component evidence;
+2. verifies OCI digests and GitHub provenance;
+3. builds and attests the UI, services, and migration images;
+4. checks that released images contain no commerce configuration;
+5. checks out the exact public integration-suite commit;
+6. reconstructs the stack from artifacts and runs the public smoke suite; and
+7. publishes signed SBOMs, checksums, provenance, release notes, and `stack-manifest.json`.
 
-| Secret | Naming Pattern |
-|--------|---------------|
-| `CLOUDFLARE_TUNNEL_TOKEN` | `marty-prod-cloudflare-tunnel-token` |
-| `IMAGE_TAG` | `marty-prod-image-tag` |
-| `KEYCLOAK_ADMIN` | `marty-prod-keycloak-admin` |
-| `KEYCLOAK_ADMIN_PASSWORD` | `marty-prod-keycloak-admin-password` |
-| `KEYCLOAK_DB_PASSWORD` | `marty-prod-keycloak-db-password` |
-| `MARTY_API_CLIENT_SECRET` | `marty-prod-marty-api-client-secret` |
-| `OCIR_AUTH_TOKEN` | `marty-prod-ocir-auth-token` |
-| `OCIR_REGISTRY` | `marty-prod-ocir-registry` |
-| `OCIR_TENANCY_NAMESPACE` | `marty-prod-ocir-tenancy-namespace` |
-| `OCI_REGION` | `marty-prod-oci-region` |
-| `OCI_USERNAME` | `marty-prod-oci-username` |
-| `POSTGRES_PASSWORD` | `marty-prod-postgres-password` |
-| `RABBITMQ_ERLANG_COOKIE` | `marty-prod-rabbitmq-erlang-cookie` |
-| `RABBITMQ_PASSWORD` | `marty-prod-rabbitmq-password` |
-| `SESSION_SECRET_KEY` | `marty-prod-session-secret-key` |
+The `stack-release` environment protects publication. Signing uses OIDC-backed keyless Cosign wherever possible. Registry credentials or repository PATs must not be added to fork CI.
 
-**Retrieve a secret:**
-```bash
-oci secrets secret-bundle get --secret-id "$SECRET_ID" \
-  --query 'data."secret-bundle-content".content' --raw-output | base64 -d
-```
+## Cost and runner policy
 
-**Deploy script:** `scripts/fetch-secrets.sh` sources all secrets into shell env.
+Only `ubuntu-latest`, `windows-latest`, and `macos-latest` are allowed in public workflows. Larger-runner labels and public pull-request access to self-hosted runners are rejected by policy checks. The organization should retain a zero paid-usage Actions budget as an additional guardrail.
 
-### Bitwarden — Team Credentials
+## Release order
 
-**Account:** `admin@elevenidllc.com`
-Stores service account passwords, API keys, and other shared credentials not suited for OCI Vault.
-
-### Known Issues
-
-- **OCI_REGION** is set to `us-ashburn-1` but should be `us-phoenix-1` — needs rotation in vault.
-
-## CI/CD Pipelines
-
-### marty-ui
-
-| Workflow | Trigger | What it does |
-|----------|---------|-------------|
-| `ci.yml` | Push/PR to `main` | Lint (ruff), UI tests (bun/vitest), service tests (pytest) |
-| `cd.yml` | Tag `v*` or manual dispatch | Builds marty-rs wheel, 4 Docker images (services, UI, self-host UI, db-migrate), pushes to GHCR |
-
-**Images published to:**
-- `ghcr.io/elevenid/marty-ui/services:<tag>`
-- `ghcr.io/elevenid/marty-ui/ui:<tag>`
-- `ghcr.io/elevenid/marty-ui/ui-selfhost:<tag>`
-- `ghcr.io/elevenid/marty-ui/db-migrate:<tag>`
-
-**Deploy from GHCR:**
-```bash
-IMAGE_TAG=<tag> docker compose -f docker-compose.base.yml -f docker-compose.profile.ghcr.yml up -d
-```
-
-### marty-core
-
-| Workflow | Trigger | What it does |
-|----------|---------|-------------|
-| `release-rc.yml` | Tag or manual | Build, test, release RC, dispatch to marty-credentials + marty-verifier |
-| `release-stable.yml` | Tag or manual | Build, test, release stable, dispatch to marty-credentials + marty-verifier |
-
-### Other Repos
-
-| Repo | CI Status | Notes |
-|------|-----------|-------|
-| marty-credentials | `ci.yml` — test-rust, security, test-python, test-wasm | Has git auth step for private Cargo deps |
-| marty-verifier | `ci.yml` — test-rust, security | Has git auth step for private Cargo deps |
-| marty-authenticator | `flutter_build.yml` | Triggers on `main` and `master` branches |
-| marty-microservices-framework | Full CI + beta publish | Publishes to `pypi.pkg.github.com/ElevenID/` |
-| marty-protocol | CI exists | Docs/specs repo |
-| longfellow-zk | CI exists | C++ library |
-
-## Periodic Maintenance
-
-- [ ] **Rotate REPO_ACCESS_TOKEN** — check expiration, regenerate PAT, update both repo secrets
-- [ ] **Fix OCI_REGION secret** — change from `us-ashburn-1` to `us-phoenix-1` in vault
-- [ ] **Review GHCR image retention** — prune old untagged images periodically
-- [ ] **Update GitHub Actions versions** — check for major version bumps in actions/checkout, docker/build-push-action, etc.
-- [ ] **Renew Cloudflare tunnel token** — if/when it expires
+Publish the shared dependency artifacts first (`marty-core`, `marty-common`, protocol packages, CLI API core, and blog). Publish verifier/authenticator artifacts next, then create the first `marty-ui` stack lock and release. Commerce overlays remain private and have separate internal automation.

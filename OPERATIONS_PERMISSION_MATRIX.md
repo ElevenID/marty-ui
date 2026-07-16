@@ -21,7 +21,7 @@ Primary implementation references:
 
 - `services/organization/infrastructure/migrations/versions/20260215_0001_add_rbac_tables.py`
 - `services/organization/application/rbac_use_cases.py`
-- `packages/marty_common/org_authorization.py`
+- `ElevenID/Marty` package `marty-common` (`marty_common.org_authorization`)
 - `ui/src/config/permissions.js`
 - `ui/src/hooks/usePermissions.js`
 - `ui/src/components/console/org/RolesPage.jsx`

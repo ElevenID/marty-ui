@@ -34,20 +34,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import redis.asyncio as aioredis
 from marty_common import CedarEngine, CedarAuthMiddleware
-from marty_common.billing_engine import BillingCedarEngine
-from marty_common.billing_middleware import BillingAuthMiddleware
 from marty_common.middleware import ETagMiddleware, IdempotencyMiddleware
-from marty_common.usage import UsageTracker
-from marty_common.plans import (
-    PLAN_INFO,
-    PLAN_LIMITS,
-    PlanTier,
-    get_plan_limits,
-    normalize_plan_identifier,
-    resolve_plan_info,
-    resolve_plan_tier,
-)
-from .plan_middleware import UsageTrackingMiddleware
 
 import gateway.proxy as _proxy_mod
 from gateway.registry import ServiceRegistry
@@ -60,6 +47,7 @@ from gateway.middleware import (
     mip_error_response,
 )
 from gateway.proxy import get_http_client, get_registry, get_session_cache, proxy_request
+from gateway.extensions import install_gateway_extension
 
 # Route modules
 from gateway.routes.applicants import applicant_router
@@ -408,7 +396,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("Gateway gRPC: event-stream\u2192%s", es_grpc_target)
 
     app.state.redis_client = redis_client
-    app.state.usage_tracker = UsageTracker(redis_client)
     app.state.auth_grpc_stub = auth_grpc_stub
 
     # Initialize Cedar policy engine (MIP RBAC \u2014 protocol-standard)
@@ -421,19 +408,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         cedar_engine = CedarEngine.with_defaults()
         logger.info("Cedar engine loaded with default MIP schema and gateway policies")
     app.state.cedar_engine = cedar_engine
-
-    # Initialize billing Cedar engine (internal plan-tier feature gating)
-    billing_schema_path = os.environ.get("BILLING_SCHEMA_PATH")
-    billing_policies_dir = os.environ.get("BILLING_POLICIES_DIR")
-    if billing_schema_path and billing_policies_dir:
-        billing_engine = BillingCedarEngine.from_files(
-            billing_schema_path, [billing_policies_dir]
-        )
-        logger.info(f"Billing engine loaded from {billing_schema_path}")
-    else:
-        billing_engine = BillingCedarEngine.with_defaults()
-        logger.info("Billing engine loaded with default billing schema and policies")
-    app.state.billing_engine = billing_engine
 
     hosted_pilot_purge_stop = asyncio.Event()
     hosted_pilot_purge_task = None
@@ -538,10 +512,9 @@ Verification is handled through two complementary approaches:
 
     # Starlette executes middleware in reverse registration order, so keep
     # idempotency inside current authz checks. A replay should still pass
-    # current Cedar/billing authorization before a cached response is returned.
-    app.add_middleware(UsageTrackingMiddleware)
+    # current Cedar and downstream extension authorization before a cached response is returned.
     app.add_middleware(IdempotencyMiddleware)
-    app.add_middleware(BillingAuthMiddleware)
+    install_gateway_extension(app)
     app.add_middleware(CedarAuthMiddleware)
     app.add_middleware(ETagMiddleware)
     app.add_middleware(ContentTypeEnforcementMiddleware)
@@ -734,113 +707,6 @@ Verification is handled through two complementary approaches:
 
     app.add_api_route("/ready", readiness_check, methods=["GET"])
     app.add_api_route("/health/ready", readiness_check, methods=["GET"])
-
-    # \u2500\u2500 Usage & billing analytics \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-
-    @app.get("/v1/usage")
-    async def get_usage(request: Request, month: str | None = None) -> dict:
-        """Get usage metrics for the authenticated user's organization."""
-        org_id = getattr(request.state, "organization_id", None)
-        if not org_id:
-            return JSONResponse(status_code=401, content={"error": "Not authenticated"})
-        tracker: UsageTracker | None = getattr(request.app.state, "usage_tracker", None)
-        if not tracker:
-            return {"metrics": {}, "plan": "sandbox", "limits": {}}
-        metrics = await tracker.get_all(org_id, month)
-        plan_str = "sandbox"
-        redis_client = getattr(request.app.state, "redis_client", None)
-        if redis_client:
-            cached = await redis_client.get(f"org:{org_id}:plan")
-            if cached:
-                plan_str = cached if isinstance(cached, str) else cached.decode()
-        plan_identifier = normalize_plan_identifier(plan_str) or PlanTier.SANDBOX.value
-        plan = resolve_plan_tier(plan_identifier)
-        limits = get_plan_limits(plan)
-        info = resolve_plan_info(plan_identifier)
-        return {
-            "plan": plan.value,
-            "plan_name": info.display_name,
-            "plan_tagline": info.tagline,
-            "metrics": metrics,
-            "limits": {
-                "deployments": limits.deployments,
-                "verifier_instances": limits.verifier_instances,
-                "active_flows": limits.active_flows,
-                "badge_templates": limits.badge_templates,
-                "admin_seats": limits.admin_seats,
-                "audit_retention_days": limits.audit_retention_days,
-                "sandbox_monthly_activity_limit": limits.sandbox_monthly_activity_limit,
-            },
-        }
-
-    @app.get("/v1/usage/history")
-    async def get_usage_history(request: Request, metric: str = "verifications", months: int = 6) -> dict:
-        """Get historical usage for a metric over the last N months."""
-        org_id = getattr(request.state, "organization_id", None)
-        if not org_id:
-            return JSONResponse(status_code=401, content={"error": "Not authenticated"})
-        tracker: UsageTracker | None = getattr(request.app.state, "usage_tracker", None)
-        if not tracker:
-            return {"metric": metric, "history": {}}
-        allowed_metrics = {"verifications", "issued_credentials", "api_calls", "active_flows"}
-        if metric not in allowed_metrics:
-            return JSONResponse(status_code=400, content={"error": f"Invalid metric. Use one of: {allowed_metrics}"})
-        history = await tracker.get_history(org_id, metric, min(months, 12))
-        return {"metric": metric, "history": history}
-
-    @app.get("/v1/plans")
-    async def list_plans() -> dict:
-        """Return available plan tiers and their limits (public endpoint)."""
-        plans = []
-        for tier in PlanTier:
-            info = PLAN_INFO[tier]
-            limits = get_plan_limits(tier)
-            plans.append({
-                "tier": tier.value,
-                "name": info.name,
-                "tagline": info.tagline,
-                "headline": info.headline,
-                "price_monthly": info.price_monthly,
-                "differentiator": info.differentiator,
-                "limits": {
-                    "verifications_per_month": limits.verifications_per_month,
-                    "issued_credentials_per_month": limits.issued_credentials_per_month,
-                    "active_flows": limits.active_flows,
-                    "members": limits.members,
-                    "credential_templates": limits.credential_templates,
-                    "deployment_profiles": limits.deployment_profiles,
-                },
-                "features": {
-                    "custom_branding": limits.custom_branding,
-                    "webhooks": limits.webhooks,
-                    "audit_logs": limits.audit_logs,
-                    "multi_environment": limits.multi_environment,
-                    "custom_cedar_policies": limits.custom_cedar_policies,
-                    "scim_provisioning": limits.scim_provisioning,
-                    "self_hosted": limits.self_hosted,
-                    "zkp_verification": limits.zkp_verification,
-                    "device_registration": limits.device_registration,
-                },
-            })
-        return {"plans": plans}
-
-    # \u2500\u2500 Billing proxy routes \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-
-    @app.api_route(
-        "/v1/billing/{path:path}",
-        methods=["GET", "POST", "PUT", "DELETE"],
-        tags=["Billing"],
-    )
-    async def proxy_billing(request: Request, path: str) -> Response:
-        """Proxy billing requests to the billing service."""
-        service_url = get_registry().get_service_url("billing")
-        if not service_url:
-            return mip_error_response(
-                status_code=503,
-                error="service_unavailable",
-                message="Billing service not configured",
-            )
-        return await proxy_request(request, service_url, f"/v1/billing/{path}")
 
     async def _proxy_to_issuance_well_known(path: str, wallet_variant: str | None = None) -> Response:
         """Proxy a well-known request to the issuance service.

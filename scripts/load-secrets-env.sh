@@ -84,11 +84,7 @@ load_secret_env() {
     load_secret_var BAO_TOKEN
     load_secret_var OPENBAO_SERVICE_TOKEN
     load_secret_var SMTP_PASSWORD
-    load_secret_var SQUARE_ACCESS_TOKEN
-    load_secret_var SQUARE_WEBHOOK_SIGNATURE_KEY
     load_secret_var CLOUDFLARE_TUNNEL_TOKEN
-    load_secret_var LICENSE_KEY
-
     expand_template_var DATABASE_URL
 }
 

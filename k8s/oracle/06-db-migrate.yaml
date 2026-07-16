@@ -44,8 +44,6 @@ spec:
                 secretKeyRef:
                   name: marty-secrets
                   key: MARTY_DB_PASSWORD
-            - name: LICENSE_KEY_FILE
-              value: /run/secrets/license_key
             - name: OPENBAO_SERVICE_TOKEN_FILE
               value: /run/secrets/openbao_service_token
           volumeMounts:
@@ -64,7 +62,5 @@ spec:
           secret:
             secretName: marty-secrets
             items:
-              - key: LICENSE_KEY
-                path: license_key
               - key: OPENBAO_SERVICE_TOKEN
                 path: openbao_service_token

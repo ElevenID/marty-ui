@@ -45,7 +45,6 @@ import {
   Info as InfoIcon,
   CheckCircle as CheckIcon,
   Schedule as PendingIcon,
-  AttachMoney as PriceIcon,
   Business as BusinessIcon,
   Verified as VerifiedIcon,
 } from '@mui/icons-material';
@@ -635,13 +634,6 @@ const CredentialCatalog = () => {
                         variant="outlined" 
                         data-testid="credential-category"
                       />
-                      <Chip 
-                        icon={<PriceIcon />}
-                        label={credential.processingFee ? `$${credential.processingFee}` : t('catalog.card.free')} 
-                        size="small" 
-                        color={credential.processingFee ? 'default' : 'success'}
-                        data-testid="credential-fee"
-                      />
                       {credential.format && (
                         <Chip label={credential.format} size="small" variant="outlined" color="info" />
                       )}
@@ -712,15 +704,6 @@ const CredentialCatalog = () => {
               </Typography>
               <Typography variant="body2" color="text.secondary" paragraph>
                 {selectedCredential.processingTime}
-              </Typography>
-              
-              <Typography variant="subtitle2" gutterBottom>
-                {t('catalog.detailsDialog.processingFee')}
-              </Typography>
-              <Typography variant="body2" color="text.secondary" paragraph>
-                {selectedCredential.processingFee 
-                  ? `$${selectedCredential.processingFee}` 
-                  : t('catalog.detailsDialog.noFee')}
               </Typography>
               
               <Typography variant="subtitle2" gutterBottom>

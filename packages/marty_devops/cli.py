@@ -128,8 +128,7 @@ def _print_plan(plan: dict[str, object]) -> None:
     profiles = plan.get("compose_profiles", [])
     print("Compose profiles: " + (", ".join(profiles) if profiles else "<none>"))
     print("Domains: " + ", ".join(plan.get("domains", [])))
-    print(f"Artifact profile: {plan['artifact_profile']} (commercial={plan['artifact_commercial']})")
-    print(f"License policy: {plan['license_policy']} (enforcement={plan['license_enforcement']})")
+    print(f"Artifact profile: {plan['artifact_profile']}")
     print("Deployment targets: " + ", ".join(plan.get("deployment_targets", [])))
     print("Required services:")
     for service_id in plan.get("required_services", []):

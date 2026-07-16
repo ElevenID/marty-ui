@@ -90,11 +90,6 @@ export const DEMO_MANIFESTS = {
         "revision": "6648d3e2c9b1f56c35043fb5052b95693c17bf4b"
       },
       {
-        "component": "marty-subscriptions",
-        "repository": "https://github.com/ElevenID/marty-subscriptions",
-        "revision": "dc504a3b64176811e5856bbe50d6d4e3f6c658a6"
-      },
-      {
         "component": "marty-ui",
         "repository": "https://github.com/ElevenID/marty-ui",
         "revision": "96cfedc0280980340777a6c39629052bec0a106e"
@@ -156,10 +151,6 @@ export const DEMO_MANIFESTS = {
       {
         "component": "event-stream",
         "digest": "sha256:c27fa417bc252494cf48fc1006ff966883b587759bec6398408ef9fed4c7456c"
-      },
-      {
-        "component": "billing",
-        "digest": "sha256:2f209d8ec5b983224d8793c8f57f46efc5c36439417688fa19758a93c452a7ed"
       },
       {
         "component": "issuance",

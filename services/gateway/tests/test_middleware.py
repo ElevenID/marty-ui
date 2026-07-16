@@ -295,8 +295,8 @@ def test_gateway_idempotency_runs_after_current_authorization_checks():
     middleware_names = [middleware.cls.__name__ for middleware in app.user_middleware]
 
     assert middleware_names.index("CedarAuthMiddleware") < middleware_names.index("IdempotencyMiddleware")
-    assert middleware_names.index("BillingAuthMiddleware") < middleware_names.index("IdempotencyMiddleware")
-    assert middleware_names.index("IdempotencyMiddleware") < middleware_names.index("UsageTrackingMiddleware")
+    assert "BillingAuthMiddleware" not in middleware_names
+    assert "UsageTrackingMiddleware" not in middleware_names
 
 
 # ---------------------------------------------------------------------------

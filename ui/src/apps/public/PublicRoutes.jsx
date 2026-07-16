@@ -71,11 +71,6 @@ function PublicRoutes() {
           path="/console-handoff/org/setup"
           element={<BrowserRedirect to="/console/org/setup" preserveSearch message="Opening console setup..." />}
         />
-        <Route
-          path="/console-handoff/org/billing"
-          element={<BrowserRedirect to="/console/org/billing" preserveSearch message="Opening console billing..." />}
-        />
-
         <Route path="/invite/accept" element={<InviteAcceptPage />} />
 
         <Route

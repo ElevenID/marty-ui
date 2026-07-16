@@ -2,6 +2,7 @@ import { lazy } from 'react';
 import { Navigate, Route } from 'react-router-dom';
 import { DISABLE_PUBLIC_GET_STARTED_BUTTONS } from '@ui-public-config';
 import { useAuth } from '../hooks/useAuth';
+import { renderCommercePublicRoutes } from '../extensions/commerce';
 
 const lazyNamedExport = (loader, exportName) => lazy(() => loader().then((module) => ({ default: module[exportName] })));
 
@@ -11,13 +12,11 @@ const StandardsPage = lazy(() => import('../components/StandardsPage'));
 const ProtocolPage = lazy(() => import('../components/ProtocolPage'));
 const IdentityGuidePage = lazy(() => import('../components/IdentityGuidePage'));
 const FromIDVPage = lazy(() => import('../components/FromIDVPage'));
-const BlogPage = lazy(() => import('@marty/blog/blog-page'));
-const BlogPostPage = lazy(() => import('@marty/blog/blog-post-page'));
-const AuthorsPage = lazy(() => import('@marty/blog/authors-page'));
-const AuthorPage = lazy(() => import('@marty/blog/author-page'));
-const FoundationsPage = lazy(() => import('@marty/blog/foundations-page'));
-const PricingPage = lazyNamedExport(() => import('@marty/subscriptions'), 'PricingPage');
-const SubscriptionCheckout = lazyNamedExport(() => import('@marty/subscriptions'), 'SubscriptionCheckout');
+const BlogPage = lazy(() => import('@elevenid/marty-blog/blog-page'));
+const BlogPostPage = lazy(() => import('@elevenid/marty-blog/blog-post-page'));
+const AuthorsPage = lazy(() => import('@elevenid/marty-blog/authors-page'));
+const AuthorPage = lazy(() => import('@elevenid/marty-blog/author-page'));
+const FoundationsPage = lazy(() => import('@elevenid/marty-blog/foundations-page'));
 const SolutionsPage = lazyNamedExport(() => import('../components/pages/PublicIAPages'), 'SolutionsPage');
 const DevelopersPage = lazyNamedExport(() => import('../components/pages/PublicIAPages'), 'DevelopersPage');
 const ArchitecturePage = lazyNamedExport(() => import('../components/pages/PublicIAPages'), 'ArchitecturePage');
@@ -93,27 +92,11 @@ export function renderMarketingRoutes({ login }) {
       <Route path="/blog/:slug" element={<BlogPostPage />} />
       <Route path="/authors" element={<AuthorsPage />} />
       <Route path="/authors/:authorId" element={<AuthorPage />} />
-      <Route
-        path="/pricing"
-        element={
-          <PricingPage
-            login={login}
-            disableSandboxSignup={DISABLE_PUBLIC_GET_STARTED_BUTTONS}
-            checkoutBasePath="/pricing/checkout"
-          />
-        }
-      />
-      <Route
-        path="/pricing/checkout"
-        element={
-          <SubscriptionCheckout
-            useAuth={useAuth}
-            login={login}
-            setupPath="/console-handoff/org/setup"
-            billingPath="/console-handoff/org/billing"
-          />
-        }
-      />
+      {renderCommercePublicRoutes({
+        login,
+        useAuth,
+        disableSandboxSignup: DISABLE_PUBLIC_GET_STARTED_BUTTONS,
+      })}
     </>
   );
 }

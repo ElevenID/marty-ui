@@ -117,15 +117,7 @@ These are pure Python packages that build standard wheels and source distributio
 pip index versions marty-credentials --pre
 ```
 
-### Via GitHub Packages
-
-If published to GitHub Packages, configure pip:
-
-```bash
-# ~/.pypirc or pip.conf
-[global]
-extra-index-url = https://pypi.pkg.github.com/YOUR_ORG/simple/
-```
+Python packages are published to PyPI using trusted publishing. GitHub does not provide a PyPI-compatible package registry endpoint.
 
 ## Example: marty-ui Development
 

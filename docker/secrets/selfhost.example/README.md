@@ -22,11 +22,8 @@ Required files:
 - `integration_secret_master_key`
 - `openbao_service_token`
 - `cloudflare_tunnel_token`
-- `license_key`
 
 `openbao_service_token` should contain the scoped `credential-service` token for your operator-managed external Vault/OpenBao instance. The helper script `scripts/bootstrap-selfhost-vault.sh` can create it from a bootstrap token without keeping the bootstrap credential in the stack.
-
-`license_key` is a signed commercial entitlement token. The issuer public verification key is embedded in the Marty self-host runtime image; customer deployments must not provide a replacement public key.
 
 `integration_secret_master_key` is a base64-encoded 32-byte AES key used by issuance to encrypt organization-managed integration secrets, such as Canvas Credentials API tokens. Generate it with:
 
@@ -43,8 +40,6 @@ Optional files may be left empty when the related integration is disabled:
 - `google_analytics_measurement_id`
 - `google_site_verification`
 - `smtp_password`
-- `square_access_token`
-- `square_webhook_signature_key`
 
 `canvas_credentials_shared_secret` signs Canvas credential-sync callbacks between the Canvas integration surface and issuance service. Leave it empty when Canvas integration is disabled.
 

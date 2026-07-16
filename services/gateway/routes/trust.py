@@ -1,8 +1,7 @@
 """Trust Profile, Issuer Entity, Trust Framework, Trust Registry, and API Key routes."""
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Query, Request, Response
-from marty_common.plans import PlanTier, resolve_plan_tier
+from fastapi import APIRouter, Query, Request, Response
 
 from gateway.models import (
     ApiKeyCreatedResponse,
@@ -37,29 +36,6 @@ issuer_entity_router = APIRouter(prefix="/v1/issuer-entities", tags=["Issuer Ent
 trust_framework_router = APIRouter(prefix="/v1/trust-frameworks", tags=["Trust Frameworks"])
 api_key_router = APIRouter(prefix="/v1/api-keys", tags=["API Keys"])
 trust_registry_router = APIRouter(prefix="/v1/trust-registry", tags=["Trust Registry"])
-
-
-def _enforce_key_management_policy(request: Request, key_management: dict | None) -> None:
-    if not key_management:
-        return
-
-    source = str(key_management.get("source", "")).strip().lower()
-    if not source:
-        return
-
-    # "First-tier" is treated as SYSTEM plan; all others must use customer-managed remote signing.
-    normalized_plan = resolve_plan_tier(getattr(request.state, "org_plan", "free"))
-    if normalized_plan == PlanTier.SYSTEM:
-        if source != "platform_managed":
-            raise HTTPException(
-                status_code=422,
-                detail="SYSTEM tier organizations must use platform_managed key management.",
-            )
-    elif source == "platform_managed":
-        raise HTTPException(
-            status_code=422,
-            detail="Non-SYSTEM tier organizations must configure customer-managed key management.",
-        )
 
 
 # ── Trust Profile ────────────────────────────────────────────────────
@@ -165,7 +141,6 @@ async def create_organization_trust_profile(
     body: OrganizationTrustProfileCreate,
     request: Request,
 ) -> Response:
-    _enforce_key_management_policy(request, body.key_management.model_dump() if body.key_management else None)
     registry = get_registry()
     service_url = registry.get_service_url("trust-profiles")
     return await proxy_request(request, service_url, f"/v1/organizations/{organization_id}/trust-profiles")
@@ -192,7 +167,6 @@ async def update_organization_trust_profile(
     body: OrganizationTrustProfileUpdate,
     request: Request,
 ) -> Response:
-    _enforce_key_management_policy(request, body.key_management.model_dump() if body.key_management else None)
     registry = get_registry()
     service_url = registry.get_service_url("trust-profiles")
     return await proxy_request(request, service_url, f"/v1/organizations/{organization_id}/trust-profiles/{profile_id}")
@@ -209,7 +183,6 @@ async def test_organization_trust_profile_key_connection(
     body: KeyConnectionTestRequest,
     request: Request,
 ) -> Response:
-    _enforce_key_management_policy(request, body.key_management.model_dump())
     registry = get_registry()
     service_url = registry.get_service_url("trust-profiles")
     return await proxy_request(
@@ -230,8 +203,6 @@ async def create_or_associate_organization_trust_profile_key(
     body: KeyCreateAssociateRequest,
     request: Request,
 ) -> Response:
-    if body.key_management:
-        _enforce_key_management_policy(request, body.key_management.model_dump())
     registry = get_registry()
     service_url = registry.get_service_url("trust-profiles")
     return await proxy_request(

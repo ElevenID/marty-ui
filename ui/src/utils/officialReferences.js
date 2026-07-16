@@ -9,7 +9,6 @@ const OFFICIAL_REFERENCE_PREFIXES = {
   event: 'AUD',
   flow: 'FLW',
   organization: 'ORG',
-  payment: 'PMT',
   policy: 'PLC',
   profile: 'PRF',
   record: 'REF',
@@ -67,7 +66,6 @@ export function inferOfficialReferenceKind(key = '') {
   if (normalizedKey.includes('applicant')) return 'applicant';
   if (normalizedKey.includes('credential')) return 'credential';
   if (normalizedKey.includes('template')) return 'template';
-  if (normalizedKey.includes('payment')) return 'payment';
   if (normalizedKey.includes('policy')) return 'policy';
   if (normalizedKey.includes('deployment')) return 'deployment';
   if (normalizedKey.includes('flow')) return 'flow';
