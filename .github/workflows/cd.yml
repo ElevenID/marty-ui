@@ -184,6 +184,8 @@ jobs:
           push: true
           tags: ${{ env.MIGRATIONS_IMAGE }}:${{ needs.validate-stack.outputs.version }}
           build-args: |
+            MARTY_RELEASE_VERSION=${{ needs.validate-stack.outputs.version }}
+            MARTY_UI_SHA=${{ github.sha }}
             MARTY_COMMON_VERSION=${{ needs.validate-stack.outputs.marty_common_version }}
             MARTY_COMMON_URI=${{ needs.validate-stack.outputs.marty_common_uri }}
             MARTY_COMMON_DIGEST=${{ needs.validate-stack.outputs.marty_common_digest }}

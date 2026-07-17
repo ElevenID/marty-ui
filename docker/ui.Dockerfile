@@ -53,6 +53,13 @@ RUN if [ "$UI_VARIANT" = "selfhost" ]; then bun run build:selfhost && mv dist-se
 # Use nginx to serve the built application
 FROM nginx:alpine
 
+ARG MARTY_RELEASE_VERSION=development
+ARG MARTY_UI_SHA=unknown
+
+LABEL org.opencontainers.image.source="https://github.com/ElevenID/marty-ui" \
+      org.opencontainers.image.revision="${MARTY_UI_SHA}" \
+      org.opencontainers.image.version="${MARTY_RELEASE_VERSION}"
+
 # Copy both nginx configs - use build arg to select which one
 # Default to PROD for safety - must explicitly opt-in to dev config
 ARG NGINX_CONFIG=nginx.prod.conf
