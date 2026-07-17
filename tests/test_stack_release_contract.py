@@ -32,6 +32,9 @@ def test_stack_release_consumes_only_immutable_public_components() -> None:
     assert "docker pull \"$uri@$digest\"" in workflow
     assert "repository: ElevenID/marty-integration-tests" in workflow
     assert "ref: ${{ needs.validate-stack.outputs.integration_commit }}" in workflow
+    assert "API_CORE_URI: ${{ needs.validate-stack.outputs.api_core_uri }}" in workflow
+    assert "API_CORE_DIGEST: ${{ needs.validate-stack.outputs.api_core_digest }}" in workflow
+    assert "npm install --global /tmp/marty-api-core.tgz /tmp/marty-cli.tgz" in workflow
     assert "marty-subscriptions" not in workflow
     assert "self-hosted" not in workflow
     assert "runs-on: ubuntu-latest" in workflow
