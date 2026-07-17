@@ -23,10 +23,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 RUN test -n "$MARTY_COMMON_URI" \
     && test -n "$MARTY_COMMON_DIGEST" \
-    && curl --fail --location --silent --show-error "$MARTY_COMMON_URI" --output /tmp/marty-common.whl \
-    && echo "${MARTY_COMMON_DIGEST#sha256:}  /tmp/marty-common.whl" | sha256sum --check --strict \
+    && MARTY_COMMON_WHEEL="/tmp/${MARTY_COMMON_URI##*/}" \
+    && curl --fail --location --silent --show-error "$MARTY_COMMON_URI" --output "$MARTY_COMMON_WHEEL" \
+    && echo "${MARTY_COMMON_DIGEST#sha256:}  $MARTY_COMMON_WHEEL" | sha256sum --check --strict \
     && pip install --no-cache-dir \
-    /tmp/marty-common.whl \
+    "$MARTY_COMMON_WHEEL" \
     sqlalchemy alembic psycopg2-binary asyncpg 'redis[hiredis]' \
     fastapi pydantic httpx 'cryptography>=44.0.0'
 
