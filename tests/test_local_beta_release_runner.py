@@ -94,7 +94,10 @@ def test_direct_ui_proxy_uses_canonical_gateway() -> None:
         config = text(config_path)
 
         assert "oid4vc-api" not in config
-        assert "proxy_pass http://gateway:8000" in config
+        assert "resolver 127.0.0.11" in config
+        assert "set $gateway_upstream gateway:8000;" in config
+        assert "proxy_pass http://$gateway_upstream" in config
+        assert "proxy_pass http://gateway:8000" not in config
 
 
 def test_canvas_beta_wrapper_enables_only_the_disposable_portable_target() -> None:
