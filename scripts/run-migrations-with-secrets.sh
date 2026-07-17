@@ -13,4 +13,4 @@ case "${admin_email}" in
 		;;
 esac
 
-exec python run_all_migrations.py
+exec python /app/services/run_all_migrations.py
