@@ -175,7 +175,7 @@ jobs:
             marty-core/target/debug/marty-test-wallet \
             >marty-test-wallet.log 2>&1 &
           echo $! >marty-test-wallet.pid
-          for attempt in $(seq 1 60); do
+          for _ in $(seq 1 60); do
             if curl --fail --silent --show-error http://127.0.0.1:8787/ready >/dev/null; then
               exit 0
             fi

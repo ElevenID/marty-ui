@@ -69,16 +69,18 @@ jobs:
           [[ "$base_index_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
           [[ "$base_amd64_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
           [[ "$base_source_policy_sha256" =~ ^[0-9a-f]{64}$ ]]
-          echo "source_tag=$source_tag" >> "$GITHUB_OUTPUT"
-          echo "source_tag_object=$source_tag_object" >> "$GITHUB_OUTPUT"
-          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
-          echo "source_tree=$source_tree" >> "$GITHUB_OUTPUT"
-          echo "release_train=$release_train" >> "$GITHUB_OUTPUT"
-          echo "image_repo=$image_repo" >> "$GITHUB_OUTPUT"
-          echo "base_reference=$base_reference" >> "$GITHUB_OUTPUT"
-          echo "base_index_digest=$base_index_digest" >> "$GITHUB_OUTPUT"
-          echo "base_amd64_digest=$base_amd64_digest" >> "$GITHUB_OUTPUT"
-          echo "base_source_policy_sha256=$base_source_policy_sha256" >> "$GITHUB_OUTPUT"
+          {
+            echo "source_tag=$source_tag"
+            echo "source_tag_object=$source_tag_object"
+            echo "source_sha=$source_sha"
+            echo "source_tree=$source_tree"
+            echo "release_train=$release_train"
+            echo "image_repo=$image_repo"
+            echo "base_reference=$base_reference"
+            echo "base_index_digest=$base_index_digest"
+            echo "base_amd64_digest=$base_amd64_digest"
+            echo "base_source_policy_sha256=$base_source_policy_sha256"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Check out exact Canvas source
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
