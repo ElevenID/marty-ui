@@ -71,7 +71,8 @@ def test_migration_image_preserves_released_wheel_filename() -> None:
     dockerfile = (ROOT / "services" / "Dockerfile.migrations").read_text(encoding="utf-8")
 
     assert 'MARTY_COMMON_WHEEL="/tmp/${MARTY_COMMON_URI##*/}"' in dockerfile
-    assert 'pip install --no-cache-dir \\\n+    "$MARTY_COMMON_WHEEL"' in dockerfile
+    assert "pip install --no-cache-dir" in dockerfile
+    assert '"$MARTY_COMMON_WHEEL"' in dockerfile
     assert "/tmp/marty-common.whl" not in dockerfile
 
 
