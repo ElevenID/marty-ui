@@ -50,6 +50,10 @@ SERVICES = [
         "module": "auth.infrastructure.models",
     },
     {
+        "name": "revocation_profile",
+        "module": "revocation_profile.infrastructure.models",
+    },
+    {
         "name": "credential_template",
         "module": "credential_template.infrastructure.models",
     },
@@ -72,10 +76,6 @@ SERVICES = [
     {
         "name": "flow",
         "module": "flow.infrastructure.models",
-    },
-    {
-        "name": "revocation_profile",
-        "module": "revocation_profile.infrastructure.models",
     },
 ]
 

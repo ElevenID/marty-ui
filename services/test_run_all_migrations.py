@@ -23,6 +23,13 @@ class FakeRedis:
         return True
 
 
+def test_revocation_schema_precedes_dependent_migrations() -> None:
+    order = [service["name"] for service in migrations.SERVICES]
+
+    assert order.index("revocation_profile") < order.index("credential_template")
+    assert order.index("revocation_profile") < order.index("trust_profile")
+
+
 def test_seed_signing_registry_binds_lti_key_inside_multi_key_service() -> None:
     redis = FakeRedis()
     organization_id = "00000000-0000-0000-0000-000000000001"

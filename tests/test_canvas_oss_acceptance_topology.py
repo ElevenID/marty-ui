@@ -271,5 +271,5 @@ def test_stack_cd_uses_released_credentials_and_public_migration_contract() -> N
     assert "MARTY_COMMON_URI" in workflow
     assert "MARTY_COMMON_DIGEST" in workflow
     assert "repository: ElevenID/marty-integration-tests" in workflow
-    assert "pytest tests/integration" in workflow
+    assert "pytest tests/oss_stack" in workflow
     assert "repository: ElevenID/marty-credentials" not in workflow

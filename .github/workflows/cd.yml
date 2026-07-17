@@ -365,14 +365,24 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          cleanup() {
+            docker compose --env-file .env.stack logs --no-color | tee public-stack.log || true
+            docker compose --env-file .env.stack down -v || true
+          }
+          trap cleanup EXIT
           docker compose --env-file .env.stack up -d
-          trap 'docker compose --env-file .env.stack logs --no-color > public-stack.log; docker compose --env-file .env.stack down -v' EXIT
           for attempt in $(seq 1 60); do
             curl --fail --silent http://127.0.0.1:28000/health >/dev/null && break
             if [ "$attempt" = 60 ]; then exit 1; fi
             sleep 2
           done
-          pytest tests/integration -m "integration and not wallet and not marty_wallet and not conformance and not ui_contract" -v
+          unexpected_exits="$(docker compose --env-file .env.stack ps --status exited --services | grep -v '^migrations$' || true)"
+          if [ -n "$unexpected_exits" ]; then
+            echo "Public-stack services exited unexpectedly:"
+            echo "$unexpected_exits"
+            exit 1
+          fi
+          pytest tests/oss_stack -v
 
   publish-manifest:
     needs: [validate-stack, build-ui, build-services, public-stack-smoke]

@@ -52,7 +52,7 @@ def test_stack_release_publishes_signed_evidence() -> None:
     assert "sbom: true" in workflow
     assert "SHA256SUMS" in workflow
     assert "softprops/action-gh-release" in workflow
-    assert "pytest tests/integration" in workflow
+    assert "pytest tests/oss_stack" in workflow
 
 
 def test_stack_release_actions_are_pinned_by_full_commit_sha() -> None:
