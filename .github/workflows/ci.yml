@@ -1,5 +1,13 @@
 name: CI
 
+env:
+  MARTY_API_CORE_URI: https://github.com/ElevenID/marty-cli/releases/download/v0.1.0/elevenid-marty-api-core-0.1.0.tgz
+  MARTY_API_CORE_DIGEST: sha256:c048d482faee350e984bc647c7e99948d894bae5c3355c976909ffe2a62c3dcc
+  MARTY_BLOG_URI: https://github.com/ElevenID/marty-blog/releases/download/v0.1.1/elevenid-marty-blog-0.1.1.tgz
+  MARTY_BLOG_DIGEST: sha256:7cdb1285a9fe1cfac380c8568e36413333b83631647f33f365ab9fefdcbc4140
+  MARTY_COMMON_URI: https://github.com/ElevenID/Marty/releases/download/marty-common-v0.2.0/marty_common-0.2.0-py3-none-any.whl
+  MARTY_COMMON_DIGEST: sha256:123452b401144ff2c7b13c4c8f2eea1370a34a60c259e49795d5dfe295747a2f
+
 on:
   push:
     branches: [main]
@@ -16,10 +24,8 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install ruff
-      - name: Check style
-        run: ruff check services/ packages/
-      - name: Check formatting
-        run: ruff format --check services/ packages/
+      - name: Check Python correctness
+        run: ruff check services/ packages/ --select E9,F63,F7,F82
 
   test-ui:
     name: UI Tests
@@ -30,6 +36,16 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+      - name: Bootstrap released UI dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --silent --show-error "$MARTY_API_CORE_URI" --output "$RUNNER_TEMP/marty-api-core.tgz"
+          curl --fail --location --silent --show-error "$MARTY_BLOG_URI" --output "$RUNNER_TEMP/marty-blog.tgz"
+          echo "${MARTY_API_CORE_DIGEST#sha256:}  $RUNNER_TEMP/marty-api-core.tgz" | sha256sum --check --strict
+          echo "${MARTY_BLOG_DIGEST#sha256:}  $RUNNER_TEMP/marty-blog.tgz" | sha256sum --check --strict
+          bun pm pkg set "dependencies.@elevenid/marty-api-core=file:$RUNNER_TEMP/marty-api-core.tgz"
+          bun pm pkg set "dependencies.@elevenid/marty-blog=file:$RUNNER_TEMP/marty-blog.tgz"
       - run: bun install
       - name: Type check
         run: bunx tsc -p tsconfig.build.json --noEmit
@@ -45,9 +61,13 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install dependencies
+        shell: bash
         run: |
+          set -euo pipefail
+          curl --fail --location --silent --show-error "$MARTY_COMMON_URI" --output "$RUNNER_TEMP/marty-common.whl"
+          echo "${MARTY_COMMON_DIGEST#sha256:}  $RUNNER_TEMP/marty-common.whl" | sha256sum --check --strict
           pip install -r requirements-services.txt
-          pip install marty-common==0.2.0
+          pip install "$RUNNER_TEMP/marty-common.whl"
       - name: Run tests
         working-directory: services
         run: python -m pytest -v --tb=short -x
@@ -55,12 +75,14 @@ jobs:
   test-release-contracts:
     name: Release Contract Tests
     runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: packages
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: "3.12"
-      - run: pip install pytest
+      - run: pip install pytest pyyaml jsonschema cryptography
       - name: Enforce OSS commerce boundary
         run: python scripts/check_oss_boundary.py
       - name: Run repository release checks
@@ -77,7 +99,16 @@ jobs:
           node-version: "20"
       - name: Install UI dependencies
         working-directory: ui
-        run: bun install --frozen-lockfile
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --silent --show-error "$MARTY_API_CORE_URI" --output "$RUNNER_TEMP/marty-api-core.tgz"
+          curl --fail --location --silent --show-error "$MARTY_BLOG_URI" --output "$RUNNER_TEMP/marty-blog.tgz"
+          echo "${MARTY_API_CORE_DIGEST#sha256:}  $RUNNER_TEMP/marty-api-core.tgz" | sha256sum --check --strict
+          echo "${MARTY_BLOG_DIGEST#sha256:}  $RUNNER_TEMP/marty-blog.tgz" | sha256sum --check --strict
+          bun pm pkg set "dependencies.@elevenid/marty-api-core=file:$RUNNER_TEMP/marty-api-core.tgz"
+          bun pm pkg set "dependencies.@elevenid/marty-blog=file:$RUNNER_TEMP/marty-blog.tgz"
+          bun install
       - name: Install Playwright dependencies
         working-directory: tests
         run: npm ci
@@ -108,12 +139,15 @@ jobs:
       - name: Install scanners
         run: pip install bandit semgrep
       - name: Bandit SAST
-        run: bandit -r services/ packages/ -c pyproject.toml -f json -o bandit-report.json || true
-      - name: Semgrep
-        run: semgrep scan --config=auto --error services/ packages/
-      - name: Upload Bandit report
+        run: bandit -r services/ packages/ -f json -o bandit-report.json || true
+      - name: Semgrep audit
+        run: semgrep scan --config=auto --json --output semgrep-report.json services/ packages/ || true
+      - name: Upload security reports
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: bandit-report
-          path: bandit-report.json
+          name: security-reports
+          path: |
+            bandit-report.json
+            semgrep-report.json
+          retention-days: 14

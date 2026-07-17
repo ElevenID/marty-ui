@@ -30,4 +30,5 @@ def test_boundary_scan_reports_commercial_price_catalog(tmp_path: Path) -> None:
     assert findings == [
         "commercial catalog key 'annual_price': packages/marty_common/plan_catalog.json",
         "commercial catalog key 'billing': packages/marty_common/plan_catalog.json",
+        "forbidden path: packages/marty_common/plan_catalog.json",
     ]

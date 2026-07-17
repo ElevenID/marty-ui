@@ -23,6 +23,7 @@ if TYPE_CHECKING:
         CredentialTemplate, ClaimDefinition, DisplayStyle, ValidityRules,
         IssuerRequirements, DerivedAttribute, TemplateStatus, CredentialFormat,
         PrivacyPosture, ClaimType, WalletConfig,
+        WalletRegistryEntry, DeliveryDestinationEntry,
     )
 
 

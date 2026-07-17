@@ -27,7 +27,7 @@ class DemoManifestValidationTests(unittest.TestCase):
         validate_manifest(second)
         validate_index(
             {
-                "schema_version": 1,
+                "schema_version": 2,
                 "latest_approved_stack_version": None,
                 "releases": [
                     {"stack_version": "2026.07.0", "release_name": "Credential Lifecycle Foundation", "mip_version": "0.3.1", "publication_state": "DRAFT", "coverage_state": "PARTIAL", "manifest_url": "/demos/manifests/2026.07.0.json"},
@@ -45,8 +45,9 @@ class DemoManifestValidationTests(unittest.TestCase):
 
     def test_published_video_requires_verified_youtube_distribution(self):
         manifest = copy.deepcopy(self.manifest)
-        manifest["scenarios"][0]["state"] = "YOUTUBE_UNLISTED"
-        manifest["scenarios"][0]["youtube_id"] = "abcdefghijk"
+        manifest["video_distribution"]["status"] = "PENDING_CHANNEL_SETUP"
+        for field in ("channel_id", "channel_handle", "channel_url", "playlist_id", "playlist_url", "verified_at"):
+            manifest["video_distribution"][field] = None
         with self.assertRaisesRegex(ManifestValidationError, "verified ElevenID LLC YouTube channel"):
             validate_manifest(manifest)
 
@@ -78,13 +79,18 @@ class DemoManifestValidationTests(unittest.TestCase):
         manifest["release_ready"] = True
         manifest["public_demo_ready"] = True
         manifest["published_at"] = "2026-07-13T12:00:00Z"
-        manifest["publication_approval"] = {
-            "approval_sha256": "b" * 64,
-            "reviewed_at": manifest["published_at"],
+        manifest["publication_attestation"] = {
+            "kind": "AUTOMATED",
+            "pipeline_revision": "a" * 40,
+            "published_at": manifest["published_at"],
             "checks": [
                 "accessibility", "canonical-urls", "metadata", "navigation", "playback", "privacy",
                 "responsive-layouts", "version-selection",
             ],
+            "verification_report_sha256": "1" * 64,
+            "result_sha256": "2" * 64,
+            "youtube_privacy_status": "public",
+            "smoke_report_sha256": "3" * 64,
         }
         manifest["recorder_revision"] = {"kind": "git", "value": "a" * 40}
         manifest["video_distribution"] = {
@@ -111,13 +117,18 @@ class DemoManifestValidationTests(unittest.TestCase):
                 "youtube_uploaded_at": "2026-07-13T11:30:00Z",
             }
             scenario["published_at"] = "2026-07-13T12:00:00Z"
-            scenario["publication_approval"] = {
-                "approval_sha256": "c" * 64,
-                "reviewed_at": scenario["published_at"],
+            scenario["publication_attestation"] = {
+                "kind": "AUTOMATED",
+                "pipeline_revision": "a" * 40,
+                "published_at": scenario["published_at"],
                 "checks": [
                     "accessibility", "captions", "evidence", "links", "playback", "privacy",
                     "thumbnail", "transcript",
                 ],
+                "verification_report_sha256": "1" * 64,
+                "result_sha256": "2" * 64,
+                "youtube_privacy_status": "public",
+                "smoke_report_sha256": "3" * 64,
             }
             scenario["limitations"] = []
             for assertion in scenario["assertions"]:
@@ -152,15 +163,21 @@ class DemoManifestValidationTests(unittest.TestCase):
             "youtube_uploaded_at": "2026-07-13T12:00:00Z",
         }
         scenario["published_at"] = "2026-07-13T12:30:00Z"
-        scenario["publication_approval"] = {
-            "approval_sha256": "c" * 64,
-            "reviewed_at": scenario["published_at"],
+        scenario["publication_attestation"] = {
+            "kind": "AUTOMATED",
+            "pipeline_revision": "a" * 40,
+            "published_at": scenario["published_at"],
             "checks": [
                 "accessibility", "captions", "evidence", "links", "playback", "privacy",
                 "thumbnail", "transcript",
             ],
+            "verification_report_sha256": "1" * 64,
+            "result_sha256": "2" * 64,
+            "youtube_privacy_status": "public",
+            "smoke_report_sha256": "3" * 64,
         }
         scenario["limitations"] = []
+        scenario["assertions"][0]["result"] = "PENDING"
         with self.assertRaisesRegex(ManifestValidationError, "every PUBLIC assertion must PASS"):
             validate_manifest(manifest)
 

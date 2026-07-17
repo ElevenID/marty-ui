@@ -54,15 +54,19 @@ marty-crypto = { git = "https://example.com/not-marty-core.git", rev = "abc" }
         raise AssertionError("Unexpected dependency source must be rejected")
 
 
-def test_shared_service_image_includes_external_issuance_runtime_dependencies() -> None:
+def test_shared_service_image_installs_released_credentials_bindings() -> None:
     dockerfile = (ROOT / "services" / "Dockerfile").read_text(encoding="utf-8")
 
-    assert "COPY marty-credentials/services/issuance /app/services/issuance" in dockerfile
-    assert "COPY marty-credentials/python/status_list /app/status_list" in dockerfile
+    assert "MARTY_RS_URI" in dockerfile
+    assert "MARTY_RS_DIGEST" in dockerfile
+    assert "curl --fail --location" in dockerfile
+    assert "sha256sum --check --strict" in dockerfile
+    assert "/tmp/marty-rs.whl" in dockerfile
+    assert "COPY marty-credentials" not in dockerfile
 
 
-def test_shared_service_image_builds_the_document_verification_bindings() -> None:
+def test_shared_service_image_does_not_rebuild_external_sources() -> None:
     dockerfile = (ROOT / "services" / "Dockerfile").read_text(encoding="utf-8")
 
-    assert "WORKDIR /build/marty-credentials/rust/marty-rs" in dockerfile
-    assert "localize_marty_core_dependencies.py" in dockerfile
+    assert "WORKDIR /build/marty-credentials" not in dockerfile
+    assert "localize_marty_core_dependencies.py" not in dockerfile
