@@ -11,6 +11,10 @@ ARG MARTY_COMMON_VERSION=0.2.0
 ARG MARTY_COMMON_URI
 ARG MARTY_COMMON_DIGEST
 
+LABEL org.opencontainers.image.source="https://github.com/ElevenID/marty-ui" \
+      org.opencontainers.image.revision="${MARTY_UI_SHA}" \
+      org.opencontainers.image.version="${MARTY_RELEASE_VERSION}"
+
 RUN apt-get update && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/*
 

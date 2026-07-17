@@ -1,9 +1,15 @@
 # Public database migration image. Build context: marty-ui repository root.
 FROM python:3.12-slim
 
+ARG MARTY_RELEASE_VERSION=development
+ARG MARTY_UI_SHA=unknown
 ARG MARTY_COMMON_VERSION=0.2.0
 ARG MARTY_COMMON_URI
 ARG MARTY_COMMON_DIGEST
+
+LABEL org.opencontainers.image.source="https://github.com/ElevenID/marty-ui" \
+      org.opencontainers.image.revision="${MARTY_UI_SHA}" \
+      org.opencontainers.image.version="${MARTY_RELEASE_VERSION}"
 
 RUN apt-get update && apt-get install -y --no-install-recommends curl postgresql-client \
     && rm -rf /var/lib/apt/lists/*
