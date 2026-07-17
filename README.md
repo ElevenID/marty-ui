@@ -9,10 +9,10 @@ Microservice-based control plane and UI for Marty credential, trust, policy, app
 ```bash
 # Clone with sibling repositories
 cd ~/workspace
-git clone https://github.com/ORG/Marty.git
-git clone https://github.com/ORG/marty-credentials.git
-git clone https://github.com/ORG/marty-microservices-framework.git
-git clone https://github.com/ORG/marty-ui.git
+git clone https://github.com/ElevenID/Marty.git
+git clone https://github.com/ElevenID/marty-credentials.git
+git clone https://github.com/ElevenID/marty-microservices-framework.git
+git clone https://github.com/ElevenID/marty-ui.git
 
 # Start the local microservice stack
 cd marty-ui
@@ -81,9 +81,9 @@ Locally, the stack is orchestrated with `docker-compose.base.yml` plus profile o
 
 This project depends on three Marty packages:
 
-- **[marty-credentials](https://github.com/ORG/marty-credentials)** - Credential domain logic, status lists, Rust bindings (marty-rs)
-- **[marty-common](https://github.com/ORG/Marty/tree/main/packages/marty-common)** - Shared infrastructure (crypto_bridge, gRPC, database)
-- **[marty-microservices-framework](https://github.com/ORG/marty-microservices-framework)** - Microservices framework
+- **[marty-credentials](https://github.com/ElevenID/marty-credentials)** - Credential domain logic, status lists, Rust bindings (marty-rs)
+- **[marty-common](https://github.com/ElevenID/Marty/tree/main/packages/marty-common)** - Shared infrastructure (crypto_bridge, gRPC, database)
+- **[marty-microservices-framework](https://github.com/ElevenID/marty-microservices-framework)** - Microservices framework
 
 **Development:** Packages are mounted as volumes for live code reloading  
 **Production:** Packages are installed from GitHub Packages registry
