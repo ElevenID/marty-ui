@@ -33,11 +33,13 @@ RUN test -n "$MARTY_RS_URI" \
     && test -n "$MARTY_RS_DIGEST" \
     && test -n "$MARTY_COMMON_URI" \
     && test -n "$MARTY_COMMON_DIGEST" \
-    && curl --fail --location --silent --show-error "$MARTY_RS_URI" --output /tmp/marty-rs.whl \
-    && curl --fail --location --silent --show-error "$MARTY_COMMON_URI" --output /tmp/marty-common.whl \
-    && echo "${MARTY_RS_DIGEST#sha256:}  /tmp/marty-rs.whl" | sha256sum --check --strict \
-    && echo "${MARTY_COMMON_DIGEST#sha256:}  /tmp/marty-common.whl" | sha256sum --check --strict \
-    && pip install --no-cache-dir -r /tmp/requirements-services.txt /tmp/marty-rs.whl /tmp/marty-common.whl
+    && MARTY_RS_WHEEL="/tmp/${MARTY_RS_URI##*/}" \
+    && MARTY_COMMON_WHEEL="/tmp/${MARTY_COMMON_URI##*/}" \
+    && curl --fail --location --silent --show-error "$MARTY_RS_URI" --output "$MARTY_RS_WHEEL" \
+    && curl --fail --location --silent --show-error "$MARTY_COMMON_URI" --output "$MARTY_COMMON_WHEEL" \
+    && echo "${MARTY_RS_DIGEST#sha256:}  $MARTY_RS_WHEEL" | sha256sum --check --strict \
+    && echo "${MARTY_COMMON_DIGEST#sha256:}  $MARTY_COMMON_WHEEL" | sha256sum --check --strict \
+    && pip install --no-cache-dir -r /tmp/requirements-services.txt "$MARTY_RS_WHEEL" "$MARTY_COMMON_WHEEL"
 
 COPY packages/marty_proto /app/packages/marty_proto
 COPY services /app/services
