@@ -24,7 +24,7 @@ import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
-import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
+import ErrorOutlineIcon from '@mui/icons-material/ErrorOutlined';
 import LanguageIcon from '@mui/icons-material/Language';
 import SettingsIcon from '@mui/icons-material/Settings';
 import VpnKeyIcon from '@mui/icons-material/VpnKey';

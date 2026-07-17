@@ -10,7 +10,7 @@ import {
 } from '@mui/material';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ErrorIcon from '@mui/icons-material/Error';
-import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
+import HelpOutlineIcon from '@mui/icons-material/HelpOutlined';
 import LinkIcon from '@mui/icons-material/Link';
 import WorkspacePremiumIcon from '@mui/icons-material/WorkspacePremium';
 

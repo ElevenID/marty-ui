@@ -91,7 +91,7 @@ const BasicsStep = ({ data, onChange }) => {
         placeholder={t('wizards.trustProfile.basicsStep.placeholders.name')}
         sx={{ mb: 3 }}
         helperText={t('wizards.trustProfile.basicsStep.helpers.name')}
-        inputProps={{ 'data-testid': 'wizard.trustProfile.name' }}
+        slotProps={{ htmlInput: { 'data-testid': 'wizard.trustProfile.name' } }}
       />
 
       {/* Description */}
@@ -104,7 +104,7 @@ const BasicsStep = ({ data, onChange }) => {
         onChange={(e) => onChange({ description: e.target.value })}
         sx={{ mb: 3 }}
         helperText={t('wizards.trustProfile.basicsStep.helpers.description')}
-        inputProps={{ 'data-testid': 'wizard.trustProfile.description' }}
+        slotProps={{ htmlInput: { 'data-testid': 'wizard.trustProfile.description' } }}
       />
 
       {/* Framework Type */}
@@ -148,7 +148,7 @@ const BasicsStep = ({ data, onChange }) => {
                   checked={(data.supported_formats || []).includes(format.value)}
                   onChange={() => handleFormatToggle(format.value)}
                   disabled={formatSelectionLocked}
-                  inputProps={{ 'data-testid': `wizard.trustProfile.format.${format.value}` }}
+                  slotProps={{ input: { 'data-testid': `wizard.trustProfile.format.${format.value}` } }}
                 />
               }
               label={

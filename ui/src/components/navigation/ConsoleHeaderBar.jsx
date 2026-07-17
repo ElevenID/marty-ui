@@ -33,7 +33,7 @@ import MenuIcon from '@mui/icons-material/Menu';
 import PersonIcon from '@mui/icons-material/Person';
 import LogoutIcon from '@mui/icons-material/Logout';
 import SettingsIcon from '@mui/icons-material/Settings';
-import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
+import HelpOutlineIcon from '@mui/icons-material/HelpOutlined';
 import BusinessIcon from '@mui/icons-material/Business';
 import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown';
 import CheckIcon from '@mui/icons-material/Check';

@@ -22,7 +22,7 @@ import {
   Button,
 } from '@mui/material';
 import { useNavigate } from 'react-router-dom';
-import AddCircleOutlineIcon from '@mui/icons-material/AddCircleOutline';
+import AddCircleOutlineIcon from '@mui/icons-material/AddCircleOutlined';
 import PolicyIcon from '@mui/icons-material/Policy';
 import { useTranslation } from 'react-i18next';
 

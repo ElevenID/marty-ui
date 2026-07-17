@@ -14,14 +14,12 @@ import {
   Fade,
   Chip,
 } from '@mui/material';
-import {
-  Flight as TravelIcon,
-  DirectionsCar as DriverLicenseIcon,
-  AccountBalance as EuIcon,
-  Badge as EmployeeIcon,
-  School as StudentIcon,
-  Security as AccessIcon,
-} from '@mui/icons-material';
+import TravelIcon from '@mui/icons-material/Flight';
+import DriverLicenseIcon from '@mui/icons-material/DirectionsCar';
+import EuIcon from '@mui/icons-material/AccountBalance';
+import EmployeeIcon from '@mui/icons-material/Badge';
+import StudentIcon from '@mui/icons-material/School';
+import AccessIcon from '@mui/icons-material/Security';
 
 // Use case definitions with business-friendly language
 const USE_CASES = [

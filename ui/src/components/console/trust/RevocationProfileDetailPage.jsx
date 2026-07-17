@@ -32,8 +32,8 @@ import {
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import BlockIcon from '@mui/icons-material/Block';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
-import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
-import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
+import ErrorOutlineIcon from '@mui/icons-material/ErrorOutlined';
+import HelpOutlineIcon from '@mui/icons-material/HelpOutlined';
 import LayersIcon from '@mui/icons-material/Layers';
 import LinkIcon from '@mui/icons-material/Link';
 import ScheduleIcon from '@mui/icons-material/Schedule';

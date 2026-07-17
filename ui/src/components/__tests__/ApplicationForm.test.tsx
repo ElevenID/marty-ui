@@ -440,19 +440,21 @@ describe('ApplicationForm', () => {
     expect(mockGet).not.toHaveBeenCalledWith(expect.stringContaining('/v1/credential-templates/'));
     expect(mockGet).not.toHaveBeenCalledWith(expect.stringContaining('/v1/application-templates/'));
     expect(screen.queryByText('Not a member of this organization')).not.toBeInTheDocument();
-    expect(mockPost).toHaveBeenCalledWith(
-      '/v1/integrations/canvas/lti/experience-sessions/current/bootstrap',
-      {
-        applicant_identifier: 'user-1',
-        applicant_data: {
-          email: 'user@example.com',
-          given_name: 'Ada',
-          family_name: 'Lovelace',
-          name: 'Ada Lovelace',
+    await waitFor(() => {
+      expect(mockPost).toHaveBeenCalledWith(
+        '/v1/integrations/canvas/lti/experience-sessions/current/bootstrap',
+        {
+          applicant_identifier: 'user-1',
+          applicant_data: {
+            email: 'user@example.com',
+            given_name: 'Ada',
+            family_name: 'Lovelace',
+            name: 'Ada Lovelace',
+          },
         },
-      },
-      { headers: { Authorization: 'Bearer canvas-session-token' } },
-    );
+        { headers: { Authorization: 'Bearer canvas-session-token' } },
+      );
+    });
   });
 
   it('runs the one-click credential issuance flow for member credentials', async () => {

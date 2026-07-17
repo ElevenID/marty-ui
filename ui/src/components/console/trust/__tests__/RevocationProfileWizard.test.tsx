@@ -196,7 +196,8 @@ describe('RevocationProfileWizard', () => {
 
     renderWizard();
     fireEvent.change(getNameInput(), { target: { value: 'Timed Profile' } });
-    fireEvent.change(screen.getByTestId('revocationWizard.checkMode'), { target: { value: 'CACHED' } });
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: /revocation check mode/i }));
+    fireEvent.click(screen.getByRole('option', { name: /cached/i }));
     fireEvent.change(screen.getByTestId('revocationWizard.cacheTtl'), { target: { value: '3600' } });
     fireEvent.click(getCreateButton());
 

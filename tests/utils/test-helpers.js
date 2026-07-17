@@ -40,7 +40,7 @@ class EventWaiter {
    * @returns {Promise<object>} Event data when received
    */
   async waitForEvent(eventType, filter = {}, timeout = 30000, deviceId = null) {
-    const EventSource = require('eventsource');
+    const { EventSource } = require('eventsource');
     const effectiveDeviceId = deviceId || `test-waiter-${Date.now()}`;
     
     return new Promise((resolve, reject) => {

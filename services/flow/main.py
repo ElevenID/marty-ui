@@ -38,8 +38,7 @@ import httpx
 from fastapi import APIRouter, Depends, FastAPI, Form, Header, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
-from jose import jwt, jwk
-from jose.constants import ALGORITHMS
+from jwcrypto import jwt, jwk
 from fastapi.middleware.cors import CORSMiddleware
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives import serialization
@@ -140,13 +139,13 @@ def get_or_create_signing_key():
             'public': private_key.public_key()
         }
         
-        # Convert to JWK format for jose library
+        # Convert to JWK format for signed OID4VP request objects.
         private_pem = private_key.private_bytes(
             encoding=serialization.Encoding.PEM,
             format=serialization.PrivateFormat.PKCS8,
             encryption_algorithm=serialization.NoEncryption()
         )
-        _SIGNING_JWK = jwk.construct(private_pem, algorithm='ES256')
+        _SIGNING_JWK = jwk.JWK.from_pem(private_pem)
     
     return _SIGNING_KEY_PAIR, _SIGNING_JWK
 
@@ -3450,12 +3449,9 @@ async def get_verification_request_object(
     # Sign the Request Object as a JWT
     # Per OID4VP spec: "The Request Object [...] MUST be signed"
     try:
-        signed_request_jwt = jwt.encode(
-            request_payload,
-            signing_jwk.to_dict(),
-            algorithm='ES256',
-            headers=jwt_headers,
-        )
+        request_object = jwt.JWT(header=jwt_headers, claims=request_payload)
+        request_object.make_signed_token(signing_jwk)
+        signed_request_jwt = request_object.serialize()
 
         logger.info(f"Generated signed Request Object JWT for instance {instance_id}")
 

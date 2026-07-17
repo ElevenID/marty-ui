@@ -6,13 +6,12 @@ import PuppeteerRenderer from '@prerenderer/renderer-puppeteer'
 import { visualizer } from 'rollup-plugin-visualizer'
 import Sitemap from 'vite-plugin-sitemap'
 import { fileURLToPath, URL } from 'node:url'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { resolve } from 'node:path'
 
 function createManualChunk(id: string) {
   const normalizedId = id.replace(/\\/g, '/')
 
-  if (normalizedId.includes('/node_modules/@elevenid/marty-blog/')) return 'blog-vendor'
   if (normalizedId.includes('/commerce-extension/')) return 'commerce-extension'
   if (normalizedId.includes('/node_modules/@elevenid/marty-api-core/')) return 'api-core-vendor'
   if (normalizedId.includes('/node_modules/redoc/')) return 'docs-vendor'
@@ -54,6 +53,58 @@ function consoleEntryRewritePlugin() {
     },
     configurePreviewServer(server: { middlewares: { use: (handler: typeof rewriteConsoleRequest) => void } }) {
       server.middlewares.use(rewriteConsoleRequest)
+    },
+  }
+}
+
+// MUI 9 publishes icon entry points as .mjs. The current marty-blog release was
+// built against MUI 5 and its generated ESM still references the former .js
+// entry points, so translate those immutable package imports during bundling.
+function muiIconMjsCompatibilityPlugin() {
+  return {
+    name: 'mui-icon-mjs-compatibility',
+    enforce: 'pre' as const,
+    resolveId(source: string) {
+      if (!/^@mui\/icons-material\/.+\.js$/.test(source)) return null
+
+      const iconName = source.slice('@mui/icons-material/'.length, -'.js'.length)
+      const iconPath = fileURLToPath(new URL(`./node_modules/@mui/icons-material/${iconName}.mjs`, import.meta.url))
+      if (existsSync(iconPath)) return iconPath
+
+      const renamedIconPath = fileURLToPath(new URL(
+        `./node_modules/@mui/icons-material/${iconName.replace(/Outline$/, 'Outlined')}.mjs`,
+        import.meta.url,
+      ))
+      return existsSync(renamedIconPath) ? renamedIconPath : null
+    },
+  }
+}
+
+function prerenderLocaleAssetsPlugin() {
+  const localeRoot = fileURLToPath(new URL('./public/locales/', import.meta.url))
+
+  return {
+    name: 'prerender-locale-assets',
+    apply: 'build' as const,
+    buildStart() {
+        const emitDirectory = (directory: string, relativeDirectory = '') => {
+          readdirSync(directory, { withFileTypes: true }).forEach((entry) => {
+            const relativePath = relativeDirectory ? `${relativeDirectory}/${entry.name}` : entry.name
+            const absolutePath = resolve(directory, entry.name)
+
+            if (entry.isDirectory()) {
+              emitDirectory(absolutePath, relativePath)
+            } else if (entry.isFile() && entry.name.endsWith('.json')) {
+              this.emitFile({
+                type: 'asset',
+                fileName: `locales/${relativePath}`,
+                source: readFileSync(absolutePath),
+              })
+            }
+          })
+        }
+
+        emitDirectory(localeRoot)
     },
   }
 }
@@ -159,6 +210,8 @@ export default defineConfig(async ({ mode }) => {
       exclude: isSelfhostBuild ? [] : ['@elevenid/marty-blog'],
     },
     plugins: [
+      muiIconMjsCompatibilityPlugin(),
+      ...(!disablePrerender ? [prerenderLocaleAssetsPlugin()] : []),
       react(),
       consoleEntryRewritePlugin(),
       ...(isDev ? [checker({
@@ -213,7 +266,16 @@ export default defineConfig(async ({ mode }) => {
               ? (_page, route) => console.info(`[prerender] loaded ${route}`)
               : undefined,
             consoleHandler: prerenderDebug
-              ? (route, message) => console.info(`[prerender] ${route} ${message.type()}: ${message.text()}`)
+              ? (route, message) => {
+                  console.info(`[prerender] ${route} ${message.type()}: ${message.text()}`)
+                  void Promise.all(message.args().map((argument) => argument.evaluate((value) => {
+                    if (value instanceof Error) {
+                      return { name: value.name, message: value.message, stack: value.stack }
+                    }
+                    return value
+                  }).catch(() => argument.toString())))
+                    .then((values) => console.info(`[prerender] ${route} values: ${JSON.stringify(values)}`))
+                }
               : undefined,
           }),
           postProcess(route) {

@@ -38,16 +38,14 @@ import {
   Divider,
   Stack,
 } from '@mui/material';
-import {
-  Search as SearchIcon,
-  FilterList as FilterIcon,
-  CardMembership as CredentialIcon,
-  Info as InfoIcon,
-  CheckCircle as CheckIcon,
-  Schedule as PendingIcon,
-  Business as BusinessIcon,
-  Verified as VerifiedIcon,
-} from '@mui/icons-material';
+import SearchIcon from '@mui/icons-material/Search';
+import FilterIcon from '@mui/icons-material/FilterList';
+import CredentialIcon from '@mui/icons-material/CardMembership';
+import InfoIcon from '@mui/icons-material/Info';
+import CheckIcon from '@mui/icons-material/CheckCircle';
+import PendingIcon from '@mui/icons-material/Schedule';
+import BusinessIcon from '@mui/icons-material/Business';
+import VerifiedIcon from '@mui/icons-material/Verified';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../../hooks/useAuth';

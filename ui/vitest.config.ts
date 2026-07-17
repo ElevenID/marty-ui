@@ -1,10 +1,35 @@
 import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 import { resolve } from 'path'
+import { existsSync } from 'fs'
+
+function muiIconMjsCompatibilityPlugin() {
+  return {
+    name: 'mui-icon-mjs-compatibility',
+    enforce: 'pre' as const,
+    resolveId(source: string) {
+      if (!/^@mui\/icons-material\/.+\.js$/.test(source)) return null
+
+      const iconName = source.slice('@mui/icons-material/'.length, -'.js'.length)
+      const iconPath = resolve(__dirname, 'node_modules', '@mui', 'icons-material', `${iconName}.mjs`)
+      if (existsSync(iconPath)) return iconPath
+
+      const renamedIconPath = resolve(
+        __dirname,
+        'node_modules',
+        '@mui',
+        'icons-material',
+        `${iconName.replace(/Outline$/, 'Outlined')}.mjs`,
+      )
+      return existsSync(renamedIconPath) ? renamedIconPath : null
+    },
+  }
+}
 
 // https://vitest.dev/config/
 export default defineConfig({
   plugins: [
+    muiIconMjsCompatibilityPlugin(),
     react({
       jsxRuntime: 'automatic',
     }),
@@ -39,6 +64,11 @@ export default defineConfig({
     // Increase timeout for integration tests
     testTimeout: 10000,
     hookTimeout: 10000,
+    server: {
+      deps: {
+        inline: ['@elevenid/marty-blog', 'use-sync-external-store'],
+      },
+    },
   },
   resolve: {
     alias: {

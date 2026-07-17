@@ -7,7 +7,7 @@
  */
 
 const { test, expect } = require('@playwright/test');
-const EventSource = require('eventsource');
+const { EventSource } = require('eventsource');
 
 // API base URL - use environment variable or default to native API
 const API_BASE_URL = process.env.API_BASE_URL || 'http://localhost:8000';

@@ -27,7 +27,7 @@ import {
 } from '@mui/material';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import HowToRegIcon from '@mui/icons-material/HowToReg';
-import MailOutlineIcon from '@mui/icons-material/MailOutline';
+import MailOutlineIcon from '@mui/icons-material/MailOutlined';
 import InfoIcon from '@mui/icons-material/Info';
 import { useTranslation, Trans } from 'react-i18next';
 

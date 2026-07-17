@@ -23,14 +23,12 @@ import {
   Alert,
   LinearProgress,
 } from '@mui/material';
-import {
-  CheckCircle as CheckCircleIcon,
-  ContentCopy as ContentCopyIcon,
-  Refresh as RefreshIcon,
-  QrCode2 as QrCode2Icon,
-  Info as InfoIcon,
-  PhoneAndroid as PhoneAndroidIcon,
-} from '@mui/icons-material';
+import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import RefreshIcon from '@mui/icons-material/Refresh';
+import QrCode2Icon from '@mui/icons-material/QrCode2';
+import InfoIcon from '@mui/icons-material/Info';
+import PhoneAndroidIcon from '@mui/icons-material/PhoneAndroid';
 import { buildOid4vciCredentialOfferUri } from '../../services/credentialLinkUtils';
 
 /**

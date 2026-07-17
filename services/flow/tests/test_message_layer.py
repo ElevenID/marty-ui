@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
+from jwcrypto import jwt as jwcrypto_jwt
 
 import flow.main as flow_main
 from marty_common.messages import MessageType
@@ -798,8 +799,11 @@ async def test_get_verification_request_object_records_presentation_request_mess
     header, payload, _ = response.body.decode().split(".", 2)
     decoded_header = _decode_jwt_segment(header)
     decoded_payload = _decode_jwt_segment(payload)
+    _, signing_key = flow_main.get_or_create_signing_key()
+    verified_request = jwcrypto_jwt.JWT(key=signing_key, jwt=response.body.decode())
 
     assert response.media_type == "application/oauth-authz-req+jwt"
+    assert json.loads(verified_request.claims) == decoded_payload
     assert decoded_header["kid"] == "did:web:verifier.example:oid4vp#oid4vp-verifier-key-1"
     assert decoded_payload["client_id"] == "decentralized_identifier:did:web:verifier.example:oid4vp"
     assert decoded_payload["iss"] == decoded_payload["client_id"]

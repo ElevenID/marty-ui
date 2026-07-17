@@ -19,7 +19,7 @@ import FolderSharedIcon from '@mui/icons-material/FolderShared';
 import StorefrontIcon from '@mui/icons-material/Storefront';
 import SettingsIcon from '@mui/icons-material/Settings';
 import DesignServicesIcon from '@mui/icons-material/DesignServices';
-import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
+import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutlined';
 import IntegrationInstructionsIcon from '@mui/icons-material/IntegrationInstructions';
 
 /**

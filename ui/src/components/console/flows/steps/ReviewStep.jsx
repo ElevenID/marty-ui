@@ -10,7 +10,7 @@ import {
   Typography,
 } from '@mui/material';
 import AccountTreeIcon from '@mui/icons-material/AccountTree';
-import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
+import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutlined';
 
 function titleize(value) {
   return String(value || '').replace(/_/g, ' ').replace(/\b\w/g, (character) => character.toUpperCase());

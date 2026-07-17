@@ -79,6 +79,10 @@ const ValidationRulesStep = ({ data, onChange }) => {
   const [wallets, setWallets] = useState([]);
   const [loadingWallets, setLoadingWallets] = useState(false);
   const [walletError, setWalletError] = useState(null);
+  const walletLoadErrorMessage = t(
+    'wizards.trustProfile.validationRulesStep.walletCompatibility.loadError',
+    { defaultValue: 'Could not load the wallet registry. You can keep configuring the trust profile and add wallet targeting later.' },
+  );
 
   const frameworkType = data.framework_type || 'custom';
   const algorithmSelectionLocked = isFrameworkAlgorithmSelectionLocked(frameworkType);
@@ -120,10 +124,7 @@ const ValidationRulesStep = ({ data, onChange }) => {
       })
       .catch(() => {
         if (!cancelled) {
-          setWalletError(t(
-            'wizards.trustProfile.validationRulesStep.walletCompatibility.loadError',
-            { defaultValue: 'Could not load the wallet registry. You can keep configuring the trust profile and add wallet targeting later.' },
-          ));
+          setWalletError(walletLoadErrorMessage);
         }
       })
       .finally(() => {
@@ -135,7 +136,7 @@ const ValidationRulesStep = ({ data, onChange }) => {
     return () => {
       cancelled = true;
     };
-  }, [t]);
+  }, [walletLoadErrorMessage]);
 
   useEffect(() => {
     if (!algorithmSelectionLocked) {
@@ -279,7 +280,7 @@ const ValidationRulesStep = ({ data, onChange }) => {
                     checked={(rules.allowed_algorithms || []).includes(alg.value)}
                     onChange={() => handleAlgorithmToggle(alg.value)}
                     disabled={algorithmSelectionLocked}
-                    inputProps={{ 'data-testid': `wizard.trustProfile.algorithm.${alg.value}` }}
+                    slotProps={{ input: { 'data-testid': `wizard.trustProfile.algorithm.${alg.value}` } }}
                   />
                 }
                 label={alg.label}
@@ -357,9 +358,9 @@ const ValidationRulesStep = ({ data, onChange }) => {
               isOptionEqualToValue={(left, right) => left.id === right.id}
               value={selectedWallets}
               onChange={handleWalletChange}
-              renderTags={(value, getTagProps) =>
+              renderValue={(value, getItemProps) =>
                 value.map((wallet, index) => {
-                  const { key, ...tagProps } = getTagProps({ index });
+                  const { key, ...itemProps } = getItemProps({ index });
 
                   return (
                     <Chip
@@ -368,7 +369,7 @@ const ValidationRulesStep = ({ data, onChange }) => {
                       size="small"
                       avatar={wallet.logo_url ? <Avatar src={wallet.logo_url} sx={{ width: 18, height: 18 }} /> : undefined}
                       icon={!wallet.logo_url ? <WalletIcon sx={{ fontSize: 16 }} /> : undefined}
-                      {...tagProps}
+                      {...itemProps}
                     />
                   );
                 })
@@ -416,10 +417,6 @@ const ValidationRulesStep = ({ data, onChange }) => {
                     { defaultValue: 'Selecting wallets lets issuance and handoff experiences prioritize the right apps.' },
                   )}
                   size="small"
-                  inputProps={{
-                    ...params.inputProps,
-                    'data-testid': 'wizard.trustProfile.supportedWallets',
-                  }}
                 />
               )}
               sx={{ mb: 2 }}
