@@ -416,13 +416,11 @@ export default function JoinOrganizationPage({
           Preview organizations, understand what you’ll unlock, and join with confidence.
         </Typography>
       </Box>
-
       {error && (
         <Alert severity="error" sx={{ mb: 3 }}>
           {error}
         </Alert>
       )}
-
       <Grid container spacing={3}>
         {/* Left side: discovery list + join code */}
         <Grid item xs={12} md={6}>
@@ -436,14 +434,16 @@ export default function JoinOrganizationPage({
                 placeholder="Enter 8-character join code"
                 value={joinCode}
                 onChange={(e) => setJoinCode(e.target.value.toUpperCase())}
-                InputProps={{
-                  startAdornment: (
-                    <InputAdornment position="start">
-                      <VpnKeyIcon />
-                    </InputAdornment>
-                  ),
-                }}
                 sx={{ mb: 2 }}
+                slotProps={{
+                  input: {
+                    startAdornment: (
+                      <InputAdornment position="start">
+                        <VpnKeyIcon />
+                      </InputAdornment>
+                    ),
+                  }
+                }}
               />
               <Button
                 variant="contained"
@@ -466,14 +466,16 @@ export default function JoinOrganizationPage({
                 placeholder="Search organizations..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                InputProps={{
-                  startAdornment: (
-                    <InputAdornment position="start">
-                      <SearchIcon />
-                    </InputAdornment>
-                  ),
-                }}
                 sx={{ mb: 2 }}
+                slotProps={{
+                  input: {
+                    startAdornment: (
+                      <InputAdornment position="start">
+                        <SearchIcon />
+                      </InputAdornment>
+                    ),
+                  }
+                }}
               />
 
               {loading ? (
@@ -608,7 +610,6 @@ export default function JoinOrganizationPage({
           </Card>
         </Grid>
       </Grid>
-
       {showCodeMode && (
         <Alert severity="info" sx={{ mt: 3 }}>
           You opened the join flow in code mode. Enter your join code above to continue.

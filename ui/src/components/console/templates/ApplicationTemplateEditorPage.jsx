@@ -253,7 +253,9 @@ export default function ApplicationTemplateEditorPage() {
             <FormControl fullWidth><InputLabel id="application-approval-label">Approval</InputLabel><Select id="application-approval" labelId="application-approval-label" label="Approval" value={data.approval_strategy || 'MANUAL'} onChange={(event) => setData({ ...data, approval_strategy: event.target.value })}>
               <MenuItem value="MANUAL">Manual review</MenuItem><MenuItem value="AUTO">Automatic</MenuItem><MenuItem value="RULES_BASED">Rules based</MenuItem>
             </Select></FormControl>
-            <TextField fullWidth type="number" label="Valid for days" value={data.application_validity_days || 30} inputProps={{ min: 1, max: 365 }} onChange={(event) => setData({ ...data, application_validity_days: Number(event.target.value) })} />
+            <TextField fullWidth type="number" label="Valid for days" value={data.application_validity_days || 30} onChange={(event) => setData({ ...data, application_validity_days: Number(event.target.value) })} slotProps={{
+              htmlInput: { min: 1, max: 365 }
+            }} />
           </Stack>
 
           {data.approval_strategy === 'RULES_BASED' && (

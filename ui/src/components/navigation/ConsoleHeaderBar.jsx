@@ -110,11 +110,8 @@ function isOpaqueCanvasIdentifier(value) {
     return false;
   }
 
-  return (
-    normalized.startsWith('canvas-lti-')
-    || /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(normalized)
-    || /^[0-9a-f]{24,}$/i.test(normalized)
-  );
+  return (normalized.startsWith('canvas-lti-')
+  || /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(normalized) || /^[0-9a-f]{24,}$/i.test(normalized));
 }
 
 function getFullName(user) {
@@ -446,10 +443,12 @@ export function ConsoleHeaderBar({ onMobileMenuToggle }) {
                   onChange={(event) => setOrgSearch(event.target.value)}
                   onKeyDown={(event) => event.stopPropagation()}
                   sx={{ mt: 0.75 }}
-                  InputProps={{
-                    startAdornment: (
-                      <InputAdornment position="start"><SearchIcon fontSize="small" /></InputAdornment>
-                    ),
+                  slotProps={{
+                    input: {
+                      startAdornment: (
+                        <InputAdornment position="start"><SearchIcon fontSize="small" /></InputAdornment>
+                      ),
+                    }
                   }}
                 />
               </Box>
@@ -465,9 +464,10 @@ export function ConsoleHeaderBar({ onMobileMenuToggle }) {
                   <ListItemText
                     primary={org.display_name || org.name || org.id}
                     secondary={getMembershipRoleSummary(org)}
-                    primaryTypographyProps={{ variant: 'body2', noWrap: true }}
-                    secondaryTypographyProps={{ variant: 'caption' }}
-                  />
+                    slotProps={{
+                      primary: { variant: 'body2', noWrap: true },
+                      secondary: { variant: 'caption' }
+                    }} />
                   {org.id === selectedOrgId && <CheckIcon fontSize="small" color="primary" sx={{ ml: 1 }} />}
                 </MenuItem>
               ))}

@@ -97,7 +97,6 @@ const PolicySetWizard = () => {
       <Button startIcon={<ArrowBackIcon />} onClick={() => navigate('/console/org/policies/sets')} sx={{ mb: 2 }}>Policy Sets</Button>
       <Typography variant="h4" gutterBottom>Create Policy Set</Typography>
       {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
-
       <Typography variant="h6" sx={{ mb: 1.5 }}>Start from a template</Typography>
       <Grid container spacing={1.5} sx={{ mb: 3 }}>
         {templates.map((template) => (
@@ -114,11 +113,14 @@ const PolicySetWizard = () => {
           </Grid>
         ))}
       </Grid>
-
       <Paper variant="outlined" sx={{ p: { xs: 2, sm: 3 } }}>
         <Stack spacing={2.5}>
-          <TextField required label="Name" value={name} onChange={(event) => setName(event.target.value)} inputProps={{ maxLength: 128 }} />
-          <TextField multiline minRows={2} label="Description" value={description} onChange={(event) => setDescription(event.target.value)} inputProps={{ maxLength: 1024 }} />
+          <TextField required label="Name" value={name} onChange={(event) => setName(event.target.value)} slotProps={{
+            htmlInput: { maxLength: 128 }
+          }} />
+          <TextField multiline minRows={2} label="Description" value={description} onChange={(event) => setDescription(event.target.value)} slotProps={{
+            htmlInput: { maxLength: 1024 }
+          }} />
 
           <FormControlLabel control={<Switch checked={advanced} onChange={(event) => setAdvanced(event.target.checked)} />} label="Advanced Cedar editor" />
 
@@ -140,7 +142,9 @@ const PolicySetWizard = () => {
                     label="Cedar policy"
                     value={policy.cedar_text}
                     onChange={(event) => updatePolicy(index, { cedar_text: event.target.value })}
-                    inputProps={{ style: { fontFamily: 'monospace', fontSize: 13 } }}
+                    slotProps={{
+                      htmlInput: { style: { fontFamily: 'monospace', fontSize: 13 } }
+                    }}
                   />
                 </Box>
               ))}

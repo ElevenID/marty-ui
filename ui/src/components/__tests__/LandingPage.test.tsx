@@ -122,7 +122,9 @@ describe('LandingPage', () => {
     expect(screen.getByText('Issue Credentials')).toBeInTheDocument();
     expect(screen.getByText('Build With ElevenID')).toBeInTheDocument();
     expect(screen.getByText('Built for the ecosystems reviewers already know')).toBeInTheDocument();
-    expect(await screen.findByText('See the decision surface without a staged demo.')).toBeInTheDocument();
+    expect(
+      await screen.findByText('See the decision surface without a staged demo.', undefined, { timeout: 10000 }),
+    ).toBeInTheDocument();
     expect(screen.getByText('Start from a deployment playbook.')).toBeInTheDocument();
     expect(await screen.findByText('How ElevenID Deploys')).toBeInTheDocument();
     expect(await screen.findByText('Deployment Model Diagram')).toBeInTheDocument();

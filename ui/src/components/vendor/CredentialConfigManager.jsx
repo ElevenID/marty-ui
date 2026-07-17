@@ -332,13 +332,11 @@ export default function CredentialConfigManager() {
           </Button>
         </Box>
       </Box>
-
       {error && (
         <Alert severity="error" sx={{ mb: 2 }} data-testid="config-error">
           {error}
         </Alert>
       )}
-
       {/* Configurations List */}
       {configs.length === 0 ? (
         <Paper sx={{ p: 4, textAlign: 'center' }} data-testid="no-configs-message">
@@ -446,7 +444,6 @@ export default function CredentialConfigManager() {
           ))}
         </Grid>
       )}
-
       {/* Create/Edit Dialog */}
       <Dialog
         open={dialogOpen}
@@ -495,9 +492,11 @@ export default function CredentialConfigManager() {
               value={formData.validity_days}
               onChange={(e) => setFormData(prev => ({ ...prev, validity_days: parseInt(e.target.value) || 365 }))}
               fullWidth
-              inputProps={{ min: 1, max: 3650 }}
               helperText={t('credentialConfigManager.form.validityHelper')}
               data-testid="validity-days-input"
+              slotProps={{
+                htmlInput: { min: 1, max: 3650 }
+              }}
             />
 
             {loadingDefaults ? (
@@ -574,7 +573,6 @@ export default function CredentialConfigManager() {
           </Button>
         </DialogActions>
       </Dialog>
-
       <ConfirmDeleteDialog
         open={deleteDialog.isOpen}
         onClose={deleteDialog.close}
@@ -582,7 +580,6 @@ export default function CredentialConfigManager() {
         title={t('credentialConfigManager.deleteDialog.title')}
         itemName={deleteDialog.data?.display_name}
       />
-
     </Box>
   );
 }

@@ -165,7 +165,6 @@ export function DiscoverOrganizationsPage({ joinPath = '/organizations/join' }) 
           Find and join publicly available organizations.
         </Typography>
       </Box>
-
       {/* Filters */}
       <Card sx={{ mb: 3 }}>
         <CardContent>
@@ -177,12 +176,14 @@ export function DiscoverOrganizationsPage({ joinPath = '/organizations/join' }) 
                 placeholder="Search by name..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                InputProps={{
-                  startAdornment: (
-                    <InputAdornment position="start">
-                      <SearchIcon />
-                    </InputAdornment>
-                  ),
+                slotProps={{
+                  input: {
+                    startAdornment: (
+                      <InputAdornment position="start">
+                        <SearchIcon />
+                      </InputAdornment>
+                    ),
+                  }
                 }}
               />
             </Grid>
@@ -239,21 +240,18 @@ export function DiscoverOrganizationsPage({ joinPath = '/organizations/join' }) 
           </Grid>
         </CardContent>
       </Card>
-
       {/* Error Alert */}
       {error && (
         <Alert severity="error" sx={{ mb: 3 }}>
           {error}
         </Alert>
       )}
-
       {/* Loading State */}
       {loading && (
         <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: 400 }}>
           <CircularProgress />
         </Box>
       )}
-
       {/* Empty State */}
       {!loading && organizations.length === 0 && (
         <Card sx={{ textAlign: 'center', py: 6 }}>
@@ -268,7 +266,6 @@ export function DiscoverOrganizationsPage({ joinPath = '/organizations/join' }) 
           </CardContent>
         </Card>
       )}
-
       {/* Organizations Grid */}
       {!loading && organizations.length > 0 && (
         <Grid container spacing={3}>
@@ -374,7 +371,6 @@ export function DiscoverOrganizationsPage({ joinPath = '/organizations/join' }) 
           ))}
         </Grid>
       )}
-
       {/* Join by Code Dialog */}
       <Dialog
         open={joinCodeDialog}
@@ -399,8 +395,10 @@ export function DiscoverOrganizationsPage({ joinPath = '/organizations/join' }) 
             onChange={(e) => setJoinCode(e.target.value.toUpperCase())}
             error={Boolean(joinCodeError)}
             helperText={joinCodeError}
-            inputProps={{ maxLength: 8 }}
             autoFocus
+            slotProps={{
+              htmlInput: { maxLength: 8 }
+            }}
           />
         </DialogContent>
         <DialogActions>

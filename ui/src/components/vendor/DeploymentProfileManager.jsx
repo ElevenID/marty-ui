@@ -201,7 +201,6 @@ const DeploymentProfileManager = ({ hideHeader = false }) => {
   return (
     <Box>
       {header}
-
       {/* Show empty state OR profiles */}
       {profiles.length === 0 ? (
         <Paper sx={{ p: 6, textAlign: 'center', borderStyle: 'dashed', borderColor: 'divider' }}>
@@ -251,7 +250,6 @@ const DeploymentProfileManager = ({ hideHeader = false }) => {
             ))}
           </Grid>
         )}
-
       {/* Create/Edit Dialog */}
       <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} maxWidth="md" fullWidth>
         <DialogTitle>

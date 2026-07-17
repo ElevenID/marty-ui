@@ -128,24 +128,26 @@ function EntryPoints({ flow, publicUrl, onCopy }) {
           value={publicUrl || t('flows.flowDetail.entryPoints.notPublished')}
           disabled={!publicUrl}
           size="small"
-          InputProps={{
-            readOnly: true,
-            endAdornment: publicUrl && (
-              <InputAdornment position="end">
-                <Tooltip title={t('flows.flowDetail.entryPoints.copyUrlTooltip')}>
-                  <IconButton onClick={onCopy} edge="end" size="small">
-                    <ContentCopyIcon fontSize="small" />
-                  </IconButton>
-                </Tooltip>
-                <Tooltip title={t('flows.flowDetail.entryPoints.openInNewTabTooltip')}>
-                  <IconButton onClick={() => window.open(publicUrl, '_blank')} edge="end" size="small">
-                    <OpenInNewIcon fontSize="small" />
-                  </IconButton>
-                </Tooltip>
-              </InputAdornment>
-            ),
-          }}
           sx={{ mb: 3 }}
+          slotProps={{
+            input: {
+              readOnly: true,
+              endAdornment: publicUrl && (
+                <InputAdornment position="end">
+                  <Tooltip title={t('flows.flowDetail.entryPoints.copyUrlTooltip')}>
+                    <IconButton onClick={onCopy} edge="end" size="small">
+                      <ContentCopyIcon fontSize="small" />
+                    </IconButton>
+                  </Tooltip>
+                  <Tooltip title={t('flows.flowDetail.entryPoints.openInNewTabTooltip')}>
+                    <IconButton onClick={() => window.open(publicUrl, '_blank')} edge="end" size="small">
+                      <OpenInNewIcon fontSize="small" />
+                    </IconButton>
+                  </Tooltip>
+                </InputAdornment>
+              ),
+            }
+          }}
         />
 
         {/* QR Code */}
@@ -271,7 +273,9 @@ function ConfigurationSummary({ flow }) {
                       )}
                     </Box>
                   }
-                  secondaryTypographyProps={{ component: 'div' }}
+                  slotProps={{
+                    secondary: { component: 'div' }
+                  }}
                 />
               </ListItem>
               {index < config.length - 1 && <Divider />}

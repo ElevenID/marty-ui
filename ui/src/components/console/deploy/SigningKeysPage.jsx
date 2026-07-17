@@ -802,7 +802,9 @@ export default function SigningKeysPage() {
                     rows={10}
                     label="Certificate Signing Request (PEM)"
                     value={certData.csr_pem}
-                    InputProps={{ readOnly: true, sx: { fontFamily: 'monospace', fontSize: '0.8rem' } }}
+                    slotProps={{
+                      input: { readOnly: true, sx: { fontFamily: 'monospace', fontSize: '0.8rem' } }
+                    }}
                   />
                   <Button variant="outlined" onClick={() => setCertAction('upload')}>
                     Upload signed certificate
@@ -830,7 +832,9 @@ export default function SigningKeysPage() {
                     placeholder="-----BEGIN CERTIFICATE-----\n..."
                     value={certData.cert_pem}
                     onChange={(e) => setCertData((prev) => ({ ...prev, cert_pem: e.target.value }))}
-                    InputProps={{ sx: { fontFamily: 'monospace', fontSize: '0.8rem' } }}
+                    slotProps={{
+                      input: { sx: { fontFamily: 'monospace', fontSize: '0.8rem' } }
+                    }}
                   />
                   <TextField
                     fullWidth
@@ -840,7 +844,9 @@ export default function SigningKeysPage() {
                     placeholder="-----BEGIN CERTIFICATE-----\n..."
                     value={certData.cert_chain_pem}
                     onChange={(e) => setCertData((prev) => ({ ...prev, cert_chain_pem: e.target.value }))}
-                    InputProps={{ sx: { fontFamily: 'monospace', fontSize: '0.8rem' } }}
+                    slotProps={{
+                      input: { sx: { fontFamily: 'monospace', fontSize: '0.8rem' } }
+                    }}
                   />
                 </>
               ) : (
@@ -852,7 +858,9 @@ export default function SigningKeysPage() {
                     rows={8}
                     label="Certificate PEM"
                     value={certData.cert_pem}
-                    InputProps={{ readOnly: true, sx: { fontFamily: 'monospace', fontSize: '0.8rem' } }}
+                    slotProps={{
+                      input: { readOnly: true, sx: { fontFamily: 'monospace', fontSize: '0.8rem' } }
+                    }}
                   />
                   <Button variant="outlined" onClick={() => setCertAction('upload')}>
                     Replace certificate

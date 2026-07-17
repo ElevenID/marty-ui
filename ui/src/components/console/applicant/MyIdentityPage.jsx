@@ -1082,7 +1082,6 @@ function MyIdentityPage() {
           {t('identity.applyButton', 'Apply for Credential')}
         </Button>
       </Stack>
-
       {/* Filters */}
       <ToggleButtonGroup
         value={filter}
@@ -1110,7 +1109,6 @@ function MyIdentityPage() {
           {t('identity.filters.actionRequired', 'Action Required')} ({counts.action})
         </ToggleButton>
       </ToggleButtonGroup>
-
       {error && (
         <Alert
           severity="error"
@@ -1129,7 +1127,6 @@ function MyIdentityPage() {
           {error}
         </Alert>
       )}
-
       {loading ? (
         <LinearProgress />
       ) : error && rows.length === 0 ? null : rows.length === 0 ? (
@@ -1200,7 +1197,6 @@ function MyIdentityPage() {
           )}
         </Box>
       )}
-
       {/* Claim Credential Dialog */}
       <ClaimCredentialDialog
         open={!!claimApp}
@@ -1219,7 +1215,6 @@ function MyIdentityPage() {
         }
         organizationId={claimApp?.organizationId}
       />
-
       {/* Application Details Dialog */}
       <Dialog open={!!selectedApp} onClose={() => setSelectedApp(null)} maxWidth="sm" fullWidth fullScreen={isMobile}>
         <DialogTitle>{selectedApp?.kind === 'credential' ? 'Credential Details' : 'Application Details'}</DialogTitle>

@@ -282,7 +282,9 @@ function AddIssuerDialog({ open, profileId, onClose, onAdded }) {
           onChange={(e) => setForm((prev) => ({ ...prev, name: e.target.value }))}
           sx={{ mt: 1, mb: 2 }}
           helperText={t('trust.addIssuerDialog.nameHelper', 'A short display name for this issuer.')}
-          inputProps={{ 'data-testid': 'addIssuer.name' }}
+          slotProps={{
+            htmlInput: { 'data-testid': 'addIssuer.name' }
+          }}
         />
         <TextField
           fullWidth
@@ -293,7 +295,9 @@ function AddIssuerDialog({ open, profileId, onClose, onAdded }) {
           sx={{ mb: 2 }}
           placeholder="did:example:123..."
           helperText={t('trust.addIssuerDialog.didHelper', 'The decentralised identifier (DID) of the issuer.')}
-          inputProps={{ 'data-testid': 'addIssuer.did', style: { fontFamily: 'monospace' } }}
+          slotProps={{
+            htmlInput: { 'data-testid': 'addIssuer.did', style: { fontFamily: 'monospace' } }
+          }}
         />
         <TextField
           fullWidth
@@ -302,7 +306,9 @@ function AddIssuerDialog({ open, profileId, onClose, onAdded }) {
           label={t('trust.addIssuerDialog.descriptionLabel', 'Description (optional)')}
           value={form.description}
           onChange={(e) => setForm((prev) => ({ ...prev, description: e.target.value }))}
-          inputProps={{ 'data-testid': 'addIssuer.description' }}
+          slotProps={{
+            htmlInput: { 'data-testid': 'addIssuer.description' }
+          }}
         />
       </DialogContent>
       <DialogActions>

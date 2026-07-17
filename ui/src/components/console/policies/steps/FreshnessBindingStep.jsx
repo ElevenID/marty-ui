@@ -98,11 +98,9 @@ const FreshnessBindingStep = ({ policyConfig, onConfigChange }) => {
       <Typography variant="h6" gutterBottom>
         {t('wizards.presentationPolicy.freshnessBindingStep.title')}
       </Typography>
-      
       <Typography color="text.secondary" paragraph>
         {t('wizards.presentationPolicy.freshnessBindingStep.description')}
       </Typography>
-
       {/* Holder Binding */}
       <Card sx={{ mb: 3 }}>
         <CardContent>
@@ -166,7 +164,6 @@ const FreshnessBindingStep = ({ policyConfig, onConfigChange }) => {
           </FormControl>
         </CardContent>
       </Card>
-
       {/* Freshness Requirements */}
       <Card sx={{ mb: 3 }}>
         <CardContent>
@@ -184,11 +181,13 @@ const FreshnessBindingStep = ({ policyConfig, onConfigChange }) => {
             label={t('wizards.presentationPolicy.freshnessBindingStep.fields.maxCredentialAge')}
             value={secondsToDays(policyConfig.freshness_requirements.max_credential_age_seconds)}
             onChange={(e) => handleFreshnessChange('max_credential_age_seconds', daysToSeconds(parseInt(e.target.value) || 0))}
-            InputProps={{
-              endAdornment: <InputAdornment position="end">{t('wizards.presentationPolicy.freshnessBindingStep.units.days')}</InputAdornment>,
-            }}
             helperText={t('wizards.presentationPolicy.freshnessBindingStep.helpers.maxCredentialAge')}
             sx={{ mb: 2 }}
+            slotProps={{
+              input: {
+                endAdornment: <InputAdornment position="end">{t('wizards.presentationPolicy.freshnessBindingStep.units.days')}</InputAdornment>,
+              }
+            }}
           />
 
           <TextField
@@ -197,11 +196,13 @@ const FreshnessBindingStep = ({ policyConfig, onConfigChange }) => {
             label={t('wizards.presentationPolicy.freshnessBindingStep.fields.maxProofAge')}
             value={Math.floor(policyConfig.freshness_requirements.max_proof_age_seconds / 60)}
             onChange={(e) => handleFreshnessChange('max_proof_age_seconds', parseInt(e.target.value) * 60 || 300)}
-            InputProps={{
-              endAdornment: <InputAdornment position="end">{t('wizards.presentationPolicy.freshnessBindingStep.units.minutes')}</InputAdornment>,
-            }}
             helperText={t('wizards.presentationPolicy.freshnessBindingStep.helpers.maxProofAge')}
             sx={{ mb: 2 }}
+            slotProps={{
+              input: {
+                endAdornment: <InputAdornment position="end">{t('wizards.presentationPolicy.freshnessBindingStep.units.minutes')}</InputAdornment>,
+              }
+            }}
           />
 
           <FormControlLabel
@@ -223,7 +224,6 @@ const FreshnessBindingStep = ({ policyConfig, onConfigChange }) => {
           </Typography>
         </CardContent>
       </Card>
-
       {/* Standard Version Tracking */}
       <Card>
         <CardContent>

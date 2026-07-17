@@ -603,7 +603,6 @@ function ApiKeysPage() {
           )}
         </Stack>
       </ResourcePage>
-
       <Dialog open={dialogOpen} onClose={saving ? undefined : resetDialog} maxWidth="md" fullWidth>
         <DialogTitle>{createdResult ? 'Integration provisioned' : 'Create API key'}</DialogTitle>
         <DialogContent dividers>
@@ -624,16 +623,18 @@ function ApiKeysPage() {
                 label="API key"
                 value={createdResult.apiKey.fullKey || createdResult.apiKey.maskedKey || createdResult.apiKey.keyPrefix}
                 fullWidth
-                InputProps={{
-                  readOnly: true,
-                  endAdornment: (
-                    <IconButton onClick={() => handleCopy(createdResult.apiKey.fullKey, 'API key')}>
-                      <ContentCopyIcon />
-                    </IconButton>
-                  ),
-                  sx: { fontFamily: 'monospace' },
-                }}
                 helperText="Save this key now. Depending on the backend response, it may not be shown again."
+                slotProps={{
+                  input: {
+                    readOnly: true,
+                    endAdornment: (
+                      <IconButton onClick={() => handleCopy(createdResult.apiKey.fullKey, 'API key')}>
+                        <ContentCopyIcon />
+                      </IconButton>
+                    ),
+                    sx: { fontFamily: 'monospace' },
+                  }
+                }}
               />
 
               {createdResult.webhook && (
@@ -642,23 +643,27 @@ function ApiKeysPage() {
                     label="Callback URL"
                     value={createdResult.webhook.url}
                     fullWidth
-                    InputProps={{ readOnly: true }}
+                    slotProps={{
+                      input: { readOnly: true }
+                    }}
                   />
                   {createdResult.webhook.secret && (
                     <TextField
                       label="Webhook secret"
                       value={createdResult.webhook.secret}
                       fullWidth
-                      InputProps={{
-                        readOnly: true,
-                        endAdornment: (
-                          <IconButton onClick={() => handleCopy(createdResult.webhook.secret, 'Webhook secret')}>
-                            <ContentCopyIcon />
-                          </IconButton>
-                        ),
-                        sx: { fontFamily: 'monospace' },
-                      }}
                       helperText="Store this secret in the receiving system to verify callback signatures."
+                      slotProps={{
+                        input: {
+                          readOnly: true,
+                          endAdornment: (
+                            <IconButton onClick={() => handleCopy(createdResult.webhook.secret, 'Webhook secret')}>
+                              <ContentCopyIcon />
+                            </IconButton>
+                          ),
+                          sx: { fontFamily: 'monospace' },
+                        }
+                      }}
                     />
                   )}
                 </>
@@ -682,9 +687,11 @@ function ApiKeysPage() {
                 type="datetime-local"
                 value={formState.expiresAt}
                 onChange={(event) => setFormState((prev) => ({ ...prev, expiresAt: event.target.value }))}
-                InputLabelProps={{ shrink: true }}
                 fullWidth
                 helperText="Optional expiry for partner credentials or temporary environments."
+                slotProps={{
+                  inputLabel: { shrink: true }
+                }}
               />
 
               <Box>
@@ -782,7 +789,6 @@ function ApiKeysPage() {
           )}
         </DialogActions>
       </Dialog>
-
       <ConfirmDeleteDialog
         open={Boolean(keyPendingRevoke)}
         onClose={() => setKeyPendingRevoke(null)}

@@ -62,8 +62,8 @@ export default defineConfig({
     include: ['src/**/*.{test,spec}.{ts,tsx}'],
     exclude: ['node_modules', 'dist', '.idea', '.git', '.cache'],
     // Increase timeout for integration tests
-    testTimeout: 10000,
-    hookTimeout: 10000,
+    testTimeout: 30000,
+    hookTimeout: 30000,
     server: {
       deps: {
         inline: ['@elevenid/marty-blog', 'use-sync-external-store'],

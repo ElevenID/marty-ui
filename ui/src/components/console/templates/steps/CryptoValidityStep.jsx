@@ -89,7 +89,6 @@ const CryptoValidityStep = ({ data, onChange }) => {
       <Typography color="text.secondary" paragraph>
         {t('wizards.credentialTemplate.cryptoValidityStep.description')}
       </Typography>
-
       {revocationProfilesError && (
         <Alert severity="warning" sx={{ mb: 3 }}>
           {revocationProfilesError?.message || t(
@@ -98,7 +97,6 @@ const CryptoValidityStep = ({ data, onChange }) => {
           )}
         </Alert>
       )}
-
       <Alert severity="success" sx={{ mb: 3 }}>
         <Typography variant="body2" gutterBottom>
           <strong>{t('wizards.credentialTemplate.cryptoValidityStep.defaults.title')}</strong>
@@ -107,7 +105,6 @@ const CryptoValidityStep = ({ data, onChange }) => {
           {t('wizards.credentialTemplate.cryptoValidityStep.defaults.description')}
         </Typography>
       </Alert>
-
       {/* Validity Period Configuration */}
       <Typography variant="subtitle2" gutterBottom>
         {t('wizards.credentialTemplate.cryptoValidityStep.validity.title')}
@@ -115,7 +112,6 @@ const CryptoValidityStep = ({ data, onChange }) => {
       <Typography variant="body2" color="text.secondary" paragraph>
         {t('wizards.credentialTemplate.cryptoValidityStep.validity.description')}
       </Typography>
-
       <Grid container spacing={3}>
         {/* TTL (Time to Live) */}
         <Grid item xs={12} md={6}>
@@ -126,7 +122,9 @@ const CryptoValidityStep = ({ data, onChange }) => {
             value={secondsToDays(validity.ttl_seconds)}
             onChange={(e) => handleValidityChange('ttl_seconds', daysToSeconds(parseInt(e.target.value, 10)))}
             helperText={t('wizards.credentialTemplate.cryptoValidityStep.validity.defaultValidityHelper')}
-            inputProps={{ min: 1 }}
+            slotProps={{
+              htmlInput: { min: 1 }
+            }}
           />
         </Grid>
 
@@ -139,7 +137,9 @@ const CryptoValidityStep = ({ data, onChange }) => {
             value={secondsToDays(validity.max_validity_seconds)}
             onChange={(e) => handleValidityChange('max_validity_seconds', daysToSeconds(parseInt(e.target.value, 10)))}
             helperText={t('wizards.credentialTemplate.cryptoValidityStep.validity.maxValidityHelper')}
-            inputProps={{ min: 1 }}
+            slotProps={{
+              htmlInput: { min: 1 }
+            }}
           />
         </Grid>
 
@@ -152,11 +152,12 @@ const CryptoValidityStep = ({ data, onChange }) => {
             value={validity.not_before_offset}
             onChange={(e) => handleValidityChange('not_before_offset', e.target.value)}
             helperText={t('wizards.credentialTemplate.cryptoValidityStep.validity.notBeforeOffsetHelper')}
-            inputProps={{ min: 0 }}
+            slotProps={{
+              htmlInput: { min: 0 }
+            }}
           />
         </Grid>
       </Grid>
-
       <Box sx={{ mt: 3, p: 2, bgcolor: 'action.hover', borderRadius: 1 }}>
         <Typography variant="body2" color="text.secondary">
           <strong>{t('wizards.credentialTemplate.cryptoValidityStep.validity.example')}</strong>{' '}
@@ -166,7 +167,6 @@ const CryptoValidityStep = ({ data, onChange }) => {
           })}
         </Typography>
       </Box>
-
       <FormControl fullWidth required error={!data.revocation_profile_id} sx={{ mt: 3 }}>
         <InputLabel id="credential-template-revocation-profile-label">
           {t('wizards.credentialTemplate.cryptoValidityStep.revocationProfile.label')}
@@ -203,7 +203,6 @@ const CryptoValidityStep = ({ data, onChange }) => {
           </Button>
         )}
       </FormControl>
-
       {/* Advanced Options Toggle */}
       <Box sx={{ mt: 3 }}>
         <Button

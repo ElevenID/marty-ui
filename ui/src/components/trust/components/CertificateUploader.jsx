@@ -94,7 +94,6 @@ const CertificateInfo = ({ certData, onRemove, showAdvanced, onToggleAdvanced })
           )}
         </Box>
       </Box>
-
       <Box sx={{ mt: 2, display: 'flex', gap: 3, flexWrap: 'wrap' }}>
         <Box>
           <Typography variant="caption" color="text.secondary">Valid From</Typography>
@@ -109,7 +108,6 @@ const CertificateInfo = ({ certData, onRemove, showAdvanced, onToggleAdvanced })
           <Typography variant="body2">{certData.algorithm || 'Unknown'}</Typography>
         </Box>
       </Box>
-
       {onToggleAdvanced && (
         <Button
           size="small"
@@ -120,7 +118,6 @@ const CertificateInfo = ({ certData, onRemove, showAdvanced, onToggleAdvanced })
           {showAdvanced ? 'Hide chain details' : 'Show chain details'}
         </Button>
       )}
-
       <Collapse in={showAdvanced}>
         <Divider sx={{ my: 2 }} />
         <Box>
@@ -150,9 +147,10 @@ const CertificateInfo = ({ certData, onRemove, showAdvanced, onToggleAdvanced })
                   <ListItemText
                     primary={chainCert.subject}
                     secondary={`Expires: ${formatDate(chainCert.validUntil)}`}
-                    primaryTypographyProps={{ variant: 'body2' }}
-                    secondaryTypographyProps={{ variant: 'caption' }}
-                  />
+                    slotProps={{
+                      primary: { variant: 'body2' },
+                      secondary: { variant: 'caption' }
+                    }} />
                 </ListItem>
               ))}
             </List>

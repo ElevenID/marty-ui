@@ -23,7 +23,6 @@ export default function EndUserExperienceSection({ t, activeExperience, onSelect
       >
         {t('landingPage.endUserExperience.title', END_USER_EXPERIENCES.title)}
       </SectionHeading>
-
       <Box sx={{ display: 'flex', justifyContent: 'center', flexWrap: 'wrap', gap: 1, mb: 4 }}>
         {END_USER_EXPERIENCES.journeys.map((journey) => (
           <Button
@@ -36,7 +35,6 @@ export default function EndUserExperienceSection({ t, activeExperience, onSelect
           </Button>
         ))}
       </Box>
-
       <Grid container spacing={4} alignItems="stretch">
         <Grid item xs={12} md={5}>
           <Paper elevation={2} sx={{ p: 3, height: '100%', borderRadius: 3 }}>
@@ -61,9 +59,10 @@ export default function EndUserExperienceSection({ t, activeExperience, onSelect
                   <ListItemText
                     primary={step.label}
                     secondary={step.description}
-                    primaryTypographyProps={{ fontWeight: 700 }}
-                    secondaryTypographyProps={{ color: 'text.secondary' }}
-                  />
+                    slotProps={{
+                      primary: { fontWeight: 700 },
+                      secondary: { color: 'text.secondary' }
+                    }} />
                 </ListItem>
               ))}
             </List>

@@ -96,17 +96,6 @@ const VendorCreateOrgStep = ({
                 ? 'Name must be at least 3 characters'
                 : ''
             }
-            InputProps={{
-              endAdornment: !orgDetailsLocked && orgName && orgName.trim().length >= 3 && (
-                <InputAdornment position="end">
-                  {orgNameChecking ? (
-                    <CircularProgress size={20} />
-                  ) : orgNameAvailable === true ? (
-                    <CheckCircleIcon color="success" />
-                  ) : null}
-                </InputAdornment>
-              ),
-            }}
             sx={{
               mb: 2,
               '& .MuiFormHelperText-root': {
@@ -114,6 +103,19 @@ const VendorCreateOrgStep = ({
               },
             }}
             data-testid="org-name-input"
+            slotProps={{
+              input: {
+                endAdornment: !orgDetailsLocked && orgName && orgName.trim().length >= 3 && (
+                  <InputAdornment position="end">
+                    {orgNameChecking ? (
+                      <CircularProgress size={20} />
+                    ) : orgNameAvailable === true ? (
+                      <CheckCircleIcon color="success" />
+                    ) : null}
+                  </InputAdornment>
+                ),
+              }
+            }}
           />
           
           <FormControl fullWidth sx={{ mb: 2 }}>
