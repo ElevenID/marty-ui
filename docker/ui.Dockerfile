@@ -27,6 +27,7 @@ WORKDIR /workspace/marty-ui/ui
 RUN apk add --no-cache chromium nss freetype harfbuzz ca-certificates ttf-freefont
 
 COPY ui/package.json ui/bun.lock ./
+COPY ui/scripts/patch-prerenderer-ts-deepmerge.cjs ./scripts/patch-prerenderer-ts-deepmerge.cjs
 RUN test -n "$MARTY_API_CORE_VERSION" \
     && test -n "$MARTY_BLOG_VERSION" \
     && test -n "$MARTY_API_CORE_URI" \

@@ -871,7 +871,7 @@ describe('TrustProfileWizard', () => {
       expect(screen.getByTestId('wizard.trustProfile.submit')).toBeDisabled()
       expect(lastTrustProfileRequestBody).toBeNull()
 
-      await user.click(screen.getByRole('checkbox', { name: /activate immediately/i }))
+      await user.click(screen.getByRole('switch', { name: /activate immediately/i }))
       await waitFor(() => {
         expect(screen.getByTestId('wizard.trustProfile.submit')).not.toBeDisabled()
         expect(screen.getAllByText(/trust no issuers/i).length).toBeGreaterThan(0)
@@ -938,7 +938,7 @@ describe('TrustProfileWizard', () => {
         expect(screen.getByTestId('wizard.trustProfile.issuanceProtocol')).toBeInTheDocument()
       })
 
-      const walletAutocomplete = screen.getByTestId('wizard.trustProfile.supportedWallets')
+      const walletAutocomplete = await screen.findByRole('combobox', { name: /supported wallets/i })
       await user.type(walletAutocomplete, 'Acme')
       await user.click(await screen.findByText('Acme Wallet'))
 

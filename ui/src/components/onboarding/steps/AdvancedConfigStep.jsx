@@ -23,13 +23,11 @@ import {
   Divider,
   Fade,
 } from '@mui/material';
-import {
-  ExpandMore as ExpandIcon,
-  ExpandLess as CollapseIcon,
-  Add as AddIcon,
-  Delete as DeleteIcon,
-  Settings as SettingsIcon,
-} from '@mui/icons-material';
+import ExpandIcon from '@mui/icons-material/ExpandMore';
+import CollapseIcon from '@mui/icons-material/ExpandLess';
+import AddIcon from '@mui/icons-material/Add';
+import DeleteIcon from '@mui/icons-material/Delete';
+import SettingsIcon from '@mui/icons-material/Settings';
 
 const TRUST_PROFILE_TYPES = [
   { value: 'ICAO', label: 'ICAO PKD (Passports)', description: 'ICAO 9303 for eMRTD/ePassport verification' },

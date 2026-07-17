@@ -45,15 +45,13 @@ import {
   Tab,
   InputAdornment,
 } from '@mui/material';
-import {
-  Block as RevokeIcon,
-  History as HistoryIcon,
-  Upload as UploadIcon,
-  Search as SearchIcon,
-  Refresh as RefreshIcon,
-  CheckCircle as ActiveIcon,
-  Warning as WarningIcon,
-} from '@mui/icons-material';
+import RevokeIcon from '@mui/icons-material/Block';
+import HistoryIcon from '@mui/icons-material/History';
+import UploadIcon from '@mui/icons-material/Upload';
+import SearchIcon from '@mui/icons-material/Search';
+import RefreshIcon from '@mui/icons-material/Refresh';
+import ActiveIcon from '@mui/icons-material/CheckCircle';
+import WarningIcon from '@mui/icons-material/Warning';
 import { useAuth } from '../../hooks/useAuth';
 import { useNotifications } from '../../hooks/useNotifications';
 import {

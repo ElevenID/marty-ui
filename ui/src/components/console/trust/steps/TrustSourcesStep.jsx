@@ -821,7 +821,7 @@ const TrustSourcesStep = ({ data, onChange, organizationId }) => {
               checked={allowAllIssuers}
               onChange={(event) => onChange({ allow_all_issuers: event.target.checked })}
               disabled={hasConfiguredPinnedIssuers}
-              inputProps={{ 'data-testid': 'wizard.trustProfile.allowAllIssuers' }}
+              slotProps={{ input: { 'data-testid': 'wizard.trustProfile.allowAllIssuers' } }}
             />
           )}
           label={t('wizards.trustProfile.trustSourcesStep.allowAllIssuers.label', {
@@ -1032,7 +1032,7 @@ const TrustSourcesStep = ({ data, onChange, organizationId }) => {
                   })}
                   value={importManagedDidValue}
                   onChange={(event) => setImportManagedDidValue(event.target.value)}
-                  inputProps={{ 'data-testid': 'wizard.trustProfile.importManagedDidValue' }}
+                  slotProps={{ htmlInput: { 'data-testid': 'wizard.trustProfile.importManagedDidValue' } }}
                   disabled={!selectedManagedKey || managedActionLoading}
                 />
                 <TextField
@@ -1124,7 +1124,7 @@ const TrustSourcesStep = ({ data, onChange, organizationId }) => {
                   multiline
                   rows={5}
                   helperText={t('wizards.trustProfile.trustSourcesStep.certPem.helper', { defaultValue: 'Paste a PEM-encoded X.509 certificate (root CA or issuing CA).' })}
-                  inputProps={{ 'data-testid': 'wizard.trustProfile.certPem', style: { fontFamily: 'monospace', fontSize: '0.8rem' } }}
+                  slotProps={{ htmlInput: { 'data-testid': 'wizard.trustProfile.certPem', style: { fontFamily: 'monospace', fontSize: '0.8rem' } } }}
                   fullWidth
                 />
                 <TextField
@@ -1173,7 +1173,7 @@ const TrustSourcesStep = ({ data, onChange, organizationId }) => {
                   onChange={(e) => setNewIssuerDid(e.target.value)}
                   onKeyPress={handleKeyPress}
                   helperText={t('wizards.trustProfile.trustSourcesStep.issuerDid.helper')}
-                  inputProps={{ 'data-testid': 'wizard.trustProfile.issuerDid' }}
+                  slotProps={{ htmlInput: { 'data-testid': 'wizard.trustProfile.issuerDid' } }}
                   fullWidth
                 />
                 <TextField

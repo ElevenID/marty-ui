@@ -14,7 +14,7 @@
  * These tests require the Flutter web wallet to be running:
  *   cd marty-authenticator && ./scripts/run-web-test.sh
  */
-const { test, expect } = require('@playwright/test');
+const { test, expect } = require('../../fixtures/auth.fixture');
 const {
   AuthHelpers,
   DeviceRegistrationHelpers,

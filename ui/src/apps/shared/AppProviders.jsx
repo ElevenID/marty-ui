@@ -9,10 +9,11 @@ import { NotificationProvider } from '../../contexts/NotificationContext';
 import ErrorBoundary from '../../components/ErrorBoundary';
 import { TrustProvider } from '../../components/trust/TrustProvider';
 import { CommerceProvider } from '../../extensions/commerce';
+import PrerenderReadySignal from './PrerenderReadySignal';
 
 function LoadingFallback() {
   return (
-    <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
+    <Box data-app-loading sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
       <Typography>Loading...</Typography>
     </Box>
   );
@@ -21,23 +22,24 @@ function LoadingFallback() {
 function AppProviders({ children }) {
   return (
     <ErrorBoundary>
-      <Suspense fallback={<LoadingFallback />}>
-        <BrandingProvider>
-          <NotificationProvider>
-            <TrustProvider>
-              <CommerceProvider>
-                <Router>
+      <Router>
+        <PrerenderReadySignal />
+        <Suspense fallback={<LoadingFallback />}>
+          <BrandingProvider>
+            <NotificationProvider>
+              <TrustProvider>
+                <CommerceProvider>
                   <AuthProvider>
                     <ConsoleProvider>
                       {children}
                     </ConsoleProvider>
                   </AuthProvider>
-                </Router>
-              </CommerceProvider>
-            </TrustProvider>
-          </NotificationProvider>
-        </BrandingProvider>
-      </Suspense>
+                </CommerceProvider>
+              </TrustProvider>
+            </NotificationProvider>
+          </BrandingProvider>
+        </Suspense>
+      </Router>
     </ErrorBoundary>
   );
 }

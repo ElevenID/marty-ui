@@ -19,7 +19,7 @@ import {
   Chip,
   Stack,
 } from '@mui/material';
-import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
+import HelpOutlineIcon from '@mui/icons-material/HelpOutlined';
 import { CHECK_TYPE_LABELS } from '../../../../config/checkConstants';
 
 const QUICK_ITEMS = [

@@ -10,13 +10,11 @@ import {
   Stack,
   Chip,
 } from '@mui/material';
-import {
-  ErrorOutline as ErrorIcon,
-  Refresh as RefreshIcon,
-  ExpandMore as ExpandMoreIcon,
-  ContentCopy as CopyIcon,
-  Support as SupportIcon,
-} from '@mui/icons-material';
+import ErrorIcon from '@mui/icons-material/ErrorOutlined';
+import RefreshIcon from '@mui/icons-material/Refresh';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import CopyIcon from '@mui/icons-material/ContentCopy';
+import SupportIcon from '@mui/icons-material/Support';
 import { useTranslation } from 'react-i18next';
 import { useNotifications } from '../../hooks/useNotifications';
 

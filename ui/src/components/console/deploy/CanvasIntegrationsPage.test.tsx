@@ -469,7 +469,7 @@ describe('CanvasIntegrationsPage', () => {
       initialEntries: ['/console/org/deploy/canvas'],
     });
 
-    expect(await screen.findByText('Canvas Main')).toBeInTheDocument();
+    expect((await screen.findAllByText('Canvas Main')).length).toBeGreaterThan(0);
     expect(screen.queryByRole('button', { name: /^Platform$/i })).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/Edit Safety Course/i)).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/Archive Safety Course/i)).not.toBeInTheDocument();
@@ -484,7 +484,7 @@ describe('CanvasIntegrationsPage', () => {
       initialEntries: ['/console/org/deploy/canvas'],
     });
 
-    await screen.findByText('Canvas Main');
+    await screen.findAllByText('Canvas Main');
     const addBinding = screen.getByRole('button', { name: /^Binding$/i });
     await waitFor(() => expect(addBinding).toBeEnabled());
     await user.click(addBinding);
@@ -614,7 +614,7 @@ describe('CanvasIntegrationsPage', () => {
       initialEntries: ['/console/org/deploy/canvas'],
     });
 
-    await screen.findByText('Canvas Main');
+    await screen.findAllByText('Canvas Main');
     await user.click(screen.getAllByRole('button', { name: /^edit$/i })[0]);
     expect(await screen.findByRole('dialog', { name: /edit canvas platform/i })).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: /^save$/i }));
@@ -639,7 +639,7 @@ describe('CanvasIntegrationsPage', () => {
       initialEntries: ['/console/org/deploy/canvas'],
     });
 
-    await screen.findByText('Canvas Main');
+    await screen.findAllByText('Canvas Main');
 
     await user.click(screen.getByRole('button', { name: /retry publish/i }));
     await waitFor(() => {
