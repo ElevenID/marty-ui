@@ -291,22 +291,25 @@ jobs:
             --lock release/candidate-stack-lock.json \
             --output ../integration-tests/stack-manifest.json
       - name: Pull immutable release images
-        run: |
-          docker pull "${{ env.IMAGE }}@${{ needs.build-ui.outputs.digest }}"
-          docker pull "${{ env.SERVICES_IMAGE }}@${{ needs.build-services.outputs.services_digest }}"
-          docker pull "${{ env.MIGRATIONS_IMAGE }}@${{ needs.build-services.outputs.migrations_digest }}"
-      - name: Reject commerce configuration
+        working-directory: integration-tests
         shell: bash
         run: |
-          for image in \
-            "${{ env.IMAGE }}@${{ needs.build-ui.outputs.digest }}" \
-            "${{ env.SERVICES_IMAGE }}@${{ needs.build-services.outputs.services_digest }}" \
-            "${{ env.MIGRATIONS_IMAGE }}@${{ needs.build-services.outputs.migrations_digest }}"; do
+          set -euo pipefail
+          jq -r '.components[].artifacts[] | select(.type == "oci") | .uri + "@" + .digest' stack-manifest.json |
+          while IFS= read -r image; do
+            docker pull "$image"
+          done
+      - name: Reject commerce configuration
+        working-directory: integration-tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r image; do
             if docker inspect "$image" | grep -Eqi 'square|subscription|product[_-]?catalog|billing'; then
               echo "::error::Forbidden commerce marker in $image"
               exit 1
             fi
-          done
+          done < <(jq -r '.components[].artifacts[] | select(.type == "oci") | .uri + "@" + .digest' stack-manifest.json)
       - name: Smoke-test UI image
         shell: bash
         run: |
