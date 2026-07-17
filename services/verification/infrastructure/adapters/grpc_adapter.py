@@ -72,7 +72,7 @@ class VerificationServiceGrpc(
             purpose=request.purpose or "",
         )
         store = self._get_store()
-        store.save(session)
+        store.save(session, touch_updated_at=False)
         logger.info("gRPC StartVerification: %s", session.session_id)
         return _session_to_pb(session)
 
@@ -138,7 +138,7 @@ class VerificationServiceGrpc(
         session.status = SessionStatus.COMPLETED if session.result == "passed" else SessionStatus.FAILED
         session.completed_at = datetime.now(timezone.utc)
         session.updated_at = session.completed_at
-        store.save(session)
+        store.save(session, touch_updated_at=False)
 
         return vs_pb2.VerificationResult(
             session_id=request.session_id,

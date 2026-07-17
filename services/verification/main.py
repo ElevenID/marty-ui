@@ -214,8 +214,14 @@ class SessionStore:
     def _use_redis(self) -> bool:
         return self._redis is not None
 
-    def save(self, session: VerificationSession) -> Awaitable[None]:
-        session.updated_at = datetime.now(timezone.utc)
+    def save(
+        self,
+        session: VerificationSession,
+        *,
+        touch_updated_at: bool = True,
+    ) -> Awaitable[None]:
+        if touch_updated_at:
+            session.updated_at = datetime.now(timezone.utc)
         if self._use_redis:
             async def _save_to_redis() -> None:
                 key = f"{SESSION_PREFIX}{session.session_id}"
@@ -570,7 +576,7 @@ async def start_verification(
         expiry_minutes=body.expiry_minutes,
         purpose=body.purpose,
     )
-    await store.save(session)
+    await store.save(session, touch_updated_at=False)
     logger.info("Created verification session %s (org=%s)", session.session_id, body.organization_id)
     resp = _session_to_protocol_dict(session)
     # Include operational fields the wallet / UI needs to display QR and deep-link
@@ -1063,7 +1069,7 @@ async def submit_presentation(
     session.status = SessionStatus.COMPLETED if session.result == "passed" else SessionStatus.FAILED
     session.completed_at = datetime.now(timezone.utc)
     session.updated_at = session.completed_at
-    await store.save(session)
+    await store.save(session, touch_updated_at=False)
 
     # Fire callback if configured
     if session.callback_url:
