@@ -320,13 +320,17 @@ jobs:
       - name: Install the released test interface
         working-directory: integration-tests
         env:
+          API_CORE_URI: ${{ needs.validate-stack.outputs.api_core_uri }}
+          API_CORE_DIGEST: ${{ needs.validate-stack.outputs.api_core_digest }}
           CLI_URI: ${{ needs.validate-stack.outputs.cli_uri }}
           CLI_DIGEST: ${{ needs.validate-stack.outputs.cli_digest }}
         run: |
           python -m pip install .
+          curl --fail --location --silent --show-error "$API_CORE_URI" --output /tmp/marty-api-core.tgz
           curl --fail --location --silent --show-error "$CLI_URI" --output /tmp/marty-cli.tgz
+          echo "${API_CORE_DIGEST#sha256:}  /tmp/marty-api-core.tgz" | sha256sum --check --strict
           echo "${CLI_DIGEST#sha256:}  /tmp/marty-cli.tgz" | sha256sum --check --strict
-          npm install --global /tmp/marty-cli.tgz
+          npm install --global /tmp/marty-api-core.tgz /tmp/marty-cli.tgz
       - name: Validate upgrade and rollback image roles
         env:
           GH_TOKEN: ${{ github.token }}
