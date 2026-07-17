@@ -98,9 +98,10 @@ export default function ApproveDialog({ open, application, checks, initialNote, 
                 <ListItemText
                   primary={c.custom_name || c.check_type.replace(/_/g, ' ')}
                   secondary={CHECK_STATUS_LABELS[c.status] || c.status}
-                  primaryTypographyProps={{ variant: 'body2' }}
-                  secondaryTypographyProps={{ variant: 'caption' }}
-                />
+                  slotProps={{
+                    primary: { variant: 'body2' },
+                    secondary: { variant: 'caption' }
+                  }} />
                 <Chip label={CHECK_STATUS_LABELS[c.status] || c.status} size="small" color={CHECK_STATUS_COLORS[c.status] || 'default'} />
               </ListItem>
             ))}

@@ -396,12 +396,14 @@ function AuditPage() {
           placeholder={t('audit.searchPlaceholder')}
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          InputProps={{
-            startAdornment: (
-              <InputAdornment position="start">
-                <SearchIcon />
-              </InputAdornment>
-            ),
+          slotProps={{
+            input: {
+              startAdornment: (
+                <InputAdornment position="start">
+                  <SearchIcon />
+                </InputAdornment>
+              ),
+            }
           }}
         />
 
@@ -471,7 +473,6 @@ function AuditPage() {
           </Box>
         </Collapse>
       </Paper>
-
       {/* Events Table */}
       {loading ? (
         <TableSkeleton rows={rowsPerPage} columns={5} showActions={false} />

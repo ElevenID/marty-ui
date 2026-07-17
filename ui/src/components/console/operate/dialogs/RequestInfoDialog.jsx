@@ -110,7 +110,9 @@ export default function RequestInfoDialog({ open, application, checks, loading, 
           size="small"
           value={deadline}
           onChange={e => setDeadline(e.target.value)}
-          InputLabelProps={{ shrink: true }}
+          slotProps={{
+            inputLabel: { shrink: true }
+          }}
         />
       </DialogContent>
       <DialogActions>

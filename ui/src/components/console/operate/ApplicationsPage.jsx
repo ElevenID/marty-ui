@@ -163,7 +163,6 @@ function ApplicationsPage() {
           {error?.message || String(error)}
         </Alert>
       )}
-
       {/* Filters */}
       <Box sx={{ display: 'flex', gap: 2, mb: 3 }}>
         <TextField
@@ -172,12 +171,14 @@ function ApplicationsPage() {
           onChange={(e) => setSearchQuery(e.target.value)}
           size="small"
           sx={{ width: 300 }}
-          InputProps={{
-            startAdornment: (
-              <InputAdornment position="start">
-                <SearchIcon color="action" />
-              </InputAdornment>
-            ),
+          slotProps={{
+            input: {
+              startAdornment: (
+                <InputAdornment position="start">
+                  <SearchIcon color="action" />
+                </InputAdornment>
+              ),
+            }
           }}
         />
         <FormControl size="small" sx={{ minWidth: 180 }}>
@@ -196,7 +197,6 @@ function ApplicationsPage() {
           </Select>
         </FormControl>
       </Box>
-
       {loading ? (
         <LinearProgress />
       ) : applications.length === 0 ? (

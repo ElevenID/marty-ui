@@ -415,10 +415,12 @@ function ImportDidDialog({ open, signingKey, organizationId, onClose, onImported
             onChange={(e) => { setDidValue(e.target.value); setError('') }}
             fullWidth
             size="small"
-            inputProps={{ spellCheck: false }}
             error={Boolean(error)}
             helperText={error || 'Paste the full DID string associated with this key.'}
             autoFocus
+            slotProps={{
+              htmlInput: { spellCheck: false }
+            }}
           />
           <TextField
             label="Profile label (optional)"
@@ -448,7 +450,7 @@ function ImportDidDialog({ open, signingKey, organizationId, onClose, onImported
         </Button>
       </DialogActions>
     </Dialog>
-  )
+  );
 }
 
 function UnboundKeyCard({ signingKey, onCreateDid, onImportDid }) {

@@ -88,7 +88,7 @@ const toBase64Url = (input) => {
       .toString('base64')
       .replace(/\+/g, '-')
       .replace(/\//g, '_')
-      .replace(/=+$/g, '')
+      .replace(/=+$/g, '');
   }
 
   const encoder = new TextEncoder()
@@ -101,7 +101,7 @@ const toBase64Url = (input) => {
   return window.btoa(binary)
     .replace(/\+/g, '-')
     .replace(/\//g, '_')
-    .replace(/=+$/g, '')
+    .replace(/=+$/g, '');
 }
 
 const BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
@@ -256,7 +256,7 @@ const getHostFromDomainSummary = (domainSummary) => {
       const pathSegments = parsed.pathname.split('/').filter(Boolean)
       return pathSegments.length > 0 ? `${host}:${pathSegments.join(':')}` : host
     } catch {
-      return issuerBaseUrl.replace(/^https?:\/\//, '').replace(/\/$/, '')
+      return issuerBaseUrl.replace(/^https?:\/\//, '').replace(/\/$/, '');
     }
   }
 
@@ -419,7 +419,7 @@ const buildDidWebIdentity = (key, domainSummary) => {
         },
       ],
     },
-  }
+  };
 }
 
 export const buildDidMethodCatalog = (keys, domainSummary) => {

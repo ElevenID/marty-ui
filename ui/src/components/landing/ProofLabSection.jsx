@@ -38,7 +38,6 @@ export default function ProofLabSection({
       >
         {t('landingPage.proofLab.title', INTERACTIVE_PROOF_LAB.title)}
       </SectionHeading>
-
       <Paper
         elevation={0}
         sx={{
@@ -176,9 +175,10 @@ export default function ProofLabSection({
                         <ListItemText
                           primary={check.label}
                           secondary={check.detail}
-                          primaryTypographyProps={{ fontWeight: 700, color: 'common.white' }}
-                          secondaryTypographyProps={{ color: 'rgba(255,255,255,0.72)' }}
-                        />
+                          slotProps={{
+                            primary: { fontWeight: 700, color: 'common.white' },
+                            secondary: { color: 'rgba(255,255,255,0.72)' }
+                          }} />
                       </ListItem>
                     ))}
                   </List>

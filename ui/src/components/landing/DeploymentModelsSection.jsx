@@ -48,7 +48,6 @@ export default function DeploymentModelsSection({ t, onSelectMode }) {
       >
         {t('landingPage.deploymentModels.title', DEPLOYMENT_MODELS.title)}
       </SectionHeading>
-
       <Grid container spacing={3} alignItems="stretch" sx={{ mb: 4 }}>
         <Grid item xs={12} lg={7}>
           <Paper
@@ -139,7 +138,6 @@ export default function DeploymentModelsSection({ t, onSelectMode }) {
           </Paper>
         </Grid>
       </Grid>
-
       <Grid container spacing={3}>
         {DEPLOYMENT_MODELS.modes.map((mode) => {
           const meta = DEPLOYMENT_MODE_META[mode.id] || DEPLOYMENT_MODE_META['saas-verification'];
@@ -189,7 +187,9 @@ export default function DeploymentModelsSection({ t, onSelectMode }) {
                           <ListItemIcon sx={{ minWidth: 28, mt: 0.15 }}>
                             <CheckCircleIcon fontSize="small" color={meta.color} />
                           </ListItemIcon>
-                          <ListItemText primary={feature} primaryTypographyProps={{ variant: 'body2' }} />
+                          <ListItemText primary={feature} slotProps={{
+                            primary: { variant: 'body2' }
+                          }} />
                         </ListItem>
                       ))}
                     </List>

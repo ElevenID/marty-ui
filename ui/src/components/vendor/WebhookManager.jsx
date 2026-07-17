@@ -400,14 +400,12 @@ export default function WebhookManager() {
           {t('webhookManager.createButton')}
         </Button>
       </Box>
-
       {/* Error Alert */}
       {error && (
         <Alert severity="error" onClose={() => setError(null)} sx={{ mb: 3 }}>
           {error}
         </Alert>
       )}
-
       {/* Info Alert */}
       <Alert severity="info" sx={{ mb: 3 }}>
         <Typography variant="body2">
@@ -415,7 +413,6 @@ export default function WebhookManager() {
           Each webhook will receive a POST request with event data and a signature for verification.
         </Typography>
       </Alert>
-
       {/* Webhooks Table */}
       {webhooks.length === 0 ? (
         <Paper sx={{ p: 4, textAlign: 'center', bgcolor: 'grey.50' }}>
@@ -518,7 +515,6 @@ export default function WebhookManager() {
           </Table>
         </TableContainer>
       )}
-
       {/* Add/Edit Dialog */}
       <Dialog open={dialogOpen} onClose={handleCloseDialog} maxWidth="md" fullWidth>
         <DialogTitle>
@@ -715,11 +711,13 @@ export default function WebhookManager() {
                   <TextField
                     fullWidth
                     value={newWebhookSecret}
-                    InputProps={{
-                      readOnly: true,
-                      sx: { fontFamily: 'monospace', fontSize: '0.875rem' },
-                    }}
                     size="small"
+                    slotProps={{
+                      input: {
+                        readOnly: true,
+                        sx: { fontFamily: 'monospace', fontSize: '0.875rem' },
+                      }
+                    }}
                   />
                   <Tooltip title="Copy to clipboard">
                     <IconButton
@@ -752,7 +750,6 @@ export default function WebhookManager() {
           )}
         </DialogActions>
       </Dialog>
-
       {/* (success notifications handled by useNotifications) */}
     </Box>
   );

@@ -9,19 +9,23 @@ concurrency:
 
 permissions:
   contents: read
-  packages: write
-  id-token: write
-  attestations: write
 
 jobs:
   build-pinned-upstream:
     name: Build exact unmodified upstream Canvas source
+    permissions:
+      contents: read
+      packages: write # Required to publish the reviewed image to GHCR.
+      id-token: write # Required for keyless provenance.
+      attestations: write # Required to attest the published digest.
     runs-on: [self-hosted, linux, x64, canvas-oss-wsl2]
     environment: canvas-oss-image-publish
     timeout-minutes: 240
     steps:
       - name: Check out acceptance harness
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
 
       - name: Require reviewed default-branch publication
         shell: bash
@@ -65,16 +69,18 @@ jobs:
           [[ "$base_index_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
           [[ "$base_amd64_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
           [[ "$base_source_policy_sha256" =~ ^[0-9a-f]{64}$ ]]
-          echo "source_tag=$source_tag" >> "$GITHUB_OUTPUT"
-          echo "source_tag_object=$source_tag_object" >> "$GITHUB_OUTPUT"
-          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
-          echo "source_tree=$source_tree" >> "$GITHUB_OUTPUT"
-          echo "release_train=$release_train" >> "$GITHUB_OUTPUT"
-          echo "image_repo=$image_repo" >> "$GITHUB_OUTPUT"
-          echo "base_reference=$base_reference" >> "$GITHUB_OUTPUT"
-          echo "base_index_digest=$base_index_digest" >> "$GITHUB_OUTPUT"
-          echo "base_amd64_digest=$base_amd64_digest" >> "$GITHUB_OUTPUT"
-          echo "base_source_policy_sha256=$base_source_policy_sha256" >> "$GITHUB_OUTPUT"
+          {
+            echo "source_tag=$source_tag"
+            echo "source_tag_object=$source_tag_object"
+            echo "source_sha=$source_sha"
+            echo "source_tree=$source_tree"
+            echo "release_train=$release_train"
+            echo "image_repo=$image_repo"
+            echo "base_reference=$base_reference"
+            echo "base_index_digest=$base_index_digest"
+            echo "base_amd64_digest=$base_amd64_digest"
+            echo "base_source_policy_sha256=$base_source_policy_sha256"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Check out exact Canvas source
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -157,6 +163,8 @@ jobs:
 
       - name: Write fixed image provenance manifest
         shell: bash
+        env:
+          HARNESS_REF: ${{ github.ref }}
         run: |
           mkdir -p tests/artifacts/canvas-oss-image
           jq -n \
@@ -171,7 +179,7 @@ jobs:
             --arg image_repository "${{ steps.lock.outputs.image_repo }}" \
             --arg image_digest "${{ steps.build.outputs.digest }}" \
             --arg harness_repository "${{ github.repository }}" \
-            --arg harness_ref "${{ github.ref }}" \
+            --arg harness_ref "$HARNESS_REF" \
             --arg harness_head_sha "${{ github.sha }}" \
             --arg publisher_workflow ".github/workflows/canvas-oss-image.yml" \
             --arg publisher_run_id "${{ github.run_id }}" \

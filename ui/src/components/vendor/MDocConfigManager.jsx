@@ -300,7 +300,6 @@ export default function MDocConfigManager() {
           </Button>
         </Box>
       </Box>
-
       {/* Template Actions */}
       {selectedType && enabledTypes[selectedType] && (
         <Box sx={{ mb: 3 }}>
@@ -317,8 +316,6 @@ export default function MDocConfigManager() {
           />
         </Box>
       )}
-
-
       {/* Tabs */}
       <Paper sx={{ mb: 3 }}>
         <Tabs value={activeTab} onChange={(e, v) => setActiveTab(v)} data-testid="config-tabs">
@@ -327,7 +324,6 @@ export default function MDocConfigManager() {
           <Tab label="Issuance Policy" data-testid="issuance-policy-tab" />
         </Tabs>
       </Paper>
-
       {/* Tab 1: Credential Types */}
       <TabPanel value={activeTab} index={0}>
         <Grid container spacing={3}>
@@ -409,7 +405,6 @@ export default function MDocConfigManager() {
           </Box>
         </Paper>
       </TabPanel>
-
       {/* Tab 2: Application Form Builder */}
       <TabPanel value={activeTab} index={1}>
         <Box sx={{ mb: 3 }}>
@@ -525,7 +520,6 @@ export default function MDocConfigManager() {
           </Grid>
         </Grid>
       </TabPanel>
-
       {/* Tab 3: Issuance Policy */}
       <TabPanel value={activeTab} index={2}>
         <Box sx={{ mb: 3 }}>
@@ -560,8 +554,10 @@ export default function MDocConfigManager() {
                 value={Math.floor((currentConfig?.validityDays || 1460) / 365)}
                 onChange={(e) => handleConfigChange('validityDays', parseInt(e.target.value) * 365)}
                 sx={{ mb: 3 }}
-                inputProps={{ min: 1, max: 10 }}
                 data-testid="validity-years-input"
+                slotProps={{
+                  htmlInput: { min: 1, max: 10 }
+                }}
               />
 
               <FormControlLabel
@@ -614,8 +610,10 @@ export default function MDocConfigManager() {
                   value={currentConfig?.renewalWindowDays || 90}
                   onChange={(e) => handleConfigChange('renewalWindowDays', parseInt(e.target.value))}
                   sx={{ mt: 2 }}
-                  inputProps={{ min: 7, max: 365 }}
                   data-testid="renewal-window-days"
+                  slotProps={{
+                    htmlInput: { min: 7, max: 365 }
+                  }}
                 />
               )}
             </Paper>

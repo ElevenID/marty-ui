@@ -203,7 +203,9 @@ function ReadinessRow({ resourceKey, readiness }) {
             </Box>
           }
           secondary={message}
-          secondaryTypographyProps={{ variant: 'caption' }}
+          slotProps={{
+            secondary: { variant: 'caption' }
+          }}
         />
       </ListItemButton>
       {actionButton && (

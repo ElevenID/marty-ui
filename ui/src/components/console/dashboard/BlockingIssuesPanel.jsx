@@ -44,7 +44,9 @@ export function BlockingIssuesPanel({ blockers }) {
             </ListItemIcon>
             <ListItemText
               primary={blocker.reason}
-              primaryTypographyProps={{ variant: 'body2' }}
+              slotProps={{
+                primary: { variant: 'body2' }
+              }}
             />
             {blocker.action && blocker.path && (
               <Button

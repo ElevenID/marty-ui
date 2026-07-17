@@ -53,7 +53,9 @@ const FlowStepsConfigStep = ({
           label="Flow name"
           value={name}
           onChange={(event) => onUpdate({ name: event.target.value })}
-          inputProps={{ maxLength: 255 }}
+          slotProps={{
+            htmlInput: { maxLength: 255 }
+          }}
         />
         <TextField
           fullWidth
@@ -62,7 +64,9 @@ const FlowStepsConfigStep = ({
           label="Description"
           value={description}
           onChange={(event) => onUpdate({ description: event.target.value })}
-          inputProps={{ maxLength: 2000 }}
+          slotProps={{
+            htmlInput: { maxLength: 2000 }
+          }}
         />
         <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
           <FormControl fullWidth>

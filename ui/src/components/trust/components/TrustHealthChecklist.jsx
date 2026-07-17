@@ -56,9 +56,10 @@ const CheckItem = ({ label, passed, warning = false, helperText }) => (
     <ListItemText
       primary={label}
       secondary={helperText}
-      primaryTypographyProps={{ variant: 'body2' }}
-      secondaryTypographyProps={{ variant: 'caption' }}
-    />
+      slotProps={{
+        primary: { variant: 'body2' },
+        secondary: { variant: 'caption' }
+      }} />
   </ListItem>
 );
 

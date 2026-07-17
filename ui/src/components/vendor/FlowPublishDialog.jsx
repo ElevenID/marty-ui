@@ -102,7 +102,6 @@ function FlowPublishDialog({ open, onClose, flow, onPublished }) {
           <CloseIcon />
         </IconButton>
       </DialogTitle>
-      
       <DialogContent>
         {error && (
           <Alert severity="error" sx={{ mb: 2 }}>
@@ -131,14 +130,16 @@ function FlowPublishDialog({ open, onClose, flow, onPublished }) {
               label={t('flowPublishDialog.changeDescriptionLabel')}
               placeholder={t('flowPublishDialog.changeDescriptionPlaceholder')}
               value={changeDescription}
-              inputProps={{
-                'aria-label': t('flowPublishDialog.changeDescriptionLabel'),
-              }}
               onChange={(e) => setState((currentState) => ({
                 ...currentState,
                 changeDescription: e.target.value,
               }))}
               sx={{ mb: 2 }}
+              slotProps={{
+                htmlInput: {
+                  'aria-label': t('flowPublishDialog.changeDescriptionLabel'),
+                }
+              }}
             />
           </>
         ) : (
@@ -154,17 +155,19 @@ function FlowPublishDialog({ open, onClose, flow, onPublished }) {
             <TextField
               fullWidth
               value={publicUrl || ''}
-              InputProps={{
-                readOnly: true,
-                endAdornment: (
-                  <InputAdornment position="end">
-                    <IconButton onClick={handleCopyUrl} edge="end" aria-label="copy public url">
-                      <ContentCopyIcon />
-                    </IconButton>
-                  </InputAdornment>
-                ),
-              }}
               sx={{ mb: 2 }}
+              slotProps={{
+                input: {
+                  readOnly: true,
+                  endAdornment: (
+                    <InputAdornment position="end">
+                      <IconButton onClick={handleCopyUrl} edge="end" aria-label="copy public url">
+                        <ContentCopyIcon />
+                      </IconButton>
+                    </InputAdornment>
+                  ),
+                }
+              }}
             />
 
             <Divider sx={{ my: 2 }} />
@@ -178,7 +181,6 @@ function FlowPublishDialog({ open, onClose, flow, onPublished }) {
           </>
         )}
       </DialogContent>
-
       <DialogActions>
         <Button onClick={handleClose}>
           {published ? t('flowPublishDialog.close') : t('flowPublishDialog.cancel')}

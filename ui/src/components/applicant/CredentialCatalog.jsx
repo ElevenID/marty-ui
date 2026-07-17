@@ -417,7 +417,6 @@ const CredentialCatalog = () => {
           </Box>
         </Paper>
       )}
-
       {/* Application Status Bar */}
       {hasAnyApplications && (
         <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
@@ -477,7 +476,6 @@ const CredentialCatalog = () => {
           </Stack>
         </Paper>
       )}
-
       <Box sx={{ mb: 4 }}>
         <Typography variant="h4" component="h1" gutterBottom data-testid="catalog-title">
           <CredentialIcon sx={{ mr: 2, verticalAlign: 'middle' }} />
@@ -489,7 +487,6 @@ const CredentialCatalog = () => {
             : t('catalog.description')}
         </Typography>
       </Box>
-
       {/* Search and Filters */}
       <Paper sx={{ p: 2, mb: 3 }} data-testid="catalog-filters">
         <Grid container spacing={2} alignItems="center">
@@ -500,12 +497,14 @@ const CredentialCatalog = () => {
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               data-testid="credential-search"
-              InputProps={{
-                startAdornment: (
-                  <InputAdornment position="start">
-                    <SearchIcon />
-                  </InputAdornment>
-                )
+              slotProps={{
+                input: {
+                  startAdornment: (
+                    <InputAdornment position="start">
+                      <SearchIcon />
+                    </InputAdornment>
+                  )
+                }
               }}
             />
           </Grid>
@@ -538,12 +537,11 @@ const CredentialCatalog = () => {
           </Grid>
         </Grid>
       </Paper>
-
       {/* Credential Grid */}
       <Grid container spacing={3}>
         {loading || canvasLtiLoading ? (
           // Loading skeletons
-          [...Array(6)].map((_, index) => (
+          ([...Array(6)].map((_, index) => (
             <Grid item xs={12} sm={6} md={4} key={index}>
               <Card>
                 <Skeleton variant="rectangular" height={140} />
@@ -554,7 +552,7 @@ const CredentialCatalog = () => {
                 </CardContent>
               </Card>
             </Grid>
-          ))
+          )))
         ) : catalogLoadAlertMessage ? (
           <Grid item xs={12}>
             <Alert severity={catalogMissingOrganization ? 'warning' : 'error'} data-testid="catalog-load-alert">
@@ -660,7 +658,6 @@ const CredentialCatalog = () => {
           })
         )}
       </Grid>
-
       {/* Credential Details Dialog */}
       <Dialog
         open={detailsOpen}

@@ -1831,7 +1831,6 @@ function CanvasIntegrationsPage() {
           </TableContainer>
         </Stack>
       </ResourcePage>
-
       <Dialog open={platformDialogOpen} onClose={() => setPlatformDialogOpen(false)} fullWidth maxWidth="md">
         <DialogTitle>{editingPlatform ? 'Edit Canvas platform' : 'Add Canvas platform'}</DialogTitle>
         <DialogContent>
@@ -1931,7 +1930,6 @@ function CanvasIntegrationsPage() {
           </Button>
         </DialogActions>
       </Dialog>
-
       <Dialog open={Boolean(registrationConfig) || Boolean(registrationError) || registrationBusy} onClose={() => { setRegistrationConfig(null); setRegistrationError(null); }} fullWidth maxWidth="md">
         <DialogTitle>Canvas LTI 1.3 registration</DialogTitle>
         <DialogContent>
@@ -1947,13 +1945,17 @@ function CanvasIntegrationsPage() {
                 value={JSON.stringify(registrationConfig.developer_key_configuration, null, 2)}
                 multiline
                 minRows={14}
-                InputProps={{ readOnly: true }}
+                slotProps={{
+                  input: { readOnly: true }
+                }}
               />
               {registrationConfig.registration_config_url && (
                 <TextField
                   label="Revocable registration configuration URL"
                   value={registrationConfig.registration_config_url}
-                  InputProps={{ readOnly: true }}
+                  slotProps={{
+                    input: { readOnly: true }
+                  }}
                 />
               )}
               <Typography variant="caption" color="text.secondary">
@@ -1966,7 +1968,6 @@ function CanvasIntegrationsPage() {
           <Button onClick={() => { setRegistrationConfig(null); setRegistrationError(null); }}>Close</Button>
         </DialogActions>
       </Dialog>
-
       <Dialog open={bindingDialogOpen} onClose={() => setBindingDialogOpen(false)} fullWidth maxWidth="md">
         <DialogTitle>{editingBinding ? 'Edit Canvas binding' : 'Add Canvas binding'}</DialogTitle>
         <DialogContent>
@@ -2281,9 +2282,11 @@ function CanvasIntegrationsPage() {
                   <TextField
                     label="Minimum score percent"
                     type="number"
-                    inputProps={{ min: 0, max: 100 }}
                     value={bindingForm.min_score_percent}
                     onChange={(event) => setBindingForm({ ...bindingForm, min_score_percent: event.target.value })}
+                    slotProps={{
+                      htmlInput: { min: 0, max: 100 }
+                    }}
                   />
                 )}
               </Stack>

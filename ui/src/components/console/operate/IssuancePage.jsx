@@ -256,7 +256,6 @@ function IssuancePage() {
           {error?.message || String(error)}
         </Alert>
       )}
-
       <Box sx={{ display: 'flex', gap: 2, mb: 3 }}>
         <TextField
           placeholder="Search issued credentials..."
@@ -264,16 +263,17 @@ function IssuancePage() {
           onChange={(event) => setSearchQuery(event.target.value)}
           size="small"
           sx={{ width: 360 }}
-          InputProps={{
-            startAdornment: (
-              <InputAdornment position="start">
-                <SearchIcon color="action" />
-              </InputAdornment>
-            ),
+          slotProps={{
+            input: {
+              startAdornment: (
+                <InputAdornment position="start">
+                  <SearchIcon color="action" />
+                </InputAdornment>
+              ),
+            }
           }}
         />
       </Box>
-
       {loading ? (
         <LinearProgress />
       ) : issuedCredentials.length === 0 ? (
@@ -394,7 +394,6 @@ function IssuancePage() {
           </Table>
         </TableContainer>
       )}
-
       <Dialog
         open={Boolean(credentialId && selectedCredential && !lifecycleAction)}
         onClose={handleCloseDetails}
@@ -521,7 +520,6 @@ function IssuancePage() {
           <Button onClick={handleCloseDetails}>Close</Button>
         </DialogActions>
       </Dialog>
-
       <Dialog
         open={Boolean(lifecycleAction && lifecycleTarget)}
         onClose={closeLifecycleDialog}
@@ -548,8 +546,10 @@ function IssuancePage() {
               autoFocus
               multiline
               minRows={3}
-              inputProps={{ maxLength: 500 }}
               helperText={`${lifecycleReason.length}/500`}
+              slotProps={{
+                htmlInput: { maxLength: 500 }
+              }}
             />
           </Stack>
         </DialogContent>

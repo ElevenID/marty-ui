@@ -349,12 +349,14 @@ function ActiveCredentialsTab({ organizationId }) {
           placeholder={t('revocationManager.activeTab.searchPlaceholder')}
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          InputProps={{
-            startAdornment: (
-              <InputAdornment position="start">
-                <SearchIcon />
-              </InputAdornment>
-            ),
+          slotProps={{
+            input: {
+              startAdornment: (
+                <InputAdornment position="start">
+                  <SearchIcon />
+                </InputAdornment>
+              ),
+            }
           }}
         />
         <Button variant="outlined" startIcon={<RefreshIcon />} onClick={loadCredentials}>
@@ -369,7 +371,6 @@ function ActiveCredentialsTab({ organizationId }) {
           {t('revocationManager.activeTab.batchRevokeButton')}
         </Button>
       </Stack>
-
       {/* Error Alert */}
       {error && (
         <Alert
@@ -385,7 +386,6 @@ function ActiveCredentialsTab({ organizationId }) {
           {t('revocationManager.activeTab.loadFailed', { error })}
         </Alert>
       )}
-
       {/* Credentials Table */}
       <TableContainer component={Paper}>
         <Table>
@@ -474,7 +474,6 @@ function ActiveCredentialsTab({ organizationId }) {
           rowsPerPageOptions={[10, 25, 50, 100]}
         />
       </TableContainer>
-
       {/* Revoke Dialog */}
       <RevokeDialog
         open={revokeDialogOpen}
@@ -482,14 +481,12 @@ function ActiveCredentialsTab({ organizationId }) {
         onRevoke={handleRevoke}
         credential={selectedCredential}
       />
-
       {/* Batch Revoke Dialog */}
       <BatchRevokeDialog
         open={batchRevokeDialogOpen}
         onClose={() => setBatchRevokeDialogOpen(false)}
         onBatchRevoke={handleBatchRevoke}
       />
-
     </Box>
   );
 }
