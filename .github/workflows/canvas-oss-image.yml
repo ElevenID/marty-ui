@@ -21,7 +21,7 @@ jobs:
     timeout-minutes: 240
     steps:
       - name: Check out acceptance harness
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses:  # v7
 
       - name: Require reviewed default-branch publication
         shell: bash
@@ -77,7 +77,7 @@ jobs:
           echo "base_source_policy_sha256=$base_source_policy_sha256" >> "$GITHUB_OUTPUT"
 
       - name: Check out exact Canvas source
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses:  # v7
         with:
           repository: instructure/canvas-lms
           ref: ${{ steps.lock.outputs.source_tag }}
@@ -219,7 +219,7 @@ jobs:
           jq -e '.image_digest | test("^sha256:[0-9a-f]{64}$")' tests/artifacts/canvas-oss-image/canvas-oss-image-manifest.json >/dev/null
 
       - name: Upload digest and provenance record
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses:  # v7
         with:
           name: canvas-oss-image-${{ steps.lock.outputs.source_sha }}
           path: |

@@ -108,7 +108,7 @@ jobs:
       CANVAS_OSS_CONTRACT_IMAGE: elevenid-local/canvas-oss-contract:${{ github.sha }}
       CANVAS_PORTABILITY_ATTESTATION_PATH: ${{ github.workspace }}/tests/artifacts/canvas-oss-portability/portable-attestation.json
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses:  # v7
 
       - name: Import approved maintenance window
         id: window
@@ -502,7 +502,7 @@ jobs:
 
       - name: Upload sanitized portability evidence
         if: always() && steps.stage.outcome == 'success'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses:  # v7
         with:
           name: canvas-oss-portability-${{ github.run_id }}
           path: tests/sanitized-artifacts/canvas-oss-portability/
