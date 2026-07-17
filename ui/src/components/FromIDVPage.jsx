@@ -98,7 +98,6 @@ function FromIDVPage() {
           ]),
         ]}
       />
-
       {/* Hero Section */}
       <Box
         sx={{
@@ -123,7 +122,6 @@ function FromIDVPage() {
           and enterprise trust ecosystems.
         </Typography>
       </Box>
-
       {/* Section 1 - The IDV Plateau */}
       <Box sx={{ mb: 8 }}>
         <Typography variant="h4" gutterBottom fontWeight="bold">
@@ -138,9 +136,7 @@ function FromIDVPage() {
           Digital identity requires something different: credentials that can be issued once and verified anywhere.
         </Typography>
       </Box>
-
       <Divider sx={{ my: 8 }} />
-
       {/* Section 2 - What Changed */}
       <Box sx={{ mb: 8 }}>
         <Typography variant="h4" gutterBottom fontWeight="bold">
@@ -157,9 +153,7 @@ function FromIDVPage() {
           </Typography>
         </Paper>
       </Box>
-
       <Divider sx={{ my: 8 }} />
-
       {/* Section 3 - The Missing Layer in Most IDV Platforms */}
       <Box sx={{ mb: 8 }}>
         <Typography variant="h4" gutterBottom fontWeight="bold">
@@ -221,9 +215,7 @@ function FromIDVPage() {
           </Typography>
         </Paper>
       </Box>
-
       <Divider sx={{ my: 8 }} />
-
       {/* Section 4 - How ElevenID LLC Solves Identity Management */}
       <Box sx={{ mb: 8 }}>
         <Typography variant="h4" gutterBottom fontWeight="bold">
@@ -245,7 +237,9 @@ function FromIDVPage() {
               </ListItemIcon>
               <ListItemText 
                 primary={item}
-                primaryTypographyProps={{ fontSize: '1.05rem' }}
+                slotProps={{
+                  primary: { fontSize: '1.05rem' }
+                }}
               />
             </ListItem>
           ))}
@@ -258,9 +252,7 @@ function FromIDVPage() {
           </Typography>
         </Paper>
       </Box>
-
       <Divider sx={{ my: 8 }} />
-
       {/* Section 5 - Who This Is For */}
       <Box sx={{ mb: 8 }}>
         <Typography variant="h4" gutterBottom fontWeight="bold" textAlign="center">
@@ -289,7 +281,9 @@ function FromIDVPage() {
                         </ListItemIcon>
                         <ListItemText 
                           primary={point}
-                          primaryTypographyProps={{ variant: 'body2' }}
+                          slotProps={{
+                            primary: { variant: 'body2' }
+                          }}
                         />
                       </ListItem>
                     ))}
@@ -300,9 +294,7 @@ function FromIDVPage() {
           ))}
         </Grid>
       </Box>
-
       <Divider sx={{ my: 8 }} />
-
       {/* Section 6 - The Outcome */}
       <Box sx={{ mb: 8 }}>
         <Typography variant="h4" gutterBottom fontWeight="bold" textAlign="center">
@@ -318,7 +310,6 @@ function FromIDVPage() {
           </Typography>
         </Paper>
       </Box>
-
       {/* Call to Action */}
       <Box 
         sx={{ 

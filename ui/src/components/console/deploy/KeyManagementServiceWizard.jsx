@@ -648,8 +648,10 @@ const KeyManagementServiceWizard = () => {
               label="Country code (ISO 3166-1 alpha-2)"
               helperText="Required for VDS-NC, CSCA, and mDoc DSC services."
               value={wizard.data.country_code || ''}
-              inputProps={{ maxLength: 2 }}
               onChange={(event) => wizard.updateData({ country_code: event.target.value.toUpperCase() })}
+              slotProps={{
+                htmlInput: { maxLength: 2 }
+              }}
             />
             <TextField
               fullWidth
@@ -675,7 +677,9 @@ const KeyManagementServiceWizard = () => {
           helperText="How often to rotate this key. Leave blank for manual rotation."
           value={wizard.data.rotation_interval_days || ''}
           onChange={(event) => wizard.updateData({ rotation_interval_days: event.target.value })}
-          inputProps={{ min: 1 }}
+          slotProps={{
+            htmlInput: { min: 1 }
+          }}
         />
         {wizard.data.rotation_interval_days && (
           <TextField
@@ -685,7 +689,9 @@ const KeyManagementServiceWizard = () => {
             helperText="How long to keep the old key active after rotation for in-flight verifications."
             value={wizard.data.rotation_overlap_days || '7'}
             onChange={(event) => wizard.updateData({ rotation_overlap_days: event.target.value })}
-            inputProps={{ min: 0 }}
+            slotProps={{
+              htmlInput: { min: 0 }
+            }}
           />
         )}
         <Divider />

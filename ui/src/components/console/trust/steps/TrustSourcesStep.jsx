@@ -790,7 +790,6 @@ const TrustSourcesStep = ({ data, onChange, organizationId }) => {
       <Typography color="text.secondary" paragraph>
         {t('wizards.trustProfile.trustSourcesStep.description')}
       </Typography>
-
       <Alert severity="info" sx={{ mb: 3 }} icon={<InfoIcon />}>
         <Typography variant="body2" gutterBottom>
           {t('wizards.trustProfile.trustSourcesStep.infoAlert.body')}
@@ -800,7 +799,6 @@ const TrustSourcesStep = ({ data, onChange, organizationId }) => {
           {t('wizards.trustProfile.trustSourcesStep.infoAlert.skippingDescription')}
         </Typography>
       </Alert>
-
       {managedDependencyErrors.length > 0 && (
         <Alert severity="warning" sx={{ mb: 3 }}>
           {t('wizards.trustProfile.trustSourcesStep.managedIdentity.loadError', {
@@ -813,7 +811,6 @@ const TrustSourcesStep = ({ data, onChange, organizationId }) => {
           </Box>
         </Alert>
       )}
-
       <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
         <FormControlLabel
           control={(
@@ -842,7 +839,6 @@ const TrustSourcesStep = ({ data, onChange, organizationId }) => {
                 })}
         </Typography>
       </Paper>
-
       {/* Tabs for Manual vs Registry Imports */}
       <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 3 }}>
         <Tabs value={tabValue} onChange={(e, v) => setTabValue(v)}>
@@ -850,7 +846,6 @@ const TrustSourcesStep = ({ data, onChange, organizationId }) => {
           <Tab label={t('wizards.trustProfile.trustSourcesStep.tabs.registries')} data-testid="wizard.trustProfile.tab.registries" />
         </Tabs>
       </Box>
-
       {/* Manual Issuers Tab */}
       {tabValue === 0 && (
         <Box>
@@ -1335,7 +1330,6 @@ const TrustSourcesStep = ({ data, onChange, organizationId }) => {
           )}
         </Box>
       )}
-
       {/* Registry Imports Tab */}
       {tabValue === 1 && (
         <Box>
@@ -1421,7 +1415,6 @@ const TrustSourcesStep = ({ data, onChange, organizationId }) => {
           )}
         </Box>
       )}
-
       {/* Registry Import Dialog */}
       <Dialog open={openRegistryDialog} onClose={() => setOpenRegistryDialog(false)} maxWidth="sm" fullWidth data-testid="wizard.trustProfile.registryDialog">
         <DialogTitle>{t('wizards.trustProfile.trustSourcesStep.registryDialog.title')}</DialogTitle>

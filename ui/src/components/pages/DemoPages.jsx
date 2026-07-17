@@ -200,7 +200,6 @@ function ReleaseExperience({ index, manifest }) {
         ogImage={`https://elevenidllc.com${manifest.scenarios[0].poster.src}`}
         keywords={['ElevenID LLC Credential Platform', manifest.release_name, `MIP ${manifest.mip_version}`, 'digital credential demos', 'release evidence']}
       />
-
       <Stack spacing={2.5} sx={{ mb: 4, maxWidth: 900 }}>
         <Typography variant="overline" color="text.secondary" fontWeight={700}>
           ElevenID LLC Credential Platform
@@ -234,13 +233,11 @@ function ReleaseExperience({ index, manifest }) {
           )}
         </Stack>
       </Stack>
-
       {!manifest.public_demo_ready && (
         <Alert severity="info" icon={<FactCheckRoundedIcon />} sx={{ mb: 4 }}>
           This release evidence is a publication preview. Independent-wallet qualification and ElevenID LLC publication review are still required for complete public coverage.
         </Alert>
       )}
-
       <Alert severity="info" sx={{ mb: 4 }}>
         <Typography variant="subtitle2" fontWeight={700} sx={{ mb: 0.5 }}>
           Independent wallet demonstrations
@@ -252,7 +249,6 @@ function ReleaseExperience({ index, manifest }) {
           </Link>.
         </Typography>
       </Alert>
-
       <Box
         component="section"
         aria-label="Demo filters"
@@ -281,8 +277,10 @@ function ReleaseExperience({ index, manifest }) {
               onChange={(event) => setQuery(event.target.value)}
               label="Filter scenarios"
               placeholder="Badge, verifier, Canvas..."
-              InputProps={{ startAdornment: <SearchRoundedIcon color="action" sx={{ mr: 1 }} /> }}
               sx={{ flex: 1, minWidth: 0 }}
+              slotProps={{
+                input: { startAdornment: <SearchRoundedIcon color="action" sx={{ mr: 1 }} /> }
+              }}
             />
           </Stack>
           <Box sx={{ overflowX: 'auto', pb: 0.5 }}>
@@ -299,7 +297,6 @@ function ReleaseExperience({ index, manifest }) {
           </Box>
         </Stack>
       </Box>
-
       <Box component="section" aria-labelledby="scenario-heading">
         <Stack direction="row" justifyContent="space-between" alignItems="baseline" spacing={2} sx={{ mb: 2 }}>
           <Typography id="scenario-heading" variant="h5" component="h2" fontWeight={750}>
@@ -319,7 +316,6 @@ function ReleaseExperience({ index, manifest }) {
           <Alert severity="info">No scenarios match these filters.</Alert>
         )}
       </Box>
-
       <Box component="section" aria-labelledby="release-differences" sx={{ mt: 7 }}>
         <Typography id="release-differences" variant="h5" component="h2" fontWeight={750} sx={{ mb: 2 }}>
           Release features
@@ -347,7 +343,6 @@ function ReleaseExperience({ index, manifest }) {
             ))}
         </Box>
       </Box>
-
       <Box component="section" aria-labelledby="release-binding" sx={{ mt: 7 }}>
         <Typography id="release-binding" variant="h5" component="h2" fontWeight={750} sx={{ mb: 2 }}>
           Release binding

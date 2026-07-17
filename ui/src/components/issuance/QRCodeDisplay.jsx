@@ -234,7 +234,7 @@ const QRCodeDisplay = ({
           >
             {qrPayload ? (
               // Use pre-generated QR image
-              <Box sx={{ position: 'relative' }}>
+              (<Box sx={{ position: 'relative' }}>
                 <img
                   src={qrPayload}
                   alt="Credential Offer QR Code"
@@ -266,10 +266,10 @@ const QRCodeDisplay = ({
                     />
                   </Box>
                 )}
-              </Box>
+              </Box>)
             ) : (
               // Generate QR code from URI
-              <Box sx={{ position: 'relative' }}>
+              (<Box sx={{ position: 'relative' }}>
                 <QRCodeSVG
                   value={effectiveQrValue}
                   size={effectiveSize}
@@ -304,7 +304,7 @@ const QRCodeDisplay = ({
                     />
                   </Box>
                 )}
-              </Box>
+              </Box>)
             )}
 
             {/* Overlay for scanned state */}

@@ -95,7 +95,6 @@ function FlowDisableDialog({ open, onClose, flow, onDisabled }) {
           <CloseIcon />
         </IconButton>
       </DialogTitle>
-      
       <DialogContent>
         {error && (
           <Alert severity="error" sx={{ mb: 2 }}>
@@ -123,18 +122,19 @@ function FlowDisableDialog({ open, onClose, flow, onDisabled }) {
           label={t('flowDisableDialog.reasonLabel')}
           placeholder={t('flowDisableDialog.reasonPlaceholder')}
           value={reason}
-          inputProps={{
-            'aria-label': t('flowDisableDialog.reasonLabel'),
-          }}
           onChange={(e) => setState((currentState) => ({
             ...currentState,
             reason: e.target.value,
           }))}
           error={Boolean(!reason && error)}
           helperText={!reason && error ? t('flowDisableDialog.reasonRequired') : ''}
+          slotProps={{
+            htmlInput: {
+              'aria-label': t('flowDisableDialog.reasonLabel'),
+            }
+          }}
         />
       </DialogContent>
-
       <DialogActions>
         <Button onClick={handleClose}>
           {t('flowDisableDialog.cancel')}

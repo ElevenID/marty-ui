@@ -155,11 +155,9 @@ export function DeveloperQuickStartPanel() {
           {t('dashboard.developerQuickStart.title')}
         </Typography>
       </Box>
-
       <Typography variant="body2" color="text.secondary" paragraph>
         {t('dashboard.developerQuickStart.description')}
       </Typography>
-
       {/* Organization Reference */}
       <Box sx={{ mb: 2 }}>
         <Typography variant="caption" color="text.secondary" display="block" gutterBottom>
@@ -170,9 +168,11 @@ export function DeveloperQuickStartPanel() {
             value={organizationReference}
             fullWidth
             size="small"
-            InputProps={{
-              readOnly: true,
-              sx: { fontFamily: 'monospace', fontSize: '0.875rem' },
+            slotProps={{
+              input: {
+                readOnly: true,
+                sx: { fontFamily: 'monospace', fontSize: '0.875rem' },
+              }
             }}
           />
           <Tooltip title={copied === 'orgRef' ? t('dashboard.developerQuickStart.copied') : t('dashboard.developerQuickStart.copyToClipboard')}>
@@ -199,9 +199,11 @@ export function DeveloperQuickStartPanel() {
               value={integrationInfo.orgId}
               fullWidth
               size="small"
-              InputProps={{
-                readOnly: true,
-                sx: { fontFamily: 'monospace', fontSize: '0.875rem' },
+              slotProps={{
+                input: {
+                  readOnly: true,
+                  sx: { fontFamily: 'monospace', fontSize: '0.875rem' },
+                }
               }}
             />
             <Tooltip title={copied === 'orgId' ? t('dashboard.developerQuickStart.copied') : t('dashboard.developerQuickStart.copyToClipboard')}>
@@ -216,7 +218,6 @@ export function DeveloperQuickStartPanel() {
           </Box>
         </Collapse>
       </Box>
-
       {/* Base API URL */}
       <Box sx={{ mb: 2 }}>
         <Typography variant="caption" color="text.secondary" display="block" gutterBottom>
@@ -227,9 +228,11 @@ export function DeveloperQuickStartPanel() {
             value={integrationInfo.baseUrl}
             fullWidth
             size="small"
-            InputProps={{
-              readOnly: true,
-              sx: { fontFamily: 'monospace', fontSize: '0.875rem' },
+            slotProps={{
+              input: {
+                readOnly: true,
+                sx: { fontFamily: 'monospace', fontSize: '0.875rem' },
+              }
             }}
           />
           <Tooltip title={copied === 'baseUrl' ? t('dashboard.developerQuickStart.copied') : t('dashboard.developerQuickStart.copyToClipboard')}>
@@ -243,7 +246,6 @@ export function DeveloperQuickStartPanel() {
           </Tooltip>
         </Box>
       </Box>
-
       {/* Example Request */}
       <Box sx={{ mb: 2 }}>
         <Typography variant="caption" color="text.secondary" display="block" gutterBottom>
@@ -282,7 +284,6 @@ export function DeveloperQuickStartPanel() {
           </Tooltip>
         </Box>
       </Box>
-
       {/* Action Buttons */}
       <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
         <Button

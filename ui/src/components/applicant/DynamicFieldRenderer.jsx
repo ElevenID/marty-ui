@@ -112,7 +112,9 @@ function TextFieldRenderer({ field, value, onChange, error, required, validation
       required={required}
       error={!!error}
       helperText={error || validation?.pattern_description}
-      inputProps={inputProps}
+      slotProps={{
+        htmlInput: inputProps
+      }}
     />
   );
 }
@@ -131,10 +133,12 @@ function NumberFieldRenderer({ field, value, onChange, error, required, validati
       required={required}
       error={!!error}
       helperText={error}
-      inputProps={{
-        min: validation?.minimum ?? validation?.min ?? validation?.min_value,
-        max: validation?.maximum ?? validation?.max ?? validation?.max_value,
-        step: field.type === 'integer' ? 1 : (field.step || 'any'),
+      slotProps={{
+        htmlInput: {
+          min: validation?.minimum ?? validation?.min ?? validation?.min_value,
+          max: validation?.maximum ?? validation?.max ?? validation?.max_value,
+          step: field.type === 'integer' ? 1 : (field.step || 'any'),
+        }
       }}
     />
   );
@@ -154,7 +158,9 @@ function DateFieldRenderer({ field, value, onChange, error, required }) {
       required={required}
       error={!!error}
       helperText={error}
-      InputLabelProps={{ shrink: true }}
+      slotProps={{
+        inputLabel: { shrink: true }
+      }}
     />
   );
 }
@@ -173,7 +179,9 @@ function DateTimeFieldRenderer({ field, value, onChange, error, required }) {
       required={required}
       error={!!error}
       helperText={error}
-      InputLabelProps={{ shrink: true }}
+      slotProps={{
+        inputLabel: { shrink: true }
+      }}
     />
   );
 }

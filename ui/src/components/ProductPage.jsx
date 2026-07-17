@@ -56,7 +56,6 @@ function ProductPage() {
           ]),
         ]}
       />
-      
       {/* Hero Section */}
       <Box
         sx={{
@@ -75,7 +74,6 @@ function ProductPage() {
           Choose the building blocks you need—start with verification, then expand into issuance and governance.
         </Typography>
       </Box>
-
       {/* Product Overview */}
       <Box sx={{ mb: 4 }}>
         <Typography variant="body1" color="text.secondary" paragraph sx={{ maxWidth: 900, mx: 'auto', textAlign: 'center' }}>
@@ -83,7 +81,6 @@ function ProductPage() {
           and governing digital credentials—built on open standards for interoperability and trust.
         </Typography>
       </Box>
-
       {/* Start Here Router */}
       <Paper elevation={2} sx={{ p: 4, mb: 6, bgcolor: 'grey.50', borderRadius: 2 }}>
         <Typography variant="h5" fontWeight="bold" gutterBottom textAlign="center">
@@ -183,7 +180,6 @@ function ProductPage() {
           </Grid>
         </Grid>
       </Paper>
-
       {/* Recommended Packages */}
       <Box sx={{ mb: 6 }}>
         <Typography variant="h5" fontWeight="bold" gutterBottom>
@@ -201,13 +197,17 @@ function ProductPage() {
                     <ListItemIcon sx={{ minWidth: 28 }}>
                       <CheckCircleIcon fontSize="small" color="success" />
                     </ListItemIcon>
-                    <ListItemText primary="Verification API (SaaS)" primaryTypographyProps={{ variant: 'body2' }} />
+                    <ListItemText primary="Verification API (SaaS)" slotProps={{
+                      primary: { variant: 'body2' }
+                    }} />
                   </ListItem>
                   <ListItem sx={{ py: 0 }}>
                     <ListItemIcon sx={{ minWidth: 28 }}>
                       <CheckCircleIcon fontSize="small" color="success" />
                     </ListItemIcon>
-                    <ListItemText primary="Trust registry integration" primaryTypographyProps={{ variant: 'body2' }} />
+                    <ListItemText primary="Trust registry integration" slotProps={{
+                      primary: { variant: 'body2' }
+                    }} />
                   </ListItem>
                 </List>
                 <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
@@ -230,13 +230,17 @@ function ProductPage() {
                     <ListItemIcon sx={{ minWidth: 28 }}>
                       <CheckCircleIcon fontSize="small" color="success" />
                     </ListItemIcon>
-                    <ListItemText primary="Issuance API (self-hosted)" primaryTypographyProps={{ variant: 'body2' }} />
+                    <ListItemText primary="Issuance API (self-hosted)" slotProps={{
+                      primary: { variant: 'body2' }
+                    }} />
                   </ListItem>
                   <ListItem sx={{ py: 0 }}>
                     <ListItemIcon sx={{ minWidth: 28 }}>
                       <CheckCircleIcon fontSize="small" color="success" />
                     </ListItemIcon>
-                    <ListItemText primary="Verification API for testing" primaryTypographyProps={{ variant: 'body2' }} />
+                    <ListItemText primary="Verification API for testing" slotProps={{
+                      primary: { variant: 'body2' }
+                    }} />
                   </ListItem>
                 </List>
                 <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
@@ -259,13 +263,17 @@ function ProductPage() {
                     <ListItemIcon sx={{ minWidth: 28 }}>
                       <CheckCircleIcon fontSize="small" color="success" />
                     </ListItemIcon>
-                    <ListItemText primary="Issuance + Verification + Trust" primaryTypographyProps={{ variant: 'body2' }} />
+                    <ListItemText primary="Issuance + Verification + Trust" slotProps={{
+                      primary: { variant: 'body2' }
+                    }} />
                   </ListItem>
                   <ListItem sx={{ py: 0 }}>
                     <ListItemIcon sx={{ minWidth: 28 }}>
                       <CheckCircleIcon fontSize="small" color="success" />
                     </ListItemIcon>
-                    <ListItemText primary="Optional: Authenticator, Kiosk" primaryTypographyProps={{ variant: 'body2' }} />
+                    <ListItemText primary="Optional: Authenticator, Kiosk" slotProps={{
+                      primary: { variant: 'body2' }
+                    }} />
                   </ListItem>
                 </List>
                 <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
@@ -294,7 +302,6 @@ function ProductPage() {
           </Box>
         )}
       </Box>
-
       {/* Who This Is For */}
       <Paper elevation={2} sx={{ p: 4, mb: 6, bgcolor: 'grey.50', borderRadius: 2 }}>
         <Typography variant="h5" fontWeight="bold" gutterBottom color="primary">
@@ -346,14 +353,11 @@ function ProductPage() {
           </Grid>
         </Grid>
       </Paper>
-
       <Divider sx={{ my: 6 }} />
-
       {/* Products Grid */}
       <Typography variant="h4" gutterBottom fontWeight="bold" sx={{ mb: 4 }}>
         Our Products
       </Typography>
-
       <Grid container spacing={4}>
         {PRODUCTS.map((product) => (
           <Grid item xs={12} key={product.id} id={product.id} sx={{ scrollMarginTop: 96 }}>
@@ -487,7 +491,6 @@ function ProductPage() {
           </Grid>
         ))}
       </Grid>
-
       {/* CTA Section */}
       <Box
         sx={{
@@ -530,7 +533,6 @@ function ProductPage() {
           </Button>
         </Box>
       </Box>
-
       {/* CTA Section */}
       <Box
         sx={{

@@ -138,14 +138,16 @@ const ApplicantJoinStep = ({
               value={inviteCode}
               onChange={(e) => onInviteCodeChange(e.target.value.toUpperCase())}
               placeholder="e.g., ABC123XY"
-              InputProps={{
-                startAdornment: (
-                  <InputAdornment position="start">
-                    <VpnKeyIcon color="action" />
-                  </InputAdornment>
-                ),
-              }}
               sx={{ mb: 3 }}
+              slotProps={{
+                input: {
+                  startAdornment: (
+                    <InputAdornment position="start">
+                      <VpnKeyIcon color="action" />
+                    </InputAdornment>
+                  ),
+                }
+              }}
             />
             <Button
               variant="contained"
@@ -186,12 +188,14 @@ const ApplicantJoinStep = ({
                     placeholder="Search organizations..."
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
-                    InputProps={{
-                      startAdornment: (
-                        <InputAdornment position="start">
-                          <SearchIcon />
-                        </InputAdornment>
-                      ),
+                    slotProps={{
+                      input: {
+                        startAdornment: (
+                          <InputAdornment position="start">
+                            <SearchIcon />
+                          </InputAdornment>
+                        ),
+                      }
                     }}
                   />
                   <FormControl size="small" sx={{ minWidth: 200 }}>

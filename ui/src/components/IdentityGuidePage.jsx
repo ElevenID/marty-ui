@@ -37,7 +37,6 @@ function IdentityGuidePage() {
           ]),
         ]}
       />
-
       {/* Hero Section */}
       <Box
         sx={{
@@ -56,7 +55,6 @@ function IdentityGuidePage() {
           Understanding identity as trust, policy, and flow
         </Typography>
       </Box>
-
       {/* TL;DR - 60 Second Summary */}
       <Paper 
         elevation={3} 
@@ -82,7 +80,6 @@ function IdentityGuidePage() {
           Below: standards, protocols, and implementation.
         </Typography>
       </Paper>
-
       {/* What Identity Is */}
       <Box sx={{ mb: 8 }}>
         <Typography variant="h4" gutterBottom fontWeight="bold">
@@ -108,9 +105,7 @@ function IdentityGuidePage() {
           </List>
         </Paper>
       </Box>
-
       <Divider sx={{ my: 8 }} />
-
       {/* Three Questions */}
       <Box sx={{ mb: 8 }}>
         <Paper elevation={2} sx={{ p: 4, bgcolor: 'grey.50' }}>
@@ -143,9 +138,7 @@ function IdentityGuidePage() {
           </Grid>
         </Box>
       </Box>
-
       <Divider sx={{ my: 8 }} />
-
       {/* Four Primitives */}
       <Box sx={{ mb: 8 }}>
         <Typography variant="h4" gutterBottom fontWeight="bold" textAlign="center">
@@ -182,7 +175,9 @@ function IdentityGuidePage() {
                       <ListItem key={item} sx={{ py: 0.5 }}>
                         <ListItemText 
                           primary={item}
-                          primaryTypographyProps={{ variant: 'body2' }}
+                          slotProps={{
+                            primary: { variant: 'body2' }
+                          }}
                         />
                       </ListItem>
                     ))}
@@ -202,9 +197,7 @@ function IdentityGuidePage() {
           ))}
         </Grid>
       </Box>
-
       <Divider sx={{ my: 8 }} />
-
       {/* Flows */}
       <Box sx={{ mb: 8 }}>
         <Typography variant="h4" gutterBottom fontWeight="bold" textAlign="center">
@@ -239,7 +232,6 @@ function IdentityGuidePage() {
           ))}
         </Grid>
       </Box>
-
       {/* Summary CTA */}
       <Box
         sx={{

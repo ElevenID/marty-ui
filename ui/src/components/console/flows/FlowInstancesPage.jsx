@@ -148,9 +148,10 @@ function InstanceTimeline({ instance }) {
           <ListItemText
             primary={String(event.label).replaceAll('_', ' ')}
             secondary={[event.detail, event.timestamp ? formatDate(event.timestamp) : null].filter(Boolean).join(' | ')}
-            primaryTypographyProps={{ variant: 'body2', fontWeight: 600, textTransform: 'capitalize' }}
-            secondaryTypographyProps={{ variant: 'caption' }}
-          />
+            slotProps={{
+              primary: { variant: 'body2', fontWeight: 600, textTransform: 'capitalize' },
+              secondary: { variant: 'caption' }
+            }} />
         </ListItem>
       ))}
     </List>
@@ -275,7 +276,9 @@ function FlowInstancesPage() {
           onChange={(event) => setSearchQuery(event.target.value)}
           size="small"
           sx={{ width: { xs: '100%', sm: 360 } }}
-          InputProps={{ startAdornment: <InputAdornment position="start"><SearchIcon color="action" /></InputAdornment> }}
+          slotProps={{
+            input: { startAdornment: <InputAdornment position="start"><SearchIcon color="action" /></InputAdornment> }
+          }}
         />
         <FormControl size="small" sx={{ minWidth: 170 }}>
           <InputLabel>Status</InputLabel>
@@ -288,7 +291,6 @@ function FlowInstancesPage() {
           </Select>
         </FormControl>
       </Box>
-
       {loading ? <LinearProgress /> : error ? null : instances.length === 0 ? (
         <EmptyState {...EmptyStates.flowInstances} />
       ) : (

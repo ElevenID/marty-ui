@@ -452,7 +452,6 @@ function WebhooksPage() {
           )}
         </Stack>
       </ResourcePage>
-
       <Dialog open={dialogOpen} onClose={saving ? undefined : resetDialog} maxWidth="md" fullWidth>
         <DialogTitle>{editingWebhook ? 'Edit webhook' : 'Add webhook'}</DialogTitle>
         <DialogContent dividers>
@@ -535,14 +534,16 @@ function WebhooksPage() {
                 <TextField
                   fullWidth
                   value={createdSecret}
-                  InputProps={{
-                    readOnly: true,
-                    endAdornment: (
-                      <IconButton onClick={handleCopySecret}>
-                        <ContentCopyIcon />
-                      </IconButton>
-                    ),
-                    sx: { fontFamily: 'monospace' },
+                  slotProps={{
+                    input: {
+                      readOnly: true,
+                      endAdornment: (
+                        <IconButton onClick={handleCopySecret}>
+                          <ContentCopyIcon />
+                        </IconButton>
+                      ),
+                      sx: { fontFamily: 'monospace' },
+                    }
                   }}
                 />
               </Alert>
@@ -558,7 +559,6 @@ function WebhooksPage() {
           )}
         </DialogActions>
       </Dialog>
-
       <ConfirmDeleteDialog
         open={Boolean(pendingDelete)}
         onClose={() => setPendingDelete(null)}

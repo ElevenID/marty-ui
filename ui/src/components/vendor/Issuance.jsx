@@ -131,7 +131,7 @@ export default function Issuance({ hideHeader = false }) {
     <Box data-testid="issuance-page">
       {!hideHeader && (
         /* Page Header */
-        <Box sx={{ mb: 4 }}>
+        (<Box sx={{ mb: 4 }}>
           <Typography variant="h4" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
             <BadgeIcon fontSize="large" />
             {t('issuance.title')}
@@ -139,9 +139,8 @@ export default function Issuance({ hideHeader = false }) {
           <Typography variant="body1" color="text.secondary">
             {t('issuance.description')}
           </Typography>
-        </Box>
+        </Box>)
       )}
-
       {/* Tabs */}
       <Paper sx={{ mb: 3 }}>
         <Tabs
@@ -252,7 +251,6 @@ export default function Issuance({ hideHeader = false }) {
           </Alert>
         </TabPanel>
       </Paper>
-
       {/* Credential Offer Dialog */}
       <CredentialOfferDialog
         open={offerDialogOpen}
