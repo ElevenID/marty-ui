@@ -21,7 +21,7 @@ def test_gateway_exposes_only_mip_v03_applicant_routes() -> None:
 
 
 def test_gateway_does_not_publish_generic_application_routes() -> None:
-    paths = {route.path for route in app.routes}
+    paths = {route.path for route in app.routes if hasattr(route, "path")}
 
     assert "/v1/me/applications" in paths
     assert all(not path.startswith("/v1/applications") for path in paths)
