@@ -61,8 +61,18 @@ def test_shared_service_image_installs_released_credentials_bindings() -> None:
     assert "MARTY_RS_DIGEST" in dockerfile
     assert "curl --fail --location" in dockerfile
     assert "sha256sum --check --strict" in dockerfile
-    assert "/tmp/marty-rs.whl" in dockerfile
+    assert 'MARTY_RS_WHEEL="/tmp/${MARTY_RS_URI##*/}"' in dockerfile
+    assert 'MARTY_COMMON_WHEEL="/tmp/${MARTY_COMMON_URI##*/}"' in dockerfile
+    assert "/tmp/marty-rs.whl" not in dockerfile
     assert "COPY marty-credentials" not in dockerfile
+
+
+def test_migration_image_preserves_released_wheel_filename() -> None:
+    dockerfile = (ROOT / "services" / "Dockerfile.migrations").read_text(encoding="utf-8")
+
+    assert 'MARTY_COMMON_WHEEL="/tmp/${MARTY_COMMON_URI##*/}"' in dockerfile
+    assert 'pip install --no-cache-dir \\\n+    "$MARTY_COMMON_WHEEL"' in dockerfile
+    assert "/tmp/marty-common.whl" not in dockerfile
 
 
 def test_shared_service_image_does_not_rebuild_external_sources() -> None:
