@@ -18,9 +18,12 @@ permissions:
   contents: read
 
 env:
-  IMAGE: ghcr.io/elevenid/marty-ui/ui
-  SERVICES_IMAGE: ghcr.io/elevenid/marty-ui/services
-  MIGRATIONS_IMAGE: ghcr.io/elevenid/marty-ui/migrations
+  # The legacy marty-ui/* packages predate this repository and are not linked
+  # to it, so their package ACL rejects this workflow's GITHUB_TOKEN. Keep the
+  # public OSS release images in a repository-owned namespace instead.
+  IMAGE: ghcr.io/elevenid/marty-ui-oss/ui
+  SERVICES_IMAGE: ghcr.io/elevenid/marty-ui-oss/services
+  MIGRATIONS_IMAGE: ghcr.io/elevenid/marty-ui-oss/migrations
 
 jobs:
   validate-stack:
@@ -272,13 +275,13 @@ jobs:
               version: $version,
               commit: $sha,
               artifacts: [
-                {type: "oci", uri: "ghcr.io/elevenid/marty-ui/ui", digest: $ui_digest,
+                {type: "oci", uri: "ghcr.io/elevenid/marty-ui-oss/ui", digest: $ui_digest,
                  sbom: "https://github.com/ElevenID/marty-ui/attestations",
                  provenance: "https://github.com/ElevenID/marty-ui/attestations"},
-                {type: "oci", uri: "ghcr.io/elevenid/marty-ui/services", digest: $services_digest,
+                {type: "oci", uri: "ghcr.io/elevenid/marty-ui-oss/services", digest: $services_digest,
                  sbom: "https://github.com/ElevenID/marty-ui/attestations",
                  provenance: "https://github.com/ElevenID/marty-ui/attestations"},
-                {type: "oci", uri: "ghcr.io/elevenid/marty-ui/migrations", digest: $migrations_digest,
+                {type: "oci", uri: "ghcr.io/elevenid/marty-ui-oss/migrations", digest: $migrations_digest,
                  sbom: "https://github.com/ElevenID/marty-ui/attestations",
                  provenance: "https://github.com/ElevenID/marty-ui/attestations"}
               ]
@@ -404,13 +407,13 @@ jobs:
               version: $version,
               commit: $sha,
               artifacts: [
-                {type: "oci", uri: "ghcr.io/elevenid/marty-ui/ui", digest: $ui_digest,
+                {type: "oci", uri: "ghcr.io/elevenid/marty-ui-oss/ui", digest: $ui_digest,
                  sbom: ("https://github.com/ElevenID/marty-ui/releases/download/v" + $version + "/marty-ui-sbom.cdx.json"),
                  provenance: "https://github.com/ElevenID/marty-ui/attestations"},
-                {type: "oci", uri: "ghcr.io/elevenid/marty-ui/services", digest: $services_digest,
+                {type: "oci", uri: "ghcr.io/elevenid/marty-ui-oss/services", digest: $services_digest,
                  sbom: ("https://github.com/ElevenID/marty-ui/releases/download/v" + $version + "/marty-ui-services-sbom.cdx.json"),
                  provenance: "https://github.com/ElevenID/marty-ui/attestations"},
-                {type: "oci", uri: "ghcr.io/elevenid/marty-ui/migrations", digest: $migrations_digest,
+                {type: "oci", uri: "ghcr.io/elevenid/marty-ui-oss/migrations", digest: $migrations_digest,
                  sbom: ("https://github.com/ElevenID/marty-ui/releases/download/v" + $version + "/marty-ui-migrations-sbom.cdx.json"),
                  provenance: "https://github.com/ElevenID/marty-ui/attestations"}
               ]
