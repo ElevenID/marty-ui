@@ -26,12 +26,10 @@ import {
   FormControlLabel,
   Divider,
 } from '@mui/material';
-import {
-  Notifications as NotificationsIcon,
-  Check as CheckIcon,
-  PhoneAndroid as PhoneIcon,
-  Refresh as RefreshIcon,
-} from '@mui/icons-material';
+import NotificationsIcon from '@mui/icons-material/Notifications';
+import CheckIcon from '@mui/icons-material/Check';
+import PhoneIcon from '@mui/icons-material/PhoneAndroid';
+import RefreshIcon from '@mui/icons-material/Refresh';
 import { QRCodeSVG } from 'qrcode.react';
 import { useAuth } from '../hooks/useAuth';
 import { useBranding } from '../hooks/useBranding';

@@ -499,12 +499,14 @@ function SidebarNavigation({ mobileOpen, onMobileClose }) {
         open={mobileOpen}
         onClose={onMobileClose}
         ModalProps={{ keepMounted: true }}
-        PaperProps={{
-          sx: {
+        slotProps={{
+          paper: {
+            sx: {
             boxSizing: 'border-box',
             width: DRAWER_WIDTH,
             top: HEADER_HEIGHT,
             height: `calc(100% - ${HEADER_HEIGHT}px)`,
+            },
           },
         }}
         sx={{

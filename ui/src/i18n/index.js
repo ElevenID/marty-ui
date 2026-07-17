@@ -70,8 +70,10 @@ i18n
     
     // React-specific options
     react: {
-      // Wait for translations to load before rendering
-      useSuspense: true,
+      // Keep the application shell mounted while translations load. This also
+      // lets production prerendering wait on i18next explicitly instead of
+      // hiding the readiness signal behind the app-wide Suspense boundary.
+      useSuspense: false,
     },
   });
 

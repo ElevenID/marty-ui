@@ -20,27 +20,25 @@ import {
   Alert,
   Chip,
 } from '@mui/material';
-import {
-  Flight as TravelIcon,
-  DirectionsCar as DriverLicenseIcon,
-  AccountBalance as EuIcon,
-  Badge as EmployeeIcon,
-  School as StudentIcon,
-  Security as AccessIcon,
-  FlightTakeoff as AirportIcon,
-  Security as BorderIcon,
-  LocalBar as AgeRestrictedIcon,
-  Business as EmployerIcon,
-  School as SchoolIcon2,
-  LocalPolice as LawEnforcementIcon,
-  Public as EuServicesIcon,
-  VpnKey as AccessControlIcon,
-  DirectionsCar as VehicleRentalIcon,
-  AccountBalance as EmbassyIcon,
-  LocationCity as FacilitiesIcon,
-  CardMembership as StudentServicesIcon,
-  School as SchoolIcon,
-} from '@mui/icons-material';
+import TravelIcon from '@mui/icons-material/Flight';
+import DriverLicenseIcon from '@mui/icons-material/DirectionsCar';
+import EuIcon from '@mui/icons-material/AccountBalance';
+import EmployeeIcon from '@mui/icons-material/Badge';
+import StudentIcon from '@mui/icons-material/School';
+import AccessIcon from '@mui/icons-material/Security';
+import AirportIcon from '@mui/icons-material/FlightTakeoff';
+import BorderIcon from '@mui/icons-material/Security';
+import AgeRestrictedIcon from '@mui/icons-material/LocalBar';
+import EmployerIcon from '@mui/icons-material/Business';
+import SchoolIcon2 from '@mui/icons-material/School';
+import LawEnforcementIcon from '@mui/icons-material/LocalPolice';
+import EuServicesIcon from '@mui/icons-material/Public';
+import AccessControlIcon from '@mui/icons-material/VpnKey';
+import VehicleRentalIcon from '@mui/icons-material/DirectionsCar';
+import EmbassyIcon from '@mui/icons-material/AccountBalance';
+import FacilitiesIcon from '@mui/icons-material/LocationCity';
+import StudentServicesIcon from '@mui/icons-material/CardMembership';
+import SchoolIcon from '@mui/icons-material/School';
 
 // Use case definitions
 const USE_CASES = [

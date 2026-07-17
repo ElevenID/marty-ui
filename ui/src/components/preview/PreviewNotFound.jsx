@@ -5,7 +5,7 @@
  */
 
 import { Box, Container, Paper, Typography, Button, Alert } from '@mui/material';
-import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
+import ErrorOutlineIcon from '@mui/icons-material/ErrorOutlined';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import { useNavigate, useLocation } from 'react-router-dom';
 import PropTypes from 'prop-types';

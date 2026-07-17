@@ -20,20 +20,18 @@ import {
   Divider,
   Alert,
 } from '@mui/material';
-import {
-  FlightTakeoff as AirportIcon,
-  Security as BorderIcon,
-  LocalBar as AgeRestrictedIcon,
-  Business as EmployerIcon,
-  School as SchoolIcon,
-  LocalPolice as LawEnforcementIcon,
-  Public as EuServicesIcon,
-  VpnKey as AccessControlIcon,
-  DirectionsCar as VehicleRentalIcon,
-  AccountBalance as EmbassyIcon,
-  LocationCity as FacilitiesIcon,
-  CardMembership as StudentServicesIcon,
-} from '@mui/icons-material';
+import AirportIcon from '@mui/icons-material/FlightTakeoff';
+import BorderIcon from '@mui/icons-material/Security';
+import AgeRestrictedIcon from '@mui/icons-material/LocalBar';
+import EmployerIcon from '@mui/icons-material/Business';
+import SchoolIcon from '@mui/icons-material/School';
+import LawEnforcementIcon from '@mui/icons-material/LocalPolice';
+import EuServicesIcon from '@mui/icons-material/Public';
+import AccessControlIcon from '@mui/icons-material/VpnKey';
+import VehicleRentalIcon from '@mui/icons-material/DirectionsCar';
+import EmbassyIcon from '@mui/icons-material/AccountBalance';
+import FacilitiesIcon from '@mui/icons-material/LocationCity';
+import StudentServicesIcon from '@mui/icons-material/CardMembership';
 import { USE_CASES } from './UseCaseStep';
 
 // Acceptance type definitions with icons and descriptions

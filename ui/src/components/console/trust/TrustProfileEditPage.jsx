@@ -197,7 +197,7 @@ export function TrustProfileEditPage() {
           onChange={(e) => setForm((prev) => ({ ...prev, name: e.target.value }))}
           sx={{ mb: 3 }}
           helperText={t('wizards.trustProfile.basicsStep.helpers.name', 'A descriptive name for this trust configuration.')}
-          inputProps={{ 'data-testid': 'edit.trustProfile.name' }}
+          slotProps={{ htmlInput: { 'data-testid': 'edit.trustProfile.name' } }}
         />
 
         {/* Description */}
@@ -210,7 +210,7 @@ export function TrustProfileEditPage() {
           onChange={(e) => setForm((prev) => ({ ...prev, description: e.target.value }))}
           sx={{ mb: 3 }}
           helperText={t('wizards.trustProfile.basicsStep.helpers.description', 'Optional description of the trust policy intent.')}
-          inputProps={{ 'data-testid': 'edit.trustProfile.description' }}
+          slotProps={{ htmlInput: { 'data-testid': 'edit.trustProfile.description' } }}
         />
 
         {/* Framework Type */}
@@ -254,7 +254,7 @@ export function TrustProfileEditPage() {
                     checked={(form.supported_formats || []).includes(fmt.value)}
                     onChange={() => handleFormatToggle(fmt.value)}
                     disabled={formatSelectionLocked}
-                    inputProps={{ 'data-testid': `edit.trustProfile.format.${fmt.value}` }}
+                    slotProps={{ input: { 'data-testid': `edit.trustProfile.format.${fmt.value}` } }}
                   />
                 }
                 label={fmt.label}

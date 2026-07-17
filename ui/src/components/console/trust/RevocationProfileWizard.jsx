@@ -190,7 +190,7 @@ function RevocationProfileWizard() {
           onChange={(e) => setForm((prev) => ({ ...prev, name: e.target.value }))}
           sx={{ mb: 3 }}
           helperText={t('trust.revocationWizard.nameHelper', 'A descriptive name for this revocation configuration.')}
-          inputProps={{ 'data-testid': 'revocationWizard.name' }}
+          slotProps={{ htmlInput: { 'data-testid': 'revocationWizard.name' } }}
         />
 
         {/* Description */}
@@ -202,17 +202,20 @@ function RevocationProfileWizard() {
           value={form.description}
           onChange={(e) => setForm((prev) => ({ ...prev, description: e.target.value }))}
           sx={{ mb: 3 }}
-          inputProps={{ 'data-testid': 'revocationWizard.description' }}
+          slotProps={{ htmlInput: { 'data-testid': 'revocationWizard.description' } }}
         />
 
         {/* Check Mode */}
         <FormControl fullWidth sx={{ mb: 3 }}>
-          <InputLabel>{t('trust.revocationWizard.checkModeLabel', 'Revocation Check Mode')}</InputLabel>
+          <InputLabel id="revocation-check-mode-label">
+            {t('trust.revocationWizard.checkModeLabel', 'Revocation Check Mode')}
+          </InputLabel>
           <Select
+            labelId="revocation-check-mode-label"
             value={form.check_mode}
             onChange={(e) => setForm((prev) => ({ ...prev, check_mode: e.target.value }))}
             label={t('trust.revocationWizard.checkModeLabel', 'Revocation Check Mode')}
-            inputProps={{ 'data-testid': 'revocationWizard.checkMode' }}
+            data-testid="revocationWizard.checkMode"
           >
             {CHECK_MODES.map((mode) => (
               <MenuItem key={mode.value} value={mode.value}>
@@ -277,7 +280,7 @@ function RevocationProfileWizard() {
             'trust.revocationWizard.statusListUrlHelper',
             'Endpoint that serves the status list credential. Required for StatusList2021 and BitstringStatusList mechanisms.'
           )}
-          inputProps={{ 'data-testid': 'revocationWizard.statusListUrl', style: { fontFamily: 'monospace' } }}
+          slotProps={{ htmlInput: { 'data-testid': 'revocationWizard.statusListUrl', style: { fontFamily: 'monospace' } } }}
         />
       </Paper>
 
@@ -295,9 +298,9 @@ function RevocationProfileWizard() {
             value={form.offline_grace_seconds}
             onChange={(e) => setForm((prev) => ({ ...prev, offline_grace_seconds: e.target.value }))}
             sx={{ mb: 3 }}
-            InputProps={{
-              endAdornment: <InputAdornment position="end">seconds</InputAdornment>,
-              inputProps: { min: 1, 'data-testid': 'revocationWizard.gracePeriod' },
+            slotProps={{
+              input: { endAdornment: <InputAdornment position="end">seconds</InputAdornment> },
+              htmlInput: { min: 1, 'data-testid': 'revocationWizard.gracePeriod' },
             }}
             helperText={t(
               'trust.revocationWizard.gracePeriodHelper',
@@ -315,9 +318,9 @@ function RevocationProfileWizard() {
             label={t('trust.revocationWizard.cacheTtlLabel', 'Cache TTL')}
             value={form.cache_ttl_seconds}
             onChange={(e) => setForm((prev) => ({ ...prev, cache_ttl_seconds: e.target.value }))}
-            InputProps={{
-              endAdornment: <InputAdornment position="end">seconds</InputAdornment>,
-              inputProps: { min: 1, 'data-testid': 'revocationWizard.cacheTtl' },
+            slotProps={{
+              input: { endAdornment: <InputAdornment position="end">seconds</InputAdornment> },
+              htmlInput: { min: 1, 'data-testid': 'revocationWizard.cacheTtl' },
             }}
             helperText={t(
               'trust.revocationWizard.cacheTtlHelper',

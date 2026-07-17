@@ -14,7 +14,7 @@ import {
   Typography,
 } from '@mui/material';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
-import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
+import ErrorOutlineIcon from '@mui/icons-material/ErrorOutlined';
 import SearchIcon from '@mui/icons-material/Search';
 import VerifiedUserIcon from '@mui/icons-material/VerifiedUser';
 
@@ -229,7 +229,7 @@ function CanvasMirrorProvenanceLookup({
                 label={LOOKUP_MODES.find((mode) => mode.value === lookupMode)?.label || 'Lookup ID'}
                 value={lookupValue}
                 onChange={(event) => setLookupValue(event.target.value)}
-                inputProps={{ 'data-testid': 'canvas-provenance-lookup' }}
+                slotProps={{ htmlInput: { 'data-testid': 'canvas-provenance-lookup' } }}
                 fullWidth
               />
               <TextField

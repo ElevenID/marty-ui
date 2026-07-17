@@ -96,7 +96,7 @@ function CreateOrganizationForm({
             value={values.name}
             onChange={updateValue('name')}
             helperText="Unique identifier, lowercase letters, numbers, and hyphens"
-            inputProps={{ 'aria-label': 'Organization Slug' }}
+            slotProps={{ htmlInput: { 'aria-label': 'Organization Slug' } }}
           />
         </Grid>
         <Grid item xs={12} sm={6}>
@@ -107,7 +107,7 @@ function CreateOrganizationForm({
             value={values.displayName}
             onChange={updateValue('displayName')}
             helperText="How the organization appears to users"
-            inputProps={{ 'aria-label': 'Display Name' }}
+            slotProps={{ htmlInput: { 'aria-label': 'Display Name' } }}
           />
         </Grid>
         <Grid item xs={12} sm={6}>

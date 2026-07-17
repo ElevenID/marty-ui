@@ -26,7 +26,7 @@ import ProductionQuantityLimitsIcon from '@mui/icons-material/ProductionQuantity
 import WarningIcon from '@mui/icons-material/Warning';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import SwapHorizIcon from '@mui/icons-material/SwapHoriz';
-import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
+import HelpOutlineIcon from '@mui/icons-material/HelpOutlined';
 import { useTranslation } from 'react-i18next';
 
 /**

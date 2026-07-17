@@ -35,12 +35,10 @@ import {
   Paper,
   Divider,
 } from '@mui/material';
-import {
-  Close as CloseIcon,
-  NavigateNext as NavigateNextIcon,
-  NavigateBefore as NavigateBeforeIcon,
-  Send as SendIcon,
-} from '@mui/icons-material';
+import CloseIcon from '@mui/icons-material/Close';
+import NavigateNextIcon from '@mui/icons-material/NavigateNext';
+import NavigateBeforeIcon from '@mui/icons-material/NavigateBefore';
+import SendIcon from '@mui/icons-material/Send';
 import QRCodeDisplay from './QRCodeDisplay';
 
 const STEPS = ['Select Recipient', 'Choose Credential', 'Review & Generate'];
