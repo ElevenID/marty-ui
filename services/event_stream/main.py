@@ -70,8 +70,8 @@ if __name__ == "__main__":
 
     SERVICE_PORT = int(os.environ.get("EVENT_STREAM_SERVICE_PORT", "8015"))
     uvicorn.run(
-        "event_stream.main:app",
+        app,
         host="0.0.0.0",
         port=SERVICE_PORT,
-        reload=True,
+        reload=False,
     )
