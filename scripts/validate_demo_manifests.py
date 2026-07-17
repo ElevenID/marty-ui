@@ -92,14 +92,18 @@ def validate_timestamp(value: Any, label: str) -> None:
     require(parsed.tzinfo is not None, f"{label} timestamp requires a timezone")
 
 
-def validate_publication_approval(value: Any, expected_checks: set[str], published_at: Any, label: str) -> None:
-    require(isinstance(value, dict), f"{label} requires editorial approval evidence")
-    require(bool(SHA256.fullmatch(value.get("approval_sha256", ""))), f"{label} approval hash is invalid")
-    validate_timestamp(value.get("reviewed_at"), f"{label} approval")
-    require(value.get("reviewed_at") == published_at, f"{label} approval time must match published_at")
+def validate_publication_attestation(value: Any, expected_checks: set[str], published_at: Any, label: str) -> None:
+    require(isinstance(value, dict), f"{label} requires publication attestation evidence")
+    require(value.get("kind") == "AUTOMATED", f"{label} attestation kind must be AUTOMATED")
+    require(bool(GIT_REVISION.fullmatch(value.get("pipeline_revision", ""))), f"{label} pipeline revision is invalid")
+    validate_timestamp(value.get("published_at"), f"{label} attestation")
+    require(value.get("published_at") == published_at, f"{label} attestation time must match published_at")
     checks = value.get("checks")
-    require(isinstance(checks, list) and len(checks) == len(set(checks)), f"{label} approval checks must be unique")
-    require(set(checks) == expected_checks, f"{label} approval checks are incomplete")
+    require(isinstance(checks, list) and len(checks) == len(set(checks)), f"{label} attestation checks must be unique")
+    require(set(checks) == expected_checks, f"{label} attestation checks are incomplete")
+    for field in ("verification_report_sha256", "result_sha256", "smoke_report_sha256"):
+        require(bool(SHA256.fullmatch(value.get(field, ""))), f"{label} {field} is invalid")
+    require(value.get("youtube_privacy_status") == "public", f"{label} YouTube privacy status must be public")
 
 
 def validate_media_evidence(value: Any, label: str) -> None:
@@ -115,14 +119,14 @@ def validate_media_evidence(value: Any, label: str) -> None:
 def validate_manifest(manifest: dict[str, Any]) -> None:
     required = {
         "schema_version", "stack_version", "release_name", "mip_version", "publication_state",
-        "coverage_state", "release_ready", "public_demo_ready", "published_at", "publication_approval",
+        "coverage_state", "release_ready", "public_demo_ready", "published_at", "publication_attestation",
         "video_distribution",
         "deployment_release_marker", "recorder_revision", "component_revisions",
         "image_digests", "release_evidence", "release_differences", "scenarios",
     }
     missing = sorted(required - manifest.keys())
     require(not missing, f"missing required fields: {', '.join(missing)}")
-    require(manifest["schema_version"] == 1, "schema_version must be 1")
+    require(manifest["schema_version"] == 2, "schema_version must be 2")
     require(bool(STACK_VERSION.fullmatch(manifest["stack_version"])), "stack_version must use YYYY.MM.PATCH")
     release_name = manifest["release_name"]
     require(isinstance(release_name, str) and 3 <= len(release_name.strip()) <= 80, "release_name must be descriptive")
@@ -199,8 +203,8 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
             validate_media_evidence(scenario.get("media_evidence"), slug)
         if state == "PUBLIC":
             validate_timestamp(scenario.get("published_at"), f"{slug}: PUBLIC")
-            validate_publication_approval(
-                scenario.get("publication_approval"),
+            validate_publication_attestation(
+                scenario.get("publication_attestation"),
                 SCENARIO_PUBLICATION_CHECKS,
                 scenario.get("published_at"),
                 f"{slug}: PUBLIC",
@@ -219,7 +223,7 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
             )
         elif state != "SUPERSEDED":
             require(scenario.get("published_at") is None, f"{slug}: non-public scenario cannot retain published_at")
-            require(scenario.get("publication_approval") is None, f"{slug}: non-public scenario cannot retain publication approval")
+            require(scenario.get("publication_attestation") is None, f"{slug}: non-public scenario cannot retain publication attestation")
             if state not in {"YOUTUBE_UNLISTED"}:
                 require(scenario.get("media_evidence") is None, f"{slug}: unpublished scenario cannot retain media evidence")
 
@@ -244,8 +248,8 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
         require(manifest["release_ready"], "PUBLIC release evidence requires release_ready")
         require(manifest["public_demo_ready"], "PUBLIC release evidence requires public_demo_ready")
         validate_timestamp(manifest.get("published_at"), "PUBLIC release")
-        validate_publication_approval(
-            manifest.get("publication_approval"),
+        validate_publication_attestation(
+            manifest.get("publication_attestation"),
             RELEASE_PUBLICATION_CHECKS,
             manifest.get("published_at"),
             "PUBLIC release",
@@ -253,12 +257,12 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
         require(any(scenario.get("state") == "PUBLIC" for scenario in scenarios), "PUBLIC release requires at least one PUBLIC scenario")
     elif manifest["publication_state"] != "SUPERSEDED":
         require(manifest.get("published_at") is None, "non-public release cannot retain published_at")
-        require(manifest.get("publication_approval") is None, "non-public release cannot retain publication approval")
+        require(manifest.get("publication_attestation") is None, "non-public release cannot retain publication attestation")
     reject_sensitive_keys(manifest)
 
 
 def validate_index(index: dict[str, Any], manifests: dict[str, dict[str, Any]]) -> None:
-    require(index.get("schema_version") == 1, "index schema_version must be 1")
+    require(index.get("schema_version") == 2, "index schema_version must be 2")
     releases = index.get("releases")
     require(isinstance(releases, list) and releases, "index releases cannot be empty")
     versions = [release.get("stack_version") for release in releases]

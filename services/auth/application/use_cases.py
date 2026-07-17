@@ -12,6 +12,7 @@ import hashlib
 import logging
 import secrets
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from ..domain.entities import AuthenticatedUser, PKCEState, Session
 from ..domain.events import (
@@ -34,6 +35,9 @@ from .ports import (
     UserProvisioningPort,
     ValidateSessionQuery,
 )
+
+if TYPE_CHECKING:
+    from ..infrastructure.adapters.postgres_audit_adapter import PostgresAuditRepository
 
 logger = logging.getLogger(__name__)
 

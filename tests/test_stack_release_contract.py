@@ -81,7 +81,10 @@ def test_public_builds_do_not_checkout_sibling_sources() -> None:
 
     assert "context: .." not in workflow
     assert "COPY ../" not in dockerfiles
-    assert "marty-common==${MARTY_COMMON_VERSION}" in dockerfiles
+    assert "MARTY_COMMON_URI" in dockerfiles
+    assert "MARTY_COMMON_DIGEST" in dockerfiles
+    assert "/tmp/marty-common.whl" in dockerfiles
+    assert "sha256sum --check --strict" in dockerfiles
 
 
 def test_release_images_reject_commerce_markers() -> None:

@@ -5,6 +5,7 @@ Implements the repository pattern for trust profile, trust framework,
 and trusted issuer persistence.
 """
 
+import uuid
 from typing import TYPE_CHECKING
 
 from sqlalchemy import delete, func, select

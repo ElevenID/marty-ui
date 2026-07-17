@@ -27,6 +27,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 from marty_common.service_setup import create_service_app
 
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 try:
     from common.events import EventPublisher, DomainEvent, EventType, get_event_publisher
 except ImportError:
@@ -36,9 +39,6 @@ except ImportError:
     DomainEvent = None
     EventType = None
     get_event_publisher = lambda: None
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 SERVICE_NAME = "applicant-service"
 SERVICE_PORT = int(os.environ.get("APPLICANT_SERVICE_PORT", "8006"))

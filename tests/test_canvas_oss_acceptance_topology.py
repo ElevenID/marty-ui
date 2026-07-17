@@ -261,24 +261,15 @@ def test_self_managed_origin_allowlist_is_wired_separately() -> None:
         assert "CANVAS_PRIVATE_ORIGIN_ALLOWLIST" in content
 
 
-def test_coordinated_cd_requires_compose_migration_contract_for_pinned_credentials() -> None:
+def test_stack_cd_uses_released_credentials_and_public_migration_contract() -> None:
     workflow = (ROOT / ".github/workflows/cd.yml").read_text(encoding="utf-8")
-    job = workflow.split("  verify-credentials-service:", 1)[1].split(
-        "\n  verify-core:", 1
-    )[0]
 
-    assert "repository: ElevenID/marty-credentials" in job
-    assert "ref: ${{ env.MARTY_CREDENTIALS_REF }}" in job
-    assert "CANVAS_MIGRATION_SOURCE_REVISION: ${{ vars.MARTY_CREDENTIALS_REF }}" in job
-    assert 'test "$(git rev-parse HEAD)" = "$CANVAS_MIGRATION_SOURCE_REVISION"' in job
-    assert "docker-compose.canvas-migration-contract.yml config --quiet" in job
-    assert "build --pull migration-contract" in job
-    assert "up --force-recreate --abort-on-container-exit" in job
-    assert "--exit-code-from migration-contract migration-contract" in job
-    assert "contract-result.json" in job
-    assert "'.source_revision'" in job
-    assert (
-        "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02" in job
-    )
-    assert "down --volumes --remove-orphans" in job
-    assert "continue-on-error" not in job
+    assert 'select(.name == "marty-core-python")' in workflow
+    assert "MARTY_RS_URI" in workflow
+    assert "MARTY_RS_DIGEST" in workflow
+    assert "file: services/Dockerfile.migrations" in workflow
+    assert "MARTY_COMMON_URI" in workflow
+    assert "MARTY_COMMON_DIGEST" in workflow
+    assert "repository: ElevenID/marty-integration-tests" in workflow
+    assert "pytest tests/integration" in workflow
+    assert "repository: ElevenID/marty-credentials" not in workflow
