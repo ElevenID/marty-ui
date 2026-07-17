@@ -337,8 +337,15 @@ jobs:
         working-directory: integration-tests
         shell: bash
         run: |
-          previous_tag="$(gh release list --repo ElevenID/marty-ui --limit 20 --json tagName,isDraft \
-            --jq '[.[] | select(.isDraft == false and .tagName != env.GITHUB_REF_NAME)][0].tagName // empty')"
+          previous_tag=""
+          while IFS= read -r candidate; do
+            if [ "$(gh release view "$candidate" --repo ElevenID/marty-ui --json assets \
+              --jq 'any(.assets[]; .name == "stack-manifest.json")')" = "true" ]; then
+              previous_tag="$candidate"
+              break
+            fi
+          done < <(gh release list --repo ElevenID/marty-ui --limit 20 --json tagName,isDraft \
+            --jq '.[] | select(.isDraft == false and .tagName != env.GITHUB_REF_NAME) | .tagName')
           args=(--manifest stack-manifest.json --output .env.stack --pull)
           if [ -n "$previous_tag" ]; then
             mkdir previous

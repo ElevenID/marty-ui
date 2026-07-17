@@ -35,6 +35,8 @@ def test_stack_release_consumes_only_immutable_public_components() -> None:
     assert "API_CORE_URI: ${{ needs.validate-stack.outputs.api_core_uri }}" in workflow
     assert "API_CORE_DIGEST: ${{ needs.validate-stack.outputs.api_core_digest }}" in workflow
     assert "npm install --global /tmp/marty-api-core.tgz /tmp/marty-cli.tgz" in workflow
+    assert 'any(.assets[]; .name == "stack-manifest.json")' in workflow
+    assert "No previous public stack release" in workflow
     assert "marty-subscriptions" not in workflow
     assert "self-hosted" not in workflow
     assert "runs-on: ubuntu-latest" in workflow
