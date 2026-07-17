@@ -83,7 +83,8 @@ def test_public_builds_do_not_checkout_sibling_sources() -> None:
     assert "COPY ../" not in dockerfiles
     assert "MARTY_COMMON_URI" in dockerfiles
     assert "MARTY_COMMON_DIGEST" in dockerfiles
-    assert "/tmp/marty-common.whl" in dockerfiles
+    assert 'MARTY_COMMON_WHEEL="/tmp/${MARTY_COMMON_URI##*/}"' in dockerfiles
+    assert "/tmp/marty-common.whl" not in dockerfiles
     assert "sha256sum --check --strict" in dockerfiles
 
 
