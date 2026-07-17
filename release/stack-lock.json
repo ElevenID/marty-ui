@@ -1,0 +1,84 @@
+{
+  "schema": "marty.stack-lock/v1",
+  "release": "marty-ui@1.0.0",
+  "components": [
+    {
+      "name": "marty-api-core",
+      "repository": "ElevenID/marty-cli",
+      "version": "0.1.0",
+      "commit": "808b8efced3dbc8496e60369342c143b08d2cf0e",
+      "artifacts": [{
+        "type": "npm",
+        "uri": "https://github.com/ElevenID/marty-cli/releases/download/v0.1.0/elevenid-marty-api-core-0.1.0.tgz",
+        "digest": "sha256:c048d482faee350e984bc647c7e99948d894bae5c3355c976909ffe2a62c3dcc",
+        "sbom": "https://github.com/ElevenID/marty-cli/releases/download/v0.1.0/marty-api-core-sbom.cdx.json",
+        "provenance": "https://github.com/ElevenID/marty-cli/attestations"
+      }]
+    },
+    {
+      "name": "marty-blog",
+      "repository": "ElevenID/marty-blog",
+      "version": "0.1.3",
+      "commit": "b14d3450195502d9feeb21f73b061f3e9c0a5c5f",
+      "artifacts": [{
+        "type": "npm",
+        "uri": "https://github.com/ElevenID/marty-blog/releases/download/v0.1.3/elevenid-marty-blog-0.1.3.tgz",
+        "digest": "sha256:ae68d11b38fc0387c07eb6629197ba226cbca9cfe65efc23e6a97cce81a20a57",
+        "sbom": "https://github.com/ElevenID/marty-blog/releases/download/v0.1.3/marty-blog-sbom.cdx.json",
+        "provenance": "https://github.com/ElevenID/marty-blog/attestations"
+      }]
+    },
+    {
+      "name": "marty-core-python",
+      "repository": "ElevenID/marty-credentials",
+      "version": "0.1.1",
+      "commit": "25db3fe9673a735450dcae6741600255ba9da0b9",
+      "artifacts": [{
+        "type": "python",
+        "uri": "https://github.com/ElevenID/marty-credentials/releases/download/v0.1.1/marty_rs-0.1.1-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+        "digest": "sha256:2b5d1b9739631f58acb1e9b83abf555e262511e419b0d5d71f07c9b86305161a",
+        "sbom": "https://github.com/ElevenID/marty-credentials/releases/download/v0.1.1/marty-rs-sbom.json",
+        "provenance": "https://github.com/ElevenID/marty-credentials/attestations"
+      }]
+    },
+    {
+      "name": "marty-common",
+      "repository": "ElevenID/Marty",
+      "version": "0.2.0",
+      "commit": "0379bb390719be88a5e6241ead68bd9ca2c3b2e2",
+      "artifacts": [{
+        "type": "python",
+        "uri": "https://github.com/ElevenID/Marty/releases/download/marty-common-v0.2.0/marty_common-0.2.0-py3-none-any.whl",
+        "digest": "sha256:123452b401144ff2c7b13c4c8f2eea1370a34a60c259e49795d5dfe295747a2f",
+        "sbom": "https://github.com/ElevenID/Marty/releases/download/marty-common-v0.2.0/marty-common-sbom.cdx.json",
+        "provenance": "https://github.com/ElevenID/Marty/attestations"
+      }]
+    },
+    {
+      "name": "marty-cli",
+      "repository": "ElevenID/marty-cli",
+      "version": "0.1.0",
+      "commit": "808b8efced3dbc8496e60369342c143b08d2cf0e",
+      "artifacts": [{
+        "type": "npm",
+        "uri": "https://github.com/ElevenID/marty-cli/releases/download/v0.1.0/elevenid-marty-cli-0.1.0.tgz",
+        "digest": "sha256:7eeb4560e090068c8ab08686b4271e887b1da20ccdff0537d27d41b4f0df0699",
+        "sbom": "https://github.com/ElevenID/marty-cli/releases/download/v0.1.0/marty-cli-sbom.cdx.json",
+        "provenance": "https://github.com/ElevenID/marty-cli/attestations"
+      }]
+    },
+    {
+      "name": "marty-integration-tests",
+      "repository": "ElevenID/marty-integration-tests",
+      "version": "1.0.0",
+      "commit": "015b8b297755ba3db75f780d53b1898b62768d17",
+      "artifacts": [{
+        "type": "release",
+        "uri": "https://github.com/ElevenID/marty-integration-tests/releases/download/v1.0.0/marty-integration-tests-1.0.0-source.tar.gz",
+        "digest": "sha256:4100f6c7206d3d82ca61c87563ec4ddeff5c44de2d4f58a408f68ea2bce5b233",
+        "sbom": "https://github.com/ElevenID/marty-integration-tests/releases/download/v1.0.0/marty-integration-tests.spdx.json",
+        "provenance": "https://github.com/ElevenID/marty-integration-tests/releases/download/v1.0.0/marty-integration-tests-1.0.0-source.tar.gz.sigstore.json"
+      }]
+    }
+  ]
+}

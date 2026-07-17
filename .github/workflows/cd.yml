@@ -25,6 +25,9 @@ env:
 jobs:
   validate-stack:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      attestations: read
     outputs:
       version: ${{ steps.components.outputs.version }}
       api_core_version: ${{ steps.components.outputs.api_core }}
@@ -81,6 +84,24 @@ jobs:
             echo "cli_digest=$(jq -er '.components[] | select(.name == "marty-cli") | .artifacts[] | select(.type == "npm") | .digest' "$LOCK_FILE")"
             echo "integration_commit=$(jq -er '.components[] | select(.name == "marty-integration-tests") | .commit' "$LOCK_FILE")"
           } >> "$GITHUB_OUTPUT"
+      - name: Verify release artifact provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LOCK_FILE: ${{ inputs.lock_file || 'release/stack-lock.json' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifact_dir=$(mktemp -d)
+          trap 'rm -rf "$artifact_dir"' EXIT
+          index=0
+          jq -r '.components[] as $component | $component.artifacts[] | select(.type != "oci") | [$component.repository, .uri, .digest] | @tsv' "$LOCK_FILE" |
+          while IFS=$'\t' read -r repository uri digest; do
+            index=$((index + 1))
+            artifact="$artifact_dir/$index-$(basename "$uri")"
+            curl --fail --location --retry 3 --silent --show-error "$uri" --output "$artifact"
+            printf '%s  %s\n' "${digest#sha256:}" "$artifact" | sha256sum --check --strict
+            gh attestation verify "$artifact" --repo "$repository"
+          done
       - name: Verify immutable OCI inputs and provenance
         env:
           GH_TOKEN: ${{ github.token }}
