@@ -39,7 +39,11 @@ BUILD_ONLY=false
 TAG_LATEST=false
 PLATFORM="${PLATFORM:-linux/arm64}"
 MARTY_API_CORE_VERSION="${MARTY_API_CORE_VERSION:?Set the released @elevenid/marty-api-core version}"
+MARTY_API_CORE_URI="${MARTY_API_CORE_URI:?Set the immutable @elevenid/marty-api-core release URI}"
+MARTY_API_CORE_DIGEST="${MARTY_API_CORE_DIGEST:?Set the @elevenid/marty-api-core release SHA-256 digest}"
 MARTY_BLOG_VERSION="${MARTY_BLOG_VERSION:?Set the released @elevenid/marty-blog version}"
+MARTY_BLOG_URI="${MARTY_BLOG_URI:?Set the immutable @elevenid/marty-blog release URI}"
+MARTY_BLOG_DIGEST="${MARTY_BLOG_DIGEST:?Set the @elevenid/marty-blog release SHA-256 digest}"
 MARTY_COMMON_VERSION="${MARTY_COMMON_VERSION:?Set the released marty-common version}"
 MARTY_RS_VERSION="${MARTY_RS_VERSION:?Set the released marty-credentials Python version}"
 
@@ -192,13 +196,13 @@ build_and_push \
   "ui-selfhost" \
   "docker/ui.Dockerfile" \
   "." \
-  "--build-arg UI_VARIANT=selfhost --build-arg MARTY_API_CORE_VERSION=${MARTY_API_CORE_VERSION} --build-arg MARTY_BLOG_VERSION=${MARTY_BLOG_VERSION}"
+  "--build-arg UI_VARIANT=selfhost --build-arg MARTY_API_CORE_VERSION=${MARTY_API_CORE_VERSION} --build-arg MARTY_API_CORE_URI=${MARTY_API_CORE_URI} --build-arg MARTY_API_CORE_DIGEST=${MARTY_API_CORE_DIGEST} --build-arg MARTY_BLOG_VERSION=${MARTY_BLOG_VERSION} --build-arg MARTY_BLOG_URI=${MARTY_BLOG_URI} --build-arg MARTY_BLOG_DIGEST=${MARTY_BLOG_DIGEST}"
 
 build_and_push \
   "ui" \
   "docker/ui.Dockerfile" \
   "." \
-  "--build-arg UI_VARIANT=public --build-arg MARTY_API_CORE_VERSION=${MARTY_API_CORE_VERSION} --build-arg MARTY_BLOG_VERSION=${MARTY_BLOG_VERSION}"
+  "--build-arg UI_VARIANT=public --build-arg MARTY_API_CORE_VERSION=${MARTY_API_CORE_VERSION} --build-arg MARTY_API_CORE_URI=${MARTY_API_CORE_URI} --build-arg MARTY_API_CORE_DIGEST=${MARTY_API_CORE_DIGEST} --build-arg MARTY_BLOG_VERSION=${MARTY_BLOG_VERSION} --build-arg MARTY_BLOG_URI=${MARTY_BLOG_URI} --build-arg MARTY_BLOG_DIGEST=${MARTY_BLOG_DIGEST}"
 
 build_and_push \
   "cloudflared-wrapper" \

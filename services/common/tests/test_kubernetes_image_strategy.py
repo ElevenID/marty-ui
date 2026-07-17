@@ -82,13 +82,19 @@ def test_registry_build_script_publishes_selfhost_image_variants():
     assert '"cloudflared-wrapper"' in text
 
 
-def test_ui_docker_builds_include_only_public_source_dependency_contexts():
+def test_ui_docker_builds_use_only_verified_public_release_dependencies():
     dockerfile = (REPO_ROOT / "docker" / "ui.Dockerfile").read_text(encoding="utf-8")
     registry_build_script = (REPO_ROOT / "scripts" / "build-push-registry.sh").read_text(encoding="utf-8")
 
-    assert 'dependencies.@elevenid/marty-api-core=$MARTY_API_CORE_VERSION' in dockerfile
-    assert 'dependencies.@elevenid/marty-blog=$MARTY_BLOG_VERSION' in dockerfile
+    assert 'dependencies.@elevenid/marty-api-core=file:/tmp/marty-api-core.tgz' in dockerfile
+    assert 'dependencies.@elevenid/marty-blog=file:/tmp/marty-blog.tgz' in dockerfile
+    assert 'MARTY_API_CORE_DIGEST#sha256:' in dockerfile
+    assert 'MARTY_BLOG_DIGEST#sha256:' in dockerfile
     assert "marty-subscriptions" not in dockerfile
     assert "COPY ../" not in dockerfile
     assert "--build-context" not in registry_build_script
+    assert "MARTY_API_CORE_URI" in registry_build_script
+    assert "MARTY_API_CORE_DIGEST" in registry_build_script
+    assert "MARTY_BLOG_URI" in registry_build_script
+    assert "MARTY_BLOG_DIGEST" in registry_build_script
     assert "marty-subscriptions" not in registry_build_script
