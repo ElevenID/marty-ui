@@ -894,6 +894,20 @@ Verification is handled through two complementary approaches:
         """JWKS endpoint."""
         return await _proxy_to_issuance_well_known("/.well-known/jwks.json")
 
+    @app.get("/credentials/{credential_type:path}")
+    async def get_sd_jwt_vc_type_metadata(credential_type: str) -> Response:
+        """Proxy public SD-JWT VC Type Metadata from the credential issuer.
+
+        Credential configuration metadata publishes HTTPS ``vct`` values under
+        this path.  It is intentionally public: wallets and the OIDF
+        conformance suite resolve it after receiving an SD-JWT VC, without an
+        ElevenID access token.
+        """
+        normalized_type = credential_type.strip("/")
+        if not normalized_type:
+            raise HTTPException(status_code=404, detail="credential type is required")
+        return await _proxy_to_issuance_well_known(f"/credentials/{normalized_type}")
+
     @app.get("/.well-known/marty-release")
     async def get_marty_release() -> dict[str, Any]:
         """Expose non-secret runtime identity for immutable release gates."""
