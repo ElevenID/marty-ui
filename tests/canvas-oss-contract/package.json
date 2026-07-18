@@ -5,6 +5,6 @@
   "description": "Minimal locked runtime for the Canvas OSS portability browser contract",
   "license": "UNLICENSED",
   "dependencies": {
-    "@playwright/test": "1.56.0"
+    "@playwright/test": "1.61.1"
   }
 }
