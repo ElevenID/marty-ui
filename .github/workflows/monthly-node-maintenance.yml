@@ -1,0 +1,18 @@
+name: Monthly Node maintenance
+
+on:
+  schedule:
+    - cron: "17 7 1 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  monthly-node-maintenance:
+    permissions:
+      contents: write
+      pull-requests: write
+    uses: ElevenID/.github/.github/workflows/monthly-node-maintenance.yml@de8291f5ec5390a4d3d4d42b1bad88045afbffbc
+    with:
+      node-version: "24"
