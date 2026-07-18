@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "description": "OpenWallet Foundation mDoc/mDL Demo UI with Enhanced Features",
   "private": true,
+  "engines": {
+    "node": ">=24"
+  },
   "license": "AGPL-3.0-only",
   "type": "module",
   "scripts": {
@@ -42,7 +45,6 @@
     "react-dom": "^19.2.7",
     "react-helmet-async": "^3.0.0",
     "react-i18next": "^17.0.10",
-    "react-qr-scanner": "^1.0.0-alpha.11",
     "react-router-dom": "^7.18.1",
     "recharts": "^3.9.2",
     "redoc": "^2.5.3",
@@ -64,7 +66,7 @@
     "@vitest/ui": "^4.1.10",
     "ajv": "^8.20.0",
     "cross-env": "^10.1.0",
-    "eslint": "^10.7.0",
+    "eslint": "^9.39.5",
     "eslint-plugin-react": "^7.37.5",
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.3",

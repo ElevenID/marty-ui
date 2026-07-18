@@ -22,7 +22,7 @@ function createManualChunk(id: string) {
   if (normalizedId.includes('/node_modules/react/') || normalizedId.includes('/node_modules/react-dom/') || normalizedId.includes('/node_modules/react-router-dom/')) return 'react-vendor'
   if (normalizedId.includes('/node_modules/recharts/')) return 'chart-vendor'
   if (normalizedId.includes('/node_modules/i18next/') || normalizedId.includes('/node_modules/react-i18next/')) return 'i18n-vendor'
-  if (normalizedId.includes('/node_modules/qrcode.react/') || normalizedId.includes('/node_modules/react-qr-scanner/')) return 'qr-vendor'
+  if (normalizedId.includes('/node_modules/qrcode.react/')) return 'qr-vendor'
 
   return undefined
 }
