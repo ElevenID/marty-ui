@@ -70,6 +70,11 @@ services:
   flow:
     environment:
       PUBLIC_BASE_URL: ${OIDF_PUBLIC_BASE_URL:?set OIDF_PUBLIC_BASE_URL to the HTTPS verifier URL}
+      # The pinned OID4VP 1.0 Final verifier plan uses the standard
+      # redirect_uri client-ID prefix.  Keep this a deployment setting so a
+      # separate HAIP overlay can select x509_hash without weakening the
+      # Final profile or changing application code.
+      OID4VP_CLIENT_ID_PREFIX: ${OIDF_CLIENT_ID_PREFIX:-redirect_uri}
 
   issuance:
     environment:

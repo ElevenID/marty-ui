@@ -137,6 +137,13 @@ def test_oidf_profile_propagates_public_origin_to_seeded_and_runtime_urls() -> N
     assert f"ISSUER_BASE_URL: {public_origin}" in profile
 
 
+def test_oidf_final_profile_selects_the_standard_redirect_uri_client_id() -> None:
+    profile = (ROOT / "docker-compose.profile.oidf.yml").read_text(encoding="utf-8")
+    flow = profile.split("  flow:\n", 1)[1].split("\n  issuance:\n", 1)[0]
+
+    assert "OID4VP_CLIENT_ID_PREFIX: ${OIDF_CLIENT_ID_PREFIX:-redirect_uri}" in flow
+
+
 def test_conformance_profile_uses_a_disposable_reviewer_via_normal_oidc() -> None:
     profile = (ROOT / "docker-compose.profile.conformance.yml").read_text(encoding="utf-8")
 
