@@ -13,3 +13,15 @@ services:
       W3C_VC_TEST_POLICY_ID: ${W3C_VC_TEST_POLICY_ID:?set W3C_VC_TEST_POLICY_ID to a disposable fixture policy}
       W3C_VC_TEST_ORGANIZATION_ID: ${W3C_VC_TEST_ORGANIZATION_ID:?set W3C_VC_TEST_ORGANIZATION_ID to a disposable fixture organization}
       W3C_VC_TEST_TEMPLATE_ID: ${W3C_VC_TEST_TEMPLATE_ID:?set W3C_VC_TEST_TEMPLATE_ID to a disposable JWT-VC fixture template}
+      # The upstream W3C suite issues many independent documents in a short
+      # burst. This overlay is isolated and enables no production routes, so
+      # retain rate limiting in every normal deployment while disabling it for
+      # the disposable official-suite fixture only.
+      RATE_LIMIT_RPM: "0"
+
+  issuance:
+    environment:
+      # The official suite obtains a distinct OID4VCI access token for many
+      # cases. Keep the service limiter enabled, but make its capacity large
+      # enough for this disposable, isolated conformance burst.
+      TOKEN_RATE_LIMIT: "10000"
