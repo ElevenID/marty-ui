@@ -303,6 +303,7 @@ The default local Postgres container is configured via compose and is intended f
 - `docker-compose.profile.tunnel.yml` - optional public tunnel support
 - `docker-compose.profile.obs.yml` - optional observability profile
 - `docker-compose.profile.w3c-vc.yml` - disposable W3C VC Data Model v2 adapter profile
+- `docker-compose.profile.conformance.yml` - project-scoped official interoperability isolation
 
 ## Development
 
