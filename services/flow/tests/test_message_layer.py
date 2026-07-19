@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import base64
 import json
+from urllib.parse import urlencode
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
 from jwcrypto import jwt as jwcrypto_jwt
+from starlette.requests import Request
 
 import flow.main as flow_main
 from marty_common.messages import MessageType
@@ -58,6 +60,28 @@ def _raw_segment(payload: bytes) -> str:
 def _decode_jwt_segment(segment: str) -> dict:
     padding = "=" * (-len(segment) % 4)
     return json.loads(base64.urlsafe_b64decode((segment + padding).encode()).decode())
+
+
+def _form_request(values: dict[str, str]) -> Request:
+    body = urlencode(values).encode()
+    delivered = False
+
+    async def receive():
+        nonlocal delivered
+        if delivered:
+            return {"type": "http.disconnect"}
+        delivered = True
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/flows/instances/example/request",
+            "headers": [(b"content-type", b"application/x-www-form-urlencoded")],
+        },
+        receive,
+    )
 
 
 def _install_reference_validation_stubs(monkeypatch, *, templates, policies):
@@ -1041,6 +1065,33 @@ async def test_x509_hash_request_uses_certificate_client_id_and_x5c_header(monke
     assert decoded_payload["client_id"] == "x509_hash:certificate-thumbprint"
     assert decoded_header["x5c"] == ["base64-der-certificate"]
     assert "kid" not in decoded_header
+
+
+@pytest.mark.asyncio
+async def test_post_request_uri_binds_wallet_nonce_to_signed_request(monkeypatch):
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://verifier.example")
+    repo = InMemoryFlowRepository()
+    instance = FlowInstance(
+        flow_definition_id="__verification__",
+        organization_id="org-1",
+        status=FlowInstanceStatus.AWAITING_WALLET,
+        context={
+            "flow_type": "verification", "nonce": "nonce-123",
+            "presentation_policy_id": "policy-1", "request_uri_method": "post",
+        },
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+    )
+    await repo.save_instance(instance)
+
+    async def _fake_presentation_definition(_policy_id: str) -> dict:
+        return {"id": "pd-1", "input_descriptors": [{"id": "descriptor-1", "constraints": {"fields": []}}]}
+
+    monkeypatch.setattr("flow.main._build_presentation_definition", _fake_presentation_definition)
+    response = await get_verification_request_object(
+        instance.id, repo, request=_form_request({"wallet_nonce": "wallet-nonce-1"})
+    )
+    _header, payload, _signature = response.body.decode().split(".", 2)
+    assert _decode_jwt_segment(payload)["wallet_nonce"] == "wallet-nonce-1"
 
 
 @pytest.mark.asyncio

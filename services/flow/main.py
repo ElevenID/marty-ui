@@ -2659,6 +2659,7 @@ class StartVerificationFlowRequest(BaseModel):
     external_reference: str | None = None
     callback_url: str | None = Field(None, max_length=2048)
     oid4vp_profile: Literal["standard", "haip"] = "standard"
+    request_uri_method: Literal["get", "post"] = "get"
     expiry_minutes: int = 15
 
     @field_validator("callback_url")
@@ -2852,6 +2853,7 @@ async def start_verification_flow(
             "nonce": nonce,
             "flow_type": "verification",
             "oid4vp_profile": request.oid4vp_profile,
+            "request_uri_method": request.request_uri_method,
             "protocol_flow_type": FlowType.OID4VP_PRESENTATION.value,
             "current_step_name": "create_request",
             "current_step_index": 0,
@@ -2869,6 +2871,8 @@ async def start_verification_flow(
     request_uri = f"{base_url}/v1/flows/instances/{instance.id}/request"
     # The authorization request with request_uri parameter
     auth_request = f"openid4vp://authorize?request_uri={request_uri}"
+    if request.request_uri_method == "post":
+        auth_request += "&request_uri_method=post"
     qr_code_data = auth_request
 
     instance.context["request_uri"] = request_uri
@@ -3284,12 +3288,13 @@ def _dcql_claims_for_descriptor(descriptor: dict[str, Any]) -> list[dict[str, An
     return claims
 
 
-@router.get("/instances/{instance_id}/request")
+@router.api_route("/instances/{instance_id}/request", methods=["GET", "POST"])
 async def get_verification_request_object(
     instance_id: str,
     repo: InMemoryFlowRepository = Depends(get_repo),
     transport: Annotated[str, Query()] = "request_uri",
     compat: Annotated[str | None, Query()] = None,
+    request: Request = None,
 ) -> Response:
     """
     Get the verification request object (for wallet to fetch via request_uri).
@@ -3390,6 +3395,15 @@ async def get_verification_request_object(
             "iat": int(datetime.now(timezone.utc).timestamp()),
             "exp": int(instance.expires_at.timestamp()) if instance.expires_at else int((datetime.now(timezone.utc).timestamp() + 900)),
         }
+
+        if instance.context.get("request_uri_method") == "post":
+            if request is None or request.method != "POST":
+                raise HTTPException(status_code=405, detail="this request_uri requires HTTP POST")
+            form = await request.form()
+            wallet_nonce = form.get("wallet_nonce")
+            if not isinstance(wallet_nonce, str) or not wallet_nonce:
+                raise HTTPException(status_code=400, detail="wallet_nonce is required for POST request_uri retrieval")
+            request_payload["wallet_nonce"] = wallet_nonce
 
         if lissi_compat:
             request_payload["client_id_scheme"] = "did"
