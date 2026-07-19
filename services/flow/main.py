@@ -4514,7 +4514,7 @@ async def submit_oid4vp_direct_post_response(
     the result endpoint. OID4VP §8.2 permits an empty JSON object here; it
     prevents internal decision data from becoming a wallet callback contract.
     """
-    await submit_verification_response(
+    result = await submit_verification_response(
         instance_id,
         vp_token,
         presentation_submission,
@@ -4522,6 +4522,14 @@ async def submit_oid4vp_direct_post_response(
         repo,
         response,
     )
+    if result.decision != "allow" or result.result != "passed":
+        # A wallet needs an HTTP failure for a rejected VP. The detailed
+        # decision remains at the authenticated result endpoint, rather than
+        # being exposed in the protocol callback response.
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "invalid_presentation", "error_description": "presentation verification failed"},
+        )
     return JSONResponse(content={})
 
 

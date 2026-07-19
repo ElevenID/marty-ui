@@ -1151,6 +1151,28 @@ async def test_oid4vp_direct_post_callback_returns_only_the_standard_empty_objec
 
 
 @pytest.mark.asyncio
+async def test_oid4vp_direct_post_callback_rejects_a_denied_presentation(monkeypatch):
+    repo = InMemoryFlowRepository()
+
+    async def _fake_submit(*_args, **_kwargs):
+        return flow_main.VerificationResultResponse(
+            instance_id="flow-1",
+            status="completed",
+            result="failed",
+            decision="deny",
+            decision_reason="signature invalid",
+            verified_claims={},
+            evaluation_timestamp="2026-01-01T00:00:00Z",
+        )
+
+    monkeypatch.setattr(flow_main, "submit_verification_response", _fake_submit)
+    with pytest.raises(flow_main.HTTPException) as error:
+        await flow_main.submit_oid4vp_direct_post_response("flow-1", "invalid-vp", None, None, repo, None)
+
+    assert error.value.status_code == 400
+
+
+@pytest.mark.asyncio
 async def test_get_verification_request_object_supports_dc_api(monkeypatch):
     monkeypatch.setenv("PUBLIC_BASE_URL", "https://verifier.example")
 
