@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import base64
 import json
+from urllib.parse import urlencode
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
 from jwcrypto import jwt as jwcrypto_jwt
+from starlette.requests import Request
 
 import flow.main as flow_main
 from marty_common.messages import MessageType
@@ -58,6 +60,28 @@ def _raw_segment(payload: bytes) -> str:
 def _decode_jwt_segment(segment: str) -> dict:
     padding = "=" * (-len(segment) % 4)
     return json.loads(base64.urlsafe_b64decode((segment + padding).encode()).decode())
+
+
+def _form_request(values: dict[str, str]) -> Request:
+    body = urlencode(values).encode()
+    delivered = False
+
+    async def receive():
+        nonlocal delivered
+        if delivered:
+            return {"type": "http.disconnect"}
+        delivered = True
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/flows/instances/example/request",
+            "headers": [(b"content-type", b"application/x-www-form-urlencoded")],
+        },
+        receive,
+    )
 
 
 def _install_reference_validation_stubs(monkeypatch, *, templates, policies):
@@ -165,6 +189,22 @@ def _encrypted_dc_api_response(payload: dict) -> str:
         },
     )
     token.add_recipient(public_key)
+    return token.serialize(compact=True)
+
+
+def _encrypted_response_for_key(payload: dict, public_jwk: dict) -> str:
+    jwcrypto_jwe = pytest.importorskip("jwcrypto.jwe")
+    jwcrypto_jwk = pytest.importorskip("jwcrypto.jwk")
+    key = jwcrypto_jwk.JWK.from_json(json.dumps(public_jwk))
+    token = jwcrypto_jwe.JWE(
+        json.dumps(payload, separators=(",", ":")).encode(),
+        protected={
+            "alg": flow_main._HAIP_JWE_ALG,
+            "enc": flow_main._HAIP_JWE_ENC,
+            "kid": public_jwk["kid"],
+        },
+    )
+    token.add_recipient(key)
     return token.serialize(compact=True)
 
 
@@ -926,6 +966,158 @@ async def test_get_verification_request_object_supports_lissi_compat_profile(mon
     assert decoded_payload["response_mode"] == "direct_post"
     assert decoded_payload["response_uri"] == f"https://verifier.example/v1/flows/instances/{instance.id}/submit"
     assert instance.context["verification_audience"] == decoded_payload["client_id"]
+
+
+@pytest.mark.asyncio
+async def test_get_verification_request_object_supports_redirect_uri_client_id_prefix(monkeypatch):
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://verifier.example")
+    monkeypatch.setenv("OID4VP_CLIENT_ID_PREFIX", "redirect_uri")
+
+    repo = InMemoryFlowRepository()
+    instance = FlowInstance(
+        flow_definition_id="__verification__",
+        organization_id="org-1",
+        status=FlowInstanceStatus.AWAITING_WALLET,
+        context={"flow_type": "verification", "nonce": "nonce-123", "presentation_policy_id": "policy-1"},
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+    )
+    await repo.save_instance(instance)
+
+    async def _fake_presentation_definition(_policy_id: str) -> dict:
+        return {"id": "pd-1", "input_descriptors": [{"id": "descriptor-1", "constraints": {"fields": []}}]}
+
+    monkeypatch.setattr("flow.main._build_presentation_definition", _fake_presentation_definition)
+    response = await get_verification_request_object(instance.id, repo)
+    _header, payload, _signature = response.body.decode().split(".", 2)
+    decoded_payload = _decode_jwt_segment(payload)
+    expected = f"https://verifier.example/v1/flows/instances/{instance.id}/submit"
+
+    assert decoded_payload["client_id"] == expected
+    assert decoded_payload["response_uri"] == expected
+    assert "client_id_scheme" not in decoded_payload
+    assert instance.context["verification_audience"] == expected
+
+
+@pytest.mark.asyncio
+async def test_haip_request_uses_a_fresh_per_flow_response_encryption_key(monkeypatch):
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://verifier.example")
+    repo = InMemoryFlowRepository()
+
+    async def _fake_presentation_definition(_policy_id: str) -> dict:
+        return {"id": "pd-1", "input_descriptors": [{"id": "descriptor-1", "constraints": {"fields": []}}]}
+
+    monkeypatch.setattr("flow.main._build_presentation_definition", _fake_presentation_definition)
+    instances = []
+    for _ in range(2):
+        instance = FlowInstance(
+            flow_definition_id="__verification__",
+            organization_id="org-1",
+            status=FlowInstanceStatus.AWAITING_WALLET,
+            context={"flow_type": "verification", "oid4vp_profile": "haip", "nonce": "nonce-123", "presentation_policy_id": "policy-1"},
+            expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+        )
+        await repo.save_instance(instance)
+        instances.append(instance)
+
+    payloads = []
+    for instance in instances:
+        response = await get_verification_request_object(instance.id, repo)
+        _header, payload, _signature = response.body.decode().split(".", 2)
+        payloads.append(_decode_jwt_segment(payload))
+
+    keys = [payload["client_metadata"]["jwks"]["keys"][0] for payload in payloads]
+    assert payloads[0]["response_mode"] == "direct_post.jwt"
+    assert payloads[0]["client_metadata"]["authorization_encrypted_response_alg"] == flow_main._HAIP_JWE_ALG
+    assert payloads[0]["client_metadata"]["authorization_encrypted_response_enc"] == flow_main._HAIP_JWE_ENC
+    assert keys[0]["kid"] != keys[1]["kid"]
+    assert "d" not in keys[0]
+    assert instances[0].context["haip_response_encryption_private_jwk"]["kid"] == keys[0]["kid"]
+
+
+@pytest.mark.asyncio
+async def test_x509_hash_request_uses_certificate_client_id_and_x5c_header(monkeypatch):
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://verifier.example")
+    monkeypatch.setenv("OID4VP_CLIENT_ID_PREFIX", "x509_hash")
+    monkeypatch.setattr(
+        flow_main,
+        "_x509_hash_client_id_and_header",
+        lambda: ("x509_hash:certificate-thumbprint", ["base64-der-certificate"]),
+    )
+    repo = InMemoryFlowRepository()
+    instance = FlowInstance(
+        flow_definition_id="__verification__",
+        organization_id="org-1",
+        status=FlowInstanceStatus.AWAITING_WALLET,
+        context={"flow_type": "verification", "nonce": "nonce-123", "presentation_policy_id": "policy-1"},
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+    )
+    await repo.save_instance(instance)
+
+    async def _fake_presentation_definition(_policy_id: str) -> dict:
+        return {"id": "pd-1", "input_descriptors": [{"id": "descriptor-1", "constraints": {"fields": []}}]}
+
+    monkeypatch.setattr("flow.main._build_presentation_definition", _fake_presentation_definition)
+    response = await get_verification_request_object(instance.id, repo)
+    header, payload, _signature = response.body.decode().split(".", 2)
+    decoded_header = _decode_jwt_segment(header)
+    decoded_payload = _decode_jwt_segment(payload)
+
+    assert decoded_payload["client_id"] == "x509_hash:certificate-thumbprint"
+    assert decoded_header["x5c"] == ["base64-der-certificate"]
+    assert "kid" not in decoded_header
+
+
+@pytest.mark.asyncio
+async def test_post_request_uri_binds_wallet_nonce_to_signed_request(monkeypatch):
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://verifier.example")
+    repo = InMemoryFlowRepository()
+    instance = FlowInstance(
+        flow_definition_id="__verification__",
+        organization_id="org-1",
+        status=FlowInstanceStatus.AWAITING_WALLET,
+        context={
+            "flow_type": "verification", "nonce": "nonce-123",
+            "presentation_policy_id": "policy-1", "request_uri_method": "post",
+        },
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+    )
+    await repo.save_instance(instance)
+
+    async def _fake_presentation_definition(_policy_id: str) -> dict:
+        return {"id": "pd-1", "input_descriptors": [{"id": "descriptor-1", "constraints": {"fields": []}}]}
+
+    monkeypatch.setattr("flow.main._build_presentation_definition", _fake_presentation_definition)
+    response = await get_verification_request_object(
+        instance.id, repo, request=_form_request({"wallet_nonce": "wallet-nonce-1"})
+    )
+    _header, payload, _signature = response.body.decode().split(".", 2)
+    assert _decode_jwt_segment(payload)["wallet_nonce"] == "wallet-nonce-1"
+
+
+@pytest.mark.asyncio
+async def test_submit_verification_response_decrypts_per_flow_direct_post_jwt():
+    repo = InMemoryFlowRepository()
+    public_jwk, private_jwk = flow_main._new_haip_response_encryption_key()
+    instance = FlowInstance(
+        flow_definition_id="__verification__",
+        organization_id="org-1",
+        status=FlowInstanceStatus.AWAITING_WALLET,
+        context={"nonce": "nonce-haip", "haip_response_encryption_private_jwk": private_jwk},
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+    )
+    await repo.save_instance(instance)
+    header = _jwt_segment({"alg": "none", "typ": "JWT"})
+    payload = _jwt_segment({"nonce": "nonce-haip", "iss": "issuer.example", "given_name": "HAIP"})
+    vp_token = f"{header}.{payload}."
+    encrypted_response = _encrypted_response_for_key({"vp_token": vp_token}, public_jwk)
+
+    response = await submit_verification_response(
+        instance.id, None, None, None, repo=repo, response=encrypted_response
+    )
+
+    assert response.result == "passed"
+    assert response.verified_claims["given_name"] == "HAIP"
+    assert instance.context["vp_token"] == vp_token
 
 
 @pytest.mark.asyncio

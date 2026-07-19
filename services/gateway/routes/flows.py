@@ -191,9 +191,9 @@ async def start_verification_flow(body: StartVerificationFlowRequest, request: R
     return await proxy_request(request, service_url, "/v1/flows/verify")
 
 
-@flow_router.get("/instances/{instance_id}/request", summary="Get Verification Request Object")
+@flow_router.api_route("/instances/{instance_id}/request", methods=["GET", "POST"], summary="Get Verification Request Object")
 async def get_flow_verification_request(instance_id: str, request: Request) -> Response:
-    """Get the OID4VP request object (for wallet to fetch via request_uri)."""
+    """Get the OID4VP request object, including POST request_uri retrieval."""
     registry = get_registry()
     service_url = registry.get_service_url("flows")
     return await proxy_request(request, service_url, f"/v1/flows/instances/{instance_id}/request")

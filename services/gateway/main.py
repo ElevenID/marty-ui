@@ -90,6 +90,7 @@ from gateway.routes.trust import (
     trust_registry_router,
 )
 from gateway.routes.verification import presentation_policy_router
+from gateway.routes.w3c_vc_test_adapter import router as w3c_vc_test_adapter_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -556,6 +557,11 @@ Verification is handled through two complementary approaches:
     app.include_router(organization_router)
     app.include_router(preferences_router)
     app.include_router(credential_metadata_router)
+    # The adapter is excluded from ordinary deployments.  It gives the pinned
+    # W3C suite a VC-API-shaped boundary while still executing Marty’s actual
+    # presentation-policy verifier in a disposable interop stack.
+    if os.environ.get("W3C_VC_TEST_ADAPTER") == "1":
+        app.include_router(w3c_vc_test_adapter_router)
 
     # Auth service proxy - forward all /v1/auth/* requests to auth service
     @app.api_route("/v1/auth/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])

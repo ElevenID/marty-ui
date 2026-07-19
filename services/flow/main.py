@@ -32,6 +32,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
+from pathlib import Path
 from typing import Any, AsyncGenerator, Literal
 
 import httpx
@@ -41,7 +42,8 @@ from fastapi.responses import JSONResponse, Response
 from jwcrypto import jwt, jwk
 from fastapi.middleware.cors import CORSMiddleware
 from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography.hazmat.primitives import serialization
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.backends import default_backend
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
@@ -2656,6 +2658,8 @@ class StartVerificationFlowRequest(BaseModel):
     deployment_profile_id: str | None = None
     external_reference: str | None = None
     callback_url: str | None = Field(None, max_length=2048)
+    oid4vp_profile: Literal["standard", "haip"] = "standard"
+    request_uri_method: Literal["get", "post"] = "get"
     expiry_minutes: int = 15
 
     @field_validator("callback_url")
@@ -2791,6 +2795,11 @@ async def start_verification_flow(
             status_code=400,
             detail={"error": "invalid_request", "error_description": "presentation_policy_id is required for OID4VP flows"},
         )
+    if request.oid4vp_profile == "haip" and os.environ.get("OID4VP_HAIP_ENABLED") != "1":
+        raise HTTPException(
+            status_code=409,
+            detail="HAIP verifier support is not enabled for this deployment",
+        )
 
     # Resolve the real organization_id from the presentation policy so that the
     # instance carries a valid org and the membership check in get_flow_instance
@@ -2843,6 +2852,8 @@ async def start_verification_flow(
             "callback_url": request.callback_url,
             "nonce": nonce,
             "flow_type": "verification",
+            "oid4vp_profile": request.oid4vp_profile,
+            "request_uri_method": request.request_uri_method,
             "protocol_flow_type": FlowType.OID4VP_PRESENTATION.value,
             "current_step_name": "create_request",
             "current_step_index": 0,
@@ -2860,6 +2871,8 @@ async def start_verification_flow(
     request_uri = f"{base_url}/v1/flows/instances/{instance.id}/request"
     # The authorization request with request_uri parameter
     auth_request = f"openid4vp://authorize?request_uri={request_uri}"
+    if request.request_uri_method == "post":
+        auth_request += "&request_uri_method=post"
     qr_code_data = auth_request
 
     instance.context["request_uri"] = request_uri
@@ -3275,12 +3288,13 @@ def _dcql_claims_for_descriptor(descriptor: dict[str, Any]) -> list[dict[str, An
     return claims
 
 
-@router.get("/instances/{instance_id}/request")
+@router.api_route("/instances/{instance_id}/request", methods=["GET", "POST"])
 async def get_verification_request_object(
     instance_id: str,
     repo: InMemoryFlowRepository = Depends(get_repo),
     transport: Annotated[str, Query()] = "request_uri",
     compat: Annotated[str | None, Query()] = None,
+    request: Request = None,
 ) -> Response:
     """
     Get the verification request object (for wallet to fetch via request_uri).
@@ -3317,6 +3331,7 @@ async def get_verification_request_object(
 
     flow_type = instance.context.get("flow_type", "verification")
     compat_profile = (compat or "").strip().lower()
+    request_x5c: list[str] | None = None
 
     if flow_type == "siop_v2":
         # SIOPv2 Draft 13 §9: authentication request for a self-issued OP.
@@ -3348,7 +3363,24 @@ async def get_verification_request_object(
         # The response_uri is where the wallet POSTs the VP token (the submit endpoint).
         verifier_did = _derive_verifier_did(base_url)
         lissi_compat = compat_profile == "lissi"
-        client_identifier = verifier_did if lissi_compat else f"decentralized_identifier:{verifier_did}"
+        client_id_prefix = os.environ.get("OID4VP_CLIENT_ID_PREFIX", "decentralized_identifier").strip().lower()
+        if lissi_compat:
+            client_identifier = verifier_did
+        elif client_id_prefix == "redirect_uri":
+            # OID4VP 1.0 Final §5.9.2: without an explicit client_id_scheme,
+            # the response URI is the verifier client identifier. This is a
+            # normal deployment option used by wallets that support the
+            # redirect_uri prefix; it is not a conformance-only shortcut.
+            client_identifier = response_uri
+        elif client_id_prefix == "decentralized_identifier":
+            client_identifier = f"decentralized_identifier:{verifier_did}"
+        elif client_id_prefix == "x509_hash":
+            client_identifier, request_x5c = _x509_hash_client_id_and_header()
+        else:
+            raise HTTPException(
+                status_code=500,
+                detail="OID4VP_CLIENT_ID_PREFIX must be decentralized_identifier, redirect_uri, or x509_hash",
+            )
         # Build OID4VP Request Object payload
         # This will be signed as a JWT per OID4VP spec section 5
         request_payload = {
@@ -3363,6 +3395,15 @@ async def get_verification_request_object(
             "iat": int(datetime.now(timezone.utc).timestamp()),
             "exp": int(instance.expires_at.timestamp()) if instance.expires_at else int((datetime.now(timezone.utc).timestamp() + 900)),
         }
+
+        if instance.context.get("request_uri_method") == "post":
+            if request is None or request.method != "POST":
+                raise HTTPException(status_code=405, detail="this request_uri requires HTTP POST")
+            form = await request.form()
+            wallet_nonce = form.get("wallet_nonce")
+            if not isinstance(wallet_nonce, str) or not wallet_nonce:
+                raise HTTPException(status_code=400, detail="wallet_nonce is required for POST request_uri retrieval")
+            request_payload["wallet_nonce"] = wallet_nonce
 
         if lissi_compat:
             request_payload["client_id_scheme"] = "did"
@@ -3384,7 +3425,22 @@ async def get_verification_request_object(
             instance.context["dc_api_jwe_alg"] = _HAIP_JWE_ALG
             instance.context["dc_api_jwe_enc"] = _HAIP_JWE_ENC
         else:
-            request_payload["response_mode"] = "direct_post"
+            haip = instance.context.get("oid4vp_profile") == "haip"
+            if haip:
+                if lissi_compat:
+                    raise HTTPException(status_code=400, detail="HAIP is incompatible with the lissi compatibility profile")
+                response_encryption_jwk = _haip_response_encryption_key(instance)
+                request_payload["client_metadata"] = _oid4vp_client_metadata(
+                    base_url,
+                    include_encrypted_response=True,
+                    response_encryption_jwk=response_encryption_jwk,
+                )
+                request_payload["response_mode"] = "direct_post.jwt"
+                instance.context["haip_response_mode"] = "direct_post.jwt"
+                instance.context["haip_jwe_alg"] = _HAIP_JWE_ALG
+                instance.context["haip_jwe_enc"] = _HAIP_JWE_ENC
+            else:
+                request_payload["response_mode"] = "direct_post"
             request_payload["response_uri"] = response_uri
             request_payload["state"] = instance_id
             instance.context["verification_audience"] = client_identifier
@@ -3444,7 +3500,10 @@ async def get_verification_request_object(
         'alg': 'ES256',
     }
     if flow_type != "siop_v2":
-        jwt_headers['kid'] = _verification_method_for_did(verifier_did)
+        if request_x5c:
+            jwt_headers['x5c'] = request_x5c
+        else:
+            jwt_headers['kid'] = _verification_method_for_did(verifier_did)
 
     # Sign the Request Object as a JWT
     # Per OID4VP spec: "The Request Object [...] MUST be signed"
@@ -3531,6 +3590,36 @@ def _base64url_decode(data: str) -> bytes:
     return base64.urlsafe_b64decode((data + padding).encode("ascii"))
 
 
+def _verifier_x509_certificate() -> x509.Certificate:
+    """Load the verifier certificate used for the x509_hash client identifier."""
+    certificate_pem = os.environ.get("VERIFIER_X509_CERT_PEM")
+    certificate_file = os.environ.get("VERIFIER_X509_CERT_FILE")
+    if certificate_pem:
+        data = certificate_pem.encode("utf-8")
+    elif certificate_file and os.path.isfile(certificate_file):
+        data = Path(certificate_file).read_bytes()
+    else:
+        raise RuntimeError("VERIFIER_X509_CERT_PEM or VERIFIER_X509_CERT_FILE is required for x509_hash")
+    return x509.load_pem_x509_certificate(data)
+
+
+def _x509_hash_client_id_and_header() -> tuple[str, list[str]]:
+    """Return the OID4VP x509_hash identifier and JOSE ``x5c`` certificate."""
+    certificate = _verifier_x509_certificate()
+    der = certificate.public_bytes(serialization.Encoding.DER)
+    certificate_hash = hashes.Hash(hashes.SHA256())
+    certificate_hash.update(der)
+    digest = _base64url_encode(certificate_hash.finalize())
+
+    signing_pair, _ = get_or_create_signing_key()
+    certificate_public = certificate.public_key()
+    if not isinstance(certificate_public, ec.EllipticCurvePublicKey) or (
+        certificate_public.public_numbers() != signing_pair["public"].public_numbers()
+    ):
+        raise RuntimeError("VERIFIER_X509_CERT_* public key must match the OID4VP request signing key")
+    return f"x509_hash:{digest}", [base64.b64encode(der).decode("ascii")]
+
+
 def _verifier_public_jwk() -> dict[str, str]:
     """Return the public JWK for the verifier's ES256 signing key."""
     key_pair, _ = get_or_create_signing_key()
@@ -3563,6 +3652,32 @@ def _verifier_encryption_private_jwk() -> dict[str, str]:
         **_verifier_encryption_public_jwk(),
         "d": _base64url_encode(private_numbers.private_value.to_bytes(coordinate_size, "big")),
     }
+
+
+def _new_haip_response_encryption_key() -> tuple[dict[str, str], dict[str, str]]:
+    """Create a fresh P-256 response-encryption key for one verification flow."""
+    private = jwk.JWK.generate(kty="EC", crv="P-256", kid=f"oid4vp-haip-{uuid.uuid4()}")
+    private_data = json.loads(private.export_private())
+    public_data = json.loads(private.export_public())
+    public_data.update({"alg": _HAIP_JWE_ALG, "use": "enc"})
+    private_data.update({"alg": _HAIP_JWE_ALG, "use": "enc"})
+    return public_data, private_data
+
+
+def _haip_response_encryption_key(instance: FlowInstance) -> dict[str, str]:
+    """Return the public half of a per-flow HAIP response key.
+
+    The private half remains only in the flow record so it can decrypt the
+    callback, while a new key is generated for every separate flow.
+    """
+    private = instance.context.get("haip_response_encryption_private_jwk")
+    public = instance.context.get("haip_response_encryption_public_jwk")
+    if isinstance(private, dict) and isinstance(public, dict):
+        return public
+    public, private = _new_haip_response_encryption_key()
+    instance.context["haip_response_encryption_public_jwk"] = public
+    instance.context["haip_response_encryption_private_jwk"] = private
+    return public
 
 
 def _derive_verifier_did(base_url: str | None = None) -> str:
@@ -3653,7 +3768,12 @@ def _oid4vp_did_web_document(base_url: str) -> dict[str, Any]:
     }
 
 
-def _oid4vp_client_metadata(base_url: str, *, include_encrypted_response: bool = False) -> dict[str, Any]:
+def _oid4vp_client_metadata(
+    base_url: str,
+    *,
+    include_encrypted_response: bool = False,
+    response_encryption_jwk: dict[str, str] | None = None,
+) -> dict[str, Any]:
     """Verifier metadata advertised to wallets in OID4VP request objects."""
     metadata: dict[str, Any] = {
         "client_name": os.environ.get("VERIFIER_DISPLAY_NAME", "ElevenID LLC"),
@@ -3672,7 +3792,7 @@ def _oid4vp_client_metadata(base_url: str, *, include_encrypted_response: bool =
             {
                 "authorization_encrypted_response_alg": _HAIP_JWE_ALG,
                 "authorization_encrypted_response_enc": _HAIP_JWE_ENC,
-                "jwks": {"keys": [_verifier_encryption_public_jwk()]},
+                "jwks": {"keys": [response_encryption_jwk or _verifier_encryption_public_jwk()]},
             }
         )
     return metadata
@@ -3981,13 +4101,18 @@ def _parse_decrypted_dc_api_response(payload_bytes: bytes) -> dict[str, Any]:
     return response_payload
 
 
-def _decrypt_dc_api_jwt_response(encrypted_response: Any) -> dict[str, Any]:
+def _decrypt_jwt_response(
+    encrypted_response: Any,
+    private_jwk: dict[str, str],
+    *,
+    field_name: str,
+) -> dict[str, Any]:
     if not isinstance(encrypted_response, str) or not encrypted_response.strip():
         raise HTTPException(
             status_code=400,
             detail={
                 "error": "invalid_request",
-                "error_description": "DigitalCredential.data.response must be a non-empty compact JWE string",
+                "error_description": f"{field_name} must be a non-empty compact JWE string",
             },
         )
 
@@ -3999,7 +4124,7 @@ def _decrypt_dc_api_jwt_response(encrypted_response: Any) -> dict[str, Any]:
             status_code=400,
             detail={
                 "error": "invalid_request",
-                "error_description": f"Unsupported dc_api.jwt JWE alg: {alg}",
+                "error_description": f"Unsupported {field_name} JWE alg: {alg}",
             },
         )
     if enc not in _SUPPORTED_HAIP_JWE_ENCS:
@@ -4007,7 +4132,7 @@ def _decrypt_dc_api_jwt_response(encrypted_response: Any) -> dict[str, Any]:
             status_code=400,
             detail={
                 "error": "invalid_request",
-                "error_description": f"Unsupported dc_api.jwt JWE enc: {enc}",
+                "error_description": f"Unsupported {field_name} JWE enc: {enc}",
             },
         )
 
@@ -4025,20 +4150,28 @@ def _decrypt_dc_api_jwt_response(encrypted_response: Any) -> dict[str, Any]:
         ) from exc
 
     try:
-        key = jwcrypto_jwk.JWK.from_json(json.dumps(_verifier_encryption_private_jwk()))
+        key = jwcrypto_jwk.JWK.from_json(json.dumps(private_jwk))
         token = jwcrypto_jwe.JWE()
         token.deserialize(encrypted_response, key=key)
     except Exception as exc:
-        logger.info("Failed to decrypt dc_api.jwt response", exc_info=True)
+        logger.info("Failed to decrypt %s response", field_name, exc_info=True)
         raise HTTPException(
             status_code=400,
             detail={
                 "error": "invalid_request",
-                "error_description": f"Failed to decrypt dc_api.jwt response: {exc}",
+                "error_description": f"Failed to decrypt {field_name} response: {exc}",
             },
         ) from exc
 
     return _parse_decrypted_dc_api_response(token.payload)
+
+
+def _decrypt_dc_api_jwt_response(encrypted_response: Any) -> dict[str, Any]:
+    return _decrypt_jwt_response(
+        encrypted_response,
+        _verifier_encryption_private_jwk(),
+        field_name="dc_api.jwt",
+    )
 
 
 async def _submit_verification_response_internal(
@@ -4312,10 +4445,11 @@ async def _submit_verification_response_internal(
 @router.post("/instances/{instance_id}/submit", response_model=VerificationResultResponse, response_model_exclude_none=True)
 async def submit_verification_response(
     instance_id: str,
-    vp_token: str = Form(...),
+    vp_token: str | None = Form(None),
     presentation_submission: str = Form(None),
     state: str = Form(None),
     repo: InMemoryFlowRepository = Depends(get_repo),
+    response: str | None = Form(None),
 ) -> VerificationResultResponse:
     """
     Submit a VP token to complete a verification flow.
@@ -4323,11 +4457,33 @@ async def submit_verification_response(
     This is called by the wallet (via direct_post) or by the relying party
     after receiving the VP token from the wallet.
 
-    Accepts form-encoded data per OID4VP spec (application/x-www-form-urlencoded).
+    Accepts form-encoded ``vp_token`` direct-post responses and encrypted
+    ``response`` values for HAIP ``direct_post.jwt`` responses.
     """
+    encrypted_response = response if isinstance(response, str) else None
+    if bool(vp_token) == bool(encrypted_response):
+        raise HTTPException(status_code=400, detail="exactly one of vp_token or response is required")
+    if encrypted_response:
+        instance = await repo.get_instance(instance_id)
+        if not instance:
+            raise HTTPException(status_code=404, detail="Flow instance not found")
+        private_jwk = instance.context.get("haip_response_encryption_private_jwk")
+        if not isinstance(private_jwk, dict):
+            raise HTTPException(status_code=400, detail="encrypted direct_post.jwt was not requested for this flow")
+        decrypted = _decrypt_jwt_response(
+            encrypted_response,
+            private_jwk,
+            field_name="direct_post.jwt response",
+        )
+        vp_value = decrypted.get("vp_token")
+        if vp_value is None:
+            raise HTTPException(status_code=400, detail="decrypted direct_post.jwt response has no vp_token")
+        vp_token = vp_value if isinstance(vp_value, str) else json.dumps(vp_value)
+        presentation_submission = decrypted.get("presentation_submission", presentation_submission)
+        state = decrypted.get("state", state)
     return await _submit_verification_response_internal(
         instance_id=instance_id,
-        vp_token=vp_token,
+        vp_token=vp_token or "",
         presentation_submission=presentation_submission,
         state=state,
         repo=repo,
