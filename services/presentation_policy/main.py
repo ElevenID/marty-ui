@@ -917,6 +917,7 @@ def _verify_credential_by_format(
     credential_format: str,
     nonce: str | None,
     audience: str | None,
+    issuer_public_jwk: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
     Verify credential based on detected format.
@@ -931,7 +932,7 @@ def _verify_credential_by_format(
         if credential_format == "w3c-vc":
             return _verify_w3c_vc(vp_token, nonce, audience)
         elif credential_format == "sd-jwt":
-            return _verify_sd_jwt(vp_token, nonce, audience)
+            return _verify_sd_jwt(vp_token, nonce, audience, issuer_public_jwk)
         elif credential_format == "mdoc":
             return _verify_mdoc(vp_token, nonce, audience)
         elif credential_format == "openbadge-v2":
@@ -1015,7 +1016,12 @@ def _verify_w3c_vc(vp_token: str, nonce: str | None, audience: str | None) -> di
                 "format": "w3c-vc", "error": str(e)}
 
 
-def _verify_sd_jwt(vp_token: str, nonce: str | None, audience: str | None) -> dict:
+def _verify_sd_jwt(
+    vp_token: str,
+    nonce: str | None,
+    audience: str | None,
+    issuer_public_jwk: dict[str, Any] | None = None,
+) -> dict:
     """
     Decode an SD-JWT VC and extract all Claims (base claims + disclosures).
 
@@ -1072,14 +1078,14 @@ def _verify_sd_jwt(vp_token: str, nonce: str | None, audience: str | None) -> di
         issuer = payload.get("iss") or payload.get("issuer", "unknown")
         subject = payload.get("sub") or payload.get("subject", "unknown")
 
-        if not isinstance(issuer, str) or not issuer.startswith("did:"):
+        if not isinstance(issuer, str) or not issuer:
             return {
                 "verified": False,
                 "claims": claims,
                 "issuer_did": str(issuer or "unknown"),
                 "subject": subject,
                 "format": "sd-jwt",
-                "error": "DID resolution failed: SD-JWT issuer is not a DID",
+                "error": "SD-JWT issuer is missing",
             }
 
         marty_rs = _load_marty_rs_binding()
@@ -1094,8 +1100,23 @@ def _verify_sd_jwt(vp_token: str, nonce: str | None, audience: str | None) -> di
             }
 
         try:
-            did_document = _resolve_did_document(issuer)
-            public_jwk = _select_public_jwk_from_did_document(did_document, issuer, header.get("kid"))
+            if issuer_public_jwk is not None:
+                # A non-DID issuer is accepted only with a JWK explicitly
+                # pinned by the selected trust profile. The normal DID path
+                # remains the default for every other issuer.
+                public_jwk = issuer_public_jwk
+            elif issuer.startswith("did:"):
+                did_document = _resolve_did_document(issuer)
+                public_jwk = _select_public_jwk_from_did_document(did_document, issuer, header.get("kid"))
+            else:
+                return {
+                    "verified": False,
+                    "claims": claims,
+                    "issuer_did": issuer,
+                    "subject": subject,
+                    "format": "sd-jwt",
+                    "error": "SD-JWT issuer is not a DID and has no pinned trust-profile JWK",
+                }
             public_key_pem = _public_jwk_to_pem(public_jwk)
             result_json = marty_rs.verify_sd_jwt(
                 vp_token,
@@ -1448,6 +1469,38 @@ def _matches_configured_issuer_identifiers(
     for value in configured_values:
         configured_candidates.update(_issuer_identifier_candidates(value))
     return not issuer_candidates.isdisjoint(configured_candidates)
+
+
+def _sd_jwt_unverified_issuer(vp_token: str) -> str | None:
+    """Read an SD-JWT issuer solely to select an already-pinned key.
+
+    This does not establish trust: the returned value is matched exactly to a
+    trust-profile override before signature verification runs.
+    """
+    try:
+        _header, payload = _jwt_header_and_payload(vp_token.split("~", 1)[0])
+    except Exception:
+        return None
+    issuer = payload.get("iss")
+    return issuer if isinstance(issuer, str) and issuer else None
+
+
+def _pinned_issuer_jwk(trust_profile_data: dict[str, Any] | None, issuer: str | None) -> dict[str, Any] | None:
+    if not trust_profile_data or not issuer:
+        return None
+    overrides = trust_profile_data.get("system_issuer_overrides") or {}
+    if not isinstance(overrides, dict):
+        return None
+    issuer_candidates = _issuer_identifier_candidates(issuer)
+    for identifier, override in overrides.items():
+        if not isinstance(identifier, str) or not isinstance(override, dict):
+            continue
+        if issuer_candidates.isdisjoint(_issuer_identifier_candidates(identifier)):
+            continue
+        public_jwk = override.get("public_jwk")
+        if isinstance(public_jwk, dict) and public_jwk.get("kty"):
+            return public_jwk
+    return None
 
 
 def _trust_source_issuer_candidates(source: dict[str, Any]) -> set[str]:
@@ -2316,11 +2369,44 @@ async def evaluate_presentation(
         policy.holder_binding.required and proof_freshness.get("audience_binding_required", True)
     ) else None
 
+    # Select an explicitly pinned public JWK before signature verification.
+    # This supports authoritative non-DID issuers without weakening the normal
+    # DID path: the key comes only from the policy's Trust Profile.
+    trust_profile_id = request.trust_profile_id or policy.trust_profile_id
+    if not trust_profile_id:
+        for requirement in policy.credential_requirements:
+            if requirement.trust_profile_id:
+                trust_profile_id = requirement.trust_profile_id
+                break
+    trust_profile_data: dict[str, Any] | None = None
+    if trust_profile_id:
+        try:
+            trust_cache = get_trust_cache()
+            trust_profile_data = trust_cache.get(trust_profile_id)
+            if trust_profile_data is None:
+                import httpx as _httpx
+                response = _httpx.get(_trust_profile_lookup_url(trust_profile_id), timeout=5.0)
+                if response.status_code == 200:
+                    trust_profile_data = response.json()
+                    trust_cache.set(
+                        trust_profile_id,
+                        trust_profile_data,
+                        _trust_profile_cache_ttl_seconds(trust_profile_data),
+                    )
+        except Exception:
+            logger.warning("Could not preload Trust Profile %s for signature verification", trust_profile_id, exc_info=True)
+
+    pinned_issuer_jwk = _pinned_issuer_jwk(
+        trust_profile_data,
+        _sd_jwt_unverified_issuer(request.vp_token) if credential_format == "sd-jwt" else None,
+    )
+
     verification_result = _verify_credential_by_format(
         request.vp_token,
         credential_format,
         verify_nonce,
         verify_audience,
+        pinned_issuer_jwk,
     )
     # 4. Check issuer trust using Trust Profile
     # 5. Evaluate claims against policy constraints
@@ -2364,19 +2450,12 @@ async def evaluate_presentation(
 
     # Validate issuer DID against the policy's Trust Profile (MIP §8.3).
     # Resolve trust_profile_id: per-requirement override takes precedence over policy-level.
-    trust_profile_id = request.trust_profile_id or policy.trust_profile_id
-    if not trust_profile_id:
-        for req in policy.credential_requirements:
-            if req.trust_profile_id:
-                trust_profile_id = req.trust_profile_id
-                break
-
     trust_check_passed = True
     trust_check_error: str | None = None
     if trust_profile_id and issuer_did and issuer_did != "unknown":
         try:
             trust_cache = get_trust_cache()
-            trust_profile_data = trust_cache.get(trust_profile_id)
+            trust_profile_data = trust_profile_data or trust_cache.get(trust_profile_id)
             if trust_profile_data is None:
                 # Fetch from trust-profiles service via HTTP
                 import httpx as _httpx

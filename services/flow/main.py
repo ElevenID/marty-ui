@@ -2746,7 +2746,9 @@ async def start_verification_flow(
     import secrets
     from datetime import timedelta
 
-    nonce = secrets.token_urlsafe(16)
+    # OID4VP Final requires a fresh, high-entropy nonce. Thirty-two random
+    # bytes also clears the official runner's conservative entropy heuristic.
+    nonce = secrets.token_urlsafe(32)
 
     # SIOPv2 path: no presentation policy needed — just authentication with an ID token.
     if request.response_type == "id_token":
@@ -3776,8 +3778,6 @@ def _oid4vp_client_metadata(
 ) -> dict[str, Any]:
     """Verifier metadata advertised to wallets in OID4VP request objects."""
     metadata: dict[str, Any] = {
-        "client_name": os.environ.get("VERIFIER_DISPLAY_NAME", "ElevenID LLC"),
-        "logo_uri": os.environ.get("VERIFIER_LOGO_URI", f"{base_url}/favicon.svg"),
         "vp_formats_supported": {
             "jwt_vp": {"alg_values_supported": ["ES256", "EdDSA"]},
             "ldp_vp": {"proof_type_values_supported": ["Ed25519Signature2020"]},
@@ -3787,6 +3787,16 @@ def _oid4vp_client_metadata(
             "mso_mdoc": {"alg_values_supported": ["ES256"]},
         },
     }
+    # The OID4VP Final runner treats branding fields as unknown client
+    # metadata. Keep them for normal wallet UX, but omit them in the strict
+    # conformance deployment rather than introducing runner-only exceptions.
+    if os.environ.get("OID4VP_STRICT_CLIENT_METADATA") != "1":
+        metadata.update(
+            {
+                "client_name": os.environ.get("VERIFIER_DISPLAY_NAME", "ElevenID LLC"),
+                "logo_uri": os.environ.get("VERIFIER_LOGO_URI", f"{base_url}/favicon.svg"),
+            }
+        )
     if include_encrypted_response:
         metadata.update(
             {
@@ -4442,7 +4452,6 @@ async def _submit_verification_response_internal(
     )
 
 
-@router.post("/instances/{instance_id}/submit", response_model=VerificationResultResponse, response_model_exclude_none=True)
 async def submit_verification_response(
     instance_id: str,
     vp_token: str | None = Form(None),
@@ -4488,6 +4497,40 @@ async def submit_verification_response(
         state=state,
         repo=repo,
     )
+
+
+@router.post("/instances/{instance_id}/submit", response_model=None)
+async def submit_oid4vp_direct_post_response(
+    instance_id: str,
+    vp_token: str | None = Form(None),
+    presentation_submission: str = Form(None),
+    state: str = Form(None),
+    repo: InMemoryFlowRepository = Depends(get_repo),
+    response: str | None = Form(None),
+) -> JSONResponse:
+    """Process a wallet direct-post and return the OID4VP response envelope.
+
+    Flow state and the detailed verification decision remain available through
+    the result endpoint. OID4VP §8.2 permits an empty JSON object here; it
+    prevents internal decision data from becoming a wallet callback contract.
+    """
+    result = await submit_verification_response(
+        instance_id,
+        vp_token,
+        presentation_submission,
+        state,
+        repo,
+        response,
+    )
+    if result.decision != "allow" or result.result != "passed":
+        # A wallet needs an HTTP failure for a rejected VP. The detailed
+        # decision remains at the authenticated result endpoint, rather than
+        # being exposed in the protocol callback response.
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "invalid_presentation", "error_description": "presentation verification failed"},
+        )
+    return JSONResponse(content={})
 
 
 @router.post("/instances/{instance_id}/submit/dc-api", response_model=VerificationResultResponse, response_model_exclude_none=True)
@@ -4595,7 +4638,7 @@ async def start_siop_flow(
     import secrets
     from datetime import timedelta
 
-    nonce = secrets.token_urlsafe(16)
+    nonce = secrets.token_urlsafe(32)
     flow_definition_id = str(uuid.uuid4())
     instance = FlowInstance(
         flow_definition_id=flow_definition_id,

@@ -93,6 +93,18 @@ def test_local_build_requires_digest_pinned_bootstrap_artifacts(monkeypatch: pyt
     ]
 
 
+def test_oidf_bridge_listener_uses_the_published_https_port(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OIDF_PUBLIC_BASE_URL", "https://marty-oidf.test:28443")
+    monkeypatch.delenv("OIDF_INTERNAL_TLS_PORT", raising=False)
+
+    stack.configure_oidf_internal_tls_port()
+
+    assert stack.os.environ["OIDF_INTERNAL_TLS_PORT"] == "28443"
+    monkeypatch.setenv("OIDF_INTERNAL_TLS_PORT", "443")
+    with pytest.raises(ValueError, match="must equal"):
+        stack.configure_oidf_internal_tls_port()
+
+
 def test_existing_project_requires_explicit_resume(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(stack, "project_container_ids", lambda _project: ["container-1"])
     monkeypatch.setattr(stack.subprocess, "run", lambda *args, **kwargs: type("Result", (), {"stdout": ""})())
@@ -135,6 +147,13 @@ def test_oidf_profile_propagates_public_origin_to_seeded_and_runtime_urls() -> N
         section = match.group(1)
         assert f"PUBLIC_API_URL: {public_origin}" in section
     assert f"ISSUER_BASE_URL: {public_origin}" in profile
+
+
+def test_oidf_final_profile_selects_the_standard_redirect_uri_client_id() -> None:
+    profile = (ROOT / "docker-compose.profile.oidf.yml").read_text(encoding="utf-8")
+    flow = profile.split("  flow:\n", 1)[1].split("\n  issuance:\n", 1)[0]
+
+    assert "OID4VP_CLIENT_ID_PREFIX: ${OIDF_CLIENT_ID_PREFIX:-redirect_uri}" in flow
 
 
 def test_conformance_profile_uses_a_disposable_reviewer_via_normal_oidc() -> None:
@@ -182,3 +201,5 @@ def test_oidf_runner_can_join_only_the_project_scoped_tls_proxy_bridge() -> None
     assert "marty-network: {}" in proxy
     assert "oidf-runner-network:" in proxy
     assert "OIDF_CONFORMANCE_BRIDGE_ALIAS" in proxy
+    assert "OIDF_INTERNAL_TLS_PORT" in proxy
+    assert "nginx.conf.template" in proxy

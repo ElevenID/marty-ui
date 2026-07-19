@@ -148,6 +148,10 @@ class TrustedIssuerCreate(BaseModel):
     issuer_did: str = Field(min_length=1, max_length=2048)
     issuer_url: str | None = Field(None, max_length=2048)
     credential_template_ids: list[str] = Field(default_factory=list)
+    # A pinned issuer must carry its public verification material through the
+    # public gateway.  Dropping this field at the gateway made an apparently
+    # configured OID4VP trust profile unverifiable by the downstream service.
+    verification_keys: list[dict] = Field(default_factory=list)
 
 
 class TrustedIssuerUpdate(BaseModel):

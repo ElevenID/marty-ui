@@ -11,6 +11,7 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -169,6 +170,30 @@ def local_build_arguments() -> list[str]:
     return values
 
 
+def configure_oidf_internal_tls_port() -> None:
+    """Keep the bridge listener identical to the published HTTPS origin.
+
+    Docker port publishing applies only to host traffic. The separately
+    composed official runner reaches the TLS proxy over its narrow bridge, so
+    the proxy itself must listen on the URL's port. The helper derives that
+    value once and rejects contradictory operator configuration.
+    """
+    value = os.environ.get("OIDF_PUBLIC_BASE_URL", "").strip()
+    if not value:
+        # Compose owns the required-variable diagnostic. Keeping this helper a
+        # no-op until an OIDF origin is supplied lets non-rendering commands
+        # retain their narrower project-safety validation.
+        return
+    parsed = urlparse(value)
+    if parsed.scheme != "https" or not parsed.hostname:
+        raise ValueError("OIDF_PUBLIC_BASE_URL must be an absolute HTTPS URL")
+    port = str(parsed.port or 443)
+    configured = os.environ.get("OIDF_INTERNAL_TLS_PORT", "").strip()
+    if configured and configured != port:
+        raise ValueError("OIDF_INTERNAL_TLS_PORT must equal the port in OIDF_PUBLIC_BASE_URL")
+    os.environ["OIDF_INTERNAL_TLS_PORT"] = port
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -190,6 +215,7 @@ def main() -> int:
     )
     args = parser.parse_args()
     project = validate_project(args.project)
+    configure_oidf_internal_tls_port()
     command = compose_command(
         project,
         include_eudi=args.include_eudi,
