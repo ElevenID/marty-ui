@@ -32,6 +32,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
+from pathlib import Path
 from typing import Any, AsyncGenerator, Literal
 
 import httpx
@@ -41,7 +42,8 @@ from fastapi.responses import JSONResponse, Response
 from jwcrypto import jwt, jwk
 from fastapi.middleware.cors import CORSMiddleware
 from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography.hazmat.primitives import serialization
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.backends import default_backend
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
@@ -2656,6 +2658,7 @@ class StartVerificationFlowRequest(BaseModel):
     deployment_profile_id: str | None = None
     external_reference: str | None = None
     callback_url: str | None = Field(None, max_length=2048)
+    oid4vp_profile: Literal["standard", "haip"] = "standard"
     expiry_minutes: int = 15
 
     @field_validator("callback_url")
@@ -2791,6 +2794,11 @@ async def start_verification_flow(
             status_code=400,
             detail={"error": "invalid_request", "error_description": "presentation_policy_id is required for OID4VP flows"},
         )
+    if request.oid4vp_profile == "haip" and os.environ.get("OID4VP_HAIP_ENABLED") != "1":
+        raise HTTPException(
+            status_code=409,
+            detail="HAIP verifier support is not enabled for this deployment",
+        )
 
     # Resolve the real organization_id from the presentation policy so that the
     # instance carries a valid org and the membership check in get_flow_instance
@@ -2843,6 +2851,7 @@ async def start_verification_flow(
             "callback_url": request.callback_url,
             "nonce": nonce,
             "flow_type": "verification",
+            "oid4vp_profile": request.oid4vp_profile,
             "protocol_flow_type": FlowType.OID4VP_PRESENTATION.value,
             "current_step_name": "create_request",
             "current_step_index": 0,
@@ -3317,6 +3326,7 @@ async def get_verification_request_object(
 
     flow_type = instance.context.get("flow_type", "verification")
     compat_profile = (compat or "").strip().lower()
+    request_x5c: list[str] | None = None
 
     if flow_type == "siop_v2":
         # SIOPv2 Draft 13 §9: authentication request for a self-issued OP.
@@ -3359,10 +3369,12 @@ async def get_verification_request_object(
             client_identifier = response_uri
         elif client_id_prefix == "decentralized_identifier":
             client_identifier = f"decentralized_identifier:{verifier_did}"
+        elif client_id_prefix == "x509_hash":
+            client_identifier, request_x5c = _x509_hash_client_id_and_header()
         else:
             raise HTTPException(
                 status_code=500,
-                detail="OID4VP_CLIENT_ID_PREFIX must be decentralized_identifier or redirect_uri",
+                detail="OID4VP_CLIENT_ID_PREFIX must be decentralized_identifier, redirect_uri, or x509_hash",
             )
         # Build OID4VP Request Object payload
         # This will be signed as a JWT per OID4VP spec section 5
@@ -3474,7 +3486,10 @@ async def get_verification_request_object(
         'alg': 'ES256',
     }
     if flow_type != "siop_v2":
-        jwt_headers['kid'] = _verification_method_for_did(verifier_did)
+        if request_x5c:
+            jwt_headers['x5c'] = request_x5c
+        else:
+            jwt_headers['kid'] = _verification_method_for_did(verifier_did)
 
     # Sign the Request Object as a JWT
     # Per OID4VP spec: "The Request Object [...] MUST be signed"
@@ -3559,6 +3574,36 @@ def _base64url_decode(data: str) -> bytes:
     """Base64url decode with optional padding omitted."""
     padding = "=" * (-len(data) % 4)
     return base64.urlsafe_b64decode((data + padding).encode("ascii"))
+
+
+def _verifier_x509_certificate() -> x509.Certificate:
+    """Load the verifier certificate used for the x509_hash client identifier."""
+    certificate_pem = os.environ.get("VERIFIER_X509_CERT_PEM")
+    certificate_file = os.environ.get("VERIFIER_X509_CERT_FILE")
+    if certificate_pem:
+        data = certificate_pem.encode("utf-8")
+    elif certificate_file and os.path.isfile(certificate_file):
+        data = Path(certificate_file).read_bytes()
+    else:
+        raise RuntimeError("VERIFIER_X509_CERT_PEM or VERIFIER_X509_CERT_FILE is required for x509_hash")
+    return x509.load_pem_x509_certificate(data)
+
+
+def _x509_hash_client_id_and_header() -> tuple[str, list[str]]:
+    """Return the OID4VP x509_hash identifier and JOSE ``x5c`` certificate."""
+    certificate = _verifier_x509_certificate()
+    der = certificate.public_bytes(serialization.Encoding.DER)
+    certificate_hash = hashes.Hash(hashes.SHA256())
+    certificate_hash.update(der)
+    digest = _base64url_encode(certificate_hash.finalize())
+
+    signing_pair, _ = get_or_create_signing_key()
+    certificate_public = certificate.public_key()
+    if not isinstance(certificate_public, ec.EllipticCurvePublicKey) or (
+        certificate_public.public_numbers() != signing_pair["public"].public_numbers()
+    ):
+        raise RuntimeError("VERIFIER_X509_CERT_* public key must match the OID4VP request signing key")
+    return f"x509_hash:{digest}", [base64.b64encode(der).decode("ascii")]
 
 
 def _verifier_public_jwk() -> dict[str, str]:
