@@ -1123,6 +1123,34 @@ async def test_submit_verification_response_decrypts_per_flow_direct_post_jwt():
 
 
 @pytest.mark.asyncio
+async def test_oid4vp_direct_post_callback_returns_only_the_standard_empty_object(monkeypatch):
+    repo = InMemoryFlowRepository()
+    called: dict[str, object] = {}
+
+    async def _fake_submit(*args, **kwargs):
+        called["args"] = args
+        called["kwargs"] = kwargs
+        return flow_main.VerificationResultResponse(
+            instance_id="flow-1",
+            status="completed",
+            result="passed",
+            decision="allow",
+            decision_reason="internal result",
+            verified_claims={"email": "member@example.test"},
+            evaluation_timestamp="2026-01-01T00:00:00Z",
+        )
+
+    monkeypatch.setattr(flow_main, "submit_verification_response", _fake_submit)
+    response = await flow_main.submit_oid4vp_direct_post_response(
+        "flow-1", "vp-token", None, "state-1", repo, None
+    )
+
+    assert response.status_code == 200
+    assert response.body == b"{}"
+    assert called
+
+
+@pytest.mark.asyncio
 async def test_get_verification_request_object_supports_dc_api(monkeypatch):
     monkeypatch.setenv("PUBLIC_BASE_URL", "https://verifier.example")
 

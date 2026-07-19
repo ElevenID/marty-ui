@@ -4452,7 +4452,6 @@ async def _submit_verification_response_internal(
     )
 
 
-@router.post("/instances/{instance_id}/submit", response_model=VerificationResultResponse, response_model_exclude_none=True)
 async def submit_verification_response(
     instance_id: str,
     vp_token: str | None = Form(None),
@@ -4498,6 +4497,32 @@ async def submit_verification_response(
         state=state,
         repo=repo,
     )
+
+
+@router.post("/instances/{instance_id}/submit", response_model=None)
+async def submit_oid4vp_direct_post_response(
+    instance_id: str,
+    vp_token: str | None = Form(None),
+    presentation_submission: str = Form(None),
+    state: str = Form(None),
+    repo: InMemoryFlowRepository = Depends(get_repo),
+    response: str | None = Form(None),
+) -> JSONResponse:
+    """Process a wallet direct-post and return the OID4VP response envelope.
+
+    Flow state and the detailed verification decision remain available through
+    the result endpoint. OID4VP §8.2 permits an empty JSON object here; it
+    prevents internal decision data from becoming a wallet callback contract.
+    """
+    await submit_verification_response(
+        instance_id,
+        vp_token,
+        presentation_submission,
+        state,
+        repo,
+        response,
+    )
+    return JSONResponse(content={})
 
 
 @router.post("/instances/{instance_id}/submit/dc-api", response_model=VerificationResultResponse, response_model_exclude_none=True)
