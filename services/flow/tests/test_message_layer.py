@@ -1029,9 +1029,9 @@ async def test_haip_request_uses_a_fresh_per_flow_response_encryption_key(monkey
 
     keys = [payload["client_metadata"]["jwks"]["keys"][0] for payload in payloads]
     assert payloads[0]["response_mode"] == "direct_post.jwt"
-    assert payloads[0]["client_metadata"]["authorization_encrypted_response_alg"] == flow_main._HAIP_JWE_ALG
-    assert payloads[0]["client_metadata"]["authorization_encrypted_response_enc"] == flow_main._HAIP_JWE_ENC
-    assert payloads[0]["client_metadata"]["authorization_encrypted_response_enc_values_supported"] == [flow_main._HAIP_JWE_ENC]
+    assert "authorization_encrypted_response_alg" not in payloads[0]["client_metadata"]
+    assert "authorization_encrypted_response_enc" not in payloads[0]["client_metadata"]
+    assert "authorization_encrypted_response_enc_values_supported" not in payloads[0]["client_metadata"]
     assert payloads[0]["client_metadata"]["encrypted_response_enc_values_supported"] == flow_main._HAIP_JWE_ENC_VALUES
     assert keys[0]["kid"] != keys[1]["kid"]
     assert "d" not in keys[0]
@@ -1244,9 +1244,9 @@ async def test_get_verification_request_object_supports_dc_api(monkeypatch):
     assert "response_uri" not in decoded_payload
     assert "state" not in decoded_payload
     client_metadata = decoded_payload["client_metadata"]
-    assert client_metadata["authorization_encrypted_response_alg"] == flow_main._HAIP_JWE_ALG
-    assert client_metadata["authorization_encrypted_response_enc"] == flow_main._HAIP_JWE_ENC
-    assert client_metadata["authorization_encrypted_response_enc_values_supported"] == [flow_main._HAIP_JWE_ENC]
+    assert "authorization_encrypted_response_alg" not in client_metadata
+    assert "authorization_encrypted_response_enc" not in client_metadata
+    assert "authorization_encrypted_response_enc_values_supported" not in client_metadata
     assert client_metadata["encrypted_response_enc_values_supported"] == flow_main._HAIP_JWE_ENC_VALUES
     [encryption_key] = client_metadata["jwks"]["keys"]
     assert encryption_key["kid"] == flow_main._HAIP_ENCRYPTION_KEY_ID
