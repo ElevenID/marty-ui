@@ -972,6 +972,7 @@ async def test_get_verification_request_object_supports_lissi_compat_profile(mon
 async def test_get_verification_request_object_supports_redirect_uri_client_id_prefix(monkeypatch):
     monkeypatch.setenv("PUBLIC_BASE_URL", "https://verifier.example")
     monkeypatch.setenv("OID4VP_CLIENT_ID_PREFIX", "redirect_uri")
+    monkeypatch.setenv("OID4VP_STRICT_CLIENT_METADATA", "1")
 
     repo = InMemoryFlowRepository()
     instance = FlowInstance(
@@ -995,6 +996,7 @@ async def test_get_verification_request_object_supports_redirect_uri_client_id_p
     assert decoded_payload["client_id"] == expected
     assert decoded_payload["response_uri"] == expected
     assert "client_id_scheme" not in decoded_payload
+    assert set(decoded_payload["client_metadata"]) == {"vp_formats_supported"}
     assert instance.context["verification_audience"] == expected
 
 
@@ -1118,6 +1120,56 @@ async def test_submit_verification_response_decrypts_per_flow_direct_post_jwt():
     assert response.result == "passed"
     assert response.verified_claims["given_name"] == "HAIP"
     assert instance.context["vp_token"] == vp_token
+
+
+@pytest.mark.asyncio
+async def test_oid4vp_direct_post_callback_returns_only_the_standard_empty_object(monkeypatch):
+    repo = InMemoryFlowRepository()
+    called: dict[str, object] = {}
+
+    async def _fake_submit(*args, **kwargs):
+        called["args"] = args
+        called["kwargs"] = kwargs
+        return flow_main.VerificationResultResponse(
+            instance_id="flow-1",
+            status="completed",
+            result="passed",
+            decision="allow",
+            decision_reason="internal result",
+            verified_claims={"email": "member@example.test"},
+            evaluation_timestamp="2026-01-01T00:00:00Z",
+        )
+
+    monkeypatch.setattr(flow_main, "submit_verification_response", _fake_submit)
+    response = await flow_main.submit_oid4vp_direct_post_response(
+        "flow-1", "vp-token", None, "state-1", repo, None
+    )
+
+    assert response.status_code == 200
+    assert response.body == b"{}"
+    assert called
+
+
+@pytest.mark.asyncio
+async def test_oid4vp_direct_post_callback_rejects_a_denied_presentation(monkeypatch):
+    repo = InMemoryFlowRepository()
+
+    async def _fake_submit(*_args, **_kwargs):
+        return flow_main.VerificationResultResponse(
+            instance_id="flow-1",
+            status="completed",
+            result="failed",
+            decision="deny",
+            decision_reason="signature invalid",
+            verified_claims={},
+            evaluation_timestamp="2026-01-01T00:00:00Z",
+        )
+
+    monkeypatch.setattr(flow_main, "submit_verification_response", _fake_submit)
+    with pytest.raises(flow_main.HTTPException) as error:
+        await flow_main.submit_oid4vp_direct_post_response("flow-1", "invalid-vp", None, None, repo, None)
+
+    assert error.value.status_code == 400
 
 
 @pytest.mark.asyncio
