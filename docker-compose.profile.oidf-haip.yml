@@ -1,0 +1,13 @@
+# Isolated HAIP verifier overlay for the OIDF conformance deployment.
+#
+# The certificate and matching request-object signing key are runtime secrets:
+# they are deliberately not stored in this repository.  This overlay is used
+# together with docker-compose.profile.oidf.yml and sets only the HAIP-specific
+# verifier contract on the flow service.
+services:
+  flow:
+    environment:
+      OID4VP_HAIP_ENABLED: "1"
+      OID4VP_CLIENT_ID_PREFIX: "x509_hash"
+      VERIFIER_SIGNING_KEY_PEM: ${VERIFIER_SIGNING_KEY_PEM:?set a disposable HAIP request-object signing key}
+      VERIFIER_X509_CERT_PEM: ${VERIFIER_X509_CERT_PEM:?set the matching disposable HAIP certificate}
