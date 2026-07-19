@@ -30,6 +30,9 @@ MARTY_API_SECRET="${MARTY_API_CLIENT_SECRET:-}"
 MARTY_ORG_NAME="${MARTY_ORG_NAME:-Marty}"
 MARTY_ORG_DOMAIN="${MARTY_ORG_DOMAIN:-${PUBLIC_DOMAIN:-marty.local}}"
 MARTY_ORG_ADMIN_EMAIL="$(printf '%s' "${MARTY_ORG_ADMIN_EMAIL:-}" | tr '[:upper:]' '[:lower:]' | tr -d '\r')"
+MARTY_ORG_ADMIN_PASSWORD="${MARTY_ORG_ADMIN_PASSWORD:-}"
+MARTY_ORG_ADMIN_FIRST_NAME="${MARTY_ORG_ADMIN_FIRST_NAME:-Marty}"
+MARTY_ORG_ADMIN_LAST_NAME="${MARTY_ORG_ADMIN_LAST_NAME:-Administrator}"
 CANVAS_DEMO_ADMIN_ENABLED="${CANVAS_DEMO_ADMIN_ENABLED:-true}"
 CANVAS_DEMO_ADMIN_EMAIL="$(printf '%s' "${CANVAS_DEMO_ADMIN_EMAIL:-canvas.admin@marty.demo}" | tr '[:upper:]' '[:lower:]' | tr -d '\r')"
 CANVAS_DEMO_ADMIN_PASSWORD="${CANVAS_DEMO_ADMIN_PASSWORD:-CanvasAdmin123!}"
@@ -223,6 +226,7 @@ main() {
     ensure_marty_org_exists
     ensure_canvas_demo_admin_user
     ensure_demo_reviewer_user
+    ensure_marty_org_admin_user
     ensure_marty_org_admin_role
     
     log_success "=== Keycloak Setup Complete ==="
@@ -242,10 +246,40 @@ get_realm_role_id() {
     echo "$payload" | tr -d '\n' | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
 }
 
+ensure_realm_role() {
+    local role_name="$1"
+    if [ -n "$(get_realm_role_id "$role_name")" ]; then
+        return 0
+    fi
+
+    local payload
+    payload=$(create_temp_file)
+    cat > "$payload" <<EOF
+{
+  "name": "${role_name}",
+  "description": "Marty application role managed by the Keycloak configurator"
+}
+EOF
+    if kcadm_safe create roles -r "$REALM" -f "$payload" > /dev/null; then
+        log_success "Created Keycloak ${role_name} realm role"
+        return 0
+    fi
+
+    # A concurrent or previous configurator may have created it after the
+    # lookup. Verify before treating the create error as fatal.
+    if [ -n "$(get_realm_role_id "$role_name")" ]; then
+        return 0
+    fi
+    log_error "Failed to create Keycloak ${role_name} realm role"
+    return 1
+}
+
 grant_realm_role_to_user() {
     local user_id="$1"
     local user_label="$2"
     local role_name="$3"
+
+    ensure_realm_role "$role_name" || return 1
 
     local role_id
     role_id=$(get_realm_role_id "$role_name")
@@ -446,6 +480,64 @@ EOF
     fi
 
     grant_realm_role_to_user "$user_id" "$DEMO_REVIEWER_EMAIL" "reviewer"
+}
+
+ensure_marty_org_admin_user() {
+    if [ -z "$MARTY_ORG_ADMIN_EMAIL" ] || [ -z "$MARTY_ORG_ADMIN_PASSWORD" ]; then
+        log_info "MARTY_ORG_ADMIN_EMAIL or MARTY_ORG_ADMIN_PASSWORD not set - skipping organization admin user bootstrap"
+        return 0
+    fi
+
+    log_info "Ensuring Marty organization admin user exists: ${MARTY_ORG_ADMIN_EMAIL}"
+    local user_id
+    user_id=$(find_user_id_by_email "$MARTY_ORG_ADMIN_EMAIL")
+    if [ -z "$user_id" ]; then
+        local payload email first_name last_name
+        payload=$(create_temp_file)
+        email="$(json_escape "$MARTY_ORG_ADMIN_EMAIL")"
+        first_name="$(json_escape "$MARTY_ORG_ADMIN_FIRST_NAME")"
+        last_name="$(json_escape "$MARTY_ORG_ADMIN_LAST_NAME")"
+        cat > "$payload" <<EOF
+{
+    "username": "${email}",
+    "email": "${email}",
+    "emailVerified": true,
+    "enabled": true,
+    "firstName": "${first_name}",
+    "lastName": "${last_name}",
+    "attributes": {
+        "user_type": ["administrator"],
+        "onboarding_completed": ["true"]
+    }
+}
+EOF
+        if ! kcadm_safe create users -r "$REALM" -f "$payload" > /dev/null; then
+            log_error "Failed to create Marty organization admin user: ${MARTY_ORG_ADMIN_EMAIL}"
+            return 1
+        fi
+        user_id=$(find_user_id_by_email "$MARTY_ORG_ADMIN_EMAIL")
+    fi
+
+    if [ -z "$user_id" ]; then
+        log_error "Marty organization admin user lookup failed after create: ${MARTY_ORG_ADMIN_EMAIL}"
+        return 1
+    fi
+
+    local password_payload password_value
+    password_payload=$(create_temp_file)
+    password_value="$(json_escape "$MARTY_ORG_ADMIN_PASSWORD")"
+    cat > "$password_payload" <<EOF
+{
+    "type": "password",
+    "value": "${password_value}",
+    "temporary": false
+}
+EOF
+    if ! kcadm_secret_safe update "users/${user_id}/reset-password" -r "$REALM" -f "$password_payload" -n > /dev/null; then
+        log_error "Failed to configure Marty organization admin password"
+        return 1
+    fi
+    grant_realm_role_to_user "$user_id" "$MARTY_ORG_ADMIN_EMAIL" "administrator"
 }
 
 ensure_marty_org_admin_role() {
@@ -762,8 +854,8 @@ PROTOEOF
 
 # ─── Marty UI Client Configuration ───────────────────────────────────────────
 configure_marty_ui_redirect_uris() {
-    if [ -z "$PUBLIC_DOMAIN" ]; then
-        log_warning "PUBLIC_DOMAIN not set — skipping marty-ui client redirect URI configuration"
+    if [ -z "$PUBLIC_DOMAIN" ] && [ -z "$UI_BASE_URL" ]; then
+        log_warning "PUBLIC_DOMAIN and UI_BASE_URL are not set — skipping marty-ui client redirect URI configuration"
         return 0
     fi
     

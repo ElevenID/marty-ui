@@ -19,11 +19,19 @@ services:
   keycloak-configurator:
     container_name: !reset null
     environment:
-      # Official runs use a disposable local account, not external identity
-      # providers or organization OAuth credentials.
+      # Official runs use this disposable reviewer through the same OIDC
+      # redirect and gateway-cookie path as a normal user. The caller supplies
+      # a unique password; no customer or organization account is involved.
       KEYCLOAK_SOCIAL_LOGIN_ENABLED: "false"
       CANVAS_DEMO_ADMIN_ENABLED: "false"
-      DEMO_REVIEWER_EMAIL: ""
+      MARTY_ORG_ADMIN_EMAIL: ${MARTY_CONFORMANCE_ADMIN_EMAIL:-conformance@elevenid.dev}
+      MARTY_ORG_ADMIN_PASSWORD: ${MARTY_CONFORMANCE_ADMIN_PASSWORD:?set a disposable administrator password}
+      MARTY_ORG_ADMIN_FIRST_NAME: "Conformance"
+      MARTY_ORG_ADMIN_LAST_NAME: "Administrator"
+      DEMO_REVIEWER_EMAIL: ${MARTY_CONFORMANCE_REVIEWER_EMAIL:-conformance.reviewer@elevenid.dev}
+      DEMO_REVIEWER_PASSWORD: ${MARTY_CONFORMANCE_REVIEWER_PASSWORD:?set a disposable reviewer password}
+      DEMO_REVIEWER_FIRST_NAME: "Conformance"
+      DEMO_REVIEWER_LAST_NAME: "Reviewer"
   mailpit:
     container_name: !reset null
     ports: !reset []
@@ -38,6 +46,7 @@ services:
       # Fresh fixture organization for this disposable project. The value is
       # organization-controlled and cannot resolve to a customer mailbox.
       MARTY_ORG_ADMIN_EMAIL: ${MARTY_CONFORMANCE_ADMIN_EMAIL:-conformance@elevenid.dev}
+      MARTY_ORG_REVIEWER_EMAIL: ${MARTY_CONFORMANCE_REVIEWER_EMAIL:-conformance.reviewer@elevenid.dev}
   gateway:
     container_name: !reset null
     ports: !reset []
