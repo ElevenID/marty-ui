@@ -62,10 +62,20 @@ def test_issuer_adapter_rejects_non_vcdm_input_before_issuance() -> None:
     ("credentialStatus", {"id": "did:example:status"}),
     ("credentialSchema", {"type": "JsonSchema"}),
     ("name", {"@value": 4}),
+    ("validFrom", "not-a-date"),
+    ("relatedResource", {"id": "https://resource.example"}),
 ])
 def test_issuer_adapter_rejects_malformed_vcdm_structures(field: str, value: object) -> None:
     credential = _valid_w3c_credential()
     credential[field] = value
+    with pytest.raises(HTTPException) as exc_info:
+        adapter._claims_from_w3c_credential(credential)
+    assert exc_info.value.status_code == 422
+
+
+def test_issuer_adapter_rejects_reversed_validity_period() -> None:
+    credential = _valid_w3c_credential()
+    credential.update({"validFrom": "2030-01-01T00:00:00Z", "validUntil": "2020-01-01T00:00:00Z"})
     with pytest.raises(HTTPException) as exc_info:
         adapter._claims_from_w3c_credential(credential)
     assert exc_info.value.status_code == 422
