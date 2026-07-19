@@ -972,6 +972,7 @@ async def test_get_verification_request_object_supports_lissi_compat_profile(mon
 async def test_get_verification_request_object_supports_redirect_uri_client_id_prefix(monkeypatch):
     monkeypatch.setenv("PUBLIC_BASE_URL", "https://verifier.example")
     monkeypatch.setenv("OID4VP_CLIENT_ID_PREFIX", "redirect_uri")
+    monkeypatch.setenv("OID4VP_STRICT_CLIENT_METADATA", "1")
 
     repo = InMemoryFlowRepository()
     instance = FlowInstance(
@@ -995,6 +996,7 @@ async def test_get_verification_request_object_supports_redirect_uri_client_id_p
     assert decoded_payload["client_id"] == expected
     assert decoded_payload["response_uri"] == expected
     assert "client_id_scheme" not in decoded_payload
+    assert set(decoded_payload["client_metadata"]) == {"vp_formats_supported"}
     assert instance.context["verification_audience"] == expected
 
 

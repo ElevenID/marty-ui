@@ -80,6 +80,7 @@ services:
       # separate HAIP overlay can select x509_hash without weakening the
       # Final profile or changing application code.
       OID4VP_CLIENT_ID_PREFIX: ${OIDF_CLIENT_ID_PREFIX:-redirect_uri}
+      OID4VP_STRICT_CLIENT_METADATA: "1"
 
   issuance:
     environment:
