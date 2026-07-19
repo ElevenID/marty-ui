@@ -91,8 +91,6 @@ def test_issuer_adapter_uses_the_released_oid4vci_proof_binding(monkeypatch: pyt
     proof = adapter._create_oid4vci_proof("https://issuer.example.test/org/fixture", "nonce-1")
     assert proof == "header.payload.signature"
     assert captured == {"issuer_url": "https://issuer.example.test/org/fixture", "nonce": "nonce-1"}
-
-
 def test_issuer_adapter_generates_a_verifiable_oid4vci_proof() -> None:
     from marty_rs import _marty_rs as binding
 
