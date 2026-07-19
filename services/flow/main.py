@@ -3828,13 +3828,9 @@ def _oid4vp_client_metadata(
     if include_encrypted_response:
         metadata.update(
             {
-                "authorization_encrypted_response_alg": _HAIP_JWE_ALG,
-                "authorization_encrypted_response_enc": _HAIP_JWE_ENC,
-                # HAIP validates the advertised set, rather than relying on
-                # the single-value OAuth metadata parameter.  Advertising the
-                # exact supported AEAD avoids wallets defaulting to A128GCM
-                # while this verifier is configured for A256GCM.
-                "authorization_encrypted_response_enc_values_supported": [_HAIP_JWE_ENC],
+                # HAIP defines this set in client metadata.  Do not emit the
+                # legacy authorization_encrypted_response_* names alongside
+                # it: strict wallets treat those as unexpected parameters.
                 "encrypted_response_enc_values_supported": _HAIP_JWE_ENC_VALUES,
                 "jwks": {"keys": [response_encryption_jwk or _verifier_encryption_public_jwk()]},
             }
