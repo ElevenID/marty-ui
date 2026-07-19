@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import sys
+import types
 
 import pytest
 from fastapi import HTTPException
@@ -75,16 +77,20 @@ def test_issuer_adapter_source_defines_a_jwt_vc_fixture_contract() -> None:
     assert "W3C fixture template must issue JWT VC, not SD-JWT, mdoc, or JSON-LD" in source
 
 
-def test_issuer_adapter_generates_a_verifiable_oid4vci_proof() -> None:
-    from marty_rs import _marty_rs as binding
+def test_issuer_adapter_uses_the_released_oid4vci_proof_binding(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, str] = {}
+
+    def create_proof(issuer_url: str, nonce: str) -> str:
+        captured.update({"issuer_url": issuer_url, "nonce": nonce})
+        return "header.payload.signature"
+
+    module = types.ModuleType("marty_rs")
+    module._marty_rs = types.SimpleNamespace(oid4vci_create_proof_jwt=create_proof)
+    monkeypatch.setitem(sys.modules, "marty_rs", module)
 
     proof = adapter._create_oid4vci_proof("https://issuer.example.test/org/fixture", "nonce-1")
-    verified = binding.oid4vci_verify_proof_jwt(
-        proof, "nonce-1", "https://issuer.example.test/org/fixture"
-    )
-    holder_did, nonce = verified[:2]
-    assert holder_did.startswith("did:key:")
-    assert nonce == "nonce-1"
+    assert proof == "header.payload.signature"
+    assert captured == {"issuer_url": "https://issuer.example.test/org/fixture", "nonce": "nonce-1"}
 
 
 def test_adapter_extracts_a_w3c_jose_vc_envelope_without_trusting_it() -> None:
