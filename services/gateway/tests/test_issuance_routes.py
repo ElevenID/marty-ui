@@ -562,6 +562,36 @@ async def test_create_issuance_rejects_claims_issuer_profile_override_for_templa
 
 
 @pytest.mark.asyncio
+async def test_authorize_issuance_proxies_without_management_header(monkeypatch: pytest.MonkeyPatch):
+    captured: dict = {}
+
+    async def _proxy(request, service_url, path, inject_headers=None):
+        captured.update({
+            "service_url": service_url,
+            "path": path,
+            "inject_headers": inject_headers,
+        })
+        return JSONResponse({"code": "authorization-code"})
+
+    monkeypatch.setattr(issuance, "get_registry", lambda: _Registry())
+    monkeypatch.setattr(issuance, "proxy_request", _proxy)
+
+    response = await issuance.authorize_issuance(_build_request())
+
+    assert captured == {
+        "service_url": "http://issuance-service",
+        "path": "/v1/issuance/authorize",
+        "inject_headers": None,
+    }
+    assert json.loads(response.body) == {"code": "authorization-code"}
+
+
+def test_authorize_route_precedes_issuance_id_catch_all() -> None:
+    paths = [route.path for route in issuance.issuance_router.routes]
+    assert paths.index("/v1/issuance/authorize") < paths.index("/v1/issuance/{issuance_id}")
+
+
+@pytest.mark.asyncio
 async def test_canvas_mirror_automation_cycle_route_proxies_with_management_header(monkeypatch: pytest.MonkeyPatch):
     captured: dict = {}
 

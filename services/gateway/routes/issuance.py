@@ -354,6 +354,20 @@ async def list_issuances(
     return await proxy_request(request, service_url, "/v1/issuance/transactions", inject_headers=_ISSUANCE_HEADERS)
 
 
+@issuance_router.get("/authorize", summary="OID4VCI Authorization Endpoint")
+async def authorize_issuance(request: Request) -> Response:
+    """Proxy the public OAuth authorization-code entry point to issuance.
+
+    This is deliberately unauthenticated: the authorization endpoint validates
+    the PAR request and redirect URI itself. It must be declared before the
+    ``/{issuance_id}`` route so FastAPI does not interpret ``authorize`` as a
+    transaction identifier.
+    """
+    registry = get_registry()
+    service_url = registry.get_service_url("issuance")
+    return await proxy_request(request, service_url, "/v1/issuance/authorize")
+
+
 @issuance_router.get("/{issuance_id}", response_model=IssuanceResponse, summary="Get Issuance")
 async def get_issuance(issuance_id: str, request: Request) -> Response:
     """Get an issuance record by ID."""
