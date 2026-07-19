@@ -1,0 +1,96 @@
+# Project-scoped isolation for official interoperability runs.
+#
+# Compose normally prefixes containers, networks, and volumes with the project
+# name. The development stack predates that convention and pins global
+# container/network names and host ports. This overlay removes those global
+# resources so a run such as `marty-conformance-20260719-abc123` can coexist
+# with every other local Marty stack on the same Docker engine.
+
+services:
+  postgres:
+    container_name: !reset null
+    ports: !reset []
+  redis:
+    container_name: !reset null
+    ports: !reset []
+  keycloak:
+    container_name: !reset null
+    ports: !reset []
+  keycloak-configurator:
+    container_name: !reset null
+    environment:
+      # Official runs use a disposable local account, not external identity
+      # providers or organization OAuth credentials.
+      KEYCLOAK_SOCIAL_LOGIN_ENABLED: "false"
+      CANVAS_DEMO_ADMIN_ENABLED: "false"
+      DEMO_REVIEWER_EMAIL: ""
+  mailpit:
+    container_name: !reset null
+    ports: !reset []
+  openbao:
+    container_name: !reset null
+    ports: !reset []
+  openbao-init:
+    container_name: !reset null
+  db-migrate:
+    container_name: !reset null
+    environment:
+      # Fresh fixture organization for this disposable project. The value is
+      # organization-controlled and cannot resolve to a customer mailbox.
+      MARTY_ORG_ADMIN_EMAIL: ${MARTY_CONFORMANCE_ADMIN_EMAIL:-conformance@elevenid.dev}
+  gateway:
+    container_name: !reset null
+    ports: !reset []
+  auth:
+    container_name: !reset null
+    ports: !reset []
+  organization:
+    container_name: !reset null
+    ports: !reset []
+  credential-template:
+    container_name: !reset null
+    ports: !reset []
+  trust-profile:
+    container_name: !reset null
+    ports: !reset []
+  applicant:
+    container_name: !reset null
+    ports: !reset []
+  notification:
+    container_name: !reset null
+    ports: !reset []
+  compliance-profile:
+    container_name: !reset null
+    ports: !reset []
+  presentation-policy:
+    container_name: !reset null
+    ports: !reset []
+  deployment-profile:
+    container_name: !reset null
+    ports: !reset []
+  flow:
+    container_name: !reset null
+    ports: !reset []
+  issuance:
+    container_name: !reset null
+    ports: !reset []
+  canvas-sync-worker:
+    container_name: !reset null
+  revocation-profile:
+    container_name: !reset null
+    ports: !reset []
+  device-registration:
+    container_name: !reset null
+    ports: !reset []
+  event-stream:
+    container_name: !reset null
+    ports: !reset []
+  verification:
+    container_name: !reset null
+    ports: !reset []
+  envoy:
+    container_name: !reset null
+    ports: !reset []
+networks:
+  marty-network:
+    name: !reset null

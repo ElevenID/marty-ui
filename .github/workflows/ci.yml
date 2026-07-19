@@ -30,12 +30,16 @@ jobs:
   test-ui:
     name: UI Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: ui
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: "24"
       - name: Bootstrap released UI dependencies
         shell: bash
         run: |
@@ -50,7 +54,7 @@ jobs:
       - name: Type check
         run: bunx tsc -p tsconfig.build.json --noEmit
       - name: Unit tests
-        run: bun run test
+        run: node ./node_modules/vitest/vitest.mjs run
 
   test-services:
     name: Service Tests

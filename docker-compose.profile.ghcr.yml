@@ -79,7 +79,8 @@ services:
       SERVICE_NAME: flow
 
   issuance:
-    <<: *service-image
+    image: ${MARTY_ISSUANCE_IMAGE:?set MARTY_ISSUANCE_IMAGE to an immutable issuance image digest}
+    pull_policy: always
     environment:
       SERVICE_NAME: issuance
 

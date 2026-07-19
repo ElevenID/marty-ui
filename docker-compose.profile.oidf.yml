@@ -12,6 +12,11 @@
 # explicit disposable presentation-policy ID.
 
 services:
+  db-migrate:
+    environment:
+      PUBLIC_API_URL: ${OIDF_PUBLIC_BASE_URL:?set OIDF_PUBLIC_BASE_URL to the HTTPS verifier URL}
+      ISSUER_BASE_URL: ${OIDF_PUBLIC_BASE_URL:?set OIDF_PUBLIC_BASE_URL to the HTTPS verifier URL}
+
   oidf-tls-proxy:
     profiles: [oidf]
     image: nginx@sha256:679a5fd058f6ca754a561846fe27927e408074431d63556e8fc588fc38be6901
@@ -40,8 +45,15 @@ services:
 
   gateway:
     environment:
+      PUBLIC_API_URL: ${OIDF_PUBLIC_BASE_URL:?set OIDF_PUBLIC_BASE_URL to the HTTPS verifier URL}
       ISSUER_BASE_URL: ${OIDF_PUBLIC_BASE_URL:?set OIDF_PUBLIC_BASE_URL to the HTTPS verifier URL}
       CORS_ORIGINS: ${OIDF_PUBLIC_BASE_URL:?set OIDF_PUBLIC_BASE_URL to the HTTPS verifier URL}
+
+  presentation-policy:
+    environment:
+      PUBLIC_API_URL: ${OIDF_PUBLIC_BASE_URL:?set OIDF_PUBLIC_BASE_URL to the HTTPS verifier URL}
+      PUBLIC_BASE_URL: ${OIDF_PUBLIC_BASE_URL:?set OIDF_PUBLIC_BASE_URL to the HTTPS verifier URL}
+      ISSUER_BASE_URL: ${OIDF_PUBLIC_BASE_URL:?set OIDF_PUBLIC_BASE_URL to the HTTPS verifier URL}
 
   flow:
     environment:
