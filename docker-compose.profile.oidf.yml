@@ -4,7 +4,8 @@
 # It exercises the same gateway, Keycloak, flow, and verification services as a
 # deployment, while making their protocol URLs HTTPS. The certificate directory
 # is intentionally supplied by the invoking environment: a local disposable
-# run may use a test CA, while certification uses its registered certificate.
+# run may use a test CA (scripts/new-oidf-local-certificate.ps1), while
+# certification uses its registered certificate.
 
 services:
   oidf-tls-proxy:
