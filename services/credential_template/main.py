@@ -2238,16 +2238,19 @@ def _validate_template_protocol_requirements(
             status_code=422,
             detail="vct is required when credential_payload_format resolves to SD_JWT_VC",
         )
-    # MIP §6.2 — vct MUST be an absolute URI per SD-JWT-VC §3.2.1
-    # Only enforced for SD-JWT-VC format; mDoc doctypes use reverse-domain notation
+    # MIP §6.2 — vct MUST be an absolute URI per SD-JWT-VC §3.2.1.
+    # An absolute URI is identified by a scheme, not just an HTTP authority:
+    # registered VCTs such as ``urn:eudi:pid:1`` are valid and are used by the
+    # OID4VP Final interoperability suite.
+    # Only enforced for SD-JWT-VC format; mDoc doctypes use reverse-domain notation.
     if (
         credential_payload_format == CredentialFormat.SD_JWT_VC.value
         and vct and str(vct).strip()
-        and "://" not in str(vct)
+        and not urlparse(str(vct).strip()).scheme
     ):
         raise HTTPException(
             status_code=422,
-            detail=f"vct must be an absolute URI (e.g. https://…), got: {vct}",
+            detail=f"vct must be an absolute URI (e.g. https://… or urn:…), got: {vct}",
         )
     if vct and urlparse(str(vct).strip()).hostname == "marty.example":
         raise HTTPException(
