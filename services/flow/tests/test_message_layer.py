@@ -995,6 +995,7 @@ async def test_get_verification_request_object_supports_redirect_uri_client_id_p
 
     assert decoded_payload["client_id"] == expected
     assert decoded_payload["response_uri"] == expected
+    assert instance.context["oid4vp_expected_state"] == instance.id
     assert "client_id_scheme" not in decoded_payload
     assert set(decoded_payload["client_metadata"]) == {"vp_formats_supported"}
     assert instance.context["verification_audience"] == expected
@@ -1122,6 +1123,27 @@ async def test_submit_verification_response_decrypts_per_flow_direct_post_jwt():
     assert response.result == "passed"
     assert response.verified_claims["given_name"] == "HAIP"
     assert instance.context["vp_token"] == vp_token
+
+
+@pytest.mark.asyncio
+async def test_submit_verification_response_rejects_missing_or_mismatched_oid4vp_state():
+    repo = InMemoryFlowRepository()
+    instance = FlowInstance(
+        flow_definition_id="__verification__",
+        organization_id="org-1",
+        status=FlowInstanceStatus.AWAITING_WALLET,
+        context={"oid4vp_expected_state": "expected-state"},
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+    )
+    await repo.save_instance(instance)
+
+    with pytest.raises(flow_main.HTTPException) as missing:
+        await submit_verification_response(instance.id, "vp-token", None, None, repo)
+    assert missing.value.status_code == 400
+
+    with pytest.raises(flow_main.HTTPException) as mismatched:
+        await submit_verification_response(instance.id, "vp-token", None, "other-state", repo)
+    assert mismatched.value.status_code == 400
 
 
 @pytest.mark.asyncio
