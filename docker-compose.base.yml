@@ -3,6 +3,12 @@
 # Single base compose file for infra + microservices.
 # Mode-specific behavior is layered via profile compose files.
 
+x-marty-service-build-artifacts: &marty_service_build_artifacts
+  MARTY_RS_URI: ${MARTY_RS_URI:?set MARTY_RS_URI to the immutable marty-rs wheel}
+  MARTY_RS_DIGEST: ${MARTY_RS_DIGEST:?set MARTY_RS_DIGEST to that wheel's sha256 digest}
+  MARTY_COMMON_URI: ${MARTY_COMMON_URI:?set MARTY_COMMON_URI to the immutable marty-common wheel}
+  MARTY_COMMON_DIGEST: ${MARTY_COMMON_DIGEST:?set MARTY_COMMON_DIGEST to that wheel's sha256 digest}
+
 services:
   # ==========================================================================
   # Infrastructure
@@ -264,6 +270,7 @@ services:
       context: .
       dockerfile: services/Dockerfile
       args:
+        <<: *marty_service_build_artifacts
         SERVICE_NAME: gateway
     container_name: marty-gateway
     environment:
@@ -346,6 +353,7 @@ services:
       context: .
       dockerfile: services/Dockerfile
       args:
+        <<: *marty_service_build_artifacts
         SERVICE_NAME: auth
     container_name: marty-auth
     environment:
@@ -407,6 +415,7 @@ services:
       context: .
       dockerfile: services/Dockerfile
       args:
+        <<: *marty_service_build_artifacts
         SERVICE_NAME: organization
     container_name: marty-organization
     environment:
@@ -440,6 +449,7 @@ services:
       context: .
       dockerfile: services/Dockerfile
       args:
+        <<: *marty_service_build_artifacts
         SERVICE_NAME: credential-template
     container_name: marty-credential-template
     environment:
@@ -472,6 +482,7 @@ services:
       context: .
       dockerfile: services/Dockerfile
       args:
+        <<: *marty_service_build_artifacts
         SERVICE_NAME: trust-profile
     container_name: marty-trust-profile
     environment:
@@ -500,6 +511,7 @@ services:
       context: .
       dockerfile: services/Dockerfile
       args:
+        <<: *marty_service_build_artifacts
         SERVICE_NAME: applicant
     container_name: marty-applicant
     environment:
@@ -533,6 +545,7 @@ services:
       context: .
       dockerfile: services/Dockerfile
       args:
+        <<: *marty_service_build_artifacts
         SERVICE_NAME: notification
     container_name: marty-notification
     environment:
@@ -563,6 +576,7 @@ services:
       context: .
       dockerfile: services/Dockerfile
       args:
+        <<: *marty_service_build_artifacts
         SERVICE_NAME: compliance-profile
     container_name: marty-compliance-profile
     environment:
@@ -588,6 +602,7 @@ services:
       context: .
       dockerfile: services/Dockerfile
       args:
+        <<: *marty_service_build_artifacts
         SERVICE_NAME: presentation-policy
     container_name: marty-presentation-policy
     environment:
@@ -622,6 +637,7 @@ services:
       context: .
       dockerfile: services/Dockerfile
       args:
+        <<: *marty_service_build_artifacts
         SERVICE_NAME: deployment-profile
     container_name: marty-deployment-profile
     environment:
@@ -647,6 +663,7 @@ services:
       context: .
       dockerfile: services/Dockerfile
       args:
+        <<: *marty_service_build_artifacts
         SERVICE_NAME: flow
     container_name: marty-flow
     environment:
@@ -830,6 +847,7 @@ services:
       context: .
       dockerfile: services/Dockerfile
       args:
+        <<: *marty_service_build_artifacts
         SERVICE_NAME: revocation-profile
     container_name: marty-revocation-profile
     environment:
@@ -861,6 +879,7 @@ services:
       context: .
       dockerfile: services/Dockerfile
       args:
+        <<: *marty_service_build_artifacts
         SERVICE_NAME: device_registration
     container_name: marty-device-registration
     environment:
@@ -887,6 +906,7 @@ services:
       context: .
       dockerfile: services/Dockerfile
       args:
+        <<: *marty_service_build_artifacts
         SERVICE_NAME: event_stream
     container_name: marty-event-stream
     environment:
@@ -912,6 +932,7 @@ services:
       context: .
       dockerfile: services/Dockerfile
       args:
+        <<: *marty_service_build_artifacts
         SERVICE_NAME: verification
     container_name: marty-verification
     environment:
