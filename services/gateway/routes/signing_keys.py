@@ -3776,6 +3776,11 @@ async def internal_resolve_issuer_context(
     )
     effective_profile["key_purpose"] = requested_purpose or "vc_jwt_issuer"
     _assert_issuer_profile_key_compatible(effective_profile, registry)
+    # mDoc issuer authentication uses an X.509 chain in the protected COSE
+    # header.  Return it only on this internal, service-to-service contract;
+    # it is public certificate material, but must not be supplied by a wallet
+    # claim or inferred by the issuance service.
+    mdoc_x5c = _service_x5c_chain(normalized)
     if credential_format or requested_purpose or algorithm:
         resolved = _resolve_service_for_format(registry, credential_format, requested_purpose, algorithm)
         if resolved is not None and resolved.get("id") != service_id:
@@ -3802,6 +3807,7 @@ async def internal_resolve_issuer_context(
                 _did_fragment_for_key_reference(service_id, profile.get("signing_key_reference") or normalized.get("key_reference")),
             ),
             "key_purpose": profile.get("key_purpose") or requested_purpose or "vc_jwt_issuer",
+            "mdoc_x5c": mdoc_x5c,
             "issuer_profile": profile,
             "service": normalized,
         }
