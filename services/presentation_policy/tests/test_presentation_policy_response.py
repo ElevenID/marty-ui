@@ -365,18 +365,35 @@ def test_verify_sd_jwt_resolves_did_jwk(monkeypatch) -> None:
             "signature",
         ]
     )
-    monkeypatch.setattr(pp, "_public_jwk_to_pem", lambda jwk: json.dumps(jwk))
+    captured: dict[str, object] = {}
+
+    def _verify(token: str, issuer_jwk: str, audience: str | None, nonce: str | None) -> str:
+        captured.update(
+            token=token,
+            issuer_jwk=json.loads(issuer_jwk),
+            audience=audience,
+            nonce=nonce,
+        )
+        return json.dumps({"given_name": "Marty"})
+
     monkeypatch.setattr(
         pp,
         "_load_marty_rs_binding",
-        lambda: SimpleNamespace(verify_sd_jwt=lambda *_args, **_kwargs: json.dumps({"valid": True})),
+        lambda: SimpleNamespace(verify_sd_jwt=_verify),
     )
 
-    result = pp._verify_sd_jwt(token, nonce=None, audience=None)
+    result = pp._verify_sd_jwt(token, nonce="nonce-123", audience="https://verifier.example")
 
     assert result["verified"] is True
     assert result["issuer_did"] == did
     assert result["claims"]["email"] == "member@example.com"
+    assert result["claims"]["given_name"] == "Marty"
+    assert captured == {
+        "token": token,
+        "issuer_jwk": public_jwk,
+        "audience": "https://verifier.example",
+        "nonce": "nonce-123",
+    }
 
 
 def test_verify_open_badge_v3_uses_binding_and_flattens_claims(monkeypatch) -> None:

@@ -633,7 +633,13 @@ def _b64decode_unpadded(segment: str) -> bytes:
 
 
 def _load_marty_rs_binding() -> Any | None:
-    """Load whichever Python package path exposes the marty-rs functions."""
+    """Load the released marty-rs package, retaining legacy import compatibility."""
+    try:
+        from marty_rs import _marty_rs as binding
+        return binding
+    except Exception:
+        pass
+
     try:
         from _marty_rs import _marty_rs as binding
         return binding
@@ -1034,7 +1040,7 @@ def _verify_sd_jwt(
     signature or validate the issuer trust chain.  That is the responsibility
     of the trust-profile service and the Rust marty-rs bridge.  In a
     production deployment, wrap this with
-    ``marty_rs.SdJwtVerifier(issuer_public_key_pem).verify(vp_token)``
+    ``marty_rs.verify_sd_jwt(vp_token, issuer_public_jwk, audience, nonce)``
     before trusting the extracted claims.
     """
     try:
@@ -1117,13 +1123,11 @@ def _verify_sd_jwt(
                     "format": "sd-jwt",
                     "error": "SD-JWT issuer is not a DID and has no pinned trust-profile JWK",
                 }
-            public_key_pem = _public_jwk_to_pem(public_jwk)
             result_json = marty_rs.verify_sd_jwt(
                 vp_token,
-                public_key_pem,
-                header.get("alg") or None,
-                nonce,
+                json.dumps(public_jwk, separators=(",", ":"), sort_keys=True),
                 audience,
+                nonce,
             )
             rust_result = json.loads(result_json) if isinstance(result_json, str) and result_json.strip() else {}
             if isinstance(rust_result, dict) and rust_result.get("valid") is False:
