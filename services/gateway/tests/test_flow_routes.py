@@ -6,6 +6,17 @@ from unittest.mock import AsyncMock
 import pytest
 
 from gateway.routes import flows
+from gateway.models import StartVerificationFlowRequest
+
+
+def test_gateway_preserves_haip_and_post_request_uri_options() -> None:
+    request = StartVerificationFlowRequest(
+        presentation_policy_id="policy-1",
+        oid4vp_profile="haip",
+        request_uri_method="post",
+    )
+    assert request.model_dump()["oid4vp_profile"] == "haip"
+    assert request.model_dump()["request_uri_method"] == "post"
 
 
 @pytest.mark.asyncio

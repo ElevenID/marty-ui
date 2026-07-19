@@ -1,0 +1,60 @@
+# OIDF verifier conformance profile.
+#
+# Combine this with docker-compose.base.yml and docker-compose.profile.ghcr.yml.
+# It exercises the same gateway, Keycloak, flow, and verification services as a
+# deployment, while making their protocol URLs HTTPS. The certificate directory
+# is intentionally supplied by the invoking environment: a local disposable
+# run may use a test CA (scripts/new-oidf-local-certificate.ps1), while
+# certification uses its registered certificate.
+
+services:
+  oidf-tls-proxy:
+    profiles: [oidf]
+    image: nginx@sha256:679a5fd058f6ca754a561846fe27927e408074431d63556e8fc588fc38be6901
+    ports:
+      - "${OIDF_TLS_HOST_PORT:-8443}:443"
+    volumes:
+      - ./services/oidf-tls-proxy/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ${OIDF_TLS_CERT_DIR:?set OIDF_TLS_CERT_DIR to a directory containing tls.crt and tls.key}:/etc/nginx/certs:ro
+    depends_on:
+      gateway:
+        condition: service_healthy
+      auth:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+    networks: [marty-network]
+    restart: "no"
+
+  auth:
+    environment:
+      UI_BASE_URL: ${OIDF_PUBLIC_BASE_URL:?set OIDF_PUBLIC_BASE_URL to the HTTPS verifier URL}
+      OIDC_EXTERNAL_ISSUER_URL: ${OIDF_PUBLIC_BASE_URL:?set OIDF_PUBLIC_BASE_URL to the HTTPS verifier URL}/realms/${KEYCLOAK_REALM:-11id}
+      OIDC_REDIRECT_URI: ${OIDF_PUBLIC_BASE_URL:?set OIDF_PUBLIC_BASE_URL to the HTTPS verifier URL}/v1/auth/callback
+      OIDC_POST_LOGOUT_REDIRECT_URI: ${OIDF_PUBLIC_BASE_URL:?set OIDF_PUBLIC_BASE_URL to the HTTPS verifier URL}/
+      COOKIE_SECURE: "true"
+
+  gateway:
+    environment:
+      ISSUER_BASE_URL: ${OIDF_PUBLIC_BASE_URL:?set OIDF_PUBLIC_BASE_URL to the HTTPS verifier URL}
+      CORS_ORIGINS: ${OIDF_PUBLIC_BASE_URL:?set OIDF_PUBLIC_BASE_URL to the HTTPS verifier URL}
+
+  flow:
+    environment:
+      PUBLIC_BASE_URL: ${OIDF_PUBLIC_BASE_URL:?set OIDF_PUBLIC_BASE_URL to the HTTPS verifier URL}
+
+  issuance:
+    environment:
+      PUBLIC_BASE_URL: ${OIDF_PUBLIC_BASE_URL:?set OIDF_PUBLIC_BASE_URL to the HTTPS verifier URL}
+      ISSUER_BASE_URL: ${OIDF_PUBLIC_BASE_URL:?set OIDF_PUBLIC_BASE_URL to the HTTPS verifier URL}
+
+  verification:
+    environment:
+      PUBLIC_BASE_URL: ${OIDF_PUBLIC_BASE_URL:?set OIDF_PUBLIC_BASE_URL to the HTTPS verifier URL}
+
+  keycloak:
+    environment:
+      KC_HOSTNAME: ${OIDF_PUBLIC_BASE_URL:?set OIDF_PUBLIC_BASE_URL to the HTTPS verifier URL}
+      KC_HOSTNAME_STRICT: "false"
+      KC_HTTP_ENABLED: "true"
+      KC_PROXY_HEADERS: xforwarded
