@@ -1032,6 +1032,7 @@ async def test_haip_request_uses_a_fresh_per_flow_response_encryption_key(monkey
     assert payloads[0]["client_metadata"]["authorization_encrypted_response_alg"] == flow_main._HAIP_JWE_ALG
     assert payloads[0]["client_metadata"]["authorization_encrypted_response_enc"] == flow_main._HAIP_JWE_ENC
     assert payloads[0]["client_metadata"]["authorization_encrypted_response_enc_values_supported"] == [flow_main._HAIP_JWE_ENC]
+    assert payloads[0]["client_metadata"]["encrypted_response_enc_values_supported"] == [flow_main._HAIP_JWE_ENC]
     assert keys[0]["kid"] != keys[1]["kid"]
     assert "d" not in keys[0]
     assert instances[0].context["haip_response_encryption_private_jwk"]["kid"] == keys[0]["kid"]
@@ -1044,7 +1045,7 @@ async def test_x509_hash_request_uses_certificate_client_id_and_x5c_header(monke
     monkeypatch.setattr(
         flow_main,
         "_x509_hash_client_id_and_header",
-        lambda: ("x509_hash:certificate-thumbprint", ["base64-der-leaf", "base64-der-issuer"]),
+        lambda: ("x509_hash:certificate-thumbprint", ["base64-der-leaf"]),
     )
     repo = InMemoryFlowRepository()
     instance = FlowInstance(
@@ -1066,7 +1067,7 @@ async def test_x509_hash_request_uses_certificate_client_id_and_x5c_header(monke
     decoded_payload = _decode_jwt_segment(payload)
 
     assert decoded_payload["client_id"] == "x509_hash:certificate-thumbprint"
-    assert decoded_header["x5c"] == ["base64-der-leaf", "base64-der-issuer"]
+    assert decoded_header["x5c"] == ["base64-der-leaf"]
     assert "kid" not in decoded_header
 
 
@@ -1246,6 +1247,7 @@ async def test_get_verification_request_object_supports_dc_api(monkeypatch):
     assert client_metadata["authorization_encrypted_response_alg"] == flow_main._HAIP_JWE_ALG
     assert client_metadata["authorization_encrypted_response_enc"] == flow_main._HAIP_JWE_ENC
     assert client_metadata["authorization_encrypted_response_enc_values_supported"] == [flow_main._HAIP_JWE_ENC]
+    assert client_metadata["encrypted_response_enc_values_supported"] == [flow_main._HAIP_JWE_ENC]
     [encryption_key] = client_metadata["jwks"]["keys"]
     assert encryption_key["kid"] == flow_main._HAIP_ENCRYPTION_KEY_ID
     assert encryption_key["use"] == "enc"
