@@ -1161,6 +1161,8 @@ class StartVerificationFlowRequest(BaseModel):
     external_reference: str | None = None
     callback_url: str | None = None
     expiry_minutes: int = 15
+    oid4vp_profile: Literal["standard", "haip"] = "standard"
+    request_uri_method: Literal["get", "post"] = "get"
 
 
 class VerificationRequestResponse(BaseModel):
