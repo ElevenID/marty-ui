@@ -93,6 +93,30 @@ def test_local_build_requires_digest_pinned_bootstrap_artifacts(monkeypatch: pyt
     ]
 
 
+def test_all_shared_service_builds_receive_the_verified_bootstrap_artifacts() -> None:
+    """A source-built conformance stack must not silently omit Docker build args.
+
+    Services share ``services/Dockerfile``, which downloads the released
+    marty-rs and marty-common wheels and checks their digests.  Compose does
+    not automatically forward environment variables as build arguments, so
+    each service must inherit the explicit build-argument mapping.
+    """
+    compose = (ROOT / "docker-compose.base.yml").read_text(encoding="utf-8")
+    assert "x-marty-service-build-artifacts: &marty_service_build_artifacts" in compose
+    for service in (
+        "gateway", "auth", "organization", "credential-template", "trust-profile",
+        "applicant", "notification", "compliance-profile", "presentation-policy",
+        "deployment-profile", "flow", "revocation-profile", "device-registration",
+        "event-stream", "verification",
+    ):
+        section = re.search(
+            rf"(?ms)^  {re.escape(service)}:\n(.*?)(?=^  [a-zA-Z0-9_-]+:\n|\Z)",
+            compose,
+        )
+        assert section is not None
+        assert "<<: *marty_service_build_artifacts" in section.group(1)
+
+
 def test_oidf_bridge_listener_uses_the_published_https_port(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OIDF_PUBLIC_BASE_URL", "https://marty-oidf.test:28443")
     monkeypatch.delenv("OIDF_INTERNAL_TLS_PORT", raising=False)
