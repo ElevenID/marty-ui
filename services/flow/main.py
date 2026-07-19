@@ -25,6 +25,7 @@ import base64
 import json
 import logging
 import os
+import re
 import time
 import urllib.parse
 import uuid
@@ -3592,8 +3593,13 @@ def _base64url_decode(data: str) -> bytes:
     return base64.urlsafe_b64decode((data + padding).encode("ascii"))
 
 
-def _verifier_x509_certificate() -> x509.Certificate:
-    """Load the verifier certificate used for the x509_hash client identifier."""
+def _verifier_x509_certificates() -> list[x509.Certificate]:
+    """Load the verifier leaf certificate and any issuer chain certificates.
+
+    ``x509_hash`` is derived from the leaf, while a HAIP request object must
+    include the complete leaf-to-trust-anchor chain in its ``x5c`` header.
+    PEM bundles are accepted in the natural order: leaf first, then issuers.
+    """
     certificate_pem = os.environ.get("VERIFIER_X509_CERT_PEM")
     certificate_file = os.environ.get("VERIFIER_X509_CERT_FILE")
     if certificate_pem:
@@ -3602,12 +3608,24 @@ def _verifier_x509_certificate() -> x509.Certificate:
         data = Path(certificate_file).read_bytes()
     else:
         raise RuntimeError("VERIFIER_X509_CERT_PEM or VERIFIER_X509_CERT_FILE is required for x509_hash")
-    return x509.load_pem_x509_certificate(data)
+    pem_certificates = re.findall(
+        br"-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----",
+        data,
+    )
+    if not pem_certificates:
+        raise RuntimeError("VERIFIER_X509_CERT_* contains no PEM certificate")
+    return [x509.load_pem_x509_certificate(certificate) for certificate in pem_certificates]
+
+
+def _verifier_x509_certificate() -> x509.Certificate:
+    """Return the leaf certificate used for the x509_hash client identifier."""
+    return _verifier_x509_certificates()[0]
 
 
 def _x509_hash_client_id_and_header() -> tuple[str, list[str]]:
     """Return the OID4VP x509_hash identifier and JOSE ``x5c`` certificate."""
-    certificate = _verifier_x509_certificate()
+    certificates = _verifier_x509_certificates()
+    certificate = certificates[0]
     der = certificate.public_bytes(serialization.Encoding.DER)
     certificate_hash = hashes.Hash(hashes.SHA256())
     certificate_hash.update(der)
@@ -3619,7 +3637,10 @@ def _x509_hash_client_id_and_header() -> tuple[str, list[str]]:
         certificate_public.public_numbers() != signing_pair["public"].public_numbers()
     ):
         raise RuntimeError("VERIFIER_X509_CERT_* public key must match the OID4VP request signing key")
-    return f"x509_hash:{digest}", [base64.b64encode(der).decode("ascii")]
+    return f"x509_hash:{digest}", [
+        base64.b64encode(item.public_bytes(serialization.Encoding.DER)).decode("ascii")
+        for item in certificates
+    ]
 
 
 def _verifier_public_jwk() -> dict[str, str]:
@@ -3802,6 +3823,11 @@ def _oid4vp_client_metadata(
             {
                 "authorization_encrypted_response_alg": _HAIP_JWE_ALG,
                 "authorization_encrypted_response_enc": _HAIP_JWE_ENC,
+                # HAIP validates the advertised set, rather than relying on
+                # the single-value OAuth metadata parameter.  Advertising the
+                # exact supported AEAD avoids wallets defaulting to A128GCM
+                # while this verifier is configured for A256GCM.
+                "authorization_encrypted_response_enc_values_supported": [_HAIP_JWE_ENC],
                 "jwks": {"keys": [response_encryption_jwk or _verifier_encryption_public_jwk()]},
             }
         )
