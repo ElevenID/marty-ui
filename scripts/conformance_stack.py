@@ -17,14 +17,20 @@ ROOT = Path(__file__).resolve().parents[1]
 PROJECT = re.compile(r"^marty-conformance-[a-z0-9](?:[a-z0-9-]{1,46}[a-z0-9])?$")
 BASE_FILES = (
     "docker-compose.base.yml",
-    "docker-compose.profile.ghcr.yml",
     "docker-compose.profile.oidf.yml",
 )
+GHCR_FILE = "docker-compose.profile.ghcr.yml"
 W3C_FILE = "docker-compose.profile.w3c-vc.yml"
 EUDI_FILE = "docker-compose.profile.eudi.yml"
 ISOLATION_FILE = "docker-compose.profile.conformance.yml"
 EUDI_ISOLATION_FILE = "docker-compose.profile.conformance-eudi.yml"
 PUBLIC_PORT_SERVICES = {"oidf-tls-proxy", "eudi-wallet-tester-tls", "eudi-verifier-tls"}
+LOCAL_BUILD_ARGS = (
+    "MARTY_RS_URI",
+    "MARTY_RS_DIGEST",
+    "MARTY_COMMON_URI",
+    "MARTY_COMMON_DIGEST",
+)
 
 
 def validate_project(project: str) -> str:
@@ -35,9 +41,11 @@ def validate_project(project: str) -> str:
     return project
 
 
-def compose_command(project: str, *, include_eudi: bool, include_w3c: bool = False) -> list[str]:
+def compose_command(project: str, *, include_eudi: bool, include_w3c: bool = False, use_ghcr: bool = True) -> list[str]:
     command = ["docker", "compose", "--project-name", validate_project(project)]
     files = [*BASE_FILES]
+    if use_ghcr:
+        files.insert(1, GHCR_FILE)
     if include_w3c:
         files.append(W3C_FILE)
     if include_eudi:
@@ -53,10 +61,10 @@ def compose_command(project: str, *, include_eudi: bool, include_w3c: bool = Fal
     return command
 
 
-def rendered_config(project: str, *, include_eudi: bool, include_w3c: bool = False) -> dict[str, Any]:
+def rendered_config(project: str, *, include_eudi: bool, include_w3c: bool = False, use_ghcr: bool = True) -> dict[str, Any]:
     completed = subprocess.run(
         [
-            *compose_command(project, include_eudi=include_eudi, include_w3c=include_w3c),
+            *compose_command(project, include_eudi=include_eudi, include_w3c=include_w3c, use_ghcr=use_ghcr),
             "config",
             "--format",
             "json",
@@ -147,6 +155,20 @@ def assert_ports_available(ports: list[int], project: str, *, resume: bool = Fal
         )
 
 
+def local_build_arguments() -> list[str]:
+    """Return explicit immutable bootstrap build arguments for source runs."""
+    missing = [name for name in LOCAL_BUILD_ARGS if not os.environ.get(name, "").strip()]
+    if missing:
+        raise ValueError(
+            "--local-build requires published, digest-pinned bootstrap artifacts: "
+            + ", ".join(missing)
+        )
+    values: list[str] = []
+    for name in LOCAL_BUILD_ARGS:
+        values.extend(["--build-arg", f"{name}={os.environ[name]}"])
+    return values
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -156,6 +178,7 @@ def main() -> int:
     )
     parser.add_argument("--include-eudi", action="store_true")
     parser.add_argument("--include-w3c", action="store_true")
+    parser.add_argument("--local-build", action="store_true", help="build the checked-out source; never certification-grade evidence")
     parser.add_argument(
         "--resume",
         action="store_true",
@@ -171,6 +194,7 @@ def main() -> int:
         project,
         include_eudi=args.include_eudi,
         include_w3c=args.include_w3c,
+        use_ghcr=not args.local_build,
     )
 
     if args.command == "down":
@@ -185,6 +209,7 @@ def main() -> int:
         project,
         include_eudi=args.include_eudi,
         include_w3c=args.include_w3c,
+        use_ghcr=not args.local_build,
     )
     ports = validate_isolation(config, project)
     if args.command == "config":
@@ -192,6 +217,18 @@ def main() -> int:
         return 0
     if args.command == "up":
         assert_ports_available(ports, project, resume=args.resume)
+        if args.local_build:
+            build_result = subprocess.run(
+                [*command, "build", *local_build_arguments()], cwd=ROOT, check=False
+            )
+            if build_result.returncode:
+                return build_result.returncode
+            return subprocess.run(
+                # Keycloak configuration is intentionally a one-shot service.
+                # Compose's --wait treats its successful exit as an error even
+                # after every long-running service becomes healthy.
+                [*command, "up", "--detach", "--no-build"], cwd=ROOT, check=False
+            ).returncode
         return subprocess.run([*command, "up", "--detach", "--wait"], cwd=ROOT, check=False).returncode
     if args.command == "bootstrap-reviewer":
         if not project_container_ids(project):
