@@ -3447,6 +3447,11 @@ async def get_verification_request_object(
                 request_payload["response_mode"] = "direct_post"
             request_payload["response_uri"] = response_uri
             request_payload["state"] = instance_id
+            # Bind the callback to this exact request.  Keep the expected
+            # value in the flow rather than inferring it from the callback
+            # path: a direct-post response can be delivered through a proxy
+            # or by a wallet that reorders its form fields.
+            instance.context["oid4vp_expected_state"] = instance_id
             instance.context["verification_audience"] = client_identifier
 
         # OID4VP presentation definition (built from the real policy)
@@ -4233,6 +4238,22 @@ async def _submit_verification_response_internal(
     
     if instance.status not in [FlowInstanceStatus.AWAITING_WALLET, FlowInstanceStatus.IN_PROGRESS]:
         raise HTTPException(status_code=400, detail="Submission not accepted in current state")
+
+    # Every request object emitted by this verifier contains a state value.
+    # Require the corresponding callback parameter before accepting a
+    # direct-post response, including a state carried inside a HAIP encrypted
+    # response.  Older internal callers that never generated an OID4VP request
+    # have no ``oid4vp_expected_state`` marker and retain their existing API
+    # contract.
+    expected_state = instance.context.get("oid4vp_expected_state")
+    if expected_state is not None and state != expected_state:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "invalid_request",
+                "error_description": "OID4VP response state does not match the verification request",
+            },
+        )
 
     effective_audience = verification_audience or instance.context.get("verification_audience", "")
     if effective_audience:
