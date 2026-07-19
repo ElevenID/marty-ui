@@ -3354,6 +3354,11 @@ async def test_internal_resolve_issuer_context_uses_explicit_profile(monkeypatch
 
     redis_mock.get = AsyncMock(side_effect=fake_get)
     request = _build_request("org_issuer", redis_client=redis_mock)
+    monkeypatch.setattr(
+        signing_keys,
+        "_service_x5c_chain",
+        lambda service: ["issuer-leaf-x5c", "issuer-intermediate-x5c"],
+    )
 
     response = await signing_keys.internal_resolve_issuer_context(
         request=request,
@@ -3372,6 +3377,7 @@ async def test_internal_resolve_issuer_context_uses_explicit_profile(monkeypatch
     assert data["issuer_mode"] == "elevenid_managed"
     assert data["issuer_did"] == "did:web:beta.elevenidllc.com:orgs:elevenid"
     assert data["signing_service_id"] == "svc-selected"
+    assert data["mdoc_x5c"] == ["issuer-leaf-x5c", "issuer-intermediate-x5c"]
 
 
 @pytest.mark.asyncio
