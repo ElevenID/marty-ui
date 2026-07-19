@@ -929,6 +929,36 @@ async def test_get_verification_request_object_supports_lissi_compat_profile(mon
 
 
 @pytest.mark.asyncio
+async def test_get_verification_request_object_supports_redirect_uri_client_id_prefix(monkeypatch):
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://verifier.example")
+    monkeypatch.setenv("OID4VP_CLIENT_ID_PREFIX", "redirect_uri")
+
+    repo = InMemoryFlowRepository()
+    instance = FlowInstance(
+        flow_definition_id="__verification__",
+        organization_id="org-1",
+        status=FlowInstanceStatus.AWAITING_WALLET,
+        context={"flow_type": "verification", "nonce": "nonce-123", "presentation_policy_id": "policy-1"},
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+    )
+    await repo.save_instance(instance)
+
+    async def _fake_presentation_definition(_policy_id: str) -> dict:
+        return {"id": "pd-1", "input_descriptors": [{"id": "descriptor-1", "constraints": {"fields": []}}]}
+
+    monkeypatch.setattr("flow.main._build_presentation_definition", _fake_presentation_definition)
+    response = await get_verification_request_object(instance.id, repo)
+    _header, payload, _signature = response.body.decode().split(".", 2)
+    decoded_payload = _decode_jwt_segment(payload)
+    expected = f"https://verifier.example/v1/flows/instances/{instance.id}/submit"
+
+    assert decoded_payload["client_id"] == expected
+    assert decoded_payload["response_uri"] == expected
+    assert "client_id_scheme" not in decoded_payload
+    assert instance.context["verification_audience"] == expected
+
+
+@pytest.mark.asyncio
 async def test_get_verification_request_object_supports_dc_api(monkeypatch):
     monkeypatch.setenv("PUBLIC_BASE_URL", "https://verifier.example")
 

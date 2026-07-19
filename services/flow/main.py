@@ -3348,7 +3348,22 @@ async def get_verification_request_object(
         # The response_uri is where the wallet POSTs the VP token (the submit endpoint).
         verifier_did = _derive_verifier_did(base_url)
         lissi_compat = compat_profile == "lissi"
-        client_identifier = verifier_did if lissi_compat else f"decentralized_identifier:{verifier_did}"
+        client_id_prefix = os.environ.get("OID4VP_CLIENT_ID_PREFIX", "decentralized_identifier").strip().lower()
+        if lissi_compat:
+            client_identifier = verifier_did
+        elif client_id_prefix == "redirect_uri":
+            # OID4VP 1.0 Final §5.9.2: without an explicit client_id_scheme,
+            # the response URI is the verifier client identifier. This is a
+            # normal deployment option used by wallets that support the
+            # redirect_uri prefix; it is not a conformance-only shortcut.
+            client_identifier = response_uri
+        elif client_id_prefix == "decentralized_identifier":
+            client_identifier = f"decentralized_identifier:{verifier_did}"
+        else:
+            raise HTTPException(
+                status_code=500,
+                detail="OID4VP_CLIENT_ID_PREFIX must be decentralized_identifier or redirect_uri",
+            )
         # Build OID4VP Request Object payload
         # This will be signed as a JWT per OID4VP spec section 5
         request_payload = {
