@@ -33,7 +33,10 @@ def test_adapter_rejects_unimplemented_json_ld_proofs() -> None:
 
 def _valid_w3c_credential() -> dict:
     return {
-        "@context": ["https://www.w3.org/ns/credentials/v2"],
+        "@context": [
+            "https://www.w3.org/ns/credentials/v2",
+            {"ExampleCredential": "https://issuer.example.test/ExampleCredential"},
+        ],
         "type": ["VerifiableCredential", "ExampleCredential"],
         "issuer": "https://issuer.example.test",
         "credentialSubject": {"id": "did:key:z6MkExample", "name": "Ada"},
@@ -52,6 +55,36 @@ def test_issuer_adapter_rejects_non_vcdm_input_before_issuance() -> None:
     with pytest.raises(HTTPException) as exc_info:
         adapter._claims_from_w3c_credential(invalid)
     assert exc_info.value.status_code == 422
+
+
+@pytest.mark.parametrize("field,value", [
+    ("id", None),
+    ("credentialStatus", {"id": "did:example:status"}),
+    ("credentialSchema", {"type": "JsonSchema"}),
+    ("name", {"@value": 4}),
+])
+def test_issuer_adapter_rejects_malformed_vcdm_structures(field: str, value: object) -> None:
+    credential = _valid_w3c_credential()
+    credential[field] = value
+    with pytest.raises(HTTPException) as exc_info:
+        adapter._claims_from_w3c_credential(credential)
+    assert exc_info.value.status_code == 422
+
+
+def test_issuer_adapter_rejects_protected_context_redefinition() -> None:
+    credential = _valid_w3c_credential()
+    credential["@context"].append({"VerifiableCredential": "https://example.test/bad"})
+    with pytest.raises(HTTPException) as exc_info:
+        adapter._claims_from_w3c_credential(credential)
+    assert exc_info.value.status_code == 422
+
+
+def test_issuer_adapter_accepts_a_valid_object_issuer_and_context_type() -> None:
+    credential = _valid_w3c_credential()
+    credential["issuer"] = {"id": "https://issuer.example.test", "name": {"@value": "Issuer", "@language": "en"}}
+    credential["@context"].append({"ExampleCredential": "https://example.test/ExampleCredential"})
+    credential["type"].append("ExampleCredential")
+    assert adapter._claims_from_w3c_credential(credential)["name"] == "Ada"
 
 
 def test_issuer_adapter_requires_explicit_disposable_fixture_configuration(monkeypatch: pytest.MonkeyPatch) -> None:

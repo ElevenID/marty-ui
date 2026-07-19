@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import json
+import re
 from typing import Any
 from urllib.parse import unquote_to_bytes
 
@@ -78,10 +79,13 @@ def _claims_from_w3c_credential(credential: dict[str, Any]) -> dict[str, Any]:
     adapter deliberately accepts the VCDM fields Marty can carry in a JWT VC;
     it never converts an invalid document into a signed credential.
     """
+    _validate_w3c_vcdm_credential(credential)
     context = credential.get("@context")
     types = credential.get("type")
     subject = credential.get("credentialSubject")
     issuer = credential.get("issuer")
+    if isinstance(issuer, dict):
+        issuer = issuer.get("id")
     if (
         not isinstance(context, list)
         or not context
@@ -90,13 +94,121 @@ def _claims_from_w3c_credential(credential: dict[str, Any]) -> dict[str, Any]:
         or "VerifiableCredential" not in types
         or not isinstance(subject, dict)
         or not subject
-        or not isinstance(issuer, str)
-        or not issuer
+        or not _is_absolute_uri(issuer)
     ):
         raise HTTPException(status_code=422, detail={"error": "invalid_credential"})
     # The credential template controls issuer identity and credential type.
     # Only subject claims cross the test adapter boundary.
     return dict(subject)
+
+
+_ABSOLUTE_URI = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:[^\s]+$")
+_BASE_CONTEXT = "https://www.w3.org/ns/credentials/v2"
+_PROTECTED_VCDM_TERMS = frozenset({
+    "VerifiableCredential", "VerifiablePresentation", "credentialSubject",
+    "issuer", "proof", "type", "id", "@context",
+})
+
+
+def _is_absolute_uri(value: Any) -> bool:
+    return isinstance(value, str) and bool(_ABSOLUTE_URI.fullmatch(value))
+
+
+def _context_term_map(context: list[Any]) -> dict[str, str]:
+    terms: dict[str, str] = {}
+    for item in context[1:]:
+        if isinstance(item, str):
+            if not _is_absolute_uri(item):
+                raise HTTPException(status_code=422, detail={"error": "invalid_context"})
+            continue
+        if not isinstance(item, dict):
+            raise HTTPException(status_code=422, detail={"error": "invalid_context"})
+        for term, target in item.items():
+            if term in _PROTECTED_VCDM_TERMS or not _is_absolute_uri(target):
+                raise HTTPException(status_code=422, detail={"error": "invalid_context"})
+            terms[term] = target
+    return terms
+
+
+def _validate_type(value: Any, terms: dict[str, str], required: str | None = None) -> None:
+    values = value if isinstance(value, list) else [value]
+    if not values or not all(isinstance(item, str) and item for item in values):
+        raise HTTPException(status_code=422, detail={"error": "invalid_type"})
+    if required and required not in values:
+        raise HTTPException(status_code=422, detail={"error": "invalid_type"})
+    for item in values:
+        if not _is_absolute_uri(item) and item not in _PROTECTED_VCDM_TERMS and item not in terms:
+            raise HTTPException(status_code=422, detail={"error": "invalid_type"})
+
+
+def _validate_typed_resource(value: Any, terms: dict[str, str], *, require_id: bool = False) -> None:
+    values = value if isinstance(value, list) else [value]
+    if not values or not all(isinstance(item, dict) for item in values):
+        raise HTTPException(status_code=422, detail={"error": "invalid_resource"})
+    for item in values:
+        _validate_type(item.get("type"), terms)
+        if require_id and not _is_absolute_uri(item.get("id")):
+            raise HTTPException(status_code=422, detail={"error": "invalid_resource"})
+
+
+def _validate_language_value(value: Any) -> bool:
+    if isinstance(value, str):
+        return True
+    if not isinstance(value, dict) or not isinstance(value.get("@value"), str):
+        return False
+    return all(
+        key in {"@value", "@language", "@direction"}
+        and (key == "@value" or isinstance(entry, str))
+        for key, entry in value.items()
+    )
+
+
+def _validate_w3c_vcdm_credential(credential: dict[str, Any]) -> None:
+    """Enforce the structural VCDM v2 rules exercised by the official suite.
+
+    This is a narrow input gate for the disposable VC-API adapter. It does not
+    verify a proof or issue a synthetic credential: valid input continues into
+    Marty's ordinary OID4VCI remote-signing path.
+    """
+    context = credential.get("@context")
+    if not isinstance(context, list) or not context or context[0] != _BASE_CONTEXT:
+        raise HTTPException(status_code=422, detail={"error": "invalid_context"})
+    terms = _context_term_map(context)
+    _validate_type(credential.get("type"), terms, "VerifiableCredential")
+    if "id" in credential and not _is_absolute_uri(credential["id"]):
+        raise HTTPException(status_code=422, detail={"error": "invalid_id"})
+    issuer = credential.get("issuer")
+    if isinstance(issuer, dict):
+        issuer = issuer.get("id")
+    if not _is_absolute_uri(issuer):
+        raise HTTPException(status_code=422, detail={"error": "invalid_issuer"})
+    subjects = credential.get("credentialSubject")
+    subject_values = subjects if isinstance(subjects, list) else [subjects]
+    if not subject_values or not all(isinstance(subject, dict) and subject for subject in subject_values):
+        raise HTTPException(status_code=422, detail={"error": "invalid_subject"})
+    for subject in subject_values:
+        if "id" in subject and not _is_absolute_uri(subject["id"]):
+            raise HTTPException(status_code=422, detail={"error": "invalid_subject"})
+    for key in ("validFrom", "validUntil"):
+        if key in credential and not isinstance(credential[key], str):
+            raise HTTPException(status_code=422, detail={"error": "invalid_validity"})
+    if "credentialStatus" in credential:
+        _validate_typed_resource(credential["credentialStatus"], terms)
+        for status in (credential["credentialStatus"] if isinstance(credential["credentialStatus"], list) else [credential["credentialStatus"]]):
+            if "id" in status and not _is_absolute_uri(status["id"]):
+                raise HTTPException(status_code=422, detail={"error": "invalid_status"})
+    if "credentialSchema" in credential:
+        _validate_typed_resource(credential["credentialSchema"], terms, require_id=True)
+    for key in ("termsOfUse", "refreshService", "evidence"):
+        if key in credential:
+            _validate_typed_resource(credential[key], terms)
+    for key in ("name", "description"):
+        if key in credential and not _validate_language_value(credential[key]):
+            raise HTTPException(status_code=422, detail={"error": "invalid_language_value"})
+    if isinstance(credential.get("issuer"), dict):
+        for key in ("name", "description"):
+            if key in credential["issuer"] and not _validate_language_value(credential["issuer"][key]):
+                raise HTTPException(status_code=422, detail={"error": "invalid_language_value"})
 
 
 def _create_oid4vci_proof(issuer_url: str, nonce: str) -> str:
