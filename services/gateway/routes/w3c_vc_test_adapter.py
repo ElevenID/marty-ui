@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 import json
 import re
+from datetime import datetime
 from typing import Any
 from urllib.parse import unquote_to_bytes
 
@@ -103,6 +104,9 @@ def _claims_from_w3c_credential(credential: dict[str, Any]) -> dict[str, Any]:
 
 
 _ABSOLUTE_URI = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:[^\s]+$")
+_RFC3339_DATETIME = re.compile(
+    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$"
+)
 _BASE_CONTEXT = "https://www.w3.org/ns/credentials/v2"
 _PROTECTED_VCDM_TERMS = frozenset({
     "VerifiableCredential", "VerifiablePresentation", "credentialSubject",
@@ -163,6 +167,16 @@ def _validate_language_value(value: Any) -> bool:
     )
 
 
+def _is_rfc3339_datetime(value: Any) -> bool:
+    if not isinstance(value, str) or not _RFC3339_DATETIME.fullmatch(value):
+        return False
+    try:
+        datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return True
+
+
 def _validate_w3c_vcdm_credential(credential: dict[str, Any]) -> None:
     """Enforce the structural VCDM v2 rules exercised by the official suite.
 
@@ -190,7 +204,10 @@ def _validate_w3c_vcdm_credential(credential: dict[str, Any]) -> None:
         if "id" in subject and not _is_absolute_uri(subject["id"]):
             raise HTTPException(status_code=422, detail={"error": "invalid_subject"})
     for key in ("validFrom", "validUntil"):
-        if key in credential and not isinstance(credential[key], str):
+        if key in credential and not _is_rfc3339_datetime(credential[key]):
+            raise HTTPException(status_code=422, detail={"error": "invalid_validity"})
+    if "validFrom" in credential and "validUntil" in credential:
+        if datetime.fromisoformat(credential["validFrom"].replace("Z", "+00:00")) > datetime.fromisoformat(credential["validUntil"].replace("Z", "+00:00")):
             raise HTTPException(status_code=422, detail={"error": "invalid_validity"})
     if "credentialStatus" in credential:
         _validate_typed_resource(credential["credentialStatus"], terms)
@@ -202,6 +219,19 @@ def _validate_w3c_vcdm_credential(credential: dict[str, Any]) -> None:
     for key in ("termsOfUse", "refreshService", "evidence"):
         if key in credential:
             _validate_typed_resource(credential[key], terms)
+    if "relatedResource" in credential:
+        resources = credential["relatedResource"]
+        resources = resources if isinstance(resources, list) else [resources]
+        seen_resource_ids: set[str] = set()
+        if not resources or not all(isinstance(resource, dict) for resource in resources):
+            raise HTTPException(status_code=422, detail={"error": "invalid_related_resource"})
+        for resource in resources:
+            resource_id = resource.get("id")
+            if not _is_absolute_uri(resource_id) or resource_id in seen_resource_ids:
+                raise HTTPException(status_code=422, detail={"error": "invalid_related_resource"})
+            if not isinstance(resource.get("digestSRI") or resource.get("digestMultibase"), str):
+                raise HTTPException(status_code=422, detail={"error": "invalid_related_resource"})
+            seen_resource_ids.add(resource_id)
     for key in ("name", "description"):
         if key in credential and not _validate_language_value(credential[key]):
             raise HTTPException(status_code=422, detail={"error": "invalid_language_value"})
