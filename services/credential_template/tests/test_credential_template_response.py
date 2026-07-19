@@ -587,6 +587,16 @@ def test_activate_credential_template_rejects_legacy_placeholder_vct() -> None:
 	assert asyncio.run(repo.get(template.id)).status == credential_template.TemplateStatus.DRAFT
 
 
+def test_sd_jwt_vct_accepts_registered_urn_identifier() -> None:
+	"""OID4VP Final credentials use ``urn:eudi:pid:1`` as their VCT."""
+	credential_template._validate_template_protocol_requirements(
+		compliance_profile=None,
+		compliance_profile_id="profile-1",
+		credential_payload_format=credential_template.CredentialFormat.SD_JWT_VC.value,
+		vct="urn:eudi:pid:1",
+	)
+
+
 def test_activate_credential_template_rejects_mismatched_trust_profile() -> None:
 	repo = credential_template.InMemoryCredentialTemplateRepository()
 	template = asyncio.run(_save_template(repo))
