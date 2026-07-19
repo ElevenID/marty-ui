@@ -231,6 +231,15 @@ async def _issue_jwt_vc(credential: dict[str, Any], request: Request) -> str:
     if template.get("organization_id") != organization_id:
         raise HTTPException(status_code=403, detail="W3C fixture template belongs to another organization")
     credential_format = template.get("credential_payload_format")
+    if str(credential_format or "").strip().lower() not in {
+        "jwt_vc_json",
+        "vc_jwt",
+        "w3c_vcdm_v2_jwt_vc",
+    }:
+        raise HTTPException(
+            status_code=422,
+            detail="W3C fixture template must issue JWT VC, not SD-JWT, mdoc, or JSON-LD",
+        )
     issuer_identity = await _resolve_issuer_identity(
         request,
         organization_id,

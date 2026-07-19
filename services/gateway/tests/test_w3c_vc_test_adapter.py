@@ -70,6 +70,11 @@ def test_issuer_adapter_wraps_only_a_compact_jwt_vc() -> None:
         adapter._jose_vc_envelope(_valid_w3c_credential(), "not-a-jwt")
 
 
+def test_issuer_adapter_source_defines_a_jwt_vc_fixture_contract() -> None:
+    source = adapter._issue_jwt_vc.__code__.co_consts
+    assert "W3C fixture template must issue JWT VC, not SD-JWT, mdoc, or JSON-LD" in source
+
+
 def test_issuer_adapter_generates_a_verifiable_oid4vci_proof() -> None:
     from marty_rs import _marty_rs as binding
 
