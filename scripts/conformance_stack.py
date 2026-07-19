@@ -161,7 +161,10 @@ def main() -> int:
         action="store_true",
         help="resume only the exact project after an interrupted up command",
     )
-    parser.add_argument("command", choices=("config", "up", "ps", "ports", "down"))
+    parser.add_argument(
+        "command",
+        choices=("bootstrap-reviewer", "config", "up", "ps", "ports", "down"),
+    )
     args = parser.parse_args()
     project = validate_project(args.project)
     command = compose_command(
@@ -190,6 +193,14 @@ def main() -> int:
     if args.command == "up":
         assert_ports_available(ports, project, resume=args.resume)
         return subprocess.run([*command, "up", "--detach", "--wait"], cwd=ROOT, check=False).returncode
+    if args.command == "bootstrap-reviewer":
+        if not project_container_ids(project):
+            raise ValueError("bootstrap-reviewer requires an existing exact conformance project")
+        return subprocess.run(
+            [*command, "up", "--detach", "--force-recreate", "--no-deps", "keycloak-configurator"],
+            cwd=ROOT,
+            check=False,
+        ).returncode
     if args.command == "ports":
         for service in sorted(PUBLIC_PORT_SERVICES & config.get("services", {}).keys()):
             subprocess.run([*command, "port", service, "443"], cwd=ROOT, check=True)
