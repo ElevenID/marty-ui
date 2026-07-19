@@ -117,7 +117,11 @@ def _jose_vc_envelope(credential: dict[str, Any], token: str) -> dict[str, Any]:
         raise HTTPException(status_code=502, detail="Marty issuance did not return a JWT VC")
     return {
         "@context": credential["@context"],
-        "type": ["EnvelopedVerifiableCredential"],
+        # The pinned official suite identifies an enveloped credential by the
+        # scalar VCDM envelope type before extracting the signed JWT payload.
+        # A one-element array is schema-valid in other contexts, but the
+        # suite's envelope branch intentionally uses scalar equality.
+        "type": "EnvelopedVerifiableCredential",
         "id": f"data:application/vc+jwt,{token}",
     }
 
