@@ -3637,9 +3637,15 @@ def _x509_hash_client_id_and_header() -> tuple[str, list[str]]:
         certificate_public.public_numbers() != signing_pair["public"].public_numbers()
     ):
         raise RuntimeError("VERIFIER_X509_CERT_* public key must match the OID4VP request signing key")
+    # x5c carries the leaf and intermediates.  A verifier's configured trust
+    # anchor is deliberately omitted: HAIP validators reject trust anchors in
+    # the JOSE header and obtain them from their configured trust store.
+    x5c_certificates = certificates
+    if len(certificates) > 1 and certificates[-1].issuer == certificates[-1].subject:
+        x5c_certificates = certificates[:-1]
     return f"x509_hash:{digest}", [
         base64.b64encode(item.public_bytes(serialization.Encoding.DER)).decode("ascii")
-        for item in certificates
+        for item in x5c_certificates
     ]
 
 
@@ -3828,6 +3834,7 @@ def _oid4vp_client_metadata(
                 # exact supported AEAD avoids wallets defaulting to A128GCM
                 # while this verifier is configured for A256GCM.
                 "authorization_encrypted_response_enc_values_supported": [_HAIP_JWE_ENC],
+                "encrypted_response_enc_values_supported": [_HAIP_JWE_ENC],
                 "jwks": {"keys": [response_encryption_jwk or _verifier_encryption_public_jwk()]},
             }
         )
