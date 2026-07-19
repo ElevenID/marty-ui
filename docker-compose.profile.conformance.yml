@@ -56,6 +56,12 @@ services:
   organization:
     container_name: !reset null
     ports: !reset []
+    environment:
+      # The organization service owns RBAC membership. Its startup bootstrap
+      # promotes this disposable account to the organization admin role rather
+      # than relying only on the Keycloak realm role.
+      MARTY_ORG_ADMIN_EMAIL: ${MARTY_CONFORMANCE_ADMIN_EMAIL:-conformance@elevenid.dev}
+      MARTY_ORG_REVIEWER_EMAIL: ${MARTY_CONFORMANCE_REVIEWER_EMAIL:-conformance.reviewer@elevenid.dev}
   credential-template:
     container_name: !reset null
     ports: !reset []

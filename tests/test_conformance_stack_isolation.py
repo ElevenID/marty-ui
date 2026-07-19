@@ -129,6 +129,9 @@ def test_conformance_profile_uses_a_disposable_reviewer_via_normal_oidc() -> Non
     assert "MARTY_ORG_REVIEWER_EMAIL: ${MARTY_CONFORMANCE_REVIEWER_EMAIL" in profile
     assert "MARTY_ORG_ADMIN_EMAIL: ${MARTY_CONFORMANCE_ADMIN_EMAIL" in profile
     assert "MARTY_ORG_ADMIN_PASSWORD: ${MARTY_CONFORMANCE_ADMIN_PASSWORD" in profile
+    organization = profile.split("  organization:\n", 1)[1].split("\n  credential-template:\n", 1)[0]
+    assert "MARTY_ORG_ADMIN_EMAIL: ${MARTY_CONFORMANCE_ADMIN_EMAIL" in organization
+    assert "MARTY_ORG_REVIEWER_EMAIL: ${MARTY_CONFORMANCE_REVIEWER_EMAIL" in organization
 
 
 def test_keycloak_configurator_bootstraps_missing_application_roles() -> None:
