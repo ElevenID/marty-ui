@@ -4530,6 +4530,18 @@ async def submit_oid4vp_direct_post_response(
             status_code=400,
             detail={"error": "invalid_presentation", "error_description": "presentation verification failed"},
         )
+
+    # HAIP 1.0 §5.1 requires a successful direct_post.jwt response to give the
+    # wallet a URI to which it can return control.  Standard OID4VP direct-post
+    # deliberately retains the empty object defined by §8.2, so do not turn a
+    # wallet callback into an application-result contract outside HAIP.
+    instance = await repo.get_instance(instance_id)
+    if instance and instance.context.get("oid4vp_profile") == "haip":
+        base_url = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
+        if not base_url.startswith("https://"):
+            logger.error("HAIP flow %s has no public HTTPS base URL", instance_id)
+            raise HTTPException(status_code=500, detail="HAIP redirect URI is not configured")
+        return JSONResponse(content={"redirect_uri": f"{base_url}/v1/flows/instances/{instance.id}"})
     return JSONResponse(content={})
 
 

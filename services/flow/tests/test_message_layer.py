@@ -1151,6 +1151,38 @@ async def test_oid4vp_direct_post_callback_returns_only_the_standard_empty_objec
 
 
 @pytest.mark.asyncio
+async def test_haip_direct_post_callback_returns_public_result_redirect(monkeypatch):
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://verifier.example")
+    repo = InMemoryFlowRepository()
+    instance = FlowInstance(
+        id="flow-haip",
+        flow_definition_id="__verification__",
+        organization_id="org-1",
+        context={"oid4vp_profile": "haip"},
+    )
+    await repo.save_instance(instance)
+
+    async def _fake_submit(*_args, **_kwargs):
+        return flow_main.VerificationResultResponse(
+            instance_id=instance.id,
+            status="completed",
+            result="passed",
+            decision="allow",
+            decision_reason="verified",
+            verified_claims={},
+            evaluation_timestamp="2026-01-01T00:00:00Z",
+        )
+
+    monkeypatch.setattr(flow_main, "submit_verification_response", _fake_submit)
+    response = await flow_main.submit_oid4vp_direct_post_response(
+        instance.id, "vp-token", None, instance.id, repo, None
+    )
+
+    assert response.status_code == 200
+    assert response.body == b'{"redirect_uri":"https://verifier.example/v1/flows/instances/flow-haip"}'
+
+
+@pytest.mark.asyncio
 async def test_oid4vp_direct_post_callback_rejects_a_denied_presentation(monkeypatch):
     repo = InMemoryFlowRepository()
 
