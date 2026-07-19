@@ -47,7 +47,23 @@ services:
       VERIFIER_ACCESS_CERTIFICATE_PASSWORD: ${EUDI_VERIFIER_KEY_PASSWORD:?set EUDI_VERIFIER_KEY_PASSWORD}
     volumes:
       - ${EUDI_VERIFIER_KEYSTORE_FILE:?set EUDI_VERIFIER_KEYSTORE_FILE}:/certs/keystore.jks:ro
+    networks: [marty-network]
+    restart: "no"
+
+  # The upstream verifier puts its public URL in its signed request object.
+  # Terminate TLS here so that URL is actually reachable over the declared
+  # HTTPS scheme while the upstream container stays private on the test
+  # network.
+  eudi-verifier-tls:
+    profiles: [eudi]
+    image: nginx@sha256:679a5fd058f6ca754a561846fe27927e408074431d63556e8fc588fc38be6901
     ports:
-      - "${EUDI_VERIFIER_HOST_PORT:-28090}:8080"
+      - "${EUDI_VERIFIER_TLS_HOST_PORT:-28091}:443"
+    volumes:
+      - ./services/eudi-verifier-tls/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ${OIDF_TLS_CERT_DIR:?set OIDF_TLS_CERT_DIR to the EUDI verifier certificate directory}:/etc/nginx/certs:ro
+    depends_on:
+      eudi-verifier:
+        condition: service_started
     networks: [marty-network]
     restart: "no"

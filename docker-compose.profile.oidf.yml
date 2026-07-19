@@ -6,6 +6,10 @@
 # is intentionally supplied by the invoking environment: a local disposable
 # run may use a test CA (scripts/new-oidf-local-certificate.ps1), while
 # certification uses its registered certificate.
+#
+# For W3C VC Data Model v2, also add docker-compose.profile.w3c-vc.yml. That
+# separate overlay enables the fixture-only VC API adapter and requires an
+# explicit disposable presentation-policy ID.
 
 services:
   oidf-tls-proxy:
