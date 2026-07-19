@@ -169,7 +169,9 @@ async def proxy_request(
     # The backend must reconstruct the public request target for DPoP and
     # similar sender-constrained protocols.  Derive this at the gateway trust
     # boundary instead of forwarding a client-supplied forwarded host.
-    headers["X-Forwarded-Host"] = request.headers.get("host", request.url.netloc)
+    headers["X-Forwarded-Host"] = request.headers.get(
+        "x-forwarded-host", request.headers.get("host", request.url.netloc)
+    )
 
     # Inject user context headers from middleware
     if hasattr(request.state, "user_id") and request.state.user_id:
