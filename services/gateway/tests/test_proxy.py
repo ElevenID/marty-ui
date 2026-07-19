@@ -141,3 +141,4 @@ async def test_proxy_request_replaces_caller_internal_headers_with_trusted_conte
     assert forwarded["x-org-permissions"] == "integration-connector:edit"
     assert forwarded["x-org-roles"] == "integration_admin"
     assert forwarded["x-required-permission"] == "integration-connector:edit"
+    assert forwarded["x-forwarded-host"] == "test"
