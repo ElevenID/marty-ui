@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import re
 from pathlib import Path
 
 import pytest
@@ -88,3 +89,20 @@ def test_ghcr_profile_keeps_dedicated_issuance_artifact() -> None:
     profile = (ROOT / "docker-compose.profile.ghcr.yml").read_text(encoding="utf-8")
 
     assert "  issuance:\n    image: ${MARTY_ISSUANCE_IMAGE" in profile
+
+
+def test_oidf_profile_propagates_public_origin_to_seeded_and_runtime_urls() -> None:
+    profile = (ROOT / "docker-compose.profile.oidf.yml").read_text(encoding="utf-8")
+    public_origin = (
+        "${OIDF_PUBLIC_BASE_URL:?set OIDF_PUBLIC_BASE_URL to the HTTPS verifier URL}"
+    )
+
+    for service in ("db-migrate", "gateway", "presentation-policy"):
+        match = re.search(
+            rf"(?ms)^  {re.escape(service)}:\n(.*?)(?=^  [a-zA-Z0-9_-]+:\n|\Z)",
+            profile,
+        )
+        assert match is not None
+        section = match.group(1)
+        assert f"PUBLIC_API_URL: {public_origin}" in section
+    assert f"ISSUER_BASE_URL: {public_origin}" in profile
