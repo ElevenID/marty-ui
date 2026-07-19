@@ -1,0 +1,13 @@
+# W3C VC Data Model v2 disposable interoperability profile.
+#
+# This is deliberately an overlay instead of a production default. It exposes
+# the gateway's test-only VC API adapter only for an isolated conformance
+# deployment and requires an active fixture presentation policy. The adapter
+# forwards to the normal presentation-policy evaluator; it is not an inline
+# verifier or a test bypass.
+
+services:
+  gateway:
+    environment:
+      W3C_VC_TEST_ADAPTER: "1"
+      W3C_VC_TEST_POLICY_ID: ${W3C_VC_TEST_POLICY_ID:?set W3C_VC_TEST_POLICY_ID to a disposable fixture policy}
