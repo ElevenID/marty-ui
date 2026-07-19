@@ -66,7 +66,7 @@ def test_issuer_adapter_requires_explicit_disposable_fixture_configuration(monke
 
 def test_issuer_adapter_wraps_only_a_compact_jwt_vc() -> None:
     envelope = adapter._jose_vc_envelope(_valid_w3c_credential(), "header.payload.signature")
-    assert envelope["type"] == ["EnvelopedVerifiableCredential"]
+    assert envelope["type"] == "EnvelopedVerifiableCredential"
     assert envelope["id"] == "data:application/vc+jwt,header.payload.signature"
     with pytest.raises(HTTPException):
         adapter._jose_vc_envelope(_valid_w3c_credential(), "not-a-jwt")
