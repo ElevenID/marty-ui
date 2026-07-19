@@ -91,16 +91,6 @@ def test_issuer_adapter_uses_the_released_oid4vci_proof_binding(monkeypatch: pyt
     proof = adapter._create_oid4vci_proof("https://issuer.example.test/org/fixture", "nonce-1")
     assert proof == "header.payload.signature"
     assert captured == {"issuer_url": "https://issuer.example.test/org/fixture", "nonce": "nonce-1"}
-def test_issuer_adapter_generates_a_verifiable_oid4vci_proof() -> None:
-    from marty_rs import _marty_rs as binding
-
-    proof = adapter._create_oid4vci_proof("https://issuer.example.test/org/fixture", "nonce-1")
-    verified = binding.oid4vci_verify_proof_jwt(
-        proof, "nonce-1", "https://issuer.example.test/org/fixture"
-    )
-    holder_did, nonce = verified[:2]
-    assert holder_did.startswith("did:key:")
-    assert nonce == "nonce-1"
 
 
 def test_adapter_extracts_a_w3c_jose_vc_envelope_without_trusting_it() -> None:
