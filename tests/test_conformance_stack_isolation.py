@@ -85,6 +85,18 @@ def test_existing_project_requires_explicit_resume(monkeypatch: pytest.MonkeyPat
     stack.assert_ports_available([], "marty-conformance-test1", resume=True)
 
 
+def test_reviewer_bootstrap_requires_the_exact_existing_project(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(stack, "rendered_config", lambda *_args, **_kwargs: {"services": {}, "networks": {}, "volumes": {}})
+    monkeypatch.setattr(stack, "validate_isolation", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(stack, "project_container_ids", lambda _project: [])
+    monkeypatch.setattr(stack.sys, "argv", ["conformance_stack.py", "--project", "marty-conformance-test1", "bootstrap-reviewer"])
+
+    with pytest.raises(ValueError, match="requires an existing"):
+        stack.main()
+
+
 def test_ghcr_profile_keeps_dedicated_issuance_artifact() -> None:
     profile = (ROOT / "docker-compose.profile.ghcr.yml").read_text(encoding="utf-8")
 
@@ -106,3 +118,47 @@ def test_oidf_profile_propagates_public_origin_to_seeded_and_runtime_urls() -> N
         section = match.group(1)
         assert f"PUBLIC_API_URL: {public_origin}" in section
     assert f"ISSUER_BASE_URL: {public_origin}" in profile
+
+
+def test_conformance_profile_uses_a_disposable_reviewer_via_normal_oidc() -> None:
+    profile = (ROOT / "docker-compose.profile.conformance.yml").read_text(encoding="utf-8")
+
+    assert "MARTY_CONFORMANCE_REVIEWER_PASSWORD:?set a disposable reviewer password" in profile
+    assert "DEMO_REVIEWER_EMAIL: ${MARTY_CONFORMANCE_REVIEWER_EMAIL" in profile
+    assert "DEMO_REVIEWER_PASSWORD: ${MARTY_CONFORMANCE_REVIEWER_PASSWORD" in profile
+    assert "MARTY_ORG_REVIEWER_EMAIL: ${MARTY_CONFORMANCE_REVIEWER_EMAIL" in profile
+    assert "MARTY_ORG_ADMIN_EMAIL: ${MARTY_CONFORMANCE_ADMIN_EMAIL" in profile
+    assert "MARTY_ORG_ADMIN_PASSWORD: ${MARTY_CONFORMANCE_ADMIN_PASSWORD" in profile
+
+
+def test_keycloak_configurator_bootstraps_missing_application_roles() -> None:
+    script = (ROOT / "scripts" / "setup-keycloak.sh").read_text(encoding="utf-8")
+
+    assert "ensure_realm_role()" in script
+    assert 'kcadm_safe create roles -r "$REALM"' in script
+    grant = script.split("grant_realm_role_to_user()", 1)[1].split("ensure_marty_org_exists()", 1)[0]
+    assert 'ensure_realm_role "$role_name" || return 1' in grant
+    assert "ensure_marty_org_admin_user()" in script
+    assert 'grant_realm_role_to_user "$user_id" "$MARTY_ORG_ADMIN_EMAIL" "administrator"' in script
+
+
+def test_oidf_profile_registers_its_published_origin_with_keycloak() -> None:
+    profile = (ROOT / "docker-compose.profile.oidf.yml").read_text(encoding="utf-8")
+    setup = (ROOT / "scripts" / "setup-keycloak.sh").read_text(encoding="utf-8")
+
+    assert "  keycloak-configurator:\n    environment:" in profile
+    assert "UI_BASE_URL: ${OIDF_PUBLIC_BASE_URL" in profile
+    assert 'KEYCLOAK_REPLACE_UI_ORIGINS: "true"' in profile
+    assert '[ -z "$PUBLIC_DOMAIN" ] && [ -z "$UI_BASE_URL" ]' in setup
+
+
+def test_oidf_runner_can_join_only_the_project_scoped_tls_proxy_bridge() -> None:
+    profile = (ROOT / "docker-compose.profile.oidf.yml").read_text(encoding="utf-8")
+
+    assert "oidf-runner-network:" in profile
+    assert "${MARTY_CONFORMANCE_PROJECT:?set MARTY_CONFORMANCE_PROJECT}_oidf-runner" in profile
+    assert "internal: true" in profile
+    proxy = profile.split("  oidf-tls-proxy:\n", 1)[1].split("\n  auth:\n", 1)[0]
+    assert "marty-network: {}" in proxy
+    assert "oidf-runner-network:" in proxy
+    assert "OIDF_CONFORMANCE_BRIDGE_ALIAS" in proxy

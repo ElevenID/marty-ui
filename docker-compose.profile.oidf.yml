@@ -17,6 +17,11 @@ services:
       PUBLIC_API_URL: ${OIDF_PUBLIC_BASE_URL:?set OIDF_PUBLIC_BASE_URL to the HTTPS verifier URL}
       ISSUER_BASE_URL: ${OIDF_PUBLIC_BASE_URL:?set OIDF_PUBLIC_BASE_URL to the HTTPS verifier URL}
 
+  keycloak-configurator:
+    environment:
+      UI_BASE_URL: ${OIDF_PUBLIC_BASE_URL:?set OIDF_PUBLIC_BASE_URL to the HTTPS verifier URL}
+      KEYCLOAK_REPLACE_UI_ORIGINS: "true"
+
   oidf-tls-proxy:
     profiles: [oidf]
     image: nginx@sha256:679a5fd058f6ca754a561846fe27927e408074431d63556e8fc588fc38be6901
@@ -32,7 +37,14 @@ services:
         condition: service_healthy
       keycloak:
         condition: service_healthy
-    networks: [marty-network]
+    # The official runner is a separate Compose project. It joins only this
+    # proxy-facing bridge, never marty-network, and resolves the published
+    # hostname to this TLS boundary rather than an internal service.
+    networks:
+      marty-network: {}
+      oidf-runner-network:
+        aliases:
+          - ${OIDF_CONFORMANCE_BRIDGE_ALIAS:?set OIDF_CONFORMANCE_BRIDGE_ALIAS to the hostname in OIDF_PUBLIC_BASE_URL}
     restart: "no"
 
   auth:
@@ -74,3 +86,11 @@ services:
       KC_HOSTNAME_STRICT: "false"
       KC_HTTP_ENABLED: "true"
       KC_PROXY_HEADERS: xforwarded
+
+networks:
+  # A project-scoped, internal bridge for a separately composed OIDF runner.
+  # The proxy is the sole Marty service on it; the runner keeps its own normal
+  # network for access to its official test server and mock-wallet endpoints.
+  oidf-runner-network:
+    name: ${MARTY_CONFORMANCE_PROJECT:?set MARTY_CONFORMANCE_PROJECT}_oidf-runner
+    internal: true
