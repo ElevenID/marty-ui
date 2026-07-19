@@ -76,6 +76,23 @@ def test_optional_suite_overlays_are_explicit_and_isolation_is_last() -> None:
     assert any(path.endswith("docker-compose.profile.w3c-vc.yml") for path in files)
 
 
+def test_local_build_requires_digest_pinned_bootstrap_artifacts(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in stack.LOCAL_BUILD_ARGS:
+        monkeypatch.delenv(name, raising=False)
+    with pytest.raises(ValueError, match="MARTY_RS_URI"):
+        stack.local_build_arguments()
+
+    for name in stack.LOCAL_BUILD_ARGS:
+        monkeypatch.setenv(name, f"value-for-{name}")
+
+    assert stack.local_build_arguments() == [
+        "--build-arg", "MARTY_RS_URI=value-for-MARTY_RS_URI",
+        "--build-arg", "MARTY_RS_DIGEST=value-for-MARTY_RS_DIGEST",
+        "--build-arg", "MARTY_COMMON_URI=value-for-MARTY_COMMON_URI",
+        "--build-arg", "MARTY_COMMON_DIGEST=value-for-MARTY_COMMON_DIGEST",
+    ]
+
+
 def test_existing_project_requires_explicit_resume(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(stack, "project_container_ids", lambda _project: ["container-1"])
     monkeypatch.setattr(stack.subprocess, "run", lambda *args, **kwargs: type("Result", (), {"stdout": ""})())
