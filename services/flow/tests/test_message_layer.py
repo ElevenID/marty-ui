@@ -168,6 +168,22 @@ def _encrypted_dc_api_response(payload: dict) -> str:
     return token.serialize(compact=True)
 
 
+def _encrypted_response_for_key(payload: dict, public_jwk: dict) -> str:
+    jwcrypto_jwe = pytest.importorskip("jwcrypto.jwe")
+    jwcrypto_jwk = pytest.importorskip("jwcrypto.jwk")
+    key = jwcrypto_jwk.JWK.from_json(json.dumps(public_jwk))
+    token = jwcrypto_jwe.JWE(
+        json.dumps(payload, separators=(",", ":")).encode(),
+        protected={
+            "alg": flow_main._HAIP_JWE_ALG,
+            "enc": flow_main._HAIP_JWE_ENC,
+            "kid": public_jwk["kid"],
+        },
+    )
+    token.add_recipient(key)
+    return token.serialize(compact=True)
+
+
 @pytest.mark.asyncio
 async def test_validate_credential_layer_references_accepts_active_template_and_policy(monkeypatch):
     _install_reference_validation_stubs(
@@ -956,6 +972,68 @@ async def test_get_verification_request_object_supports_redirect_uri_client_id_p
     assert decoded_payload["response_uri"] == expected
     assert "client_id_scheme" not in decoded_payload
     assert instance.context["verification_audience"] == expected
+
+
+@pytest.mark.asyncio
+async def test_haip_request_uses_a_fresh_per_flow_response_encryption_key(monkeypatch):
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://verifier.example")
+    repo = InMemoryFlowRepository()
+
+    async def _fake_presentation_definition(_policy_id: str) -> dict:
+        return {"id": "pd-1", "input_descriptors": [{"id": "descriptor-1", "constraints": {"fields": []}}]}
+
+    monkeypatch.setattr("flow.main._build_presentation_definition", _fake_presentation_definition)
+    instances = []
+    for _ in range(2):
+        instance = FlowInstance(
+            flow_definition_id="__verification__",
+            organization_id="org-1",
+            status=FlowInstanceStatus.AWAITING_WALLET,
+            context={"flow_type": "verification", "oid4vp_profile": "haip", "nonce": "nonce-123", "presentation_policy_id": "policy-1"},
+            expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+        )
+        await repo.save_instance(instance)
+        instances.append(instance)
+
+    payloads = []
+    for instance in instances:
+        response = await get_verification_request_object(instance.id, repo)
+        _header, payload, _signature = response.body.decode().split(".", 2)
+        payloads.append(_decode_jwt_segment(payload))
+
+    keys = [payload["client_metadata"]["jwks"]["keys"][0] for payload in payloads]
+    assert payloads[0]["response_mode"] == "direct_post.jwt"
+    assert payloads[0]["client_metadata"]["authorization_encrypted_response_alg"] == flow_main._HAIP_JWE_ALG
+    assert payloads[0]["client_metadata"]["authorization_encrypted_response_enc"] == flow_main._HAIP_JWE_ENC
+    assert keys[0]["kid"] != keys[1]["kid"]
+    assert "d" not in keys[0]
+    assert instances[0].context["haip_response_encryption_private_jwk"]["kid"] == keys[0]["kid"]
+
+
+@pytest.mark.asyncio
+async def test_submit_verification_response_decrypts_per_flow_direct_post_jwt():
+    repo = InMemoryFlowRepository()
+    public_jwk, private_jwk = flow_main._new_haip_response_encryption_key()
+    instance = FlowInstance(
+        flow_definition_id="__verification__",
+        organization_id="org-1",
+        status=FlowInstanceStatus.AWAITING_WALLET,
+        context={"nonce": "nonce-haip", "haip_response_encryption_private_jwk": private_jwk},
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+    )
+    await repo.save_instance(instance)
+    header = _jwt_segment({"alg": "none", "typ": "JWT"})
+    payload = _jwt_segment({"nonce": "nonce-haip", "iss": "issuer.example", "given_name": "HAIP"})
+    vp_token = f"{header}.{payload}."
+    encrypted_response = _encrypted_response_for_key({"vp_token": vp_token}, public_jwk)
+
+    response = await submit_verification_response(
+        instance.id, None, None, None, repo=repo, response=encrypted_response
+    )
+
+    assert response.result == "passed"
+    assert response.verified_claims["given_name"] == "HAIP"
+    assert instance.context["vp_token"] == vp_token
 
 
 @pytest.mark.asyncio

@@ -3399,7 +3399,22 @@ async def get_verification_request_object(
             instance.context["dc_api_jwe_alg"] = _HAIP_JWE_ALG
             instance.context["dc_api_jwe_enc"] = _HAIP_JWE_ENC
         else:
-            request_payload["response_mode"] = "direct_post"
+            haip = instance.context.get("oid4vp_profile") == "haip"
+            if haip:
+                if lissi_compat:
+                    raise HTTPException(status_code=400, detail="HAIP is incompatible with the lissi compatibility profile")
+                response_encryption_jwk = _haip_response_encryption_key(instance)
+                request_payload["client_metadata"] = _oid4vp_client_metadata(
+                    base_url,
+                    include_encrypted_response=True,
+                    response_encryption_jwk=response_encryption_jwk,
+                )
+                request_payload["response_mode"] = "direct_post.jwt"
+                instance.context["haip_response_mode"] = "direct_post.jwt"
+                instance.context["haip_jwe_alg"] = _HAIP_JWE_ALG
+                instance.context["haip_jwe_enc"] = _HAIP_JWE_ENC
+            else:
+                request_payload["response_mode"] = "direct_post"
             request_payload["response_uri"] = response_uri
             request_payload["state"] = instance_id
             instance.context["verification_audience"] = client_identifier
@@ -3580,6 +3595,32 @@ def _verifier_encryption_private_jwk() -> dict[str, str]:
     }
 
 
+def _new_haip_response_encryption_key() -> tuple[dict[str, str], dict[str, str]]:
+    """Create a fresh P-256 response-encryption key for one verification flow."""
+    private = jwk.JWK.generate(kty="EC", crv="P-256", kid=f"oid4vp-haip-{uuid.uuid4()}")
+    private_data = json.loads(private.export_private())
+    public_data = json.loads(private.export_public())
+    public_data.update({"alg": _HAIP_JWE_ALG, "use": "enc"})
+    private_data.update({"alg": _HAIP_JWE_ALG, "use": "enc"})
+    return public_data, private_data
+
+
+def _haip_response_encryption_key(instance: FlowInstance) -> dict[str, str]:
+    """Return the public half of a per-flow HAIP response key.
+
+    The private half remains only in the flow record so it can decrypt the
+    callback, while a new key is generated for every separate flow.
+    """
+    private = instance.context.get("haip_response_encryption_private_jwk")
+    public = instance.context.get("haip_response_encryption_public_jwk")
+    if isinstance(private, dict) and isinstance(public, dict):
+        return public
+    public, private = _new_haip_response_encryption_key()
+    instance.context["haip_response_encryption_public_jwk"] = public
+    instance.context["haip_response_encryption_private_jwk"] = private
+    return public
+
+
 def _derive_verifier_did(base_url: str | None = None) -> str:
     """Derive the verifier DID used as the OID4VP client identifier.
 
@@ -3668,7 +3709,12 @@ def _oid4vp_did_web_document(base_url: str) -> dict[str, Any]:
     }
 
 
-def _oid4vp_client_metadata(base_url: str, *, include_encrypted_response: bool = False) -> dict[str, Any]:
+def _oid4vp_client_metadata(
+    base_url: str,
+    *,
+    include_encrypted_response: bool = False,
+    response_encryption_jwk: dict[str, str] | None = None,
+) -> dict[str, Any]:
     """Verifier metadata advertised to wallets in OID4VP request objects."""
     metadata: dict[str, Any] = {
         "client_name": os.environ.get("VERIFIER_DISPLAY_NAME", "ElevenID LLC"),
@@ -3687,7 +3733,7 @@ def _oid4vp_client_metadata(base_url: str, *, include_encrypted_response: bool =
             {
                 "authorization_encrypted_response_alg": _HAIP_JWE_ALG,
                 "authorization_encrypted_response_enc": _HAIP_JWE_ENC,
-                "jwks": {"keys": [_verifier_encryption_public_jwk()]},
+                "jwks": {"keys": [response_encryption_jwk or _verifier_encryption_public_jwk()]},
             }
         )
     return metadata
@@ -3996,13 +4042,18 @@ def _parse_decrypted_dc_api_response(payload_bytes: bytes) -> dict[str, Any]:
     return response_payload
 
 
-def _decrypt_dc_api_jwt_response(encrypted_response: Any) -> dict[str, Any]:
+def _decrypt_jwt_response(
+    encrypted_response: Any,
+    private_jwk: dict[str, str],
+    *,
+    field_name: str,
+) -> dict[str, Any]:
     if not isinstance(encrypted_response, str) or not encrypted_response.strip():
         raise HTTPException(
             status_code=400,
             detail={
                 "error": "invalid_request",
-                "error_description": "DigitalCredential.data.response must be a non-empty compact JWE string",
+                "error_description": f"{field_name} must be a non-empty compact JWE string",
             },
         )
 
@@ -4014,7 +4065,7 @@ def _decrypt_dc_api_jwt_response(encrypted_response: Any) -> dict[str, Any]:
             status_code=400,
             detail={
                 "error": "invalid_request",
-                "error_description": f"Unsupported dc_api.jwt JWE alg: {alg}",
+                "error_description": f"Unsupported {field_name} JWE alg: {alg}",
             },
         )
     if enc not in _SUPPORTED_HAIP_JWE_ENCS:
@@ -4022,7 +4073,7 @@ def _decrypt_dc_api_jwt_response(encrypted_response: Any) -> dict[str, Any]:
             status_code=400,
             detail={
                 "error": "invalid_request",
-                "error_description": f"Unsupported dc_api.jwt JWE enc: {enc}",
+                "error_description": f"Unsupported {field_name} JWE enc: {enc}",
             },
         )
 
@@ -4040,20 +4091,28 @@ def _decrypt_dc_api_jwt_response(encrypted_response: Any) -> dict[str, Any]:
         ) from exc
 
     try:
-        key = jwcrypto_jwk.JWK.from_json(json.dumps(_verifier_encryption_private_jwk()))
+        key = jwcrypto_jwk.JWK.from_json(json.dumps(private_jwk))
         token = jwcrypto_jwe.JWE()
         token.deserialize(encrypted_response, key=key)
     except Exception as exc:
-        logger.info("Failed to decrypt dc_api.jwt response", exc_info=True)
+        logger.info("Failed to decrypt %s response", field_name, exc_info=True)
         raise HTTPException(
             status_code=400,
             detail={
                 "error": "invalid_request",
-                "error_description": f"Failed to decrypt dc_api.jwt response: {exc}",
+                "error_description": f"Failed to decrypt {field_name} response: {exc}",
             },
         ) from exc
 
     return _parse_decrypted_dc_api_response(token.payload)
+
+
+def _decrypt_dc_api_jwt_response(encrypted_response: Any) -> dict[str, Any]:
+    return _decrypt_jwt_response(
+        encrypted_response,
+        _verifier_encryption_private_jwk(),
+        field_name="dc_api.jwt",
+    )
 
 
 async def _submit_verification_response_internal(
@@ -4327,10 +4386,11 @@ async def _submit_verification_response_internal(
 @router.post("/instances/{instance_id}/submit", response_model=VerificationResultResponse, response_model_exclude_none=True)
 async def submit_verification_response(
     instance_id: str,
-    vp_token: str = Form(...),
+    vp_token: str | None = Form(None),
     presentation_submission: str = Form(None),
     state: str = Form(None),
     repo: InMemoryFlowRepository = Depends(get_repo),
+    response: str | None = Form(None),
 ) -> VerificationResultResponse:
     """
     Submit a VP token to complete a verification flow.
@@ -4338,11 +4398,33 @@ async def submit_verification_response(
     This is called by the wallet (via direct_post) or by the relying party
     after receiving the VP token from the wallet.
 
-    Accepts form-encoded data per OID4VP spec (application/x-www-form-urlencoded).
+    Accepts form-encoded ``vp_token`` direct-post responses and encrypted
+    ``response`` values for HAIP ``direct_post.jwt`` responses.
     """
+    encrypted_response = response if isinstance(response, str) else None
+    if bool(vp_token) == bool(encrypted_response):
+        raise HTTPException(status_code=400, detail="exactly one of vp_token or response is required")
+    if encrypted_response:
+        instance = await repo.get_instance(instance_id)
+        if not instance:
+            raise HTTPException(status_code=404, detail="Flow instance not found")
+        private_jwk = instance.context.get("haip_response_encryption_private_jwk")
+        if not isinstance(private_jwk, dict):
+            raise HTTPException(status_code=400, detail="encrypted direct_post.jwt was not requested for this flow")
+        decrypted = _decrypt_jwt_response(
+            encrypted_response,
+            private_jwk,
+            field_name="direct_post.jwt response",
+        )
+        vp_value = decrypted.get("vp_token")
+        if vp_value is None:
+            raise HTTPException(status_code=400, detail="decrypted direct_post.jwt response has no vp_token")
+        vp_token = vp_value if isinstance(vp_value, str) else json.dumps(vp_value)
+        presentation_submission = decrypted.get("presentation_submission", presentation_submission)
+        state = decrypted.get("state", state)
     return await _submit_verification_response_internal(
         instance_id=instance_id,
-        vp_token=vp_token,
+        vp_token=vp_token or "",
         presentation_submission=presentation_submission,
         state=state,
         repo=repo,
