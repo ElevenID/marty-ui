@@ -89,9 +89,10 @@ _DC_API_PROTOCOL = "openid4vp-v1-signed"
 _DC_API_JWT_RESPONSE_MODE = "dc_api.jwt"
 _HAIP_JWE_ALG = "ECDH-ES"
 _HAIP_JWE_ENC = "A256GCM"
+_HAIP_JWE_ENC_VALUES = ["A128GCM", _HAIP_JWE_ENC]
 _HAIP_ENCRYPTION_KEY_ID = "oid4vp-verifier-enc-key-1"
 _SUPPORTED_HAIP_JWE_ALGS = {_HAIP_JWE_ALG}
-_SUPPORTED_HAIP_JWE_ENCS = {_HAIP_JWE_ENC}
+_SUPPORTED_HAIP_JWE_ENCS = set(_HAIP_JWE_ENC_VALUES)
 
 
 def _origin_for_base_url(base_url: str) -> str:
@@ -3834,7 +3835,7 @@ def _oid4vp_client_metadata(
                 # exact supported AEAD avoids wallets defaulting to A128GCM
                 # while this verifier is configured for A256GCM.
                 "authorization_encrypted_response_enc_values_supported": [_HAIP_JWE_ENC],
-                "encrypted_response_enc_values_supported": [_HAIP_JWE_ENC],
+                "encrypted_response_enc_values_supported": _HAIP_JWE_ENC_VALUES,
                 "jwks": {"keys": [response_encryption_jwk or _verifier_encryption_public_jwk()]},
             }
         )
