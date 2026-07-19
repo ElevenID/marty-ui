@@ -29,6 +29,59 @@ def test_adapter_rejects_unimplemented_json_ld_proofs() -> None:
     assert exc_info.value.detail["error"] == "unsupported_serialization"
 
 
+def _valid_w3c_credential() -> dict:
+    return {
+        "@context": ["https://www.w3.org/ns/credentials/v2"],
+        "type": ["VerifiableCredential", "ExampleCredential"],
+        "issuer": "https://issuer.example.test",
+        "credentialSubject": {"id": "did:key:z6MkExample", "name": "Ada"},
+    }
+
+
+def test_issuer_adapter_keeps_only_supported_subject_claims() -> None:
+    assert adapter._claims_from_w3c_credential(_valid_w3c_credential()) == {
+        "id": "did:key:z6MkExample", "name": "Ada"
+    }
+
+
+def test_issuer_adapter_rejects_non_vcdm_input_before_issuance() -> None:
+    invalid = _valid_w3c_credential()
+    invalid["credentialSubject"] = []
+    with pytest.raises(HTTPException) as exc_info:
+        adapter._claims_from_w3c_credential(invalid)
+    assert exc_info.value.status_code == 422
+
+
+def test_issuer_adapter_requires_explicit_disposable_fixture_configuration(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("W3C_VC_TEST_ADAPTER", "1")
+    monkeypatch.setenv("W3C_VC_TEST_POLICY_ID", "fixture-policy")
+    monkeypatch.delenv("W3C_VC_TEST_ORGANIZATION_ID", raising=False)
+    monkeypatch.delenv("W3C_VC_TEST_TEMPLATE_ID", raising=False)
+    with pytest.raises(HTTPException) as exc_info:
+        adapter._issuance_fixture_configuration()
+    assert exc_info.value.status_code == 503
+
+
+def test_issuer_adapter_wraps_only_a_compact_jwt_vc() -> None:
+    envelope = adapter._jose_vc_envelope(_valid_w3c_credential(), "header.payload.signature")
+    assert envelope["type"] == ["EnvelopedVerifiableCredential"]
+    assert envelope["id"] == "data:application/vc+jwt,header.payload.signature"
+    with pytest.raises(HTTPException):
+        adapter._jose_vc_envelope(_valid_w3c_credential(), "not-a-jwt")
+
+
+def test_issuer_adapter_generates_a_verifiable_oid4vci_proof() -> None:
+    from marty_rs import _marty_rs as binding
+
+    proof = adapter._create_oid4vci_proof("https://issuer.example.test/org/fixture", "nonce-1")
+    verified = binding.oid4vci_verify_proof_jwt(
+        proof, "nonce-1", "https://issuer.example.test/org/fixture"
+    )
+    holder_did, nonce = verified[:2]
+    assert holder_did.startswith("did:key:")
+    assert nonce == "nonce-1"
+
+
 def test_adapter_extracts_a_w3c_jose_vc_envelope_without_trusting_it() -> None:
     token = adapter._token_or_unsupported(
         {
