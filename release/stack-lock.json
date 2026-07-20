@@ -90,7 +90,7 @@
         "uri": "https://github.com/ElevenID/marty-integration-tests/releases/download/v1.1.1/marty-integration-tests-1.1.1-source.tar.gz",
         "digest": "sha256:c58e1f32d6c35b4c8b00187c0718dd1957c152e3d0ede062a60955409c4c58a8",
         "sbom": "https://github.com/ElevenID/marty-integration-tests/releases/download/v1.1.1/marty-integration-tests.spdx.json",
-        "provenance": "https://github.com/ElevenID/marty-integration-tests/releases/download/v1.1.1/marty-integration-tests-1.1.1-source.tar.gz.sigstore.json"
+        "provenance": "https://github.com/ElevenID/marty-integration-tests/attestations"
       }]
     }
   ]

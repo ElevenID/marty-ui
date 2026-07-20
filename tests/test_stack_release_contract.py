@@ -55,6 +55,19 @@ def test_stack_release_publishes_signed_evidence() -> None:
     assert "pytest tests/oss_stack" in workflow
 
 
+def test_stack_release_is_tag_only_and_targets_the_validated_tag() -> None:
+    workflow = _text(".github/workflows/cd.yml")
+
+    assert "workflow_dispatch:" not in workflow
+    assert 'test "$GITHUB_EVENT_NAME" = "push"' in workflow
+    assert 'test "$GITHUB_REF_NAME" = "v$version"' in workflow
+    assert "tag_name: v${{ needs.validate-stack.outputs.version }}" in workflow
+    assert "Reject published release overwrite" in workflow
+    assert 'any(.assets[]; .name == "stack-manifest.json")' in workflow
+    assert "overwrite_files: false" in workflow
+    assert "inputs.lock_file" not in workflow
+
+
 def test_stack_release_actions_are_pinned_by_full_commit_sha() -> None:
     workflow = _text(".github/workflows/cd.yml")
     uses_lines = [line for line in workflow.splitlines() if "uses:" in line]
