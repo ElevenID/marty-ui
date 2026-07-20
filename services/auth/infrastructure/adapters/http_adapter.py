@@ -140,6 +140,17 @@ def _with_query_parameter(url: str, key: str, value: str) -> str:
     return parsed._replace(query=urlencode(query, doseq=True)).geturl()
 
 
+def _without_query_parameter(url: str, key: str) -> str:
+    """Remove every occurrence of a query key while preserving the fragment."""
+    parsed = urlparse(url)
+    query = [
+        (name, value)
+        for name, value in parse_qsl(parsed.query, keep_blank_values=True)
+        if name != key
+    ]
+    return parsed._replace(query=urlencode(query, doseq=True)).geturl()
+
+
 def _wallet_request_uri(wallet_choice: dict[str, str], request_uri: str, oid4vp_uri: str) -> str:
     normalized_request_uri = _extract_oid4vp_request_uri(request_uri or oid4vp_uri)
     compat = wallet_choice.get("request_object_compat", "").strip().lower()
@@ -253,12 +264,16 @@ def _render_credential_login_wallet_link(
         )
         if client_id:
             rendered = _with_query_parameter(rendered, "client_id", client_id)
+        else:
+            rendered = _without_query_parameter(rendered, "client_id")
         if request_uri_method:
             rendered = _with_query_parameter(
                 rendered,
                 "request_uri_method",
                 request_uri_method,
             )
+        else:
+            rendered = _without_query_parameter(rendered, "request_uri_method")
 
     return rendered
 

@@ -599,6 +599,43 @@ def test_reconstructed_wallet_link_collapses_stale_protocol_duplicates(
     }
 
 
+def test_omitted_outer_parameters_remove_stale_values_from_custom_links(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    stale_query = (
+        "request_uri={request_uri_encoded}&client_id=stale-one&client_id=stale-two&"
+        "request_uri_method=post&request_uri_method=get"
+    )
+    monkeypatch.setenv(
+        "CREDENTIAL_LOGIN_SPRUCEKIT_DEEP_LINK_TEMPLATE",
+        f"walletapp://authorize?{stale_query}",
+    )
+    monkeypatch.setenv(
+        "CREDENTIAL_LOGIN_SPRUCEKIT_ANDROID_DEEP_LINK_TEMPLATE",
+        f"intent://authorize?{stale_query}#Intent;scheme=openid4vp;end",
+    )
+    monkeypatch.setenv(
+        "CREDENTIAL_LOGIN_SPRUCEKIT_IOS_UNIVERSAL_LINK_TEMPLATE",
+        f"https://wallet.example/openid4vp?{stale_query}",
+    )
+    oid4vp_uri = (
+        "openid4vp://authorize?"
+        "request_uri=https%3A%2F%2Fverifier.example%2Frequest%2F1"
+    )
+
+    options = _build_credential_login_wallet_options(
+        oid4vp_uri=oid4vp_uri,
+        request_uri=oid4vp_uri,
+    )
+
+    assert [option["id"] for option in options] == ["sprucekit"]
+    for link_name in ("href", "android_href", "ios_href"):
+        query_pairs = parse_qs(urlparse(options[0][link_name]).query)
+        assert query_pairs == {
+            "request_uri": ["https://verifier.example/request/1"],
+        }
+
+
 @pytest.mark.parametrize(
     ("query", "message"),
     [
