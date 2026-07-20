@@ -64,7 +64,10 @@ def test_stack_release_is_tag_only_and_targets_the_validated_tag() -> None:
     assert "tag_name: v${{ needs.validate-stack.outputs.version }}" in workflow
     assert "Reject published release overwrite" in workflow
     assert 'any(.assets[]; .name == "stack-manifest.json")' in workflow
+    assert "draft: true" in workflow
     assert "overwrite_files: false" in workflow
+    assert 'gh release edit "$RELEASE_TAG"' in workflow
+    assert "--draft=false" in workflow
     assert "inputs.lock_file" not in workflow
 
 
