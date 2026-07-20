@@ -12,69 +12,83 @@
 x-service-image: &service-image
   image: ${MARTY_SERVICES_IMAGE:?set MARTY_SERVICES_IMAGE to an immutable digest}
   pull_policy: always
+  build: !reset null
 
 services:
   db-migrate:
     image: ${MARTY_MIGRATIONS_IMAGE:?set MARTY_MIGRATIONS_IMAGE to an immutable digest}
     pull_policy: always
+    build: !reset null
 
   gateway:
     <<: *service-image
+    build: !reset null
     environment:
       SERVICE_NAME: gateway
 
   auth:
     <<: *service-image
+    build: !reset null
     environment:
       SERVICE_NAME: auth
 
   organization:
     <<: *service-image
+    build: !reset null
     environment:
       SERVICE_NAME: organization
 
   credential-template:
     <<: *service-image
+    build: !reset null
     environment:
       SERVICE_NAME: credential_template
 
   trust-profile:
     <<: *service-image
+    build: !reset null
     environment:
       SERVICE_NAME: trust_profile
 
   applicant:
     <<: *service-image
+    build: !reset null
     environment:
       SERVICE_NAME: applicant
 
   notification:
     <<: *service-image
+    build: !reset null
     environment:
       SERVICE_NAME: notification
 
   compliance-profile:
     <<: *service-image
+    build: !reset null
     environment:
       SERVICE_NAME: compliance_profile
 
   presentation-policy:
     <<: *service-image
+    build: !reset null
     environment:
       SERVICE_NAME: presentation_policy
 
   deployment-profile:
     <<: *service-image
+    build: !reset null
     environment:
       SERVICE_NAME: deployment_profile
 
   signing-keys:
     <<: *service-image
+    build: !reset null
     environment:
       SERVICE_NAME: signing_keys
 
   flow:
     <<: *service-image
+    build: !reset null
     environment:
       SERVICE_NAME: flow
 
@@ -86,20 +100,24 @@ services:
 
   revocation-profile:
     <<: *service-image
+    build: !reset null
     environment:
       SERVICE_NAME: revocation_profile
 
   device-registration:
     <<: *service-image
+    build: !reset null
     environment:
       SERVICE_NAME: device_registration
 
   event-stream:
     <<: *service-image
+    build: !reset null
     environment:
       SERVICE_NAME: event_stream
 
   verification:
     <<: *service-image
+    build: !reset null
     environment:
       SERVICE_NAME: verification

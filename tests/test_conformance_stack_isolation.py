@@ -20,10 +20,31 @@ SPEC.loader.exec_module(stack)
 
 
 def test_project_name_is_narrowly_scoped() -> None:
-    assert stack.validate_project("marty-conformance-20260719-a1") == "marty-conformance-20260719-a1"
-    for unsafe in ("marty", "default", "marty-conformance-", "MARTY-conformance-run", "marty-conformance-../prod"):
+    assert (
+        stack.validate_project("marty-conformance-20260719-a1")
+        == "marty-conformance-20260719-a1"
+    )
+    for unsafe in (
+        "marty",
+        "default",
+        "marty-conformance-",
+        "MARTY-conformance-run",
+        "marty-conformance-../prod",
+    ):
         with pytest.raises(ValueError, match="project must match"):
             stack.validate_project(unsafe)
+
+
+def test_project_environment_is_derived_from_the_validated_cli_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("MARTY_CONFORMANCE_PROJECT", raising=False)
+    stack.configure_project_environment("marty-conformance-test1")
+    assert stack.os.environ["MARTY_CONFORMANCE_PROJECT"] == "marty-conformance-test1"
+
+    monkeypatch.setenv("MARTY_CONFORMANCE_PROJECT", "marty-conformance-other")
+    with pytest.raises(ValueError, match="conflicts"):
+        stack.configure_project_environment("marty-conformance-test1")
 
 
 def test_isolation_accepts_only_project_resources_and_tls_ports() -> None:
@@ -38,6 +59,74 @@ def test_isolation_accepts_only_project_resources_and_tls_ports() -> None:
     }
 
     assert stack.validate_isolation(config, project) == [28443]
+
+
+def test_public_service_targets_follow_the_rendered_tls_listener() -> None:
+    config = {
+        "services": {
+            "gateway": {},
+            "oidf-tls-proxy": {"ports": [{"published": "28443", "target": 28443}]},
+        }
+    }
+
+    assert stack.public_service_targets(config) == {"oidf-tls-proxy": [28443]}
+
+
+def test_public_service_targets_reject_an_incomplete_port_mapping() -> None:
+    config = {"services": {"oidf-tls-proxy": {"ports": [{"published": "28443"}]}}}
+
+    with pytest.raises(ValueError, match="without a target"):
+        stack.public_service_targets(config)
+
+
+def test_compose_ps_parser_accepts_array_and_stream_formats() -> None:
+    row = '{"Service":"db-migrate","State":"exited","ExitCode":0}'
+    assert stack.parse_compose_ps(f"[{row}]")[0]["Service"] == "db-migrate"
+    assert len(stack.parse_compose_ps(f"{row}\n{row}")) == 2
+
+
+def test_one_shot_wait_requires_every_initializer_to_exit_zero(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    expected = sorted(stack.ONE_SHOT_SERVICES)
+    payload = [
+        {"Service": service, "State": "exited", "ExitCode": 0} for service in expected
+    ]
+    monkeypatch.setattr(
+        stack.subprocess,
+        "run",
+        lambda *_args, **_kwargs: type(
+            "Result", (), {"stdout": stack.json.dumps(payload)}
+        )(),
+    )
+
+    stack.wait_for_one_shots(
+        ["docker", "compose"],
+        {"services": {service: {} for service in expected}},
+        timeout_seconds=0,
+        poll_seconds=0,
+    )
+
+
+def test_one_shot_wait_rejects_a_failed_initializer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = [{"Service": "db-migrate", "State": "exited", "ExitCode": 17}]
+    monkeypatch.setattr(
+        stack.subprocess,
+        "run",
+        lambda *_args, **_kwargs: type(
+            "Result", (), {"stdout": stack.json.dumps(payload)}
+        )(),
+    )
+
+    with pytest.raises(ValueError, match="db-migrate.*17"):
+        stack.wait_for_one_shots(
+            ["docker", "compose"],
+            {"services": {"db-migrate": {}}},
+            timeout_seconds=0,
+            poll_seconds=0,
+        )
 
 
 def test_isolation_rejects_global_resources() -> None:
@@ -69,14 +158,41 @@ def test_haip_and_w3c_overlays_are_explicit_and_isolation_is_last() -> None:
         include_haip=True,
         include_w3c=True,
     )
-    files = [command[index + 1] for index, value in enumerate(command) if value == "--file"]
+    files = [
+        command[index + 1] for index, value in enumerate(command) if value == "--file"
+    ]
 
     assert files[-1].endswith("docker-compose.profile.conformance.yml")
     assert any(path.endswith("docker-compose.profile.oidf-haip.yml") for path in files)
     assert any(path.endswith("docker-compose.profile.w3c-vc.yml") for path in files)
+    assert any(
+        path.endswith("docker-compose.profile.conformance-images.yml") for path in files
+    )
 
 
-def test_local_build_requires_digest_pinned_bootstrap_artifacts(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_release_profile_removes_builds_and_pins_infrastructure() -> None:
+    ghcr = (ROOT / "docker-compose.profile.ghcr.yml").read_text(encoding="utf-8")
+    infrastructure = (ROOT / "docker-compose.profile.conformance-images.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "build: !reset null" in ghcr
+    assert "marty-envoy:latest" not in infrastructure
+    for service in (
+        "postgres",
+        "redis",
+        "keycloak",
+        "mailpit",
+        "openbao",
+        "envoy",
+    ):
+        section = infrastructure.split(f"  {service}:\n", 1)[1].split("\n  ", 1)[0]
+        assert "@sha256:" in section
+
+
+def test_local_build_requires_digest_pinned_bootstrap_artifacts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     for name in stack.LOCAL_BUILD_ARGS:
         monkeypatch.delenv(name, raising=False)
     with pytest.raises(ValueError, match="MARTY_RS_URI"):
@@ -86,10 +202,14 @@ def test_local_build_requires_digest_pinned_bootstrap_artifacts(monkeypatch: pyt
         monkeypatch.setenv(name, f"value-for-{name}")
 
     assert stack.local_build_arguments() == [
-        "--build-arg", "MARTY_RS_URI=value-for-MARTY_RS_URI",
-        "--build-arg", "MARTY_RS_DIGEST=value-for-MARTY_RS_DIGEST",
-        "--build-arg", "MARTY_COMMON_URI=value-for-MARTY_COMMON_URI",
-        "--build-arg", "MARTY_COMMON_DIGEST=value-for-MARTY_COMMON_DIGEST",
+        "--build-arg",
+        "MARTY_RS_URI=value-for-MARTY_RS_URI",
+        "--build-arg",
+        "MARTY_RS_DIGEST=value-for-MARTY_RS_DIGEST",
+        "--build-arg",
+        "MARTY_COMMON_URI=value-for-MARTY_COMMON_URI",
+        "--build-arg",
+        "MARTY_COMMON_DIGEST=value-for-MARTY_COMMON_DIGEST",
     ]
 
 
@@ -104,10 +224,21 @@ def test_all_shared_service_builds_receive_the_verified_bootstrap_artifacts() ->
     compose = (ROOT / "docker-compose.base.yml").read_text(encoding="utf-8")
     assert "x-marty-service-build-artifacts: &marty_service_build_artifacts" in compose
     for service in (
-        "gateway", "auth", "organization", "credential-template", "trust-profile",
-        "applicant", "notification", "compliance-profile", "presentation-policy",
-        "deployment-profile", "flow", "revocation-profile", "device-registration",
-        "event-stream", "verification",
+        "gateway",
+        "auth",
+        "organization",
+        "credential-template",
+        "trust-profile",
+        "applicant",
+        "notification",
+        "compliance-profile",
+        "presentation-policy",
+        "deployment-profile",
+        "flow",
+        "revocation-profile",
+        "device-registration",
+        "event-stream",
+        "verification",
     ):
         section = re.search(
             rf"(?ms)^  {re.escape(service)}:\n(.*?)(?=^  [a-zA-Z0-9_-]+:\n|\Z)",
@@ -117,7 +248,9 @@ def test_all_shared_service_builds_receive_the_verified_bootstrap_artifacts() ->
         assert "<<: *marty_service_build_artifacts" in section.group(1)
 
 
-def test_oidf_bridge_listener_uses_the_published_https_port(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_oidf_bridge_listener_uses_the_published_https_port(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("OIDF_PUBLIC_BASE_URL", "https://marty-oidf.test:28443")
     monkeypatch.delenv("OIDF_INTERNAL_TLS_PORT", raising=False)
 
@@ -129,9 +262,17 @@ def test_oidf_bridge_listener_uses_the_published_https_port(monkeypatch: pytest.
         stack.configure_oidf_internal_tls_port()
 
 
-def test_existing_project_requires_explicit_resume(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(stack, "project_container_ids", lambda _project: ["container-1"])
-    monkeypatch.setattr(stack.subprocess, "run", lambda *args, **kwargs: type("Result", (), {"stdout": ""})())
+def test_existing_project_requires_explicit_resume(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        stack, "project_container_ids", lambda _project: ["container-1"]
+    )
+    monkeypatch.setattr(
+        stack.subprocess,
+        "run",
+        lambda *args, **kwargs: type("Result", (), {"stdout": ""})(),
+    )
 
     with pytest.raises(ValueError, match="already has containers"):
         stack.assert_ports_available([], "marty-conformance-test1")
@@ -141,10 +282,23 @@ def test_existing_project_requires_explicit_resume(monkeypatch: pytest.MonkeyPat
 def test_reviewer_bootstrap_requires_the_exact_existing_project(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(stack, "rendered_config", lambda *_args, **_kwargs: {"services": {}, "networks": {}, "volumes": {}})
+    monkeypatch.setattr(
+        stack,
+        "rendered_config",
+        lambda *_args, **_kwargs: {"services": {}, "networks": {}, "volumes": {}},
+    )
     monkeypatch.setattr(stack, "validate_isolation", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(stack, "project_container_ids", lambda _project: [])
-    monkeypatch.setattr(stack.sys, "argv", ["conformance_stack.py", "--project", "marty-conformance-test1", "bootstrap-reviewer"])
+    monkeypatch.setattr(
+        stack.sys,
+        "argv",
+        [
+            "conformance_stack.py",
+            "--project",
+            "marty-conformance-test1",
+            "bootstrap-reviewer",
+        ],
+    )
 
     with pytest.raises(ValueError, match="requires an existing"):
         stack.main()
@@ -181,17 +335,26 @@ def test_oidf_final_profile_selects_the_standard_redirect_uri_client_id() -> Non
 
 
 def test_conformance_profile_uses_a_disposable_reviewer_via_normal_oidc() -> None:
-    profile = (ROOT / "docker-compose.profile.conformance.yml").read_text(encoding="utf-8")
+    profile = (ROOT / "docker-compose.profile.conformance.yml").read_text(
+        encoding="utf-8"
+    )
 
-    assert "MARTY_CONFORMANCE_REVIEWER_PASSWORD:?set a disposable reviewer password" in profile
+    assert (
+        "MARTY_CONFORMANCE_REVIEWER_PASSWORD:?set a disposable reviewer password"
+        in profile
+    )
     assert "DEMO_REVIEWER_EMAIL: ${MARTY_CONFORMANCE_REVIEWER_EMAIL" in profile
     assert "DEMO_REVIEWER_PASSWORD: ${MARTY_CONFORMANCE_REVIEWER_PASSWORD" in profile
     assert "MARTY_ORG_REVIEWER_EMAIL: ${MARTY_CONFORMANCE_REVIEWER_EMAIL" in profile
     assert "MARTY_ORG_ADMIN_EMAIL: ${MARTY_CONFORMANCE_ADMIN_EMAIL" in profile
     assert "MARTY_ORG_ADMIN_PASSWORD: ${MARTY_CONFORMANCE_ADMIN_PASSWORD" in profile
-    organization = profile.split("  organization:\n", 1)[1].split("\n  credential-template:\n", 1)[0]
+    organization = profile.split("  organization:\n", 1)[1].split(
+        "\n  credential-template:\n", 1
+    )[0]
     assert "MARTY_ORG_ADMIN_EMAIL: ${MARTY_CONFORMANCE_ADMIN_EMAIL" in organization
-    assert "MARTY_ORG_REVIEWER_EMAIL: ${MARTY_CONFORMANCE_REVIEWER_EMAIL" in organization
+    assert (
+        "MARTY_ORG_REVIEWER_EMAIL: ${MARTY_CONFORMANCE_REVIEWER_EMAIL" in organization
+    )
 
 
 def test_keycloak_configurator_bootstraps_missing_application_roles() -> None:
@@ -199,10 +362,15 @@ def test_keycloak_configurator_bootstraps_missing_application_roles() -> None:
 
     assert "ensure_realm_role()" in script
     assert 'kcadm_safe create roles -r "$REALM"' in script
-    grant = script.split("grant_realm_role_to_user()", 1)[1].split("ensure_marty_org_exists()", 1)[0]
+    grant = script.split("grant_realm_role_to_user()", 1)[1].split(
+        "ensure_marty_org_exists()", 1
+    )[0]
     assert 'ensure_realm_role "$role_name" || return 1' in grant
     assert "ensure_marty_org_admin_user()" in script
-    assert 'grant_realm_role_to_user "$user_id" "$MARTY_ORG_ADMIN_EMAIL" "administrator"' in script
+    assert (
+        'grant_realm_role_to_user "$user_id" "$MARTY_ORG_ADMIN_EMAIL" "administrator"'
+        in script
+    )
 
 
 def test_oidf_profile_registers_its_published_origin_with_keycloak() -> None:
@@ -219,7 +387,10 @@ def test_oidf_runner_can_join_only_the_project_scoped_tls_proxy_bridge() -> None
     profile = (ROOT / "docker-compose.profile.oidf.yml").read_text(encoding="utf-8")
 
     assert "oidf-runner-network:" in profile
-    assert "${MARTY_CONFORMANCE_PROJECT:?set MARTY_CONFORMANCE_PROJECT}_oidf-runner" in profile
+    assert (
+        "${MARTY_CONFORMANCE_PROJECT:?set MARTY_CONFORMANCE_PROJECT}_oidf-runner"
+        in profile
+    )
     assert "internal: true" in profile
     proxy = profile.split("  oidf-tls-proxy:\n", 1)[1].split("\n  auth:\n", 1)[0]
     assert "marty-network: {}" in proxy
