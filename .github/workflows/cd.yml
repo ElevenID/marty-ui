@@ -3,12 +3,6 @@ name: Stack release
 on:
   push:
     tags: ["v*"]
-  workflow_dispatch:
-    inputs:
-      lock_file:
-        description: Committed immutable stack lock
-        required: true
-        default: release/stack-lock.json
 
 concurrency:
   group: stack-release-${{ github.ref }}
@@ -54,9 +48,13 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: "3.12"
+      - name: Reject any existing release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/check_release_absent.py --repository "$GITHUB_REPOSITORY" --tag "$GITHUB_REF_NAME"
       - id: components
         env:
-          LOCK_FILE: ${{ inputs.lock_file || 'release/stack-lock.json' }}
+          LOCK_FILE: release/stack-lock.json
         shell: bash
         run: |
           set -euo pipefail
@@ -65,9 +63,8 @@ jobs:
           release="$(jq -r .release "$LOCK_FILE")"
           version="${release#marty-ui@}"
           test "$release" = "marty-ui@$version"
-          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
-            test "$GITHUB_REF_NAME" = "v$version"
-          fi
+          test "$GITHUB_EVENT_NAME" = "push"
+          test "$GITHUB_REF_NAME" = "v$version"
           {
             echo "version=$version"
             echo "api_core=$(jq -er '.components[] | select(.name == "marty-api-core") | .version' "$LOCK_FILE")"
@@ -90,7 +87,7 @@ jobs:
       - name: Verify release artifact provenance
         env:
           GH_TOKEN: ${{ github.token }}
-          LOCK_FILE: ${{ inputs.lock_file || 'release/stack-lock.json' }}
+          LOCK_FILE: release/stack-lock.json
         shell: bash
         run: |
           set -euo pipefail
@@ -108,7 +105,7 @@ jobs:
       - name: Verify immutable OCI inputs and provenance
         env:
           GH_TOKEN: ${{ github.token }}
-          LOCK_FILE: ${{ inputs.lock_file || 'release/stack-lock.json' }}
+          LOCK_FILE: release/stack-lock.json
         shell: bash
         run: |
           set -euo pipefail
@@ -255,7 +252,7 @@ jobs:
           registry-url: https://registry.npmjs.org
       - name: Build candidate stack manifest
         env:
-          LOCK_FILE: ${{ inputs.lock_file || 'release/stack-lock.json' }}
+          LOCK_FILE: release/stack-lock.json
           UI_DIGEST: ${{ needs.build-ui.outputs.digest }}
           SERVICES_DIGEST: ${{ needs.build-services.outputs.services_digest }}
           MIGRATIONS_DIGEST: ${{ needs.build-services.outputs.migrations_digest }}
@@ -412,7 +409,7 @@ jobs:
           output-file: marty-ui-migrations-sbom.cdx.json
       - name: Add immutable UI evidence
         env:
-          LOCK_FILE: ${{ inputs.lock_file || 'release/stack-lock.json' }}
+          LOCK_FILE: release/stack-lock.json
           UI_DIGEST: ${{ needs.build-ui.outputs.digest }}
           SERVICES_DIGEST: ${{ needs.build-services.outputs.services_digest }}
           MIGRATIONS_DIGEST: ${{ needs.build-services.outputs.migrations_digest }}
@@ -461,9 +458,18 @@ jobs:
             marty-ui-migrations-sbom.cdx.json
       - uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228
         with:
+          tag_name: v${{ needs.validate-stack.outputs.version }}
+          draft: true
+          overwrite_files: false
           generate_release_notes: true
           files: |
             stack-manifest.json
             *.cdx.json
             *.sigstore.json
             SHA256SUMS
+      - name: Publish immutable release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: v${{ needs.validate-stack.outputs.version }}
+        shell: bash
+        run: gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false
