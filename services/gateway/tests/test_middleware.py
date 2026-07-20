@@ -10,7 +10,6 @@ import httpx
 import pytest
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
-from marty_common import CedarAuthMiddleware
 from marty_common import cedar_actions
 from marty_common.middleware import IdempotencyMiddleware
 
@@ -296,7 +295,7 @@ def test_gateway_idempotency_runs_after_current_authorization_checks():
     app = gateway_main.create_app()
     middleware_names = [middleware.cls.__name__ for middleware in app.user_middleware]
 
-    assert middleware_names.index("CedarAuthMiddleware") < middleware_names.index("IdempotencyMiddleware")
+    assert middleware_names.index("GatewayCedarAuthMiddleware") < middleware_names.index("IdempotencyMiddleware")
     assert "BillingAuthMiddleware" not in middleware_names
     assert "UsageTrackingMiddleware" not in middleware_names
 
@@ -423,7 +422,7 @@ async def test_signing_key_query_org_cannot_cross_session_membership_boundary(
         reached.append((request.state.organization_id, request.state.required_permission))
         return JSONResponse({"ok": True})
 
-    app.add_middleware(CedarAuthMiddleware)
+    app.add_middleware(gateway_main.GatewayCedarAuthMiddleware)
 
     @app.middleware("http")
     async def authenticated_session(request: Request, call_next):
@@ -447,6 +446,88 @@ async def test_signing_key_query_org_cannot_cross_session_membership_boundary(
         ("user-1", "org-other"),
         ("user-1", "org-session"),
     ]
+
+
+@pytest.mark.parametrize(
+    ("permission", "scopes", "allowed"),
+    [
+        ("signing-key:view", ["keys:read"], True),
+        ("signing-key:view", ["keys:write"], True),
+        ("signing-key:create", ["keys:write"], True),
+        ("signing-key:delete", ["keys:write"], True),
+        ("signing-key:create", ["keys:read"], False),
+        ("signing-key:delete", ["keys:read"], False),
+        ("signing-key:rotate", ["keys:write"], True),
+        ("signing-key:admin", ["keys:write"], False),
+        ("signing-key", ["keys:write"], False),
+    ],
+)
+def test_gateway_cedar_maps_only_supported_signing_key_api_scopes(
+    permission: str,
+    scopes: list[str],
+    allowed: bool,
+):
+    assert gateway_main.GatewayCedarAuthMiddleware._api_key_allowed(
+        permission,
+        scopes,
+    ) is allowed
+
+
+def test_gateway_cedar_delegates_other_api_scope_decisions_to_marty_common():
+    assert gateway_main.GatewayCedarAuthMiddleware._api_key_allowed(
+        "trust-profile:view",
+        ["trust:read"],
+    )
+    assert not gateway_main.GatewayCedarAuthMiddleware._api_key_allowed(
+        "trust-profile:create",
+        ["keys:write"],
+    )
+
+
+@pytest.mark.asyncio
+async def test_signing_key_api_key_is_org_bound_and_scope_bound():
+    app = FastAPI()
+    reached: list[str] = []
+
+    @app.api_route(
+        "/v1/signing-keys/services/example",
+        methods=["GET", "POST"],
+    )
+    async def protected_route(request: Request):
+        reached.append(request.method)
+        return JSONResponse({"ok": True})
+
+    app.add_middleware(gateway_main.GatewayCedarAuthMiddleware)
+
+    @app.middleware("http")
+    async def authenticated_api_key(request: Request, call_next):
+        request.state.auth_source = "api_key"
+        request.state.user_id = "api_key:key-1"
+        request.state.api_key_id = "key-1"
+        request.state.api_key_organization_id = "org-session"
+        request.state.session_organization_id = "org-session"
+        request.state.organization_id = "org-session"
+        request.state.api_key_scopes = ["keys:read"]
+        return await call_next(request)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        wrong_org = await client.get(
+            "/v1/signing-keys/services/example?organization_id=org-other",
+        )
+        read_allowed = await client.get("/v1/signing-keys/services/example")
+        write_denied = await client.post("/v1/signing-keys/services/example")
+
+    assert wrong_org.status_code == 403
+    assert wrong_org.json()["detail"] == (
+        "API key does not have access to this organization"
+    )
+    assert read_allowed.status_code == 200
+    assert write_denied.status_code == 403
+    assert write_denied.json()["detail"] == (
+        "API key missing required permission: signing-key:create"
+    )
+    assert reached == ["GET"]
 
 
 # ---------------------------------------------------------------------------

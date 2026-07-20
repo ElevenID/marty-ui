@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from marty_common.org_authorization import OrganizationMembership, OrganizationRoleSummary
+import pytest
 
 from services.presentation_policy import main as pp
 
@@ -490,6 +491,7 @@ async def _save_open_badge_login_policy(
 def _install_marty_trust_profile(
     monkeypatch,
     *,
+    organization_id: object = "org-1",
     allowed_issuers: list[str] | None = None,
     denied_issuers: list[str] | None = None,
     trust_sources: list[dict[str, object]] | None = None,
@@ -498,6 +500,7 @@ def _install_marty_trust_profile(
     cache.set(
         "60000000-0000-0000-0000-000000000001",
         {
+            "organization_id": organization_id,
             "allowed_issuers": ["did:web:beta.elevenidllc.com:orgs:marty"] if allowed_issuers is None else allowed_issuers,
             "denied_issuers": denied_issuers or [],
             "trust_sources": trust_sources or [],
@@ -506,6 +509,55 @@ def _install_marty_trust_profile(
         3600,
     )
     monkeypatch.setattr(pp, "_trust_profile_cache", cache)
+
+
+def test_rest_evaluation_rejects_cross_org_trust_profile_override(monkeypatch) -> None:
+    repo = pp.InMemoryPresentationPolicyRepository()
+    policy = asyncio.run(_save_open_badge_login_policy(repo))
+    _install_marty_trust_profile(monkeypatch, organization_id="org-other")
+    monkeypatch.setattr(pp, "_detect_credential_format", lambda _token: "sd-jwt")
+
+    response = _build_client(repo).post(
+        f"/v1/presentation-policies/{policy.id}/evaluate",
+        json={
+            "vp_token": "header.payload.signature",
+            "trust_profile_id": "60000000-0000-0000-0000-000000000001",
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == (
+        "Trust Profile and Presentation Policy must belong to the same organization"
+    )
+
+
+@pytest.mark.parametrize("ambiguous_organization_id", [None, "", ["org-1"], {"id": "org-1"}])
+def test_evaluator_rejects_trust_profile_without_unambiguous_org(
+    monkeypatch,
+    ambiguous_organization_id: object,
+) -> None:
+    repo = pp.InMemoryPresentationPolicyRepository()
+    policy = asyncio.run(_save_open_badge_login_policy(repo))
+    _install_marty_trust_profile(
+        monkeypatch,
+        organization_id=ambiguous_organization_id,
+    )
+    monkeypatch.setattr(pp, "_detect_credential_format", lambda _token: "sd-jwt")
+
+    with pytest.raises(pp.HTTPException) as exc_info:
+        asyncio.run(
+            pp.evaluate_presentation(
+                policy.id,
+                pp.EvaluatePresentationRequest(
+                    vp_token="header.payload.signature",
+                    trust_profile_id="60000000-0000-0000-0000-000000000001",
+                ),
+                repo=repo,
+            )
+        )
+
+    assert exc_info.value.status_code == 503
+    assert "no unambiguous organization_id" in exc_info.value.detail
 
 
 def test_open_badge_login_policy_allows_verified_sd_jwt_badge(monkeypatch) -> None:
@@ -725,6 +777,7 @@ def test_open_badge_login_policy_uses_marty_trust_profile() -> None:
 def test_open_badge_login_policy_denies_unverified_open_badge(monkeypatch) -> None:
     repo = pp.InMemoryPresentationPolicyRepository()
     policy = asyncio.run(_save_open_badge_login_policy(repo))
+    _install_marty_trust_profile(monkeypatch)
 
     monkeypatch.setattr(pp, "_detect_credential_format", lambda _token: "sd-jwt")
     monkeypatch.setattr(

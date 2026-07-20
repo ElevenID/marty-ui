@@ -1638,6 +1638,91 @@ def _trust_profile_lookup_url(profile_id: str) -> str:
     return f"{_trust_profile_service_url()}/internal/v1/trust-profiles/{profile_id}"
 
 
+def _load_policy_trust_profile(
+    profile_id: str,
+    policy_organization_id: Any,
+) -> dict[str, Any]:
+    """Load one Trust Profile and enforce the saved policy tenant boundary.
+
+    This validation belongs at the evaluator decision boundary because the
+    evaluator is called by both REST and internal gRPC flows. Gateway-only
+    validation is insufficient for service-to-service callers.
+    """
+    if (
+        not isinstance(policy_organization_id, str)
+        or not policy_organization_id.strip()
+    ):
+        raise HTTPException(
+            status_code=503,
+            detail="Presentation Policy has no unambiguous organization_id",
+        )
+    expected_organization_id = policy_organization_id.strip()
+
+    trust_cache = get_trust_cache()
+    trust_profile_data = trust_cache.get(profile_id)
+    loaded_from_service = trust_profile_data is None
+    if loaded_from_service:
+        import httpx as _httpx
+
+        try:
+            response = _httpx.get(_trust_profile_lookup_url(profile_id), timeout=5.0)
+        except Exception as exc:
+            logger.warning(
+                "Could not load Trust Profile %s for tenant validation",
+                profile_id,
+                exc_info=True,
+            )
+            raise HTTPException(
+                status_code=503,
+                detail=f"Trust Profile {profile_id} could not be loaded",
+            ) from exc
+        if response.status_code == 404:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Trust Profile {profile_id} does not exist",
+            )
+        if response.status_code != 200:
+            raise HTTPException(
+                status_code=503,
+                detail=f"Trust Profile {profile_id} could not be loaded",
+            )
+        try:
+            trust_profile_data = response.json()
+        except Exception as exc:
+            raise HTTPException(
+                status_code=503,
+                detail=f"Trust Profile {profile_id} returned invalid data",
+            ) from exc
+
+    if not isinstance(trust_profile_data, dict):
+        raise HTTPException(
+            status_code=503,
+            detail=f"Trust Profile {profile_id} returned invalid data",
+        )
+    profile_organization_id = trust_profile_data.get("organization_id")
+    if (
+        not isinstance(profile_organization_id, str)
+        or not profile_organization_id.strip()
+    ):
+        raise HTTPException(
+            status_code=503,
+            detail=f"Trust Profile {profile_id} has no unambiguous organization_id",
+        )
+    if profile_organization_id.strip() != expected_organization_id:
+        raise HTTPException(
+            status_code=422,
+            detail="Trust Profile and Presentation Policy must belong to the same organization",
+        )
+
+    if loaded_from_service:
+        trust_cache.set(
+            profile_id,
+            trust_profile_data,
+            _trust_profile_cache_ttl_seconds(trust_profile_data),
+        )
+    return trust_profile_data
+
+
 def _issuance_service_url() -> str:
     """Return the internal Issuance service base URL."""
     return os.environ.get("ISSUANCE_SERVICE_URL", "http://issuance:8005")
@@ -2384,21 +2469,10 @@ async def evaluate_presentation(
                 break
     trust_profile_data: dict[str, Any] | None = None
     if trust_profile_id:
-        try:
-            trust_cache = get_trust_cache()
-            trust_profile_data = trust_cache.get(trust_profile_id)
-            if trust_profile_data is None:
-                import httpx as _httpx
-                response = _httpx.get(_trust_profile_lookup_url(trust_profile_id), timeout=5.0)
-                if response.status_code == 200:
-                    trust_profile_data = response.json()
-                    trust_cache.set(
-                        trust_profile_id,
-                        trust_profile_data,
-                        _trust_profile_cache_ttl_seconds(trust_profile_data),
-                    )
-        except Exception:
-            logger.warning("Could not preload Trust Profile %s for signature verification", trust_profile_id, exc_info=True)
+        trust_profile_data = _load_policy_trust_profile(
+            trust_profile_id,
+            policy.organization_id,
+        )
 
     pinned_issuer_jwk = _pinned_issuer_jwk(
         trust_profile_data,

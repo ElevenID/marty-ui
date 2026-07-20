@@ -524,6 +524,129 @@ def test_lissi_wallet_option_matches_bare_did_request_object_client_id(
     ]
 
 
+def test_post_request_uri_method_survives_every_reconstructed_wallet_link(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv(
+        "CREDENTIAL_LOGIN_SPRUCEKIT_DEEP_LINK_TEMPLATE",
+        "walletapp://authorize?request_uri={request_uri_encoded}",
+    )
+    monkeypatch.setenv(
+        "CREDENTIAL_LOGIN_SPRUCEKIT_ANDROID_DEEP_LINK_TEMPLATE",
+        "intent://authorize?request_uri={request_uri_encoded}"
+        "#Intent;scheme=openid4vp;{android_package_param}end",
+    )
+    monkeypatch.setenv(
+        "CREDENTIAL_LOGIN_SPRUCEKIT_IOS_UNIVERSAL_LINK_TEMPLATE",
+        "https://wallet.example/openid4vp?request_uri={request_uri_encoded}",
+    )
+    client_id = "decentralized_identifier:did:web:verifier.example:oid4vp"
+    oid4vp_uri = (
+        "openid4vp://authorize?"
+        f"client_id={quote(client_id, safe='')}&"
+        "request_uri=https%3A%2F%2Fverifier.example%2Frequest%2F1&"
+        "request_uri_method=post"
+    )
+
+    [sprucekit, *_] = _build_credential_login_wallet_options(
+        oid4vp_uri=oid4vp_uri,
+        request_uri=oid4vp_uri,
+    )
+
+    for link_name in ("href", "android_href", "ios_href"):
+        query_pairs = parse_qs(urlparse(sprucekit[link_name]).query)
+        assert query_pairs == {
+            "request_uri": ["https://verifier.example/request/1"],
+            "client_id": [client_id],
+            "request_uri_method": ["post"],
+        }
+
+
+def test_reconstructed_wallet_link_collapses_stale_protocol_duplicates(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv(
+        "CREDENTIAL_LOGIN_SPRUCEKIT_ANDROID_DEEP_LINK_TEMPLATE",
+        "intent://authorize?request_uri=stale&request_uri=other&"
+        "client_id=wrong&client_id=also-wrong&request_uri_method=get"
+        "#Intent;scheme=openid4vp;end",
+    )
+    client_id = "decentralized_identifier:did:web:verifier.example:oid4vp"
+    oid4vp_uri = (
+        "openid4vp://authorize?"
+        f"client_id={quote(client_id, safe='')}&"
+        "request_uri=https%3A%2F%2Fverifier.example%2Frequest%2F1&"
+        "request_uri_method=post"
+    )
+
+    [sprucekit, *_] = _build_credential_login_wallet_options(
+        oid4vp_uri=oid4vp_uri,
+        request_uri=oid4vp_uri,
+    )
+    query_pairs = parse_qs(urlparse(sprucekit["android_href"]).query)
+
+    assert query_pairs == {
+        "request_uri": ["https://verifier.example/request/1"],
+        "client_id": [client_id],
+        "request_uri_method": ["post"],
+    }
+
+
+@pytest.mark.parametrize(
+    ("query", "message"),
+    [
+        ("client_id=did%3Aweb%3Averifier.example", "request_uri exactly once"),
+        (
+            "request_uri=https%3A%2F%2Fverifier.example%2Fone&"
+            "request_uri=https%3A%2F%2Fverifier.example%2Ftwo",
+            "request_uri exactly once",
+        ),
+        (
+            "request_uri=https%3A%2F%2Fverifier.example%2Fone&"
+            "client_id=did%3Aweb%3Aone&client_id=did%3Aweb%3Atwo",
+            "client_id at most once",
+        ),
+        (
+            "request_uri=https%3A%2F%2Fverifier.example%2Fone&"
+            "request_uri_method=post&request_uri_method=post",
+            "request_uri_method at most once",
+        ),
+        (
+            "request_uri=https%3A%2F%2Fverifier.example%2Fone&"
+            "request_uri_method=get",
+            "omitted for GET",
+        ),
+        (
+            "request_uri=https%3A%2F%2Fverifier.example%2Fone&"
+            "request_uri_method=put",
+            "omitted for GET",
+        ),
+    ],
+)
+def test_wallet_links_reject_ambiguous_or_unsupported_outer_parameters(
+    query: str,
+    message: str,
+):
+    with pytest.raises(ValueError, match=message):
+        _build_credential_login_wallet_options(
+            oid4vp_uri=f"openid4vp://authorize?{query}",
+            request_uri=f"openid4vp://authorize?{query}",
+        )
+
+
+def test_wallet_links_reject_request_uri_disagreement():
+    oid4vp_uri = (
+        "openid4vp://authorize?"
+        "request_uri=https%3A%2F%2Fverifier.example%2Frequest%2Fexpected"
+    )
+
+    with pytest.raises(ValueError, match="must match the validated outer request"):
+        _build_credential_login_wallet_options(
+            oid4vp_uri=oid4vp_uri,
+            request_uri="https://verifier.example/request/different",
+        )
+
+
 @pytest.mark.parametrize(
     "client_id",
     [
@@ -607,7 +730,9 @@ def test_build_credential_login_wallet_options_honors_sprucekit_template_overrid
         request_uri="https://issuer.example/request/1",
     )
 
-    assert options[0]["href"] == "walletapp://authorize?request_uri=https://issuer.example/request/1"
+    assert parse_qs(urlparse(options[0]["href"]).query) == {
+        "request_uri": ["https://issuer.example/request/1"],
+    }
     assert options[0]["android_href"] == "intent://custom?request_uri=https%3A%2F%2Fissuer.example%2Frequest%2F1#Intent;scheme=openid4vp;end"
 
 

@@ -34,7 +34,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import redis.asyncio as aioredis
-from marty_common import CedarEngine, CedarAuthMiddleware
+from marty_common import CedarAuthMiddleware as MartyCedarAuthMiddleware
+from marty_common import CedarEngine
 from marty_common import cedar_actions as _cedar_actions
 from marty_common.middleware import ETagMiddleware, IdempotencyMiddleware
 
@@ -124,6 +125,46 @@ _SIGNING_KEY_ROUTE_PERMISSIONS = {
     "PATCH": "signing-key:create",
     "DELETE": "signing-key:delete",
 }
+
+
+class GatewayCedarAuthMiddleware(MartyCedarAuthMiddleware):
+    """Preserve the published API-key contract for signing-key routes.
+
+    marty-common 0.2.0 does not yet map its ``signing-key`` resource to the
+    already-published ``keys:read`` and ``keys:write`` scopes. Keep this narrow
+    compatibility layer until a later marty-common release supplies the same
+    mapping; every other resource continues through the upstream middleware.
+    """
+
+    @staticmethod
+    def _api_key_allowed(required_permission: str, scopes: list[str]) -> bool:
+        resource, separator, action = required_permission.partition(":")
+        if resource != "signing-key":
+            return MartyCedarAuthMiddleware._api_key_allowed(
+                required_permission,
+                scopes,
+            )
+        if separator != ":":
+            return False
+
+        scope_set = set(scopes or [])
+        if "admin:full" in scope_set:
+            return True
+        if action == "view":
+            return bool(scope_set & {"keys:read", "keys:write"})
+        if action in {
+            "activate",
+            "archive",
+            "create",
+            "delete",
+            "edit",
+            "rotate",
+            "update",
+            "validate",
+            "write",
+        }:
+            return "keys:write" in scope_set
+        return False
 
 
 def _register_signing_key_cedar_routes() -> None:
@@ -576,7 +617,7 @@ Verification is handled through two complementary approaches:
     # current Cedar and downstream extension authorization before a cached response is returned.
     app.add_middleware(IdempotencyMiddleware)
     install_gateway_extension(app)
-    app.add_middleware(CedarAuthMiddleware)
+    app.add_middleware(GatewayCedarAuthMiddleware)
     app.add_middleware(ETagMiddleware)
     app.add_middleware(ContentTypeEnforcementMiddleware)
     app.add_middleware(AuthMiddleware, session_cache=session_cache)
