@@ -63,14 +63,16 @@ def test_isolation_rejects_unexpected_published_port() -> None:
         stack.validate_isolation(config, project)
 
 
-def test_w3c_overlay_is_explicit_and_isolation_is_last() -> None:
+def test_haip_and_w3c_overlays_are_explicit_and_isolation_is_last() -> None:
     command = stack.compose_command(
         "marty-conformance-test1",
+        include_haip=True,
         include_w3c=True,
     )
     files = [command[index + 1] for index, value in enumerate(command) if value == "--file"]
 
     assert files[-1].endswith("docker-compose.profile.conformance.yml")
+    assert any(path.endswith("docker-compose.profile.oidf-haip.yml") for path in files)
     assert any(path.endswith("docker-compose.profile.w3c-vc.yml") for path in files)
 
 
