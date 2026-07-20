@@ -88,6 +88,11 @@ the pinned `conformance/eudi-reference.compose.yml` from
 tester and wallet-kit harness join only `${MARTY_CONFORMANCE_PROJECT}_oidf-runner`;
 they must never join `marty-network`.
 
+For the OID4VP HAIP verifier plan, add `--haip` to every launcher command and
+supply a fresh `VERIFIER_SIGNING_KEY_PEM` and matching
+`VERIFIER_X509_CERT_PEM`. This selects the separate HAIP overlay, which enables
+HAIP only for that disposable deployment and uses `x509_hash` client IDs.
+
 Inspect and remove exactly that project with:
 
 ```bash
